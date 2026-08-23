@@ -154,13 +154,35 @@ function milestoneProgress(data: Record<string, unknown>): string {
 }
 
 const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> = {
-  'booking-confirmed': (data) => {
-    const clientName = (data.clientName as string) ?? 'A client';
-    const caseId = data.caseId as string | undefined;
+  // BAL-400 (D4) — a consultation was booked into a case. The CLIENT in-app notice: prospective
+  // copy names the PARTY (`expertPartyLabel`), never a pronoun. Deep-links to the case, never to
+  // `/meeting/:id` (that route does not exist — `meetings.join_url` is the raw Daily URL and
+  // never crosses to the client).
+  'booking-confirmed-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const engagementId = data.engagementId as string | undefined;
+    const isNewCase = data.isNewCase === true;
+    return {
+      title: 'Consultation confirmed',
+      body: isNewCase
+        ? `Your consultation with ${expertParty} is confirmed.`
+        : `Another consultation with ${expertParty} is confirmed.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-400 (D4) — the EXPERT half of the same event: prospective copy names the CLIENT PARTY
+  // (`clientCompanyName`), never an invented individual.
+  'booking-confirmed-expert': (data) => {
+    const clientCompany = (data.clientCompanyName as string) ?? 'A client';
+    const engagementId = data.engagementId as string | undefined;
+    const isNewCase = data.isNewCase === true;
     return {
       title: 'New booking',
-      body: `${clientName} booked a consultation`,
-      actionUrl: caseId ? `/cases/${caseId}` : undefined,
+      body: isNewCase
+        ? `${clientCompany} booked a consultation with you.`
+        : `${clientCompany} booked another consultation with you.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
     };
   },
 

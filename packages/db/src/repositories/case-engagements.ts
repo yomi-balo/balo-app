@@ -1,8 +1,11 @@
-import { and, asc, eq, gt, isNull, lte, notExists, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lte, notExists, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
+  caseEngagementProducts,
   caseEngagements,
   engagements,
+  meetingContexts,
+  meetings,
   reviews,
   type CaseEngagement,
   type Engagement,
@@ -36,11 +39,64 @@ export type CaseCloseReason = NonNullable<CaseEngagement['closeReason']>;
  * sets or reports case economics — and would put a raw margin into a projection that
  * BAL-421 will hand to a client surface. Making it unreachable is the mitigation.
  *
+ * ⚠ `bookingIdempotencyKey` is OMITTED FOR THE SAME REASON (BAL-400). It is an opaque
+ * server-minted token (`sha256(userId:nonce)`) whose only job is to make a retry re-enter
+ * against the case that already exists. NO caller needs it handed back — the retry already
+ * holds the value it passed in — so the narrowest thing that works is to keep it out of the
+ * projection entirely, where it can never ride a case row onto a client surface. A test that
+ * wants to assert persistence reads the `case_engagements` row directly.
+ *
+ * A pleasant side effect worth stating: because both new columns are stripped here, adding
+ * them to the SCHEMA widened no consumer's view of a case. `CaseEngagementRow` is unchanged.
+ *
  * `createdAt` is the PARENT's — the same clock `listOpenCreatedBefore` filters on, so
  * BAL-420 can feed it straight into `isCaseInactive` from `@balo/shared/engagements`.
  */
 export type CaseEngagementRow = Omit<Engagement, 'baloFeeBps'> &
-  Omit<CaseEngagement, 'engagementId' | 'engagementType' | 'createdAt' | 'updatedAt' | 'deletedAt'>;
+  Omit<
+    CaseEngagement,
+    | 'engagementId'
+    | 'engagementType'
+    | 'createdAt'
+    | 'updatedAt'
+    | 'deletedAt'
+    | 'bookingIdempotencyKey'
+  >;
+
+/**
+ * BAL-400 §2.5 — ONE of the client's OPEN cases with a given expert, as the booking flow's
+ * "attach to an existing case" chooser needs it. NARROW BY DESIGN: a title, two clocks and
+ * a count. No description (it is sanitised HTML destined for a different surface), no
+ * company, no fee, no idempotency key.
+ */
+export interface OpenCaseForExpert {
+  engagementId: string;
+  title: string;
+  /** The PARENT's `created_at` — the same clock every other case read uses. */
+  createdAt: Date;
+  /**
+   * `MAX(meetings.scheduled_start)` over the case's LIVE meetings, falling back to
+   * `createdAt` when the case has none. Drives the most-recent-activity ordering, so a case
+   * that was just booked into sorts above one that has been quiet for a month.
+   */
+  lastActivityAt: Date;
+  /** How many LIVE meetings this case has, of any status. `0` for a fresh case. */
+  consultationCount: number;
+}
+
+/** BAL-400 §2.5 — {@link caseEngagementsRepository.listOpenForCompanyAndExpert}'s result. */
+export interface OpenCasesForExpert {
+  openCases: OpenCaseForExpert[];
+  /**
+   * How many cases this company has ALREADY RESOLVED with this expert. Drives the
+   * "your last case with {Expert} is resolved — this starts a new one" note on the
+   * `Book again` entry point WITHOUT the caller threading an `engagementId` through a URL,
+   * so that note costs no new IDOR surface.
+   *
+   * ⚠ NOT capped by `limit` — `limit` bounds the OPEN list only.
+   */
+  resolvedCaseCount: number;
+}
 
 /**
  * Thrown when `closed_by_user_id` would not be a LIVE member of the case's
@@ -95,6 +151,8 @@ export function toCaseRow(parent: Engagement, child: CaseEngagement): CaseEngage
     createdAt: _createdAt,
     updatedAt: _updatedAt,
     deletedAt: _deletedAt,
+    // BAL-400 — stripped for the same reason as `baloFeeBps`; see `CaseEngagementRow`.
+    bookingIdempotencyKey: _bookingIdempotencyKey,
     ...childRest
   } = child;
   return { ...parentRest, ...childRest };
@@ -215,8 +273,15 @@ export const caseEngagementsRepository = {
    * convention: a Case never passes through request origination, so there is nothing for the
    * old per-relationship model to key on.
    *
+   * ⚠ WRITES THE CASE'S PRODUCT TAGS IN THIS SAME TRANSACTION (BAL-400). A case and the
+   * taxonomy rows that say what it is ABOUT commit or roll back together — a half-tagged
+   * case is not a state any reader should have to handle. That is also why there is no
+   * `caseEngagementProductsRepository`: these rows have exactly one writer, here.
+   *
    * CONTRACT — bare INSERT. Raw FK violation (23503) on an unknown `companyId` /
-   * `expertProfileId`; CHECK (23514) on a blank `title` / `description`.
+   * `expertProfileId` / `productIds` entry; CHECK (23514) on a blank `title` /
+   * `description` or a malformed `bookingIdempotencyKey`; UNIQUE violation (23505) on a
+   * `bookingIdempotencyKey` that a live case already holds.
    */
   async create(input: {
     companyId: string;
@@ -233,6 +298,38 @@ export const caseEngagementsRepository = {
      * fabricated one. BAL-400's booking surface should pass the booking user.
      */
     actorUserId?: string | null;
+    /**
+     * BAL-400 — the BOOKING-LEVEL idempotency key (a lowercase 64-char sha256 hex digest,
+     * hashed SERVER-SIDE from the actor id and a stable client nonce). Stamped so a retry
+     * after a failed meeting hop re-enters against THIS case instead of opening a second
+     * one with the same title.
+     *
+     * ⚠ THE CALLER OWNS THE COLLISION, and deliberately so. This method does NOT use
+     * `ON CONFLICT`: the arbiter `case_engagement_booking_idempotency_key_idx` is a PARTIAL
+     * index, so a Drizzle `eq()` predicate there fails 42P10 at runtime (memory
+     * `reference_pg_partial_index_arbiter_param_42p10`), and swallowing the conflict would
+     * hand back a case the caller never inspected. A concurrent duplicate raises a bare
+     * `23505`; the booking action catches it and re-reads via
+     * {@link findByBookingIdempotencyKey}. THAT IS THE SAFE SHAPE — catch-and-reread, never
+     * conflict-and-guess. (⚠ The link is UNQUALIFIED on purpose: a
+     * `caseEngagementsRepository.x` reference from INSIDE this object literal makes the
+     * literal reference its own initializer and TypeScript infers it as `any` — TS7022.)
+     */
+    bookingIdempotencyKey?: string | null;
+    /**
+     * BAL-400 — `products` taxonomy ids to tag this case with, written to
+     * `case_engagement_products` inside this transaction. Empty/omitted writes no rows.
+     *
+     * DE-DUPLICATED IN PROCESS before insert. A multi-select can legitimately post the same
+     * id twice, and the partial unique would turn that client artefact into a `23505` that
+     * rolls the WHOLE case back. De-duplicating is the forgiving-in-what-you-accept side of
+     * the contract; the unique index remains the guarantee.
+     *
+     * ⚠ AN UNKNOWN PRODUCT ID ROLLS THE WHOLE CASE BACK (23503 on the `restrict` FK). That
+     * is correct: a case tagged with a product that does not exist is worse than no case,
+     * and the caller is validating against a taxonomy it just rendered.
+     */
+    productIds?: readonly string[];
   }): Promise<CaseEngagementRow> {
     return db.transaction(async (tx) => {
       const parent = await insertEngagementRowTx(tx, {
@@ -251,11 +348,21 @@ export const caseEngagementsRepository = {
           engagementId: parent.id,
           title: input.title,
           description: input.description,
+          bookingIdempotencyKey: input.bookingIdempotencyKey ?? null,
         })
         .returning();
 
       if (child === undefined) {
         throw new Error('Failed to create case engagement');
+      }
+
+      // BAL-400 — the product tags, on `tx`. De-duplicated (see the `productIds` docblock);
+      // an empty set issues no statement at all rather than an INSERT with no VALUES.
+      const productIds = [...new Set(input.productIds ?? [])];
+      if (productIds.length > 0) {
+        await tx
+          .insert(caseEngagementProducts)
+          .values(productIds.map((productId) => ({ engagementId: parent.id, productId })));
       }
 
       await recordEngagementCreated(tx, {
@@ -292,6 +399,183 @@ export const caseEngagementsRepository = {
       .limit(1);
 
     return row === undefined ? undefined : toCaseRow(row.parent, row.child);
+  },
+
+  /**
+   * BAL-400 — THE IDEMPOTENT-REPLAY LOOKUP AT THE CASE GRAIN. The one live case created
+   * under this booking key, or `undefined`. Rides
+   * `case_engagement_booking_idempotency_key_idx`.
+   *
+   * ⚠⚠ ACTOR-SCOPED BY CONSTRUCTION, AND THAT IS WHY THIS TAKES NO `userId`. The stored key
+   * is `sha256(userId:nonce)`, hashed SERVER-SIDE, so a key that resolves to a case can only
+   * have been minted by that case's creator — cross-user collision is unreachable, not
+   * merely unlikely. A RAW CLIENT-SUPPLIED KEY WOULD MAKE THIS AN IDOR: a stranger replaying
+   * someone else's key would be handed their `engagementId`. Any future caller that wants to
+   * key this on something the client chooses MUST add an ownership check in the same change.
+   *
+   * ⚠ THIS IS A LOOKUP, NOT AN AUTHORIZATION GATE — the same ruling as {@link close}. It
+   * resolves no capability and interprets no role. The attach/booking server action still
+   * gates on `CONSUME_CREDITS` over the returned `companyId` (ADR-1029).
+   *
+   * LIVE ROWS ONLY on BOTH parent and child, matching the index predicate: a soft-deleted
+   * case neither answers a replay nor keeps its key locked.
+   *
+   * ⚠ THIS IS THE **CASE** GRAIN ONLY. The meeting the same submit books carries the SAME
+   * key on `meetings.booking_idempotency_key`; `meetingsRepository.findByBookingIdempotencyKey`
+   * answers that half. Both halves exist because the booking is two non-atomic hops.
+   */
+  async findByBookingIdempotencyKey(key: string): Promise<CaseEngagementRow | undefined> {
+    const [row] = await db
+      .select({ parent: engagements, child: caseEngagements })
+      .from(engagements)
+      .innerJoin(caseEngagements, eq(caseEngagements.engagementId, engagements.id))
+      .where(
+        and(
+          eq(caseEngagements.bookingIdempotencyKey, key),
+          eq(engagements.engagementType, 'case'),
+          isNull(engagements.deletedAt),
+          isNull(caseEngagements.deletedAt)
+        )
+      )
+      .limit(1);
+
+    return row === undefined ? undefined : toCaseRow(row.parent, row.child);
+  },
+
+  /**
+   * BAL-400 §2.5 — the client's OPEN cases with THIS expert, plus how many they have already
+   * resolved with them. Feeds the booking flow's "attach to an existing case" chooser.
+   *
+   * KEYED `(company_id, expert_profile_id, engagement_type='case', status='active')` with
+   * `closed_at IS NULL` on the child and `deleted_at IS NULL` on both. ADR-1045 §5:
+   * `engagements.expert_profile_id` is NOT NULL and there is exactly one expert per
+   * engagement, so attach is offered ONLY for this expert's cases — there is no such thing
+   * as a cross-expert case, and no arm of the chooser needs to handle one.
+   *
+   * ⚠ BOTH LIVENESS PREDICATES ARE REQUIRED AND NEITHER IMPLIES THE OTHER. `status='active'`
+   * is the PARENT's coarse lifecycle; `closed_at IS NULL` is the CHILD's resolution state.
+   * `close()` writes both in one transaction, but the inactivity sweep and any future
+   * cancel path need not, and a case that is closed-but-still-active must never be offered
+   * as an attach target.
+   *
+   * ⚠ NOT AN AUTHORIZATION GATE — the same ruling as every other method in this file. It
+   * resolves no capability and interprets no role; the caller passes a `companyId` it has
+   * ALREADY proven the actor holds `CONSUME_CREDITS` on (ADR-1029). Passing an arbitrary
+   * `companyId` here returns that company's cases, so do not call it with an unvalidated
+   * one.
+   *
+   * ⚠ THE SHIPPED AGGREGATE HELPER DOES NOT FIT, WHICH IS WHY THIS QUERY COMPUTES ITS OWN.
+   * `meetingContextsRepository.consultationTimestampsForEngagements` answers
+   * `lastCompletedConsultationAt` / `nextScheduledConsultationAt` — two anchors BAL-425's
+   * inactivity rule needs, and NEITHER of which is `MAX(scheduled_start)` or a count. Using
+   * it would mean a second round trip that returns the wrong two numbers. The join below is
+   * the same `meeting_contexts` reverse edge (`context_type='case'`,
+   * `context_id = engagement_id`) that `meeting_context_reverse_idx` exists for.
+   *
+   * ⚠ `consultationCount` COUNTS DISTINCT **LIVE MEETINGS**, not raw context rows. In
+   * practice the two agree — `meetingsRepository.softDelete` stamps the meeting AND its
+   * context rows in one transaction — but a context row that outlived its meeting would
+   * inflate a number the client reads as "3 consultations", so the count is taken on the
+   * side that is actually a consultation.
+   *
+   * ORDERING is most-recent-activity first and DETERMINISTIC on ties: `lastActivityAt DESC,
+   * created_at DESC, engagement_id ASC`. A stable order matters because the UI shows the
+   * first four and hides the rest behind "Show N more" — a wobbling order would move cards
+   * under the cursor between renders.
+   *
+   * ⚠ NO INDEX WAS ADDED FOR THIS READ, DELIBERATELY (plan, "engagements index gap").
+   * `engagements` carries `engagement_company_idx`, `engagement_expert_idx` and the
+   * type-leading `engagement_type_status_created_idx`, but nothing on
+   * `(company_id, expert_profile_id, status)`. The read is bounded by
+   * `engagement_company_idx` to ONE company's engagements — a small set for every realistic
+   * client — and runs once per booking, so a second `ALTER` on a hot table was not worth it.
+   * If a seeded multi-thousand-row `engagements` ever shows a seq scan here, add
+   * `index('engagement_company_expert_status_idx').on(companyId, expertProfileId, status)`
+   * partial on `deleted_at IS NULL` rather than widening this query.
+   */
+  async listOpenForCompanyAndExpert(input: {
+    companyId: string;
+    expertProfileId: string;
+    /** Bounds the OPEN list only, never `resolvedCaseCount`. The UI caps display at 4. */
+    limit?: number;
+  }): Promise<OpenCasesForExpert> {
+    const limit = input.limit ?? 10;
+    if (limit <= 0) {
+      return { openCases: [], resolvedCaseCount: 0 };
+    }
+
+    // COALESCE so a case with no meetings still sorts by SOMETHING monotonic. Declared once
+    // and used in both the projection and the ORDER BY so they cannot disagree.
+    const lastActivityAt = sql<
+      Date | string
+    >`coalesce(max(${meetings.scheduledStart}), ${engagements.createdAt})`;
+
+    const partyMatch = and(
+      eq(engagements.engagementType, 'case'),
+      eq(engagements.companyId, input.companyId),
+      eq(engagements.expertProfileId, input.expertProfileId),
+      isNull(engagements.deletedAt),
+      isNull(caseEngagements.deletedAt)
+    );
+
+    const rows = await db
+      .select({
+        engagementId: engagements.id,
+        title: caseEngagements.title,
+        createdAt: engagements.createdAt,
+        lastActivityAt,
+        consultationCount: sql<number>`count(distinct ${meetings.id})::int`,
+      })
+      .from(engagements)
+      .innerJoin(caseEngagements, eq(caseEngagements.engagementId, engagements.id))
+      // The `meeting_contexts` reverse edge. LEFT so a case with no consultation yet — the
+      // resting state D4b declares acceptable — still appears in the chooser.
+      .leftJoin(
+        meetingContexts,
+        and(
+          eq(meetingContexts.contextType, 'case'),
+          eq(meetingContexts.contextId, engagements.id),
+          isNull(meetingContexts.deletedAt)
+        )
+      )
+      .leftJoin(
+        meetings,
+        and(eq(meetings.id, meetingContexts.meetingId), isNull(meetings.deletedAt))
+      )
+      .where(
+        and(
+          partyMatch,
+          // Enum literals at QUERY time are always safe — the house restriction is on index
+          // predicates and CHECKs.
+          eq(engagements.status, 'active'),
+          isNull(caseEngagements.closedAt)
+        )
+      )
+      .groupBy(engagements.id, caseEngagements.title, engagements.createdAt)
+      .orderBy(desc(lastActivityAt), desc(engagements.createdAt), asc(engagements.id))
+      .limit(limit);
+
+    const [resolved] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(engagements)
+      .innerJoin(caseEngagements, eq(caseEngagements.engagementId, engagements.id))
+      .where(and(partyMatch, isNotNull(caseEngagements.closedAt)));
+
+    return {
+      openCases: rows.map((row) => ({
+        engagementId: row.engagementId,
+        title: row.title,
+        createdAt: row.createdAt,
+        // `coalesce(...)` reaches us through a raw `sql` fragment, so its runtime type is
+        // OURS to narrow, not the driver's (memory `reference_jsonb_date_type_lie` — a type
+        // that merely CLAIMS `Date` is how string timestamps leak into callers). NEVER null:
+        // the COALESCE falls back to the NOT NULL `created_at`.
+        lastActivityAt:
+          row.lastActivityAt instanceof Date ? row.lastActivityAt : new Date(row.lastActivityAt),
+        consultationCount: Number(row.consultationCount),
+      })),
+      resolvedCaseCount: Number(resolved?.total ?? 0),
+    };
   },
 
   /**

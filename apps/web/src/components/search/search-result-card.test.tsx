@@ -8,14 +8,16 @@ import type { ExpertCardData } from '@/components/expert';
 const { mockPush } = vi.hoisted(() => ({ mockPush: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush }) }));
 
-// Stub ExpertCard to expose the View-profile handler simply.
+// Stub ExpertCard to expose the View-profile + Book handlers simply.
 vi.mock('@/components/expert', () => ({
   ExpertCard: ({
     expert,
     onViewProfile,
+    onBook,
   }: {
     expert: { name: string };
     onViewProfile?: () => void;
+    onBook?: () => void;
   }) => (
     <div>
       <span>{expert.name}</span>
@@ -25,6 +27,13 @@ vi.mock('@/components/expert', () => ({
         </button>
       ) : (
         <span>View profile</span>
+      )}
+      {onBook ? (
+        <button type="button" onClick={onBook}>
+          Book
+        </button>
+      ) : (
+        <span>Book</span>
       )}
     </div>
   ),
@@ -89,5 +98,29 @@ describe('SearchResultCard', () => {
     // No button is wired — the card renders the default inert label.
     expect(screen.queryByRole('button', { name: 'View profile' })).not.toBeInTheDocument();
     expect(screen.getByText('View profile')).toBeInTheDocument();
+  });
+
+  // BAL-400 (D4a entry point 2)
+  it('navigates onBook to /experts/{username}?book=1&src=search', async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchResultCard expert={expert()} variant="grid" position={1} sort="soonest" page={1} />
+    );
+    await user.click(screen.getByRole('button', { name: 'Book' }));
+    expect(mockPush).toHaveBeenCalledWith('/experts/anil?book=1&src=search');
+  });
+
+  it('renders an inert Book CTA (no handler) when the expert has no username', () => {
+    render(
+      <SearchResultCard
+        expert={expert({ username: null })}
+        variant="grid"
+        position={1}
+        sort="best_match"
+        page={1}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Book' })).not.toBeInTheDocument();
+    expect(screen.getByText('Book')).toBeInTheDocument();
   });
 });

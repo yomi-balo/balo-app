@@ -26,6 +26,7 @@ export * from './expert-referral-invites';
 export * from './engagements';
 export * from './project-engagements';
 export * from './case-engagements';
+export * from './case-engagement-products';
 export * from './engagement-milestones';
 export * from './action-items';
 export * from './transcripts';

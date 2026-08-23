@@ -487,6 +487,7 @@ export const loadCase = cache(
 
     const base = {
       engagementId,
+      expertProfileId,
       viewerUserId: userId,
       header,
       nudge: toNudgeView(nudge),

@@ -9,7 +9,9 @@ import { InlineRating } from '@/components/balo/rating-display';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
+import type { BookingFlowExpert } from '@/components/booking';
 import { CaseEarningsBlock } from './case-earnings-block';
+import { CaseSlotQuickPick } from './case-slot-quick-pick';
 
 /**
  * BAL-421 — the rail's counterparty card. ONE component for both lenses, because the two
@@ -39,6 +41,18 @@ interface CasePartyCardProps {
   /** Copy differs on a CLOSED case: booking then starts a NEW case, and says so. */
   isOpen: boolean;
   counterpartyFirstName: string;
+  /** BAL-400 (D4a) — client lens + open case only; used by `CaseSlotQuickPick`. */
+  engagementId: string;
+  expertProfileId: string;
+  caseTitle: string;
+  consultationCount: number;
+  openedAtIso: string;
+  /**
+   * UX-2 (BAL-400 round 2) — the viewer's SESSION-derived email domain, passed through
+   * unchanged to `CaseSlotQuickPick` → the guest composer. NOT case-view PII (`CasePartyView`
+   * carries no email, by design) — it originates in the page's `getCurrentUser()` read.
+   */
+  viewerEmailDomain: string | null;
 }
 
 export function CasePartyCard({
@@ -47,12 +61,32 @@ export function CasePartyCard({
   earnings,
   isOpen,
   counterpartyFirstName,
+  engagementId,
+  expertProfileId,
+  caseTitle,
+  consultationCount,
+  openedAtIso,
+  viewerEmailDomain,
 }: Readonly<CasePartyCardProps>): React.JSX.Element {
   const onBookAnother = useCallback(() => {
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'book_another', lens });
   }, [lens]);
 
   const avatarSrc = getAvatarUrl(party.avatarUrl, 'thumbnail');
+
+  // BAL-400 — the quick-pick's `BookingFlowExpert`, built from the party view's already-loaded
+  // fields. `verified`/`availableForWork` have no equivalent on `CasePartyView` (this card
+  // never showed either), so they default rather than triggering a second read.
+  const quickPickExpert: BookingFlowExpert = {
+    expertProfileId,
+    name: party.name,
+    firstName: counterpartyFirstName,
+    initials: party.initials,
+    avatarUrl: avatarSrc,
+    partyLabel: party.orgLabel ?? party.name,
+    verified: false,
+    availableForWork: true,
+  };
 
   return (
     <section className="bg-card border-border rounded-3xl border px-5 py-4">
@@ -84,16 +118,11 @@ export function CasePartyCard({
         `/experts/{username}` and `expert_profiles.username` is NULLABLE, so a null username
         means NO button rather than a link to `/experts/null`. The expert lens never has one:
         only a client can book.
-
-        ⚠ NO SLOT STRIP. The design reference draws three next-available slots as tappable
-        quick-picks; owner decision D5 struck them because NO slot-listing endpoint exists
-        anywhere on the platform. A strip of fabricated times that failed on tap would be worse
-        than the plain affordance.
       */}
       {party.bookAgainHref !== null && (
         <div className="mt-4">
           <Button asChild className="min-h-11 w-full gap-2">
-            <Link href={party.bookAgainHref} onClick={onBookAnother}>
+            <Link href={`${party.bookAgainHref}?book=1&src=book_again`} onClick={onBookAnother}>
               <Video className="h-4 w-4" aria-hidden="true" />
               Book with {counterpartyFirstName} again
             </Link>
@@ -104,6 +133,20 @@ export function CasePartyCard({
             </p>
           )}
         </div>
+      )}
+
+      {/* BAL-400 (D4a entry point 3) — the next-available-slot quick-pick strip. Client lens,
+          open case only; silently renders nothing without ready availability. */}
+      {lens === 'client' && isOpen && (
+        <CaseSlotQuickPick
+          engagementId={engagementId}
+          caseTitle={caseTitle}
+          consultationCount={consultationCount}
+          openedAtIso={openedAtIso}
+          expertProfileId={expertProfileId}
+          expert={quickPickExpert}
+          viewerEmailDomain={viewerEmailDomain}
+        />
       )}
 
       {earnings !== undefined && <CaseEarningsBlock earnings={earnings} />}

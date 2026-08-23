@@ -190,6 +190,28 @@ export interface CreateMeetingInput {
    * `bookAndProvisionMeeting`) passes the authenticated user.
    */
   actorUserId?: string | null;
+  /**
+   * BAL-400 — the BOOKING-LEVEL idempotency key (a lowercase 64-char sha256 hex digest,
+   * hashed SERVER-SIDE from the actor id and a stable client nonce). Written to
+   * `meetings.booking_idempotency_key`, whose partial unique makes a second meeting for the
+   * same submit impossible.
+   *
+   * OPTIONAL and NULLABLE. The dev seeder and the three non-`case` booking paths pass
+   * none, and `POST /meetings` keeps accepting requests without one.
+   *
+   * ⚠ THE CALLER OWNS THE COLLISION. `create` does NOT use `ON CONFLICT` — the arbiter is a
+   * PARTIAL index, so a Drizzle `eq()` predicate there fails 42P10 at runtime (memory
+   * `reference_pg_partial_index_arbiter_param_42p10`), and swallowing the conflict would
+   * silently hand back a meeting the caller never inspected. A concurrent duplicate raises
+   * a bare `23505` on `meeting_booking_idempotency_key_idx`; the booking service catches it
+   * and re-reads via {@link meetingsRepository.findByBookingIdempotencyKey}.
+   *
+   * ⚠ A malformed key (anything that is not lowercase 64-hex) fails 23514 on
+   * `meeting_booking_idempotency_key_format` rather than being stored. That is the backstop
+   * against a caller forwarding a RAW CLIENT NONCE, which would turn the lookup into an
+   * IDOR — see the column docblock.
+   */
+  bookingIdempotencyKey?: string | null;
 }
 
 export interface MeetingWithContexts {
@@ -321,19 +343,53 @@ export const meetingsRepository = {
    * silent no-op without `POSTHOG_API_KEY`. The party stayed recoverable through
    * `meeting_contexts` → engagement → `company_id`; the individual did not.
    *
-   * ⚠ WHY AN AUDIT ROW SHIPS HERE BUT AN ATTRIBUTION COLUMN DOES NOT — the ceiling/floor split,
-   * recorded so the next reader does not "finish the job" by adding a column. ADR-1030's floor
-   * for a money-or-authority action is a DURABLE ATTRIBUTION COLUMN on the row itself
-   * (`credit_ledger.member_id`); its ceiling is an `audit_events` row in the same transaction.
-   * The ceiling is reachable in this PR because `audit_events.action`/`entityType` are open
-   * TEXT — "the audit vocabulary is open-ended and grows without a migration per event"
-   * (`schema/audit-events.ts`) — so it costs no schema change. A `booked_by_user_id` column on
-   * `meetings` IS a migration, and this branch deliberately ships none; it rides **BAL-400**'s
-   * idempotency-key migration (D2), which must alter this same table anyway. Shipping the
-   * ceiling now and the floor with that migration is strictly better than shipping neither,
-   * and it is NOT the failure mode `schema/meeting-presence.ts` warns about ("an attribution
-   * column with no writer is a worse lie than its absence") — that rules against an EMPTY
-   * COLUMN, whereas this is a WRITTEN ROW with no column yet.
+   * ⚠⚠ WHY AN AUDIT ROW SHIPS HERE AND AN ATTRIBUTION COLUMN **NEVER WILL** — the
+   * ceiling/floor split, SETTLED. RESOLVED BY BAL-400 (architect Decision 8, ratified by the
+   * owner as D5): **`meetings.booked_by_user_id` was deliberately NOT added, and this is the
+   * record of that decision.** An earlier revision of this block told the next reader the
+   * floor would ride BAL-400's idempotency-key migration. It did not. Do not finish the job.
+   *
+   * ADR-1030's floor for a money-or-authority action is a DURABLE ATTRIBUTION COLUMN on the
+   * row itself (`credit_ledger.member_id`); its ceiling is an `audit_events` row in the same
+   * transaction. The ceiling was reachable without a migration because
+   * `audit_events.action`/`entityType` are open TEXT ("the audit vocabulary is open-ended and
+   * grows without a migration per event" — `schema/audit-events.ts`), and it SHIPS, right
+   * here, at `recordMeetingBooked` below. That is what discharges the ADR requirement; the
+   * BAL-400 ticket concedes as much in writing.
+   *
+   * The floor was rejected for three reasons, in descending order of weight:
+   *
+   *   1. **IT COSTS A SHIPPED STRUCTURAL INVARIANT.**
+   *      `booked_by_user_id uuid ... -> users.id` fails THREE of the five assertions in
+   *      `invariants/meetings-no-context-column.test.ts` (no column name ending `_id`;
+   *      exactly one uuid column; ZERO foreign keys). The third is the naming-independent
+   *      one that actually holds the line, and the FIRST exception is the expensive one — it
+   *      converts "`meetings` declares no FK, full stop" into "`meetings` declares the FKs on
+   *      this list", and every later request inherits a worked precedent. `meetings` is the
+   *      ROOT of this subgraph: `meeting_contexts` and `meeting_presence` point AT it and
+   *      nothing points out. This would have been the first outbound edge, permanently.
+   *   2. **NOTHING READS IT.** No shipped or in-scope consumer asks "who booked this meeting"
+   *      off `meetings`. Cancel authorization is on the ADR-1046 ENGAGEMENT axis (delivery
+   *      identity, `hasEngagementCapability`), not on "did you book it".
+   *   3. The house rule quoted at `schema/meeting-presence.ts` — "an attribution column with
+   *      no writer is a worse lie than its absence" — is a rule against HALF-MEASURES:
+   *      column-and-writer-together, or not at all. "Not at all" is a legal reading of it,
+   *      and the audit row means the fact is not lost either way.
+   *
+   * ⚠ IF THE FLOOR IS EVER GENUINELY WANTED it is a STRUCTURAL change reviewed on its own
+   * merits: amend ADR-1045 §2 in the Notion Decision Register FIRST, then edit the invariant
+   * with a written justification (exact-match and closed-world — a regex or prefix allow-list
+   * re-opens the rename escape the invariant's own comments describe). Never a carve-out
+   * smuggled into a feature PR.
+   *
+   * ⚠ WHAT BAL-400 DID ADD to this table is `booking_idempotency_key` — `text`, no `_id`
+   * suffix, no `.references(` — which passes all five assertions by construction. See
+   * {@link CreateMeetingInput.bookingIdempotencyKey}.
+   *
+   * The surviving half of BAL-129 D12 is its FOURTH acceptance criterion, and it is the real
+   * substance: EVERY booking entry point must thread the authenticated user into
+   * `actorUserId`. An omitted actor records NULL (the ADR-1030 system-actor exemption), never
+   * a fabricated one — asserted in `meetings.integration.test.ts`.
    */
   async create(input: CreateMeetingInput): Promise<CreatedMeeting> {
     if (input.contexts.length === 0) {
@@ -349,6 +405,7 @@ export const meetingsRepository = {
           scheduledEnd: input.scheduledEnd,
           dailyRoomName: input.dailyRoomName ?? null,
           joinUrl: input.joinUrl ?? null,
+          bookingIdempotencyKey: input.bookingIdempotencyKey ?? null,
         })
         .returning();
       if (meeting === undefined) {
@@ -413,6 +470,35 @@ export const meetingsRepository = {
       .from(meetingContexts)
       .where(and(eq(meetingContexts.meetingId, meeting.id), isNull(meetingContexts.deletedAt)));
     return { meeting, contexts };
+  },
+
+  /**
+   * BAL-400 — THE IDEMPOTENT-REPLAY LOOKUP. The one live meeting booked under this
+   * booking key, or `undefined`. Rides `meeting_booking_idempotency_key_idx`.
+   *
+   * ⚠⚠ ACTOR-SCOPED BY CONSTRUCTION, AND THAT IS WHY THIS TAKES NO `userId`. The stored key
+   * is `sha256(userId:nonce)`, hashed SERVER-SIDE, so a key that resolves to a meeting can
+   * only have been minted by that meeting's booker — cross-user collision is not merely
+   * unlikely, it is unreachable. A RAW CLIENT-SUPPLIED KEY WOULD MAKE THIS AN IDOR: a
+   * stranger replaying someone else's key would be handed their meeting. If a future caller
+   * ever wants to key this on something the client chooses, it must add an ownership check
+   * here in the same change — or, better, keep the derivation and change nothing.
+   *
+   * LIVE ROWS ONLY (`deleted_at IS NULL`), matching the index predicate, so a soft-deleted
+   * meeting neither answers a replay nor blocks re-booking under the same key.
+   *
+   * ⚠ THIS IS THE **MEETING** GRAIN ONLY. A booking is two non-atomic hops, and after a
+   * case-created / meeting-failed partial there is no `meetings` row at all — the retry's
+   * first question ("has a case already been created?") is answered by
+   * `caseEngagementsRepository.findByBookingIdempotencyKey`, not here.
+   */
+  async findByBookingIdempotencyKey(key: string): Promise<Meeting | undefined> {
+    const [row] = await db
+      .select()
+      .from(meetings)
+      .where(and(eq(meetings.bookingIdempotencyKey, key), isNull(meetings.deletedAt)))
+      .limit(1);
+    return row;
   },
 
   /**

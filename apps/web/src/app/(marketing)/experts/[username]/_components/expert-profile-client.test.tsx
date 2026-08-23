@@ -6,6 +6,7 @@ import { track, EXPERT_PROFILE_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
 import type { ExpertProfileView } from '@/components/expert/profile';
 import { EMPTY_TAXONOMY } from '@/lib/search/taxonomy';
+import type { BookingContext } from '@/components/booking';
 
 const EMPTY_TAXONOMIES = { tags: EMPTY_TAXONOMY, products: EMPTY_TAXONOMY };
 
@@ -27,7 +28,58 @@ vi.mock('@/lib/project-request/actions/submit-project-request', () => ({
   submitProjectRequestAction: vi.fn(),
 }));
 
+// BAL-400 — the mounted BookingFlowDialog imports THREE `'use server'` action modules at
+// module load (same reason as the project-request mock above). Mock all three so the client
+// tree mounts cleanly without dragging `@balo/db` into the test.
+vi.mock('@/lib/booking/actions/book-consultation', () => ({
+  bookConsultationAction: vi.fn(),
+}));
+vi.mock('@/lib/booking/actions/refetch-open-cases', () => ({
+  refetchOpenCasesAction: vi.fn().mockResolvedValue({ ok: false }),
+}));
+vi.mock('@/lib/booking/actions/refetch-booking-context', () => ({
+  refetchBookingContextAction: vi.fn().mockResolvedValue({ ok: false }),
+}));
+
+const { mockAuthModalOpen } = vi.hoisted(() => ({ mockAuthModalOpen: vi.fn() }));
+vi.mock('@/hooks/use-auth-modal', () => ({
+  useAuthModal: () => ({ open: mockAuthModalOpen, close: vi.fn(), isOpen: false }),
+}));
+
+const mockRouterRefresh = vi.fn();
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: mockRouterRefresh }),
+}));
+
+// `ExpertAvailabilityCalendar` (embedded by Step 1) calls `fetch` on mount. No test in this
+// file exercises the calendar's own states (that's `ExpertAvailabilityCalendar.test.tsx`'s
+// job) — stub a rejection so it resolves to its (already-tested) error state instantly, never
+// a real network attempt.
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('not mocked in this test file')));
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 import { ExpertProfileClient } from './expert-profile-client';
+
+const DEFAULT_BOOKING_CONTEXT: BookingContext = {
+  arm: 'single_company',
+  company: { id: 'company-1', name: 'Northwind Industrial', logoUrl: null },
+  openCases: [],
+  resolvedCaseCount: 0,
+};
+
+/** The five BAL-400 props every render call site now needs, with sane defaults. */
+const bookingProps = {
+  bookingAvatarUrl: null,
+  productsTaxonomy: EMPTY_TAXONOMY,
+  bookingContext: DEFAULT_BOOKING_CONTEXT as BookingContext | null,
+  viewerEmailDomain: null as string | null,
+  autoOpenBooking: false,
+  autoOpenBookingSource: 'profile' as const,
+};
 
 /**
  * A fully serializable `ExpertProfileView` mirroring the exact shape in
@@ -138,6 +190,7 @@ describe('ExpertProfileClient — full profile', () => {
         portraitUrl="https://cdn.test/anil.png"
         isLoggedIn
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
 
@@ -163,6 +216,7 @@ describe('ExpertProfileClient — full profile', () => {
         portraitUrl={null}
         isLoggedIn={false}
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
 
@@ -180,6 +234,7 @@ describe('ExpertProfileClient — full profile', () => {
         portraitUrl={null}
         isLoggedIn
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     // HeroPortrait is an inline SVG placeholder (no <img>).
@@ -199,6 +254,7 @@ describe('ExpertProfileClient — sparse profile', () => {
         portraitUrl={null}
         isLoggedIn={false}
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     expect(screen.queryByRole('button', { name: 'Work' })).not.toBeInTheDocument();
@@ -214,6 +270,7 @@ describe('ExpertProfileClient — sparse profile', () => {
         portraitUrl={null}
         isLoggedIn={false}
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     expect(screen.getByText(/hasn't added a bio yet/i)).toBeInTheDocument();
@@ -240,6 +297,7 @@ describe('ExpertProfileClient — sparse profile', () => {
         portraitUrl={null}
         isLoggedIn={false}
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     expect(container.textContent ?? '').not.toContain('0.0');
@@ -255,6 +313,7 @@ describe('ExpertProfileClient — sparse profile', () => {
         portraitUrl={null}
         isLoggedIn={false}
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     // Hero stat: average + count, never one without the other.
@@ -276,6 +335,7 @@ describe('ExpertProfileClient — sparse profile', () => {
         portraitUrl={null}
         isLoggedIn={false}
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     expect(screen.getByText('Rate on request')).toBeInTheDocument();
@@ -294,6 +354,7 @@ describe('ExpertProfileClient — sparse profile', () => {
         portraitUrl={null}
         isLoggedIn={false}
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     expect(await axe(container)).toHaveNoViolations();
@@ -305,7 +366,7 @@ describe('ExpertProfileClient — CTA handlers', () => {
     vi.clearAllMocks();
   });
 
-  it('toasts "Coming soon" for the still-stubbed book + message CTAs', async () => {
+  it('still toasts "Coming soon" for the still-stubbed message CTA', async () => {
     const user = userEvent.setup();
     render(
       <ExpertProfileClient
@@ -313,17 +374,83 @@ describe('ExpertProfileClient — CTA handlers', () => {
         portraitUrl={null}
         isLoggedIn
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /send a message first/i }));
+
+    expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+      expert_id: 'expert-1',
+      cta: 'message',
+    });
+    expect(mockToast).toHaveBeenCalledWith('Coming soon', expect.objectContaining({}));
+  });
+
+  // BAL-400 — "book" is no longer a stub: it opens the BookingFlowDialog directly for a
+  // signed-in visitor (D4a entry point 1).
+  it('opens the booking wrapper (not a toast) for a signed-in visitor', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
 
     await user.click(screen.getByRole('button', { name: /book a consultation/i }));
-    await user.click(screen.getByRole('button', { name: /send a message first/i }));
 
-    const clickedCtas = mockTrack.mock.calls
-      .filter(([event]) => event === EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED)
-      .map(([, props]) => (props as { cta: string }).cta);
-    expect(clickedCtas).toEqual(['book', 'message']);
-    expect(mockToast).toHaveBeenCalledWith('Coming soon', expect.objectContaining({}));
+    expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+      expert_id: 'expert-1',
+      cta: 'book',
+    });
+    // The wrapper's header renders the expert's name — the dialog is genuinely open.
+    expect(await screen.findByText('Book a consultation with Anil Pilania')).toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalledWith('Coming soon', expect.anything());
+    expect(mockAuthModalOpen).not.toHaveBeenCalled();
+  });
+
+  // Edge Case (design spec): signed-out visitor clicking "Book" sees the auth modal first,
+  // never the wrapper directly.
+  it('opens the auth modal instead of the wrapper for a signed-out visitor', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+        bookingContext={null}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /book a consultation/i }));
+
+    expect(mockAuthModalOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+    expect(screen.queryByText(/book a consultation with anil pilania/i)).not.toBeInTheDocument();
+  });
+
+  // `?book=1` deep link (entry points 2/4, D4a) — auto-opens once mounted.
+  it('auto-opens the booking wrapper when autoOpenBooking is true', async () => {
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+        autoOpenBooking
+        autoOpenBookingSource="search"
+      />
+    );
+
+    expect(await screen.findByText('Book a consultation with Anil Pilania')).toBeInTheDocument();
   });
 
   it('opens the ProjectRequestPanel (not a toast) and still fires cta_clicked {cta:project}', async () => {
@@ -334,6 +461,7 @@ describe('ExpertProfileClient — CTA handlers', () => {
         portraitUrl={null}
         isLoggedIn
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
 
@@ -369,6 +497,7 @@ describe('ExpertProfileClient — CTA handlers', () => {
         portraitUrl={null}
         isLoggedIn
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
     // handleJump sets active + smooth-scrolls; scrollIntoView is stubbed in setup.
@@ -422,6 +551,7 @@ describe('ExpertProfileClient — IntersectionObserver effects', () => {
         portraitUrl={null}
         isLoggedIn
         projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
       />
     );
 

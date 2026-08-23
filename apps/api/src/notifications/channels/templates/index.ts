@@ -75,6 +75,11 @@ import {
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { ExpertSearchabilityLostEmail } from './expert-searchability-lost.js';
 import type { ExpertChecklistItemKey } from '@balo/shared/experts';
+import {
+  BookingConfirmedClientEmail,
+  BookingConfirmedExpertEmail,
+  bookingConfirmedSubject,
+} from './booking-confirmed.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -1547,6 +1552,61 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     }),
     subject: 'Your consultation has started',
   }),
+
+  // BAL-400 (D4) — the CLIENT half of `booking.confirmed`. Prospective copy names the expert
+  // PARTY (`expertPartyLabel`), never a pronoun. CTA always deep-links to the case; the join
+  // link is a body line, gated on `provisioned` (D2c — a Daily-room failure must never
+  // promise a dead link). No calendar claim (D2a): only the expert's own calendar is written.
+  'booking-confirmed-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const isNewCase = data.isNewCase === true;
+    const engagementId = (data.engagementId as string) ?? '';
+    const joinPath = (data.joinPath as string) ?? '';
+    return {
+      component: React.createElement(BookingConfirmedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: expertParty,
+        caseTitle: (data.caseTitle as string) ?? 'your case',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        isNewCase,
+        priorConsultationCount: numberCount(data.priorConsultationCount),
+        guestCount: numberCount(data.guestCount),
+        provisioned: data.provisioned === true,
+        joinUrl: `${BASE_URL}${joinPath}`,
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: bookingConfirmedSubject('client', expertParty, isNewCase),
+    };
+  },
+
+  // BAL-400 (D4) — the EXPERT half of the same event. Prospective copy names the CLIENT
+  // company (`clientCompanyName`), never an invented individual. Same CTA/join-link/no-calendar
+  // rules as the client half.
+  'booking-confirmed-expert': (data) => {
+    const clientCompany = (data.clientCompanyName as string) ?? 'A client';
+    const isNewCase = data.isNewCase === true;
+    const engagementId = (data.engagementId as string) ?? '';
+    const joinPath = (data.joinPath as string) ?? '';
+    return {
+      component: React.createElement(BookingConfirmedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: clientCompany,
+        caseTitle: (data.caseTitle as string) ?? 'the case',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        isNewCase,
+        priorConsultationCount: numberCount(data.priorConsultationCount),
+        guestCount: numberCount(data.guestCount),
+        provisioned: data.provisioned === true,
+        joinUrl: `${BASE_URL}${joinPath}`,
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: bookingConfirmedSubject('expert', clientCompany, isNewCase),
+    };
+  },
 };
 
 export function getEmailTemplate(

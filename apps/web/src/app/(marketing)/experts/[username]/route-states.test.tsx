@@ -68,10 +68,16 @@ vi.mock('./_components/expert-profile-client', () => ({
 
 import ExpertProfilePage, { generateMetadata } from './page';
 
-const VIEW: Pick<ExpertProfileView, 'name'> = { name: 'Anil Pilania' };
+const VIEW: Pick<ExpertProfileView, 'name' | 'expertId'> = {
+  name: 'Anil Pilania',
+  expertId: 'expert-1',
+};
 
-async function renderPage(username = 'anil') {
-  const ui = await ExpertProfilePage({ params: Promise.resolve({ username }) });
+async function renderPage(username = 'anil', searchParams: { book?: string; src?: string } = {}) {
+  const ui = await ExpertProfilePage({
+    params: Promise.resolve({ username }),
+    searchParams: Promise.resolve(searchParams),
+  });
   return render(ui);
 }
 
@@ -84,7 +90,7 @@ describe('ExpertProfilePage (RSC)', () => {
     mockFindProfile.mockResolvedValue({ id: 'p1' });
     mockMapView.mockReturnValue(VIEW);
     mockGetAvatarUrl.mockReturnValue('https://cdn.test/anil.png');
-    mockGetCurrentUser.mockResolvedValue({ id: 'u1' });
+    mockGetCurrentUser.mockResolvedValue({ id: 'u1', email: 'anil@example.com' });
 
     await renderPage('anil');
 

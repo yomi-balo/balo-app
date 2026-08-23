@@ -233,3 +233,10 @@ export {
   AVAILABILITY_SERVER_EVENTS,
   type AvailabilityServerEventMap,
 } from './availability';
+export {
+  BOOKING_EVENTS,
+  type BookingEventMap,
+  type BookingSource,
+  type BookingEntryMode,
+  type BookingAbandonStep,
+} from './booking';

@@ -5,6 +5,17 @@ import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseEarningsView, CasePartyView } from '@/lib/cases/case-view-types';
 import { CasePartyCard } from './case-party-card';
 
+// BAL-400 — CasePartyCard now mounts `CaseSlotQuickPick` (which calls the real availability
+// fetch) whenever `lens==='client' && isOpen`. That component has its own test file; here it's
+// stubbed so this file stays scoped to the identity block + booking CTA it already covers.
+const { mockQuickPickProps } = vi.hoisted(() => ({ mockQuickPickProps: vi.fn() }));
+vi.mock('./case-slot-quick-pick', () => ({
+  CaseSlotQuickPick: (props: Readonly<{ viewerEmailDomain: string | null }>) => {
+    mockQuickPickProps(props);
+    return <div data-testid="quick-pick-stub" />;
+  },
+}));
+
 /**
  * BAL-421 — the rail's counterparty card: ONE component for both lenses.
  *
@@ -40,7 +51,19 @@ const NOT_YET: CaseEarningsView = {
 
 function renderCard(over: Readonly<Partial<React.ComponentProps<typeof CasePartyCard>>> = {}) {
   return render(
-    <CasePartyCard party={PARTY} lens="client" isOpen counterpartyFirstName="Amara" {...over} />
+    <CasePartyCard
+      party={PARTY}
+      lens="client"
+      isOpen
+      counterpartyFirstName="Amara"
+      engagementId="engagement-1"
+      expertProfileId="expert-1"
+      caseTitle="Flow interview loop"
+      consultationCount={2}
+      openedAtIso="2026-06-12T09:00:00Z"
+      viewerEmailDomain={null}
+      {...over}
+    />
   );
 }
 
@@ -131,11 +154,12 @@ describe('CasePartyCard — the identity block', () => {
 });
 
 describe('CasePartyCard — the booking CTA is a live destination or nothing', () => {
-  it('links to the expert profile and names the counterparty', () => {
+  // BAL-400 (D4a entry point 4) — the query params open the booking wrapper directly.
+  it('links to the expert profile with the booking deep-link and names the counterparty', () => {
     renderCard();
     expect(screen.getByRole('link', { name: BOOK_AGAIN })).toHaveAttribute(
       'href',
-      '/experts/amara-okafor'
+      '/experts/amara-okafor?book=1&src=book_again'
     );
   });
 
@@ -181,6 +205,40 @@ describe('CasePartyCard — the booking CTA is a live destination or nothing', (
 
     renderCard({ isOpen: true });
     expect(screen.queryByText(NEW_CASE_NOTE)).not.toBeInTheDocument();
+  });
+});
+
+// BAL-400 (D4a entry point 3) — the quick-pick strip is client-lens + open-case only.
+describe('CasePartyCard — CaseSlotQuickPick gating', () => {
+  it('renders the quick-pick for an open case on the client lens', () => {
+    renderCard({ lens: 'client', isOpen: true });
+    expect(screen.getByTestId('quick-pick-stub')).toBeInTheDocument();
+  });
+
+  it('omits the quick-pick on a closed case', () => {
+    renderCard({ lens: 'client', isOpen: false });
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+  });
+
+  it('omits the quick-pick on the expert lens', () => {
+    renderCard({ lens: 'expert', isOpen: true });
+    expect(screen.queryByTestId('quick-pick-stub')).not.toBeInTheDocument();
+  });
+
+  // UX-2 (BAL-400 round 2) — the SESSION-derived domain must reach the composer honestly;
+  // a hardcoded null here is exactly the bug UX-2 found on this entry point.
+  it('forwards the real viewerEmailDomain to CaseSlotQuickPick, not a hardcoded null', () => {
+    renderCard({ lens: 'client', isOpen: true, viewerEmailDomain: 'northwind.com' });
+    expect(mockQuickPickProps).toHaveBeenCalledWith(
+      expect.objectContaining({ viewerEmailDomain: 'northwind.com' })
+    );
+  });
+
+  it('forwards null when the viewer domain is unknown', () => {
+    renderCard({ lens: 'client', isOpen: true, viewerEmailDomain: null });
+    expect(mockQuickPickProps).toHaveBeenCalledWith(
+      expect.objectContaining({ viewerEmailDomain: null })
+    );
   });
 });
 

@@ -63,6 +63,7 @@ import { CaseSurface } from './case-surface';
 
 const BASE = {
   engagementId: ENGAGEMENT_ID,
+  expertProfileId: 'expert-1',
   viewerUserId: VIEWER_ID,
   header: {
     title: 'Flow interview loop',

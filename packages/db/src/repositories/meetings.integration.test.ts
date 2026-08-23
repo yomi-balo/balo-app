@@ -1192,3 +1192,155 @@ describe('meetings — the ended_by CHECK', () => {
     expect(unattributed.endedBy).toBeNull();
   });
 });
+
+// ── BAL-400 — the booking idempotency key ─────────────────────────────────────────────
+//
+// ⚠ THE OTHER HALF OF BAL-129 D12 IS ALREADY COVERED ABOVE, NOT DUPLICATED HERE.
+// "the D12 CEILING" — `create({ actorUserId })` writes exactly one `meeting.booked` audit
+// row naming that user, and an omitted actor records NULL rather than a fabricated actor —
+// is asserted by `meetingsRepository.create — the meeting.booked audit row`. The FLOOR
+// (`meetings.booked_by_user_id`) was deliberately NOT built (architect Decision 8, owner
+// D5); its absence is enforced by `invariants/meetings-no-context-column.test.ts`, which
+// must stay green and untouched.
+
+let meetingKeySeq = 0;
+
+/** A DISTINCT, VALID booking key: 64 lowercase hex chars, per the format CHECK. */
+function meetingBookingKey(): string {
+  meetingKeySeq += 1;
+  // Offset so these never collide with the case-grain suite's keys if both ever share a DB.
+  return (meetingKeySeq + 0x1000).toString(16).padStart(64, '0');
+}
+
+describe('meetingsRepository.create — bookingIdempotencyKey (BAL-400)', () => {
+  it('persists the key, and defaults it to NULL when the caller passes none', async () => {
+    const key = meetingBookingKey();
+    const { engagement } = await caseEngagementFactory();
+    const other = await caseEngagementFactory();
+
+    const keyed = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      bookingIdempotencyKey: key,
+    });
+    const unkeyed = await meetingsRepository.create({
+      ...schedule(2),
+      contexts: [{ contextType: 'case', contextId: other.engagement.id }],
+    });
+
+    expect(keyed.meeting.bookingIdempotencyKey).toBe(key);
+    // The three non-`case` booking paths and the dev seeder pass none, and must keep working.
+    expect(unkeyed.meeting.bookingIdempotencyKey).toBeNull();
+  });
+
+  it('REFUSES a second live meeting under the SAME key — 23505 on the partial unique', async () => {
+    const key = meetingBookingKey();
+    const a = await caseEngagementFactory();
+    const b = await caseEngagementFactory();
+
+    await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'case', contextId: a.engagement.id }],
+      bookingIdempotencyKey: key,
+    });
+
+    // THE WHOLE POINT: a lost 201 followed by a re-POST cannot create a second meeting, a
+    // second Daily room, a second calendar event and a second notification fan-out. `create`
+    // uses no `ON CONFLICT` (the arbiter is a PARTIAL index — 42P10), so the service sees the
+    // raw 23505 and re-reads by key.
+    await expect(
+      meetingsRepository.create({
+        ...schedule(2),
+        contexts: [{ contextType: 'case', contextId: b.engagement.id }],
+        bookingIdempotencyKey: key,
+      })
+    ).rejects.toMatchObject({ code: '23505' });
+
+    const rows = await db
+      .select({ id: meetings.id })
+      .from(meetings)
+      .where(eq(meetings.bookingIdempotencyKey, key));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('lets a SOFT-DELETED meeting FREE its key (the unique is partial on deleted_at)', async () => {
+    const key = meetingBookingKey();
+    const a = await caseEngagementFactory();
+    const b = await caseEngagementFactory();
+
+    const first = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'case', contextId: a.engagement.id }],
+      bookingIdempotencyKey: key,
+    });
+    await meetingsRepository.softDelete(first.meeting.id);
+
+    // Without the `deleted_at IS NULL` half of the predicate this is 23505 forever — the
+    // `reference_softdelete_nonpartial_unique_recreate` failure mode.
+    const second = await meetingsRepository.create({
+      ...schedule(2),
+      contexts: [{ contextType: 'case', contextId: b.engagement.id }],
+      bookingIdempotencyKey: key,
+    });
+    expect(second.meeting.id).not.toBe(first.meeting.id);
+    expect(second.meeting.bookingIdempotencyKey).toBe(key);
+  });
+
+  it('REJECTS a malformed key with 23514 — a raw client nonce never reaches the column', async () => {
+    const { engagement } = await caseEngagementFactory();
+    await expect(
+      meetingsRepository.create({
+        ...schedule(),
+        contexts: [{ contextType: 'case', contextId: engagement.id }],
+        // A client-minted UUID: the exact IDOR shape the CHECK exists to refuse.
+        bookingIdempotencyKey: randomUUID(),
+      })
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('REJECTS an UPPERCASE hex key — the digest is lowercase by contract', async () => {
+    const { engagement } = await caseEngagementFactory();
+    await expect(
+      meetingsRepository.create({
+        ...schedule(),
+        contexts: [{ contextType: 'case', contextId: engagement.id }],
+        bookingIdempotencyKey: 'F'.repeat(64),
+      })
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+});
+
+describe('meetingsRepository.findByBookingIdempotencyKey (BAL-400)', () => {
+  it('returns the live meeting booked under the key', async () => {
+    const key = meetingBookingKey();
+    const { engagement } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      bookingIdempotencyKey: key,
+    });
+
+    const found = await meetingsRepository.findByBookingIdempotencyKey(key);
+    expect(found?.id).toBe(created.meeting.id);
+    expect(found?.bookingIdempotencyKey).toBe(key);
+  });
+
+  it('returns undefined for an unknown key', async () => {
+    await expect(
+      meetingsRepository.findByBookingIdempotencyKey(meetingBookingKey())
+    ).resolves.toBeUndefined();
+  });
+
+  it('IGNORES a soft-deleted meeting, so a replay never resurrects a dead booking', async () => {
+    const key = meetingBookingKey();
+    const { engagement } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      bookingIdempotencyKey: key,
+    });
+    await meetingsRepository.softDelete(created.meeting.id);
+
+    await expect(meetingsRepository.findByBookingIdempotencyKey(key)).resolves.toBeUndefined();
+  });
+});

@@ -40,6 +40,9 @@ export {
   // ⚠ `AVAILABILITY_SERVER_EVENTS` must NEVER join this list — it is server-only
   // (exported from '../server' instead).
   AVAILABILITY_EVENTS,
+  // BAL-400 — the case-booking flow. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a
+  // DIFFERENT package (`apps/web` cannot import it), not in this one.
+  BOOKING_EVENTS,
 } from '../events';
 
 export type {
@@ -115,4 +118,9 @@ export type {
   // Availability CLIENT family — BAL-416's conflict warnings AND BAL-236's slot picker.
   AvailabilityEventMap,
   AvailabilityConflictResolution,
+  // BAL-400 — the case-booking flow's client vocabulary.
+  BookingEventMap,
+  BookingSource,
+  BookingEntryMode,
+  BookingAbandonStep,
 } from '../events';

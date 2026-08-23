@@ -85,6 +85,7 @@ export type AssertPendingHasNoFigure = AssertNever<
 
 const BASE = {
   engagementId: 'e-1',
+  expertProfileId: 'expert-1',
   viewerUserId: 'u-1',
   header: {
     title: 'Flow interview loop',

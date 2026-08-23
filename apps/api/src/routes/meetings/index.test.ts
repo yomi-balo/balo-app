@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 const {
   mockAuthorizeMeetingBooking,
   mockBookAndProvisionMeeting,
+  mockLookupBookingReplay,
   mockCheckRateLimit,
   mockIsWindowAvailableForExpert,
   MatchModeDiscoveryNotBookableError,
@@ -10,6 +11,7 @@ const {
   MeetingContextRequiredError,
   MeetingContextUnresolvableError,
   MeetingExpertAmbiguousError,
+  BookingIdempotencyKeyConflictError,
 } = vi.hoisted(() => {
   /**
    * The real classes embed raw uuids in their messages, ON PURPOSE, so the SERVER log is
@@ -46,9 +48,18 @@ const {
       this.name = 'MeetingContextRequiredError';
     }
   }
+  // BAL-400 (Decision 7) — this one is REAL `provision-meeting.ts` shape, not `@balo/db`'s:
+  // it also embeds a raw uuid (the existing meeting id) for the same no-echo reason.
+  class BookingIdempotencyKeyConflictError extends Error {
+    constructor(meetingId: string) {
+      super(`Booking idempotency key already resolves to a different case (meeting ${meetingId})`);
+      this.name = 'BookingIdempotencyKeyConflictError';
+    }
+  }
   return {
     mockAuthorizeMeetingBooking: vi.fn(),
     mockBookAndProvisionMeeting: vi.fn(),
+    mockLookupBookingReplay: vi.fn(),
     mockCheckRateLimit: vi.fn(),
     mockIsWindowAvailableForExpert: vi.fn(),
     MatchModeDiscoveryNotBookableError,
@@ -56,6 +67,7 @@ const {
     MeetingContextRequiredError,
     MeetingContextUnresolvableError,
     MeetingExpertAmbiguousError,
+    BookingIdempotencyKeyConflictError,
   };
 });
 
@@ -80,6 +92,8 @@ vi.mock('../../services/meetings/authorize-meeting-booking.js', () => ({
 }));
 vi.mock('../../services/meetings/provision-meeting.js', () => ({
   bookAndProvisionMeeting: mockBookAndProvisionMeeting,
+  lookupBookingReplay: mockLookupBookingReplay,
+  BookingIdempotencyKeyConflictError,
 }));
 // The rate limiter is faked at the `checkRateLimit` seam, not at Redis: the assertions are
 // about WHICH keys the route consumes and how it behaves on `allowed: false` / a throw, none
@@ -178,6 +192,8 @@ describe('POST /meetings', () => {
     vi.clearAllMocks();
     mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 3600 });
     mockIsWindowAvailableForExpert.mockResolvedValue(true);
+    // Default: this key names nothing yet, so every guard runs exactly as before.
+    mockLookupBookingReplay.mockResolvedValue({ kind: 'none' });
     mockAuthorizeMeetingBooking.mockResolvedValue({
       ok: true,
       companyId: 'company_1',
@@ -250,6 +266,134 @@ describe('POST /meetings', () => {
       }),
       expect.anything()
     );
+  });
+
+  // ── BAL-400 (Decision 7) — bookingIdempotencyKey ────────────────────────────
+
+  describe('bookingIdempotencyKey', () => {
+    const KEY = 'a'.repeat(64);
+
+    it('is OPTIONAL — the three other context types keep working with no key at all', async () => {
+      const res = await post(body());
+
+      expect(res.statusCode).toBe(201);
+      expect(mockBookAndProvisionMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ bookingIdempotencyKey: undefined }),
+        expect.anything()
+      );
+    });
+
+    it('threads a well-formed key into bookAndProvisionMeeting', async () => {
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(201);
+      expect(mockBookAndProvisionMeeting).toHaveBeenCalledWith(
+        expect.objectContaining({ bookingIdempotencyKey: KEY }),
+        expect.anything()
+      );
+    });
+
+    it.each([
+      { label: 'too short', key: 'a'.repeat(63) },
+      { label: 'too long', key: 'a'.repeat(65) },
+      { label: 'uppercase hex', key: 'A'.repeat(64) },
+      { label: 'non-hex characters', key: 'z'.repeat(64) },
+    ])('400s invalid_request on a malformed key ($label)', async ({ key }) => {
+      const res = await post(body({ bookingIdempotencyKey: key }));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'invalid_request' });
+      expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
+    });
+
+    it('a repeated POST with the same key returns 201 with the SAME meetingId (the service owns the replay)', async () => {
+      // The route's job is only to thread the key through and map the service's typed
+      // errors — the actual dedup/replay logic is `bookAndProvisionMeeting`'s
+      // (service-level tests in `provision-meeting.test.ts`). Here we just pin that TWO
+      // identical POSTs against a mocked service both 201 with the SAME meetingId and that
+      // the route creates no second anything of its own.
+      mockBookAndProvisionMeeting.mockResolvedValue({
+        meeting: bookedMeeting(),
+        provisioned: true,
+        dailyRoomName: ROOM_NAME,
+        joinUrl: JOIN_URL,
+      });
+
+      const first = await post(body({ bookingIdempotencyKey: KEY }));
+      const second = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(first.statusCode).toBe(201);
+      expect(second.statusCode).toBe(201);
+      expect(first.json().meetingId).toBe(MEETING_ID);
+      expect(second.json().meetingId).toBe(MEETING_ID);
+    });
+
+    // ── S3/M1 regression: THE GUARD ORDER ───────────────────────────────────
+    //
+    // ⚠⚠ THESE TESTS DRIVE `isWindowAvailableForExpert` TO **FALSE**, ON PURPOSE. The
+    // pre-existing case above mocks it `true`, which is exactly why S3 was invisible to CI:
+    // in production a committed booking writes its own `confirmed` consultation row, and the
+    // very next availability read sees that row and answers BUSY. So `false` — not `true` —
+    // is what the lost-201 retry actually meets, and a replay that only works when the window
+    // reads free is a replay that never runs.
+
+    it('REPLAYS with 201 even when the window now reads BUSY (the lost-201 retry, S3)', async () => {
+      mockLookupBookingReplay.mockResolvedValue({ kind: 'match', meeting: bookedMeeting() });
+      mockIsWindowAvailableForExpert.mockResolvedValue(false);
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().meetingId).toBe(MEETING_ID);
+      // The availability gate must not even have been consulted, and the per-pair limit must
+      // not have been consumed a second time.
+      expect(mockIsWindowAvailableForExpert).not.toHaveBeenCalled();
+      expect(mockCheckRateLimit).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ keyPrefix: 'ratelimit:meetings:user-expert' }),
+        expect.anything()
+      );
+      expect(mockBookAndProvisionMeeting).toHaveBeenCalledTimes(1);
+    });
+
+    it('still 409s window_not_available when the key names NOTHING (no replay to lean on)', async () => {
+      mockLookupBookingReplay.mockResolvedValue({ kind: 'none' });
+      mockIsWindowAvailableForExpert.mockResolvedValue(false);
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'window_not_available' });
+      expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
+    });
+
+    it('a key naming a DIFFERENT booking keeps every guard — no skip on a conflict', async () => {
+      mockLookupBookingReplay.mockResolvedValue({ kind: 'conflict', meetingId: MEETING_ID });
+      mockIsWindowAvailableForExpert.mockResolvedValue(false);
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(409);
+      expect(mockIsWindowAvailableForExpert).toHaveBeenCalled();
+    });
+
+    it('NEVER skips the tenancy gate for a replay — the key proves only who minted it', async () => {
+      mockLookupBookingReplay.mockResolvedValue({ kind: 'match', meeting: bookedMeeting() });
+      mockAuthorizeMeetingBooking.mockResolvedValue({ ok: false, code: 'context_not_found' });
+
+      const res = await post(body({ bookingIdempotencyKey: KEY }));
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ error: 'context_not_found' });
+      expect(mockBookAndProvisionMeeting).not.toHaveBeenCalled();
+      // The probe must not even run before the gate has answered.
+      expect(mockLookupBookingReplay).not.toHaveBeenCalled();
+    });
+
+    it('never probes at all when no key is supplied', async () => {
+      await post(body());
+      expect(mockLookupBookingReplay).not.toHaveBeenCalled();
+    });
   });
 
   // ── 401 ───────────────────────────────────────────────────────────────────
@@ -506,6 +650,9 @@ describe('POST /meetings', () => {
     { Err: MatchModeDiscoveryNotBookableError, error: 'discovery_not_routed' },
     { Err: MeetingExpertAmbiguousError, error: 'meeting_expert_ambiguous' },
     { Err: MeetingContextNotProjectableError, error: 'context_not_bookable' },
+    // BAL-400 (Decision 7) — a `bookingIdempotencyKey` that already resolves to a meeting
+    // booked against a DIFFERENT context.
+    { Err: BookingIdempotencyKeyConflictError, error: 'idempotency_key_conflict' },
   ])('409s "$error" on the matching typed error', async ({ Err, error }) => {
     mockBookAndProvisionMeeting.mockRejectedValue(new Err(CONTEXT_ID));
 
@@ -542,6 +689,7 @@ describe('POST /meetings', () => {
       { label: 'MatchModeDiscoveryNotBookableError', Err: MatchModeDiscoveryNotBookableError },
       { label: 'MeetingExpertAmbiguousError', Err: MeetingExpertAmbiguousError },
       { label: 'MeetingContextNotProjectableError', Err: MeetingContextNotProjectableError },
+      { label: 'BookingIdempotencyKeyConflictError', Err: BookingIdempotencyKeyConflictError },
     ])('$label', async ({ Err }) => {
       const thrown = new Err(CONTEXT_ID);
       // Sanity: the message really does carry a uuid, so the assertion below has teeth.

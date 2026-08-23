@@ -15,6 +15,13 @@ export interface ConsultationEventInput {
   /** The Daily room the client/expert actually meet in — carried in BOTH `description` and
    *  `location` so it is visible regardless of which field a calendar client surfaces. */
   readonly joinUrl: string;
+  /**
+   * BAL-400 (D2) — OPTIONAL. When present, prefixes `description` above the join URL so the
+   * expert's calendar names WHAT the consultation is about, not only where to join it.
+   * Absent ⇒ `description` is exactly `joinUrl`, unchanged from BAL-396's shipped shape (every
+   * caller before BAL-400 omits it).
+   */
+  readonly caseTitle?: string;
 }
 
 /**
@@ -38,7 +45,8 @@ export interface ConsultationEventInput {
 export function buildConsultationEvent(input: ConsultationEventInput): CreateEventInput {
   return {
     title: input.title,
-    description: input.joinUrl,
+    description:
+      input.caseTitle === undefined ? input.joinUrl : `${input.caseTitle}\n\n${input.joinUrl}`,
     location: input.joinUrl,
     start: { dateTime: input.startAt.toISOString(), timeZone: 'UTC' },
     end: { dateTime: input.endAt.toISOString(), timeZone: 'UTC' },

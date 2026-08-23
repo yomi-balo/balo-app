@@ -36,8 +36,16 @@ import { MarkResolvedButton, RequestResolutionButton } from './case-actions';
  * ⚠ THE LENS IS A DISCRIMINANT ALL THE WAY DOWN. The earnings block is not conditionally
  * hidden on the client arm — a client-lens view has no `earnings` FIELD to pass, so the
  * fee-concealment invariant is structural rather than a render-time `&&`.
+ *
+ * ⚠ `viewerEmailDomain` (UX-2, BAL-400 round 2) is SESSION-derived, passed in from `page.tsx`
+ * (`getCurrentUser().email`) — never sourced from `view`, since `CasePartyView` structurally
+ * excludes email. Optional/defaulted to `null` so the many existing render call-sites that
+ * predate this prop keep compiling unchanged.
  */
-export function CaseSurface({ view }: Readonly<{ view: CaseSurfaceView }>): React.JSX.Element {
+export function CaseSurface({
+  view,
+  viewerEmailDomain = null,
+}: Readonly<{ view: CaseSurfaceView; viewerEmailDomain?: string | null }>): React.JSX.Element {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
@@ -124,6 +132,12 @@ export function CaseSurface({ view }: Readonly<{ view: CaseSurfaceView }>): Reac
                 earnings={view.lens === 'expert' ? view.earnings : undefined}
                 isOpen={view.header.isOpen}
                 counterpartyFirstName={counterpartyFirstName}
+                engagementId={view.engagementId}
+                expertProfileId={view.expertProfileId}
+                caseTitle={view.header.title}
+                consultationCount={view.header.consultationCount}
+                openedAtIso={view.header.openedAtIso}
+                viewerEmailDomain={viewerEmailDomain}
               />
             </Reveal>
             <Reveal delay={0.2}>

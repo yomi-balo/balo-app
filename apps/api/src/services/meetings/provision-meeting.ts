@@ -127,15 +127,46 @@
  *   already booked — re-running an availability check there would refuse to heal exactly the
  *   bookings that need healing, because the meeting's own consultation row now reads as busy.
  */
-import { meetingsRepository, type CreatedMeeting, type Meeting } from '@balo/db';
+import {
+  meetingsRepository,
+  caseEngagementsRepository,
+  companiesRepository,
+  type CreatedMeeting,
+  type Meeting,
+} from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { dailyRoomNameForMeeting, type MeetingBookingContextType } from '@balo/shared/meetings';
 import type { FastifyBaseLogger } from 'fastify';
 import { DailyApiError } from '../daily/errors.js';
 import type { RoomProvisioner } from '../daily/rooms.js';
 import { dailyRoomProvisioner } from '../daily/rooms.js';
+import { projectBookingToExpertCalendar } from '../consultation-events/project-booking-to-calendar.js';
 import type { BookableEngagementType } from './authorize-meeting-booking.js';
 import { bookMeeting } from './meeting-availability.js';
+
+/** The web origin used to build the MEMBER join route — never `meetings.join_url` (raw Daily). */
+const WEB_BASE_URL = process.env.APP_URL ?? 'https://balo.expert';
+
+/**
+ * BAL-400 (Decision 7) — thrown when a `bookingIdempotencyKey` resolves to an already-live
+ * meeting that is NOT the booking being submitted: either its live context of the submitted
+ * `contextType` names a DIFFERENT `contextId`, or it is scheduled in a DIFFERENT WINDOW. The
+ * key is `sha256(userId:nonce)`, so cross-user reuse is already unreachable; this closes the
+ * remaining same-user holes — reusing a key against a different case, or against a different
+ * time. Mapped to `409 idempotency_key_conflict` by the route; never `err.message`-echoed (it
+ * embeds a raw meeting id).
+ */
+export class BookingIdempotencyKeyConflictError extends Error {
+  constructor(meetingId: string) {
+    super(`Booking idempotency key already resolves to a different booking (meeting ${meetingId})`);
+    this.name = 'BookingIdempotencyKeyConflictError';
+  }
+}
+
+/** A Postgres unique violation — the concurrent-double-submit race, mapped rather than 500'd. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === '23505';
+}
 
 /** The venue half of the outcome — both fields, or neither (§3.2). */
 export interface MeetingVenue {
@@ -169,6 +200,13 @@ export interface BookAndProvisionInput {
   scheduledEnd: Date;
   engagementType: BookableEngagementType | null;
   userId: string;
+  /**
+   * BAL-400 (Decision 7) — OPTIONAL. When present, `bookAndProvisionMeeting` checks for an
+   * already-live meeting under this key BEFORE calling `bookMeeting`, and replays through
+   * `provisionMeeting` instead of creating a second meeting/room/notification fan-out. See the
+   * module docblock's "WHAT THIS DOES NOT DELIVER" section — this is what closes that gap.
+   */
+  bookingIdempotencyKey?: string;
 }
 
 export interface BookAndProvisionResult extends MeetingVenue {
@@ -316,34 +354,176 @@ async function provisionVenue(
 }
 
 /**
+ * BAL-400 (Decision 7) — what identifies "the SAME booking" for an idempotent replay. Both
+ * halves are load-bearing: the CONTEXT (which case) and the WINDOW (which time).
+ */
+export interface BookingReplayProbe {
+  contextType: MeetingBookingContextType;
+  contextId: string;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+}
+
+/** The three outcomes of resolving a `bookingIdempotencyKey` against a submitted booking. */
+export type BookingReplayLookup =
+  /** No meeting exists under this key yet — the caller must create one. */
+  | { readonly kind: 'none' }
+  /** The key names THIS booking: same context, same window. Replay it. */
+  | { readonly kind: 'match'; readonly meeting: Meeting }
+  /** The key names a DIFFERENT booking (other case, or other window). Refuse. */
+  | { readonly kind: 'conflict'; readonly meetingId: string };
+
+/**
+ * BAL-400 (S3/M1) — THE ONE DEFINITION OF "this key names this booking". Exported because
+ * `POST /meetings` must consult it BEFORE its availability gate, and `replayByIdempotencyKey`
+ * consults it again inside the service. A second, drifting copy of this predicate is exactly
+ * how a replay starts resolving to a meeting the client never asked for.
+ *
+ * ⚠⚠ THE WINDOW COMPARISON IS NOT OPTIONAL, and the semantics chosen here are deliberate:
+ * **a key that resolves to a DIFFERENT window is a CONFLICT (409), never a silent replay.**
+ * The alternative — return the existing meeting for whatever window the client last submitted
+ * — was rejected: the client's own wrapper freezes the nonce after a failed meeting hop, so a
+ * user who then picks a different time would be silently booked at the ORIGINAL time. Telling
+ * them "that key is already spent on another booking" is the only answer that cannot lie. The
+ * `scheduledStart`/`scheduledEnd` now returned to the caller (S2) mean an honest replay also
+ * reports the real window rather than echoing the request back.
+ *
+ * ⚠ ORDER: the window is compared first because it costs no second read. `findWithContexts`
+ * only runs once the window already agrees.
+ */
+export async function lookupBookingReplay(
+  key: string,
+  probe: BookingReplayProbe
+): Promise<BookingReplayLookup> {
+  const existing = await meetingsRepository.findByBookingIdempotencyKey(key);
+  if (existing === undefined) {
+    return { kind: 'none' };
+  }
+
+  if (
+    existing.scheduledStart.getTime() !== probe.scheduledStart.getTime() ||
+    existing.scheduledEnd.getTime() !== probe.scheduledEnd.getTime()
+  ) {
+    return { kind: 'conflict', meetingId: existing.id };
+  }
+
+  const withContexts = await meetingsRepository.findWithContexts(existing.id);
+  const matchesContext =
+    withContexts !== undefined &&
+    withContexts.contexts.some(
+      (context) =>
+        context.contextType === probe.contextType && context.contextId === probe.contextId
+    );
+  if (!matchesContext) {
+    return { kind: 'conflict', meetingId: existing.id };
+  }
+
+  return { kind: 'match', meeting: existing };
+}
+
+/**
+ * BAL-400 (Decision 7) — the idempotent-replay check, run BEFORE `bookMeeting`.
+ *
+ * Returns the already-provisioned result when `key` resolves to THIS booking (same context,
+ * same window — see {@link lookupBookingReplay}); `null` when no meeting exists under `key`
+ * yet — the caller must create one. Throws {@link BookingIdempotencyKeyConflictError} when the
+ * key resolves to a different case or a different window (cross-user reuse is already
+ * unreachable — the key is `sha256(userId:nonce)`).
+ *
+ * Goes through `provisionMeeting`, NEVER `bookMeeting`, on the replay path (D2/Decision 7):
+ * the meeting already exists, so this only needs to (re-)stamp its venue, and it must not
+ * re-run `enqueueAvailabilityCacheRebuild` — `provisionMeeting` does not call it.
+ */
+async function replayByIdempotencyKey(
+  key: string,
+  input: BookAndProvisionInput,
+  log: FastifyBaseLogger,
+  deps: ProvisionMeetingDeps
+): Promise<BookAndProvisionResult | null> {
+  const lookup = await lookupBookingReplay(key, input);
+  if (lookup.kind === 'none') {
+    return null;
+  }
+  if (lookup.kind === 'conflict') {
+    throw new BookingIdempotencyKeyConflictError(lookup.meetingId);
+  }
+  const existing = lookup.meeting;
+
+  const replayed = await provisionMeeting(
+    existing.id,
+    { contextType: input.contextType, engagementType: input.engagementType, userId: input.userId },
+    log,
+    deps
+  );
+  if (replayed === undefined) {
+    // The meeting existed a moment ago and no longer does (soft-deleted between the two
+    // reads) — an extremely narrow race. Let this 500 rather than silently minting a SECOND
+    // meeting for a key that already names a durable (now-vanished) row.
+    throw new Error(`Meeting ${existing.id} vanished during idempotent replay`);
+  }
+
+  return {
+    meeting: existing,
+    provisioned: replayed.provisioned,
+    dailyRoomName: replayed.dailyRoomName,
+    joinUrl: replayed.joinUrl,
+  };
+}
+
+/**
  * BOOK then PROVISION — the route's entry point.
  *
- * The booking half is deliberately NOT wrapped in a `try`: `bookMeeting`'s typed errors
- * (`MeetingExpertAmbiguousError`, `MatchModeDiscoveryNotBookableError`,
+ * The booking half is deliberately NOT wrapped in a `try` FOR `bookMeeting`'s OWN typed
+ * errors (`MeetingExpertAmbiguousError`, `MatchModeDiscoveryNotBookableError`,
  * `MeetingContextUnresolvableError`, `MeetingContextNotProjectableError`,
- * `MeetingContextRequiredError`) MUST reach the route intact so it can map each to its own
- * status code. Catching here would flatten branchable reasons into one 500 — the same rule
- * `meeting-availability.ts`'s docblock states for itself.
+ * `MeetingContextRequiredError`) — they MUST reach the route intact so it can map each to its
+ * own status code. Catching here would flatten branchable reasons into one 500 — the same
+ * rule `meeting-availability.ts`'s docblock states for itself.
+ *
+ * ⚠ THE ONE THING THIS FUNCTION DOES CATCH: a bare Postgres `23505` on
+ * `meeting_booking_idempotency_key_idx` when `bookingIdempotencyKey` is present — the
+ * concurrent-double-submit race (Decision 7 step 4). That is not a branchable "reason" for
+ * the client; it means a racing request under the SAME key already won, so this call re-reads
+ * and replays through it rather than surfacing the raw constraint violation as a 500.
  */
 export async function bookAndProvisionMeeting(
   input: BookAndProvisionInput,
   log: FastifyBaseLogger,
   deps: ProvisionMeetingDeps = {}
 ): Promise<BookAndProvisionResult> {
-  const created: CreatedMeeting = await bookMeeting(
-    {
-      scheduledStart: input.scheduledStart,
-      scheduledEnd: input.scheduledEnd,
-      contexts: [{ contextType: input.contextType, contextId: input.contextId }],
-      // ⚠ THE ONLY DURABLE RECORD OF WHO BOOKED (BAL-129, ADR-1044 §5). `userId` is otherwise
-      // spent entirely on PostHog's `distinct_id` and the Pino/Axiom log — and `trackServer` is
-      // a silent no-op without `POSTHOG_API_KEY`, so on a deployment without analytics the
-      // booking actor would reach NO durable store at all. `create` folds this into a
-      // `meeting.booked` audit row on the booking's own transaction.
-      actorUserId: input.userId,
-    },
-    log
-  );
+  if (input.bookingIdempotencyKey !== undefined) {
+    const replay = await replayByIdempotencyKey(input.bookingIdempotencyKey, input, log, deps);
+    if (replay !== null) {
+      return replay;
+    }
+  }
+
+  let created: CreatedMeeting;
+  try {
+    created = await bookMeeting(
+      {
+        scheduledStart: input.scheduledStart,
+        scheduledEnd: input.scheduledEnd,
+        contexts: [{ contextType: input.contextType, contextId: input.contextId }],
+        // ⚠ THE ONLY DURABLE RECORD OF WHO BOOKED (BAL-129, ADR-1044 §5). `userId` is otherwise
+        // spent entirely on PostHog's `distinct_id` and the Pino/Axiom log — and `trackServer`
+        // is a silent no-op without `POSTHOG_API_KEY`, so on a deployment without analytics the
+        // booking actor would reach NO durable store at all. `create` folds this into a
+        // `meeting.booked` audit row on the booking's own transaction.
+        actorUserId: input.userId,
+        bookingIdempotencyKey: input.bookingIdempotencyKey ?? null,
+      },
+      log
+    );
+  } catch (error) {
+    if (input.bookingIdempotencyKey !== undefined && isUniqueViolation(error)) {
+      const replay = await replayByIdempotencyKey(input.bookingIdempotencyKey, input, log, deps);
+      if (replay !== null) {
+        return replay;
+      }
+    }
+    throw error;
+  }
 
   const venue = await provisionVenue(
     created.meeting,
@@ -356,5 +536,85 @@ export async function bookAndProvisionMeeting(
     deps
   );
 
+  // BAL-400 (D2) — the EXPERT-side calendar projection. Gated on `contextType === 'case'`
+  // (the only context this ticket wires) and run ONLY on a fresh create, never on a replay:
+  // `provisionMeeting` (the replay path) never reaches here, matching the availability-cache
+  // rebuild's own "the replay path skips it anyway" rule — re-running this on a replay would
+  // call `events.create` a SECOND time and, per apiroc skill §M1, could strand a first vendor
+  // event rather than merely re-stamping Balo's own row. `projectCaseBookingCalendarEvent`
+  // NEVER throws (D2c) — the booking above has already committed and must not be undone by a
+  // best-effort projection.
+  if (input.contextType === 'case') {
+    await projectCaseBookingCalendarEvent(created, input, log);
+  }
+
   return { meeting: created.meeting, ...venue };
+}
+
+/**
+ * BAL-400 (D2) — resolve what the expert's calendar event needs to say (the client's
+ * COMPANY name and the case title) and write it. `input.contextId` IS the case's
+ * `engagementId` for a `'case'` context (`meeting_contexts.context_id = engagements.id`).
+ *
+ * Never throws. A missing case/company row, or a `null` `expertProfileId` (structurally
+ * unreachable for a `'case'` booking — a case always names exactly one expert — but typed
+ * nullable on {@link CreatedMeeting}), is logged and treated as "nothing to project", the
+ * same posture `projectBookingToExpertCalendar` itself takes for a disconnected expert.
+ */
+async function projectCaseBookingCalendarEvent(
+  created: CreatedMeeting,
+  input: BookAndProvisionInput,
+  log: FastifyBaseLogger
+): Promise<void> {
+  if (created.expertProfileId === null) {
+    log.error(
+      { meetingId: created.meeting.id, engagementId: input.contextId },
+      'A case booking resolved no expertProfileId — skipping the calendar projection'
+    );
+    return;
+  }
+
+  try {
+    const caseRow = await caseEngagementsRepository.findByEngagementId(input.contextId);
+    if (caseRow === undefined) {
+      log.info(
+        { meetingId: created.meeting.id, engagementId: input.contextId },
+        'No live case for this booking — skipping the calendar projection'
+      );
+      return;
+    }
+    const company = await companiesRepository.findById(caseRow.companyId);
+    if (company === undefined) {
+      log.info(
+        { meetingId: created.meeting.id, engagementId: input.contextId },
+        'No live company for this case — skipping the calendar projection'
+      );
+      return;
+    }
+
+    await projectBookingToExpertCalendar(
+      {
+        meetingId: created.meeting.id,
+        expertProfileId: created.expertProfileId,
+        clientCompanyName: company.name,
+        caseTitle: caseRow.title,
+        startAt: created.meeting.scheduledStart,
+        endAt: created.meeting.scheduledEnd,
+        joinUrl: `${WEB_BASE_URL}/join/m/${created.meeting.id}`,
+      },
+      log
+    );
+  } catch (error) {
+    // Resolving the case/company is a plain DB read outside `projectBookingToExpertCalendar`'s
+    // own try/catch — cover it here so THIS function keeps the same "never throws" contract.
+    log.error(
+      {
+        meetingId: created.meeting.id,
+        engagementId: input.contextId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Failed to resolve case/company for the expert calendar projection'
+    );
+  }
 }

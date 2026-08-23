@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   auditEvents,
+  caseEngagementProducts,
   caseEngagements,
   companies,
   companyMembers,
   conversationContexts,
   engagements,
+  products,
   reviews,
+  verticals,
   type AuditEvent,
 } from '../schema';
 import {
@@ -17,6 +21,7 @@ import {
   companyMemberFactory,
   engagementFactory,
   expertDraftFactory,
+  meetingFactory,
   userFactory,
 } from '../test/factories';
 import {
@@ -27,7 +32,10 @@ import {
 import { EngagementTypeMismatchError } from './_shared/engagement-supertype';
 import { conversationsRepository } from './conversations';
 import { softDeleteEngagementFixture } from '../test/helpers/soft-delete-engagement';
-import { expectCheckViolation } from '../test/helpers/expect-check-violation';
+import {
+  expectCheckViolation,
+  expectConstraintViolation,
+} from '../test/helpers/expect-check-violation';
 
 /** Delivery audit rows for one entity (BAL-344 generic table, ordered createdAt asc). */
 async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
@@ -1223,5 +1231,604 @@ describe('caseEngagementsRepository.clearResolutionRequest', () => {
         engagementId: '00000000-0000-4000-8000-000000000000',
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+// ── BAL-400 — booking idempotency key, product tags, open-case chooser ─────────────────
+
+let bookingKeySeq = 0;
+
+/**
+ * A DISTINCT, VALID booking key: 64 lowercase hex chars, which is all
+ * `case_engagement_booking_idempotency_key_format` demands. Production values are
+ * `sha256(userId:nonce)`.
+ */
+function bookingKey(): string {
+  bookingKeySeq += 1;
+  return bookingKeySeq.toString(16).padStart(64, '0');
+}
+
+let productSeq = 0;
+
+/**
+ * Seed ONE `products` row on its OWN vertical. The integration global-setup seeds only the
+ * Salesforce vertical and no products, and `products` carries a composite unique on
+ * `(vertical_id, slug)` — a fresh vertical per product keeps every fixture independent.
+ * Rolled back with the per-test transaction.
+ */
+async function seedProductId(): Promise<string> {
+  productSeq += 1;
+  const suffix = `${productSeq}-${Date.now()}`;
+  const [vertical] = await db
+    .insert(verticals)
+    .values({ name: `Vertical ${suffix}`, slug: `vertical-${suffix}`, isActive: true })
+    .returning();
+  if (vertical === undefined) throw new Error('vertical insert failed');
+  const [product] = await db
+    .insert(products)
+    .values({ verticalId: vertical.id, name: `Product ${suffix}`, slug: `product-${suffix}` })
+    .returning();
+  if (product === undefined) throw new Error('product insert failed');
+  return product.id;
+}
+
+/** The raw child row — the ONLY place the stripped booking key is observable. */
+async function childRow(engagementId: string): Promise<typeof caseEngagements.$inferSelect> {
+  const [row] = await db
+    .select()
+    .from(caseEngagements)
+    .where(eq(caseEngagements.engagementId, engagementId));
+  if (row === undefined) throw new Error(`no case_engagements row for ${engagementId}`);
+  return row;
+}
+
+async function productLinks(
+  engagementId: string
+): Promise<(typeof caseEngagementProducts.$inferSelect)[]> {
+  return db
+    .select()
+    .from(caseEngagementProducts)
+    .where(eq(caseEngagementProducts.engagementId, engagementId))
+    .orderBy(asc(caseEngagementProducts.productId));
+}
+
+async function newCaseInput(): Promise<{ companyId: string; expertProfileId: string }> {
+  const companyId = await seedCompanyId();
+  const expert = await expertDraftFactory();
+  return { companyId, expertProfileId: expert.id };
+}
+
+/** A CLOSED case fixture for this pair, using the only reason that needs no closer user. */
+async function seedClosedCase(shared: {
+  companyId: string;
+  expertProfileId?: string;
+}): Promise<string> {
+  const { engagement } = await caseEngagementFactory({
+    ...shared,
+    values: { status: 'completed' },
+    caseValues: { closedAt: new Date(), closeReason: 'auto_inactive' },
+  });
+  return engagement.id;
+}
+
+describe('caseEngagementsRepository.create — booking idempotency key (BAL-400)', () => {
+  it('persists the key on the CHILD row and keeps it OUT of the returned projection', async () => {
+    const base = await newCaseInput();
+    const key = bookingKey();
+
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Flow fails on record update',
+      description: '<p>Broken flow.</p>',
+      bookingIdempotencyKey: key,
+    });
+
+    expect((await childRow(created.id)).bookingIdempotencyKey).toBe(key);
+    // Stripped by `toCaseRow`, exactly as `baloFeeBps` is — the key must never ride a case
+    // row onto a client surface.
+    expect(created).not.toHaveProperty('bookingIdempotencyKey');
+    expect(created).not.toHaveProperty('baloFeeBps');
+  });
+
+  it('defaults the key to NULL when the caller passes none (the seeder / BAL-417 path)', async () => {
+    const base = await newCaseInput();
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'No key',
+      description: '<p>No key.</p>',
+    });
+    expect((await childRow(created.id)).bookingIdempotencyKey).toBeNull();
+  });
+
+  it('still writes balo_fee_bps as NULL for a case when a booking key is supplied', async () => {
+    // `engagement_balo_fee_bps_case_null` is a BICONDITIONAL, so a case row that fell
+    // through to the column DEFAULT (2500) would be rejected 23514. This proves the new
+    // parameter did not disturb the explicit-NULL write.
+    const base = await newCaseInput();
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Fee stays null',
+      description: '<p>Fee.</p>',
+      bookingIdempotencyKey: bookingKey(),
+    });
+    const [parent] = await db.select().from(engagements).where(eq(engagements.id, created.id));
+    expect(parent?.baloFeeBps).toBeNull();
+  });
+
+  it('REFUSES a second live case under the SAME key — 23505 on the partial unique', async () => {
+    const base = await newCaseInput();
+    const key = bookingKey();
+
+    await caseEngagementsRepository.create({
+      ...base,
+      title: 'First',
+      description: '<p>First.</p>',
+      bookingIdempotencyKey: key,
+    });
+
+    // THE WHOLE POINT: a concurrent double-submit cannot open two cases. `create` uses no
+    // `ON CONFLICT` (the arbiter is a PARTIAL index — 42P10), so the caller sees the raw
+    // 23505 and re-reads by key.
+    await expect(
+      caseEngagementsRepository.create({
+        ...base,
+        title: 'Second',
+        description: '<p>Second.</p>',
+        bookingIdempotencyKey: key,
+      })
+    ).rejects.toMatchObject({ code: '23505' });
+
+    const rows = await db
+      .select({ id: caseEngagements.engagementId })
+      .from(caseEngagements)
+      .where(eq(caseEngagements.bookingIdempotencyKey, key));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('lets a SOFT-DELETED case FREE its key (the unique is partial on deleted_at)', async () => {
+    const base = await newCaseInput();
+    const key = bookingKey();
+
+    const first = await caseEngagementsRepository.create({
+      ...base,
+      title: 'First',
+      description: '<p>First.</p>',
+      bookingIdempotencyKey: key,
+    });
+    await softDeleteEngagementFixture(first.id);
+
+    // Without the `deleted_at IS NULL` half of the predicate this is 23505 forever — the
+    // `reference_softdelete_nonpartial_unique_recreate` failure mode.
+    const second = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Second',
+      description: '<p>Second.</p>',
+      bookingIdempotencyKey: key,
+    });
+    expect(second.id).not.toBe(first.id);
+    expect((await childRow(second.id)).bookingIdempotencyKey).toBe(key);
+  });
+
+  it('REJECTS a malformed key with 23514 — a raw client nonce never reaches the column', async () => {
+    const base = await newCaseInput();
+    await expect(
+      caseEngagementsRepository.create({
+        ...base,
+        title: 'Bad key',
+        description: '<p>Bad.</p>',
+        // A client-minted UUID: the exact IDOR shape the CHECK exists to refuse.
+        bookingIdempotencyKey: randomUUID(),
+      })
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('REJECTS an UPPERCASE hex key — the digest is lowercase by contract', async () => {
+    const base = await newCaseInput();
+    await expect(
+      caseEngagementsRepository.create({
+        ...base,
+        title: 'Upper',
+        description: '<p>Upper.</p>',
+        bookingIdempotencyKey: 'A'.repeat(64),
+      })
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+});
+
+describe('caseEngagementsRepository.create — product tags (BAL-400)', () => {
+  it('writes ONE link row per product id, in the same transaction as the case', async () => {
+    const base = await newCaseInput();
+    const a = await seedProductId();
+    const b = await seedProductId();
+
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Tagged',
+      description: '<p>Tagged.</p>',
+      productIds: [a, b],
+    });
+
+    const links = await productLinks(created.id);
+    expect(links).toHaveLength(2);
+    expect(links.map((l) => l.productId).sort()).toEqual([a, b].sort());
+    expect(links.every((l) => l.deletedAt === null)).toBe(true);
+  });
+
+  it('writes NO rows for an empty array and for an omitted parameter', async () => {
+    const empty = await caseEngagementsRepository.create({
+      ...(await newCaseInput()),
+      title: 'Empty',
+      description: '<p>Empty.</p>',
+      productIds: [],
+    });
+    const omitted = await caseEngagementsRepository.create({
+      ...(await newCaseInput()),
+      title: 'Omitted',
+      description: '<p>Omitted.</p>',
+    });
+
+    expect(await productLinks(empty.id)).toEqual([]);
+    expect(await productLinks(omitted.id)).toEqual([]);
+  });
+
+  it('DE-DUPLICATES a repeated product id instead of failing the whole case on 23505', async () => {
+    const base = await newCaseInput();
+    const productId = await seedProductId();
+
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Duped',
+      description: '<p>Duped.</p>',
+      productIds: [productId, productId, productId],
+    });
+
+    expect(await productLinks(created.id)).toHaveLength(1);
+  });
+
+  it('ROLLS THE WHOLE CASE BACK on an unknown product id (23503 on the restrict FK)', async () => {
+    const base = await newCaseInput();
+    const before = await db.select({ id: engagements.id }).from(engagements);
+
+    await expect(
+      caseEngagementsRepository.create({
+        ...base,
+        title: 'Bad product',
+        description: '<p>Bad product.</p>',
+        productIds: [randomUUID()],
+      })
+    ).rejects.toMatchObject({ code: '23503' });
+
+    // The case, its child, its conversation and its audit row all went with it.
+    const after = await db.select({ id: engagements.id }).from(engagements);
+    expect(after).toHaveLength(before.length);
+  });
+
+  it('lets a SOFT-DELETED link be re-created — the unique is PARTIAL, unlike the template', async () => {
+    // ⚠ THE DELIBERATE DIVERGENCE FROM `project_request_products`, whose unique is
+    // NON-partial: there, a soft-deleted link blocks re-tagging forever. Ours must not.
+    const base = await newCaseInput();
+    const productId = await seedProductId();
+
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Retag',
+      description: '<p>Retag.</p>',
+      productIds: [productId],
+    });
+
+    await db
+      .update(caseEngagementProducts)
+      .set({ deletedAt: new Date() })
+      .where(eq(caseEngagementProducts.engagementId, created.id));
+
+    await db.insert(caseEngagementProducts).values({ engagementId: created.id, productId });
+
+    const links = await productLinks(created.id);
+    expect(links).toHaveLength(2);
+    expect(links.filter((l) => l.deletedAt === null)).toHaveLength(1);
+  });
+
+  it('REFUSES two LIVE links for the same (case, product) pair — 23505', async () => {
+    const base = await newCaseInput();
+    const productId = await seedProductId();
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Dupe live',
+      description: '<p>Dupe live.</p>',
+      productIds: [productId],
+    });
+
+    await expectConstraintViolation('23505', (tx) =>
+      tx.insert(caseEngagementProducts).values({ engagementId: created.id, productId })
+    );
+  });
+
+  it('REFUSES a link whose parent is not a CASE — there is no case_engagements row to name', async () => {
+    const project = await engagementFactory();
+    const productId = await seedProductId();
+
+    await expectConstraintViolation('23503', (tx) =>
+      tx.insert(caseEngagementProducts).values({ engagementId: project.engagement.id, productId })
+    );
+  });
+
+  it('CASCADES the links away when the case row is hard-deleted', async () => {
+    const base = await newCaseInput();
+    const productId = await seedProductId();
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Cascade',
+      description: '<p>Cascade.</p>',
+      productIds: [productId],
+    });
+
+    // Deleting the SUPERTYPE cascades to `case_engagements`, which cascades to the links.
+    await db.delete(engagements).where(eq(engagements.id, created.id));
+    expect(await productLinks(created.id)).toEqual([]);
+  });
+});
+
+describe('caseEngagementsRepository.findByBookingIdempotencyKey (BAL-400)', () => {
+  it('returns the live case that was created under the key', async () => {
+    const base = await newCaseInput();
+    const key = bookingKey();
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Findable',
+      description: '<p>Findable.</p>',
+      bookingIdempotencyKey: key,
+    });
+
+    const found = await caseEngagementsRepository.findByBookingIdempotencyKey(key);
+    expect(found?.id).toBe(created.id);
+    expect(found?.companyId).toBe(base.companyId);
+    expect(found?.title).toBe('Findable');
+    // Stripped from the projection — the retry already holds the key it passed in.
+    expect(found).not.toHaveProperty('bookingIdempotencyKey');
+  });
+
+  it('returns undefined for an unknown key', async () => {
+    await expect(
+      caseEngagementsRepository.findByBookingIdempotencyKey(bookingKey())
+    ).resolves.toBeUndefined();
+  });
+
+  it('IGNORES a soft-deleted case, so a replay never re-enters against a dead one', async () => {
+    const base = await newCaseInput();
+    const key = bookingKey();
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Deleted',
+      description: '<p>Deleted.</p>',
+      bookingIdempotencyKey: key,
+    });
+    await softDeleteEngagementFixture(created.id);
+
+    await expect(
+      caseEngagementsRepository.findByBookingIdempotencyKey(key)
+    ).resolves.toBeUndefined();
+  });
+
+  it('IGNORES a case whose PARENT alone was soft-deleted (both rows are filtered)', async () => {
+    const base = await newCaseInput();
+    const key = bookingKey();
+    const created = await caseEngagementsRepository.create({
+      ...base,
+      title: 'Parent gone',
+      description: '<p>Parent gone.</p>',
+      bookingIdempotencyKey: key,
+    });
+    // DELIBERATE parent-only drift: the child stays live, so only the PARENT guard can
+    // exclude this row. The sanctioned fixture stamps both — this proves the guard is not
+    // load-bearing on the child alone.
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, created.id));
+
+    await expect(
+      caseEngagementsRepository.findByBookingIdempotencyKey(key)
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('caseEngagementsRepository.listOpenForCompanyAndExpert (BAL-400)', () => {
+  it('returns an OPEN case with a zero consultation count and lastActivityAt = createdAt', async () => {
+    const { engagement, companyId, expertProfileId } = await caseEngagementFactory();
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert({
+      companyId,
+      expertProfileId,
+    });
+
+    expect(result.openCases).toHaveLength(1);
+    const [only] = result.openCases;
+    expect(only?.engagementId).toBe(engagement.id);
+    expect(only?.title).toBe('Salesforce flow debugging');
+    expect(only?.consultationCount).toBe(0);
+    // A case with no consultation yet is an ACCEPTABLE resting state (D4b) and must still
+    // be offered as an attach target.
+    expect(only?.lastActivityAt).toBeInstanceOf(Date);
+    expect(only?.lastActivityAt.getTime()).toBe(only?.createdAt.getTime());
+    expect(result.resolvedCaseCount).toBe(0);
+  });
+
+  it('EXCLUDES another expert’s case and another company’s case', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const mine = await caseEngagementFactory({ companyId, expertProfileId: expert.id });
+    // Same company, DIFFERENT expert.
+    await caseEngagementFactory({ companyId });
+    // Same expert, DIFFERENT company.
+    await caseEngagementFactory({ expertProfileId: expert.id });
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert({
+      companyId,
+      expertProfileId: expert.id,
+    });
+
+    expect(result.openCases.map((c) => c.engagementId)).toEqual([mine.engagement.id]);
+  });
+
+  it('EXCLUDES a closed case, a non-active parent, and a soft-deleted case', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const shared = { companyId, expertProfileId: expert.id };
+
+    const open = await caseEngagementFactory(shared);
+    // CLOSED on the child while the parent is still `active` — the two liveness predicates
+    // are independent and neither implies the other.
+    await caseEngagementFactory({
+      ...shared,
+      caseValues: { closedAt: new Date(), closeReason: 'auto_inactive' },
+    });
+    // Parent moved off `active` while the child is still open.
+    await caseEngagementFactory({ ...shared, values: { status: 'cancelled' } });
+    const deleted = await caseEngagementFactory(shared);
+    await softDeleteEngagementFixture(deleted.engagement.id);
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert(shared);
+    expect(result.openCases.map((c) => c.engagementId)).toEqual([open.engagement.id]);
+  });
+
+  it('counts LIVE meetings only, never a context row whose meeting is soft-deleted', async () => {
+    const { engagement, companyId, expertProfileId } = await caseEngagementFactory();
+    const attach = [{ contextType: 'case' as const, contextId: engagement.id }];
+
+    await meetingFactory({ contexts: attach });
+    await meetingFactory({ contexts: attach });
+    // ⚠ `meetingFactory` deliberately does NOT propagate `deletedAt` to the context row, so
+    // this seeds a LIVE context pointing at a DEAD meeting — the exact shape a raw
+    // context-row count would over-report to a client reading "N consultations".
+    await meetingFactory({ contexts: attach, values: { deletedAt: new Date() } });
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert({
+      companyId,
+      expertProfileId,
+    });
+    expect(result.openCases[0]?.consultationCount).toBe(2);
+  });
+
+  it('does not count a case context row belonging to a DIFFERENT engagement', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const shared = { companyId, expertProfileId: expert.id };
+    const a = await caseEngagementFactory(shared);
+    const b = await caseEngagementFactory(shared);
+
+    await meetingFactory({ contexts: [{ contextType: 'case', contextId: a.engagement.id }] });
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert(shared);
+    const byId = new Map(result.openCases.map((c) => [c.engagementId, c.consultationCount]));
+    expect(byId.get(a.engagement.id)).toBe(1);
+    expect(byId.get(b.engagement.id)).toBe(0);
+  });
+
+  it('orders MOST-RECENT-ACTIVITY first — a booked meeting outranks a newer, quiet case', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const shared = { companyId, expertProfileId: expert.id };
+
+    const old = await caseEngagementFactory({
+      ...shared,
+      values: { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    });
+    const fresh = await caseEngagementFactory(shared);
+
+    const start = new Date(Date.now() + 10 * 24 * 3_600_000);
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: old.engagement.id }],
+      values: { scheduledStart: start, scheduledEnd: new Date(start.getTime() + 3_600_000) },
+    });
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert(shared);
+    expect(result.openCases.map((c) => c.engagementId)).toEqual([
+      old.engagement.id,
+      fresh.engagement.id,
+    ]);
+    expect(result.openCases[0]?.lastActivityAt.getTime()).toBe(start.getTime());
+  });
+
+  it('is DETERMINISTIC on a tie — identical clocks fall back to engagement id ASC', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const shared = { companyId, expertProfileId: expert.id };
+    const createdAt = new Date('2026-03-03T03:03:03.000Z');
+
+    const a = await caseEngagementFactory({ ...shared, values: { createdAt } });
+    const b = await caseEngagementFactory({ ...shared, values: { createdAt } });
+    const c = await caseEngagementFactory({ ...shared, values: { createdAt } });
+
+    const expected = [a.engagement.id, b.engagement.id, c.engagement.id].sort((x, y) =>
+      x < y ? -1 : 1
+    );
+
+    // Run it twice: a wobbling order would move cards under the cursor between renders.
+    const first = await caseEngagementsRepository.listOpenForCompanyAndExpert(shared);
+    const second = await caseEngagementsRepository.listOpenForCompanyAndExpert(shared);
+    expect(first.openCases.map((r) => r.engagementId)).toEqual(expected);
+    expect(second.openCases.map((r) => r.engagementId)).toEqual(expected);
+  });
+
+  it('applies `limit` to the OPEN list, and short-circuits on limit <= 0', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const shared = { companyId, expertProfileId: expert.id };
+    await caseEngagementFactory(shared);
+    await caseEngagementFactory(shared);
+    await caseEngagementFactory(shared);
+
+    const capped = await caseEngagementsRepository.listOpenForCompanyAndExpert({
+      ...shared,
+      limit: 2,
+    });
+    expect(capped.openCases).toHaveLength(2);
+    await expect(
+      caseEngagementsRepository.listOpenForCompanyAndExpert({ ...shared, limit: 0 })
+    ).resolves.toEqual({ openCases: [], resolvedCaseCount: 0 });
+  });
+
+  it('counts RESOLVED cases for this pair only, and never caps them with `limit`', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    const shared = { companyId, expertProfileId: expert.id };
+
+    await caseEngagementFactory(shared); // open — not counted
+    await seedClosedCase(shared);
+    await seedClosedCase(shared);
+    // Same company, DIFFERENT expert → not this pair's history.
+    await seedClosedCase({ companyId });
+    // A SOFT-DELETED closed case must not count either.
+    await softDeleteEngagementFixture(await seedClosedCase(shared));
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert({
+      ...shared,
+      limit: 1,
+    });
+    expect(result.openCases).toHaveLength(1);
+    expect(result.resolvedCaseCount).toBe(2);
+  });
+
+  it('returns an empty result for a company/expert pair with no cases at all', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    await expect(
+      caseEngagementsRepository.listOpenForCompanyAndExpert({
+        companyId,
+        expertProfileId: expert.id,
+      })
+    ).resolves.toEqual({ openCases: [], resolvedCaseCount: 0 });
+  });
+
+  it('never returns a PROJECT engagement, even for the same company and expert', async () => {
+    const companyId = await seedCompanyId();
+    const expert = await expertDraftFactory();
+    await engagementFactory({ companyId, expertProfileId: expert.id });
+
+    const result = await caseEngagementsRepository.listOpenForCompanyAndExpert({
+      companyId,
+      expertProfileId: expert.id,
+    });
+    expect(result.openCases).toEqual([]);
   });
 });

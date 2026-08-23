@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
+import { CAPABILITIES, rolesWithCapability } from '@balo/shared/authz';
 import { db } from '../client';
 import { companyMembers, agencyMembers, auditEvents } from '../schema';
 import {
@@ -322,5 +323,146 @@ describe('partyMembershipsRepository.listBillingUserIds (BAL-380 — MANAGE_BILL
   it('returns [] for an empty company (no members at all → dispatcher skips the fan-out)', async () => {
     const company = await companyFactory();
     await expect(partyMembershipsRepository.listBillingUserIds(company.id)).resolves.toEqual([]);
+  });
+});
+
+describe('partyMembershipsRepository.listCapabilityEligibleCompanies (BAL-400 D1a)', () => {
+  it('returns every LIVE company membership holding CONSUME_CREDITS (owner/admin/member)', async () => {
+    const user = await userFactory();
+    const owned = await companyFactory({ name: 'Aardvark Pty' });
+    const administered = await companyFactory({ name: 'Borealis Ltd' });
+    const joined = await companyFactory({ name: 'Cygnet Co' });
+    await companyMemberFactory({ companyId: owned.id, userId: user.id, role: 'owner' });
+    await companyMemberFactory({ companyId: administered.id, userId: user.id, role: 'admin' });
+    await companyMemberFactory({
+      companyId: joined.id,
+      userId: user.id,
+      role: 'member',
+      joinMethod: 'domain_match',
+    });
+
+    const eligible = await partyMembershipsRepository.listCapabilityEligibleCompanies(
+      user.id,
+      CAPABILITIES.CONSUME_CREDITS
+    );
+
+    // CONSUME_CREDITS is a BASE member capability — the wallet is drawn down by every
+    // company member, not only by billing admins.
+    expect(eligible.map((c) => c.id)).toEqual([owned.id, administered.id, joined.id]);
+  });
+
+  it('projects NAMES ONLY — no creditBalance, no isPersonal, no other company column', async () => {
+    const user = await userFactory();
+    const company = await companyFactory({ name: 'Narrow Co', logoUrl: 'https://cdn/x.png' });
+    await companyMemberFactory({ companyId: company.id, userId: user.id, role: 'owner' });
+
+    const [eligible] = await partyMembershipsRepository.listCapabilityEligibleCompanies(
+      user.id,
+      CAPABILITIES.CONSUME_CREDITS
+    );
+
+    // The `EligibleCompany` shape, exactly. A widened projection is how company internals
+    // reach a client-bound picker.
+    expect(eligible).toEqual({
+      id: company.id,
+      name: 'Narrow Co',
+      logoUrl: 'https://cdn/x.png',
+    });
+  });
+
+  it('EXCLUDES a soft-removed membership', async () => {
+    const user = await userFactory();
+    const owner = await userFactory();
+    const live = await companyFactory({ name: 'Live Co' });
+    const removed = await companyFactory({ name: 'Removed Co' });
+    await companyMemberFactory({ companyId: live.id, userId: user.id, role: 'member' });
+    await companyMemberFactory({
+      companyId: removed.id,
+      userId: user.id,
+      role: 'owner',
+      deletedAt: new Date(),
+      deletedByUserId: owner.id,
+    });
+
+    const eligible = await partyMembershipsRepository.listCapabilityEligibleCompanies(
+      user.id,
+      CAPABILITIES.CONSUME_CREDITS
+    );
+    expect(eligible.map((c) => c.id)).toEqual([live.id]);
+  });
+
+  it('EXCLUDES agency memberships entirely — a wallet is company-scoped', async () => {
+    // ⚠ `rolesWithCapability(CONSUME_CREDITS)` genuinely contains the AGENCY-only label
+    // `expert` (it shares the base-member bundle). If the intersection with
+    // `companyRoleEnum.enumValues` were dropped, this call would raise
+    // `22P02 invalid input value for enum company_role` at the database — not return [].
+    expect(rolesWithCapability(CAPABILITIES.CONSUME_CREDITS)).toContain('expert');
+
+    const user = await userFactory();
+    const agency = await agencyFactory();
+    await agencyMemberFactory({ agencyId: agency.id, userId: user.id, role: 'owner' });
+
+    await expect(
+      partyMembershipsRepository.listCapabilityEligibleCompanies(
+        user.id,
+        CAPABILITIES.CONSUME_CREDITS
+      )
+    ).resolves.toEqual([]);
+  });
+
+  it('honours a NARROWER capability — MANAGE_BILLING drops the base member', async () => {
+    const user = await userFactory();
+    const owned = await companyFactory({ name: 'Owned Co' });
+    const joined = await companyFactory({ name: 'Joined Co' });
+    await companyMemberFactory({ companyId: owned.id, userId: user.id, role: 'owner' });
+    await companyMemberFactory({ companyId: joined.id, userId: user.id, role: 'member' });
+
+    const consume = await partyMembershipsRepository.listCapabilityEligibleCompanies(
+      user.id,
+      CAPABILITIES.CONSUME_CREDITS
+    );
+    const billing = await partyMembershipsRepository.listCapabilityEligibleCompanies(
+      user.id,
+      CAPABILITIES.MANAGE_BILLING
+    );
+
+    // The role set is DERIVED from `@balo/shared/authz`, never a hardcoded role literal —
+    // so a capability change moves this read without editing it.
+    expect(consume.map((c) => c.id).sort()).toEqual([owned.id, joined.id].sort());
+    expect(billing.map((c) => c.id)).toEqual([owned.id]);
+  });
+
+  it('returns [] for a user with no company memberships at all', async () => {
+    const user = await userFactory();
+    await expect(
+      partyMembershipsRepository.listCapabilityEligibleCompanies(
+        user.id,
+        CAPABILITIES.CONSUME_CREDITS
+      )
+    ).resolves.toEqual([]);
+  });
+
+  it('is DETERMINISTIC — ordered by name, then id, and stable across calls', async () => {
+    const user = await userFactory();
+    const a = await companyFactory({ name: 'Same Name' });
+    const b = await companyFactory({ name: 'Same Name' });
+    const z = await companyFactory({ name: 'Zebra Co' });
+    for (const company of [a, b, z]) {
+      await companyMemberFactory({ companyId: company.id, userId: user.id, role: 'member' });
+    }
+
+    const tiedIds = [a.id, b.id].sort((x, y) => (x < y ? -1 : 1));
+    const expected = [...tiedIds, z.id];
+
+    const first = await partyMembershipsRepository.listCapabilityEligibleCompanies(
+      user.id,
+      CAPABILITIES.CONSUME_CREDITS
+    );
+    const second = await partyMembershipsRepository.listCapabilityEligibleCompanies(
+      user.id,
+      CAPABILITIES.CONSUME_CREDITS
+    );
+    expect(first.map((c) => c.id)).toEqual(expected);
+    expect(second.map((c) => c.id)).toEqual(expected);
   });
 });

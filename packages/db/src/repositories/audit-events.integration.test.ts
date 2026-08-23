@@ -163,6 +163,129 @@ describe('auditEventsRepository.countByEntityAndAction', () => {
   });
 });
 
+describe('auditEventsRepository.countByActorAndActionSince', () => {
+  /** Append one `engagement.created` row for `actor`, stamped at `createdAt`. */
+  async function seedCreated(actorUserId: string, createdAt: Date): Promise<void> {
+    const row = await auditEventsRepository.record(
+      {
+        actorUserId,
+        action: 'engagement.created',
+        entityType: 'engagement',
+        entityId: randomUUID(),
+        metadata: { engagement_type: 'case' },
+      },
+      db
+    );
+    await db.update(auditEvents).set({ createdAt }).where(eq(auditEvents.id, row.id));
+  }
+
+  it('counts one actor’s rows for one action inside the window (BAL-400 S6)', async () => {
+    const actor = await userFactory();
+    const other = await userFactory();
+    const now = Date.now();
+    const since = new Date(now - 3_600_000);
+
+    await seedCreated(actor.id, new Date(now - 60_000));
+    await seedCreated(actor.id, new Date(now - 120_000));
+
+    // Negatives that must NOT be counted:
+    //  - the same action, same actor, but OUTSIDE the window,
+    await seedCreated(actor.id, new Date(now - 7_200_000));
+    //  - the same action inside the window, but a DIFFERENT actor,
+    await seedCreated(other.id, new Date(now - 60_000));
+    //  - a different action by the same actor inside the window.
+    await auditEventsRepository.record(
+      {
+        actorUserId: actor.id,
+        action: 'engagement.accepted',
+        entityType: 'engagement',
+        entityId: randomUUID(),
+      },
+      db
+    );
+
+    const count = await auditEventsRepository.countByActorAndActionSince({
+      actorUserId: actor.id,
+      action: 'engagement.created',
+      since,
+    });
+    expect(count).toBe(2);
+  });
+
+  it('is inclusive at the boundary instant', async () => {
+    const actor = await userFactory();
+    const boundary = new Date('2026-01-01T00:00:00.000Z');
+    await seedCreated(actor.id, boundary);
+
+    await expect(
+      auditEventsRepository.countByActorAndActionSince({
+        actorUserId: actor.id,
+        action: 'engagement.created',
+        since: boundary,
+      })
+    ).resolves.toBe(1);
+    await expect(
+      auditEventsRepository.countByActorAndActionSince({
+        actorUserId: actor.id,
+        action: 'engagement.created',
+        since: new Date(boundary.getTime() + 1),
+      })
+    ).resolves.toBe(0);
+  });
+
+  it('returns 0 for an actor with no rows at all', async () => {
+    const actor = await userFactory();
+    await expect(
+      auditEventsRepository.countByActorAndActionSince({
+        actorUserId: actor.id,
+        action: 'engagement.created',
+        since: new Date(0),
+      })
+    ).resolves.toBe(0);
+  });
+
+  it('N2 — engagementType: "case" excludes project kickoffs from the count, even though both emit the SAME action', async () => {
+    // `engagement.created` is deliberately type-agnostic (BAL-417): a case create and a
+    // project kickoff both write it, distinguished only by `metadata.engagement_type`. The
+    // hop-1 booking budget (BAL-400 S6) must count ONLY case creates, or a burst of approved
+    // project kickoffs would exhaust a client's case-booking budget with no case involved.
+    const actor = await userFactory();
+    const now = Date.now();
+    const since = new Date(now - 3_600_000);
+
+    await seedCreated(actor.id, new Date(now - 60_000)); // case, in window
+    const projectRow = await auditEventsRepository.record(
+      {
+        actorUserId: actor.id,
+        action: 'engagement.created',
+        entityType: 'engagement',
+        entityId: randomUUID(),
+        metadata: { engagement_type: 'project' },
+      },
+      db
+    );
+    await db
+      .update(auditEvents)
+      .set({ createdAt: new Date(now - 60_000) })
+      .where(eq(auditEvents.id, projectRow.id));
+
+    const caseOnlyCount = await auditEventsRepository.countByActorAndActionSince({
+      actorUserId: actor.id,
+      action: 'engagement.created',
+      engagementType: 'case',
+      since,
+    });
+    expect(caseOnlyCount).toBe(1);
+
+    const unfilteredCount = await auditEventsRepository.countByActorAndActionSince({
+      actorUserId: actor.id,
+      action: 'engagement.created',
+      since,
+    });
+    expect(unfilteredCount).toBe(2);
+  });
+});
+
 describe('auditEventsRepository.findLatestByEntityAndAction', () => {
   it('returns the most-recent row by created_at for the entity + action', async () => {
     const older = await userFactory();
