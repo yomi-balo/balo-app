@@ -469,6 +469,24 @@ function windowMinutes(startIso: string, endIso: string): number {
 }
 
 /** How many LIVE consultations this case had BEFORE this booking — 0 for a brand-new case. */
+/**
+ * How many consultations this case had BEFORE this booking — the "N consultations so far"
+ * line in the expert's email. `0` for a new case.
+ *
+ * ⚠ CALLED **AFTER** THE MEETING HOP, AND SUBTRACTS ONE. `consultationCount` counts LIVE
+ * MEETINGS through the `meeting_contexts` reverse edge, and by the time `POST /meetings` has
+ * returned 201 the meeting written in this booking's own transaction is already included. So
+ * the count here is always `prior + 1`, and the honest answer is one less.
+ *
+ * Reading it BEFORE the hop looks equivalent and is not: on a lost-201 retry the FIRST
+ * attempt's meeting already exists, so a pre-hop read returns `prior + 1` and the email
+ * over-counts by one. Subtracting after is correct on BOTH paths — a fresh booking and a
+ * replay each have exactly one meeting of their own in the count. (The `correlationId` dedup
+ * usually suppresses that second email anyway, which is what made this cosmetic rather than
+ * visible; "usually" is not a guarantee, so the number is made right at the source.)
+ *
+ * Moving the read here also drops it entirely off the failure paths above, which never publish.
+ */
 async function resolvePriorConsultationCount(
   isNewCase: boolean,
   companyId: string,
@@ -483,7 +501,11 @@ async function resolvePriorConsultationCount(
       companyId,
       expertProfileId,
     });
-    return openCases.find((c) => c.engagementId === engagementId)?.consultationCount ?? 0;
+    const countIncludingThisBooking =
+      openCases.find((c) => c.engagementId === engagementId)?.consultationCount ?? 0;
+    // `Math.max` guards the theoretical case where the projection has not caught up; a
+    // negative count would render as "-1 consultations so far".
+    return Math.max(0, countIncludingThisBooking - 1);
   } catch (error) {
     log.warn('Prior consultation count unavailable; defaulting to 0', {
       engagementId,
@@ -510,13 +532,6 @@ async function completeBooking(params: {
 }): Promise<BookConsultationResult> {
   const { userId, key, resolved, slot, guests } = params;
   const { engagementId, companyId, expertProfileId, title: caseTitle, isNewCase } = resolved;
-
-  const priorConsultationCount = await resolvePriorConsultationCount(
-    isNewCase,
-    companyId,
-    expertProfileId,
-    engagementId
-  );
 
   const booked = await postBookMeeting({
     contextType: 'case',
@@ -613,7 +628,12 @@ async function completeBooking(params: {
     expertPartyLabel: expertDisplay.partyLabel,
     caseTitle,
     isNewCase,
-    priorConsultationCount,
+    priorConsultationCount: await resolvePriorConsultationCount(
+      isNewCase,
+      companyId,
+      expertProfileId,
+      engagementId
+    ),
     scheduledStartIso: scheduledStart,
     durationMinutes,
     joinPath: `/join/m/${meetingId}`,

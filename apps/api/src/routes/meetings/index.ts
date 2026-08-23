@@ -330,6 +330,20 @@ async function enforceExpertScopedGuards(
  * ⚠ NEVER call this before `authorizeMeetingBooking`. The key proves who minted it, not what
  * the actor may book.
  */
+/**
+ * ⚠ THIS LOOKUP IS DELIBERATELY REPEATED INSIDE THE SERVICE — DO NOT "OPTIMISE" IT AWAY.
+ *
+ * `lookupBookingReplay` runs here (to decide whether to SKIP the availability gate and the
+ * per-pair limit) and again inside `replayByIdempotencyKey` (to decide WHAT to return). That
+ * is one extra indexed read, on the retry path only, and it buys a property worth more than
+ * the read: the service NEVER TRUSTS ITS CALLER'S VERDICT.
+ *
+ * Collapsing the two — threading this result down as a parameter — would make the service's
+ * behaviour a function of what a caller asserts rather than of what the database says. The
+ * service is also reachable as a repair entry point independent of this route, so a caller
+ * asserting "this is an exact replay" must never be able to make it act on that claim alone.
+ * Re-deriving is the same defence-in-depth posture as the gate ordering documented above.
+ */
 async function isExactBookingReplay(
   bookingIdempotencyKey: string | undefined,
   probe: BookingReplayProbe

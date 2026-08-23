@@ -228,6 +228,66 @@ describe('bookConsultationAction', () => {
     );
   });
 
+  it("reports priorConsultationCount EXCLUDING this booking's own meeting", async () => {
+    // `consultationCount` counts LIVE MEETINGS, and by the time `POST /meetings` has returned
+    // the meeting from THIS booking is already in it. The repository therefore reports 3 for a
+    // case that had 2 before today, and the expert's email must say 2.
+    mockListOpenForCompanyAndExpert.mockResolvedValue({
+      openCases: [{ engagementId: ENGAGEMENT_ID, consultationCount: 3 }],
+      resolvedCaseCount: 0,
+    });
+
+    await bookConsultationAction(EXISTING_CASE_INPUT);
+
+    expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
+      'booking.confirmed',
+      expect.objectContaining({ priorConsultationCount: 2 })
+    );
+  });
+
+  it('never publishes a NEGATIVE priorConsultationCount if the projection lags', async () => {
+    mockListOpenForCompanyAndExpert.mockResolvedValue({
+      openCases: [{ engagementId: ENGAGEMENT_ID, consultationCount: 0 }],
+      resolvedCaseCount: 0,
+    });
+
+    await bookConsultationAction(EXISTING_CASE_INPUT);
+
+    expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
+      'booking.confirmed',
+      expect.objectContaining({ priorConsultationCount: 0 })
+    );
+  });
+
+  it('reads the consultation count AFTER the meeting hop, never before', async () => {
+    // The ordering IS the fix. A pre-hop read returns `prior + 1` on a lost-201 retry, because
+    // the first attempt's meeting already exists — and the email then over-counts by one.
+    const order: string[] = [];
+    mockPostBookMeeting.mockImplementation(async () => {
+      order.push('meeting-hop');
+      return {
+        ok: true,
+        data: {
+          meetingId: MEETING_ID,
+          scheduledStart: SERVER_START,
+          scheduledEnd: SERVER_END,
+          provisioned: true,
+        },
+      };
+    });
+    mockListOpenForCompanyAndExpert.mockImplementation(async () => {
+      order.push('count-read');
+      return {
+        openCases: [{ engagementId: ENGAGEMENT_ID, consultationCount: 1 }],
+        resolvedCaseCount: 0,
+      };
+    });
+
+    await bookConsultationAction(EXISTING_CASE_INPUT);
+
+    expect(order).toEqual(['meeting-hop', 'count-read']);
+  });
+
   it('denies the attach arm with the single case_not_available literal', async () => {
     mockAuthorizeCaseAttach.mockResolvedValue({ ok: false, code: 'case_not_available' });
     const result = await bookConsultationAction(EXISTING_CASE_INPUT);
