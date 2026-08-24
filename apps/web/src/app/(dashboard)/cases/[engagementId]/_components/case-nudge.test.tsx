@@ -23,6 +23,8 @@ const BASE = {
   onMarkResolved: vi.fn(),
   onDismissAsk: vi.fn(),
   onReschedule: vi.fn(),
+  canProposeReschedule: false,
+  onProposeReschedule: vi.fn(),
   busy: false,
 };
 
@@ -41,6 +43,8 @@ const UPCOMING: CaseNudgeView = {
 const HEADINGS: readonly RegExp[] = [
   /Next consultation/i,
   /consultation is about to start|consultation starts in|consultation is starting now/i,
+  /suggested some new times/i,
+  /Waiting on a reply to your suggested times/i,
   /thinks this one's sorted/i,
   /You've asked if this is sorted/i,
   /Nothing booked/i,
@@ -79,6 +83,44 @@ describe('CaseNudge — exactly ONE nudge renders, for every kind × every lens'
     render(<CaseNudge {...BASE} nudge={{ kind: 'nothing_booked' }} lens={lens} />);
     expect(renderedHeadingCount()).toBe(1);
     expect(screen.getByText(/Nothing booked/i)).toBeInTheDocument();
+  });
+
+  const PROPOSAL_OPTIONS = [
+    { optionId: 'opt-1', scheduledStartIso: '2026-09-02T10:00:00Z' },
+    { optionId: 'opt-2', scheduledStartIso: '2026-09-03T10:00:00Z' },
+  ];
+
+  const RESCHEDULE_PROPOSAL_NUDGE = {
+    kind: 'reschedule_proposal' as const,
+    proposalId: 'proposal-1',
+    meetingId: 'm1',
+    optionCount: 2,
+    originalScheduledStartIso: '2026-09-01T10:00:00Z',
+    expiresAtIso: '2026-09-01T09:00:00Z',
+    proposedAtIso: '2026-08-30T09:00:00Z',
+    options: PROPOSAL_OPTIONS,
+  };
+
+  const RESCHEDULE_PROPOSAL_PENDING_NUDGE = {
+    kind: 'reschedule_proposal_pending' as const,
+    proposalId: 'proposal-1',
+    meetingId: 'm1',
+    optionCount: 2,
+    expiresAtIso: '2026-09-01T09:00:00Z',
+    proposedAtIso: '2026-08-30T09:00:00Z',
+    options: PROPOSAL_OPTIONS,
+  };
+
+  it('renders exactly one RESCHEDULE_PROPOSAL nudge — CLIENT lens only', () => {
+    render(<CaseNudge {...BASE} nudge={RESCHEDULE_PROPOSAL_NUDGE} lens="client" />);
+    expect(renderedHeadingCount()).toBe(1);
+    expect(screen.getByText(/Amara suggested some new times/i)).toBeInTheDocument();
+  });
+
+  it('renders exactly one RESCHEDULE_PROPOSAL_PENDING nudge — EXPERT lens only', () => {
+    render(<CaseNudge {...BASE} nudge={RESCHEDULE_PROPOSAL_PENDING_NUDGE} lens="expert" />);
+    expect(renderedHeadingCount()).toBe(1);
+    expect(screen.getByText(/Waiting on a reply to your suggested times/i)).toBeInTheDocument();
   });
 });
 
@@ -134,21 +176,70 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
   /**
    * BAL-409 — INVERTED from the pre-BAL-409 assertion that no reschedule CTA exists. A
    * client-initiated reschedule auto-approves (it needs no proposal state), so the CTA lands
-   * here; BAL-411's expert-side propose-and-wait still has nothing to link to.
+   * here.
    */
   it('renders a RESCHEDULE CTA for the client lens on an upcoming, non-live consultation', () => {
     render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" />);
     expect(screen.getByRole('button', { name: /reschedule/i })).toBeInTheDocument();
   });
 
-  it('does NOT render the reschedule CTA for the expert lens', () => {
-    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" />);
-    expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument();
+  it('does NOT render the (client) reschedule CTA for the expert lens — it gets its own', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={true} />);
+    expect(screen.queryByRole('button', { name: /^reschedule$/i })).not.toBeInTheDocument();
   });
 
   it('does NOT render the reschedule CTA while the consultation is LIVE', () => {
     render(<CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens="client" />);
     expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * BAL-411 — the EXPERT'S symmetrical CTA on the SAME `'upcoming'` arm, gated on the
+   * server-resolved `canProposeReschedule`. An absent action beats a dead one: when the flag
+   * is false (a proposal is already outstanding, or the axis denies it), no button renders at
+   * all — never a disabled one.
+   */
+  it('renders "Propose a new time" for the EXPERT lens when canProposeReschedule is true', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={true} />);
+    expect(screen.getByRole('button', { name: 'Propose a new time' })).toBeInTheDocument();
+  });
+
+  it('renders NO propose CTA for the expert when canProposeReschedule is false', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={false} />);
+    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the propose CTA for the CLIENT lens, even when the flag is true', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" canProposeReschedule={true} />);
+    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the propose CTA while the consultation is LIVE', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ ...UPCOMING, live: true }}
+        lens="expert"
+        canProposeReschedule={true}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+  });
+
+  it('calls onProposeReschedule when the expert CTA is clicked', async () => {
+    const onProposeReschedule = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={UPCOMING}
+        lens="expert"
+        canProposeReschedule={true}
+        onProposeReschedule={onProposeReschedule}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Propose a new time' }));
+    expect(onProposeReschedule).toHaveBeenCalledTimes(1);
   });
 
   it('calls onReschedule when the CTA is clicked, and renderedHeadingCount stays 1', async () => {

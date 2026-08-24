@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { CalendarClock, MessageSquare, Sparkles, Video, X } from 'lucide-react';
+import { CalendarClock, CalendarSync, MessageSquare, Sparkles, Video, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
@@ -24,8 +24,16 @@ import type { CaseNudgeView } from '@/lib/cases/case-view-types';
  *
  * ⚠ THE RESCHEDULE CTA (BAL-409) IS CLIENT-INITIATED AND AUTO-APPROVES — it needs NO proposal
  * state (the slot was already offered on the expert's live availability), so it lands here on
- * the `'upcoming'` arm rather than waiting on schema. BAL-411's expert-side propose-and-wait
- * still has nothing to link to; do not add a symmetrical button for the expert lens.
+ * the `'upcoming'` arm.
+ *
+ * ⚠ BAL-411 — the EXPERT gets a SYMMETRICAL CTA on the SAME `'upcoming'` arm: "Propose a new
+ * time", gated on `canProposeReschedule` (server-resolved: open case, an upcoming meeting, no
+ * proposal already outstanding, and the engagement-axis capability). It opens
+ * `ProposeTimesDialog`, owned by `case-surface.tsx` exactly as `RescheduleDialog`'s open state
+ * is. The two new `reschedule_proposal` / `reschedule_proposal_pending` nudge kinds below are
+ * PURELY INFORMATIONAL — the actual accept/decline/withdraw affordances live on
+ * `RescheduleProposalCard`, mounted alongside this nudge, because "pick one of up to three
+ * times" does not fit the nudge's two-button shell the way `resolution_ask` does.
  */
 
 interface CaseNudgeProps {
@@ -40,6 +48,11 @@ interface CaseNudgeProps {
   /** BAL-409 — opens the reschedule dialog. Presentational only: `case-surface.tsx` owns the
    *  dialog's open state, exactly as it owns `resolveCaseAction`'s transition. */
   onReschedule: () => void;
+  /** BAL-411 — EXPERT lens only. Whether "Propose a new time" renders at all — server-resolved
+   *  (`canProposeReschedule`), never derived here. */
+  canProposeReschedule: boolean;
+  /** BAL-411 — opens `ProposeTimesDialog`. Presentational only, mirroring `onReschedule`. */
+  onProposeReschedule: () => void;
   /** True while the close/dismiss mutation is in flight. */
   busy: boolean;
 }
@@ -52,31 +65,59 @@ export function CaseNudge({
   onMarkResolved,
   onDismissAsk,
   onReschedule,
+  canProposeReschedule,
+  onProposeReschedule,
   busy,
 }: Readonly<CaseNudgeProps>): React.JSX.Element | null {
   if (nudge === null) {
     return null;
   }
   if (nudge.kind === 'upcoming') {
-    // Client lens only — the expert-side reschedule is BAL-411's, and showing a button that
-    // 404s is worse than no button. `!nudge.live` — inside the join window the honest action
-    // is to join, not to move, and the nudge is already the "starting soon" moment. This is
-    // STRICTER than the server (which allows until `start > now`); client-stricter-than-server
-    // is the safe direction — a stale page that submits at T-2min still succeeds server-side.
+    // `!nudge.live` on BOTH sides — inside the join window the honest action is to join, not
+    // to move, and the nudge is already the "starting soon" moment. This is STRICTER than the
+    // server (which allows until `start > now`); client-stricter-than-server is the safe
+    // direction — a stale page that submits at T-2min still succeeds server-side.
     const canReschedule = lens === 'client' && !nudge.live;
+    const canPropose = lens === 'expert' && !nudge.live && canProposeReschedule;
+    let upcomingAction: React.ReactNode;
+    if (canReschedule) {
+      upcomingAction = (
+        <Button type="button" size="sm" variant="outline" onClick={onReschedule}>
+          Reschedule
+        </Button>
+      );
+    } else if (canPropose) {
+      upcomingAction = (
+        <Button type="button" size="sm" variant="outline" onClick={onProposeReschedule}>
+          Propose a new time
+        </Button>
+      );
+    }
     return (
       <NudgeShell
         icon={nudge.live ? Video : CalendarClock}
         live={nudge.live}
         title={<UpcomingTitle iso={nudge.scheduledStartIso} live={nudge.live} />}
         body={upcomingBody(lens, counterpartyLabel, nudge.live)}
-        actions={
-          canReschedule ? (
-            <Button type="button" size="sm" variant="outline" onClick={onReschedule}>
-              Reschedule
-            </Button>
-          ) : undefined
-        }
+        actions={upcomingAction}
+      />
+    );
+  }
+  if (nudge.kind === 'reschedule_proposal') {
+    return (
+      <NudgeShell
+        icon={CalendarSync}
+        title={`${counterpartyLabel} suggested some new times`}
+        body={rescheduleProposalBody(nudge.optionCount, nudge.expiresAtIso)}
+      />
+    );
+  }
+  if (nudge.kind === 'reschedule_proposal_pending') {
+    return (
+      <NudgeShell
+        icon={CalendarSync}
+        title="Waiting on a reply to your suggested times"
+        body={`${counterpartyLabel} will pick one, or keep the original time. You can withdraw and try again any time below.`}
       />
     );
   }
@@ -191,6 +232,21 @@ function upcomingBody(lens: 'client' | 'expert', counterparty: string, live: boo
     : `${counterparty} is booked in. Their brief and the last recap are on this case.`;
 }
 
+/**
+ * BAL-411 — the client-facing `reschedule_proposal` body. The deadline is stated as a HELPFUL
+ * FACT, never a countdown (CLAUDE.md): declining is always one click below, so "or nothing
+ * happens" is honestly true rather than a threat.
+ */
+function rescheduleProposalBody(optionCount: number, expiresAtIso: string): React.ReactNode {
+  return (
+    <>
+      {optionCount} time{optionCount === 1 ? '' : 's'} to choose from — pick one below, or keep your
+      original time. Reply by <LocalDateTime iso={expiresAtIso} variant="day-month-time" /> — after
+      that, your original time simply stands, no need to do anything.
+    </>
+  );
+}
+
 function nothingBookedBody(lens: 'client' | 'expert', counterparty: string): string {
   // ⚠ THE DESIGN'S "{Expert} has time this week" IS NOT RENDERED. There is no availability
   // read on this surface (and no slot-listing endpoint anywhere — owner decision D5), so
@@ -203,7 +259,7 @@ function nothingBookedBody(lens: 'client' | 'expert', counterparty: string): str
 interface NudgeShellProps {
   icon: LucideIcon;
   title: React.ReactNode;
-  body: string;
+  body: React.ReactNode;
   live?: boolean;
   actions?: React.ReactNode;
   onDismiss?: () => void;

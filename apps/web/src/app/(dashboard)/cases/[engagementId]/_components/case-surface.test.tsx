@@ -72,6 +72,42 @@ vi.mock('@/components/booking/reschedule-dialog', () => ({
     ) : null,
 }));
 
+// BAL-411 — a minimal stand-in for `ProposeTimesDialog`, the SAME reason `RescheduleDialog` is
+// stubbed: the real component calls `useIsMobile` (→ `window.matchMedia`, unavailable in jsdom)
+// and fetches availability — out of scope for a composition test.
+vi.mock('@/components/booking/propose-times-dialog', () => ({
+  ProposeTimesDialog: (props: {
+    open: boolean;
+    onClose: () => void;
+    onProposed: () => void;
+    meetingId: string;
+  }) =>
+    props.open ? (
+      <div data-testid="propose-times-dialog-stub">
+        <span>meeting: {props.meetingId}</span>
+        <button type="button" onClick={props.onClose}>
+          Stub close
+        </button>
+        <button type="button" onClick={props.onProposed}>
+          Stub proposed
+        </button>
+      </div>
+    ) : null,
+}));
+
+// BAL-411 — `RescheduleProposalCard` fires Server Actions of its own; a minimal stand-in keeps
+// this file a pure composition test the same way the two dialog stubs above do.
+vi.mock('./reschedule-proposal-card', () => ({
+  RescheduleProposalCard: (props: { lens: string; onChanged: () => void }) => (
+    <div data-testid="reschedule-proposal-card-stub">
+      <span>lens: {props.lens}</span>
+      <button type="button" onClick={props.onChanged}>
+        Stub changed
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock('@/components/balo/conversation/use-conversation-realtime', () => ({
   useConversationRealtime: vi.fn(),
 }));
@@ -159,6 +195,8 @@ function expertView(over: Record<string, unknown> = {}): CaseSurfaceView {
     lens: 'expert',
     earnings: { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 },
     canRequestResolution: true,
+    canProposeReschedule: true,
+    canManageReschedule: true,
     ...over,
   } as CaseSurfaceView;
 }
@@ -447,9 +485,93 @@ describe('CaseSurface — the conditional regions', () => {
       expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
     });
 
-    it('offers no "Reschedule" CTA on the EXPERT lens (BAL-411 is the expert-side ticket)', () => {
+    it('offers no client "Reschedule" CTA on the EXPERT lens — it gets its OWN CTA (BAL-411)', () => {
       render(<CaseSurface view={expertView({ nudge: UPCOMING_NUDGE })} />);
       expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
+    });
+  });
+
+  /** BAL-411 — the EXPERT's symmetrical propose-times dialog, same seam shape as BAL-409's. */
+  describe('CaseSurface — the conditional regions › BAL-411 — propose-times CTA → dialog seam', () => {
+    const UPCOMING_NUDGE = {
+      kind: 'upcoming' as const,
+      meetingId: 'm-upcoming-1',
+      scheduledStartIso: '2026-09-01T10:00:00Z',
+      live: false,
+      durationMinutes: 45,
+    };
+
+    it('mounts the dialog only when the EXPERT has an upcoming meeting and canProposeReschedule', async () => {
+      const user = userEvent.setup();
+      render(
+        <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, canProposeReschedule: true })} />
+      );
+      expect(screen.queryByTestId('propose-times-dialog-stub')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Propose a new time' }));
+
+      const stub = screen.getByTestId('propose-times-dialog-stub');
+      expect(stub).toBeInTheDocument();
+      expect(stub).toHaveTextContent('meeting: m-upcoming-1');
+    });
+
+    it('offers no propose CTA on the CLIENT lens, even with an upcoming meeting', () => {
+      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+    });
+
+    it('onProposed closes the dialog AND refreshes the page', async () => {
+      const user = userEvent.setup();
+      render(
+        <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, canProposeReschedule: true })} />
+      );
+      await user.click(screen.getByRole('button', { name: 'Propose a new time' }));
+      await user.click(screen.getByRole('button', { name: 'Stub proposed' }));
+      expect(screen.queryByTestId('propose-times-dialog-stub')).not.toBeInTheDocument();
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /** BAL-411 — the ONE place accept/decline/withdraw happen; mounted whenever the nudge is a
+   *  live proposal, on EITHER lens. */
+  describe('CaseSurface — the conditional regions › BAL-411 — the reschedule-proposal card', () => {
+    const PROPOSAL_NUDGE = {
+      kind: 'reschedule_proposal' as const,
+      proposalId: 'proposal-1',
+      meetingId: 'm-upcoming-1',
+      optionCount: 2,
+      originalScheduledStartIso: '2026-09-01T10:00:00Z',
+      expiresAtIso: '2026-08-31T10:00:00Z',
+      proposedAtIso: '2026-08-25T10:00:00Z',
+      options: [{ optionId: 'opt-1', scheduledStartIso: '2026-09-02T10:00:00Z' }],
+    };
+
+    it('mounts on the CLIENT lens for a reschedule_proposal nudge', () => {
+      render(<CaseSurface view={clientView({ nudge: PROPOSAL_NUDGE })} />);
+      const stub = screen.getByTestId('reschedule-proposal-card-stub');
+      expect(stub).toHaveTextContent('lens: client');
+    });
+
+    it('mounts on the EXPERT lens for a reschedule_proposal_pending nudge', () => {
+      render(
+        <CaseSurface
+          view={expertView({ nudge: { ...PROPOSAL_NUDGE, kind: 'reschedule_proposal_pending' } })}
+        />
+      );
+      const stub = screen.getByTestId('reschedule-proposal-card-stub');
+      expect(stub).toHaveTextContent('lens: expert');
+    });
+
+    it('does NOT mount for any other nudge kind', () => {
+      render(<CaseSurface view={clientView({ nudge: { kind: 'nothing_booked' } })} />);
+      expect(screen.queryByTestId('reschedule-proposal-card-stub')).not.toBeInTheDocument();
+    });
+
+    it('router.refresh() fires when the card reports a change', async () => {
+      const user = userEvent.setup();
+      render(<CaseSurface view={clientView({ nudge: PROPOSAL_NUDGE })} />);
+      await user.click(screen.getByRole('button', { name: 'Stub changed' }));
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
     });
   });
 

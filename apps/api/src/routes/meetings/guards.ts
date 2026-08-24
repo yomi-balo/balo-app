@@ -62,6 +62,18 @@ export const RESCHEDULE_USER_RATE_LIMIT: RateLimitConfig = {
 };
 
 /**
+ * BAL-411 — the reschedule-PROPOSAL route's PER-USER limit. A SEPARATE, TIGHTER bucket from
+ * `RESCHEDULE_USER_RATE_LIMIT`: proposing performs up to `RESCHEDULE_PROPOSAL_MAX_OPTIONS`
+ * vendor free/busy round-trips per request (one per option, via `isWindowAvailableForExpert`),
+ * so it is a heavier write than an ordinary reschedule and gets its own, lower ceiling.
+ */
+export const RESCHEDULE_PROPOSAL_USER_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meetings:reschedule-proposal:user',
+  maxRequests: 10,
+  windowSeconds: 3600,
+};
+
+/**
  * Booking-window violation → the STABLE wire code. Deliberately a lookup rather than the
  * violation string itself: `invalid_window` reads better to a client than
  * `end_before_start`, and decoupling the two means the internal names can change without a

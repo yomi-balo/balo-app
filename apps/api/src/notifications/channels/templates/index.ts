@@ -85,7 +85,14 @@ import {
   BookingRescheduledClientEmail,
   BookingRescheduledExpertEmail,
   bookingRescheduledSubject,
+  type BookingRescheduledInitiator,
 } from './booking-rescheduled.js';
+import {
+  RescheduleProposalSentEmail,
+  RescheduleProposalDeclinedEmail,
+  rescheduleProposalSentSubject,
+  rescheduleProposalDeclinedSubject,
+} from './reschedule-proposal.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -1617,9 +1624,13 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   // BAL-409 — the CLIENT half of `booking.rescheduled`. Prospective copy names the expert
   // PARTY, never a pronoun. NO CALENDAR CLAIM (D14) — only the expert's own calendar is ever
   // written, and the amend has not necessarily run yet at publish time.
+  // BAL-411 — `?? 'client'` is the DEPLOY-SKEW FALLBACK: an older publisher's payload may not
+  // carry `initiatedBy` yet, and the pre-BAL-411 copy is exactly what that fallback reproduces.
   'booking-rescheduled-client': (data) => {
     const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
     const engagementId = (data.engagementId as string) ?? '';
+    const initiatedBy: BookingRescheduledInitiator =
+      data.initiatedBy === 'expert' ? 'expert' : 'client';
     return {
       component: React.createElement(BookingRescheduledClientEmail, {
         firstName: (data.recipientName as string) ?? 'there',
@@ -1630,16 +1641,20 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         durationMinutes: numberCount(data.durationMinutes),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
+        initiatedBy,
       }),
-      subject: bookingRescheduledSubject('client', expertParty),
+      subject: bookingRescheduledSubject('client', expertParty, initiatedBy),
     };
   },
 
   // BAL-409 — the EXPERT half of the same event. Prospective copy names the CLIENT company,
   // never an invented individual. Same no-calendar-claim rule as the client half.
+  // BAL-411 — same deploy-skew fallback as the client half above.
   'booking-rescheduled-expert': (data) => {
     const clientCompany = (data.clientCompanyName as string) ?? 'A client';
     const engagementId = (data.engagementId as string) ?? '';
+    const initiatedBy: BookingRescheduledInitiator =
+      data.initiatedBy === 'expert' ? 'expert' : 'client';
     return {
       component: React.createElement(BookingRescheduledExpertEmail, {
         firstName: (data.recipientName as string) ?? 'there',
@@ -1650,8 +1665,51 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         durationMinutes: numberCount(data.durationMinutes),
         caseUrl: `${BASE_URL}/cases/${engagementId}`,
         baseUrl: BASE_URL,
+        initiatedBy,
       }),
-      subject: bookingRescheduledSubject('expert', clientCompany),
+      subject: bookingRescheduledSubject('expert', clientCompany, initiatedBy),
+    };
+  },
+
+  // BAL-411 — the expert proposed alternative times. Prospective copy names the expert
+  // individual with "@ company" on first mention, mirroring the client-facing half's posture.
+  'reschedule-proposal-sent': (data) => {
+    const expertPerson = (data.expertPersonLabel as string) ?? 'Your expert';
+    const engagementId = (data.engagementId as string) ?? '';
+    const optionStartIsos = Array.isArray(data.optionStartIsos)
+      ? data.optionStartIsos.filter((iso): iso is string => typeof iso === 'string')
+      : [];
+    return {
+      component: React.createElement(RescheduleProposalSentEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        expertPersonLabel: expertPerson,
+        caseTitle: (data.caseTitle as string) ?? 'your case',
+        originalScheduledStartIso: (data.originalScheduledStartIso as string) ?? '',
+        optionStartIsos,
+        durationMinutes: numberCount(data.durationMinutes),
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: rescheduleProposalSentSubject(expertPerson),
+    };
+  },
+
+  // BAL-411 — the client declined every option. Retrospective copy names the person who
+  // answered, with "@ company" on first mention, never an address.
+  'reschedule-proposal-declined': (data) => {
+    const declinedBy = (data.declinedByLabel as string) ?? 'The client';
+    const engagementId = (data.engagementId as string) ?? '';
+    return {
+      component: React.createElement(RescheduleProposalDeclinedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        declinedByLabel: declinedBy,
+        caseTitle: (data.caseTitle as string) ?? 'the case',
+        originalScheduledStartIso: (data.originalScheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: rescheduleProposalDeclinedSubject(declinedBy),
     };
   },
 

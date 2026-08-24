@@ -4,21 +4,13 @@ import 'server-only';
 
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import {
-  agenciesRepository,
-  companiesRepository,
-  expertsRepository,
-  meetingsRepository,
-  usersRepository,
-} from '@balo/db';
-import { expertPartyDisplayName } from '@balo/shared/parties';
-import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import type { SessionUser } from '@/lib/auth/session';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { errorMessage, log } from '@/lib/logging';
-import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { postRescheduleMeeting } from '@/lib/meetings/reschedule-api-client';
-import { authorizeCaseMutation } from '../_lib/authorize-case-mutation';
+import { authorizeClientCaseMutation } from '../_lib/authorize-client-case-mutation';
+import { publishBookingRescheduled } from '../_lib/publish-booking-rescheduled';
+import { resolveBoundMeeting } from '../_lib/resolve-bound-meeting';
 import type {
   RescheduleConsultationInput,
   RescheduleConsultationResult,
@@ -89,38 +81,6 @@ function mapApiFailure(
   return { code: 'unknown', error: GENERIC_FAILURE };
 }
 
-/**
- * The `booking.rescheduled` payload's two display labels, resolved the SAME way
- * `close-case-effects.ts`'s `publishCaseClosed` does — column-projected reads, never a full
- * row. Never throws: a publish is best-effort and must not fail an already-committed move.
- */
-async function resolveNotificationLabels(
-  companyId: string,
-  expertProfileId: string
-): Promise<{ clientCompanyName: string; expertPartyLabel: string }> {
-  const [company, profile] = await Promise.all([
-    companiesRepository.findNameById(companyId),
-    expertsRepository.findDisplayProfileById(expertProfileId),
-  ]);
-  const [expertUser, agency] = await Promise.all([
-    profile === undefined
-      ? Promise.resolve(undefined)
-      : usersRepository.findDisplayById(profile.userId),
-    profile?.agencyId == null
-      ? Promise.resolve(undefined)
-      : agenciesRepository.getSummaryById(profile.agencyId),
-  ]);
-  return {
-    clientCompanyName: company?.name ?? 'your company',
-    expertPartyLabel: expertPartyDisplayName({
-      type: profile?.type ?? 'freelancer',
-      agencyName: agency?.name ?? null,
-      firstName: expertUser?.firstName ?? null,
-      lastName: expertUser?.lastName ?? null,
-    }),
-  };
-}
-
 export async function rescheduleConsultationAction(
   input: RescheduleConsultationInput
 ): Promise<RescheduleConsultationResult> {
@@ -137,24 +97,20 @@ export async function rescheduleConsultationAction(
   }
   const { engagementId, meetingId, startIso } = parsed.data;
 
-  const gate = await authorizeCaseMutation({ engagementId });
+  // BAL-411 shipped the expert-side propose-and-wait as its OWN action (`propose-reschedule.ts`),
+  // on the ENGAGEMENT axis — a different axis, a different route, and (fix round 2 item 2) now
+  // the same `authorizeClientCaseMutation` CLIENT-lens gate as this action's siblings in
+  // `respond-to-reschedule-proposal.ts`, not a separate copy of it. This action stays the
+  // client-initiated, auto-approving path only.
+  const gate = await authorizeClientCaseMutation(
+    engagementId,
+    user,
+    "You don't have permission to reschedule this consultation."
+  );
   if (!gate.ok) {
     return { success: false, code: 'not_permitted', error: gate.error };
   }
-  const denied = "You don't have permission to reschedule this consultation.";
-  if (gate.lens !== 'client') {
-    // BAL-411 (expert-side propose-and-wait) is a different axis and a different ticket.
-    return { success: false, code: 'not_permitted', error: denied };
-  }
   const { companyId, expertProfileId, caseRow } = gate;
-
-  // N1 — CLAUDE.md bans gating on `lens ===` alone; `lens` is a routing hint, not an
-  // authorization decision. Pair it with the actual MEMBERSHIP-axis capability check, the same
-  // way the shipped sibling `resolve-case.ts` does for the close action.
-  const allowed = await hasCapability(user, CAPABILITIES.PARTICIPATE, { companyId });
-  if (!allowed) {
-    return { success: false, code: 'not_permitted', error: denied };
-  }
 
   try {
     // Step 3b — B3: PROVE `meetingId` BELONGS TO `engagementId` BEFORE ANYTHING ELSE.
@@ -165,33 +121,16 @@ export async function rescheduleConsultationAction(
     // B}` (any two cases they can each individually reach) and both gates would pass — pairing
     // case A's `expertProfileId`/`caseTitle` with case B's `meetingId`/join link in the
     // notification, and revalidating case A's page for a move that actually happened on case B.
-    // `findWithContexts` reads the meeting's LIVE context rows directly (never re-derived from
-    // `engagementId`) and requires a live `case` context whose `contextId` is exactly this
-    // `engagementId` — closing the join the two independent gates leave open.
-    const meetingWithContexts = await meetingsRepository.findWithContexts(meetingId);
-    if (meetingWithContexts === undefined) {
-      return {
-        success: false,
-        code: 'meeting_not_found',
-        error: "We couldn't find that consultation.",
-      };
+    // `resolveBoundMeeting` reads the meeting's LIVE context rows directly (never re-derived
+    // from `engagementId`) and requires a live `case` context whose `contextId` is exactly this
+    // `engagementId` — closing the join the two independent gates leave open. Fix round 1 item
+    // 9 — extracted; was a byte-identical inline copy shared with `propose-reschedule.ts` and
+    // `respond-to-reschedule-proposal.ts`.
+    const bound = await resolveBoundMeeting(meetingId, engagementId, user.id, 'Reschedule');
+    if (!bound.ok) {
+      return { success: false, code: bound.code, error: bound.error };
     }
-    const { meeting, contexts } = meetingWithContexts;
-    const belongsToThisCase = contexts.some(
-      (context) => context.contextType === 'case' && context.contextId === engagementId
-    );
-    if (!belongsToThisCase) {
-      log.error('Reschedule meetingId does not belong to engagementId — refusing', {
-        meetingId,
-        engagementId,
-        userId: user.id,
-      });
-      return {
-        success: false,
-        code: 'meeting_not_found',
-        error: "We couldn't find that consultation.",
-      };
-    }
+    const { meeting } = bound;
 
     // Step 4 — the CURRENT window, read fresh. Never trust a client-submitted duration.
     const currentDurationMs = meeting.scheduledEnd.getTime() - meeting.scheduledStart.getTime();
@@ -234,54 +173,22 @@ export async function rescheduleConsultationAction(
     revalidatePath(`/cases/${engagementId}`);
     log.info('Consultation rescheduled', { meetingId, engagementId, userId: user.id });
 
-    // ⚠ THE LABELS ARE AWAITED; THE PUBLISH ITSELF IS NOT. `publishNotificationEvent` must be
-    // called SYNCHRONOUSLY within this action's own execution (the `book-consultation.ts`
-    // precedent) so Next's `after()` (inside it) can still register against the live request
-    // context — calling it from a `.then()` continuation on a promise created here risks that
-    // context having already been torn down by the time the continuation runs. Resolving the
-    // labels first costs two small column-projected reads, not a second network hop.
-    const labels = await resolveNotificationLabels(companyId, expertProfileId).catch(
-      (error: unknown) => {
-        log.error('Failed to resolve booking.rescheduled labels — publishing with fallbacks', {
-          meetingId,
-          engagementId,
-          error: errorMessage(error),
-        });
-        return { clientCompanyName: 'your company', expertPartyLabel: 'Your expert' };
-      }
-    );
-    // ⚠ THE FALLBACK IS A DEPLOY-SKEW SAFETY NET, NOT A NORMAL PATH — so it is LOUD. A
-    // `changed: true` response always carries `rescheduleAuditId`; if it does not, the web is
-    // running against an older API and every reschedule silently reverts to the window-derived
-    // key, reinstating the A→B→C→B collision that drops both party emails. Silence there would
-    // make a real regression indistinguishable from correct behaviour.
-    const rescheduleAuditId = result.data.rescheduleAuditId;
-    if (rescheduleAuditId === undefined) {
-      log.warn('Reschedule response carried no rescheduleAuditId — falling back to a window key', {
-        meetingId,
-        engagementId,
-      });
-    }
-
-    // Fire-and-forget by contract — `publishNotificationEvent` never throws (see its own
-    // docblock); nothing here needs a `.catch()`.
-    publishNotificationEvent('booking.rescheduled', {
-      // ⚠ THE AUDIT ROW ID, NOT THE TARGET WINDOW. `publisher.ts` turns `correlationId` into
-      // the BullMQ jobId (`${event}--${correlationId}`) and the notification-events queue
-      // RETAINS 100 completed jobs, so `${meetingId}:${scheduledStart}` would collide on a
-      // move BACK to a previously-used window (A→B→C→B) and silently drop BOTH party emails.
-      // Falls back to the window only on deploy skew — see the `log.warn` above.
-      correlationId: `${meetingId}:${rescheduleAuditId ?? result.data.scheduledStart}`,
+    // Fix round 2 item 2 — the label resolution, the deploy-skew `rescheduleAuditId` fallback,
+    // and the `booking.rescheduled` publish envelope are now `publishBookingRescheduled` (own
+    // docblock covers the "labels awaited, publish itself not" ordering requirement this used to
+    // explain inline) — shared with `respond-to-reschedule-proposal.ts`'s accept path, the other
+    // COMMITTED-move caller of this exact event.
+    await publishBookingRescheduled({
       meetingId,
       engagementId,
-      recipientId: user.id,
+      companyId,
       expertProfileId,
-      clientCompanyName: labels.clientCompanyName,
-      expertPartyLabel: labels.expertPartyLabel,
       caseTitle: caseRow.title,
-      previousScheduledStartIso: result.data.previousScheduledStart,
-      scheduledStartIso: result.data.scheduledStart,
+      recipientId: user.id,
+      previousScheduledStart: result.data.previousScheduledStart,
+      scheduledStart: result.data.scheduledStart,
       durationMinutes: Math.round(currentDurationMs / 60_000),
+      rescheduleAuditId: result.data.rescheduleAuditId,
       initiatedBy: 'client',
     });
 

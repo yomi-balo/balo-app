@@ -90,6 +90,9 @@ describe('processSmsJob', () => {
       id: 'user-1',
       phone: '+61412345678',
       firstName: 'Alice',
+      // Item 17 — the new structural guard. Every existing happy-path fixture in this file
+      // must carry a verified phone or the guard added below skips every one of them.
+      phoneVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
     });
     mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 3600 });
   });
@@ -186,6 +189,33 @@ describe('processSmsJob', () => {
       expect(mockTrackServer).toHaveBeenCalledWith('notification_sms_skipped', {
         template: 'booking-confirmed-sms',
         skip_reason: 'Invalid phone number format',
+        distinct_id: 'user-1',
+      });
+    });
+
+    // Item 17 — the STRUCTURAL guard. "Has a phone ⇒ verified" previously rested entirely on
+    // the convention that `usersRepository.setPhoneVerified` is the sole writer of
+    // `users.phone`; this pins the guard directly rather than depending on that grep staying
+    // true.
+    it('skips when phone is present and E.164-valid but NOT verified', async () => {
+      mockFindById.mockResolvedValue({
+        id: 'user-1',
+        phone: '+61412345678',
+        phoneVerifiedAt: null,
+      });
+
+      await processSmsJob(makeJob());
+
+      expect(mockSendTransacSms).not.toHaveBeenCalled();
+      expect(mockLogNotification).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientId: 'user-1' }),
+        'sms',
+        'skipped',
+        'Phone not verified'
+      );
+      expect(mockTrackServer).toHaveBeenCalledWith('notification_sms_skipped', {
+        template: 'booking-confirmed-sms',
+        skip_reason: 'Phone not verified',
         distinct_id: 'user-1',
       });
     });

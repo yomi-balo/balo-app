@@ -123,4 +123,6 @@ export type {
   BookingSource,
   BookingEntryMode,
   BookingAbandonStep,
+  // BAL-411 CONSIDER item — the reschedule-proposal answer vocabulary.
+  RescheduleProposalOutcome,
 } from '../events';

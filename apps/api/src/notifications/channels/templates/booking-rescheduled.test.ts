@@ -78,24 +78,75 @@ describe('getEmailTemplate — booking-rescheduled-expert', () => {
   });
 });
 
+describe('BAL-411 — the initiatedBy branch', () => {
+  it('defaults to the pre-BAL-411 "client" copy when initiatedBy is absent (deploy skew)', () => {
+    const out = getEmailTemplate('booking-rescheduled-client', BASE_DATA);
+    expect(out.subject).toBe('Your consultation with CloudPeak has moved');
+  });
+
+  it('expert half, initiatedBy=expert: "accepted your new time", not "moved your consultation"', async () => {
+    const out = getEmailTemplate('booking-rescheduled-expert', {
+      ...BASE_DATA,
+      initiatedBy: 'expert',
+    });
+    expect(out.subject).toBe('Northwind Industrial accepted your new time');
+    const text = textOf(await render(out.component));
+    expect(text).toContain('accepted your new time');
+    expect(text).not.toContain('moved your consultation');
+  });
+
+  it('client half, initiatedBy=expert: "You confirmed a new time", not "has moved"', async () => {
+    const out = getEmailTemplate('booking-rescheduled-client', {
+      ...BASE_DATA,
+      initiatedBy: 'expert',
+    });
+    expect(out.subject).toBe('You confirmed a new time with CloudPeak');
+    const text = textOf(await render(out.component));
+    expect(text).toContain('You confirmed a new time');
+    expect(text).not.toContain('has moved to');
+  });
+
+  it('an unrecognised initiatedBy value falls back to the client-initiated copy (fail safe)', () => {
+    const out = getEmailTemplate('booking-rescheduled-client', {
+      ...BASE_DATA,
+      initiatedBy: 'not-a-real-value',
+    });
+    expect(out.subject).toBe('Your consultation with CloudPeak has moved');
+  });
+});
+
 describe('booking-rescheduled — the invariants both halves must hold', () => {
   const RECIPIENTS = ['booking-rescheduled-client', 'booking-rescheduled-expert'] as const;
+  // BAL-411 — every invariant below is re-run over BOTH `initiatedBy` values, so a new arm
+  // cannot silently leak an address/money/calendar-claim/gendered pronoun the original arm
+  // was already clean of.
+  const INITIATED_BY = ['client', 'expert'] as const;
+  const CASES = RECIPIENTS.flatMap((template) =>
+    INITIATED_BY.map((initiatedBy) => ({ template, initiatedBy }))
+  );
 
   // ADR-1044 §3: names cross the party boundary, ADDRESSES NEVER. The label fields carry
   // org/party names only; an `@` in the rendered copy would mean an address leaked through.
-  it.each(RECIPIENTS)('%s renders no address other than Balo support', async (template) => {
-    const html = await render(getEmailTemplate(template, BASE_DATA).component);
-    const addresses = [...html.matchAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g)].map(([match]) => match);
+  it.each(CASES)(
+    '$template ($initiatedBy) renders no address other than Balo support',
+    async ({ template, initiatedBy }) => {
+      const html = await render(
+        getEmailTemplate(template, { ...BASE_DATA, initiatedBy }).component
+      );
+      const addresses = [...html.matchAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g)].map(([match]) => match);
 
-    // The `meeting-guest-emails.test.ts` precedent: the shared footer legitimately carries
-    // Balo's OWN support address, so the assertion is an exact set — anything else appearing
-    // here is a counterparty address that leaked through.
-    expect([...new Set(addresses)]).toEqual(['support@getbalo.com']);
-  });
+      // The `meeting-guest-emails.test.ts` precedent: the shared footer legitimately carries
+      // Balo's OWN support address, so the assertion is an exact set — anything else appearing
+      // here is a counterparty address that leaked through.
+      expect([...new Set(addresses)]).toEqual(['support@getbalo.com']);
+    }
+  );
 
   // A reschedule moves no money. No rate, no total, no hold — fee concealment is load-bearing.
-  it.each(RECIPIENTS)('%s states no money', async (template) => {
-    const text = textOf(await render(getEmailTemplate(template, BASE_DATA).component));
+  it.each(CASES)('$template ($initiatedBy) states no money', async ({ template, initiatedBy }) => {
+    const text = textOf(
+      await render(getEmailTemplate(template, { ...BASE_DATA, initiatedBy }).component)
+    );
     expect(text).not.toContain('$');
     expect(text.toLowerCase()).not.toContain('hold');
     expect(text.toLowerCase()).not.toContain('rate');
@@ -106,28 +157,41 @@ describe('booking-rescheduled — the invariants both halves must hold', () => {
    * email is published, and there is no client-side ICS at all in Slice A. So neither half may
    * claim any calendar was updated: at send time it demonstrably has not been.
    */
-  it.each(RECIPIENTS)('%s claims no calendar was updated', async (template) => {
-    const text = textOf(
-      await render(getEmailTemplate(template, BASE_DATA).component)
-    ).toLowerCase();
-    expect(text).not.toContain('calendar has been updated');
-    expect(text).not.toContain('updated your calendar');
-    expect(text).not.toContain('added to your calendar');
-  });
+  it.each(CASES)(
+    '$template ($initiatedBy) claims no calendar was updated',
+    async ({ template, initiatedBy }) => {
+      const text = textOf(
+        await render(getEmailTemplate(template, { ...BASE_DATA, initiatedBy }).component)
+      ).toLowerCase();
+      expect(text).not.toContain('calendar has been updated');
+      expect(text).not.toContain('updated your calendar');
+      expect(text).not.toContain('added to your calendar');
+    }
+  );
 
   // CLAUDE.md: gender-neutral copy — never a gendered pronoun for a client or an expert.
-  it.each(RECIPIENTS)('%s uses no gendered pronouns', async (template) => {
-    const text = textOf(await render(getEmailTemplate(template, BASE_DATA).component));
-    expect(text).not.toMatch(/\b(he|she|him|her|his|hers)\b/i);
-  });
+  it.each(CASES)(
+    '$template ($initiatedBy) uses no gendered pronouns',
+    async ({ template, initiatedBy }) => {
+      const text = textOf(
+        await render(getEmailTemplate(template, { ...BASE_DATA, initiatedBy }).component)
+      );
+      expect(text).not.toMatch(/\b(he|she|him|her|his|hers)\b/i);
+    }
+  );
 
   // B2 pinned the duration server-side, so "same length" is now a TRUE statement rather than
   // the false reassurance it was before the fix. Pin the claim so a future resize-capable
   // reschedule cannot silently leave this copy lying.
-  it.each(RECIPIENTS)('%s says the length is unchanged', async (template) => {
-    const text = textOf(await render(getEmailTemplate(template, BASE_DATA).component));
-    expect(text).toContain('same length');
-  });
+  it.each(CASES)(
+    '$template ($initiatedBy) says the length is unchanged',
+    async ({ template, initiatedBy }) => {
+      const text = textOf(
+        await render(getEmailTemplate(template, { ...BASE_DATA, initiatedBy }).component)
+      );
+      expect(text).toContain('same length');
+    }
+  );
 });
 
 describe('bookingRescheduledSubject', () => {

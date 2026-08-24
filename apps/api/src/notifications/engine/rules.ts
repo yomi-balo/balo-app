@@ -68,6 +68,18 @@ const recipientPhoneVerified: NonNullable<NotificationRule['condition']> = (ctx)
   return !!user?.phoneVerifiedAt;
 };
 
+/**
+ * BAL-411 — the SMS arm on `reschedule_proposal.sent` fires only when the ORIGINAL start is
+ * imminent. Payload-only, deliberately: unlike `recipientPhoneVerified` above, this condition
+ * carries NO phone-verification check, because `meeting_party_participants` is a FAN-OUT
+ * recipient (`payload.recipientUserIds`, resolved by the web action) — there is no single
+ * `data.user` to hydrate here the way a `'self'`/`'expert'` rule's `ctx.data.user` has one. The
+ * per-RECIPIENT phone-verified gate lives where it CAN run per-recipient: `sms.adapter.ts`'s
+ * `processSmsJob`, which resolves each fan-out recipient's own user row before sending.
+ */
+const rescheduleProposalIsUrgent: NonNullable<NotificationRule['condition']> = (ctx) =>
+  typeof ctx.payload.hoursToStart === 'number' && ctx.payload.hoursToStart < 2;
+
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
     {
@@ -310,6 +322,50 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     ...emailAndInApp('client', 'booking-rescheduled-client', (ctx) => !!ctx.payload.recipientId),
     ...emailAndInApp('expert', 'booking-rescheduled-expert'),
   ],
+  // ── BAL-411 — the expert-initiated reschedule proposal ─────────────────────────────────
+  //
+  // The expert proposed up to three alternative times. `meeting_party_participants` reads the
+  // publisher-resolved `payload.recipientUserIds` (the client company's admin holders,
+  // resolved by the web action — the same `meeting.client_absent` fan-out shape). Email +
+  // in-app always; SMS ONLY when the original start is under 2h away (`rescheduleProposalIsUrgent`),
+  // `priority: 'critical'` because the deadline is close.
+  'reschedule_proposal.sent': [
+    {
+      channel: 'email',
+      recipient: 'meeting_party_participants',
+      template: 'reschedule-proposal-sent',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'meeting_party_participants',
+      template: 'reschedule-proposal-sent',
+      timing: 'immediate',
+    },
+    {
+      channel: 'sms',
+      recipient: 'meeting_party_participants',
+      template: 'reschedule-proposal-sent-sms',
+      timing: 'immediate',
+      priority: 'critical',
+      condition: rescheduleProposalIsUrgent,
+    },
+  ],
+  // The client declined every option — tell the expert who asked. `recipient: 'expert'`
+  // resolves via `payload.expertProfileId` (the generic `resolver.ts` hydration).
+  'reschedule_proposal.declined': emailAndInApp('expert', 'reschedule-proposal-declined'),
+  // BAL-420 reminder tick — still unanswered as the original start closes in. IN-APP ONLY (the
+  // urgent case already got SMS at propose time); same fan-out shape as `.sent`.
+  'reschedule_proposal.unanswered': [
+    {
+      channel: 'in-app',
+      recipient: 'meeting_party_participants',
+      template: 'reschedule-proposal-unanswered',
+      timing: 'immediate',
+    },
+  ],
+
   // BAL-409 — the guest-facing half of the same move. EMAIL ONLY — a guest is a non-user with
   // no in-app surface (matching `meeting.guest_invited`'s posture). `recipient: 'email_address'`
   // resolves off `payload.recipientEmail`, the same lever every guest event uses.

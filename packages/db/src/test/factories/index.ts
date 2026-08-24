@@ -38,6 +38,11 @@ export { creditWalletFactory } from './credit-wallet.factory';
 export type { CreditWalletFactoryResult } from './credit-wallet.factory';
 export { promoCodeFactory, promoRedemptionFactory } from './promo-code.factory';
 export type { PromoRedemptionFactoryResult } from './promo-code.factory';
+export { rescheduleProposalFactory } from './reschedule-proposal.factory';
+export type {
+  RescheduleProposalFactoryResult,
+  RescheduleProposalFactoryOption,
+} from './reschedule-proposal.factory';
 export { reviewFactory, reviewInviteTokenFactory } from './review.factory';
 export type { ReviewFactoryResult, ReviewInviteTokenFactoryResult } from './review.factory';
 export type {

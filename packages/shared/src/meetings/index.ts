@@ -104,6 +104,9 @@ export * from './reactions';
 // route (apps/api) and the repository compare-and-set (@balo/db) cannot drift on "which
 // statuses may move". Pure, no clock read.
 export * from './reschedulable';
+// BAL-411 — the reschedule-PROPOSAL lifecycle's pure core: lazy expiry, liveness, and the
+// answer-time refusal vocabulary. Pure, no clock read — `now` is always injected.
+export * from './reschedule-proposal';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

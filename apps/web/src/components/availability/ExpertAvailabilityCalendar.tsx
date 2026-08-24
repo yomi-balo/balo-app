@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { AlertTriangle, CalendarX, Clock, Globe, RefreshCw } from 'lucide-react';
 import type { AvailabilitySlotDto, SlotDurationMinutes } from '@balo/shared/availability';
+import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
+import { Button } from '@/components/ui/button';
 import {
   DEFAULT_AVAILABILITY_WINDOW_DAYS,
   MAX_AVAILABILITY_WINDOW_DAYS,
@@ -87,6 +90,9 @@ interface AvailabilityStateMessageProps {
   /** Every kind EXCEPT `ready` and `loading`, both of which the parent renders itself. */
   view: Exclude<AvailabilityView, { kind: 'ready' } | { kind: 'loading' }>;
   mode: 'preview' | 'selectable';
+  /** Fix round 1 item 15 — the OWNER is entitled to the `not_published` distinction even in
+   *  `selectable` mode (see the panel's own comment below). */
+  viewerType: 'expert' | 'client';
   emptyAction?: ReactNode;
   onRetry: () => void;
   onWiden: () => void;
@@ -100,24 +106,46 @@ interface AvailabilityStateMessageProps {
 function AvailabilityStateMessage({
   view,
   mode,
+  viewerType,
   emptyAction,
   onRetry,
   onWiden,
 }: Readonly<AvailabilityStateMessageProps>): React.JSX.Element {
   /**
-   * ⚠ ONLY THE EXPERT'S OWN PREVIEW LEARNS THAT THE PROFILE EXISTS BUT IS UNPUBLISHED. The
-   * server answers a byte-identical 404 for "not approved", "not searchable" and "no such uuid"
-   * precisely so an anonymous caller cannot tell them apart; a "Not published yet" panel in
-   * `selectable` mode would hand that distinction straight back. Anyone but the owner falls
-   * through to the generic error state (plan §5/§6).
+   * ⚠ ONLY THE EXPERT'S OWN VIEW LEARNS THAT THE PROFILE EXISTS BUT IS UNPUBLISHED. The server
+   * answers a byte-identical 404 for "not approved", "not searchable" and "no such uuid"
+   * precisely so an anonymous caller cannot tell them apart; a "Not published yet" panel for a
+   * CLIENT would hand that distinction straight back. Anyone but the owner falls through to the
+   * generic error state (plan §5/§6).
+   *
+   * Fix round 1 item 15 — gated on `viewerType === 'expert'`, NOT `mode === 'preview'`. Before
+   * this fix an unsearchable expert proposing their own reschedule times
+   * (`propose-times-dialog.tsx`, `mode="selectable"`, `viewerType="expert"`) fell through to
+   * the generic "Couldn't load availability." with a Retry that could never succeed — the ONE
+   * party entitled to the "not published" distinction (the profile's own owner) was denied it
+   * purely because THIS surface happens to be selectable rather than a preview. `mode` answers
+   * "is this read-only", `viewerType` answers "whose profile is this" — the concealment rule is
+   * about the second question, not the first.
    */
-  if (view.kind === 'not_published' && mode === 'preview') {
+  if (view.kind === 'not_published' && viewerType === 'expert') {
     return (
       <AvailabilityMessage
         icon={<CalendarX className="h-5 w-5" aria-hidden="true" />}
         title="Not published yet"
-        body="Your profile isn't published yet — once it's live, clients will see these times here."
-        action={emptyAction}
+        body={
+          mode === 'preview'
+            ? "Your profile isn't published yet — once it's live, clients will see these times here."
+            : "Your profile isn't published yet — publish your availability so clients (and this picker) can see your times."
+        }
+        action={
+          mode === 'preview' ? (
+            emptyAction
+          ) : (
+            <Button asChild variant="outline" size="sm" className="mt-4">
+              <Link href={EXPERT_CALENDAR_SETTINGS_PATH}>Availability settings</Link>
+            </Button>
+          )
+        }
       />
     );
   }
@@ -385,6 +413,7 @@ export function ExpertAvailabilityCalendar({
         <AvailabilityStateMessage
           view={view}
           mode={mode}
+          viewerType={viewerType}
           emptyAction={emptyAction}
           onRetry={reload}
           onWiden={() => setDays(MAX_AVAILABILITY_WINDOW_DAYS)}

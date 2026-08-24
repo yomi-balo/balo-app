@@ -1227,6 +1227,60 @@ export interface BookingRescheduledPayload {
    * renders is dead weight that reads as intentional to the next person.
    * `booking.confirmed` keeps its `joinPath` — that one IS rendered.
    */
-  /** `'client'` today; BAL-411 adds `'expert'`. Present from day one so the template need not change. */
-  initiatedBy: 'client';
+  /** `'client'` today; BAL-411 added `'expert'` (accepting a reschedule proposal). Present from
+   *  day one so the template need not change SHAPE — it does change COPY, branching on this
+   *  field: see `booking-rescheduled.tsx`'s `initiatedBy` prop. */
+  initiatedBy: 'client' | 'expert';
+}
+
+/**
+ * BAL-411 — the expert proposed up to three alternative times for a booked consultation.
+ * Published from `apps/web` after the propose api route returns 200 (mirrors
+ * `BookingRescheduledPayload`'s posture).
+ *
+ * ⚠ NO EMAIL ADDRESS ON ANY FIELD (ADR-1044 §3) — names cross the party boundary, addresses
+ * never. ⚠ NO RATE, TOTAL OR HOLD — a proposal moves no money (§D3's "nothing is held").
+ */
+export interface RescheduleProposalSentPayload {
+  /** = proposalId (§D6) — a fresh row per propose, so re-proposing the same three slots mints
+   *  a NEW id and therefore a genuinely new notification. */
+  correlationId: string;
+  proposalId: string;
+  meetingId: string;
+  engagementId: string;
+  /** → recipient 'meeting_party_participants'; resolved by the PUBLISHER, never the engine. */
+  recipientUserIds: string[];
+  /** Prospective copy names the PARTY (CLAUDE.md). */
+  expertPartyLabel: string;
+  /** Retrospective — a NAME with "@ company" on first mention, never an address. */
+  expertPersonLabel: string;
+  clientCompanyName: string;
+  caseTitle: string;
+  originalScheduledStartIso: string;
+  /** 1..3 ISO instants, in display order. */
+  optionStartIsos: string[];
+  durationMinutes: number;
+  /** Drives the SMS urgency condition (`< 2` ⇒ the sms rule fires). */
+  hoursToStart: number;
+  expiresAtIso: string;
+}
+
+/**
+ * BAL-411 — the client declined every option; the proposal is terminal. Published from
+ * `apps/web` after the decline api route returns 200.
+ */
+export interface RescheduleProposalDeclinedPayload {
+  /** = proposalId — one decline per proposal (the repository CAS is terminal). */
+  correlationId: string;
+  proposalId: string;
+  meetingId: string;
+  engagementId: string;
+  /** → recipient 'expert' (resolver hydrates `data.expert`). */
+  expertProfileId: string;
+  clientCompanyName: string;
+  caseTitle: string;
+  /** A NAME with "@ company" on first mention, never an address. */
+  declinedByLabel: string;
+  originalScheduledStartIso: string;
+  durationMinutes: number;
 }

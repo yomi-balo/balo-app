@@ -6,6 +6,10 @@ import {
   meetingClientAbsentRecheck,
   meetingExpertAbsentRecheck,
 } from './meeting-absence.js';
+import {
+  RESCHEDULE_PROPOSAL_UNANSWERED_RECHECK,
+  rescheduleProposalUnansweredRecheck,
+} from './reschedule-proposal.js';
 
 /**
  * What a fire-time guard decides.
@@ -45,9 +49,9 @@ export type ScheduledRecheck = (row: ScheduledNotification) => Promise<RecheckRe
  * (conversation unread) as a PROSPECTIVE consumer "if it takes the dependency at all".
  * **BAL-424 TOOK IT**, and **BAL-134 IS THE SECOND AND THIRD ENTRIES**. Every later consumer
  * registers its own guard here in its OWN PR, alongside its event, rules and template —
- * BAL-411 (reschedule-proposal unanswered) is the one still outstanding. Adding a key here
- * without a consumer would be dead code; adding a consumer's guard from another PR would be
- * building that consumer.
+ * **BAL-411 (reschedule-proposal unanswered) IS THE FOURTH, AND IS NO LONGER OUTSTANDING.**
+ * Adding a key here without a consumer would be dead code; adding a consumer's guard from
+ * another PR would be building that consumer.
  *
  * Registering a guard is additive and needs nothing else: a row whose `recheck` names a key
  * in this record is guarded; a row whose `recheck` is NULL is not.
@@ -61,6 +65,9 @@ export const SCHEDULED_RECHECKS: Record<string, ScheduledRecheck> = {
   // sweep against a missing guard would be a dead alert rather than a noisy one.
   [MEETING_EXPERT_ABSENT_RECHECK]: meetingExpertAbsentRecheck,
   [MEETING_CLIENT_ABSENT_RECHECK]: meetingClientAbsentRecheck,
+  // BAL-411 — "is this reschedule proposal STILL pending, unexpired, unmoved and on a still-
+  // reschedulable meeting?" See `reschedule-proposal.ts`.
+  [RESCHEDULE_PROPOSAL_UNANSWERED_RECHECK]: rescheduleProposalUnansweredRecheck,
 };
 
 /**

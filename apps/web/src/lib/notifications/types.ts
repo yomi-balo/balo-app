@@ -26,6 +26,8 @@ import type {
   ExpertSearchabilityRestoredPayload,
   BookingConfirmedPayload,
   BookingRescheduledPayload,
+  RescheduleProposalSentPayload,
+  RescheduleProposalDeclinedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -259,7 +261,14 @@ export type NotificationEvent =
   // Server Action AFTER the reschedule route returns 200. Mirror of
   // apps/api/src/notifications/events.ts — keep in lockstep. ⚠ `meeting.guest_rescheduled` is
   // deliberately NOT mirrored here — it is SERVER-ONLY (see that event's docblock).
-  | 'booking.rescheduled';
+  | 'booking.rescheduled'
+  // BAL-411 — the expert proposed alternative times / the client declined every option. Both
+  // published from apps/web Server Actions after their api route returns 200. Mirror of
+  // apps/api/src/notifications/events.ts — keep in lockstep. ⚠ `reschedule_proposal.unanswered`
+  // is deliberately NOT mirrored here — it is SERVER-ONLY (published exclusively by the BAL-420
+  // dispatch tick).
+  | 'reschedule_proposal.sent'
+  | 'reschedule_proposal.declined';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -304,4 +313,6 @@ export interface EventPayloadMap {
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
   'booking.confirmed': BookingConfirmedPayload;
   'booking.rescheduled': BookingRescheduledPayload;
+  'reschedule_proposal.sent': RescheduleProposalSentPayload;
+  'reschedule_proposal.declined': RescheduleProposalDeclinedPayload;
 }

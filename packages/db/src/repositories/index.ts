@@ -603,3 +603,22 @@ export {
   type CreateReviewInviteTokenInput,
 } from './review-invite-tokens';
 export type { Review, NewReview, ReviewInviteToken, NewReviewInviteToken } from '../schema';
+// ── Reschedule proposals (BAL-411 / ADR-1044) ──────────────────────────────
+export {
+  rescheduleProposalsRepository,
+  RescheduleProposalAlreadyPendingError,
+  type ProposeRescheduleInput,
+  type RescheduleProposalOptionInput,
+  type RescheduleProposalWithOptions,
+  type LiveRescheduleProposalSummary,
+  type AnswerRescheduleProposalInput,
+  type AcceptRescheduleProposalInput,
+  type AcceptedRescheduleProposal,
+} from './reschedule-proposals';
+export type {
+  RescheduleProposal,
+  NewRescheduleProposal,
+  RescheduleProposalOption,
+  NewRescheduleProposalOption,
+  RescheduleProposalStatus,
+} from '../schema';

@@ -554,7 +554,7 @@ describe('ExpertAvailabilityCalendar', () => {
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
-  it('not_published (404) renders its own copy', async () => {
+  it('not_published (404) renders its own copy — the OWNER, in preview mode', async () => {
     fetchMock.mockResolvedValue(jsonResponse(404, { error: 'not_found' }));
     render(
       <ExpertAvailabilityCalendar
@@ -562,9 +562,51 @@ describe('ExpertAvailabilityCalendar', () => {
         viewerTimezone="UTC"
         daysAhead={14}
         mode="preview"
+        viewerType="expert"
       />
     );
     expect(await screen.findByText(/isn't published yet/i)).toBeInTheDocument();
+  });
+
+  // Item 15 — the OWNER proposing their own reschedule times hits this exact shape:
+  // `mode="selectable"` (the picker is interactive) but `viewerType="expert"` (it's their own
+  // profile). Before this fix the panel was gated on `mode === 'preview'` alone, so this fell
+  // through to the generic, un-actionable "Couldn't load availability." + a Retry that could
+  // never succeed.
+  it('not_published (404) also renders its own copy for the OWNER in SELECTABLE mode, with a settings link', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { error: 'not_found' }));
+    render(
+      <ExpertAvailabilityCalendar
+        expertProfileId={EXPERT_ID}
+        viewerTimezone="UTC"
+        daysAhead={14}
+        mode="selectable"
+        viewerType="expert"
+      />
+    );
+    expect(await screen.findByText(/isn't published yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /availability settings/i })).toHaveAttribute(
+      'href',
+      '/expert/settings?tab=schedule'
+    );
+  });
+
+  // The CLIENT-facing posture is unchanged: a non-owner viewer must never learn that the
+  // profile exists but is unpublished (anti-enumeration, plan §5/§6) — falls through to the
+  // generic error state regardless of `mode`.
+  it('not_published (404) falls through to the generic error for a CLIENT viewer', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { error: 'not_found' }));
+    render(
+      <ExpertAvailabilityCalendar
+        expertProfileId={EXPERT_ID}
+        viewerTimezone="UTC"
+        daysAhead={14}
+        mode="selectable"
+        viewerType="client"
+      />
+    );
+    expect(await screen.findByText(/couldn't load availability/i)).toBeInTheDocument();
+    expect(screen.queryByText(/isn't published yet/i)).not.toBeInTheDocument();
   });
 
   it('fires availability_calendar_viewed exactly once, not on refetches', async () => {

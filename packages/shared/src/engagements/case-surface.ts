@@ -21,6 +21,8 @@
  * `buildHostContextForExpertProfile` in `../authz/engagement.ts`.
  */
 
+import { rescheduleProposalIsLive } from '../meetings';
+
 // ── The nudge ────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -41,6 +43,22 @@ export interface CaseNudgeUpcoming {
   readonly scheduledStart: Date;
 }
 
+/**
+ * BAL-411 — the meeting's pending reschedule proposal, or `null`. Liveness (expiry) is decided
+ * HERE via {@link rescheduleProposalIsLive}, so the loader and the nudge cannot disagree.
+ * Staleness (the client having moved the meeting out from under a pending proposal, BAL-409) is
+ * NOT decided here — it is derived at ANSWER time, against the meeting's LIVE `scheduled_start`,
+ * by `resolveProposalAnswerRefusal`; the nudge has no need to distinguish "live" from "live but
+ * stale" because a stale proposal is still exactly what the expert is waiting on an answer to.
+ */
+export interface CaseNudgeRescheduleProposal {
+  readonly proposalId: string;
+  readonly meetingId: string;
+  readonly optionCount: number;
+  readonly originalScheduledStart: Date;
+  readonly expiresAt: Date;
+}
+
 export interface CaseNudgeInput {
   /** The viewer's resolved SIDE. NEVER `users.activeMode` (a view toggle — ADR-1029). */
   readonly lens: 'client' | 'expert';
@@ -50,6 +68,9 @@ export interface CaseNudgeInput {
   readonly nextScheduled: CaseNudgeUpcoming | null;
   /** `case_engagements.resolution_requested_at`. */
   readonly resolutionRequestedAt: Date | null;
+  /** BAL-411 — the LIVE meeting's pending reschedule proposal, or `null`. See
+   *  {@link CaseNudgeRescheduleProposal}. */
+  readonly rescheduleProposal: CaseNudgeRescheduleProposal | null;
   readonly now: Date;
 }
 
@@ -60,6 +81,24 @@ export type CaseNudge =
       readonly scheduledStart: Date;
       /** Inside `CASE_JOIN_WINDOW_MINUTES` of the start — the pulse + live dot. */
       readonly live: boolean;
+    }
+  /** CLIENT lens — the expert asked to move it, and only the client can answer by accepting or
+   *  declining. BAL-411. */
+  | {
+      readonly kind: 'reschedule_proposal';
+      readonly proposalId: string;
+      readonly meetingId: string;
+      readonly optionCount: number;
+      readonly originalScheduledStart: Date;
+      readonly expiresAt: Date;
+    }
+  /** EXPERT lens — their own reschedule proposal is outstanding. BAL-411. */
+  | {
+      readonly kind: 'reschedule_proposal_pending';
+      readonly proposalId: string;
+      readonly meetingId: string;
+      readonly optionCount: number;
+      readonly expiresAt: Date;
     }
   /** CLIENT lens only — the expert asked, and only the client can answer by closing. */
   | { readonly kind: 'resolution_ask' }
@@ -79,26 +118,54 @@ function withinJoinWindow(now: Date, scheduledStart: Date): boolean {
  * two prompts, so the ordering IS the rule and it is pinned by a table test.
  *
  * ```
- * 0. [DARK] a blocking reschedule proposal — BAL-411. NOT REPRESENTABLE TODAY: an exhaustive
- *    search of `packages/db/src/schema` found ZERO table, ZERO column and ZERO enum label for
- *    a reschedule proposal. This comment is the placeholder, and BAL-411 inserts its arm HERE,
- *    ABOVE `upcoming`. Do not "reserve" a union member for it — a state nothing can produce
- *    reads as coverage that does not exist.
- * 1. !isOpen                        → null
- * 2. nextScheduled !== null         → upcoming (live iff inside the join window)
- * 3. resolutionRequestedAt !== null → client: resolution_ask | expert: resolution_ask_pending
- * 4. otherwise                      → nothing_booked
+ * 1. !isOpen                                       → null
+ * 2. a LIVE reschedule proposal on the meeting      → client: reschedule_proposal |
+ *                                                      expert: reschedule_proposal_pending
+ * 3. nextScheduled !== null                         → upcoming (live iff inside the join window)
+ * 4. resolutionRequestedAt !== null                 → client: resolution_ask |
+ *                                                      expert: resolution_ask_pending
+ * 5. otherwise                                       → nothing_booked
  * ```
  *
- * ⚠ ARM 2 SITTING ABOVE ARM 3 **IS** THE "ask is suppressed while anything is booked" RULE.
+ * ⚠ ARM 1 STAYS FIRST, ABOVE THE RESCHEDULE-PROPOSAL ARM. "A CLOSED case has no nudge at all —
+ * there is nothing left to prompt" is a stronger rule than a live proposal: a proposal cannot
+ * legitimately outlive the case closing (propose requires an OPEN case, §D8), but a client-side
+ * close racing an in-flight proposal must still win, and asking a client to answer a proposal on
+ * a case nobody can act on any more is not a prompt worth showing.
+ *
+ * ⚠ ARM 2 SITS ABOVE `upcoming` (BAL-411), AND SUPPRESSES IT. Showing "your call is at 3pm"
+ * while the expert has asked to move it is actively misleading, and the header can only ever
+ * carry one prompt — so a live proposal suppresses `upcoming` and, with it, the client's own
+ * "Reschedule" CTA: one negotiation over a booking at a time.
+ *
+ * ⚠ ARM 3 SITTING ABOVE ARM 4 **IS** THE "ask is suppressed while anything is booked" RULE.
  * "Is this resolved?" contradicts a call the two parties have already agreed to hold. It falls
  * out of the ordering — do NOT add a separate suppression flag, which would be a second place
  * the same rule lives.
  */
 export function selectCaseNudge(input: CaseNudgeInput): CaseNudge {
-  const { lens, isOpen, nextScheduled, resolutionRequestedAt, now } = input;
+  const { lens, isOpen, nextScheduled, resolutionRequestedAt, rescheduleProposal, now } = input;
 
   if (!isOpen) return null;
+
+  if (rescheduleProposal !== null && rescheduleProposalIsLive(rescheduleProposal, now)) {
+    return lens === 'client'
+      ? {
+          kind: 'reschedule_proposal',
+          proposalId: rescheduleProposal.proposalId,
+          meetingId: rescheduleProposal.meetingId,
+          optionCount: rescheduleProposal.optionCount,
+          originalScheduledStart: rescheduleProposal.originalScheduledStart,
+          expiresAt: rescheduleProposal.expiresAt,
+        }
+      : {
+          kind: 'reschedule_proposal_pending',
+          proposalId: rescheduleProposal.proposalId,
+          meetingId: rescheduleProposal.meetingId,
+          optionCount: rescheduleProposal.optionCount,
+          expiresAt: rescheduleProposal.expiresAt,
+        };
+  }
 
   if (nextScheduled !== null) {
     return {
@@ -145,11 +212,14 @@ export type MeetingOutcomeLabel = 'completed' | 'no_show_client' | 'missed_call'
  * Folding them into one "not held" label would tell the wronged party the call failed without
  * saying who failed to show, which is the single most load-bearing fact in the row.
  *
- * ⚠ THERE IS NO `pending_reschedule` MEMBER. BAL-411 owns it and no schema for it exists —
- * see the priority-0 comment on {@link selectCaseNudge}.
+ * ⚠ `pending_reschedule` (BAL-411) — a `scheduled` / `waiting_for_participants` consultation
+ * that ALSO carries a LIVE reschedule proposal. It is nested INSIDE the `scheduled` branch of
+ * {@link deriveCaseConsultationState}, never a sibling check above it — see that function's
+ * own comment for why the ordering matters.
  */
 export type CaseConsultationStateLabel =
   | 'scheduled'
+  | 'pending_reschedule'
   | 'in_progress'
   | 'held'
   | 'no_show_client'
@@ -160,10 +230,13 @@ export type CaseConsultationStateLabel =
 export interface CaseConsultationStateInput {
   readonly status: MeetingStatusLabel;
   readonly outcome: MeetingOutcomeLabel | null;
+  /** BAL-411 — a LIVE (pending, unexpired) reschedule proposal exists on THIS meeting. */
+  readonly hasLiveRescheduleProposal: boolean;
 }
 
 /**
- * TOTAL over every `(status, outcome)` pair — no fallthrough, no `default: 'held'`.
+ * TOTAL over every `(status, outcome, hasLiveRescheduleProposal)` triple — no fallthrough, no
+ * `default: 'held'`.
  *
  * ⚠ `in_progress` AND `outcome_pending` EXIST BECAUSE BOTH ARE REPRESENTABLE, NOT AS SCOPE
  * CREEP. The CHECK `meeting_outcome_requires_ended` is ONE-DIRECTIONAL (`outcome ⇒ ended`), so
@@ -171,15 +244,24 @@ export interface CaseConsultationStateInput {
  * before anything stamped why. A total function that silently folded that into `held` would
  * MISREPORT it as a delivered consultation, on a surface whose whole job is to say what
  * happened. The mapper `log.warn`s when it sees one; the row states the absence neutrally.
+ *
+ * ⚠ `hasLiveRescheduleProposal` IS CHECKED INSIDE THE `scheduled` BRANCH, NEVER ABOVE IT
+ * (BAL-411). A proposal cannot legitimately exist on an ended/cancelled meeting — propose
+ * requires `resolveRescheduleRefusal === null`, i.e. a live `scheduled` meeting — but a
+ * client-side CANCEL racing an in-flight proposal would otherwise flip a `cancelled` row to
+ * `pending_reschedule` if this check ran first. This function's whole contract is that it is
+ * TOTAL and honest, so the check sits where it can only ever apply to a row it is true of.
  */
 export function deriveCaseConsultationState(
   input: CaseConsultationStateInput
 ): CaseConsultationStateLabel {
-  const { status, outcome } = input;
+  const { status, outcome, hasLiveRescheduleProposal } = input;
 
   if (status === 'cancelled') return 'cancelled';
   if (status === 'in_progress') return 'in_progress';
-  if (status === 'scheduled' || status === 'waiting_for_participants') return 'scheduled';
+  if (status === 'scheduled' || status === 'waiting_for_participants') {
+    return hasLiveRescheduleProposal ? 'pending_reschedule' : 'scheduled';
+  }
 
   // `status === 'ended'` — the outcome decides, and a NULL one is its own honest state.
   if (outcome === 'completed') return 'held';
@@ -188,7 +270,9 @@ export function deriveCaseConsultationState(
   return 'outcome_pending';
 }
 
-/** A consultation is UPCOMING when it is still expected to happen. */
+/** A consultation is UPCOMING when it is still expected to happen. `pending_reschedule`
+ *  (BAL-411) counts — the original booking stands until an option is accepted, so the
+ *  consultation is still expected to happen and must not drop out of `selectNextScheduled`. */
 export function caseConsultationIsUpcoming(state: CaseConsultationStateLabel): boolean {
-  return state === 'scheduled' || state === 'in_progress';
+  return state === 'scheduled' || state === 'pending_reschedule' || state === 'in_progress';
 }

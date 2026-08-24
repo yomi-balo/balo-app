@@ -228,6 +228,49 @@ export type CaseNudgeView =
        */
       durationMinutes: number;
     }
+  /** CLIENT lens (BAL-411) — the expert asked to move it; only the client can answer. */
+  | {
+      kind: 'reschedule_proposal';
+      proposalId: string;
+      meetingId: string;
+      optionCount: number;
+      originalScheduledStartIso: string;
+      expiresAtIso: string;
+      /**
+       * ADDITIVE — when the ask was made, for the `hours_to_respond` analytics property.
+       * Fix round 1 item 12 — `null` ONLY when the loader's detail read raced the proposal
+       * resolving out from under it (the loader falls the whole nudge back to no-proposal in
+       * that case, so this is effectively unreachable through the normal path; kept nullable
+       * as the honest type rather than ever substituting the DEADLINE for the creation time).
+       */
+      proposedAtIso: string | null;
+      /**
+       * ADDITIVE on this WEB WIRE PROJECTION only, the SAME posture as `'upcoming'`'s
+       * `durationMinutes` above — `@balo/shared/engagements`'s `CaseNudge` union deliberately
+       * carries only `optionCount` (the shared core has no reason to hydrate full rows), but
+       * `RescheduleProposalCard` needs a real `optionId` per choice to accept one. Fetched by
+       * the loader ONLY when a live proposal is on the next meeting.
+       */
+      options: readonly { optionId: string; scheduledStartIso: string }[];
+    }
+  /** EXPERT lens (BAL-411) — their own outstanding proposal. */
+  | {
+      kind: 'reschedule_proposal_pending';
+      proposalId: string;
+      meetingId: string;
+      optionCount: number;
+      expiresAtIso: string;
+      /**
+       * ADDITIVE — when the ask was made, for the `hours_to_respond` analytics property.
+       * Fix round 1 item 12 — `null` ONLY when the loader's detail read raced the proposal
+       * resolving out from under it (the loader falls the whole nudge back to no-proposal in
+       * that case, so this is effectively unreachable through the normal path; kept nullable
+       * as the honest type rather than ever substituting the DEADLINE for the creation time).
+       */
+      proposedAtIso: string | null;
+      /** See the sibling `reschedule_proposal` arm's note — same additive shape. */
+      options: readonly { optionId: string; scheduledStartIso: string }[];
+    }
   | { kind: 'resolution_ask' }
   | { kind: 'resolution_ask_pending' }
   | { kind: 'nothing_booked' }
@@ -275,4 +318,22 @@ export type CaseSurfaceView =
       lens: 'expert';
       earnings: CaseEarningsView;
       canRequestResolution: boolean;
+      /**
+       * BAL-411 — `isOpen && nextScheduled !== null && rescheduleProposal === null &&
+       * hasEngagementCapability(...)`, resolved server-side the same
+       * resolve-server-side/re-check-in-the-action pattern as `canRequestResolution`. The
+       * action re-checks independently; this is a render hint only.
+       */
+      canProposeReschedule: boolean;
+      /**
+       * Fix round 1 item 18 (security LOW) — the SAME `manage_engagement` holder set as
+       * `canProposeReschedule`, without its "no live proposal already outstanding" condition.
+       * `canProposeReschedule` is structurally `false` exactly when Withdraw is relevant (a
+       * live proposal exists), so `RescheduleProposalCard` needs this SEPARATE flag to gate
+       * Withdraw on the actual holder set rather than `lens === 'expert'` alone — which also
+       * admits an agency member with role `expert`, deliberately and permanently NOT a
+       * `manage_engagement` holder (ADR-1046 §7). A render hint only; the withdraw action
+       * re-checks independently.
+       */
+      canManageReschedule: boolean;
     });

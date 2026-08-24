@@ -63,6 +63,8 @@ const m = {
   findCase: vi.fn(),
   findTranscripts: vi.fn(),
   listMeetingFiles: vi.fn(),
+  findLiveProposals: vi.fn(),
+  findProposalForAnswer: vi.fn(),
 };
 
 vi.mock('@balo/db', () => ({
@@ -82,6 +84,10 @@ vi.mock('@balo/db', () => ({
   expertsRepository: { findDisplayProfileById: (...a: unknown[]) => m.findProfile(...a) },
   meetingContextsRepository: { listMeetingsForContext: (...a: unknown[]) => m.listMeetings(...a) },
   meetingFilesRepository: { listByMeeting: (...a: unknown[]) => m.listMeetingFiles(...a) },
+  rescheduleProposalsRepository: {
+    findLivePendingByMeetingIds: (...a: unknown[]) => m.findLiveProposals(...a),
+    findPendingForAnswer: (...a: unknown[]) => m.findProposalForAnswer(...a),
+  },
   transcriptsRepository: { findByMeetingIds: (...a: unknown[]) => m.findTranscripts(...a) },
   usersRepository: {
     findDisplayById: (...a: unknown[]) => m.findUser(...a),
@@ -210,6 +216,8 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.findAgency.mockResolvedValue(undefined);
   m.findTranscripts.mockResolvedValue(new Map());
   m.listMeetingFiles.mockResolvedValue([]);
+  m.findLiveProposals.mockResolvedValue([]);
+  m.findProposalForAnswer.mockResolvedValue(undefined);
 }
 
 /** Load and assert non-null, so each test can read the view without re-narrowing. */
@@ -381,14 +389,21 @@ describe('loadCase — canRequestResolution carries the CAPABILITY term, not jus
     expect(mockHasEngagementCapability).not.toHaveBeenCalled();
   });
 
-  it('is FALSE when a resolution has ALREADY been asked for — no second ask', async () => {
+  it('is FALSE when a resolution has ALREADY been asked for — no second ask, and its OWN capability call is skipped', async () => {
     seed({
       access: { lens: 'expert' },
       caseRow: { resolutionRequestedAt: new Date('2026-08-10T00:00:00Z') },
     });
     const view = await loadOrThrow();
     expect(view).toMatchObject({ canRequestResolution: false });
-    expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+    // `mayRequestResolution`'s OWN capability call is short-circuited by
+    // `resolutionRequestedAt === null` being false, before it ever awaits — same as the CLOSED
+    // case above. Fix round 1 item 18 added a SEPARATE `canManageReschedule` flag with a
+    // DIFFERENT (broader) short-circuit condition (`isOpen` alone — Withdraw eligibility does
+    // not care whether a resolution was already asked for), so on an OPEN case it legitimately
+    // calls the capability once on its own; the case is open with no meeting seeded, so
+    // `mayProposeReschedule`'s own call stays skipped (`nextScheduled !== null` is false).
+    expect(mockHasEngagementCapability).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -727,6 +742,256 @@ describe('loadCase — the nudge', () => {
   it('nudges nothing-booked when every consultation is already behind us', async () => {
     const view = await loadOrThrow();
     expect(view.nudge).toEqual({ kind: 'nothing_booked' });
+  });
+});
+
+/**
+ * BAL-411 — the reschedule-proposal read, and the two new nudge arms it feeds. `selectCaseNudge`
+ * and `deriveCaseConsultationState` are the REAL pure functions (only `@balo/db` is mocked), so
+ * these tests pin the LOADER's wiring — that it reads `findLivePendingByMeetingIds`, derives
+ * liveness itself via `rescheduleProposalIsLive`, and threads the SAME set into both the nudge
+ * and the consultation row so the two can never disagree.
+ */
+describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
+  const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
+
+  function scheduledMeeting(id = 'm1'): Record<string, unknown> {
+    return meeting(id, {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: SCHEDULED_START,
+    });
+  }
+
+  function liveProposal(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      proposalId: 'proposal-1',
+      meetingId: 'm1',
+      optionCount: 2,
+      originalScheduledStart: SCHEDULED_START,
+      expiresAt: new Date('2026-08-20T09:00:00Z'), // ahead of NOW (2026-08-12)
+      ...over,
+    };
+  }
+
+  it("reads proposals for the case's meeting ids", async () => {
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    await loadOrThrow();
+    expect(m.findLiveProposals).toHaveBeenCalledWith(['m1']);
+  });
+
+  const PROPOSAL_DETAIL = {
+    proposal: { id: 'proposal-1', createdAt: new Date('2026-08-13T09:00:00Z') },
+    options: [
+      { id: 'opt-1', scheduledStart: new Date('2026-08-21T10:00:00Z') },
+      { id: 'opt-2', scheduledStart: new Date('2026-08-22T10:00:00Z') },
+    ],
+  };
+
+  it('CLIENT lens — a live proposal on the next meeting suppresses "upcoming"', async () => {
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    m.findLiveProposals.mockResolvedValue([liveProposal()]);
+    m.findProposalForAnswer.mockResolvedValue(PROPOSAL_DETAIL);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toEqual({
+      kind: 'reschedule_proposal',
+      proposalId: 'proposal-1',
+      meetingId: 'm1',
+      optionCount: 2,
+      originalScheduledStartIso: SCHEDULED_START.toISOString(),
+      expiresAtIso: '2026-08-20T09:00:00.000Z',
+      proposedAtIso: '2026-08-13T09:00:00.000Z',
+      options: [
+        { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
+        { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
+      ],
+    });
+    expect(view.consultations[0]).toMatchObject({ state: 'pending_reschedule' });
+  });
+
+  it('EXPERT lens — the SAME live proposal renders reschedule_proposal_pending', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    m.findLiveProposals.mockResolvedValue([liveProposal()]);
+    m.findProposalForAnswer.mockResolvedValue(PROPOSAL_DETAIL);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toEqual({
+      kind: 'reschedule_proposal_pending',
+      proposalId: 'proposal-1',
+      meetingId: 'm1',
+      optionCount: 2,
+      expiresAtIso: '2026-08-20T09:00:00.000Z',
+      proposedAtIso: '2026-08-13T09:00:00.000Z',
+      options: [
+        { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
+        { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
+      ],
+    });
+  });
+
+  it('an EXPIRED proposal (expiresAt <= now) is treated as absent — liveness derived HERE, not trusted from the row', async () => {
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    m.findLiveProposals.mockResolvedValue([
+      liveProposal({ expiresAt: new Date('2026-08-01T00:00:00Z') }), // before NOW
+    ]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
+    expect(view.consultations[0]).toMatchObject({ state: 'scheduled' });
+  });
+
+  // Item 12 — a race between the PROJECTION read (`findLiveProposals`) and the DETAIL read
+  // (`findPendingForAnswer`): the proposal resolved (answered/withdrawn) in between. The nudge
+  // must fall all the way back to `upcoming`, never render a `reschedule_proposal` nudge with
+  // zero options and a fabricated `proposedAtIso` (the deadline, previously).
+  it('CLIENT lens — the detail read finding nothing falls the WHOLE nudge back to upcoming', async () => {
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    m.findLiveProposals.mockResolvedValue([liveProposal()]);
+    m.findProposalForAnswer.mockResolvedValue(undefined);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
+  });
+
+  it('a proposal on a DIFFERENT meeting than nextScheduled does not compete for the header', async () => {
+    m.listMeetings.mockResolvedValue([scheduledMeeting('m1')]);
+    m.findLiveProposals.mockResolvedValue([liveProposal({ meetingId: 'm-other' })]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
+  });
+});
+
+describe('loadCase — canProposeReschedule (BAL-411)', () => {
+  const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
+
+  function scheduledMeeting(id = 'm1'): Record<string, unknown> {
+    return meeting(id, {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: SCHEDULED_START,
+    });
+  }
+
+  it('is TRUE for the expert on an open case with an upcoming meeting and no live proposal', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canProposeReschedule: true });
+  });
+
+  it('is FALSE when a live proposal is already outstanding on the next meeting', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    m.findLiveProposals.mockResolvedValue([
+      {
+        proposalId: 'proposal-1',
+        meetingId: 'm1',
+        optionCount: 1,
+        originalScheduledStart: SCHEDULED_START,
+        expiresAt: new Date('2026-08-20T09:00:00Z'),
+      },
+    ]);
+
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canProposeReschedule: false });
+  });
+
+  it('is FALSE when nothing is booked — there is no meeting to propose a move on', async () => {
+    seed({ access: { lens: 'expert' } });
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.nudge).toEqual({ kind: 'nothing_booked' });
+  });
+
+  it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
+    seed({
+      access: { lens: 'expert' },
+      caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+    });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canProposeReschedule: false });
+  });
+
+  it('is FALSE when the engagement axis says no', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canProposeReschedule: false });
+  });
+});
+
+// Item 18 (security LOW) — `canManageReschedule` is the WITHDRAW holder set, deliberately
+// separate from `canProposeReschedule`: it must stay TRUE precisely when a live proposal
+// exists (the one case `canProposeReschedule` is always FALSE), so it needs its OWN coverage
+// rather than inheriting the sibling's.
+describe('loadCase — canManageReschedule (fix round 1 item 18)', () => {
+  const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
+
+  function scheduledMeeting(id = 'm1'): Record<string, unknown> {
+    return meeting(id, {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: SCHEDULED_START,
+    });
+  }
+
+  it('is TRUE for the expert on an open case, WITH a live proposal outstanding (unlike canProposeReschedule)', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    m.findLiveProposals.mockResolvedValue([
+      {
+        proposalId: 'proposal-1',
+        meetingId: 'm1',
+        optionCount: 1,
+        originalScheduledStart: SCHEDULED_START,
+        expiresAt: new Date('2026-08-20T09:00:00Z'),
+      },
+    ]);
+    m.findProposalForAnswer.mockResolvedValue({
+      proposal: { id: 'proposal-1', createdAt: new Date('2026-08-13T09:00:00Z') },
+      options: [{ id: 'opt-1', scheduledStart: new Date('2026-08-21T10:00:00Z') }],
+    });
+
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canProposeReschedule: false, canManageReschedule: true });
+  });
+
+  it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
+    seed({
+      access: { lens: 'expert' },
+      caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+    });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    mockHasEngagementCapability.mockClear();
+
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canManageReschedule: false });
+    expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+  });
+
+  it('is FALSE when the engagement axis says no', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    const view = await loadOrThrow();
+    expect(view).toMatchObject({ canManageReschedule: false });
   });
 });
 

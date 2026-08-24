@@ -564,7 +564,45 @@ const bookingRescheduledPayload = z.object({
   durationMinutes: z.number().int().positive(),
   // No `joinPath` — a reschedule reuses the same room, so the link is unchanged and neither
   // template renders one. See `BookingRescheduledPayload`. `booking.confirmed` keeps its own.
-  initiatedBy: z.literal('client'),
+  // BAL-411 widened this from `z.literal('client')` — accepting the client's OWN acceptance of
+  // an expert-initiated proposal.
+  initiatedBy: z.enum(['client', 'expert']),
+});
+
+// BAL-411 — the expert proposed alternative times (web-published, mirroring
+// `booking.rescheduled`). `correlationId` = proposalId — a fresh row per propose, so
+// re-proposing mints a genuinely new id. No rate/total/hold field — a proposal moves no money.
+// Mirrors packages/shared/src/notifications/index.ts.
+const rescheduleProposalSentPayload = z.object({
+  correlationId: z.uuid(),
+  proposalId: z.uuid(),
+  meetingId: z.uuid(),
+  engagementId: z.uuid(),
+  recipientUserIds: z.array(z.uuid()),
+  expertPartyLabel: z.string().min(1).max(200),
+  expertPersonLabel: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  caseTitle: z.string().min(1).max(200),
+  originalScheduledStartIso: z.string().datetime(),
+  optionStartIsos: z.array(z.string().datetime()).min(1).max(3),
+  durationMinutes: z.number().int().positive(),
+  hoursToStart: z.number(),
+  expiresAtIso: z.string().datetime(),
+});
+
+// BAL-411 — the client declined every option. `correlationId` = proposalId — one decline per
+// proposal (the repository CAS is terminal). Mirrors packages/shared/src/notifications/index.ts.
+const rescheduleProposalDeclinedPayload = z.object({
+  correlationId: z.uuid(),
+  proposalId: z.uuid(),
+  meetingId: z.uuid(),
+  engagementId: z.uuid(),
+  expertProfileId: z.uuid(),
+  clientCompanyName: z.string().min(1).max(200),
+  caseTitle: z.string().min(1).max(200),
+  declinedByLabel: z.string().min(1).max(200),
+  originalScheduledStartIso: z.string().datetime(),
+  durationMinutes: z.number().int().positive(),
 });
 
 export const publishBodySchema = z.discriminatedUnion('event', [
@@ -729,6 +767,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('booking.rescheduled'),
     payload: bookingRescheduledPayload,
+  }),
+  z.object({
+    event: z.literal('reschedule_proposal.sent'),
+    payload: rescheduleProposalSentPayload,
+  }),
+  z.object({
+    event: z.literal('reschedule_proposal.declined'),
+    payload: rescheduleProposalDeclinedPayload,
   }),
 ]);
 

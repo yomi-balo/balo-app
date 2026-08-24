@@ -146,6 +146,8 @@ import { meetingJoinRoutes } from './join.js';
 import { meetingEndRoutes } from './end.js';
 import { meetingStateRoutes } from './state.js';
 import { meetingRescheduleRoutes } from './reschedule.js';
+import { meetingRescheduleProposalRoutes } from './reschedule-proposals.js';
+import { meetingRescheduleProposalAnswerRoutes } from './reschedule-proposal-answers.js';
 import {
   BOOKING_USER_RATE_LIMIT,
   WINDOW_VIOLATION_CODE,
@@ -361,6 +363,11 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
   // BAL-409 — client-initiated reschedule. A sibling registration, same reasoning as the
   // routes above: one prefix, one `requireAuth` idiom.
   await meetingRescheduleRoutes(fastify);
+
+  // BAL-411 — expert-initiated reschedule PROPOSALS. Two sibling registrations split by axis
+  // (engagement vs membership) so the two API gate modules can never be folded into one.
+  await meetingRescheduleProposalRoutes(fastify);
+  await meetingRescheduleProposalAnswerRoutes(fastify);
 
   log.info('Registered meeting routes');
 }

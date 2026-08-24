@@ -85,6 +85,9 @@ const STATE_PRESENTATION: Readonly<
   Record<CaseConsultationStateLabel, { icon: LucideIcon; muted: boolean }>
 > = {
   scheduled: { icon: CalendarClock, muted: false },
+  // BAL-411 — same icon/weight as `scheduled` (the booking still stands); `stateNote` below
+  // carries the one distinguishing fact.
+  pending_reschedule: { icon: CalendarClock, muted: false },
   in_progress: { icon: Video, muted: false },
   held: { icon: Video, muted: false },
   no_show_client: { icon: CircleSlash, muted: true },
@@ -102,6 +105,13 @@ function stateNote(
   switch (state) {
     case 'scheduled':
       return 'Upcoming · join link in your calendar';
+    // BAL-411 — the original time still stands; the proposal card above the list is where
+    // either side actually acts. This note only says WHY the badge differs from a plain
+    // `scheduled` row — it never restates the option count or the deadline.
+    case 'pending_reschedule':
+      return lens === 'client'
+        ? `${counterpartyLabel} suggested some new times — see above`
+        : 'Waiting on a reply to your suggested times';
     case 'in_progress':
       return 'Happening now';
     case 'cancelled':

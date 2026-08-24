@@ -56,6 +56,10 @@ export interface CaseConsultationCounts {
   actionItemCountByMeetingId: ReadonlyMap<string, number>;
   fileCountByMeetingId: ReadonlyMap<string, number>;
   meetingIdsWithTranscript: ReadonlySet<string>;
+  /** BAL-411 — meetings carrying a LIVE (pending, unexpired) reschedule proposal, gathered by
+   *  the loader from `rescheduleProposalsRepository.findLivePendingByMeetingIds` +
+   *  `rescheduleProposalIsLive`. Threaded into `deriveCaseConsultationState` below. */
+  meetingIdsWithLiveProposal: ReadonlySet<string>;
 }
 
 /** Whole minutes between the two stamps; `null` when either is missing (never a bare zero). */
@@ -94,6 +98,7 @@ export function mapCaseConsultations(
     const state = deriveCaseConsultationState({
       status: meeting.status,
       outcome: meeting.outcome,
+      hasLiveRescheduleProposal: counts.meetingIdsWithLiveProposal.has(meeting.id),
     });
 
     if (state === 'outcome_pending') {
