@@ -65,6 +65,10 @@ function fakeJob(overrides: Record<string, unknown> = {}) {
     log: vi.fn(),
     attemptsMade: 1,
     moveToDelayed: vi.fn().mockResolvedValue(undefined),
+    // `updateData` is how the rate-limit deferral counter is persisted between deferrals —
+    // `moveToDelayed` does NOT consume an attempt, so `attempts: 5` cannot bound that path
+    // and only the counter can.
+    updateData: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as never;
 }
@@ -212,6 +216,54 @@ describe('processMeetingCalendarAmend — T-JOB (BAL-409 §4)', () => {
       // 30s, not the DEFAULT_RATE_LIMIT_BACKOFF_MS fallback — the vendor's own value is honoured.
       expect(delayUntil).toBeGreaterThan(Date.now() + 29_000);
       expect(delayUntil).toBeLessThanOrEqual(Date.now() + 30_000);
+    });
+
+    /**
+     * ⚠ THE UNBOUNDED-RETRY REGRESSION. `job.moveToDelayed()` + `DelayedError` deliberately
+     * does NOT consume a BullMQ attempt, so the queue's `attempts: 5` does not bound this path
+     * at all: a vendor that keeps answering `rate_limited` would be deferred forever, bounded
+     * only by each `Retry-After`, never failing and never becoming visible in the failed set.
+     * Past the ceiling the job must fall through to an ORDINARY attempt so it can terminate.
+     */
+    it('stops deferring past the ceiling and rethrows so an attempt is finally consumed', async () => {
+      mockUpdateConsultationEvent.mockRejectedValue(
+        Object.assign(new ApirocErrorStub('rate_limited', 'req-1'), { retryAfterSeconds: 30 })
+      );
+      const moveToDelayed = vi.fn().mockResolvedValue(undefined);
+      const job = fakeJob({
+        moveToDelayed,
+        data: {
+          meetingId: MEETING_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          rateLimitDeferrals: 10,
+        },
+      });
+
+      // Not a DelayedError — the original vendor error, so BullMQ counts the attempt.
+      await expect(processMeetingCalendarAmend(job, 'token-1')).rejects.toThrow(
+        expect.objectContaining({ kind: 'rate_limited' })
+      );
+      expect(moveToDelayed).not.toHaveBeenCalled();
+    });
+
+    it('counts each deferral so successive rate limits converge on the ceiling', async () => {
+      mockUpdateConsultationEvent.mockRejectedValue(
+        Object.assign(new ApirocErrorStub('rate_limited', 'req-1'), { retryAfterSeconds: 30 })
+      );
+      const updateData = vi.fn().mockResolvedValue(undefined);
+      const job = fakeJob({
+        updateData,
+        data: {
+          meetingId: MEETING_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          rateLimitDeferrals: 3,
+        },
+      });
+
+      await expect(processMeetingCalendarAmend(job, 'token-1')).rejects.toThrow(
+        expect.objectContaining({ name: 'DelayedError' })
+      );
+      expect(updateData).toHaveBeenCalledWith(expect.objectContaining({ rateLimitDeferrals: 4 }));
     });
 
     it('rate_limited with NO token: falls back to a plain rethrow (generic backoff)', async () => {

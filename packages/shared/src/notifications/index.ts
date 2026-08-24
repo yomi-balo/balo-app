@@ -1218,8 +1218,15 @@ export interface BookingRescheduledPayload {
   previousScheduledStartIso: string;
   scheduledStartIso: string;
   durationMinutes: number;
-  /** `/join/m/{meetingId}` — the MEMBER route. NEVER `meetings.join_url` (raw Daily). */
-  joinPath: string;
+  /**
+   * ⚠ NO `joinPath` ON THIS EVENT, DELIBERATELY — and it is not an omission to "fix" later.
+   * A reschedule REUSES the same `meetings` row and the same Daily room (ADR-1044 amendment
+   * 2026-08-08), so the join link is byte-identical before and after; both templates say
+   * "same link" and link the CASE, which is the right destination for a meeting that is still
+   * in the future. Carrying a join path that four registration files validate and no template
+   * renders is dead weight that reads as intentional to the next person.
+   * `booking.confirmed` keeps its `joinPath` — that one IS rendered.
+   */
   /** `'client'` today; BAL-411 adds `'expert'`. Present from day one so the template need not change. */
   initiatedBy: 'client';
 }

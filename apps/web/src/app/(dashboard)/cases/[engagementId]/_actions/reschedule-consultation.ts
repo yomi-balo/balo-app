@@ -18,7 +18,6 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { errorMessage, log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { postRescheduleMeeting } from '@/lib/meetings/reschedule-api-client';
-import { memberJoinPath } from '@/lib/meetings/member-join-path';
 import { authorizeCaseMutation } from '../_lib/authorize-case-mutation';
 import type {
   RescheduleConsultationInput,
@@ -254,7 +253,14 @@ export async function rescheduleConsultationAction(
     // Fire-and-forget by contract — `publishNotificationEvent` never throws (see its own
     // docblock); nothing here needs a `.catch()`.
     publishNotificationEvent('booking.rescheduled', {
-      correlationId: `${meetingId}:${result.data.scheduledStart}`,
+      // ⚠ THE AUDIT ROW ID, NOT THE TARGET WINDOW. `publisher.ts` turns `correlationId` into
+      // the BullMQ jobId (`${event}--${correlationId}`) and the notification-events queue
+      // RETAINS 100 completed jobs, so `${meetingId}:${scheduledStart}` would collide on a
+      // move BACK to a previously-used window (A→B→C→B) and silently drop BOTH party emails.
+      // Falls back to the window only if the API omitted the id — a `changed: true` response
+      // always carries it, so the fallback is unreachable in practice and exists so a schema
+      // skew degrades to the old behaviour rather than to an undefined key.
+      correlationId: `${meetingId}:${result.data.rescheduleAuditId ?? result.data.scheduledStart}`,
       meetingId,
       engagementId,
       recipientId: user.id,
@@ -265,7 +271,6 @@ export async function rescheduleConsultationAction(
       previousScheduledStartIso: result.data.previousScheduledStart,
       scheduledStartIso: result.data.scheduledStart,
       durationMinutes: Math.round(currentDurationMs / 60_000),
-      joinPath: memberJoinPath(meetingId),
       initiatedBy: 'client',
     });
 

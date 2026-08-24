@@ -3,9 +3,15 @@ import { meetingGuests } from '../../schema';
 import type { DbExecutor } from './db-executor';
 
 /**
- * BAL-409 — THE TX-SCOPED GUEST-EXPIRY WRITER, lifted verbatim (extend-only predicate
- * preserved) from `meetingGuestsRepository.extendExpiryForMeeting`'s body, so a reschedule can
- * run it on the SAME `tx` as `meetingsRepository.updateSchedule`'s other writes.
+ * BAL-409 — THE TX-SCOPED GUEST-EXPIRY WRITER, lifted from
+ * `meetingGuestsRepository.extendExpiryForMeeting`'s body so a reschedule can run it on the
+ * SAME `tx` as `meetingsRepository.updateSchedule`'s other writes.
+ *
+ * ⚠ NOT A VERBATIM LIFT — THE PREDICATE WAS NARROWED. The extend-only condition is preserved,
+ * but an `admission IN ('admitted','pre_admitted')` filter was ADDED that the original lacked
+ * (see the B7 note below). The public method's signature is unchanged and its extend-only
+ * contract is unchanged, but its EFFECT is deliberately narrower than before: rows for
+ * never-admitted lobby knocks are no longer touched.
  *
  * A `_shared/` internal, deliberately NOT barrel-exported — matching `_shared/consultation-
  * projection.ts`'s writers. `meetingGuestsRepository.extendExpiryForMeeting` now DELEGATES to

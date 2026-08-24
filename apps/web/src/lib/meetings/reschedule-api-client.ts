@@ -81,6 +81,13 @@ export interface RescheduleMeetingResponse {
   previousScheduledEnd: string;
   /** `false` ⇒ the no-op guard fired (the requested window equalled the current one). */
   changed: boolean;
+  /**
+   * The `meeting.rescheduled` audit row id — the caller's `booking.rescheduled` dedup key.
+   * Unique per MOVE; a window-derived key is unique only per DESTINATION and so collides on a
+   * move BACK to a previously-used window, silently dropping the notification.
+   * Absent on a `changed: false` no-op, which writes no audit row and publishes nothing.
+   */
+  rescheduleAuditId?: string;
 }
 
 export interface RescheduleMeetingInput {
@@ -136,6 +143,9 @@ export async function postRescheduleMeeting(
     const previousScheduledStart = readInstant(parsed, 'previousScheduledStart');
     const previousScheduledEnd = readInstant(parsed, 'previousScheduledEnd');
     const changed = parsed['changed'];
+    // Optional by contract: present on a real move, absent on a `changed: false` no-op. Not
+    // part of the malformed-body check — a missing id on a no-op is correct, not a fault.
+    const rescheduleAuditId = readString(parsed, 'rescheduleAuditId');
     if (
       responseMeetingId === undefined ||
       scheduledStart === undefined ||
@@ -157,6 +167,7 @@ export async function postRescheduleMeeting(
         previousScheduledStart,
         previousScheduledEnd,
         changed,
+        ...(rescheduleAuditId === undefined ? {} : { rescheduleAuditId }),
       },
     };
   } catch (error) {

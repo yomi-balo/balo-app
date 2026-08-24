@@ -253,6 +253,8 @@ describe('meeting-availability — every mutation rebuilds the moved expert’s 
 // ── BAL-409 — rescheduleMeeting's own contract (T-API-SVC) ─────────────────────
 
 const ACTOR_USER_ID = '44444444-4444-4444-8444-444444444444';
+/** The `meeting.rescheduled` audit row id — the outbound fan-out's per-MOVE dedup key. */
+const AUDIT_ID = '55555555-5555-4555-8555-555555555555';
 
 function rescheduleResult(
   expertProfileId: string | null,
@@ -262,6 +264,7 @@ function rescheduleResult(
   expertProfileId: string | null;
   previous: { scheduledStart: Date; scheduledEnd: Date };
   guestLinksExtended: number;
+  rescheduleAuditId: string;
 } {
   return {
     meeting: { id: MEETING_ID, ...SCHEDULE },
@@ -271,6 +274,7 @@ function rescheduleResult(
       scheduledEnd: new Date('2026-08-25T10:00:00.000Z'),
     },
     guestLinksExtended: 0,
+    rescheduleAuditId: AUDIT_ID,
     ...overrides,
   };
 }
@@ -295,7 +299,7 @@ describe('rescheduleMeeting — T-API-SVC', () => {
     expect(mockEnqueue).toHaveBeenCalledTimes(1);
   });
 
-  it('enqueues the calendar amend AFTER commit, with the meeting’s committed window', async () => {
+  it('enqueues the calendar amend AFTER commit, keyed on the AUDIT ROW ID not the window', async () => {
     const order: string[] = [];
     mockUpdateSchedule.mockImplementation(async () => {
       order.push('repository');
@@ -308,12 +312,35 @@ describe('rescheduleMeeting — T-API-SVC', () => {
     await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
 
     expect(order).toEqual(['repository', 'enqueue-amend']);
-    expect(mockEnqueueCalendarAmend).toHaveBeenCalledWith(
-      MEETING_ID,
-      EXPERT_ID,
-      SCHEDULE.scheduledStart,
-      SCHEDULE.scheduledEnd
+    expect(mockEnqueueCalendarAmend).toHaveBeenCalledWith(MEETING_ID, EXPERT_ID, AUDIT_ID);
+  });
+
+  /**
+   * ⚠ THE A→B→C→B REGRESSION. Every outbound key used to be derived from the TARGET WINDOW,
+   * which is unique per DESTINATION, not per WRITE. A move BACK to a previously-used window
+   * regenerated a key already used by the earlier move, and BullMQ silently no-ops an `add`
+   * whose jobId still exists in the retained completed set — so the third move's calendar
+   * amend and BOTH party emails vanished, leaving Balo on B and the expert's real calendar
+   * on C with nothing logged.
+   *
+   * This asserts the property that makes that impossible: two moves that land on the SAME
+   * window still produce DIFFERENT keys, because the key is the append-only audit row id.
+   */
+  it('gives two moves to the SAME window different keys (A→B→C→B does not dedup)', async () => {
+    mockUpdateSchedule.mockResolvedValueOnce(
+      rescheduleResult(EXPERT_ID, { rescheduleAuditId: 'audit-first-move-to-B' })
     );
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    // …two moves later, back to the very same window.
+    mockUpdateSchedule.mockResolvedValueOnce(
+      rescheduleResult(EXPERT_ID, { rescheduleAuditId: 'audit-third-move-back-to-B' })
+    );
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    const keys = mockEnqueueCalendarAmend.mock.calls.map((call) => call[2]);
+    expect(keys).toEqual(['audit-first-move-to-B', 'audit-third-move-back-to-B']);
+    expect(new Set(keys).size).toBe(2);
   });
 
   it('enqueues NO calendar amend for an admin meeting (no expert)', async () => {

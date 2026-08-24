@@ -72,10 +72,10 @@ export async function recordMeetingAudit(
     meetingId: string;
     metadata?: Record<string, unknown>;
   }
-): Promise<void> {
+): Promise<string> {
   const entityType: MeetingAuditEntityType = 'meeting';
 
-  await auditEventsRepository.record(
+  const row = await auditEventsRepository.record(
     {
       actorUserId: input.actorUserId,
       action: input.action,
@@ -85,6 +85,14 @@ export async function recordMeetingAudit(
     },
     exec
   );
+
+  // ⚠ RETURNS THE AUDIT ROW ID, and that is load-bearing for reschedule — not a convenience.
+  // `audit_events` is append-only, so this id is UNIQUE PER WRITE. Reschedule's outbound
+  // fan-out keys its BullMQ jobIds off it precisely because every window-derived key
+  // COLLIDES on a move BACK to a previously-used window (A→B→C→B), and BullMQ silently
+  // no-ops an `add` whose jobId already exists in the retained completed set. Existing
+  // callers may ignore the return; nothing else about the write changed.
+  return row.id;
 }
 
 /**
@@ -164,8 +172,8 @@ export async function recordMeetingRescheduled(
     expertProfileId: string | null;
     guestLinksExtended: number;
   }
-): Promise<void> {
-  await recordMeetingAudit(exec, {
+): Promise<string> {
+  return recordMeetingAudit(exec, {
     actorUserId: input.actorUserId,
     action: 'meeting.rescheduled',
     meetingId: input.meetingId,

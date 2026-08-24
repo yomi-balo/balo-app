@@ -843,9 +843,15 @@ export const meetingGuestsRepository = {
    * moved.
    *
    * ⚠ THE BAL-409 HAND-OFF IS NOW DISCHARGED — this delegates to the tx-scoped
-   * `extendGuestExpiryForMeetingTx` (`_shared/guest-expiry.ts`), bound to the base `db`, so a
-   * standalone caller behaves exactly as before while `meetingsRepository.updateSchedule` calls
-   * the SAME underlying writer on its own `tx`. `expires_at` is derived from the MEETING
+   * `extendGuestExpiryForMeetingTx` (`_shared/guest-expiry.ts`), bound to the base `db`, while
+   * `meetingsRepository.updateSchedule` calls the SAME underlying writer on its own `tx`.
+   *
+   * ⚠ THE BEHAVIOUR IS NARROWED, NOT PRESERVED. The shared writer added an
+   * `admission IN ('admitted','pre_admitted')` filter this method did not previously have, so a
+   * standalone caller no longer extends never-admitted (`pending`) lobby handles, nor revives
+   * already-expired ones. That is the intended fix — an expired `pending` handle silently
+   * pushed back to `newEnd + TTL` was a working lobby token restored for someone no host ever
+   * admitted — but it IS a change to a shipped public method, not a refactor. `expires_at` is derived from the MEETING
    * (`scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`), so a meeting moved more than that TTL past
    * its ORIGINAL end leaves already-issued links expiring BEFORE the call.
    *

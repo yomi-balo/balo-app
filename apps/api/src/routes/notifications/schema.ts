@@ -562,7 +562,8 @@ const bookingRescheduledPayload = z.object({
   previousScheduledStartIso: z.string().datetime(),
   scheduledStartIso: z.string().datetime(),
   durationMinutes: z.number().int().positive(),
-  joinPath: memberJoinPathSchema,
+  // No `joinPath` — a reschedule reuses the same room, so the link is unchanged and neither
+  // template renders one. See `BookingRescheduledPayload`. `booking.confirmed` keeps its own.
   initiatedBy: z.literal('client'),
 });
 

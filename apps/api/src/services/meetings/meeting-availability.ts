@@ -196,6 +196,7 @@ async function publishGuestRescheduledNotifications(
   previousScheduledStart: Date,
   scheduledStart: Date,
   scheduledEnd: Date,
+  rescheduleAuditId: string,
   log: FastifyBaseLogger
 ): Promise<void> {
   try {
@@ -217,7 +218,12 @@ async function publishGuestRescheduledNotifications(
     for (const guest of guests) {
       try {
         await notificationEvents.publish('meeting.guest_rescheduled', {
-          correlationId: `${guest.id}:${scheduledStart.toISOString()}`,
+          // ⚠ KEYED ON THE AUDIT ROW ID, NOT THE TARGET WINDOW. `publisher.ts` turns
+          // `correlationId` into the BullMQ `jobId` (`${event}--${correlationId}`), and the
+          // notification-events queue RETAINS 100 completed jobs — so a window-derived key
+          // would silently drop this guest's email on a move BACK to a previously-used
+          // window (A→B→C→B). Per (guest, move), not per (guest, destination).
+          correlationId: `${guest.id}:${rescheduleAuditId}`,
           recipientEmail: guest.email,
           ...(guest.name === null ? {} : { guestName: sanitizeSelfDeclaredName(guest.name) }),
           meetingTitle: meetingTitle ?? 'the video call',
@@ -283,8 +289,7 @@ export async function rescheduleMeeting(
     await enqueueMeetingCalendarAmend(
       meetingId,
       result.expertProfileId,
-      result.meeting.scheduledStart,
-      result.meeting.scheduledEnd
+      result.rescheduleAuditId
     ).catch((error: unknown) => {
       log.error(
         { meetingId, error: error instanceof Error ? error.message : String(error) },
@@ -298,6 +303,7 @@ export async function rescheduleMeeting(
     result.previous.scheduledStart,
     result.meeting.scheduledStart,
     result.meeting.scheduledEnd,
+    result.rescheduleAuditId,
     log
   );
 

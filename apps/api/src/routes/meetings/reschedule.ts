@@ -138,9 +138,14 @@ async function resolveRescheduleInput(
     return { noop: true, meetingId };
   }
 
-  // `expertProfileId === null` ⇒ a match-routed `project_discovery`. Nothing to rate-limit
-  // and no calendar to check; such a context is not reschedulable by a client and is denied
-  // at the gate or by the repository — never reachable in practice for a live consultation.
+  // `expertProfileId === null` ⇒ a match-routed `project_discovery`. Nothing to rate-limit and
+  // no calendar to check, so the expert-scoped guards below are skipped.
+  //
+  // ⚠ NOT "denied at the gate or by the repository" — NEITHER denies it, and saying so would
+  // send the next reader looking for a check that does not exist. It is unreachable for a
+  // different reason: such a meeting cannot be CREATED in the first place
+  // (`MatchModeDiscoveryNotBookableError` blocks it at booking), so no live row reaches here.
+  // The skip is correct either way; only the stated reason was wrong.
   if (expertProfileId !== null) {
     const hasVendorEvent =
       (await meetingCalendarEventsRepository.findLiveByMeetingId(meetingId)) !== undefined;
@@ -218,6 +223,12 @@ export async function meetingRescheduleRoutes(fastify: FastifyInstance): Promise
           previousScheduledStart: result.previous.scheduledStart.toISOString(),
           previousScheduledEnd: result.previous.scheduledEnd.toISOString(),
           changed: true,
+          // ⚠ THE FAN-OUT KEY FOR THE CALLER'S OWN `booking.rescheduled` PUBLISH. It is the
+          // `meeting.rescheduled` audit row id — unique per MOVE, where a window-derived key
+          // is unique only per DESTINATION and therefore collides on a move BACK (A→B→C→B),
+          // silently dropping the notification. It is an opaque append-only-log id: it names
+          // no party, leaks nothing, and is already the caller's own move.
+          rescheduleAuditId: result.rescheduleAuditId,
         });
       } catch (error) {
         if (error instanceof MeetingNotReschedulableError) {

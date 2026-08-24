@@ -14,7 +14,23 @@ export const MEETING_CALENDAR_AMEND_QUEUE = 'meeting-calendar-amend';
 export interface MeetingCalendarAmendJobData {
   meetingId: string;
   expertProfileId: string;
+  /**
+   * How many times this job has been DEFERRED for a vendor rate limit. Not the same as
+   * `job.attemptsMade`: `moveToDelayed` + `DelayedError` deliberately does NOT consume an
+   * attempt, so `attempts: 5` does not bound this path at all. Without its own counter a
+   * vendor that keeps answering `rate_limited` would be retried forever, bounded only by each
+   * `Retry-After`. Incremented via `job.updateData` before each deferral.
+   */
+  rateLimitDeferrals?: number;
 }
+
+/**
+ * The ceiling on rate-limit deferrals. Chosen to be generous — a real rate limit clears well
+ * inside this — while still terminating: past it the job falls through to the queue's ordinary
+ * `attempts: 5` + exponential backoff and can finally FAIL, landing in the failed set where it
+ * is visible, rather than deferring silently and indefinitely.
+ */
+const MAX_RATE_LIMIT_DEFERRALS = 10;
 
 /**
  * BAL-409 (§4) — THE RETRYING, CONVERGING CALENDAR AMEND. A reschedule of a `scheduled` meeting
@@ -32,18 +48,25 @@ export interface MeetingCalendarAmendJobData {
  * EVERY job writes current truth. Combined with the window-scoped `jobId` below, at least one
  * job always runs after the final commit.
  *
- * ⚠ `jobId` IS THE IDEMPOTENCY KEY, keyed on the TARGET WINDOW: a duplicate enqueue for the
- * SAME window is dropped by BullMQ (correct — one amend); a SECOND reschedule to a DIFFERENT
- * window produces a different jobId, so it is never dropped.
+ * ⚠ `jobId` IS THE IDEMPOTENCY KEY, AND IT IS THE `meeting.rescheduled` AUDIT ROW ID — NOT THE
+ * TARGET WINDOW. A window-derived key (`meetingId:start-end`) looks right and is subtly wrong:
+ * it is unique per DESTINATION, not per WRITE, so a move BACK to a previously-used window
+ * regenerates a key that has already been used. A→B→C→B produces the same jobId as A→B, and
+ * BullMQ silently no-ops an `add` whose jobId still exists in the RETAINED completed set
+ * (`removeOnComplete: { count: 1000 }` below). The third move's amend would simply vanish: Balo
+ * would say B while the expert's real calendar stayed on C, with nothing logged and nobody told —
+ * precisely the silent divergence this whole job exists to prevent.
+ *
+ * `audit_events` is append-only, so its row id is unique per SUCCESSFUL MOVE. Retries of the same
+ * move still collapse to one amend (the point of a jobId); genuinely distinct moves never do.
  */
 export function enqueueMeetingCalendarAmend(
   meetingId: string,
   expertProfileId: string,
-  scheduledStart: Date,
-  scheduledEnd: Date
+  rescheduleAuditId: string
 ): Promise<void> {
   const queue = getQueue(MEETING_CALENDAR_AMEND_QUEUE);
-  const jobId = `meeting-calendar-amend:${meetingId}:${scheduledStart.getTime()}-${scheduledEnd.getTime()}`;
+  const jobId = `meeting-calendar-amend:${rescheduleAuditId}`;
   return queue
     .add('amend', { meetingId, expertProfileId } satisfies MeetingCalendarAmendJobData, {
       jobId,
@@ -195,9 +218,20 @@ async function handleAmendError(
     // exponential backoff. `token` is required by `moveToDelayed`; if BullMQ ever calls this
     // processor without one, fall back to the generic backoff rather than throwing a second,
     // more confusing error.
+    const deferrals = job.data.rateLimitDeferrals ?? 0;
     if (decision.afterMs !== undefined && token !== undefined) {
-      await job.moveToDelayed(Date.now() + decision.afterMs, token);
-      throw new DelayedError();
+      // ⚠ BOUNDED. `moveToDelayed` does not consume an attempt, so `attempts: 5` cannot stop
+      // this loop — only this counter can. Past the ceiling, fall through to `throw error`
+      // so the job takes an ordinary attempt and can eventually fail visibly.
+      if (deferrals < MAX_RATE_LIMIT_DEFERRALS) {
+        await job.updateData({ ...job.data, rateLimitDeferrals: deferrals + 1 });
+        await job.moveToDelayed(Date.now() + decision.afterMs, token);
+        throw new DelayedError();
+      }
+      log.error(
+        { ...context, deferrals, apirocRequestId: error.requestId },
+        'Meeting calendar amend rate-limited past the deferral ceiling — falling back to ordinary attempts'
+      );
     }
     throw error;
   }

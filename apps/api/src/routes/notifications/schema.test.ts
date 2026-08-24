@@ -1398,34 +1398,27 @@ describe('publishBodySchema', () => {
       ).toBe(false);
     });
 
-    // N3 — `joinPath` must be the exact `/join/m/{uuid}` shape `memberJoinPath()` emits.
-    // `booking.confirmed`'s template renders `${BASE_URL}${joinPath}` — an unconstrained value
-    // would let an absolute URL become a phishing link inside a real Balo email.
-    it('N3 — rejects an absolute URL smuggled through joinPath', () => {
-      expect(
-        publishBodySchema.safeParse({
-          event: 'booking.rescheduled',
-          payload: { ...valid, joinPath: 'https://evil.com/phish' },
-        }).success
-      ).toBe(false);
-    });
+    /**
+     * ⚠ `booking.rescheduled` CARRIES NO `joinPath` AT ALL, and that is deliberate — see
+     * `BookingRescheduledPayload`. A reschedule reuses the same room, so the link is unchanged;
+     * both templates say "same link" and link the CASE. The payload is `.strict()`, so a
+     * `joinPath` smuggled in is REJECTED as an unknown key rather than silently ignored.
+     *
+     * The `/join/m/{uuid}` shape itself is still pinned — on `booking.confirmed`, the arm that
+     * actually renders `${BASE_URL}${joinPath}` (see the "booking.confirmed — joinPath (N3)"
+     * block above). Duplicating those cases here would test a field that does not exist.
+     */
+    it('carries no joinPath — a supplied one is STRIPPED, never forwarded', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'booking.rescheduled',
+        payload: { ...valid, joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000' },
+      });
 
-    it('N3 — rejects a joinPath outside the /join/m/{uuid} shape', () => {
-      expect(
-        publishBodySchema.safeParse({
-          event: 'booking.rescheduled',
-          payload: { ...valid, joinPath: '/join/m/not-a-uuid' },
-        }).success
-      ).toBe(false);
-    });
-
-    it('N3 — rejects a protocol-relative joinPath (//evil.com)', () => {
-      expect(
-        publishBodySchema.safeParse({
-          event: 'booking.rescheduled',
-          payload: { ...valid, joinPath: '//evil.com/join/m/550e8400-e29b-41d4-a716-446655440000' },
-        }).success
-      ).toBe(false);
+      // ⚠ Zod STRIPS unknown keys by default — these payload schemas are not `.strict()`, so
+      // the parse SUCCEEDS. What matters is that the field cannot reach a template: it is
+      // absent from the parsed output, so no downstream renderer can ever read it.
+      expect(result.success).toBe(true);
+      expect(result.success && 'joinPath' in result.data.payload).toBe(false);
     });
   });
 

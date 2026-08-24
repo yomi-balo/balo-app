@@ -257,6 +257,20 @@ export interface RescheduleMutationResult extends MeetingMutationResult {
   previous: { scheduledStart: Date; scheduledEnd: Date };
   /** How many live guest links moved. `0` on a move EARLIER — correct, not a bug. */
   guestLinksExtended: number;
+  /**
+   * The `meeting.rescheduled` audit row's id — UNIQUE PER SUCCESSFUL MOVE, because
+   * `audit_events` is append-only.
+   *
+   * ⚠ THIS IS THE OUTBOUND FAN-OUT'S IDEMPOTENCY KEY, AND IT MUST NOT BE DERIVED FROM THE
+   * WINDOW. Every window-derived key (`meetingId:start-end`, `meetingId:startIso`,
+   * `guestId:startIso`) COLLIDES on a move BACK to a previously-used window — A→B→C→B
+   * regenerates the key the A→B move already used. BullMQ silently no-ops an `add` whose
+   * jobId exists in the RETAINED completed set (`removeOnComplete` keeps 1000 amend jobs and
+   * 100 notification jobs), so the third move would drop the calendar amend AND both party
+   * emails: Balo says B, the expert's real calendar stays on C, and nobody is told.
+   * Keying on this id makes every successful move its own event.
+   */
+  rescheduleAuditId: string;
 }
 
 /**
@@ -682,7 +696,7 @@ export const meetingsRepository = {
 
       // 5. LAST — an audit row left behind by a rolled-back move would attest to a move that
       // never happened.
-      await recordMeetingRescheduled(tx, {
+      const rescheduleAuditId = await recordMeetingRescheduled(tx, {
         meetingId: meeting.id,
         actorUserId: audit.actorUserId,
         previous: before,
@@ -692,7 +706,7 @@ export const meetingsRepository = {
         guestLinksExtended,
       });
 
-      return { meeting, expertProfileId, previous: before, guestLinksExtended };
+      return { meeting, expertProfileId, previous: before, guestLinksExtended, rescheduleAuditId };
     });
   },
 

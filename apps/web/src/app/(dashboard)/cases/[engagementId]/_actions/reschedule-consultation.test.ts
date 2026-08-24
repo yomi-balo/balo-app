@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // mnemonic prefix like `m0000000…` silently 400s the whole fixture on `meetingId`.
 const ENGAGEMENT_ID = 'e0000000-0000-4000-8000-000000000001';
 const MEETING_ID = 'a0000000-0000-4000-8000-000000000002';
+/** The `meeting.rescheduled` audit row id — the fan-out's per-MOVE dedup key. */
+const AUDIT_ID = 'd0000000-0000-4000-8000-00000000000a';
 const USER_ID = 'a0000000-0000-4000-8000-000000000003';
 const COMPANY_ID = 'a0000000-0000-4000-8000-000000000004';
 const EXPERT_PROFILE_ID = 'a0000000-0000-4000-8000-000000000005';
@@ -107,6 +109,7 @@ beforeEach(() => {
       previousScheduledStart: '2026-09-01T09:00:00.000Z',
       previousScheduledEnd: '2026-09-01T09:45:00.000Z',
       changed: true,
+      rescheduleAuditId: AUDIT_ID,
     },
   });
   mockFindCompany.mockResolvedValue({ name: 'Northwind Industrial' });
@@ -301,9 +304,11 @@ describe('rescheduleConsultationAction — T-WEB-ACT', () => {
         recipientId: USER_ID,
         expertProfileId: EXPERT_PROFILE_ID,
         initiatedBy: 'client',
-        // N9 — `joinPath` was absent from this assertion; a regression to a hand-rolled
-        // template (or the wrong meetingId) would have passed silently.
-        joinPath: `/join/m/${MEETING_ID}`,
+        // ⚠ The dedup key is the `meeting.rescheduled` AUDIT ROW ID, never the target window.
+        // A window-derived key is unique per DESTINATION, not per WRITE, so a move BACK to a
+        // previously-used window (A→B→C→B) regenerates a key BullMQ has already seen and the
+        // publish is silently dropped — both party emails lost on a move that did happen.
+        correlationId: `${MEETING_ID}:${AUDIT_ID}`,
       })
     );
     resolvePublish?.();
