@@ -239,4 +239,7 @@ export {
   type BookingSource,
   type BookingEntryMode,
   type BookingAbandonStep,
+  // BAL-411 CONSIDER item — was absent from this allowlist, unlike its sibling
+  // `AvailabilityConflictResolution`.
+  type RescheduleProposalOutcome,
 } from './booking';

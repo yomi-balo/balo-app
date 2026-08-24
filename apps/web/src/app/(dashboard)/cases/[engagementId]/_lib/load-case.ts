@@ -10,6 +10,7 @@ import {
   creditSessionsRepository,
   expertsRepository,
   meetingContextsRepository,
+  rescheduleProposalsRepository,
   transcriptsRepository,
   usersRepository,
   type ActionItem,
@@ -18,12 +19,14 @@ import {
   type Meeting,
 } from '@balo/db';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
-import { MIN_MEETING_MINUTES } from '@balo/shared/meetings';
+import { MIN_MEETING_MINUTES, rescheduleProposalIsLive } from '@balo/shared/meetings';
 import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
 import {
+  caseConsultationIsUpcoming,
   deriveCaseConsultationState,
   selectCaseNudge,
   type CaseNudge,
+  type CaseNudgeRescheduleProposal,
 } from '@balo/shared/engagements';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { errorMessage, log } from '@/lib/logging';
@@ -143,6 +146,59 @@ function toEarningsView(aggregate: CaseExpertEarningsAggregate): CaseEarningsVie
   return { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 };
 }
 
+/** BAL-411 — the live proposal's own detail, fetched separately (see `loadCase`'s comment on
+ *  WHY: `CaseNudge`'s shared core deliberately carries only `optionCount`). `null` unless
+ *  `nudge.kind` is one of the two proposal arms. */
+interface RescheduleProposalDetailForNudge {
+  readonly createdAt: Date;
+  readonly options: readonly { id: string; scheduledStart: Date }[];
+}
+
+/**
+ * BAL-411 — resolves the live reschedule proposal (if any) on the case's `nextScheduled`
+ * meeting, PLUS its detail (options + when it was made). Extracted out of `loadCase` to keep
+ * that function's own cognitive complexity under the SonarJS ceiling — see the comment at the
+ * call site for the "why a proposal-with-null-detail collapses to no proposal at all" rule this
+ * preserves unchanged.
+ */
+async function resolveRescheduleProposalForNudge(
+  nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null,
+  liveProposals: readonly CaseNudgeRescheduleProposal[],
+  now: Date
+): Promise<{
+  proposal: CaseNudgeRescheduleProposal | null;
+  detail: RescheduleProposalDetailForNudge | null;
+}> {
+  if (nextScheduled === null) {
+    return { proposal: null, detail: null };
+  }
+  const proposal =
+    liveProposals.find(
+      (candidate) =>
+        candidate.meetingId === nextScheduled.meetingId && rescheduleProposalIsLive(candidate, now)
+    ) ?? null;
+  if (proposal === null) {
+    return { proposal: null, detail: null };
+  }
+  const found = await rescheduleProposalsRepository.findPendingForAnswer({
+    proposalId: proposal.proposalId,
+    meetingId: proposal.meetingId,
+  });
+  if (found === undefined) {
+    return { proposal, detail: null };
+  }
+  return {
+    proposal,
+    detail: {
+      createdAt: found.proposal.createdAt,
+      options: found.options.map((option) => ({
+        id: option.id,
+        scheduledStart: option.scheduledStart,
+      })),
+    },
+  };
+}
+
 /**
  * `CaseNudge` (Dates, from the pure core) → `CaseNudgeView` (ISO strings, serialisable).
  *
@@ -154,7 +210,8 @@ function toEarningsView(aggregate: CaseExpertEarningsAggregate): CaseEarningsVie
  */
 function toNudgeView(
   nudge: CaseNudge,
-  nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null
+  nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null,
+  proposalDetail: RescheduleProposalDetailForNudge | null
 ): CaseNudgeView {
   if (nudge === null) return null;
   if (nudge.kind === 'upcoming') {
@@ -170,6 +227,41 @@ function toNudgeView(
       scheduledStartIso: nudge.scheduledStart.toISOString(),
       live: nudge.live,
       durationMinutes,
+    };
+  }
+  if (nudge.kind === 'reschedule_proposal') {
+    return {
+      kind: 'reschedule_proposal',
+      proposalId: nudge.proposalId,
+      meetingId: nudge.meetingId,
+      optionCount: nudge.optionCount,
+      originalScheduledStartIso: nudge.originalScheduledStart.toISOString(),
+      expiresAtIso: nudge.expiresAt.toISOString(),
+      // Item 12 — NEVER the deadline. `null` when there is genuinely no detail to report
+      // (structurally unreachable through the normal path now that the caller falls the whole
+      // nudge back to `rescheduleProposal: null` on the same condition — see `loadCase`).
+      proposedAtIso: proposalDetail?.createdAt.toISOString() ?? null,
+      options: (proposalDetail?.options ?? []).map((option) => ({
+        optionId: option.id,
+        scheduledStartIso: option.scheduledStart.toISOString(),
+      })),
+    };
+  }
+  if (nudge.kind === 'reschedule_proposal_pending') {
+    return {
+      kind: 'reschedule_proposal_pending',
+      proposalId: nudge.proposalId,
+      meetingId: nudge.meetingId,
+      optionCount: nudge.optionCount,
+      expiresAtIso: nudge.expiresAt.toISOString(),
+      // Item 12 — NEVER the deadline. `null` when there is genuinely no detail to report
+      // (structurally unreachable through the normal path now that the caller falls the whole
+      // nudge back to `rescheduleProposal: null` on the same condition — see `loadCase`).
+      proposedAtIso: proposalDetail?.createdAt.toISOString() ?? null,
+      options: (proposalDetail?.options ?? []).map((option) => ({
+        optionId: option.id,
+        scheduledStartIso: option.scheduledStart.toISOString(),
+      })),
     };
   }
   return { kind: nudge.kind };
@@ -435,11 +527,25 @@ export const loadCase = cache(
       occurredAt: meeting.startedAt ?? meeting.scheduledStart,
     }));
 
-    const [labels, fileResult, transcriptMeetingIds] = await Promise.all([
+    const [labels, fileResult, transcriptMeetingIds, liveProposals] = await Promise.all([
       resolveCounterparty(lens, profile, clientCompanyName),
       loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
       readTranscriptMeetingIds(meetings),
+      // BAL-411 — needs `meetings`' ids, so it rides the SECOND wave, not the first.
+      rescheduleProposalsRepository.findLivePendingByMeetingIds(
+        meetings.map((meeting) => meeting.id)
+      ),
     ]);
+
+    // ⚠ LIVENESS (expiry) IS DECIDED HERE, ONCE, via `rescheduleProposalIsLive` — the read
+    // itself filters `status = 'pending'` only (never soft-deleted), never expiry. Both the
+    // consultation-row state and the header nudge below derive from THIS set, so they cannot
+    // disagree about what "live" means.
+    const meetingIdsWithLiveProposal = new Set(
+      liveProposals
+        .filter((proposal) => rescheduleProposalIsLive(proposal, now))
+        .map((proposal) => proposal.meetingId)
+    );
 
     const actionItemCountByMeetingId = new Map<string, number>();
     for (const item of actionItems) {
@@ -461,15 +567,39 @@ export const loadCase = cache(
       actionItemCountByMeetingId,
       fileCountByMeetingId,
       meetingIdsWithTranscript: transcriptMeetingIds,
+      meetingIdsWithLiveProposal,
     });
 
     const isOpen = caseRow.closedAt === null;
-    const nextScheduled = selectNextScheduled(meetings);
+    const nextScheduled = selectNextScheduled(meetings, meetingIdsWithLiveProposal);
+    // BAL-411 — the nudge cares about the proposal on THE NEXT meeting only: a live proposal's
+    // meeting is always `caseConsultationIsUpcoming`, so if `nextScheduled` exists and carries a
+    // proposal, this finds it; a proposal on some OTHER, later meeting is represented on that
+    // meeting's own consultation row (`pending_reschedule`) but does not compete for the header.
+    // The actual DETAIL (options + when it was made) is fetched only when a live proposal is
+    // actually rendering in the nudge. `findLivePendingByMeetingIds` (above) is a PROJECTION
+    // with no options, by design (`rescheduleProposalsRepository`'s own docblock);
+    // `RescheduleProposalCard` needs real `optionId`s to accept one, so this is the one extra
+    // read that gets them, and it is never speculative — most cases have no live proposal.
+    const { proposal: rescheduleProposalForNudge, detail: proposalDetailForNudge } =
+      await resolveRescheduleProposalForNudge(nextScheduled, liveProposals, now);
+
+    // Item 12 — a proposal that resolved (answered/withdrawn/soft-deleted) in the gap between
+    // the PROJECTION read above and this DETAIL read is treated as GONE, never rendered
+    // proposal-shaped with zero options and a fabricated `proposedAtIso`. Re-deriving `nudge`
+    // with `rescheduleProposal: null` here — rather than deciding it once, earlier, off the
+    // projection alone — lets `selectCaseNudge` fall back to whatever it would have chosen with
+    // no live proposal (`upcoming`, `resolution_ask`, …) instead of a proposal nudge nothing
+    // backs.
     const nudge = selectCaseNudge({
       lens,
       isOpen,
       nextScheduled,
       resolutionRequestedAt: caseRow.resolutionRequestedAt,
+      rescheduleProposal:
+        rescheduleProposalForNudge !== null && proposalDetailForNudge === null
+          ? null
+          : rescheduleProposalForNudge,
       now,
     });
 
@@ -510,7 +640,7 @@ export const loadCase = cache(
       expertProfileId,
       viewerUserId: userId,
       header,
-      nudge: toNudgeView(nudge, nextScheduled),
+      nudge: toNudgeView(nudge, nextScheduled, proposalDetailForNudge),
       consultations,
       conversation: await buildConversation(access, labels, messagePage, conversationFileRows),
       actionItems: buildActionItems(
@@ -541,9 +671,45 @@ export const loadCase = cache(
       // rule is "an absent action beats a dead one" (`case-view-types.ts`). The read is
       // resolved here so the action stays the authority and this stays a render hint: the
       // server action re-checks independently and is NOT trusting this flag.
+      // ⚠ EACH FLAG SHORT-CIRCUITS ITS OWN `await hasEngagementCapability(...)` INDEPENDENTLY —
+      // NOT a shared/hoisted call. A shared call was tried and reverted: it made the capability
+      // check unconditional on `isOpen` alone, which broke the pre-existing invariant (pinned
+      // by its own test) that a CLOSED case, or a case with a resolution ALREADY requested,
+      // resolves NO capability call at all. Three calls with identical short-circuit shape cost
+      // nothing extra in the common case (at most one of the three ever actually awaits,
+      // because at most one of `canRequestResolution`/`canProposeReschedule`/
+      // `canManageReschedule` is relevant to any one case state) and keep every existing
+      // short-circuit guarantee intact.
       const mayRequestResolution =
         isOpen &&
         caseRow.resolutionRequestedAt === null &&
+        (await hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, {
+          contextType: 'case',
+          contextId: engagementId,
+        }));
+      // BAL-411 — the SAME resolve-server-side/re-check-in-the-action pattern as
+      // `mayRequestResolution` immediately above. `rescheduleProposalForNudge === null` is the
+      // "no LIVE proposal already outstanding on the next meeting" half — mirroring the DB's
+      // own partial unique index (at most one pending proposal per meeting), so the button
+      // never invites a 409 `proposal_already_pending` the picker itself could have prevented.
+      const mayProposeReschedule =
+        isOpen &&
+        nextScheduled !== null &&
+        rescheduleProposalForNudge === null &&
+        (await hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, {
+          contextType: 'case',
+          contextId: engagementId,
+        }));
+      // Item 18 (security LOW) — the WITHDRAW holder set. `canProposeReschedule` is
+      // STRUCTURALLY FALSE exactly when Withdraw would be relevant (a live proposal already
+      // exists — that is `rescheduleProposalForNudge !== null`), so it cannot be reused as-is
+      // to gate the Withdraw button the way its own docblock suggested; this is the SAME
+      // capability check, without the "no live proposal" condition, so the card can gate
+      // Withdraw on the actual holder set instead of `lens === 'expert'` alone (which also
+      // admits an agency member with role `expert` — a legitimate viewer of the case surface
+      // who is deliberately and permanently NOT a `manage_engagement` holder, ADR-1046 §7).
+      const canManageReschedule =
+        isOpen &&
         (await hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, {
           contextType: 'case',
           contextId: engagementId,
@@ -553,6 +719,8 @@ export const loadCase = cache(
         lens: 'expert',
         earnings: toEarningsView(earningsAggregate ?? EMPTY_EARNINGS),
         canRequestResolution: mayRequestResolution,
+        canProposeReschedule: mayProposeReschedule,
+        canManageReschedule,
       };
     }
     return { ...base, lens: 'client', canClose: isOpen };
@@ -582,15 +750,20 @@ const EMPTY_EARNINGS: CaseExpertEarningsAggregate = {
  * the nudge renders live — which is exactly right.
  */
 function selectNextScheduled(
-  meetings: readonly Meeting[]
+  meetings: readonly Meeting[],
+  meetingIdsWithLiveProposal: ReadonlySet<string>
 ): { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null {
   const upcoming = meetings
     .filter((meeting) => {
       const state = deriveCaseConsultationState({
         status: meeting.status,
         outcome: meeting.outcome,
+        hasLiveRescheduleProposal: meetingIdsWithLiveProposal.has(meeting.id),
       });
-      return state === 'scheduled' || state === 'in_progress';
+      // BAL-411 — `caseConsultationIsUpcoming`, NOT a hand-rolled `'scheduled' | 'in_progress'`
+      // check: it ALSO admits `pending_reschedule`, so a meeting carrying a live proposal is
+      // not dropped from the case surface's next-consultation entirely while the ask is open.
+      return caseConsultationIsUpcoming(state);
     })
     .sort((a, b) => {
       // Lead with the POSITIVE branch (S7735 / unicorn/no-negated-condition). Behaviour is

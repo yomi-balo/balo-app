@@ -52,6 +52,8 @@ import type {
   ExpertSearchabilityRestoredPayload,
   BookingConfirmedPayload,
   BookingRescheduledPayload,
+  RescheduleProposalSentPayload,
+  RescheduleProposalDeclinedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -299,6 +301,32 @@ export interface MeetingGuestRescheduledPayload {
   expiresOn: string;
 }
 
+/**
+ * BAL-411 — the BAL-420 reminder: a pending reschedule proposal is still unanswered as the
+ * original start closes in. Declared INLINE (the `:104-110` `CalendarAuthErrorPayload`
+ * exception) — SERVER-ONLY, published EXCLUSIVELY by the dispatch tick, so it has no web
+ * mirror and this is its one home.
+ *
+ * ⚠ NO EMAIL ADDRESS ANYWHERE (ADR-1044 §3). ⚠ NO RATE, TOTAL OR HOLD — a proposal moves no
+ * money.
+ */
+export interface RescheduleProposalUnansweredPayload {
+  /** A fresh uuid per `scheduleNotification` call — NEVER the proposal id (§ scheduling
+   *  module docblock: dedup is scoped to the pending window only). */
+  correlationId: string;
+  proposalId: string;
+  meetingId: string;
+  engagementId: string;
+  /** So the recheck can rebuild recipients without re-answering "who owns this meeting". */
+  companyId: string;
+  /** Seeded empty, REBUILT by the recheck at fire time. */
+  recipientUserIds: string[];
+  expertPartyLabel: string;
+  caseTitle: string;
+  originalScheduledStartIso: string;
+  optionCount: number;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -413,7 +441,18 @@ export type NotificationEvent =
   // BAL-409 — the guest-facing half of the same move. SERVER-ONLY (see below): it carries no
   // secret, but it is published exclusively from `apps/api`'s post-commit block, which
   // already holds the meeting and its live guests.
-  | 'meeting.guest_rescheduled';
+  | 'meeting.guest_rescheduled'
+  // BAL-411 — the expert proposed up to three alternative times. Published from `apps/web`
+  // after the propose api route returns 200 — same posture as `booking.rescheduled`.
+  // Publishable from apps/web — deliberately NOT in `ServerOnlyNotificationEvent` below — so
+  // it needs a `publishBodySchema` arm.
+  | 'reschedule_proposal.sent'
+  // BAL-411 — the client declined every option. Published from `apps/web` after the decline
+  // api route returns 200. Same posture as `reschedule_proposal.sent`.
+  | 'reschedule_proposal.declined'
+  // BAL-411 — the BAL-420 reminder: still unanswered as the original start closes in.
+  // SERVER-ONLY (see below): published EXCLUSIVELY by the dispatch tick.
+  | 'reschedule_proposal.unanswered';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -498,7 +537,13 @@ export type ServerOnlyNotificationEvent =
   // it has no `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
   // ⚠ `booking.rescheduled` is deliberately NOT listed here: its publisher is a web Server
   // Action and needs its arm — same asymmetry as `booking.confirmed`.
-  | 'meeting.guest_rescheduled';
+  | 'meeting.guest_rescheduled'
+  // BAL-411: published EXCLUSIVELY by the BAL-420 dispatch tick — `scheduleNotification` is an
+  // in-process `apps/api` function and ADR-1047 Decision 11 keeps the schedule/cancel seam off
+  // HTTP entirely. So it has no `publishBodySchema` arm; adding one would be a `StraySchemaArm`
+  // and fail `tsc`. ⚠ `reschedule_proposal.sent` / `reschedule_proposal.declined` are
+  // deliberately NOT listed: both are published by web Server Actions and need their arms.
+  | 'reschedule_proposal.unanswered';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -528,8 +573,8 @@ export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnly
  * entry resolves a `recipient: 'admin'` delivery is API-only BY CONSTRUCTION. That is
  * asserted by `web-schedulable-policy.test.ts`, not left to review.
  *
- * EMPTY until a web-side consumer ships. BAL-411 is the only candidate, and it may well end
- * up API-side too.
+ * EMPTY until a web-side consumer ships. BAL-411 was the only candidate and it landed API-side
+ * (§D2), so this stays empty.
  */
 export type WebSchedulableNotificationEvent = never;
 
@@ -641,4 +686,7 @@ export interface EventPayloadMap {
   'booking.confirmed': BookingConfirmedPayload;
   'booking.rescheduled': BookingRescheduledPayload;
   'meeting.guest_rescheduled': MeetingGuestRescheduledPayload;
+  'reschedule_proposal.sent': RescheduleProposalSentPayload;
+  'reschedule_proposal.declined': RescheduleProposalDeclinedPayload;
+  'reschedule_proposal.unanswered': RescheduleProposalUnansweredPayload;
 }

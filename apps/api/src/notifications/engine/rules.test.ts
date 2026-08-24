@@ -54,11 +54,14 @@ function expectClientRulesGatedOnRecipientId(
 }
 
 describe('notificationRules', () => {
-  it('has rules for user.welcome event', () => {
-    const rules = notificationRules['user.welcome'];
-    expect(rules).toBeDefined();
-    expect(rules).toHaveLength(1);
-  });
+  it.each(['user.welcome', 'expert.application_submitted', 'project.request_submitted'] as const)(
+    'has rules for %s event',
+    (event) => {
+      const rules = notificationRules[event];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(1);
+    }
+  );
 
   it('user.welcome rule has correct config', () => {
     const [rule] = notificationRules['user.welcome']!;
@@ -69,12 +72,6 @@ describe('notificationRules', () => {
     expect(rule.priority).toBe('critical');
   });
 
-  it('has rules for expert.application_submitted event', () => {
-    const rules = notificationRules['expert.application_submitted'];
-    expect(rules).toBeDefined();
-    expect(rules).toHaveLength(1);
-  });
-
   it('expert.application_submitted rule has correct config', () => {
     const [rule] = notificationRules['expert.application_submitted']!;
     expect(rule.channel).toBe('email');
@@ -82,12 +79,6 @@ describe('notificationRules', () => {
     expect(rule.template).toBe('application-submitted');
     expect(rule.timing).toBe('immediate');
     expect(rule.priority).toBe('critical');
-  });
-
-  it('has rules for project.request_submitted event', () => {
-    const rules = notificationRules['project.request_submitted'];
-    expect(rules).toBeDefined();
-    expect(rules).toHaveLength(1);
   });
 
   it('project.request_submitted rule has correct config', () => {
@@ -1022,17 +1013,23 @@ describe('notificationRules', () => {
       }
     });
 
-    it('⚠ `meeting_party_participants` is used by the guest FYI and the BAL-134 client nudge', () => {
+    it('⚠ `meeting_party_participants` is used by the guest FYI, the BAL-134 client nudge and BAL-411', () => {
       // A new fan-out KIND is a dispatcher branch; pinning its consumers means a future reuse
-      // has to come past this test and state itself. BAL-134 is the SECOND consumer, and it
-      // states itself here: the client-absent nudge fans out to the booking company's members,
-      // resolved by the PUBLISHER into `payload.recipientUserIds` — which is what keeps a
-      // membership read out of `engine/resolver.ts`, exactly as the guest FYI does.
+      // has to come past this test and state itself. BAL-134 is the SECOND consumer and BAL-411
+      // is the THIRD/FOURTH: both the proposal-sent notice and its unanswered reminder fan out
+      // to the client company's members the same way — resolved by the PUBLISHER (or the
+      // fire-time recheck) into `payload.recipientUserIds`, keeping a membership read out of
+      // `engine/resolver.ts`.
       const users = Object.entries(notificationRules)
         .filter(([, rules]) => rules.some((r) => r.recipient === 'meeting_party_participants'))
         .map(([event]) => event);
 
-      expect(users).toEqual(['meeting.guest_added', 'meeting.client_absent']);
+      expect(users).toEqual([
+        'reschedule_proposal.sent',
+        'reschedule_proposal.unanswered',
+        'meeting.guest_added',
+        'meeting.client_absent',
+      ]);
     });
 
     /**
@@ -1089,5 +1086,76 @@ describe('notificationRules', () => {
         expect(validChannels).toContain(rule.channel);
       }
     }
+  });
+
+  describe('BAL-411 reschedule proposal events', () => {
+    it('reschedule_proposal.sent ships email + in-app + a CONDITIONED, CRITICAL sms arm', () => {
+      const rules = notificationRules['reschedule_proposal.sent'] ?? [];
+      expect(rules).toHaveLength(3);
+      expect(rules.every((r) => r.recipient === 'meeting_party_participants')).toBe(true);
+      expect(
+        rules.every(
+          (r) =>
+            r.template === 'reschedule-proposal-sent' ||
+            r.template === 'reschedule-proposal-sent-sms'
+        )
+      ).toBe(true);
+
+      const sms = rules.find((r) => r.channel === 'sms');
+      expect(sms).toBeDefined();
+      expect(sms!.priority).toBe('critical');
+      expect(sms!.template).toBe('reschedule-proposal-sent-sms');
+      expect(sms!.condition).toBeDefined();
+
+      const email = rules.find((r) => r.channel === 'email');
+      const inApp = rules.find((r) => r.channel === 'in-app');
+      expect(email?.condition).toBeUndefined();
+      expect(inApp?.condition).toBeUndefined();
+    });
+
+    it('the sms arm fires ONLY when hoursToStart < 2', () => {
+      const rules = notificationRules['reschedule_proposal.sent'] ?? [];
+      const sms = rules.find((r) => r.channel === 'sms')!;
+      const base = { event: 'reschedule_proposal.sent', data: {} };
+      expect(sms.condition!({ ...base, payload: { hoursToStart: 1.9 } })).toBe(true);
+      expect(sms.condition!({ ...base, payload: { hoursToStart: 2 } })).toBe(false);
+      expect(sms.condition!({ ...base, payload: { hoursToStart: 5 } })).toBe(false);
+      expect(sms.condition!({ ...base, payload: {} })).toBe(false);
+    });
+
+    // Item 5 — the publisher now emits a FRACTIONAL `hoursToStart` (never `Math.round`ed), so
+    // the boundary this condition actually has to hold at run time is a fraction just under 2,
+    // not the whole number `1.9` above. Pin it precisely: a propose at 1h50m out (1.8333h,
+    // exactly what `Math.round` used to bump to 2) must still fire, and 2.0 exactly must not.
+    it('boundary: 1.99 fires, 2.0 exactly does not', () => {
+      const rules = notificationRules['reschedule_proposal.sent'] ?? [];
+      const sms = rules.find((r) => r.channel === 'sms')!;
+      const base = { event: 'reschedule_proposal.sent', data: {} };
+      expect(sms.condition!({ ...base, payload: { hoursToStart: 1.99 } })).toBe(true);
+      expect(sms.condition!({ ...base, payload: { hoursToStart: 11 / 6 } })).toBe(true); // 1h50m
+      expect(sms.condition!({ ...base, payload: { hoursToStart: 2.0 } })).toBe(false);
+    });
+
+    it('reschedule_proposal.declined ships email + in-app to the expert, no sms, no admin fan-out', () => {
+      const rules = notificationRules['reschedule_proposal.declined'] ?? [];
+      expect(rules).toHaveLength(2);
+      expect(rules.every((r) => r.recipient === 'expert')).toBe(true);
+      expect(rules.every((r) => r.template === 'reschedule-proposal-declined')).toBe(true);
+      expect(rules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+
+    it('reschedule_proposal.unanswered is IN-APP ONLY, to meeting_party_participants', () => {
+      expect(notificationRules['reschedule_proposal.unanswered']).toEqual([
+        {
+          channel: 'in-app',
+          recipient: 'meeting_party_participants',
+          template: 'reschedule-proposal-unanswered',
+          timing: 'immediate',
+        },
+      ]);
+    });
   });
 });

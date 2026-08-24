@@ -189,23 +189,74 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // BAL-409 — the CLIENT half of `booking.rescheduled`: prospective copy names the expert
   // PARTY, matching `booking-confirmed-client`'s posture. Never `/meeting/:id` (no such route)
   // and never `meetings.join_url`.
+  // BAL-411 — `initiatedBy` now branches the body: the expert-initiated arm ("you confirmed a
+  // new time") is what the client sees right after THEY accepted the expert's proposal — the
+  // client just acted, so the copy says so rather than presenting it as something that
+  // happened to them.
   'booking-rescheduled-client': (data) => {
     const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
     const engagementId = data.engagementId as string | undefined;
+    const initiatedBy = data.initiatedBy === 'expert' ? 'expert' : 'client';
     return {
       title: 'Consultation moved',
-      body: `Your consultation with ${expertParty} was moved to a new time.`,
+      body:
+        initiatedBy === 'expert'
+          ? `You confirmed a new time with ${expertParty}.`
+          : `Your consultation with ${expertParty} was moved to a new time.`,
       actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
     };
   },
 
   // BAL-409 — the EXPERT half of the same event: prospective copy names the CLIENT PARTY.
+  // BAL-411 — `initiatedBy` now branches the body: the expert-initiated arm ("accepted your
+  // new time") is what the expert sees when the CLIENT accepted the expert's OWN proposal.
   'booking-rescheduled-expert': (data) => {
     const clientCompany = (data.clientCompanyName as string) ?? 'A client';
     const engagementId = data.engagementId as string | undefined;
+    const initiatedBy = data.initiatedBy === 'expert' ? 'expert' : 'client';
     return {
       title: 'Booking moved',
-      body: `${clientCompany} moved a consultation with you to a new time.`,
+      body:
+        initiatedBy === 'expert'
+          ? `${clientCompany} accepted your new time.`
+          : `${clientCompany} moved a consultation with you to a new time.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-411 — the expert proposed alternative times. Prospective copy names the expert PARTY,
+  // matching `booking-rescheduled-client`'s posture.
+  'reschedule-proposal-sent': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const engagementId = data.engagementId as string | undefined;
+    return {
+      title: 'New time suggested',
+      body: `${expertParty} suggested a few other times for your consultation.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-411 — the client declined every option. Retrospective copy names the person who
+  // answered, with "@ company" on first mention.
+  'reschedule-proposal-declined': (data) => {
+    const declinedBy = (data.declinedByLabel as string) ?? 'The client';
+    const engagementId = data.engagementId as string | undefined;
+    return {
+      title: 'Original time kept',
+      body: `${declinedBy} kept the original time.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-411 — the BAL-420 reminder: still unanswered as the original start closes in.
+  // Prospective copy names the expert PARTY. Deadline stated as a helpful fact, never a
+  // countdown.
+  'reschedule-proposal-unanswered': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const engagementId = data.engagementId as string | undefined;
+    return {
+      title: 'A time suggestion is waiting',
+      body: `${expertParty}'s suggested times are still open — pick one, or keep your original booking.`,
       actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
     };
   },

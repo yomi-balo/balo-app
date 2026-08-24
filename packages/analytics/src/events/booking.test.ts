@@ -12,6 +12,9 @@ describe('BOOKING_EVENTS', () => {
       'CONFIRM_VIEWED',
       'FLOW_OPENED',
       'GUESTS_INVITED',
+      'RESCHEDULE_PROPOSAL_ANSWERED',
+      'RESCHEDULE_PROPOSAL_SLOT_LOST',
+      'RESCHEDULE_PROPOSED',
       'RESCHEDULED',
     ]);
   });
@@ -26,6 +29,9 @@ describe('BOOKING_EVENTS', () => {
     expect(BOOKING_EVENTS.CASE_BOOKED).toBe('case_booked');
     expect(BOOKING_EVENTS.ABANDONED).toBe('booking_abandoned');
     expect(BOOKING_EVENTS.RESCHEDULED).toBe('booking_rescheduled');
+    expect(BOOKING_EVENTS.RESCHEDULE_PROPOSED).toBe('reschedule_proposed');
+    expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED).toBe('reschedule_proposal_answered');
+    expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST).toBe('reschedule_proposal_slot_lost');
   });
 
   it('uses snake_case event values throughout', () => {

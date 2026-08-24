@@ -7,10 +7,12 @@ import { Reveal } from '@/components/balo/engagement/reveal';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
 import { RescheduleDialog } from '@/components/booking/reschedule-dialog';
+import { ProposeTimesDialog } from '@/components/booking/propose-times-dialog';
 import { resolveCaseAction } from '../_actions/resolve-case';
 import { dismissResolutionRequestAction } from '../_actions/dismiss-resolution-request';
 import { CaseHeader } from './case-header';
 import { CaseNudge } from './case-nudge';
+import { RescheduleProposalCard } from './reschedule-proposal-card';
 import { CaseConversationPanel } from './case-conversation-panel';
 import { ConsultationList } from './consultation-list';
 import { CasePartyCard } from './case-party-card';
@@ -52,6 +54,8 @@ export function CaseSurface({
   // BAL-409 — the reschedule dialog's open state, owned here exactly as `resolveCaseAction`'s
   // transition is: `case-nudge.tsx` stays a presentational renderer of one `CaseNudgeView`.
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  // BAL-411 — the propose-times dialog's open state, owned the SAME way.
+  const [proposeOpen, setProposeOpen] = useState(false);
 
   const counterpartyFirstName = view.conversation.counterpartyFirstName;
 
@@ -97,6 +101,28 @@ export function CaseSurface({
     router.refresh();
   }, [router]);
 
+  const handleOpenPropose = useCallback(() => {
+    setProposeOpen(true);
+  }, []);
+
+  const handleProposed = useCallback(() => {
+    setProposeOpen(false);
+    router.refresh();
+  }, [router]);
+
+  // BAL-411 — `RescheduleProposalCard`'s `onChanged`: no local dialog state to close, just a
+  // refresh (accept/decline/withdraw all resolve to a page revalidate already; this covers the
+  // client-side render before the next server round trip lands).
+  const handleProposalChanged = useCallback(() => {
+    router.refresh();
+  }, [router]);
+
+  // BAL-411 — read ONLY from the expert arm; the client arm has no `canProposeReschedule` field
+  // to hold (the same discriminant-not-flag posture the whole view already follows).
+  const canProposeReschedule = view.lens === 'expert' && view.canProposeReschedule;
+  // Item 18 — same posture, for the Withdraw button's holder set (see `RescheduleProposalCard`).
+  const canManageReschedule = view.lens === 'expert' && view.canManageReschedule;
+
   return (
     <div className="from-background to-muted/30 min-h-full bg-gradient-to-b">
       <div className="mx-auto w-full max-w-[1060px] px-4 py-8 sm:px-6 lg:px-8">
@@ -111,8 +137,24 @@ export function CaseSurface({
               onMarkResolved={handleMarkResolved}
               onDismissAsk={handleDismissAsk}
               onReschedule={handleOpenReschedule}
+              canProposeReschedule={canProposeReschedule}
+              onProposeReschedule={handleOpenPropose}
               busy={pending}
             />
+            {/* BAL-411 — the ONE place accept/decline/withdraw actually happen; the nudge above
+                is purely informational (see `case-nudge.tsx`'s own docblock). */}
+            {view.nudge !== null &&
+              (view.nudge.kind === 'reschedule_proposal' ||
+                view.nudge.kind === 'reschedule_proposal_pending') && (
+                <RescheduleProposalCard
+                  engagementId={view.engagementId}
+                  lens={view.lens}
+                  nudge={view.nudge}
+                  counterpartyLabel={counterpartyFirstName}
+                  onChanged={handleProposalChanged}
+                  canManageReschedule={canManageReschedule}
+                />
+              )}
           </div>
         </Reveal>
 
@@ -127,6 +169,22 @@ export function CaseSurface({
             // this nudge/CTA is now stale, exactly like a successful move does: close AND
             // refresh, reusing the same handler rather than a second near-identical one.
             onTerminalFailure={handleRescheduled}
+            engagementId={view.engagementId}
+            meetingId={view.nudge.meetingId}
+            expertProfileId={view.expertProfileId}
+            currentScheduledStartIso={view.nudge.scheduledStartIso}
+            durationMinutes={view.nudge.durationMinutes}
+            caseTitle={view.header.title}
+          />
+        )}
+
+        {/* BAL-411 — the EXPERT's symmetrical dialog, same mount gate as `RescheduleDialog`
+            (an `'upcoming'` nudge implies a meeting to propose against). */}
+        {view.nudge !== null && view.nudge.kind === 'upcoming' && (
+          <ProposeTimesDialog
+            open={proposeOpen}
+            onClose={() => setProposeOpen(false)}
+            onProposed={handleProposed}
             engagementId={view.engagementId}
             meetingId={view.nudge.meetingId}
             expertProfileId={view.expertProfileId}

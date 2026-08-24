@@ -17,6 +17,13 @@ const templates: Record<string, (data: Record<string, unknown>) => string> = {
   'session-near-wrap-sms': () => {
     return 'Balo: Your session is nearing the end of its extra time — top up to keep going without a break.';
   },
+
+  // BAL-411 — the expert proposed alternative times AND the original start is under 2h away
+  // (`rescheduleProposalIsUrgent`). ≤160 chars, warm, NO countdown language beyond the plain
+  // fact that the original time is soon.
+  'reschedule-proposal-sent-sms': () => {
+    return 'Balo: A new time was suggested for your consultation, coming up soon. Check the case to pick a time or keep your original booking.';
+  },
 };
 
 export function getSmsTemplate(templateName: string, data: Record<string, unknown>): string {
@@ -25,4 +32,14 @@ export function getSmsTemplate(templateName: string, data: Record<string, unknow
     throw new Error(`Unknown SMS template: ${templateName}`);
   }
   return factory(data);
+}
+
+/**
+ * Fix round 1 item 11 — every REGISTERED template name, for a test to iterate rather than
+ * hand-maintain a parallel literal array (`sms-templates.test.ts` had frozen one at a single
+ * entry, so the ≤160-char invariant this module's own comments assert silently stopped
+ * covering every template added after it).
+ */
+export function listSmsTemplates(): string[] {
+  return Object.keys(templates);
 }

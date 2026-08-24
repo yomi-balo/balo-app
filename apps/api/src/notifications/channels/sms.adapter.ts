@@ -48,6 +48,22 @@ export async function processSmsJob(job: Job<DeliveryPayload>): Promise<void> {
     return;
   }
 
+  // Fix round 1 item 17 (security LOW) — the STRUCTURAL guard, not just the shape checks
+  // above. "Has a phone ⇒ verified" previously rested entirely on the convention that
+  // `usersRepository.setPhoneVerified` is the sole writer of `users.phone` — true today
+  // (verified by grep), but a convention, not a constraint, and this is the first SMS rule to
+  // depend on it. Checking `phoneVerifiedAt` here removes that dependency at zero cost.
+  if (!user.phoneVerifiedAt) {
+    log.warn({ recipientId: payload.recipientId }, 'Phone not verified for recipient');
+    await logNotification(payload, 'sms', 'skipped', 'Phone not verified');
+    trackServer(NOTIFICATION_SERVER_EVENTS.SMS_SKIPPED, {
+      template: payload.template,
+      skip_reason: 'Phone not verified',
+      distinct_id: payload.recipientId,
+    });
+    return;
+  }
+
   // 3. Rate-limit check (fail-open: Redis errors let the SMS through)
   try {
     const rateLimitResult = await checkRateLimit(getRedis(), SMS_RATE_LIMIT, payload.recipientId);

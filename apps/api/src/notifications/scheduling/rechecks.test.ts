@@ -44,19 +44,20 @@ afterEach(() => {
 describe('SCHEDULED_RECHECKS', () => {
   /**
    * BAL-420 shipped this registry EMPTY, naming BAL-424 (conversation unread) as a
-   * PROSPECTIVE consumer "if it takes the dependency at all". It took it, and BAL-134 added the
-   * next two.
+   * PROSPECTIVE consumer "if it takes the dependency at all". It took it, BAL-134 added the
+   * next two, and BAL-411 registered the reminder named at `:48` as "the one still outstanding".
    *
    * ⚠ AN EXACT-SET ASSERTION ON PURPOSE. An UNREGISTERED recheck name fails CLOSED (terminal
    * `failed` + `log.error`), so a promise armed against a missing guard is a DEAD alert — and
    * BAL-134's expert-absent alert is the one Balo has operationally committed to. Registering a
    * name without its consumer, or shipping a consumer without its name, must come past here.
    */
-  it('carries exactly three guards: BAL-424 conversation_unread + BAL-134 absence pair', () => {
+  it('carries exactly four guards: BAL-424 conversation_unread + BAL-134 absence pair + BAL-411 reschedule_proposal_unanswered', () => {
     expect(Object.keys(BUILT_IN_RECHECKS)).toEqual([
       'conversation_unread',
       'meeting_expert_absent',
       'meeting_client_absent',
+      'reschedule_proposal_unanswered',
     ]);
   });
 

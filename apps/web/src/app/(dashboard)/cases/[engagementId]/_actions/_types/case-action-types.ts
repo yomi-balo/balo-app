@@ -76,3 +76,84 @@ export type RescheduleConsultationResult =
       scheduledEnd: string;
     }
   | { success: false; code: RescheduleFailureCode; error: string };
+
+/**
+ * BAL-411 — the reschedule-PROPOSAL failure vocabulary. Extends `RescheduleFailureCode` (the
+ * shipped BAL-409 union) with the four literals the proposal API adds — never a raw
+ * `err.message`, same rule as its sibling.
+ */
+export type RescheduleProposalFailureCode =
+  | RescheduleFailureCode
+  | 'proposal_not_answerable'
+  | 'proposal_stale'
+  | 'proposal_already_pending'
+  | 'case_closed';
+
+// ── propose (EXPERT — engagement axis) ──────────────────────────────────────────────────
+
+export interface ProposeRescheduleInput {
+  engagementId: string;
+  meetingId: string;
+  /** 1..3 ISO instants, in display order — the ends are ALWAYS server-pinned. */
+  optionStartIsos: string[];
+}
+
+export interface ProposeRescheduleOptionResult {
+  optionId: string;
+  scheduledStart: string;
+  scheduledEnd: string;
+  position: number;
+}
+
+export type ProposeRescheduleResult =
+  | {
+      success: true;
+      proposalId: string;
+      meetingId: string;
+      expiresAtIso: string;
+      options: ProposeRescheduleOptionResult[];
+    }
+  | { success: false; code: RescheduleProposalFailureCode; error: string };
+
+// ── withdraw (EXPERT — engagement axis) ─────────────────────────────────────────────────
+
+export interface WithdrawRescheduleProposalInput {
+  engagementId: string;
+  meetingId: string;
+  proposalId: string;
+}
+
+export type WithdrawRescheduleProposalResult =
+  | { success: true; proposalId: string }
+  | { success: false; code: RescheduleProposalFailureCode; error: string };
+
+// ── accept (CLIENT — membership axis) ───────────────────────────────────────────────────
+
+export interface AcceptRescheduleProposalInput {
+  engagementId: string;
+  meetingId: string;
+  proposalId: string;
+  optionId: string;
+}
+
+export type AcceptRescheduleProposalResult =
+  | {
+      success: true;
+      proposalId: string;
+      /** The SERVER's committed values, never the client's submitted option. */
+      scheduledStart: string;
+      scheduledEnd: string;
+    }
+  | { success: false; code: RescheduleProposalFailureCode; error: string };
+
+// ── decline (CLIENT — membership axis) ──────────────────────────────────────────────────
+
+export interface DeclineRescheduleProposalInput {
+  engagementId: string;
+  meetingId: string;
+  proposalId: string;
+}
+
+export type DeclineRescheduleProposalResult =
+  | { success: true; proposalId: string }
+  | { success: false; code: RescheduleProposalFailureCode; error: string };

@@ -820,6 +820,126 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('booking-rescheduled-client (BAL-411 initiatedBy branch)', () => {
+    it('defaults to the client-initiated copy when initiatedBy is absent (deploy skew)', () => {
+      const result = getInAppTemplate('booking-rescheduled-client', {
+        expertPartyLabel: 'CloudPeak',
+        engagementId: 'engagement-123',
+      });
+      expect(result).toEqual({
+        title: 'Consultation moved',
+        body: 'Your consultation with CloudPeak was moved to a new time.',
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('initiatedBy=expert: "You confirmed a new time", not "was moved"', () => {
+      const result = getInAppTemplate('booking-rescheduled-client', {
+        expertPartyLabel: 'CloudPeak',
+        engagementId: 'engagement-123',
+        initiatedBy: 'expert',
+      });
+      expect(result.body).toBe('You confirmed a new time with CloudPeak.');
+    });
+
+    it('falls back to "Your expert" when expertPartyLabel is missing', () => {
+      const result = getInAppTemplate('booking-rescheduled-client', {});
+      expect(result.body).toBe('Your consultation with Your expert was moved to a new time.');
+    });
+  });
+
+  describe('booking-rescheduled-expert (BAL-411 initiatedBy branch)', () => {
+    it('defaults to the client-initiated copy when initiatedBy is absent (deploy skew)', () => {
+      const result = getInAppTemplate('booking-rescheduled-expert', {
+        clientCompanyName: 'Northwind Industrial',
+        engagementId: 'engagement-456',
+      });
+      expect(result).toEqual({
+        title: 'Booking moved',
+        body: 'Northwind Industrial moved a consultation with you to a new time.',
+        actionUrl: '/cases/engagement-456',
+      });
+    });
+
+    it('initiatedBy=expert: "accepted your new time", not "moved a consultation"', () => {
+      const result = getInAppTemplate('booking-rescheduled-expert', {
+        clientCompanyName: 'Northwind Industrial',
+        engagementId: 'engagement-456',
+        initiatedBy: 'expert',
+      });
+      expect(result.body).toBe('Northwind Industrial accepted your new time.');
+    });
+
+    it('falls back to "A client" when clientCompanyName is missing', () => {
+      const result = getInAppTemplate('booking-rescheduled-expert', {});
+      expect(result.body).toBe('A client moved a consultation with you to a new time.');
+    });
+  });
+
+  describe('reschedule-proposal-sent (BAL-411)', () => {
+    it('names the expert party and deep-links to the case', () => {
+      const result = getInAppTemplate('reschedule-proposal-sent', {
+        expertPartyLabel: 'CloudPeak',
+        engagementId: 'engagement-123',
+      });
+      expect(result).toEqual({
+        title: 'New time suggested',
+        body: 'CloudPeak suggested a few other times for your consultation.',
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('falls back to "Your expert" when expertPartyLabel is missing', () => {
+      const result = getInAppTemplate('reschedule-proposal-sent', {});
+      expect(result.body).toBe('Your expert suggested a few other times for your consultation.');
+    });
+
+    it('omits actionUrl when engagementId is missing', () => {
+      const result = getInAppTemplate('reschedule-proposal-sent', {});
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('reschedule-proposal-declined (BAL-411)', () => {
+    it('names the person who declined, with "@ company" on first mention', () => {
+      const result = getInAppTemplate('reschedule-proposal-declined', {
+        declinedByLabel: 'Priya Shah @ Northwind Industrial',
+        engagementId: 'engagement-123',
+      });
+      expect(result).toEqual({
+        title: 'Original time kept',
+        body: 'Priya Shah @ Northwind Industrial kept the original time.',
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('falls back to "The client" when declinedByLabel is missing', () => {
+      const result = getInAppTemplate('reschedule-proposal-declined', {});
+      expect(result.body).toBe('The client kept the original time.');
+    });
+  });
+
+  describe('reschedule-proposal-unanswered (BAL-411 / BAL-420)', () => {
+    it('names the expert party and states the deadline as a helpful fact, not a countdown', () => {
+      const result = getInAppTemplate('reschedule-proposal-unanswered', {
+        expertPartyLabel: 'CloudPeak',
+        engagementId: 'engagement-123',
+      });
+      expect(result).toEqual({
+        title: 'A time suggestion is waiting',
+        body: "CloudPeak's suggested times are still open — pick one, or keep your original booking.",
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('falls back to "Your expert" when expertPartyLabel is missing', () => {
+      const result = getInAppTemplate('reschedule-proposal-unanswered', {});
+      expect(result.body).toBe(
+        "Your expert's suggested times are still open — pick one, or keep your original booking."
+      );
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

@@ -1037,3 +1037,46 @@ export const meetingGuestAdmissionEnum = pgEnum('meeting_guest_admission', [
  * and makes drizzle recreate the type instead of emitting a plain ALTER TYPE … ADD VALUE.
  */
 export const meetingFileSourceEnum = pgEnum('meeting_file_source', ['chat', 'files_tab']);
+
+// ── BAL-411 — expert-initiated reschedule proposals (schema/reschedule-proposals.ts) ────
+
+/**
+ * BAL-411 (§D1/§D3) — the lifecycle of ONE expert-initiated reschedule proposal.
+ *
+ *   pending   → live and answerable by the client until `expires_at`.
+ *   accepted  → terminal: the client took one option and the meeting MOVED (the accept
+ *               path's own `rescheduleMeeting` call is what actually moves it).
+ *   declined  → terminal: the client kept the original time.
+ *   withdrawn → terminal: the EXPERT pulled the proposal back before it was answered.
+ *   expired   → terminal: the deadline passed unanswered.
+ *
+ * ⚠ `expired` IS PRODUCIBLE, NOT RESERVED, AND THAT IS THE WHOLE POINT. Expiry is
+ * evaluated LAZILY (§D1) — no sweep, no bespoke job — so a lapsed proposal keeps
+ * `status = 'pending'` in the row while reading as expired to
+ * `deriveRescheduleProposalState`. The stored status is therefore a MONOTONE LOWER BOUND
+ * on truth. That is safe everywhere except the "at most one pending proposal per meeting"
+ * partial unique, whose predicate cannot mention `now()` (not IMMUTABLE); the gap is closed
+ * at the WRITE path by `rescheduleProposalsRepository.expireStaleForMeeting`, which runs as
+ * the first statement inside the propose transaction and is the only writer of this label.
+ * A union member nothing can produce would be "coverage that does not exist"
+ * (`packages/shared/src/engagements/case-surface.ts`); this one has a real writer.
+ *
+ * ⚠ `pending` APPEARS IN AN INDEX PREDICATE (`reschedule_proposal_one_pending_idx`), a
+ * deliberate deviation from the `action-items.ts` / `transcripts.ts` house rule of
+ * predicating on `deleted_at` alone, and the same deviation `scheduled_notifications` makes
+ * for the same reason: without it the unique would permit ONE proposal per meeting EVER.
+ * SAFE IN MIGRATION 0073 because this is a brand-new STANDALONE `CREATE TYPE` — every label
+ * commits atomically with the type, so naming one in an index predicate in that same
+ * migration is legal. The residual is the usual one (memory
+ * `reference_enum_default_same_tx_migration_hazard`): a FUTURE label added by
+ * `ALTER TYPE … ADD VALUE` may NOT be *used* in an index predicate, default, CHECK or data
+ * statement in the same migration transaction — split it across two.
+ * ⚠ APPEND-ONLY: a new label goes at the END, never mid-array.
+ */
+export const rescheduleProposalStatusEnum = pgEnum('reschedule_proposal_status', [
+  'pending',
+  'accepted',
+  'declined',
+  'withdrawn',
+  'expired',
+]);

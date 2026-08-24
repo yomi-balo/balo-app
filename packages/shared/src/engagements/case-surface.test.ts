@@ -6,6 +6,7 @@ import {
   selectCaseNudge,
   type CaseConsultationStateLabel,
   type CaseNudgeInput,
+  type CaseNudgeRescheduleProposal,
   type MeetingOutcomeLabel,
   type MeetingStatusLabel,
 } from './case-surface';
@@ -23,7 +24,21 @@ function nudgeInput(overrides: Partial<CaseNudgeInput> = {}): CaseNudgeInput {
     isOpen: true,
     nextScheduled: null,
     resolutionRequestedAt: null,
+    rescheduleProposal: null,
     now: NOW,
+    ...overrides,
+  };
+}
+
+function liveProposal(
+  overrides: Partial<CaseNudgeRescheduleProposal> = {}
+): CaseNudgeRescheduleProposal {
+  return {
+    proposalId: 'proposal-1',
+    meetingId: 'm1',
+    optionCount: 2,
+    originalScheduledStart: at(4320),
+    expiresAt: at(60),
     ...overrides,
   };
 }
@@ -52,16 +67,49 @@ describe('selectCaseNudge', () => {
         expected: null,
       },
       {
+        name: 'closed WITH a live reschedule proposal',
+        input: { isOpen: false, rescheduleProposal: liveProposal() },
+        expected: null,
+      },
+      {
         name: 'closed, expert lens, everything set',
         input: {
           lens: 'expert',
           isOpen: false,
           nextScheduled: { meetingId: 'm1', scheduledStart: at(60) },
           resolutionRequestedAt: NOW,
+          rescheduleProposal: liveProposal(),
         },
         expected: null,
       },
-      // ── arm 2: anything booked wins ───────────────────────────────────────────────
+      // ── arm 2: a LIVE reschedule proposal wins over everything below it ────────────
+      {
+        name: 'live reschedule proposal, client lens',
+        input: { rescheduleProposal: liveProposal() },
+        expected: 'reschedule_proposal',
+      },
+      {
+        name: 'live reschedule proposal, expert lens',
+        input: { lens: 'expert', rescheduleProposal: liveProposal() },
+        expected: 'reschedule_proposal_pending',
+      },
+      {
+        name: 'live reschedule proposal SUPPRESSES upcoming',
+        input: {
+          rescheduleProposal: liveProposal(),
+          nextScheduled: { meetingId: 'm1', scheduledStart: at(4320) },
+        },
+        expected: 'reschedule_proposal',
+      },
+      {
+        name: 'EXPIRED reschedule proposal falls through to upcoming',
+        input: {
+          rescheduleProposal: liveProposal({ expiresAt: at(-5) }),
+          nextScheduled: { meetingId: 'm1', scheduledStart: at(4320) },
+        },
+        expected: 'upcoming',
+      },
+      // ── arm 3: anything booked wins over the resolution ask ────────────────────────
       {
         name: 'booked, client lens',
         input: { nextScheduled: { meetingId: 'm1', scheduledStart: at(60) } },
@@ -72,7 +120,7 @@ describe('selectCaseNudge', () => {
         input: { lens: 'expert', nextScheduled: { meetingId: 'm1', scheduledStart: at(60) } },
         expected: 'upcoming',
       },
-      // ── arm 3: the ask, split by lens ─────────────────────────────────────────────
+      // ── arm 4: the ask, split by lens ─────────────────────────────────────────────
       {
         name: 'ask pending, client lens',
         input: { resolutionRequestedAt: NOW },
@@ -83,7 +131,7 @@ describe('selectCaseNudge', () => {
         input: { lens: 'expert', resolutionRequestedAt: NOW },
         expected: 'resolution_ask_pending',
       },
-      // ── arm 4: the quiet default ──────────────────────────────────────────────────
+      // ── arm 5: the quiet default ──────────────────────────────────────────────────
       { name: 'nothing at all, client lens', input: {}, expected: 'nothing_booked' },
       {
         name: 'nothing at all, expert lens',
@@ -100,8 +148,8 @@ describe('selectCaseNudge', () => {
 
   /**
    * ⚠ THE SUPPRESSION RULE, PINNED. "Is this resolved?" must never be asked while a call is
-   * already booked — it contradicts a commitment both parties made. It falls out of arm 2
-   * sitting above arm 3, so this test is what stops someone "fixing" the ordering.
+   * already booked — it contradicts a commitment both parties made. It falls out of arm 3
+   * sitting above arm 4, so this test is what stops someone "fixing" the ordering.
    */
   it('SUPPRESSES the resolution ask while a consultation is booked — BOTH lenses', () => {
     const booked = { meetingId: 'm1', scheduledStart: at(4320) };
@@ -115,6 +163,27 @@ describe('selectCaseNudge', () => {
         nudgeInput({ lens: 'expert', nextScheduled: booked, resolutionRequestedAt: NOW })
       )
     ).toMatchObject({ kind: 'upcoming' });
+  });
+
+  it('carries the proposal fields straight through, both lenses', () => {
+    const proposal = liveProposal({ proposalId: 'p-9', optionCount: 3 });
+
+    expect(selectCaseNudge(nudgeInput({ rescheduleProposal: proposal }))).toEqual({
+      kind: 'reschedule_proposal',
+      proposalId: 'p-9',
+      meetingId: proposal.meetingId,
+      optionCount: 3,
+      originalScheduledStart: proposal.originalScheduledStart,
+      expiresAt: proposal.expiresAt,
+    });
+
+    expect(selectCaseNudge(nudgeInput({ lens: 'expert', rescheduleProposal: proposal }))).toEqual({
+      kind: 'reschedule_proposal_pending',
+      proposalId: 'p-9',
+      meetingId: proposal.meetingId,
+      optionCount: 3,
+      expiresAt: proposal.expiresAt,
+    });
   });
 
   describe('the live join window', () => {
@@ -147,8 +216,9 @@ describe('selectCaseNudge', () => {
 
 describe('deriveCaseConsultationState', () => {
   /**
-   * TOTAL over every representable `(status, outcome)` pair. `meeting_outcome_requires_ended`
-   * is one-directional, so `ended` + `null` IS legal and must have its own honest state.
+   * TOTAL over every representable `(status, outcome, hasLiveRescheduleProposal)` triple.
+   * `meeting_outcome_requires_ended` is one-directional, so `ended` + `null` IS legal and must
+   * have its own honest state.
    */
   const STATUSES: readonly MeetingStatusLabel[] = [
     'scheduled',
@@ -164,10 +234,14 @@ describe('deriveCaseConsultationState', () => {
     'missed_call',
   ];
 
-  it('is TOTAL — every (status, outcome) pair yields a label', () => {
+  it('is TOTAL — every (status, outcome, hasLiveRescheduleProposal) triple yields a label', () => {
     for (const status of STATUSES) {
       for (const outcome of OUTCOMES) {
-        expect(typeof deriveCaseConsultationState({ status, outcome })).toBe('string');
+        for (const hasLiveRescheduleProposal of [false, true]) {
+          expect(
+            typeof deriveCaseConsultationState({ status, outcome, hasLiveRescheduleProposal })
+          ).toBe('string');
+        }
       }
     }
   });
@@ -185,9 +259,52 @@ describe('deriveCaseConsultationState', () => {
     status: MeetingStatusLabel;
     outcome: MeetingOutcomeLabel | null;
     expected: CaseConsultationStateLabel;
-  }>)('$status + $outcome → $expected', ({ status, outcome, expected }) => {
-    expect(deriveCaseConsultationState({ status, outcome })).toBe(expected);
+  }>)('$status + $outcome → $expected (no live proposal)', ({ status, outcome, expected }) => {
+    expect(deriveCaseConsultationState({ status, outcome, hasLiveRescheduleProposal: false })).toBe(
+      expected
+    );
   });
+
+  /**
+   * ⚠ BAL-411 — a live proposal flips ONLY the two `scheduled`-branch statuses to
+   * `pending_reschedule`. Every other status/outcome combination is UNCHANGED by it — a
+   * `cancelled` or `ended` row cannot legitimately carry a live proposal, but this function is
+   * TOTAL and must still answer honestly if handed one (the guard sits inside the `scheduled`
+   * branch precisely so it cannot).
+   */
+  it.each(['scheduled', 'waiting_for_participants'] as const)(
+    'status=%s + a live reschedule proposal → pending_reschedule',
+    (status) => {
+      expect(
+        deriveCaseConsultationState({ status, outcome: null, hasLiveRescheduleProposal: true })
+      ).toBe('pending_reschedule');
+    }
+  );
+
+  it.each([
+    { status: 'in_progress', outcome: null },
+    { status: 'ended', outcome: 'completed' },
+    { status: 'ended', outcome: 'no_show_client' },
+    { status: 'ended', outcome: 'missed_call' },
+    { status: 'ended', outcome: null },
+    { status: 'cancelled', outcome: null },
+  ] as ReadonlyArray<{ status: MeetingStatusLabel; outcome: MeetingOutcomeLabel | null }>)(
+    'a live reschedule proposal on a non-scheduled row ($status/$outcome) is IGNORED, never pending_reschedule',
+    ({ status, outcome }) => {
+      const withoutProposal = deriveCaseConsultationState({
+        status,
+        outcome,
+        hasLiveRescheduleProposal: false,
+      });
+      const withProposal = deriveCaseConsultationState({
+        status,
+        outcome,
+        hasLiveRescheduleProposal: true,
+      });
+      expect(withProposal).toBe(withoutProposal);
+      expect(withProposal).not.toBe('pending_reschedule');
+    }
+  );
 
   /**
    * ⚠ THE TWO NO-SHOW OUTCOMES ARE DIFFERENT EVENTS AND MUST STAY DIFFERENT LABELS —
@@ -195,15 +312,29 @@ describe('deriveCaseConsultationState', () => {
    * Folding them would hide WHO failed to show, which is the row's load-bearing fact.
    */
   it('keeps no_show_client and missed_call DISTINCT', () => {
-    const noShow = deriveCaseConsultationState({ status: 'ended', outcome: 'no_show_client' });
-    const missed = deriveCaseConsultationState({ status: 'ended', outcome: 'missed_call' });
+    const noShow = deriveCaseConsultationState({
+      status: 'ended',
+      outcome: 'no_show_client',
+      hasLiveRescheduleProposal: false,
+    });
+    const missed = deriveCaseConsultationState({
+      status: 'ended',
+      outcome: 'missed_call',
+      hasLiveRescheduleProposal: false,
+    });
     expect(noShow).not.toBe(missed);
   });
 
   /** A cancelled meeting is cancelled whatever else the row happens to carry. */
   it('lets cancelled win over any outcome', () => {
     for (const outcome of OUTCOMES) {
-      expect(deriveCaseConsultationState({ status: 'cancelled', outcome })).toBe('cancelled');
+      expect(
+        deriveCaseConsultationState({
+          status: 'cancelled',
+          outcome,
+          hasLiveRescheduleProposal: false,
+        })
+      ).toBe('cancelled');
     }
   });
 });
@@ -211,6 +342,7 @@ describe('deriveCaseConsultationState', () => {
 describe('caseConsultationIsUpcoming', () => {
   it.each([
     { state: 'scheduled', upcoming: true },
+    { state: 'pending_reschedule', upcoming: true },
     { state: 'in_progress', upcoming: true },
     { state: 'held', upcoming: false },
     { state: 'no_show_client', upcoming: false },

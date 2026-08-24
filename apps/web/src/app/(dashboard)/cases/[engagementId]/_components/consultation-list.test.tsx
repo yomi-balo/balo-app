@@ -73,6 +73,11 @@ const ALL_NOTES: readonly string[] = [
   `${COUNTERPARTY} wasn't able to join`,
   "The call didn't start",
   'Outcome not recorded',
+  // Item 13 — `pending_reschedule` (BAL-411), the 8th state; §D4 flagged it as NOT
+  // compile-forced (`stateNote`'s `default: return null`), so nothing but a test catches a
+  // future regression here.
+  `${COUNTERPARTY} suggested some new times — see above`,
+  'Waiting on a reply to your suggested times',
 ];
 
 function renderedNotes(): string[] {
@@ -160,6 +165,17 @@ const STATE_CASES: readonly StateCase[] = [
   },
   { state: 'cancelled', muted: true, notes: bothLenses('Cancelled — nothing charged') },
   { state: 'outcome_pending', muted: true, notes: bothLenses('Outcome not recorded') },
+  // Item 13 (BAL-411) — same icon/weight as `scheduled`; `stateNote` carries the one
+  // distinguishing fact, and it is LENS-AWARE (the proposal card above the list is where
+  // either side actually acts — this note only says WHY the badge differs from `scheduled`).
+  {
+    state: 'pending_reschedule',
+    muted: false,
+    notes: {
+      client: `${COUNTERPARTY} suggested some new times — see above`,
+      expert: 'Waiting on a reply to your suggested times',
+    },
+  },
 ];
 
 const SWEEP = STATE_CASES.flatMap((stateCase) =>
@@ -167,12 +183,12 @@ const SWEEP = STATE_CASES.flatMap((stateCase) =>
 );
 
 describe('ConsultationList — every state renders, on every lens', () => {
-  it('sweeps all seven states across both lenses', () => {
-    // A guard on the table itself: 7 states × 2 lenses. If a state is added to
+  it('sweeps all eight states across both lenses', () => {
+    // A guard on the table itself: 8 states × 2 lenses. If a state is added to
     // `CaseConsultationStateLabel` without landing here, `STATE_PRESENTATION` would throw at
     // render time in production — this keeps the sweep honest about its own breadth.
-    expect(SWEEP).toHaveLength(14);
-    expect(new Set(STATE_CASES.map((c) => c.state)).size).toBe(7);
+    expect(SWEEP).toHaveLength(16);
+    expect(new Set(STATE_CASES.map((c) => c.state)).size).toBe(8);
   });
 
   it.each(SWEEP)(

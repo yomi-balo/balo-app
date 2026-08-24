@@ -1,8 +1,12 @@
 import 'server-only';
 
-import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
-import { getSession } from '@/lib/auth/session';
+import {
+  postBaloApiJson,
+  readInstant,
+  readString,
+  type BaloApiResult,
+} from '@/lib/api/balo-api-client';
 
 /**
  * BAL-400 — the SERVER-ONLY web→api client for the booking flow's two `apps/api` hops:
@@ -36,119 +40,19 @@ import { getSession } from '@/lib/auth/session';
  * out of this interface.
  */
 
-/**
- * ⚠ 3002, NOT 3001. CLAUDE.md's port table is stale; the API dev server listens on 3002. The
- * same helper shape as `lib/credit/api-client.ts`, `lib/meetings/join-api-client.ts` and
- * `lib/meetings/guests-api-client.ts`, so none of the four can disagree.
- */
-function getApiUrl(): string {
-  const url = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL;
-  if (url === undefined || url.length === 0) {
-    log.warn('API_URL not configured — falling back to localhost:3002');
-    return 'http://localhost:3002';
-  }
-  return url;
-}
-
-export type BookingApiResult<T> =
-  | { readonly ok: true; readonly data: T }
-  | {
-      readonly ok: false;
-      /** ⚠ `0` MEANS **TRANSPORT**, not "server said no". See the module docblock. */
-      readonly status: number;
-      /** The api's FIXED literal, or `request_failed`. Never a message, never vendor prose. */
-      readonly code: string;
-      /** Seconds, from a `429`'s `Retry-After`. ⚠ Absent unless the server sent a usable one. */
-      readonly retryAfterSeconds?: number;
-    };
-
-/** Parse a body as JSON, tolerating an empty one. Never throws. */
-function safeParse(text: string): Record<string, unknown> {
-  if (text.length === 0) return {};
-  try {
-    return JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-function readString(body: Record<string, unknown>, key: string): string | undefined {
-  const value = body[key];
-  return typeof value === 'string' ? value : undefined;
-}
-
-/** An ISO instant the caller can safely do date arithmetic on, or `undefined`. */
-function readInstant(body: Record<string, unknown>, key: string): string | undefined {
-  const value = readString(body, key);
-  if (value === undefined || !Number.isFinite(Date.parse(value))) return undefined;
-  return value;
-}
-
-/** A `Retry-After` in seconds, or `undefined`. ⚠ Never negative, never `NaN`, never absurd. */
-function readRetryAfter(response: Response): number | undefined {
-  const raw = response.headers.get('Retry-After');
-  if (raw === null) return undefined;
-  const seconds = Number.parseInt(raw, 10);
-  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
-  return Math.min(seconds, 300);
-}
+/** Re-exported under this module's own name — see `lib/api/balo-api-client.ts` (fix round 1
+ *  item 9) for the shared shape. Nothing here narrows it further. */
+export type BookingApiResult<T> = BaloApiResult<T>;
 
 /**
- * One call to a booking route, with the viewer's Bearer resolved server-side.
- *
- * ⚠ FAILS CLOSED on a missing user or a missing access token. The api re-verifies the token
- * regardless, so this is a first, cheap gate rather than the boundary.
+ * One call to a booking route, with the viewer's Bearer resolved server-side. Thin wrapper over
+ * the shared `postBaloApiJson` — this module keeps only its own response shapes and route
+ * paths; the identity `parse` matches this file's own posture of narrowing AFTER the call
+ * (`postBookMeeting`/`postInviteGuests` do their own field-by-field validation below), not
+ * inside a `parse` callback the way `reschedule-proposal-api-client.ts` does.
  */
-async function callBookingApi<T>(
-  path: string,
-  method: 'POST',
-  body: unknown
-): Promise<BookingApiResult<T>> {
-  const session = await getSession();
-  const accessToken = session.accessToken;
-  if (session.user?.id === undefined || accessToken === undefined || accessToken.length === 0) {
-    return { ok: false, status: 401, code: 'unauthenticated' };
-  }
-
-  try {
-    const response = await loggedFetch(`${getApiUrl()}${path}`, {
-      service: 'balo-api',
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const parsed = safeParse(await response.text());
-
-    if (!response.ok) {
-      // ⚠ ONLY READ ON A `429`. Any other status's `Retry-After` is not advice about OUR
-      // window.
-      const retryAfterSeconds = response.status === 429 ? readRetryAfter(response) : undefined;
-      return {
-        ok: false,
-        status: response.status,
-        code: readString(parsed, 'error') ?? 'request_failed',
-        // ⚠ THE KEY IS **OMITTED**, NOT SET TO `undefined` — a present-but-undefined optional
-        // survives an `in` check and violates the declared type under
-        // `exactOptionalPropertyTypes`.
-        ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
-      };
-    }
-    return { ok: true, data: parsed as T };
-  } catch (error) {
-    // ⚠ NO TOKEN, NO GUEST EMAIL, NO DESCRIPTION HTML IN THIS LOG — the path already
-    // identifies the operation.
-    log.error('Booking api call failed', {
-      path,
-      method,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-    return { ok: false, status: 0, code: 'request_failed' };
-  }
+async function callBookingApi<T>(path: string, body: unknown): Promise<BookingApiResult<T>> {
+  return postBaloApiJson<T>(path, body, (parsed) => parsed as T, 'Booking');
 }
 
 /** `POST /meetings`'s `201` body, NARROWED — see the module docblock for what is dropped. */
@@ -185,7 +89,7 @@ export interface BookMeetingInput {
 export async function postBookMeeting(
   input: BookMeetingInput
 ): Promise<BookingApiResult<BookMeetingResponse>> {
-  const result = await callBookingApi<Record<string, unknown>>('/meetings', 'POST', input);
+  const result = await callBookingApi<Record<string, unknown>>('/meetings', input);
   if (!result.ok) {
     return result;
   }
@@ -235,11 +139,10 @@ export async function postInviteGuests(
   meetingId: string,
   guests: readonly InviteGuestInput[]
 ): Promise<BookingApiResult<InviteGuestsResponse>> {
-  const result = await callBookingApi<Record<string, unknown>>(
-    `/meetings/${meetingId}/guests`,
-    'POST',
-    { entryPoint: 'booking_confirm', guests }
-  );
+  const result = await callBookingApi<Record<string, unknown>>(`/meetings/${meetingId}/guests`, {
+    entryPoint: 'booking_confirm',
+    guests,
+  });
   if (!result.ok) {
     return result;
   }

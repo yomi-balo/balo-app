@@ -1,5 +1,5 @@
 /**
- * BAL-400 — case-booking flow analytics. ALL EIGHT are CLIENT events (`track`); there is no
+ * BAL-400 — case-booking flow analytics. ALL are CLIENT events (`track`); there is no
  * `BOOKING_SERVER_EVENTS` (D4c: no rate anywhere, and the money path is out of scope — D1).
  *
  * ⚠ REGISTRATION IS SIX FILES FOR A CLIENT FAMILY, NOT CLAUDE.md's THREE (memory
@@ -29,7 +29,21 @@ export const BOOKING_EVENTS = {
   ABANDONED: 'booking_abandoned',
   /** BAL-409 — fired from `reschedule-dialog.tsx` after the Server Action returns `ok`. */
   RESCHEDULED: 'booking_rescheduled',
+  /** BAL-411 — the expert published a proposal. Fired from the propose dialog on `ok`. */
+  RESCHEDULE_PROPOSED: 'reschedule_proposed',
+  /**
+   * BAL-411 — the proposal reached a terminal state by SOMEONE'S ACTION (accept / decline /
+   * withdraw). ⚠ NO `'expired'` outcome — see `deriveRescheduleProposalState`'s docblock:
+   * expiry is derived in PostHog as `reschedule_proposed` minus a matching answer, never fired
+   * as its own event.
+   */
+  RESCHEDULE_PROPOSAL_ANSWERED: 'reschedule_proposal_answered',
+  /** BAL-411 — the accepted option was gone at re-validation (409 `window_not_available`). */
+  RESCHEDULE_PROPOSAL_SLOT_LOST: 'reschedule_proposal_slot_lost',
 } as const;
+
+/** BAL-411 — who answered a reschedule proposal. Deliberately excludes `'expired'` (lazy, never fired). */
+export type RescheduleProposalOutcome = 'accepted' | 'declined' | 'withdrawn';
 
 /** Where the booking wrapper was opened from (D4a's four entry points, minus "book again" being its own source). */
 export type BookingSource = 'profile' | 'search' | 'case_quick_pick' | 'book_again';
@@ -81,8 +95,24 @@ export interface BookingEventMap {
     step: BookingAbandonStep;
   };
   [BOOKING_EVENTS.RESCHEDULED]: {
-    /** `'client'` today; BAL-411 adds `'expert'`. */
-    initiated_by: 'client';
+    /** `'client'` (BAL-409, client-initiated) or `'expert'` (BAL-411, accept of a proposal). */
+    initiated_by: 'client' | 'expert';
     hours_before_start: number;
+  };
+  [BOOKING_EVENTS.RESCHEDULE_PROPOSED]: {
+    proposal_id: string;
+    /** 1–3 — `RESCHEDULE_PROPOSAL_MAX_OPTIONS` in `@balo/shared/meetings`. */
+    option_count: number;
+    hours_before_start: number;
+  };
+  [BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED]: {
+    proposal_id: string;
+    outcome: RescheduleProposalOutcome;
+    hours_to_respond: number;
+    option_count: number;
+  };
+  [BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST]: {
+    proposal_id: string;
+    option_count: number;
   };
 }

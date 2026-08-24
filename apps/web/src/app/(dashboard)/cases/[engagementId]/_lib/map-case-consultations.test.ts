@@ -28,6 +28,7 @@ const EMPTY_COUNTS: CaseConsultationCounts = {
   actionItemCountByMeetingId: new Map(),
   fileCountByMeetingId: new Map(),
   meetingIdsWithTranscript: new Set(),
+  meetingIdsWithLiveProposal: new Set(),
 };
 
 /**
@@ -236,10 +237,26 @@ describe('mapCaseConsultations — duration, counts and ordering', () => {
       actionItemCountByMeetingId: new Map([['m1', 3]]),
       fileCountByMeetingId: new Map([['m1', 2]]),
       meetingIdsWithTranscript: new Set(['m1']),
+      meetingIdsWithLiveProposal: new Set(),
     });
     const [first, second] = rows;
     expect(first).toMatchObject({ actionItemCount: 3, fileCount: 2, hasTranscript: true });
     expect(second).toMatchObject({ actionItemCount: 0, fileCount: 0, hasTranscript: false });
+  });
+
+  /**
+   * BAL-411 — `pending_reschedule` is nested INSIDE the `scheduled` branch of
+   * `deriveCaseConsultationState`, so a meeting carrying a LIVE proposal renders that state
+   * instead of plain `scheduled`. This is the projection boundary's own wiring test; the
+   * derivation's full priority table lives in `@balo/shared/engagements`'s own suite.
+   */
+  it('BAL-411 — a meeting in meetingIdsWithLiveProposal renders pending_reschedule, not scheduled', () => {
+    const [withProposal, withoutProposal] = mapCaseConsultations(
+      [meeting({ id: 'm1' }), meeting({ id: 'm2' })],
+      { ...EMPTY_COUNTS, meetingIdsWithLiveProposal: new Set(['m1']) }
+    );
+    expect(withProposal?.state).toBe('pending_reschedule');
+    expect(withoutProposal?.state).toBe('scheduled');
   });
 
   it('hard-falses hasRecording — no capture exists anywhere on the platform', () => {

@@ -1373,11 +1373,23 @@ describe('publishBodySchema', () => {
       ).toBe(true);
     });
 
-    it('rejects an initiatedBy other than "client"', () => {
+    // BAL-411 — `initiatedBy` widened from `z.literal('client')` to `z.enum(['client', 'expert'])`:
+    // 'expert' records that the client ACCEPTED a reschedule PROPOSAL, not that they initiated
+    // the move themselves.
+    it('accepts initiatedBy: "expert" (BAL-411 — accepting a reschedule proposal)', () => {
       expect(
         publishBodySchema.safeParse({
           event: 'booking.rescheduled',
           payload: { ...valid, initiatedBy: 'expert' },
+        }).success
+      ).toBe(true);
+    });
+
+    it('rejects an initiatedBy outside the two-member enum', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.rescheduled',
+          payload: { ...valid, initiatedBy: 'admin' },
         }).success
       ).toBe(false);
     });

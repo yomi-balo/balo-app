@@ -160,6 +160,8 @@ const EXPERT_VIEW: CaseSurfaceView = {
   lens: 'expert',
   earnings: { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 },
   canRequestResolution: false,
+  canProposeReschedule: false,
+  canManageReschedule: false,
 };
 
 /** A CLOSED client view, with the close reason under test. */
