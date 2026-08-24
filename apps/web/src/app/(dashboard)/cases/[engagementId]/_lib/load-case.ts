@@ -155,6 +155,51 @@ interface RescheduleProposalDetailForNudge {
 }
 
 /**
+ * BAL-411 — resolves the live reschedule proposal (if any) on the case's `nextScheduled`
+ * meeting, PLUS its detail (options + when it was made). Extracted out of `loadCase` to keep
+ * that function's own cognitive complexity under the SonarJS ceiling — see the comment at the
+ * call site for the "why a proposal-with-null-detail collapses to no proposal at all" rule this
+ * preserves unchanged.
+ */
+async function resolveRescheduleProposalForNudge(
+  nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null,
+  liveProposals: readonly CaseNudgeRescheduleProposal[],
+  now: Date
+): Promise<{
+  proposal: CaseNudgeRescheduleProposal | null;
+  detail: RescheduleProposalDetailForNudge | null;
+}> {
+  if (nextScheduled === null) {
+    return { proposal: null, detail: null };
+  }
+  const proposal =
+    liveProposals.find(
+      (candidate) =>
+        candidate.meetingId === nextScheduled.meetingId && rescheduleProposalIsLive(candidate, now)
+    ) ?? null;
+  if (proposal === null) {
+    return { proposal: null, detail: null };
+  }
+  const found = await rescheduleProposalsRepository.findPendingForAnswer({
+    proposalId: proposal.proposalId,
+    meetingId: proposal.meetingId,
+  });
+  if (found === undefined) {
+    return { proposal, detail: null };
+  }
+  return {
+    proposal,
+    detail: {
+      createdAt: found.proposal.createdAt,
+      options: found.options.map((option) => ({
+        id: option.id,
+        scheduledStart: option.scheduledStart,
+      })),
+    },
+  };
+}
+
+/**
  * `CaseNudge` (Dates, from the pure core) → `CaseNudgeView` (ISO strings, serialisable).
  *
  * BAL-409 — `nextScheduled` is passed through SEPARATELY (rather than widening `CaseNudge`
@@ -531,38 +576,13 @@ export const loadCase = cache(
     // meeting is always `caseConsultationIsUpcoming`, so if `nextScheduled` exists and carries a
     // proposal, this finds it; a proposal on some OTHER, later meeting is represented on that
     // meeting's own consultation row (`pending_reschedule`) but does not compete for the header.
-    const rescheduleProposalForNudge: CaseNudgeRescheduleProposal | null =
-      nextScheduled === null
-        ? null
-        : (liveProposals.find(
-            (proposal) =>
-              proposal.meetingId === nextScheduled.meetingId &&
-              rescheduleProposalIsLive(proposal, now)
-          ) ?? null);
-    // BAL-411 — the actual DETAIL (options + when it was made), fetched only when a live
-    // proposal is actually rendering in the nudge. `findLivePendingByMeetingIds` (above) is a
-    // PROJECTION with no options, by design (`rescheduleProposalsRepository`'s own docblock);
+    // The actual DETAIL (options + when it was made) is fetched only when a live proposal is
+    // actually rendering in the nudge. `findLivePendingByMeetingIds` (above) is a PROJECTION
+    // with no options, by design (`rescheduleProposalsRepository`'s own docblock);
     // `RescheduleProposalCard` needs real `optionId`s to accept one, so this is the one extra
     // read that gets them, and it is never speculative — most cases have no live proposal.
-    const proposalDetailForNudge =
-      rescheduleProposalForNudge === null
-        ? null
-        : await rescheduleProposalsRepository
-            .findPendingForAnswer({
-              proposalId: rescheduleProposalForNudge.proposalId,
-              meetingId: rescheduleProposalForNudge.meetingId,
-            })
-            .then((found) =>
-              found === undefined
-                ? null
-                : {
-                    createdAt: found.proposal.createdAt,
-                    options: found.options.map((option) => ({
-                      id: option.id,
-                      scheduledStart: option.scheduledStart,
-                    })),
-                  }
-            );
+    const { proposal: rescheduleProposalForNudge, detail: proposalDetailForNudge } =
+      await resolveRescheduleProposalForNudge(nextScheduled, liveProposals, now);
 
     // Item 12 — a proposal that resolved (answered/withdrawn/soft-deleted) in the gap between
     // the PROJECTION read above and this DETAIL read is treated as GONE, never rendered

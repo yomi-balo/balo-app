@@ -99,6 +99,42 @@ interface AvailabilityStateMessageProps {
 }
 
 /**
+ * Fix round — the `not_published && viewerType === 'expert'` arm, extracted out of
+ * `AvailabilityStateMessage` to keep THAT function's own cognitive complexity under the
+ * ceiling once this arm (Fix round 1 item 15) landed alongside the other four states. See the
+ * inline comment this carried at its original call site for why the concealment rule keys off
+ * `viewerType`, not `mode`.
+ */
+function NotPublishedForExpertMessage({
+  mode,
+  emptyAction,
+}: Readonly<{
+  mode: 'preview' | 'selectable';
+  emptyAction?: ReactNode;
+}>): React.JSX.Element {
+  return (
+    <AvailabilityMessage
+      icon={<CalendarX className="h-5 w-5" aria-hidden="true" />}
+      title="Not published yet"
+      body={
+        mode === 'preview'
+          ? "Your profile isn't published yet — once it's live, clients will see these times here."
+          : "Your profile isn't published yet — publish your availability so clients (and this picker) can see your times."
+      }
+      action={
+        mode === 'preview' ? (
+          emptyAction
+        ) : (
+          <Button asChild variant="outline" size="sm" className="mt-4">
+            <Link href={EXPERT_CALENDAR_SETTINGS_PATH}>Availability settings</Link>
+          </Button>
+        )
+      }
+    />
+  );
+}
+
+/**
  * Every non-content state, in one place. Extracted from the parent so the calendar component
  * stays under SonarCloud's cognitive-complexity ceiling — five early returns for five states was
  * the bulk of its branching, and none of it touches selection state.
@@ -128,26 +164,7 @@ function AvailabilityStateMessage({
    * about the second question, not the first.
    */
   if (view.kind === 'not_published' && viewerType === 'expert') {
-    return (
-      <AvailabilityMessage
-        icon={<CalendarX className="h-5 w-5" aria-hidden="true" />}
-        title="Not published yet"
-        body={
-          mode === 'preview'
-            ? "Your profile isn't published yet — once it's live, clients will see these times here."
-            : "Your profile isn't published yet — publish your availability so clients (and this picker) can see your times."
-        }
-        action={
-          mode === 'preview' ? (
-            emptyAction
-          ) : (
-            <Button asChild variant="outline" size="sm" className="mt-4">
-              <Link href={EXPERT_CALENDAR_SETTINGS_PATH}>Availability settings</Link>
-            </Button>
-          )
-        }
-      />
-    );
+    return <NotPublishedForExpertMessage mode={mode} emptyAction={emptyAction} />;
   }
 
   if (view.kind === 'error' || view.kind === 'not_published') {

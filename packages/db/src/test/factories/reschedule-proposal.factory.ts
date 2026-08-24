@@ -75,12 +75,11 @@ export async function rescheduleProposalFactory(
     overrides.originalScheduledStart ?? seededMeetingStart ?? new Date(Date.now() + HOUR_MS);
 
   const status = overrides.values?.status ?? 'pending';
+  // Default only applies when the override is UNDEFINED (not provided) — an explicit `null`
+  // override must survive as-is, so this can't collapse to `??` (which treats both the same).
+  const defaultResolvedAt = status === 'pending' ? null : new Date();
   const resolvedAt =
-    overrides.values?.resolvedAt !== undefined
-      ? overrides.values.resolvedAt
-      : status === 'pending'
-        ? null
-        : new Date();
+    overrides.values?.resolvedAt === undefined ? defaultResolvedAt : overrides.values.resolvedAt;
 
   const [proposal] = await db
     .insert(rescheduleProposals)

@@ -182,6 +182,8 @@ export function ProposeTimesDialog({
     }
   }, [atMax]);
 
+  const sendButtonLabel = picked.length > 0 ? `Send proposal (${picked.length})` : 'Send proposal';
+
   const body = (
     <div className="flex min-h-[420px] flex-col p-6">
       <h2
@@ -252,9 +254,7 @@ export function ProposeTimesDialog({
           onClick={handleSend}
           disabled={submitting || picked.length === 0}
         >
-          {submitting
-            ? 'Sending…'
-            : `Send proposal${picked.length > 0 ? ` (${picked.length})` : ''}`}
+          {submitting ? 'Sending…' : sendButtonLabel}
         </Button>
       </div>
     </div>

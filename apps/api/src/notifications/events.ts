@@ -573,8 +573,8 @@ export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnly
  * entry resolves a `recipient: 'admin'` delivery is API-only BY CONSTRUCTION. That is
  * asserted by `web-schedulable-policy.test.ts`, not left to review.
  *
- * EMPTY until a web-side consumer ships. BAL-411 is the only candidate, and it may well end
- * up API-side too.
+ * EMPTY until a web-side consumer ships. BAL-411 was the only candidate and it landed API-side
+ * (§D2), so this stays empty.
  */
 export type WebSchedulableNotificationEvent = never;
 

@@ -43,13 +43,6 @@ export type RescheduleProposalStatusLabel =
   | 'withdrawn'
   | 'expired';
 
-/**
- * The DERIVED state a proposal reads as, given the caller's own `now`. Identical vocabulary to
- * {@link RescheduleProposalStatusLabel} — `'expired'` is producible by derivation even when the
- * stored row still says `'pending'` (§D1).
- */
-export type RescheduleProposalStateLabel = RescheduleProposalStatusLabel;
-
 export interface RescheduleProposalStateInput {
   readonly status: RescheduleProposalStatusLabel;
   readonly expiresAt: Date;
@@ -62,10 +55,17 @@ export interface RescheduleProposalStateInput {
  * A non-`'pending'` status is a TERMINAL fact — it is returned as-is regardless of `expiresAt`,
  * because a proposal that was already accepted/declined/withdrawn cannot ALSO be "expired": the
  * CAS in the repository refuses to let a resolved proposal's `expires_at` matter again.
+ *
+ * The return type is {@link RescheduleProposalStatusLabel} — the same vocabulary as the STORED
+ * `status` column, reused rather than aliased: this function's whole job is to widen that
+ * stored, monotone-lower-bound value into the DERIVED state the caller should treat as truth.
+ * `'expired'` is producible here even when the stored row still says `'pending'` (§D1) — the
+ * derived and stored values share a type only because they share a vocabulary, not because
+ * they're interchangeable in meaning.
  */
 export function deriveRescheduleProposalState(
   input: RescheduleProposalStateInput
-): RescheduleProposalStateLabel {
+): RescheduleProposalStatusLabel {
   const { status, expiresAt, now } = input;
   if (status !== 'pending') {
     return status;

@@ -211,6 +211,68 @@ export interface AcceptRescheduleServiceResult {
  *   error RE-THROWN so the route maps it. NEVER the reverse ordering: a committed move with a
  *   still-`pending` proposal would invite a second accept.
  */
+/**
+ * The `acceptRescheduleProposal` catch-block's own body, extracted so the parent function's
+ * cognitive complexity stays under the SonarJS ceiling. Always re-throws `error` (the ORIGINAL
+ * one, never the revert's) — see the comment where this is called.
+ */
+async function revertAcceptAfterMeetingMoveFailure(
+  input: AcceptRescheduleServiceInput,
+  answered: NonNullable<Awaited<ReturnType<typeof rescheduleProposalsRepository.accept>>>,
+  error: unknown,
+  log: FastifyBaseLogger
+): Promise<never> {
+  // Fix round 1 item 6 — the revert gets its OWN try/catch. A rejecting `revertAccept` must
+  // never replace the ORIGINAL error: the route's `instanceof MeetingNotReschedulableError`
+  // branch has to see the real thing to answer 409 `meeting_not_reschedulable` instead of a
+  // bare 500, and both failures need their own `log.error` (CLAUDE.md: log at every caught
+  // boundary) rather than one line describing only whichever error happened to run last.
+  let reverted: Awaited<ReturnType<typeof rescheduleProposalsRepository.revertAccept>>;
+  try {
+    reverted = await rescheduleProposalsRepository.revertAccept({
+      proposalId: input.proposalId,
+      // The anchor from BEFORE this accept's move, so the CAS is a no-op if
+      // `rescheduleMeeting` actually committed (see the repository docblock).
+      expectedOriginalScheduledStart: answered.proposal.originalScheduledStart,
+    });
+  } catch (revertError) {
+    log.error(
+      {
+        proposalId: input.proposalId,
+        meetingId: input.meetingId,
+        error: revertError instanceof Error ? revertError.message : String(revertError),
+        stack: revertError instanceof Error ? revertError.stack : undefined,
+      },
+      'Reschedule proposal revertAccept itself failed — proposal state is now inconsistent'
+    );
+    log.error(
+      {
+        proposalId: input.proposalId,
+        meetingId: input.meetingId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Reschedule proposal accepted but the meeting move failed — revert ALSO failed'
+    );
+    // Re-throw the ORIGINAL error, never the revert's — see the comment above the try.
+    throw error;
+  }
+  log.error(
+    {
+      proposalId: input.proposalId,
+      meetingId: input.meetingId,
+      reverted: reverted !== undefined,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    },
+    'Reschedule proposal accepted but the meeting move failed — reverted to pending'
+  );
+  // Re-thrown so the ROUTE's own error mapping (the `MeetingNotReschedulableError` → 409
+  // `meeting_not_reschedulable` boundary, NO message echo) stays the single place that
+  // decision is made — matching `reschedule.ts`'s own posture.
+  throw error;
+}
+
 export async function acceptRescheduleProposal(
   input: AcceptRescheduleServiceInput,
   log: FastifyBaseLogger
@@ -260,54 +322,6 @@ export async function acceptRescheduleProposal(
       rescheduleAuditId: result.rescheduleAuditId,
     };
   } catch (error) {
-    // Fix round 1 item 6 — the revert gets its OWN try/catch. A rejecting `revertAccept` must
-    // never replace the ORIGINAL error: the route's `instanceof MeetingNotReschedulableError`
-    // branch has to see the real thing to answer 409 `meeting_not_reschedulable` instead of a
-    // bare 500, and both failures need their own `log.error` (CLAUDE.md: log at every caught
-    // boundary) rather than one line describing only whichever error happened to run last.
-    let reverted: Awaited<ReturnType<typeof rescheduleProposalsRepository.revertAccept>>;
-    try {
-      reverted = await rescheduleProposalsRepository.revertAccept({
-        proposalId: input.proposalId,
-        // The anchor from BEFORE this accept's move, so the CAS is a no-op if
-        // `rescheduleMeeting` actually committed (see the repository docblock).
-        expectedOriginalScheduledStart: answered.proposal.originalScheduledStart,
-      });
-    } catch (revertError) {
-      log.error(
-        {
-          proposalId: input.proposalId,
-          meetingId: input.meetingId,
-          error: revertError instanceof Error ? revertError.message : String(revertError),
-          stack: revertError instanceof Error ? revertError.stack : undefined,
-        },
-        'Reschedule proposal revertAccept itself failed — proposal state is now inconsistent'
-      );
-      log.error(
-        {
-          proposalId: input.proposalId,
-          meetingId: input.meetingId,
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        },
-        'Reschedule proposal accepted but the meeting move failed — revert ALSO failed'
-      );
-      // Re-throw the ORIGINAL error, never the revert's — see the comment above the try.
-      throw error;
-    }
-    log.error(
-      {
-        proposalId: input.proposalId,
-        meetingId: input.meetingId,
-        reverted: reverted !== undefined,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      },
-      'Reschedule proposal accepted but the meeting move failed — reverted to pending'
-    );
-    // Re-thrown so the ROUTE's own error mapping (the `MeetingNotReschedulableError` → 409
-    // `meeting_not_reschedulable` boundary, NO message echo) stays the single place that
-    // decision is made — matching `reschedule.ts`'s own posture.
-    throw error;
+    await revertAcceptAfterMeetingMoveFailure(input, answered, error, log);
   }
 }

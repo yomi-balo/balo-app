@@ -54,11 +54,14 @@ function expectClientRulesGatedOnRecipientId(
 }
 
 describe('notificationRules', () => {
-  it('has rules for user.welcome event', () => {
-    const rules = notificationRules['user.welcome'];
-    expect(rules).toBeDefined();
-    expect(rules).toHaveLength(1);
-  });
+  it.each(['user.welcome', 'expert.application_submitted', 'project.request_submitted'] as const)(
+    'has rules for %s event',
+    (event) => {
+      const rules = notificationRules[event];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(1);
+    }
+  );
 
   it('user.welcome rule has correct config', () => {
     const [rule] = notificationRules['user.welcome']!;
@@ -69,12 +72,6 @@ describe('notificationRules', () => {
     expect(rule.priority).toBe('critical');
   });
 
-  it('has rules for expert.application_submitted event', () => {
-    const rules = notificationRules['expert.application_submitted'];
-    expect(rules).toBeDefined();
-    expect(rules).toHaveLength(1);
-  });
-
   it('expert.application_submitted rule has correct config', () => {
     const [rule] = notificationRules['expert.application_submitted']!;
     expect(rule.channel).toBe('email');
@@ -82,12 +79,6 @@ describe('notificationRules', () => {
     expect(rule.template).toBe('application-submitted');
     expect(rule.timing).toBe('immediate');
     expect(rule.priority).toBe('critical');
-  });
-
-  it('has rules for project.request_submitted event', () => {
-    const rules = notificationRules['project.request_submitted'];
-    expect(rules).toBeDefined();
-    expect(rules).toHaveLength(1);
   });
 
   it('project.request_submitted rule has correct config', () => {

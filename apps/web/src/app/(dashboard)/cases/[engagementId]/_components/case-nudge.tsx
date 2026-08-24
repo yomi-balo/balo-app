@@ -73,33 +73,14 @@ export function CaseNudge({
     return null;
   }
   if (nudge.kind === 'upcoming') {
-    // `!nudge.live` on BOTH sides — inside the join window the honest action is to join, not
-    // to move, and the nudge is already the "starting soon" moment. This is STRICTER than the
-    // server (which allows until `start > now`); client-stricter-than-server is the safe
-    // direction — a stale page that submits at T-2min still succeeds server-side.
-    const canReschedule = lens === 'client' && !nudge.live;
-    const canPropose = lens === 'expert' && !nudge.live && canProposeReschedule;
-    let upcomingAction: React.ReactNode;
-    if (canReschedule) {
-      upcomingAction = (
-        <Button type="button" size="sm" variant="outline" onClick={onReschedule}>
-          Reschedule
-        </Button>
-      );
-    } else if (canPropose) {
-      upcomingAction = (
-        <Button type="button" size="sm" variant="outline" onClick={onProposeReschedule}>
-          Propose a new time
-        </Button>
-      );
-    }
     return (
-      <NudgeShell
-        icon={nudge.live ? Video : CalendarClock}
-        live={nudge.live}
-        title={<UpcomingTitle iso={nudge.scheduledStartIso} live={nudge.live} />}
-        body={upcomingBody(lens, counterpartyLabel, nudge.live)}
-        actions={upcomingAction}
+      <UpcomingNudge
+        nudge={nudge}
+        lens={lens}
+        counterpartyLabel={counterpartyLabel}
+        canProposeReschedule={canProposeReschedule}
+        onReschedule={onReschedule}
+        onProposeReschedule={onProposeReschedule}
       />
     );
   }
@@ -174,6 +155,58 @@ export function CaseNudge({
           </Button>
         ) : undefined
       }
+    />
+  );
+}
+
+interface UpcomingNudgeProps {
+  nudge: Extract<CaseNudgeView, { kind: 'upcoming' }>;
+  lens: 'client' | 'expert';
+  counterpartyLabel: string;
+  canProposeReschedule: boolean;
+  onReschedule: () => void;
+  onProposeReschedule: () => void;
+}
+
+/**
+ * The `'upcoming'` nudge arm, extracted from `CaseNudge` to keep that dispatcher's own
+ * cognitive complexity under the SonarJS ceiling — this is the only arm with branching logic.
+ */
+function UpcomingNudge({
+  nudge,
+  lens,
+  counterpartyLabel,
+  canProposeReschedule,
+  onReschedule,
+  onProposeReschedule,
+}: Readonly<UpcomingNudgeProps>): React.JSX.Element {
+  // `!nudge.live` on BOTH sides — inside the join window the honest action is to join, not
+  // to move, and the nudge is already the "starting soon" moment. This is STRICTER than the
+  // server (which allows until `start > now`); client-stricter-than-server is the safe
+  // direction — a stale page that submits at T-2min still succeeds server-side.
+  const canReschedule = lens === 'client' && !nudge.live;
+  const canPropose = lens === 'expert' && !nudge.live && canProposeReschedule;
+  let upcomingAction: React.ReactNode;
+  if (canReschedule) {
+    upcomingAction = (
+      <Button type="button" size="sm" variant="outline" onClick={onReschedule}>
+        Reschedule
+      </Button>
+    );
+  } else if (canPropose) {
+    upcomingAction = (
+      <Button type="button" size="sm" variant="outline" onClick={onProposeReschedule}>
+        Propose a new time
+      </Button>
+    );
+  }
+  return (
+    <NudgeShell
+      icon={nudge.live ? Video : CalendarClock}
+      live={nudge.live}
+      title={<UpcomingTitle iso={nudge.scheduledStartIso} live={nudge.live} />}
+      body={upcomingBody(lens, counterpartyLabel, nudge.live)}
+      actions={upcomingAction}
     />
   );
 }

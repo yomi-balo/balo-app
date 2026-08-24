@@ -133,6 +133,6 @@ export function mapCaseConsultations(
   return rows.sort((a, b) => {
     const aAt = Date.parse(a.startedAtIso ?? a.scheduledStartIso);
     const bAt = Date.parse(b.startedAtIso ?? b.scheduledStartIso);
-    return aAt !== bAt ? aAt - bAt : a.meetingId.localeCompare(b.meetingId);
+    return aAt === bAt ? a.meetingId.localeCompare(b.meetingId) : aAt - bAt;
   });
 }

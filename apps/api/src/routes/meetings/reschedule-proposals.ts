@@ -108,19 +108,34 @@ async function resolveExpertPartyLabel(expertProfileId: string): Promise<string>
   });
 }
 
+/** The meeting facts `resolveProposeOptions` needs, grouped into one object so the function
+ *  stays under the parameter-count ceiling (SonarCloud max 7) — six meeting facts plus
+ *  `body`/`now`/`reply` was 9. */
+interface ProposeOptionContext {
+  readonly meetingId: string;
+  readonly expertProfileId: string;
+  readonly currentDurationMs: number;
+  readonly meetingScheduledStart: Date;
+  readonly meetingScheduledEnd: Date;
+  readonly hasVendorEvent: boolean;
+}
+
 /** Every per-option guard, in order. Bails via `reply` on the FIRST violation across the whole
  *  set — extracted so `resolveProposeInput` stays under the complexity ceiling. */
 async function resolveProposeOptions(
   body: ProposeRescheduleBody,
-  meetingId: string,
-  expertProfileId: string,
-  currentDurationMs: number,
-  meetingScheduledStart: Date,
-  meetingScheduledEnd: Date,
-  hasVendorEvent: boolean,
+  ctx: ProposeOptionContext,
   now: Date,
   reply: FastifyReply
 ): Promise<ResolvedProposeOption[] | null> {
+  const {
+    meetingId,
+    expertProfileId,
+    currentDurationMs,
+    meetingScheduledStart,
+    meetingScheduledEnd,
+    hasVendorEvent,
+  } = ctx;
   const seenStarts = new Set<number>();
   const options: ResolvedProposeOption[] = [];
 
@@ -227,12 +242,14 @@ async function resolveProposeInput(
 
   const options = await resolveProposeOptions(
     body,
-    meetingId,
-    expertProfileId,
-    currentDurationMs,
-    meeting.scheduledStart,
-    meeting.scheduledEnd,
-    hasVendorEvent,
+    {
+      meetingId,
+      expertProfileId,
+      currentDurationMs,
+      meetingScheduledStart: meeting.scheduledStart,
+      meetingScheduledEnd: meeting.scheduledEnd,
+      hasVendorEvent,
+    },
     now,
     reply
   );
