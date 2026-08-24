@@ -60,6 +60,7 @@ import {
   MeetingGuestInvitedEmail,
   MeetingGuestLinkResentEmail,
   MeetingGuestRemovedEmail,
+  MeetingGuestRescheduledEmail,
 } from './meeting-guest-emails.js';
 import {
   MeetingClientAbsentEmail,
@@ -80,6 +81,11 @@ import {
   BookingConfirmedExpertEmail,
   bookingConfirmedSubject,
 } from './booking-confirmed.js';
+import {
+  BookingRescheduledClientEmail,
+  BookingRescheduledExpertEmail,
+  bookingRescheduledSubject,
+} from './booking-rescheduled.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -1607,6 +1613,63 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       subject: bookingConfirmedSubject('expert', clientCompany, isNewCase),
     };
   },
+
+  // BAL-409 — the CLIENT half of `booking.rescheduled`. Prospective copy names the expert
+  // PARTY, never a pronoun. NO CALENDAR CLAIM (D14) — only the expert's own calendar is ever
+  // written, and the amend has not necessarily run yet at publish time.
+  'booking-rescheduled-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const engagementId = (data.engagementId as string) ?? '';
+    return {
+      component: React.createElement(BookingRescheduledClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: expertParty,
+        caseTitle: (data.caseTitle as string) ?? 'your case',
+        previousScheduledStartIso: (data.previousScheduledStartIso as string) ?? '',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: bookingRescheduledSubject('client', expertParty),
+    };
+  },
+
+  // BAL-409 — the EXPERT half of the same event. Prospective copy names the CLIENT company,
+  // never an invented individual. Same no-calendar-claim rule as the client half.
+  'booking-rescheduled-expert': (data) => {
+    const clientCompany = (data.clientCompanyName as string) ?? 'A client';
+    const engagementId = (data.engagementId as string) ?? '';
+    return {
+      component: React.createElement(BookingRescheduledExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: clientCompany,
+        caseTitle: (data.caseTitle as string) ?? 'the case',
+        previousScheduledStartIso: (data.previousScheduledStartIso as string) ?? '',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: bookingRescheduledSubject('expert', clientCompany),
+    };
+  },
+
+  // BAL-409 — the guest-facing half of the same move. NO `joinUrl` (see the component's own
+  // docblock): the existing link still works because the reschedule transaction extended its
+  // expiry, never rotated it.
+  'meeting-guest-rescheduled': (data) => ({
+    component: React.createElement(MeetingGuestRescheduledEmail, {
+      guestName: data.guestName as string | undefined,
+      meetingTitle: (data.meetingTitle as string) ?? 'a call',
+      previousScheduledStartIso: (data.previousScheduledStartIso as string) ?? '',
+      scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+      scheduledEndIso: (data.scheduledEndIso as string) ?? '',
+      expiresOn: (data.expiresOn as string) ?? '',
+      baseUrl: BASE_URL,
+    }),
+    subject: 'This call has moved',
+  }),
 };
 
 export function getEmailTemplate(

@@ -1,6 +1,58 @@
 import { describe, it, expect } from 'vitest';
 import { notificationRules, type NotificationRule } from './rules.js';
 
+/**
+ * N13 — SHARED BY `booking.confirmed` AND `booking.rescheduled` (both new-code from BAL-409),
+ * which were previously two near-verbatim ~13-line blocks with only the template names
+ * differing — exactly the shape SonarCloud's >3% new-code duplication gate flags. Asserts the
+ * "client + expert each get email + in-app, 4 rules, no SMS, no admin fan-out" shape for either
+ * event.
+ */
+function expectEmailAndInAppPair(
+  event: 'booking.confirmed' | 'booking.rescheduled',
+  clientTemplate: string,
+  expertTemplate: string
+): void {
+  const rules = notificationRules[event];
+  expect(rules).toBeDefined();
+  expect(rules).toHaveLength(4);
+  for (const rule of rules!) {
+    expect(rule.timing).toBe('immediate');
+  }
+  const clientRules = rules!.filter((r) => r.recipient === 'client');
+  const expertRules = rules!.filter((r) => r.recipient === 'expert');
+  expect(clientRules).toHaveLength(2);
+  expect(expertRules).toHaveLength(2);
+  expect(clientRules.every((r) => r.template === clientTemplate)).toBe(true);
+  expect(expertRules.every((r) => r.template === expertTemplate)).toBe(true);
+  expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+    'email',
+    'in-app',
+  ]);
+  expect(expertRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+    'email',
+    'in-app',
+  ]);
+  expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
+  expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
+}
+
+/** N13 — the gating half: client rules require `recipientId`, expert rules are unconditioned. */
+function expectClientRulesGatedOnRecipientId(
+  event: 'booking.confirmed' | 'booking.rescheduled'
+): void {
+  const rules = notificationRules[event]!;
+  const clientRules = rules.filter((r) => r.recipient === 'client');
+  const expertRules = rules.filter((r) => r.recipient === 'expert');
+  for (const rule of clientRules) {
+    expect(rule.condition).toBeDefined();
+    const base = { event, data: {} };
+    expect(rule.condition!({ ...base, payload: { recipientId: 'user-1' } })).toBe(true);
+    expect(rule.condition!({ ...base, payload: {} })).toBe(false);
+  }
+  expect(expertRules.every((r) => r.condition === undefined)).toBe(true);
+}
+
 describe('notificationRules', () => {
   it('has rules for user.welcome event', () => {
     const rules = notificationRules['user.welcome'];
@@ -48,41 +100,40 @@ describe('notificationRules', () => {
   });
 
   it('booking.confirmed: client + expert each get email + in-app — 4 rules, no SMS, no admin fan-out', () => {
-    const rules = notificationRules['booking.confirmed'];
-    expect(rules).toBeDefined();
-    expect(rules).toHaveLength(4);
-    for (const rule of rules!) {
-      expect(rule.timing).toBe('immediate');
-    }
-    const clientRules = rules!.filter((r) => r.recipient === 'client');
-    const expertRules = rules!.filter((r) => r.recipient === 'expert');
-    expect(clientRules).toHaveLength(2);
-    expect(expertRules).toHaveLength(2);
-    expect(clientRules.every((r) => r.template === 'booking-confirmed-client')).toBe(true);
-    expect(expertRules.every((r) => r.template === 'booking-confirmed-expert')).toBe(true);
-    expect(clientRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
-      'email',
-      'in-app',
-    ]);
-    expect(expertRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
-      'email',
-      'in-app',
-    ]);
-    expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
-    expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
+    expectEmailAndInAppPair(
+      'booking.confirmed',
+      'booking-confirmed-client',
+      'booking-confirmed-expert'
+    );
   });
 
   it('booking.confirmed: the client rules are gated on recipientId; the expert rules are unconditioned', () => {
-    const rules = notificationRules['booking.confirmed']!;
-    const clientRules = rules.filter((r) => r.recipient === 'client');
-    const expertRules = rules.filter((r) => r.recipient === 'expert');
-    for (const rule of clientRules) {
-      expect(rule.condition).toBeDefined();
-      const base = { event: 'booking.confirmed', data: {} };
-      expect(rule.condition!({ ...base, payload: { recipientId: 'user-1' } })).toBe(true);
-      expect(rule.condition!({ ...base, payload: {} })).toBe(false);
-    }
-    expect(expertRules.every((r) => r.condition === undefined)).toBe(true);
+    expectClientRulesGatedOnRecipientId('booking.confirmed');
+  });
+
+  it('booking.rescheduled: client + expert each get email + in-app — 4 rules, no SMS, no admin fan-out', () => {
+    expectEmailAndInAppPair(
+      'booking.rescheduled',
+      'booking-rescheduled-client',
+      'booking-rescheduled-expert'
+    );
+  });
+
+  it('booking.rescheduled: the client rules are gated on recipientId; the expert rules are unconditioned', () => {
+    expectClientRulesGatedOnRecipientId('booking.rescheduled');
+  });
+
+  it('meeting.guest_rescheduled: EMAIL ONLY, to the external `email_address`', () => {
+    const rules = notificationRules['meeting.guest_rescheduled'];
+    expect(rules).toBeDefined();
+    expect(rules).toHaveLength(1);
+    expect(rules![0]).toMatchObject({
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'meeting-guest-rescheduled',
+      timing: 'immediate',
+      priority: 'normal',
+    });
   });
 
   it('project.exploratory_requested has client email + in-app rules', () => {
@@ -958,6 +1009,9 @@ describe('notificationRules', () => {
         // decisions below, where the door opening in front of the person IS the notification.
         'meeting.guest_link_resent',
         'meeting.guest_removed',
+        // ⚠ BAL-409. A booked consultation MOVED — the guest is not in a lobby for this one,
+        // they are told by email ahead of time, same reasoning as `meeting.guest_invited`.
+        'meeting.guest_rescheduled',
       ]);
       for (const key of [
         'meeting.guest_admitted',

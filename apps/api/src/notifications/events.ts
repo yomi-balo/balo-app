@@ -51,6 +51,7 @@ import type {
   ExpertSearchabilityLostPayload,
   ExpertSearchabilityRestoredPayload,
   BookingConfirmedPayload,
+  BookingRescheduledPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -263,6 +264,41 @@ export interface AgencyProvisionedPayload {
   ownerUserId: string; // the new owner (subject + recipient)
 }
 
+/**
+ * BAL-409 — a booked consultation was moved, and this guest's join link's expiry moved with
+ * it. Declared INLINE (the `:103-109` `CalendarAuthErrorPayload` exception): SERVER-ONLY,
+ * published from `apps/api`'s `meeting-availability.ts` post-commit block (one publish per
+ * live guest, from `meetingGuestsRepository.listLiveByMeeting`), never through the internal
+ * `/notifications/publish` route — so it has NO web mirror and NO `publishBodySchema` arm
+ * (adding one would be a `StraySchemaArm` and fail `tsc`).
+ *
+ * ⚠ NO `joinToken`. Balo stores only a hash of the guest token; the raw token is
+ * unrecoverable, and re-minting one would be a `rotateToken` — a revocation nobody asked for.
+ * The copy says their EXISTING link still works, which is true because the reschedule
+ * transaction extended its expiry (`extendGuestExpiryForMeetingTx`).
+ *
+ * ⚠ COUNTERPARTY CONCEALMENT applies here too: `guestName` is a NAME field, never an address,
+ * and must be run through `sanitizeSelfDeclaredName` before it reaches this payload (ADR-1044
+ * amendment 2026-08-14) — an address typed into `name` must not defeat field-scoped
+ * concealment.
+ */
+export interface MeetingGuestRescheduledPayload {
+  /** `${guestId}:${scheduledStartIso}` — unique per guest per move. ⚠ NOT the bare row id:
+   *  that is `MeetingGuestInvitedPayload`'s dedup key, and reusing it would collide with the
+   *  original invite's job and be silently swallowed. */
+  correlationId: string;
+  recipientEmail: string;
+  /** Absent ⇒ greet generically. Pre-sanitized by the caller — see the docblock above. */
+  guestName?: string;
+  /** From `resolveMeetingContextLabel` — what the meeting is ABOUT, never a money figure. */
+  meetingTitle: string;
+  previousScheduledStartIso: string;
+  scheduledStartIso: string;
+  scheduledEndIso: string;
+  /** Pre-formatted UTC date. Helpful-fact framing, never a countdown. */
+  expiresOn: string;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -368,7 +404,16 @@ export type NotificationEvent =
   // Server Action AFTER `POST /meetings` returns 201, so a case with no meeting never
   // notifies anyone. Publishable from apps/web — deliberately NOT in
   // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
-  | 'booking.confirmed';
+  | 'booking.confirmed'
+  // BAL-409 — a booked consultation was moved by the CLIENT. Published by the case-surface
+  // web Server Action AFTER the reschedule route returns 200 — same posture as
+  // `booking.confirmed`. Publishable from apps/web — deliberately NOT in
+  // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
+  | 'booking.rescheduled'
+  // BAL-409 — the guest-facing half of the same move. SERVER-ONLY (see below): it carries no
+  // secret, but it is published exclusively from `apps/api`'s post-commit block, which
+  // already holds the meeting and its live guests.
+  | 'meeting.guest_rescheduled';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -448,7 +493,12 @@ export type ServerOnlyNotificationEvent =
   // `StraySchemaArm` and fail `tsc`. ⚠ `conversation.message_posted` /
   // `conversation.file_shared` are deliberately NOT listed: both are published by web
   // Server Actions and need their arms.
-  | 'conversation.unread_digest_due';
+  | 'conversation.unread_digest_due'
+  // BAL-409: published by `apps/api`'s reschedule post-commit block — never from apps/web, so
+  // it has no `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail `tsc`.
+  // ⚠ `booking.rescheduled` is deliberately NOT listed here: its publisher is a web Server
+  // Action and needs its arm — same asymmetry as `booking.confirmed`.
+  | 'meeting.guest_rescheduled';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -589,4 +639,6 @@ export interface EventPayloadMap {
   'expert.searchability_lost': ExpertSearchabilityLostPayload;
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
   'booking.confirmed': BookingConfirmedPayload;
+  'booking.rescheduled': BookingRescheduledPayload;
+  'meeting.guest_rescheduled': MeetingGuestRescheduledPayload;
 }

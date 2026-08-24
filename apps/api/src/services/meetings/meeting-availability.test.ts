@@ -3,15 +3,31 @@ import type { FastifyBaseLogger } from 'fastify';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-const { mockCreate, mockUpdateSchedule, mockCancel, mockSoftDelete, mockEnqueue } = vi.hoisted(
-  () => ({
-    mockCreate: vi.fn(),
-    mockUpdateSchedule: vi.fn(),
-    mockCancel: vi.fn(),
-    mockSoftDelete: vi.fn(),
-    mockEnqueue: vi.fn().mockResolvedValue(undefined),
-  })
-);
+const {
+  mockCreate,
+  mockUpdateSchedule,
+  mockCancel,
+  mockSoftDelete,
+  mockEnqueue,
+  mockListByMeeting,
+  mockListLiveByMeeting,
+  mockPublish,
+  mockEnqueueCalendarAmend,
+  mockResolveMeetingTitle,
+  mockFormatExpiryDate,
+} = vi.hoisted(() => ({
+  mockCreate: vi.fn(),
+  mockUpdateSchedule: vi.fn(),
+  mockCancel: vi.fn(),
+  mockSoftDelete: vi.fn(),
+  mockEnqueue: vi.fn().mockResolvedValue(undefined),
+  mockListByMeeting: vi.fn().mockResolvedValue([]),
+  mockListLiveByMeeting: vi.fn().mockResolvedValue([]),
+  mockPublish: vi.fn().mockResolvedValue(undefined),
+  mockEnqueueCalendarAmend: vi.fn().mockResolvedValue(undefined),
+  mockResolveMeetingTitle: vi.fn().mockResolvedValue('the video call'),
+  mockFormatExpiryDate: vi.fn().mockReturnValue('8 September 2026'),
+}));
 
 vi.mock('@balo/db', () => ({
   meetingsRepository: {
@@ -20,10 +36,25 @@ vi.mock('@balo/db', () => ({
     cancel: mockCancel,
     softDelete: mockSoftDelete,
   },
+  meetingContextsRepository: { listByMeeting: mockListByMeeting },
+  meetingGuestsRepository: { listLiveByMeeting: mockListLiveByMeeting },
 }));
 
 vi.mock('../../jobs/availability-cache.js', () => ({
   enqueueAvailabilityCacheRebuild: mockEnqueue,
+}));
+
+vi.mock('../../jobs/meeting-calendar-amend.js', () => ({
+  enqueueMeetingCalendarAmend: mockEnqueueCalendarAmend,
+}));
+
+vi.mock('../../notifications/index.js', () => ({
+  notificationEvents: { publish: mockPublish },
+}));
+
+vi.mock('./guest-participation.js', () => ({
+  formatExpiryDate: mockFormatExpiryDate,
+  resolveMeetingTitle: mockResolveMeetingTitle,
 }));
 
 import {
@@ -76,12 +107,6 @@ const MUTATORS = [
     expectedArgs: [CREATE_INPUT],
   },
   {
-    name: 'rescheduleMeeting',
-    repositoryMock: mockUpdateSchedule,
-    invoke: () => rescheduleMeeting(MEETING_ID, SCHEDULE, log),
-    expectedArgs: [MEETING_ID, SCHEDULE],
-  },
-  {
     name: 'cancelMeeting',
     repositoryMock: mockCancel,
     invoke: () => cancelMeeting(MEETING_ID, log),
@@ -98,6 +123,12 @@ const MUTATORS = [
 beforeEach(() => {
   vi.clearAllMocks();
   mockEnqueue.mockResolvedValue(undefined);
+  mockListByMeeting.mockResolvedValue([]);
+  mockListLiveByMeeting.mockResolvedValue([]);
+  mockPublish.mockResolvedValue(undefined);
+  mockEnqueueCalendarAmend.mockResolvedValue(undefined);
+  mockResolveMeetingTitle.mockResolvedValue('the video call');
+  mockFormatExpiryDate.mockReturnValue('8 September 2026');
 });
 
 // ── The contract ─────────────────────────────────────────────────────────────
@@ -216,5 +247,157 @@ describe('meeting-availability — every mutation rebuilds the moved expert’s 
     await cancelMeeting(MEETING_ID, log);
 
     expect(order).toEqual(['repository', 'enqueue']);
+  });
+});
+
+// ── BAL-409 — rescheduleMeeting's own contract (T-API-SVC) ─────────────────────
+
+const ACTOR_USER_ID = '44444444-4444-4444-8444-444444444444';
+
+function rescheduleResult(
+  expertProfileId: string | null,
+  overrides: Record<string, unknown> = {}
+): {
+  meeting: { id: string; scheduledStart: Date; scheduledEnd: Date };
+  expertProfileId: string | null;
+  previous: { scheduledStart: Date; scheduledEnd: Date };
+  guestLinksExtended: number;
+} {
+  return {
+    meeting: { id: MEETING_ID, ...SCHEDULE },
+    expertProfileId,
+    previous: {
+      scheduledStart: new Date('2026-08-25T09:00:00.000Z'),
+      scheduledEnd: new Date('2026-08-25T10:00:00.000Z'),
+    },
+    guestLinksExtended: 0,
+    ...overrides,
+  };
+}
+
+describe('rescheduleMeeting — T-API-SVC', () => {
+  it('threads actorUserId into updateSchedule as the third { actorUserId } argument', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    expect(mockUpdateSchedule).toHaveBeenCalledWith(MEETING_ID, SCHEDULE, {
+      actorUserId: ACTOR_USER_ID,
+    });
+  });
+
+  it('the availability rebuild still fires exactly once, for the expert the repository returned', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    expect(mockEnqueue).toHaveBeenCalledWith(EXPERT_ID, log);
+    expect(mockEnqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('enqueues the calendar amend AFTER commit, with the meeting’s committed window', async () => {
+    const order: string[] = [];
+    mockUpdateSchedule.mockImplementation(async () => {
+      order.push('repository');
+      return rescheduleResult(EXPERT_ID);
+    });
+    mockEnqueueCalendarAmend.mockImplementation(async () => {
+      order.push('enqueue-amend');
+    });
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    expect(order).toEqual(['repository', 'enqueue-amend']);
+    expect(mockEnqueueCalendarAmend).toHaveBeenCalledWith(
+      MEETING_ID,
+      EXPERT_ID,
+      SCHEDULE.scheduledStart,
+      SCHEDULE.scheduledEnd
+    );
+  });
+
+  it('enqueues NO calendar amend for an admin meeting (no expert)', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(null));
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    expect(mockEnqueueCalendarAmend).not.toHaveBeenCalled();
+  });
+
+  it('a failed calendar-amend enqueue is logged and does NOT fail the reschedule', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+    mockEnqueueCalendarAmend.mockRejectedValue(new Error('redis down'));
+
+    await expect(
+      rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log)
+    ).resolves.toMatchObject({ expertProfileId: EXPERT_ID });
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID }),
+      'Failed to enqueue meeting-calendar-amend job'
+    );
+  });
+
+  it('publishes meeting.guest_rescheduled once per ADMITTED guest', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'guest-1', email: 'a@example.com', name: 'Dana', admission: 'admitted' },
+      { id: 'guest-2', email: 'b@example.com', name: null, admission: 'pre_admitted' },
+    ]);
+    mockListByMeeting.mockResolvedValue([{ contextType: 'case', contextId: 'ctx-1' }]);
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    expect(mockPublish).toHaveBeenCalledTimes(2);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'meeting.guest_rescheduled',
+      expect.objectContaining({ recipientEmail: 'a@example.com', guestName: 'Dana' })
+    );
+    expect(mockPublish).toHaveBeenCalledWith(
+      'meeting.guest_rescheduled',
+      expect.not.objectContaining({ guestName: expect.anything() })
+    );
+  });
+
+  // B1 — an unauthenticated, self-declared lobby knock (`admission: 'pending'`) must never
+  // receive the reschedule email: `POST /meetings/:meetingId/lobby` is public and requires no
+  // host approval, so a `pending` row can be written by anyone who guesses the meeting uuid.
+  it('publishes NOTHING to a pending (un-admitted) guest — B1', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'guest-pending', email: 'stranger@example.com', name: null, admission: 'pending' },
+    ]);
+    mockListByMeeting.mockResolvedValue([{ contextType: 'case', contextId: 'ctx-1' }]);
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('a throwing guest publish does not fail the reschedule, and does not block the other guests', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'guest-1', email: 'a@example.com', name: null, admission: 'admitted' },
+      { id: 'guest-2', email: 'b@example.com', name: null, admission: 'admitted' },
+    ]);
+    mockPublish.mockRejectedValueOnce(new Error('publish failed')).mockResolvedValueOnce(undefined);
+
+    await expect(
+      rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log)
+    ).resolves.toMatchObject({ expertProfileId: EXPERT_ID });
+    expect(mockPublish).toHaveBeenCalledTimes(2);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, guestId: 'guest-1' }),
+      expect.stringContaining('Failed to publish meeting.guest_rescheduled')
+    );
+  });
+
+  it('publishes NOTHING when there are no live guests', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+    mockListLiveByMeeting.mockResolvedValue([]);
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockListByMeeting).not.toHaveBeenCalled();
   });
 });

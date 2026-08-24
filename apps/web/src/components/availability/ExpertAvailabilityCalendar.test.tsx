@@ -57,6 +57,135 @@ describe('ExpertAvailabilityCalendar', () => {
     expect(screen.getByText('10:00 AM')).toBeInTheDocument();
   });
 
+  describe('BAL-409 — fixedDurationMinutes', () => {
+    it('locks the filter and hides the manual pills when supplied', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const user = userEvent.setup();
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+          fixedDurationMinutes={60}
+        />
+      );
+      await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+
+      // The 60-min slot (9:00 AM) shows; the 30-min-only slot (10:00 AM) is filtered out.
+      expect(await screen.findByText('9:00 AM')).toBeInTheDocument();
+      expect(screen.queryByText('10:00 AM')).not.toBeInTheDocument();
+
+      // No manual duration pills — nothing to click.
+      expect(screen.queryByRole('button', { name: '60 min' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '30 min' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Any' })).not.toBeInTheDocument();
+    });
+
+    // B6(a) — the confirm step must show ONE non-interactive line, never a radio group whose
+    // answer the server discards, and the Confirm button must be enabled immediately (the
+    // duration is auto-set, not left for the user to answer).
+    it('B6(a) — confirm step shows a non-interactive line, no radio group, and confirms immediately', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const onSlotSelect = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+          mode="selectable"
+          fixedDurationMinutes={60}
+          onSlotSelect={onSlotSelect}
+        />
+      );
+      await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+      await user.click(await screen.findByRole('button', { name: /9:00 AM/ }));
+      await user.click(screen.getByRole('button', { name: /Continue with/ }));
+
+      // No radio group — the "How long do you need?" question never appears.
+      expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+      expect(screen.queryByText(/how long do you need/i)).not.toBeInTheDocument();
+      // The non-interactive line, and the Confirm button already enabled.
+      expect(
+        screen.getByText('60 minutes — same as your current consultation')
+      ).toBeInTheDocument();
+      const confirmButton = screen.getByRole('button', { name: /Confirm 60-min consultation/ });
+      expect(confirmButton).toBeEnabled();
+
+      await user.click(confirmButton);
+
+      expect(onSlotSelect).toHaveBeenCalledWith({
+        start: '2026-06-05T09:00:00.000Z',
+        end: '2026-06-05T10:00:00.000Z',
+        duration: 60,
+      });
+    });
+
+    // B6(b)/(c) — a day with NO ≥60-min slot must render as EMPTY while pinned, never silently
+    // widen to show a shorter slot as selectable (that is exactly the `window_not_available`
+    // 409 the pin exists to prevent), and the auto-reset "Show all →" escape hatch must not
+    // appear — it exists only to discard the pin.
+    it('B6(b)/(c) — a day with only a shorter slot stays empty while pinned, with no "Show all"', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(
+          200,
+          okBody({
+            slots: [
+              {
+                start: '2026-06-05T09:00:00.000Z',
+                end: '2026-06-05T10:00:00.000Z',
+                maxDuration: 60,
+              },
+              {
+                start: '2026-06-06T09:00:00.000Z',
+                end: '2026-06-06T09:15:00.000Z',
+                maxDuration: 15,
+              },
+            ],
+          })
+        )
+      );
+      const user = userEvent.setup();
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+          fixedDurationMinutes={60}
+        />
+      );
+      await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+      await screen.findByText('9:00 AM');
+
+      await user.click(await screen.findByRole('button', { name: /June 6th, 2026/ }));
+
+      // The 15-min-only slot never appears as a selectable row — not widened to 'any'.
+      expect(screen.queryByText('9:00 AM')).not.toBeInTheDocument();
+      // No escape hatch back to 'any' while pinned.
+      expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+      expect(screen.queryByText(/No 60-min slots that day\./)).not.toBeInTheDocument();
+      expect(screen.getByText(/0 times available/)).toBeInTheDocument();
+    });
+
+    it('changes nothing when omitted — the shipped free-choice behaviour', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
+      const user = userEvent.setup();
+      render(
+        <ExpertAvailabilityCalendar
+          expertProfileId={EXPERT_ID}
+          viewerTimezone="UTC"
+          daysAhead={14}
+        />
+      );
+      await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+
+      expect(await screen.findByText('9:00 AM')).toBeInTheDocument();
+      expect(screen.getByText('10:00 AM')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '60 min' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Any' })).toBeInTheDocument();
+    });
+  });
+
   it('clicking a duration pill filters the list and fires DURATION_FILTER_USED', async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, okBody()));
     const user = userEvent.setup();

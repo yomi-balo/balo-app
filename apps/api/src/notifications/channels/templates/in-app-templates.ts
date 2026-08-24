@@ -186,6 +186,30 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-409 — the CLIENT half of `booking.rescheduled`: prospective copy names the expert
+  // PARTY, matching `booking-confirmed-client`'s posture. Never `/meeting/:id` (no such route)
+  // and never `meetings.join_url`.
+  'booking-rescheduled-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const engagementId = data.engagementId as string | undefined;
+    return {
+      title: 'Consultation moved',
+      body: `Your consultation with ${expertParty} was moved to a new time.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-409 — the EXPERT half of the same event: prospective copy names the CLIENT PARTY.
+  'booking-rescheduled-expert': (data) => {
+    const clientCompany = (data.clientCompanyName as string) ?? 'A client';
+    const engagementId = data.engagementId as string | undefined;
+    return {
+      title: 'Booking moved',
+      body: `${clientCompany} moved a consultation with you to a new time.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
   'new-message': (data) => {
     const caseId = data.caseId as string | undefined;
     return {

@@ -27,6 +27,8 @@ export const BOOKING_EVENTS = {
    */
   CASE_BOOKED: 'case_booked',
   ABANDONED: 'booking_abandoned',
+  /** BAL-409 — fired from `reschedule-dialog.tsx` after the Server Action returns `ok`. */
+  RESCHEDULED: 'booking_rescheduled',
 } as const;
 
 /** Where the booking wrapper was opened from (D4a's four entry points, minus "book again" being its own source). */
@@ -77,5 +79,10 @@ export interface BookingEventMap {
   [BOOKING_EVENTS.ABANDONED]: {
     expert_id: string;
     step: BookingAbandonStep;
+  };
+  [BOOKING_EVENTS.RESCHEDULED]: {
+    /** `'client'` today; BAL-411 adds `'expert'`. */
+    initiated_by: 'client';
+    hours_before_start: number;
   };
 }

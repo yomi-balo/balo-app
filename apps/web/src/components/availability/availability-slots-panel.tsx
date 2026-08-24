@@ -51,6 +51,29 @@ export interface AvailabilitySlotsPanelProps {
   /** True for the render right after a day-change auto-reset — drives the inline warning. */
   filterAutoReset: boolean;
   onFilterChange: (filter: DurationFilter) => void;
+  /**
+   * BAL-409 — the caller pinned `durationFilter` to a meeting's existing length; hide the
+   * manual toggle pills so there is nothing to conflict with the pin.
+   *
+   * ⚠ B6 — WHEN THIS IS SET, THE DAY-CHANGE AUTO-RESET SAFETY NET IS DELIBERATELY DISABLED,
+   * NOT JUST HIDDEN. The unpinned safety net falls back to `'any'` so the user is never
+   * stranded on a blank day — but for a PINNED reschedule, widening to `'any'` would silently
+   * list 15/30-min slots as selectable for a 60-min meeting, which is exactly the
+   * `window_not_available` 409 this prop exists to prevent. The caller (`ExpertAvailability
+   * Calendar`) never sets `filterAutoReset` while pinned, so this component never even needs
+   * to gate on it for the LIST — but the WARNING/"Show all →" control is gated here too
+   * (`!hideDurationFilter`), belt-and-braces, so a future caller that forgets that contract
+   * cannot regress the list into showing sub-length slots as selectable.
+   */
+  hideDurationFilter?: boolean;
+  /**
+   * B6 — the pinned length itself, threaded into the CONFIRM STEP. When set, the "How long do
+   * you need?" radio group (whose answer the server always discarded) is replaced with one
+   * non-interactive line, and `chosenDuration` is auto-set to this value the moment the confirm
+   * step is entered — never left for the user to (mis)answer a question with only one real
+   * answer.
+   */
+  fixedDurationMinutes?: SlotDurationMinutes;
   selectedSlot: AvailabilitySlotDto | null;
   onSelectSlot: (slot: AvailabilitySlotDto) => void;
   confirmStep: boolean;
@@ -76,6 +99,8 @@ export function AvailabilitySlotsPanel({
   durationFilter,
   filterAutoReset,
   onFilterChange,
+  hideDurationFilter = false,
+  fixedDurationMinutes,
   selectedSlot,
   onSelectSlot,
   confirmStep,
@@ -120,6 +145,25 @@ export function AvailabilitySlotsPanel({
     onConfirm();
   }, [submitting, onConfirm]);
 
+  /**
+   * ⚠ B6 — AUTO-SET, NEVER LEFT FOR THE USER TO (MIS)ANSWER. Before this fix, `chosenDuration`
+   * stayed `null` until the user picked from a radio group whose answer the server always
+   * discarded — the button read "Confirm 60-min consultation" for whatever the user clicked,
+   * while the very next screen said "Same length, same link — nothing else changes": a visible,
+   * self-contradicting lie. Setting it here, keyed off entering the confirm step, means the
+   * Confirm button is enabled immediately and the (now non-interactive) duration line always
+   * agrees with what will actually be booked.
+   */
+  useEffect(() => {
+    if (
+      confirmStep &&
+      fixedDurationMinutes !== undefined &&
+      chosenDuration !== fixedDurationMinutes
+    ) {
+      onChooseDuration(fixedDurationMinutes);
+    }
+  }, [confirmStep, fixedDurationMinutes, chosenDuration, onChooseDuration]);
+
   if (confirmed) {
     return (
       <AvailabilityMessage
@@ -145,7 +189,6 @@ export function AvailabilitySlotsPanel({
   }
 
   if (confirmStep && selectedSlot) {
-    const durations = confirmationDurations(selectedSlot.maxDuration);
     const headDate = isToday ? 'Today' : formatDayHeading(dayKey);
     return (
       <div>
@@ -165,57 +208,71 @@ export function AvailabilitySlotsPanel({
           <span className="text-muted-foreground ml-2 text-[13px]">{headDate}</span>
         </div>
 
-        <fieldset>
-          <legend className="text-muted-foreground mb-2.5 text-[11px] font-semibold tracking-wider uppercase">
-            How long do you need?
-          </legend>
-          <div className="mb-5 flex flex-col gap-1.5">
-            {durations.map((d) => {
-              const id = `availability-duration-${d}`;
-              const isChosen = chosenDuration === d;
-              const end = new Date(
-                new Date(selectedSlot.start).getTime() + d * 60_000
-              ).toISOString();
-              return (
-                <label
-                  key={d}
-                  htmlFor={id}
-                  className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-2.5 text-left transition-colors ${
-                    isChosen ? 'border-primary bg-primary/5' : 'border-border bg-card'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    id={id}
-                    name="availability-duration"
-                    className="text-primary h-4 w-4"
-                    checked={isChosen}
-                    onChange={() => onChooseDuration(d)}
-                    /*
-                     * ⚠ EXPLICIT, not redundant. The visible text lives two <span> levels inside
-                     * the <label>, which is deeper than `label-has-associated-control` will look
-                     * (SonarCloud S6853) — and a screen reader announcing a bare radio here would
-                     * say nothing useful. Leads with "{d} minutes" so it reads naturally and so
-                     * the existing getByLabelText(/N minutes/) queries still resolve.
-                     */
-                    aria-label={`${d} minutes, ${formatSlotTime(selectedSlot.start, viewerTimezone)} to ${formatSlotTime(end, viewerTimezone)}`}
-                  />
-                  <span className="flex flex-col">
-                    <span
-                      className={`text-sm ${isChosen ? 'text-primary font-semibold' : 'text-foreground font-medium'}`}
-                    >
-                      {d} minutes
-                    </span>
-                    <span className="text-muted-foreground text-xs">
-                      {formatSlotTime(selectedSlot.start, viewerTimezone)} –{' '}
-                      {formatSlotTime(end, viewerTimezone)}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
+        {fixedDurationMinutes !== undefined ? (
+          // B6(a) — PINNED: ONE non-interactive line, never a radio group whose answer would be
+          // discarded server-side. `chosenDuration` is already auto-set to this value by the
+          // effect above, so the Confirm button below is enabled immediately.
+          <div className="border-border bg-card mb-5 rounded-lg border px-4 py-3">
+            <p className="text-muted-foreground mb-1 text-[11px] font-semibold tracking-wider uppercase">
+              Duration
+            </p>
+            <p className="text-foreground text-sm font-medium">
+              {fixedDurationMinutes} minutes — same as your current consultation
+            </p>
           </div>
-        </fieldset>
+        ) : (
+          <fieldset>
+            <legend className="text-muted-foreground mb-2.5 text-[11px] font-semibold tracking-wider uppercase">
+              How long do you need?
+            </legend>
+            <div className="mb-5 flex flex-col gap-1.5">
+              {confirmationDurations(selectedSlot.maxDuration).map((d) => {
+                const id = `availability-duration-${d}`;
+                const isChosen = chosenDuration === d;
+                const end = new Date(
+                  new Date(selectedSlot.start).getTime() + d * 60_000
+                ).toISOString();
+                return (
+                  <label
+                    key={d}
+                    htmlFor={id}
+                    className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-2.5 text-left transition-colors ${
+                      isChosen ? 'border-primary bg-primary/5' : 'border-border bg-card'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      id={id}
+                      name="availability-duration"
+                      className="text-primary h-4 w-4"
+                      checked={isChosen}
+                      onChange={() => onChooseDuration(d)}
+                      /*
+                       * ⚠ EXPLICIT, not redundant. The visible text lives two <span> levels inside
+                       * the <label>, which is deeper than `label-has-associated-control` will look
+                       * (SonarCloud S6853) — and a screen reader announcing a bare radio here would
+                       * say nothing useful. Leads with "{d} minutes" so it reads naturally and so
+                       * the existing getByLabelText(/N minutes/) queries still resolve.
+                       */
+                      aria-label={`${d} minutes, ${formatSlotTime(selectedSlot.start, viewerTimezone)} to ${formatSlotTime(end, viewerTimezone)}`}
+                    />
+                    <span className="flex flex-col">
+                      <span
+                        className={`text-sm ${isChosen ? 'text-primary font-semibold' : 'text-foreground font-medium'}`}
+                      >
+                        {d} minutes
+                      </span>
+                      <span className="text-muted-foreground text-xs">
+                        {formatSlotTime(selectedSlot.start, viewerTimezone)} –{' '}
+                        {formatSlotTime(end, viewerTimezone)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+        )}
 
         <Button
           type="button"
@@ -232,7 +289,16 @@ export function AvailabilitySlotsPanel({
   const pills = derivePills(slotsForDay);
   // Effective filter for the LIST: 'any' whenever the day-change auto-reset fired, even though
   // `durationFilter` itself keeps the user's original choice (needed for the warning copy).
-  const effectiveFilter: DurationFilter = filterAutoReset ? 'any' : durationFilter;
+  //
+  // ⚠ B6(c) — NEVER 'any' WHILE `hideDurationFilter` IS SET, REGARDLESS OF `filterAutoReset`.
+  // The caller (`ExpertAvailabilityCalendar`) is contracted never to set `filterAutoReset` while
+  // pinned — but this component owns the LIST, and defending the invariant only at the caller
+  // would let a future caller regress it silently. Widening to 'any' here would list 15/30-min
+  // slots as selectable for a pinned 60-min meeting: exactly the `window_not_available` 409 the
+  // pin exists to prevent. Pinned + a day with no long-enough slot means an EMPTY list for that
+  // day, consciously — never a wider, wrong one.
+  const effectiveFilter: DurationFilter =
+    filterAutoReset && !hideDurationFilter ? 'any' : durationFilter;
   const showing = filterSlotsByDuration(slotsForDay, effectiveFilter);
   const headDate = isToday ? 'Today' : formatDayHeading(dayKey);
   // Positive form deliberately: the duration label is redundant once the list is already filtered
@@ -262,32 +328,39 @@ export function AvailabilitySlotsPanel({
       </div>
 
       <div className="mb-4">
-        <p className="text-muted-foreground mb-2 text-[11px] font-semibold tracking-wider uppercase">
-          Duration
-        </p>
-        <div className="flex flex-wrap gap-1.5">
-          {pills.map((pill) => {
-            const isActive = effectiveFilter === pill;
-            return (
-              <Button
-                key={pill}
-                type="button"
-                size="sm"
-                variant={isActive ? 'default' : 'outline'}
-                aria-pressed={isActive}
-                // ⚠ 44px minimum. These pills are the primary narrowing control on a 375px
-                // viewport and they wrap to two lines by design; at the previous `h-7` (28px)
-                // they were the only sub-target in the panel — the slot rows beside them
-                // already use `min-h-11`.
-                className="h-auto min-h-11 rounded-full px-4 text-xs"
-                onClick={() => onFilterChange(pill)}
-              >
-                {pill === 'any' ? 'Any' : `${pill} min`}
-              </Button>
-            );
-          })}
-        </div>
-        {filterAutoReset && (
+        {!hideDurationFilter && (
+          <>
+            <p className="text-muted-foreground mb-2 text-[11px] font-semibold tracking-wider uppercase">
+              Duration
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {pills.map((pill) => {
+                const isActive = effectiveFilter === pill;
+                return (
+                  <Button
+                    key={pill}
+                    type="button"
+                    size="sm"
+                    variant={isActive ? 'default' : 'outline'}
+                    aria-pressed={isActive}
+                    // ⚠ 44px minimum. These pills are the primary narrowing control on a 375px
+                    // viewport and they wrap to two lines by design; at the previous `h-7` (28px)
+                    // they were the only sub-target in the panel — the slot rows beside them
+                    // already use `min-h-11`.
+                    className="h-auto min-h-11 rounded-full px-4 text-xs"
+                    onClick={() => onFilterChange(pill)}
+                  >
+                    {pill === 'any' ? 'Any' : `${pill} min`}
+                  </Button>
+                );
+              })}
+            </div>
+          </>
+        )}
+        {/* B6(b) — GATED ON `!hideDurationFilter`, belt-and-braces alongside the pills above:
+            when the duration is PINNED, "Show all →" would be a visible control whose only job
+            is to discard the pin (see the prop's own docblock). */}
+        {!hideDurationFilter && filterAutoReset && (
           <output className="text-warning mt-2 flex items-center gap-1.5 text-xs">
             <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
             {/* `durationFilter` is never `'any'` here: `filterAutoReset` is only set when

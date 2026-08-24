@@ -213,7 +213,21 @@ export interface CaseHeaderView {
 
 /** Exactly one, chosen by `selectCaseNudge`. `null` ⇒ the case is closed. */
 export type CaseNudgeView =
-  | { kind: 'upcoming'; meetingId: string; scheduledStartIso: string; live: boolean }
+  | {
+      kind: 'upcoming';
+      meetingId: string;
+      scheduledStartIso: string;
+      live: boolean;
+      /**
+       * BAL-409 — the meeting's current length, minutes. An ADDITIVE field on this WEB WIRE
+       * PROJECTION only — `@balo/shared/engagements`'s `CaseNudge` discriminated union is
+       * UNCHANGED (a client-initiated reschedule auto-approves; it produces no new state for
+       * that union to represent). The reschedule dialog needs the current duration so it can
+       * pin the picker (`fixedDurationMinutes`) and so the Server Action can compute
+       * `scheduledEnd` server-side without a second read.
+       */
+      durationMinutes: number;
+    }
   | { kind: 'resolution_ask' }
   | { kind: 'resolution_ask_pending' }
   | { kind: 'nothing_booked' }

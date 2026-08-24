@@ -12,6 +12,7 @@ describe('BOOKING_EVENTS', () => {
       'CONFIRM_VIEWED',
       'FLOW_OPENED',
       'GUESTS_INVITED',
+      'RESCHEDULED',
     ]);
   });
 
@@ -24,6 +25,7 @@ describe('BOOKING_EVENTS', () => {
     expect(BOOKING_EVENTS.GUESTS_INVITED).toBe('booking_guests_invited');
     expect(BOOKING_EVENTS.CASE_BOOKED).toBe('case_booked');
     expect(BOOKING_EVENTS.ABANDONED).toBe('booking_abandoned');
+    expect(BOOKING_EVENTS.RESCHEDULED).toBe('booking_rescheduled');
   });
 
   it('uses snake_case event values throughout', () => {

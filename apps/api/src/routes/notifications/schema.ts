@@ -2,6 +2,15 @@ import { z } from 'zod';
 import type { PublishableNotificationEvent } from '../../notifications/events.js';
 import { EXPERT_CHECKLIST_ITEM_KEYS } from '@balo/shared/experts';
 
+// N3 — `joinPath` MUST be a same-origin, ROUTE-SHAPED path, never a bare `.min(1).max(200)`
+// string. `booking.confirmed`'s email template renders it as `${BASE_URL}${joinPath}`, so an
+// unconstrained value lets an internal-secret-holding caller (or a future bug upstream of this
+// boundary) turn `joinPath` into an absolute `https://evil.com/...` phishing link inside a real
+// Balo email. The only producer is `memberJoinPath()` (`apps/web/src/lib/meetings/
+// member-join-path.ts`), which emits exactly `/join/m/{meetingId}` — anchored front and back so
+// nothing else is accepted.
+const memberJoinPathSchema = z.string().regex(/^\/join\/m\/[0-9a-f-]{36}$/);
+
 const userWelcomePayload = z.object({
   correlationId: z.uuid(),
   userId: z.uuid(),
@@ -531,9 +540,30 @@ const bookingConfirmedPayload = z.object({
   priorConsultationCount: z.number().int().nonnegative(),
   scheduledStartIso: z.string().datetime(),
   durationMinutes: z.number().int().positive(),
-  joinPath: z.string().min(1).max(200),
+  joinPath: memberJoinPathSchema,
   provisioned: z.boolean(),
   guestCount: z.number().int().nonnegative(),
+});
+
+// BAL-409 — a booked consultation was moved by the CLIENT (web-published, mirroring
+// `booking.confirmed`). `correlationId` = `${meetingId}:${scheduledStartIso}` — NOT the bare
+// meetingId, so a SECOND reschedule notifies again rather than colliding with the first
+// publish's jobId. No rate/total/hold field — a reschedule moves no money. Mirrors
+// packages/shared/src/notifications/index.ts.
+const bookingRescheduledPayload = z.object({
+  correlationId: z.string().min(1).max(200),
+  meetingId: z.uuid(),
+  engagementId: z.uuid(),
+  recipientId: z.uuid().optional(),
+  expertProfileId: z.uuid(),
+  clientCompanyName: z.string().min(1).max(200),
+  expertPartyLabel: z.string().min(1).max(200),
+  caseTitle: z.string().min(1).max(200),
+  previousScheduledStartIso: z.string().datetime(),
+  scheduledStartIso: z.string().datetime(),
+  durationMinutes: z.number().int().positive(),
+  joinPath: memberJoinPathSchema,
+  initiatedBy: z.literal('client'),
 });
 
 export const publishBodySchema = z.discriminatedUnion('event', [
@@ -694,6 +724,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('booking.confirmed'),
     payload: bookingConfirmedPayload,
+  }),
+  z.object({
+    event: z.literal('booking.rescheduled'),
+    payload: bookingRescheduledPayload,
   }),
 ]);
 

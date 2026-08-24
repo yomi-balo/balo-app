@@ -67,6 +67,14 @@ export interface AvailabilityRuleRow {
 export interface ConsultationWindowRow {
   startAt: Date;
   endAt: Date;
+  /**
+   * BAL-409 (D7, arm 1) — the meeting this consultation projects. A TYPE WIDENING, not a query
+   * change: `consultations.meetingId` is already `NOT NULL` and every row `listConfirmedInRange`
+   * returns already carries it (it selects the full `Consultation` row). Lets a reschedule
+   * caller filter OUT the meeting's own row before it reaches the resolver — otherwise a
+   * meeting collides with its own booking on every reschedule attempt.
+   */
+  meetingId: string;
 }
 
 /** The two date-only columns of an `availability_overrides` row, as Drizzle returns them. */

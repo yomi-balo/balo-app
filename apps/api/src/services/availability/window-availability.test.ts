@@ -279,3 +279,99 @@ describe('it performs no write', () => {
     await expect(check()).resolves.toBe(true);
   });
 });
+
+describe('BAL-409 (D7) — excludeMeeting, the reschedule self-collision fix', () => {
+  const MEETING_ID = '77777777-7777-4777-8777-777777777777';
+
+  it('WITHOUT excludeMeeting, a meeting collides with its own consultation row (the pinned bug)', async () => {
+    mockListConfirmedInRange.mockResolvedValue([
+      { meetingId: MEETING_ID, startAt: START, endAt: END },
+    ]);
+
+    await expect(check()).resolves.toBe(false);
+  });
+
+  it('WITH excludeMeeting, the same overlapping window (its own booking) is available', async () => {
+    mockListConfirmedInRange.mockResolvedValue([
+      { meetingId: MEETING_ID, startAt: START, endAt: END },
+    ]);
+
+    await expect(
+      isWindowAvailableForExpert(EXPERT_PROFILE_ID, START, END, NOW, {
+        meetingId: MEETING_ID,
+        currentStart: START,
+        currentEnd: END,
+        hasVendorEvent: false,
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('a DIFFERENT meeting’s confirmed consultation still blocks, even with excludeMeeting set', async () => {
+    mockListConfirmedInRange.mockResolvedValue([
+      {
+        meetingId: 'some-other-meeting-id',
+        startAt: new Date('2026-09-07T10:30:00.000Z'),
+        endAt: new Date('2026-09-07T11:30:00.000Z'),
+      },
+    ]);
+
+    await expect(
+      isWindowAvailableForExpert(EXPERT_PROFILE_ID, START, END, NOW, {
+        meetingId: MEETING_ID,
+        currentStart: START,
+        currentEnd: END,
+        hasVendorEvent: false,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('hasVendorEvent: false performs NO vendor subtraction — the vendor block still applies', async () => {
+    const spy = vi
+      .spyOn(vendorBusyProvider, 'listBusyBlocks')
+      .mockResolvedValue([{ startAt: START, endAt: END }]);
+
+    await expect(
+      isWindowAvailableForExpert(EXPERT_PROFILE_ID, START, END, NOW, {
+        meetingId: MEETING_ID,
+        currentStart: START,
+        currentEnd: END,
+        hasVendorEvent: false,
+      })
+    ).resolves.toBe(false);
+
+    spy.mockRestore();
+  });
+
+  it('hasVendorEvent: true subtracts the meeting’s OWN window from the vendor busy set', async () => {
+    // The vendor busy block returned is EXACTLY the meeting's current window — evidence that
+    // Apiroc has an event for it. Subtracting it clears the block, so the proposed window
+    // (identical to the current one — the smallest possible nudge) becomes available.
+    const spy = vi
+      .spyOn(vendorBusyProvider, 'listBusyBlocks')
+      .mockResolvedValue([{ startAt: START, endAt: END }]);
+
+    await expect(
+      isWindowAvailableForExpert(EXPERT_PROFILE_ID, START, END, NOW, {
+        meetingId: MEETING_ID,
+        currentStart: START,
+        currentEnd: END,
+        hasVendorEvent: true,
+      })
+    ).resolves.toBe(true);
+
+    spy.mockRestore();
+  });
+
+  it('a fail-closed path (no settings) is unchanged by excludeMeeting', async () => {
+    mockFindResolverSettings.mockResolvedValue(null);
+
+    await expect(
+      isWindowAvailableForExpert(EXPERT_PROFILE_ID, START, END, NOW, {
+        meetingId: MEETING_ID,
+        currentStart: START,
+        currentEnd: END,
+        hasVendorEvent: true,
+      })
+    ).resolves.toBe(false);
+  });
+});

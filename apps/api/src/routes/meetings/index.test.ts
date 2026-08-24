@@ -588,11 +588,17 @@ describe('POST /meetings', () => {
     it('checks the proposed window against the resolved expert before booking', async () => {
       await post(body());
 
+      // BAL-409 — `enforceExpertScopedGuards` (guards.ts, now shared with the reschedule
+      // route) threads a 5th `excludeMeeting` parameter through unconditionally; the booking
+      // route never supplies one, so it always arrives as `undefined` here. Byte-identical
+      // runtime behaviour to before — `isWindowAvailableForExpert`'s 5th parameter is optional
+      // and `undefined` is its "omitted" value — but the call now carries 5 arguments, not 4.
       expect(mockIsWindowAvailableForExpert).toHaveBeenCalledWith(
         EXPERT_PROFILE_ID,
         new Date(START),
         new Date(END),
-        expect.any(Date)
+        expect.any(Date),
+        undefined
       );
     });
 

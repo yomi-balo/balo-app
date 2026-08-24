@@ -22,8 +22,10 @@ import type { CaseNudgeView } from '@/lib/cases/case-view-types';
  * happening now" is true and useful on its own. When the join route lands, this is one
  * `<Button asChild>` away.
  *
- * ⚠ NO "RESCHEDULE" CTA EITHER, for the same reason: no reschedule proposal exists in the
- * schema at all (BAL-411 owns it), so there is nothing to link to.
+ * ⚠ THE RESCHEDULE CTA (BAL-409) IS CLIENT-INITIATED AND AUTO-APPROVES — it needs NO proposal
+ * state (the slot was already offered on the expert's live availability), so it lands here on
+ * the `'upcoming'` arm rather than waiting on schema. BAL-411's expert-side propose-and-wait
+ * still has nothing to link to; do not add a symmetrical button for the expert lens.
  */
 
 interface CaseNudgeProps {
@@ -35,6 +37,9 @@ interface CaseNudgeProps {
   bookAgainHref: string | null;
   onMarkResolved: () => void;
   onDismissAsk: () => void;
+  /** BAL-409 — opens the reschedule dialog. Presentational only: `case-surface.tsx` owns the
+   *  dialog's open state, exactly as it owns `resolveCaseAction`'s transition. */
+  onReschedule: () => void;
   /** True while the close/dismiss mutation is in flight. */
   busy: boolean;
 }
@@ -46,18 +51,32 @@ export function CaseNudge({
   bookAgainHref,
   onMarkResolved,
   onDismissAsk,
+  onReschedule,
   busy,
 }: Readonly<CaseNudgeProps>): React.JSX.Element | null {
   if (nudge === null) {
     return null;
   }
   if (nudge.kind === 'upcoming') {
+    // Client lens only — the expert-side reschedule is BAL-411's, and showing a button that
+    // 404s is worse than no button. `!nudge.live` — inside the join window the honest action
+    // is to join, not to move, and the nudge is already the "starting soon" moment. This is
+    // STRICTER than the server (which allows until `start > now`); client-stricter-than-server
+    // is the safe direction — a stale page that submits at T-2min still succeeds server-side.
+    const canReschedule = lens === 'client' && !nudge.live;
     return (
       <NudgeShell
         icon={nudge.live ? Video : CalendarClock}
         live={nudge.live}
         title={<UpcomingTitle iso={nudge.scheduledStartIso} live={nudge.live} />}
         body={upcomingBody(lens, counterpartyLabel, nudge.live)}
+        actions={
+          canReschedule ? (
+            <Button type="button" size="sm" variant="outline" onClick={onReschedule}>
+              Reschedule
+            </Button>
+          ) : undefined
+        }
       />
     );
   }

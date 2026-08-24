@@ -157,6 +157,15 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   // components/balo/credit/in-call-balance-panel.tsx, deliberately — see below.
   'drawdown-auto-open.ts',
   'use-drawdown-poll.ts',
+  // ── BAL-409, client-initiated reschedule ────────────────────────────────────────────
+  //
+  // ⚠ `member-join-path.ts` AND `reschedule-api-client.ts` ARE DELIBERATELY ABSENT, on
+  // exactly the grounds `guests-api-client.ts`, `meeting-lifecycle-client.ts` and
+  // `meeting-chat-anchor.ts` already are: both carry `import 'server-only'` (`member-
+  // join-path.ts` for the `/join/` prefetch-scan reason its own docblock states;
+  // `reschedule-api-client.ts` because it resolves the viewer's Bearer from the
+  // iron-session) and neither belongs in a browser bundle, so neither is scanned here.
+  // Neither file names `lens` in any case.
 ]);
 
 /**

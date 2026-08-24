@@ -29,6 +29,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startCalendarHealthProbeWorker, registerCalendarHealthProbeCron },
     { startCalendarSubscriptionReconcileWorker },
     { startCalendarSubscriptionMonitorWorker, registerCalendarSubscriptionMonitorCron },
+    { startMeetingCalendarAmendWorker },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -49,6 +50,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./calendar-health-probe.js'),
     import('./calendar-subscription-reconcile.js'),
     import('./calendar-subscription-monitor.js'),
+    import('./meeting-calendar-amend.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -103,5 +105,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   startCalendarSubscriptionReconcileWorker();
   startCalendarSubscriptionMonitorWorker();
   await registerCalendarSubscriptionMonitorCron();
+  // BAL-409 — the retrying, converging Apiroc calendar amend for a client-initiated reschedule.
+  // Trigger-driven (enqueued from `rescheduleMeeting`'s post-commit block), no cron of its own.
+  startMeetingCalendarAmendWorker();
   logger?.info('BullMQ workers started');
 }

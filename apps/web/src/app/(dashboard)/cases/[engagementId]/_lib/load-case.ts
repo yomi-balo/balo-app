@@ -18,6 +18,7 @@ import {
   type Meeting,
 } from '@balo/db';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
+import { MIN_MEETING_MINUTES } from '@balo/shared/meetings';
 import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
 import {
   deriveCaseConsultationState,
@@ -142,15 +143,33 @@ function toEarningsView(aggregate: CaseExpertEarningsAggregate): CaseEarningsVie
   return { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 };
 }
 
-/** `CaseNudge` (Dates, from the pure core) → `CaseNudgeView` (ISO strings, serialisable). */
-function toNudgeView(nudge: CaseNudge): CaseNudgeView {
+/**
+ * `CaseNudge` (Dates, from the pure core) → `CaseNudgeView` (ISO strings, serialisable).
+ *
+ * BAL-409 — `nextScheduled` is passed through SEPARATELY (rather than widening `CaseNudge`
+ * itself) so the reschedule dialog can read the meeting's current duration. Structurally,
+ * `nudge.kind === 'upcoming'` implies `selectCaseNudge` derived it FROM this same
+ * `nextScheduled` value, so it is never null there — the `?? MIN_MEETING_MINUTES` fallback is
+ * defensive only, never reachable in practice.
+ */
+function toNudgeView(
+  nudge: CaseNudge,
+  nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null
+): CaseNudgeView {
   if (nudge === null) return null;
   if (nudge.kind === 'upcoming') {
+    const durationMinutes =
+      nextScheduled !== null && nextScheduled.meetingId === nudge.meetingId
+        ? Math.round(
+            (nextScheduled.scheduledEnd.getTime() - nextScheduled.scheduledStart.getTime()) / 60_000
+          )
+        : MIN_MEETING_MINUTES;
     return {
       kind: 'upcoming',
       meetingId: nudge.meetingId,
       scheduledStartIso: nudge.scheduledStart.toISOString(),
       live: nudge.live,
+      durationMinutes,
     };
   }
   return { kind: nudge.kind };
@@ -445,10 +464,11 @@ export const loadCase = cache(
     });
 
     const isOpen = caseRow.closedAt === null;
+    const nextScheduled = selectNextScheduled(meetings);
     const nudge = selectCaseNudge({
       lens,
       isOpen,
-      nextScheduled: selectNextScheduled(meetings),
+      nextScheduled,
       resolutionRequestedAt: caseRow.resolutionRequestedAt,
       now,
     });
@@ -490,7 +510,7 @@ export const loadCase = cache(
       expertProfileId,
       viewerUserId: userId,
       header,
-      nudge: toNudgeView(nudge),
+      nudge: toNudgeView(nudge, nextScheduled),
       consultations,
       conversation: await buildConversation(access, labels, messagePage, conversationFileRows),
       actionItems: buildActionItems(
@@ -563,7 +583,7 @@ const EMPTY_EARNINGS: CaseExpertEarningsAggregate = {
  */
 function selectNextScheduled(
   meetings: readonly Meeting[]
-): { meetingId: string; scheduledStart: Date } | null {
+): { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null {
   const upcoming = meetings
     .filter((meeting) => {
       const state = deriveCaseConsultationState({
@@ -581,7 +601,14 @@ function selectNextScheduled(
 
   const [next] = upcoming;
   if (next === undefined) return null;
-  return { meetingId: next.id, scheduledStart: next.scheduledStart };
+  // BAL-409 — `scheduledEnd` rides alongside for the reschedule dialog's duration pin
+  // (`toNudgeView`). `selectCaseNudge`'s own `nextScheduled` parameter type only reads
+  // `meetingId`/`scheduledStart`; the extra field is structurally ignored there.
+  return {
+    meetingId: next.id,
+    scheduledStart: next.scheduledStart,
+    scheduledEnd: next.scheduledEnd,
+  };
 }
 
 /**

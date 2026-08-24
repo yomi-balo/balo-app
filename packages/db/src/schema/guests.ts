@@ -67,15 +67,15 @@ import { timestamps, softDelete } from './helpers';
  * capture a raw secret passed as a bind parameter — verbatim the `review_invite_tokens`
  * ruling. Do not move hashing in here.
  *
- * ⚠ KNOWN LIMITATION — RESCHEDULE, AND ITS WRITTEN HAND-OFF. `expires_at` is derived from
- * the MEETING (`scheduled_end` + 7d) at invite time, so it has NO SQL default (unlike
- * BAL-386/390's `now() + 30 days`). If a meeting is later moved more than 7 days past its
- * ORIGINAL end, an already-issued guest link expires before the call.
- * **BAL-409 / BAL-410 / BAL-411 (reschedule) MUST CALL
- * `meetingGuestsRepository.extendExpiryForMeeting(meetingId, newExpiresAt)` inside the
- * reschedule transaction.** That method ships here with ZERO production callers precisely
- * so those tickets need no migration — this paragraph is the assignment, in the same form
- * BAL-418 used to hand D1 to BAL-408.
+ * ⚠ KNOWN LIMITATION — RESCHEDULE, AND ITS HAND-OFF, NOW DISCHARGED FOR THE CLIENT SIDE.
+ * `expires_at` is derived from the MEETING (`scheduled_end` + 7d) at invite time, so it has
+ * NO SQL default (unlike BAL-386/390's `now() + 30 days`). If a meeting is later moved more
+ * than 7 days past its ORIGINAL end, an already-issued guest link expires before the call.
+ * **BAL-409 (client-initiated reschedule) now calls
+ * `meetingGuestsRepository.extendExpiryForMeeting` — via the tx-scoped
+ * `extendGuestExpiryForMeetingTx` — inside `meetingsRepository.updateSchedule`'s own
+ * transaction.** BAL-411 (expert-side propose-and-wait) still owes the same call on its own
+ * write path when it lands.
  *
  * ── FOUR STRUCTURAL GUARANTEES AN EXPERT-SIDE GUEST IS NOT A CO-DELIVERER ──────────────
  * (multi-expert delivery is DEFERRED — ADR-1045 §5's future `engagement_experts` — not

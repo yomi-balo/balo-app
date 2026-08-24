@@ -238,7 +238,9 @@ describe('consultation projection — lifecycle', () => {
     });
     const next = schedule(48);
 
-    const result = await meetingsRepository.updateSchedule(created.meeting.id, next);
+    const result = await meetingsRepository.updateSchedule(created.meeting.id, next, {
+      actorUserId: null,
+    });
 
     expect(result.expertProfileId).toBe(expert.id);
     const projection = await findProjectionForMeeting(created.meeting.id);
@@ -248,11 +250,11 @@ describe('consultation projection — lifecycle', () => {
     expect(await allProjectionRows(created.meeting.id)).toHaveLength(1);
   });
 
-  it('updateSchedule works for waiting_for_participants too (the other reschedulable label)', async () => {
-    // The guard below is `IN ('scheduled','waiting_for_participants')`. Pinning the SECOND
-    // label matters: a guard narrowed to `scheduled` alone would still pass every other
-    // assertion in this file while quietly breaking the reschedule of a call whose lobby is
-    // already open — the exact window in which a reschedule is most likely to be requested.
+  it('updateSchedule now REFUSES waiting_for_participants (BAL-409 settled the asymmetry)', async () => {
+    // ⚠ THIS INVERTS the pre-BAL-409 guard. `waiting_for_participants` used to be reschedulable
+    // alongside `scheduled`; BAL-409 (orchestrator D-B) narrowed the guard to `scheduled` ALONE
+    // — the join window already opened, and moving it would leave a STALE status (D12). See
+    // `meetingsRepository.updateSchedule`'s docblock for the full reasoning.
     const expert = await expertDraftFactory();
     const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
     const created = await meetingsRepository.create({
@@ -265,10 +267,10 @@ describe('consultation projection — lifecycle', () => {
       .where(eq(meetings.id, created.meeting.id));
     const next = schedule(72);
 
-    const result = await meetingsRepository.updateSchedule(created.meeting.id, next);
-
-    expect(result.expertProfileId).toBe(expert.id);
-    expect((await findProjectionForMeeting(created.meeting.id))?.startAt.getTime()).toBe(
+    await expect(
+      meetingsRepository.updateSchedule(created.meeting.id, next, { actorUserId: null })
+    ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
+    expect((await findProjectionForMeeting(created.meeting.id))?.startAt.getTime()).not.toBe(
       next.scheduledStart.getTime()
     );
   });
@@ -307,7 +309,7 @@ describe('consultation projection — lifecycle', () => {
     ] as const;
 
     await expect(
-      meetingsRepository.updateSchedule(created.meeting.id, target)
+      meetingsRepository.updateSchedule(created.meeting.id, target, { actorUserId: null })
     ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
 
     // 1. NOTHING MOVED. The meeting is still cancelled, still on its original window, and
@@ -384,7 +386,7 @@ describe('consultation projection — lifecycle', () => {
       await db.update(meetings).set({ status }).where(eq(meetings.id, created.meeting.id));
 
       await expect(
-        meetingsRepository.updateSchedule(created.meeting.id, schedule(48))
+        meetingsRepository.updateSchedule(created.meeting.id, schedule(48), { actorUserId: null })
       ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
 
       expect((await findProjectionForMeeting(created.meeting.id))?.startAt.getTime()).toBe(
@@ -402,7 +404,7 @@ describe('consultation projection — lifecycle', () => {
     await meetingsRepository.softDelete(created.meeting.id);
 
     await expect(
-      meetingsRepository.updateSchedule(created.meeting.id, schedule(48))
+      meetingsRepository.updateSchedule(created.meeting.id, schedule(48), { actorUserId: null })
     ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
   });
 
@@ -645,7 +647,9 @@ describe('findProjectionDrift — did availability and meetings ever disagree?',
       ...schedule(3),
       contexts: [{ contextType: 'case', contextId: engagementId }],
     });
-    await meetingsRepository.updateSchedule(rescheduled.meeting.id, schedule(9));
+    await meetingsRepository.updateSchedule(rescheduled.meeting.id, schedule(9), {
+      actorUserId: null,
+    });
     const cancelled = await meetingsRepository.create({
       ...schedule(5),
       contexts: [{ contextType: 'case', contextId: engagementId }],

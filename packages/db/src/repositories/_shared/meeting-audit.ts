@@ -8,14 +8,13 @@ import type { DbExecutor } from './db-executor';
  * compile time WITHOUT the generic repo needing to know it. Mirrors
  * `_shared/schedule-audit.ts`.
  *
- * ⚠ TWO OF THE FOUR HAVE WRITERS: `meeting.booked` (BAL-129, on `create`) and `meeting.ended`
- * (BAL-134, on `endMeeting`). The other two are RESERVED — declared here so their eventual
- * writers inherit THIS vocabulary rather than minting a near-miss spelling
- * (`meeting.reschedule`, `meeting.canceled`) that no "history of one meeting" read would ever
- * find. `audit_events.action` is open TEXT, so a reserved label costs no migration and no enum
- * value:
- *   · `meeting.rescheduled` — owner BAL-409/BAL-411, on `meetingsRepository.updateSchedule`.
- *   · `meeting.cancelled`   — owner BAL-410, on `meetingsRepository.cancel`.
+ * ⚠ THREE OF THE FOUR NOW HAVE WRITERS: `meeting.booked` (BAL-129, on `create`), `meeting.ended`
+ * (BAL-134, on `endMeeting`), and — as of BAL-409 — `meeting.rescheduled` (on
+ * `meetingsRepository.updateSchedule`, via `recordMeetingRescheduled` below). `meeting.cancelled`
+ * is still RESERVED — declared here so its eventual writer (BAL-410, on `cancel`) inherits THIS
+ * vocabulary rather than minting a near-miss spelling (`meeting.canceled`) that no "history of
+ * one meeting" read would ever find. `audit_events.action` is open TEXT, so a reserved label
+ * costs no migration and no enum value.
  *
  * ⚠ `meeting.ended` IS WRITTEN WITH A NULL ACTOR ON FOUR OF THE FIVE TERMINAL PATHS, and that
  * is the ADR-1030 system-actor exemption, not a miss: idle end, no-show, missed call and
@@ -33,8 +32,8 @@ import type { DbExecutor } from './db-executor';
  * visible only to someone reading this file. That is why the reserved labels ship and an
  * attribution column on `meetings` does not (see `meetingsRepository.create`).
  *
- * Both reserved mutators exist and are unaudited today, which is safe only because NEITHER HAS
- * A PRODUCTION CALLER (`repositories/meetings.ts`) — so neither can yet produce an
+ * `meeting.cancelled`'s mutator (`cancel`) exists and is unaudited today, which is safe only
+ * because it has NO PRODUCTION CALLER (`repositories/meetings.ts`) — so it cannot yet produce an
  * unattributed, party-visible state change. Wiring a caller without also wiring its audit row
  * re-opens exactly the ADR-1044 §5 gap BAL-129 closes here.
  */
@@ -138,6 +137,45 @@ export async function recordMeetingBooked(
       scheduledStart: input.scheduledStart.toISOString(),
       scheduledEnd: input.scheduledEnd.toISOString(),
       expertProfileId: input.expertProfileId,
+    },
+  });
+}
+
+/**
+ * Record the `meeting.rescheduled` row for ONE move, inside `meetingsRepository.updateSchedule`'s
+ * transaction. BAL-409 — the first shipped writer on this reserved label (BAL-411 shares it for
+ * the expert-initiated half).
+ *
+ * ⚠ THE WINDOW IS STORED AS ISO STRINGS, NOT `Date` — same rule as `recordMeetingBooked`.
+ * `metadata` is `jsonb`, so a `Date` written into it round-trips as a string; typing the stored
+ * shape as `Date` would be a lie on the way back out.
+ *
+ * `previous` is the pre-image read inside the SAME transaction (before the compare-and-set), so
+ * a "history of one meeting" read can show the from/to window without a second query.
+ */
+export async function recordMeetingRescheduled(
+  exec: DbExecutor,
+  input: {
+    meetingId: string;
+    actorUserId: string | null;
+    previous: { scheduledStart: Date; scheduledEnd: Date };
+    scheduledStart: Date;
+    scheduledEnd: Date;
+    expertProfileId: string | null;
+    guestLinksExtended: number;
+  }
+): Promise<void> {
+  await recordMeetingAudit(exec, {
+    actorUserId: input.actorUserId,
+    action: 'meeting.rescheduled',
+    meetingId: input.meetingId,
+    metadata: {
+      previousScheduledStart: input.previous.scheduledStart.toISOString(),
+      previousScheduledEnd: input.previous.scheduledEnd.toISOString(),
+      scheduledStart: input.scheduledStart.toISOString(),
+      scheduledEnd: input.scheduledEnd.toISOString(),
+      expertProfileId: input.expertProfileId,
+      guestLinksExtended: input.guestLinksExtended,
     },
   });
 }

@@ -303,6 +303,25 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     ...emailAndInApp('client', 'booking-confirmed-client', (ctx) => !!ctx.payload.recipientId),
     ...emailAndInApp('expert', 'booking-confirmed-expert'),
   ],
+  // BAL-409 — a booked consultation was moved by the CLIENT. Same recipient/condition shape as
+  // `booking.confirmed`: the CLIENT (conditioned on `recipientId`'s presence) + the delivering
+  // EXPERT (unconditioned — always present). Email + in-app to each; NO SMS, NO admin fan-out.
+  'booking.rescheduled': [
+    ...emailAndInApp('client', 'booking-rescheduled-client', (ctx) => !!ctx.payload.recipientId),
+    ...emailAndInApp('expert', 'booking-rescheduled-expert'),
+  ],
+  // BAL-409 — the guest-facing half of the same move. EMAIL ONLY — a guest is a non-user with
+  // no in-app surface (matching `meeting.guest_invited`'s posture). `recipient: 'email_address'`
+  // resolves off `payload.recipientEmail`, the same lever every guest event uses.
+  'meeting.guest_rescheduled': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'meeting-guest-rescheduled',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
   'message.received': [
     {
       channel: 'in-app',

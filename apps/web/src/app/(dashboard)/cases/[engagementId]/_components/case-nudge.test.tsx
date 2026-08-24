@@ -22,6 +22,7 @@ const BASE = {
   bookAgainHref: '/experts/amara-okafor',
   onMarkResolved: vi.fn(),
   onDismissAsk: vi.fn(),
+  onReschedule: vi.fn(),
   busy: false,
 };
 
@@ -30,6 +31,7 @@ const UPCOMING: CaseNudgeView = {
   meetingId: 'm1',
   scheduledStartIso: '2026-09-01T10:00:00Z',
   live: false,
+  durationMinutes: 60,
 };
 
 /**
@@ -129,9 +131,35 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
     expect(screen.getByText(/join link is in your calendar/i)).toBeInTheDocument();
   });
 
-  it('offers no RESCHEDULE CTA either — no reschedule proposal exists in the schema', () => {
+  /**
+   * BAL-409 — INVERTED from the pre-BAL-409 assertion that no reschedule CTA exists. A
+   * client-initiated reschedule auto-approves (it needs no proposal state), so the CTA lands
+   * here; BAL-411's expert-side propose-and-wait still has nothing to link to.
+   */
+  it('renders a RESCHEDULE CTA for the client lens on an upcoming, non-live consultation', () => {
     render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" />);
-    expect(screen.queryByText(/reschedule/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reschedule/i })).toBeInTheDocument();
+  });
+
+  it('does NOT render the reschedule CTA for the expert lens', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" />);
+    expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the reschedule CTA while the consultation is LIVE', () => {
+    render(<CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens="client" />);
+    expect(screen.queryByRole('button', { name: /reschedule/i })).not.toBeInTheDocument();
+  });
+
+  it('calls onReschedule when the CTA is clicked, and renderedHeadingCount stays 1', async () => {
+    const onReschedule = vi.fn();
+    const user = userEvent.setup();
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" onReschedule={onReschedule} />);
+
+    await user.click(screen.getByRole('button', { name: /reschedule/i }));
+
+    expect(onReschedule).toHaveBeenCalledTimes(1);
+    expect(renderedHeadingCount()).toBe(1);
   });
 });
 

@@ -917,7 +917,7 @@ describe('publishBodySchema', () => {
     });
 
     it('rejects a missing expertProfileId and an empty reason', () => {
-      const { expertProfileId: _e, ...rest } = valid;
+      const { expertProfileId: _expertProfileId, ...rest } = valid;
       expect(
         publishBodySchema.safeParse({ event: 'engagement.cancelled', payload: rest }).success
       ).toBe(false);
@@ -1288,12 +1288,161 @@ describe('publishBodySchema', () => {
     });
 
     it('rejects a missing expertProfileId', () => {
-      const { expertProfileId: _e, ...rest } = valid;
+      const { expertProfileId: _expertProfileId, ...rest } = valid;
       expect(
         publishBodySchema.safeParse({ event: 'expert.searchability_restored', payload: rest })
           .success
       ).toBe(false);
     });
+  });
+
+  // N3 — a focused block, NOT a full accept/reject suite (see the comment on `booking.
+  // rescheduled` below on why `booking.confirmed` otherwise ships with none): `joinPath` IS
+  // rendered as `${BASE_URL}${joinPath}` in this event's own template, so it must be pinned
+  // here too.
+  describe('booking.confirmed — joinPath (N3)', () => {
+    const valid = {
+      correlationId: '550e8400-e29b-41d4-a716-446655440099',
+      meetingId: '550e8400-e29b-41d4-a716-446655440000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440002',
+      clientCompanyName: 'Northwind Industrial',
+      expertPartyLabel: 'CloudPeak',
+      caseTitle: 'Salesforce integration',
+      isNewCase: true,
+      priorConsultationCount: 0,
+      scheduledStartIso: '2026-09-01T10:00:00.000Z',
+      durationMinutes: 30,
+      joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000',
+      provisioned: true,
+      guestCount: 0,
+    };
+
+    it('accepts a valid payload', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'booking.confirmed', payload: valid }).success
+      ).toBe(true);
+    });
+
+    it('rejects an absolute URL smuggled through joinPath', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.confirmed',
+          payload: { ...valid, joinPath: 'https://evil.com/phish' },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a joinPath outside the /join/m/{uuid} shape', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.confirmed',
+          payload: { ...valid, joinPath: '/join/m/not-a-uuid' },
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  // BAL-409 — unlike `booking.confirmed` (which shipped with no accept/reject block; do not
+  // copy that gap), this event gets one.
+  describe('booking.rescheduled', () => {
+    const valid = {
+      correlationId: 'meeting-id:2026-09-01T10:00:00.000Z',
+      meetingId: '550e8400-e29b-41d4-a716-446655440000',
+      engagementId: '550e8400-e29b-41d4-a716-446655440001',
+      expertProfileId: '550e8400-e29b-41d4-a716-446655440002',
+      clientCompanyName: 'Northwind Industrial',
+      expertPartyLabel: 'CloudPeak',
+      caseTitle: 'Salesforce integration',
+      previousScheduledStartIso: '2026-09-01T09:00:00.000Z',
+      scheduledStartIso: '2026-09-01T10:00:00.000Z',
+      durationMinutes: 30,
+      joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000',
+      initiatedBy: 'client',
+    };
+
+    it('accepts a valid payload', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'booking.rescheduled', payload: valid }).success
+      ).toBe(true);
+    });
+
+    it('accepts without recipientId (the client rule skips gracefully)', () => {
+      expect(
+        publishBodySchema.safeParse({ event: 'booking.rescheduled', payload: valid }).success
+      ).toBe(true);
+    });
+
+    it('rejects an initiatedBy other than "client"', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.rescheduled',
+          payload: { ...valid, initiatedBy: 'expert' },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a non-datetime scheduledStartIso', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.rescheduled',
+          payload: { ...valid, scheduledStartIso: 'not-a-date' },
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects a missing expertProfileId', () => {
+      const { expertProfileId: _expertProfileId, ...rest } = valid;
+      expect(
+        publishBodySchema.safeParse({ event: 'booking.rescheduled', payload: rest }).success
+      ).toBe(false);
+    });
+
+    // N3 — `joinPath` must be the exact `/join/m/{uuid}` shape `memberJoinPath()` emits.
+    // `booking.confirmed`'s template renders `${BASE_URL}${joinPath}` — an unconstrained value
+    // would let an absolute URL become a phishing link inside a real Balo email.
+    it('N3 — rejects an absolute URL smuggled through joinPath', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.rescheduled',
+          payload: { ...valid, joinPath: 'https://evil.com/phish' },
+        }).success
+      ).toBe(false);
+    });
+
+    it('N3 — rejects a joinPath outside the /join/m/{uuid} shape', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.rescheduled',
+          payload: { ...valid, joinPath: '/join/m/not-a-uuid' },
+        }).success
+      ).toBe(false);
+    });
+
+    it('N3 — rejects a protocol-relative joinPath (//evil.com)', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.rescheduled',
+          payload: { ...valid, joinPath: '//evil.com/join/m/550e8400-e29b-41d4-a716-446655440000' },
+        }).success
+      ).toBe(false);
+    });
+  });
+
+  it('rejects meeting.guest_rescheduled — a server-only event with no publish arm by design', () => {
+    const result = publishBodySchema.safeParse({
+      event: 'meeting.guest_rescheduled',
+      payload: {
+        correlationId: 'guest-id:2026-09-01T10:00:00.000Z',
+        recipientEmail: 'guest@example.com',
+        meetingTitle: 'Salesforce integration',
+        previousScheduledStartIso: '2026-09-01T09:00:00.000Z',
+        scheduledStartIso: '2026-09-01T10:00:00.000Z',
+        scheduledEndIso: '2026-09-01T10:30:00.000Z',
+        expiresOn: '8 September 2026',
+      },
+    });
+    expect(result.success).toBe(false);
   });
 
   it('rejects missing event field', () => {

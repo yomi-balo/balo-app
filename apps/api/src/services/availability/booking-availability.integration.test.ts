@@ -262,6 +262,7 @@ describe('BAL-428 — booking a meeting removes the slot the marketplace adverti
     const moved = await rescheduleMeeting(
       booked.meetingId,
       { scheduledStart: at('10:00'), scheduledEnd: at('11:00') },
+      null,
       log
     );
     expect(moved.expertProfileId).toBe(expert.expertProfileId);
