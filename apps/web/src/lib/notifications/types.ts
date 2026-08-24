@@ -25,6 +25,7 @@ import type {
   ExpertSearchabilityLostPayload,
   ExpertSearchabilityRestoredPayload,
   BookingConfirmedPayload,
+  BookingRescheduledPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -253,7 +254,12 @@ export type NotificationEvent =
   // BAL-400 (D4) — a consultation was booked into a case. Published by the booking
   // Server Action AFTER `POST /meetings` returns 201 — so a case with no meeting never
   // notifies anyone. Mirror of apps/api/src/notifications/events.ts — keep in lockstep.
-  | 'booking.confirmed';
+  | 'booking.confirmed'
+  // BAL-409 — a booked consultation was moved by the CLIENT. Published by the case-surface
+  // Server Action AFTER the reschedule route returns 200. Mirror of
+  // apps/api/src/notifications/events.ts — keep in lockstep. ⚠ `meeting.guest_rescheduled` is
+  // deliberately NOT mirrored here — it is SERVER-ONLY (see that event's docblock).
+  | 'booking.rescheduled';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -297,4 +303,5 @@ export interface EventPayloadMap {
   'expert.searchability_lost': ExpertSearchabilityLostPayload;
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
   'booking.confirmed': BookingConfirmedPayload;
+  'booking.rescheduled': BookingRescheduledPayload;
 }

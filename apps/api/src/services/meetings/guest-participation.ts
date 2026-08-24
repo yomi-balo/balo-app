@@ -452,8 +452,14 @@ async function announceInvites(params: AnnounceInvitesParams): Promise<void> {
   }
 }
 
-/** Pre-formatted UTC date for the email's helpful-fact expiry line ("13 August 2026"). */
-function formatExpiryDate(expiresAt: Date): string {
+/**
+ * Pre-formatted UTC date for the email's helpful-fact expiry line ("13 August 2026").
+ *
+ * ⚠ EXPORTED (BAL-409) — `meeting-availability.ts`'s `meeting.guest_rescheduled` publish needs
+ * the identical formatting for its own `expiresOn` line; a second inline `Intl.DateTimeFormat`
+ * call there would be the exact copy this file's own docblock warns against.
+ */
+export function formatExpiryDate(expiresAt: Date): string {
   return new Intl.DateTimeFormat('en-GB', {
     timeZone: 'UTC',
     day: 'numeric',
@@ -488,8 +494,13 @@ const MEETING_LABEL_FOR_CONTEXT: Record<PrimaryMeetingContext['contextType'], st
  * to `MEETING_LABEL_FOR_CONTEXT` whenever the subtype carries no title — which is the case
  * for `project_kickoff` / `package_session` / `retainer_checkin`, whose titles would need a
  * further hop through origination that is not worth a new repository surface here.
+ *
+ * ⚠ EXPORTED (BAL-409) — this is the GUEST-FACING title resolver (it has no notion of "already
+ * authorized member", unlike `resolveMeetingContextLabel`, which is member-only and explicitly
+ * forbids guest/lobby callers). `meeting-availability.ts`'s `meeting.guest_rescheduled` fan-out
+ * is a guest-facing payload and must use THIS function, not that one.
  */
-async function resolveMeetingTitle(subject: PrimaryMeetingContext): Promise<string> {
+export async function resolveMeetingTitle(subject: PrimaryMeetingContext): Promise<string> {
   const fallback = MEETING_LABEL_FOR_CONTEXT[subject.contextType];
   try {
     if (subject.contextType === 'case') {

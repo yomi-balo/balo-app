@@ -1,5 +1,10 @@
 import { and, asc, eq, gte, inArray, isNull, notInArray } from 'drizzle-orm';
-import { assertMeetingTransition, type MeetingLifecycleStatus } from '@balo/shared/meetings';
+import {
+  assertMeetingTransition,
+  RESCHEDULABLE_MEETING_STATUSES,
+  GUEST_TOKEN_TTL_AFTER_END_MS,
+  type MeetingLifecycleStatus,
+} from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   meetings,
@@ -19,7 +24,12 @@ import {
   syncProjectionScheduleTx,
 } from './_shared/consultation-projection';
 import type { DbExecutor } from './_shared/db-executor';
-import { recordMeetingAudit, recordMeetingBooked } from './_shared/meeting-audit';
+import { extendGuestExpiryForMeetingTx } from './_shared/guest-expiry';
+import {
+  recordMeetingAudit,
+  recordMeetingBooked,
+  recordMeetingRescheduled,
+} from './_shared/meeting-audit';
 import { meetingPresenceRepository } from './meeting-presence';
 
 /**
@@ -89,9 +99,7 @@ export class MeetingNotCancellableError extends Error {
  */
 export class MeetingNotReschedulableError extends Error {
   constructor(public readonly meetingId: string) {
-    super(
-      `Meeting ${meetingId} is not reschedulable (must be live and status='scheduled' or 'waiting_for_participants')`
-    );
+    super(`Meeting ${meetingId} is not reschedulable (must be live and status='scheduled')`);
     this.name = 'MeetingNotReschedulableError';
   }
 }
@@ -238,6 +246,31 @@ export interface MeetingMutationResult {
 /** `create`'s result: the meeting, its context rows, AND who was booked. */
 export interface CreatedMeeting extends MeetingMutationResult {
   contexts: MeetingContext[];
+}
+
+/**
+ * BAL-409 — `updateSchedule`'s result. Widens {@link MeetingMutationResult} with the pre-image
+ * window (for the audit row and the API response) and how many guest links moved.
+ */
+export interface RescheduleMutationResult extends MeetingMutationResult {
+  /** The window as it was BEFORE the move — read inside the same tx. */
+  previous: { scheduledStart: Date; scheduledEnd: Date };
+  /** How many live guest links moved. `0` on a move EARLIER — correct, not a bug. */
+  guestLinksExtended: number;
+  /**
+   * The `meeting.rescheduled` audit row's id — UNIQUE PER SUCCESSFUL MOVE, because
+   * `audit_events` is append-only.
+   *
+   * ⚠ THIS IS THE OUTBOUND FAN-OUT'S IDEMPOTENCY KEY, AND IT MUST NOT BE DERIVED FROM THE
+   * WINDOW. Every window-derived key (`meetingId:start-end`, `meetingId:startIso`,
+   * `guestId:startIso`) COLLIDES on a move BACK to a previously-used window — A→B→C→B
+   * regenerates the key the A→B move already used. BullMQ silently no-ops an `add` whose
+   * jobId exists in the RETAINED completed set (`removeOnComplete` keeps 1000 amend jobs and
+   * 100 notification jobs), so the third move would drop the calendar amend AND both party
+   * emails: Balo says B, the expert's real calendar stays on C, and nobody is told.
+   * Keying on this id makes every successful move its own event.
+   */
+  rescheduleAuditId: string;
 }
 
 /**
@@ -531,40 +564,37 @@ export const meetingsRepository = {
    * Re-asserts `start < end` in-process so the caller gets a named error rather than a raw
    * `23514` from `meeting_scheduled_start_before_end` (which remains the backstop).
    *
-   * ⚠ RETURNS `MeetingMutationResult`, NOT `Meeting` (changed by BAL-428) — the caller
-   * needs the `expertProfileId` to rebuild the availability cache post-commit. That expert
-   * is read from the LIVE PROJECTION ROW, never re-resolved from the contexts; see
-   * `syncProjectionScheduleTx` for why re-resolving would be a silent repoint.
+   * ⚠ RETURNS `RescheduleMutationResult`, NOT `Meeting` — widens `MeetingMutationResult`
+   * (BAL-428) with the pre-image window (for the audit row and the API response) and how many
+   * guest links moved. `expertProfileId` is read from the LIVE PROJECTION ROW, never
+   * re-resolved from the contexts; see `syncProjectionScheduleTx` for why re-resolving would
+   * be a silent repoint.
    *
-   * ⚠ THE GUARD SETS HERE AND ON `cancel()` ARE NOT THE SAME, AND THAT ASYMMETRY IS
-   * UNDECIDED — NOT A RULING. `cancel()` allows `scheduled` ONLY; this allows `scheduled`
-   * AND `waiting_for_participants`. So once the Daily room opens, a meeting can be MOVED but
-   * not CANCELLED. Two consequences a route author will meet before anyone else does:
-   *   · rescheduling a `waiting_for_participants` meeting into next week leaves it AT
-   *     `waiting_for_participants` with a future window. ⚠ BAL-134 HAS NOW LANDED AND STILL
-   *     DOES NOT CLOSE THIS (D12): the `waiting_for_participants → scheduled` back-edge is
-   *     DECLARED LEGAL in its transition map but deliberately NOT implemented, because
-   *     deciding what happens to the presence rows from the pre-reschedule attempt is a
-   *     BILLING question (BAL-412's) on a route BAL-409/BAL-411 own. What BAL-134 did do is
-   *     make the stale status INERT: every one of its five terminal rules carries an explicit
-   *     wall-clock precondition anchored on `scheduled_start`, so a meeting rescheduled into
-   *     the future matches NO rule. Without that guard an expert with an open interval across
-   *     the move would have `expertPresentMs` grow to `now` and trip the no-show rule on a
-   *     call that has not happened yet;
-   *   · if a participant had already joined, that meeting carries an open presence interval
-   *     across the move (`meeting-presence.ts`'s `resolveClockCeiling` residual).
-   * Each guard was written for its own reason — `cancel` narrow because cancelling is what
-   * frees a slot, this one wider because a client may legitimately move a call in the minutes
-   * before it starts — so the asymmetry is an ACCIDENT OF TWO LOCAL DECISIONS, not a product
-   * position. **BAL-409/BAL-410/BAL-411 must settle it explicitly**: either widen `cancel` to
-   * `waiting_for_participants` (and revisit the presence residual, which currently leans on
-   * `cancel`'s narrowness), or narrow this one to `scheduled` and require cancel-then-rebook
-   * once the room is open. Do not let the first route to land decide it by omission.
+   * ⚠⚠ THE `cancel()` ASYMMETRY IS NOW SETTLED, IN THE RESCHEDULE DIRECTION ONLY (orchestrator
+   * D-B). `repositories/meetings.ts:539-562`'s prior revision left this UNDECIDED between two
+   * options: widen `cancel()` to `waiting_for_participants`, or narrow this method to
+   * `scheduled` alone. **BAL-409 CHOSE THE SECOND.** The guard is now
+   * `RESCHEDULABLE_MEETING_STATUSES` (`@balo/shared/meetings` — `readonly ['scheduled']`), the
+   * SAME tuple the route's `resolveRescheduleRefusal` checks, so the repository guard and the
+   * route guard cannot drift. Reasons, all load-bearing:
+   *
+   *   1. It is what the ticket's own AC says ("Reschedule is unavailable once the meeting has
+   *      started").
+   *   2. `waiting_for_participants` means the join window already opened. Moving it would
+   *      leave a STALE status — the `waiting_for_participants → scheduled` back-edge is
+   *      DECLARED LEGAL in the transition map (`lifecycle.ts:59-66`, D12) but DELIBERATELY
+   *      UNIMPLEMENTED, because the presence rows from the pre-reschedule attempt are a
+   *      BILLING question (BAL-412's). **Do not implement that back-edge here.**
+   *   3. It leaves no open presence interval spanning a move
+   *      (`meeting-presence.ts`'s `resolveClockCeiling` residual).
+   *
+   * **`cancel()`'s guard is UNCHANGED** — it still allows `scheduled` only, and it already
+   * agreed with this narrower reschedule guard by coincidence. BAL-410 inherits the cancel
+   * side of the asymmetry and has no production caller today.
    *
    * ⚠⚠ GUARDED AT ALL FOR A SHARPER REASON THAN THE ABOVE. Without any status guard,
-   * CANCEL-THEN-
-   * RESCHEDULE REOPENS EXACTLY THE DOUBLE-BOOKING THIS TICKET CLOSES, in the one shape the
-   * reconciliation read cannot see:
+   * CANCEL-THEN-RESCHEDULE REOPENS EXACTLY THE DOUBLE-BOOKING THIS TICKET CLOSES, in the one
+   * shape the reconciliation read cannot see:
    *
    *   1. Book M for 09:00–10:00 → meeting `scheduled`, projection `confirmed`.
    *   2. `cancel(M)` → meeting `cancelled`, projection `cancelled`. Slot correctly freed.
@@ -579,23 +609,60 @@ export const meetingsRepository = {
    *   6. Worse, `afterMeetingMutation` still gets a non-null `expertProfileId` and enqueues a
    *      rebuild — so the platform actively RE-ADVERTISES the slot as free.
    *
-   * `ended` and `in_progress` are excluded for the same reason plus an independent one: a
-   * delivered or running call must not be silently moved into the future.
+   * `ended`, `in_progress` and `cancelled` are excluded for the same reason plus an
+   * independent one: a delivered, running or cancelled call must not be silently moved into
+   * the future.
    *
    * ⚠ IF RESCHEDULE-AFTER-CANCEL IS EVER MADE LEGAL (a "revive"), `syncProjectionScheduleTx`
    * MUST re-derive `status` from `meeting.status` in the same change, and `cancel()`'s guard
    * must be revisited. What must never exist again is the third state, where it half-works.
    *
-   * ⚠ THE WALL-CLOCK RULE IS NOT HERE, matching `cancel()`: BAL-409/BAL-411's "how late may
-   * you move it" policy belongs at the CALL SITE.
+   * ⚠ THE WALL-CLOCK RULE IS NOT HERE, matching `cancel()`: BAL-409's "how late may you move
+   * it" policy (`resolveRescheduleRefusal`'s `already_started`) belongs at the CALL SITE. This
+   * repository's status allow-list is the TOCTOU BACKSTOP — if the meeting flips to
+   * `in_progress` between the route's gate read and this write, the UPDATE matches zero rows
+   * and the whole transaction rolls back.
+   *
+   * ── THE FULL TRANSACTION, IN ORDER, ALL ON `tx` ────────────────────────────────
+   *   1. Read the pre-image (`scheduled_start`/`scheduled_end`) — needed for the audit row's
+   *      `previous` window. Consistent by construction: same transaction as the write below.
+   *   2. The guarded compare-and-set, as above.
+   *   3. `syncProjectionScheduleTx` — moves the `consultations` projection.
+   *   4. `extendGuestExpiryForMeetingTx` — extends every live guest link (extend-only).
+   *   5. `recordMeetingRescheduled` — the `meeting.rescheduled` audit row, LAST among the
+   *      writes: an audit row left behind by a rolled-back move would attest to a move that
+   *      never happened.
    */
   async updateSchedule(
     id: string,
-    schedule: { scheduledStart: Date; scheduledEnd: Date }
-  ): Promise<MeetingMutationResult> {
+    schedule: { scheduledStart: Date; scheduledEnd: Date },
+    audit: { actorUserId: string | null }
+  ): Promise<RescheduleMutationResult> {
     assertScheduleOrder(schedule.scheduledStart, schedule.scheduledEnd);
 
     return db.transaction(async (tx) => {
+      // 1. Pre-image — read before the write so the audit row can carry the FROM window.
+      // ⚠ N6 — `.for('update')`, NOT a bare SELECT. Without it, two concurrent reschedules on
+      // the same meeting can both read the SAME pre-image before either writes: the second
+      // request's audit row (and its `booking.rescheduled` email copy, which quotes `previous`)
+      // would then name the window that was replaced by the FIRST request, not the one it
+      // actually replaced. Locking here makes the second transaction block until the first
+      // commits, so its own re-read of `before` sees the first move's result.
+      const [before] = await tx
+        .select({
+          scheduledStart: meetings.scheduledStart,
+          scheduledEnd: meetings.scheduledEnd,
+        })
+        .from(meetings)
+        .where(and(eq(meetings.id, id), isNull(meetings.deletedAt)))
+        .limit(1)
+        .for('update');
+      if (before === undefined) {
+        throw new MeetingNotReschedulableError(id);
+      }
+
+      // 2. Guarded compare-and-set — the TOCTOU backstop, and the ONLY definition of "which
+      // statuses may move" (shared with the route's `resolveRescheduleRefusal`).
       const [meeting] = await tx
         .update(meetings)
         .set({
@@ -608,7 +675,7 @@ export const meetingsRepository = {
         .where(
           and(
             eq(meetings.id, id),
-            inArray(meetings.status, ['scheduled', 'waiting_for_participants']),
+            inArray(meetings.status, [...RESCHEDULABLE_MEETING_STATUSES]),
             isNull(meetings.deletedAt)
           )
         )
@@ -617,8 +684,29 @@ export const meetingsRepository = {
         throw new MeetingNotReschedulableError(id);
       }
 
+      // 3. Move the projection.
       const expertProfileId = await syncProjectionScheduleTx(tx, meeting);
-      return { meeting, expertProfileId };
+
+      // 4. Extend every live guest link — extend-only, so a move EARLIER shortens nothing.
+      const guestLinksExtended = await extendGuestExpiryForMeetingTx(
+        tx,
+        meeting.id,
+        new Date(meeting.scheduledEnd.getTime() + GUEST_TOKEN_TTL_AFTER_END_MS)
+      );
+
+      // 5. LAST — an audit row left behind by a rolled-back move would attest to a move that
+      // never happened.
+      const rescheduleAuditId = await recordMeetingRescheduled(tx, {
+        meetingId: meeting.id,
+        actorUserId: audit.actorUserId,
+        previous: before,
+        scheduledStart: meeting.scheduledStart,
+        scheduledEnd: meeting.scheduledEnd,
+        expertProfileId,
+        guestLinksExtended,
+      });
+
+      return { meeting, expertProfileId, previous: before, guestLinksExtended, rescheduleAuditId };
     });
   },
 

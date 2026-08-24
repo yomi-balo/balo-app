@@ -1190,3 +1190,43 @@ export interface BookingConfirmedPayload {
   provisioned: boolean;
   guestCount: number;
 }
+
+/**
+ * BAL-409 — a booked consultation was moved by the CLIENT. Published by the case-surface
+ * Server Action AFTER the reschedule route returns 200, so nothing notifies on a failed move.
+ *
+ * ⚠ COUNTERPARTY CONTACT CONCEALMENT (ADR-1044 §3): names cross the party boundary, addresses
+ * never. No field here is or contains an email address.
+ * ⚠ FEE CONCEALMENT: no rate, no total, no hold. A reschedule moves no money.
+ */
+export interface BookingRescheduledPayload {
+  /** `${meetingId}:${scheduledStartIso}` — the BullMQ jobId dedup key. NOT the bare meetingId:
+   *  a SECOND reschedule of the same meeting must notify again, and a bare id would collide with
+   *  the first publish and be SILENTLY SWALLOWED. Two moves to the same instant collapse, which
+   *  is correct. */
+  correlationId: string;
+  meetingId: string;
+  engagementId: string;
+  /** The rescheduling client's user id → recipient 'client'. Absent ⇒ the client rule skips. */
+  recipientId?: string;
+  /** → recipient 'expert'; the resolver hydrates `data.expert` off this field name. */
+  expertProfileId: string;
+  /** Prospective copy names the PARTY (CLAUDE.md). */
+  clientCompanyName: string;
+  expertPartyLabel: string;
+  caseTitle: string;
+  previousScheduledStartIso: string;
+  scheduledStartIso: string;
+  durationMinutes: number;
+  /**
+   * ⚠ NO `joinPath` ON THIS EVENT, DELIBERATELY — and it is not an omission to "fix" later.
+   * A reschedule REUSES the same `meetings` row and the same Daily room (ADR-1044 amendment
+   * 2026-08-08), so the join link is byte-identical before and after; both templates say
+   * "same link" and link the CASE, which is the right destination for a meeting that is still
+   * in the future. Carrying a join path that four registration files validate and no template
+   * renders is dead weight that reads as intentional to the next person.
+   * `booking.confirmed` keeps its `joinPath` — that one IS rendered.
+   */
+  /** `'client'` today; BAL-411 adds `'expert'`. Present from day one so the template need not change. */
+  initiatedBy: 'client';
+}

@@ -144,6 +144,10 @@ function meeting(id: string, over: Record<string, unknown> = {}): Record<string,
     status: 'ended',
     outcome: 'completed',
     scheduledStart: new Date('2026-07-29T04:00:00Z'),
+    // BAL-409 — `selectNextScheduled` now reads `scheduledEnd` too (for the reschedule
+    // dialog's duration pin), so every fixture needs one even where the test cares only
+    // about `scheduledStart`. One hour, matching this file's other explicit durations.
+    scheduledEnd: new Date('2026-07-29T05:00:00Z'),
     startedAt: new Date('2026-07-29T04:14:00Z'),
     endedAt: new Date('2026-07-29T04:59:00Z'),
     dailyRoomName: 'room-secret-abc',

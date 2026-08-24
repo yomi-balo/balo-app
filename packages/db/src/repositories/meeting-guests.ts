@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { meetingGuests, meetings } from '../schema';
 import type {
@@ -11,6 +11,7 @@ import type {
   MeetingParticipationRole,
 } from '../schema';
 import { auditEventsRepository } from './audit-events';
+import { extendGuestExpiryForMeetingTx } from './_shared/guest-expiry';
 
 const ENTITY_TYPE = 'meeting_guest';
 
@@ -841,30 +842,25 @@ export const meetingGuestsRepository = {
    * Push every LIVE guest link on a meeting out to a LATER expiry, returning how many rows
    * moved.
    *
-   * ⚠⚠ NO PRODUCTION CALLER IN BAL-408 — THIS IS THE WRITTEN D2 RESCHEDULE HAND-OFF, and it
-   * ships now so the receiving tickets need no migration. `expires_at` is derived from the
-   * MEETING (`scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`), so a meeting moved more than
-   * that TTL past its ORIGINAL end leaves already-issued links expiring BEFORE the call.
-   * **BAL-409 / BAL-410 / BAL-411 must call this inside their reschedule transaction.**
+   * ⚠ THE BAL-409 HAND-OFF IS NOW DISCHARGED — this delegates to the tx-scoped
+   * `extendGuestExpiryForMeetingTx` (`_shared/guest-expiry.ts`), bound to the base `db`, while
+   * `meetingsRepository.updateSchedule` calls the SAME underlying writer on its own `tx`.
+   *
+   * ⚠ THE BEHAVIOUR IS NARROWED, NOT PRESERVED. The shared writer added an
+   * `admission IN ('admitted','pre_admitted')` filter this method did not previously have, so a
+   * standalone caller no longer extends never-admitted (`pending`) lobby handles, nor revives
+   * already-expired ones. That is the intended fix — an expired `pending` handle silently
+   * pushed back to `newEnd + TTL` was a working lobby token restored for someone no host ever
+   * admitted — but it IS a change to a shipped public method, not a refactor. `expires_at` is derived from the MEETING
+   * (`scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`), so a meeting moved more than that TTL past
+   * its ORIGINAL end leaves already-issued links expiring BEFORE the call.
    *
    * EXTEND-ONLY by construction (`expires_at < newExpiresAt`): moving a meeting EARLIER must
    * never silently shorten a window, because a shortened window is a revocation nobody
    * decided on — and revocation has its own attributed path (`revoke`).
    */
   extendExpiryForMeeting: async (meetingId: string, expiresAt: Date): Promise<number> => {
-    const rows = await db
-      .update(meetingGuests)
-      .set({ expiresAt, updatedAt: sql`now()` })
-      .where(
-        and(
-          eq(meetingGuests.meetingId, meetingId),
-          isNull(meetingGuests.deletedAt),
-          isNull(meetingGuests.revokedAt),
-          lt(meetingGuests.expiresAt, expiresAt)
-        )
-      )
-      .returning({ id: meetingGuests.id });
-    return rows.length;
+    return extendGuestExpiryForMeetingTx(db, meetingId, expiresAt);
   },
 
   /**

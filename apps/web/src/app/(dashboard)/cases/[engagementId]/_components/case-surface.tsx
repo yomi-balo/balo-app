@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useTransition } from 'react';
+import { useCallback, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Reveal } from '@/components/balo/engagement/reveal';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
+import { RescheduleDialog } from '@/components/booking/reschedule-dialog';
 import { resolveCaseAction } from '../_actions/resolve-case';
 import { dismissResolutionRequestAction } from '../_actions/dismiss-resolution-request';
 import { CaseHeader } from './case-header';
@@ -48,6 +49,9 @@ export function CaseSurface({
 }: Readonly<{ view: CaseSurfaceView; viewerEmailDomain?: string | null }>): React.JSX.Element {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // BAL-409 — the reschedule dialog's open state, owned here exactly as `resolveCaseAction`'s
+  // transition is: `case-nudge.tsx` stays a presentational renderer of one `CaseNudgeView`.
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
 
   const counterpartyFirstName = view.conversation.counterpartyFirstName;
 
@@ -84,6 +88,15 @@ export function CaseSurface({
     });
   }, [router, view.engagementId, view.lens]);
 
+  const handleOpenReschedule = useCallback(() => {
+    setRescheduleOpen(true);
+  }, []);
+
+  const handleRescheduled = useCallback(() => {
+    setRescheduleOpen(false);
+    router.refresh();
+  }, [router]);
+
   return (
     <div className="from-background to-muted/30 min-h-full bg-gradient-to-b">
       <div className="mx-auto w-full max-w-[1060px] px-4 py-8 sm:px-6 lg:px-8">
@@ -97,10 +110,31 @@ export function CaseSurface({
               bookAgainHref={view.party.bookAgainHref}
               onMarkResolved={handleMarkResolved}
               onDismissAsk={handleDismissAsk}
+              onReschedule={handleOpenReschedule}
               busy={pending}
             />
           </div>
         </Reveal>
+
+        {/* BAL-409 — mounted only when there is an upcoming meeting to move; `open` still
+            gates rendering so the dialog's own data fetch never starts speculatively. */}
+        {view.nudge !== null && view.nudge.kind === 'upcoming' && (
+          <RescheduleDialog
+            open={rescheduleOpen}
+            onClose={() => setRescheduleOpen(false)}
+            onRescheduled={handleRescheduled}
+            // N14(c) — a TERMINAL failure (meeting_not_reschedulable / meeting_not_found) means
+            // this nudge/CTA is now stale, exactly like a successful move does: close AND
+            // refresh, reusing the same handler rather than a second near-identical one.
+            onTerminalFailure={handleRescheduled}
+            engagementId={view.engagementId}
+            meetingId={view.nudge.meetingId}
+            expertProfileId={view.expertProfileId}
+            currentScheduledStartIso={view.nudge.scheduledStartIso}
+            durationMinutes={view.nudge.durationMinutes}
+            caseTitle={view.header.title}
+          />
+        )}
 
         <div className="mt-3 flex flex-wrap items-start gap-3">
           {/* Main column — the conversation LEADS it. Between calls, the conversation is

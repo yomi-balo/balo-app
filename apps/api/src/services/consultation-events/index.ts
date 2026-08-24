@@ -13,3 +13,7 @@ export {
   type DeleteConsultationEventInput,
 } from './delete-consultation-event.js';
 export { reconcileByTag, type ReconcileByTagInput } from './reconcile-by-tag.js';
+export {
+  updateConsultationEvent,
+  type UpdateConsultationEventInput,
+} from './update-consultation-event.js';

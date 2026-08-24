@@ -492,6 +492,7 @@ export {
   type CreatedMeeting,
   type MeetingContextInput,
   type MeetingMutationResult,
+  type RescheduleMutationResult,
   type MeetingWithContexts,
   // BAL-134 / ADR-1049 — the lifecycle transitions (§4.3).
   type ListLifecycleCandidatesInput,

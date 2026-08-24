@@ -100,6 +100,10 @@ export * from './end-authority';
 // import `apps/web`; it used to hand-restate the six glyphs, which is two definitions of one
 // closed set. See `reactions.ts` for the full argument.
 export * from './reactions';
+// BAL-409 (orchestrator D-B) — the reschedule gate's fail-closed allow-list, shared so the
+// route (apps/api) and the repository compare-and-set (@balo/db) cannot drift on "which
+// statuses may move". Pure, no clock read.
+export * from './reschedulable';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

@@ -47,3 +47,32 @@ export type ConfirmCaseFileUploadResult =
 export type GetCaseFileDownloadResult =
   | { success: true; url: string }
   | { success: false; error: string };
+
+/** BAL-409 — `rescheduleConsultationAction`'s failure vocabulary, mapped from the api's fixed
+ *  literals + the transport layer's own `unauthenticated`/`request_failed`. Never a raw
+ *  `err.message` — see `reschedule-consultation.ts`. */
+export type RescheduleFailureCode =
+  | 'unauthenticated'
+  | 'invalid_request'
+  | 'not_permitted'
+  | 'meeting_not_found'
+  | 'meeting_not_reschedulable'
+  | 'slot_unavailable'
+  | 'rate_limited'
+  | 'unknown';
+
+export interface RescheduleConsultationInput {
+  engagementId: string;
+  meetingId: string;
+  /** The picker's selected start — ISO. The end is SERVER-COMPUTED from the current duration. */
+  startIso: string;
+}
+
+export type RescheduleConsultationResult =
+  | {
+      success: true;
+      /** The SERVER's committed values, never the client's submitted slot. */
+      scheduledStart: string;
+      scheduledEnd: string;
+    }
+  | { success: false; code: RescheduleFailureCode; error: string };

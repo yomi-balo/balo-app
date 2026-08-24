@@ -1,14 +1,45 @@
 import { expertsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { subtractInterval } from './exclude-window.js';
 import {
   CONSULTATION_LOAD_PAD_MS,
   expandOverrideBlocks,
   toResolverConsultations,
   toResolverRules,
+  type ConsultationWindowRow,
 } from './resolver-inputs.js';
+import type { BusyBlock } from './types.js';
 import { isWindowBookable } from './resolver.js';
 import { loadResolverInputs } from './load-resolver-inputs.js';
 import { VendorBusyUnavailableError } from './vendor-busy.js';
+
+/**
+ * BAL-409 (D7) — a meeting excluded from its OWN reschedule availability check.
+ *
+ * On a reschedule the meeting collides with itself: its own `confirmed` `consultations` row
+ * blocks the Balo-side read, and (when the expert has a connected calendar) the Apiroc-written
+ * event blocks the vendor free/busy read. Without this exclusion the gate fails closed, so the
+ * symptom is a SILENT 409 on the ticket's most common case — a small nudge.
+ */
+export interface ExcludeMeetingWindow {
+  /** Filters the Balo consultation projection row by `meetingId` (arm 1, exact). */
+  readonly meetingId: string;
+  /** The meeting's CURRENT window — subtracted from the vendor busy set (arm 2). */
+  readonly currentStart: Date;
+  readonly currentEnd: Date;
+  /**
+   * `true` only when Balo actually wrote a vendor event for this meeting
+   * (`meetingCalendarEventsRepository.findLiveByMeetingId(meetingId) !== undefined`),
+   * resolved by the CALLER so this module stays decoupled and unit-testable. `false` performs
+   * NO vendor subtraction at all — an expert with no connected calendar triggers none.
+   *
+   * ⚠ THE RESIDUAL (see `exclude-window.ts`'s docblock): subtraction clips every vendor
+   * interval over `[currentStart, currentEnd)`, so an unrelated expert event living entirely
+   * inside the old window is ignored for the portion of the new window that overlaps the old
+   * one. Partial overlaps still block — that is what makes subtraction, not deletion, safe.
+   */
+  readonly hasVendorEvent: boolean;
+}
 
 const log = createLogger('availability-window-check');
 
@@ -48,12 +79,18 @@ const log = createLogger('availability-window-check');
 /**
  * `true` when `[start, end)` lies wholly inside `expertProfileId`'s published availability and
  * overlaps no busy interval. Every input instant is UTC; `now` is injected.
+ *
+ * `excludeMeeting` (BAL-409, optional) excludes ONE meeting's own booking from both the Balo
+ * consultation read and — when it actually wrote a vendor event — the vendor busy read, so a
+ * reschedule of a meeting does not collide with itself. Omitted, this is byte-identical to the
+ * booking-gate behaviour that shipped before BAL-409.
  */
 export async function isWindowAvailableForExpert(
   expertProfileId: string,
   start: Date,
   end: Date,
-  now: Date
+  now: Date,
+  excludeMeeting?: ExcludeMeetingWindow
 ): Promise<boolean> {
   const settings = await expertsRepository.findResolverSettings(expertProfileId);
   if (!settings) {
@@ -108,13 +145,28 @@ export async function isWindowAvailableForExpert(
     }
     throw err;
   }
-  const busyBlocks = busyOutcome.value;
+  // BAL-409 (D7, arm 1) — filter the meeting's OWN consultation row before it ever reaches the
+  // resolver projection. Exact, Balo-side.
+  const consultationsExcludingSelf: ConsultationWindowRow[] =
+    excludeMeeting === undefined
+      ? baloConsultations
+      : baloConsultations.filter((c) => c.meetingId !== excludeMeeting.meetingId);
+
+  // BAL-409 (D7, arm 2) — evidence-gated interval subtraction. `hasVendorEvent` is resolved by
+  // the CALLER; no live vendor event ⇒ no subtraction at all.
+  const busyBlocks: BusyBlock[] =
+    excludeMeeting !== undefined && excludeMeeting.hasVendorEvent
+      ? subtractInterval(busyOutcome.value, {
+          startAt: excludeMeeting.currentStart,
+          endAt: excludeMeeting.currentEnd,
+        })
+      : busyOutcome.value;
 
   return isWindowBookable({
     // ⚠ THE SAME PROJECTIONS `resolveAndCacheAvailability` USES (`./resolver-inputs.ts`), so
     // what is ACCEPTED here and what is ADVERTISED there cannot read the rows differently.
     rules: toResolverRules(rules),
-    baloConsultations: toResolverConsultations(baloConsultations),
+    baloConsultations: toResolverConsultations(consultationsExcludingSelf),
     busyBlocks,
     overrideBlocks: expandOverrideBlocks(overrides, settings.timezone),
     timezone: settings.timezone,

@@ -290,6 +290,90 @@ export function MeetingGuestInvitedEmail({
   );
 }
 
+// ── meeting.guest_rescheduled ────────────────────────────────────────────────────────
+
+interface MeetingGuestRescheduledEmailProps {
+  readonly guestName?: string;
+  readonly meetingTitle: string;
+  readonly previousScheduledStartIso: string;
+  readonly scheduledStartIso: string;
+  readonly scheduledEndIso: string;
+  readonly expiresOn: string;
+  /** The SITE ORIGIN, for the shell's legal footer. There is no CTA — see the docblock below. */
+  readonly baseUrl: string;
+}
+
+/**
+ * BAL-409 — a booked consultation this guest was invited to was MOVED by the client.
+ *
+ * ⚠⚠ NO `joinUrl`, AND THEREFORE NO CTA BUTTON. Balo stores only a hash of the guest token;
+ * the raw token is unrecoverable, and re-minting one would be a `rotateToken` — a revocation
+ * nobody asked for. The copy says their EXISTING link still works, which is true because the
+ * reschedule transaction extended its expiry (`extendGuestExpiryForMeetingTx`) rather than
+ * rotating it. This is the one guest email in the file with no button.
+ *
+ * ⚠ WARM, HELPFUL-FACT FRAMING — the new time is stated plainly, never as a countdown, and
+ * the copy names no person: this is PROSPECTIVE (what the new time is), and CLAUDE.md's
+ * attribution rule puts prospective copy on the PARTY, not an individual.
+ *
+ * ⚠ NO BILLING LINE, NO CALENDAR CLAIM — see the file docblock (the same rule every guest
+ * email in this file follows).
+ */
+export function MeetingGuestRescheduledEmail({
+  guestName,
+  meetingTitle,
+  previousScheduledStartIso,
+  scheduledStartIso,
+  scheduledEndIso,
+  expiresOn,
+  baseUrl,
+}: Readonly<MeetingGuestRescheduledEmailProps>) {
+  const previewText = `The call "${meetingTitle}" has moved.`;
+  const previousWindow = formatMeetingWindowUtc(previousScheduledStartIso);
+  const newWindow = formatMeetingWindowUtc(scheduledStartIso, scheduledEndIso);
+
+  const expiryClause =
+    expiresOn.trim().length > 0 ? ` and is good until ${expiresOn} — no rush.` : '.';
+  const linkText = `Your original link still works${expiryClause}`;
+
+  return (
+    <EmailShell previewText={previewText} baseUrl={baseUrl}>
+      <Section style={shared.smallHero}>
+        <LogoRow size="small" />
+        <StatusPill label="🕐 Time changed" style={guestPillStyle} />
+        <Heading style={shared.smallHeroHeading}>This call moved</Heading>
+      </Section>
+
+      <Section style={shared.card}>
+        <Text style={shared.greeting}>{greetingFor(guestName)}</Text>
+        <Text style={shared.bodyText}>
+          The call below has been moved to a new time. Nothing else has changed — same length, same
+          link.
+        </Text>
+
+        {previousWindow.length > 0 ? (
+          <Text style={{ ...shared.bodyText, color: colors.textTertiary }}>
+            Previously: {previousWindow}
+          </Text>
+        ) : null}
+
+        <MeetingWhenBlock meetingTitle={meetingTitle} window={newWindow} />
+
+        <Callout
+          emoji="🔗"
+          heading="About your link"
+          text={linkText}
+          bg={colors.bg}
+          borderColor={colors.border}
+          headingColor={colors.textSecondary}
+        />
+
+        <SupportFooter prefix="Questions about this call?" />
+      </Section>
+    </EmailShell>
+  );
+}
+
 // ── meeting.guest_removed ────────────────────────────────────────────────────────────
 
 interface MeetingGuestRemovedEmailProps {

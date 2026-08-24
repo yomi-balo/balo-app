@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
+import userEvent from '@testing-library/user-event';
 import type { ActionItemNodeView } from '@/lib/engagement/action-items-view';
 import type {
   CaseConsultationRowView,
   CaseFileRowView,
   CaseSurfaceView,
 } from '@/lib/cases/case-view-types';
+
+// N8 — a shared, hoisted spy so tests can assert `router.refresh()` fired, which a fresh
+// `vi.fn()` returned from inside the factory on every `useRouter()` call could not do.
+const { mockRouterRefresh } = vi.hoisted(() => ({ mockRouterRefresh: vi.fn() }));
 
 /**
  * BAL-421 — the desktop composition, tested for the ONE thing composition can get wrong: which
@@ -35,8 +40,37 @@ vi.mock('motion/react', () => ({
   AnimatePresence: (props: Record<string, unknown>) => <>{props.children as React.ReactNode}</>,
 }));
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: mockRouterRefresh, push: vi.fn() }),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+
+// N8/N14(c) — a minimal stand-in for the real dialog (which itself fetches availability and
+// posts a Server Action — out of scope for a composition test). Exposes just enough surface to
+// prove the CTA→dialog SEAM: it mounts only when `open`, and its three callback props are wired.
+vi.mock('@/components/booking/reschedule-dialog', () => ({
+  RescheduleDialog: (props: {
+    open: boolean;
+    onClose: () => void;
+    onRescheduled: () => void;
+    onTerminalFailure?: () => void;
+    meetingId: string;
+  }) =>
+    props.open ? (
+      <div data-testid="reschedule-dialog-stub">
+        <span>meeting: {props.meetingId}</span>
+        <button type="button" onClick={props.onClose}>
+          Stub close
+        </button>
+        <button type="button" onClick={props.onRescheduled}>
+          Stub rescheduled
+        </button>
+        <button type="button" onClick={props.onTerminalFailure}>
+          Stub terminal failure
+        </button>
+      </div>
+    ) : null,
+}));
 
 vi.mock('@/components/balo/conversation/use-conversation-realtime', () => ({
   useConversationRealtime: vi.fn(),
@@ -343,6 +377,80 @@ describe('CaseSurface — the conditional regions', () => {
     render(<CaseSurface view={clientView({ nudge: { kind: 'resolution_ask' } })} />);
     expect(screen.getByRole('button', { name: 'Yes, mark it resolved' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+  });
+
+  // N8 — the reschedule CTA → dialog seam previously had ZERO coverage: `rescheduleOpen`,
+  // `handleOpenReschedule`, `handleRescheduled` and the dialog's conditional mount never ran.
+  describe('BAL-409 — reschedule CTA → dialog seam', () => {
+    const UPCOMING_NUDGE = {
+      kind: 'upcoming' as const,
+      meetingId: 'm-upcoming-1',
+      scheduledStartIso: '2026-09-01T10:00:00Z',
+      live: false,
+      durationMinutes: 45,
+    };
+
+    it('the dialog is NOT mounted while closed, even with an upcoming nudge', () => {
+      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      expect(screen.queryByTestId('reschedule-dialog-stub')).not.toBeInTheDocument();
+    });
+
+    it('is never mounted at all for a non-"upcoming" nudge (or none)', () => {
+      render(<CaseSurface view={clientView({ nudge: { kind: 'nothing_booked' } })} />);
+      expect(screen.queryByTestId('reschedule-dialog-stub')).not.toBeInTheDocument();
+    });
+
+    it('clicking "Reschedule" opens the dialog, mounted with the nudge’s meetingId', async () => {
+      const user = userEvent.setup();
+      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+
+      await user.click(screen.getByRole('button', { name: 'Reschedule' }));
+
+      const stub = screen.getByTestId('reschedule-dialog-stub');
+      expect(stub).toBeInTheDocument();
+      expect(stub).toHaveTextContent('meeting: m-upcoming-1');
+    });
+
+    it('onClose closes the dialog WITHOUT refreshing the page', async () => {
+      const user = userEvent.setup();
+      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      await user.click(screen.getByRole('button', { name: 'Reschedule' }));
+      expect(screen.getByTestId('reschedule-dialog-stub')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Stub close' }));
+
+      expect(screen.queryByTestId('reschedule-dialog-stub')).not.toBeInTheDocument();
+      expect(mockRouterRefresh).not.toHaveBeenCalled();
+    });
+
+    it('onRescheduled closes the dialog AND refreshes the page', async () => {
+      const user = userEvent.setup();
+      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      await user.click(screen.getByRole('button', { name: 'Reschedule' }));
+
+      await user.click(screen.getByRole('button', { name: 'Stub rescheduled' }));
+
+      expect(screen.queryByTestId('reschedule-dialog-stub')).not.toBeInTheDocument();
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    // N14(c) — a TERMINAL dialog failure (meeting_not_reschedulable / meeting_not_found) must
+    // ALSO close AND refresh, exactly like a successful reschedule — the CTA is stale either way.
+    it('onTerminalFailure closes the dialog AND refreshes the page', async () => {
+      const user = userEvent.setup();
+      render(<CaseSurface view={clientView({ nudge: UPCOMING_NUDGE })} />);
+      await user.click(screen.getByRole('button', { name: 'Reschedule' }));
+
+      await user.click(screen.getByRole('button', { name: 'Stub terminal failure' }));
+
+      expect(screen.queryByTestId('reschedule-dialog-stub')).not.toBeInTheDocument();
+      expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers no "Reschedule" CTA on the EXPERT lens (BAL-411 is the expert-side ticket)', () => {
+      render(<CaseSurface view={expertView({ nudge: UPCOMING_NUDGE })} />);
+      expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
+    });
   });
 
   /** ⚠ A CLOSED CASE IS READ-ONLY BUT FULLY READABLE, and every card says so in its own way. */

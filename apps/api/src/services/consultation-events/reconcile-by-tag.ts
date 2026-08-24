@@ -11,12 +11,15 @@ export interface ReconcileByTagInput {
  * BAL-396 §5/§10.6 — `events.list` filtered by `metadataFilters`, paginated TO EXHAUSTION.
  * Ships INERT: no live caller until a future reconciliation sweep needs it.
  *
- * ⚠⚠ NEVER READS THE TAG OFF A FETCHED EVENT (apiroc skill §M3). Microsoft returns
- * `privateExtendedProperties: {}` on create, on read, and after `PUT` — the tag is
- * write-and-QUERY-only, never readable back. This function relies ENTIRELY on the
- * `metadataFilters` query to select the right events; it must never additionally filter or
- * assert by reading `event.privateExtendedProperties.baloBookingId` off the results — that
- * would silently drop every Microsoft event and pass every test written against Google alone.
+ * ⚠⚠ NEVER READS THE TAG OFF A FETCHED EVENT TO VERIFY A WRITE (apiroc skill §M3, corrected
+ * 2026-08-18 against the raw capture). Microsoft returns `privateExtendedProperties: {}` on
+ * `events.create` and `events.update` ONLY — a `metadataFilters` READ echoes the tag in full on
+ * BOTH providers. So the surviving rule is: verify by QUERYING, never by reading a tag off a
+ * WRITE response. This function relies ENTIRELY on the `metadataFilters` query to select the
+ * right events, and that query already selected them correctly — it must never additionally
+ * filter or assert by reading `event.privateExtendedProperties.baloBookingId` off the results,
+ * which would be redundant at best and, for a caller that copied the old "never readable back"
+ * claim literally, a silent drop of every Microsoft event.
  *
  * Returns the full vendor `Event` objects — reading Balo's OWN tagged consultation events is
  * the one sanctioned full-event-content read (apiroc skill, Constraint 4's second sentence);

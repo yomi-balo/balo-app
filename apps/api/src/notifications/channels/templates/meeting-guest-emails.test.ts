@@ -3,6 +3,7 @@ import { render } from '@react-email/render';
 import {
   MeetingGuestInvitedEmail,
   MeetingGuestRemovedEmail,
+  MeetingGuestRescheduledEmail,
   formatMeetingWindowUtc,
 } from './meeting-guest-emails.js';
 import { getEmailTemplate } from './index.js';
@@ -521,5 +522,72 @@ describe('getEmailTemplate — meeting-guest-removed', () => {
     expect(html).toContain('Hi there,');
     expect(html).toContain('a call');
     expect(html).not.toContain('consultation');
+  });
+});
+
+/**
+ * BAL-409 — the THIRD guest-facing email: the call this guest is on has moved.
+ *
+ * ⚠ WHO RECEIVES THIS IS NOT THIS TEMPLATE'S DECISION and is pinned elsewhere
+ * (`meeting-availability.test.ts`): the fan-out is filtered to `admitted`/`pre_admitted`, so a
+ * never-admitted lobby knock is never rendered this at all. What IS pinned here is that the
+ * rendered copy leaks nothing and claims nothing false.
+ */
+describe('MeetingGuestRescheduledEmail', () => {
+  const rescheduledProps = () => ({
+    guestName: 'Dana',
+    meetingTitle: 'Salesforce CPQ rollout',
+    previousScheduledStartIso: '2026-09-01T04:00:00.000Z',
+    scheduledStartIso: '2026-09-08T06:30:00.000Z',
+    scheduledEndIso: '2026-09-08T07:00:00.000Z',
+    expiresOn: '15 September 2026',
+    baseUrl: SITE,
+  });
+
+  it('states the new window, the previous one, and that the original link still works', async () => {
+    const html = await render(MeetingGuestRescheduledEmail(rescheduledProps()));
+    expect(html).toContain('This call moved');
+    expect(html).toContain('Salesforce CPQ rollout');
+    expect(html).toMatch(/Previously:/);
+    expect(html).toContain('Your original link still works');
+    expect(html).toContain('15 September 2026');
+  });
+
+  /**
+   * The expiry clause is OMITTED, not rendered empty, when no expiry is known — otherwise the
+   * sentence reads "still works and is good until  — no rush."
+   */
+  it('drops the expiry clause entirely when expiresOn is blank', async () => {
+    const html = await render(
+      MeetingGuestRescheduledEmail({ ...rescheduledProps(), expiresOn: '' })
+    );
+    expect(html).toContain('Your original link still works');
+    expect(html).not.toContain('is good until');
+    expect(html).not.toContain('no rush');
+  });
+
+  // A guest gets NO join token in this payload and no counterparty address — only Balo support.
+  it('renders no address other than Balo support, and no join token', async () => {
+    const html = await render(MeetingGuestRescheduledEmail(rescheduledProps()));
+    const addresses = [...html.matchAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g)].map(([match]) => match);
+    expect([...new Set(addresses)]).toEqual(['support@getbalo.com']);
+    expect(html).not.toContain('/join/');
+  });
+
+  // A reschedule moves no money, and the guest is never the paying party regardless.
+  it('states no money', async () => {
+    const html = await render(MeetingGuestRescheduledEmail(rescheduledProps()));
+    const text = html
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^<>]*>/g, ' ');
+    expect(text).not.toContain('$');
+  });
+
+  // D14 — the Apiroc amend runs AFTER this send and there is no guest-side ICS at all.
+  it('claims no calendar was updated', async () => {
+    const html = (await render(MeetingGuestRescheduledEmail(rescheduledProps()))).toLowerCase();
+    expect(html).not.toContain('calendar has been updated');
+    expect(html).not.toContain('added to your calendar');
   });
 });

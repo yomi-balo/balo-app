@@ -1,11 +1,22 @@
 import {
+  meetingContextsRepository,
+  meetingGuestsRepository,
   meetingsRepository,
   type CreateMeetingInput,
   type CreatedMeeting,
   type MeetingMutationResult,
+  type RescheduleMutationResult,
 } from '@balo/db';
+import {
+  GUEST_TOKEN_TTL_AFTER_END_MS,
+  selectPrimaryMeetingContext,
+  sanitizeSelfDeclaredName,
+} from '@balo/shared/meetings';
 import type { FastifyBaseLogger } from 'fastify';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
+import { enqueueMeetingCalendarAmend } from '../../jobs/meeting-calendar-amend.js';
+import { notificationEvents } from '../../notifications/index.js';
+import { formatExpiryDate, resolveMeetingTitle } from './guest-participation.js';
 
 /**
  * BAL-428 — THE MEETING-MUTATION SEAM: every write that can move an expert's
@@ -28,17 +39,26 @@ import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.j
  * expert-facing surface advertising a slot that is already taken. Booking goes through
  * here, behind an API route.
  *
- * ⚠ NO `try` / `catch` ANYWHERE IN THIS FILE, DELIBERATELY, for two separate reasons:
- *   1. `enqueueAvailabilityCacheRebuild` ALREADY swallows and logs its own Redis errors
- *      (see its docblock — a Redis hiccup must never fail the caller's mutation). A
- *      `catch` here would be a second, redundant handler around a call that cannot throw.
- *   2. The repository's TYPED errors — `MeetingExpertAmbiguousError`,
- *      `MatchModeDiscoveryNotBookableError`, `MeetingContextUnresolvableError`,
- *      `MeetingContextNotProjectableError`, `MeetingContextRequiredError`,
- *      `MeetingNotCancellableError` — MUST reach BAL-129's route intact so it can map each
- *      to its own status code. That route is the `log.error` boundary (CLAUDE.md: log
- *      where an error is turned into a user-facing message). Catching here would flatten
- *      six branchable reasons into one 500.
+ * ⚠ THE RULE IS NARROWER THAN "NO `try`/`catch` ANYWHERE": **the TRANSACTIONAL mutation must
+ * never be wrapped; the POST-COMMIT fan-out always must be.** Concretely:
+ *   1. `meetingsRepository.create` / `updateSchedule` / `cancel` / `softDelete` — the
+ *      transactional writes — are never caught here. `enqueueAvailabilityCacheRebuild`
+ *      ALREADY swallows and logs its own Redis errors (see its docblock — a Redis hiccup
+ *      must never fail the caller's mutation), so a `catch` around IT would be a second,
+ *      redundant handler around a call that cannot throw. And the repository's TYPED
+ *      errors — `MeetingExpertAmbiguousError`, `MatchModeDiscoveryNotBookableError`,
+ *      `MeetingContextUnresolvableError`, `MeetingContextNotProjectableError`,
+ *      `MeetingContextRequiredError`, `MeetingNotCancellableError` — MUST reach BAL-129's
+ *      route intact so it can map each to its own status code. That route is the
+ *      `log.error` boundary (CLAUDE.md: log where an error is turned into a user-facing
+ *      message). Catching here would flatten six branchable reasons into one 500.
+ *   2. Everything AFTER the mutation has already committed — `enqueueMeetingCalendarAmend`
+ *      and `publishGuestRescheduledNotifications` (its reads INCLUDED, not just the
+ *      per-guest publish) — IS wrapped, deliberately, for the opposite reason: a reschedule
+ *      that already committed must not turn into a 500 because a later read or publish
+ *      hiccupped. A user retrying a "failed" request that actually succeeded is worse than
+ *      one missed notification, which the per-guest granularity below still isolates from
+ *      its siblings.
  *
  * ⚠ THIS MODULE RESOLVES NO AUTHORIZATION, AND THE OBLIGATION HAS **TWO DIFFERENT SHAPES**
  * — do not read the first one as covering all four functions.
@@ -138,15 +158,156 @@ export async function bookMeeting(
 }
 
 /**
+ * BAL-409 — the post-commit guest fan-out for a reschedule: one `meeting.guest_rescheduled`
+ * publish per ADMITTED guest, each in its OWN try/catch so one failure never blocks the rest
+ * (or the response, which has already been sent by the time this runs). The reads that build
+ * the fan-out are wrapped too — see B5/the file docblock: a post-commit read hiccup must
+ * degrade to "logged, nothing sent", never a 500 for a reschedule that already committed.
+ *
+ * ⚠ FILTERED TO `admission IN ('admitted','pre_admitted')` — DELIBERATELY NARROWER THAN
+ * `listLiveByMeeting`'s own contract (it filters `deleted_at`/`revoked_at` only, so it
+ * INCLUDES `pending` lobby knocks). `POST /meetings/:meetingId/lobby` is PUBLIC and accepts a
+ * self-declared name+email with no host approval — a `pending` row can be written by anyone
+ * who guesses a meeting uuid. Emailing it the case/project title and both windows on every
+ * reschedule would be an unauthenticated cross-party disclosure with no admission check ever
+ * in the loop. Contrast the OTHER two callers of this finder, which gate on "live" on purpose
+ * because they answer a different question: `inviteGuests` (`guest-participation.ts`) counts
+ * `pending` rows because a queued knock still occupies a QUEUE SLOT, and the roster
+ * (`apps/web/src/lib/meetings/guest-roster.ts`) SHOWS `pending` rows to the HOST, who is the
+ * one person entitled to see and act on the queue. This fan-out talks to the GUEST, not the
+ * host, about content the guest has not been vetted for — so it narrows to admitted seats.
+ *
+ * ⚠ NO `joinToken` — Balo stores only a hash; the raw token is unrecoverable and re-minting
+ * one would be a `rotateToken`, i.e. a revocation nobody asked for. The copy says the
+ * existing link still works, which is true because `updateSchedule`'s transaction already
+ * extended its expiry.
+ *
+ * ⚠ `expiresOn` IS THE LINK'S REAL EXPIRY (`scheduledEnd + GUEST_TOKEN_TTL_AFTER_END_MS`), NOT
+ * `scheduledEnd` itself — the same instant `updateSchedule`'s transaction actually writes to
+ * `expires_at`, and the same one every other guest email passes. Passing `scheduledEnd` bare
+ * would tell the guest their link dies on the day of the call, seven days early.
+ *
+ * ⚠ USES `resolveMeetingTitle` (`guest-participation.ts`), the GUEST-FACING title resolver —
+ * NOT `resolveMeetingContextLabel`, which is member-only by its own docblock ("must never be
+ * called from the guest or lobby arms"). This payload IS a guest arm.
+ */
+async function publishGuestRescheduledNotifications(
+  meetingId: string,
+  previousScheduledStart: Date,
+  scheduledStart: Date,
+  scheduledEnd: Date,
+  rescheduleAuditId: string,
+  log: FastifyBaseLogger
+): Promise<void> {
+  try {
+    const liveGuests = await meetingGuestsRepository.listLiveByMeeting(meetingId);
+    const guests = liveGuests.filter(
+      (guest) => guest.admission === 'admitted' || guest.admission === 'pre_admitted'
+    );
+    if (guests.length === 0) return;
+
+    const contexts = await meetingContextsRepository.listByMeeting(meetingId);
+    const primary = selectPrimaryMeetingContext(contexts);
+    // `resolveMeetingTitle` never throws; a missing/ambiguous primary context degrades to
+    // a neutral label rather than blocking the fan-out — the meeting move already committed.
+    const meetingTitle = primary.ok ? await resolveMeetingTitle(primary.context) : null;
+    const expiresOn = formatExpiryDate(
+      new Date(scheduledEnd.getTime() + GUEST_TOKEN_TTL_AFTER_END_MS)
+    );
+
+    for (const guest of guests) {
+      try {
+        await notificationEvents.publish('meeting.guest_rescheduled', {
+          // ⚠ KEYED ON THE AUDIT ROW ID, NOT THE TARGET WINDOW. `publisher.ts` turns
+          // `correlationId` into the BullMQ `jobId` (`${event}--${correlationId}`), and the
+          // notification-events queue RETAINS 100 completed jobs — so a window-derived key
+          // would silently drop this guest's email on a move BACK to a previously-used
+          // window (A→B→C→B). Per (guest, move), not per (guest, destination).
+          correlationId: `${guest.id}:${rescheduleAuditId}`,
+          recipientEmail: guest.email,
+          ...(guest.name === null ? {} : { guestName: sanitizeSelfDeclaredName(guest.name) }),
+          meetingTitle: meetingTitle ?? 'the video call',
+          previousScheduledStartIso: previousScheduledStart.toISOString(),
+          scheduledStartIso: scheduledStart.toISOString(),
+          scheduledEndIso: scheduledEnd.toISOString(),
+          expiresOn,
+        });
+      } catch (error) {
+        log.error(
+          {
+            meetingId,
+            guestId: guest.id,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Failed to publish meeting.guest_rescheduled — the guest link itself still works'
+        );
+      }
+    }
+  } catch (error) {
+    log.error(
+      { meetingId, error: error instanceof Error ? error.message : String(error) },
+      'Failed to fan out meeting.guest_rescheduled notifications — the reschedule already committed'
+    );
+  }
+}
+
+/**
  * RESCHEDULE: move the meeting and its projection together, then rebuild — the old window
  * must not stay advertised as booked, nor the new one as free.
+ *
+ * ── F-API-3 — DAILY JOIN TOKENS: NO ACTION HERE, AND THAT IS BY DESIGN (D2) ────────────────
+ * A reschedule reuses the SAME Daily room by construction (`dailyRoomNameForMeeting` is a pure
+ * function of `meetings.id`), and the room carries no `exp` to reconcile. Tokens are minted
+ * STRICTLY ON DEMAND at join (`join-meeting.ts`), and each join recomputes
+ * `expiresAtUnixFor(meeting.scheduledEnd)` off the CURRENT row — so the very next join after
+ * this commits already mints against the new window with no code here. Pre-reschedule tokens
+ * already handed out stay valid to OLD end + 24h, by design (ADR-1044 amendment 2026-08-08) —
+ * held by exactly the same legitimate participants. Build no revocation cascade.
+ *
+ * ── POST-COMMIT (never inside `updateSchedule`'s transaction) ──────────────────────────────
+ *   6. `afterMeetingMutation` — the availability-cache rebuild (already shared with every
+ *      other mutator; not duplicated here).
+ *   7. `enqueueMeetingCalendarAmend` — the retrying, converging Apiroc amend (§4). Enqueued
+ *      with the WINDOW-SCOPED jobId, so a duplicate enqueue for the same target window is
+ *      dropped and a second reschedule to a different window is never dropped.
+ *   9. `publishGuestRescheduledNotifications` — one publish per live guest.
+ * (`booking.rescheduled`, step 10, is published from `apps/web` AFTER this returns 200 — a
+ * different process, never awaited here.)
  */
 export async function rescheduleMeeting(
   meetingId: string,
   schedule: MeetingScheduleInput,
+  actorUserId: string | null,
   log: FastifyBaseLogger
-): Promise<MeetingMutationResult> {
-  return afterMeetingMutation(await meetingsRepository.updateSchedule(meetingId, schedule), log);
+): Promise<RescheduleMutationResult> {
+  const result = await afterMeetingMutation(
+    await meetingsRepository.updateSchedule(meetingId, schedule, { actorUserId }),
+    log
+  );
+
+  if (result.expertProfileId !== null) {
+    await enqueueMeetingCalendarAmend(
+      meetingId,
+      result.expertProfileId,
+      result.rescheduleAuditId
+    ).catch((error: unknown) => {
+      log.error(
+        { meetingId, error: error instanceof Error ? error.message : String(error) },
+        'Failed to enqueue meeting-calendar-amend job'
+      );
+    });
+  }
+
+  await publishGuestRescheduledNotifications(
+    meetingId,
+    result.previous.scheduledStart,
+    result.meeting.scheduledStart,
+    result.meeting.scheduledEnd,
+    result.rescheduleAuditId,
+    log
+  );
+
+  return result;
 }
 
 /**

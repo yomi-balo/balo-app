@@ -48,6 +48,15 @@ export interface ExpertAvailabilityCalendarProps {
    * clue why. Read only at mount; later changes to this prop are ignored (see `days` state).
    */
   daysAhead?: number;
+  /**
+   * BAL-409 — pin the duration filter to a MEETING's existing length (a reschedule MOVES a
+   * booking, it does not resize it) and hide the manual duration pills. This is a UI AFFORDANCE
+   * ONLY — the server still pins the length regardless of what the picker returns, so this prop
+   * never enforces anything by itself; it exists so a client cannot pick a 30-minute slot for a
+   * 60-minute meeting and be met with a confusing `409`. Omit it (the default) for the shipped
+   * BAL-236 free-choice behaviour, unchanged.
+   */
+  fixedDurationMinutes?: SlotDurationMinutes;
   /** Selectable only. Called with the final selection. The component NEVER books. */
   onSlotSelect?: (selection: AvailabilitySlotSelection) => void;
   /** Analytics only — which side is looking. Default `'client'`. */
@@ -177,6 +186,7 @@ export function ExpertAvailabilityCalendar({
   mode = 'selectable',
   viewerTimezone,
   daysAhead,
+  fixedDurationMinutes,
   onSlotSelect,
   viewerType = 'client',
   emptyAction,
@@ -203,7 +213,9 @@ export function ExpertAvailabilityCalendar({
   const [days, setDays] = useState(defaultDays);
 
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-  const [durationFilter, setDurationFilter] = useState<DurationFilter>('any');
+  const [durationFilter, setDurationFilter] = useState<DurationFilter>(
+    fixedDurationMinutes ?? 'any'
+  );
   const [filterAutoReset, setFilterAutoReset] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<AvailabilitySlotDto | null>(null);
   const [confirmStep, setConfirmStep] = useState(false);
@@ -271,11 +283,11 @@ export function ExpertAvailabilityCalendar({
     setSelectedSlot(null);
     setConfirmStep(false);
     setChosenDuration(null);
-    setDurationFilter('any');
+    setDurationFilter(fixedDurationMinutes ?? 'any');
     setFilterAutoReset(false);
     setConfirmed(false);
     setConfirmedSummary(null);
-  }, [expertProfileId]);
+  }, [expertProfileId, fixedDurationMinutes]);
 
   /**
    * ⚠ `confirmed` MUST BE PART OF EVERY RESET. It short-circuits the whole right-hand panel
@@ -297,10 +309,15 @@ export function ExpertAvailabilityCalendar({
     setSelectedDayKey(dayKey);
     resetSelection();
     const daySlots = slotsByDay.get(dayKey) ?? [];
-    // ⚠ `durationFilter` itself is NOT reset here — it stays the user's last explicit choice so
+    // ⚠ B6(c) — THE AUTO-RESET SAFETY NET NEVER FIRES WHILE PINNED. Unpinned, widening to 'any'
+    // when a day has no slot at the user's chosen minimum is the right UX (never strand them on
+    // a blank day). PINNED, widening would silently offer 15/30-min slots as selectable for a
+    // 60-min meeting the server will refuse — exactly the `window_not_available` 409 the pin
+    // exists to prevent. A day with nothing at the pinned length is correctly an EMPTY day.
+    // `durationFilter` itself is NOT reset here — it stays the user's last explicit choice so
     // the warning copy can still name it, and the panel derives the EFFECTIVE ('any') filter
     // for the shown list from `filterAutoReset` alone. Pure predicate, no effect (D13).
-    if (shouldResetFilter(daySlots, durationFilter)) {
+    if (fixedDurationMinutes === undefined && shouldResetFilter(daySlots, durationFilter)) {
       setFilterAutoReset(true);
       track(AVAILABILITY_EVENTS.EMPTY_STATE_SHOWN, {
         expert_id: expertProfileId,
@@ -408,6 +425,8 @@ export function ExpertAvailabilityCalendar({
             durationFilter={durationFilter}
             filterAutoReset={filterAutoReset}
             onFilterChange={handleFilterChange}
+            hideDurationFilter={fixedDurationMinutes !== undefined}
+            fixedDurationMinutes={fixedDurationMinutes}
             selectedSlot={selectedSlot}
             onSelectSlot={setSelectedSlot}
             confirmStep={confirmStep}

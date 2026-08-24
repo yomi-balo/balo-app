@@ -2,11 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '../client';
-import { auditEvents, consultations, meetingContexts, meetings, type AuditEvent } from '../schema';
+import {
+  auditEvents,
+  consultations,
+  meetingContexts,
+  meetingGuests,
+  meetings,
+  type AuditEvent,
+} from '../schema';
 import {
   caseEngagementFactory,
   expertDraftFactory,
   meetingFactory,
+  meetingGuestFactory,
   projectRequestFactory,
   userFactory,
 } from '../test/factories';
@@ -413,9 +421,11 @@ describe('meetingsRepository.updateSchedule', () => {
     const { meeting } = await meetingFactory();
     const next = schedule(48);
 
-    // BAL-428: returns `MeetingMutationResult`, not a bare `Meeting` — the caller needs the
+    // BAL-428: returns `RescheduleMutationResult`, not a bare `Meeting` — the caller needs the
     // `expertProfileId` to rebuild that expert's availability cache post-commit.
-    const { meeting: updated } = await meetingsRepository.updateSchedule(meeting.id, next);
+    const { meeting: updated } = await meetingsRepository.updateSchedule(meeting.id, next, {
+      actorUserId: null,
+    });
 
     expect(updated.scheduledStart.getTime()).toBe(next.scheduledStart.getTime());
     expect(updated.scheduledEnd.getTime()).toBe(next.scheduledEnd.getTime());
@@ -427,7 +437,9 @@ describe('meetingsRepository.updateSchedule', () => {
     // nothing to rebuild, rather than being handed an id it would rebuild for no reason.
     const { meeting } = await meetingFactory();
 
-    const { expertProfileId } = await meetingsRepository.updateSchedule(meeting.id, schedule(48));
+    const { expertProfileId } = await meetingsRepository.updateSchedule(meeting.id, schedule(48), {
+      actorUserId: null,
+    });
 
     expect(expertProfileId).toBeNull();
   });
@@ -437,20 +449,91 @@ describe('meetingsRepository.updateSchedule', () => {
     const start = new Date(Date.now() + HOUR_MS);
 
     await expect(
-      meetingsRepository.updateSchedule(meeting.id, { scheduledStart: start, scheduledEnd: start })
+      meetingsRepository.updateSchedule(
+        meeting.id,
+        { scheduledStart: start, scheduledEnd: start },
+        { actorUserId: null }
+      )
     ).rejects.toThrow(/scheduled_start must be before scheduled_end/);
   });
 
   it('throws MeetingNotReschedulableError on a missing meeting', async () => {
-    // BAL-428 CHANGED THIS ERROR. `updateSchedule` is now guarded on
-    // `status IN ('scheduled','waiting_for_participants') AND deleted_at IS NULL`, so a
-    // missing row and a cancelled/ended/deleted one are indistinguishable to the UPDATE and
-    // share ONE named error. The status half of that guard — and the cancel-then-reschedule
-    // double-booking it closes — is asserted in
+    // BAL-409 NARROWED THIS GUARD to `status = 'scheduled' AND deleted_at IS NULL` (was
+    // `IN ('scheduled','waiting_for_participants')`), so a missing row and a
+    // cancelled/ended/waiting_for_participants/deleted one are ALL indistinguishable to the
+    // UPDATE and share ONE named error. The status half of that guard — and the
+    // cancel-then-reschedule double-booking it closes — is asserted in
     // `_shared/consultation-projection.integration.test.ts`, which owns the projection.
     await expect(
-      meetingsRepository.updateSchedule(randomUUID(), schedule())
+      meetingsRepository.updateSchedule(randomUUID(), schedule(), { actorUserId: null })
     ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
+  });
+
+  it('writes the meeting.rescheduled audit row on the SAME tx, with the from/to window as ISO strings', async () => {
+    const actor = await userFactory();
+    const { meeting } = await meetingFactory();
+    const next = schedule(48);
+
+    const result = await meetingsRepository.updateSchedule(meeting.id, next, {
+      actorUserId: actor.id,
+    });
+
+    expect(result.previous.scheduledStart.getTime()).toBe(meeting.scheduledStart.getTime());
+    expect(result.previous.scheduledEnd.getTime()).toBe(meeting.scheduledEnd.getTime());
+
+    const audits = await auditEventsForEntity(meeting.id);
+    const rescheduled = audits.filter((row) => row.action === 'meeting.rescheduled');
+    expect(rescheduled).toHaveLength(1);
+    expect(rescheduled[0]?.actorUserId).toBe(actor.id);
+    const metadata = rescheduled[0]?.metadata as Record<string, unknown> | null;
+    expect(metadata?.previousScheduledStart).toBe(meeting.scheduledStart.toISOString());
+    expect(metadata?.scheduledStart).toBe(next.scheduledStart.toISOString());
+  });
+
+  it('a NULL actorUserId is the ADR-1030 system-actor exemption, not a miss', async () => {
+    const { meeting } = await meetingFactory();
+
+    await meetingsRepository.updateSchedule(meeting.id, schedule(48), { actorUserId: null });
+
+    const audits = await auditEventsForEntity(meeting.id);
+    expect(audits.find((row) => row.action === 'meeting.rescheduled')?.actorUserId).toBeNull();
+  });
+
+  it('extends every LIVE guest link on the SAME tx, returning the moved count', async () => {
+    const { meeting } = await meetingFactory();
+    const soon = new Date(Date.now() + HOUR_MS);
+    const guest = await meetingGuestFactory({
+      meetingId: meeting.id,
+      values: { expiresAt: soon },
+    });
+
+    const far = schedule(24 * 30);
+    const result = await meetingsRepository.updateSchedule(meeting.id, far, {
+      actorUserId: null,
+    });
+
+    expect(result.guestLinksExtended).toBe(1);
+    const [row] = await db.select().from(meetingGuests).where(eq(meetingGuests.id, guest.guest.id));
+    expect(row?.expiresAt.getTime()).toBeGreaterThan(soon.getTime());
+  });
+
+  it('a ROLLED-BACK move (guard miss) leaves NO audit row and NO guest-expiry change', async () => {
+    const { meeting } = await meetingFactory();
+    const soon = new Date(Date.now() + HOUR_MS);
+    const guest = await meetingGuestFactory({
+      meetingId: meeting.id,
+      values: { expiresAt: soon },
+    });
+    await db.update(meetings).set({ status: 'cancelled' }).where(eq(meetings.id, meeting.id));
+
+    await expect(
+      meetingsRepository.updateSchedule(meeting.id, schedule(48), { actorUserId: null })
+    ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
+
+    const audits = await auditEventsForEntity(meeting.id);
+    expect(audits.filter((row) => row.action === 'meeting.rescheduled')).toHaveLength(0);
+    const [row] = await db.select().from(meetingGuests).where(eq(meetingGuests.id, guest.guest.id));
+    expect(row?.expiresAt.getTime()).toBe(soon.getTime());
   });
 });
 

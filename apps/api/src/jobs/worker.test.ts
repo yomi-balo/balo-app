@@ -34,6 +34,7 @@ const mockRegisterCalendarHealthProbeCron = vi.fn().mockResolvedValue(undefined)
 const mockStartCalendarSubscriptionReconcile = vi.fn();
 const mockStartCalendarSubscriptionMonitor = vi.fn();
 const mockRegisterCalendarSubscriptionMonitorCron = vi.fn().mockResolvedValue(undefined);
+const mockStartMeetingCalendarAmend = vi.fn();
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -122,6 +123,14 @@ vi.mock('./calendar-subscription-monitor.js', () => ({
   startCalendarSubscriptionMonitorWorker: () => mockStartCalendarSubscriptionMonitor(),
   registerCalendarSubscriptionMonitorCron: () => mockRegisterCalendarSubscriptionMonitorCron(),
 }));
+// BAL-409: mocking this is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
+// GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
+// through in every ticket named in the comments above. Must land in the SAME COMMIT as the
+// `worker.ts` registration.
+vi.mock('./meeting-calendar-amend.js', () => ({
+  startMeetingCalendarAmendWorker: () => mockStartMeetingCalendarAmend(),
+}));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
 }));
@@ -160,6 +169,7 @@ describe('startWorkers', () => {
     expect(mockStartCalendarSubscriptionReconcile).not.toHaveBeenCalled();
     expect(mockStartCalendarSubscriptionMonitor).not.toHaveBeenCalled();
     expect(mockRegisterCalendarSubscriptionMonitorCron).not.toHaveBeenCalled();
+    expect(mockStartMeetingCalendarAmend).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -201,6 +211,7 @@ describe('startWorkers', () => {
     expect(mockStartCalendarSubscriptionReconcile).toHaveBeenCalled();
     expect(mockStartCalendarSubscriptionMonitor).toHaveBeenCalled();
     expect(mockRegisterCalendarSubscriptionMonitorCron).toHaveBeenCalled();
+    expect(mockStartMeetingCalendarAmend).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;
