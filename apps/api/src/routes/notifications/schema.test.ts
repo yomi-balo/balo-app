@@ -1401,8 +1401,12 @@ describe('publishBodySchema', () => {
     /**
      * ⚠ `booking.rescheduled` CARRIES NO `joinPath` AT ALL, and that is deliberate — see
      * `BookingRescheduledPayload`. A reschedule reuses the same room, so the link is unchanged;
-     * both templates say "same link" and link the CASE. The payload is `.strict()`, so a
-     * `joinPath` smuggled in is REJECTED as an unknown key rather than silently ignored.
+     * both templates say "same link" and link the CASE.
+     *
+     * ⚠ `bookingRescheduledPayload` is a PLAIN `z.object`, NOT `.strict()` — nothing in this
+     * file is — so a smuggled `joinPath` is STRIPPED, not rejected, and the parse SUCCEEDS.
+     * What the assertion below pins is the property that actually matters: the field cannot
+     * reach a template, because it is absent from the parsed output.
      *
      * The `/join/m/{uuid}` shape itself is still pinned — on `booking.confirmed`, the arm that
      * actually renders `${BASE_URL}${joinPath}` (see the "booking.confirmed — joinPath (N3)"

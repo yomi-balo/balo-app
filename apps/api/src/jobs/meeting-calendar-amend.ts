@@ -45,8 +45,8 @@ const MAX_RATE_LIMIT_DEFERRALS = 10;
  * ⚠⚠ THE PAYLOAD DELIBERATELY CARRIES NO WINDOW. Every handler run RE-READS the meeting row and
  * amends to WHATEVER IS THERE NOW — never the window in the job's own payload. That is what
  * makes out-of-order execution harmless: whichever job runs last writes current truth, and
- * EVERY job writes current truth. Combined with the window-scoped `jobId` below, at least one
- * job always runs after the final commit.
+ * EVERY job writes current truth. Combined with the per-move `jobId` below, at least one job
+ * always runs after the final commit.
  *
  * ⚠ `jobId` IS THE IDEMPOTENCY KEY, AND IT IS THE `meeting.rescheduled` AUDIT ROW ID — NOT THE
  * TARGET WINDOW. A window-derived key (`meetingId:start-end`) looks right and is subtly wrong:

@@ -54,6 +54,8 @@ vi.mock('@/lib/notifications/publish', () => ({
 }));
 
 import { revalidatePath } from 'next/cache';
+// Globally auto-mocked in `test/setup.ts` — imported here to assert the deploy-skew warn.
+import { log } from '@/lib/logging';
 import { rescheduleConsultationAction } from './reschedule-consultation';
 
 // N9 — DELIBERATELY NOT 30 MINUTES. A hard-coded `+ 30 minutes` in the action would pass
@@ -282,6 +284,48 @@ describe('rescheduleConsultationAction — T-WEB-ACT', () => {
     });
     expect(revalidatePath).not.toHaveBeenCalled();
     expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ THE DEPLOY-SKEW PATH. `rescheduleAuditId` is what makes the fan-out key unique per MOVE
+   * rather than per DESTINATION; without it the key falls back to the target window and the
+   * A→B→C→B collision returns, silently dropping both party emails. A `changed: true` response
+   * from a current API always carries the id, so reaching the fallback means the web is running
+   * against an older API — which must be LOUD, or a real regression is indistinguishable from
+   * correct behaviour.
+   */
+  it('warns and falls back to a window key when the API omits rescheduleAuditId', async () => {
+    mockPostRescheduleMeeting.mockResolvedValue({
+      ok: true,
+      data: {
+        meetingId: MEETING_ID,
+        scheduledStart: '2026-09-01T10:00:00.000Z',
+        scheduledEnd: '2026-09-01T10:45:00.000Z',
+        previousScheduledStart: '2026-09-01T09:00:00.000Z',
+        previousScheduledEnd: '2026-09-01T09:45:00.000Z',
+        changed: true,
+        // no rescheduleAuditId — an older API
+      },
+    });
+
+    const result = await rescheduleConsultationAction(VALID_INPUT);
+
+    expect(result.success).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('rescheduleAuditId'),
+      expect.objectContaining({ meetingId: MEETING_ID })
+    );
+    expect(mockPublishNotificationEvent).toHaveBeenCalledWith(
+      'booking.rescheduled',
+      expect.objectContaining({
+        correlationId: `${MEETING_ID}:2026-09-01T10:00:00.000Z`,
+      })
+    );
+  });
+
+  it('does NOT warn on the normal path, where the id is present', async () => {
+    await rescheduleConsultationAction(VALID_INPUT);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('publishes booking.rescheduled ONLY on ok: true, and does not await it', async () => {

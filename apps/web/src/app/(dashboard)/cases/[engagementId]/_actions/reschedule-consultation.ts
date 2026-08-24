@@ -250,6 +250,19 @@ export async function rescheduleConsultationAction(
         return { clientCompanyName: 'your company', expertPartyLabel: 'Your expert' };
       }
     );
+    // ⚠ THE FALLBACK IS A DEPLOY-SKEW SAFETY NET, NOT A NORMAL PATH — so it is LOUD. A
+    // `changed: true` response always carries `rescheduleAuditId`; if it does not, the web is
+    // running against an older API and every reschedule silently reverts to the window-derived
+    // key, reinstating the A→B→C→B collision that drops both party emails. Silence there would
+    // make a real regression indistinguishable from correct behaviour.
+    const rescheduleAuditId = result.data.rescheduleAuditId;
+    if (rescheduleAuditId === undefined) {
+      log.warn('Reschedule response carried no rescheduleAuditId — falling back to a window key', {
+        meetingId,
+        engagementId,
+      });
+    }
+
     // Fire-and-forget by contract — `publishNotificationEvent` never throws (see its own
     // docblock); nothing here needs a `.catch()`.
     publishNotificationEvent('booking.rescheduled', {
@@ -257,10 +270,8 @@ export async function rescheduleConsultationAction(
       // the BullMQ jobId (`${event}--${correlationId}`) and the notification-events queue
       // RETAINS 100 completed jobs, so `${meetingId}:${scheduledStart}` would collide on a
       // move BACK to a previously-used window (A→B→C→B) and silently drop BOTH party emails.
-      // Falls back to the window only if the API omitted the id — a `changed: true` response
-      // always carries it, so the fallback is unreachable in practice and exists so a schema
-      // skew degrades to the old behaviour rather than to an undefined key.
-      correlationId: `${meetingId}:${result.data.rescheduleAuditId ?? result.data.scheduledStart}`,
+      // Falls back to the window only on deploy skew — see the `log.warn` above.
+      correlationId: `${meetingId}:${rescheduleAuditId ?? result.data.scheduledStart}`,
       meetingId,
       engagementId,
       recipientId: user.id,

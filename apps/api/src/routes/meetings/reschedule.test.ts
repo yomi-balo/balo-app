@@ -71,6 +71,8 @@ import { meetingRescheduleRoutes } from './reschedule.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const MEETING_ID = '22222222-2222-4222-8222-222222222222';
+/** The `meeting.rescheduled` audit row id — the outbound fan-out's per-MOVE dedup key. */
+const AUDIT_ID = '66666666-6666-4666-8666-666666666666';
 const EXPERT_PROFILE_ID = '66666666-6666-4666-8666-666666666666';
 const URL = `/meetings/${MEETING_ID}/reschedule`;
 const AUTH = { authorization: 'Bearer test-token' };
@@ -153,6 +155,7 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
       previous: { scheduledStart: CURRENT_START, scheduledEnd: CURRENT_END },
       expertProfileId: EXPERT_PROFILE_ID,
       guestLinksExtended: 0,
+      rescheduleAuditId: AUDIT_ID,
     });
     mockFindById.mockResolvedValue(meetingRow());
   });
@@ -398,6 +401,12 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
       previousScheduledStart: CURRENT_START.toISOString(),
       previousScheduledEnd: CURRENT_END.toISOString(),
       changed: true,
+      // ⚠ WITHOUT THIS LINE THE ASSERTION IS BLIND TO ITS OWN SUBJECT. `undefined` is dropped
+      // from JSON, so a route that stopped serialising `rescheduleAuditId` would still satisfy
+      // an exact-match `toEqual` that never named it — and the web action's
+      // `?? scheduledStart` fallback would silently reinstate the A→B→C→B key collision this
+      // field exists to prevent, with every test still green.
+      rescheduleAuditId: AUDIT_ID,
     });
     expect(mockRescheduleMeeting).toHaveBeenCalledWith(
       MEETING_ID,
