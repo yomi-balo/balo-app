@@ -48,13 +48,15 @@ import {
   eq,
   findProjectionDrift,
   findProjectionForMeeting,
+  meetingCalendarEvents,
+  meetingCalendarEventsRepository,
   meetingContexts,
   meetings,
   meetingsRepository,
 } from '@balo/db';
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import type { ProvisionedRoom, RoomProvisioner } from '../daily/rooms.js';
-import { seedBookingParties } from '../../test/fixtures/booking-graph.js';
+import { seedBookingParties, type BookingParties } from '../../test/fixtures/booking-graph.js';
 import { authorizeMeetingBooking } from './authorize-meeting-booking.js';
 import { bookAndProvisionMeeting, provisionMeeting } from './provision-meeting.js';
 
@@ -538,5 +540,175 @@ describe('BAL-129 — book and provision, against a real database', () => {
       { expertProfileId: parties.expertProfileId },
       expect.objectContaining({ jobId: `availability-${parties.expertProfileId}` })
     );
+  });
+});
+
+/**
+ * BAL-433 SLICE 1 — THE ACCEPTANCE TEST, AND THE ONLY PLACE THE THREE PRODUCER-LESS CONTEXTS
+ * CAN BE EXERCISED END TO END.
+ *
+ * `case` and `request_interaction` have production booking producers in `apps/web`;
+ * `project_discovery` has only a declared MOCK SEAM, and `project_kickoff` and
+ * `package_session` have **none at all**. Building producers for those three is explicitly out
+ * of this slice's scope — so a direct service call against a real database is the whole of
+ * their reachability proof.
+ *
+ * WHAT THIS PROVES THAT NO MOCKED TEST CAN:
+ *
+ *   · the registry really does reach every bookable label (a gate left anywhere in the chain
+ *     would leave a context with NO row, and the unit tests would still be green because they
+ *     mock the projection);
+ *   · the ICS-fallback condition is actually PERSISTED, through the real migration, past the
+ *     real biconditional CHECK and the real partial unique on `(meeting_id, party)`;
+ *   · no 42P10 on the widened arbiter, on a first write, against a real plan.
+ *
+ * ⚠ NO CALENDAR CONNECTION IS SEEDED, DELIBERATELY. `pickWriteTarget` therefore answers
+ * `undefined` for every one of the five and ADR-1044 Ruling 1 fires — which also means NO
+ * VENDOR CALL IS ATTEMPTED: nothing here mocks `@apiroc/…`, so a write would fail loudly
+ * rather than silently pass.
+ *
+ * ⚠ `pnpm test:integration` PASSES VACUOUSLY WITHOUT DOCKER. Check the reported test COUNT.
+ */
+describe('BAL-433 — every bookable context projects, and the ICS fallback is persisted', () => {
+  /** Every live calendar-entry row for one meeting. */
+  async function calendarRowsFor(
+    meetingId: string
+  ): Promise<(typeof meetingCalendarEvents.$inferSelect)[]> {
+    return db
+      .select()
+      .from(meetingCalendarEvents)
+      .where(eq(meetingCalendarEvents.meetingId, meetingId));
+  }
+
+  /**
+   * The context id each label anchors on. ⚠ `package_session` points at a PROJECT engagement:
+   * there is no package factory and this slice does not need one, and both labels resolve
+   * their company through the engagement SUPERTYPE while the registry supplies only the label
+   * (see `seedBookingParties`' own note).
+   */
+  const CONTEXTS = [
+    {
+      contextType: 'case',
+      engagementType: 'case',
+      idOf: (p: BookingParties) => p.caseEngagementId,
+    },
+    {
+      contextType: 'project_kickoff',
+      engagementType: 'project',
+      idOf: (p: BookingParties) => p.projectEngagementId,
+    },
+    {
+      contextType: 'package_session',
+      engagementType: 'package',
+      idOf: (p: BookingParties) => p.projectEngagementId,
+    },
+    {
+      contextType: 'project_discovery',
+      engagementType: null,
+      idOf: (p: BookingParties) => p.directProjectRequestId,
+    },
+    {
+      contextType: 'request_interaction',
+      engagementType: null,
+      idOf: (p: BookingParties) => p.relationshipId,
+    },
+  ] as const;
+
+  it.each(CONTEXTS)(
+    'contextType "$contextType" → ONE live expert-party row, delivery_mode ics, no provider payload',
+    async ({ contextType, engagementType, idOf }) => {
+      const parties = await seedBookingParties();
+
+      const result = await bookAndProvisionMeeting(
+        {
+          contextType,
+          contextId: idOf(parties),
+          scheduledStart: START,
+          scheduledEnd: END,
+          engagementType,
+          userId: parties.memberUserId,
+        },
+        log,
+        { provisioner: recordingProvisioner() }
+      );
+
+      const rows = await calendarRowsFor(result.meeting.id);
+      expect(rows, `${contextType} produced no calendar row`).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        party: 'expert',
+        deliveryMode: 'ics',
+        // ⚠ ALL FOUR NULL, AND THE BICONDITIONAL CHECK ENFORCES IT. An `ics` row carrying a
+        // stale vendor id would raise 23514 rather than reach this assertion.
+        connectionId: null,
+        calendarId: null,
+        vendorEventId: null,
+        baloBookingId: null,
+        deletedAt: null,
+      });
+    }
+  );
+
+  it("the five bookings are five independent rows — no context shares another's entry", async () => {
+    // A registry that resolved every label to the same row (or a writer keyed on something
+    // other than the meeting) would pass each case above in isolation and fail here.
+    const parties = await seedBookingParties();
+    const meetingIds: string[] = [];
+
+    for (const [index, spec] of CONTEXTS.entries()) {
+      const start = new Date(START.getTime() + index * 3 * 60 * 60 * 1000);
+      const result = await bookAndProvisionMeeting(
+        {
+          contextType: spec.contextType,
+          contextId: spec.idOf(parties),
+          scheduledStart: start,
+          scheduledEnd: new Date(start.getTime() + 60 * 60 * 1000),
+          engagementType: spec.engagementType,
+          userId: parties.memberUserId,
+        },
+        log,
+        { provisioner: recordingProvisioner() }
+      );
+      meetingIds.push(result.meeting.id);
+    }
+
+    expect(new Set(meetingIds).size).toBe(5);
+    const rowIds: string[] = [];
+    for (const meetingId of meetingIds) {
+      const rows = await calendarRowsFor(meetingId);
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      if (row === undefined) throw new Error('unreachable: length was asserted above');
+      rowIds.push(row.id);
+    }
+    expect(new Set(rowIds).size).toBe(5);
+  });
+
+  it('a rebook after the entry is retired INSERTS beside it — one live row, two total', async () => {
+    // The partial unique ignores a soft-deleted row, which is what makes a cancelled-then-
+    // rebooked meeting able to record a SECOND entry. Proved here through the real index
+    // rather than only in the repository test, because this is the path a booking takes.
+    const parties = await seedBookingParties();
+    const result = await bookAndProvisionMeeting(
+      {
+        contextType: 'case',
+        contextId: parties.caseEngagementId,
+        scheduledStart: START,
+        scheduledEnd: END,
+        engagementType: 'case',
+        userId: parties.memberUserId,
+      },
+      log,
+      { provisioner: recordingProvisioner() }
+    );
+
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(result.meeting.id, 'expert');
+    await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: result.meeting.id,
+      party: 'expert',
+    });
+
+    const rows = await calendarRowsFor(result.meeting.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((row) => row.deletedAt === null)).toHaveLength(1);
   });
 });

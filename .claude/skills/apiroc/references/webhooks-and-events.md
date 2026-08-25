@@ -547,12 +547,13 @@ docblock's own stated reason: "before this table there was NO column for it anyw
 obvious homes are closed" (`meetings` is FORBIDDEN by `invariants/meetings-no-context-column.test.ts`;
 `consultations` is a derived read model with a deleted `create()`).
 
-The real, shipped code — `apps/api/src/services/consultation-events/write-consultation-event.ts`,
-COMPLETE and TESTED, but **INERT: no live caller until BAL-400 wires booking**
-(`services/consultation-events/index.ts`'s own docblock says so):
+The real, shipped code — `apps/api/src/services/consultation-events/write-consultation-event.ts`.
+⚠ **LIVE, not inert.** An earlier revision of this note said "no live caller until BAL-400 wires
+booking"; BAL-400 wired it, BAL-283 added the intro call, and **BAL-433 Slice 1 made every one of
+the five bookable contexts reach it**:
 
 ```typescript
-// apps/api/src/services/consultation-events/write-consultation-event.ts — SHIPPED, INERT.
+// apps/api/src/services/consultation-events/write-consultation-event.ts — SHIPPED and LIVE.
 export async function writeConsultationEvent(
   input: WriteConsultationEventInput
 ): Promise<MeetingCalendarEvent> {
@@ -566,8 +567,9 @@ export async function writeConsultationEvent(
     throw new Error(/* Apiroc substituted the event id — never trust it silently, see B2 */);
   }
 
-  return meetingCalendarEventsRepository.record({
+  return meetingCalendarEventsRepository.recordProviderEvent({
     meetingId: input.meetingId,
+    party: 'expert', // ← BAL-433. STRUCTURAL: connections are keyed on `expert_profile_id`.
     connectionId: input.connectionId,
     calendarId: input.calendarId,
     vendorEventId: created.id, // ← VENDOR-RETURNED, asserted equal to any requested id above
@@ -649,13 +651,18 @@ returns **never retry, fail closed**. So on Google a derived-id retry surfaces a
 ⚠ **This is exactly what shipped, not just a design rule — see B1's `writeConsultationEvent`.**
 
 1. **Key idempotency off Balo's own record.** Before creating, check for a live
-   `meeting_calendar_events` row keyed on `meeting_id` (`findLiveByMeetingId`). A row ⇒ the event
-   exists; do not create. Shipped as `meeting_calendar_event_meeting_uq`, a partial unique on
-   `meeting_id` — there is no `calendar_event_id` column on any table (see B1); the row itself is
-   the "does this exist" check.
+   `meeting_calendar_events` row for the meeting AND the party
+   (`findLiveExpertProviderEvent`). A row ⇒ the event exists; do not create. ⚠ Since **BAL-433**
+   the shipped unique is `meeting_calendar_event_meeting_party_uq`, a partial unique on
+   **`(meeting_id, party)`** (it was on `meeting_id` alone) — there is no `calendar_event_id`
+   column on any table (see B1); the row itself is the "does this exist" check. The same index is
+   also ADR-1044 Ruling 1's structural form: a party gets a provider write **or** an ICS, never
+   both, because there is only one live row to hold either answer.
 2. **Store the vendor-returned id** immediately after the create, in the same call —
-   `writeConsultationEvent` does exactly this, via `meetingCalendarEventsRepository.record`'s
-   `onConflictDoUpdate` (a retry updates in place; a rebook after a soft-delete inserts a fresh row).
+   `writeConsultationEvent` does exactly this, via
+   `meetingCalendarEventsRepository.recordProviderEvent`'s `onConflictDoUpdate` (a retry updates in
+   place, keeping the same row id; a rebook after a soft-delete inserts a FRESH row beside it).
+   ⚠ That row id is the **per-write** key — BAL-475 should correlate on it, never on `meetingId`.
 3. **Never send `id`.** Let the vendor generate it. Shipped: `buildConsultationEvent` never sets
    `CreateEventInput.id`.
 4. **If a derived id is ever genuinely required**, assert the returned id equals the requested one
@@ -698,24 +705,34 @@ best.
 **Delete IS built** — `apps/api/src/services/consultation-events/delete-consultation-event.ts`
 ships COMPLETE and TESTED, calling `events.delete(endUserAccountId, calendarId, eventId)` →
 `200 {"success": true}` **[live]** on both providers, by the **stored vendor id** (never a
-re-derived one) read off the `meeting_calendar_events` row. It ships INERT — no live caller until
-BAL-400 wires cancellation — and it marks Balo's row soft-deleted BEFORE calling the vendor (round-2
-fix #14 in its own docblock: an orphaned vendor event is recoverable via `reconcileByTag`; a lost
-Balo row pointing at an already-vendor-deleted event is not).
+re-derived one) read off the `meeting_calendar_events` row. It **still has no production caller**, and the reason has changed:
+an earlier revision of this note said "no live caller until BAL-400 wires cancellation", and that
+premise is now stale — **BAL-400 shipped and did NOT wire it**. The vendor DELETE belongs to
+**BAL-410** (the cancel flow), which is not built. `cancelMeeting` likewise still has zero
+production callers.
 
-⚠ **Gap worth flagging, not a defect (the function is INERT so nothing depends on it yet):** the
-shipped `deleteConsultationEvent` does **not** itself catch a `404` from `events.delete` — it lets
-`callApiroc` throw an `ApirocError { kind: 'not_found' }` straight up to the caller. The
+It marks Balo's row soft-deleted BEFORE calling the vendor (round-2 fix #14 in its own docblock:
+an orphaned vendor event is recoverable via `reconcileByTag`; a lost Balo row pointing at an
+already-vendor-deleted event is not). ⚠ Since **BAL-433** both halves are EXPERT-PARTY SCOPED:
+it reads `findLiveExpertProviderEvent` (narrowed to `party='expert' AND
+delivery_mode='provider_event'`, so an ICS-fallback row cannot be mistaken for an addressable
+vendor event) and soft-deletes with `softDeleteByMeetingAndParty(meetingId, 'expert')`.
+
+⚠ **Gap worth flagging, and it is STILL OPEN — owned by whoever wires the cancel flow (BAL-410):**
+the shipped `deleteConsultationEvent` does **not** itself catch a `404` from `events.delete` — it
+lets `callApiroc` throw an `ApirocError { kind: 'not_found' }` straight up to the caller. The
 "treat `404` as converged" design rule below is real and still correct (`classifyRetry('not_found')`
 does answer "never retry"), but nothing in this function currently swallows that error and clears
 the row on a 404 specifically — a caller that doesn't separately handle `not_found` would surface
-it as a hard failure instead of a no-op. Whoever wires BAL-400's cancel flow needs to either add
-that catch here or handle it at the call site; it isn't done today.
+it as a hard failure instead of a no-op. Note that `jobs/meeting-calendar-amend.ts` DOES handle
+this for the amend path (its `not_found` arm soft-deletes the expert-party row and returns), so
+the pattern to copy already exists in the repo.
 
 ⚠ **Treat a `404` on delete as converged, not as a failure.** The expert may have deleted the event
 by hand; the desired end state ("no consultation event on that calendar") already holds. The shipped
 `classifyRetry` agrees — `not_found` → never retry. Clear Balo's stored row —
-`meetingCalendarEventsRepository.softDeleteByMeetingId`, not a `calendar_event_id` column, which
+`meetingCalendarEventsRepository.softDeleteByMeetingAndParty(meetingId, 'expert')` (BAL-433
+renamed the whole-meeting version out of existence), not a `calendar_event_id` column, which
 does not exist (see B1) — and move on. A `403` is different: that is the expired-credential condition (SKILL.md's
 [Credential expiry & reconnect detection](../SKILL.md)), and it means reconnect, not retry.
 

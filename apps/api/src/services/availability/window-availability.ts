@@ -29,9 +29,15 @@ export interface ExcludeMeetingWindow {
   readonly currentEnd: Date;
   /**
    * `true` only when Balo actually wrote a vendor event for this meeting
-   * (`meetingCalendarEventsRepository.findLiveByMeetingId(meetingId) !== undefined`),
+   * (`meetingCalendarEventsRepository.findLiveExpertProviderEvent(meetingId) !== undefined`),
    * resolved by the CALLER so this module stays decoupled and unit-testable. `false` performs
    * NO vendor subtraction at all — an expert with no connected calendar triggers none.
+   *
+   * ⚠ ONLY A `provider_event` ROW COUNTS, AND THAT NARROWING IS THIS FIELD'S CONTRACT, NOT AN
+   * IMPLEMENTATION DETAIL OF THE CALLER (BAL-433). An ICS-fallback row (ADR-1044 Ruling 1 — no
+   * writable connection, so no vendor event exists) names no vendor event, and answering `true`
+   * for one would drop a real busy block below and let the expert be DOUBLE-BOOKED,
+   * typecheck-clean with every mocked test green. A whole-meeting read is the WRONG source.
    *
    * ⚠ THE RESIDUAL (see `exclude-window.ts`'s docblock): subtraction clips every vendor
    * interval over `[currentStart, currentEnd)`, so an unrelated expert event living entirely

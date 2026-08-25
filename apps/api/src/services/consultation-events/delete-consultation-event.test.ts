@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockEventsDelete, mockFindLiveByMeetingId, mockSoftDeleteByMeetingId } = vi.hoisted(() => ({
-  mockEventsDelete: vi.fn(),
-  mockFindLiveByMeetingId: vi.fn(),
-  mockSoftDeleteByMeetingId: vi.fn(),
-}));
+const { mockEventsDelete, mockFindLiveExpertProviderEvent, mockSoftDeleteByMeetingAndParty } =
+  vi.hoisted(() => ({
+    mockEventsDelete: vi.fn(),
+    mockFindLiveExpertProviderEvent: vi.fn(),
+    mockSoftDeleteByMeetingAndParty: vi.fn(),
+  }));
 
 vi.mock('@balo/db', () => ({
   meetingCalendarEventsRepository: {
-    findLiveByMeetingId: mockFindLiveByMeetingId,
-    softDeleteByMeetingId: mockSoftDeleteByMeetingId,
+    findLiveExpertProviderEvent: mockFindLiveExpertProviderEvent,
+    softDeleteByMeetingAndParty: mockSoftDeleteByMeetingAndParty,
   },
 }));
 
@@ -24,16 +25,16 @@ describe('deleteConsultationEvent (BAL-396 §5/§10.6)', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('is a no-op when there is no live row — never throws, never calls the vendor', async () => {
-    mockFindLiveByMeetingId.mockResolvedValue(undefined);
+    mockFindLiveExpertProviderEvent.mockResolvedValue(undefined);
 
     await deleteConsultationEvent({ meetingId: 'meeting-1', endUserAccountId: 'eua-1' });
 
     expect(mockEventsDelete).not.toHaveBeenCalled();
-    expect(mockSoftDeleteByMeetingId).not.toHaveBeenCalled();
+    expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
   });
 
   it('deletes using the STORED calendarId (never a current target_calendar_id) and the stored vendorEventId', async () => {
-    mockFindLiveByMeetingId.mockResolvedValue({
+    mockFindLiveExpertProviderEvent.mockResolvedValue({
       id: 'row-1',
       meetingId: 'meeting-1',
       calendarId: 'cal-stored-at-write-time',
@@ -47,16 +48,16 @@ describe('deleteConsultationEvent (BAL-396 §5/§10.6)', () => {
       'cal-stored-at-write-time',
       'vendor-event-1'
     );
-    expect(mockSoftDeleteByMeetingId).toHaveBeenCalledWith('meeting-1');
+    expect(mockSoftDeleteByMeetingAndParty).toHaveBeenCalledWith('meeting-1', 'expert');
   });
 
   /**
    * ⚠⚠ round-2 fix #14 — THE ORDERING REGRESSION TEST. A prior revision of this test pinned
    * the OPPOSITE ordering ("soft-deletes ONLY after the vendor delete succeeds"), which
-   * directly contradicted `meetingCalendarEventsRepository.softDeleteByMeetingId`'s own
+   * directly contradicted `meetingCalendarEventsRepository.softDeleteByMeetingAndParty`'s own
    * docstring: "Marking first and deleting after is the right order — an orphaned vendor
    * event is recoverable via balo_booking_id, a lost row is not." A caller following that
-   * repository docstring would get `findLiveByMeetingId → undefined` on the next call (row
+   * repository docstring would get `findLiveExpertProviderEvent → undefined` on the next call (row
    * already marked deleted) and the vendor event would NEVER get deleted under the old,
    * delete-then-mark order if the process crashed in between. This test now asserts the
    * documented order: mark first, delete at the vendor second — and that a vendor-delete
@@ -64,11 +65,11 @@ describe('deleteConsultationEvent (BAL-396 §5/§10.6)', () => {
    */
   it('marks Balo’s row deleted BEFORE calling the vendor, and does not roll the mark back if the vendor delete fails', async () => {
     const callOrder: string[] = [];
-    mockFindLiveByMeetingId.mockResolvedValue({
+    mockFindLiveExpertProviderEvent.mockResolvedValue({
       calendarId: 'cal-1',
       vendorEventId: 'vendor-1',
     });
-    mockSoftDeleteByMeetingId.mockImplementation(async () => {
+    mockSoftDeleteByMeetingAndParty.mockImplementation(async () => {
       callOrder.push('mark');
     });
     mockEventsDelete.mockImplementation(async () => {
@@ -81,17 +82,17 @@ describe('deleteConsultationEvent (BAL-396 §5/§10.6)', () => {
     ).rejects.toThrow('vendor 500');
 
     // The mark happened, and happened BEFORE the vendor call — not rolled back on failure.
-    expect(mockSoftDeleteByMeetingId).toHaveBeenCalledWith('meeting-1');
+    expect(mockSoftDeleteByMeetingAndParty).toHaveBeenCalledWith('meeting-1', 'expert');
     expect(callOrder).toEqual(['mark', 'vendor-delete']);
   });
 
   it('the happy path also marks before deleting at the vendor', async () => {
     const callOrder: string[] = [];
-    mockFindLiveByMeetingId.mockResolvedValue({
+    mockFindLiveExpertProviderEvent.mockResolvedValue({
       calendarId: 'cal-1',
       vendorEventId: 'vendor-1',
     });
-    mockSoftDeleteByMeetingId.mockImplementation(async () => {
+    mockSoftDeleteByMeetingAndParty.mockImplementation(async () => {
       callOrder.push('mark');
     });
     mockEventsDelete.mockImplementation(async () => {

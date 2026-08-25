@@ -33,8 +33,9 @@ export interface ConsultationEventInput {
  *  - `privateExtendedProperties: { baloBookingId }` — write-and-query-only on Microsoft
  *    (§M3); never read back by this mapper or any caller.
  *  - NO `id` — a caller-supplied id is not a portable idempotency lever (§M1: Microsoft
- *    silently substitutes its own). Idempotency is Balo's own `meeting_id`, enforced by
- *    `meetingCalendarEventsRepository.record`'s partial unique, not by this event.
+ *    silently substitutes its own). Idempotency is Balo's own `(meeting_id, party)`, enforced
+ *    by `meetingCalendarEventsRepository.recordProviderEvent`'s partial unique on
+ *    `(meeting_id, party)` (BAL-433 widened it from `meeting_id` alone), not by this event.
  *  - NO attendees — the client is deliberately NOT invited; comms stay in Balo.
  *  - NO `generateMeetingUrlProvider` — Daily is the venue; Balo never asks the vendor to
  *    generate its own meeting link (Microsoft has no `allowedOnlineMeetingProviders` at all;

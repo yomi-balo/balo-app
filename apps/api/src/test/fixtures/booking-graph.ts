@@ -24,8 +24,10 @@ import {
   db,
   expertsRepository,
   caseEngagementsRepository,
+  projectEngagementsRepository,
   projectRequestsRepository,
   referenceDataRepository,
+  requestExpertRelationshipsRepository,
   usersRepository,
 } from '@balo/db';
 import { randomUUID } from 'node:crypto';
@@ -48,6 +50,23 @@ export interface BookingParties {
   directProjectRequestId: string;
   /** A `send_to='match'` request with NO expert — deliberately NOT bookable. */
   matchProjectRequestId: string;
+  /**
+   * BAL-433 — a live PROJECT engagement: `companyId` × `expertProfileId`.
+   *
+   * ⚠ IT SERVES BOTH `project_kickoff` AND `package_session`, AND THE SECOND IS DELIBERATELY
+   * ARTIFICIAL. There is no package-engagement factory and this slice does not otherwise need
+   * one; `resolveExpertCalendarFacts` reads `engagementsRepository.findById` (the SUPERTYPE)
+   * for both labels and the registry only picks a LABEL for each, so pointing a
+   * `package_session` context at a project engagement exercises that arm honestly. Noted here
+   * rather than papered over — if a future slice makes `package_session` read a subtype, this
+   * fixture must grow a real package engagement.
+   */
+  projectEngagementId: string;
+  /**
+   * BAL-433 — a live `request_expert_relationships` row linking `expertProfileId` to
+   * `directProjectRequestId`. The `request_interaction` context id.
+   */
+  relationshipId: string;
 }
 
 /**
@@ -133,6 +152,26 @@ export async function seedBookingParties(): Promise<BookingParties> {
     documents: [],
   });
 
+  // BAL-433 — the two contexts BAL-129 never needed. `project_kickoff` (and, artificially,
+  // `package_session`) anchor on an engagement of kind `project`; `request_interaction` anchors
+  // on the request↔expert relationship, which is created through the same repository the invite
+  // flow uses so the conversation row it also writes is real.
+  const projectEngagement = await projectEngagementsRepository.create({
+    companyId: company.id,
+    expertProfileId: profile.id,
+    pricingMethod: 'fixed',
+    priceCents: 500_000,
+  });
+
+  const relationship = await requestExpertRelationshipsRepository.invite({
+    projectRequestId: directRequest.id,
+    expertProfileId: profile.id,
+    invitedByUserId: memberUser.id,
+  });
+  if (relationship === undefined) {
+    throw new Error('fixture: relationship invite returned no row');
+  }
+
   return {
     companyId: company.id,
     memberUserId: memberUser.id,
@@ -140,5 +179,7 @@ export async function seedBookingParties(): Promise<BookingParties> {
     caseEngagementId: engagement.id,
     directProjectRequestId: directRequest.id,
     matchProjectRequestId: matchRequest.id,
+    projectEngagementId: projectEngagement.id,
+    relationshipId: relationship.id,
   };
 }

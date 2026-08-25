@@ -7,7 +7,7 @@ const {
   mockFindPendingForAnswer,
   mockIsWindowAvailableForExpert,
   mockCheckRateLimit,
-  mockFindLiveByMeetingId,
+  mockFindLiveExpertProviderEvent,
   MeetingNotReschedulableErrorStub,
 } = vi.hoisted(() => {
   class MeetingNotReschedulableErrorImpl extends Error {
@@ -25,7 +25,7 @@ const {
     mockFindPendingForAnswer: vi.fn(),
     mockIsWindowAvailableForExpert: vi.fn(),
     mockCheckRateLimit: vi.fn(),
-    mockFindLiveByMeetingId: vi.fn(),
+    mockFindLiveExpertProviderEvent: vi.fn(),
     MeetingNotReschedulableErrorStub: MeetingNotReschedulableErrorImpl,
   };
 });
@@ -35,7 +35,7 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@balo/db', () => ({
   MeetingNotReschedulableError: MeetingNotReschedulableErrorStub,
-  meetingCalendarEventsRepository: { findLiveByMeetingId: mockFindLiveByMeetingId },
+  meetingCalendarEventsRepository: { findLiveExpertProviderEvent: mockFindLiveExpertProviderEvent },
   rescheduleProposalsRepository: { findPendingForAnswer: mockFindPendingForAnswer },
 }));
 vi.mock('../../lib/rate-limiter.js', async (importOriginal) => ({
@@ -149,7 +149,7 @@ describe('POST /meetings/:meetingId/reschedule-proposals/:proposalId (BAL-411 an
     mockCheckRateLimit.mockResolvedValue({ allowed: true, remaining: 19, ttlSeconds: 3600 });
     mockAuthorizeMeetingReschedule.mockResolvedValue(authOk());
     mockFindPendingForAnswer.mockResolvedValue(foundOk());
-    mockFindLiveByMeetingId.mockResolvedValue(undefined);
+    mockFindLiveExpertProviderEvent.mockResolvedValue(undefined);
     mockIsWindowAvailableForExpert.mockResolvedValue(true);
     mockAcceptRescheduleProposal.mockResolvedValue({
       proposalId: PROPOSAL_ID,
@@ -304,7 +304,7 @@ describe('POST /meetings/:meetingId/reschedule-proposals/:proposalId (BAL-411 an
     });
 
     it('threads excludeMeeting into isWindowAvailableForExpert', async () => {
-      mockFindLiveByMeetingId.mockResolvedValue({ id: 'cal-event-1' });
+      mockFindLiveExpertProviderEvent.mockResolvedValue({ id: 'cal-event-1' });
       await call({ method: 'POST', url: URL, headers: AUTH, payload: { optionId: OPTION_ID } });
       expect(mockIsWindowAvailableForExpert).toHaveBeenCalledWith(
         EXPERT_PROFILE_ID,

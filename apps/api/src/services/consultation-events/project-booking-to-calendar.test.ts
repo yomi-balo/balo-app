@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
 
-const { mockListConnections, mockWriteConsultationEvent } = vi.hoisted(() => ({
-  mockListConnections: vi.fn(),
-  mockWriteConsultationEvent: vi.fn(),
-}));
+const { mockListConnections, mockWriteConsultationEvent, mockRecordIcsDelivery } = vi.hoisted(
+  () => ({
+    mockListConnections: vi.fn(),
+    mockWriteConsultationEvent: vi.fn(),
+    mockRecordIcsDelivery: vi.fn(),
+  })
+);
 
 vi.mock('@balo/db', () => ({
   calendarRepository: { listConnectionsByExpertProfileId: mockListConnections },
+  meetingCalendarEventsRepository: { recordIcsDelivery: mockRecordIcsDelivery },
 }));
 
 vi.mock('./write-consultation-event.js', () => ({
@@ -58,37 +62,8 @@ describe('projectBookingToExpertCalendar (BAL-400 D2)', () => {
   beforeEach(() => {
     mockListConnections.mockReset();
     mockWriteConsultationEvent.mockReset();
-  });
-
-  it('no connection at all → logged no-op, never throws', async () => {
-    mockListConnections.mockResolvedValue([]);
-    const log = fakeLog();
-
-    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBeUndefined();
-
-    expect(mockWriteConsultationEvent).not.toHaveBeenCalled();
-    expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(log.error)).not.toHaveBeenCalled();
-  });
-
-  it('credentialStatus !== ACTIVE → no-op', async () => {
-    mockListConnections.mockResolvedValue([connection({ credentialStatus: 'EXPIRED' })]);
-    const log = fakeLog();
-
-    await projectBookingToExpertCalendar(BASE_INPUT, log);
-
-    expect(mockWriteConsultationEvent).not.toHaveBeenCalled();
-    expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
-  });
-
-  it('targetCalendarId === null → no-op', async () => {
-    mockListConnections.mockResolvedValue([connection({ targetCalendarId: null })]);
-    const log = fakeLog();
-
-    await projectBookingToExpertCalendar(BASE_INPUT, log);
-
-    expect(mockWriteConsultationEvent).not.toHaveBeenCalled();
-    expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
+    mockRecordIcsDelivery.mockReset();
+    mockRecordIcsDelivery.mockResolvedValue({ id: 'row-ics-1' });
   });
 
   it('two live connections → the first (oldest-live-first-ordered) one wins', async () => {
@@ -126,11 +101,24 @@ describe('projectBookingToExpertCalendar (BAL-400 D2)', () => {
     expect(writeInput.event.privateExtendedProperties).toEqual({ baloBookingId: 'meeting-1' });
   });
 
+  it("the writable path reports 'provider_event' and records NO ics row", async () => {
+    mockListConnections.mockResolvedValue([connection()]);
+    mockWriteConsultationEvent.mockResolvedValue({});
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, fakeLog())).resolves.toBe(
+      'provider_event'
+    );
+
+    // ⚠ THE OTHER HALF OF "NEVER BOTH" AT THE UNIT LEVEL. The structural guarantee is the
+    // partial unique on `(meeting_id, party)`; this proves the code never even tries.
+    expect(mockRecordIcsDelivery).not.toHaveBeenCalled();
+  });
+
   it('a listConnections throw resolves to an error-logged no-op, never rethrown', async () => {
     mockListConnections.mockRejectedValue(new Error('db unavailable'));
     const log = fakeLog();
 
-    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBeUndefined();
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
     expect(vi.mocked(log.error)).toHaveBeenCalledTimes(1);
   });
 
@@ -139,10 +127,85 @@ describe('projectBookingToExpertCalendar (BAL-400 D2)', () => {
     mockWriteConsultationEvent.mockRejectedValue(new Error('Apiroc events.create failed'));
     const log = fakeLog();
 
-    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBeUndefined();
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
     expect(vi.mocked(log.error)).toHaveBeenCalledTimes(1);
     const [[meta]] = vi.mocked(log.error).mock.calls;
     expect(meta).toMatchObject({ meetingId: 'meeting-1', expertProfileId: 'expert-1' });
+  });
+});
+
+/**
+ * BAL-433 Slice 1 — ADR-1044 amendment 2026-08-25, RULING 1.
+ *
+ * ⚠ WHAT CHANGED, AND WHY THE OLD ASSERTIONS COULD NOT SURVIVE: before this slice an expert
+ * with no writable calendar produced NOTHING — a `log.info` and a return. Silence is not a
+ * fact anything downstream can act on, so BAL-475 would have had to re-derive the condition
+ * off `calendar_connections`. The condition is now a durable row.
+ *
+ * ⚠ AND STILL NOTHING IS BUILT AND NOTHING IS SENT. There is no ICS here, no transport, no
+ * notification event — only the recorded condition. BAL-475 delivers; BAL-476 cancels.
+ */
+describe('projectBookingToExpertCalendar — the expert-party ICS fallback (BAL-433 Ruling 1)', () => {
+  beforeEach(() => {
+    mockListConnections.mockReset();
+    mockWriteConsultationEvent.mockReset();
+    mockRecordIcsDelivery.mockReset();
+    mockRecordIcsDelivery.mockResolvedValue({ id: 'row-ics-1' });
+  });
+
+  /**
+   * The FOUR listed cases collapse into ONE predicate — `pickWriteTarget(connections) ===
+   * undefined`. iCloud is not a fourth arm: an iCloud expert has NO `calendar_connections` row
+   * at all (the connect route's Zod enum admits two providers only), so it reaches here as the
+   * first case. ⚠ There is NO provider check at this write path and there never was.
+   */
+  it.each([
+    ['no connection at all (this is also how an iCloud expert arrives)', () => []],
+    ['a non-ACTIVE credential', () => [connection({ credentialStatus: 'EXPIRED' })]],
+    ['a connection with no target calendar', () => [connection({ targetCalendarId: null })]],
+  ])(
+    '%s → records the ICS fallback exactly once and writes no vendor event',
+    async (_case, rows) => {
+      mockListConnections.mockResolvedValue(rows());
+      const log = fakeLog();
+
+      await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('ics');
+
+      expect(mockRecordIcsDelivery).toHaveBeenCalledTimes(1);
+      expect(mockRecordIcsDelivery).toHaveBeenCalledWith({
+        meetingId: 'meeting-1',
+        party: 'expert',
+      });
+      expect(mockWriteConsultationEvent).not.toHaveBeenCalled();
+      expect(vi.mocked(log.error)).not.toHaveBeenCalled();
+    }
+  );
+
+  it('logs the CONNECTION COUNT and no provider name, address or calendar id', async () => {
+    // The count is what separates "never connected" from "connected but unusable"; anything
+    // more would put vendor identity or an address into an operational log.
+    mockListConnections.mockResolvedValue([connection({ credentialStatus: 'REVOKED' })]);
+    const log = fakeLog();
+
+    await projectBookingToExpertCalendar(BASE_INPUT, log);
+
+    expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
+    const [[meta, message]] = vi.mocked(log.info).mock.calls;
+    expect(meta).toEqual({
+      meetingId: 'meeting-1',
+      expertProfileId: 'expert-1',
+      connectionCount: 1,
+    });
+    expect(message).toContain('BAL-475');
+  });
+
+  it('a throwing recordIcsDelivery degrades to a logged failure — the booking still stands', async () => {
+    mockListConnections.mockResolvedValue([]);
+    mockRecordIcsDelivery.mockRejectedValue(new Error('db unavailable'));
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+    expect(vi.mocked(log.error)).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
   mockFindById,
-  mockFindLiveByMeetingId,
-  mockSoftDeleteByMeetingId,
+  mockFindLiveExpertProviderEvent,
+  mockSoftDeleteByMeetingAndParty,
   mockListConnectionsByExpertProfileId,
   mockUpdateConsultationEvent,
   ApirocErrorStub,
@@ -20,8 +20,8 @@ const {
   }
   return {
     mockFindById: vi.fn(),
-    mockFindLiveByMeetingId: vi.fn(),
-    mockSoftDeleteByMeetingId: vi.fn(),
+    mockFindLiveExpertProviderEvent: vi.fn(),
+    mockSoftDeleteByMeetingAndParty: vi.fn(),
     mockListConnectionsByExpertProfileId: vi.fn(),
     mockUpdateConsultationEvent: vi.fn(),
     ApirocErrorStub: ApirocErrorStubImpl,
@@ -35,8 +35,8 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockFindById },
   meetingCalendarEventsRepository: {
-    findLiveByMeetingId: mockFindLiveByMeetingId,
-    softDeleteByMeetingId: mockSoftDeleteByMeetingId,
+    findLiveExpertProviderEvent: mockFindLiveExpertProviderEvent,
+    softDeleteByMeetingAndParty: mockSoftDeleteByMeetingAndParty,
   },
   calendarRepository: { listConnectionsByExpertProfileId: mockListConnectionsByExpertProfileId },
 }));
@@ -96,7 +96,7 @@ function calendarEventRow(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindById.mockResolvedValue(meetingRow());
-  mockFindLiveByMeetingId.mockResolvedValue(calendarEventRow());
+  mockFindLiveExpertProviderEvent.mockResolvedValue(calendarEventRow());
   mockListConnectionsByExpertProfileId.mockResolvedValue([
     { id: 'conn-1', endUserAccountId: 'eua-1' },
   ]);
@@ -120,12 +120,16 @@ describe('processMeetingCalendarAmend — T-JOB (BAL-409 §4)', () => {
     expect(mockUpdateConsultationEvent).not.toHaveBeenCalled();
   });
 
-  it('no live calendar_events row ⇒ no vendor call (the expert has no connected calendar)', async () => {
-    mockFindLiveByMeetingId.mockResolvedValue(undefined);
+  it('no live expert-party PROVIDER event ⇒ converged, no vendor call', async () => {
+    // BAL-433: `undefined` here now covers THREE cases, not one — no connected calendar, a
+    // skipped projection, and an `ics` FALLBACK meeting (ADR-1044 Ruling 1), which names no
+    // vendor event at all. Re-sending an updated ICS is BAL-475/BAL-476's, not this job's.
+    mockFindLiveExpertProviderEvent.mockResolvedValue(undefined);
 
     await processMeetingCalendarAmend(fakeJob());
 
     expect(mockUpdateConsultationEvent).not.toHaveBeenCalled();
+    expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
   });
 
   it('the stored connection no longer exists ⇒ warns, no vendor call', async () => {
@@ -160,7 +164,9 @@ describe('processMeetingCalendarAmend — T-JOB (BAL-409 §4)', () => {
   });
 
   it('uses the STORED calendarId, never the current target_calendar_id', async () => {
-    mockFindLiveByMeetingId.mockResolvedValue(calendarEventRow({ calendarId: 'stored-cal' }));
+    mockFindLiveExpertProviderEvent.mockResolvedValue(
+      calendarEventRow({ calendarId: 'stored-cal' })
+    );
 
     await processMeetingCalendarAmend(fakeJob());
 
@@ -175,18 +181,20 @@ describe('processMeetingCalendarAmend — T-JOB (BAL-409 §4)', () => {
     await expect(processMeetingCalendarAmend(fakeJob())).rejects.toThrow();
   });
 
-  it('a `not_found` ApirocError soft-deletes the row and does NOT rethrow', async () => {
+  it('a `not_found` ApirocError soft-deletes the EXPERT-PARTY row only and does NOT rethrow', async () => {
     mockUpdateConsultationEvent.mockRejectedValue(new ApirocErrorStub('not_found'));
 
     await expect(processMeetingCalendarAmend(fakeJob())).resolves.toBeUndefined();
-    expect(mockSoftDeleteByMeetingId).toHaveBeenCalledWith(MEETING_ID);
+    // ⚠ THE `'expert'` ARGUMENT IS THE POINT (BAL-433). The 404 happened on the expert's
+    // calendar; a whole-meeting soft delete would take a client-party row as collateral.
+    expect(mockSoftDeleteByMeetingAndParty).toHaveBeenCalledWith(MEETING_ID, 'expert');
   });
 
   it('a `forbidden` ApirocError logs and returns — does not burn retries', async () => {
     mockUpdateConsultationEvent.mockRejectedValue(new ApirocErrorStub('forbidden'));
 
     await expect(processMeetingCalendarAmend(fakeJob())).resolves.toBeUndefined();
-    expect(mockSoftDeleteByMeetingId).not.toHaveBeenCalled();
+    expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
   });
 
   it('an unrecognized (non-ApirocError) error rethrows', async () => {
@@ -290,7 +298,7 @@ describe('processMeetingCalendarAmend — T-JOB (BAL-409 §4)', () => {
       mockUpdateConsultationEvent.mockRejectedValue(new ApirocErrorStub('validation'));
 
       await expect(processMeetingCalendarAmend(fakeJob())).resolves.toBeUndefined();
-      expect(mockSoftDeleteByMeetingId).not.toHaveBeenCalled();
+      expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
     });
   });
 });

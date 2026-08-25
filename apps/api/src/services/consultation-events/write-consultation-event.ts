@@ -15,8 +15,8 @@ export interface WriteConsultationEventInput {
 }
 
 /**
- * BAL-396 §5/§10.6 — one `events.create`, then record the VENDOR-RETURNED id. Ships INERT: no
- * live caller until BAL-400 wires booking.
+ * BAL-396 §5/§10.6 — one `events.create`, then record the VENDOR-RETURNED id. **LIVE since
+ * BAL-400**, and reached by every bookable context since BAL-433 Slice 1.
  *
  * ⚠⚠ THE VENDOR-RETURNED ID, NEVER A DERIVED ONE (apiroc skill §M1). Microsoft answers HTTP
  * 200 to a caller-supplied `id` and silently substitutes a Graph id — a success response that
@@ -41,8 +41,17 @@ export async function writeConsultationEvent(
     );
   }
 
-  return meetingCalendarEventsRepository.record({
+  return meetingCalendarEventsRepository.recordProviderEvent({
     meetingId: input.meetingId,
+    /**
+     * ⚠ STRUCTURAL, NOT A PARAMETER WAITING TO BE THREADED. Every provider event THIS writer
+     * produces is the expert's: `endUserAccountId` comes off a `calendar_connections` row,
+     * and that table is keyed on `expert_profile_id`. There is no client-side connection
+     * model anywhere in the repo, so no writer produces a client-party `provider_event` row
+     * today (BAL-475 delivers the client party by ICS). ⚠ That is a property of the writers,
+     * not a constraint — the column and the repository both accept either party.
+     */
+    party: 'expert',
     connectionId: input.connectionId,
     calendarId: input.calendarId,
     vendorEventId: created.id,

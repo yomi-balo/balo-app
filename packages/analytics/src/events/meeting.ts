@@ -37,6 +37,15 @@ export const MEETING_SERVER_EVENTS = {
   MEETING_MISSED_CALL: 'meeting_missed_call',
   /** EVERY terminal path — the four system rules and the human End alike. */
   MEETING_ENDED: 'meeting_ended',
+  /**
+   * BAL-433 Slice 1 (ADR-1044 amendment 2026-08-25) — one booking's EXPERT-party calendar
+   * entry was resolved, and this is what it became.
+   *
+   * ⚠ IT EARNS ITS PLACE BY ANSWERING EXACTLY ONE QUESTION: what fraction of bookings reach
+   * an expert with NO writable calendar? That fraction is the whole business case for the ICS
+   * delivery slice (BAL-475), and without this event it is visible only in logs.
+   */
+  MEETING_CALENDAR_PROJECTED: 'meeting_calendar_projected',
 } as const;
 
 /**
@@ -211,6 +220,34 @@ export interface MeetingServerEventMap {
     /** `meetings.ended_by`. ⚠ ALL FOUR system rules report `system_idle`; `outcome` separates them. */
     ended_by: 'client_principal' | 'expert_host' | 'system_idle';
     /** The acting user on a human End; the MEETING id on all four system paths. */
+    distinct_id: string;
+  };
+
+  /**
+   * BAL-433 — one booking, one party, one calendar-delivery outcome. Fires once per FRESH
+   * create, immediately after the projection returns; never on an idempotent replay (the
+   * replay path never reaches the projection at all).
+   *
+   * ⚠ NO PII. Ids, one context label and two closed enums — no title, no company name, no
+   * address, no provider name.
+   */
+  [MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED]: {
+    meeting_id: string;
+    context_type: MeetingBookingContextType;
+    /**
+     * ⚠ ALWAYS `'expert'` IN SLICE 1, and typed as the pair anyway. `calendar_connections` is
+     * keyed on `expert_profile_id`, so the CLIENT party can only ever be delivered an ICS —
+     * BAL-475 emits this same event with `party: 'client'` rather than inventing a second one.
+     */
+    party: 'client' | 'expert';
+    /**
+     * `provider_event` — written into a connected calendar. `ics` — ADR-1044 Ruling 1: no
+     * writable connection, so the condition is RECORDED and BAL-475 delivers. `skipped` — no
+     * expert, or no live context/company to describe. `failed` — the projection threw and was
+     * swallowed; the booking still stands.
+     */
+    delivery: 'provider_event' | 'ics' | 'skipped' | 'failed';
+    /** The BOOKING actor — the same `distinct_id` `meeting_provisioned` carries. */
     distinct_id: string;
   };
 }
