@@ -1080,3 +1080,35 @@ export const rescheduleProposalStatusEnum = pgEnum('reschedule_proposal_status',
   'withdrawn',
   'expired',
 ]);
+
+// ── BAL-473 — meeting recordings (schema/meeting-recordings.ts) ─────────────────────────
+
+/**
+ * BAL-473 — the lifecycle of ONE recording SEGMENT of one meeting.
+ *
+ *   recording    → Daily is (believed to be) capturing. `capture_ended_at` IS NULL, and the
+ *                  partial-unique `meeting_recording_capturing_idx` holds the meeting's ONE
+ *                  capture slot while this label is set.
+ *   source_ready → Daily finished and the source is downloadable. `recording-ingest` is owed.
+ *   ingesting    → a Mux asset exists (`mux_asset_id` stamped); waiting on `video.asset.ready`.
+ *   ready        → TERMINAL SUCCESS. `mux_playback_id` is stamped and the segment is playable.
+ *   failed       → TERMINAL FAILURE. `failed_stage` + `failure_reason` say where and why.
+ *
+ * ⚠ A MEETING HAS 1:n SEGMENTS IN START ORDER (D2). Daily stops a cloud recording when the
+ * room goes idle (`minIdleTimeOut`); a rejoin starts another. Segments are the truth, not a
+ * defect to collapse.
+ *
+ * ⚠ `ready` IS NEVER OVERWRITTEN. `markFailed` compare-and-sets on `status <> 'ready'` — a
+ * late vendor error must not un-publish a segment BAL-440 is already rendering.
+ *
+ * ⚠ APPEND-ONLY: a new label goes at the END, never mid-array. And a future NON-TERMINAL
+ * capture label (e.g. a `paused`) MUST be added to `meeting_recording_capture_slot` in the
+ * same change, or the capture-slot invariant silently stops meaning what it says.
+ */
+export const recordingStatusEnum = pgEnum('recording_status', [
+  'recording',
+  'source_ready',
+  'ingesting',
+  'ready',
+  'failed',
+]);

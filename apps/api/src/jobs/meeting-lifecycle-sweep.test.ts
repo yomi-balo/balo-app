@@ -22,6 +22,8 @@ const {
   mockErrorLog,
   mockInfo,
   mockSettleMeetingIfBillable,
+  mockEnqueueRecordingEnsure,
+  mockEnqueueRecordingStop,
 } = vi.hoisted(() => ({
   mockListCandidates: vi.fn(),
   mockFindMeetingById: vi.fn(),
@@ -44,6 +46,8 @@ const {
   mockErrorLog: vi.fn(),
   mockInfo: vi.fn(),
   mockSettleMeetingIfBillable: vi.fn(),
+  mockEnqueueRecordingEnsure: vi.fn(),
+  mockEnqueueRecordingStop: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -96,6 +100,15 @@ vi.mock('../notifications/scheduling/meeting-absence.js', () => ({
 vi.mock('../services/daily/rooms.js', () => ({
   dailyRoomTeardown: { deleteRoom: mockDeleteRoom },
   dailyPresenceReader: { getAllPresence: vi.fn() },
+}));
+// BAL-473 — MANDATORY: `meeting-lifecycle-sweep.ts` now imports `enqueueRecordingEnsure` /
+// `enqueueRecordingStop` from `./recording-capture.js`, which in turn imports `../lib/queue.js`
+// → `../lib/redis.js`. Left unmocked, a test that actually TRIGGERS either enqueue (a terminal
+// rule firing, or a repaired `in_progress` transition) would call the REAL `getQueue()` and
+// attempt a real Redis connection — exactly the hang this suite's own comment below warns about.
+vi.mock('./recording-capture.js', () => ({
+  enqueueRecordingEnsure: mockEnqueueRecordingEnsure,
+  enqueueRecordingStop: mockEnqueueRecordingStop,
 }));
 // ⚠ NEITHER `../lib/redis.js` NOR `../lib/queue.js` IS REACHED: only `runMeetingLifecycleSweep`
 // is imported, and the Worker/cron constructors are never called. ⚠ `@balo/shared/meetings` is
@@ -319,6 +332,28 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       expect.objectContaining({ id: MEETING_ID }),
       at(30)
     );
+    // BAL-473 (§5.2) — the sweep repaired a MISSED forward transition; recording-ensure must
+    // fire here too, monotonic-per-minute dedupe token, never the bare meetingId alone.
+    expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      trigger: 'in_progress',
+      dedupeToken: `sweep-${Math.floor(at(30).getTime() / 60_000)}`,
+    });
+  });
+
+  it('does NOT enqueue recording-ensure when the reconciler moves to `waiting_for_participants`', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+    mockFindMeetingById.mockResolvedValue(meeting({ status: 'scheduled' }));
+    mockApplyPresenceEffect.mockResolvedValue('opened');
+    mockReconcileMeetingStatus.mockResolvedValue('waiting_for_participants');
+
+    await runMeetingLifecycleSweep(at(30), () => {}, {
+      getAllPresence: async () => ({
+        [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
+      }),
+    });
+
+    expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
   });
 
   /**
@@ -564,6 +599,41 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
 
     await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
 
+    expect(mockDeleteRoom).toHaveBeenCalledWith(ROOM);
+  });
+
+  /**
+   * BAL-473 (§5.2, ARCHITECT AMENDMENT to OD-2) — a system terminal rule enqueues
+   * `recording-stop` too, BEFORE `tearDownRoom`, same as the human `end-meeting.ts` path. Every
+   * OTHER terminal rule than `idle_end` never had a recording capturing, so the job no-ops for
+   * free on those — this call is unconditional and costs nothing.
+   */
+  it('⚠ enqueues recording-stop BEFORE tearing the Daily room down', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+    const order: string[] = [];
+    mockEnqueueRecordingStop.mockImplementation(async () => {
+      order.push('enqueueRecordingStop');
+    });
+    mockDeleteRoom.mockImplementation(async () => {
+      order.push('deleteRoom');
+      return 'deleted';
+    });
+
+    await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+    expect(mockEnqueueRecordingStop).toHaveBeenCalledWith({ meetingId: MEETING_ID });
+    expect(order).toEqual(['enqueueRecordingStop', 'deleteRoom']);
+  });
+
+  it('the recording-stop enqueue failing is non-fatal — the meeting stays terminated', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
+    mockEnqueueRecordingStop.mockRejectedValue(new Error('redis is down'));
+
+    const result = await runMeetingLifecycleSweep(at(10), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(1);
+    expect(mockErrorLog).toHaveBeenCalled();
+    // Teardown still runs — the fault is contained to the enqueue.
     expect(mockDeleteRoom).toHaveBeenCalledWith(ROOM);
   });
 

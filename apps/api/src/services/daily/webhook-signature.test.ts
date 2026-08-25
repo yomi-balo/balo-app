@@ -1,4 +1,3 @@
-import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   DAILY_WEBHOOK_SIGNATURE_HEADER,
@@ -35,22 +34,19 @@ describe('verifyDailyWebhookSignature (BAL-134 §5.2)', () => {
    *
    * ⚠ EVERY OTHER TEST IN THIS FILE ROUND-TRIPS `signDailyWebhookForTest` → `verify`, AND A
    * ROUND-TRIP PASSES UNDER EITHER ENCODING — both sides would simply agree on the wrong one.
-   * So this asserts against a FIXED VECTOR computed independently of the module: the exact
-   * base64 digest, and that it is NOT the hex form. Without this, the bug ships green.
+   *
+   * ⚠⚠ FIX ROUND 1 (F9-4) — THE PREVIOUS VERSION OF THIS TEST STILL RECOMPUTED THE EXPECTED
+   * VALUE INLINE WITH `createHmac`, which is exactly the round-trip the comment above says the
+   * acceptance criterion forbids: this module and the "independent" computation shared the same
+   * `createHmac('sha256', ...).digest('base64')` call shape, so a regression to hex in BOTH
+   * places at once (a full copy-paste of the wrong digest call) would still have passed. The
+   * literal below is a FIXED VECTOR — computed once, independently, and pinned — with no
+   * `createHmac` call anywhere in this test.
    */
   it('⚠ produces a BASE64 digest, not hex — pinned against an independent fixed vector', () => {
-    const timestamp = String(Math.floor(NOW.getTime() / 1000));
-    const key = Buffer.from(SECRET, 'base64');
-    const expectedBase64 = createHmac('sha256', key)
-      .update(`${timestamp}.`)
-      .update(BODY)
-      .digest('base64');
-    const hexForm = createHmac('sha256', key).update(`${timestamp}.`).update(BODY).digest('hex');
-
     const signature = headersFor()[DAILY_WEBHOOK_SIGNATURE_HEADER];
 
-    expect(signature).toBe(expectedBase64);
-    expect(signature).not.toBe(hexForm);
+    expect(signature).toBe('zVwFNQPyiHPmH63FPrudklOf81G7/0w7r1P9kxaGh8k=');
     // Base64 of a 32-byte digest is 44 chars with padding; hex would be 64.
     expect(signature).toHaveLength(44);
     expect(signature).toMatch(/^[A-Za-z0-9+/]+=*$/);

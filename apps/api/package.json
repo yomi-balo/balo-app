@@ -24,6 +24,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/sensible": "^6.0.4",
     "@getbrevo/brevo": "^5.0.1",
+    "@mux/mux-node": "^15.0.0",
     "@react-email/components": "^1.0.10",
     "@react-email/render": "^2.0.4",
     "@sentry/node": "^10.36.0",

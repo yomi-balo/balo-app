@@ -107,6 +107,11 @@ export * from './reschedulable';
 // BAL-411 — the reschedule-PROPOSAL lifecycle's pure core: lazy expiry, liveness, and the
 // answer-time refusal vocabulary. Pure, no clock read — `now` is always injected.
 export * from './reschedule-proposal';
+// BAL-473 — the meeting-recording concealment boundary: the client-safe view, its exact key
+// set, the concealed-key list, and the pure `@balo/db` row → view projection. Restated (not
+// imported) against `packages/db/src/schema/meeting-recordings.ts`'s `recordingStatusEnum`,
+// pinned to it at compile time via that file's `Exact<>` assertion.
+export * from './recording-view';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

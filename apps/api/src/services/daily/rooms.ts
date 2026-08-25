@@ -35,16 +35,35 @@
  *     reschedule stay valid until OLD end + 24h. Same legitimate holders — document, do not
  *     engineer against. Re-mint ACs are appended to BAL-409 / BAL-411.
  *
- * ⚠ THE REQUEST BODY CARRIES TWO KEYS AND NOTHING ELSE. Every other Daily knob — `exp`,
- * `nbf`, `enable_knocking`, `enable_recording`, `enable_prejoin_ui`, `eject_at_room_exp` —
- * is deliberately left at Daily's default and is owned by BAL-132 (tokens, People tab) and
- * BAL-131 (webhooks). Do not set them speculatively; an earlier draft of this ticket set
- * `enable_knocking: false`, and that is exactly the kind of silent commitment ADR-1044 had
- * to walk back. `rooms.test.ts` deep-equals the body for that reason.
+ * ⚠ THE REQUEST BODY CARRIES THREE KEYS AND NOTHING ELSE (BAL-473 widened this from two).
+ * Every other Daily knob — `exp`, `nbf`, `enable_knocking`, `enable_prejoin_ui`,
+ * `eject_at_room_exp` — is deliberately left at Daily's default and is owned by BAL-132
+ * (tokens, People tab) and BAL-131 (webhooks). Do not set them speculatively; an earlier
+ * draft of this ticket set `enable_knocking: false`, and that is exactly the kind of silent
+ * commitment ADR-1044 had to walk back. `rooms.test.ts` deep-equals the body for that reason.
+ *
+ * ⚠ WHY `enable_recording` EARNED ITS WAY IN (BAL-473, D5), AND NO OTHER KNOB DOES. D5 makes
+ * Daily cloud recording an ALWAYS-ON PLATFORM GUARANTEE for every consultation that reaches
+ * `in_progress` — not a per-room preference, not a speculative product commitment, and not a
+ * thing a future ticket might turn on per meeting or per expert. That is a categorically
+ * different kind of knob from `enable_knocking`/`enable_prejoin_ui`: those are UX toggles
+ * this file has no business pre-deciding, while `enable_recording` is a platform-wide
+ * invariant this file is the ONLY place that provisions a room at all. See
+ * `services/daily/recordings.ts` for the rest of the recording pipeline and
+ * `.claude/skills/mux/SKILL.md` for where the captured source goes.
+ *
+ * ⚠ ROOMS PROVISIONED BEFORE BAL-473 SHIPPED NEED RECONCILING, NOT JUST NEW ROOMS. Every room
+ * that already exists (the already-exists fallback below) was created with `enable_recording`
+ * UNSET, and would otherwise silently never record. `reconcileRoomRecording` closes that gap
+ * on the already-exists path — see its own docblock for why a failed reconcile is a `log.warn`
+ * and not a thrown error.
  */
 import { z } from 'zod';
+import { createLogger } from '@balo/shared/logging';
 import { dailyRequest } from './client.js';
 import { DailyApiError } from './errors.js';
+
+const log = createLogger('daily-rooms');
 
 /**
  * What Daily returns from `POST /v1/rooms` and `GET /v1/rooms/{name}` (the fields we use).
@@ -67,6 +86,16 @@ interface DailyRoomResponse {
 
 /** The one value `privacy` may hold for a room this function will hand back. */
 const REQUIRED_PRIVACY = 'private';
+
+/**
+ * BAL-473 (D5) — the always-on cloud recording mode. `'cloud'`, never `'cloud-audio-only'` or
+ * `'raw-tracks'` (see the module docblock's "WHY `enable_recording` EARNED ITS WAY IN").
+ *
+ * ⚠ FIX ROUND 1 (F14) — moved BELOW the imports, beside `REQUIRED_PRIVACY` (the other
+ * "value this module enforces on every room" constant). It previously sat ABOVE every import
+ * in the file, which is not where a module-level constant belongs.
+ */
+const DAILY_RECORDING_MODE = 'cloud';
 
 /**
  * The status carried on every `DailyApiError` this module raises about a room the vendor
@@ -105,15 +134,61 @@ interface VendorRoom {
 }
 
 /**
- * POST the room, falling back to a `GET` when the name is already taken.
+ * BAL-473 (OD-3) — reconcile `enable_recording` onto a room that ALREADY EXISTS (the
+ * already-exists fallback below). `createOrFindRoom`'s `GET` fallback only ADOPTS a
+ * pre-existing room; it reconciles nothing. Without this call, every room provisioned
+ * before BAL-473 shipped keeps `enable_recording` unset and silently never records.
+ *
+ * `POST /rooms/:name` OVERRIDES an existing room's config without recreating it — the
+ * daily-co skill's "Update room config" scenario.
+ *
+ * ⚠ RETURNS `null` ON **ANY** PROBLEM — a throw, or a 2xx body missing `name`/`url`/`privacy`
+ * — RATHER THAN THROWING. Provisioning sits on the booking critical path and must not gain a
+ * new failure mode from a knob this call is trying to fix up. A failed reconcile is a
+ * `log.warn`; the caller falls through to the existing `GET` adoption, and the room simply
+ * refuses to record — `recording-ensure`'s `startRoomRecording` call then fails with a
+ * legible Daily 400 that lands in `meeting_recordings.failure_reason`. The failure is
+ * VISIBLE; it just is not FATAL.
+ */
+async function reconcileRoomRecording(name: string): Promise<DailyRoomResponse | null> {
+  try {
+    const room = await dailyRequest<DailyRoomResponse>(
+      'POST',
+      `/rooms/${encodeURIComponent(name)}`,
+      { properties: { enable_recording: DAILY_RECORDING_MODE } }
+    );
+    if (room.name === undefined || room.url === undefined || room.privacy === undefined) {
+      log.warn(
+        { roomName: name },
+        'Daily room-recording reconcile returned a body missing name/url/privacy; falling back to GET adoption'
+      );
+      return null;
+    }
+    return room;
+  } catch (error) {
+    log.warn(
+      {
+        roomName: name,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Daily room-recording reconcile failed; falling back to GET adoption — the room will not record until this is retried'
+    );
+    return null;
+  }
+}
+
+/**
+ * POST the room, falling back to a `GET` (with a recording RECONCILE in between) when the
+ * name is already taken.
  *
  * ⚠ THE ALREADY-EXISTS FALLBACK IS THE ONLY BRANCH, and it is what makes re-provisioning
- * safe. Daily answers `400` when a room name is taken; we then `GET` the name, and a `200`
- * is DIRECT PROOF the room is ours (the name is a pure function of `meetings.id`, so no
- * other meeting could have taken it). If the `GET` fails, the original `400` was something
- * else and must propagate unchanged.
+ * safe. Daily answers `400` when a room name is taken; we then attempt to reconcile
+ * `enable_recording` onto it (BAL-473, OD-3) and, failing that, `GET` the name — a `200` on
+ * either is DIRECT PROOF the room is ours (the name is a pure function of `meetings.id`, so
+ * no other meeting could have taken it). If BOTH the reconcile and the `GET` fail, the
+ * original `400` was something else and must propagate unchanged.
  *
- * Branching on STATUS PLUS A SUCCESSFUL GET rather than on the vendor's error string is
+ * Branching on STATUS PLUS A SUCCESSFUL RESPONSE rather than on the vendor's error string is
  * deliberate: the string is not a stable contract.
  */
 async function createOrFindRoom(name: string): Promise<VendorRoom> {
@@ -121,13 +196,19 @@ async function createOrFindRoom(name: string): Promise<VendorRoom> {
     const room = await dailyRequest<DailyRoomResponse>('POST', '/rooms', {
       name,
       privacy: REQUIRED_PRIVACY,
+      properties: { enable_recording: DAILY_RECORDING_MODE },
     });
     return { room, method: 'POST', path: '/rooms' };
   } catch (error) {
     if (!(error instanceof DailyApiError) || error.status !== 400) {
       throw error;
     }
-    // The name is taken. If it is taken by US (it can only be), the GET returns the room.
+    // The name is taken. If it is taken by US (it can only be), reconcile recording onto it
+    // (BAL-473) and, failing that, the GET adoption returns the room.
+    const reconciled = await reconcileRoomRecording(name);
+    if (reconciled !== null) {
+      return { room: reconciled, method: 'POST', path: `/rooms/${encodeURIComponent(name)}` };
+    }
     const path = `/rooms/${encodeURIComponent(name)}`;
     const room = await dailyRequest<DailyRoomResponse>('GET', path).catch(() => {
       // The 400 meant something other than already-exists — re-raise THAT, not this.

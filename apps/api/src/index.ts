@@ -52,6 +52,20 @@ try {
       'DAILY_WEBHOOK_SECRET is not set — POST /webhooks/daily will 503 EVERY delivery, silently degrading meeting presence to sweep-only reconciliation until Daily disables the webhook'
     );
   }
+
+  // BAL-473 — the same posture as the Daily secret above: a WARNING, never a throw (throwing
+  // would crash-loop Railway on a missing vendor secret and take down every route to protect
+  // one integration).
+  if (!process.env.MUX_WEBHOOK_SECRET) {
+    app.log.warn(
+      'MUX_WEBHOOK_SECRET is not set — POST /webhooks/mux will 503 EVERY delivery, so no meeting recording will ever reach `ready` and no Daily source will ever be cleaned up'
+    );
+  }
+  if (!process.env.MUX_TOKEN_ID || !process.env.MUX_TOKEN_SECRET) {
+    app.log.warn(
+      'MUX_TOKEN_ID / MUX_TOKEN_SECRET are not set — every `recording-ingest` job will fail and meeting recordings will stall at `source_ready` (the Daily source is retained, so they are re-drivable)'
+    );
+  }
   const shutdown = async () => {
     try {
       const { shutdownServerAnalytics } = await import('@balo/analytics/server');

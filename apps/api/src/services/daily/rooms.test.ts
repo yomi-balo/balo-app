@@ -21,12 +21,13 @@ function room(name: string, privacy = 'private'): { name: string; url: string; p
 useDailyApiKey();
 
 describe('createRoom — the request', () => {
-  it('POSTs a body that deep-equals EXACTLY { name, privacy: "private" }', async () => {
+  it('POSTs a body that deep-equals EXACTLY { name, privacy: "private", properties: { enable_recording: "cloud" } }', async () => {
     // ⚠ PIN. `privacy: 'private'` is what makes ADR-1044's app-side waiting-to-join queue
-    // real — a public room's raw daily.co URL bypasses it entirely. And any EXTRA key here
-    // would be a silent product commitment owned by BAL-131/BAL-132, not this ticket. A
-    // regression in either direction must fail loudly, so this is a deep equality, not a
-    // `objectContaining`.
+    // real — a public room's raw daily.co URL bypasses it entirely. `enable_recording:'cloud'`
+    // is BAL-473's D5 always-on platform guarantee — the ONE other knob that earned its way
+    // into this body (see the module docblock for why). Any OTHER extra key here would be a
+    // silent product commitment owned by BAL-131/BAL-132, not this ticket. A regression in
+    // any direction must fail loudly, so this is a deep equality, not an `objectContaining`.
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, room(ROOM)));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -35,7 +36,11 @@ describe('createRoom — the request', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(`${DAILY_API_BASE}/rooms`);
     expect(init.method).toBe('POST');
-    expect(JSON.parse(String(init.body))).toEqual({ name: ROOM, privacy: 'private' });
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: ROOM,
+      privacy: 'private',
+      properties: { enable_recording: 'cloud' },
+    });
   });
 
   it('returns the created room as a ProvisionedRoom', async () => {
@@ -48,10 +53,10 @@ describe('createRoom — the request', () => {
   });
 });
 
-describe('createRoom — the already-exists fallback (the only branch)', () => {
-  it('resolves a 400 by GETting the name and returning the existing room', async () => {
-    // This is what makes re-provisioning self-healing: a room created for meeting M can only
-    // ever be claimed by M, so a successful GET is direct proof the name is ours.
+describe('createRoom — the already-exists fallback (BAL-473: reconcile, then GET)', () => {
+  it('resolves a 400 by RECONCILING enable_recording onto the existing room (OD-3)', async () => {
+    // This is the net-new seam BAL-473 requires: without it, every room provisioned before
+    // this ticket shipped would keep `enable_recording` unset and silently never record.
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(400, { error: 'invalid-request-error' }))
@@ -64,27 +69,72 @@ describe('createRoom — the already-exists fallback (the only branch)', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [getUrl, getInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [reconcileUrl, reconcileInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(reconcileUrl).toBe(`${DAILY_API_BASE}/rooms/${ROOM}`);
+    expect(reconcileInit.method).toBe('POST');
+    // ⚠ PIN. The reconcile body carries ONLY the recording knob — never `privacy` (this call
+    // is not creating the room) and never any other property.
+    expect(JSON.parse(String(reconcileInit.body))).toEqual({
+      properties: { enable_recording: 'cloud' },
+    });
+  });
+
+  it('falls back to GET adoption when the reconcile call THROWS', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(400, { error: 'invalid-request-error' }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: 'internal' }))
+      .mockResolvedValueOnce(jsonResponse(200, room(ROOM)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createRoom(ROOM)).resolves.toEqual({
+      dailyRoomName: ROOM,
+      joinUrl: `https://balo.daily.co/${ROOM}`,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const [getUrl, getInit] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(getUrl).toBe(`${DAILY_API_BASE}/rooms/${ROOM}`);
     expect(getInit.method).toBe('GET');
   });
 
-  it('rethrows the ORIGINAL 400 when the GET also fails — the 400 meant something else', async () => {
+  it('falls back to GET adoption when the reconcile returns a 2xx body missing name/url/privacy', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(400, { error: 'invalid-request-error' }))
+      .mockResolvedValueOnce(jsonResponse(200, { name: ROOM, privacy: 'private' })) // no `url`
+      .mockResolvedValueOnce(jsonResponse(200, room(ROOM)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createRoom(ROOM)).resolves.toEqual({
+      dailyRoomName: ROOM,
+      joinUrl: `https://balo.daily.co/${ROOM}`,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const [getUrl, getInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(getUrl).toBe(`${DAILY_API_BASE}/rooms/${ROOM}`);
+    expect(getInit.method).toBe('GET');
+  });
+
+  it('rethrows the ORIGINAL 400 when BOTH the reconcile AND the GET fail', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(400, { error: 'name-too-long' }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: 'internal' }))
       .mockResolvedValueOnce(jsonResponse(404, { error: 'not-found' }));
     vi.stubGlobal('fetch', fetchMock);
 
     const error = await createRoom(ROOM).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(DailyApiError);
-    // The ORIGINAL error, not the 404 from the probe — the probe is a diagnostic, and
-    // reporting its status would misdiagnose the real failure.
+    // The ORIGINAL error, not the reconcile's or the GET's — both are diagnostics, and
+    // reporting either status would misdiagnose the real failure.
     expect(error).toMatchObject({ status: 400, method: 'POST', path: '/rooms' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it('does NOT attempt a GET on a non-400 failure', async () => {
+  it('does NOT attempt a reconcile or a GET on a non-400 failure', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(403, { error: 'forbidden' }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -124,10 +174,11 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
     expect(error).toMatchObject({ method: 'POST', path: '/rooms' });
   });
 
-  it('REJECTS an already-EXISTING room that is public — the fallback adopts, it does not create', async () => {
+  it('REJECTS an already-EXISTING room that is public — reconciled but never adopted', async () => {
     // The most important case: this is the path that never asks for `private` in the first
     // place, so before the assertion it would happily stamp a public room and hand back a
-    // join URL that admits anybody who can guess a meeting id.
+    // join URL that admits anybody who can guess a meeting id. The reconcile ONLY touches
+    // `enable_recording` — it must not weaken the privacy assertion.
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(400, { error: 'invalid-request-error' }))
@@ -137,9 +188,26 @@ describe('createRoom — `privacy` is VERIFIED on the RESPONSE, not assumed (D8)
     const error = await createRoom(ROOM).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(DailyApiError);
-    // Attributed to the GET, not the POST — that is where the offending room was seen.
-    expect(error).toMatchObject({ method: 'GET', path: `/rooms/${ROOM}` });
+    // Attributed to the reconcile POST — that is where the offending room was seen.
+    expect(error).toMatchObject({ method: 'POST', path: `/rooms/${ROOM}` });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('REJECTS an already-EXISTING public room reached via the GET fallback too', async () => {
+    // Same privacy guarantee on the SECOND fallback leg — reached when the reconcile itself
+    // fails and the GET adopts a public room.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(400, { error: 'invalid-request-error' }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: 'internal' }))
+      .mockResolvedValueOnce(jsonResponse(200, room(ROOM, 'public')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await createRoom(ROOM).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DailyApiError);
+    expect(error).toMatchObject({ method: 'GET', path: `/rooms/${ROOM}` });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it.each(['public', 'org', 'PRIVATE', ''])(
@@ -215,6 +283,7 @@ describe('createRoom — the response must actually CARRY a venue (no half-stamp
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(400, { error: 'invalid-request-error' }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: 'internal' })) // reconcile fails too
       .mockResolvedValueOnce(jsonResponse(200, roomWithout('url')));
     vi.stubGlobal('fetch', fetchMock);
 

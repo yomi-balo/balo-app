@@ -13,6 +13,8 @@ import {
   RECONNECTING_BODY,
   RECONNECTING_LONG_BODY,
   RECONNECTING_TITLE,
+  RECORDING_LOBBY_NOTICE,
+  RECORDING_PILL_MESSAGE,
   ReconnectingOverlay,
 } from './meeting-notices';
 
@@ -29,6 +31,32 @@ import {
  *     used to fall back to PreJoin's live "Join now" after an eject, with the same still-valid
  *     token. It must offer no rejoin affordance of any kind.
  */
+
+/**
+ * BAL-473 (D5) — PIN the two recording-notice copy constants to their exact strings. This is
+ * PLACEHOLDER, legal-adjacent copy pending MJ/Yomi sign-off — pinning it means an unreviewed
+ * change fails a test rather than shipping silently.
+ */
+describe('BAL-473 recording notice copy', () => {
+  it('pins RECORDING_PILL_MESSAGE', () => {
+    expect(RECORDING_PILL_MESSAGE).toBe('This call is being recorded');
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 1 (F2) — the previous copy promised "…available afterwards with the meeting
+   * recap", a playback surface this PR does not ship (`signedPlaybackUrl` has no production
+   * caller; the recap/Files card is unchanged, OD-8). The pin now asserts the corrected,
+   * fact-only copy AND that it does not smuggle the old promise back in.
+   */
+  it('pins RECORDING_LOBBY_NOTICE', () => {
+    expect(RECORDING_LOBBY_NOTICE).toBe('This consultation is recorded.');
+  });
+
+  it('⚠ does NOT promise a playback surface this PR does not ship', () => {
+    expect(RECORDING_LOBBY_NOTICE).not.toContain('recap');
+    expect(RECORDING_LOBBY_NOTICE).not.toContain('available');
+  });
+});
 
 describe('ReconnectingOverlay', () => {
   it('states the situation IN WORDS — the spinner is never the message', () => {
@@ -105,6 +133,20 @@ describe('MeetingPill', () => {
     );
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 1 (F15) — renders an optional leading `icon`, hidden from assistive tech
+   * (the message text alone is the accessible content). Opt-in: no `icon` prop renders no
+   * extra markup, so the ambient "Change devices"-style pills are unaffected.
+   */
+  it('renders an optional icon, aria-hidden, only when supplied', () => {
+    const { container, rerender } = render(<MeetingPill message="No icon here" />);
+    expect(container.querySelector('[aria-hidden="true"]')).toBeNull();
+
+    rerender(<MeetingPill message="Has an icon" icon={<span data-testid="dot" />} />);
+    expect(screen.getByTestId('dot')).toBeInTheDocument();
+    expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });
 

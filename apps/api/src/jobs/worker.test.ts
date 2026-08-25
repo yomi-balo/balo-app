@@ -35,6 +35,9 @@ const mockStartCalendarSubscriptionReconcile = vi.fn();
 const mockStartCalendarSubscriptionMonitor = vi.fn();
 const mockRegisterCalendarSubscriptionMonitorCron = vi.fn().mockResolvedValue(undefined);
 const mockStartMeetingCalendarAmend = vi.fn();
+const mockStartRecordingCapture = vi.fn();
+const mockStartRecordingIngest = vi.fn();
+const mockStartRecordingCleanupSource = vi.fn();
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -131,6 +134,20 @@ vi.mock('./calendar-subscription-monitor.js', () => ({
 vi.mock('./meeting-calendar-amend.js', () => ({
   startMeetingCalendarAmendWorker: () => mockStartMeetingCalendarAmend(),
 }));
+// BAL-473: mocking these THREE is MANDATORY — otherwise the REDIS_URL-set test loads the real
+// modules, which construct a Worker on a live Redis connection and HANGS at the 5s CI timeout.
+// It stays GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it
+// slipped through in every ticket named in the comments above (now eight tickets running).
+// Must land in the SAME COMMIT as the `worker.ts` registration.
+vi.mock('./recording-capture.js', () => ({
+  startRecordingCaptureWorker: () => mockStartRecordingCapture(),
+}));
+vi.mock('./recording-ingest.js', () => ({
+  startRecordingIngestWorker: () => mockStartRecordingIngest(),
+}));
+vi.mock('./recording-cleanup-source.js', () => ({
+  startRecordingCleanupSourceWorker: () => mockStartRecordingCleanupSource(),
+}));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
 }));
@@ -170,6 +187,9 @@ describe('startWorkers', () => {
     expect(mockStartCalendarSubscriptionMonitor).not.toHaveBeenCalled();
     expect(mockRegisterCalendarSubscriptionMonitorCron).not.toHaveBeenCalled();
     expect(mockStartMeetingCalendarAmend).not.toHaveBeenCalled();
+    expect(mockStartRecordingCapture).not.toHaveBeenCalled();
+    expect(mockStartRecordingIngest).not.toHaveBeenCalled();
+    expect(mockStartRecordingCleanupSource).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -212,6 +232,9 @@ describe('startWorkers', () => {
     expect(mockStartCalendarSubscriptionMonitor).toHaveBeenCalled();
     expect(mockRegisterCalendarSubscriptionMonitorCron).toHaveBeenCalled();
     expect(mockStartMeetingCalendarAmend).toHaveBeenCalled();
+    expect(mockStartRecordingCapture).toHaveBeenCalled();
+    expect(mockStartRecordingIngest).toHaveBeenCalled();
+    expect(mockStartRecordingCleanupSource).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

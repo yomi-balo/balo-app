@@ -58,18 +58,18 @@ against `*.daily.co` before any join.
 
 Base URL `https://api.daily.co/v1`; `Authorization: Bearer $DAILY_API_KEY` on every call.
 
-| Scenario                          | Call                                               | Balo specifics                                                                                                                                                                                                                                                                                |
-| --------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Provision room (BAL-129)          | `POST /rooms`                                      | `name` from `meetings.id` + `privacy:'private'` **top-level**; rest under `properties`. No `enable_knocking`. Make it idempotent on the name (see Errors & idempotency).                                                                                                                      |
-| Update room config                | `POST /rooms/:name`                                | overrides an existing room's config (e.g. reconcile `exp`/privacy) without recreating it.                                                                                                                                                                                                     |
-| Mint token at admission (BAL-132) | `POST /meeting-tokens`                             | all fields under `properties`; values from the config table.                                                                                                                                                                                                                                  |
-| Validate a token                  | `GET /meeting-tokens/:token`                       | returns decoded claims — assert them in the smoke test.                                                                                                                                                                                                                                       |
-| Self-sign (optional)              | JWT signed with the API key                        | skips the round-trip; short-form claim keys (`r`,`o`,`d`,`u`,`exp`,`nbf`). Keep one minting helper so REST and self-signed can't drift. Default to REST.                                                                                                                                      |
-| Presence — one guest              | `GET /rooms/:name/presence?userId=<participantId>` | the admitted-not-arrived check; primary "arrived" signal is still `meeting_presence` (BAL-134).                                                                                                                                                                                               |
-| Presence — all rooms              | `GET /presence`                                    | active participants grouped by room; Daily's recommended "current state" endpoint (not `/meetings`).                                                                                                                                                                                          |
-| Eject participant (BAL-436)       | `POST /rooms/:name/eject`                          | body `{ ids?, user_ids?, ban? }` (max 100 each). Eject by `user_ids` = the participantId. The token stays valid, so pass `ban: true` to block rejoin (or simply don't re-mint).                                                                                                               |
-| Recording                         | `enable_recording` on room/token                   | modes `'cloud' \| 'cloud-audio-only' \| 'local' \| 'raw-tracks'`. Auto-start via token `start_cloud_recording` (needs `enable_recording:'cloud'`), or client `startRecording()`; stop via `POST /rooms/:name/recordings/stop`. Bucket config: see the recording docs — don't assume defaults. |
-| Cleanup                           | expiry, or `DELETE /rooms/:name`                   | an expiring room auto-deletes after `exp` **once all participants have left**.                                                                                                                                                                                                                |
+| Scenario                          | Call                                               | Balo specifics                                                                                                                                                                                                                                                                               |
+| --------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provision room (BAL-129)          | `POST /rooms`                                      | `name` from `meetings.id` + `privacy:'private'` **top-level**; rest under `properties`. No `enable_knocking`. Make it idempotent on the name (see Errors & idempotency).                                                                                                                     |
+| Update room config                | `POST /rooms/:name`                                | overrides an existing room's config (e.g. reconcile `exp`/privacy) without recreating it.                                                                                                                                                                                                    |
+| Mint token at admission (BAL-132) | `POST /meeting-tokens`                             | all fields under `properties`; values from the config table.                                                                                                                                                                                                                                 |
+| Validate a token                  | `GET /meeting-tokens/:token`                       | returns decoded claims — assert them in the smoke test.                                                                                                                                                                                                                                      |
+| Self-sign (optional)              | JWT signed with the API key                        | skips the round-trip; short-form claim keys (`r`,`o`,`d`,`u`,`exp`,`nbf`). Keep one minting helper so REST and self-signed can't drift. Default to REST.                                                                                                                                     |
+| Presence — one guest              | `GET /rooms/:name/presence?userId=<participantId>` | the admitted-not-arrived check; primary "arrived" signal is still `meeting_presence` (BAL-134).                                                                                                                                                                                              |
+| Presence — all rooms              | `GET /presence`                                    | active participants grouped by room; Daily's recommended "current state" endpoint (not `/meetings`).                                                                                                                                                                                         |
+| Eject participant (BAL-436)       | `POST /rooms/:name/eject`                          | body `{ ids?, user_ids?, ban? }` (max 100 each). Eject by `user_ids` = the participantId. The token stays valid, so pass `ban: true` to block rejoin (or simply don't re-mint).                                                                                                              |
+| Recording (BAL-473)               | `POST /rooms/:name/recordings/start`               | ⚠ **Server-side start on the `in_progress` transition — NOT token `start_cloud_recording`, NOT client `startRecording()`** (BAL-473 D1). Room needs `enable_recording:'cloud'` under `properties`. Stop via `POST /rooms/:name/recordings/stop`. Full detail in the Recording section below. |
+| Cleanup                           | expiry, or `DELETE /rooms/:name`                   | an expiring room auto-deletes after `exp` **once all participants have left**.                                                                                                                                                                                                               |
 
 ## Request bodies
 
@@ -191,6 +191,75 @@ Any other type is acknowledged `200` and recorded, never processed.
 is not optional bookkeeping: a replayed `participant.joined` after its interval legitimately
 closed would open a second interval anchored in the past that nothing closes — a silent unbounded
 over-bill on a money path.
+
+## Recording (BAL-473)
+
+Balo records **every** Balo Video consultation (BAL-473 D5 — always-on, no per-meeting or
+per-expert switch). The recording is a platform artefact for the recap and for disputes, not a
+participant preference. Notice is given in the lobby and by a persistent in-call pill.
+
+### ⚠⚠ The event payloads — verified against docs.daily.co on 2026-08-25
+
+**This table is the most valuable thing in this section. The payloads are not symmetric, and
+assuming they are will cost you a build cycle.**
+
+| Event                         | Payload fields (verbatim)                                                                             |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `recording.started`           | `recording_id`, `action`, `layout`, `started_by`, `instance_id`, `start_ts` — ⚠ **NO `room_name`**    |
+| `recording.ready-to-download` | `recording_id`, `room_name`, `start_ts`, `status`, `max_participants`, `duration`, `s3_key`, `tracks` |
+| `recording.error`             | `action`, `error_msg`, `instance_id`, `room_name`, `timestamp` — ⚠ **NO `recording_id`**              |
+
+Envelope on all three: `version`, `type`, `id`, `payload`, `event_ts`.
+
+**Because `recording.started` names no room, a webhook arm CANNOT resolve a meeting from it, and
+therefore cannot create the row.** That is why Balo's `recording-ensure` job inserts
+`meeting_recordings` _before_ calling start, and passes its own row id as `instanceId`:
+
+- `instanceId` is a **request parameter you supply** (a UUID). Balo sets it to
+  `meeting_recordings.id`, which doubles as the Mux `passthrough`. No extra correlation column.
+- `recording.started` resolves by `instance_id` and stamps `daily_recording_id`.
+- `ready-to-download` resolves by `recording_id`, falling back to `room_name` — which is what
+  makes a dropped `recording.started` cost nothing.
+- `recording.error` resolves by `instance_id`.
+
+### Endpoints
+
+| Call                                 | Notes                                                                                                                                                                                                                        |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /rooms/:name/recordings/start` | ⚠ Returns **`{"status":"sent"}` and never the recording id**. Body keys are **camelCase**: `instanceId`, `minIdleTimeOut`, `maxDuration`, `type`, `layout`.                                                                  |
+| `POST /rooms/:name/recordings/stop`  | Nothing-to-stop is **success** — Daily may have auto-stopped, or the room may already be gone.                                                                                                                               |
+| `GET /recordings/:id/access-link`    | → `{ download_link, expires }`, `expires` in unix seconds. ⚠ Short-lived — mint **inside** the ingest job, never at webhook time, never persist it.                                                                          |
+| `DELETE /recordings/:id`             | → `{ deleted: true, id }`; **404 when absent — treat as success**, same as `deleteRoom`'s 404.                                                                                                                               |
+| `POST /rooms/:name`                  | The **reconcile** call. A room created before recording shipped has no `enable_recording`, and `createRoom`'s already-exists path only `GET`s and adopts it — without this reconcile such a room **silently never records**. |
+
+### `minIdleTimeOut`
+
+Daily's default is **300s**, and shutdown takes a further 1–3 minutes. "Idle" means all
+participants have muted video **and** audio — it is not the same as "the room emptied". Balo sets
+**60**. Set it explicitly; inheriting the default silently widens the window in which a recording
+keeps running over a call nobody is on.
+
+⚠ A wrong body key is **silently ignored** by Daily — no error, just a recording that quietly used
+the defaults. Pin the request body with a deep-equal unit test.
+
+### Retention
+
+> "Recordings are stored in the Daily cloud until a Daily domain owner deletes them through the
+> REST API or through the dashboard."
+
+Recordings are **domain-scoped and deleted only explicitly**. Balo deletes the source only after
+Mux reports `ready`, never before — the Daily copy is the only thing a failed ingest can retry
+from.
+
+⚠ **Still smoke-test-gated, not proven:** whether a recording survives `DELETE /rooms/:name`
+_specifically_. BAL-473 is designed so that either answer is survivable (stop treats
+nothing-to-stop as success; cleanup treats 404 as success), but do not assert survival as fact
+until the live smoke test shows it.
+
+### Rate limits
+
+⚠ Starting a recording sits in a much tighter tier than most calls: **~1/s (5 per 5s)**, against
+20/s for room and token operations. One start per meeting is fine; a retry storm is not.
 
 ## Not this skill
 

@@ -6,6 +6,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { useDevices, useLocalSessionId, useVideoTrack } from '@daily-co/daily-react';
 import { cn } from '@/lib/utils';
 import { MeetingAvatar } from './meeting-avatar';
+import { RECORDING_LOBBY_NOTICE } from './meeting-notices';
 import { MeetingToolbarButton } from './meeting-toolbar-button';
 
 /**
@@ -193,6 +194,16 @@ export function PreJoin({
               Joining as {displayName}
             </span>
           )}
+          {/*
+            BAL-473 (D5) — the lobby notice. `PreJoin` is rendered by `meeting-frame-impl.tsx`
+            for BOTH member and guest mounts, so this one line covers every joiner. ⚠ Anyone who
+            has set "Skip this next time" auto-joins and never sees this — the in-call
+            `RecordingIndicator` pill is the backstop notice for them, which is why it is
+            persistent rather than timed.
+          */}
+          <p className="text-muted-foreground max-w-[320px] text-xs leading-relaxed">
+            {RECORDING_LOBBY_NOTICE}
+          </p>
         </div>
 
         <motion.button
