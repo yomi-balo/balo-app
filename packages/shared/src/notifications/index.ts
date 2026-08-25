@@ -1284,3 +1284,83 @@ export interface RescheduleProposalDeclinedPayload {
   originalScheduledStartIso: string;
   durationMinutes: number;
 }
+
+// ── BAL-283 conversation call-CTA events ────────────────────────────────────────────────
+//
+// ⚠ DEFINED ONCE, HERE — `apps/api/src/notifications/events.ts` and
+// `apps/web/src/lib/notifications/types.ts` both IMPORT these (memory
+// `reference_notification_event_dup_shared_home`). NEITHER event belongs in
+// `ServerOnlyNotificationEvent`: both are published from `apps/web` Server Actions, so listing
+// either there satisfies `AssertPublishCoverageComplete` while leaving it with no
+// `publishBodySchema` arm — compiling green everywhere and 400ing every publish at runtime
+// (plan §2.2).
+
+/**
+ * BAL-283 (Ruling 3) — the expert made themselves gettable on a project-request thread
+ * ("Propose times" = share availability + nudge the client; no proposal state machine, no
+ * held slot).
+ *
+ * ⚠ ADR-1044: names cross the party boundary, addresses NEVER. No field here is an email.
+ * ⚠ NO MONEY FIELD — an intro call is unbilled (Ruling 2); there is none to leak.
+ */
+export interface ConversationAvailabilitySharedPayload {
+  /**
+   * ⚠ `${relationshipId}--${sharedAtIso}`, NOT the relationship id alone. `publisher.ts`
+   * keys the BullMQ jobId on this, and BullMQ dedups against RETAINED COMPLETED jobs — so a
+   * per-relationship key would silently drop every re-share for the life of the queue's
+   * retention (memory `reference_bullmq_jobid_must_be_per_write_not_per_state`). Per WRITE.
+   */
+  correlationId: string;
+  requestId: string;
+  requestTitle: string;
+  relationshipId: string;
+  /** The request's creator → recipient 'client'. */
+  recipientId: string;
+  /** → the resolver hydrates data.expert for free (engine/resolver.ts). */
+  expertProfileId: string;
+  /** Retrospective copy names the PERSON (CLAUDE.md). */
+  expertPersonName: string;
+  /** …with "@ party" on first mention. */
+  expertPartyLabel: string;
+  sharedAtIso: string;
+  /** The value BEFORE this share. `null` ⇒ first share. THE ONLY INPUT TO THE 24h WINDOW. */
+  previousSharedAtIso: string | null;
+}
+
+/**
+ * BAL-283 — a free intro call was booked on a project-request thread. SIBLING of
+ * `booking.confirmed`, never a reuse of it: that payload requires `engagementId`, `caseTitle`,
+ * `isNewCase` and `priorConsultationCount`, and BOTH its templates build
+ * `caseUrl = ${BASE_URL}/cases/${engagementId}`. There is no engagement here and there never
+ * will be.
+ */
+export interface ConversationIntroCallBookedPayload {
+  /** `${meetingId}` — an idempotent replay publishes the same jobId and dedups. */
+  correlationId: string;
+  meetingId: string;
+  requestId: string;
+  requestTitle: string;
+  relationshipId: string;
+  /** The booking client's user id → recipient 'client'. */
+  recipientId: string;
+  expertProfileId: string;
+  /**
+   * The PERSON who booked. Retrospective copy names the person with "@ company" on first
+   * mention (CLAUDE.md), and this event's mirror `conversation.availability_shared` already
+   * carries `expertPersonName` + `expertPartyLabel` — carrying only the company here made the
+   * pair asymmetric, telling the client exactly who acted while telling the expert only that
+   * *someone* from the company did.
+   *
+   * ⚠ A NAME, NEVER AN ADDRESS — ADR-1044 concealment is about contact details, not identity.
+   * There is no email field on this payload and there must never be one.
+   */
+  clientPersonName: string;
+  clientCompanyName: string;
+  expertPartyLabel: string;
+  scheduledStartIso: string;
+  durationMinutes: number;
+  /** `/join/m/{meetingId}` — NEVER `meetings.join_url` (raw Daily). */
+  joinPath: string;
+  provisioned: boolean;
+  guestCount: number;
+}

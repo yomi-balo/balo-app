@@ -17,6 +17,10 @@ export {
   EXPERT_PROFILE_EVENTS,
   PROJECT_EVENTS,
   CONVERSATION_EVENTS,
+  // BAL-283 (round-1 W10) — ⚠ THE RE-EXPORT ALLOWLIST. The canonical call-surface tuple, so
+  // the two BAL-283 Server Actions derive their Zod enum from it instead of hand-writing a
+  // sixth copy of `['header','rail','nudge']`.
+  CONVERSATION_CALL_SURFACES,
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
   ADMIN_ENGAGEMENTS_EVENTS,

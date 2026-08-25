@@ -65,6 +65,9 @@ export {
   type ConversationLens,
   type ConversationThreadSelectMethod,
   type ConversationFilesSurface,
+  // BAL-283 (round-1 W10) — the VALUE tuple as well as the type: Server Actions derive their
+  // Zod enum from it rather than hand-writing a sixth copy of the surface list.
+  CONVERSATION_CALL_SURFACES,
   type ConversationCallSurface,
   type ConversationProposalSurface,
 } from './conversation';

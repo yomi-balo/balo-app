@@ -79,6 +79,21 @@ export const requestExpertRelationships = pgTable(
     // since" surfaces, and reminder nudges. Read via the relationship row,
     // never filtered on → no index.
     proposalRequestedAt: timestamp('proposal_requested_at', { withTimezone: true }),
+    // BAL-283 (Ruling 3) — when the expert last made themselves gettable on this
+    // thread ("Propose times" = share availability + nudge the client; there is no
+    // proposal state machine and no held slot).
+    //
+    // NULLABLE, no default: NULL means "never shared", which is every pre-BAL-283
+    // row. Stamped by `stampAvailabilityShared`, which RETURNS the previous value —
+    // that previous instant is the ONLY input to the notification rule's flat 24h
+    // re-notify window and to the analytics `is_reshare` flag, so the write and the
+    // read of the prior value must be ONE step (see the repository method).
+    //
+    // Like `proposalRequestedAt` above: survives later status transitions (unlike
+    // `updatedAt`), and is read as part of an already-indexed point read
+    // (`findById`) or of the relationship child rows of `findByIdWithRelations` —
+    // never a WHERE/JOIN/ORDER BY predicate → NO INDEX.
+    availabilitySharedAt: timestamp('availability_shared_at', { withTimezone: true }),
     ...timestamps,
     ...softDelete,
   },

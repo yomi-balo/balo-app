@@ -9,6 +9,7 @@ import {
   expertDraftFactory,
   meetingFactory,
   projectRequestFactory,
+  requestExpertRelationshipFactory,
 } from '../../test/factories';
 import { consultationsRepository } from '../consultations';
 import { meetingContextsRepository } from '../meeting-contexts';
@@ -223,6 +224,148 @@ describe('consultation projection — a booking that cannot name one expert is r
         contexts: [{ contextType: 'case', contextId: engagement.id }],
       })
     ).rejects.toBeInstanceOf(MeetingContextUnresolvableError);
+  });
+});
+
+// ── BAL-283 / Ruling 1 — the request_interaction arm, against real SQL ──
+
+/**
+ * ⚠⚠ THE BOTH-ARMS PROOF. `resolveOneContext` and `loadContextExperts` must BOTH have learnt
+ * this label; the invariant test the ticket names as the net asserts on the ENUM ONLY and
+ * never opens the projection module, so without this block (and its unit sibling, T1/T2 in
+ * `consultation-projection.test.ts`) a half-added arm ships green and fails in production on
+ * the first row written. This half runs the real query against real Postgres, so it also
+ * proves the arm targets a table that actually EXISTS with the columns it names — something
+ * a stubbed executor cannot.
+ */
+describe('consultation projection — a request_interaction call BLOCKS the candidate’s slot', () => {
+  it('projects through the RELATIONSHIP’s expert, not the REQUEST’s (the axis guard)', async () => {
+    // ⚠ THE TWO EXPERTS ARE DELIBERATELY DIFFERENT. `context-owner.ts`'s axis warning is that
+    // the EXPERT comes from the relationship and the COMPANY from the request; a projection
+    // wired to `project_requests.expert_profile_id` instead would pass every same-expert
+    // fixture and block the WRONG marketplace calendar in production.
+    const requestExpert = await expertDraftFactory();
+    const threadExpert = await expertDraftFactory();
+    const request = await projectRequestFactory({ expertProfileId: requestExpert.id });
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: threadExpert.id,
+    });
+    const window = schedule();
+
+    const created = await meetingsRepository.create({
+      ...window,
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+
+    expect(created.expertProfileId).toBe(threadExpert.id);
+    expect(created.expertProfileId).not.toBe(requestExpert.id);
+
+    const projection = await findProjectionForMeeting(created.meeting.id);
+    expect(projection?.expertProfileId).toBe(threadExpert.id);
+    expect(projection?.status).toBe('confirmed');
+    // The projection MIRRORS the meeting's window — a blocked slot, not a computed one.
+    expect(projection?.startAt.getTime()).toBe(window.scheduledStart.getTime());
+    expect(projection?.endAt.getTime()).toBe(window.scheduledEnd.getTime());
+    expect(await allProjectionRows(created.meeting.id)).toHaveLength(1);
+  });
+
+  it('leaves NO drift — the reconciliation read agrees with the booking', async () => {
+    // The independent check: `findProjectionDrift` re-resolves the contexts from scratch, so
+    // it fails if `loadContextExperts` and `resolveOneContext` disagree with each other on a
+    // second pass (which is the shape a copy-pasted arm produces).
+    const { relationship } = await requestExpertRelationshipFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+
+    expect(await findProjectionDrift({ meetingIds: [created.meeting.id] })).toEqual([]);
+  });
+
+  it('a SOFT-DELETED (withdrawn) relationship is UNRESOLVABLE and writes no meeting at all', async () => {
+    // Withdrawal is a soft delete on this table, and the batched read filters `deleted_at IS
+    // NULL` — so a stale context id cannot book time on a calendar the marketplace no longer
+    // offers. Fail loudly at write time; the whole transaction rolls back.
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { deletedAt: new Date() },
+    });
+    const before = await db.select({ id: meetings.id }).from(meetings);
+
+    await expect(
+      meetingsRepository.create({
+        ...schedule(),
+        contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+      })
+    ).rejects.toBeInstanceOf(MeetingContextUnresolvableError);
+
+    expect(await db.select({ id: meetings.id }).from(meetings)).toHaveLength(before.length);
+  });
+
+  it('an unknown relationship id is UNRESOLVABLE (no FK behind context_id)', async () => {
+    await expect(
+      meetingsRepository.create({
+        ...schedule(),
+        contexts: [{ contextType: 'request_interaction', contextId: randomUUID() }],
+      })
+    ).rejects.toBeInstanceOf(MeetingContextUnresolvableError);
+  });
+
+  it('alongside a case context naming a DIFFERENT expert it is AMBIGUOUS, and nothing is written', async () => {
+    // The label is a full participant in ambiguity detection, not a special case that is
+    // skipped: a meeting whose contexts name two calendars has no answer to "whose slot?".
+    const { relationship } = await requestExpertRelationshipFactory();
+    const { engagement } = await caseEngagementFactory();
+    const before = await db.select({ id: meetings.id }).from(meetings);
+
+    await expect(
+      meetingsRepository.create({
+        ...schedule(),
+        contexts: [
+          { contextType: 'request_interaction', contextId: relationship.id },
+          { contextType: 'case', contextId: engagement.id },
+        ],
+      })
+    ).rejects.toBeInstanceOf(MeetingExpertAmbiguousError);
+
+    expect(await db.select({ id: meetings.id }).from(meetings)).toHaveLength(before.length);
+  });
+
+  it('alongside a case context naming the SAME expert it resolves to ONE projection row', async () => {
+    const expert = await expertDraftFactory();
+    const request = await projectRequestFactory({ expertProfileId: expert.id });
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: expert.id,
+    });
+    const { engagement } = await caseEngagementFactory({ expertProfileId: expert.id });
+
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [
+        { contextType: 'request_interaction', contextId: relationship.id },
+        { contextType: 'case', contextId: engagement.id },
+      ],
+    });
+
+    expect(created.expertProfileId).toBe(expert.id);
+    expect(await allProjectionRows(created.meeting.id)).toHaveLength(1);
+  });
+
+  it('cancelling the call FREES the candidate’s slot (the projection follows the meeting)', async () => {
+    // The lifecycle writers are label-agnostic — proven here rather than assumed, because a
+    // slot that could be booked but never released would be worse than not booking it.
+    const { relationship } = await requestExpertRelationshipFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+
+    const cancelled = await meetingsRepository.cancel(created.meeting.id);
+
+    expect(cancelled.expertProfileId).toBe(created.expertProfileId);
+    expect((await findProjectionForMeeting(created.meeting.id))?.status).toBe('cancelled');
+    expect(await findProjectionDrift({ meetingIds: [created.meeting.id] })).toEqual([]);
   });
 });
 

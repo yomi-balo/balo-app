@@ -17,6 +17,8 @@ export {
   EXPERT_PROFILE_EVENTS,
   PROJECT_EVENTS,
   CONVERSATION_EVENTS,
+  /** BAL-283 — the canonical `['header','rail','nudge']` tuple the Zod enums derive from. */
+  CONVERSATION_CALL_SURFACES,
   PROJECTS_INBOX_EVENTS,
   BILLING_EVENTS,
   ADMIN_ENGAGEMENTS_EVENTS,

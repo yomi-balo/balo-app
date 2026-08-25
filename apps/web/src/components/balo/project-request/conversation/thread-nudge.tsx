@@ -2,6 +2,7 @@
 
 import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { LocalDateTime } from '@/components/balo/date/local-date-time';
 import type {
   ThreadNudgeButton,
   ThreadNudgeContent,
@@ -70,6 +71,13 @@ const PRIMARY_CLASS =
   'from-primary focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[10px] bg-gradient-to-r to-violet-600 px-3.5 text-[13px] font-semibold text-white transition-opacity focus-visible:ring-2 focus-visible:outline-none lg:min-h-9 dark:to-violet-500';
 const SECONDARY_CLASS =
   'border-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-[10px] border px-3 text-[12.5px] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none lg:min-h-9';
+/**
+ * BAL-283 — the "Share again" re-share affordance: a TEXT LINK, deliberately harder to reach
+ * than the first share (never button chrome). `min-h-11` still pads the tap target per the
+ * balo-ui-skill 44px rule, even though the visible underline stays small.
+ */
+const TERTIARY_CLASS =
+  'text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center gap-1 text-[12.5px] font-medium underline decoration-dotted underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:outline-none lg:min-h-9';
 
 export function ThreadNudge({
   nudge,
@@ -132,10 +140,22 @@ export function ThreadNudge({
             {nudge.sub}
           </p>
         )}
-        {(nudge.primary || nudge.secondary) && (
+        {/* BAL-283 (round-1 W4) — an ABSOLUTE instant, formatted by `LocalDateTime` in the
+            VIEWER's zone AFTER mount. Formatting it in `threadNudgeFor` (a pure deriver that
+            runs during the SSR pass of this `'use client'` island) produced server/client HTML
+            that differed for every viewer outside UTC — a hydration mismatch on every page
+            load, invisible to a `TZ=UTC` CI. */}
+        {nudge.subInstant && (
+          <p className="text-muted-foreground mt-0.5 ml-7 truncate text-[13px] leading-relaxed">
+            <LocalDateTime iso={nudge.subInstant.iso} variant="day-month-time" />
+            {nudge.subInstant.suffix}
+          </p>
+        )}
+        {(nudge.primary || nudge.secondary || nudge.tertiary) && (
           <div className="mt-2.5 ml-7 flex flex-wrap items-center gap-2">
             {nudge.primary && renderButton(nudge.primary, PRIMARY_CLASS)}
             {nudge.secondary && renderButton(nudge.secondary, SECONDARY_CLASS)}
+            {nudge.tertiary && renderButton(nudge.tertiary, TERTIARY_CLASS)}
           </div>
         )}
       </div>

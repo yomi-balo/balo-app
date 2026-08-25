@@ -5,6 +5,11 @@ export const CONVERSATION_EVENTS = {
   CONVERSATION_FILES_OPENED: 'conversation_files_opened',
   CONVERSATION_CALL_CTA_CLICKED: 'conversation_call_cta_clicked',
   CONVERSATION_PROPOSAL_CTA_CLICKED: 'conversation_proposal_cta_clicked',
+  // BAL-283 — the two conversation call-CTA "completion" events, wiring
+  // CONVERSATION_CALL_CTA_CLICKED (the funnel head) to a real outcome per lens: the expert's
+  // completion is the share, the client's is the booking.
+  CONVERSATION_AVAILABILITY_SHARED: 'conversation_availability_shared',
+  CONVERSATION_INTRO_CALL_BOOKED: 'conversation_intro_call_booked',
 } as const;
 
 /** Viewer lens inside the conversation stage (admin observes, never chats). */
@@ -13,8 +18,16 @@ export type ConversationLens = 'client' | 'expert';
 export type ConversationThreadSelectMethod = 'auto' | 'manual';
 /** Where the files drawer/sheet was opened from. */
 export type ConversationFilesSurface = 'header' | 'tabstrip';
-/** Where the call CTA was clicked. */
-export type ConversationCallSurface = 'header' | 'rail' | 'nudge';
+/**
+ * Where the call CTA was clicked — THE canonical surface list.
+ *
+ * ⚠ THE TUPLE IS EXPORTED, NOT ONLY THE TYPE (round-1 W10). Four modules had re-declared the
+ * literal union inline and two more had hand-written a matching `z.enum([...])`, so the wire
+ * contract lived in six places and could drift silently in five of them. Server Actions derive
+ * their Zod enum from THIS tuple; components import the type from here.
+ */
+export const CONVERSATION_CALL_SURFACES = ['header', 'rail', 'nudge'] as const;
+export type ConversationCallSurface = (typeof CONVERSATION_CALL_SURFACES)[number];
 /** Where the client's Request-proposal CTA was clicked (A5: no nudge surface). */
 export type ConversationProposalSurface = 'header' | 'rail';
 
@@ -101,5 +114,30 @@ export interface ConversationEventMap {
     request_id: string;
     relationship_id: string;
     surface: ConversationProposalSurface;
+  };
+  /**
+   * BAL-283 (Ruling 3) — `shareAvailabilityAction` returned `ok`. `lens` is deliberately
+   * ABSENT (§14.2 of the plan): this event is structurally expert-only (the share is the
+   * expert's completion), so a `lens` property could only ever hold one value and would
+   * invite a false cross-tab against `CONVERSATION_INTRO_CALL_BOOKED`.
+   */
+  [CONVERSATION_EVENTS.CONVERSATION_AVAILABILITY_SHARED]: {
+    request_id: string;
+    relationship_id: string;
+    surface: ConversationCallSurface;
+    is_reshare: boolean;
+  };
+  /**
+   * BAL-283 — `bookIntroCallAction` returned `ok`. Structurally client-only (the booking is
+   * the client's completion) — same `lens`-absence reasoning as the share event above.
+   */
+  [CONVERSATION_EVENTS.CONVERSATION_INTRO_CALL_BOOKED]: {
+    request_id: string;
+    relationship_id: string;
+    expert_profile_id: string;
+    surface: ConversationCallSurface;
+    duration_minutes: number;
+    guest_count: number;
+    provisioned: boolean;
   };
 }

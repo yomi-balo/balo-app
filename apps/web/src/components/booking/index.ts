@@ -8,3 +8,6 @@ export type {
   FixedCaseSummary,
   PresetSlot,
 } from './types';
+export { BookingStepper, type BookingStepperStep } from './booking-header';
+// BAL-283 — the intro-call booking dialog.
+export * from './intro-call';

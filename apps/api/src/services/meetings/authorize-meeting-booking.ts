@@ -64,19 +64,38 @@
  * precede any invite" — so requiring expert assent would break the feature rather than secure
  * it.
  *
- * ⚠ AND A DECLINED `request_expert_relationships` ROW IS DELIBERATELY **NON-BLOCKING FOR
- * BOOKING**, which is a different ruling from the hosting one and must not be conflated with
- * it. `relationshipDeniesHosting` (`@balo/shared/authz`) denies on EVIDENCE, not absence —
- * precisely so it CAN be consulted safely on a path where no relationship row is expected. So
- * "it denies on evidence" is an argument the check would be SAFE here, never an argument
- * against making it; an earlier version of this block cited it the wrong way round.
- *   The real reason booking does not consult it is the SUBJECT. Hosting asks "may this expert
- *   deliver this call?", and an expert who declined the engagement must not hold the owner
- *   token — that is a fact about the relationship. Booking asks "may this company member place
- *   a slot on a calendar they can reach?", and a decline is not a withdrawal of published
- *   availability: an expert who declines a specific request keeps their published hours open to
- *   everyone, and the client may legitimately re-approach. If a decline should ALSO close
- *   booking, that is a PRODUCT decision (with a UX for it) and not something to bolt on here.
+ * ⚠ A DECLINED `request_expert_relationships` ROW IS NON-BLOCKING FOR BOOKING ON
+ * `project_discovery` — SCOPED, as of BAL-283. `relationshipDeniesHosting` (`@balo/shared/authz`)
+ * denies on EVIDENCE, not absence — precisely so it CAN be consulted safely on a path where no
+ * relationship row is expected. So "it denies on evidence" is an argument the check would be
+ * SAFE here, never an argument against making it; an earlier version of this block cited it the
+ * wrong way round.
+ *   The real reason `project_discovery` does not consult it is the SUBJECT. Hosting asks "may
+ *   this expert deliver this call?", and an expert who declined the engagement must not hold the
+ *   owner token — that is a fact about the relationship. `project_discovery` booking asks "may
+ *   this company member place a slot on a calendar they can reach?" against a `project_requests`
+ *   row that is a DIFFERENT row than any relationship, and a decline is not a withdrawal of
+ *   published availability: an expert who declines a specific request keeps their published
+ *   hours open to everyone, and the client may legitimately re-approach.
+ *
+ * ⚠ ON `request_interaction`, BAL-283 MADE THE OPPOSITE CALL, AND IT IS NOT A REVERSAL — THE
+ * SUBJECT CHANGED. There the relationship **IS** the booking subject (not a fact about some
+ * other row), so `loadSubject`'s `request_interaction` arm consults `relationshipDeniesHosting`
+ * on the SAME row the two-hop reads, structurally identical to the `subject.status !== 'active'`
+ * check this module already runs for engagements below. A declined thread is closed on every
+ * shipped surface (`isThreadOpenStatus`), so there is no legitimate booking behind it. See
+ * `@balo/shared/authz`'s `engagement.ts` docblock for the third call site this adds.
+ *
+ * ⚠⚠ AND THE SAME ARM CARRIES A **REQUEST-LIFECYCLE** GATE, WHICH IS A SEPARATE RULE FROM THE
+ * DECLINE ONE (BAL-283 round 1). A `request_interaction` context has no engagement, so the
+ * `subject.status !== 'active'` check below cannot reach it — leaving this label with NO
+ * lifecycle gate at all, and reopening one grain up exactly the hole that check's own docblock
+ * describes ("a `completed` CASE IS A PERMANENT BOOKING HANDLE ON THAT EXPERT'S CALENDAR").
+ * `THREAD_OPEN_RELATIONSHIP_STATUSES` on the web side includes `'accepted'`, so an accepted
+ * relationship's thread stays open and a client-company member could POST the Server Action
+ * directly and book FREE calls against the DELIVERING expert — the hours that must route
+ * through the BILLED `case`/`project_kickoff` path — and equally against a LOSING expert whose
+ * thread also stays open. Both denials collapse into `context_not_found` (§3's oracle rule).
  *
  * The abuse this arm enables is therefore not "booking without authorization" but VOLUME:
  * consuming a stranger-to-you expert's calendar. That is **BOUNDED — not closed — on the
@@ -120,8 +139,9 @@
  *     context this route accepts is a COMPANY.
  *
  * ⚠ WHY `PARTICIPATE` AND NOT `CONSUME_CREDITS`. `CONSUME_CREDITS` is the WALLET-DRAWDOWN
- * token. Three of the four contexts (kickoff, discovery, package session) carry NO CREDIT
- * HOLD AT ALL — gating them on a wallet token is a category error. The money gate for a Case
+ * token. Four of the five contexts (kickoff, discovery, package session, request_interaction
+ * — BAL-283 Ruling 2: NO credit hold on an intro call, ever) carry NO CREDIT HOLD AT ALL —
+ * gating them on a wallet token is a category error. The money gate for a Case
  * consultation is `openSession`'s own `CONSUME_CREDITS` check, which stays exactly where it
  * is. `PARTICIPATE` is the base-member token, held by every company role
  * (`owner`/`admin`/`member`), so the effective rule is "a LIVE MEMBER of the company that
@@ -144,12 +164,18 @@ import {
   engagementsRepository,
   partyMembershipsRepository,
   projectRequestsRepository,
+  requestExpertRelationshipsRepository,
   type EngagementStatus,
   type EngagementType,
 } from '@balo/db';
-import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
+import { CAPABILITIES, relationshipDeniesHosting, roleHasCapability } from '@balo/shared/authz';
+import type { RelationshipHostingStatus } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
-import type { MeetingBookingContextType } from '@balo/shared/meetings';
+import {
+  resolveContextOwner,
+  type MeetingBookingContextType,
+  type MeetingContextOwnerReads,
+} from '@balo/shared/meetings';
 
 const log = createLogger('meeting-booking-authz');
 
@@ -182,18 +208,48 @@ export interface AuthorizeMeetingBookingInput {
   userId: string;
 }
 
+/** The bookable labels that anchor on something OTHER than an `engagements.id`. */
+const NON_ENGAGEMENT_CONTEXT_TYPES = ['project_discovery', 'request_interaction'] as const;
+type NonEngagementContextType = (typeof NON_ENGAGEMENT_CONTEXT_TYPES)[number];
+
+/**
+ * BAL-283 (round-1 HIGH) — the `project_request_status` values at or past the client's
+ * DECISION, on which a free `request_interaction` intro call is no longer legitimate.
+ *
+ * ⚠ A SET OF LITERALS, NOT A RANK COMPARISON, AND DELIBERATELY SO. `project_request_status`
+ * is a pgEnum whose ORDER is not a lifecycle guarantee this module may rely on, and this gate
+ * must fail in the SAFE direction on a value it does not recognise — an unknown status is NOT
+ * in the set, so it stays bookable, which matches the pre-decision default rather than
+ * bricking the feature on an enum addition. A NEW post-decision label must be added here
+ * consciously; that is the intended cost.
+ */
+const POST_DECISION_REQUEST_STATUSES: ReadonlySet<string> = new Set([
+  'accepted',
+  'kickoff_approved',
+]);
+
 /**
  * The engagement `engagement_type` each ENGAGEMENT-anchored context label must name.
  *
- * `project_discovery` is absent BY CONSTRUCTION: it anchors on a `project_requests.id`, not
- * an `engagements.id`, so it has no supertype discriminator to agree with. Its owning party
- * is read from the request row instead.
+ * `project_discovery` and `request_interaction` are absent BY CONSTRUCTION: neither anchors
+ * on an `engagements.id` (the first on `project_requests.id`, the second on
+ * `request_expert_relationships.id`), so neither has a supertype discriminator to agree
+ * with. Their owning party is read from their own row instead (`loadSubject`).
+ *
+ * ⚠ `Record<Exclude<…>>`, NOT `Partial<Record<…>>` (BAL-283). Under `Partial` a sixth
+ * bookable label needed no entry here and the TS7053 index error at this constant's use site
+ * never fired — the constant silently agreed to know nothing about it. Non-partial makes a
+ * sixth ENGAGEMENT-grain label a compile error in this object, and a sixth NON-engagement
+ * label a compile error in the tuple above.
  */
 const ENGAGEMENT_TYPE_FOR_CONTEXT = {
   case: 'case',
   project_kickoff: 'project',
   package_session: 'package',
-} as const satisfies Partial<Record<MeetingBookingContextType, EngagementType>>;
+} as const satisfies Record<
+  Exclude<MeetingBookingContextType, NonEngagementContextType>,
+  EngagementType
+>;
 
 /**
  * The engagement kinds reachable through this route — `EngagementType` MINUS `'retainer'`.
@@ -223,38 +279,136 @@ interface LoadedSubject {
 }
 
 /**
- * Per-context-type LOAD of the owning party — TOTAL over the four bookable labels, and
- * deliberately judgement-free: it reports what the row says and nothing about whether the
- * caller may see it. Both repository reads already filter `deleted_at IS NULL`, so
+ * Per-context-type LOAD of the owning party — TOTAL over the FIVE bookable labels, and now
+ * provably so: the switch's `default` arm assigns to `never`, so a sixth bookable label
+ * fails `pnpm --filter api typecheck` HERE — at the load that must learn its subject shape —
+ * instead of 120 lines downstream at `ENGAGEMENT_TYPE_FOR_CONTEXT`, or silently at runtime as
+ * a 404 on every booking (BAL-283 plan §6.1: widening `BOOKABLE_CONTEXT_TYPES` alone raised no
+ * error at the old binary `if/else` here — a `request_interaction` id was simply fed to
+ * `engagementsRepository.findById`, missed, and returned `context_not_found` on every attempt,
+ * indistinguishable on the wire from a cross-tenant probe).
+ *
+ * Deliberately judgement-free: it reports what the row says and nothing about whether the
+ * caller may see it. Every repository read already filters `deleted_at IS NULL`, so
  * `undefined` (missing OR soft-deleted) is the single not-found outcome.
  */
 async function loadSubject(
   contextType: MeetingBookingContextType,
   contextId: string
 ): Promise<LoadedSubject | undefined> {
-  if (contextType === 'project_discovery') {
-    const request = await projectRequestsRepository.findById(contextId);
-    if (request === undefined) {
-      return undefined;
+  switch (contextType) {
+    case 'project_discovery': {
+      const request = await projectRequestsRepository.findById(contextId);
+      if (request === undefined) {
+        return undefined;
+      }
+      return {
+        companyId: request.companyId,
+        expertProfileId: request.expertProfileId,
+        engagementType: null,
+        status: null,
+      };
     }
-    return {
-      companyId: request.companyId,
-      expertProfileId: request.expertProfileId,
-      engagementType: null,
-      status: null,
-    };
-  }
 
-  const engagement = await engagementsRepository.findById(contextId);
-  if (engagement === undefined) {
-    return undefined;
+    case 'request_interaction': {
+      // ⚠ ONE READ OF THE RELATIONSHIP **AND ONE OF THE REQUEST**, BOTH CAPTURED. The two
+      // guards below and the shared two-hop must judge the SAME rows: a second `findById`
+      // could observe a row that changed between them, and fail-open on exactly the state
+      // these checks exist to catch. Routes through the EXISTING `resolveContextOwner` two-hop
+      // (`@balo/shared/meetings`) rather than re-deriving it — see that module's axis
+      // warning (the EXPERT comes from the relationship, the COMPANY from the request).
+      let relationship: RelationshipHostingStatus | undefined;
+      let request: { status: string } | undefined;
+      const reads: MeetingContextOwnerReads = {
+        findEngagement: (id) => engagementsRepository.findById(id),
+        findProjectRequest: async (id) => {
+          const row = await projectRequestsRepository.findById(id);
+          request = row;
+          return row;
+        },
+        findRelationship: async (id) => {
+          const row = await requestExpertRelationshipsRepository.findById(id);
+          relationship = row;
+          return row;
+        },
+      };
+      const owner = await resolveContextOwner({ contextType, contextId }, reads);
+      if (owner.outcome !== 'resolved' || relationship === undefined || request === undefined) {
+        return undefined; // missing OR soft-deleted (findById filters deleted_at)
+      }
+      if (relationshipDeniesHosting(relationship)) {
+        log.warn(
+          { contextType, contextId },
+          'Meeting booking denied — the relationship that owns this context is declined'
+        );
+        return undefined; // §7 — collapses into `context_not_found` on the wire
+      }
+      /**
+       * ⚠⚠ THE REQUEST-LIFECYCLE GATE — THE `subject.status !== 'active'` CHECK'S EXACT TWIN,
+       * AT REQUEST GRAIN. Read the docblock further down that says, of an engagement:
+       * "WITHOUT THIS, A `completed` CASE IS A PERMANENT BOOKING HANDLE ON THAT EXPERT'S
+       * CALENDAR." A `request_interaction` context has no engagement lifecycle to consult, so
+       * WITHOUT THIS LINE it had no lifecycle gate AT ALL, and the same hole reopened one
+       * grain up.
+       *
+       * The chain that made it reachable: `THREAD_OPEN_RELATIONSHIP_STATUSES` (web) includes
+       * `'accepted'`, so `resolveConversationAccess` passes an accepted relationship straight
+       * through; the web UI hides the CTA (`callAllowed = beforeKickoff && stage === 'active'`)
+       * but a Server Action is a PUBLIC ENTRY POINT — a client-company member who reads
+       * `relationshipId`/`requestId` out of the rendered DOM can POST it directly. Past
+       * acceptance the delivering expert's hours are supposed to route through the BILLED
+       * `case`/`project_kickoff` path; free `request_interaction` bookings against them are
+       * exactly the leak. It applies equally to a LOSING expert on a decided request, whose
+       * thread also stays open.
+       *
+       * ⚠ AND IT IS IRREVERSIBLE ON THIS BRANCH. `cancelMeeting` has ZERO production callers
+       * (cancel is BAL-410's), so every slot consumed this way stays consumed.
+       *
+       * ⚠ THE THRESHOLD IS `accepted`, MATCHING THE WEB'S OWN `beforeKickoff` DERIVATION —
+       * `deriveThreadActions` stops offering the CTA at `accepted`, and this is the server-side
+       * statement of the same rule. `kickoff_approved` is denied by the same clause.
+       *
+       * ⚠ AND IT ANSWERS `context_not_found`, NOT A NEW LITERAL — §3's oracle decision is that
+       * every denial an outsider can reach is indistinguishable. Same posture as the decline
+       * check above.
+       */
+      if (POST_DECISION_REQUEST_STATUSES.has(request.status)) {
+        log.warn(
+          { contextType, contextId, requestStatus: request.status },
+          'Meeting booking denied — the project request that owns this context is already decided'
+        );
+        return undefined; // §7 — collapses into `context_not_found` on the wire
+      }
+      return {
+        companyId: owner.owner.companyId,
+        expertProfileId: owner.owner.expertProfileId, // NOT NULL on the table; typed `| null` upstream
+        engagementType: null,
+        status: null,
+      };
+    }
+
+    case 'case':
+    case 'project_kickoff':
+    case 'package_session': {
+      const engagement = await engagementsRepository.findById(contextId);
+      if (engagement === undefined) {
+        return undefined;
+      }
+      return {
+        companyId: engagement.companyId,
+        expertProfileId: engagement.expertProfileId,
+        engagementType: engagement.engagementType,
+        status: engagement.status,
+      };
+    }
+
+    default: {
+      // ⚠ `never` TODAY, AND THAT IS THE POINT. A sixth bookable label widens this and fails
+      // `pnpm --filter api typecheck` HERE. See the function docblock.
+      const exhaustive: never = contextType;
+      return exhaustive;
+    }
   }
-  return {
-    companyId: engagement.companyId,
-    expertProfileId: engagement.expertProfileId,
-    engagementType: engagement.engagementType,
-    status: engagement.status,
-  };
 }
 
 /**
@@ -302,7 +456,7 @@ export async function authorizeMeetingBooking(
     return { ok: false, code: 'context_not_found' };
   }
 
-  if (contextType === 'project_discovery') {
+  if (contextType === 'project_discovery' || contextType === 'request_interaction') {
     return { ok: true, companyId, engagementType: null, expertProfileId };
   }
 

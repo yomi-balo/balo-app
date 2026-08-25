@@ -16,6 +16,7 @@ import {
   meetingFactory,
   meetingGuestFactory,
   projectRequestFactory,
+  requestExpertRelationshipFactory,
   userFactory,
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
@@ -1425,5 +1426,137 @@ describe('meetingsRepository.findByBookingIdempotencyKey (BAL-400)', () => {
     await meetingsRepository.softDelete(created.meeting.id);
 
     await expect(meetingsRepository.findByBookingIdempotencyKey(key)).resolves.toBeUndefined();
+  });
+});
+
+describe('meetingsRepository.listActiveMeetingsForContexts (BAL-283)', () => {
+  it('groups live meetings by context id and returns an entry for EVERY requested id', async () => {
+    const first = await requestExpertRelationshipFactory();
+    const second = await requestExpertRelationshipFactory();
+    const neverBooked = await requestExpertRelationshipFactory();
+    const window = schedule();
+
+    const created = await meetingsRepository.create({
+      ...window,
+      contexts: [{ contextType: 'request_interaction', contextId: first.relationship.id }],
+    });
+    await meetingsRepository.create({
+      ...schedule(5),
+      contexts: [{ contextType: 'request_interaction', contextId: second.relationship.id }],
+    });
+
+    const byContext = await meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'request_interaction',
+      contextIds: [first.relationship.id, second.relationship.id, neverBooked.relationship.id],
+    });
+
+    // An entry for every requested id — the caller never distinguishes "absent" from "none".
+    expect([...byContext.keys()]).toHaveLength(3);
+    expect(byContext.get(neverBooked.relationship.id)).toEqual([]);
+
+    const [booked] = byContext.get(first.relationship.id) ?? [];
+    expect(booked?.meetingId).toBe(created.meeting.id);
+    expect(booked?.scheduledStart.getTime()).toBe(window.scheduledStart.getTime());
+    expect(booked?.scheduledEnd.getTime()).toBe(window.scheduledEnd.getTime());
+    expect(booked?.status).toBe('scheduled');
+    // ⚠ NO JOIN CREDENTIALS IN THE SUMMARY — `join_url` / `daily_room_name` are call-JOIN
+    // credentials, and this read is fed a LIST of ids from a page loader.
+    expect(booked).not.toHaveProperty('joinUrl');
+    expect(booked).not.toHaveProperty('dailyRoomName');
+
+    // ONE query for the whole page's worth of ids: the second thread's meeting comes back in
+    // the same result, never in a second round trip.
+    expect(byContext.get(second.relationship.id)).toHaveLength(1);
+  });
+
+  it('returns several calls per thread, ordered by scheduled_start (the pick is the caller’s)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    const later = await meetingsRepository.create({
+      ...schedule(72),
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+    const sooner = await meetingsRepository.create({
+      ...schedule(2),
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+
+    const byContext = await meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'request_interaction',
+      contextIds: [relationship.id],
+    });
+
+    expect((byContext.get(relationship.id) ?? []).map((row) => row.meetingId)).toEqual([
+      sooner.meeting.id,
+      later.meeting.id,
+    ]);
+  });
+
+  it('EXCLUDES cancelled meetings — a released slot must not hide the CTA', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+
+    await meetingsRepository.cancel(created.meeting.id);
+
+    const byContext = await meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'request_interaction',
+      contextIds: [relationship.id],
+    });
+    expect(byContext.get(relationship.id)).toEqual([]);
+  });
+
+  it('EXCLUDES a soft-deleted meeting and a soft-deleted context row, independently', async () => {
+    const removedMeeting = await requestExpertRelationshipFactory();
+    const detached = await requestExpertRelationshipFactory();
+
+    const removed = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'request_interaction', contextId: removedMeeting.relationship.id }],
+    });
+    await meetingsRepository.softDelete(removed.meeting.id);
+
+    const live = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'request_interaction', contextId: detached.relationship.id }],
+    });
+    // Detach the context WITHOUT touching the meeting — the two filters are independent, and
+    // a test that soft-deleted both would prove only one of them.
+    await db
+      .update(meetingContexts)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetingContexts.meetingId, live.meeting.id));
+
+    const byContext = await meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'request_interaction',
+      contextIds: [removedMeeting.relationship.id, detached.relationship.id],
+    });
+    expect(byContext.get(removedMeeting.relationship.id)).toEqual([]);
+    expect(byContext.get(detached.relationship.id)).toEqual([]);
+  });
+
+  it('is SCOPED BY LABEL — the same uuid read as a `case` context answers nothing', async () => {
+    // `context_id` is polymorphic and has NO FK, so the label is the only thing separating
+    // one table's ids from another's. Pinned so a caller cannot widen it by accident.
+    const { relationship } = await requestExpertRelationshipFactory();
+    await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+
+    const asCases = await meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'case',
+      contextIds: [relationship.id],
+    });
+    expect(asCases.get(relationship.id)).toEqual([]);
+  });
+
+  it('an EMPTY id list returns an empty map without touching the DB', async () => {
+    const byContext = await meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'request_interaction',
+      contextIds: [],
+    });
+    expect(byContext.size).toBe(0);
   });
 });

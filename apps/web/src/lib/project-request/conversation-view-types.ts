@@ -1,4 +1,4 @@
-import type { RequestExpertRelationship } from '@balo/db';
+import type { ContextMeetingSummary, RequestExpertRelationship } from '@balo/db';
 import { previewOfPlainText } from '@balo/shared/notifications';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
 import type {
@@ -73,6 +73,32 @@ export function requestStatusRank(status: ProjectRequestStatus): number {
   return REQUEST_STATUS_ORDER.indexOf(status);
 }
 
+/**
+ * BAL-283 — THE ONE DEFINITION OF "this thread has a live intro call".
+ *
+ * `listActiveMeetingsForContexts` filters only `status <> 'cancelled'` and deliberately
+ * DELEGATES the pick to its caller (see its docblock: "an intro call that ended, then a second
+ * one booked"). This is that pick, and it is shared by BOTH consumers so they cannot disagree:
+ *   · `loadConversationView` — decides `bookedCall`, i.e. whether the CTA renders;
+ *   · `assertNoLiveIntroCall` — the server-side one-call-per-thread guard behind it.
+ * A second copy of this rule would let the UI hide a CTA the server still allows, or vice versa.
+ *
+ * ⚠ TWO INDEPENDENT DISQUALIFIERS, BOTH LOAD-BEARING: `status === 'ended'` (the explicit
+ * signal) AND a window already in the past (the clock, for a meeting nobody ever moved off
+ * `scheduled`). Rows arrive ordered `scheduled_start, id`, so the first survivor is the soonest
+ * upcoming one.
+ *
+ * ⚠ `nowMs` IS A PARAMETER, NEVER `Date.now()` READ INSIDE. Both callers are server-side, but
+ * passing the instant keeps this pure and testable, and keeps a clock out of a module that
+ * client components import.
+ */
+export function pickUpcomingContextMeeting(
+  meetings: readonly ContextMeetingSummary[],
+  nowMs: number
+): ContextMeetingSummary | undefined {
+  return meetings.find((m) => m.status !== 'ended' && m.scheduledEnd.getTime() > nowMs);
+}
+
 /** Derived per-thread display stage. */
 export type ThreadStage = 'active' | 'not_selected' | 'won';
 
@@ -128,6 +154,18 @@ export interface ConversationThreadView {
   /** Client lens only: the expert's live EOI pitch (sanitised HTML). Null for expert lens. */
   eoiHtml: string | null;
   eoiSubmittedAtIso: string | null;
+  /**
+   * BAL-283 (Ruling 3) — when the expert last shared availability on this thread. `null` ⇒
+   * never shared. Drives the header/rail "Availability shared" pill and the nudge's waiting
+   * copy; render-path only, never an authorization input.
+   */
+  availabilitySharedAtIso: string | null;
+  /**
+   * BAL-283 — the live `request_interaction` meeting for this thread, if one has been booked.
+   * `null` ⇒ nothing booked yet. Once set, the call-CTA slot on this thread is `'booked'` and
+   * is removed from header/rail (plan §12.3/§12.4).
+   */
+  bookedCall: { meetingId: string; scheduledStartIso: string } | null;
 }
 
 /**

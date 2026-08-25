@@ -6,6 +6,7 @@ import {
   companyBillingRepository,
   projectEngagementsRepository,
 } from '@balo/db';
+import { extractEmailDomain } from '@balo/shared/domains';
 import { log } from '@/lib/logging';
 import { getCurrentUser } from '@/lib/auth/session';
 import {
@@ -201,6 +202,11 @@ export default async function RequestDetailPage({
       (await projectEngagementsRepository.findIdByProjectRequestId(requestId)) ?? null;
   }
 
+  // BAL-283 (D12) — the VIEWER's OWN email domain (never a counterparty's — ADR-1044 is not
+  // engaged), for the intro-call dialog's guest composer disclosure. Same precedent as the
+  // case surface (`cases/[engagementId]/page.tsx`).
+  const viewerEmailDomain = extractEmailDomain(user.email);
+
   return (
     <RequestDetailShell
       view={view}
@@ -209,6 +215,7 @@ export default async function RequestDetailPage({
       adminBilling={adminBilling}
       billingCapture={billingCapture}
       deliveryEngagementId={deliveryEngagementId}
+      viewerEmailDomain={viewerEmailDomain}
     />
   );
 }

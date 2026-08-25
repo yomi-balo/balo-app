@@ -12,6 +12,17 @@ export interface GuestDraft {
   name?: string;
 }
 
+/**
+ * BAL-283 (round-1 C4) — WHAT A SAME-DOMAIN GUEST ACTUALLY GAINS, on THIS surface.
+ *
+ * ⚠ `'case'` COPY IS FACTUALLY FALSE PRE-ENGAGEMENT AND MUST NOT BE THE ONLY OPTION. An intro
+ * call on a project-request thread happens BEFORE any engagement exists: there is no case, and
+ * no prior consultation to be given access to. Promising "this whole case, including
+ * consultations held before today" on that surface fires on the COMMON path (a client inviting
+ * a same-domain colleague) and promises access that does not exist.
+ */
+export type GuestAccessScope = 'case' | 'call';
+
 export interface GuestInviteComposerProps {
   guests: readonly GuestDraft[];
   onChange: (guests: readonly GuestDraft[]) => void;
@@ -21,11 +32,27 @@ export interface GuestInviteComposerProps {
   viewerEmailDomain: string | null;
   /** For the "Outside {client company}" copy. `null` falls back to "your company". */
   clientCompanyName: string | null;
+  /**
+   * What a same-company guest is being given. Defaults to `'case'` — BAL-400's original and
+   * only behaviour, so every existing call site is unchanged byte-for-byte.
+   */
+  accessScope?: GuestAccessScope;
+  /**
+   * BAL-283 (round-1 C3) — whether the participant counter carries the "guests don't change
+   * what you pay" clause. Defaults to `true` (BAL-400's behaviour). Pass `false` on a surface
+   * where NOTHING is paid: money framing there is both a Ruling-2 violation and a
+   * non-sequitur — there is nothing to pay, so reassuring the user about it invents a concern.
+   */
+  showPricingNote?: boolean;
 }
 
 const MAX_TOTAL_PARTICIPANTS = 10;
 
-/** True when adding this address grants CASE-level (not just this call's) access. */
+/**
+ * True when adding this address grants access BEYOND this one call — i.e. same verified
+ * company domain. On an `accessScope: 'call'` surface the WIDER grant does not exist, but the
+ * "same company as you" fact is still what decides which disclosure line to show.
+ */
 function isCaseLevelAccess(email: string, viewerEmailDomain: string | null): boolean {
   const domain = extractEmailDomain(email);
   if (domain === null) return false;
@@ -36,12 +63,15 @@ function isCaseLevelAccess(email: string, viewerEmailDomain: string | null): boo
 function liveDisclosure(
   email: string,
   viewerEmailDomain: string | null,
-  companyName: string | null
+  companyName: string | null,
+  accessScope: GuestAccessScope
 ): string | null {
   const domain = extractEmailDomain(email);
   if (domain === null) return null;
   if (isCaseLevelAccess(email, viewerEmailDomain)) {
-    return 'Same company as you — they’ll see this whole case, including consultations held before today.';
+    return accessScope === 'case'
+      ? 'Same company as you — they’ll see this whole case, including consultations held before today.'
+      : 'Same company as you — they’ll only see this intro call and its recap.';
   }
   const company = companyName ?? 'your company';
   return `Outside ${company}, or a personal email address — they'll only see this call and its recap.`;
@@ -51,11 +81,21 @@ function liveDisclosure(
  * UX-4 (BAL-400 round 2) — the PERSISTENT, post-add record of what access was actually
  * granted, distinct from `liveDisclosure`'s per-keystroke estimate (which disappears the
  * instant the draft is cleared). Design §Copy Reference — singular/plural summary disclosure.
- * `null` when no added guest resolved to case-level access.
+ * `null` when no added guest resolved to same-company access.
  */
-function summaryDisclosure(caseLevelGuests: readonly GuestDraft[]): string | null {
+function summaryDisclosure(
+  caseLevelGuests: readonly GuestDraft[],
+  accessScope: GuestAccessScope
+): string | null {
   const [only, ...rest] = caseLevelGuests;
   if (only === undefined) return null;
+  if (accessScope === 'call') {
+    // Nothing exists beyond this call yet, so there is no wider grant to disclose — only the
+    // plain fact of who is coming.
+    return rest.length === 0
+      ? `${only.name ?? only.email} will only see this intro call and its recap.`
+      : `${caseLevelGuests.length} people will only see this intro call and its recap.`;
+  }
   if (rest.length === 0) {
     const label = only.name ?? only.email;
     return `${label} will be able to read every consultation in this case — recaps, transcripts and action items — including ones held before they were invited.`;
@@ -75,6 +115,8 @@ export function GuestInviteComposer({
   otherParticipantCount,
   viewerEmailDomain,
   clientCompanyName,
+  accessScope = 'case',
+  showPricingNote = true,
 }: Readonly<GuestInviteComposerProps>): React.JSX.Element {
   const [draftEmail, setDraftEmail] = useState('');
   const total = otherParticipantCount + guests.length;
@@ -82,7 +124,7 @@ export function GuestInviteComposer({
 
   const disclosure =
     draftEmail.trim().length > 0
-      ? liveDisclosure(draftEmail, viewerEmailDomain, clientCompanyName)
+      ? liveDisclosure(draftEmail, viewerEmailDomain, clientCompanyName, accessScope)
       : null;
 
   // ⚠ NOT A REGEX — a hand-rolled `local@domain.tld` pattern here trips SonarCloud's S5852
@@ -108,7 +150,11 @@ export function GuestInviteComposer({
   }
 
   const caseLevelGuests = guests.filter((g) => isCaseLevelAccess(g.email, viewerEmailDomain));
-  const summary = summaryDisclosure(caseLevelGuests);
+  const summary = summaryDisclosure(caseLevelGuests, accessScope);
+  // ⚠ Positive condition first (SonarCloud S7735 — no negated condition with an else).
+  const countLabel = showPricingNote
+    ? `${total} of ${MAX_TOTAL_PARTICIPANTS} · guests don't change what you pay`
+    : `${total} of ${MAX_TOTAL_PARTICIPANTS}`;
 
   return (
     <div className="space-y-2">
@@ -178,9 +224,7 @@ export function GuestInviteComposer({
       )}
 
       <p className={cn('text-xs', atCap ? 'text-warning font-medium' : 'text-muted-foreground')}>
-        {atCap
-          ? "You've reached the 10-person limit for this call."
-          : `${total} of ${MAX_TOTAL_PARTICIPANTS} · guests don't change what you pay`}
+        {atCap ? "You've reached the 10-person limit for this call." : countLabel}
       </p>
     </div>
   );

@@ -12,6 +12,9 @@ const {
   mockFindByEngagementId,
   mockFindCompanyById,
   mockProjectBookingToExpertCalendar,
+  mockFindEngagementById,
+  mockFindProjectRequestById,
+  mockFindRelationshipById,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockSetVenue: vi.fn(),
@@ -22,6 +25,9 @@ const {
   mockFindByEngagementId: vi.fn(),
   mockFindCompanyById: vi.fn(),
   mockProjectBookingToExpertCalendar: vi.fn(),
+  mockFindEngagementById: vi.fn(),
+  mockFindProjectRequestById: vi.fn(),
+  mockFindRelationshipById: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -33,6 +39,12 @@ vi.mock('@balo/db', () => ({
   },
   caseEngagementsRepository: { findByEngagementId: mockFindByEngagementId },
   companiesRepository: { findById: mockFindCompanyById },
+  // BAL-283 — the `request_interaction` resolver's two-hop reads. `engagementsRepository` is
+  // injected but never reached on that arm (its label is relationship-grain); it is mocked
+  // because a vitest factory mock throws on any export the module imports and it omits.
+  engagementsRepository: { findById: mockFindEngagementById },
+  projectRequestsRepository: { findById: mockFindProjectRequestById },
+  requestExpertRelationshipsRepository: { findById: mockFindRelationshipById },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
@@ -779,20 +791,24 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-400 D2
     };
   }
 
-  it('is invoked ONLY for contextType "case"', async () => {
-    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
-    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+  /**
+   * BAL-283 — the three contexts BAL-433 still owns. Pinned as a TABLE rather than one
+   * `project_kickoff` case, because the whole risk of widening the gate is widening it too far:
+   * if a future edit projects one of these with case-shaped facts, this fails immediately.
+   */
+  it.each(['project_kickoff', 'package_session', 'project_discovery'] as const)(
+    'writes NOTHING to a calendar for contextType "%s" (BAL-433 owns these)',
+    async (contextType) => {
+      mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
+      mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
 
-    await bookAndProvisionMeeting(
-      bookInput('project_kickoff', { engagementType: 'project' }),
-      log,
-      {
+      await bookAndProvisionMeeting(bookInput(contextType, { engagementType: 'project' }), log, {
         provisioner: fakeProvisioner(),
-      }
-    );
+      });
 
-    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
-  });
+      expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+    }
+  );
 
   it('resolves the case + company and calls projectBookingToExpertCalendar for contextType "case"', async () => {
     mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
@@ -806,11 +822,29 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-400 D2
         expertProfileId: 'expert_1',
         clientCompanyName: 'Northwind Industrial',
         caseTitle: 'CPQ rollout',
+        // BAL-283 REGRESSION — the case arm's headline noun must stay BAL-400's, byte for
+        // byte, now that it is one of two entries rather than the module's only literal.
+        eventLabel: 'Consultation',
       }),
       log
     );
     const [[calendarInput]] = mockProjectBookingToExpertCalendar.mock.calls;
     expect((calendarInput as { joinUrl: string }).joinUrl).toContain(`/join/m/${MEETING_ID}`);
+  });
+
+  it('⚠ REGRESSION — the case arm reads the case then the company, and nothing else', async () => {
+    // BAL-283 must not have re-routed the `case` two-hop through `resolveContextOwner`: a case
+    // context is engagement-grain and resolves its company from `case_engagements`, not from a
+    // request. If this starts calling the request/relationship finders, the arms have merged.
+    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
+    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+    await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
+
+    expect(mockFindByEngagementId).toHaveBeenCalledWith(CONTEXT_ID);
+    expect(mockFindCompanyById).toHaveBeenCalledWith('company-1');
+    expect(mockFindProjectRequestById).not.toHaveBeenCalled();
+    expect(mockFindRelationshipById).not.toHaveBeenCalled();
   });
 
   it('a throwing projection call does NOT fail the booking', async () => {
@@ -838,6 +872,182 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-400 D2
     await expect(
       bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() })
     ).resolves.toBeDefined();
+    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-283 — RESOLUTION ENTRY TWO. Before this, an intro call blocked the expert's slot INSIDE
+ * Balo (the `consultations` projection) and wrote NOTHING to their Google/Outlook — and because
+ * Balo reads their external free/busy, a colleague could book over it undetected.
+ *
+ * ⚠ `@balo/shared/meetings` IS NOT MOCKED IN THIS FILE, so these exercise the REAL
+ * `resolveContextOwner` two-hop — including its axis rule (the EXPERT comes from the
+ * relationship, the COMPANY from the request). A stubbed resolver would let the two be swapped
+ * and still pass.
+ */
+describe('bookAndProvisionMeeting — the expert calendar projection for an intro call (BAL-283)', () => {
+  const RELATIONSHIP_ID = '66666666-6666-4666-8666-666666666666';
+  const REQUEST_ID = '77777777-7777-4777-8777-777777777777';
+
+  function introCallInput(overrides: Partial<BookAndProvisionInput> = {}): BookAndProvisionInput {
+    return {
+      contextType: 'request_interaction',
+      contextId: RELATIONSHIP_ID,
+      scheduledStart: START,
+      scheduledEnd: END,
+      // A `request_interaction` anchors on no engagement, so it carries no engagement type.
+      engagementType: null,
+      userId: USER_ID,
+      ...overrides,
+    };
+  }
+
+  /** The happy two-hop: relationship → request → company. */
+  function wireLiveGraph(requestTitle: string | null = 'Salesforce CPQ rollout'): void {
+    mockFindRelationshipById.mockResolvedValue({
+      id: RELATIONSHIP_ID,
+      projectRequestId: REQUEST_ID,
+      expertProfileId: 'expert_1',
+    });
+    mockFindProjectRequestById.mockResolvedValue({
+      id: REQUEST_ID,
+      companyId: 'company-9',
+      expertProfileId: 'expert_1',
+      title: requestTitle,
+    });
+    mockFindCompanyById.mockResolvedValue({ id: 'company-9', name: 'Northwind Industrial' });
+  }
+
+  it('projects the intro call with the client COMPANY and an "Intro call" title', async () => {
+    wireLiveGraph();
+
+    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
+
+    expect(mockProjectBookingToExpertCalendar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        expertProfileId: 'expert_1',
+        // ADR-1044 §4 — the expert's event names the client COMPANY, never a person.
+        clientCompanyName: 'Northwind Industrial',
+        // The headline noun, which is what makes the event read as an intro call rather than
+        // as a "Consultation" the expert has not agreed to deliver.
+        eventLabel: 'Intro call',
+        // The subject line is the project request's own title (load-recap resolves this exact
+        // context the same way).
+        caseTitle: 'Salesforce CPQ rollout',
+      }),
+      log
+    );
+    const [[calendarInput]] = mockProjectBookingToExpertCalendar.mock.calls;
+    expect((calendarInput as { joinUrl: string }).joinUrl).toContain(`/join/m/${MEETING_ID}`);
+  });
+
+  it('reads the company from the REQUEST, one hop past the relationship', async () => {
+    wireLiveGraph();
+
+    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
+
+    expect(mockFindRelationshipById).toHaveBeenCalledWith(RELATIONSHIP_ID);
+    expect(mockFindProjectRequestById).toHaveBeenCalledWith(REQUEST_ID);
+    expect(mockFindCompanyById).toHaveBeenCalledWith('company-9');
+    // The relationship names no company, so the case reader must never be consulted here.
+    expect(mockFindByEngagementId).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the "Intro call" label when the request title is blank', async () => {
+    wireLiveGraph('   ');
+
+    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
+
+    expect(mockProjectBookingToExpertCalendar).toHaveBeenCalledWith(
+      expect.objectContaining({ caseTitle: 'Intro call' }),
+      log
+    );
+  });
+
+  it('⚠ carries NO attendees — comms stay in Balo (ADR-1044 §4 / BAL-433 Ruling 2)', async () => {
+    wireLiveGraph();
+
+    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
+
+    const [[calendarInput]] = mockProjectBookingToExpertCalendar.mock.calls;
+    expect(calendarInput).not.toHaveProperty('attendees');
+    expect(calendarInput).not.toHaveProperty('generateMeetingUrlProvider');
+  });
+
+  it.each([
+    ['relationship', () => mockFindRelationshipById.mockResolvedValue(undefined)],
+    ['request', () => mockFindProjectRequestById.mockResolvedValue(undefined)],
+    ['company', () => mockFindCompanyById.mockResolvedValue(undefined)],
+  ])('skips silently (no throw) when the %s row is missing', async (_label, breakRow) => {
+    wireLiveGraph();
+    breakRow();
+
+    await expect(
+      bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() })
+    ).resolves.toBeDefined();
+    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+  });
+
+  it('never throws, and never undoes the booking, when a read rejects', async () => {
+    // The booking has ALREADY COMMITTED by the time the projection runs (D2c) — a repository
+    // wobble here must degrade to a logged no-op, never to a rejected promise.
+    wireLiveGraph();
+    mockFindRelationshipById.mockRejectedValue(new Error('db unavailable'));
+
+    const result = await bookAndProvisionMeeting(introCallInput(), log, {
+      provisioner: fakeProvisioner(),
+    });
+
+    expect(result.meeting.id).toBe(MEETING_ID);
+    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, relationshipId: RELATIONSHIP_ID }),
+      'Failed to resolve request/company for the expert calendar projection'
+    );
+  });
+
+  it('skips the projection when the booking resolved no expertProfileId', async () => {
+    wireLiveGraph();
+    mockBookMeeting.mockResolvedValue({
+      meeting: unstampedMeeting(),
+      contexts: [],
+      expertProfileId: null,
+    });
+
+    await expect(
+      bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() })
+    ).resolves.toBeDefined();
+    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+  });
+
+  it('⚠ does NOT project on the idempotent REPLAY path', async () => {
+    // Re-running the projection would call `events.create` a SECOND time and, per apiroc skill
+    // §M1, could strand a first vendor event rather than re-stamping Balo's own row. The replay
+    // goes through `provisionMeeting`, which never reaches the projection at all.
+    wireLiveGraph();
+    const stamped = {
+      ...unstampedMeeting(),
+      dailyRoomName: ROOM_NAME,
+      joinUrl: JOIN_URL,
+      scheduledStart: START,
+      scheduledEnd: END,
+    };
+    mockFindByBookingIdempotencyKey.mockResolvedValue(stamped);
+    mockFindWithContexts.mockResolvedValue({
+      contexts: [{ contextType: 'request_interaction', contextId: RELATIONSHIP_ID }],
+    });
+    mockFindById.mockResolvedValue(stamped);
+
+    const result = await bookAndProvisionMeeting(
+      introCallInput({ bookingIdempotencyKey: 'key-intro-1' }),
+      log,
+      { provisioner: fakeProvisioner() }
+    );
+
+    expect(result.meeting.id).toBe(MEETING_ID);
+    expect(mockBookMeeting).not.toHaveBeenCalled();
     expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
   });
 });

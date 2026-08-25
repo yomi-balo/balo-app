@@ -101,9 +101,10 @@ export interface MeetingServerEventMap {
     /**
      * The PRIMARY context's type (the D3 precedence winner) — the SIX HOLDER-BEARING labels.
      *
-     * ⚠ WIDER than `MeetingBookingContextType` on purpose: a meeting is BOOKED under four
-     * labels but JOINED under any context that resolves, which includes `request_interaction`
-     * and `retainer_checkin`.
+     * ⚠ WIDER than `MeetingBookingContextType` on purpose: a meeting is BOOKED under FIVE
+     * labels — which now INCLUDES `request_interaction` (BAL-283 widened
+     * `BOOKABLE_CONTEXT_TYPES`) — but JOINED under any context that resolves, which adds
+     * `retainer_checkin`.
      *
      * ⚠⚠ AND NARROWER THAN `MeetingContextTypeLabel` — `admin` IS STRUCTURALLY UNREACHABLE
      * HERE, so declaring it invited a consumer to write a branch that can never run. The sole

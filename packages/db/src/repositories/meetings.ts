@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNull, notInArray } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, ne, notInArray } from 'drizzle-orm';
 import {
   assertMeetingTransition,
   RESCHEDULABLE_MEETING_STATUSES,
@@ -228,6 +228,23 @@ export interface MeetingWithContexts {
 }
 
 /**
+ * BAL-283 — ONE row of {@link meetingsRepository.listActiveMeetingsForContexts}: the minimum a
+ * conversation surface needs to say "a call is booked on this thread, at this time".
+ *
+ * ⚠ DELIBERATELY NOT A `Meeting`. `meetings` carries `join_url` and `daily_room_name`, which
+ * are call-JOIN CREDENTIALS (`schema/meeting-contexts.ts`'s tenancy obligation, consequence 1)
+ * — and this read is fed a LIST of context ids from a page loader, so the blast radius of one
+ * mis-scoped id is a whole request's worth of threads rather than one. A projection that
+ * cannot carry a credential cannot leak one.
+ */
+export interface ContextMeetingSummary {
+  meetingId: string;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+  status: MeetingStatus;
+}
+
+/**
  * The return shape of EVERY mutator that can move an expert's availability (BAL-428).
  *
  * ⚠ `expertProfileId` IS PART OF THE RETURN TYPE ON PURPOSE, and the caller's obligation is
@@ -357,10 +374,11 @@ export const meetingsRepository = {
    * THE EXPERT IS RESOLVED HERE, AT WRITE TIME, from the contexts (see
    * `_shared/consultation-projection.ts`). A booking that cannot name exactly one expert
    * throws — `MeetingExpertAmbiguousError`, `MatchModeDiscoveryNotBookableError`,
-   * `MeetingContextUnresolvableError` or `MeetingContextNotProjectableError` (a label with
-   * no projection rule yet, i.e. `request_interaction`) — and the WHOLE meeting rolls
-   * back. An admin-only meeting resolves to `null`, writes no projection row, and blocks
-   * nobody.
+   * `MeetingContextUnresolvableError` or `MeetingContextNotProjectableError` (⚠ BAL-283: no
+   * longer `request_interaction`, which now projects through
+   * `request_expert_relationships.expert_profile_id`; every SHIPPED label has an arm, so that
+   * last error is now the generic 8th-label defence) — and the WHOLE meeting rolls back. An
+   * admin-only meeting resolves to `null`, writes no projection row, and blocks nobody.
    *
    * `scheduledStart < scheduledEnd` is re-asserted in-process, MIRRORING `updateSchedule`,
    * so the SAME invariant surfaces as the SAME typed error from BOTH entry points rather
@@ -503,6 +521,86 @@ export const meetingsRepository = {
       .from(meetingContexts)
       .where(and(eq(meetingContexts.meetingId, meeting.id), isNull(meetingContexts.deletedAt)));
     return { meeting, contexts };
+  },
+
+  /**
+   * BAL-283 — THE BATCHED "is a call booked on this context?" READ. One query for a WHOLE
+   * page's worth of context ids; never one per id.
+   *
+   * Its first caller is the project-request conversation loader, which derives one
+   * `bookedCall` per thread and must not go N+1 over a request's relationships — the same
+   * batching posture as `conversationsRepository.latestMessagesForRelationships` and
+   * `meetingContextsRepository.consultationTimestampsForEngagements`.
+   *
+   * FILTERS, all three load-bearing: live context rows, live meetings, and
+   * `status <> 'cancelled'` — a cancelled meeting has released the slot
+   * (`consultationStatusForMeeting`), so a surface that hid its "book a call" CTA on the
+   * strength of one would strand the thread with no way to rebook.
+   *
+   * ⚠ THE PICK IS THE CALLER'S, NOT THIS METHOD'S. A thread can legitimately hold more than
+   * one call over its life (an intro call that ended, then a second one booked), so this
+   * returns EVERY live non-cancelled meeting per context, ordered `scheduled_start` then `id`
+   * — deterministic, and never silently truncated. "Which of these is THE booked call" is a
+   * display rule and belongs where the display lives. An entry is returned for EVERY
+   * requested id (an empty array when none), so a caller never has to distinguish "absent"
+   * from "none". An empty input returns an empty Map WITHOUT touching the DB.
+   *
+   * ⚠⚠ RESOLVES NO AUTHORIZATION, AND IS FED UNVALIDATED IDS. `meeting_contexts.context_id`
+   * has NO FK and NO RLS, so a context id belonging to another tenant does not fail — it
+   * returns that tenant's meetings. The caller MUST already have established the viewer's
+   * right to every id it passes (for the conversation loader, `resolveRequestLens` runs
+   * first). See the tenancy obligation on `schema/meeting-contexts.ts`; this method is a
+   * display projection and is not a substitute for it.
+   */
+  async listActiveMeetingsForContexts(input: {
+    contextType: MeetingContextType;
+    contextIds: readonly string[];
+  }): Promise<Map<string, ContextMeetingSummary[]>> {
+    const byContext = new Map<string, ContextMeetingSummary[]>();
+    for (const contextId of input.contextIds) {
+      byContext.set(contextId, []);
+    }
+    if (byContext.size === 0) {
+      return byContext;
+    }
+
+    const rows = await db
+      .select({
+        contextId: meetingContexts.contextId,
+        meetingId: meetings.id,
+        scheduledStart: meetings.scheduledStart,
+        scheduledEnd: meetings.scheduledEnd,
+        status: meetings.status,
+      })
+      .from(meetingContexts)
+      .innerJoin(meetings, eq(meetings.id, meetingContexts.meetingId))
+      .where(
+        and(
+          eq(meetingContexts.contextType, input.contextType),
+          inArray(meetingContexts.contextId, [...byContext.keys()]),
+          isNull(meetingContexts.deletedAt),
+          isNull(meetings.deletedAt),
+          ne(meetings.status, 'cancelled')
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id));
+
+    for (const row of rows) {
+      // Unreachable for every non-`admin` label (the `meeting_context_admin_no_id`
+      // biconditional CHECK), and `admin` ids can never match an `inArray` of uuids — but
+      // `context_id` is typed nullable, so this is a narrowing guard, not a `!`.
+      const bucket = row.contextId === null ? undefined : byContext.get(row.contextId);
+      if (bucket === undefined) {
+        continue;
+      }
+      bucket.push({
+        meetingId: row.meetingId,
+        scheduledStart: row.scheduledStart,
+        scheduledEnd: row.scheduledEnd,
+        status: row.status,
+      });
+    }
+    return byContext;
   },
 
   /**

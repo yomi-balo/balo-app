@@ -60,8 +60,14 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-fi
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download', () => ({
   getConversationFileDownloadAction: vi.fn(),
 }));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-call', () => ({
-  requestConversationCallAction: vi.fn(),
+// BAL-283 — the two real booking actions. Mocked at the MODULE level (not just their exports
+// exercised) so their `@balo/db` / auth transitive imports never load in this shell-composition
+// test, mirroring every other action mock in this file.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/share-availability', () => ({
+  shareAvailabilityAction: vi.fn(),
+}));
+vi.mock('@/lib/booking/actions/book-intro-call', () => ({
+  bookIntroCallAction: vi.fn(),
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal', () => ({
   requestProposalAction: vi.fn(),

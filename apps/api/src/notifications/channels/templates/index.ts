@@ -1,5 +1,6 @@
 import React from 'react';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
+import { personWithOrgLabel } from '@balo/shared/parties';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
@@ -93,6 +94,13 @@ import {
   rescheduleProposalSentSubject,
   rescheduleProposalDeclinedSubject,
 } from './reschedule-proposal.js';
+import {
+  AvailabilitySharedClientEmail,
+  IntroCallBookedClientEmail,
+  IntroCallBookedExpertEmail,
+  availabilitySharedSubject,
+  introCallBookedSubject,
+} from './intro-call-emails.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -1710,6 +1718,85 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: rescheduleProposalDeclinedSubject(declinedBy),
+    };
+  },
+
+  // BAL-283 (Ruling 3) — the expert shared availability on a project-request thread. Links the
+  // CONVERSATION, never a raw booking deep link (one entry point into the dialog). Retrospective
+  // copy names the PERSON with "@ party" on first mention (CLAUDE.md).
+  //
+  // ⚠ NO `'their agency'` PLACEHOLDER (round-1 W2) — the same rule this file already states at
+  // the BAL-409 arm above: an unsubstituted-looking stand-in reads worse than the bare name it
+  // was trying to improve on. The honest fallback for a missing party label is the PERSON'S OWN
+  // NAME, which is also exactly what `personWithOrgLabel` collapses to.
+  'availability-shared-client': (data) => {
+    const expertPersonName = (data.expertPersonName as string) ?? 'An expert';
+    const expertPartyLabel = (data.expertPartyLabel as string) ?? expertPersonName;
+    const requestId = (data.requestId as string) ?? '';
+    return {
+      component: React.createElement(AvailabilitySharedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        expertPersonName,
+        expertPartyLabel,
+        requestTitle: (data.requestTitle as string) ?? 'your request',
+        requestUrl: `${BASE_URL}/projects/${requestId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: availabilitySharedSubject(expertPersonName, expertPartyLabel),
+    };
+  },
+
+  // BAL-283 — the CLIENT half of `conversation.intro_call_booked`. No money field to leak
+  // (Ruling 2); no calendar claim (only the join link, gated on `provisioned`).
+  'intro-call-booked-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const requestId = (data.requestId as string) ?? '';
+    const joinPath = (data.joinPath as string) ?? '';
+    return {
+      component: React.createElement(IntroCallBookedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: expertParty,
+        requestTitle: (data.requestTitle as string) ?? 'your request',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        guestCount: numberCount(data.guestCount),
+        provisioned: data.provisioned === true,
+        joinUrl: `${BASE_URL}${joinPath}`,
+        requestUrl: `${BASE_URL}/projects/${requestId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: introCallBookedSubject('client', expertParty),
+    };
+  },
+
+  // BAL-283 — the EXPERT half of the same event.
+  //
+  // ⚠ RETROSPECTIVE, SO IT NAMES THE PERSON "@ company" ON FIRST MENTION (round-1 MAJOR UX,
+  // CLAUDE.md). A completed action reported after the fact is retrospective, not prospective —
+  // the earlier "prospective" reading here was simply wrong. Its mirror
+  // `availability-shared-client` already names the person; carrying only the company told the
+  // expert *that* someone from Northwind booked but never *who*, while the client was told
+  // exactly which named person acted. `personWithOrgLabel` (not a hand-concatenation) so a
+  // client with no company label on file degrades to the bare person name.
+  'intro-call-booked-expert': (data) => {
+    const clientPerson = (data.clientPersonName as string) ?? 'A client';
+    const clientCompany = personWithOrgLabel(clientPerson, data.clientCompanyName as string);
+    const requestId = (data.requestId as string) ?? '';
+    const joinPath = (data.joinPath as string) ?? '';
+    return {
+      component: React.createElement(IntroCallBookedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: clientCompany,
+        requestTitle: (data.requestTitle as string) ?? 'the request',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        guestCount: numberCount(data.guestCount),
+        provisioned: data.provisioned === true,
+        joinUrl: `${BASE_URL}${joinPath}`,
+        requestUrl: `${BASE_URL}/projects/${requestId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: introCallBookedSubject('expert', clientCompany),
     };
   },
 

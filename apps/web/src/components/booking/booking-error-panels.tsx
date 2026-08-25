@@ -3,24 +3,45 @@
 import { AlertCircle, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
+export interface HardFailurePanelProps {
+  onRetry: () => void;
+  /** Defaults to the BAL-400 case-booking headline. */
+  title?: string;
+  /**
+   * BAL-283 (round-1 W8) — overridable because the default body says "Nothing was charged",
+   * which is MONEY FRAMING on a free intro call (Ruling 2) AND a non-sequitur there: nothing
+   * could have been charged, so reassuring the user about it invents a concern. The design
+   * assumed this panel carried no money copy; it did.
+   */
+  body?: string;
+  /**
+   * BAL-283 (round-1 W9) — suppress the retry affordance for a failure that retrying CANNOT
+   * fix (`not_permitted`). Offering "Try again" there is a dead end that fails identically.
+   */
+  hideRetry?: boolean;
+}
+
 /** Hard failure — nothing created yet. Standard destructive treatment. */
 export function HardFailurePanel({
   onRetry,
-}: Readonly<{ onRetry: () => void }>): React.JSX.Element {
+  title = 'Something went wrong',
+  body = "We couldn't start your booking. Nothing was charged.",
+  hideRetry = false,
+}: Readonly<HardFailurePanelProps>): React.JSX.Element {
   return (
     <div className="flex flex-col items-center gap-4 px-6 py-12 text-center">
       <span className="bg-destructive/10 flex h-14 w-14 items-center justify-center rounded-xl">
         <AlertCircle className="text-destructive h-6 w-6" aria-hidden="true" />
       </span>
       <div className="max-w-[320px] space-y-1.5">
-        <h2 className="text-foreground text-lg font-semibold">Something went wrong</h2>
-        <p className="text-muted-foreground text-sm leading-relaxed">
-          We couldn&apos;t start your booking. Nothing was charged.
-        </p>
+        <h2 className="text-foreground text-lg font-semibold">{title}</h2>
+        <p className="text-muted-foreground text-sm leading-relaxed">{body}</p>
       </div>
-      <Button variant="outline" onClick={onRetry}>
-        Try again
-      </Button>
+      {hideRetry ? null : (
+        <Button variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      )}
     </div>
   );
 }

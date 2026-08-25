@@ -35,7 +35,7 @@ vi.mock('@balo/db', () => ({
   partyMembershipsRepository: { getMemberRole: (...a: unknown[]) => mockGetMemberRole(...a) },
 }));
 
-import { hasEngagementCapability } from './engagement';
+import { hasEngagementCapability, hasExpertDeliveryCapability } from './engagement';
 import { log } from '@/lib/logging';
 
 const SUBJECT = { contextType: 'case', contextId: ENGAGEMENT_ID } as const;
@@ -207,5 +207,97 @@ describe('hasEngagementCapability — one path for both tokens', () => {
       true
     );
     expect(await hasEngagementCapability({ id: COLLEAGUE_ID }, HOST_MEETINGS, SUBJECT)).toBe(true);
+  });
+});
+
+/**
+ * BAL-283 — `hasExpertDeliveryCapability`: the SAME rule asked of an already-resolved
+ * `expert_profiles.id`, for a caller whose subject is not an `engagements.id`
+ * (`shareAvailabilityAction`, on a `request_expert_relationships` row).
+ *
+ * ⚠⚠ THE POINT OF THIS BLOCK IS THAT THE HOLDER SET IS **IDENTICAL**. It is not a second
+ * resolver — `hasEngagementCapability` calls it — and ADR-1046 allows exactly one per app. A
+ * change that made these two disagree is the regression these tests exist to catch, so the
+ * matrix below is deliberately the same matrix as "who holds it" above, asked the other way in.
+ */
+describe('hasExpertDeliveryCapability — the identical holder set, one hop earlier', () => {
+  const LOG_CONTEXT = { contextType: 'request_interaction', contextId: 'rel-1' };
+
+  it.each([
+    ['the delivering expert', EXPERT_USER_ID, undefined, true],
+    ['an agency OWNER', COLLEAGUE_ID, 'owner', true],
+    ['an agency ADMIN', COLLEAGUE_ID, 'admin', true],
+    // ⚠ Agency role `expert` is REFUSED on the ACT axis and ADMITTED on the VISIBILITY axis
+    // (ADR-1046 §7). Do not "align" them.
+    ['an agency `expert` colleague', COLLEAGUE_ID, 'expert', false],
+    ['a total stranger', COLLEAGUE_ID, undefined, false],
+  ])('%s → %s', async (_label, actorId, agencyRole, expected) => {
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: AGENCY_ID });
+    mockGetMemberRole.mockResolvedValue(agencyRole);
+
+    expect(
+      await hasExpertDeliveryCapability(
+        { id: actorId as string },
+        MANAGE_ENGAGEMENT,
+        PROFILE_ID,
+        LOG_CONTEXT
+      )
+    ).toBe(expected);
+  });
+
+  it('an INDEPENDENT delivering expert short-circuits with NO agency lookup at all', async () => {
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
+
+    expect(
+      await hasExpertDeliveryCapability(
+        { id: EXPERT_USER_ID },
+        MANAGE_ENGAGEMENT,
+        PROFILE_ID,
+        LOG_CONTEXT
+      )
+    ).toBe(true);
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('NEVER reads engagements — the caller has no engagement to read', async () => {
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: null });
+    await hasExpertDeliveryCapability(
+      { id: EXPERT_USER_ID },
+      MANAGE_ENGAGEMENT,
+      PROFILE_ID,
+      LOG_CONTEXT
+    );
+    expect(mockFindEngagement).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED when the expert profile is missing, and logs ids only', async () => {
+    mockFindProfile.mockResolvedValue(undefined);
+
+    expect(
+      await hasExpertDeliveryCapability(
+        { id: EXPERT_USER_ID },
+        MANAGE_ENGAGEMENT,
+        PROFILE_ID,
+        LOG_CONTEXT
+      )
+    ).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(expect.any(String), {
+      contextType: 'request_interaction',
+      contextId: 'rel-1',
+      actorId: EXPERT_USER_ID,
+      expertProfileId: PROFILE_ID,
+    });
+  });
+
+  it('passes the ACTOR being authorized to the agency lookup, never a captured id', async () => {
+    mockFindProfile.mockResolvedValue({ userId: EXPERT_USER_ID, agencyId: AGENCY_ID });
+    mockGetMemberRole.mockResolvedValue('owner');
+    await hasExpertDeliveryCapability(
+      { id: COLLEAGUE_ID },
+      MANAGE_ENGAGEMENT,
+      PROFILE_ID,
+      LOG_CONTEXT
+    );
+    expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, COLLEAGUE_ID);
   });
 });

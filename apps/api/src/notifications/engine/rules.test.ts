@@ -1158,4 +1158,137 @@ describe('notificationRules', () => {
       ]);
     });
   });
+
+  describe('BAL-283 conversation call-CTA events', () => {
+    it('conversation.availability_shared: client email + in-app, both gated on the 24h window', () => {
+      const rules = notificationRules['conversation.availability_shared'] ?? [];
+      expect(rules).toHaveLength(2);
+      expect(rules.every((r) => r.recipient === 'client')).toBe(true);
+      expect(rules.every((r) => r.template === 'availability-shared-client')).toBe(true);
+      expect(rules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      expect(rules.every((r) => r.condition !== undefined)).toBe(true);
+    });
+
+    it('the 24h re-notify condition: null previous fires, elapsed fires, not-yet-elapsed does not', () => {
+      const rules = notificationRules['conversation.availability_shared'] ?? [];
+      const condition = rules[0]?.condition;
+      expect(condition).toBeDefined();
+      const base = { event: 'conversation.availability_shared', data: {} };
+
+      // First share — no previous instant.
+      expect(
+        condition!({
+          ...base,
+          payload: { sharedAtIso: '2026-08-25T00:00:00.000Z', previousSharedAtIso: null },
+        })
+      ).toBe(true);
+
+      // Exactly 24h — fires (>=).
+      expect(
+        condition!({
+          ...base,
+          payload: {
+            sharedAtIso: '2026-08-25T00:00:00.000Z',
+            previousSharedAtIso: '2026-08-24T00:00:00.000Z',
+          },
+        })
+      ).toBe(true);
+
+      // 23h59m — does not fire.
+      expect(
+        condition!({
+          ...base,
+          payload: {
+            sharedAtIso: '2026-08-25T00:00:00.000Z',
+            previousSharedAtIso: '2026-08-24T00:01:00.000Z',
+          },
+        })
+      ).toBe(false);
+
+      // Unparseable — fails OPEN (fires).
+      expect(
+        condition!({
+          ...base,
+          payload: { sharedAtIso: '2026-08-25T00:00:00.000Z', previousSharedAtIso: 'not-a-date' },
+        })
+      ).toBe(true);
+    });
+
+    /**
+     * ⚠ TUPLES, NOT SETS (round-1 W6). The original assertions checked that every rule's
+     * recipient was one of {client, expert} and every template one of {client, expert} —
+     * INDEPENDENTLY. That would have passed with the recipients and templates CROSSED, mailing
+     * the client the expert's copy and vice versa. The (channel, recipient, template) triple is
+     * the only thing that actually pins the fan-out.
+     */
+    it('conversation.intro_call_booked: the four (channel, recipient, template) triples, PAIRED', () => {
+      const rules = notificationRules['conversation.intro_call_booked'] ?? [];
+      expect(
+        rules.map((r) => ({ channel: r.channel, recipient: r.recipient, template: r.template }))
+      ).toEqual([
+        { channel: 'email', recipient: 'client', template: 'intro-call-booked-client' },
+        { channel: 'in-app', recipient: 'client', template: 'intro-call-booked-client' },
+        { channel: 'email', recipient: 'expert', template: 'intro-call-booked-expert' },
+        { channel: 'in-app', recipient: 'expert', template: 'intro-call-booked-expert' },
+      ]);
+      // No SMS, no admin fan-out — an intro call is not the ~2h-reminder-worthy commitment a
+      // reschedule proposal is.
+      expect(rules.some((r) => r.channel === 'sms')).toBe(false);
+      expect(rules.some((r) => r.recipient === 'party_admins')).toBe(false);
+      // Booking is unconditional — the 24h window belongs to the SHARE event only.
+      expect(rules.every((r) => r.condition === undefined)).toBe(true);
+    });
+
+    it('conversation.availability_shared: both arms carry the SAME condition instance', () => {
+      const rules = notificationRules['conversation.availability_shared'] ?? [];
+      // ⚠ IDENTITY, not "both are defined" (round-1 W6). If the email arm were gated and the
+      // in-app arm were not — or the two used different predicates — the boundary table above
+      // would still pass while a re-share silently produced an in-app row every 61 seconds.
+      expect(rules[0]?.condition).toBe(rules[1]?.condition);
+      expect(
+        rules.map((r) => ({ channel: r.channel, recipient: r.recipient, template: r.template }))
+      ).toEqual([
+        { channel: 'email', recipient: 'client', template: 'availability-shared-client' },
+        { channel: 'in-app', recipient: 'client', template: 'availability-shared-client' },
+      ]);
+    });
+
+    /**
+     * ⚠ THE DOCUMENTED TRADEOFF, PINNED AS BEHAVIOUR (round-1 LOW). The window is measured from
+     * the last *SHARE*, not the last successful *SEND*, and `stampAvailabilityShared` advances
+     * the anchor whether or not delivery happened. So an expert who clicks "Share again" every
+     * 23 hours NEVER re-notifies the client, forever. That is an availability-of-notification
+     * tradeoff the rule's own docblock accepts (and the reason the expert's toast is worded to
+     * never claim the client was emailed) — this test exists so it can never become an
+     * accidental regression that nobody notices.
+     */
+    it('a 23h re-share loop never re-notifies — the accepted last-SHARE tradeoff', () => {
+      const rules = notificationRules['conversation.availability_shared'] ?? [];
+      const condition = rules[0]?.condition;
+      expect(condition).toBeDefined();
+
+      const TWENTY_THREE_HOURS_MS = 23 * 60 * 60 * 1000;
+      let previous = Date.parse('2026-08-25T00:00:00.000Z');
+      const fired: boolean[] = [];
+      for (let click = 0; click < 5; click++) {
+        const sharedAt = previous + TWENTY_THREE_HOURS_MS;
+        fired.push(
+          condition!({
+            event: 'conversation.availability_shared',
+            data: {},
+            payload: {
+              sharedAtIso: new Date(sharedAt).toISOString(),
+              previousSharedAtIso: new Date(previous).toISOString(),
+            },
+          })
+        );
+        // The stamp advances on EVERY click, delivered or not — that is the whole tradeoff.
+        previous = sharedAt;
+      }
+      expect(fired).toEqual([false, false, false, false, false]);
+    });
+  });
 });

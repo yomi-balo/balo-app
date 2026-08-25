@@ -2,6 +2,7 @@ import { formatAudMinor, formatExpiryDateShort } from './credit-format.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
+import { personWithOrgLabel } from '@balo/shared/parties';
 
 interface InAppOutput {
   title: string;
@@ -258,6 +259,55 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       title: 'A time suggestion is waiting',
       body: `${expertParty}'s suggested times are still open — pick one, or keep your original booking.`,
       actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-283 (Ruling 3) — the expert shared availability on a project-request thread.
+  // Retrospective copy names the PERSON with "@ party" on first mention (CLAUDE.md). Deep-links
+  // the CONVERSATION, never a raw booking deep link — one entry point into the dialog.
+  //
+  // ⚠ `personWithOrgLabel`, NEVER `` `${person} @ ${party}` `` (round-1 W1): for an INDEPENDENT
+  // expert the party label IS the person's own name, and the hand-concatenation rendered
+  // "Dana Okoro @ Dana Okoro". ⚠ AND NO `'their agency'` PLACEHOLDER (round-1 W2) — this file's
+  // sibling `templates/index.ts` carries the standing warning against exactly that string; the
+  // honest fallback for a missing party label is the person's own name.
+  'availability-shared-client': (data) => {
+    const expertPersonName = (data.expertPersonName as string) ?? 'An expert';
+    const expertPartyLabel = (data.expertPartyLabel as string) ?? expertPersonName;
+    const requestId = data.requestId as string | undefined;
+    return {
+      title: 'An expert is ready to talk',
+      body: `${personWithOrgLabel(expertPersonName, expertPartyLabel)} shared their availability — pick a time.`,
+      actionUrl: requestId ? `/projects/${requestId}` : undefined,
+    };
+  },
+
+  // BAL-283 — the CLIENT half of `conversation.intro_call_booked`. Names the expert PARTY,
+  // matching `booking-confirmed-client`'s posture (the client already knows who they booked —
+  // the party is the useful identifier). No money field to leak.
+  'intro-call-booked-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'your expert';
+    const requestId = data.requestId as string | undefined;
+    return {
+      title: 'Intro call confirmed',
+      body: `Your intro call with ${expertParty} is confirmed.`,
+      actionUrl: requestId ? `/projects/${requestId}` : undefined,
+    };
+  },
+
+  // BAL-283 — the EXPERT half of the same event.
+  //
+  // ⚠ RETROSPECTIVE, NOT PROSPECTIVE (round-1 MAJOR UX). A completed action reported after the
+  // fact is retrospective, so it names the PERSON "@ company" on first mention (CLAUDE.md) —
+  // the earlier comment here mislabelled "booked" as prospective and the copy followed it,
+  // telling the expert only *that* someone from the company booked, never *who*.
+  'intro-call-booked-expert': (data) => {
+    const clientPerson = (data.clientPersonName as string) ?? 'A client';
+    const requestId = data.requestId as string | undefined;
+    return {
+      title: 'New intro call booked',
+      body: `${personWithOrgLabel(clientPerson, data.clientCompanyName as string)} booked an intro call with you.`,
+      actionUrl: requestId ? `/projects/${requestId}` : undefined,
     };
   },
 

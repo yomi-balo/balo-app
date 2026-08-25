@@ -208,12 +208,24 @@ export const projectRequestsRepository = {
           where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
           // `updatedAt` feeds the pipeline-health "last activity" derivation
           // alongside the latest live EOI/message timestamps below.
+          //
+          // ⚠ BAL-283 widened this by EXACTLY ONE column, `availabilitySharedAt`, and
+          // deliberately NOT by `declinedAt`/`deletedAt`. This is the RENDER-PATH view-model
+          // behind every conversation read (thread list, header, nudge, files panel), so a
+          // column earns its place here only if the RENDER needs it: the "Availability
+          // shared" pill and the thread nudge are render-path consumers, which
+          // `declinedAt`/`deletedAt` are not — they are needed by exactly two MUTATIONS, and
+          // a mutation must re-read the row it is about to act on rather than trust a
+          // render-path projection read earlier in the request. Adding them here would also
+          // half-enable `relationshipDeniesHosting`, which requires BOTH `status` and
+          // `declinedAt` on purpose so it fails CLOSED when the two disagree.
           columns: {
             id: true,
             expertProfileId: true,
             status: true,
             invitedAt: true,
             updatedAt: true,
+            availabilitySharedAt: true,
           },
           with: {
             // ⚠ BAL-422 widened this allow-list by exactly TWO DISPLAY columns

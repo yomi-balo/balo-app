@@ -275,6 +275,62 @@ export const requestExpertRelationshipsRepository = {
   },
 
   /**
+   * BAL-283 (Ruling 3) — stamp "the expert shared availability on this thread, NOW", and
+   * report what the column said BEFORE. Returns `undefined` when there is no live row
+   * (missing, or soft-deleted = the expert was removed from the invite list).
+   *
+   * BOTH HALVES OF THE RETURN MATTER. `previousSharedAt` is the ONLY input to the flat 24h
+   * re-notify window the notification rule applies (the engine has no cooldown primitive and
+   * no last-sent store, so the state has to come from here), and it is what `is_reshare` is
+   * derived from. `null` ⇒ this was the first share.
+   *
+   * ⚠ ONE TRANSACTION WITH `FOR UPDATE`, NOT TWO STATEMENTS. Two tabs clicking "Share again"
+   * a second apart must not BOTH read `previousSharedAt: null` and both be judged a first
+   * share — that is precisely the double-email the throttle exists to prevent. Drizzle cannot
+   * express `UPDATE … RETURNING old.col`, so the lock is what makes the read-then-write
+   * atomic. `.for('update')` mirrors `projectRequestsRepository.transitionStatus`.
+   *
+   * ⚠ THIS IS A PURE STAMP: no status transition, no rollup, no notification. Sharing
+   * availability is not a lifecycle event — the relationship stays exactly where it was, and
+   * the client picking a slot later runs the ordinary `request_interaction` booking path.
+   * Publishing the domain event is the caller's (feature code publishes; the engine delivers).
+   */
+  async stampAvailabilityShared(
+    id: string
+  ): Promise<{ previousSharedAt: Date | null; sharedAt: Date } | undefined> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ availabilitySharedAt: requestExpertRelationships.availabilitySharedAt })
+        .from(requestExpertRelationships)
+        .where(
+          and(eq(requestExpertRelationships.id, id), isNull(requestExpertRelationships.deletedAt))
+        )
+        .for('update');
+
+      if (current === undefined) {
+        return undefined;
+      }
+
+      const now = new Date();
+      const [updated] = await tx
+        .update(requestExpertRelationships)
+        .set({ availabilitySharedAt: now, updatedAt: now })
+        .where(eq(requestExpertRelationships.id, id))
+        .returning({ availabilitySharedAt: requestExpertRelationships.availabilitySharedAt });
+
+      // Read the PERSISTED instant back rather than trusting `now`: the caller puts this
+      // value in a notification payload and in the `correlationId` that keys BullMQ's dedup,
+      // so it must be the value a later read of this row will agree with.
+      const sharedAt = updated?.availabilitySharedAt;
+      if (sharedAt === undefined || sharedAt === null) {
+        throw new Error(`Failed to stamp availability_shared_at on relationship: ${id}`);
+      }
+
+      return { previousSharedAt: current.availabilitySharedAt, sharedAt };
+    });
+  },
+
+  /**
    * Advance a single relationship's per-expert status with validation against
    * `RELATIONSHIP_STATUS_TRANSITIONS`. Sets `declinedAt` when `to='declined'`
    * and `proposalRequestedAt` when `to='proposal_requested'`. Optional

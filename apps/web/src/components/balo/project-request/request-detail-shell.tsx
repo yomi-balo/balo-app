@@ -50,6 +50,12 @@ interface RequestDetailShellProps {
    * exists.
    */
   deliveryEngagementId?: string | null;
+  /**
+   * BAL-283 (D12) — the VIEWER's OWN email domain (never a counterparty's — ADR-1044 is not
+   * engaged), resolved by the page from the session user's email. Threaded to
+   * `ConversationStage` for the intro-call dialog's guest composer disclosure.
+   */
+  viewerEmailDomain?: string | null;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -153,6 +159,7 @@ export function RequestDetailShell({
   adminBilling = null,
   billingCapture = null,
   deliveryEngagementId = null,
+  viewerEmailDomain = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
@@ -366,6 +373,9 @@ export function RequestDetailShell({
                 lens={ctx.lens === 'expert' ? 'expert' : 'client'}
                 requestStatus={view.status}
                 view={conversation ?? EMPTY_CONVERSATION_VIEW}
+                requestTitle={view.title}
+                clientCompanyName={view.companyName}
+                viewerEmailDomain={viewerEmailDomain}
               />
             </div>
             <div className="hidden space-y-5 lg:block">

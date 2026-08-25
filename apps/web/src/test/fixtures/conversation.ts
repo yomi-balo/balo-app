@@ -27,6 +27,8 @@ export function thread(overrides: Partial<ConversationThreadView> = {}): Convers
     fileCount: 0,
     eoiHtml: null,
     eoiSubmittedAtIso: null,
+    availabilitySharedAtIso: null,
+    bookedCall: null,
     ...overrides,
   };
 }

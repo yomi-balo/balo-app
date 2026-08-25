@@ -940,6 +940,122 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  // ── BAL-283 conversation call-CTA in-app templates (round-1 W7) ────────────────────────
+  //
+  // 37 lines of new template code shipped with ZERO tests — an uncovered block under the ≥80%
+  // new-code gate, and the place three separate copy rules (person-with-org attribution, the
+  // independent-expert collapse, and the banned `'their agency'` placeholder) actually land.
+
+  describe('availability-shared-client', () => {
+    it('names the PERSON "@ party" and deep-links the conversation, never a booking deep link', () => {
+      const result = getInAppTemplate('availability-shared-client', {
+        expertPersonName: 'Dana Okoro',
+        expertPartyLabel: 'CloudPeak',
+        requestId: 'request-123',
+      });
+      expect(result).toEqual({
+        title: 'An expert is ready to talk',
+        body: 'Dana Okoro @ CloudPeak shared their availability — pick a time.',
+        actionUrl: '/projects/request-123',
+      });
+    });
+
+    it('an INDEPENDENT expert is named once, never "Dana Okoro @ Dana Okoro"', () => {
+      const result = getInAppTemplate('availability-shared-client', {
+        expertPersonName: 'Dana Okoro',
+        // `expertPartyDisplayName` returns the person's OWN name for an independent expert.
+        expertPartyLabel: 'Dana Okoro',
+        requestId: 'request-123',
+      });
+      expect(result.body).toBe('Dana Okoro shared their availability — pick a time.');
+    });
+
+    it('a missing party label degrades to the bare person name — never "their agency"', () => {
+      const result = getInAppTemplate('availability-shared-client', {
+        expertPersonName: 'Dana Okoro',
+        requestId: 'request-123',
+      });
+      expect(result.body).toBe('Dana Okoro shared their availability — pick a time.');
+      expect(result.body).not.toContain('their agency');
+    });
+
+    it('actionUrl is undefined when requestId is absent', () => {
+      const result = getInAppTemplate('availability-shared-client', {
+        expertPersonName: 'Dana Okoro',
+        expertPartyLabel: 'CloudPeak',
+      });
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('intro-call-booked-client', () => {
+    it('names the expert party and deep-links the conversation', () => {
+      const result = getInAppTemplate('intro-call-booked-client', {
+        expertPartyLabel: 'CloudPeak',
+        requestId: 'request-123',
+      });
+      expect(result).toEqual({
+        title: 'Intro call confirmed',
+        body: 'Your intro call with CloudPeak is confirmed.',
+        actionUrl: '/projects/request-123',
+      });
+    });
+
+    it('carries NO money framing — an intro call is unbilled (Ruling 2)', () => {
+      const result = getInAppTemplate('intro-call-booked-client', {
+        expertPartyLabel: 'CloudPeak',
+        requestId: 'request-123',
+      });
+      expect(`${result.title} ${result.body}`).not.toMatch(/charge|\bpay\b|billed|\bcost\b|\$/i);
+    });
+
+    it('actionUrl is undefined when requestId is absent', () => {
+      const result = getInAppTemplate('intro-call-booked-client', {
+        expertPartyLabel: 'CloudPeak',
+      });
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('intro-call-booked-expert', () => {
+    it('RETROSPECTIVE: names the PERSON "@ company", not just the company', () => {
+      const result = getInAppTemplate('intro-call-booked-expert', {
+        clientPersonName: 'Sam Reilly',
+        clientCompanyName: 'Northwind Industrial',
+        requestId: 'request-123',
+      });
+      expect(result).toEqual({
+        title: 'New intro call booked',
+        body: 'Sam Reilly @ Northwind Industrial booked an intro call with you.',
+        actionUrl: '/projects/request-123',
+      });
+    });
+
+    it('a missing company degrades to the bare person name', () => {
+      const result = getInAppTemplate('intro-call-booked-expert', {
+        clientPersonName: 'Sam Reilly',
+        requestId: 'request-123',
+      });
+      expect(result.body).toBe('Sam Reilly booked an intro call with you.');
+    });
+
+    it('a missing person name degrades to "A client", never an empty "@ company"', () => {
+      const result = getInAppTemplate('intro-call-booked-expert', {
+        clientCompanyName: 'Northwind Industrial',
+        requestId: 'request-123',
+      });
+      expect(result.body).toBe('A client @ Northwind Industrial booked an intro call with you.');
+    });
+
+    it('actionUrl is undefined when requestId is absent', () => {
+      const result = getInAppTemplate('intro-call-booked-expert', {
+        clientPersonName: 'Sam Reilly',
+        clientCompanyName: 'Northwind Industrial',
+      });
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
   describe('unknown template', () => {
     it('returns generic fallback for unknown template name', () => {
       const result = getInAppTemplate('nonexistent', {});

@@ -80,6 +80,30 @@ const recipientPhoneVerified: NonNullable<NotificationRule['condition']> = (ctx)
 const rescheduleProposalIsUrgent: NonNullable<NotificationRule['condition']> = (ctx) =>
   typeof ctx.payload.hoursToStart === 'number' && ctx.payload.hoursToStart < 2;
 
+/**
+ * BAL-283 (owner amendment) — the flat 24h re-notify window for
+ * `conversation.availability_shared`. PAYLOAD-ONLY and CLOCK-FREE: it compares the two
+ * instants the publisher already holds (`sharedAtIso`, `previousSharedAtIso`), so it is
+ * deterministic, unit-testable, and needs no last-sent store — of which the engine has none.
+ *
+ * ⚠ IT THROTTLES ON THE LAST *SHARE*, NOT THE LAST SUCCESSFUL DELIVERY. A suppressed or
+ * failed send still advances `availability_shared_at`. Accepted — see the payload's own
+ * docblock for why the expert's toast is worded to never claim the client was emailed.
+ *
+ * ⚠ FAILS OPEN on an unparseable timestamp: the cost is one extra email, versus silently
+ * dropping a legitimate first nudge.
+ */
+const AVAILABILITY_RESHARE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+const availabilityReshareWindowElapsed: NonNullable<NotificationRule['condition']> = (ctx) => {
+  const previous = ctx.payload.previousSharedAtIso;
+  if (typeof previous !== 'string') return true; // first share
+  const previousAt = Date.parse(previous);
+  const sharedAt = Date.parse(String(ctx.payload.sharedAtIso));
+  if (!Number.isFinite(previousAt) || !Number.isFinite(sharedAt)) return true;
+  return sharedAt - previousAt >= AVAILABILITY_RESHARE_MIN_INTERVAL_MS;
+};
+
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
     {
@@ -364,6 +388,26 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'reschedule-proposal-unanswered',
       timing: 'immediate',
     },
+  ],
+
+  // BAL-283 (Ruling 3) — the expert shared availability on a project-request thread.
+  // `recipient: 'client'` resolves via `payload.recipientId` (the request's creator — §10.4 of
+  // the plan: no recipient kind expresses "all members with conversation visibility", and
+  // `party_admins` is the sanctioned widening if the owner wants it later). Email + in-app,
+  // BOTH gated on the flat 24h re-notify window — a repeat in-app row inside 24h is the same
+  // noise as a repeat email.
+  'conversation.availability_shared': [
+    ...emailAndInApp('client', 'availability-shared-client', availabilityReshareWindowElapsed),
+  ],
+  // BAL-283 — a free intro call was booked on a project-request thread. Two-party fan-out
+  // (mirrors `booking.confirmed`): the CLIENT (recipient:'client' via `payload.recipientId`,
+  // always present — the booking actor) + the delivering EXPERT (recipient:'expert' via
+  // `payload.expertProfileId` → the resolver hydrates data.expert). Email + in-app to each; NO
+  // admin fan-out, NO SMS (an intro call is not the ~2h-reminder-worthy commitment a reschedule
+  // proposal is).
+  'conversation.intro_call_booked': [
+    ...emailAndInApp('client', 'intro-call-booked-client'),
+    ...emailAndInApp('expert', 'intro-call-booked-expert'),
   ],
 
   // BAL-409 — the guest-facing half of the same move. EMAIL ONLY — a guest is a non-user with

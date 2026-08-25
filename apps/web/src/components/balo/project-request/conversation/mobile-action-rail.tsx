@@ -2,13 +2,12 @@
 
 import { Calendar, FileText, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { RailProposalSlot } from './thread-actions';
+import type { CallSlot, RailProposalSlot } from './thread-actions';
 
 interface MobileActionRailProps {
   /** Hidden while the composer is focused (keyboard up — thumb zone is busy). */
   visible: boolean;
-  showCall: boolean;
-  callLabel: string;
+  callSlot: CallSlot;
   callPending: boolean;
   /** The proposal CTA slot (null = none; `quiet` defers to the nudge). */
   proposalCta: RailProposalSlot | null;
@@ -46,16 +45,15 @@ function proposalHandlerFor(
 
 /**
  * Mobile action rail (`lg:hidden`) — BELOW the composer, anchored at the true
- * bottom (thumb zone). Surfaces the call CTA (mock seam) + the primary
- * proposal action (LIVE for the client per BAL-272 / A5, for the expert per
+ * bottom (thumb zone). Surfaces the call CTA (BAL-283 — real booking / share-availability) +
+ * the primary proposal action (LIVE for the client per BAL-272 / A5, for the expert per
  * BAL-288 / A6.2, and the `kind:'view'` review/submitted link per BAL-289 /
  * A6.3). Returns null when nothing is actionable; hides while the composer is
  * focused (keyboard up).
  */
 export function MobileActionRail({
   visible,
-  showCall,
-  callLabel,
+  callSlot,
   callPending,
   proposalCta,
   onCall,
@@ -63,7 +61,9 @@ export function MobileActionRail({
   onBuildProposal,
   onViewProposal,
 }: Readonly<MobileActionRailProps>): React.JSX.Element | null {
-  if (!visible || (!showCall && proposalCta === null)) return null;
+  const showCallButton = callSlot.kind === 'book' || callSlot.kind === 'propose';
+  const showSharedPill = callSlot.kind === 'shared';
+  if (!visible || (!showCallButton && !showSharedPill && proposalCta === null)) return null;
 
   // Map the handler by kind: `request` → client A5, `build` → expert A6.2,
   // `view` → the A6.3 review/submitted link (mirrors the desktop header).
@@ -76,7 +76,7 @@ export function MobileActionRail({
 
   return (
     <div className="border-border bg-muted/40 flex items-center gap-2 border-t px-3.5 py-2.5 lg:hidden">
-      {showCall && (
+      {showCallButton && (
         <button
           type="button"
           onClick={onCall}
@@ -88,8 +88,19 @@ export function MobileActionRail({
           ) : (
             <Calendar className="h-4 w-4" aria-hidden="true" />
           )}
-          {callLabel}
+          {callSlot.kind === 'propose' ? 'Propose times' : 'Book a call'}
         </button>
+      )}
+      {/* BAL-283 — same rail slot, quiet pill treatment; reuses the rail's existing
+          disabled-button chrome rather than inventing mobile-specific pill styling. */}
+      {showSharedPill && (
+        <span
+          aria-disabled="true"
+          className="border-border bg-card text-muted-foreground inline-flex min-h-11 shrink-0 items-center justify-center gap-1.5 rounded-[11px] border px-3.5 text-[13px] font-semibold opacity-60"
+        >
+          <Calendar className="h-4 w-4" aria-hidden="true" />
+          Availability shared
+        </span>
       )}
       {proposalCta !== null && (
         <button

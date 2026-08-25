@@ -605,6 +605,47 @@ const rescheduleProposalDeclinedPayload = z.object({
   durationMinutes: z.number().int().positive(),
 });
 
+// BAL-283 (Ruling 3) — the expert shared availability on a project-request thread
+// (web-published). `correlationId` = `${relationshipId}--${sharedAtIso}` — per WRITE, never
+// per relationship (BullMQ dedups against retained completed jobs). `previousSharedAtIso` is
+// the ONLY input to the notification rule's flat 24h re-notify window. No money field — an
+// intro call is unbilled. Mirrors packages/shared/src/notifications/index.ts.
+const conversationAvailabilitySharedPayload = z.object({
+  correlationId: z.string().min(1).max(200),
+  requestId: z.uuid(),
+  requestTitle: z.string().min(1).max(200),
+  relationshipId: z.uuid(),
+  recipientId: z.uuid(),
+  expertProfileId: z.uuid(),
+  expertPersonName: z.string().min(1).max(200),
+  expertPartyLabel: z.string().min(1).max(200),
+  sharedAtIso: z.string().datetime(),
+  previousSharedAtIso: z.string().datetime().nullable(),
+});
+
+// BAL-283 — a free intro call was booked on a project-request thread (web-published, AFTER
+// `POST /meetings` returns 201). `correlationId` = `${meetingId}` — an idempotent replay
+// publishes the same jobId and dedups. SIBLING of `booking.confirmed`, never a reuse — no
+// `engagementId`/`caseTitle` here and there never will be. Mirrors
+// packages/shared/src/notifications/index.ts.
+const conversationIntroCallBookedPayload = z.object({
+  correlationId: z.uuid(),
+  meetingId: z.uuid(),
+  requestId: z.uuid(),
+  requestTitle: z.string().min(1).max(200),
+  relationshipId: z.uuid(),
+  recipientId: z.uuid(),
+  expertProfileId: z.uuid(),
+  clientPersonName: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  expertPartyLabel: z.string().min(1).max(200),
+  scheduledStartIso: z.string().datetime(),
+  durationMinutes: z.number().int().positive(),
+  joinPath: memberJoinPathSchema,
+  provisioned: z.boolean(),
+  guestCount: z.number().int().nonnegative(),
+});
+
 export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('user.welcome'), payload: userWelcomePayload }),
   z.object({
@@ -775,6 +816,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('reschedule_proposal.declined'),
     payload: rescheduleProposalDeclinedPayload,
+  }),
+  z.object({
+    event: z.literal('conversation.availability_shared'),
+    payload: conversationAvailabilitySharedPayload,
+  }),
+  z.object({
+    event: z.literal('conversation.intro_call_booked'),
+    payload: conversationIntroCallBookedPayload,
   }),
 ]);
 

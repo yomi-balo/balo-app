@@ -11,7 +11,7 @@ import {
  * proposal CTA is LIVE (BAL-272 / A5), the expert's `kind:'build'` CTA is LIVE
  * (BAL-288 / A6.2 — navigates to the proposal composer), and the `kind:'view'`
  * CTA is LIVE (BAL-289 / A6.3 — navigates to the read-only review/submitted
- * surface). The call CTA is wired (mock seam).
+ * surface). The call CTA is wired to real booking (BAL-283).
  */
 
 export type HeaderProposalSlot =
@@ -31,13 +31,29 @@ export type RailProposalSlot = {
   quiet: boolean;
 };
 
+/**
+ * BAL-283 (plan §12.3) — the call-CTA slot as ONE derived discriminated union, so header, rail
+ * and nudge cannot disagree about what state this thread's call is in.
+ *
+ *   'none'    — call CTA not offered at all (past kickoff, or thread not active)
+ *   'book'    — client, nothing booked yet: "Book a call" opens the live-availability dialog
+ *   'propose' — expert, has not yet shared availability: "Propose times" (share + nudge)
+ *   'shared'  — expert, `availability_shared_at` is set: quiet, non-interactive pill
+ *   'booked'  — either lens, a live request_interaction meeting exists: the slot is REMOVED
+ *               from header/rail (there is nothing left to book against this relationship at
+ *               this stage); `scheduledStartIso` carries the meeting's window for the nudge's
+ *               "done" copy.
+ */
+export type CallSlot =
+  | { kind: 'none' }
+  | { kind: 'book' }
+  | { kind: 'propose' }
+  | { kind: 'shared' }
+  | { kind: 'booked'; scheduledStartIso: string };
+
 export interface ThreadActions {
-  /** Call CTA renders (header) — before kickoff, active threads only. */
-  callAllowed: boolean;
-  callLabel: string;
+  callSlot: CallSlot;
   headerProposal: HeaderProposalSlot | null;
-  /** Mobile rail: call button (collapses past acceptance). */
-  showCallOnRail: boolean;
   /** Mobile rail: proposal CTA (null = none; quiet defers to the nudge). */
   railProposal: RailProposalSlot | null;
 }
@@ -86,6 +102,38 @@ function deriveRailProposal(
   return null;
 }
 
+/**
+ * BAL-283 — the call-slot derivation, isolated so its precedence is legible in one place:
+ * BOOKED beats everything (nothing left to book), then the lens-specific progression.
+ *
+ * ⚠ `'booked'` IS A REAL LIMIT, NOT ONLY A DISPLAY STATE (round-1 security MEDIUM). The
+ * matching server-side guard is `assertNoLiveIntroCall`, called by `bookIntroCallAction`, and
+ * it asks the IDENTICAL question through the SAME shared `pickUpcomingContextMeeting` that
+ * produced `thread.bookedCall` here. Before that guard existed this precedence was browser-only
+ * and a fresh client-minted `bookingNonce` booked straight past it.
+ *
+ * ⚠ AND `bookedCall` MEANS "an UPCOMING call", never "a call ever happened" — an ENDED intro
+ * call resolves to `null` upstream, so the CTA correctly returns for a second conversation.
+ */
+function deriveCallSlot(input: {
+  lens: 'client' | 'expert';
+  callAllowed: boolean;
+  availabilitySharedAtIso: string | null;
+  bookedCall: { meetingId: string; scheduledStartIso: string } | null;
+}): CallSlot {
+  const { lens, callAllowed, availabilitySharedAtIso, bookedCall } = input;
+  if (bookedCall !== null) {
+    return { kind: 'booked', scheduledStartIso: bookedCall.scheduledStartIso };
+  }
+  if (!callAllowed) {
+    return { kind: 'none' };
+  }
+  if (lens === 'client') {
+    return { kind: 'book' };
+  }
+  return availabilitySharedAtIso === null ? { kind: 'propose' } : { kind: 'shared' };
+}
+
 export function deriveThreadActions(input: {
   lens: 'client' | 'expert';
   requestStatus: ProjectRequestStatus;
@@ -99,14 +147,19 @@ export function deriveThreadActions(input: {
   const pastAcceptance = rank >= requestStatusRank('accepted');
   const callAllowed = beforeKickoff && thread.stage === 'active';
 
-  return {
+  const callSlot = deriveCallSlot({
+    lens,
     callAllowed,
-    callLabel: lens === 'expert' ? 'Propose times' : 'Book a call',
+    availabilitySharedAtIso: thread.availabilitySharedAtIso,
+    bookedCall: thread.bookedCall,
+  });
+
+  return {
+    callSlot,
     // Design: the proposal slot shares the call gate (hidden once decided).
     headerProposal: callAllowed
       ? deriveHeaderProposal(lens, thread.relationshipStatus, nudgeIsProposal)
       : null,
-    showCallOnRail: callAllowed && !pastAcceptance,
     railProposal: deriveRailProposal(
       lens,
       thread.relationshipStatus,
