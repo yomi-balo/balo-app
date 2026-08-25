@@ -3,7 +3,6 @@ import { db } from '../client';
 import { meetingRecordings } from '../schema';
 import type { MeetingRecording } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
-import { isUniqueViolation } from './experts';
 
 /**
  * ⚠ A CAP, NOT PAGINATION. A meeting with 50 segments is already pathological (Daily only
@@ -135,15 +134,23 @@ export const meetingRecordingsRepository = {
    * ERROR: it is exactly the concurrent-duplicate `recording-ensure` case the AC requires
    * to lose, and the loser must not start a second Daily recording in the same room.
    *
-   * ⚠⚠ STANDALONE ONLY — DO NOT PASS AN EXECUTOR, AND DO NOT CALL THIS INSIDE AN OPEN
-   * TRANSACTION. The `meetingFilesRepository.add` contract, restated: a raw `23505` raised
-   * inside an ambient transaction ABORTS that transaction, and every later statement then
-   * answers `25P02` instead of the code being caught here. The catch below can only
-   * contain the failure because the insert runs on its own implicit transaction. The one
-   * shipped caller (`recording-ensure`) has no ambient transaction. This is why the
-   * signature takes no `exec` — the type system refuses the hazard rather than documenting
-   * it. Mirrors the 23505-catch shape `meetingContextsRepository` and
-   * `rescheduleProposalsRepository` already use.
+   * ⚠⚠ THE CONFLICT IS ABSORBED BY `onConflictDoNothing`, NOT BY CATCHING A RAW `23505` —
+   * and that difference is load-bearing, not stylistic. A raised `23505` ABORTS the ambient
+   * transaction, so a caught one still leaves every later statement answering `25P02`
+   * ("current transaction is aborted"). That is invisible in production, where the one
+   * shipped caller (`recording-ensure`) has no ambient transaction — but the integration
+   * harness wraps EVERY test in one, so the catch-shape made this repository untestable and
+   * failed 10 cases in CI. `ON CONFLICT` never raises, so it is correct in both worlds.
+   *
+   * ⚠ The arbiter predicate MUST match `meeting_recording_capturing_idx` EXACTLY
+   * (`capture_ended_at IS NULL AND deleted_at IS NULL`), or Postgres answers `42P10`
+   * "no unique or exclusion constraint matching the ON CONFLICT specification". Both terms
+   * are bare `isNull` column references and bind NO parameters — a partial-index arbiter
+   * built from a value-carrying `eq()` fails `42P10` at runtime. Mirrors the
+   * `transcriptsRepository.insertRaw` precedent against `transcript_capture_id_idx`.
+   *
+   * The signature still takes no `exec`: the one caller has no transaction to pass, and the
+   * standalone contract keeps the Daily REST call out of any open transaction.
    *
    * ⚠ A `23503` (unknown `meetingId`) still propagates RAW, deliberately: a job enqueued
    * for a meeting that does not exist is a bug in the caller, not a race to swallow.
@@ -151,18 +158,15 @@ export const meetingRecordingsRepository = {
   async insertCapturing(
     input: InsertCapturingRecordingInput
   ): Promise<MeetingRecording | undefined> {
-    try {
-      const [row] = await db
-        .insert(meetingRecordings)
-        .values({ meetingId: input.meetingId })
-        .returning();
-      return row;
-    } catch (error) {
-      if (isUniqueViolation(error, 'meeting_recording_capturing_idx')) {
-        return undefined;
-      }
-      throw error;
-    }
+    const [row] = await db
+      .insert(meetingRecordings)
+      .values({ meetingId: input.meetingId })
+      .onConflictDoNothing({
+        target: meetingRecordings.meetingId, // arbiter = meeting_recording_capturing_idx
+        where: and(isNull(meetingRecordings.captureEndedAt), isNull(meetingRecordings.deletedAt)), // predicate MUST match the partial index exactly
+      })
+      .returning();
+    return row;
   },
 
   /**
@@ -349,7 +353,9 @@ export const meetingRecordingsRepository = {
             }),
         ...(input.startedAt == null
           ? {}
-          : { startedAt: sql`coalesce(${meetingRecordings.startedAt}, ${input.startedAt})` }),
+          : {
+              startedAt: sql`coalesce(${meetingRecordings.startedAt}, ${input.startedAt.toISOString()}::timestamptz)`,
+            }),
       })
       .where(
         and(
@@ -451,6 +457,11 @@ export const meetingRecordingsRepository = {
    * in JS rather than via SQL `left()` — the two differ only for astral-plane text well past
    * the 500th character, and this keeps the statement Drizzle-native.
    */
+  // ⚠ `${...toISOString()}::timestamptz` — NOT a bare Date. A Date interpolated into a raw
+  // `sql` template is bound WITHOUT the column's timestamptz mapper, so postgres-js receives
+  // it in `bytes.str` and throws "the string argument must be of type string ... received an
+  // instance of Date". Only raw templates are affected; `.set({ captureEndedAt: date })`
+  // elsewhere in this file is mapped normally and is correct as written.
   async markFailed(
     input: MarkRecordingFailedInput,
     exec: DbExecutor = db
@@ -461,7 +472,7 @@ export const meetingRecordingsRepository = {
         status: 'failed',
         failedStage: input.stage,
         failureReason: input.reason.slice(0, FAILURE_REASON_MAX_LENGTH),
-        captureEndedAt: sql`coalesce(${meetingRecordings.captureEndedAt}, ${input.at})`,
+        captureEndedAt: sql`coalesce(${meetingRecordings.captureEndedAt}, ${input.at.toISOString()}::timestamptz)`,
       })
       .where(
         and(
