@@ -3,6 +3,7 @@ import {
   deriveThreadStage,
   isThreadOpenStatus,
   pickDefaultThread,
+  pickUpcomingContextMeeting,
   previewOfHtml,
   previewOfPlainText,
   PREVIEW_MAX_CHARS,
@@ -155,5 +156,104 @@ describe('previewOfHtml', () => {
     expect(previewOfHtml(`<p>${'y'.repeat(300)}</p>`)).toBe(
       `${'y'.repeat(PREVIEW_MAX_CHARS - 1)}…`
     );
+  });
+});
+
+/**
+ * BAL-283 — THE ONE definition of "this thread has a live intro call", shared by
+ * `loadConversationView` (what the CTA renders) and `assertNoLiveIntroCall` (what the server
+ * enforces). If these two ever disagreed, the server would refuse bookings the UI was still
+ * offering — so the rule is pinned here, once, in its pure form.
+ */
+describe('pickUpcomingContextMeeting', () => {
+  const NOW = Date.parse('2026-08-25T00:00:00.000Z');
+
+  function meeting(overrides: Record<string, unknown> = {}) {
+    return {
+      meetingId: 'meeting-1',
+      scheduledStart: new Date('2026-08-26T04:00:00.000Z'),
+      scheduledEnd: new Date('2026-08-26T04:30:00.000Z'),
+      status: 'scheduled' as const,
+      ...overrides,
+    };
+  }
+
+  it('picks an upcoming meeting', () => {
+    expect(pickUpcomingContextMeeting([meeting()], NOW)?.meetingId).toBe('meeting-1');
+  });
+
+  it('returns undefined for an empty list', () => {
+    expect(pickUpcomingContextMeeting([], NOW)).toBeUndefined();
+  });
+
+  it.each(['scheduled', 'waiting_for_participants', 'in_progress'] as const)(
+    'accepts a live status %s while the window is still ahead',
+    (status) => {
+      expect(pickUpcomingContextMeeting([meeting({ status })], NOW)).toBeDefined();
+    }
+  );
+
+  it('rejects an ENDED meeting even when its window is somehow in the future', () => {
+    expect(pickUpcomingContextMeeting([meeting({ status: 'ended' })], NOW)).toBeUndefined();
+  });
+
+  /**
+   * PR #236 review. A call that RUNS PAST its scheduled end stays `in_progress` —
+   * `MEETING_TRANSITIONS` only lets that status move to `ended`, so nothing advances it on the
+   * clock alone. Judging it by `scheduledEnd` would drop it from the pick while the parties are
+   * still in the room, the CTA would reappear, and `assertNoLiveIntroCall` would let a SECOND
+   * intro call be booked over the live one.
+   */
+  it.each(['in_progress', 'waiting_for_participants'] as const)(
+    'keeps a LIVE %s call that has overrun its scheduled end',
+    (status) => {
+      const overrun = meeting({
+        status,
+        scheduledStart: new Date(NOW - 90 * 60_000),
+        scheduledEnd: new Date(NOW - 30 * 60_000),
+      });
+      expect(pickUpcomingContextMeeting([overrun], NOW)?.meetingId).toBe('meeting-1');
+    }
+  );
+
+  it('prefers a live overrunning call over a later scheduled one', () => {
+    const live = meeting({
+      meetingId: 'meeting-live',
+      status: 'in_progress',
+      scheduledStart: new Date(NOW - 90 * 60_000),
+      scheduledEnd: new Date(NOW - 30 * 60_000),
+    });
+    // Rows arrive ordered `scheduled_start, id`, so the overrunning call sorts first.
+    expect(
+      pickUpcomingContextMeeting([live, meeting({ meetingId: 'meeting-2' })], NOW)?.meetingId
+    ).toBe('meeting-live');
+  });
+
+  it('rejects a SCHEDULED meeting whose window has passed — nobody ever joined it', () => {
+    const past = meeting({
+      scheduledStart: new Date('2026-08-24T04:00:00.000Z'),
+      scheduledEnd: new Date('2026-08-24T04:30:00.000Z'),
+    });
+    expect(pickUpcomingContextMeeting([past], NOW)).toBeUndefined();
+  });
+
+  it('a meeting IN PROGRESS inside its window counts (see below for the overrun case)', () => {
+    const running = meeting({
+      scheduledStart: new Date('2026-08-24T23:45:00.000Z'),
+      scheduledEnd: new Date('2026-08-25T00:15:00.000Z'),
+      status: 'in_progress' as const,
+    });
+    expect(pickUpcomingContextMeeting([running], NOW)).toBeDefined();
+  });
+
+  it('given a past call then an upcoming one, the UPCOMING one wins (repository order)', () => {
+    const past = meeting({
+      meetingId: 'meeting-past',
+      scheduledStart: new Date('2026-08-20T04:00:00.000Z'),
+      scheduledEnd: new Date('2026-08-20T04:30:00.000Z'),
+      status: 'ended' as const,
+    });
+    const next = meeting({ meetingId: 'meeting-next' });
+    expect(pickUpcomingContextMeeting([past, next], NOW)?.meetingId).toBe('meeting-next');
   });
 });

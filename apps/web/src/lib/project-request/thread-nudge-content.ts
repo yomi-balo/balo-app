@@ -49,8 +49,43 @@ export interface ThreadNudgeContent {
    * set on the client-lens unread nudge so the composer invites the reply.
    */
   composerPlaceholder?: string;
+  /**
+   * BAL-283 (round-1 W4) — an ABSOLUTE INSTANT plus its trailing clause, for the two
+   * booked-call cells. Rendered by `<LocalDateTime>`; NEVER pre-formatted into `sub` here.
+   *
+   * ⚠⚠ THIS IS A HYDRATION FIX, NOT A REFACTOR. The previous code called
+   * `new Intl.DateTimeFormat('en-US', {…})` with NO `timeZone` inside `deriveStageRender`, on
+   * the first render of an SSR'd `'use client'` component — so the server formatted in UTC, the
+   * browser re-formatted in local time, and every viewer outside UTC got a hydration mismatch.
+   * `LocalDateTime`'s own docblock says closing exactly that gap is the entire reason it exists.
+   * (CI runs `TZ=UTC`, so no test could ever have caught it.) The locale was wrong too — the
+   * house locale is `en-AU`, which `LocalDateTime` uses.
+   */
+  subInstant?: { iso: string; suffix: string };
   primary?: ThreadNudgeButton;
   secondary?: ThreadNudgeButton;
+  /**
+   * BAL-283 — the de-emphasised "Share again" re-share affordance on the expert's waiting
+   * cell (design's re-share case). Deliberately a THIRD slot, not folded into `secondary`:
+   * "Send a message" and "Share again" are both legitimate secondary actions on that one
+   * cell, and collapsing them would force a choice the design never makes. Text-link
+   * treatment only — never button chrome — so it reads as harder to reach than the first
+   * share (a deliberate anti-spam-click affordance).
+   */
+  tertiary?: ThreadNudgeButton;
+}
+
+/**
+ * BAL-283 — the CLIENT PARTY's display label for expert-facing copy.
+ *
+ * ⚠ THE PARTY, NOT "the client" (round-1 MUST-FIX). CLAUDE.md: PROSPECTIVE copy — who can act,
+ * who is being waited on — names the PARTY. "Waiting on the client" is identical across every
+ * thread in an expert's inbox and tells them nothing; "Waiting on Northwind Industrial" does.
+ * The generic string survives only as the fallback for a genuinely absent company name.
+ */
+function clientPartyLabel(clientCompanyName: string | null): string {
+  const trimmed = clientCompanyName?.trim() ?? '';
+  return trimmed.length > 0 ? trimmed : 'the client';
 }
 
 function clientNudge(
@@ -88,6 +123,20 @@ function clientNudge(
     thread.unread || (!thread.latestMessageFromViewer && thread.latestMessagePreview !== null);
 
   if (thread.relationshipStatus === 'eoi_submitted') {
+    // BAL-283 — a live call beats everything else on this cell: nothing left to book, and
+    // the message-momentum framing above no longer applies once a call exists.
+    if (thread.bookedCall !== null) {
+      return {
+        variant: 'done',
+        icon: Calendar,
+        headline: `Call booked with ${name}`,
+        subInstant: {
+          iso: thread.bookedCall.scheduledStartIso,
+          suffix: " — you'll get a join link by email.",
+        },
+        secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
+      };
+    }
     if (needsReply) {
       return {
         variant: 'action',
@@ -95,6 +144,19 @@ function clientNudge(
         headline: `${name} sent a message — reply to keep momentum`,
         sub: preview,
         composerPlaceholder: `Reply to ${name}…`,
+      };
+    }
+    // BAL-283 — once the expert has shared availability, the ask sharpens from a cold "meet
+    // them" prompt to a specific "pick a time" — same handler (`call`), same live-availability
+    // dialog; there is no separate "accept the expert's proposed times" path.
+    if (thread.availabilitySharedAtIso !== null) {
+      return {
+        variant: 'action',
+        icon: Calendar,
+        headline: `${name} is free — pick a time`,
+        sub: 'A quick intro call is the fastest way to gauge fit. Meetings are free.',
+        primary: { label: 'Book a call', icon: Calendar, action: 'call' },
+        secondary: { label: 'Reply by message', icon: MessageSquare, action: 'reply' },
       };
     }
     return {
@@ -133,14 +195,19 @@ function clientNudge(
 
 function expertNudge(
   status: ProjectRequestStatus,
-  thread: ConversationThreadView
+  thread: ConversationThreadView,
+  clientCompanyName: string | null
 ): ThreadNudgeContent | null {
+  const clientParty = clientPartyLabel(clientCompanyName);
   // The expert lost the request — mirror the client's "records" framing
   // (the design's demo expert always wins, so this cell is Balo-added copy).
   if (thread.stage === 'not_selected') {
     return {
       variant: 'done',
       icon: MessageSquare,
+      // ⚠ Sentence-initial, so it is left generic on purpose: `clientPartyLabel`'s fallback is
+      // the lowercase `'the client'`, which would read as a typo at the start of a headline.
+      // The BAL-283 cells that DO name the party are all mid-sentence.
       headline: 'The client went with another expert',
       sub: 'Thanks for engaging — the conversation stays here for your records.',
     };
@@ -169,10 +236,37 @@ function expertNudge(
   }
 
   if (thread.relationshipStatus === 'eoi_submitted') {
+    // BAL-283 — a live call beats everything else (both lenses share this precedence).
+    if (thread.bookedCall !== null) {
+      return {
+        variant: 'done',
+        icon: Calendar,
+        headline: 'Call booked',
+        subInstant: {
+          iso: thread.bookedCall.scheduledStartIso,
+          suffix: ` with ${clientParty}.`,
+        },
+        secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
+      };
+    }
+    // BAL-283 (Ruling 3) — "propose times" FINISHED the expert's job; this is explicitly
+    // framed as complete, not pending-on-me (design's "why this is not a lesser action").
+    if (thread.availabilitySharedAtIso !== null) {
+      return {
+        variant: 'waiting',
+        icon: Clock,
+        // ⚠ THE PARTY, NOT "the client" — see `clientPartyLabel`. This is the approved design's
+        // exact cell: `Availability shared — waiting on {ClientParty}`.
+        headline: `Availability shared — waiting on ${clientParty}`,
+        sub: "They can book any open slot on your calendar. You'll be notified the moment they pick a time.",
+        secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
+        tertiary: { label: 'Share again', icon: Calendar, action: 'call' },
+      };
+    }
     return {
       variant: 'action',
       icon: Calendar,
-      headline: 'Offer the client a time to talk',
+      headline: `Offer ${clientParty} a time to talk`,
       sub: "Clients don't share calendars — propose a couple of times to get ahead.",
       primary: { label: 'Propose meeting times', icon: Calendar, action: 'call' },
       secondary: { label: 'Send a message', icon: MessageSquare, action: 'reply' },
@@ -202,12 +296,20 @@ function expertNudge(
   return null;
 }
 
-/** The single per-thread nudge for a (lens, request status, thread) cell. */
+/**
+ * The single per-thread nudge for a (lens, request status, thread) cell.
+ *
+ * `clientCompanyName` is the CLIENT PARTY's display name, used only by the EXPERT lens (the
+ * client already knows who they are). Optional so a caller that genuinely has no company name
+ * degrades to the generic `'the client'`; the shipped call site always passes
+ * `view.companyName`.
+ */
 export function threadNudgeFor(
   lens: 'client' | 'expert',
   requestStatus: ProjectRequestStatus,
-  thread: ConversationThreadView
+  thread: ConversationThreadView,
+  clientCompanyName: string | null = null
 ): ThreadNudgeContent | null {
   if (lens === 'client') return clientNudge(requestStatus, thread);
-  return expertNudge(requestStatus, thread);
+  return expertNudge(requestStatus, thread, clientCompanyName);
 }

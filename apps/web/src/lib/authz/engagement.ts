@@ -93,26 +93,61 @@ export async function hasEngagementCapability(
     return false;
   }
 
-  const resolution = await buildHostContextForExpertProfile(
+  return hasExpertDeliveryCapability(
+    actor,
+    capability,
     // `engagements.expert_profile_id` is NOT NULL on the supertype for ALL engagement types
     // (BAL-417), so the four labels share one path and there is nothing to defend here.
     engagement.expertProfileId,
-    actor.id,
-    {
-      findExpertProfile: (id) => expertsRepository.findProfileById(id),
-      // ⚠ `actorId` is the callback's PARAMETER, never captured — the confused-deputy
-      // defence documented on `HostContextReads`. Do not collapse it to one argument.
-      findAgencyRole: (agencyId, actorId) =>
-        partyMembershipsRepository.getMemberRole('agency', agencyId, actorId),
-    }
+    { contextType: subject.contextType, contextId: subject.contextId }
   );
+}
+
+/**
+ * BAL-283 — the SAME rule, asked of an ALREADY-RESOLVED delivering `expert_profiles.id`.
+ *
+ * ⚠⚠ THIS IS NOT A SECOND RESOLVER, AND IT MUST NOT BECOME ONE. It is the exact tail
+ * `hasEngagementCapability` used to inline, hoisted so a caller whose subject is NOT an
+ * `engagements.id` can ask the identical question through the identical core
+ * (`buildHostContextForExpertProfile` → `hostContextGrants`). `hasEngagementCapability` now
+ * calls it, so there is one code path and one holder set for `apps/web`, exactly as ADR-1046
+ * requires. If a holder set ever changes it changes in `ENGAGEMENT_ROLE_CAPABILITIES` — never
+ * here, and never in a caller.
+ *
+ * ⚠ WHY IT EXISTS AT ALL. `shareAvailabilityAction` gates a PRE-ENGAGEMENT act on a
+ * `request_expert_relationships` row: there is no engagement, so `EngagementGrainHostSubject`
+ * (deliberately narrowed to the four engagement-grain labels) cannot represent it, and
+ * widening that type is BAL-410 / BAL-411's, not this ticket's. Before this, that action
+ * compared `access.ctx.lens !== 'expert'` — a `lens ===` gate, which CLAUDE.md forbids
+ * categorically: `lens` gates the VIEW, a capability gates the MUTATION.
+ *
+ * ⚠ IT ANSWERS "IS THIS ACTOR ON THE DELIVERY SIDE OF THIS EXPERT PROFILE", AND NOTHING ELSE.
+ * It resolves NO tenancy, NO relationship lifecycle and NO liveness — the caller must have
+ * already established that the actor may reach this row (`resolveConversationAccess`) and that
+ * the relationship is not declined/withdrawn (`assertRelationshipBookable`, which consults the
+ * ONE shared `relationshipDeniesHosting` predicate). A `true` authorizes the ACT, never the
+ * READ.
+ */
+export async function hasExpertDeliveryCapability(
+  actor: { id: string },
+  capability: EngagementCapability,
+  expertProfileId: string,
+  logContext: { contextType: string; contextId: string }
+): Promise<boolean> {
+  const resolution = await buildHostContextForExpertProfile(expertProfileId, actor.id, {
+    findExpertProfile: (id) => expertsRepository.findProfileById(id),
+    // ⚠ `actorId` is the callback's PARAMETER, never captured — the confused-deputy
+    // defence documented on `HostContextReads`. Do not collapse it to one argument.
+    findAgencyRole: (agencyId, actorId) =>
+      partyMembershipsRepository.getMemberRole('agency', agencyId, actorId),
+  });
 
   if (!resolution.ok) {
     log.warn('Engagement host context denied — the delivering expert profile is missing', {
-      contextType: subject.contextType,
-      contextId: subject.contextId,
+      contextType: logContext.contextType,
+      contextId: logContext.contextId,
       actorId: actor.id,
-      expertProfileId: engagement.expertProfileId,
+      expertProfileId,
     });
     return false;
   }

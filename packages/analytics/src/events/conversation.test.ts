@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { CONVERSATION_EVENTS } from './conversation';
 
 describe('CONVERSATION_EVENTS', () => {
-  it('has exactly the five A4 events plus the A5 proposal CTA', () => {
+  it('has exactly the five A4 events, the A5 proposal CTA, and the two BAL-283 completion events', () => {
     expect(Object.keys(CONVERSATION_EVENTS)).toEqual([
       'CONVERSATION_MESSAGE_SENT',
       'CONVERSATION_FILE_SHARED',
@@ -10,6 +10,8 @@ describe('CONVERSATION_EVENTS', () => {
       'CONVERSATION_FILES_OPENED',
       'CONVERSATION_CALL_CTA_CLICKED',
       'CONVERSATION_PROPOSAL_CTA_CLICKED',
+      'CONVERSATION_AVAILABILITY_SHARED',
+      'CONVERSATION_INTRO_CALL_BOOKED',
     ]);
   });
 
@@ -27,6 +29,12 @@ describe('CONVERSATION_EVENTS', () => {
     expect(CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED).toBe('conversation_call_cta_clicked');
     expect(CONVERSATION_EVENTS.CONVERSATION_PROPOSAL_CTA_CLICKED).toBe(
       'conversation_proposal_cta_clicked'
+    );
+    expect(CONVERSATION_EVENTS.CONVERSATION_AVAILABILITY_SHARED).toBe(
+      'conversation_availability_shared'
+    );
+    expect(CONVERSATION_EVENTS.CONVERSATION_INTRO_CALL_BOOKED).toBe(
+      'conversation_intro_call_booked'
     );
   });
 });

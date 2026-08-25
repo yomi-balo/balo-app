@@ -131,11 +131,19 @@ import {
   meetingsRepository,
   caseEngagementsRepository,
   companiesRepository,
+  engagementsRepository,
+  projectRequestsRepository,
+  requestExpertRelationshipsRepository,
   type CreatedMeeting,
   type Meeting,
 } from '@balo/db';
 import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
-import { dailyRoomNameForMeeting, type MeetingBookingContextType } from '@balo/shared/meetings';
+import {
+  dailyRoomNameForMeeting,
+  resolveContextOwner,
+  type MeetingBookingContextType,
+  type MeetingContextOwnerReads,
+} from '@balo/shared/meetings';
 import type { FastifyBaseLogger } from 'fastify';
 import { DailyApiError } from '../daily/errors.js';
 import type { RoomProvisioner } from '../daily/rooms.js';
@@ -536,49 +544,128 @@ export async function bookAndProvisionMeeting(
     deps
   );
 
-  // BAL-400 (D2) — the EXPERT-side calendar projection. Gated on `contextType === 'case'`
-  // (the only context this ticket wires) and run ONLY on a fresh create, never on a replay:
-  // `provisionMeeting` (the replay path) never reaches here, matching the availability-cache
-  // rebuild's own "the replay path skips it anyway" rule — re-running this on a replay would
-  // call `events.create` a SECOND time and, per apiroc skill §M1, could strand a first vendor
-  // event rather than merely re-stamping Balo's own row. `projectCaseBookingCalendarEvent`
+  // BAL-400 (D2) / BAL-283 — the EXPERT-side calendar projection, run ONLY on a fresh create
+  // and never on a replay: `provisionMeeting` (the replay path) never reaches here, matching
+  // the availability-cache rebuild's own "the replay path skips it anyway" rule — re-running
+  // this on a replay would call `events.create` a SECOND time and, per apiroc skill §M1, could
+  // strand a first vendor event rather than merely re-stamping Balo's own row. The projection
   // NEVER throws (D2c) — the booking above has already committed and must not be undone by a
   // best-effort projection.
-  if (input.contextType === 'case') {
-    await projectCaseBookingCalendarEvent(created, input, log);
+  //
+  // ⚠ WHICH CONTEXTS STILL WRITE NOTHING, STATED SO IT IS NOT SILENT: `project_kickoff`,
+  // `package_session` and `project_discovery` reach no connected calendar. **BAL-433 OWNS ALL
+  // THREE**, and it owns the CLIENT side for every context (nothing here has ever written to a
+  // client's calendar — see `project-booking-to-calendar.ts`'s expert-side-only warning).
+  // BAL-433 also owns folding {@link isCalendarProjectedContext} and the two resolvers below
+  // into one `contextType`-keyed registry with its own exhaustiveness test; two hand-written
+  // entries is the deliberate stopping point here, NOT an abstraction waiting to be finished.
+  //
+  // The consequence for those three, stated plainly and unchanged from BAL-283 round 1: the
+  // expert has a real, confirmed Balo meeting that is absent from their own calendar — and
+  // because Balo READS their external free/busy, a colleague can book over it in Google with
+  // nothing on either side detecting the collision. Do not close this by deleting the comment.
+  if (isCalendarProjectedContext(input.contextType)) {
+    await projectBookingCalendarEvent(created, input.contextType, input.contextId, log);
   }
 
   return { meeting: created.meeting, ...venue };
 }
 
 /**
- * BAL-400 (D2) — resolve what the expert's calendar event needs to say (the client's
- * COMPANY name and the case title) and write it. `input.contextId` IS the case's
- * `engagementId` for a `'case'` context (`meeting_contexts.context_id = engagements.id`).
+ * BAL-283 — the bookable contexts whose booking IS projected to the expert's connected
+ * calendar. TWO ENTRIES, hand-enumerated; see the gate's comment in `bookAndProvisionMeeting`
+ * for who owns the rest.
  *
- * Never throws. A missing case/company row, or a `null` `expertProfileId` (structurally
- * unreachable for a `'case'` booking — a case always names exactly one expert — but typed
- * nullable on {@link CreatedMeeting}), is logged and treated as "nothing to project", the
- * same posture `projectBookingToExpertCalendar` itself takes for a disconnected expert.
+ * ⚠ `Extract`, NOT A BARE UNION, for the same reason `HandledMeetingContextType` in
+ * `@balo/shared/meetings` is: a label RENAMED in the database leaves a stale name in a plain
+ * union and nothing notices, whereas `Extract` silently drops it — and the `switch` in
+ * {@link projectBookingCalendarEvent} then fails `pnpm --filter api typecheck` on the arm that
+ * no longer matches.
+ */
+type CalendarProjectedContextType = Extract<
+  MeetingBookingContextType,
+  'case' | 'request_interaction'
+>;
+
+/** BAL-433 §3's label for a `request_interaction`, matching the client-side booking surfaces. */
+const INTRO_CALL_LABEL = 'Intro call';
+
+function isCalendarProjectedContext(
+  contextType: MeetingBookingContextType
+): contextType is CalendarProjectedContextType {
+  return contextType === 'case' || contextType === 'request_interaction';
+}
+
+/**
+ * The DISPLAY FACTS one context contributes to the expert's calendar event — everything that
+ * differs BETWEEN contexts and nothing that does not. Resolving these is per-context; writing
+ * them is not (see {@link writeExpertCalendarEvent}).
+ */
+interface ExpertCalendarFacts {
+  /** ADR-1044 §4 — the expert's event headline names the client COMPANY, never a person. */
+  readonly clientCompanyName: string;
+  /** The subject line, rendered above the join URL: this context's own title. */
+  readonly title: string;
+  /** The headline noun: `'Consultation'` for a case, `'Intro call'` for a request interaction. */
+  readonly eventLabel: string;
+}
+
+/** A title that is absent or blank reads as a bug on a calendar — fall back to the label. */
+function titleOr(title: string | null | undefined, fallback: string): string {
+  const trimmed = title?.trim() ?? '';
+  return trimmed.length === 0 ? fallback : trimmed;
+}
+
+/**
+ * THE SHARED WRITE PATH — the ONE place a booking becomes an expert calendar event. Every
+ * rule BAL-400 fixed here holds for every context that reaches it and is asserted once, not
+ * once per context: NO attendees and NO `generateMeetingUrlProvider` (both are absences in
+ * `event-mapper.ts`, never re-decided per caller), and idempotency keyed on Balo's own
+ * `meeting_id` — never a caller-supplied event id, which Microsoft silently substitutes
+ * (apiroc skill §M1).
+ *
+ * ⚠ `joinUrl` IS BALO'S MEMBER JOIN ROUTE, NEVER `meetings.join_url` (the raw Daily URL).
+ */
+async function writeExpertCalendarEvent(
+  created: CreatedMeeting,
+  expertProfileId: string,
+  facts: ExpertCalendarFacts,
+  log: FastifyBaseLogger
+): Promise<void> {
+  await projectBookingToExpertCalendar(
+    {
+      meetingId: created.meeting.id,
+      expertProfileId,
+      clientCompanyName: facts.clientCompanyName,
+      caseTitle: facts.title,
+      eventLabel: facts.eventLabel,
+      startAt: created.meeting.scheduledStart,
+      endAt: created.meeting.scheduledEnd,
+      joinUrl: `${WEB_BASE_URL}/join/m/${created.meeting.id}`,
+    },
+    log
+  );
+}
+
+/**
+ * BAL-400 (D2) — RESOLUTION ENTRY ONE: a `'case'`. `contextId` IS the case's `engagementId`
+ * (`meeting_contexts.context_id = engagements.id`), so the client's COMPANY is two hops away:
+ * the case names a company, the company names itself.
+ *
+ * Never throws — a missing case or company row is logged and treated as "nothing to project",
+ * the same posture `projectBookingToExpertCalendar` itself takes for a disconnected expert.
  */
 async function projectCaseBookingCalendarEvent(
   created: CreatedMeeting,
-  input: BookAndProvisionInput,
+  expertProfileId: string,
+  engagementId: string,
   log: FastifyBaseLogger
 ): Promise<void> {
-  if (created.expertProfileId === null) {
-    log.error(
-      { meetingId: created.meeting.id, engagementId: input.contextId },
-      'A case booking resolved no expertProfileId — skipping the calendar projection'
-    );
-    return;
-  }
-
   try {
-    const caseRow = await caseEngagementsRepository.findByEngagementId(input.contextId);
+    const caseRow = await caseEngagementsRepository.findByEngagementId(engagementId);
     if (caseRow === undefined) {
       log.info(
-        { meetingId: created.meeting.id, engagementId: input.contextId },
+        { meetingId: created.meeting.id, engagementId },
         'No live case for this booking — skipping the calendar projection'
       );
       return;
@@ -586,21 +673,20 @@ async function projectCaseBookingCalendarEvent(
     const company = await companiesRepository.findById(caseRow.companyId);
     if (company === undefined) {
       log.info(
-        { meetingId: created.meeting.id, engagementId: input.contextId },
+        { meetingId: created.meeting.id, engagementId },
         'No live company for this case — skipping the calendar projection'
       );
       return;
     }
 
-    await projectBookingToExpertCalendar(
+    await writeExpertCalendarEvent(
+      created,
+      expertProfileId,
       {
-        meetingId: created.meeting.id,
-        expertProfileId: created.expertProfileId,
         clientCompanyName: company.name,
-        caseTitle: caseRow.title,
-        startAt: created.meeting.scheduledStart,
-        endAt: created.meeting.scheduledEnd,
-        joinUrl: `${WEB_BASE_URL}/join/m/${created.meeting.id}`,
+        title: caseRow.title,
+        // BAL-400's shipped literal, restated at the call site now that it is one of two.
+        eventLabel: 'Consultation',
       },
       log
     );
@@ -610,11 +696,132 @@ async function projectCaseBookingCalendarEvent(
     log.error(
       {
         meetingId: created.meeting.id,
-        engagementId: input.contextId,
+        engagementId,
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       },
       'Failed to resolve case/company for the expert calendar projection'
     );
+  }
+}
+
+/**
+ * BAL-283 — RESOLUTION ENTRY TWO: a `'request_interaction'` (an intro call). `contextId` is a
+ * `request_expert_relationships.id`, which names an EXPERT and a REQUEST but NEVER a company —
+ * the company lives one hop further on, on the request.
+ *
+ * ⚠⚠ THE TWO-HOP IS NOT RE-DERIVED HERE. It goes through `@balo/shared/meetings`'s
+ * `resolveContextOwner` — the SAME pure rule `authorize-meeting-booking.ts`'s `loadSubject`
+ * uses — because that module exists specifically to kill a second copy of "which party owns
+ * this context", and a drifting copy is how the EXPERT and the COMPANY end up read off the
+ * wrong rows (its own docblock names that as the axis confusion ADR-1029 forbids).
+ *
+ * ⚠ THE REQUEST ROW IS CAPTURED FROM THE INJECTED READ RATHER THAN FETCHED AGAIN, for the
+ * reason `loadSubject` states verbatim: a second `findById` could observe a row that changed
+ * between the two reads, so the title and the company id would describe different states.
+ *
+ * ⚠ THIS RESOLVES DISPLAY FACTS AND JUDGES NOTHING. It re-runs no gate — not
+ * `relationshipDeniesHosting`, not the post-decision status check. Both already ran in
+ * `authorizeMeetingBooking` BEFORE the booking committed, and re-deciding them here could only
+ * withhold a calendar event from a meeting that legitimately exists.
+ */
+async function projectRequestInteractionCalendarEvent(
+  created: CreatedMeeting,
+  expertProfileId: string,
+  relationshipId: string,
+  log: FastifyBaseLogger
+): Promise<void> {
+  try {
+    let request: { title: string } | undefined;
+    const reads: MeetingContextOwnerReads = {
+      findEngagement: (id) => engagementsRepository.findById(id),
+      findProjectRequest: async (id) => {
+        const row = await projectRequestsRepository.findById(id);
+        request = row;
+        return row;
+      },
+      findRelationship: (id) => requestExpertRelationshipsRepository.findById(id),
+    };
+
+    const owner = await resolveContextOwner(
+      { contextType: 'request_interaction', contextId: relationshipId },
+      reads
+    );
+    if (owner.outcome !== 'resolved' || request === undefined) {
+      // `undefined` from either hop means missing OR soft-deleted — every injected read filters
+      // `deleted_at IS NULL`, and this module cannot tell the two apart (nor does it need to).
+      log.info(
+        { meetingId: created.meeting.id, relationshipId },
+        'No live relationship/request for this booking — skipping the calendar projection'
+      );
+      return;
+    }
+
+    const company = await companiesRepository.findById(owner.owner.companyId);
+    if (company === undefined) {
+      log.info(
+        { meetingId: created.meeting.id, relationshipId },
+        'No live company for this request — skipping the calendar projection'
+      );
+      return;
+    }
+
+    await writeExpertCalendarEvent(
+      created,
+      expertProfileId,
+      {
+        clientCompanyName: company.name,
+        title: titleOr(request.title, INTRO_CALL_LABEL),
+        eventLabel: INTRO_CALL_LABEL,
+      },
+      log
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: created.meeting.id,
+        relationshipId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Failed to resolve request/company for the expert calendar projection'
+    );
+  }
+}
+
+/**
+ * Pick the resolution entry for this context and let the shared write path do the rest.
+ *
+ * ⚠ NO `default:` ARM. A third {@link CalendarProjectedContextType} fails
+ * `pnpm --filter api typecheck` RIGHT HERE until a resolver is consciously written for it —
+ * which is what stops BAL-433 from widening the gate and silently projecting a context with
+ * case-shaped facts.
+ *
+ * Never throws: each arm owns its own try/catch, so the "the booking has already committed"
+ * contract holds per context rather than depending on one shared catch staying in place.
+ */
+async function projectBookingCalendarEvent(
+  created: CreatedMeeting,
+  contextType: CalendarProjectedContextType,
+  contextId: string,
+  log: FastifyBaseLogger
+): Promise<void> {
+  const { expertProfileId } = created;
+  if (expertProfileId === null) {
+    // Structurally unreachable for both entries — a case and a relationship each name exactly
+    // one expert — but `CreatedMeeting` types it nullable for the `admin` meetings that project
+    // no consultation row at all, so it is answered rather than asserted away.
+    log.error(
+      { meetingId: created.meeting.id, contextType, contextId },
+      'A booking resolved no expertProfileId — skipping the calendar projection'
+    );
+    return;
+  }
+
+  switch (contextType) {
+    case 'case':
+      return projectCaseBookingCalendarEvent(created, expertProfileId, contextId, log);
+    case 'request_interaction':
+      return projectRequestInteractionCalendarEvent(created, expertProfileId, contextId, log);
   }
 }

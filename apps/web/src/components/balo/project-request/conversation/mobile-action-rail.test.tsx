@@ -2,14 +2,19 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { MobileActionRail } from './mobile-action-rail';
+import type { CallSlot } from './thread-actions';
+
+const NONE: CallSlot = { kind: 'none' };
+const BOOK: CallSlot = { kind: 'book' };
+const PROPOSE: CallSlot = { kind: 'propose' };
+const SHARED: CallSlot = { kind: 'shared' };
 
 describe('MobileActionRail', () => {
   it('renders nothing when nothing is actionable', () => {
     const { container } = render(
       <MobileActionRail
         visible
-        showCall={false}
-        callLabel="Book a call"
+        callSlot={NONE}
         callPending={false}
         proposalCta={null}
         onCall={vi.fn()}
@@ -25,8 +30,7 @@ describe('MobileActionRail', () => {
     const { container } = render(
       <MobileActionRail
         visible={false}
-        showCall
-        callLabel="Book a call"
+        callSlot={BOOK}
         callPending={false}
         proposalCta={{ kind: 'request', label: 'Request proposal', quiet: false }}
         onCall={vi.fn()}
@@ -44,8 +48,7 @@ describe('MobileActionRail', () => {
     render(
       <MobileActionRail
         visible
-        showCall={false}
-        callLabel="Book a call"
+        callSlot={NONE}
         callPending={false}
         proposalCta={{ kind: 'request', label: 'Request proposal', quiet: false }}
         onCall={vi.fn()}
@@ -67,8 +70,7 @@ describe('MobileActionRail', () => {
     render(
       <MobileActionRail
         visible
-        showCall={false}
-        callLabel="Propose times"
+        callSlot={NONE}
         callPending={false}
         proposalCta={{ kind: 'build', label: 'Build proposal', quiet: false }}
         onCall={vi.fn()}
@@ -90,8 +92,7 @@ describe('MobileActionRail', () => {
     render(
       <MobileActionRail
         visible
-        showCall={false}
-        callLabel="Book a call"
+        callSlot={NONE}
         callPending={false}
         proposalCta={{ kind: 'build', label: 'Build proposal', quiet: false }}
         onCall={vi.fn()}
@@ -109,8 +110,7 @@ describe('MobileActionRail', () => {
     render(
       <MobileActionRail
         visible
-        showCall={false}
-        callLabel="Book a call"
+        callSlot={NONE}
         callPending={false}
         proposalCta={{ kind: 'request', label: 'Request proposal', quiet: true }}
         onCall={vi.fn()}
@@ -130,8 +130,7 @@ describe('MobileActionRail', () => {
     render(
       <MobileActionRail
         visible
-        showCall={false}
-        callLabel="Book a call"
+        callSlot={NONE}
         callPending={false}
         proposalCta={{ kind: 'view', label: 'View proposal', quiet: false }}
         onCall={vi.fn()}
@@ -157,8 +156,7 @@ describe('MobileActionRail', () => {
     render(
       <MobileActionRail
         visible
-        showCall={false}
-        callLabel="Book a call"
+        callSlot={NONE}
         callPending={false}
         proposalCta={{ kind: 'view', label: 'View proposal', quiet: false }}
         onCall={vi.fn()}
@@ -180,8 +178,7 @@ describe('MobileActionRail', () => {
     render(
       <MobileActionRail
         visible
-        showCall
-        callLabel="Book a call"
+        callSlot={BOOK}
         callPending
         proposalCta={null}
         onCall={vi.fn()}
@@ -191,5 +188,61 @@ describe('MobileActionRail', () => {
       />
     );
     expect(screen.getByRole('button', { name: 'Book a call' })).toBeDisabled();
+  });
+
+  // ── BAL-283 — the callSlot states ───────────────────────────────────────────────────────
+
+  it("callSlot 'propose' renders the Propose times label and fires onCall", async () => {
+    const user = userEvent.setup();
+    const onCall = vi.fn();
+    render(
+      <MobileActionRail
+        visible
+        callSlot={PROPOSE}
+        callPending={false}
+        proposalCta={null}
+        onCall={onCall}
+        onProposal={null}
+        onBuildProposal={null}
+        onViewProposal={null}
+      />
+    );
+    const cta = screen.getByRole('button', { name: 'Propose times' });
+    await user.click(cta);
+    expect(onCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("callSlot 'shared' renders a quiet, non-interactive pill — no button, no onCall wiring", () => {
+    render(
+      <MobileActionRail
+        visible
+        callSlot={SHARED}
+        callPending={false}
+        proposalCta={null}
+        onCall={vi.fn()}
+        onProposal={null}
+        onBuildProposal={null}
+        onViewProposal={null}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /availability shared/i })).not.toBeInTheDocument();
+    const pill = screen.getByText('Availability shared');
+    expect(pill.closest('[aria-disabled="true"]')).not.toBeNull();
+  });
+
+  it("callSlot 'booked' renders no call affordance at all", () => {
+    const { container } = render(
+      <MobileActionRail
+        visible
+        callSlot={{ kind: 'booked', scheduledStartIso: '2026-09-01T04:00:00.000Z' }}
+        callPending={false}
+        proposalCta={null}
+        onCall={vi.fn()}
+        onProposal={null}
+        onBuildProposal={null}
+        onViewProposal={null}
+      />
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });

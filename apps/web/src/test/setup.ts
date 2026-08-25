@@ -95,6 +95,10 @@ vi.mock('@/lib/analytics', async () => {
     EXPERT_PROFILE_EVENTS: events.EXPERT_PROFILE_EVENTS,
     PROJECT_EVENTS: events.PROJECT_EVENTS,
     CONVERSATION_EVENTS: events.CONVERSATION_EVENTS,
+    // BAL-283 — the canonical call-surface tuple. ⚠ WITHOUT THIS LINE any test whose module
+    // graph reaches a Server Action that derives its Zod enum from it throws on an undefined
+    // constant (memory `reference_web_analytics_test_mock_export_list`).
+    CONVERSATION_CALL_SURFACES: events.CONVERSATION_CALL_SURFACES,
     PROJECTS_INBOX_EVENTS: events.PROJECTS_INBOX_EVENTS,
     BILLING_EVENTS: events.BILLING_EVENTS,
     ADMIN_ENGAGEMENTS_EVENTS: events.ADMIN_ENGAGEMENTS_EVENTS,

@@ -39,6 +39,12 @@ import { log } from '@/lib/logging';
 export interface BookingExpertDisplay {
   /** `null` when the expert user has no first name on file. Never a fallback string here. */
   firstName: string | null;
+  /**
+   * BAL-283 — ADDITIVE, for the retrospective "{person} @ {party}" attribution rule
+   * (CLAUDE.md), which needs the full name, not just `firstName`. `null` when the expert user
+   * has no last name on file. Existing callers (`book-consultation.ts`) are unaffected.
+   */
+  lastName: string | null;
   /** Prospective copy names the PARTY (CLAUDE.md) — the agency name, or the expert's own name. */
   partyLabel: string;
 }
@@ -65,7 +71,11 @@ export type BookingContext =
       readonly expert: BookingExpertDisplay;
     };
 
-const FALLBACK_EXPERT_DISPLAY: BookingExpertDisplay = { firstName: null, partyLabel: 'An expert' };
+const FALLBACK_EXPERT_DISPLAY: BookingExpertDisplay = {
+  firstName: null,
+  lastName: null,
+  partyLabel: 'An expert',
+};
 
 /**
  * The expert's display fields for the booking header/copy — `firstName` (personal address)
@@ -98,13 +108,14 @@ export async function resolveBookingExpertDisplay(
     ]);
     const agencyLabel = agency?.name ?? null;
     const firstName = expertUser?.firstName ?? null;
+    const lastName = expertUser?.lastName ?? null;
     const partyLabel = expertPartyDisplayName({
       type: profile.type,
       agencyName: agencyLabel,
       firstName,
-      lastName: expertUser?.lastName ?? null,
+      lastName,
     });
-    return { firstName, partyLabel };
+    return { firstName, lastName, partyLabel };
   } catch (error) {
     log.warn('Booking expert display read failed; degrading to a neutral label', {
       expertProfileId,

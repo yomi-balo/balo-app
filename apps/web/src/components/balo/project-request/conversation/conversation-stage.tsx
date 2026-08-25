@@ -27,7 +27,11 @@ import { fetchThreadAction } from '@/app/(dashboard)/projects/[requestId]/_actio
 import { requestConversationFileUploadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-file-upload';
 import { confirmConversationFileUploadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-file-upload';
 import { getConversationFileDownloadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download';
-import { requestConversationCallAction } from '@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-call';
+import { shareAvailabilityAction } from '@/app/(dashboard)/projects/[requestId]/_actions/share-availability';
+import {
+  IntroCallBookingDialog,
+  type IntroCallBookedSummary,
+} from '@/components/booking/intro-call';
 import {
   requestProposalAction,
   type RequestProposalResult,
@@ -52,6 +56,14 @@ interface ConversationStageProps {
   lens: 'client' | 'expert';
   requestStatus: ProjectRequestStatus;
   view: ConversationView;
+  /** BAL-283 (D12) — prop-drilled from the page, NOT added to the conversation view-model:
+   *  the confirm step's "Intro call for {requestTitle}" context strip. */
+  requestTitle: string;
+  /** BAL-283 (D12) — for `GuestInviteComposer`'s "Outside {company}" copy. */
+  clientCompanyName: string;
+  /** BAL-283 (D12) — the VIEWER's OWN email domain (never a counterparty's — ADR-1044 is not
+   *  engaged), for the guest composer's "same company as you" disclosure. */
+  viewerEmailDomain: string | null;
 }
 
 interface ThreadData {
@@ -126,9 +138,11 @@ function deriveStageRender(input: {
   requestStatus: ProjectRequestStatus;
   activeThread: ConversationThreadView;
   threadCount: number;
+  /** The CLIENT PARTY's name — prospective expert-lens copy names the party (CLAUDE.md). */
+  clientCompanyName: string | null;
 }): StageRenderModel {
-  const { lens, requestStatus, activeThread, threadCount } = input;
-  const nudge = threadNudgeFor(lens, requestStatus, activeThread);
+  const { lens, requestStatus, activeThread, threadCount, clientCompanyName } = input;
+  const nudge = threadNudgeFor(lens, requestStatus, activeThread, clientCompanyName);
   const nudgeIsProposal = Boolean(nudge?.primary && /proposal/i.test(nudge.primary.label));
   const actions = deriveThreadActions({
     lens,
@@ -308,6 +322,9 @@ export function ConversationStage({
   lens,
   requestStatus,
   view,
+  requestTitle,
+  clientCompanyName,
+  viewerEmailDomain,
 }: Readonly<ConversationStageProps>): React.JSX.Element {
   const { viewerUserId } = view;
   const router = useRouter();
@@ -332,6 +349,8 @@ export function ConversationStage({
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState<{ fileName: string; progress: number } | null>(null);
   const [callPending, setCallPending] = useState(false);
+  const [introCallDialogOpen, setIntroCallDialogOpen] = useState(false);
+  const [introCallSurface, setIntroCallSurface] = useState<'header' | 'rail' | 'nudge'>('header');
   const [proposalDialogOpen, setProposalDialogOpen] = useState(false);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
   // Per-thread composer drafts (Slack behaviour): a reply typed for expert A
@@ -769,7 +788,45 @@ export function ConversationStage({
     [activeThreadId, uploading, requestId, lens, rememberFile, conversationIdOf]
   );
 
-  // ── Call CTA (mock seam) ───────────────────────────────────────────────
+  // ── Call CTA (BAL-283) ───────────────────────────────────────────────────
+  //
+  // Lens-specific from here: the CLIENT opens the live-availability dialog (no server call on
+  // click — plan §12.5 step 2); the EXPERT fires `shareAvailabilityAction` directly (no dialog,
+  // no picker — Ruling 3, plan §12.6 step 2).
+  //
+  // ⚠⚠ BOTH PATHS FLIP LOCAL STATE, AND `router.refresh()` ALONE IS NOT ENOUGH (round-1 C1).
+  // `threads` is seeded ONCE from `view.threads`; a refresh PRESERVES client component state by
+  // design (the sibling comment on `<ConversationStage key={view.id}>` in
+  // `request-detail-shell.tsx` says so verbatim) and the key is the REQUEST id, which does not
+  // change on a refresh. Without these flips the entire post-action half of BAL-283 was dead on
+  // BOTH lenses: the expert's "Availability shared" pill never appeared and "Propose times"
+  // stayed a live primary CTA that re-stamped the row on every click (with the 24h rule
+  // silently suppressing the notification the toast implied was sent), and the client's booked
+  // CTA never disappeared, letting them immediately book a second call. Same precedent as
+  // `flipThreadToProposalRequested` below.
+
+  /** Local flip: stamp `availabilitySharedAtIso` so the pill/nudge re-derive instantly. */
+  const flipThreadToAvailabilityShared = useCallback(
+    (threadId: string, sharedAtIso: string): void => {
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.relationshipId === threadId ? { ...t, availabilitySharedAtIso: sharedAtIso } : t
+        )
+      );
+    },
+    []
+  );
+
+  /** Local flip: record the booked call so the CTA becomes the "booked" done cell instantly. */
+  const flipThreadToBooked = useCallback(
+    (threadId: string, booked: { meetingId: string; scheduledStartIso: string }): void => {
+      setThreads((prev) =>
+        prev.map((t) => (t.relationshipId === threadId ? { ...t, bookedCall: booked } : t))
+      );
+    },
+    []
+  );
+
   const handleCall = useCallback(
     (surface: 'header' | 'rail' | 'nudge'): void => {
       if (activeThreadId === null || callPending) return;
@@ -779,16 +836,71 @@ export function ConversationStage({
         lens,
         surface,
       });
+
+      if (lens === 'client') {
+        setIntroCallSurface(surface);
+        setIntroCallDialogOpen(true);
+        return;
+      }
+
       setCallPending(true);
-      requestConversationCallAction({ requestId, relationshipId: activeThreadId })
+      shareAvailabilityAction({ requestId, relationshipId: activeThreadId, surface })
         .then((result) => {
-          if (result.success) toast.success(result.confirmation.message);
-          else toast.error(result.error);
+          if (!result.ok) {
+            const message =
+              result.code === 'not_permitted'
+                ? 'This request has moved on — sharing availability isn’t needed anymore.'
+                : 'Could not share your availability. Please try again.';
+            toast.error(message);
+            return;
+          }
+          track(CONVERSATION_EVENTS.CONVERSATION_AVAILABILITY_SHARED, {
+            request_id: requestId,
+            relationship_id: activeThreadId,
+            surface,
+            is_reshare: result.isReshare,
+          });
+          // ⚠ THE CLIENT PARTY, NOT `expertFirstName` (round-1 CRITICAL). This branch runs ONLY
+          // for `lens === 'expert'`, and `expertFirstName` IS THE VIEWER — so Priya clicked
+          // "Propose times" and was told "Priya can now pick a time from your calendar." The
+          // right value was already a prop on this component and already threaded into
+          // `IntroCallBookingDialog`.
+          const description = result.calendarConnected
+            ? `${clientCompanyName ?? 'The client'} can now pick a time from your calendar.`
+            : 'Connect your calendar so clients can see your open slots.';
+          toast.success(result.isReshare ? 'Availability shared again' : 'Availability shared', {
+            description,
+          });
+          // Local flip FIRST (see the block comment above — the refresh cannot do this), then
+          // the refresh to reconcile everything else the server render owns.
+          flipThreadToAvailabilityShared(activeThreadId, result.sharedAtIso);
+          router.refresh();
         })
-        .catch(() => toast.error('Could not request your call. Please try again.'))
+        .catch(() => toast.error('Could not share your availability. Please try again.'))
         .finally(() => setCallPending(false));
     },
-    [activeThreadId, callPending, requestId, lens]
+    [
+      activeThreadId,
+      callPending,
+      requestId,
+      lens,
+      router,
+      clientCompanyName,
+      flipThreadToAvailabilityShared,
+    ]
+  );
+
+  const handleIntroCallBooked = useCallback(
+    (booked: IntroCallBookedSummary): void => {
+      // ⚠ The thread the DIALOG booked against, captured from the dialog's own props — not
+      // `activeThreadId`, which a tab switch could have moved while the request was in flight.
+      flipThreadToBooked(booked.relationshipId, {
+        meetingId: booked.meetingId,
+        scheduledStartIso: booked.scheduledStartIso,
+      });
+      router.refresh();
+    },
+    [router, flipThreadToBooked]
   );
   const handleHeaderCall = useCallback((): void => handleCall('header'), [handleCall]);
   const handleRailCall = useCallback((): void => handleCall('rail'), [handleCall]);
@@ -1034,13 +1146,27 @@ export function ConversationStage({
     composerContainerRef.current?.querySelector('textarea')?.focus();
   }, []);
 
+  // BAL-283 — the calendar's `emptyAction` escape ("Message {expert} instead"): closes the
+  // dialog and focuses the composer, reusing the SAME `focusComposer` wiring already used by
+  // the nudge/pill's reply action, per the design's "never a dead end" rule.
+  const handleIntroCallMessage = useCallback((): void => {
+    setIntroCallDialogOpen(false);
+    focusComposer();
+  }, [focusComposer]);
+
   // ── Zero open threads — invitation, never a blank panel ────────────────
   if (threads.length === 0 || activeThread === null) {
     return <EmptyConversationStage lens={lens} />;
   }
 
   const { nudge, actions, single, showYouSuffix, profileHref, showProposalPill, showOverflow } =
-    deriveStageRender({ lens, requestStatus, activeThread, threadCount: threads.length });
+    deriveStageRender({
+      lens,
+      requestStatus,
+      activeThread,
+      threadCount: threads.length,
+      clientCompanyName,
+    });
 
   // Lens-gated handler wiring (pure helper — keeps the component body branch-light).
   const {
@@ -1175,8 +1301,7 @@ export function ConversationStage({
 
       <MobileActionRail
         visible={!composerFocused}
-        showCall={actions.showCallOnRail}
-        callLabel={actions.callLabel}
+        callSlot={actions.callSlot}
         callPending={callPending}
         proposalCta={actions.railProposal}
         onCall={handleRailCall}
@@ -1211,6 +1336,29 @@ export function ConversationStage({
         onConfirm={handleProposalConfirm}
         onConfirmed={handleProposalConfirmed}
       />
+
+      {/* BAL-283 — the CLIENT lens's live-availability booking dialog. Mounted for the ACTIVE
+          thread only; a tab switch while open would otherwise book against the wrong
+          relationship. */}
+      {lens === 'client' && (
+        <IntroCallBookingDialog
+          open={introCallDialogOpen}
+          onOpenChange={setIntroCallDialogOpen}
+          requestId={requestId}
+          relationshipId={activeThread.relationshipId}
+          expertProfileId={activeThread.expertProfileId}
+          expertName={activeThread.expertName}
+          expertFirstName={activeThread.expertFirstName}
+          expertInitials={activeThread.expertInitials}
+          requestTitle={requestTitle}
+          clientCompanyName={clientCompanyName}
+          viewerEmailDomain={viewerEmailDomain}
+          viewerTimezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+          surface={introCallSurface}
+          onBooked={handleIntroCallBooked}
+          onMessage={handleIntroCallMessage}
+        />
+      )}
     </RequestCard>
   );
 }

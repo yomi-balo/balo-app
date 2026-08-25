@@ -2,44 +2,103 @@ import { describe, it, expect } from 'vitest';
 import { deriveThreadActions } from './thread-actions';
 import { thread } from '@/test/fixtures/conversation';
 
-describe('deriveThreadActions — call gating', () => {
-  it('allows the call before kickoff on active threads, with lens-aware labels', () => {
+describe('deriveThreadActions — the callSlot state matrix (BAL-283)', () => {
+  it('client, nothing booked yet → book', () => {
     const client = deriveThreadActions({
       lens: 'client',
       requestStatus: 'eoi_submitted',
       thread: thread(),
       nudgeIsProposal: false,
     });
-    expect(client.callAllowed).toBe(true);
-    expect(client.callLabel).toBe('Book a call');
-    expect(client.showCallOnRail).toBe(true);
+    expect(client.callSlot).toEqual({ kind: 'book' });
+  });
 
+  it('expert, not yet shared → propose', () => {
     const expert = deriveThreadActions({
       lens: 'expert',
       requestStatus: 'eoi_submitted',
       thread: thread(),
       nudgeIsProposal: false,
     });
-    expect(expert.callLabel).toBe('Propose times');
+    expect(expert.callSlot).toEqual({ kind: 'propose' });
   });
 
-  it('blocks the call at kickoff_approved and on non-active threads', () => {
+  it('expert, availability_shared_at set → shared', () => {
+    const expert = deriveThreadActions({
+      lens: 'expert',
+      requestStatus: 'eoi_submitted',
+      thread: thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' }),
+      nudgeIsProposal: false,
+    });
+    expect(expert.callSlot).toEqual({ kind: 'shared' });
+  });
+
+  it('client lens is UNAFFECTED by availabilitySharedAtIso — it stays "book"', () => {
+    const client = deriveThreadActions({
+      lens: 'client',
+      requestStatus: 'eoi_submitted',
+      thread: thread({ availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' }),
+      nudgeIsProposal: false,
+    });
+    expect(client.callSlot).toEqual({ kind: 'book' });
+  });
+
+  it('either lens, a live call is booked → booked, with the scheduled start — BEATS everything', () => {
+    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
+    const client = deriveThreadActions({
+      lens: 'client',
+      requestStatus: 'eoi_submitted',
+      thread: thread({ bookedCall }),
+      nudgeIsProposal: false,
+    });
+    expect(client.callSlot).toEqual({
+      kind: 'booked',
+      scheduledStartIso: bookedCall.scheduledStartIso,
+    });
+
+    const expert = deriveThreadActions({
+      lens: 'expert',
+      requestStatus: 'eoi_submitted',
+      thread: thread({ bookedCall, availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' }),
+      nudgeIsProposal: false,
+    });
+    expect(expert.callSlot).toEqual({
+      kind: 'booked',
+      scheduledStartIso: bookedCall.scheduledStartIso,
+    });
+  });
+
+  it('blocks the call (kind: none) at kickoff_approved and on non-active threads', () => {
     expect(
       deriveThreadActions({
         lens: 'client',
         requestStatus: 'kickoff_approved',
         thread: thread({ stage: 'won', relationshipStatus: 'accepted' }),
         nudgeIsProposal: false,
-      }).callAllowed
-    ).toBe(false);
+      }).callSlot
+    ).toEqual({ kind: 'none' });
     expect(
       deriveThreadActions({
         lens: 'client',
         requestStatus: 'accepted',
         thread: thread({ stage: 'not_selected' }),
         nudgeIsProposal: false,
-      }).callAllowed
-    ).toBe(false);
+      }).callSlot
+    ).toEqual({ kind: 'none' });
+  });
+
+  it('a booked call still wins even past the call gate (nothing left to re-derive)', () => {
+    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
+    const actions = deriveThreadActions({
+      lens: 'client',
+      requestStatus: 'kickoff_approved',
+      thread: thread({ stage: 'won', relationshipStatus: 'accepted', bookedCall }),
+      nudgeIsProposal: false,
+    });
+    expect(actions.callSlot).toEqual({
+      kind: 'booked',
+      scheduledStartIso: bookedCall.scheduledStartIso,
+    });
   });
 });
 
@@ -149,7 +208,7 @@ describe('deriveThreadActions — mobile rail', () => {
       thread: thread({ stage: 'won', relationshipStatus: 'accepted' }),
       nudgeIsProposal: false,
     });
-    expect(actions.showCallOnRail).toBe(false);
+    expect(actions.callSlot).toEqual({ kind: 'none' });
     expect(actions.railProposal).toBeNull();
   });
 

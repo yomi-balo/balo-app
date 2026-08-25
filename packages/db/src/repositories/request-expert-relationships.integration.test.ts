@@ -298,6 +298,115 @@ describe('requestExpertRelationshipsRepository.listByRequest', () => {
   });
 });
 
+describe('requestExpertRelationshipsRepository.stampAvailabilityShared', () => {
+  it('first share stamps the column and reports previousSharedAt: null', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+    expect(relationship.availabilitySharedAt).toBeNull(); // every pre-BAL-283 row
+
+    const result = await requestExpertRelationshipsRepository.stampAvailabilityShared(
+      relationship.id
+    );
+
+    expect(result).toBeDefined();
+    // `null` is what the caller turns into `isReshare: false` AND what the notification
+    // rule's 24h window reads as "first share, always deliver".
+    expect(result?.previousSharedAt).toBeNull();
+    expect(result?.sharedAt).toBeInstanceOf(Date);
+
+    // Persisted on disk (not just returned), and equal to the returned instant — the caller
+    // puts `sharedAt` in a payload and in the BullMQ correlationId, so a later read of this
+    // row must agree with it.
+    const reloaded = await requestExpertRelationshipsRepository.findById(relationship.id);
+    expect(reloaded?.availabilitySharedAt?.getTime()).toBe(result?.sharedAt.getTime());
+  });
+
+  it('re-share returns the PRIOR instant and advances the column', async () => {
+    const { relationship } = await requestExpertRelationshipFactory();
+
+    const first = await requestExpertRelationshipsRepository.stampAvailabilityShared(
+      relationship.id
+    );
+    const second = await requestExpertRelationshipsRepository.stampAvailabilityShared(
+      relationship.id
+    );
+
+    // ⚠ THE WHOLE POINT OF THE METHOD. The previous instant is the ONLY input to the flat 24h
+    // re-notify window — the notification engine has no cooldown primitive and no last-sent
+    // store, so if this were lost the throttle could not be built at all.
+    expect(second?.previousSharedAt?.getTime()).toBe(first?.sharedAt.getTime());
+    expect(second?.sharedAt.getTime()).toBeGreaterThanOrEqual(first?.sharedAt.getTime() ?? 0);
+
+    const reloaded = await requestExpertRelationshipsRepository.findById(relationship.id);
+    expect(reloaded?.availabilitySharedAt?.getTime()).toBe(second?.sharedAt.getTime());
+  });
+
+  it('touches updatedAt but NOT status, declinedAt or proposalRequestedAt', async () => {
+    // Sharing availability is not a lifecycle event: the relationship stays exactly where it
+    // was, and there is no request-level rollup to re-derive.
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'eoi_submitted' },
+    });
+
+    await requestExpertRelationshipsRepository.stampAvailabilityShared(relationship.id);
+
+    const [raw] = await db
+      .select()
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.id, relationship.id));
+    expect(raw?.status).toBe('eoi_submitted');
+    expect(raw?.declinedAt).toBeNull();
+    expect(raw?.proposalRequestedAt).toBeNull();
+    expect(raw?.updatedAt.getTime()).toBeGreaterThanOrEqual(relationship.updatedAt.getTime());
+  });
+
+  it('surfaces on findByIdWithRelations — the render path reads it (the ONE widened column)', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+
+    const stamped = await requestExpertRelationshipsRepository.stampAvailabilityShared(
+      relationship.id
+    );
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+    const [projected] = found?.relationships ?? [];
+    expect(projected?.availabilitySharedAt?.getTime()).toBe(stamped?.sharedAt.getTime());
+    // ⚠ AND THE COLUMNS DELIBERATELY *NOT* WIDENED IN. `relationshipDeniesHosting` needs BOTH
+    // `status` and `declinedAt` so it fails CLOSED when they disagree; half-enabling it from
+    // this render-path projection is exactly the mistake the mutations must not make.
+    expect(projected).not.toHaveProperty('declinedAt');
+    expect(projected).not.toHaveProperty('deletedAt');
+  });
+
+  it('returns undefined for a soft-deleted (withdrawn) relationship, and writes nothing', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { deletedAt: new Date() },
+    });
+
+    const result = await requestExpertRelationshipsRepository.stampAvailabilityShared(
+      relationship.id
+    );
+
+    expect(result).toBeUndefined();
+    const [raw] = await db
+      .select()
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.id, relationship.id));
+    expect(raw?.availabilitySharedAt).toBeNull();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    const result = await requestExpertRelationshipsRepository.stampAvailabilityShared(randomUUID());
+
+    expect(result).toBeUndefined();
+  });
+});
+
 describe('requestExpertRelationshipsRepository.transitionStatus', () => {
   it('advances through a legal transition', async () => {
     const { relationship } = await requestExpertRelationshipFactory();

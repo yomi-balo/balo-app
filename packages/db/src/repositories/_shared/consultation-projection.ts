@@ -6,6 +6,7 @@ import {
   meetingContexts,
   meetings,
   projectRequests,
+  requestExpertRelationships,
   type Consultation,
   type ConsultationStatus,
   type Meeting,
@@ -39,7 +40,7 @@ import type { DbExecutor } from './db-executor';
  *   case / project_kickoff / package_session / retainer_checkin → `engagements.expert_profile_id`
  *   project_discovery                                            → `project_requests.expert_profile_id`
  *   admin                                                        → IGNORED (no expert exists)
- *   request_interaction                                          → NOT PROJECTABLE YET (throws)
+ *   request_interaction                                          → `request_expert_relationships.expert_profile_id`
  *
  * ⚠ THE WALK IS EXHAUSTIVE OVER `meeting_context_type`, AND MUST STAY SO. Every label gets
  * an arm in BOTH `loadContextExperts` and `resolveOneContext`; there is no safe default,
@@ -47,6 +48,23 @@ import type { DbExecutor } from './db-executor';
  * some other table's id is a silent misresolution or a misdiagnosed throw. An 8th label
  * must add an arm to both — `packages/db/src/invariants/meeting-context-type-labels.test.ts`
  * names this module in its sweep list for exactly that reason.
+ *
+ * ⚠ THE TWO HALVES ARE COUPLED THROUGH THE LOOKUP MAPS, AND THAT COUPLING IS THE ONLY
+ * MECHANICAL GUARD AGAINST A HALF-ADD (BAL-283). `resolveOneContext` is now a `switch` whose
+ * `default` assigns to `never`, so an 8th label with no arm THERE fails
+ * `pnpm --filter api typecheck` (this module is inside `apps/api`'s program — `@balo/db`'s
+ * exports point at raw `./src/*.ts` and the meetings route value-imports the barrel).
+ * `loadContextExperts` is NOT typechecked by anything, so an arm added only to it, or only to
+ * `resolveOneContext`, is caught at RUNTIME instead — by every arm answering from a map only
+ * `loadContextExperts` can populate:
+ *
+ *   arm in `resolveOneContext` only → the map is empty → `MeetingContextUnresolvableError`
+ *   arm in `loadContextExperts` only → falls through the switch → typecheck error, and at
+ *                                      runtime `MeetingContextNotProjectableError`
+ *
+ * Both shapes are pinned in `consultation-projection.test.ts` (T1/T2). ⚠ The named invariant
+ * test does NOT catch this: it imports `meetingContextTypeEnum` and asserts on `enumValues`
+ * only — it never opens this module.
  *
  * A booking that cannot name EXACTLY ONE expert throws and the transaction rolls back.
  * Zero non-admin contexts resolves to `null`, which means NO projection row at all — an
@@ -98,38 +116,34 @@ export class MeetingExpertAmbiguousError extends Error {
 }
 
 /**
- * A context type that is REAL but has no projection rule yet (BAL-413).
+ * THE GENERIC DEFENCE FOR A LABEL WITH NO PROJECTION RULE — a `meeting_context_type` value
+ * that is REAL but that `resolveOneContext`'s switch does not answer for.
  *
- * ⚠ NAMED DECISION, NOT A FALL-THROUGH. `request_interaction` (the client↔candidate call
- * label added in BAL-413 / ADR-1046's 2026-08-07 amendment) anchors on
- * `request_expert_relationships.id`, NOT on `engagements.id`. Before this class existed it
- * fell into the engagement `else` branch, was looked up in the wrong table, resolved to
- * nothing, and threw `MeetingContextUnresolvableError` — an error whose message
- * ("does not resolve to a live row") would have been a LIE about a row that exists, and
- * which would have rolled back the whole `meetingsRepository.create` transaction with a
- * misleading diagnosis. Fail-closed, but fail-closed for the wrong stated reason is how a
- * one-hour debug becomes a one-day one.
+ * ⚠ IT NO LONGER NAMES A PENDING OWNER, AND THAT IS THE POINT (BAL-283). This class was born
+ * in BAL-413 as `request_interaction`'s answer, while whether a client↔candidate call should
+ * occupy that candidate's calendar was still an unmade product ruling. **That ruling is now
+ * made and shipped: it DOES block the slot** (BAL-283 Ruling 1, owner-ratified, recorded as an
+ * ADR-1046 amendment), and `request_interaction` resolves through
+ * `request_expert_relationships.expert_profile_id` like any other projected label. Every one
+ * of the seven labels now has an arm, so nothing in the shipped enum reaches this class.
  *
- * WHY NOT JUST PROJECT IT. Resolving `request_expert_relationships → expert_profile_id`
- * would be easy and is probably what the writer eventually wants — but BAL-413 ships the
- * LABEL only, deliberately live-but-unwritten (F7), and inventing a projection rule the
- * ticket never specified would put an unreviewed booking semantics into the one module
- * allowed to write `consultations`. Whether a candidate call should occupy that
- * candidate's calendar at all is a product decision that belongs to the BOOKING-LANE
- * surface that writes the first `request_interaction` row (BAL-283), together with an
- * ADR-1046 amendment. Until then this throws with an accurate name and a pointer.
+ * WHAT IT IS FOR NOW: an 8th label. Both guards fire, and they are deliberately different:
+ *   · TYPE-LEVEL — `resolveOneContext`'s `default` assigns `context.contextType` to `never`,
+ *     so a new label with no arm fails `pnpm --filter api typecheck` at the switch itself.
+ *   · RUNTIME — a label can still ARRIVE from a raw DB row that a cast let past the type
+ *     (this module reads `meeting_contexts`, which has no FK and no RLS), so the throw stays.
  *
- * ⚠ RE-ASSIGNED FROM BAL-129 TO BAL-283 (2026-08-08, BAL-129 decision D3). BAL-129 is the
- * booking-lane surface that landed first, and it EXPLICITLY DECLINED to define this rule:
- * its context list predates the label, the projection module is BAL-428's, and whether a
- * client↔candidate call blocks the candidate's calendar is an unmade product ruling. BAL-283
- * books exactly this context and already carries the identical unanswered question for
- * money. BAL-129 excludes `request_interaction` at its Zod boundary, so this error is
- * structurally unreachable from `POST /meetings`.
+ * WHY IT IS NOT DELETED NOW THAT `request_interaction` PROJECTS. Deleting it would remove
+ * `409 context_not_bookable` from `POST /meetings`'s error table and force the fall-through
+ * to be `MeetingContextUnresolvableError` — an error whose message ("does not resolve to a
+ * live row") would be a LIE about a row that exists and is perfectly live, and which would
+ * roll back the whole `meetingsRepository.create` transaction with a misleading diagnosis.
+ * That misdiagnosis is exactly what BAL-413 introduced this class to stop; the class outlives
+ * the label that prompted it.
  *
- * WHY NOT `ignored`. That is the ONE outcome that is unsafe: it would write a meeting with
- * NO projection row, i.e. a booking blocking nobody's calendar — precisely the
- * double-booking BAL-428 exists to close.
+ * WHY NOT `ignored`. That is the ONE outcome that is unsafe, for a new label as much as it
+ * was for `request_interaction`: it would write a meeting with NO projection row, i.e. a
+ * booking blocking nobody's calendar — precisely the double-booking BAL-428 exists to close.
  */
 export class MeetingContextNotProjectableError extends Error {
   constructor(
@@ -137,7 +151,7 @@ export class MeetingContextNotProjectableError extends Error {
     public readonly contextId: string
   ) {
     super(
-      `Meeting context type '${contextType}' (${contextId}) has no consultation projection rule yet — the booking-lane surface that writes this label (BAL-283) must define one, per ADR-1046`
+      `Meeting context type '${contextType}' (${contextId}) has no consultation projection rule — add an arm to BOTH loadContextExperts and resolveOneContext in _shared/consultation-projection.ts, per ADR-1046`
     );
     this.name = 'MeetingContextNotProjectableError';
   }
@@ -186,20 +200,27 @@ interface ContextExpertMaps {
   engagementExperts: Map<string, string>;
   /** `project_requests.id` → `expert_profile_id` (NULLABLE = match mode), live rows only. */
   requestExperts: Map<string, string | null>;
+  /**
+   * `request_expert_relationships.id` → `expert_profile_id`, live rows only (BAL-283).
+   *
+   * ⚠ `string`, NOT `string | null` — `request_expert_relationships.expert_profile_id` is
+   * NOT NULL (`schema/request-origination.ts`), so this label has NO match-mode equivalent
+   * and `.get()` is the correct read here, unlike `requestExperts`'s deliberate `.has()`.
+   */
+  relationshipExperts: Map<string, string>;
 }
 
-/**
- * BATCHED, DELIBERATELY: `findProjectionDrift` resolves many meetings at once, and a
- * per-context read would be a textbook N+1. The single-meeting writers pass one meeting's
- * contexts and pay two queries at most (one if the meeting has no `project_discovery`
- * context, zero if it is admin-only).
- */
-async function loadContextExperts(
-  exec: DbExecutor,
-  contexts: readonly ProjectionContext[]
-): Promise<ContextExpertMaps> {
+interface ContextIdBuckets {
+  engagementIds: Set<string>;
+  requestIds: Set<string>;
+  relationshipIds: Set<string>;
+}
+
+/** PURE. Sorts every context's id into the one table batch that can resolve it. */
+function classifyContextIds(contexts: readonly ProjectionContext[]): ContextIdBuckets {
   const engagementIds = new Set<string>();
   const requestIds = new Set<string>();
+  const relationshipIds = new Set<string>();
   for (const context of contexts) {
     // `admin` carries no subject, and the biconditional CHECK makes the two conditions
     // equivalent — both are spelled out so a reader does not have to know that.
@@ -209,9 +230,10 @@ async function loadContextExperts(
     // ⚠ EXPLICIT, and it must stay above the engagement `else`. A `request_interaction`
     // `context_id` is a `request_expert_relationships.id`; querying `engagements` with it
     // is a guaranteed miss that `resolveOneContext` would then have to diagnose as
-    // "unresolvable". No table to load — `resolveOneContext` reports it as
-    // `not_projectable`. See `MeetingContextNotProjectableError`.
+    // "unresolvable". BAL-283 (Ruling 1) gave this label its OWN table — the id is queued
+    // into its own batch below, and `resolveOneContext`'s matching arm reads THIS map.
     if (context.contextType === 'request_interaction') {
+      relationshipIds.add(context.contextId);
       continue;
     }
     if (context.contextType === 'project_discovery') {
@@ -220,30 +242,93 @@ async function loadContextExperts(
       engagementIds.add(context.contextId);
     }
   }
+  return { engagementIds, requestIds, relationshipIds };
+}
 
-  const engagementExperts = new Map<string, string>();
-  const requestExperts = new Map<string, string | null>();
-
-  if (engagementIds.size > 0) {
-    const rows = await exec
-      .select({ id: engagements.id, expertProfileId: engagements.expertProfileId })
-      .from(engagements)
-      .where(and(inArray(engagements.id, [...engagementIds]), isNull(engagements.deletedAt)));
-    for (const row of rows) {
-      engagementExperts.set(row.id, row.expertProfileId);
-    }
+async function loadEngagementExperts(
+  exec: DbExecutor,
+  ids: ReadonlySet<string>
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (ids.size === 0) {
+    return map;
   }
-  if (requestIds.size > 0) {
-    const rows = await exec
-      .select({ id: projectRequests.id, expertProfileId: projectRequests.expertProfileId })
-      .from(projectRequests)
-      .where(and(inArray(projectRequests.id, [...requestIds]), isNull(projectRequests.deletedAt)));
-    for (const row of rows) {
-      requestExperts.set(row.id, row.expertProfileId);
-    }
+  const rows = await exec
+    .select({ id: engagements.id, expertProfileId: engagements.expertProfileId })
+    .from(engagements)
+    .where(and(inArray(engagements.id, [...ids]), isNull(engagements.deletedAt)));
+  for (const row of rows) {
+    map.set(row.id, row.expertProfileId);
   }
+  return map;
+}
 
-  return { engagementExperts, requestExperts };
+async function loadRequestExperts(
+  exec: DbExecutor,
+  ids: ReadonlySet<string>
+): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>();
+  if (ids.size === 0) {
+    return map;
+  }
+  const rows = await exec
+    .select({ id: projectRequests.id, expertProfileId: projectRequests.expertProfileId })
+    .from(projectRequests)
+    .where(and(inArray(projectRequests.id, [...ids]), isNull(projectRequests.deletedAt)));
+  for (const row of rows) {
+    map.set(row.id, row.expertProfileId);
+  }
+  return map;
+}
+
+/**
+ * BAL-283 (Ruling 1) — a client↔candidate call DOES block the candidate's calendar, so the
+ * relationship's own expert is loaded here exactly like the other two batches. Soft-deleted
+ * relationships are excluded (the `drizzle-schema` soft-delete query rule), which is what makes
+ * a withdrawn expert's stale context resolve `unresolvable` rather than book time on a calendar
+ * the marketplace no longer offers.
+ */
+async function loadRelationshipExperts(
+  exec: DbExecutor,
+  ids: ReadonlySet<string>
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (ids.size === 0) {
+    return map;
+  }
+  const rows = await exec
+    .select({
+      id: requestExpertRelationships.id,
+      expertProfileId: requestExpertRelationships.expertProfileId,
+    })
+    .from(requestExpertRelationships)
+    .where(
+      and(
+        inArray(requestExpertRelationships.id, [...ids]),
+        isNull(requestExpertRelationships.deletedAt)
+      )
+    );
+  for (const row of rows) {
+    map.set(row.id, row.expertProfileId);
+  }
+  return map;
+}
+
+/**
+ * BATCHED, DELIBERATELY: `findProjectionDrift` resolves many meetings at once, and a
+ * per-context read would be a textbook N+1. ONE query PER TARGET TABLE for the whole context
+ * set, never one per context — so the single-meeting writers pay THREE at most (BAL-283 added
+ * the third), and zero for an admin-only meeting.
+ */
+async function loadContextExperts(
+  exec: DbExecutor,
+  contexts: readonly ProjectionContext[]
+): Promise<ContextExpertMaps> {
+  const { engagementIds, requestIds, relationshipIds } = classifyContextIds(contexts);
+  const engagementExperts = await loadEngagementExperts(exec, engagementIds);
+  const requestExperts = await loadRequestExperts(exec, requestIds);
+  const relationshipExperts = await loadRelationshipExperts(exec, relationshipIds);
+  return { engagementExperts, requestExperts, relationshipExperts };
 }
 
 /**
@@ -276,44 +361,66 @@ function sortIds(ids: string[]): string[] {
 
 function resolveOneContext(context: ProjectionContext, maps: ContextExpertMaps): ContextResolution {
   // `admin` carries no subject, and the biconditional CHECK makes the two conditions
-  // equivalent — both are spelled out so a reader does not have to know that.
+  // equivalent — both are spelled out so a reader does not have to know that. It stays a
+  // guard ABOVE the switch rather than an arm inside it, because it is the one label whose
+  // `contextId` is legally NULL and the switch below is written over a non-null id.
   if (context.contextType === 'admin' || context.contextId === null) {
     return { kind: 'ignored' };
   }
+  const contextId = context.contextId;
   const unresolvable = {
     kind: 'unresolvable',
     contextType: context.contextType,
-    contextId: context.contextId,
+    contextId,
   } as const;
 
-  // ⚠ EXPLICIT ARM, above the engagement fall-through — the whole point of this branch is
-  // that `request_interaction` must NOT be treated as an `engagements.id`. Reported as a
-  // named "no projection rule yet" decision rather than a misdiagnosed "unresolvable"
-  // row. See `MeetingContextNotProjectableError` for why it throws instead of projecting
-  // or being ignored, and who owns defining the rule.
-  if (context.contextType === 'request_interaction') {
-    return {
-      kind: 'not_projectable',
-      contextType: context.contextType,
-      contextId: context.contextId,
-    };
-  }
-
-  if (context.contextType === 'project_discovery') {
-    // `has` vs `get`, DELIBERATELY: the map stores `string | null`, so a MISSING key (no such
-    // live request) and a PRESENT null one (match mode) are different outcomes that `get`
-    // alone would flatten into one.
-    if (!maps.requestExperts.has(context.contextId)) {
-      return unresolvable;
+  switch (context.contextType) {
+    case 'request_interaction': {
+      // BAL-283 / Ruling 1 (owner-ratified) — a client↔candidate call DOES block the
+      // candidate's calendar: "we should not care what event is in the expert calendar; all
+      // we care about is, is that slot free or not". The id is a
+      // `request_expert_relationships.id`, NEVER an `engagements.id`, and its expert comes
+      // from the map `loadContextExperts` fills from that table — which is what makes a
+      // half-added arm impossible to ship silently (see the module docblock).
+      //
+      // `get`, not `has`: `expert_profile_id` is NOT NULL there, so a missing key means no
+      // LIVE relationship (absent or soft-deleted, i.e. a withdrawn expert) and there is no
+      // match-mode third state to distinguish.
+      const expertProfileId = maps.relationshipExperts.get(contextId);
+      return expertProfileId === undefined ? unresolvable : { kind: 'expert', expertProfileId };
     }
-    const expertProfileId = maps.requestExperts.get(context.contextId) ?? null;
-    return expertProfileId === null
-      ? { kind: 'match_mode', projectRequestId: context.contextId }
-      : { kind: 'expert', expertProfileId };
+    case 'project_discovery': {
+      // `has` vs `get`, DELIBERATELY: the map stores `string | null`, so a MISSING key (no
+      // such live request) and a PRESENT null one (match mode) are different outcomes that
+      // `get` alone would flatten into one.
+      if (!maps.requestExperts.has(contextId)) {
+        return unresolvable;
+      }
+      const expertProfileId = maps.requestExperts.get(contextId) ?? null;
+      return expertProfileId === null
+        ? { kind: 'match_mode', projectRequestId: contextId }
+        : { kind: 'expert', expertProfileId };
+    }
+    case 'case':
+    case 'project_kickoff':
+    case 'package_session':
+    case 'retainer_checkin': {
+      const expertProfileId = maps.engagementExperts.get(contextId);
+      return expertProfileId === undefined ? unresolvable : { kind: 'expert', expertProfileId };
+    }
+    default: {
+      // ⚠ TWO GUARDS, ONE ARM, AND BOTH ARE LOAD-BEARING.
+      //   TYPE-LEVEL: `never` today, so an 8th `meeting_context_type` label fails
+      //   `pnpm --filter api typecheck` RIGHT HERE — this module really is inside `apps/api`'s
+      //   program (`@balo/db`'s exports point at raw `./src/*.ts`, and the meetings route
+      //   value-imports the barrel), verified by probe. `@balo/db` has no typecheck script of
+      //   its own, so this is the only compiler that sees it.
+      //   RUNTIME: still a named, fail-closed throw, because a label can also ARRIVE from a
+      //   raw DB row that a cast let past the type — `meeting_contexts` has no FK and no RLS.
+      const unhandled: never = context.contextType;
+      return { kind: 'not_projectable', contextType: unhandled, contextId };
+    }
   }
-
-  const expertProfileId = maps.engagementExperts.get(context.contextId);
-  return expertProfileId === undefined ? unresolvable : { kind: 'expert', expertProfileId };
 }
 
 /**
@@ -842,6 +949,6 @@ function describeResolution(resolution: ExpertResolution): string {
     case 'unresolvable':
       return `an unresolvable ${resolution.contextType} context (${resolution.contextId})`;
     case 'not_projectable':
-      return `a ${resolution.contextType} context (${resolution.contextId}), which has no projection rule yet`;
+      return `a ${resolution.contextType} context (${resolution.contextId}), which has no projection rule`;
   }
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "request_expert_relationships" ADD COLUMN "availability_shared_at" timestamp with time zone;

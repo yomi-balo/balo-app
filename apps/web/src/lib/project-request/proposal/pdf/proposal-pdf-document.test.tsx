@@ -100,6 +100,9 @@ function makeRelationship(): Relationship {
     status: 'proposal_submitted',
     invitedAt: NOW,
     updatedAt: NOW,
+    // BAL-283 — the render-path projection carries "has the expert shared availability on
+    // this thread". The PDF reads none of it; `null` = never shared.
+    availabilitySharedAt: null,
     expertProfile: {
       id: 'exp-1',
       // ⚠ `numeric` ⇒ a STRING off the driver — the fixture mirrors the raw row.

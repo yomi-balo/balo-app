@@ -176,4 +176,23 @@ describe('ThreadHeader', () => {
     });
     expect(screen.queryByRole('button', { name: 'Book a call' })).not.toBeInTheDocument();
   });
+
+  // ── BAL-283 — the callSlot states on the desktop header ─────────────────────────────────
+
+  it("expert, availability_shared_at set: renders the quiet 'Availability shared' pill, not a button", () => {
+    renderHeader({
+      lens: 'expert',
+      threadOverrides: { availabilitySharedAtIso: '2026-08-20T00:00:00.000Z' },
+    });
+    expect(screen.queryByRole('button', { name: 'Propose times' })).not.toBeInTheDocument();
+    const pill = screen.getByText('Availability shared');
+    expect(pill.closest('[aria-disabled="true"]')).not.toBeNull();
+  });
+
+  it('a booked call removes the call CTA slot entirely, for either lens', () => {
+    const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
+    renderHeader({ lens: 'client', threadOverrides: { bookedCall } });
+    expect(screen.queryByRole('button', { name: 'Book a call' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Availability shared')).not.toBeInTheDocument();
+  });
 });

@@ -104,6 +104,10 @@ function makeRelationship(): Relationship {
     status: 'proposal_submitted',
     invitedAt: NOW,
     updatedAt: NOW,
+    // BAL-283 — the render-path projection carries "has the expert shared availability on
+    // this thread". Nothing in the proposal audience view reads it; `null` (never shared) is
+    // the shape every pre-BAL-283 row has.
+    availabilitySharedAt: null,
     expertProfile: {
       id: 'exp-1',
       // ⚠ `rating_average` is `numeric(2,1)`, so Drizzle's relational `columns:` hands back

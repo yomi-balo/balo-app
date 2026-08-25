@@ -12,10 +12,21 @@ vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
+// BAL-283 — the intro-call dialog's phase transitions use motion/react; mocked per the
+// balo-ui-skill's "mock framer-motion in component tests" rule.
+vi.mock('motion/react', async () => {
+  const { createMotionStub } = await import('@/test/motion-stub');
+  return createMotionStub();
+});
 
 const mockPush = vi.hoisted(() => vi.fn());
+// ⚠ `refresh` IS PART OF THE STUB, and its absence was a real hazard (BAL-283 round 1): the
+// BAL-283 call paths call `router.refresh()` after a successful share/booking, so a stub
+// without it threw a `TypeError` that the surrounding `.catch()` swallowed into an error
+// toast — silently turning any post-action assertion into a test of the FAILURE path.
+const mockRefresh = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: mockPush, refresh: mockRefresh }),
 }));
 
 // Tiptap-free viewer stand-in (EOI intro card only — bubbles never use it).
@@ -30,7 +41,8 @@ const {
   mockRequestUpload,
   mockConfirmUpload,
   mockGetDownload,
-  mockRequestCall,
+  mockShareAvailability,
+  mockBookIntroCall,
   mockRequestProposal,
 } = vi.hoisted(() => ({
   mockPostMessage: vi.fn(),
@@ -39,7 +51,8 @@ const {
   mockRequestUpload: vi.fn(),
   mockConfirmUpload: vi.fn(),
   mockGetDownload: vi.fn(),
-  mockRequestCall: vi.fn(),
+  mockShareAvailability: vi.fn(),
+  mockBookIntroCall: vi.fn(),
   mockRequestProposal: vi.fn(),
 }));
 
@@ -61,11 +74,44 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-fi
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download', () => ({
   getConversationFileDownloadAction: (...args: unknown[]) => mockGetDownload(...args),
 }));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-call', () => ({
-  requestConversationCallAction: (...args: unknown[]) => mockRequestCall(...args),
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/share-availability', () => ({
+  shareAvailabilityAction: (...args: unknown[]) => mockShareAvailability(...args),
+}));
+vi.mock('@/lib/booking/actions/book-intro-call', () => ({
+  bookIntroCallAction: (...args: unknown[]) => mockBookIntroCall(...args),
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal', () => ({
   requestProposalAction: (...args: unknown[]) => mockRequestProposal(...args),
+}));
+
+// BAL-283 — Step 1's calendar is embedded "as shipped" (D3, same posture as
+// `booking-flow-dialog.test.tsx`) — stubbed here so opening the intro-call dialog never
+// exercises the calendar's own (separately tested) fetch state machine.
+//
+// ⚠ IT EXPOSES `onSlotSelect` AS A REAL BUTTON, deliberately: the round-1 C1 test drives a
+// booking END TO END through this stage (pick → confirm → booked) to prove the thread's own
+// state flips WITHOUT a remount, which an inert stub could not reach.
+vi.mock('@/components/availability', () => ({
+  ExpertAvailabilityCalendar: (props: {
+    onSlotSelect?: (s: { start: string; end: string; duration: 15 | 30 | 45 | 60 }) => void;
+    emptyAction?: React.ReactNode;
+  }) => (
+    <div data-testid="intro-call-calendar-stub">
+      <button
+        type="button"
+        onClick={() =>
+          props.onSlotSelect?.({
+            start: '2026-06-05T09:00:00.000Z',
+            end: '2026-06-05T09:30:00.000Z',
+            duration: 30,
+          })
+        }
+      >
+        Pick 9am slot
+      </button>
+      {props.emptyAction}
+    </div>
+  ),
 }));
 
 // XHR PUT seam — no sockets in jsdom.
@@ -153,7 +199,15 @@ function fileView(id: string, overrides: Record<string, unknown> = {}): Record<s
 
 function renderStage(v: ConversationView, lens: 'client' | 'expert' = 'client'): void {
   render(
-    <ConversationStage requestId={REQUEST_ID} lens={lens} requestStatus="eoi_submitted" view={v} />
+    <ConversationStage
+      requestId={REQUEST_ID}
+      lens={lens}
+      requestStatus="eoi_submitted"
+      view={v}
+      requestTitle="CPQ implementation"
+      clientCompanyName="Northwind Industrial"
+      viewerEmailDomain="northwind.example"
+    />
   );
 }
 
@@ -167,13 +221,22 @@ beforeEach(() => {
     success: true,
     message: message('m-new', { senderUserId: VIEWER_ID }),
   });
-  mockRequestCall.mockResolvedValue({
-    success: true,
-    mocked: true,
-    confirmation: {
-      message: 'Your call request is in — Balo will email you the details.',
-      scheduledAtIso: null,
-    },
+  mockShareAvailability.mockResolvedValue({
+    ok: true,
+    isReshare: false,
+    calendarConnected: true,
+    sharedAtIso: '2026-08-25T00:00:00.000Z',
+  });
+  mockBookIntroCall.mockResolvedValue({
+    ok: true,
+    meetingId: 'meeting-1',
+    joinPath: '/join/m/meeting-1',
+    provisioned: true,
+    scheduledStartIso: '2026-06-05T09:00:00.000Z',
+    scheduledEndIso: '2026-06-05T09:30:00.000Z',
+    durationMinutes: 30,
+    guestsInvited: 0,
+    guestInviteFailed: false,
   });
   mockRequestProposal.mockResolvedValue({
     success: true,
@@ -443,7 +506,7 @@ describe('ConversationStage — files + call + EOI intro', () => {
     expect(screen.getByText('No files shared yet')).toBeInTheDocument();
   });
 
-  it('fires the call analytics BEFORE the mock action and toasts its confirmation', async () => {
+  it('CLIENT lens: fires the call analytics, then opens the booking dialog with NO server call', async () => {
     const user = userEvent.setup();
     renderStage(view());
     // Desktop header call button (also reachable via nudge/rail).
@@ -454,15 +517,122 @@ describe('ConversationStage — files + call + EOI intro', () => {
       CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
       expect.objectContaining({ surface: 'header', lens: 'client' })
     );
-    await waitFor(() =>
-      expect(mockToast.success).toHaveBeenCalledWith(
-        'Your call request is in — Balo will email you the details.'
-      )
+    // The dialog opens locally — no booking action fires on click alone (plan §12.5 step 2).
+    expect(
+      await screen.findByText('Pick a time — this is a free intro call, no commitment.')
+    ).toBeInTheDocument();
+    expect(mockBookIntroCall).not.toHaveBeenCalled();
+    expect(mockShareAvailability).not.toHaveBeenCalled();
+  });
+
+  it('EXPERT lens: fires the call analytics BEFORE shareAvailabilityAction and toasts the result', async () => {
+    const user = userEvent.setup();
+    renderStage(view(), 'expert');
+    const [callButton] = screen.getAllByRole('button', { name: 'Propose times' });
+    expect(callButton).toBeDefined();
+    await user.click(callButton as HTMLElement);
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_CALL_CTA_CLICKED,
+      expect.objectContaining({ surface: 'header', lens: 'expert' })
     );
-    expect(mockRequestCall).toHaveBeenCalledWith({
-      requestId: REQUEST_ID,
-      relationshipId: 'rel-1',
-    });
+    await waitFor(() =>
+      expect(mockShareAvailability).toHaveBeenCalledWith({
+        requestId: REQUEST_ID,
+        relationshipId: 'rel-1',
+        surface: 'header',
+      })
+    );
+    /**
+     * ⚠ THE REAL STRING, NOT `expect.anything()` (round-1 CRITICAL). This branch runs ONLY for
+     * `lens === 'expert'`, and the description used to interpolate `expertFirstName` — WHICH IS
+     * THE VIEWER — so Priya was told "Priya can now pick a time from your calendar." The
+     * previous `expect.anything()` could never have caught it, and would not catch the
+     * regression either.
+     */
+    await waitFor(() =>
+      expect(mockToast.success).toHaveBeenCalledWith('Availability shared', {
+        description: 'Northwind Industrial can now pick a time from your calendar.',
+      })
+    );
+    expect(mockTrack).toHaveBeenCalledWith(
+      CONVERSATION_EVENTS.CONVERSATION_AVAILABILITY_SHARED,
+      expect.objectContaining({ surface: 'header', is_reshare: false })
+    );
+    // The call-CTA click never opens a dialog for the expert lens (Ruling 3 — no picker).
+    expect(
+      screen.queryByText('Pick a time — this is a free intro call, no commitment.')
+    ).not.toBeInTheDocument();
+  });
+
+  it('EXPERT lens: the toast NEVER names the viewer themselves, even without a company name', async () => {
+    const user = userEvent.setup();
+    render(
+      <ConversationStage
+        requestId={REQUEST_ID}
+        lens="expert"
+        requestStatus="eoi_submitted"
+        view={view()}
+        requestTitle="CPQ implementation"
+        clientCompanyName={null as unknown as string}
+        viewerEmailDomain="northwind.example"
+      />
+    );
+    const [callButton] = screen.getAllByRole('button', { name: 'Propose times' });
+    await user.click(callButton as HTMLElement);
+
+    await waitFor(() =>
+      expect(mockToast.success).toHaveBeenCalledWith('Availability shared', {
+        description: 'The client can now pick a time from your calendar.',
+      })
+    );
+    // `Priya` is the EXPERT — the viewer. It must never appear in their own success toast.
+    const [, options] = vi.mocked(mockToast.success).mock.calls[0] as [
+      string,
+      { description: string },
+    ];
+    expect(options.description).not.toContain('Priya');
+  });
+
+  /**
+   * ⚠⚠ C1 — THE POST-ACTION HALF OF BAL-283, WITHOUT A REMOUNT. `router.refresh()` PRESERVES
+   * client component state by design and `<ConversationStage key={view.id}>` keys on the
+   * REQUEST id, which does not change on a refresh — so nothing re-seeds `threads` from the
+   * prop. These two tests assert the OPTIMISTIC flip: they never re-render with a new `view`.
+   */
+  it('EXPERT lens: after a successful share the CTA becomes the pill and the nudge flips to waiting — NO remount', async () => {
+    const user = userEvent.setup();
+    renderStage(view(), 'expert');
+
+    expect(screen.getAllByRole('button', { name: 'Propose times' }).length).toBeGreaterThan(0);
+
+    await user.click(screen.getAllByRole('button', { name: 'Propose times' })[0] as HTMLElement);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Propose times' })).not.toBeInTheDocument()
+    );
+    expect(
+      screen.getByText('Availability shared — waiting on Northwind Industrial')
+    ).toBeInTheDocument();
+    // The de-emphasised re-share affordance replaces the primary CTA.
+    expect(screen.getByRole('button', { name: /Share again/ })).toBeInTheDocument();
+  });
+
+  it('CLIENT lens: after a successful booking the CTA disappears and the nudge becomes the done cell — NO remount', async () => {
+    const user = userEvent.setup();
+    renderStage(view());
+
+    await user.click(screen.getAllByRole('button', { name: 'Book a call' })[0] as HTMLElement);
+    await user.click(await screen.findByRole('button', { name: 'Pick 9am slot' }));
+    await user.click(await screen.findByRole('button', { name: 'Confirm & book call' }));
+
+    expect(await screen.findByText("You're booked!")).toBeInTheDocument();
+    // Close the dialog so the underlying stage is the only thing on screen.
+    await user.click(screen.getByRole('button', { name: 'Back to conversation' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Book a call' })).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('Call booked with Priya')).toBeInTheDocument();
   });
 
   it('pins the client-lens EOI intro card at the top of the fully-loaded thread', () => {
@@ -958,6 +1128,9 @@ describe('ConversationStage — request proposal (BAL-272 / A5)', () => {
         lens="client"
         requestStatus="proposal_submitted"
         view={view({ threads: [thread({ relationshipStatus: 'proposal_submitted' })] })}
+        requestTitle="CPQ implementation"
+        clientCompanyName="Northwind Industrial"
+        viewerEmailDomain="northwind.example"
       />
     );
     // Desktop header + mobile rail — both enabled now.

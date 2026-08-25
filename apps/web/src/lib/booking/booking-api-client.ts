@@ -7,6 +7,10 @@ import {
   readString,
   type BaloApiResult,
 } from '@/lib/api/balo-api-client';
+// BAL-283 — PURE, no `@balo/db` (the client-bundle footgun this module's own docblock warns
+// about elsewhere). `MeetingBookingContextType` is the single definition `apps/api`'s Zod
+// boundary and tenancy gate also read.
+import type { MeetingBookingContextType } from '@balo/shared/meetings';
 
 /**
  * BAL-400 — the SERVER-ONLY web→api client for the booking flow's two `apps/api` hops:
@@ -72,7 +76,9 @@ export interface BookMeetingResponse {
 }
 
 export interface BookMeetingInput {
-  contextType: 'case';
+  // BAL-283 widened this from the literal `'case'` — `book-consultation.ts` (BAL-400) still
+  // only ever passes `'case'`; `book-intro-call.ts` (BAL-283) passes `'request_interaction'`.
+  contextType: MeetingBookingContextType;
   contextId: string;
   scheduledStart: string;
   scheduledEnd: string;

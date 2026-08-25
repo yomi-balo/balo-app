@@ -5,7 +5,7 @@ vi.mock('server-only', () => ({}));
 import { serializeBookingContext } from './serialize-booking-context';
 import type { BookingContext } from './load-booking-context';
 
-const EXPERT_DISPLAY = { firstName: 'Dana', partyLabel: 'Dana Okoro' };
+const EXPERT_DISPLAY = { firstName: 'Dana', lastName: 'Okoro', partyLabel: 'Dana Okoro' };
 
 // M7 — the only `Date` → ISO boundary in the booking feature; a bug here would silently
 // corrupt every case card's dates on the client.

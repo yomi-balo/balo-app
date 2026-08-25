@@ -54,6 +54,8 @@ import type {
   BookingRescheduledPayload,
   RescheduleProposalSentPayload,
   RescheduleProposalDeclinedPayload,
+  ConversationAvailabilitySharedPayload,
+  ConversationIntroCallBookedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -452,7 +454,16 @@ export type NotificationEvent =
   | 'reschedule_proposal.declined'
   // BAL-411 — the BAL-420 reminder: still unanswered as the original start closes in.
   // SERVER-ONLY (see below): published EXCLUSIVELY by the dispatch tick.
-  | 'reschedule_proposal.unanswered';
+  | 'reschedule_proposal.unanswered'
+  // BAL-283 (Ruling 3) — the expert shared availability on a project-request thread.
+  // Published from `apps/web`'s `shareAvailabilityAction` — deliberately NOT in
+  // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
+  | 'conversation.availability_shared'
+  // BAL-283 — a free intro call was booked on a project-request thread. Published from
+  // `apps/web`'s `bookIntroCallAction` AFTER `POST /meetings` returns 201 — same posture as
+  // `booking.confirmed`. Publishable from apps/web — deliberately NOT in
+  // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
+  | 'conversation.intro_call_booked';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -689,4 +700,6 @@ export interface EventPayloadMap {
   'reschedule_proposal.sent': RescheduleProposalSentPayload;
   'reschedule_proposal.declined': RescheduleProposalDeclinedPayload;
   'reschedule_proposal.unanswered': RescheduleProposalUnansweredPayload;
+  'conversation.availability_shared': ConversationAvailabilitySharedPayload;
+  'conversation.intro_call_booked': ConversationIntroCallBookedPayload;
 }

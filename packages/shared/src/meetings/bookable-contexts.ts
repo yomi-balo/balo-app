@@ -10,22 +10,26 @@
  * from a route directory is a layering inversion, and a hand-copied union in a third package
  * is a drift waiting to happen; one `as const` tuple in `@balo/shared/meetings` closes both.
  *
- * ⚠ THREE OF THE SEVEN `meeting_context_type` LABELS ARE ABSENT, each for its own reason:
+ * ⚠ TWO OF THE SEVEN `meeting_context_type` LABELS ARE ABSENT, each for its own reason:
  *   · `admin` — scoped out by BAL-129. An internal Balo meeting projects no consultation row
  *     and occupies nobody's calendar, so there is no booking to authorize.
  *   · `retainer_checkin` — scoped out by BAL-129. (Its engagement kind, `retainer`, is
  *     therefore unreachable through the booking gate; see `BookableEngagementType`.)
- *   · `request_interaction` — scoped out by D3 and assigned to **BAL-283**. Whether a
- *     client↔candidate call should block the candidate's calendar is an unmade PRODUCT
- *     ruling, and the projection module has no rule for the label (it throws
- *     `MeetingContextNotProjectableError`).
  *
- * The consequence is structural and worth naming: excluding them here makes
- * `MeetingContextNotProjectableError` UNREACHABLE from `POST /meetings` (only
- * `request_interaction` raises it, and this tuple refuses that label at the Zod boundary). It
+ * `request_interaction` was scoped out by BAL-129's D3 and assigned to BAL-283. BAL-283
+ * ADMITS IT (Ruling 1, owner-ratified): a client↔candidate intro call DOES block the
+ * candidate's calendar, and the consultation projection now has a rule for the label
+ * (`request_expert_relationships.expert_profile_id`, see `_shared/consultation-projection.ts`).
+ *
+ * ⚠ THE CONSEQUENCE BELOW SURVIVES BAL-283, BUT ITS REASON CHANGES (plan §2.4 — do not "flip
+ * it to live", that would be a false statement in the opposite direction). `admin` and
+ * `retainer_checkin` are still refused at the Zod boundary here, so
+ * `MeetingContextNotProjectableError` remains UNREACHABLE from `POST /meetings` — NOT because
+ * this tuple refuses `request_interaction` (it no longer does), but because EVERY label this
+ * tuple now admits has an explicit projection rule in `_shared/consultation-projection.ts`. It
  * nevertheless STAYS MAPPED in that route's error table — `409 context_not_bookable` — as
- * DEFENCE rather than as a live branch, so a fifth label admitted here later cannot reach the
- * client as an unexplained 500.
+ * DEFENCE against an eighth `meeting_context_type` label admitted here later without a
+ * matching projection arm, so that case cannot reach the client as an unexplained 500.
  *
  * ⚠ `MeetingContextRequiredError` IS THE OPPOSITE CASE, AND AN EARLIER VERSION OF THIS BLOCK
  * GOT IT WRONG BY LUMPING THE TWO TOGETHER. It is NOT in `bookingErrorResponse`'s table and
@@ -44,10 +48,11 @@ export const BOOKABLE_CONTEXT_TYPES = [
   'project_kickoff',
   'package_session',
   'project_discovery',
+  'request_interaction',
 ] as const;
 
 /**
- * The four labels a booking may name. DERIVED from the tuple above — never restated, so a
- * fifth label cannot be admitted to one layer and not another.
+ * The five labels a booking may name. DERIVED from the tuple above — never restated, so a
+ * sixth label cannot be admitted to one layer and not another.
  */
 export type MeetingBookingContextType = (typeof BOOKABLE_CONTEXT_TYPES)[number];

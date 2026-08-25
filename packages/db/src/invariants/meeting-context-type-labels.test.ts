@@ -24,12 +24,22 @@ import { meetingContextTypeEnum } from '../schema/enums';
  *      WRONG arm hands meeting-host rights to the wrong expert. This is the security-relevant
  *      sweep and the reason this guard exists.
  *   2. `../repositories/_shared/consultation-projection.ts` — BOTH `loadContextExperts`
- *      and `resolveOneContext`. ⚠ NEITHER IS A `switch`, so NOTHING TYPECHECKS THIS ONE:
- *      both end in an `else` that treats `context_id` as an `engagements.id`, so a new
- *      label with no arm is looked up in the WRONG TABLE and hard-fails the whole booking
- *      transaction (this is precisely what `request_interaction` did before BAL-413 gave
- *      it an explicit `not_projectable` arm). A new label needs a deliberate answer:
- *      project it, ignore it, or `MeetingContextNotProjectableError`.
+ *      and `resolveOneContext`. ⚠ HALF-TYPECHECKED SINCE BAL-283, AND YOU MUST KNOW WHICH
+ *      HALF. `resolveOneContext` IS now a `switch` whose `default` assigns to `never`, and
+ *      that module really is inside `apps/api`'s program (`@balo/db`'s exports point at raw
+ *      `./src/*.ts` and `routes/meetings/index.ts` value-imports the barrel), so a label
+ *      with no arm THERE fails `pnpm --filter api typecheck`. `loadContextExperts` is still
+ *      a plain `if`/`else` chain that ends by treating `context_id` as an `engagements.id`,
+ *      and NOTHING typechecks it — a label queued into the wrong batch is looked up in the
+ *      WRONG TABLE and hard-fails the whole booking transaction at runtime. The two are
+ *      therefore COUPLED THROUGH THE LOOKUP MAPS (every arm answers from a map only
+ *      `loadContextExperts` can fill), and the half-add is caught by explicit assertions in
+ *      `consultation-projection.test.ts` / `.integration.test.ts` rather than by a compiler.
+ *      A new label needs a deliberate answer: project it, ignore it, or
+ *      `MeetingContextNotProjectableError`. (`request_interaction` is projected as of
+ *      BAL-283 Ruling 1 — through `request_expert_relationships.expert_profile_id` — so
+ *      `MeetingContextNotProjectableError` is now the generic 8th-label defence and no
+ *      shipped label reaches it.)
  *   3. `../repositories/meeting-presence.ts` — `listClientUserIdsForEngagement`'s
  *      `inArray(meetingContexts.contextType, [...])` ALLOW-LIST. It names the four
  *      engagement-grain labels explicitly, so a new label is silently EXCLUDED. That is
@@ -44,8 +54,10 @@ import { meetingContextTypeEnum } from '../schema/enums';
  *      A new NON-admin label inherits the correct half automatically and needs no CHECK
  *      change; a second id-less label WOULD need one.
  *
- * ⚠ ITEMS 2 AND 3 ARE THE SILENT ONES. Item 1 fails at `pnpm --filter api typecheck`;
- * items 2 and 3 fail at RUNTIME, in production, on the first row written with the new
+ * ⚠ ITEM 3 IS THE SILENT ONE, AND ITEM 2 IS HALF SILENT. Item 1 fails at
+ * `pnpm --filter api typecheck`; so does item 2's `resolveOneContext` half, since BAL-283
+ * made it an exhaustive `switch` with a `never` witness. Item 2's `loadContextExperts` half
+ * and item 3 still fail at RUNTIME, in production, on the first row written with the new
  * label. That asymmetry is why they are named here rather than left to the compiler.
  *
  * ⚠ ORDER IS ASSERTED ON PURPOSE, not incidentally. `toEqual` on an array pins the ordinals:

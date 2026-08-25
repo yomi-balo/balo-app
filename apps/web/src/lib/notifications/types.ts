@@ -28,6 +28,8 @@ import type {
   BookingRescheduledPayload,
   RescheduleProposalSentPayload,
   RescheduleProposalDeclinedPayload,
+  ConversationAvailabilitySharedPayload,
+  ConversationIntroCallBookedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -268,7 +270,15 @@ export type NotificationEvent =
   // is deliberately NOT mirrored here — it is SERVER-ONLY (published exclusively by the BAL-420
   // dispatch tick).
   | 'reschedule_proposal.sent'
-  | 'reschedule_proposal.declined';
+  | 'reschedule_proposal.declined'
+  // BAL-283 (Ruling 3) — the expert shared availability on a project-request thread, published
+  // from `shareAvailabilityAction`. Mirror of apps/api/src/notifications/events.ts — keep in
+  // lockstep. ⚠ NEITHER of the two BAL-283 events may be server-only — see that file's §2.2
+  // note on the surviving publish hole this mirror has no compile-time guard against.
+  | 'conversation.availability_shared'
+  // BAL-283 — a free intro call was booked on a project-request thread, published from
+  // `bookIntroCallAction` AFTER `POST /meetings` returns 201.
+  | 'conversation.intro_call_booked';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -315,4 +325,6 @@ export interface EventPayloadMap {
   'booking.rescheduled': BookingRescheduledPayload;
   'reschedule_proposal.sent': RescheduleProposalSentPayload;
   'reschedule_proposal.declined': RescheduleProposalDeclinedPayload;
+  'conversation.availability_shared': ConversationAvailabilitySharedPayload;
+  'conversation.intro_call_booked': ConversationIntroCallBookedPayload;
 }

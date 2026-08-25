@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { CalendarPlus, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatSlotDateTime } from './format';
+import { downloadIcsEvent } from './ics';
 
 export interface StepBookedProps {
   engagementId: string;
@@ -46,29 +47,12 @@ export function StepBooked({
   const caseVerb = isNewCase ? 'This started a new case' : 'Added to your case';
 
   function handleAddToCalendar(): void {
-    const start = new Date(startIso);
-    const end = new Date(start.getTime() + durationMinutes * 60_000);
-    const format = (d: Date): string => {
-      const [stamp] = d.toISOString().replace(/[-:]/g, '').split('.');
-      return `${stamp ?? ''}Z`;
-    };
-    const lines = [
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'BEGIN:VEVENT',
-      `DTSTART:${format(start)}`,
-      `DTEND:${format(end)}`,
-      `SUMMARY:Consultation with ${name}`,
-      'END:VEVENT',
-      'END:VCALENDAR',
-    ].join('\r\n');
-    const blob = new Blob([lines], { type: 'text/calendar' });
-    const url = globalThis.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'consultation.ics';
-    link.click();
-    globalThis.URL.revokeObjectURL(url);
+    downloadIcsEvent({
+      summary: `Consultation with ${name}`,
+      startIso,
+      durationMinutes,
+      filename: 'consultation.ics',
+    });
   }
 
   return (

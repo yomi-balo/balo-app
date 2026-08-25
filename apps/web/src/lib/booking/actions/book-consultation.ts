@@ -535,6 +535,9 @@ async function completeBooking(params: {
   const { engagementId, companyId, expertProfileId, title: caseTitle, isNewCase } = resolved;
 
   const booked = await postBookMeeting({
+    // BAL-283 widened `BookMeetingInput.contextType` off the literal `'case'` — this action
+    // books Cases only, so the literal stays explicit here even though the field now accepts
+    // every bookable label. No behaviour change.
     contextType: 'case',
     contextId: engagementId,
     scheduledStart: slot.startIso,

@@ -31,8 +31,10 @@ const {
     }
   }
   class MeetingContextNotProjectableError extends Error {
+    // BAL-283 — `request_interaction` now HAS a projection rule; this class is the generic
+    // 8th-label defence. The stand-in message mirrors the real one's post-BAL-283 wording.
     constructor(id: string) {
-      super(`Meeting context type 'request_interaction' (${id}) has no projection rule yet`);
+      super(`Meeting context type 'future_label' (${id}) has no consultation projection rule`);
       this.name = 'MeetingContextNotProjectableError';
     }
   }
@@ -247,6 +249,54 @@ describe('POST /meetings', () => {
     });
   });
 
+  // ── BAL-283 — `request_interaction`, the `loadSubject` trap ────────────────
+  //
+  // ⚠ THIS IS THE TEST THAT FAILS IF ONLY THE `:350` COMPILER ERROR WAS FIXED AND
+  // `loadSubject` WAS NOT. `authorizeMeetingBooking` is mocked here exactly like every other
+  // case in this file, so this alone does not exercise the real `loadSubject` — that proof
+  // lives in `authorize-meeting-booking.test.ts`'s `request_interaction` describe block,
+  // which mocks only the REPOSITORIES and lets the real gate run. This route-level case pins
+  // the OTHER half: that a `request_interaction` booking, once the gate says `ok`, drives the
+  // expert-scoped guards exactly like every other bookable label.
+  //
+  // ⚠⚠ WHAT THIS TEST DOES **NOT** PROVE, STATED SO NOBODY READS IT AS COVERAGE:
+  // `mockAuthorizeMeetingBooking` returns `{ok:true}` unconditionally here, so NONE of the
+  // gate's own decisions are exercised — not the two-hop through `resolveContextOwner`, not
+  // `relationshipDeniesHosting`, and not the request-LIFECYCLE denial (a request at
+  // `accepted`/`kickoff_approved`, the round-1 HIGH). All three are proven in
+  // `authorize-meeting-booking.test.ts`. If you are adding a gate rule, this file is the wrong
+  // place to pin it — it would pass here no matter what the rule said.
+  it('201s for `request_interaction` and runs the expert-scoped guards (rate limit + availability)', async () => {
+    mockAuthorizeMeetingBooking.mockResolvedValue({
+      ok: true,
+      companyId: 'company_1',
+      engagementType: null,
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+
+    const res = await post(body({ contextType: 'request_interaction' }));
+
+    expect(res.statusCode).toBe(201);
+    expect(mockBookAndProvisionMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextType: 'request_interaction',
+        contextId: CONTEXT_ID,
+        engagementType: null,
+        userId: USER_ID,
+      }),
+      expect.anything()
+    );
+    // The 10/hr per-(user, expert) limit and the availability read both ran for this label —
+    // exactly what Ruling 1 wants (a `request_interaction` call DOES block the calendar).
+    expect(mockIsWindowAvailableForExpert).toHaveBeenCalledWith(
+      EXPERT_PROFILE_ID,
+      expect.any(Date),
+      expect.any(Date),
+      expect.any(Date),
+      undefined
+    );
+  });
+
   it('threads the gate’s resolved engagementType into the service, not the client’s claim', async () => {
     mockAuthorizeMeetingBooking.mockResolvedValue({
       ok: true,
@@ -411,10 +461,6 @@ describe('POST /meetings', () => {
   it.each([
     { label: 'an unknown context type', patch: { contextType: 'retainer_checkin' } },
     { label: 'the excluded `admin` label', patch: { contextType: 'admin' } },
-    {
-      label: 'the D3-excluded `request_interaction` label',
-      patch: { contextType: 'request_interaction' },
-    },
     { label: 'a non-uuid contextId', patch: { contextId: 'not-a-uuid' } },
     { label: 'a malformed start timestamp', patch: { scheduledStart: '2026-13-45' } },
     { label: 'a missing end timestamp', patch: { scheduledEnd: undefined } },

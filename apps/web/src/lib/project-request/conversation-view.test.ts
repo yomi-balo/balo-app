@@ -8,12 +8,14 @@ const {
   mockListFiles,
   mockEnsureManyForContexts,
   mockFindProfileById,
+  mockListActiveMeetingsForContexts,
 } = vi.hoisted(() => ({
   mockListThreadSummaries: vi.fn(),
   mockListMessagesPage: vi.fn(),
   mockListFiles: vi.fn(),
   mockEnsureManyForContexts: vi.fn(),
   mockFindProfileById: vi.fn(),
+  mockListActiveMeetingsForContexts: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -27,6 +29,11 @@ vi.mock('@balo/db', () => ({
   },
   expertsRepository: {
     findProfileById: (...args: unknown[]) => mockFindProfileById(...args),
+  },
+  // BAL-283 — the batched "is a call booked on this context?" read.
+  meetingsRepository: {
+    listActiveMeetingsForContexts: (...args: unknown[]) =>
+      mockListActiveMeetingsForContexts(...args),
   },
 }));
 
@@ -131,6 +138,7 @@ describe('loadConversationView', () => {
     mockListMessagesPage.mockResolvedValue({ messages: [], hasEarlier: false });
     mockListFiles.mockResolvedValue([]);
     mockFindProfileById.mockResolvedValue({ id: 'exp-1', username: 'priya-nair' });
+    mockListActiveMeetingsForContexts.mockResolvedValue(new Map());
   });
 
   it('builds one thread per OPEN relationship and skips invited/declined ones', async () => {
@@ -195,6 +203,127 @@ describe('loadConversationView', () => {
     expect(thread?.eoiHtml).toBe('<p>My pitch</p>');
     expect(thread?.eoiSubmittedAtIso).toBe('2026-06-02T00:00:00.000Z');
     expect(thread?.expertUsername).toBe('priya-nair');
+  });
+
+  // ── BAL-283 — availabilitySharedAtIso + bookedCall ──────────────────────────────────────
+
+  it('maps availabilitySharedAt to an ISO string, and null when never shared', async () => {
+    const sharedView = await loadConversationView(
+      request([relationship({ availabilitySharedAt: new Date('2026-08-20T00:00:00Z') })]) as never,
+      CLIENT_CTX,
+      USER
+    );
+    expect(sharedView.threads[0]?.availabilitySharedAtIso).toBe('2026-08-20T00:00:00.000Z');
+
+    const neverSharedView = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER
+    );
+    expect(neverSharedView.threads[0]?.availabilitySharedAtIso).toBeNull();
+  });
+
+  it('runs ONE batched booked-call query for the whole page, never one per relationship', async () => {
+    const req = request([relationship(), relationship({ id: 'rel-2' })]);
+    mockListThreadSummaries.mockResolvedValue([
+      summary(),
+      summary({ conversationId: convIdFor('rel-2') }),
+    ]);
+    await loadConversationView(req as never, CLIENT_CTX, USER);
+
+    expect(mockListActiveMeetingsForContexts).toHaveBeenCalledTimes(1);
+    expect(mockListActiveMeetingsForContexts).toHaveBeenCalledWith({
+      contextType: 'request_interaction',
+      contextIds: ['rel-1', 'rel-2'],
+    });
+  });
+
+  // ⚠ EVERY `status` below is a real member of `meetingStatusEnum`
+  // (`scheduled | waiting_for_participants | in_progress | ended | cancelled`). The original
+  // fixture used `'confirmed'` — a CONSULTATION status, not a meeting one — which was the tell
+  // that `status` had never been considered by the pick at all.
+  function meetingRow(
+    overrides: Partial<{
+      meetingId: string;
+      scheduledStart: Date;
+      scheduledEnd: Date;
+      status: 'scheduled' | 'waiting_for_participants' | 'in_progress' | 'ended' | 'cancelled';
+    }> = {}
+  ) {
+    return {
+      meetingId: 'meeting-1',
+      scheduledStart: new Date('2999-09-01T04:00:00Z'),
+      scheduledEnd: new Date('2999-09-01T04:30:00Z'),
+      status: 'scheduled' as const,
+      ...overrides,
+    };
+  }
+
+  it('bookedCall is null when no live meeting exists, and carries the upcoming one when it does', async () => {
+    mockListActiveMeetingsForContexts.mockResolvedValue(new Map([['rel-1', [meetingRow()]]]));
+    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    expect(view.threads[0]?.bookedCall).toEqual({
+      meetingId: 'meeting-1',
+      scheduledStartIso: '2999-09-01T04:00:00.000Z',
+    });
+
+    mockListActiveMeetingsForContexts.mockResolvedValue(new Map([['rel-1', []]]));
+    const emptyView = await loadConversationView(
+      request([relationship()]) as never,
+      CLIENT_CTX,
+      USER
+    );
+    expect(emptyView.threads[0]?.bookedCall).toBeNull();
+  });
+
+  it('an ENDED intro call is NOT the booked call — the CTA comes back (C2)', async () => {
+    mockListActiveMeetingsForContexts.mockResolvedValue(
+      new Map([['rel-1', [meetingRow({ status: 'ended' })]]])
+    );
+    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    expect(view.threads[0]?.bookedCall).toBeNull();
+  });
+
+  it('a meeting whose window has already passed is NOT the booked call, even at status scheduled', async () => {
+    mockListActiveMeetingsForContexts.mockResolvedValue(
+      new Map([
+        [
+          'rel-1',
+          [
+            meetingRow({
+              scheduledStart: new Date('2020-01-01T04:00:00Z'),
+              scheduledEnd: new Date('2020-01-01T04:30:00Z'),
+            }),
+          ],
+        ],
+      ])
+    );
+    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    expect(view.threads[0]?.bookedCall).toBeNull();
+  });
+
+  it('with a past call AND an upcoming one, the UPCOMING one wins (repository order is start asc)', async () => {
+    mockListActiveMeetingsForContexts.mockResolvedValue(
+      new Map([
+        [
+          'rel-1',
+          [
+            meetingRow({
+              meetingId: 'meeting-past',
+              scheduledStart: new Date('2020-01-01T04:00:00Z'),
+              scheduledEnd: new Date('2020-01-01T04:30:00Z'),
+              status: 'ended',
+            }),
+            meetingRow({ meetingId: 'meeting-next' }),
+          ],
+        ],
+      ])
+    );
+    const view = await loadConversationView(request([relationship()]) as never, CLIENT_CTX, USER);
+    expect(view.threads[0]?.bookedCall).toEqual({
+      meetingId: 'meeting-next',
+      scheduledStartIso: '2999-09-01T04:00:00.000Z',
+    });
   });
 
   it('falls back to a null username when profile hydration fails', async () => {

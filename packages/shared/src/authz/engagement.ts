@@ -141,12 +141,22 @@ export type RelationshipHostingStatus = {
  * ⚠ THE SINGLE DEFINITION OF "this relationship denies hosting" (BAL-413 / ADR-1046 §3,
  * amended 2026-08-08). There must never be a second definition of "declined" on this axis.
  *
- * BOTH call sites live in `apps/api/src/services/meetings/authorize-engagement-host.ts`:
+ * THREE call sites, as of BAL-283. Two live in
+ * `apps/api/src/services/meetings/authorize-engagement-host.ts`:
  *   · arm 5 `project_discovery` — the `send_to='direct'` target expert's relationship on
  *     that request, looked up by `(projectRequestId, expertProfileId)`;
  *   · arm 6 `request_interaction` — the subject relationship itself, looked up by id.
  * That shared consumption is what makes the two arms' claim to "coincide on direct
  * routes" true BY CONSTRUCTION rather than by two rules that happen to agree today.
+ *
+ * The third is `apps/api/src/services/meetings/authorize-meeting-booking.ts`'s
+ * `request_interaction` arm (BAL-283 / plan §7.1). It is NOT an axis violation despite living
+ * in a MEMBERSHIP-axis gate: on that context label the relationship IS the booking subject
+ * (not a fact about some other row), so consulting its own lifecycle state is structurally
+ * identical to the `subject.status !== 'active'` check the same gate already runs for
+ * engagements — a subject-state check, not a borrowed ENGAGEMENT-axis holder check. It denies
+ * BEFORE the membership read by returning `undefined` from `loadSubject`, collapsing into the
+ * ordinary `404 context_not_found` — no new error literal, no new oracle.
  *
  * WHY BOTH REPRESENTATIONS. `advanceRelationshipStatus` writes the enum label and the
  * timestamp together, so they agree in practice. Checking both means the predicate fails

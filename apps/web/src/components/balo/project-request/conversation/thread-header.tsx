@@ -93,7 +93,7 @@ export function ThreadHeader({
         )}
       </button>
 
-      {actions.callAllowed && (
+      {(actions.callSlot.kind === 'book' || actions.callSlot.kind === 'propose') && (
         <button
           type="button"
           onClick={onCall}
@@ -105,8 +105,19 @@ export function ThreadHeader({
           ) : (
             <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
           )}
-          {actions.callLabel}
+          {actions.callSlot.kind === 'propose' ? 'Propose times' : 'Book a call'}
         </button>
+      )}
+      {/* BAL-283 — the expert has shared availability: quiet, non-interactive pill, same
+          visual family as the `pill-awaiting` proposal treatment below. */}
+      {actions.callSlot.kind === 'shared' && (
+        <span
+          aria-disabled="true"
+          className="border-border bg-muted/50 text-muted-foreground animate-in fade-in zoom-in-95 inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3.5 text-xs font-medium motion-reduce:animate-none"
+        >
+          <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
+          Availability shared
+        </span>
       )}
 
       {headerProposal?.kind === 'pill-requested' && (

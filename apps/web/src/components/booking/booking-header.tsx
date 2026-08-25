@@ -5,10 +5,45 @@ import type { BookingFlowExpert } from './types';
 
 export type BookingStep = 'pick_time' | 'confirm' | 'booked';
 
+export interface BookingStepperStep {
+  key: string;
+  label: string;
+}
+
 const STEPPER_STEPS: ReadonlyArray<{ key: 'pick_time' | 'confirm'; label: string }> = [
   { key: 'pick_time', label: 'Choose a time' },
   { key: 'confirm', label: 'Review & confirm' },
 ];
+
+/**
+ * BAL-283 — the two-step stepper, EXTRACTED from `BookingHeader` (pure refactor, no visual
+ * change to BAL-400's case-booking flow) so `IntroCallHeader` can reuse it with its own step
+ * labels ("Confirm" instead of "Review & confirm" — there's nothing to review on a free intro
+ * call, no case draft, no billing) without forking a second copy of the `<ol>` markup.
+ */
+export function BookingStepper({
+  steps,
+  step,
+}: Readonly<{ steps: readonly BookingStepperStep[]; step: string }>): React.JSX.Element {
+  return (
+    <ol className="flex items-center gap-2" aria-label="Booking steps">
+      {steps.map((s, i) => (
+        <li key={s.key} className="flex items-center gap-2">
+          {i > 0 && <span className="bg-border h-px w-4" aria-hidden="true" />}
+          <span
+            className={cn(
+              'text-xs font-semibold',
+              s.key === step ? 'text-primary' : 'text-muted-foreground/60'
+            )}
+            aria-current={s.key === step ? 'step' : undefined}
+          >
+            {s.label}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 /**
  * BAL-400 — identity row + two-step stepper (design "Wrapper" composition).
@@ -71,22 +106,7 @@ export function BookingHeader({
         {step === 'booked' ? (
           <p className="text-foreground text-sm font-semibold">Booking confirmed</p>
         ) : (
-          <ol className="flex items-center gap-2" aria-label="Booking steps">
-            {STEPPER_STEPS.map((s, i) => (
-              <li key={s.key} className="flex items-center gap-2">
-                {i > 0 && <span className="bg-border h-px w-4" aria-hidden="true" />}
-                <span
-                  className={cn(
-                    'text-xs font-semibold',
-                    s.key === step ? 'text-primary' : 'text-muted-foreground/60'
-                  )}
-                  aria-current={s.key === step ? 'step' : undefined}
-                >
-                  {s.label}
-                </span>
-              </li>
-            ))}
-          </ol>
+          <BookingStepper steps={STEPPER_STEPS} step={step} />
         )}
       </div>
     </div>

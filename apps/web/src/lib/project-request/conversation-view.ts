@@ -4,8 +4,10 @@ import {
   conversationContextKey,
   conversationsRepository,
   expertsRepository,
+  meetingsRepository,
   type ConversationContextRef,
   type ConversationFile,
+  type ContextMeetingSummary,
   type ProjectRequestWithRelations,
 } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
@@ -17,6 +19,7 @@ import {
   deriveThreadStage,
   isThreadOpenStatus,
   pickDefaultThread,
+  pickUpcomingContextMeeting,
   previewOfHtml,
   type ConversationFileView,
   type ConversationMessageView,
@@ -189,7 +192,7 @@ export async function loadConversationView(
     return [{ relationship, conversationId }];
   });
 
-  const [summaries, usernames] = await Promise.all([
+  const [summaries, usernames, bookedCallsByRelationship] = await Promise.all([
     conversationsRepository.listThreadSummaries({
       conversationIds: openThreads.map((t) => t.conversationId),
       viewerUserId: user.id,
@@ -198,8 +201,43 @@ export async function loadConversationView(
       openThreads.map((t) => t.relationship),
       ctx.lens
     ),
+    // BAL-283 (plan §12.4) — ONE batched read for the whole page's threads, never N+1. A
+    // thread can legitimately hold more than one live call over its life; the DISPLAY rule
+    // ("which one is THE booked call") lives here, at the render-path caller, not in the
+    // repository.
+    meetingsRepository.listActiveMeetingsForContexts({
+      contextType: 'request_interaction',
+      contextIds: openThreads.map((t) => t.relationship.id),
+    }),
   ]);
   const summaryById = new Map(summaries.map((s) => [s.conversationId, s]));
+
+  /**
+   * Display rule: the SOONEST call still AHEAD of the viewer — routed through the SHARED
+   * `pickUpcomingContextMeeting` so this and the server-side one-call-per-thread guard cannot
+   * disagree about what "already booked" means.
+   *
+   * ⚠ `.at(0)` (the earliest row) WAS A BUG. `listActiveMeetingsForContexts` filters only
+   * `status <> 'cancelled'`, and `meetingStatusEnum` includes `ended` — so once an intro call
+   * has happened, the earliest row is a PAST meeting that stays first forever. `deriveCallSlot`
+   * checks `bookedCall !== null` BEFORE `callAllowed`, so `{kind:'booked'}` won permanently:
+   * the CTA vanished from header, rail and nudge for BOTH lenses for the life of the thread,
+   * with no recovery path, while the nudge rendered stale copy about a past event.
+   *
+   * `Date.now()` is safe HERE: this is a `server-only` loader, so the instant is read once per
+   * request on the server and never re-evaluated in a browser (no hydration surface). Client
+   * components must never format or compare instants this way — see `LocalDateTime`.
+   */
+  const nowMs = Date.now();
+  function pickBookedCall(
+    relationshipId: string
+  ): { meetingId: string; scheduledStartIso: string } | null {
+    const meetings: ContextMeetingSummary[] = bookedCallsByRelationship.get(relationshipId) ?? [];
+    const meeting = pickUpcomingContextMeeting(meetings, nowMs);
+    return meeting === undefined
+      ? null
+      : { meetingId: meeting.meetingId, scheduledStartIso: meeting.scheduledStart.toISOString() };
+  }
 
   const threads: ConversationThreadView[] = openThreads.map(({ relationship, conversationId }) => {
     const summary = summaryById.get(conversationId);
@@ -235,6 +273,8 @@ export async function loadConversationView(
       eoiHtml: ctx.lens === 'client' ? (liveEoi?.message ?? null) : null,
       eoiSubmittedAtIso:
         ctx.lens === 'client' && liveEoi !== undefined ? liveEoi.submittedAt.toISOString() : null,
+      availabilitySharedAtIso: relationship.availabilitySharedAt?.toISOString() ?? null,
+      bookedCall: pickBookedCall(relationship.id),
     };
   });
 

@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockEngagementFindById, mockProjectRequestFindById, mockGetMemberRole } = vi.hoisted(
-  () => ({
-    mockEngagementFindById: vi.fn(),
-    mockProjectRequestFindById: vi.fn(),
-    mockGetMemberRole: vi.fn(),
-  })
-);
+const {
+  mockEngagementFindById,
+  mockProjectRequestFindById,
+  mockRelationshipFindById,
+  mockGetMemberRole,
+} = vi.hoisted(() => ({
+  mockEngagementFindById: vi.fn(),
+  mockProjectRequestFindById: vi.fn(),
+  mockRelationshipFindById: vi.fn(),
+  mockGetMemberRole: vi.fn(),
+}));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -14,11 +18,18 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: mockEngagementFindById },
   projectRequestsRepository: { findById: mockProjectRequestFindById },
+  // BAL-283 — required by the `request_interaction` arm's `resolveContextOwner` reads.
+  // A vitest factory mock throws on any export it omits, so this is a forcing function: a
+  // builder who widens `loadSubject` without importing this repository fails LOUDLY at
+  // import, not silently at a 404.
+  requestExpertRelationshipsRepository: { findById: mockRelationshipFindById },
   partyMembershipsRepository: { getMemberRole: mockGetMemberRole },
 }));
 // NOTE: `@balo/shared/authz` is deliberately NOT mocked — the real, pure `roleHasCapability`
 // map is the thing under test at the capability step (owner/admin/member hold PARTICIPATE;
-// an unknown role holds nothing).
+// an unknown role holds nothing), and the same is true of `relationshipDeniesHosting` /
+// `resolveContextOwner`, the real predicates the `request_interaction` declined-relationship
+// tests below exercise.
 
 import { authorizeMeetingBooking } from './authorize-meeting-booking.js';
 
@@ -345,5 +356,217 @@ describe('the engagement-type / context-label coherence check', () => {
     });
 
     expect(result).toEqual({ ok: false, code: 'context_type_mismatch' });
+  });
+});
+
+const REQUEST_ID = '55555555-5555-4555-8555-555555555555';
+const OTHER_EXPERT_PROFILE_ID = '66666666-6666-4666-8666-666666666666';
+
+/**
+ * BAL-283 — `request_interaction`'s `loadSubject` arm. `CONTEXT_ID` here is a
+ * `request_expert_relationships.id`, never an `engagements.id`.
+ */
+function relationshipRow(overrides: Record<string, unknown> = {}): unknown {
+  return {
+    id: CONTEXT_ID,
+    projectRequestId: REQUEST_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+    status: 'eoi_submitted',
+    declinedAt: null,
+    ...overrides,
+  };
+}
+
+/**
+ * The `project_requests` row the arm's SECOND hop reads. `status` is here because BAL-283's
+ * round-1 HIGH added a LIFECYCLE gate on it — the request-grain twin of the engagement's
+ * `status !== 'active'` check.
+ */
+function projectRequestRow(overrides: Record<string, unknown> = {}): unknown {
+  return {
+    companyId: COMPANY_ID,
+    expertProfileId: OTHER_EXPERT_PROFILE_ID,
+    status: 'eoi_submitted',
+    ...overrides,
+  };
+}
+
+const authorizeInteraction = (): Promise<unknown> =>
+  authorizeMeetingBooking({
+    contextType: 'request_interaction',
+    contextId: CONTEXT_ID,
+    userId: USER_ID,
+  });
+
+describe('BAL-283 — the request_interaction arm (the loadSubject trap)', () => {
+  beforeEach(() => {
+    mockRelationshipFindById.mockResolvedValue(relationshipRow());
+    mockProjectRequestFindById.mockResolvedValue(projectRequestRow());
+  });
+
+  it('reads request_expert_relationships then project_requests, and never touches engagements', async () => {
+    const result = await authorizeInteraction();
+
+    expect(result).toEqual({
+      ok: true,
+      companyId: COMPANY_ID,
+      engagementType: null,
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+    expect(mockRelationshipFindById).toHaveBeenCalledWith(CONTEXT_ID);
+    expect(mockProjectRequestFindById).toHaveBeenCalledWith(REQUEST_ID);
+    expect(mockEngagementFindById).not.toHaveBeenCalled();
+  });
+
+  it('AXIS TEST — the expert comes from the RELATIONSHIP, the company from the REQUEST, even when they disagree', async () => {
+    // The request names a DIFFERENT expert than the relationship does — this is the single
+    // test that would catch a re-derived two-hop wired the wrong way round.
+    mockRelationshipFindById.mockResolvedValue(
+      relationshipRow({ expertProfileId: EXPERT_PROFILE_ID })
+    );
+    mockProjectRequestFindById.mockResolvedValue(
+      projectRequestRow({ expertProfileId: OTHER_EXPERT_PROFILE_ID })
+    );
+
+    const result = await authorizeInteraction();
+
+    expect(result).toMatchObject({
+      ok: true,
+      companyId: COMPANY_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+  });
+
+  it('context_not_found when the relationship does not resolve (missing or soft-deleted)', async () => {
+    mockRelationshipFindById.mockResolvedValue(undefined);
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('context_not_found for a dangling projectRequestId (request does not resolve)', async () => {
+    mockProjectRequestFindById.mockResolvedValue(undefined);
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ THE REQUEST-LIFECYCLE GATE (round-1 HIGH) — the request-grain twin of the engagement's
+   * `status !== 'active'` check, whose docblock warns that without it "a `completed` CASE IS A
+   * PERMANENT BOOKING HANDLE ON THAT EXPERT'S CALENDAR". A `request_interaction` context has no
+   * engagement lifecycle, so before this it had NO lifecycle gate at all.
+   *
+   * The exploit it closes: `THREAD_OPEN_RELATIONSHIP_STATUSES` (web) includes `'accepted'`, so
+   * an accepted relationship's thread stays open and `resolveConversationAccess` passes it
+   * through. The UI hides the CTA, but a Server Action is a PUBLIC entry point — a
+   * client-company member could POST `relationshipId`/`requestId` read out of the DOM and book
+   * FREE calls against the DELIVERING expert, exactly the hours that must route through the
+   * BILLED case/kickoff path. It applies equally to a LOSING expert on a decided request.
+   * Irreversible on this branch: `cancelMeeting` has zero production callers.
+   */
+  it.each(['accepted', 'kickoff_approved'])(
+    'DECIDED — a request at %s denies booking, and membership is never consulted',
+    async (status) => {
+      mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status }));
+
+      await expect(authorizeInteraction()).resolves.toEqual({
+        ok: false,
+        code: 'context_not_found',
+      });
+      // ⚠ Collapsed into the ORDINARY not-found literal (§3's oracle decision) — no new code,
+      // so a prober cannot distinguish "decided request" from "uuid resolves to nothing".
+      expect(mockGetMemberRole).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    'draft',
+    'requested',
+    'exploratory_meeting_requested',
+    'experts_invited',
+    'eoi_submitted',
+    'proposal_requested',
+    'proposal_submitted',
+  ])('PRE-DECISION — a request at %s still books', async (status) => {
+    mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status }));
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: true,
+      companyId: COMPANY_ID,
+      engagementType: null,
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
+  });
+
+  it('the DECLINE check and the LIFECYCLE check are independent — either alone denies', async () => {
+    // Declined relationship on a live request.
+    mockRelationshipFindById.mockResolvedValue(relationshipRow({ status: 'declined' }));
+    mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status: 'eoi_submitted' }));
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+
+    // Live relationship on a decided request — the LOSING-expert case, whose thread also
+    // stays open.
+    mockRelationshipFindById.mockResolvedValue(relationshipRow({ status: 'eoi_submitted' }));
+    mockProjectRequestFindById.mockResolvedValue(projectRequestRow({ status: 'accepted' }));
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+  });
+
+  it.each([
+    { label: 'status declined alone', overrides: { status: 'declined' } },
+    {
+      label: 'declinedAt set alone',
+      overrides: { status: 'eoi_submitted', declinedAt: new Date() },
+    },
+    { label: 'both set', overrides: { status: 'declined', declinedAt: new Date() } },
+  ])('DECLINED — $label denies booking, membership never consulted', async ({ overrides }) => {
+    mockRelationshipFindById.mockResolvedValue(relationshipRow(overrides));
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('context_not_found for a non-member of the request-owning company', async () => {
+    mockGetMemberRole.mockResolvedValue(undefined);
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+  });
+
+  it('context_not_found for a member whose role lacks PARTICIPATE', async () => {
+    mockGetMemberRole.mockResolvedValue('finance');
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: false,
+      code: 'context_not_found',
+    });
+  });
+
+  it.each(['owner', 'admin', 'member'])('allows a company `%s`', async (role) => {
+    mockGetMemberRole.mockResolvedValue(role);
+
+    await expect(authorizeInteraction()).resolves.toEqual({
+      ok: true,
+      companyId: COMPANY_ID,
+      engagementType: null,
+      expertProfileId: EXPERT_PROFILE_ID,
+    });
   });
 });

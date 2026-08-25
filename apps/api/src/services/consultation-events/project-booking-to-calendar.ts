@@ -27,12 +27,30 @@ export interface ProjectBookingToCalendarInput {
   readonly expertProfileId: string;
   /** ADR-1044 §4: the expert's event title names the client COMPANY. */
   readonly clientCompanyName: string;
+  /**
+   * The SUBJECT line rendered above the join URL. Named for BAL-400's only caller; since
+   * BAL-283 it also carries a `request_interaction` booking's project-request title, which is
+   * why {@link DEFAULT_EVENT_LABEL} and not this field decides the headline noun.
+   */
   readonly caseTitle: string;
+  /**
+   * BAL-283 — the headline NOUN, so a context that is not a case does not announce itself as a
+   * "Consultation" on the expert's calendar. OPTIONAL, defaulting to {@link DEFAULT_EVENT_LABEL}
+   * — which is exactly BAL-400's shipped literal, so the `case` path is byte-identical and every
+   * pre-BAL-283 caller keeps its title unchanged.
+   *
+   * ⚠ IT IS A LABEL, NOT A TITLE. The caller passes a fixed noun (`'Intro call'`); it is never
+   * user input, so it needs no escaping and cannot widen what a booking can write here.
+   */
+  readonly eventLabel?: string;
   readonly startAt: Date;
   readonly endAt: Date;
   /** `${WEB_BASE_URL}/join/m/${meetingId}` — NEVER `meetings.join_url`. */
   readonly joinUrl: string;
 }
+
+/** BAL-400's shipped headline noun — the default, so omitting `eventLabel` changes nothing. */
+const DEFAULT_EVENT_LABEL = 'Consultation';
 
 const READABLE_STATUS: CalendarCredentialStatus = 'ACTIVE';
 
@@ -80,7 +98,7 @@ export async function projectBookingToExpertCalendar(
     }
 
     const event = buildConsultationEvent({
-      title: `Consultation with ${input.clientCompanyName}`,
+      title: `${input.eventLabel ?? DEFAULT_EVENT_LABEL} with ${input.clientCompanyName}`,
       caseTitle: input.caseTitle,
       startAt: input.startAt,
       endAt: input.endAt,

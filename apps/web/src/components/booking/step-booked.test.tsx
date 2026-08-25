@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
 import { StepBooked, type StepBookedProps } from './step-booked';
+import * as ics from './ics';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
@@ -89,5 +90,22 @@ describe('StepBooked', () => {
     const { onDone } = renderStep();
     screen.getByRole('button', { name: 'Done' }).click();
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds and downloads the .ics event from "Add to calendar"', () => {
+    const spy = vi.spyOn(ics, 'downloadIcsEvent').mockImplementation(() => {});
+    renderStep({
+      expertFirstName: 'Amara',
+      startIso: '2026-06-05T09:00:00.000Z',
+      durationMinutes: 30,
+    });
+    screen.getByRole('button', { name: /Add to calendar/ }).click();
+    expect(spy).toHaveBeenCalledWith({
+      summary: 'Consultation with Amara',
+      startIso: '2026-06-05T09:00:00.000Z',
+      durationMinutes: 30,
+      filename: 'consultation.ics',
+    });
+    spy.mockRestore();
   });
 });

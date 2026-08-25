@@ -145,3 +145,51 @@ describe('projectBookingToExpertCalendar (BAL-400 D2)', () => {
     expect(meta).toMatchObject({ meetingId: 'meeting-1', expertProfileId: 'expert-1' });
   });
 });
+
+/**
+ * BAL-283 — the headline noun is now a per-context INPUT rather than a literal in this module.
+ * The default is what makes the `case` path byte-identical to BAL-400's shipped behaviour, so
+ * it is pinned here rather than left implied by the suite above.
+ */
+describe('projectBookingToExpertCalendar — the event label (BAL-283)', () => {
+  beforeEach(() => {
+    mockListConnections.mockReset();
+    mockWriteConsultationEvent.mockReset();
+    mockListConnections.mockResolvedValue([connection()]);
+    mockWriteConsultationEvent.mockResolvedValue({});
+  });
+
+  /** The `event` object handed to the vendor writer on the single expected call. */
+  async function writtenEvent(
+    input: Parameters<typeof projectBookingToExpertCalendar>[0]
+  ): Promise<Record<string, unknown>> {
+    await projectBookingToExpertCalendar(input, fakeLog());
+    const [call] = mockWriteConsultationEvent.mock.calls;
+    return (call?.[0] as { event: Record<string, unknown> }).event;
+  }
+
+  it('omitting eventLabel keeps BAL-400\'s exact "Consultation with {company}" headline', async () => {
+    const event = await writtenEvent(BASE_INPUT);
+
+    expect(event.title).toBe('Consultation with Northwind Industrial');
+  });
+
+  it('an "Intro call" label titles the event without disturbing the subject line', async () => {
+    const event = await writtenEvent({ ...BASE_INPUT, eventLabel: 'Intro call' });
+
+    expect(event.title).toBe('Intro call with Northwind Industrial');
+    // The subject stays the request's own title, ABOVE the join URL — the label replaces the
+    // headline noun only, never the description.
+    expect(event.description).toBe(`Salesforce CPQ rollout\n\n${BASE_INPUT.joinUrl}`);
+  });
+
+  it('⚠ carries NO attendees and NO generateMeetingUrlProvider on the labelled path either', async () => {
+    // ADR-1044 §4 HARD CONSTRAINT / BAL-433 Ruling 2. `event-mapper.test.ts` pins this for the
+    // mapper; asserted again HERE so a second context reaching the writer cannot smuggle either
+    // field in through the input that BAL-283 widened.
+    const event = await writtenEvent({ ...BASE_INPUT, eventLabel: 'Intro call' });
+
+    expect(event.attendees).toBeUndefined();
+    expect(event.generateMeetingUrlProvider).toBeUndefined();
+  });
+});
