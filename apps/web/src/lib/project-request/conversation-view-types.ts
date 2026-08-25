@@ -74,6 +74,15 @@ export function requestStatusRank(status: ProjectRequestStatus): number {
 }
 
 /**
+ * A meeting whose parties are in the room RIGHT NOW, so the scheduled window says nothing about
+ * whether it is over. Kept next to its only consumer rather than exported: this is a display
+ * rule for the call-CTA pick, not a lifecycle predicate — `@balo/shared/meetings` owns those.
+ */
+function isLiveMeetingStatus(status: ContextMeetingSummary['status']): boolean {
+  return status === 'in_progress' || status === 'waiting_for_participants';
+}
+
+/**
  * BAL-283 — THE ONE DEFINITION OF "this thread has a live intro call".
  *
  * `listActiveMeetingsForContexts` filters only `status <> 'cancelled'` and deliberately
@@ -88,6 +97,15 @@ export function requestStatusRank(status: ProjectRequestStatus): number {
  * `scheduled`). Rows arrive ordered `scheduled_start, id`, so the first survivor is the soonest
  * upcoming one.
  *
+ * ⚠ THE CLOCK DISQUALIFIER IS SUPPRESSED WHILE A CALL IS ACTUALLY LIVE (PR #236 review). A call
+ * that runs past its scheduled end stays `in_progress` — `MEETING_TRANSITIONS` only lets that
+ * status move to `ended` (`@balo/shared/meetings` lifecycle), so nothing advances it on the
+ * clock alone. Judging such a row by `scheduledEnd` alone would drop it from the pick WHILE THE
+ * PARTIES ARE STILL IN THE ROOM: the CTA would reappear and `assertNoLiveIntroCall` would pass,
+ * letting a second intro call be booked over a call in progress. `waiting_for_participants` is
+ * treated the same way — somebody is sitting in the lobby of that exact meeting. Only the
+ * explicit `ended` signal (or `cancelled`, already filtered in the repository) retires a row.
+ *
  * ⚠ `nowMs` IS A PARAMETER, NEVER `Date.now()` READ INSIDE. Both callers are server-side, but
  * passing the instant keeps this pure and testable, and keeps a clock out of a module that
  * client components import.
@@ -96,7 +114,10 @@ export function pickUpcomingContextMeeting(
   meetings: readonly ContextMeetingSummary[],
   nowMs: number
 ): ContextMeetingSummary | undefined {
-  return meetings.find((m) => m.status !== 'ended' && m.scheduledEnd.getTime() > nowMs);
+  return meetings.find(
+    (m) =>
+      m.status !== 'ended' && (isLiveMeetingStatus(m.status) || m.scheduledEnd.getTime() > nowMs)
+  );
 }
 
 /** Derived per-thread display stage. */

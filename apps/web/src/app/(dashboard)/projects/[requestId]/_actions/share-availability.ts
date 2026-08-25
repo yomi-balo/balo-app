@@ -141,7 +141,12 @@ export async function shareAvailabilityAction(
     const { previousSharedAt, sharedAt } = stamped;
     const isReshare = previousSharedAt !== null;
 
-    log.info('Expert shared availability', { requestId, relationshipId, isReshare });
+    log.info('Expert shared availability', {
+      requestId,
+      relationshipId,
+      userId: user.id,
+      isReshare,
+    });
 
     const [expertDisplay, calendarConnected] = await Promise.all([
       resolveBookingExpertDisplay(expertProfileId),

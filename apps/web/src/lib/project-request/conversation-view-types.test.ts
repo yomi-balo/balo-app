@@ -197,7 +197,39 @@ describe('pickUpcomingContextMeeting', () => {
     expect(pickUpcomingContextMeeting([meeting({ status: 'ended' })], NOW)).toBeUndefined();
   });
 
-  it('rejects a meeting whose window has already passed, whatever its status', () => {
+  /**
+   * PR #236 review. A call that RUNS PAST its scheduled end stays `in_progress` —
+   * `MEETING_TRANSITIONS` only lets that status move to `ended`, so nothing advances it on the
+   * clock alone. Judging it by `scheduledEnd` would drop it from the pick while the parties are
+   * still in the room, the CTA would reappear, and `assertNoLiveIntroCall` would let a SECOND
+   * intro call be booked over the live one.
+   */
+  it.each(['in_progress', 'waiting_for_participants'] as const)(
+    'keeps a LIVE %s call that has overrun its scheduled end',
+    (status) => {
+      const overrun = meeting({
+        status,
+        scheduledStart: new Date(NOW - 90 * 60_000),
+        scheduledEnd: new Date(NOW - 30 * 60_000),
+      });
+      expect(pickUpcomingContextMeeting([overrun], NOW)?.meetingId).toBe('meeting-1');
+    }
+  );
+
+  it('prefers a live overrunning call over a later scheduled one', () => {
+    const live = meeting({
+      meetingId: 'meeting-live',
+      status: 'in_progress',
+      scheduledStart: new Date(NOW - 90 * 60_000),
+      scheduledEnd: new Date(NOW - 30 * 60_000),
+    });
+    // Rows arrive ordered `scheduled_start, id`, so the overrunning call sorts first.
+    expect(
+      pickUpcomingContextMeeting([live, meeting({ meetingId: 'meeting-2' })], NOW)?.meetingId
+    ).toBe('meeting-live');
+  });
+
+  it('rejects a SCHEDULED meeting whose window has passed — nobody ever joined it', () => {
     const past = meeting({
       scheduledStart: new Date('2026-08-24T04:00:00.000Z'),
       scheduledEnd: new Date('2026-08-24T04:30:00.000Z'),
@@ -205,7 +237,7 @@ describe('pickUpcomingContextMeeting', () => {
     expect(pickUpcomingContextMeeting([past], NOW)).toBeUndefined();
   });
 
-  it('a meeting IN PROGRESS right now still counts — the end is what must be ahead', () => {
+  it('a meeting IN PROGRESS inside its window counts (see below for the overrun case)', () => {
     const running = meeting({
       scheduledStart: new Date('2026-08-24T23:45:00.000Z'),
       scheduledEnd: new Date('2026-08-25T00:15:00.000Z'),
