@@ -2820,6 +2820,58 @@ describe('creditSessionsRepository — presence in the reaper finders (BAL-412)'
   });
 });
 
+/**
+ * BAL-466 (§F) — ⚠⚠ THE END-TO-END PROOF THE THREE SETTLEMENT PATHS ARE NOW REACHABLE.
+ *
+ * The predicates above were all proven individually under BAL-412, seeded by `openPresence`
+ * (which calls `creditSessionsRepository.open({ durationSource: 'presence', meetingId })`
+ * directly — the exact call `apps/api`'s `openSession` now forwards from `join-meeting.ts`'s
+ * `openCaseSessionBestEffort`, per `open-session.test.ts`'s "is forwarded to
+ * creditSessionsRepository.open" and `join-meeting.test.ts`'s "durationSource: 'presence'"
+ * assertions). This test is the single, explicit, ONE-TEST proof that opening a session this
+ * way carries it through the FULL predicate lifecycle a Case consultation now takes at
+ * admission: selected by the live meter while the meeting runs (`active` AND `grace`),
+ * selected by the durability backstop once the meeting ends unsettled, and EXCLUDED from the
+ * two reaper finders whose job is a different provenance entirely.
+ */
+describe('creditSessionsRepository — BAL-466, the three settlement paths end to end', () => {
+  it('a presence session opened with a meetingId is metered while live, settled once ended, and excluded from the wrong reapers', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const id = await openPresence(ctx, meetingId);
+    await creditSessionsRepository.connect(id, { now: BASE });
+
+    // (a) findMeterable SELECTS it while the meeting is live and status='active'.
+    expect((await creditSessionsRepository.findMeterable()).map((r) => r.id)).toContain(id);
+
+    // (a, continued) — and still SELECTS it once metering has pushed it into 'grace'.
+    await db.update(creditSessions).set({ status: 'grace' }).where(eq(creditSessions.id, id));
+    expect((await creditSessionsRepository.findMeterable()).map((r) => r.id)).toContain(id);
+
+    // (c) the two reaper finders — a DIFFERENT provenance's terminators — do NOT select it.
+    expect(
+      (await creditSessionsRepository.findStalePending(meterAt(60))).map((r) => r.id)
+    ).not.toContain(id);
+    expect(
+      (await creditSessionsRepository.findWrappedIdle(meterAt(60))).map((r) => r.id)
+    ).not.toContain(id);
+
+    // Now the meeting ends, unsettled — the durability backstop's territory.
+    await db
+      .update(meetings)
+      .set({ status: 'ended', endedBy: 'expert_host', endedAt: meterAt(20) })
+      .where(eq(meetings.id, meetingId));
+
+    // (a, continued) — a session on an ENDED meeting drops out of the live meter…
+    expect((await creditSessionsRepository.findMeterable()).map((r) => r.id)).not.toContain(id);
+
+    // (b) …and findPresenceUnsettled(cutoff) now SELECTS it — the backstop can reach it.
+    expect(
+      (await creditSessionsRepository.findPresenceUnsettled(meterAt(60))).map((r) => r.id)
+    ).toContain(id);
+  });
+});
+
 describe('creditSessionsRepository.findPresenceUnsettled (BAL-412 durability backstop)', () => {
   const CUTOFF = meterAt(60);
 

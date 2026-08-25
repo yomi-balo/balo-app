@@ -114,9 +114,10 @@ export interface MeetingToolbarProps {
   /** BAL-403 — focused when the Balance panel closes, so focus returns to its opener. */
   readonly balanceButtonRef?: React.Ref<HTMLButtonElement>;
   /**
-   * BAL-403 — ⚠ WHETHER THE **BALANCE** SLOT IS REGISTERED. `false` for every meeting today
-   * (nothing opens a credit session yet) — see `meeting-panels.ts`. `false`/`undefined` ⇒ the
-   * control is ABSENT, never disabled.
+   * BAL-403 — ⚠ WHETHER THE **BALANCE** SLOT IS REGISTERED. `false` for every non-`case`
+   * meeting and for a Case whose client has not yet been admitted (BAL-466 opens the session
+   * at admission) — see `meeting-panels.ts`. `false`/`undefined` ⇒ the control is ABSENT,
+   * never disabled.
    */
   readonly hasBalance?: boolean;
   /**

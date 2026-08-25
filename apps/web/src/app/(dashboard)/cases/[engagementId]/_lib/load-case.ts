@@ -120,10 +120,16 @@ function resolveClosedNote(caseRow: CaseEngagementRow): string | null {
  * DISCRIMINANT arm for arm.
  *
  * ⚠⚠ THE THREE ARMS ARE REBUILT EXPLICITLY RATHER THAN SPREAD, SO THE FIGURE STAYS
- * STRUCTURALLY UNREPRESENTABLE UNTIL SOMETHING FINALIZES. Nothing writes
- * `credit_sessions.engagement_id` yet (BAL-400 will), so EVERY case on `main` today returns
- * `not_yet` — and a flat `{state, number}` shape would render "A$0.00", a MONEY CLAIM, for
- * every expert on the platform. A `finalized` block CAN legitimately be `0`; that is a REAL
+ * STRUCTURALLY UNREPRESENTABLE UNTIL SOMETHING FINALIZES.
+ *
+ * ⚠⚠ BAL-466 (F9, review fix round) — CORRECTING A NOW-FALSE CLAIM. This used to say "Nothing
+ * writes `credit_sessions.engagement_id` yet (BAL-400 will), so EVERY case on `main` today
+ * returns `not_yet`". `openSession` writes it now, for every session BAL-466's admission seam
+ * opens — so `pending` (and eventually `finalized`) are LIVE for a case with an admitted
+ * client, reachable from this same read while the consultation is still on the call. A flat
+ * `{state, number}` shape would still render "A$0.00", a MONEY CLAIM, for every expert on the
+ * platform the moment that became possible — which is exactly why the three arms stay rebuilt
+ * explicitly rather than spread. A `finalized` block CAN legitimately be `0`; that is a REAL
  * zero, which is exactly why the states must stay distinct.
  */
 function toEarningsView(aggregate: CaseExpertEarningsAggregate): CaseEarningsView {

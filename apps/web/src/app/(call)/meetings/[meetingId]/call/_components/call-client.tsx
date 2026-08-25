@@ -26,6 +26,7 @@ import { formatScheduledStartLabel } from '@/lib/meetings/format-scheduled-start
 import { resolveWaitingSubject } from '@/lib/meetings/waiting-subject';
 import { MEMBER_JOIN_OUTAGE_ERROR } from '@/lib/meetings/lobby';
 import { useMeetingStatePoll } from '@/lib/meetings/use-meeting-state-poll';
+import { pollIntervalFor } from '@/lib/meetings/use-admission-poll';
 import { resolveTopBarClock } from '@/lib/meetings/top-bar-clock';
 import { joinAsMemberAction } from '@/app/join/_actions/join-as-member';
 import { UNKNOWN_WAITING_FACTS, type WaitingFacts } from '@/lib/meetings/waiting-copy';
@@ -119,8 +120,10 @@ export interface CallClientProps {
    * BAL-403 — ⚠⚠ **RESOLVED SERVER-SIDE, ONCE**, mirroring `hasChat` exactly. `false` ⇒ the
    * Balance slot is ABSENT: no toolbar button, no More-sheet row, no poll, no fetch, no panel.
    *
-   * ⚠⚠ `false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED — nothing in the app opens a
-   * credit session yet. See `page.tsx`'s `resolveBalanceSlot` docblock.
+   * ⚠⚠ `false` FOR A NON-`case` MEETING, OR A `case` WHOSE CLIENT HAS NOT YET BEEN ADMITTED —
+   * BAL-466's join seam (`joinMeetingAsMember`) opens the `credit_sessions` row this RSC read
+   * answers `true` for. See `page.tsx`'s `resolveBalanceSlot` docblock, and this component's own
+   * post-join re-resolve effect for the member whose OWN join creates that row.
    */
   readonly hasBalance: boolean;
 }
@@ -137,10 +140,13 @@ export function CallClient({
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('connecting');
   const [response, setResponse] = useState<MemberJoinResponse | null>(null);
+  const [balanceAppeared, setBalanceAppeared] = useState(false);
   const [isExhausted, setIsExhausted] = useState(false);
   const failureCountRef = useRef(0);
   const startedAtRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** F4 (BAL-466 fix round) — the post-join balance probe's ONE bounded retry timer. */
+  const probeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * ⚠ THE RETRY RE-ENTERS THROUGH A REF, NOT THROUGH THE CALLBACK'S OWN IDENTITY. A `setTimeout`
    * closing over `attempt` would either need `attempt` in its own dependency list (a cycle) or
@@ -239,6 +245,84 @@ export function CallClient({
   */
   const envelope = useMemo(() => parseMemberJoinEnvelope(response), [response]);
   const context = envelope.context;
+
+  /**
+   * BAL-466 — ⚠⚠ **THE POST-JOIN RE-RESOLVE.** `page.tsx` resolves `hasBalance` in the RSC, and
+   * the credit session is opened by the API's admission seam (`joinMeetingAsMember`) — which
+   * runs AFTER this page rendered. So for the member whose join CREATES the session, the RSC's
+   * verdict is a stale `false`, and without this the panel would never register for the very
+   * person paying for the call.
+   *
+   * ⚠⚠ IT ASKS THE SAME QUESTION, THROUGH THE SAME FUNCTION. This calls
+   * `getMeetingDrawdownStateAction` — whose body is one call to `resolveInCallDrawdown`, the
+   * ONE composed gate `page.tsx` also calls. There is no second gate, no second predicate and
+   * nothing new to keep in sync; `state !== null` is byte-for-byte the boolean the RSC computed,
+   * re-asked at a moment when the answer can differ.
+   *
+   * ⚠ ONCE PER SUCCESSFUL ANSWER, AND ONLY WHEN THE RSC SAID `false`. `hasBalance === true`
+   * already registers the slot and its own poll takes over; probing again would be a wasted
+   * round trip. The effect is keyed on the grant, so it cannot fire before admission.
+   *
+   * ── ⚠⚠ F4 (review fix round) — ONE BOUNDED RETRY ON A TRANSPORT FAILURE ──────────────────
+   *
+   * This fires at the single busiest, most contention-prone moment on the connection — right
+   * after a Daily room join, in parallel with the vendor chunk fetch (see the module docblock).
+   * The prior shape caught and swallowed a failed fetch with no retry, and the effect's own dep
+   * array never changes again on its own after a successful join — so a single transient blip
+   * (mobile network, VPN hiccup, tab still settling) permanently hid the only money-visibility
+   * surface for the rest of a call the viewer is actively being billed for; `useDrawdownPoll`
+   * only starts once this slot registers, so there is no other backstop.
+   *
+   * ⚠ BOUNDED, NOT A POLL: at most ONE retry, after `pollIntervalFor(0)` — the SAME shipped
+   * cadence `attempt()` above uses for the join retry, not a second one invented here. A
+   * `result.success && state === null` answer is a real verdict (denied / no session), not a
+   * transport blip, and is NOT retried — only the `.catch()` arm (the fetch itself failing) is.
+   *
+   * ── ⚠⚠ F15 (review fix round) — PRE-FILTERED, NOT A SECOND PREDICATE ─────────────────────
+   *
+   * `envelope.context?.type === 'case' && envelope.viewerRole === 'client'` short-circuits the
+   * probe for every shape where `resolveInCallDrawdown` structurally answers `null` anyway
+   * (expert-side joins, intro calls, `project_discovery`, `request_interaction`, `admin`
+   * meetings) — each wasted probe was a full Server Action round trip through the composed
+   * participation gate for an answer already known. The composed gate inside
+   * `getMeetingDrawdownStateAction` stays the ONLY authority; this filter cannot make anything
+   * MORE permissive, because every case it skips already answers `null` there too.
+   */
+  useEffect(() => {
+    if (response === null || hasBalance || balanceAppeared) return;
+    if (context?.type !== 'case' || envelope.viewerRole !== 'client') return;
+    let cancelled = false;
+    let attempts = 0;
+    const MAX_PROBE_ATTEMPTS = 2; // the first attempt + ONE bounded retry — never a poll.
+
+    const runProbe = (): void => {
+      attempts += 1;
+      getMeetingDrawdownStateAction({ meetingId })
+        .then((result) => {
+          if (cancelled) return;
+          if (result.success && result.state !== null) setBalanceAppeared(true);
+          // else: a real verdict (denied / not yet opened) — not retried, see docblock.
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (attempts < MAX_PROBE_ATTEMPTS) {
+            probeRetryTimerRef.current = setTimeout(runProbe, pollIntervalFor(0));
+            return;
+          }
+          /* bounded retry exhausted — absent slot is the shipped degradation from here */
+        });
+    };
+
+    runProbe();
+    return () => {
+      cancelled = true;
+      if (probeRetryTimerRef.current !== null) {
+        clearTimeout(probeRetryTimerRef.current);
+        probeRetryTimerRef.current = null;
+      }
+    };
+  }, [response, hasBalance, balanceAppeared, meetingId, context, envelope.viewerRole]);
+
   const subject = useMemo(
     () => (context === null ? null : { contextType: context.type, contextId: context.id }),
     [context]
@@ -373,19 +457,30 @@ export function CallClient({
           }
         : null,
       /**
-       * BAL-403 — ⚠⚠ `null` ⇒ NO BALANCE SLOT. `hasBalance` is the RSC's verdict — `false` for
-       * every meeting today, which is the EXPECTED, inert answer (see `page.tsx`).
+       * BAL-403 / BAL-466 — ⚠⚠ `null` ⇒ NO BALANCE SLOT. `hasBalance` is the RSC's verdict, and
+       * `balanceAppeared` is the post-join re-resolve above: the credit session for a `case`
+       * meeting is opened by the API's admission seam, which runs AFTER this page rendered, so
+       * the RSC's `false` is stale for the very member whose join creates the session.
        *
        * ⚠⚠ `loadDrawdownState` CLOSES OVER `meetingId` ONLY — no credit-session id crosses this
        * registration. The id is returned BY the action's own success answer, not supplied TO it;
        * see `meeting-panels.ts`'s `GetMeetingDrawdownResult` docblock for why that keeps the
        * "registration stays id-free" rule intact.
        */
-      balance: hasBalance
-        ? { loadDrawdownState: () => getMeetingDrawdownStateAction({ meetingId }) }
-        : null,
+      balance:
+        hasBalance || balanceAppeared
+          ? { loadDrawdownState: () => getMeetingDrawdownStateAction({ meetingId }) }
+          : null,
     }),
-    [meetingId, joinLinkUrl, hasChat, isRealtimeEnabled, chatChannelName, hasBalance]
+    [
+      meetingId,
+      joinLinkUrl,
+      hasChat,
+      isRealtimeEnabled,
+      chatChannelName,
+      hasBalance,
+      balanceAppeared,
+    ]
   );
 
   /**

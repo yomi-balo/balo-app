@@ -383,3 +383,61 @@ describe('openSession — the BAL-129 meetingId seam', () => {
     expect(mockFindWalletByCompany).not.toHaveBeenCalled();
   });
 });
+
+describe('openSession — BAL-466 (D4), durationSource', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindWithCompany.mockResolvedValue(singleEligible());
+    mockFindWalletByCompany.mockResolvedValue({ id: 'wallet_1' });
+    mockRepoOpen.mockResolvedValue({ ok: true, session: { id: 'session_1', holdId: 'hold_1' } });
+    mockFindWithContexts.mockResolvedValue({
+      meeting: { id: 'meeting_1' },
+      contexts: [{ contextType: 'case', contextId: 'engagement_1' }],
+    });
+    mockEngagementFindById.mockResolvedValue({
+      id: 'engagement_1',
+      engagementType: 'case',
+      status: 'active',
+      companyId: 'company_1',
+      expertProfileId: 'expert_1',
+    });
+  });
+
+  it('is forwarded to creditSessionsRepository.open when supplied, alongside meetingId/engagementId', async () => {
+    await openSession({ ...INPUT, meetingId: 'meeting_1', durationSource: 'presence' });
+
+    expect(mockRepoOpen).toHaveBeenCalledWith({
+      walletId: 'wallet_1',
+      companyId: 'company_1',
+      expertProfileId: 'expert_1',
+      initiatingMemberId: 'user_1',
+      estimatedMinutes: 30,
+      meetingId: 'meeting_1',
+      engagementId: 'engagement_1',
+      durationSource: 'presence',
+    });
+  });
+
+  it('omitted ⇒ the key is ABSENT — byte-identical to the pre-BAL-466 call (exactOptionalPropertyTypes)', async () => {
+    await openSession(INPUT);
+
+    const call = mockRepoOpen.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(call).toBeDefined();
+    expect(call).not.toHaveProperty('durationSource');
+  });
+
+  it("'presence' WITHOUT meetingId returns meeting_not_bookable BEFORE any repository read", async () => {
+    const result = await openSession({ ...INPUT, durationSource: 'presence' });
+
+    expect(result).toEqual({ ok: false, code: 'meeting_not_bookable' });
+    expect(mockFindWithCompany).not.toHaveBeenCalled();
+    expect(mockFindWalletByCompany).not.toHaveBeenCalled();
+    expect(mockFindWithContexts).not.toHaveBeenCalled();
+    expect(mockRepoOpen).not.toHaveBeenCalled();
+  });
+
+  it("'live_capture' without meetingId is unaffected by the coherence guard", async () => {
+    const result = await openSession({ ...INPUT, durationSource: 'live_capture' });
+    expect(result).toMatchObject({ ok: true });
+  });
+});

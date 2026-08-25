@@ -127,6 +127,12 @@ export interface MeetingPanelEventMap {
     meeting_id?: string;
     /** ⚠ ON OPEN ONLY. A close event would double every open in a funnel for no question. */
     panel: MeetingPanelId;
+    /**
+     * ⚠ BAL-466 (D9.3) — `true` ⇒ the BAL-403 auto-open ladder opened it; `false` ⇒ a person
+     * clicked. Without it the ladder inflates "manual opens" the moment a credit session
+     * exists. REQUIRED on purpose — an omitted key here would be a silent `undefined` bucket.
+     */
+    auto: boolean;
   };
   [MEETING_PANEL_EVENTS.GUEST_DECIDED]: {
     meeting_id?: string;

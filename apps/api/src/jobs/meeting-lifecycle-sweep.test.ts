@@ -159,7 +159,9 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     mockFindMeetingById.mockResolvedValue(meeting());
     mockReconcileMeetingStatus.mockResolvedValue(null);
     mockDeliveringPartyName.mockResolvedValue('CloudPeak');
-    // BAL-412 — INERT on main (D10): every meeting today resolves `no_meeting`.
+    // ⚠ BAL-466 wires the enabling condition; `no_meeting` is still the default here because
+    // most fixtures in this file are non-`case` / unfunded meetings, not because settlement is
+    // globally inert.
     mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'no_meeting' });
   });
 
@@ -801,6 +803,45 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     await runMeetingLifecycleSweep(at(6), () => {}, EMPTY_READER);
 
     expect(mockSettleMeetingIfBillable).not.toHaveBeenCalled();
+  });
+
+  it('BAL-466 — a candidate whose meeting has a presence session settles, actorUserId: null', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: at(30) },
+      { party: 'client', joinedAt: at(2), leftAt: at(30) },
+    ]);
+    mockSettleMeetingIfBillable.mockResolvedValue({
+      ok: true,
+      settlement: { shape: 'held' },
+      result: {},
+    });
+
+    const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(1);
+    expect(mockSettleMeetingIfBillable).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actorUserId: null,
+      now: at(35),
+    });
+  });
+
+  it('⚠ a non-`no_meeting` DECLINE logs a warning rather than throwing — the sweep tick still succeeds', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: at(30) },
+      { party: 'client', joinedAt: at(2), leftAt: at(30) },
+    ]);
+    mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'already_settled' });
+
+    const result = await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
+
+    expect(result.terminated).toBe(1);
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, code: 'already_settled' }),
+      expect.stringContaining('Presence settlement declined')
+    );
   });
 });
 

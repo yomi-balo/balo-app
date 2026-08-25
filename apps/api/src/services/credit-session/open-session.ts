@@ -101,10 +101,62 @@ async function resolveEngagementForMeeting(
   return engagement.id;
 }
 
+/**
+ * Step 2 of `openSession` — resolve the billing company from the eligible set, honouring an
+ * explicit (capability-gated) `companyId`, auto-selecting the single eligible company, or
+ * signalling `company_selection_required` when more than one is eligible and none was chosen.
+ * Extracted purely to keep `openSession`'s own cognitive complexity under the SonarCloud gate —
+ * no behavioural change from the inline version.
+ */
+function resolveChosenCompany(
+  eligible: EligibleCompany[],
+  companyId: string | undefined,
+  initiatingMemberId: string
+): { ok: true; companyId: string } | { ok: false; result: OpenSessionServiceResult } {
+  if (companyId !== undefined) {
+    // Explicit choice MUST be one the caller holds CONSUME_CREDITS on (fail-closed IDOR guard).
+    const match = eligible.find((c) => c.id === companyId);
+    if (match === undefined) {
+      log.warn(
+        { userId: initiatingMemberId, companyId },
+        'openSession denied — companyId not in eligible set'
+      );
+      return { ok: false, result: { ok: false, code: 'forbidden' } };
+    }
+    return { ok: true, companyId: match.id };
+  }
+
+  if (eligible.length === 1) {
+    const [only] = eligible;
+    if (only === undefined) return { ok: false, result: { ok: false, code: 'forbidden' } }; // unreachable; satisfies noUncheckedIndexedAccess
+    return { ok: true, companyId: only.id };
+  }
+
+  log.info(
+    { userId: initiatingMemberId, count: eligible.length },
+    'openSession — company selection required'
+  );
+  return {
+    ok: false,
+    result: { ok: false, code: 'company_selection_required', companies: eligible },
+  };
+}
+
 export async function openSession(
   input: OpenSessionServiceInput
 ): Promise<OpenSessionServiceResult> {
   const { initiatingMemberId, expertProfileId, estimatedMinutes, companyId, meetingId } = input;
+
+  // BAL-466 (D4) — COHERENCE. A `'presence'` session settles from `meeting_presence`, which is
+  // meeting-grained; `findPresenceUnsettled` requires `meeting_id IS NOT NULL`. Opening one
+  // without a meeting would produce a row that NO settlement path can ever reach.
+  if (input.durationSource === 'presence' && meetingId === undefined) {
+    log.error(
+      { userId: initiatingMemberId, expertProfileId },
+      'openSession refused — presence provenance requires a meetingId'
+    );
+    return { ok: false, code: 'meeting_not_bookable' };
+  }
 
   // 1. Build the member's CONSUME_CREDITS-eligible billing-company set (subsumes the old
   //    findWithCompany + getMemberRole gate: membership ∈ eligible IS the capability check).
@@ -117,29 +169,11 @@ export async function openSession(
   }
 
   // 2. Resolve the chosen billing company.
-  let chosenCompanyId: string;
-  if (companyId !== undefined) {
-    // Explicit choice MUST be one the caller holds CONSUME_CREDITS on (fail-closed IDOR guard).
-    const match = eligible.find((c) => c.id === companyId);
-    if (match === undefined) {
-      log.warn(
-        { userId: initiatingMemberId, companyId },
-        'openSession denied — companyId not in eligible set'
-      );
-      return { ok: false, code: 'forbidden' };
-    }
-    chosenCompanyId = match.id;
-  } else if (eligible.length === 1) {
-    const [only] = eligible;
-    if (only === undefined) return { ok: false, code: 'forbidden' }; // unreachable; satisfies noUncheckedIndexedAccess
-    chosenCompanyId = only.id;
-  } else {
-    log.info(
-      { userId: initiatingMemberId, count: eligible.length },
-      'openSession — company selection required'
-    );
-    return { ok: false, code: 'company_selection_required', companies: eligible };
+  const chosen = resolveChosenCompany(eligible, companyId, initiatingMemberId);
+  if (!chosen.ok) {
+    return chosen.result;
   }
+  const chosenCompanyId = chosen.companyId;
 
   // 2b. BAL-129 (D5) — resolve the billed engagement from the meeting, if one was supplied.
   //     Placed AFTER the eligible-company resolution and BEFORE the wallet lookup, so
@@ -181,6 +215,9 @@ export async function openSession(
     ...(meetingId === undefined || resolvedEngagementId === undefined
       ? {}
       : { meetingId, engagementId: resolvedEngagementId }),
+    // BAL-466 (D4) — omitted ⇒ the repository's `'live_capture'` default, so every
+    // pre-BAL-466 call site is byte-identical.
+    ...(input.durationSource === undefined ? {} : { durationSource: input.durationSource }),
   });
 
   if (!result.ok) {

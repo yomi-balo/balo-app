@@ -18,7 +18,7 @@ vi.mock('@balo/db', () => ({
 }));
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorize }));
 
-import { connectSession } from './connect-session.js';
+import { connectSession, connectSessionAsSystem } from './connect-session.js';
 
 const SESSION = { id: 'session_1', companyId: 'company_1', status: 'active' };
 
@@ -59,5 +59,69 @@ describe('connectSession', () => {
     await expect(connectSession('session_1', 'user_1')).rejects.toBeInstanceOf(
       InvalidSessionTransitionError
     );
+  });
+
+  it('delegates to connectSessionAsSystem — one transition path', async () => {
+    await connectSession('session_1', 'user_1', { now: new Date('2026-08-25T00:00:00.000Z') });
+    expect(mockConnect).toHaveBeenCalledWith('session_1', {
+      now: new Date('2026-08-25T00:00:00.000Z'),
+    });
+  });
+
+  it('F1 (BAL-466 fix round) — refuses a presence-sourced session (forbidden, no connect call)', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      session: { ...SESSION, durationSource: 'presence' },
+      role: 'member',
+    });
+    const res = await connectSession('session_1', 'user_1');
+    expect(res).toEqual({ ok: false, code: 'forbidden' });
+    expect(mockConnect).not.toHaveBeenCalled();
+  });
+
+  it('F1 — a live_capture session is unaffected by the presence guard', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      session: { ...SESSION, durationSource: 'live_capture' },
+      role: 'member',
+    });
+    const res = await connectSession('session_1', 'user_1');
+    expect(res).toEqual({ ok: true, session: SESSION });
+    expect(mockConnect).toHaveBeenCalled();
+  });
+});
+
+describe('connectSessionAsSystem (BAL-466, D6)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConnect.mockResolvedValue(SESSION);
+  });
+
+  it('runs NO authorizeSessionActor — system-only, no actor authorization', async () => {
+    const session = await connectSessionAsSystem('session_1');
+
+    expect(session).toEqual(SESSION);
+    expect(mockAuthorize).not.toHaveBeenCalled();
+    expect(mockConnect).toHaveBeenCalledWith('session_1', {});
+  });
+
+  it('passes `now` through to the repository', async () => {
+    const now = new Date('2026-08-25T00:00:00.000Z');
+    await connectSessionAsSystem('session_1', { now });
+    expect(mockConnect).toHaveBeenCalledWith('session_1', { now });
+  });
+
+  it('propagates a thrown InvalidSessionTransitionError to the caller', async () => {
+    mockConnect.mockRejectedValue(new InvalidSessionTransitionError());
+    await expect(connectSessionAsSystem('session_1')).rejects.toBeInstanceOf(
+      InvalidSessionTransitionError
+    );
+  });
+
+  it('connectSession still authorizes and delegates to connectSessionAsSystem', async () => {
+    mockAuthorize.mockResolvedValue({ ok: true, session: SESSION, role: 'member' });
+    const res = await connectSession('session_1', 'user_1');
+    expect(mockAuthorize).toHaveBeenCalled();
+    expect(res).toEqual({ ok: true, session: SESSION });
   });
 });

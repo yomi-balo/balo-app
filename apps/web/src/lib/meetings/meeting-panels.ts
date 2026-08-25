@@ -56,14 +56,17 @@ import type { MeetingReactionEmoji } from './meeting-reactions';
  * speculative calls: authorizing a read against a grant with no authenticated subject to bind
  * it to is worse than denying. **BAL-445** mints the session and fills the arm.
  *
- * ── ⚠⚠ BAL-403 ADDED `'balance'` — AND IT SHIPS INERT BY DESIGN ─────────────────────────────
+ * ── ⚠⚠ BAL-403 ADDED `'balance'`; BAL-466 MADE IT REACHABLE FOR A `case` CONSULTATION ────────
  *
  * `MeetingPanelRegistration.balance !== null` requires a `credit_sessions` row for THIS
- * meeting, and nothing in the app opens one today (`openSessionAction` / `connectSessionAction`
- * have zero non-test callers — the session-open ticket is deferred and tracked separately). So
- * `hasBalance: false` is the EXPECTED answer for every meeting right now, not a bug: no slot
- * button, no More-sheet row, no poll, no fetch, no panel. See `page.tsx`'s `resolveBalanceSlot`
- * docblock for the full inert-seam reasoning (the same posture BAL-420 and BAL-387 shipped).
+ * meeting. `apps/web`'s `openSessionAction` still has zero non-test callers — the seam is
+ * server-side (`connectSessionAction` no longer exists — F1 of the BAL-466 fix round deleted
+ * it): `joinMeetingAsMember` (`apps/api`) opens a
+ * `duration_source='presence'` session when the first CLIENT-side member is admitted to a
+ * `case` meeting. `hasBalance: false` is still the answer for every non-`case` meeting and for
+ * a Case whose client has not yet been admitted — not a bug: no slot button, no More-sheet row,
+ * no poll, no fetch, no panel. See `page.tsx`'s `resolveBalanceSlot` docblock for the full
+ * reasoning.
  */
 export type MeetingPanelId = 'people' | 'files' | 'chat' | 'balance';
 

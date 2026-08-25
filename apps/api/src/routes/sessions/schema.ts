@@ -17,7 +17,12 @@ import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
  * `OpenSessionInput`'s docblock warns about — a session that bills one engagement while
  * BAL-425's sweep ages out another. One resolution, one source.
  *
- * Nothing sends `meetingId` yet (D6); **BAL-400** wires it when it books a Case consultation.
+ * ⚠ Nothing sends `meetingId` ON THIS ROUTE, and nothing is expected to. BAL-466 opens the
+ * Case consultation's session from the API SERVICE (`joinMeetingAsMember` → `openSession`),
+ * not over this wire. ⚠ AND THERE IS DELIBERATELY NO `durationSource` FIELD HERE EITHER —
+ * provenance is a server decision derived from the seam, exactly as `engagementId` is; a
+ * client that could choose it could open a `'presence'` session with no meeting, which no
+ * settlement path can ever reach.
  */
 export const openSessionBodySchema = z.object({
   expertProfileId: z.string().uuid(),

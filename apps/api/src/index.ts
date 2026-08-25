@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/node';
 import { buildApp } from './app.js';
 import { startWorkers } from './jobs/worker.js';
+import { assertNoShowFloorOverrideUnsetInProduction } from './config/billing-floor.js';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -11,6 +12,13 @@ Sentry.init({
 const app = await buildApp();
 
 try {
+  // BAL-466 (D13) — ⚠⚠ THROWS IN PRODUCTION IF `MEETING_NO_SHOW_FLOOR_MINUTES` IS SET. Unlike
+  // the two vendor-secret warnings below, this one is a HARD failure on purpose — an override
+  // here would silently corrupt a MONEY figure (see the function's own docblock) rather than
+  // degrade a feature, so crash-looping loudly is the correct trade. Run before `app.listen` so
+  // a misconfigured deployment never starts serving traffic on it.
+  assertNoShowFloorOverrideUnsetInProduction();
+
   await app.listen({
     port: parseInt(process.env.PORT || '3002'),
     host: '0.0.0.0',

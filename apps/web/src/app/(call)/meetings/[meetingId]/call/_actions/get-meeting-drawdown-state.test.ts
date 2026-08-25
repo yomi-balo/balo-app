@@ -13,17 +13,20 @@ const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const USER_ID = '11111111-2222-4333-8444-555555555555';
 const SESSION_ID = '9d4e2f10-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
 
+const CLIENT_COMPANY_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const EXPERT_PROFILE_ID = '88888888-8888-4888-8888-888888888888';
+
 const {
   mockRequireUser,
   mockFindIdByMeetingId,
-  mockAuthorizeMeetingFileAccess,
+  mockAuthorizeMeetingParticipation,
   mockGetSessionDrawdownState,
   mockLogWarn,
   mockLogError,
 } = vi.hoisted(() => ({
   mockRequireUser: vi.fn(),
   mockFindIdByMeetingId: vi.fn(),
-  mockAuthorizeMeetingFileAccess: vi.fn(),
+  mockAuthorizeMeetingParticipation: vi.fn(),
   mockGetSessionDrawdownState: vi.fn(),
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
@@ -33,8 +36,8 @@ vi.mock('@/lib/auth/session', () => ({ requireUser: mockRequireUser }));
 vi.mock('@/lib/logging', () => ({
   log: { warn: mockLogWarn, error: mockLogError, info: vi.fn(), debug: vi.fn() },
 }));
-vi.mock('@/lib/meetings/authorize-meeting-file-access', () => ({
-  authorizeMeetingFileAccess: mockAuthorizeMeetingFileAccess,
+vi.mock('@/lib/authz/meeting-participation', () => ({
+  authorizeMeetingParticipation: mockAuthorizeMeetingParticipation,
 }));
 vi.mock('@/lib/credit/actions/get-drawdown-state', () => ({
   getSessionDrawdownState: mockGetSessionDrawdownState,
@@ -53,7 +56,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockRequireUser.mockResolvedValue({ id: USER_ID });
   mockFindIdByMeetingId.mockResolvedValue(undefined);
-  mockAuthorizeMeetingFileAccess.mockResolvedValue({ ok: true, side: 'client' });
+  mockAuthorizeMeetingParticipation.mockResolvedValue({
+    ok: true,
+    side: 'client',
+    companyId: CLIENT_COMPANY_ID,
+    expertProfileId: EXPERT_PROFILE_ID,
+  });
   mockGetSessionDrawdownState.mockResolvedValue(DRAWDOWN_STATE);
 });
 
@@ -82,33 +90,40 @@ describe('getMeetingDrawdownStateAction — the inert path', () => {
     const result = await getMeetingDrawdownStateAction({ meetingId: MEETING_ID });
 
     expect(result).toEqual({ success: true, state: null });
-    expect(mockAuthorizeMeetingFileAccess).not.toHaveBeenCalled();
+    // ⚠ BAL-466 (D8) — the participation gate now runs EVEN for a meeting with no session
+    // (authorization first, existence second). Its own cost is a fact about the meeting, not
+    // about the money — it is NOT skipped on the inert path any more.
+    expect(mockAuthorizeMeetingParticipation).toHaveBeenCalled();
   });
 });
 
-describe('getMeetingDrawdownStateAction — ⚠⚠ W6, participation in THIS meeting', () => {
-  it('runs the participation gate AFTER the session is found, never before', async () => {
+describe('getMeetingDrawdownStateAction — ⚠⚠ W6 / BAL-466 (D8), participation in THIS meeting', () => {
+  // ⚠ F11 (review fix round) — RENAMED: this asserts only the CALL ARGUMENTS, not ordering. The
+  // real ordering proof is the "no credit session for this meeting" test above (participation
+  // runs even with no session) and the denial test below (the money table is never read when
+  // participation denies).
+  it('calls authorizeMeetingParticipation with the meeting + user, even when a session exists', async () => {
     mockFindIdByMeetingId.mockResolvedValue({ id: SESSION_ID });
 
     await getMeetingDrawdownStateAction({ meetingId: MEETING_ID });
 
-    expect(mockAuthorizeMeetingFileAccess).toHaveBeenCalledWith({
+    expect(mockAuthorizeMeetingParticipation).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
       userId: USER_ID,
     });
   });
 
-  it('⚠⚠ a company member who is NOT a participant of this meeting is denied — the SAME inert arm as W1', async () => {
+  it('⚠⚠ a company member who is NOT a participant of this meeting is denied — the SAME inert arm as W1, and the money table is never read', async () => {
     mockFindIdByMeetingId.mockResolvedValue({ id: SESSION_ID });
-    mockAuthorizeMeetingFileAccess.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
+    mockAuthorizeMeetingParticipation.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
 
     const result = await getMeetingDrawdownStateAction({ meetingId: MEETING_ID });
 
     expect(result).toEqual({ success: true, state: null });
     expect(mockGetSessionDrawdownState).not.toHaveBeenCalled();
     expect(mockLogWarn).toHaveBeenCalledWith(
-      'Drawdown read refused — not in the audience for this meeting',
-      expect.objectContaining({ meetingId: MEETING_ID, sessionId: SESSION_ID })
+      'Drawdown read refused — not a participant of this meeting',
+      expect.objectContaining({ meetingId: MEETING_ID })
     );
   });
 });
@@ -122,7 +137,7 @@ describe('getMeetingDrawdownStateAction — ⚠⚠ W1, the gate denial collapses
 
     expect(result).toEqual({ success: true, state: null });
     expect(mockLogWarn).toHaveBeenCalledWith(
-      'Drawdown read denied — not a live company member',
+      'Drawdown read denied — not a live member of the billed company',
       expect.objectContaining({ meetingId: MEETING_ID, sessionId: SESSION_ID })
     );
   });
@@ -157,7 +172,7 @@ describe('getMeetingDrawdownStateAction — transport failures', () => {
 
   it('a thrown participation gate ⇒ retryable: true too', async () => {
     mockFindIdByMeetingId.mockResolvedValue({ id: SESSION_ID });
-    mockAuthorizeMeetingFileAccess.mockRejectedValue(new Error('db unavailable'));
+    mockAuthorizeMeetingParticipation.mockRejectedValue(new Error('db unavailable'));
 
     const result = await getMeetingDrawdownStateAction({ meetingId: MEETING_ID });
 

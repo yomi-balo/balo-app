@@ -81,6 +81,17 @@
  * `completed`/`cancelled` engagement still holds `manage_engagement`. Callers that need
  * liveness check `meetings.status` themselves — the guest service does, against the
  * TERMINAL set (see `MEETING_CLOSED_TO_GUESTS`).
+ *
+ * ── BAL-466 (D3) — THE RULE ITSELF NOW LIVES IN `@balo/shared/meetings` ────────────────────
+ *
+ * `apps/web`'s in-call money surface (`resolveInCallDrawdown`) needs this identical verdict,
+ * so the two axes above were extracted, verbatim, into `resolveMeetingParticipation` — a pure
+ * core over INJECTED reads. This module is now a THIN WRAPPER: it binds the shared core to
+ * `@balo/db`'s repositories (`PARTICIPATION_READS`, below) and keeps only what cannot move —
+ * the pgEnum drift-guard witnesses (they depend on `@balo/db` types, which `packages/shared`
+ * cannot import) and the LOGGING (a pure rule with a logger stops being pure). There is now
+ * exactly ONE definition of "is this actor a participant of this meeting", consumed by both
+ * apps as fetch-and-call wrappers.
  */
 import {
   engagementsRepository,
@@ -93,13 +104,16 @@ import {
   type MeetingContextType,
   type MeetingGuestInviteChannel,
 } from '@balo/db';
-import { CAPABILITIES, ENGAGEMENT_CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
+import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
 import {
   resolveContextOwner,
-  selectPrimaryMeetingContext,
+  resolveMeetingParticipation,
   type MeetingContextOwner,
   type MeetingContextOwnerReads,
+  type MeetingParticipationDenialReason,
+  type MeetingParticipationOk,
+  type MeetingParticipationReads,
   type PrimaryMeetingContext,
   type MeetingContextTypeLabel,
   type MeetingGuestInviteChannelLabel,
@@ -152,20 +166,14 @@ export type AuthorizeMeetingParticipationErrorCode = 'meeting_not_found';
 /** Which side of the meeting the actor was resolved onto. NEVER taken from request input. */
 export type MeetingParticipationSide = MeetingGuestSide;
 
+/**
+ * ⚠⚠ F16 (review fix round) — THE `ok: true` ARM IS `MeetingParticipationOk<Meeting>`, NOT A
+ * HAND-RESTATED COPY. `apps/web`'s `lib/authz/meeting-participation.ts` composes the identical
+ * shared shape — see that module's own type and `@balo/shared/meetings`'s docblock on
+ * `MeetingParticipationOk` for why this is one definition rather than two.
+ */
 export type AuthorizeMeetingParticipationResult =
-  | {
-      ok: true;
-      /** ⚠ The `party` every guest this actor invites will carry. */
-      side: MeetingParticipationSide;
-      /** Threaded back so the service never re-reads it (nor can disagree with itself). */
-      meeting: Meeting;
-      /** The PRIMARY context — directly assignable to `hasEngagementCapability`'s subject. */
-      subject: PrimaryMeetingContext;
-      /** The company that owns the primary context. Always resolved on both sides. */
-      companyId: string;
-      /** `null` for a `match`-routed `project_discovery`, which names nobody. */
-      expertProfileId: string | null;
-    }
+  | ({ ok: true } & MeetingParticipationOk<Meeting>)
   | { ok: false; code: AuthorizeMeetingParticipationErrorCode };
 
 export interface AuthorizeMeetingParticipationInput {
@@ -173,14 +181,13 @@ export interface AuthorizeMeetingParticipationInput {
   userId: string;
 }
 
-/** Which read came back empty, or which axis refused — a LOG field, never a wire value. */
-type DenialReason =
-  | 'no_meeting'
-  | 'no_context'
-  | 'ambiguous_context'
-  | 'subject_unresolvable'
-  | 'cross_tenant'
-  | 'no_capability';
+/**
+ * Which read came back empty, or which axis refused — a LOG field, never a wire value.
+ *
+ * ⚠⚠ NOW AN ALIAS OF THE SHARED SHAPE (BAL-466, D3) — one union, so a new denial shape cannot
+ * drift between this app's wrapper and `apps/web`'s.
+ */
+type DenialReason = MeetingParticipationDenialReason;
 
 /**
  * THE REPOSITORY BINDING for the shared owning-party rule.
@@ -277,14 +284,42 @@ async function loadOwningParty(
 /** The single fail-closed exit. The SHAPE goes here; the wire gets one literal. */
 function deny(
   reason: DenialReason,
-  fields: Record<string, unknown>
+  fields: Readonly<Record<string, string | number | null>>
 ): { ok: false; code: 'meeting_not_found' } {
   log.warn({ ...fields, reason }, 'Meeting participation denied');
   return { ok: false, code: 'meeting_not_found' };
 }
 
 /**
+ * ⚠⚠ THE REPOSITORY BINDING (BAL-466, D3). Every entry is a function this module ALREADY
+ * imported, passed in rather than imported anew — the same discipline `OWNING_PARTY_READS`
+ * states, for the same reason: it is what keeps `authorize-meeting-participation.test.ts`'s
+ * six-export `@balo/db` factory mock green with ZERO edits.
+ */
+const PARTICIPATION_READS = {
+  findMeeting: (meetingId: string) => meetingsRepository.findById(meetingId),
+  listMeetingContexts: (meetingId: string) => meetingContextsRepository.listByMeeting(meetingId),
+  resolveOwner: loadOwningParty,
+  findCompanyMemberRole: (companyId: string, userId: string) =>
+    partyMembershipsRepository.getMemberRole('company', companyId, userId),
+  // ⚠ `manage_engagement` — the ADMINISTRATIVE token, never `host_meetings`. Pinned by a test.
+  //
+  // ⚠ Calling `hasEngagementCapability` here is safe SPECIFICALLY because step 3 already
+  // resolved this context's owning party from its own row — the tenancy obligation that
+  // seam's header block assigns to its callers. It is NOT safe to call on an unvetted
+  // `contextId`; `resolveHostContext` is an identity oracle.
+  holdsEngagementCapability: (userId: string, subject: PrimaryMeetingContext) =>
+    hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, subject),
+} satisfies MeetingParticipationReads<Meeting>;
+
+/**
  * Fail-closed, two-axis authorization for acting on a meeting's participant roster.
+ *
+ * ⚠⚠ THIN WRAPPER (BAL-466, D3). The RULE lives in `@balo/shared/meetings`'s
+ * `resolveMeetingParticipation`, shared with `apps/web`'s in-call money surface. This module
+ * keeps: the pgEnum drift-guard witnesses above (they depend on `@balo/db` types and cannot
+ * move), `OWNING_PARTY_READS` + `loadOwningParty` (the logging locality for the owning-party
+ * exhaustiveness witness), and `deny` (this app's own log voice).
  *
  * Returns the actor's SIDE plus the meeting, the primary context and the owning party, so
  * the caller threads all four onward and none is read twice.
@@ -292,72 +327,10 @@ function deny(
 export async function authorizeMeetingParticipation(
   input: AuthorizeMeetingParticipationInput
 ): Promise<AuthorizeMeetingParticipationResult> {
-  const { meetingId, userId } = input;
-
-  // 1. The meeting. `findById` filters `deleted_at IS NULL`, so missing and soft-deleted are
-  //    one outcome — which is what lets them share one literal without extra work.
-  const meeting = await meetingsRepository.findById(meetingId);
-  if (meeting === undefined) {
-    return deny('no_meeting', { userId, meetingId });
+  const result = await resolveMeetingParticipation(input, PARTICIPATION_READS);
+  if (result.outcome === 'denied') {
+    return deny(result.reason, result.fields);
   }
-
-  // 2. The PRIMARY context (D3's precedence rule). `listByMeeting` filters soft-deleted rows.
-  const contexts = await meetingContextsRepository.listByMeeting(meetingId);
-  const primary = selectPrimaryMeetingContext(contexts);
-  if (!primary.ok) {
-    // Both `none` (admin-only / empty) and `ambiguous` answer the SAME literal — see the
-    // §4.1 divergence note in the module docblock. Only the log distinguishes them.
-    return deny(primary.reason === 'ambiguous' ? 'ambiguous_context' : 'no_context', {
-      userId,
-      meetingId,
-      contextCount: contexts.length,
-    });
-  }
-  const subject = primary.context;
-
-  // 3. The owning party, from the primary context.
-  const owner = await loadOwningParty(subject);
-  if (owner === undefined) {
-    return deny('subject_unresolvable', {
-      userId,
-      meetingId,
-      contextType: subject.contextType,
-      contextId: subject.contextId,
-    });
-  }
-  const { companyId, expertProfileId } = owner;
-
-  // ── 4. AUTHORIZATION. Nothing below this point runs before a side is proven. ──
-
-  // CLIENT SIDE — membership axis, company scope. Role interpretation goes through
-  // `@balo/shared/authz` (ADR-1029 HARD CONSTRAINT B); never `role === 'owner'`.
-  const role = await partyMembershipsRepository.getMemberRole('company', companyId, userId);
-  if (role !== undefined) {
-    if (!roleHasCapability(role, CAPABILITIES.PARTICIPATE)) {
-      // A live member whose role lacks the base bundle. Distinct in the log, identical on
-      // the wire — the same treatment `authorize-meeting-booking` gives it.
-      return deny('no_capability', { userId, meetingId, companyId, side: 'client' });
-    }
-    return { ok: true, side: 'client', meeting, subject, companyId, expertProfileId };
-  }
-
-  // EXPERT SIDE — engagement axis, `manage_engagement`. Reached only when the actor holds
-  // NO company membership, so the two arms cannot both fire and the side is unambiguous.
-  //
-  // ⚠ Calling `hasEngagementCapability` here is safe SPECIFICALLY because step 3 already
-  // resolved this context's owning party from its own row — the tenancy obligation that
-  // seam's header block assigns to its callers. It is NOT safe to call on an unvetted
-  // `contextId`; `resolveHostContext` is an identity oracle.
-  const isHostSide = await hasEngagementCapability(
-    { id: userId },
-    ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-    subject
-  );
-  if (isHostSide) {
-    return { ok: true, side: 'expert', meeting, subject, companyId, expertProfileId };
-  }
-
-  // THE CROSS-TENANT ATTEMPT — the thing worth seeing in Axiom. The log distinguishes it
-  // from a genuinely missing meeting; the wire deliberately does not.
-  return deny('cross_tenant', { userId, meetingId, companyId, contextType: subject.contextType });
+  const { side, meeting, subject, companyId, expertProfileId } = result;
+  return { ok: true, side, meeting, subject, companyId, expertProfileId };
 }

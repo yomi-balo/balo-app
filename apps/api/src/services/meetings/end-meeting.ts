@@ -137,9 +137,10 @@ async function tearDownRoom(
  * ⚠⚠ BAL-412 (ADR-1044 §7) — settle the meeting's presence-sourced credit session, if it has
  * one. BEST-EFFORT AND NON-FATAL, by design, exactly like {@link tearDownRoom}: the meeting is
  * ALREADY terminal in Postgres by the time this runs, so a settlement fault must never fail the
- * End request the person who ended the meeting is waiting on. INERT ON MAIN (D10) — every
- * meeting today has `duration_source` of `live_capture` or `external`, never `presence`, so
- * `settleMeetingIfBillable` returns `{ ok: false, code: 'no_meeting' }` on every call.
+ * End request the person who ended the meeting is waiting on. BAL-466 wires it:
+ * `joinMeetingAsMember` opens a `duration_source='presence'` session when the first
+ * CLIENT-side member is admitted to a `case` meeting. Still returns `no_meeting` for every
+ * non-`case` meeting and for a Case whose client never joined.
  */
 async function settleBestEffort(meetingId: string, actorUserId: string): Promise<void> {
   try {
@@ -253,9 +254,10 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
     now,
   });
 
-  // 9. ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. INERT ON MAIN (D10): reachable only
-  //    from a `duration_source='presence'` session, and nothing on main opens one (BAL-400
-  //    booking → BAL-466 session open would). BEST-EFFORT AND NON-FATAL, the same posture as
+  // 9. ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. BAL-466 wires it: `joinMeetingAsMember`
+  //    opens a `duration_source='presence'` session when the first CLIENT-side member is
+  //    admitted to a `case` meeting. Still returns `no_meeting` for every non-`case` meeting
+  //    and for a Case whose client never joined. BEST-EFFORT AND NON-FATAL, the same posture as
   //    `tearDownRoom` above — the meeting is already terminal in Postgres, so a settlement fault
   //    costs nothing that matters to THIS request, and the meter sweep's durability backstop
   //    (§4.3, `credit-session-meter-sweep.ts`'s `findPresenceUnsettled` pass) recovers it.
