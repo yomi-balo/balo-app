@@ -32,7 +32,7 @@ const log = createLogger('recording-capture');
 
 export const RECORDING_CAPTURE_QUEUE = 'recording-capture';
 
-const ATTEMPTS = 3;
+export const ATTEMPTS = 3;
 const BACKOFF_DELAY_MS = 5_000;
 
 export interface RecordingEnsureJobData {
@@ -130,12 +130,21 @@ function isUnrecoverableDailyError(error: unknown): boolean {
  * answer. This is where the loop actually stops: `handleEnsure` refuses to arm a FRESH capture
  * once a meeting has failed to start recording this many times at the Daily stage.
  *
- * 3 is chosen deliberately: enough to rule out a single transient blip (a Daily 429, a network
- * hiccup) without letting a genuinely broken room burn the whole meeting re-emitting analytics
- * on every webhook delivery. Past this point a re-arm can only reproduce the same failure — it
- * is an ops problem, not a retry problem.
+ * ⚠⚠ IT IS `ATTEMPTS + 2`, AND IT MUST NOT BE `ATTEMPTS`. A bare `3` — which this constant was
+ * until review caught it — is consumed ENTIRELY by ONE exhausted retry sequence, because §5.1b
+ * stamps a `failed` row on EVERY attempt (in-handler, before the rethrow). So a single ~15-second
+ * Daily blip burns all three BullMQ attempts, writes three `failed` rows, hits the cap, and
+ * DISABLES RECORDING FOR THE REST OF THAT MEETING — the next rejoin's re-arm is refused even
+ * though Daily has long since recovered. That is the opposite of the intent: the cap exists to
+ * stop a loop, not to let one transient outage end a consultation's recording.
+ *
+ * Deriving it from `ATTEMPTS` keeps the two in step — raising the retry count without raising
+ * this would silently re-introduce the same collision. `+ 2` leaves room for one full retry
+ * sequence PLUS two genuine re-arms, which is enough to distinguish "Daily wobbled" from "this
+ * room cannot record". Past that a re-arm can only reproduce the same failure — an ops problem,
+ * not a retry problem.
  */
-const MAX_DAILY_FAILURES_PER_MEETING = 3;
+export const MAX_DAILY_FAILURES_PER_MEETING = ATTEMPTS + 2;
 
 /**
  * `ensure` — plan §6.1's ladder, every gate a successful no-op.

@@ -1,1 +1,0 @@
-ALTER TABLE "transcripts" DROP COLUMN "recording_ref";

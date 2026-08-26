@@ -77,6 +77,8 @@ import {
   enqueueRecordingStop,
   startRecordingCaptureWorker,
   RECORDING_CAPTURE_QUEUE,
+  ATTEMPTS,
+  MAX_DAILY_FAILURES_PER_MEETING,
 } from './recording-capture.js';
 
 const MEETING_ID = '11111111-1111-4111-8111-111111111111';
@@ -253,7 +255,7 @@ describe('recording-capture job — ensure handler', () => {
     findById.mockResolvedValue(liveMeeting());
     listOpen.mockResolvedValue([{ id: 'p1' }]);
     findCapturingForMeeting.mockResolvedValue(undefined);
-    countFailedByStage.mockResolvedValue(3);
+    countFailedByStage.mockResolvedValue(MAX_DAILY_FAILURES_PER_MEETING);
 
     await runEnsure({ meetingId: MEETING_ID, trigger: 'rejoin' });
 
@@ -261,16 +263,30 @@ describe('recording-capture job — ensure handler', () => {
     expect(insertCapturing).not.toHaveBeenCalled();
     expect(startRoomRecording).not.toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith(
-      expect.objectContaining({ meetingId: MEETING_ID, dailyFailures: 3 }),
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        dailyFailures: MAX_DAILY_FAILURES_PER_MEETING,
+      }),
       expect.stringContaining('repeatedly')
     );
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (F3a) — THE COLLISION THIS CONSTANT EXISTS TO AVOID, PINNED.
+   * §5.1b stamps a `failed` row on EVERY BullMQ attempt, so a cap equal to `ATTEMPTS` is
+   * consumed entirely by ONE exhausted retry sequence — a single transient Daily blip would
+   * then disable recording for the rest of the meeting, refusing every later rejoin re-arm.
+   * A strict `>` is the whole property; without it the breaker fires on recoverable faults.
+   */
+  it('⚠⚠ the cap leaves room beyond one full retry sequence (cap > ATTEMPTS)', () => {
+    expect(MAX_DAILY_FAILURES_PER_MEETING).toBeGreaterThan(ATTEMPTS);
   });
 
   it('BELOW the failure threshold: the re-arm still starts a fresh capture', async () => {
     findById.mockResolvedValue(liveMeeting());
     listOpen.mockResolvedValue([{ id: 'p1' }]);
     findCapturingForMeeting.mockResolvedValue(undefined);
-    countFailedByStage.mockResolvedValue(2);
+    countFailedByStage.mockResolvedValue(MAX_DAILY_FAILURES_PER_MEETING - 1);
     insertCapturing.mockResolvedValue(ROW);
     startRoomRecording.mockResolvedValue(undefined);
 

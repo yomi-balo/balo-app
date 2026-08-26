@@ -332,6 +332,31 @@ describe('POST /webhooks/mux (BAL-473 §8)', () => {
   });
 
   /**
+   * ⚠⚠ FIX ROUND 2 (F4a) — THE THIRD WEDGE RESIDUAL'S ONLY OBSERVABLE MOMENT.
+   * Mux finished transcoding before `recording-ingest`'s `markIngesting` committed, so the row
+   * is still `source_ready` and the CAS (`status = 'ingesting'`) finds nothing. Because this
+   * handler ACKS, the marker is consumed and Mux never retries — the segment can never reach
+   * `ready`. That has to log at ERROR: it was previously indistinguishable from a benign replay
+   * in the `info` branch, which is the whole reason the wedge was invisible. BAL-480 owns the
+   * actual fix; this test pins the signal so it cannot silently regress to `info`.
+   */
+  it('⚠⚠ a ready that races ahead of markIngesting logs the wedge at ERROR, not info', async () => {
+    mockFindRecordingById.mockResolvedValue({ ...RECORDING_ROW, status: 'source_ready' });
+    mockMarkReady.mockResolvedValue(undefined); // CAS refuses — the row is not `ingesting` yet
+    const payload = body();
+
+    const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ recordingId: RECORDING_ID, eventAssetId: ASSET_ID }),
+      expect.stringContaining('wedged')
+    );
+    expect(mockEnqueueRecordingCleanupSource).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  /**
    * ⚠⚠ FIX ROUND 2 (R3) — THE ORPHAN SIGNAL. A worker died between `assets.create` and
    * `markIngesting` for a FIRST asset; a retry created a SECOND asset and stamped the row with
    * IT. The first asset's `video.asset.ready` still resolves by `passthrough` (the row id) but

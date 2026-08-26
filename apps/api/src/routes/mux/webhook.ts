@@ -180,6 +180,19 @@ async function applyEffect(
           },
           'Mux video.asset.ready resolved to a row whose mux_asset_id names a DIFFERENT asset — an orphaned Mux asset exists'
         );
+      } else if (recording.status === 'source_ready') {
+        // ⚠⚠ FIX ROUND 2 (F4a) — THE THIRD WEDGE RESIDUAL, AND ITS ONLY OBSERVABLE MOMENT.
+        // `ready` arrived while the row is still `source_ready`: Mux finished transcoding before
+        // `recording-ingest`'s `markIngesting` committed. The CAS (`status = 'ingesting'`) finds
+        // nothing, and because this handler acks, THE MARKER IS CONSUMED AND MUX NEVER RETRIES —
+        // so the row wedges at `ingesting` forever once the ingest job does commit, and the
+        // recording never becomes playable. Logged at ERROR, not info: this line is the only
+        // signal the wedge ever emits, and it was previously buried in the "replay" branch
+        // below alongside genuinely benign no-ops. BAL-480 owns the actual fix.
+        log.error(
+          { recordingId: recording.id, eventAssetId: event.assetId },
+          'Mux video.asset.ready arrived before markIngesting committed — this segment is wedged and will never reach ready'
+        );
       } else {
         log.info(
           { recordingId: recording.id },
