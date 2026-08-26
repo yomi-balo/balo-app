@@ -17,9 +17,14 @@ export interface OpenSessionServiceInput {
    */
   companyId?: string;
   /**
-   * BAL-129 (D5) — the Balo meeting this session bills. OPTIONAL; nothing sends it yet
-   * (**BAL-400** wires it when it books a Case consultation), and a `duration_source =
-   * 'external'` session legitimately has an engagement and NO Balo meeting.
+   * BAL-129 (D5) — the Balo meeting this session bills. OPTIONAL.
+   *
+   * ⚠ SUPERSEDED CLAIM, CORRECTED: this used to say "nothing sends it yet (BAL-400 wires it
+   * when it books a Case consultation)". BAL-400 (booking) was the recorded intent and is NOT
+   * the seam — **BAL-466** sends it from `joinMeetingAsMember`'s `openCaseSessionBestEffort`,
+   * at ADMISSION, alongside `durationSource: 'presence'` (see the bidirectional coherence guard
+   * below, G1). A `duration_source = 'external'` session still legitimately has an engagement
+   * and NO Balo meeting.
    *
    * ⚠ THE CLIENT NEVER SENDS `engagementId`, AND THAT IS THE WHOLE POINT.
    * `OpenSessionInput`'s docblock states the coherence obligation — `engagementId` must be

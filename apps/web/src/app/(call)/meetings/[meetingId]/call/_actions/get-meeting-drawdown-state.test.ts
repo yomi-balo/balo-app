@@ -22,6 +22,7 @@ const {
   mockAuthorizeMeetingParticipation,
   mockGetSessionDrawdownState,
   mockLogWarn,
+  mockLogInfo,
   mockLogError,
 } = vi.hoisted(() => ({
   mockRequireUser: vi.fn(),
@@ -29,12 +30,13 @@ const {
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockGetSessionDrawdownState: vi.fn(),
   mockLogWarn: vi.fn(),
+  mockLogInfo: vi.fn(),
   mockLogError: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireUser: mockRequireUser }));
 vi.mock('@/lib/logging', () => ({
-  log: { warn: mockLogWarn, error: mockLogError, info: vi.fn(), debug: vi.fn() },
+  log: { warn: mockLogWarn, error: mockLogError, info: mockLogInfo, debug: vi.fn() },
 }));
 vi.mock('@/lib/authz/meeting-participation', () => ({
   authorizeMeetingParticipation: mockAuthorizeMeetingParticipation,
@@ -129,6 +131,8 @@ describe('getMeetingDrawdownStateAction — ⚠⚠ W6 / BAL-466 (D8), participat
 });
 
 describe('getMeetingDrawdownStateAction — ⚠⚠ W1, the gate denial collapses into the inert arm', () => {
+  // ⚠⚠ G2 (second review round) — `log.info`, NOT `log.warn`. This is the expected, by-design
+  // denial (D10) and fires on every poll for the delivering expert's own call.
   it('`getSessionDrawdownState` returning null (not a live company member) is the SAME success arm as no-session', async () => {
     mockFindIdByMeetingId.mockResolvedValue({ id: SESSION_ID });
     mockGetSessionDrawdownState.mockResolvedValue(null);
@@ -136,7 +140,7 @@ describe('getMeetingDrawdownStateAction — ⚠⚠ W1, the gate denial collapses
     const result = await getMeetingDrawdownStateAction({ meetingId: MEETING_ID });
 
     expect(result).toEqual({ success: true, state: null });
-    expect(mockLogWarn).toHaveBeenCalledWith(
+    expect(mockLogInfo).toHaveBeenCalledWith(
       'Drawdown read denied — not a live member of the billed company',
       expect.objectContaining({ meetingId: MEETING_ID, sessionId: SESSION_ID })
     );

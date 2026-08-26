@@ -20,6 +20,7 @@ const {
   mockOpenSession,
   mockFindWalletByCompanyId,
   mockCaptureException,
+  mockConnectSessionAsSystem,
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
@@ -42,6 +43,8 @@ const {
   /** F7/F8 (review fix round) — the session_open_refused diagnostic wallet lookup. */
   mockFindWalletByCompanyId: vi.fn(),
   mockCaptureException: vi.fn(),
+  /** G3 (second review round) — the guest-first co-presence connect fallback. */
+  mockConnectSessionAsSystem: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -105,9 +108,10 @@ vi.mock('@balo/analytics/server', () => ({
     MEETING_PROVISION_FAILED: 'meeting_provision_failed',
     MEETING_JOIN_GRANTED: 'meeting_join_granted',
   },
-  // F7/F8 (review fix round) — session_open_refused.
+  // F7/F8 (review fix round) — session_open_refused. G3 (second review round) — session_started.
   SESSION_SERVER_EVENTS: {
     SESSION_OPEN_REFUSED: 'session_open_refused',
+    SESSION_STARTED: 'session_started',
   },
 }));
 vi.mock('../../notifications/index.js', () => ({
@@ -122,6 +126,10 @@ vi.mock('./authorize-engagement-host.js', () => ({
 // BAL-466 — the join seam calls `openSession` directly; not the route, not a repository.
 vi.mock('../credit-session/open-session.js', () => ({
   openSession: mockOpenSession,
+}));
+// G3 (second review round) — the guest-first co-presence connect fallback.
+vi.mock('../credit-session/connect-session.js', () => ({
+  connectSessionAsSystem: mockConnectSessionAsSystem,
 }));
 // ⚠ `./meeting-liveness.js` is deliberately NOT mocked — the REAL rule is what the
 // engagement-lifecycle tests below are asserting, and it needs only `engagementsRepository`.
@@ -230,6 +238,14 @@ beforeEach(() => {
     sessionId: 'sess-1',
     status: 'pending',
     holdId: 'hold-1',
+  });
+  // G3 (second review round) — only reached when the gate-resolved meeting is already
+  // `in_progress`; the default `meetingRow()` is `scheduled`, so most tests never call this.
+  mockConnectSessionAsSystem.mockResolvedValue({
+    id: 'sess-1',
+    expertProfileId: EXPERT_PROFILE_ID,
+    clientRateMinorPerMinute: 250,
+    companyId: COMPANY_ID,
   });
 });
 
@@ -639,6 +655,123 @@ describe('joinMeetingAsMember — BAL-466, the credit session open', () => {
       // ⚠ Does NOT re-read findIdByMeetingId a second time — that re-check is F7's, specific to
       // disambiguating session_in_progress's two shapes, not a general pattern.
       expect(mockFindIdByMeetingId).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('G5 (second review round) — every money-gate refusal alarms, not just the original two', () => {
+    it.each([
+      'account_hold',
+      'settlement_pending',
+      'expert_rate_missing',
+      'wallet_missing',
+      'forbidden',
+      'meeting_not_bookable',
+    ] as const)('alarms with reason: %s, and the join still succeeds', async (code) => {
+      mockOpenSession.mockResolvedValue({ ok: false, code });
+      mockFindWalletByCompanyId.mockResolvedValue({ id: 'wallet-3' });
+
+      const result = await joinMeetingAsMember({
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        minter: createJwtMinter(),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mockCaptureException).toHaveBeenCalledTimes(1);
+      expect(mockTrackServer).toHaveBeenCalledWith('session_open_refused', {
+        meeting_id: MEETING_ID,
+        company_id: COMPANY_ID,
+        wallet_id: 'wallet-3',
+        reason: code,
+        distinct_id: COMPANY_ID,
+      });
+    });
+
+    it('company_selection_required is logged but NEVER alarmed — asserted unreachable', async () => {
+      mockOpenSession.mockResolvedValue({
+        ok: false,
+        code: 'company_selection_required',
+        companies: [],
+      });
+
+      const result = await joinMeetingAsMember({
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        minter: createJwtMinter(),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mockCaptureException).not.toHaveBeenCalled();
+      expect(mockTrackServer).not.toHaveBeenCalledWith('session_open_refused', expect.anything());
+      expect(mockFindWalletByCompanyId).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('G3 (second review round) — guest-first co-presence connects the session immediately', () => {
+    it('connects the newly-opened session when the gate-resolved meeting is already in_progress', async () => {
+      mockAuthorizeMeetingParticipation.mockResolvedValue(
+        gateOk({ meeting: meetingRow({ status: 'in_progress' }) })
+      );
+
+      const result = await joinMeetingAsMember({
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        minter: createJwtMinter(),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mockConnectSessionAsSystem).toHaveBeenCalledWith('sess-1');
+      expect(mockTrackServer).toHaveBeenCalledWith(
+        'session_started',
+        expect.objectContaining({ session_id: 'sess-1', meeting_id: MEETING_ID })
+      );
+    });
+
+    it('does NOT connect when the gate-resolved meeting is still scheduled — the ordinary co-presence seam owns that', async () => {
+      mockAuthorizeMeetingParticipation.mockResolvedValue(
+        gateOk({ meeting: meetingRow({ status: 'scheduled' }) })
+      );
+
+      const result = await joinMeetingAsMember({
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        minter: createJwtMinter(),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mockConnectSessionAsSystem).not.toHaveBeenCalled();
+    });
+
+    it('is best-effort — a connect failure never fails the join, and logs instead', async () => {
+      mockAuthorizeMeetingParticipation.mockResolvedValue(
+        gateOk({ meeting: meetingRow({ status: 'in_progress' }) })
+      );
+      mockConnectSessionAsSystem.mockRejectedValue(new Error('already active'));
+
+      const result = await joinMeetingAsMember({
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        minter: createJwtMinter(),
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('does not connect when the session was NOT freshly opened (idempotency fast path)', async () => {
+      mockAuthorizeMeetingParticipation.mockResolvedValue(
+        gateOk({ meeting: meetingRow({ status: 'in_progress' }) })
+      );
+      mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-existing' });
+
+      const result = await joinMeetingAsMember({
+        meetingId: MEETING_ID,
+        userId: USER_ID,
+        minter: createJwtMinter(),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(mockOpenSession).not.toHaveBeenCalled();
+      expect(mockConnectSessionAsSystem).not.toHaveBeenCalled();
     });
   });
 

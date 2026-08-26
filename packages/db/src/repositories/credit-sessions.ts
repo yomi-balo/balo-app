@@ -957,7 +957,10 @@ export const creditSessionsRepository = {
           meetingId: input.meetingId ?? null,
           engagementId: input.engagementId ?? null,
           // BAL-412 seam — write-once provenance. Omitted ⇒ `'live_capture'`, i.e. exactly
-          // what every shipped caller gets. NOTHING on main passes `'presence'` (D10).
+          // what every shipped caller gets. ⚠⚠ G4 (second review round) — CORRECTING A
+          // NOW-FALSE CLAIM: this used to say "NOTHING on main passes `'presence'` (D10)". As
+          // of BAL-466, `openSession` passes it for every session `joinMeetingAsMember` opens
+          // at admission — see the coherence guard's docblock (`open-session.ts`, D4/G1).
           durationSource: input.durationSource ?? 'live_capture',
         })
         .returning();
@@ -2178,7 +2181,12 @@ export const creditSessionsRepository = {
    * Ordered oldest-ended first and batch-bounded via `limit`. ⚠ The CALLER must `log.warn`
    * when the batch FILLS — a silent cap on a money backstop reads as "nothing was stranded".
    *
-   * ⚠ RETURNS `[]` ON MAIN, ALWAYS (D10): nothing sets `duration_source='presence'`.
+   * ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM. This used to say "RETURNS `[]`
+   * ON MAIN, ALWAYS (D10): nothing sets `duration_source='presence'`" — true before BAL-466,
+   * false as of it: `openSession` (D1/D4) passes `durationSource: 'presence'` from
+   * `joinMeetingAsMember`'s admission seam for every Case consultation a client is admitted to,
+   * so this now returns real rows once such a session's meeting has ended and settlement has
+   * not yet landed within the grace window.
    */
   async findPresenceUnsettled(cutoff: Date, limit = 100): Promise<CreditSession[]> {
     const rows = await db

@@ -71,14 +71,18 @@ export const SESSION_SERVER_EVENTS = {
   /** A failed settlement opened a receivable (soft account hold). */
   RECEIVABLE_OPENED: 'receivable_opened',
   /**
-   * BAL-466 (F7/F8, review fix round) — admission tried to open a `'presence'` credit session
-   * and the gate refused, so the consultation proceeds UNBILLED and (for `wallet_busy`) the
-   * expert goes UNPAID. Fired ONLY for the two shapes that are a real money-path anomaly, not
-   * the ordinary same-meeting join race (that stays `log.info`, no event): a DIFFERENT meeting
-   * already holds the company's one-live-session-per-wallet slot (`wallet_busy`, tracked at
-   * BAL-477), or the wallet cannot fund the estimate and carries no mandate
-   * (`insufficient_no_mandate`, tracked at BAL-474 — which gains the overdraft-tolerant open
-   * that will replace this refusal). Deliberately carries NO `session_id` — no row was created.
+   * BAL-466 (F7/F8, review fix round; widened by G5, second review round) — admission tried to
+   * open a `'presence'` credit session and the gate refused, so the consultation proceeds
+   * UNBILLED and (for every reason but `insufficient_no_mandate`) the expert goes UNPAID. Fired
+   * for every reason that is a real money-path anomaly, not the ordinary same-meeting join race
+   * (that stays `log.info`, no event): a DIFFERENT meeting already holds the company's
+   * one-live-session-per-wallet slot (`wallet_busy`, tracked at BAL-477), the wallet cannot fund
+   * the estimate and carries no mandate (`insufficient_no_mandate`, tracked at BAL-474 — which
+   * gains the overdraft-tolerant open that will replace this refusal), or one of the other
+   * money-gate / structural refusals `handleOpenSessionFailure` used to let fall through to a
+   * bare, unalarmed `log.error` (`account_hold`, `settlement_pending`, `expert_rate_missing`,
+   * `wallet_missing`, `forbidden`, `meeting_not_bookable` — G5 closed that gap). Deliberately
+   * carries NO `session_id` — no row was created.
    */
   SESSION_OPEN_REFUSED: 'session_open_refused',
 } as const;
@@ -135,7 +139,23 @@ export interface SessionServerEventMap {
     company_id: string;
     /** `null` when the diagnostic wallet lookup itself could not resolve one. */
     wallet_id: string | null;
-    reason: 'wallet_busy' | 'insufficient_no_mandate';
+    /**
+     * ⚠⚠ G5 (second review round) — WIDENED FROM `'wallet_busy' | 'insufficient_no_mandate'`.
+     * Every `OpenSessionServiceErrorCode` except `session_in_progress`'s benign same-meeting
+     * shape (no event) now alarms with its own reason — see `handleOpenSessionFailure`
+     * (`apps/api/src/services/meetings/join-meeting.ts`). `company_selection_required` is
+     * deliberately NOT a member: it is structurally unreachable at this seam (D1 threads an
+     * explicit `companyId`), so it is logged, never alarmed.
+     */
+    reason:
+      | 'wallet_busy'
+      | 'insufficient_no_mandate'
+      | 'account_hold'
+      | 'settlement_pending'
+      | 'expert_rate_missing'
+      | 'wallet_missing'
+      | 'forbidden'
+      | 'meeting_not_bookable';
     /** = company_id. */
     distinct_id: string;
   };

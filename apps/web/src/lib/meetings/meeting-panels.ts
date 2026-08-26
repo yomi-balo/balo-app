@@ -267,10 +267,13 @@ export interface MeetingRealtimeRegistration {
  * consumer of the id (`nudgeAdminAction`, `in_session_panel_viewed`'s property) re-gates
  * server-side on its own, so the id is an opaque UUID that authorizes nothing by itself.
  *
- * ⚠⚠ THE SECOND ARM — `{ success: true, state: null }` — IS THE **EXPECTED, INERT PATH**
- * TODAY, AND IT IS A SUCCESS, NOT AN ERROR. See {@link MeetingPanelId}'s BAL-403 note. It means
- * `credit_sessions.meeting_id` resolved to no row (or a soft-deleted / cancelled one), which is
- * true of every meeting until the session-open ticket ships. Never surface it as an error state.
+ * ⚠⚠ THE SECOND ARM — `{ success: true, state: null }` — IS A **SUCCESS, NOT AN ERROR**. See
+ * {@link MeetingPanelId}'s BAL-403 note. It means `credit_sessions.meeting_id` resolved to no
+ * row (or a soft-deleted / cancelled one) — the ordinary answer for every non-`case` meeting and
+ * for a Case whose client has not yet been admitted. ⚠⚠ G4 (second review round) — CORRECTING A
+ * NOW-FALSE CLAIM: this used to say that was true "of every meeting until the session-open
+ * ticket ships". BAL-466 shipped that ticket — the first arm above IS now reachable, for an
+ * admitted Case consultation. Never surface the second arm as an error state.
  */
 export type GetMeetingDrawdownResult =
   | { readonly success: true; readonly state: DrawdownState; readonly sessionId: string }
@@ -311,9 +314,14 @@ export interface MeetingPanelRegistration {
   /**
    * BAL-403 — ⚠⚠ `null` ⇒ **NO BALANCE SLOT AT ALL.** Resolved SERVER-SIDE in the RSC
    * (`resolveBalanceSlot` in `page.tsx`), not in the browser, for the identical no-flash reason
-   * `chat` is. **`false`/`null` is the EXPECTED value for every meeting today** — see
-   * {@link MeetingPanelId}'s BAL-403 note. This is the forward seam; nothing opens a credit
-   * session yet.
+   * `chat` is. ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this used to say
+   * "`false`/`null` is the EXPECTED value for every meeting today… this is the forward seam;
+   * nothing opens a credit session yet." BAL-466 is that seam and it now opens one:
+   * `joinMeetingAsMember` opens a `duration_source='presence'` session the moment the first
+   * CLIENT-side member is admitted to a `case` meeting, so this slot is non-null from that
+   * point on. `null`/`false` remains the correct, EXPECTED answer for every non-`case` meeting
+   * and for a Case whose client has not yet been admitted — see {@link MeetingPanelId}'s
+   * BAL-403 note.
    */
   readonly balance: MeetingBalancePanelActions | null;
 }

@@ -188,64 +188,34 @@ describe('sessions routes', () => {
       expect(res.json()).toEqual({ code: 'company_selection_required', companies });
     });
 
-    it('forwards a valid meetingId to the service (BAL-129 / D5)', async () => {
-      mockOpenSession.mockResolvedValue({
-        ok: true,
-        sessionId: SESSION_ID,
-        status: 'pending',
-        holdId: 'hold_1',
-      });
+    // ⚠⚠ G1 (second review round) — `meetingId` NO LONGER EXISTS ON THIS SCHEMA. The three
+    // tests that used to live here ("forwards a valid meetingId", "omits meetingId entirely
+    // when absent", "400s on a non-uuid meetingId") asserted a WIRE CONTRACT that turned out to
+    // be the bypass: a caller could send a real `meetingId` with no `durationSource`, silently
+    // shadowing the real `'presence'` session `openCaseSessionBestEffort` opens at admission.
+    // See `schema.ts`'s docblock. Replaced by the single test below, which asserts the field is
+    // now REJECTED, not merely unforwarded.
+    it('400s on a body carrying meetingId — the field no longer exists on this wire (G1)', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/sessions',
         payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, meetingId: MEETING_ID },
       });
-      expect(res.statusCode).toBe(201);
-      // ⚠ NO `engagementId` — the service derives it from the meeting alone. If one ever
-      // appears on this call, the divergent-pair hazard is back.
-      expect(mockOpenSession).toHaveBeenCalledWith({
-        initiatingMemberId: 'user_1',
-        expertProfileId: EXPERT_ID,
-        estimatedMinutes: 30,
-        meetingId: MEETING_ID,
-      });
-    });
-
-    it('omits meetingId entirely when absent — not an explicit undefined (BAL-129)', async () => {
-      mockOpenSession.mockResolvedValue({
-        ok: true,
-        sessionId: SESSION_ID,
-        status: 'pending',
-        holdId: 'hold_1',
-      });
-      await app.inject({
-        method: 'POST',
-        url: '/sessions',
-        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
-      });
-      const [call] = mockOpenSession.mock.calls;
-      expect(call?.[0]).not.toHaveProperty('meetingId');
-    });
-
-    it('400s on a non-uuid meetingId without calling the service (BAL-129)', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/sessions',
-        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, meetingId: 'not-a-uuid' },
-      });
       expect(res.statusCode).toBe(400);
-      expect(res.json().error).toBe('invalid_request');
       expect(mockOpenSession).not.toHaveBeenCalled();
     });
 
     it('409s on the meeting_not_bookable rejection (BAL-129 / D5)', async () => {
-      // 409, not 403 — `openErrorStatus` already routes everything but `forbidden` there,
-      // and conflating this with the membership gate would want different client behaviour.
+      // ⚠ NO `meetingId` IN THIS PAYLOAD — see the G1 note above. This only pins the STATUS
+      // MAPPING for a code the SERVICE can still return (from its own, server-derived
+      // `meetingId`, e.g. `joinMeetingAsMember`'s admission call) — 409, not 403:
+      // `openErrorStatus` already routes everything but `forbidden` there, and conflating this
+      // with the membership gate would want different client behaviour.
       mockOpenSession.mockResolvedValue({ ok: false, code: 'meeting_not_bookable' });
       const res = await app.inject({
         method: 'POST',
         url: '/sessions',
-        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30, meetingId: MEETING_ID },
+        payload: { expertProfileId: EXPERT_ID, estimatedMinutes: 30 },
       });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toEqual({ code: 'meeting_not_bookable' });

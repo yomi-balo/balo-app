@@ -21,6 +21,7 @@ const {
   mockResolveMeetingContextOwner,
   mockHasEngagementCapability,
   mockLogWarn,
+  mockLogInfo,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
@@ -28,6 +29,7 @@ const {
   mockResolveMeetingContextOwner: vi.fn(),
   mockHasEngagementCapability: vi.fn(),
   mockLogWarn: vi.fn(),
+  mockLogInfo: vi.fn(),
 }));
 
 // ⚠ THE FACTORY LITERAL NAMES EXACTLY THE FOUR THINGS THIS WRAPPER USES.
@@ -41,7 +43,7 @@ vi.mock('@/lib/authz/engagement', () => ({
   hasEngagementCapability: mockHasEngagementCapability,
 }));
 vi.mock('@/lib/logging', () => ({
-  log: { warn: mockLogWarn, error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+  log: { warn: mockLogWarn, error: vi.fn(), info: mockLogInfo, debug: vi.fn() },
 }));
 
 import { authorizeMeetingParticipation } from './meeting-participation';
@@ -138,6 +140,29 @@ describe('authorizeMeetingParticipation (web) — the REQUEST-GRAIN gap, pinned 
       authorizeMeetingParticipation({ meetingId: MEETING_ID, userId: USER_ID })
     ).resolves.toEqual({ ok: false, code: 'meeting_not_found' });
   });
+
+  /**
+   * ⚠⚠ G2 (second review round) — LOG LEVEL, NOT AUTHORIZATION. `resolveInCallDrawdown` runs
+   * this gate for EVERY viewer on EVERY call-page render (D8), so a delivering expert's own
+   * discovery / request-interaction call denies here on EVERY visit — the EXPECTED shape, never
+   * a genuine cross-tenant attempt. It must log at `info`, never `warn` (which `apps/api`
+   * reserves for a real attempt worth paging on).
+   */
+  it.each(['project_discovery', 'request_interaction'] as const)(
+    '%s logs the expected cross_tenant denial at info, never warn',
+    async (contextType) => {
+      const REQUEST_ID = '66666666-6666-4666-8666-666666666666';
+      mockListByMeeting.mockResolvedValue([{ contextType, contextId: REQUEST_ID }]);
+
+      await authorizeMeetingParticipation({ meetingId: MEETING_ID, userId: USER_ID });
+
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        'Meeting participation denied',
+        expect.objectContaining({ reason: 'cross_tenant', contextType })
+      );
+      expect(mockLogWarn).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('authorizeMeetingParticipation (web) — every denial collapses into ONE literal', () => {
@@ -172,5 +197,21 @@ describe('authorizeMeetingParticipation (web) — every denial collapses into ON
       'Meeting participation denied',
       expect.objectContaining({ reason: 'no_meeting' })
     );
+  });
+
+  // ⚠⚠ G2 (second review round) — a GENUINE cross-tenant denial (an engagement-grain context,
+  // e.g. `case`, where neither axis holds) must still `warn`. Only the two unimplemented
+  // request-grain labels are downgraded — see the dedicated block above.
+  it('a genuine cross_tenant denial (engagement-grain context) still logs at warn', async () => {
+    mockGetMemberRole.mockResolvedValue(undefined);
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    await authorizeMeetingParticipation({ meetingId: MEETING_ID, userId: USER_ID });
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Meeting participation denied',
+      expect.objectContaining({ reason: 'cross_tenant', contextType: 'case' })
+    );
+    expect(mockLogInfo).not.toHaveBeenCalled();
   });
 });

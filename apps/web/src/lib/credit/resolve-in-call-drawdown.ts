@@ -120,9 +120,16 @@ export async function resolveInCallDrawdown(
 
   // 3. ⚠⚠ THE `credit_sessions.company_id` MEMBERSHIP READ. See the docblock — this is what
   //    denies every expert-side actor, and it is NOT redundant with step 1.
+  //
+  //    ⚠⚠ G2 (second review round) — `log.info`, NOT `log.warn`. On a live Case this denial is
+  //    the EXPECTED, BY-DESIGN outcome (D10) for the delivering expert — the docblock above
+  //    calls it exactly that — and `resolveBalanceSlot` runs this composed gate on every
+  //    call-page render, so a `warn` here fires once per render for a path this module already
+  //    documents as normal. Keep the log (an anomaly here would still want a paper trail); just
+  //    don't alarm on it.
   const state = await getSessionDrawdownState(row.id, userId);
   if (state === null) {
-    log.warn('Drawdown read denied — not a live member of the billed company', {
+    log.info('Drawdown read denied — not a live member of the billed company', {
       meetingId,
       sessionId: row.id,
     });

@@ -19,11 +19,13 @@ const {
   mockAuthorizeMeetingParticipation,
   mockGetSessionDrawdownState,
   mockLogWarn,
+  mockLogInfo,
 } = vi.hoisted(() => ({
   mockFindIdByMeetingId: vi.fn(),
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockGetSessionDrawdownState: vi.fn(),
   mockLogWarn: vi.fn(),
+  mockLogInfo: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -36,7 +38,7 @@ vi.mock('@/lib/credit/actions/get-drawdown-state', () => ({
   getSessionDrawdownState: mockGetSessionDrawdownState,
 }));
 vi.mock('@/lib/logging', () => ({
-  log: { warn: mockLogWarn, error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+  log: { warn: mockLogWarn, error: vi.fn(), info: mockLogInfo, debug: vi.fn() },
 }));
 
 import { resolveInCallDrawdown } from './resolve-in-call-drawdown';
@@ -114,17 +116,21 @@ describe('resolveInCallDrawdown — the inert path (authorized, but no session)'
 });
 
 describe('resolveInCallDrawdown — the membership + capability read (step 3)', () => {
-  it('denied (not a live company member, or vanished) ⇒ null, logged', async () => {
+  // ⚠⚠ G2 (second review round) — `log.info`, NOT `log.warn`. This denial is the EXPECTED,
+  // by-design outcome for the delivering expert (D10), and `resolveBalanceSlot` runs this gate
+  // on every call-page render — a `warn` here would fire once per render on a normal path.
+  it('denied (not a live company member, or vanished) ⇒ null, logged at info (G2)', async () => {
     mockFindIdByMeetingId.mockResolvedValue({ id: SESSION_ID });
     mockGetSessionDrawdownState.mockResolvedValue(null);
 
     const result = await resolveInCallDrawdown(MEETING_ID, USER_ID);
 
     expect(result).toBeNull();
-    expect(mockLogWarn).toHaveBeenCalledWith(
+    expect(mockLogInfo).toHaveBeenCalledWith(
       'Drawdown read denied — not a live member of the billed company',
       expect.objectContaining({ meetingId: MEETING_ID, sessionId: SESSION_ID })
     );
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
   it('calls getSessionDrawdownState with (sessionId, userId)', async () => {
@@ -186,7 +192,9 @@ describe('⚠⚠ D10 — the delivering expert never sees the client funding sta
     // participation gate", this expectation fails FIRST and by name — before the null does.
     // (It does NOT by itself prove the membership rule — see the comment above.)
     expect(mockGetSessionDrawdownState).toHaveBeenCalledWith(SESSION_ID, EXPERT_USER_ID);
-    expect(mockLogWarn).toHaveBeenCalledWith(
+    // ⚠⚠ G2 (second review round) — `info`, not `warn`: this is exactly the expected-by-design
+    // shape the comment above describes, and it fires once per call-page render.
+    expect(mockLogInfo).toHaveBeenCalledWith(
       'Drawdown read denied — not a live member of the billed company',
       expect.objectContaining({ meetingId: MEETING_ID, sessionId: SESSION_ID })
     );

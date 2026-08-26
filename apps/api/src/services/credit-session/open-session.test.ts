@@ -213,6 +213,13 @@ describe('openSession', () => {
  * BAL-129 (D5) — the `meetingId` seam. The client sends a meeting; the SERVICE derives the
  * engagement. Every failure shape collapses to ONE literal so a caller cannot learn whether
  * a guessed uuid exists.
+ *
+ * ⚠⚠ G1 (second review round) — EVERY CALL BELOW NOW ALSO PASSES `durationSource: 'presence'`.
+ * Before this round, `meetingId` alone (no `durationSource`) was a legitimate, successful
+ * input — that was exactly the bidirectional-coherence gap G1 closed (see
+ * `openSession — BAL-466 (D4), durationSource`'s new tests below). Omitting it here now would
+ * make every test in this block hit the NEW `meeting_not_bookable` guard instead of the
+ * engagement-resolution logic they exist to pin.
  */
 describe('openSession — the BAL-129 meetingId seam', () => {
   const MEETING_ID = 'meeting_1';
@@ -263,7 +270,11 @@ describe('openSession — the BAL-129 meetingId seam', () => {
   });
 
   it('passes BOTH meetingId and the RESOLVED engagementId when the pair is coherent', async () => {
-    const result = await openSession({ ...INPUT, meetingId: MEETING_ID });
+    const result = await openSession({
+      ...INPUT,
+      meetingId: MEETING_ID,
+      durationSource: 'presence',
+    });
 
     expect(result).toMatchObject({ ok: true });
     expect(mockRepoOpen).toHaveBeenCalledWith({
@@ -274,6 +285,7 @@ describe('openSession — the BAL-129 meetingId seam', () => {
       estimatedMinutes: 30,
       meetingId: MEETING_ID,
       engagementId: ENGAGEMENT_ID,
+      durationSource: 'presence',
     });
   });
 
@@ -281,7 +293,7 @@ describe('openSession — the BAL-129 meetingId seam', () => {
     mockFindWithContexts.mockResolvedValue(meetingWithCaseContext('engagement_from_context'));
     mockEngagementFindById.mockResolvedValue(coherentEngagement({ id: 'engagement_from_context' }));
 
-    await openSession({ ...INPUT, meetingId: MEETING_ID });
+    await openSession({ ...INPUT, meetingId: MEETING_ID, durationSource: 'presence' });
 
     expect(mockEngagementFindById).toHaveBeenCalledWith('engagement_from_context');
     expect(mockRepoOpen).toHaveBeenCalledWith(
@@ -355,7 +367,11 @@ describe('openSession — the BAL-129 meetingId seam', () => {
   ])('meeting_not_bookable when $label — and NO session is opened', async ({ arrange }) => {
     arrange();
 
-    const result = await openSession({ ...INPUT, meetingId: MEETING_ID });
+    const result = await openSession({
+      ...INPUT,
+      meetingId: MEETING_ID,
+      durationSource: 'presence',
+    });
 
     // ONE literal for every shape: distinguishing them would tell a caller whether a guessed
     // uuid exists.
@@ -369,7 +385,11 @@ describe('openSession — the BAL-129 meetingId seam', () => {
     // company the caller never proved anything about.
     mockFindWithCompany.mockResolvedValue({ companyMemberships: [] });
 
-    const result = await openSession({ ...INPUT, meetingId: MEETING_ID });
+    const result = await openSession({
+      ...INPUT,
+      meetingId: MEETING_ID,
+      durationSource: 'presence',
+    });
 
     expect(result).toEqual({ ok: false, code: 'forbidden' });
     expect(mockFindWithContexts).not.toHaveBeenCalled();
@@ -378,7 +398,7 @@ describe('openSession — the BAL-129 meetingId seam', () => {
   it('resolves the meeting BEFORE the wallet lookup', async () => {
     mockFindWithContexts.mockResolvedValue(undefined);
 
-    await openSession({ ...INPUT, meetingId: MEETING_ID });
+    await openSession({ ...INPUT, meetingId: MEETING_ID, durationSource: 'presence' });
 
     expect(mockFindWalletByCompany).not.toHaveBeenCalled();
   });
@@ -439,5 +459,28 @@ describe('openSession — BAL-466 (D4), durationSource', () => {
   it("'live_capture' without meetingId is unaffected by the coherence guard", async () => {
     const result = await openSession({ ...INPUT, durationSource: 'live_capture' });
     expect(result).toMatchObject({ ok: true });
+  });
+
+  describe('G1 (second review round) — the guard is bidirectional', () => {
+    it("a meetingId WITHOUT durationSource: 'presence' returns meeting_not_bookable BEFORE any repository read", async () => {
+      const result = await openSession({ ...INPUT, meetingId: 'meeting_1' });
+
+      expect(result).toEqual({ ok: false, code: 'meeting_not_bookable' });
+      expect(mockFindWithCompany).not.toHaveBeenCalled();
+      expect(mockFindWalletByCompany).not.toHaveBeenCalled();
+      expect(mockFindWithContexts).not.toHaveBeenCalled();
+      expect(mockRepoOpen).not.toHaveBeenCalled();
+    });
+
+    it("a meetingId WITH durationSource: 'live_capture' EXPLICITLY is refused identically — omission and an explicit non-presence value are the same case", async () => {
+      const result = await openSession({
+        ...INPUT,
+        meetingId: 'meeting_1',
+        durationSource: 'live_capture',
+      });
+
+      expect(result).toEqual({ ok: false, code: 'meeting_not_bookable' });
+      expect(mockRepoOpen).not.toHaveBeenCalled();
+    });
   });
 });

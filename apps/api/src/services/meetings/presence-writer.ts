@@ -477,15 +477,23 @@ export async function reconcileMeetingStatus(
       distinct_id: meeting.id,
     });
 
-    // ⚠⚠ BAL-466 (D6) — CONNECT THE CREDIT SESSION. This is the TRUE connect seam: the moment
-    //    an expert and a client side are both in the room. `markInProgress` is a compare-and-
-    //    set, so exactly ONE racing caller reaches this line per meeting.
+    // ⚠⚠ BAL-466 (D6) — CONNECT THE CREDIT SESSION. This is the ORDINARY connect seam: the
+    //    moment an expert and a client side are both in the room. `markInProgress` is a
+    //    compare-and-set, so exactly ONE racing caller reaches this line per meeting.
     //
     //    ⚠ BEST-EFFORT AND NON-FATAL, the same posture as `cancelAbsenceReminders` above and
     //    `settleBestEffort` in `end-meeting.ts`: the meeting is already `in_progress` in
     //    Postgres, so a connect fault must never fail the Daily webhook (Daily would retry the
     //    delivery and re-drive a transition that has already happened). The meter sweep cannot
     //    recover this one, so it is an `error`, not a `warn`.
+    //
+    //    ⚠⚠ G3 (second review round) — NOT THE ONLY CONNECT SITE. When a CLIENT-invited GUEST
+    //    (counted in `clientPresent` above) is co-present with the expert BEFORE any client
+    //    MEMBER exists, this CAS fires here and finds no session to connect — the session does
+    //    not exist until a client member later joins and opens it. `join-meeting.ts`'s
+    //    `openCaseSessionBestEffort` covers exactly that ordering via
+    //    `connectIfMeetingAlreadyInProgress`, checking the meeting's status at that later
+    //    admission. The two never race each other: this CAS only ever fires ONCE per meeting.
     await connectSessionBestEffort(meeting.id, now);
 
     return 'in_progress';

@@ -87,6 +87,7 @@ import { personDisplayName } from '@balo/shared/parties';
 import { dailyMeetingTokenMinter, type MeetingTokenMinter } from '../daily/meeting-tokens.js';
 import { DailyApiError, DailyConfigError } from '../daily/errors.js';
 import { openSession } from '../credit-session/open-session.js';
+import { connectSessionAsSystem } from '../credit-session/connect-session.js';
 import {
   guestTokenHashesMatch,
   hashGuestToken,
@@ -320,16 +321,59 @@ function estimatedMinutesForWindow(scheduledStart: Date, scheduledEnd: Date): nu
 }
 
 /**
- * BAL-466 (F7/F8, review fix round) — a session_open_refused REASON that is a real money-path
- * anomaly, not the ordinary same-meeting join race.
+ * BAL-466 (F7/F8, review fix round; widened by G5, second review round) — a
+ * `session_open_refused` REASON. Every member EXCEPT `wallet_busy` is a verbatim
+ * `OpenSessionServiceErrorCode` — `wallet_busy` is the one synthetic value, standing in for
+ * `session_in_progress`'s DIFFERENT-meeting shape (see `handleOpenSessionFailure`).
+ *
+ * ⚠⚠ G5 — ALL OF THESE NOW ALARM, NOT JUST THE ORIGINAL TWO. `account_hold` and
+ * `settlement_pending` are money-gate rejections from `creditSessionsRepository.open`
+ * (`credit-sessions.ts:849`, `:895`); `expert_rate_missing`, `wallet_missing`, `forbidden` and
+ * `meeting_not_bookable` end in the identical outcome — no row, an unbilled consultation, an
+ * unpaid expert. There is no longer a silent, unalarmed catch-all on this path. The one
+ * deliberate exception is `company_selection_required`, which is not a member of this union at
+ * all — see `handleOpenSessionFailure`'s dedicated arm for why.
  */
-type SessionOpenRefusedReason = 'wallet_busy' | 'insufficient_no_mandate';
+type SessionOpenRefusedReason =
+  | 'wallet_busy'
+  | 'insufficient_no_mandate'
+  | 'account_hold'
+  | 'settlement_pending'
+  | 'expert_rate_missing'
+  | 'wallet_missing'
+  | 'forbidden'
+  | 'meeting_not_bookable';
+
+/**
+ * BAL-466 (G5, second review round) — ONE HUMAN-LEGIBLE MESSAGE PER REASON, DATA-DRIVEN rather
+ * than a branching chain (CLAUDE.md: data-driven over repetitive for a fixed set of same-shape
+ * values). Every message ends the same way on purpose: whatever the gate, the outcome for this
+ * seam is identical — no row, an unbilled consultation, an unpaid expert.
+ */
+const SESSION_OPEN_REFUSED_MESSAGES: Record<SessionOpenRefusedReason, string> = {
+  wallet_busy:
+    'Credit session refused — this company wallet already has a live session on another meeting; this consultation is unbilled',
+  insufficient_no_mandate:
+    'Credit session refused — wallet cannot fund the estimate and carries no mandate; this consultation is unbilled and the expert is unpaid',
+  account_hold:
+    'Credit session refused — an open receivable soft-holds the company; this consultation is unbilled and the expert is unpaid',
+  settlement_pending:
+    "Credit session refused — a prior session's overdraft settlement is still in flight; this consultation is unbilled and the expert is unpaid",
+  expert_rate_missing:
+    'Credit session refused — the delivering expert has no rate set; this consultation is unbilled and the expert is unpaid',
+  wallet_missing:
+    'Credit session refused — the company has no credit wallet (structural); this consultation is unbilled and the expert is unpaid',
+  forbidden:
+    'Credit session refused — the joining member lacks CONSUME_CREDITS on the billing company; this consultation is unbilled and the expert is unpaid',
+  meeting_not_bookable:
+    'Credit session refused — the meeting did not resolve to a billable case engagement; this consultation is unbilled and the expert is unpaid',
+};
 
 /**
  * BAL-466 (F7/F8, review fix round) — THE SHARED ALARM for a refused admission-seam open that
- * silently loses money (an unbilled consultation, and for `wallet_busy` an unpaid expert). Both
- * callers below share ONE implementation so the log shape, the Sentry context and the analytics
- * payload cannot drift between the two reasons.
+ * silently loses money (an unbilled consultation, and for most reasons an unpaid expert). Every
+ * caller below shares ONE implementation so the log shape, the Sentry context and the analytics
+ * payload cannot drift between reasons.
  *
  * ⚠ `walletId` IS BEST-EFFORT. It is a DIAGNOSTIC read (`creditWalletsRepository.findByCompanyId`)
  * on an already-rare error path — never load-bearing for the refusal itself, which has already
@@ -354,10 +398,7 @@ async function reportSessionOpenRefused(
     walletId = null; // best-effort — see docblock.
   }
 
-  const message =
-    reason === 'wallet_busy'
-      ? 'Credit session refused — this company wallet already has a live session on another meeting; this consultation is unbilled'
-      : 'Credit session refused — wallet cannot fund the estimate and carries no mandate; this consultation is unbilled and the expert is unpaid';
+  const message = SESSION_OPEN_REFUSED_MESSAGES[reason];
 
   log.error({ meetingId, companyId, walletId, userId, reason }, message);
   Sentry.captureException(new Error(message), {
@@ -421,9 +462,15 @@ async function reportSessionOpenRefused(
  */
 /**
  * Handles a non-ok `openSession` result on behalf of `openCaseSessionBestEffort` — extracted
- * purely to keep that function's own cognitive complexity under the SonarCloud gate. No
- * behavioural change from the inline version; see the F7/F8 review-fix commentary at the call
- * site for why `session_in_progress` and `insufficient_no_mandate` each need their own arm.
+ * purely to keep that function's own cognitive complexity under the SonarCloud gate.
+ *
+ * ⚠⚠ G5 (second review round) — EVERY CODE NOW ALARMS EXCEPT ONE. `session_in_progress` keeps
+ * its dedicated two-shape arm (F7 — a same-meeting race is benign; a different meeting holding
+ * the wallet is not). `company_selection_required` keeps its own arm too, but UNALARMED — see
+ * that arm's comment for why it is structurally unreachable here. Every other code — including
+ * `insufficient_no_mandate`, which no longer needs a dedicated branch now that the generic path
+ * alarms identically — falls through to the shared `reportSessionOpenRefused` call at the
+ * bottom. There is no more silent, unalarmed catch-all on this path.
  */
 async function handleOpenSessionFailure(
   result: Extract<Awaited<ReturnType<typeof openSession>>, { ok: false }>,
@@ -446,12 +493,72 @@ async function handleOpenSessionFailure(
     return;
   }
 
-  if (result.code === 'insufficient_no_mandate') {
-    await reportSessionOpenRefused('insufficient_no_mandate', { meetingId, companyId, userId });
+  if (result.code === 'company_selection_required') {
+    // ⚠⚠ G5 (second review round) — LOGGED, NOT ALARMED, AND ASSERTED UNREACHABLE.
+    // `openCaseSessionBestEffort` always threads an explicit, already capability-checked
+    // `companyId` (D1); `resolveChosenCompany` (`open-session.ts`) honours an explicit
+    // `companyId` directly and never falls into the ambiguous-selection branch that produces
+    // this code. This arm exists only because `OpenSessionServiceResult`'s type still carries
+    // the wire-only ambiguity code — a genuine surprise here should still be visible in the
+    // logs, but paging on a code this seam cannot produce would just be alarm fatigue.
+    log.error(
+      fields,
+      'openSession returned company_selection_required at the admission seam — should be unreachable (D1 threads an explicit companyId)'
+    );
     return;
   }
 
-  log.error(fields, 'Credit session could not be opened at admission — the call proceeds unbilled');
+  await reportSessionOpenRefused(result.code, { meetingId, companyId, userId });
+}
+
+/**
+ * BAL-466 (G3, second review round) — GUEST-FIRST CO-PRESENCE. `reconcileMeetingStatus`
+ * (`presence-writer.ts`) fires its expert+client `in_progress` transition, and the
+ * `connectSessionBestEffort` that rides it, ONCE per meeting (`markInProgress`'s
+ * compare-and-set) — and that transition can be won by a client-invited GUEST's presence,
+ * before any client MEMBER (and therefore this session) exists. That connect attempt finds no
+ * row (nothing to connect yet) and is never re-invoked; the meeting is already `in_progress` by
+ * the time the client MEMBER admits here and opens the session. Without this, the session would
+ * stay `pending` for the ENTIRE call: `connectedAt` never stamps, `findMeterable` never selects
+ * it, no live meter, no ladder, no `session_started` — a LIVE-SURFACE gap only. Settlement is
+ * unaffected: `pending` is already a member of `SETTLE_FROM_PRESENCE_FROM`, so the client is
+ * still charged and the expert still paid, correctly, at meeting end.
+ *
+ * Best-effort and non-fatal, the same posture as the rest of this function's own catch: a
+ * connect fault must never fail a join that already opened the session successfully.
+ */
+async function connectIfMeetingAlreadyInProgress(context: {
+  readonly sessionId: string;
+  readonly meetingId: string;
+}): Promise<void> {
+  const { sessionId, meetingId } = context;
+  try {
+    const session = await connectSessionAsSystem(sessionId);
+    // BAL-466 (D7) — the same event `presence-writer.ts`'s ordinary connect seam fires. This
+    // call site is a fallback that only ever reaches a session the ordinary seam did NOT
+    // connect (see the docblock above), so there is no double-fire risk between the two.
+    trackServer(SESSION_SERVER_EVENTS.SESSION_STARTED, {
+      session_id: session.id,
+      meeting_id: meetingId,
+      expert_profile_id: session.expertProfileId,
+      rate_per_minute_minor: session.clientRateMinorPerMinute,
+      distinct_id: session.companyId,
+    });
+    log.info(
+      { meetingId, sessionId },
+      'Credit session connected at admission — guest-first co-presence had already started the meeting'
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Credit session opened but could not connect at admission — the live meter is unavailable for this call'
+    );
+  }
 }
 
 async function openCaseSessionBestEffort(input: {
@@ -463,6 +570,8 @@ async function openCaseSessionBestEffort(input: {
   readonly subject: PrimaryMeetingContext;
   readonly scheduledStart: Date;
   readonly scheduledEnd: Date;
+  /** BAL-466 (G3) — was the meeting ALREADY `in_progress` before this session was opened. */
+  readonly meetingAlreadyInProgress: boolean;
 }): Promise<void> {
   const { meetingId, userId, side, companyId, expertProfileId, subject } = input;
 
@@ -517,6 +626,15 @@ async function openCaseSessionBestEffort(input: {
       { meetingId, userId, companyId, sessionId: result.sessionId, holdId: result.holdId },
       'Credit session opened at admission (pending, presence-sourced)'
     );
+
+    // ⚠⚠ G3 (second review round) — GUEST-FIRST CO-PRESENCE. See
+    // `connectIfMeetingAlreadyInProgress`'s docblock: if the room already reached `in_progress`
+    // before this session existed (a client-invited guest co-present with the expert), the
+    // ordinary co-presence connect seam already ran and found nothing to connect. Connect now,
+    // best-effort, rather than leave the session `pending` for the rest of the call.
+    if (input.meetingAlreadyInProgress) {
+      await connectIfMeetingAlreadyInProgress({ sessionId: result.sessionId, meetingId });
+    }
   } catch (error) {
     // ⚠ `creditSessionsRepository.open` THROWS on two shapes that are NOT in its result union:
     // `ExpertProfileNotFoundError` and any database rejection. Both must land here, because
@@ -658,6 +776,11 @@ export async function joinMeetingAsMember(
     subject,
     scheduledStart: meeting.scheduledStart,
     scheduledEnd: meeting.scheduledEnd,
+    // ⚠ G3 (second review round) — the meeting row this actor's OWN participation gate resolved
+    // at step 1. A small race is accepted here (the status could flip between that read and
+    // this point) in exchange for zero extra reads — the same posture as every other
+    // best-effort guard in this function.
+    meetingAlreadyInProgress: meeting.status === 'in_progress',
   });
 
   trackServer(MEETING_SERVER_EVENTS.MEETING_JOIN_GRANTED, {

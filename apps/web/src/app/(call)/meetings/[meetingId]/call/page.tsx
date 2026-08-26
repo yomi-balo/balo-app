@@ -197,8 +197,11 @@ export default async function MeetingCallPage({
       // lives in `lib/meetings/` rather than in this file.
       joinLinkUrl={meetingJoinLinkUrl(meetingId)}
       hasChat={hasChat}
-      // BAL-403 — ⚠⚠ `false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED. See
-      // `resolveBalanceSlot`'s docblock.
+      // BAL-403 / BAL-466 — ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this
+      // used to say "`false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED". `true` is now the
+      // real answer for a `case` meeting once its client has been admitted — see
+      // `resolveBalanceSlot`'s docblock. `false` is still expected for every non-`case` meeting
+      // and for a Case with no admitted client.
       hasBalance={hasBalance}
       // ⚠ THE ENV READ HAPPENS ON THE SERVER. `ABLY_API_KEY` is not `NEXT_PUBLIC_*` and must
       // never become one; the client only ever learns the BOOLEAN.

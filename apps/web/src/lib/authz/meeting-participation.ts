@@ -118,12 +118,44 @@ const PARTICIPATION_READS = {
   holdsEngagementCapability: holdsMeetingEngagementCapability,
 } satisfies MeetingParticipationReads<Meeting>;
 
-/** The single fail-closed exit. The SHAPE goes to the log; the wire gets one literal. */
+/**
+ * ⚠⚠ G2 (second review round) — CONTEXT LABELS THE WEB ENGAGEMENT ARM NEVER RESOLVES. A
+ * `cross_tenant` denial on one of these is the EXPECTED shape for a delivering expert's own
+ * discovery / request-interaction call — see `holdsMeetingEngagementCapability` above — never a
+ * genuine cross-tenant attempt. Log level only; never touch authorization here.
+ */
+const UNIMPLEMENTED_ENGAGEMENT_ARM_CONTEXTS: ReadonlySet<string> = new Set([
+  'project_discovery',
+  'request_interaction',
+]);
+
+/**
+ * The single fail-closed exit. The SHAPE goes to the log; the wire gets one literal.
+ *
+ * ⚠⚠ G2 (second review round) — LOG LEVEL, NOT AUTHORIZATION. `resolveBalanceSlot`
+ * (`call/page.tsx`) runs `authorizeMeetingParticipation` for EVERY viewer on EVERY call-page
+ * render (D8 runs authorization first), so a `cross_tenant` denial for a delivering expert on
+ * their own `project_discovery` / `request_interaction` call — the two context labels
+ * `holdsMeetingEngagementCapability` deliberately never resolves — fires on every render of a
+ * page that expert visits legitimately every day. `apps/api` reserves `warn` for a genuine
+ * cross-tenant access attempt; that is what Axiom should page on, and drowning it in the
+ * expected shape defeats the alarm. Downgraded to `info` for exactly that shape; every other
+ * `cross_tenant` denial (and every other reason) still `warn`s. Do NOT restore this to
+ * unconditional `warn` "for consistency" — see G2's write-up.
+ */
 function deny(
   reason: MeetingParticipationDenialReason,
   fields: Readonly<Record<string, string | number | null>>
 ): { ok: false; code: 'meeting_not_found' } {
-  log.warn('Meeting participation denied', { ...fields, reason });
+  const isExpectedCrossTenant =
+    reason === 'cross_tenant' &&
+    typeof fields.contextType === 'string' &&
+    UNIMPLEMENTED_ENGAGEMENT_ARM_CONTEXTS.has(fields.contextType);
+  if (isExpectedCrossTenant) {
+    log.info('Meeting participation denied', { ...fields, reason });
+  } else {
+    log.warn('Meeting participation denied', { ...fields, reason });
+  }
   return { ok: false, code: 'meeting_not_found' };
 }
 

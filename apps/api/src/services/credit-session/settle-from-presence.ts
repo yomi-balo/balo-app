@@ -248,8 +248,11 @@ export async function settleSessionFromPresence(input: {
   );
 
   // F15 / plan §8.1 / CLAUDE.md (payment events are a mandatory `log.info`) — THE SUCCESS RECORD.
-  // ⚠ This path ships INERT (D10): when BAL-466 turns it on, these structured logs are the ONLY
-  // production evidence it ran at all. A silent money path is undebuggable.
+  // ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this used to say "This path
+  // ships INERT (D10): when BAL-466 turns it on, these structured logs are the ONLY production
+  // evidence it ran at all." BAL-466 turned it on — `joinMeetingAsMember` opens
+  // `duration_source='presence'` sessions at admission, so this path runs live for every
+  // settled Case consultation, and these structured logs ARE the production evidence.
   log.info(
     {
       sessionId: session.id,
