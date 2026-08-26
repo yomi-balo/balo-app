@@ -178,6 +178,51 @@ describe('InSessionPanel — BAL-403, variant="embedded"', () => {
     expect(screen.getByRole('button', { name: 'Let Sam know' })).toBeInTheDocument();
   });
 
+  it('F3 — gives the client-lens dead end a plain top-up link, opened in a new tab', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.wrapClient} sessionId="sess-1" />);
+    const link = screen.getByRole('link', { name: /top up to continue/i });
+    expect(link).toHaveAttribute('href', '/billing/top-up');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    // No button rendered for this arm — the link is the ONLY affordance.
+    expect(screen.queryByRole('button', { name: /top up/i })).not.toBeInTheDocument();
+  });
+
+  it('F3 — the member lens (no MANAGE_BILLING) never gets the top-up link, only NudgeButton', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.lowMember} sessionId="sess-1" />);
+    expect(screen.queryByRole('link', { name: /top up/i })).not.toBeInTheDocument();
+  });
+
+  it('F3 — the healthy client (no cta) renders no top-up link', () => {
+    render(<InSessionPanel variant="embedded" state={STATES.healthyClient} sessionId="sess-1" />);
+    expect(screen.queryByRole('link', { name: /top up/i })).not.toBeInTheDocument();
+  });
+
+  it('⚠⚠ BAL-466 (D9.2) — deny-by-default: a synthetic THIRD cta kind is suppressed embedded, rendered in card', () => {
+    // A future money-bearing `DrawdownCta['kind']` this codebase does not know about yet — cast
+    // past the two-member union to prove the ALLOW-list, not an exclude-list, is what decides.
+    const synthetic = {
+      ...STATES.lowClient,
+      cta: { kind: 'future_kind', label: 'Do a thing' },
+    } as unknown as DrawdownState;
+
+    const embedded = render(
+      <InSessionPanel variant="embedded" state={synthetic} sessionId="sess-1" />
+    );
+    expect(embedded.queryByRole('button', { name: 'Do a thing' })).not.toBeInTheDocument();
+    embedded.unmount();
+
+    render(
+      <InSessionPanel
+        state={synthetic}
+        sessionId="sess-1"
+        expertProfileId="exp-1"
+        expert={EXPERT}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Do a thing' })).toBeInTheDocument();
+  });
+
   it('healthy renders no notice card and no countdown', () => {
     render(<InSessionPanel variant="embedded" state={STATES.healthyClient} sessionId="sess-1" />);
     expect(
@@ -185,9 +230,8 @@ describe('InSessionPanel — BAL-403, variant="embedded"', () => {
     ).toBeInTheDocument();
   });
 
-  it('fires NEITHER lifecycle event', () => {
+  it('fires no lifecycle event', () => {
     render(<InSessionPanel variant="embedded" state={STATES.lowClient} sessionId="sess-1" />);
-    expect(track).not.toHaveBeenCalledWith(SESSION_EVENTS.STARTED, expect.anything());
     expect(track).not.toHaveBeenCalledWith(
       SESSION_EVENTS.LOW_BALANCE_WARNING_SHOWN,
       expect.anything()
@@ -210,18 +254,9 @@ describe('InSessionPanel — tone discipline', () => {
 });
 
 describe('InSessionPanel — analytics', () => {
-  it('fires session_started once for a live session', () => {
+  it('never fires session_started — BAL-466 moved it server-side to the connect seam', () => {
     renderPanel(STATES.healthyClient);
-    expect(track).toHaveBeenCalledWith(SESSION_EVENTS.STARTED, {
-      session_id: 'sess-1',
-      expert_profile_id: 'exp-1',
-      rate_per_minute_minor: 450,
-    });
-  });
-
-  it('does NOT fire session_started for an already-wrapped session', () => {
-    renderPanel(STATES.endNoMandate);
-    expect(track).not.toHaveBeenCalledWith(SESSION_EVENTS.STARTED, expect.anything());
+    expect(track).not.toHaveBeenCalledWith('session_started', expect.anything());
   });
 
   it('fires the low-balance impression once when the low card shows', () => {

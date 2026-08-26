@@ -75,14 +75,14 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
     const parsed = parseBodyOr400(openSessionBodySchema, request, reply);
     if (parsed === null) return;
 
+    // ⚠ G1 (second review round) — `meetingId` is NOT on `openSessionBodySchema` and must never
+    // be re-added here. See that schema's docblock: meeting-binding is a server decision made
+    // by `joinMeetingAsMember`'s admission seam, never a wire input on this route.
     const result = await openSession({
       initiatingMemberId: userId,
       expertProfileId: parsed.expertProfileId,
       estimatedMinutes: parsed.estimatedMinutes,
       ...(parsed.companyId === undefined ? {} : { companyId: parsed.companyId }),
-      // BAL-129 (D5) — the service resolves the engagement from this alone; the client
-      // never sends one.
-      ...(parsed.meetingId === undefined ? {} : { meetingId: parsed.meetingId }),
     });
 
     if (!result.ok) {

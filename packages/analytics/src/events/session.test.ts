@@ -7,7 +7,6 @@ const SNAKE_CASE = /^[a-z]+(_[a-z]+)*$/;
 describe('SESSION_EVENTS (client)', () => {
   it('has exactly the expected keys', () => {
     expect(Object.keys(SESSION_EVENTS)).toEqual([
-      'STARTED',
       'LOW_BALANCE_WARNING_SHOWN',
       'IN_SESSION_PANEL_VIEWED',
       'NUDGE_CLICKED',
@@ -15,7 +14,6 @@ describe('SESSION_EVENTS (client)', () => {
   });
 
   it('maps each constant to its snake_case event name', () => {
-    expect(SESSION_EVENTS.STARTED).toBe('session_started');
     expect(SESSION_EVENTS.LOW_BALANCE_WARNING_SHOWN).toBe('low_balance_warning_shown');
     expect(SESSION_EVENTS.IN_SESSION_PANEL_VIEWED).toBe('in_session_panel_viewed');
     expect(SESSION_EVENTS.NUDGE_CLICKED).toBe('session_nudge_clicked');
@@ -31,18 +29,22 @@ describe('SESSION_EVENTS (client)', () => {
 describe('SESSION_SERVER_EVENTS (server)', () => {
   it('has exactly the expected keys', () => {
     expect(Object.keys(SESSION_SERVER_EVENTS)).toEqual([
+      'SESSION_STARTED',
       'GRACE_ENTERED',
       'GRACE_CEILING_HIT',
       'SESSION_SETTLED',
       'RECEIVABLE_OPENED',
+      'SESSION_OPEN_REFUSED',
     ]);
   });
 
   it('maps each constant to its snake_case event name', () => {
+    expect(SESSION_SERVER_EVENTS.SESSION_STARTED).toBe('session_started');
     expect(SESSION_SERVER_EVENTS.GRACE_ENTERED).toBe('grace_entered');
     expect(SESSION_SERVER_EVENTS.GRACE_CEILING_HIT).toBe('grace_ceiling_hit');
     expect(SESSION_SERVER_EVENTS.SESSION_SETTLED).toBe('session_settled');
     expect(SESSION_SERVER_EVENTS.RECEIVABLE_OPENED).toBe('receivable_opened');
+    expect(SESSION_SERVER_EVENTS.SESSION_OPEN_REFUSED).toBe('session_open_refused');
   });
 
   it('values follow the snake_case naming convention', () => {

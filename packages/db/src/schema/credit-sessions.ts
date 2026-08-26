@@ -91,10 +91,9 @@ export const creditSessions = pgTable(
     // exactly like `live_capture`, but the TERMINAL figure is fixed from `meeting_presence`
     // with the ADR-1044 §7 floor. Fee-safe (client-viewable).
     //
-    // ⚠ INERT ON MAIN: nothing sets `'presence'` today. `creditSessionsRepository.open` accepts
-    // it as an optional input — the seam BAL-400 (booking) / BAL-466 (session open) will use —
-    // and no shipped caller passes it, so every new settlement path below is unreachable in
-    // production on merge (decision D10).
+    // ⚠ BAL-466 wires it: `joinMeetingAsMember` passes `durationSource: 'presence'` to
+    // `creditSessionsRepository.open` when the first CLIENT-side member is admitted to a
+    // `case` meeting, so every settlement path below is now reachable in production.
     durationSource: creditDurationSourceEnum('duration_source').notNull().default('live_capture'),
 
     // ── Snapshots (immutable for the life of the session; economics never drift) ──

@@ -48,6 +48,7 @@
  * directions.
  */
 import {
+  creditSessionsRepository,
   meetingGuestsRepository,
   meetingPresenceRepository,
   meetingsRepository,
@@ -55,7 +56,7 @@ import {
   type MeetingParticipantParty,
   type PresenceWindow,
 } from '@balo/db';
-import { MEETING_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
+import { MEETING_SERVER_EVENTS, SESSION_SERVER_EVENTS, trackServer } from '@balo/analytics/server';
 import { createLogger } from '@balo/shared/logging';
 import {
   parseDailyParticipantId,
@@ -65,6 +66,7 @@ import {
 import { MEETING_TOKEN_TTL_AFTER_END_MS } from './meeting-liveness.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
 import { deliveringExpertProfileIdForMeeting, deliveringExpertUserId } from './delivering-party.js';
+import { connectSessionAsSystem } from '../credit-session/connect-session.js';
 import {
   clientAbsentKey,
   expertAbsentKey,
@@ -474,6 +476,26 @@ export async function reconcileMeetingStatus(
       // same non-user shape `guest_joined` already uses with `meeting_guests.id`.
       distinct_id: meeting.id,
     });
+
+    // ⚠⚠ BAL-466 (D6) — CONNECT THE CREDIT SESSION. This is the ORDINARY connect seam: the
+    //    moment an expert and a client side are both in the room. `markInProgress` is a
+    //    compare-and-set, so exactly ONE racing caller reaches this line per meeting.
+    //
+    //    ⚠ BEST-EFFORT AND NON-FATAL, the same posture as `cancelAbsenceReminders` above and
+    //    `settleBestEffort` in `end-meeting.ts`: the meeting is already `in_progress` in
+    //    Postgres, so a connect fault must never fail the Daily webhook (Daily would retry the
+    //    delivery and re-drive a transition that has already happened). The meter sweep cannot
+    //    recover this one, so it is an `error`, not a `warn`.
+    //
+    //    ⚠⚠ G3 (second review round) — NOT THE ONLY CONNECT SITE. When a CLIENT-invited GUEST
+    //    (counted in `clientPresent` above) is co-present with the expert BEFORE any client
+    //    MEMBER exists, this CAS fires here and finds no session to connect — the session does
+    //    not exist until a client member later joins and opens it. `join-meeting.ts`'s
+    //    `openCaseSessionBestEffort` covers exactly that ordering via
+    //    `connectIfMeetingAlreadyInProgress`, checking the meeting's status at that later
+    //    admission. The two never race each other: this CAS only ever fires ONCE per meeting.
+    await connectSessionBestEffort(meeting.id, now);
+
     return 'in_progress';
   }
 
@@ -495,6 +517,46 @@ export async function reconcileMeetingStatus(
   }
 
   return null;
+}
+
+/**
+ * BAL-466 (D6) — connect this meeting's credit session, if it has one.
+ *
+ * ⚠ INERT FOR EVERY MEETING WITHOUT ONE — `findIdByMeetingId` answers `undefined` for every
+ * intro call, discovery call and unfunded Case, and this returns after ONE indexed read.
+ *
+ * ⚠ A SESSION THAT NEVER CONNECTS IS NOT BROKEN. `SETTLE_FROM_PRESENCE_FROM` includes
+ * `pending` precisely so a client no-show settles correctly, and `findStalePending` excludes
+ * `duration_source='presence'` so nothing cancels it. A failure here costs the LIVE meter and
+ * the in-call ladder for that call, never the settlement.
+ */
+async function connectSessionBestEffort(meetingId: string, now: Date): Promise<void> {
+  try {
+    const found = await creditSessionsRepository.findIdByMeetingId(meetingId);
+    if (found === undefined) return;
+
+    const session = await connectSessionAsSystem(found.id, { now });
+
+    // BAL-466 (D7) — `session_started` fires HERE, server-side, at the real connect seam.
+    trackServer(SESSION_SERVER_EVENTS.SESSION_STARTED, {
+      session_id: session.id,
+      meeting_id: meetingId,
+      expert_profile_id: session.expertProfileId,
+      // ⚠ THE MARKED-UP CLIENT RATE — never `expertRateMinorPerMinute` and never `baloFeeBps`.
+      rate_per_minute_minor: session.clientRateMinorPerMinute,
+      // ⚠ = company_id. There is no acting human on a system-observed transition.
+      distinct_id: session.companyId,
+    });
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Credit session could not be connected at co-presence — the call is not metering'
+    );
+  }
 }
 
 /**

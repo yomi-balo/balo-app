@@ -4,15 +4,8 @@ import 'server-only';
 
 import { z } from 'zod';
 import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
-import type { DrawdownState } from '@balo/shared/credit';
 import { callSessionApi } from '../api-client';
-import type {
-  ActionResult,
-  ConnectSessionData,
-  EndSessionData,
-  OpenSessionActionResult,
-  OpenSessionData,
-} from './types';
+import type { ActionResult, OpenSessionActionResult, OpenSessionData } from './types';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) — the thin credit-session Server Actions.
@@ -23,6 +16,21 @@ import type {
  * (BAL-401) is accepted but is capability-gated server-side — `openSession` only honours a
  * company the caller holds CONSUME_CREDITS on (fail-closed), so it cannot be used to draw
  * down another tenant's wallet. The component layer toasts each outcome.
+ *
+ * ⚠⚠ BAL-466 (F1, review fix round) — `connectSessionAction` AND `endSessionAction` WERE
+ * DELETED FROM THIS FILE. Both were zero-caller `'use server'` exports — every export here is
+ * directly browser-callable — gated only on `authorizeSessionActor(CONSUME_CREDITS)` (any live
+ * company member). Until BAL-466 no `durationSource === 'presence'` session existed, so that
+ * gate was sufficient; once the join seam (D1) started opening presence sessions, these two
+ * became a live payment-manipulation surface: any company member could hand-craft a fetch to
+ * end a presence session at minute 2 of a 60-minute case (freezing the expert's accrual and
+ * skipping the ADR-1044 floor + the whole presence settlement) or connect one early (starting
+ * the meter before real co-presence, made permanent by the Q1 no-refund clamp). A `'presence'`
+ * session's lifecycle is system-only — driven by the Daily co-presence webhook via
+ * `connectSessionAsSystem` / `settleSessionFromPresence` — and the api's `connectSession` /
+ * `endSession` now refuse one outright (`forbidden`) rather than leaving the refusal to a web
+ * action that should never have existed. `openSessionAction` stays (open is inherently
+ * actor-initiated and always was); `nudgeAdminAction` stays (it has a real caller, BAL-381).
  */
 
 const openInputSchema = z
@@ -84,42 +92,6 @@ export async function openSessionAction(input: {
       code: result.code,
       ...(result.companies === undefined ? {} : { companies: result.companies }),
     };
-  }
-  return { success: true, data: result.data };
-}
-
-/** Connect a pending session (pending → active); returns the fresh drawdown state. */
-export async function connectSessionAction(
-  sessionId: string
-): Promise<ActionResult<ConnectSessionData>> {
-  const parsed = sessionIdSchema.safeParse(sessionId);
-  if (!parsed.success) {
-    return { success: false, error: 'That consultation could not be found.' };
-  }
-
-  const result = await callSessionApi<DrawdownState>(
-    `/sessions/${parsed.data}/connect`,
-    'POST',
-    {}
-  );
-
-  if (!result.ok) {
-    return { success: false, error: 'Could not connect the consultation.', code: result.code };
-  }
-  return { success: true, data: result.data };
-}
-
-/** End a session: meter → release → accrual → settle. Returns the settlement summary. */
-export async function endSessionAction(sessionId: string): Promise<ActionResult<EndSessionData>> {
-  const parsed = sessionIdSchema.safeParse(sessionId);
-  if (!parsed.success) {
-    return { success: false, error: 'That consultation could not be found.' };
-  }
-
-  const result = await callSessionApi<EndSessionData>(`/sessions/${parsed.data}/end`, 'POST', {});
-
-  if (!result.ok) {
-    return { success: false, error: 'Could not wrap up the consultation.', code: result.code };
   }
   return { success: true, data: result.data };
 }

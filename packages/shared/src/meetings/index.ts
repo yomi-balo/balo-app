@@ -107,6 +107,10 @@ export * from './reschedulable';
 // BAL-411 — the reschedule-PROPOSAL lifecycle's pure core: lazy expiry, liveness, and the
 // answer-time refusal vocabulary. Pure, no clock read — `now` is always injected.
 export * from './reschedule-proposal';
+// BAL-466 (D3) — the ONE participation rule ("is this actor a participant of this meeting"),
+// as a pure core over injected reads. `apps/api`'s gate and `apps/web`'s in-call money surface
+// are both thin fetch-and-call wrappers over this, so there is exactly one definition.
+export * from './participation';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

@@ -639,7 +639,11 @@ describe('loadCase — the counterparty, per lens', () => {
 });
 
 describe('loadCase — the earnings aggregate stays a DISCRIMINATED state, never a flat zero', () => {
-  it('keeps not_yet distinct from a real zero — nothing writes engagement_id yet', async () => {
+  // ⚠ F9 (BAL-466 fix round) — RENAMED: `openSession` DOES write `engagement_id` now, for every
+  // presence session BAL-466's admission seam opens (see `sumEarnings.mockResolvedValue`d
+  // `pending`/`finalized` fixtures below). This fixture's default mock (no admitted client on
+  // this case) is what makes `not_yet` the answer here, not an absence of any writer.
+  it('keeps not_yet distinct from a real zero — the default fixture has no admitted client', async () => {
     seed({ access: { lens: 'expert' } });
     const view = await loadOrThrow();
     expect(view).toMatchObject({

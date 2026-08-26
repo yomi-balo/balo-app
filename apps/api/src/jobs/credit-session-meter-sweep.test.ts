@@ -246,7 +246,7 @@ describe('runSessionMeterSweep', () => {
       expect(result.presenceSettled).toBe(1);
     });
 
-    it('is inert on main today — the finder returns nothing (D10)', async () => {
+    it('an empty finder result settles nothing (the ordinary case for most sweep ticks)', async () => {
       const result = await runSessionMeterSweep(NOW);
       expect(mockSettleSessionFromPresence).not.toHaveBeenCalled();
       expect(result.presenceSettled).toBe(0);

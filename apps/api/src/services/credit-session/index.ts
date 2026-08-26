@@ -5,7 +5,7 @@
  * publish helpers DIRECTLY from `./notify.js` to avoid a Stripe ↔ service import cycle.
  */
 export { openSession } from './open-session.js';
-export { connectSession } from './connect-session.js';
+export { connectSession, connectSessionAsSystem } from './connect-session.js';
 export { endSession, endSessionAsSystem, reconcileStuckSettlement } from './end-session.js';
 export {
   settleSessionFromPresence,

@@ -101,24 +101,32 @@ async function resolveChatSlot(
  * ── ⚠⚠ FIX ROUND 2 (R1) — THE SLOT NOW RUNS THE **SAME COMPOSED GATE** AS THE PANEL BODY ─────
  *
  * Round 1 made this call `getSessionDrawdownState` directly — the SAME final read the panel
- * body used, but not the SAME GATE: the action also ran `authorizeMeetingFileAccess` first, and
- * this RSC did not. The two could disagree (see `resolve-in-call-drawdown.ts`'s docblock for the
- * exact failure this caused), so the slot now calls `resolveInCallDrawdown` — the ONE function
+ * body used, but not the SAME GATE: the action also ran an audience gate first, and this RSC
+ * did not. The two could disagree (see `resolve-in-call-drawdown.ts`'s docblock for the exact
+ * failure this caused), so the slot now calls `resolveInCallDrawdown` — the ONE function
  * both this RSC and `get-meeting-drawdown-state.ts` call — and narrows its result to a boolean.
  * Registration and body read from the same three composed checks and cannot disagree by
  * construction. This also removes the double work round 1 left behind: the RSC used to derive a
  * full `DrawdownState` and discard everything but `!== null`, which the client's first poll then
  * redid milliseconds later.
  *
- * ── ⚠⚠ "NO CREDIT SESSION FOR THIS MEETING" IS THE EXPECTED ANSWER FOR EVERY MEETING TODAY ───
+ * ⚠ BAL-466 (D3, D8) changed WHICH gate that first check is — `authorizeMeetingParticipation`,
+ * not the company-audience gate — and reordered it to run FIRST. See
+ * `resolve-in-call-drawdown.ts` for the full account.
  *
- * `openSessionAction` and `connectSessionAction` (`lib/credit/actions/session-mutations.ts`)
- * have zero non-test callers, so `findIdByMeetingId` always answers `undefined`. That is **not
- * a bug** — it is the same forward-seam posture BAL-420 (scheduled dispatch) and BAL-387
- * (transcripts) already shipped: every wire is real (the poll, the toolbar slot, the More-sheet
- * row, the panel body), and the surface renders only once the deferred session-open ticket
- * lands. Until then this returns `false` for every meeting, and that is CORRECT, not a
- * regression to chase.
+ * ── ⚠⚠ BAL-466 — "NO CREDIT SESSION FOR THIS MEETING" IS NOW THE ANSWER ONLY FOR NON-`case`
+ *    MEETINGS AND A `case` WHOSE CLIENT HAS NOT YET BEEN ADMITTED ──────────────────────────
+ *
+ * `apps/web`'s `openSessionAction` (`lib/credit/actions/session-mutations.ts`) still has zero
+ * non-test callers — the seam is server-side, NOT this web action. (`connectSessionAction` no
+ * longer exists at all — F1 of the BAL-466 fix round deleted it: a `'presence'` session's
+ * `pending → active` transition is system-only, driven by co-presence, and the actor-facing
+ * `connectSession` now refuses one.) `joinMeetingAsMember` (`apps/api`) opens a
+ * `duration_source='presence'` session
+ * when the first CLIENT-side member is admitted to a `case` meeting, so `findIdByMeetingId` now
+ * answers a real row for those meetings. This RSC still resolves BEFORE `joinAsMemberAction`
+ * runs client-side (§A.6/§A.7 of the BAL-466 plan), so for the member whose join CREATES the
+ * session, this verdict is stale `false` — `call-client.tsx`'s post-join probe re-resolves it.
  *
  * ⚠⚠ NEVER FAILS THE CALL PAGE, same posture as {@link resolveChatSlot}: Balance is an accessory
  * to a live consultation, so a throw degrades to `hasBalance: false` and logs a `warn`.
@@ -189,8 +197,11 @@ export default async function MeetingCallPage({
       // lives in `lib/meetings/` rather than in this file.
       joinLinkUrl={meetingJoinLinkUrl(meetingId)}
       hasChat={hasChat}
-      // BAL-403 — ⚠⚠ `false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED. See
-      // `resolveBalanceSlot`'s docblock.
+      // BAL-403 / BAL-466 — ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this
+      // used to say "`false` FOR EVERY MEETING TODAY, AND THAT IS EXPECTED". `true` is now the
+      // real answer for a `case` meeting once its client has been admitted — see
+      // `resolveBalanceSlot`'s docblock. `false` is still expected for every non-`case` meeting
+      // and for a Case with no admitted client.
       hasBalance={hasBalance}
       // ⚠ THE ENV READ HAPPENS ON THE SERVER. `ABLY_API_KEY` is not `NEXT_PUBLIC_*` and must
       // never become one; the client only ever learns the BOOLEAN.

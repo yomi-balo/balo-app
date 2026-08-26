@@ -40,9 +40,12 @@ import { InSessionPanel } from './in-session-panel';
  * fields (`expertRate*`, `baloFeeBps`, `expertAccruedMinor`, `stripePaymentIntentId`) are
  * structurally absent from the payload (`findForClientView`).
  *
- * ⚠ SHIPS INERT. `panels.balance` is `null` for every meeting today (nothing opens a credit
- * session) — see `meeting-panels.ts`'s `MeetingPanelId` docblock. This component simply never
- * mounts until that changes.
+ * ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM. This used to say "SHIPS INERT.
+ * `panels.balance` is `null` for every meeting today (nothing opens a credit session)… this
+ * component simply never mounts until that changes." BAL-466 is that change: `panels.balance`
+ * is non-null, and this component DOES mount, for a `case` consultation once its client has
+ * been admitted — see `meeting-panels.ts`'s `MeetingPanelId` docblock. `null` (no mount) remains
+ * correct for every non-`case` meeting and for a Case with no admitted client.
  *
  * ── ⚠⚠ FIX ROUND 1 (C2) — THE ERROR CARD'S RECOVERY INSTRUCTION IS NOW TRUE ────────────────────
  *

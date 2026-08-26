@@ -318,6 +318,23 @@ export async function endSession(
     return auth;
   }
 
+  // BAL-466 (F1, review fix round) — a `'presence'` session's terminal path is
+  // `settleSessionFromPresence` (`./settle-from-presence.ts`), driven by meeting end / the
+  // lifecycle sweeps, never this ACTOR-facing route. Every SYSTEM path was taught to skip
+  // presence sessions (`enforceMaxDuration`, `findWrappedIdle`/`findStalePending` exclude them);
+  // this one never was, because until this PR no presence session existed. Its only gate is
+  // CONSUME_CREDITS — any live company member — so an unguarded actor-end would let anyone on
+  // the paying company freeze the expert's accrual at wall-clock minutes and skip the ADR-1044
+  // floor and the whole presence settlement (`already_settled` at meeting end): a live payment
+  // manipulation, not a settlement-timing quirk.
+  if (auth.session.durationSource === 'presence') {
+    log.warn(
+      { sessionId, userId: endedByMemberId },
+      'Session actor denied — presence-sourced session is ended by the system only'
+    );
+    return { ok: false, code: 'forbidden' };
+  }
+
   // BAL-399: an EXTERNAL session cannot be wall-clock finalized on hang-up — it PARKS awaiting a
   // BAL-133 duration confirmation (no settlement here; the money block stays PENDING). The
   // live-capture path finalizes immediately as before.

@@ -1,4 +1,4 @@
-import type { CreditSessionStatus, DrawdownState, EligibleCompany } from '@balo/shared/credit';
+import type { CreditSessionStatus, EligibleCompany } from '@balo/shared/credit';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) — pure result types for the credit-session Server Actions.
@@ -31,13 +31,10 @@ export interface OpenSessionData {
 }
 
 /**
- * `POST /sessions/:id/end` success body. Deliberately EXCLUDES `expertAccruedMinor` (the raw
- * pre-markup expert pay) — it is a fee/PII-boundary value that must never reach the client.
+ * ⚠ BAL-466 (F1, review fix round) — `EndSessionData` / `ConnectSessionData` were removed:
+ * `endSessionAction` and `connectSessionAction` (their only consumers) were deleted from
+ * `session-mutations.ts` — a `'presence'` session's lifecycle is system-only. If a route-facing
+ * end/connect Server Action is ever legitimately needed again (never for a `'presence'`
+ * session — the api itself refuses that), reintroduce the type alongside it rather than
+ * resurrecting a dead export ahead of a caller.
  */
-export interface EndSessionData {
-  settlementStatus: string;
-  overdraftSettledMinor: number | null;
-}
-
-/** `POST /sessions/:id/connect` returns the freshly-derived drawdown state. */
-export type ConnectSessionData = DrawdownState;

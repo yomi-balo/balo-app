@@ -33,7 +33,7 @@ const {
   mockIsRealtimeConfigured,
   mockFindIdByMeetingId,
   mockGetSessionDrawdownState,
-  mockAuthorizeMeetingFileAccess,
+  mockAuthorizeMeetingParticipation,
   dbSpies,
 } = vi.hoisted(() => ({
   mockCheckSessionDrift: vi.fn(),
@@ -46,9 +46,9 @@ const {
   mockFindIdByMeetingId: vi.fn(),
   /** BAL-403 fix round 1 (C1) — the SAME membership gate the panel body reads through. */
   mockGetSessionDrawdownState: vi.fn(),
-  /** BAL-403 fix round 2 (R1) — the SAME composed gate (`resolveInCallDrawdown`) the polled
+  /** BAL-466 (D3, D8) — the SAME composed gate (`resolveInCallDrawdown`) the polled
    * action runs; this RSC test proves the slot cannot disagree with it. */
-  mockAuthorizeMeetingFileAccess: vi.fn(),
+  mockAuthorizeMeetingParticipation: vi.fn(),
   /**
    * ⚠ A TRIPWIRE, NOT A DEPENDENCY. The page must reach no repository DIRECTLY — the chat
    * anchor's own reads happen behind `resolveMeetingChatAccess`, which is mocked, and are
@@ -66,8 +66,8 @@ vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 vi.mock('@/lib/credit/actions/get-drawdown-state', () => ({
   getSessionDrawdownState: mockGetSessionDrawdownState,
 }));
-vi.mock('@/lib/meetings/authorize-meeting-file-access', () => ({
-  authorizeMeetingFileAccess: mockAuthorizeMeetingFileAccess,
+vi.mock('@/lib/authz/meeting-participation', () => ({
+  authorizeMeetingParticipation: mockAuthorizeMeetingParticipation,
 }));
 vi.mock('@/lib/logging', () => ({
   log: { warn: mockLogWarn, error: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -136,18 +136,24 @@ beforeEach(() => {
     anchor: { conversationId: CONVERSATION_ID, subject: {}, writable: true },
   });
   mockIsRealtimeConfigured.mockReturnValue(true);
-  // ⚠ BAL-403 — `undefined` (no row) IS THE EXPECTED DEFAULT: nothing opens a credit session
-  // today, so every existing test in this file that does not care about Balance still exercises
-  // the inert path.
+  // ⚠ BAL-403 — `undefined` (no row) IS THE FIXTURE DEFAULT here, so every existing test in this
+  // file that does not care about Balance still exercises the inert path. (BAL-466's join seam
+  // DOES open a credit session for an admitted case client in production — this default is a
+  // test fixture choice, not a claim that nothing does.)
   mockFindIdByMeetingId.mockResolvedValue(undefined);
   // ⚠ BAL-403 fix round 1 (C1) — `null` by default (not a live member), so a test that sets a
   // row on `mockFindIdByMeetingId` without opting in stays denied rather than accidentally
   // passing the gate.
   mockGetSessionDrawdownState.mockResolvedValue(null);
-  // ⚠ BAL-403 fix round 2 (R1) — the audience gate defaults to PASS, so existing tests that only
+  // ⚠ BAL-466 (D3, D8) — the participation gate defaults to PASS, so existing tests that only
   // opt into `mockFindIdByMeetingId` / `mockGetSessionDrawdownState` still exercise exactly what
   // they did before this gate joined the composition.
-  mockAuthorizeMeetingFileAccess.mockResolvedValue({ ok: true, side: 'client' });
+  mockAuthorizeMeetingParticipation.mockResolvedValue({
+    ok: true,
+    side: 'client',
+    companyId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    expertProfileId: '88888888-8888-4888-8888-888888888888',
+  });
 });
 
 describe('MeetingCallPage — route configuration', () => {
@@ -328,7 +334,7 @@ describe('MeetingCallPage — BAL-437, the realtime flag', () => {
 });
 
 describe('MeetingCallPage — BAL-403, the BALANCE slot resolves server-side', () => {
-  it('⚠⚠ no credit session for this meeting ⇒ hasBalance: false — the EXPECTED path today', async () => {
+  it('⚠⚠ no credit session for this meeting ⇒ hasBalance: false — the EXPECTED path for a non-case / not-yet-admitted meeting', async () => {
     const container = await renderPage();
 
     expect(mockFindIdByMeetingId).toHaveBeenCalledWith(MEETING_ID);
@@ -344,7 +350,7 @@ describe('MeetingCallPage — BAL-403, the BALANCE slot resolves server-side', (
 
     const container = await renderPage();
 
-    expect(mockGetSessionDrawdownState).toHaveBeenCalledWith('sess-1');
+    expect(mockGetSessionDrawdownState).toHaveBeenCalledWith('sess-1', USER_ID);
     expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
       'data-has-balance',
       'true'
@@ -389,22 +395,24 @@ describe('MeetingCallPage — BAL-403, the BALANCE slot resolves server-side', (
     );
   });
 
-  it('⚠⚠ fix round 2 (R1) — a session exists and membership passes, but the audience gate denies ⇒ hasBalance: false, matching the polled action byte-for-byte', async () => {
-    // ⚠ THE EXACT SHAPE THAT DISAGREED PRE-FIX: round 1's RSC never called
-    // `authorizeMeetingFileAccess` at all, so this combination answered `hasBalance: true` here
-    // while `get-meeting-drawdown-state.ts` answered `{ success: true, state: null }` — a
-    // rendered button over an eternal skeleton. `resolveInCallDrawdown` closes the gap by
-    // construction: both callers run this exact same check now.
+  it('⚠⚠ BAL-466 (D3, D8) — a session exists but the PARTICIPATION gate denies ⇒ hasBalance: false, matching the polled action byte-for-byte, and no repo call', async () => {
+    // ⚠ THE EXACT SHAPE THAT DISAGREED PRE-FIX: round 1's RSC never ran a participation check
+    // at all, so this combination answered `hasBalance: true` here while
+    // `get-meeting-drawdown-state.ts` answered `{ success: true, state: null }` — a rendered
+    // button over an eternal skeleton. `resolveInCallDrawdown` closes the gap by construction:
+    // both callers run this exact same check now, and (D8) it runs FIRST — so a denied actor
+    // never reaches `findIdByMeetingId` at all.
     mockFindIdByMeetingId.mockResolvedValue({ id: 'sess-1' });
     mockGetSessionDrawdownState.mockResolvedValue({ key: 'healthy' });
-    mockAuthorizeMeetingFileAccess.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
+    mockAuthorizeMeetingParticipation.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
 
     const container = await renderPage();
 
-    expect(mockAuthorizeMeetingFileAccess).toHaveBeenCalledWith({
+    expect(mockAuthorizeMeetingParticipation).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
       userId: USER_ID,
     });
+    expect(mockFindIdByMeetingId).not.toHaveBeenCalled();
     expect(mockGetSessionDrawdownState).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="call-client"]')).toHaveAttribute(
       'data-has-balance',
