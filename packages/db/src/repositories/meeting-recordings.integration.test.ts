@@ -29,10 +29,10 @@ import {
  * outside its webhook marker's transaction; a test handing over the transaction it is already
  * inside is exactly the intended usage.
  *
- * ⚠ GENUINE CONCURRENCY IS NOT EXPRESSIBLE HERE (memory
- * `reference_db_integration_harness_no_concurrency`) — the harness is one `max: 1` connection
- * inside one open transaction. The "a concurrent duplicate loses the unique index" acceptance
- * criterion lives in `meeting-recordings.concurrency.integration.test.ts`, on its own backends.
+ * ⚠ GENUINE CONCURRENCY IS NOT EXPRESSIBLE HERE — the harness runs every test on a single
+ * (`max: 1`) connection inside one open transaction, so two "simultaneous" calls can only ever
+ * run sequentially. The "a concurrent duplicate loses the unique index" acceptance criterion
+ * lives in `meeting-recordings.concurrency.integration.test.ts`, on its own backends.
  */
 
 /** A fresh, collision-proof vendor-shaped id. */
@@ -343,6 +343,65 @@ describe('meetingRecordingsRepository — the reads', () => {
   });
 });
 
+// ── 3b. countFailedByStage (FIX ROUND 2, R2 circuit breaker) ─────────────────
+
+describe('meetingRecordingsRepository.countFailedByStage', () => {
+  it('counts only LIVE failed segments at the given stage', async () => {
+    const { meeting } = await meetingFactory();
+    await meetingRecordingFactory({
+      meetingId: meeting.id,
+      status: 'failed',
+      failedStage: 'daily',
+    });
+    await meetingRecordingFactory({
+      meetingId: meeting.id,
+      status: 'failed',
+      failedStage: 'daily',
+    });
+    // A different stage must not be counted.
+    await meetingRecordingFactory({
+      meetingId: meeting.id,
+      status: 'failed',
+      failedStage: 'mux_ingest',
+    });
+    // A non-failed segment must not be counted.
+    await meetingRecordingFactory({ meetingId: meeting.id, status: 'ready' });
+
+    expect(await meetingRecordingsRepository.countFailedByStage(meeting.id, 'daily')).toBe(2);
+    expect(await meetingRecordingsRepository.countFailedByStage(meeting.id, 'mux_ingest')).toBe(1);
+  });
+
+  it('excludes a soft-deleted failure', async () => {
+    const { meeting } = await meetingFactory();
+    const { recording } = await meetingRecordingFactory({
+      meetingId: meeting.id,
+      status: 'failed',
+      failedStage: 'daily',
+    });
+    await meetingRecordingsRepository.softDelete({ id: recording.id });
+
+    expect(await meetingRecordingsRepository.countFailedByStage(meeting.id, 'daily')).toBe(0);
+  });
+
+  it('returns 0 for a meeting with no failures at all', async () => {
+    const { meeting } = await meetingFactory();
+    expect(await meetingRecordingsRepository.countFailedByStage(meeting.id, 'daily')).toBe(0);
+  });
+
+  it('different meetings never contend — the count is per meeting', async () => {
+    const a = await meetingFactory();
+    const b = await meetingFactory();
+    await meetingRecordingFactory({
+      meetingId: a.meeting.id,
+      status: 'failed',
+      failedStage: 'daily',
+    });
+
+    expect(await meetingRecordingsRepository.countFailedByStage(a.meeting.id, 'daily')).toBe(1);
+    expect(await meetingRecordingsRepository.countFailedByStage(b.meeting.id, 'daily')).toBe(0);
+  });
+});
+
 // ── 4. markStarted (T2) ──────────────────────────────────────────────────────
 
 describe('meetingRecordingsRepository.markStarted', () => {
@@ -547,14 +606,22 @@ describe('meetingRecordingsRepository.markIngesting', () => {
 
 describe('meetingRecordingsRepository.markReady', () => {
   it('reaches TERMINAL SUCCESS: playback id, ready_at, and Mux’s duration OVERWRITING Daily’s', async () => {
+    const assetId = vendorId('asset');
     const { recording } = await meetingRecordingFactory({
       status: 'ingesting',
+      muxAssetId: assetId, // T6 always stamps this before a row reaches `ingesting`.
       durationSeconds: 900, // Daily's number, recorded at source_ready
     });
     const at = new Date('2026-08-25T12:00:00.000Z');
 
     const updated = await meetingRecordingsRepository.markReady(
-      { id: recording.id, muxPlaybackId: vendorId('pb'), durationSeconds: 912, at },
+      {
+        id: recording.id,
+        muxAssetId: assetId,
+        muxPlaybackId: vendorId('pb'),
+        durationSeconds: 912,
+        at,
+      },
       db
     );
 
@@ -566,28 +633,45 @@ describe('meetingRecordingsRepository.markReady', () => {
   });
 
   it('keeps Daily’s duration when Mux sends none (COALESCE the other way)', async () => {
+    const assetId = vendorId('asset');
     const { recording } = await meetingRecordingFactory({
       status: 'ingesting',
+      muxAssetId: assetId,
       durationSeconds: 900,
     });
 
     const updated = await meetingRecordingsRepository.markReady(
-      { id: recording.id, muxPlaybackId: vendorId('pb'), durationSeconds: null, at: new Date() },
+      {
+        id: recording.id,
+        muxAssetId: assetId,
+        muxPlaybackId: vendorId('pb'),
+        durationSeconds: null,
+        at: new Date(),
+      },
       db
     );
     expect(updated?.durationSeconds).toBe(900);
   });
 
   it('THE REPLAY: a second video.asset.ready returns undefined and preserves the first playback id', async () => {
-    const { recording } = await meetingRecordingFactory({ status: 'ingesting' });
+    const assetId = vendorId('asset');
+    const { recording } = await meetingRecordingFactory({
+      status: 'ingesting',
+      muxAssetId: assetId,
+    });
     const playbackId = vendorId('pb');
     await meetingRecordingsRepository.markReady(
-      { id: recording.id, muxPlaybackId: playbackId, at: new Date() },
+      { id: recording.id, muxAssetId: assetId, muxPlaybackId: playbackId, at: new Date() },
       db
     );
 
     const replay = await meetingRecordingsRepository.markReady(
-      { id: recording.id, muxPlaybackId: vendorId('pb-other'), at: new Date() },
+      {
+        id: recording.id,
+        muxAssetId: assetId,
+        muxPlaybackId: vendorId('pb-other'),
+        at: new Date(),
+      },
       db
     );
     expect(replay).toBeUndefined();
@@ -597,13 +681,49 @@ describe('meetingRecordingsRepository.markReady', () => {
   });
 
   it('refuses a row that is not ingesting', async () => {
-    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+    const assetId = vendorId('asset');
+    const { recording } = await meetingRecordingFactory({
+      status: 'source_ready',
+      muxAssetId: assetId,
+    });
 
     const refused = await meetingRecordingsRepository.markReady(
-      { id: recording.id, muxPlaybackId: vendorId('pb'), at: new Date() },
+      { id: recording.id, muxAssetId: assetId, muxPlaybackId: vendorId('pb'), at: new Date() },
       db
     );
     expect(refused).toBeUndefined();
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (R3) — THE TWO-ASSET ORPHAN HAZARD, closed by the `mux_asset_id` CAS term.
+   * A row `ingesting` under asset #2 (the retry that won) must refuse a `video.asset.ready`
+   * naming asset #1 (the orphaned first attempt) even though the STATUS matches — the status
+   * alone is not enough to prove the event is about the asset this row actually points at.
+   */
+  it('⚠⚠ THE ORPHAN GUARD: refuses a video.asset.ready naming a DIFFERENT asset than the row', async () => {
+    const rowAssetId = vendorId('asset-two'); // the retry that won `markIngesting`
+    const orphanAssetId = vendorId('asset-one'); // the orphaned first attempt
+    const { recording } = await meetingRecordingFactory({
+      status: 'ingesting',
+      muxAssetId: rowAssetId,
+    });
+
+    const refused = await meetingRecordingsRepository.markReady(
+      {
+        id: recording.id,
+        muxAssetId: orphanAssetId,
+        muxPlaybackId: vendorId('pb'),
+        at: new Date(),
+      },
+      db
+    );
+    expect(refused).toBeUndefined();
+
+    // The row still names ITS OWN asset — the orphan's playback id never landed here.
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.status).toBe('ingesting');
+    expect(row?.muxAssetId).toBe(rowAssetId);
+    expect(row?.muxPlaybackId).toBeNull();
   });
 });
 

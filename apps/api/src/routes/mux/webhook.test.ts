@@ -256,6 +256,9 @@ describe('POST /webhooks/mux (BAL-473 §8)', () => {
     expect(mockMarkReady).toHaveBeenCalledWith(
       expect.objectContaining({
         id: RECORDING_ID,
+        // ⚠⚠ FIX ROUND 2 (R3) — the CAS's asset-id term, sourced from the EVENT (`data.id`),
+        // not merely re-read off the row. This is what closes the two-asset orphan hazard.
+        muxAssetId: ASSET_ID,
         muxPlaybackId: 'pb_signed',
         durationSeconds: 90,
       }),
@@ -326,6 +329,118 @@ describe('POST /webhooks/mux (BAL-473 §8)', () => {
       expect.objectContaining({ recordingId: RECORDING_ID }),
       expect.stringContaining('no SIGNED playback id')
     );
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (R3) — THE ORPHAN SIGNAL. A worker died between `assets.create` and
+   * `markIngesting` for a FIRST asset; a retry created a SECOND asset and stamped the row with
+   * IT. The first asset's `video.asset.ready` still resolves by `passthrough` (the row id) but
+   * must NOT stamp its playback id onto a row that now names a different asset.
+   */
+  it('⚠⚠ an asset-id MISMATCH refuses the transition and logs the orphan signal', async () => {
+    mockMarkReady.mockResolvedValue(undefined); // the CAS refuses — the row names a different asset
+    const orphanAssetId = 'mux-asset-orphan';
+    const payload = body({
+      data: {
+        passthrough: RECORDING_ID,
+        id: orphanAssetId, // ⚠ NOT `ASSET_ID` — the row's own mux_asset_id
+        playback_ids: [{ id: 'pb_signed', policy: 'signed' }],
+      },
+    });
+
+    const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockMarkReady).toHaveBeenCalledWith(
+      expect.objectContaining({ muxAssetId: orphanAssetId }),
+      expect.anything()
+    );
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recordingId: RECORDING_ID,
+        rowMuxAssetId: ASSET_ID,
+        eventAssetId: orphanAssetId,
+      }),
+      expect.stringContaining('DIFFERENT asset')
+    );
+    // Never advertised as ready, never cleaned up, never counted as the metric.
+    expect(mockEnqueueRecordingCleanupSource).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('⚠ video.asset.ready with NO asset id at all refuses the transition rather than trusting it', async () => {
+    const payload = body({
+      data: {
+        passthrough: RECORDING_ID,
+        id: undefined,
+        playback_ids: [{ id: 'pb_signed', policy: 'signed' }],
+      },
+    });
+
+    const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockMarkReady).not.toHaveBeenCalled();
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ recordingId: RECORDING_ID }),
+      expect.stringContaining('no asset id')
+    );
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (R3) — "SAME TREATMENT" FOR `video.asset.errored`: an orphaned FIRST
+   * attempt's asset reports its own error after a SECOND attempt has already stamped the row.
+   * Failing the row for an asset it no longer points at would wrongly fail a segment whose
+   * real asset may still succeed.
+   */
+  it('⚠⚠ video.asset.errored for a DIFFERENT asset than the row points at is refused, not failed', async () => {
+    const orphanAssetId = 'mux-asset-orphan';
+    const payload = body({
+      type: 'video.asset.errored',
+      id: 'evt_2',
+      data: { passthrough: RECORDING_ID, id: orphanAssetId, errors: { messages: ['boom'] } },
+    });
+
+    const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recordingId: RECORDING_ID,
+        rowMuxAssetId: ASSET_ID,
+        eventAssetId: orphanAssetId,
+      }),
+      expect.stringContaining('DIFFERENT asset')
+    );
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (R4) — every other vendor-error sink in this PR redacts URL-shaped
+   * substrings before they reach `failure_reason` or a log line (`lib/sanitize-error.ts`).
+   * `video.asset.errored`'s message is Mux's own arbitrary `data.errors.messages` text and must
+   * get the same treatment.
+   */
+  it('⚠⚠ video.asset.errored redacts a URL-shaped substring in the vendor message', async () => {
+    const payload = body({
+      type: 'video.asset.errored',
+      id: 'evt_3',
+      data: {
+        passthrough: RECORDING_ID,
+        errors: { messages: ['could not fetch https://example.com/secret-signed-link'] },
+      },
+    });
+
+    const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockMarkFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining('[redacted-url]') }),
+      expect.anything()
+    );
+    const [failedCall] = mockMarkFailed.mock.calls[0] as [{ reason: string }];
+    expect(failedCall.reason).not.toContain('example.com');
   });
 
   it('video.asset.errored calls markFailed and emits recording_failed', async () => {

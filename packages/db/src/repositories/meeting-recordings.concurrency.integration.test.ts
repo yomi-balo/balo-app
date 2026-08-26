@@ -16,8 +16,9 @@ import { meetingRecordingsRepository } from './meeting-recordings';
  * (`test/setup-integration.ts`), so two `insertCapturing` calls there can only ever run
  * SEQUENTIALLY — the second sees the first's committed-to-the-transaction row and conflicts
  * on a lookup, not on a race. It proves the OUTCOME is right when the calls are ordered. It
- * cannot touch the question this file answers, which is what happens when they are NOT
- * (memory `reference_db_integration_harness_no_concurrency`).
+ * cannot touch the question this file answers, which is what happens when they are NOT — a
+ * single-connection (`max: 1`) pool inside one open transaction can only ever serialize calls,
+ * never truly race them.
  *
  * WHAT WOULD GO WRONG WITHOUT THE INDEX. `recording-ensure` gates on
  * `findCapturingForMeeting` before inserting. That read-then-write is a classic

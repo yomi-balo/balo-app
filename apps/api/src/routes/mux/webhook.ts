@@ -38,6 +38,7 @@ import { type RateLimitConfig } from '../../lib/rate-limiter.js';
 import { parseMuxWebhookEvent, type MuxWebhookEvent } from '../../services/mux/webhook-events.js';
 import { verifyMuxWebhookSignature } from '../../services/mux/webhook-signature.js';
 import { enqueueRecordingCleanupSource } from '../../jobs/recording-cleanup-source.js';
+import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
 
 const log = createLogger('mux-webhook-route');
 
@@ -144,9 +145,21 @@ async function applyEffect(
       );
       return { transitioned: false };
     }
+    if (event.assetId === null) {
+      // ⚠⚠ FIX ROUND 2 (R3) — CANNOT VERIFY WHICH ASSET THIS EVENT DESCRIBES WITHOUT `data.id`.
+      // `markReady`'s CAS needs it to close the two-asset hazard (see its docblock); a delivery
+      // missing it is refused rather than trusted, exactly like the missing-signed-playback-id
+      // case above.
+      log.error(
+        { recordingId: recording.id, eventId: event.eventId },
+        'Mux video.asset.ready carried no asset id — cannot verify which asset this row should describe, refusing the transition'
+      );
+      return { transitioned: false };
+    }
     const updated = await meetingRecordingsRepository.markReady(
       {
         id: recording.id,
+        muxAssetId: event.assetId,
         muxPlaybackId: event.playbackId,
         durationSeconds: event.durationSeconds,
         at: now,
@@ -154,20 +167,62 @@ async function applyEffect(
       exec
     );
     if (updated === undefined) {
-      log.info(
-        { recordingId: recording.id },
-        'video.asset.ready: no-op (replay, or the row already progressed)'
-      );
+      if (recording.status === 'ingesting' && recording.muxAssetId !== event.assetId) {
+        // ⚠⚠ FIX ROUND 2 (R3) — THE ORPHAN SIGNAL. This row's `mux_asset_id` names a DIFFERENT
+        // asset than the one this `video.asset.ready` event describes — the two-asset hazard
+        // `markReady`'s docblock documents. The asset THIS event names is now an untracked
+        // orphan at Mux; ops needs both ids to reconcile or delete it.
+        log.error(
+          {
+            recordingId: recording.id,
+            rowMuxAssetId: recording.muxAssetId,
+            eventAssetId: event.assetId,
+          },
+          'Mux video.asset.ready resolved to a row whose mux_asset_id names a DIFFERENT asset — an orphaned Mux asset exists'
+        );
+      } else {
+        log.info(
+          { recordingId: recording.id },
+          'video.asset.ready: no-op (replay, or the row already progressed)'
+        );
+      }
     }
     return { transitioned: updated !== undefined };
   }
 
   // video.asset.errored
+  if (
+    event.assetId !== null &&
+    recording.muxAssetId !== null &&
+    recording.muxAssetId !== event.assetId
+  ) {
+    // ⚠⚠ FIX ROUND 2 (R3) — "SAME TREATMENT FOR `video.asset.errored`". The same two-asset
+    // hazard applies here: an orphaned FIRST attempt's asset can report its own error after a
+    // SECOND, successful attempt has already stamped the row's `mux_asset_id`. Failing the row
+    // for an asset it no longer points at would incorrectly fail a segment whose real (second)
+    // asset may still succeed. Refuse rather than call `markFailed`; the marker still commits.
+    log.error(
+      {
+        recordingId: recording.id,
+        rowMuxAssetId: recording.muxAssetId,
+        eventAssetId: event.assetId,
+      },
+      'Mux video.asset.errored named a DIFFERENT asset than this row currently points at — refusing to fail the row for an orphaned asset error'
+    );
+    return { transitioned: false };
+  }
   const updated = await meetingRecordingsRepository.markFailed(
     {
       id: recording.id,
       stage: 'mux_asset',
-      reason: event.errorMessage ?? 'Mux reported an asset error with no message',
+      // ⚠⚠ FIX ROUND 2 (R4) — SANITIZED, matching every other vendor-error sink this PR
+      // writes to (`lib/sanitize-error.ts`'s doctrine). `data.errors.messages` is arbitrary
+      // vendor text; passed through `sanitizedErrorMessage` it degrades to a plain string
+      // (not a `Mux.APIError`), so this reduces to `redactUrls` — the same URL-shaped-substring
+      // backstop `recording-ingest.ts` and `recording-cleanup-source.ts` already apply.
+      reason: sanitizedErrorMessage(
+        event.errorMessage ?? 'Mux reported an asset error with no message'
+      ),
       at: now,
     },
     exec

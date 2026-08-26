@@ -23,10 +23,10 @@ import { pgTable, uuid, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core
  * signature-verified webhook through the admin `db` client.
  *
  * ⚠ THE UNIQUE INDEX IS NON-PARTIAL, AND THAT IS SAFE **BECAUSE** THE TABLE IS APPEND-ONLY —
- * the soft-delete + non-partial-unique recreate footgun (memory
- * `reference_softdelete_nonpartial_unique_recreate`) needs a `deleted_at` to bite, and there
- * is none. Non-partial also keeps the `onConflictDoNothing` arbiter total, so the `42P10`
- * partial-arbiter hazard (memory `reference_pg_partial_index_arbiter_param_42p10`) cannot arise.
+ * the footgun where a soft-delete plus a non-partial unique silently blocks re-creating the
+ * same key needs a `deleted_at` to bite, and there is none. Non-partial also keeps the
+ * `onConflictDoNothing` arbiter total (no predicate to bind a Drizzle `eq()` Param against),
+ * so it cannot fail Postgres's `42P10` "no unique or exclusion constraint" error either.
  */
 export const muxWebhookEvents = pgTable(
   'mux_webhook_events',

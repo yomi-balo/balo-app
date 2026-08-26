@@ -3,8 +3,9 @@
  * they share the Daily REST seam, the meeting lookup, and the retry posture, so BullMQ
  * dispatches on `job.name` rather than splitting into two queues.
  *
- * ⚠⚠ EVERY jobId BELOW IS KEYED ON A WRITE, NEVER ON A TARGET STATE (memory
- * `reference_bullmq_jobid_must_be_per_write_not_per_state`). `getQueue`'s defaults retain
+ * ⚠⚠ EVERY jobId BELOW IS KEYED ON A WRITE, NEVER ON A TARGET STATE — a jobId keyed on the
+ * state being reached, rather than the write that reaches it, silently dedupes against a
+ * RETAINED COMPLETED job the next time that same state recurs. `getQueue`'s defaults retain
  * completed jobs (`removeOnComplete: { count: 100 }`), so a re-`add` under a state-shaped
  * jobId is SILENTLY DROPPED. `ensure`'s dedupe token is the Daily event id (webhook origin) or
  * a per-minute sweep bucket (sweep origin) — never the bare `meetingId` alone, because
@@ -119,6 +120,24 @@ function isUnrecoverableDailyError(error: unknown): boolean {
 }
 
 /**
+ * ⚠⚠ FIX ROUND 2 (R2) — BOUNDS THE `recording.error` → RE-ARM LOOP. `routes/daily/webhook.ts`
+ * re-arms `enqueueRecordingEnsure` UNCONDITIONALLY after every `recording.error`, keyed on the
+ * Daily event id — nothing collapses successive iterations. For a persistently-broken room
+ * (R1's gap: a pre-deploy room whose `enable_recording` was never reconciled onto it, so every
+ * `startRoomRecording` call fails the same way) that loop would otherwise run for the rest of
+ * the meeting, each iteration emitting a `failed` row plus `recording_started` +
+ * `recording_failed` PostHog events — skewing the §11 metric this analytics family exists to
+ * answer. This is where the loop actually stops: `handleEnsure` refuses to arm a FRESH capture
+ * once a meeting has failed to start recording this many times at the Daily stage.
+ *
+ * 3 is chosen deliberately: enough to rule out a single transient blip (a Daily 429, a network
+ * hiccup) without letting a genuinely broken room burn the whole meeting re-emitting analytics
+ * on every webhook delivery. Past this point a re-arm can only reproduce the same failure — it
+ * is an ops problem, not a retry problem.
+ */
+const MAX_DAILY_FAILURES_PER_MEETING = 3;
+
+/**
  * `ensure` — plan §6.1's ladder, every gate a successful no-op.
  */
 async function handleEnsure(job: Job<RecordingEnsureJobData>): Promise<void> {
@@ -187,6 +206,18 @@ async function handleEnsure(job: Job<RecordingEnsureJobData>): Promise<void> {
     log.info(
       { meetingId, recordingId: capturing.id },
       'recording-ensure: already_capturing — no-op'
+    );
+    return;
+  }
+
+  // 5.5. FIX ROUND 2 (R2) — a persistently-broken room must not re-arm for the rest of the
+  // meeting. Counted BEFORE inserting a fresh capturing row, so the threshold is enforced on
+  // the write path itself rather than trusting the webhook's unconditional re-arm to stop.
+  const dailyFailures = await meetingRecordingsRepository.countFailedByStage(meetingId, 'daily');
+  if (dailyFailures >= MAX_DAILY_FAILURES_PER_MEETING) {
+    log.error(
+      { meetingId, dailyFailures },
+      'recording-ensure: this meeting has failed to start a Daily recording repeatedly — refusing to re-arm; this is an ops problem, not a retry problem'
     );
     return;
   }

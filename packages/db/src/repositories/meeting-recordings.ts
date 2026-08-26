@@ -55,6 +55,12 @@ export interface MarkRecordingIngestingInput {
 /** {@link meetingRecordingsRepository.markReady} — T8, from Mux `video.asset.ready`. */
 export interface MarkRecordingReadyInput {
   id: string;
+  /**
+   * ⚠⚠ FIX ROUND 2 (R3) — THE ASSET id THIS `video.asset.ready` EVENT DESCRIBES (Mux's
+   * `data.id`), CAS'd against the row's own `mux_asset_id`. See {@link markReady}'s docblock
+   * for the orphan-asset hazard this closes.
+   */
+  muxAssetId: string;
   muxPlaybackId: string;
   /** ⚠ Mux's duration WINS over Daily's when present — see the column docblock. */
   durationSeconds?: number | null;
@@ -258,6 +264,34 @@ export const meetingRecordingsRepository = {
   },
 
   /**
+   * ⚠⚠ FIX ROUND 2 (R2) — the circuit breaker's ONLY read. Counts a meeting's LIVE `failed`
+   * segments at one `failed_stage`. `recording-capture.ts`'s `handleEnsure` calls this BEFORE
+   * `insertCapturing` and refuses to arm a fresh capture past
+   * `MAX_DAILY_FAILURES_PER_MEETING` — see that constant's docblock for why: the Daily webhook
+   * unconditionally re-arms `enqueueRecordingEnsure` after every `recording.error`, so a room
+   * that refuses to record (R1's gap: `enable_recording` never reconciled onto it) would
+   * otherwise loop for the rest of the meeting. Standalone read → the base `db`.
+   */
+  async countFailedByStage(
+    meetingId: string,
+    stage: string,
+    exec: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await exec
+      .select({ count: sql<number>`cast(count(*) as int)` })
+      .from(meetingRecordings)
+      .where(
+        and(
+          eq(meetingRecordings.meetingId, meetingId),
+          eq(meetingRecordings.status, 'failed'),
+          eq(meetingRecordings.failedStage, stage),
+          isNull(meetingRecordings.deletedAt)
+        )
+      );
+    return row?.count ?? 0;
+  },
+
+  /**
    * A meeting's live segments in START ORDER (D2 — a meeting has 1:n segments, and BAL-440
    * renders them in the order they were captured). Served by
    * `meeting_recording_meeting_idx (meeting_id, created_at) WHERE deleted_at IS NULL`.
@@ -401,7 +435,19 @@ export const meetingRecordingsRepository = {
   /**
    * T8 — Mux `video.asset.ready`. TERMINAL SUCCESS: the segment is playable.
    *
-   * CAS: `id = $ AND deleted_at IS NULL AND status = 'ingesting'`.
+   * CAS: `id = $ AND deleted_at IS NULL AND status = 'ingesting' AND mux_asset_id = $`.
+   *
+   * ⚠⚠ FIX ROUND 2 (R3) — THE `mux_asset_id` TERM CLOSES A TWO-ASSET HAZARD, MIRRORING
+   * `markIngesting`'s ORPHAN GUARD. If a worker dies between `assets.create` and
+   * `markIngesting` committing, the row's `mux_asset_id` stays NULL, so the retry's own no-op
+   * guard (`row.muxAssetId !== null` in `recording-ingest.ts`) does not fire and it creates a
+   * SECOND asset. Both carry the SAME `passthrough` (the row id). Without this term, asset
+   * #1's `video.asset.ready` would resolve by `passthrough` and stamp asset #1's playback id
+   * onto a row whose `mux_asset_id` is asset #2 — a row that now describes TWO DIFFERENT
+   * assets, with asset #2 an untracked orphan at Mux nothing will ever delete. CAS'ing on the
+   * asset id the EVENT is actually about makes that mismatch a refused zero-row update instead
+   * of a silent misattachment; the caller must log both ids at `error` when it detects one
+   * (that is the orphan signal ops needs; see `routes/mux/webhook.ts`).
    *
    * ⚠ MUX'S DURATION WINS, WHEN IT SENDS ONE. On a `ready` row `duration_seconds` describes
    * the PLAYABLE artefact — what BAL-440 renders beside the player — not the pre-transcode
@@ -427,7 +473,8 @@ export const meetingRecordingsRepository = {
         and(
           eq(meetingRecordings.id, input.id),
           isNull(meetingRecordings.deletedAt),
-          eq(meetingRecordings.status, 'ingesting')
+          eq(meetingRecordings.status, 'ingesting'),
+          eq(meetingRecordings.muxAssetId, input.muxAssetId)
         )
       )
       .returning();

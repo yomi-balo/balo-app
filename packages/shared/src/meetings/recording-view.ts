@@ -3,8 +3,8 @@
  * `meeting_recordings` row, and the concealment boundary it is projected THROUGH.
  *
  * PURE and dependency-free (no `@balo/db`, no I/O) — the `@balo/shared/meetings` rule,
- * restated: `apps/web` must be able to reach this without pulling the postgres driver into
- * a client bundle (memory `reference_balo_db_client_bundle_footgun`).
+ * restated: `apps/web` must be able to reach this without pulling the `postgres` driver into
+ * a client bundle, where it fails `next build` (it cannot resolve Node builtins like `tls`).
  *
  * ⚠ RESTATED, NOT IMPORTED. `@balo/shared` must never value-import `@balo/db` — so
  * {@link MeetingRecordingStatus} below is a SECOND definition of the same five-label union

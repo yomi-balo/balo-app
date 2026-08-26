@@ -44,8 +44,15 @@ export const MIN_IDLE_TIMEOUT_SECONDS = 60;
  * the row exists.
  *
  * ⚠ SENDS NO OTHER KNOB — no `layout`, no bucket config, no `maxDuration`. `rooms.ts`'s "do
- * not set them speculatively" rule applies here too; `maxDuration`'s 15000s (~4h10m) default
- * comfortably exceeds any consultation.
+ * not set them speculatively" rule applies here too.
+ *
+ * ⚠⚠ FIX ROUND 2 (R5) — `maxDuration`'s DEFAULT IS UNVERIFIABLE AS DAILY DOCUMENTS IT, AND
+ * THAT IS STATED HONESTLY RATHER THAN PICKING A SIDE. Daily's own reference page reads
+ * "`15000` seconds (3 hours)" — but 15000 seconds is 4h10m, not 3h (10800s); the number and
+ * the gloss disagree, and re-verification on 2026-08-26 confirmed the page is still
+ * self-contradictory. Whichever reading is true, it comfortably exceeds any consultation, we
+ * do not set it, and the re-arm (`routes/daily/webhook.ts`'s post-commit ensure) covers a
+ * force-stop at either bound the same way.
  *
  * Rate-limit tier: ~1/s (5 per 5s) — much tighter than the 20/s most Daily calls get. There is
  * no retry loop inside `dailyRequest` by design; BullMQ's backoff on `recording-ensure` is the

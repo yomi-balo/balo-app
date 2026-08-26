@@ -52,11 +52,19 @@
  * `services/daily/recordings.ts` for the rest of the recording pipeline and
  * `.claude/skills/mux/SKILL.md` for where the captured source goes.
  *
- * ⚠ ROOMS PROVISIONED BEFORE BAL-473 SHIPPED NEED RECONCILING, NOT JUST NEW ROOMS. Every room
- * that already exists (the already-exists fallback below) was created with `enable_recording`
- * UNSET, and would otherwise silently never record. `reconcileRoomRecording` closes that gap
- * on the already-exists path — see its own docblock for why a failed reconcile is a `log.warn`
- * and not a thrown error.
+ * ⚠⚠ FIX ROUND 2 (R1) — `reconcileRoomRecording` DOES NOT CLOSE THE PRE-DEPLOY GAP, AND AN
+ * EARLIER VERSION OF THIS COMMENT CLAIMED IT DID. `provisionMeeting`
+ * (`services/meetings/provision-meeting.ts`) short-circuits with ZERO VENDOR CALLS the moment
+ * a meeting's venue is already stamped (`dailyRoomName`/`joinUrl` both non-null) — true of
+ * every meeting booked before this shipped. So `createOrFindRoom`, and therefore
+ * `reconcileRoomRecording`, is NEVER REACHED for that population; the already-exists fallback
+ * below only runs when `provisionMeeting` is called for a meeting NOT yet stamped and the room
+ * name is already taken at Daily — a concurrent duplicate provision, or BAL-400's repair path
+ * re-provisioning a meeting whose earlier venue write failed. What actually covers the
+ * pre-deploy population is `enable_recording` set at the DAILY DOMAIN LEVEL (Daily supports an
+ * always-on default at that scope) — the right home for an always-on platform guarantee (D5),
+ * since a per-room property is inherently a per-room preference, never a platform one.
+ * `reconcileRoomRecording` still earns its keep on the paths it DOES reach; it stays.
  */
 import { z } from 'zod';
 import { createLogger } from '@balo/shared/logging';
@@ -136,8 +144,19 @@ interface VendorRoom {
 /**
  * BAL-473 (OD-3) — reconcile `enable_recording` onto a room that ALREADY EXISTS (the
  * already-exists fallback below). `createOrFindRoom`'s `GET` fallback only ADOPTS a
- * pre-existing room; it reconciles nothing. Without this call, every room provisioned
- * before BAL-473 shipped keeps `enable_recording` unset and silently never records.
+ * pre-existing room; it reconciles nothing.
+ *
+ * ⚠⚠ FIX ROUND 2 (R1) — THIS DOES NOT REACH EVERY ROOM PROVISIONED BEFORE BAL-473 SHIPPED, AND
+ * SAYING SO HERE WOULD BE A LIE. `provisionMeeting`'s replay guard
+ * (`services/meetings/provision-meeting.ts`) short-circuits with zero vendor calls whenever a
+ * meeting's venue is already stamped — true of every meeting booked before this shipped — so
+ * `createOrFindRoom` is never called for that meeting and this function never runs for it. It
+ * only runs when `provisionMeeting` is called for a meeting whose venue is NOT yet stamped and
+ * the room name is already taken at Daily: a concurrent duplicate provision, or BAL-400's
+ * repair path re-provisioning a meeting whose earlier venue write failed. Domain-level
+ * `enable_recording` (set once, at the Daily domain, outside this codebase) is what actually
+ * covers the pre-deploy population — a platform-wide always-on default is what D5 asks for,
+ * and a per-room property can only ever be a per-room preference.
  *
  * `POST /rooms/:name` OVERRIDES an existing room's config without recreating it — the
  * daily-co skill's "Update room config" scenario.

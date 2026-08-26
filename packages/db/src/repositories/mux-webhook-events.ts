@@ -75,8 +75,9 @@ export const muxWebhookEventsRepository = {
 
   /**
    * Insert the received marker for an event. `onConflictDoNothing` on the NON-PARTIAL unique
-   * `event_id` — so no arbiter predicate is needed and the `42P10` partial-arbiter hazard
-   * (memory `reference_pg_partial_index_arbiter_param_42p10`) does not arise here at all.
+   * `event_id` — so no arbiter predicate is needed, and the hazard where a Drizzle `eq()`
+   * Param in a PARTIAL index's arbiter predicate fails Postgres's `42P10` does not arise here
+   * at all (there is no predicate to bind against).
    *
    * Returns the inserted row on FIRST sight and `undefined` when the id was already recorded
    * — a concurrent or replayed delivery. `undefined` is the caller's signal to abandon the

@@ -7,6 +7,7 @@ const listOpen = vi.hoisted(() => vi.fn());
 const findCapturingForMeeting = vi.hoisted(() => vi.fn());
 const insertCapturing = vi.hoisted(() => vi.fn());
 const markFailed = vi.hoisted(() => vi.fn());
+const countFailedByStage = vi.hoisted(() => vi.fn());
 const startRoomRecording = vi.hoisted(() => vi.fn());
 const stopRoomRecording = vi.hoisted(() => vi.fn());
 const trackServer = vi.hoisted(() => vi.fn());
@@ -51,7 +52,12 @@ vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecover
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById },
   meetingPresenceRepository: { listOpen },
-  meetingRecordingsRepository: { findCapturingForMeeting, insertCapturing, markFailed },
+  meetingRecordingsRepository: {
+    findCapturingForMeeting,
+    insertCapturing,
+    markFailed,
+    countFailedByStage,
+  },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer,
@@ -124,6 +130,8 @@ describe('recording-capture job — enqueue', () => {
 describe('recording-capture job — ensure handler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Below the R2 threshold by default — individual tests override to exercise the breaker.
+    countFailedByStage.mockResolvedValue(0);
     startRecordingCaptureWorker();
   });
 
@@ -232,6 +240,44 @@ describe('recording-capture job — ensure handler', () => {
       expect.objectContaining({ meetingId: MEETING_ID, recordingId: 'rec-normal' }),
       expect.stringContaining('already_capturing')
     );
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (R2) — THE CIRCUIT BREAKER. `routes/daily/webhook.ts` re-arms
+   * `enqueueRecordingEnsure` unconditionally after every `recording.error`; for a
+   * persistently-broken room that would otherwise re-attempt (and re-fail) for the rest of
+   * the meeting. At the threshold, `handleEnsure` must refuse to insert a fresh capturing row
+   * or call Daily at all.
+   */
+  it('⚠⚠ AT the failure threshold: refuses to re-arm, logs at error, and calls Daily nothing', async () => {
+    findById.mockResolvedValue(liveMeeting());
+    listOpen.mockResolvedValue([{ id: 'p1' }]);
+    findCapturingForMeeting.mockResolvedValue(undefined);
+    countFailedByStage.mockResolvedValue(3);
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'rejoin' });
+
+    expect(countFailedByStage).toHaveBeenCalledWith(MEETING_ID, 'daily');
+    expect(insertCapturing).not.toHaveBeenCalled();
+    expect(startRoomRecording).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, dailyFailures: 3 }),
+      expect.stringContaining('repeatedly')
+    );
+  });
+
+  it('BELOW the failure threshold: the re-arm still starts a fresh capture', async () => {
+    findById.mockResolvedValue(liveMeeting());
+    listOpen.mockResolvedValue([{ id: 'p1' }]);
+    findCapturingForMeeting.mockResolvedValue(undefined);
+    countFailedByStage.mockResolvedValue(2);
+    insertCapturing.mockResolvedValue(ROW);
+    startRoomRecording.mockResolvedValue(undefined);
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'rejoin' });
+
+    expect(insertCapturing).toHaveBeenCalled();
+    expect(startRoomRecording).toHaveBeenCalledWith(ROOM, { instanceId: ROW.id });
   });
 
   it('⚠ a concurrent duplicate loses the unique index and does nothing', async () => {

@@ -63,6 +63,17 @@ import { timestamps, softDelete } from './helpers';
  * as the first residual. There is still no automatic reaper; this only stops it from being
  * silent.
  *
+ * ⚠⚠ A THIRD RESIDUAL (fix round 2, R3): a `video.asset.ready` that arrives while the row is
+ * STILL `source_ready` — a fast Mux transcode racing a slow `markIngesting` commit. `markReady`'s
+ * CAS requires `status = 'ingesting'`, so this delivery fails it and no-ops; the row's own
+ * `mux_webhook_events` marker still commits (Mux does not retry a `200`), so when
+ * `markIngesting` DOES finally commit moments later, the ready event that would have advanced
+ * it has already been consumed. The row WEDGES AT `ingesting` FOREVER — the same failure mode
+ * `markStarted`'s T5 residual documents on the Daily side, on the Mux side instead. Blast
+ * radius is one segment, and there is deliberately no reaper for the same reason as the other
+ * two: a retention/reaper sweep is out of scope and needs its own ruling. The manual
+ * `softDelete` escape hatch applies here too.
+ *
  * ── RETENTION: THE DAILY SOURCE GOES, THE MUX ASSET STAYS (D4) ────────────────────────────
  * `source_deleted_at` records the post-`ready` Daily delete. It is NEVER stamped before
  * `ready`: the Daily copy is the ONLY thing a failed ingest can retry from. Mux asset
@@ -74,7 +85,7 @@ import { timestamps, softDelete } from './helpers';
  * columns. The client-safe projection is `toMeetingRecordingView` in
  * `@balo/shared/meetings`, and its test asserts none of them survive the boundary.
  * ⚠ Never hydrate this table through a relational `with:` on a client-bound read — `with:`
- * returns FULL rows (memory `reference_drizzle_with_hydration_leaks_secrets`).
+ * returns FULL rows, vendor/ops columns included, with no way to project them away.
  *
  * NO RLS — matching `meetings`, `meeting_contexts`, `meeting_guests`, `meeting_files`,
  * `transcripts`, `credit_sessions` and `daily_webhook_events`: Balo auths with WorkOS +
@@ -190,9 +201,10 @@ export const meetingRecordings = pgTable(
      * NO THREE-VALUED-LOGIC HOLE: `IS NOT NULL` is total, and `status` is NOT NULL compared
      * to a literal ⇒ never NULL. SAFE TO NAME `'recording'` IN MIGRATION 0075: the type is
      * created by a STANDALONE `CREATE TYPE` in that same migration and `'recording'` is an
-     * ORIGINAL label, so it commits atomically with the type (the
-     * `meeting_file_party_two_sided` precedent; memory
-     * `reference_enum_default_same_tx_migration_hazard` does NOT apply).
+     * ORIGINAL label, so it commits atomically with the type (the `meeting_file_party_two_sided`
+     * precedent). The hazard where a DEFAULT set to a just-added enum value fails from scratch
+     * because `ALTER TYPE … ADD VALUE` cannot commit in the same transaction as its use does
+     * NOT apply here — there is no such default, and the label is original to the type.
      */
     check(
       'meeting_recording_capture_slot',
@@ -224,10 +236,11 @@ export type MeetingRecordingStatus = (typeof recordingStatusEnum.enumValues)[num
 // ── Type-agreement pin (BAL-473 plan §3.2) ────────────────────────────────
 //
 // ⚠ TWO DEFINITIONS OF ONE VOCABULARY, PINNED TO EACH OTHER AT COMPILE TIME. `@balo/shared`
-// must not import `@balo/db` (memory `reference_balo_db_client_bundle_footgun`), so the
-// client-safe view in `packages/shared/src/meetings/recording-view.ts` RESTATES this union
-// rather than importing it. This assertion makes a drift between the two a TYPE ERROR
-// rather than a runtime surprise. `never` here is a build failure.
+// must not import `@balo/db` — a client component that value-imports `@balo/db` drags the
+// `postgres` driver into the bundle and fails `next build` (it cannot resolve Node builtins
+// like `tls`) — so the client-safe view in `packages/shared/src/meetings/recording-view.ts`
+// RESTATES this union rather than importing it. This assertion makes a drift between the two
+// a TYPE ERROR rather than a runtime surprise. `never` here is a build failure.
 import type { MeetingRecordingStatus as SharedMeetingRecordingStatus } from '@balo/shared/meetings';
 
 type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;

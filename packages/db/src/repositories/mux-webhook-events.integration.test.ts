@@ -130,8 +130,7 @@ describe('muxWebhookEventsRepository.insertReceived', () => {
 
     // ⚠ HONEST ABOUT WHAT THIS DOES AND DOES NOT PROVE. The harness runs every test inside ONE
     // transaction on a `max: 1` pool, so a genuine interleaving is INEXPRESSIBLE here — these
-    // two calls serialize on the single connection (memory
-    // `reference_db_integration_harness_no_concurrency`). What it pins is the OUTCOME the
+    // two calls only ever serialize on the single connection. What it pins is the OUTCOME the
     // unique index must produce for two deliveries of one event id — exactly one row, exactly
     // one non-undefined return — which is the property the webhook branches on. The real
     // interleaving is Postgres's to serialise: the second INSERT would block on the unique
@@ -284,10 +283,10 @@ describe('mux_webhook_events — the append-only posture', () => {
 
   it('the unique on event_id is NON-PARTIAL — no soft-delete can ever vacate it', async () => {
     // The safety argument for the non-partial unique is that nothing can soft-delete a row
-    // here. There is no `deleted_at` column to stamp, so the recreate footgun (memory
-    // `reference_softdelete_nonpartial_unique_recreate`) has no way in. Non-partial also keeps
-    // the `onConflictDoNothing` arbiter TOTAL, so the `42P10` partial-arbiter hazard cannot
-    // arise. Pinned by asserting the conflict survives full processing.
+    // here. There is no `deleted_at` column to stamp, so the footgun where a soft-delete plus
+    // a non-partial unique silently blocks re-creating the same key has no way in. Non-partial
+    // also keeps the `onConflictDoNothing` arbiter TOTAL, so the `42P10` partial-arbiter hazard
+    // cannot arise. Pinned by asserting the conflict survives full processing.
     const id = eventId();
     await muxWebhookEventsRepository.insertReceived({ eventId: id, type: 'video.asset.ready' }, db);
     await muxWebhookEventsRepository.markProcessed(id, db);
