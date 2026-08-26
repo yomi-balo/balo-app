@@ -31,6 +31,10 @@ function fakeLog(): FastifyBaseLogger {
 
 const BASE_INPUT = {
   meetingId: 'meeting-1',
+  // ⚠ LOGGING ONLY. Nothing in the module under test may branch on it — the assertions in
+  // this file are what say so: the title, the subject line and the write target are all
+  // unchanged by it, and only the two log lines name it.
+  contextType: 'case' as const,
   expertProfileId: 'expert-1',
   clientCompanyName: 'Northwind Industrial',
   caseTitle: 'Salesforce CPQ rollout',
@@ -130,7 +134,21 @@ describe('projectBookingToExpertCalendar (BAL-400 D2)', () => {
     await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
     expect(vi.mocked(log.error)).toHaveBeenCalledTimes(1);
     const [[meta]] = vi.mocked(log.error).mock.calls;
-    expect(meta).toMatchObject({ meetingId: 'meeting-1', expertProfileId: 'expert-1' });
+    expect(meta).toMatchObject({
+      meetingId: 'meeting-1',
+      party: 'expert',
+      contextType: 'case',
+      expertProfileId: 'expert-1',
+    });
+    // The failure line is the one an operator reads in Sentry — it must still carry the cause.
+    expect(Object.keys(meta as object).sort()).toEqual([
+      'contextType',
+      'error',
+      'expertProfileId',
+      'meetingId',
+      'party',
+      'stack',
+    ]);
   });
 });
 
@@ -191,10 +209,16 @@ describe('projectBookingToExpertCalendar — the expert-party ICS fallback (BAL-
 
     expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
     const [[meta, message]] = vi.mocked(log.info).mock.calls;
+    // ⚠ AN EXACT KEY SET, NOT A PARTIAL MATCH. Every key is an id or a closed enum
+    // (`party`, `contextType`, `deliveryMode`) plus a COUNT — a provider name, a calendar id
+    // or anything derived from an address fails right here rather than in a log review.
     expect(meta).toEqual({
       meetingId: 'meeting-1',
+      party: 'expert',
+      contextType: 'case',
       expertProfileId: 'expert-1',
       connectionCount: 1,
+      deliveryMode: 'ics',
     });
     expect(message).toContain('BAL-475');
   });

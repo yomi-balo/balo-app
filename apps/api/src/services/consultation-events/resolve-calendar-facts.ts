@@ -39,6 +39,20 @@ export interface ExpertCalendarFacts {
 }
 
 /**
+ * WHICH context to resolve, plus the meeting it was booked for.
+ *
+ * ⚠ `meetingId` IS FOR LOGGING AND NOTHING ELSE. It is read by no query and reaches no
+ * decision here — every read below is keyed on `contextId`. It exists because a SKIPPED
+ * projection used to be unjoinable to a meeting at all: the two skip lines and the error line
+ * named only the context, so "which bookings never reached a calendar?" had no answer in Axiom.
+ */
+export interface ExpertCalendarFactsSubject {
+  readonly meetingId: string;
+  readonly contextType: CalendarProjectedContextType;
+  readonly contextId: string;
+}
+
+/**
  * A title that is absent or blank reads as a bug on a calendar — fall back to the label.
  * Moved VERBATIM from `provision-meeting.ts`, which is why `request_interaction`'s shipped
  * blank-title behaviour is byte-identical after BAL-433.
@@ -96,10 +110,10 @@ async function resolveSubject(
  * it need to).
  */
 export async function resolveExpertCalendarFacts(
-  contextType: CalendarProjectedContextType,
-  contextId: string,
+  subject: ExpertCalendarFactsSubject,
   log: FastifyBaseLogger
 ): Promise<ExpertCalendarFacts | undefined> {
+  const { meetingId, contextType, contextId } = subject;
   const descriptor = CALENDAR_CONTEXT_REGISTRY[contextType];
 
   try {
@@ -129,7 +143,7 @@ export async function resolveExpertCalendarFacts(
     const owner = await resolveContextOwner({ contextType, contextId }, reads);
     if (owner.outcome !== 'resolved') {
       log.info(
-        { contextType, contextId },
+        { meetingId, contextType, contextId },
         'No live context for this booking — skipping the calendar projection'
       );
       return undefined;
@@ -138,7 +152,7 @@ export async function resolveExpertCalendarFacts(
     const company = await companiesRepository.findById(owner.owner.companyId);
     if (company === undefined) {
       log.info(
-        { contextType, contextId },
+        { meetingId, contextType, contextId },
         'No live company for this context — skipping the calendar projection'
       );
       return undefined;
@@ -157,6 +171,7 @@ export async function resolveExpertCalendarFacts(
     // ⚠ NO TITLE AND NO COMPANY NAME IN THE LOG — the ids identify the rows.
     log.error(
       {
+        meetingId,
         contextType,
         contextId,
         error: error instanceof Error ? error.message : String(error),

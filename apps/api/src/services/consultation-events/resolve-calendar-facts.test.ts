@@ -27,7 +27,11 @@ vi.mock('@balo/db', () => ({
 // sanctioned "which party owns this context" rule, including its axis discipline (the EXPERT
 // from the relationship, the COMPANY from the request). A stubbed resolver would let the two
 // be swapped and every assertion below would still pass.
-import { resolveExpertCalendarFacts, titleOr } from './resolve-calendar-facts.js';
+import {
+  resolveExpertCalendarFacts,
+  titleOr,
+  type ExpertCalendarFactsSubject,
+} from './resolve-calendar-facts.js';
 
 function fakeLog(): FastifyBaseLogger {
   return {
@@ -38,10 +42,25 @@ function fakeLog(): FastifyBaseLogger {
   } as unknown as FastifyBaseLogger;
 }
 
+const MEETING_ID = 'meeting-1';
 const ENGAGEMENT_ID = 'engagement-1';
 const REQUEST_ID = 'request-1';
 const RELATIONSHIP_ID = 'relationship-1';
 const COMPANY = { id: 'company-1', name: 'Northwind Industrial' };
+
+/**
+ * The subject one booking resolves facts for.
+ *
+ * ⚠ `meetingId` IS LOGGING-ONLY CORRELATION and is deliberately CONSTANT across every case
+ * below — no assertion in this file may come to depend on it, because nothing in the resolver
+ * reads it. The lines that DO carry it are pinned in the not-found and never-throws suites.
+ */
+function subject(
+  contextType: ExpertCalendarFactsSubject['contextType'],
+  contextId: string
+): ExpertCalendarFactsSubject {
+  return { meetingId: MEETING_ID, contextType, contextId };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -75,7 +94,7 @@ describe('resolveExpertCalendarFacts — one arm per bookable context', () => {
     wireEngagement();
     mockFindCaseByEngagementId.mockResolvedValue({ title: 'CPQ rollout' });
 
-    const facts = await resolveExpertCalendarFacts('case', ENGAGEMENT_ID, fakeLog());
+    const facts = await resolveExpertCalendarFacts(subject('case', ENGAGEMENT_ID), fakeLog());
 
     expect(facts).toEqual({
       clientCompanyName: 'Northwind Industrial',
@@ -93,7 +112,10 @@ describe('resolveExpertCalendarFacts — one arm per bookable context', () => {
   it('project_discovery → the request title, captured from the injected read', async () => {
     wireRequest();
 
-    const facts = await resolveExpertCalendarFacts('project_discovery', REQUEST_ID, fakeLog());
+    const facts = await resolveExpertCalendarFacts(
+      subject('project_discovery', REQUEST_ID),
+      fakeLog()
+    );
 
     expect(facts).toEqual({
       clientCompanyName: 'Northwind Industrial',
@@ -112,8 +134,7 @@ describe('resolveExpertCalendarFacts — one arm per bookable context', () => {
     wireRequest();
 
     const facts = await resolveExpertCalendarFacts(
-      'request_interaction',
-      RELATIONSHIP_ID,
+      subject('request_interaction', RELATIONSHIP_ID),
       fakeLog()
     );
 
@@ -140,7 +161,7 @@ describe('resolveExpertCalendarFacts — one arm per bookable context', () => {
     });
     wireRequest();
 
-    await resolveExpertCalendarFacts('request_interaction', RELATIONSHIP_ID, fakeLog());
+    await resolveExpertCalendarFacts(subject('request_interaction', RELATIONSHIP_ID), fakeLog());
 
     expect(mockFindProjectRequestById).toHaveBeenCalledTimes(1);
   });
@@ -158,7 +179,10 @@ describe('resolveExpertCalendarFacts — one arm per bookable context', () => {
     async (contextType, label) => {
       wireEngagement();
 
-      const facts = await resolveExpertCalendarFacts(contextType, ENGAGEMENT_ID, fakeLog());
+      const facts = await resolveExpertCalendarFacts(
+        subject(contextType, ENGAGEMENT_ID),
+        fakeLog()
+      );
 
       expect(facts).toEqual({
         clientCompanyName: 'Northwind Industrial',
@@ -176,7 +200,7 @@ describe('resolveExpertCalendarFacts — blank titles never reach a calendar', (
     wireEngagement();
     mockFindCaseByEngagementId.mockResolvedValue({ title });
 
-    const facts = await resolveExpertCalendarFacts('case', ENGAGEMENT_ID, fakeLog());
+    const facts = await resolveExpertCalendarFacts(subject('case', ENGAGEMENT_ID), fakeLog());
 
     expect(facts?.title).toBe('Consultation');
   });
@@ -184,7 +208,10 @@ describe('resolveExpertCalendarFacts — blank titles never reach a calendar', (
   it('a blank REQUEST title degrades to the label — BAL-283 behaviour, byte for byte', async () => {
     wireRequest('   ');
 
-    const facts = await resolveExpertCalendarFacts('project_discovery', REQUEST_ID, fakeLog());
+    const facts = await resolveExpertCalendarFacts(
+      subject('project_discovery', REQUEST_ID),
+      fakeLog()
+    );
 
     expect(facts?.title).toBe('Discovery call');
   });
@@ -205,8 +232,7 @@ describe('resolveExpertCalendarFacts — blank titles never reach a calendar', (
     wireRequest('   ');
 
     const facts = await resolveExpertCalendarFacts(
-      'request_interaction',
-      RELATIONSHIP_ID,
+      subject('request_interaction', RELATIONSHIP_ID),
       fakeLog()
     );
 
@@ -220,7 +246,7 @@ describe('resolveExpertCalendarFacts — blank titles never reach a calendar', (
     wireEngagement();
     mockFindCaseByEngagementId.mockResolvedValue(undefined);
 
-    const facts = await resolveExpertCalendarFacts('case', ENGAGEMENT_ID, fakeLog());
+    const facts = await resolveExpertCalendarFacts(subject('case', ENGAGEMENT_ID), fakeLog());
 
     expect(facts?.title).toBe('Consultation');
   });
@@ -232,11 +258,11 @@ describe('resolveExpertCalendarFacts — the not-found paths', () => {
     const log = fakeLog();
 
     await expect(
-      resolveExpertCalendarFacts('project_kickoff', ENGAGEMENT_ID, log)
+      resolveExpertCalendarFacts(subject('project_kickoff', ENGAGEMENT_ID), log)
     ).resolves.toBeUndefined();
 
     expect(vi.mocked(log.info)).toHaveBeenCalledWith(
-      { contextType: 'project_kickoff', contextId: ENGAGEMENT_ID },
+      { meetingId: MEETING_ID, contextType: 'project_kickoff', contextId: ENGAGEMENT_ID },
       'No live context for this booking — skipping the calendar projection'
     );
     expect(vi.mocked(log.error)).not.toHaveBeenCalled();
@@ -255,7 +281,7 @@ describe('resolveExpertCalendarFacts — the not-found paths', () => {
     breakRow();
 
     await expect(
-      resolveExpertCalendarFacts('request_interaction', RELATIONSHIP_ID, fakeLog())
+      resolveExpertCalendarFacts(subject('request_interaction', RELATIONSHIP_ID), fakeLog())
     ).resolves.toBeUndefined();
   });
 
@@ -265,11 +291,11 @@ describe('resolveExpertCalendarFacts — the not-found paths', () => {
     const log = fakeLog();
 
     await expect(
-      resolveExpertCalendarFacts('package_session', ENGAGEMENT_ID, log)
+      resolveExpertCalendarFacts(subject('package_session', ENGAGEMENT_ID), log)
     ).resolves.toBeUndefined();
 
     expect(vi.mocked(log.info)).toHaveBeenCalledWith(
-      { contextType: 'package_session', contextId: ENGAGEMENT_ID },
+      { meetingId: MEETING_ID, contextType: 'package_session', contextId: ENGAGEMENT_ID },
       'No live company for this context — skipping the calendar projection'
     );
   });
@@ -291,26 +317,36 @@ describe('resolveExpertCalendarFacts — it NEVER throws', () => {
     breakRead();
     const log = fakeLog();
 
-    await expect(resolveExpertCalendarFacts('case', ENGAGEMENT_ID, log)).resolves.toBeUndefined();
+    await expect(
+      resolveExpertCalendarFacts(subject('case', ENGAGEMENT_ID), log)
+    ).resolves.toBeUndefined();
 
     expect(vi.mocked(log.error)).toHaveBeenCalledTimes(1);
     const [[meta, message]] = vi.mocked(log.error).mock.calls;
-    expect(meta).toMatchObject({ contextType: 'case', contextId: ENGAGEMENT_ID });
+    expect(meta).toMatchObject({
+      meetingId: MEETING_ID,
+      contextType: 'case',
+      contextId: ENGAGEMENT_ID,
+    });
     expect(message).toBe('Failed to resolve display facts for the expert calendar projection');
   });
 
   it('⚠ the error log carries the ids and the stack — never a title or a company name', async () => {
+    // ⚠ AN EXACT KEY SET, AND `meetingId` IS THE POINT OF IT. Without that key a failed
+    // resolution names a context and no meeting, so it cannot be joined to the booking it
+    // silently withheld a calendar entry from.
     wireEngagement();
     mockFindCaseByEngagementId.mockRejectedValue(new Error('db unavailable'));
     const log = fakeLog();
 
-    await resolveExpertCalendarFacts('case', ENGAGEMENT_ID, log);
+    await resolveExpertCalendarFacts(subject('case', ENGAGEMENT_ID), log);
 
     const [[meta]] = vi.mocked(log.error).mock.calls;
     expect(Object.keys(meta as object).sort()).toEqual([
       'contextId',
       'contextType',
       'error',
+      'meetingId',
       'stack',
     ]);
   });

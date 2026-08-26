@@ -5,6 +5,7 @@ import {
   type CalendarCredentialStatus,
 } from '@balo/db';
 import type { FastifyBaseLogger } from 'fastify';
+import type { CalendarProjectedContextType } from './calendar-context-registry.js';
 import { buildConsultationEvent } from './event-mapper.js';
 import { writeConsultationEvent } from './write-consultation-event.js';
 
@@ -41,6 +42,14 @@ export type ExpertCalendarDelivery = 'provider_event' | 'ics' | 'skipped' | 'fai
 
 export interface ProjectBookingToCalendarInput {
   readonly meetingId: string;
+  /**
+   * ⚠ LOGGING ONLY, AND IT MUST STAY THAT WAY. Nothing in this module may branch on it: the
+   * registry has already turned the context into `eventLabel` and `caseTitle` upstream, and a
+   * second per-context decision down here is exactly the drift BAL-433 collapsed the resolvers
+   * to remove. It is here because a projection outcome that cannot be attributed to a KIND of
+   * booking is unqueryable in Axiom.
+   */
+  readonly contextType: CalendarProjectedContextType;
   readonly expertProfileId: string;
   /** ADR-1044 §4: the expert's event title names the client COMPANY. */
   readonly clientCompanyName: string;
@@ -133,8 +142,11 @@ export async function projectBookingToExpertCalendar(
       log.info(
         {
           meetingId: input.meetingId,
+          party: 'expert',
+          contextType: input.contextType,
           expertProfileId: input.expertProfileId,
           connectionCount: connections.length,
+          deliveryMode: 'ics',
         },
         'No writable calendar connection — recorded the expert-party ICS fallback (BAL-475 delivers)'
       );
@@ -165,6 +177,8 @@ export async function projectBookingToExpertCalendar(
     log.error(
       {
         meetingId: input.meetingId,
+        party: 'expert',
+        contextType: input.contextType,
         expertProfileId: input.expertProfileId,
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,

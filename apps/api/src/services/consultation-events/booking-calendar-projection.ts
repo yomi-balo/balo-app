@@ -33,12 +33,15 @@ const WEB_BASE_URL = process.env.APP_URL ?? 'https://balo.expert';
 export type { ExpertCalendarDelivery };
 
 /**
- * Project ONE committed booking to the expert's calendar, and report what it became.
+ * The projection itself — every branch that decides WHAT this booking's expert-party calendar
+ * entry becomes, and nothing else.
  *
- * The return value is for ANALYTICS ONLY (`meeting_calendar_projected`) — no caller branches
- * on it, and none should: every outcome, including `'failed'`, leaves the booking standing.
+ * ⚠ EXTRACTED PURELY SO THE OUTCOME IS LOGGED IN EXACTLY ONE PLACE. Four scattered returns
+ * meant four chances to forget the log line, and the most important outcome —
+ * `'provider_event'`, an event actually written to a real calendar — was the one that had no
+ * line at all. The branches, and the value each of them returns, are UNCHANGED.
  */
-export async function projectBookingCalendarEvent(
+async function runExpertCalendarProjection(
   created: CreatedMeeting,
   contextType: CalendarProjectedContextType,
   contextId: string,
@@ -57,7 +60,10 @@ export async function projectBookingCalendarEvent(
     return 'skipped';
   }
 
-  const facts = await resolveExpertCalendarFacts(contextType, contextId, log);
+  const facts = await resolveExpertCalendarFacts(
+    { meetingId: created.meeting.id, contextType, contextId },
+    log
+  );
   if (facts === undefined) {
     return 'skipped';
   }
@@ -65,6 +71,10 @@ export async function projectBookingCalendarEvent(
   return projectBookingToExpertCalendar(
     {
       meetingId: created.meeting.id,
+      // ⚠ CARRIED FOR LOGGING ONLY. It selects nothing and titles nothing down there — the
+      // registry already resolved both — but without it the writer's own two lines cannot say
+      // WHICH kind of booking reached a calendar.
+      contextType,
       // ⚠ `created.expertProfileId`, NEVER `resolveContextOwner`'s. This is the answer the
       // consultation projection committed the booking on, and the one that actually blocks
       // availability; two answers to "whose calendar" is exactly the drift this repo forbids.
@@ -82,4 +92,41 @@ export async function projectBookingCalendarEvent(
     },
     log
   );
+}
+
+/**
+ * Project ONE committed booking to the expert's calendar, and report what it became.
+ *
+ * The return value is for ANALYTICS ONLY (`meeting_calendar_projected`) — no caller branches
+ * on it, and none should: every outcome, including `'failed'`, leaves the booking standing.
+ */
+export async function projectBookingCalendarEvent(
+  created: CreatedMeeting,
+  contextType: CalendarProjectedContextType,
+  contextId: string,
+  log: FastifyBaseLogger
+): Promise<ExpertCalendarDelivery> {
+  const deliveryMode = await runExpertCalendarProjection(created, contextType, contextId, log);
+
+  /**
+   * ⚠⚠ THE ONE LINE AXIOM QUERIES (BAL-433 AC). Emitted on EVERY outcome —
+   * `'provider_event'`, `'ics'`, `'skipped'`, `'failed'` — so "did this booking reach a
+   * calendar?" is one query over one key set, never an inference from which lines are absent.
+   * The inner modules' own lines explain WHY an outcome happened; this one states THAT it did.
+   *
+   * ⚠ IDS AND CLOSED ENUMS ONLY. `party`, `contextType` and `deliveryMode` are closed
+   * vocabularies and `meetingId`/`contextId` are uuids — no company name, no title, no expert
+   * name, no provider, no calendar id, nothing derived from an address (ADR-1044 §4). That is
+   * what makes an operational log of every booking safe to keep.
+   *
+   * ⚠ `sequence` IS DELIBERATELY ABSENT, NOT FORGOTTEN. There is no sequence column in Slice 1
+   * — `meeting_calendar_events` gains it with BAL-475's amend/cancel ordering — and a
+   * fabricated placeholder would be worse than the gap. It joins this key set there.
+   */
+  log.info(
+    { meetingId: created.meeting.id, party: 'expert', contextType, contextId, deliveryMode },
+    'Meeting calendar projection outcome'
+  );
+
+  return deliveryMode;
 }

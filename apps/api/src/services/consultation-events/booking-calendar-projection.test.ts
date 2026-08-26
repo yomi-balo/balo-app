@@ -69,11 +69,16 @@ describe('projectBookingCalendarEvent — the happy path', () => {
       projectBookingCalendarEvent(createdMeeting(), 'case', CONTEXT_ID, log)
     ).resolves.toBe('provider_event');
 
-    expect(mockResolveFacts).toHaveBeenCalledWith('case', CONTEXT_ID, log);
+    expect(mockResolveFacts).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, contextType: 'case', contextId: CONTEXT_ID },
+      log
+    );
     expect(mockProjectToExpertCalendar).toHaveBeenCalledTimes(1);
     const [[input]] = mockProjectToExpertCalendar.mock.calls;
     expect(input).toMatchObject({
       meetingId: MEETING_ID,
+      // Carried through for the writer's own log lines — it selects and titles nothing there.
+      contextType: 'case',
       expertProfileId: 'expert-1',
       clientCompanyName: 'Northwind Industrial',
       caseTitle: 'CPQ rollout',
@@ -137,7 +142,10 @@ describe('projectBookingCalendarEvent — the happy path', () => {
     async (contextType) => {
       await projectBookingCalendarEvent(createdMeeting(), contextType, CONTEXT_ID, fakeLog());
 
-      expect(mockResolveFacts).toHaveBeenCalledWith(contextType, CONTEXT_ID, expect.anything());
+      expect(mockResolveFacts).toHaveBeenCalledWith(
+        { meetingId: MEETING_ID, contextType, contextId: CONTEXT_ID },
+        expect.anything()
+      );
       expect(mockProjectToExpertCalendar).toHaveBeenCalledTimes(1);
     }
   );
@@ -178,6 +186,110 @@ describe("projectBookingCalendarEvent — the 'skipped' branches", () => {
 
     expect(mockProjectToExpertCalendar).not.toHaveBeenCalled();
     expect(vi.mocked(log.error)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-433 AC — **EVERY WRITE OUTCOME IS LOGGED TO AXIOM.**
+ *
+ * ⚠⚠ THE SUCCESS PATH IS THE ONE THAT HAD NO COVERAGE AND NO LOG, AND THAT IS NOT A
+ * COINCIDENCE. `'provider_event'` — an event actually written to a real expert's calendar, the
+ * single most important thing this pipeline does — used to `return` in silence, so "did this
+ * booking reach a calendar?" was answerable only by inferring from which lines were ABSENT.
+ * The gap survived three review phases because no test looked at the happy path's logging.
+ *
+ * ⚠ ONE LINE, ONE KEY SET, EVERY OUTCOME. The inner modules explain WHY (`connectionCount`, an
+ * `error` and a `stack`); this line states THAT, uniformly, so a single Axiom query covers all
+ * four. `sequence` is deliberately not in it — Slice 1 has no such column; BAL-475 adds it.
+ */
+describe('projectBookingCalendarEvent — the outcome line', () => {
+  it("'provider_event' — the success path emits the line with the FULL key set", async () => {
+    const log = fakeLog();
+
+    await expect(
+      projectBookingCalendarEvent(createdMeeting(), 'case', CONTEXT_ID, log)
+    ).resolves.toBe('provider_event');
+
+    expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
+    const [[meta, message]] = vi.mocked(log.info).mock.calls;
+    expect(meta).toEqual({
+      meetingId: MEETING_ID,
+      party: 'expert',
+      contextType: 'case',
+      contextId: CONTEXT_ID,
+      deliveryMode: 'provider_event',
+    });
+    expect(message).toBe('Meeting calendar projection outcome');
+  });
+
+  /**
+   * ⚠ AN EXACT KEY SET IS ALSO THE PRIVACY ASSERTION. The resolved display facts — a client
+   * COMPANY NAME and a case TITLE — are in scope at this line and are exactly what must not
+   * reach an operational log (ADR-1044 §4). Ids and closed enums only.
+   */
+  it('⚠ carries no company name, no title and nothing else the resolver returned', async () => {
+    const log = fakeLog();
+
+    await projectBookingCalendarEvent(createdMeeting(), 'case', CONTEXT_ID, log);
+
+    const [[meta]] = vi.mocked(log.info).mock.calls;
+    const serialised = JSON.stringify(meta);
+    expect(serialised).not.toContain(FACTS.clientCompanyName);
+    expect(serialised).not.toContain(FACTS.title);
+    expect(serialised).not.toContain(FACTS.eventLabel);
+  });
+
+  it.each(['provider_event', 'ics', 'failed'] as const)(
+    'the writer\'s outcome "%s" reaches the line as deliveryMode',
+    async (delivery) => {
+      mockProjectToExpertCalendar.mockResolvedValue(delivery);
+      const log = fakeLog();
+
+      await projectBookingCalendarEvent(createdMeeting(), 'project_kickoff', CONTEXT_ID, log);
+
+      expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
+      const [[meta]] = vi.mocked(log.info).mock.calls;
+      expect(meta).toEqual({
+        meetingId: MEETING_ID,
+        party: 'expert',
+        contextType: 'project_kickoff',
+        contextId: CONTEXT_ID,
+        deliveryMode: delivery,
+      });
+    }
+  );
+
+  /**
+   * A SKIP IS AN OUTCOME, NOT AN ABSENCE. Both skip branches used to leave the entry point
+   * silent — the fact resolver logged the REASON under a context id that named no meeting, so
+   * a withheld calendar entry could not be joined to the booking it belonged to.
+   */
+  it.each([
+    ['a null expertProfileId', (): void => undefined, null],
+    [
+      'unresolved facts',
+      (): void => {
+        mockResolveFacts.mockResolvedValue(undefined);
+      },
+      'expert-1',
+    ],
+  ])('%s still emits the line with deliveryMode "skipped"', async (_case, arrange, expertId) => {
+    arrange();
+    const log = fakeLog();
+
+    await expect(
+      projectBookingCalendarEvent(createdMeeting(expertId), 'request_interaction', CONTEXT_ID, log)
+    ).resolves.toBe('skipped');
+
+    expect(vi.mocked(log.info)).toHaveBeenCalledTimes(1);
+    const [[meta]] = vi.mocked(log.info).mock.calls;
+    expect(meta).toEqual({
+      meetingId: MEETING_ID,
+      party: 'expert',
+      contextType: 'request_interaction',
+      contextId: CONTEXT_ID,
+      deliveryMode: 'skipped',
+    });
   });
 });
 
