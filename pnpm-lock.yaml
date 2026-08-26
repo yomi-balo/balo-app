@@ -79,6 +79,9 @@ importers:
       '@getbrevo/brevo':
         specifier: ^5.0.1
         version: 5.0.1
+      '@mux/mux-node':
+        specifier: ^15.0.0
+        version: 15.0.0
       '@react-email/components':
         specifier: ^1.0.10
         version: 1.0.10(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
@@ -2734,6 +2737,13 @@ packages:
       }
     cpu: [x64]
     os: [win32]
+
+  '@mux/mux-node@15.0.0':
+    resolution:
+      {
+        integrity: sha512-3b3qfcLKPDqbIVHqcGjUtI521N91QEKGu2S2Qv91TQ1v8U4WZHAsM/l4Xl9MJ66+sHH0bC6otUX18Z5HAk3QBA==,
+      }
+    hasBin: true
 
   '@next/env@16.1.0':
     resolution:
@@ -14692,6 +14702,8 @@ snapshots:
 
   '@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3':
     optional: true
+
+  '@mux/mux-node@15.0.0': {}
 
   '@next/env@16.1.0': {}
 

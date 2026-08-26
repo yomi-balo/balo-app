@@ -62,7 +62,6 @@ export interface TranscriptPipelineJobInput {
   meetingId: string;
   vendor: TranscriptVendor;
   payload: VendorTranscriptPayload;
-  recordingRef?: string | null;
   durationMs?: number | null;
 }
 
@@ -151,7 +150,6 @@ async function stagePersistRaw(
     meetingId: job.meetingId,
     vendor: job.vendor,
     canonical,
-    recordingRef: job.recordingRef,
     language: canonical.language,
     durationMs: job.durationMs ?? canonical.durationMs,
   });
@@ -343,7 +341,6 @@ async function stagePublishRecap(
     expertProfileId: engagement.expertProfileId,
     actionItemCount: extractedItems.length,
     summaryHeadline: headline,
-    recordingRef: transcript.recordingRef,
   };
   if (suppressed) {
     // Observability for the money guard: lets us measure false positives + tune the vocabulary.

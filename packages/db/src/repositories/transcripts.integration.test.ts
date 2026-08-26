@@ -44,7 +44,6 @@ describe('transcriptsRepository.insertRaw', () => {
     expect(created.vendor).toBe('daily_deepgram');
     expect(created.status).toBe('processing');
     expect(created.fillerWords).toBe(true);
-    expect(created.recordingRef).toBeNull();
     expect(created.actionItemsExtractedAt).toBeNull();
     expect(created.recapReadyPublishedAt).toBeNull();
     expect(created.canonical.segments).toHaveLength(1);

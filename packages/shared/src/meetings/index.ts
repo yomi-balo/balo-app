@@ -111,6 +111,11 @@ export * from './reschedule-proposal';
 // as a pure core over injected reads. `apps/api`'s gate and `apps/web`'s in-call money surface
 // are both thin fetch-and-call wrappers over this, so there is exactly one definition.
 export * from './participation';
+// BAL-473 — the meeting-recording concealment boundary: the client-safe view, its exact key
+// set, the concealed-key list, and the pure `@balo/db` row → view projection. Restated (not
+// imported) against `packages/db/src/schema/meeting-recordings.ts`'s `recordingStatusEnum`,
+// pinned to it at compile time via that file's `Exact<>` assertion.
+export * from './recording-view';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

@@ -9,6 +9,7 @@ import {
   resetDailyMock,
   type MockDeviceState,
 } from '@/test/mocks/daily';
+import { RECORDING_LOBBY_NOTICE } from './meeting-notices';
 import { PreJoin, SKIP_PREJOIN_STORAGE_KEY, type PreJoinProps } from './prejoin';
 
 /**
@@ -126,6 +127,21 @@ describe('PreJoin — identity is bound by the grant, never typed', () => {
     const container = renderPreJoin({ displayName: null });
 
     expect(container.textContent ?? '').not.toMatch(/joining as/i);
+  });
+});
+
+/** BAL-473 (D5) — the always-on recording notice. Both member and guest mounts see it. */
+describe('PreJoin — the recording notice (BAL-473)', () => {
+  it('renders the lobby notice WITH a displayName', () => {
+    renderPreJoin({ displayName: 'Dana Okafor' });
+
+    expect(screen.getByText(RECORDING_LOBBY_NOTICE)).toBeInTheDocument();
+  });
+
+  it('renders the lobby notice WITHOUT a displayName (a guest mount)', () => {
+    renderPreJoin({ displayName: null });
+
+    expect(screen.getByText(RECORDING_LOBBY_NOTICE)).toBeInTheDocument();
   });
 });
 

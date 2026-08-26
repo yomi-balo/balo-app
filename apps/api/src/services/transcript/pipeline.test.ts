@@ -98,7 +98,6 @@ function makeTranscript(overrides: Record<string, unknown> = {}): Record<string,
     extractedActionItems: null,
     actionItemsExtractedAt: null,
     recapReadyPublishedAt: null,
-    recordingRef: null,
     ...overrides,
   };
 }
@@ -109,7 +108,6 @@ const job: TranscriptPipelineJobInput = {
   meetingId: MEETING_ID,
   vendor: 'daily_deepgram',
   payload: dailyMultiSpeaker,
-  recordingRef: null,
   durationMs: 12500,
 };
 

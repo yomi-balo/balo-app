@@ -42,6 +42,7 @@ import {
 } from './meeting-notices';
 import { MeetingToolbar } from './meeting-toolbar';
 import { MeetingTopBar, type MeetingRoster } from './meeting-top-bar';
+import { RecordingIndicator } from './recording-indicator';
 import { PeoplePanel } from './people-panel';
 import { FilesPanel } from './files-panel';
 import { ChatPanel } from './chat-panel';
@@ -1480,29 +1481,35 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
           `pointer-events-none` on the rail keeps the stage clickable; each pill re-enables its
           own so "Change devices" still works.
         */}
-        {pill === null && deviceNotice === null ? null : (
-          <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex flex-col items-center gap-2">
-            {pill === null ? null : (
-              <span className="pointer-events-auto">
-                <MeetingPill
-                  message={pill}
-                  actionLabel="Change devices"
-                  onAction={() => setSettingsOpen(true)}
-                />
-              </span>
-            )}
-            {deviceNotice === null ? null : (
-              <span className="pointer-events-auto">
-                <MeetingPill
-                  message={deviceNotice}
-                  tone="warning"
-                  actionLabel="Show me how"
-                  onAction={() => setSettingsOpen(true)}
-                />
-              </span>
-            )}
-          </div>
-        )}
+        {
+          // BAL-473 — the rail now ALSO hosts `<RecordingIndicator/>`, which renders on its own
+          // condition (`isRecording`) this component cannot see ahead of time. So the rail
+          // mounts UNCONDITIONALLY (it is `pointer-events-none` and an empty container costs
+          // nothing) rather than gating on `pill`/`deviceNotice` alone; each pill keeps its own
+          // null check.
+        }
+        <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex flex-col items-center gap-2">
+          <RecordingIndicator />
+          {pill === null ? null : (
+            <span className="pointer-events-auto">
+              <MeetingPill
+                message={pill}
+                actionLabel="Change devices"
+                onAction={() => setSettingsOpen(true)}
+              />
+            </span>
+          )}
+          {deviceNotice === null ? null : (
+            <span className="pointer-events-auto">
+              <MeetingPill
+                message={deviceNotice}
+                tone="warning"
+                actionLabel="Show me how"
+                onAction={() => setSettingsOpen(true)}
+              />
+            </span>
+          )}
+        </div>
 
         <div className="relative flex min-h-0 flex-1">
           <motion.div

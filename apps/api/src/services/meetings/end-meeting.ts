@@ -40,6 +40,7 @@ import {
   type MeetingEndedBy,
 } from '@balo/shared/meetings';
 import { dailyRoomTeardown, type RoomTeardown } from '../daily/rooms.js';
+import { enqueueRecordingStop } from '../../jobs/recording-capture.js';
 import { settleMeetingIfBillable } from '../credit-session/settle-from-presence.js';
 import { authorizeMeetingParticipation } from './authorize-meeting-participation.js';
 import { logEndAuthorityDenied, resolveEndAuthority } from './authorize-end-meeting.js';
@@ -47,23 +48,47 @@ import { logEndAuthorityDenied, resolveEndAuthority } from './authorize-end-meet
 const log = createLogger('meeting-end');
 
 /**
- * ⚠⚠ THE RECORDING-FINALIZATION SEAM — A DELIBERATE, DOCUMENTED NO-OP.
+ * ⚠⚠ THE RECORDING-FINALIZATION SEAM — FILLED BY BAL-473 (OD-2).
  *
- * The AC says "the End endpoint finalizes the recording before teardown". **It is satisfied
- * VACUOUSLY, and here is exactly why, verified in this checkout rather than assumed:**
- * `rooms.ts`'s create body sends only `{ name, privacy }`; `meeting-tokens.ts` sends five
- * properties and NONE of them is `start_cloud_recording`; there is no
- * `POST /rooms/:name/recordings/stop` anywhere in the repo; and the one recording-shaped
- * column, `transcripts.recordingRef`, is annotated "no producer". **NOTHING ENABLES RECORDING,
- * SO THERE IS NOTHING TO FINALIZE AND NOTHING TO ORPHAN.**
+ * Recording is real now: `rooms.ts` sends `enable_recording: 'cloud'` on every provisioned
+ * room, and `recording-stop` (`jobs/recording-capture.ts`) is a real BullMQ job. This constant
+ * preserves the ORDERING CONSTRAINT it always named — stop the recording HERE, after the
+ * meeting is terminal in Postgres and BEFORE the room is deleted — and step 6 below now
+ * enqueues that job at exactly this position.
  *
- * ⚠ DO NOT BUILD A RECORDING REST API TO SATISFY A HYPOTHETICAL. What this constant preserves
- * is the ORDERING CONSTRAINT — stop the recording HERE, after the meeting is terminal in
- * Postgres and BEFORE the room is deleted — so that when recording becomes real the requirement
- * already has a home and a position in the sequence.
+ * ⚠ THE ORDERING CLAIM, HONESTLY RESTATED. The **enqueue** is at this position; the
+ * **execution** is a queue away and may land after `tearDownRoom` runs. Both orderings are
+ * correct: if the room still exists, the stop request succeeds; if it is already gone, Daily
+ * has already finalized the in-progress recording on room delete, and `recording-stop`'s own
+ * 400/404-is-success handling (OD-7) treats that as done. Do NOT make this a synchronous
+ * inline vendor call — that would put a network round trip on the End request the person who
+ * ended the meeting is waiting on, contrary to `tearDownRoom`'s own best-effort posture below.
+ *
+ * ⚠ NOT ON THE `alreadyEnded` PATH — see step 5: nothing runs there, including this enqueue.
  */
 export const RECORDING_FINALIZATION_SEAM =
-  'BAL-134: if cloud recording is ever enabled, stop it HERE — after the terminal transition, before teardown.';
+  'BAL-473 (OD-2): recording-stop is enqueued HERE — after the terminal transition, before teardown.';
+
+/**
+ * Best-effort `recording-stop` enqueue. Mirrors `tearDownRoom`'s posture exactly: the meeting
+ * is ALREADY terminal in Postgres by the time this runs, so a BullMQ enqueue fault must never
+ * fail the End request. `recording-stop` itself no-ops when there is nothing capturing, so this
+ * call is free on a meeting that was never recording.
+ */
+async function enqueueRecordingStopBestEffort(meetingId: string): Promise<void> {
+  try {
+    await enqueueRecordingStop({ meetingId });
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'recording-stop enqueue failed on the human End path — best-effort, the meeting stays ended'
+    );
+  }
+}
 
 /**
  * Every wire literal this service produces.
@@ -240,8 +265,9 @@ export async function endMeeting(input: EndMeetingInput): Promise<EndMeetingResu
     return { ok: true, status: 'ended', alreadyEnded: true, endedBy: null };
   }
 
-  // 6. RECORDING FINALIZATION — {@link RECORDING_FINALIZATION_SEAM}. Vacuous today, by
-  //    verification rather than by assumption. The POSITION is the deliverable.
+  // 6. RECORDING FINALIZATION — {@link RECORDING_FINALIZATION_SEAM}. BAL-473 (OD-2): enqueue
+  //    `recording-stop`, best-effort, BEFORE teardown.
+  await enqueueRecordingStopBestEffort(meetingId);
 
   // 7. TEARDOWN — best-effort, after the meeting is terminal, before we answer.
   const teardownOutcome = await tearDownRoom(teardown, ended.meeting);

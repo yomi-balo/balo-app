@@ -15,12 +15,15 @@ function envelope(overrides: Record<string, unknown> = {}): unknown {
   };
 }
 
-describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
-  it('handles exactly three event types', () => {
+describe('parseDailyWebhookEvent (BAL-134 §5.1 / BAL-473 §7.3)', () => {
+  it('handles exactly six event types, in order', () => {
     expect([...HANDLED_DAILY_EVENT_TYPES]).toEqual([
       'participant.joined',
       'participant.left',
       'meeting.ended',
+      'recording.started',
+      'recording.ready-to-download',
+      'recording.error',
     ]);
   });
 
@@ -45,7 +48,10 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
     );
 
     expect(result.ok).toBe(true);
-    if (!result.ok || result.event.kind === 'unhandled' || result.event.kind === 'meeting.ended') {
+    if (
+      !result.ok ||
+      (result.event.kind !== 'participant.joined' && result.event.kind !== 'participant.left')
+    ) {
       throw new Error('expected a participant event');
     }
     expect(result.event.roomName).toBe(ROOM);
@@ -59,9 +65,11 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
       RECEIVED_AT
     );
 
-    expect(result.ok && result.event.kind !== 'unhandled' && result.event.occurredAt).toEqual(
-      new Date(joinedAt)
-    );
+    expect(
+      result.ok &&
+        (result.event.kind === 'participant.joined' || result.event.kind === 'participant.left') &&
+        result.event.occurredAt
+    ).toEqual(new Date(joinedAt));
   });
 
   it('reads `left_at` on a participant.left', () => {
@@ -74,9 +82,11 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
       RECEIVED_AT
     );
 
-    expect(result.ok && result.event.kind !== 'unhandled' && result.event.occurredAt).toEqual(
-      new Date(leftAt)
-    );
+    expect(
+      result.ok &&
+        (result.event.kind === 'participant.joined' || result.event.kind === 'participant.left') &&
+        result.event.occurredAt
+    ).toEqual(new Date(leftAt));
   });
 
   it('falls back to the RECEIPT time when the vendor names no instant at all', () => {
@@ -85,9 +95,11 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
       RECEIVED_AT
     );
 
-    expect(result.ok && result.event.kind !== 'unhandled' && result.event.occurredAt).toEqual(
-      RECEIVED_AT
-    );
+    expect(
+      result.ok &&
+        (result.event.kind === 'participant.joined' || result.event.kind === 'participant.left') &&
+        result.event.occurredAt
+    ).toEqual(RECEIVED_AT);
   });
 
   /**
@@ -104,7 +116,11 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
     );
 
     expect(result.ok).toBe(true);
-    if (!result.ok || result.event.kind === 'unhandled') return;
+    if (
+      !result.ok ||
+      (result.event.kind !== 'participant.joined' && result.event.kind !== 'participant.left')
+    )
+      return;
     expect(Number.isNaN(result.event.occurredAt.getTime())).toBe(true);
   });
 
@@ -112,7 +128,10 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
     const result = parseDailyWebhookEvent(envelope({ payload: { room: ROOM } }), RECEIVED_AT);
 
     expect(result.ok).toBe(true);
-    if (!result.ok || result.event.kind === 'unhandled' || result.event.kind === 'meeting.ended') {
+    if (
+      !result.ok ||
+      (result.event.kind !== 'participant.joined' && result.event.kind !== 'participant.left')
+    ) {
       throw new Error('expected a participant event');
     }
     expect(result.event.participantId).toBeNull();
@@ -137,11 +156,11 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
    * DISABLED, taking the three handled types down with it.
    */
   it('⚠ an unknown type is `unhandled`, not a parse failure', () => {
-    const result = parseDailyWebhookEvent(envelope({ type: 'recording.started' }), RECEIVED_AT);
+    const result = parseDailyWebhookEvent(envelope({ type: 'room.created' }), RECEIVED_AT);
 
     expect(result.ok && result.event).toMatchObject({
       kind: 'unhandled',
-      type: 'recording.started',
+      type: 'room.created',
       roomName: ROOM,
     });
   });
@@ -188,5 +207,247 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1)', () => {
       'roomName',
       'type',
     ]);
+  });
+});
+
+describe('parseDailyWebhookEvent — recording.started (BAL-473)', () => {
+  const INSTANCE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+  /**
+   * ⚠⚠ THE HIGHEST-VALUE ASSERTION IN THIS FILE. `recording.started` carries NO `room_name` —
+   * the naive room-gate would swallow every delivery as `unhandled` and silently kill this arm.
+   */
+  it('⚠⚠ parses with NO `room_name` in the payload — NOT `unhandled`', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_1',
+        type: 'recording.started',
+        event_ts: EVENT_TS,
+        payload: { instance_id: INSTANCE_ID, recording_id: 'daily-rec-1', start_ts: EVENT_TS },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.event).toMatchObject({
+      kind: 'recording.started',
+      eventId: 'evt_rec_1',
+      roomName: null,
+      instanceId: INSTANCE_ID,
+      dailyRecordingId: 'daily-rec-1',
+      startedAt: new Date(EVENT_TS * 1000),
+    });
+  });
+
+  it('accepts `instanceId`/`recordingId` as well as `instance_id`/`recording_id`', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_1',
+        type: 'recording.started',
+        payload: { instanceId: INSTANCE_ID, recordingId: 'daily-rec-1' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({
+      kind: 'recording.started',
+      instanceId: INSTANCE_ID,
+      dailyRecordingId: 'daily-rec-1',
+    });
+  });
+
+  it('a non-UUID instance_id ⇒ `unhandled` — it is by definition not ours', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_1',
+        type: 'recording.started',
+        payload: { instance_id: 'not-a-uuid', recording_id: 'daily-rec-1' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({ kind: 'unhandled', roomName: null });
+  });
+
+  it('a missing instance_id ⇒ `unhandled`', () => {
+    const result = parseDailyWebhookEvent(
+      { id: 'evt_rec_1', type: 'recording.started', payload: { recording_id: 'daily-rec-1' } },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({ kind: 'unhandled' });
+  });
+
+  it('a missing recording_id ⇒ `unhandled` — T2 cannot stamp without a daily_recording_id', () => {
+    const result = parseDailyWebhookEvent(
+      { id: 'evt_rec_1', type: 'recording.started', payload: { instance_id: INSTANCE_ID } },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({ kind: 'unhandled' });
+  });
+
+  it('falls back to the envelope `event_ts`, then to `receivedAt`, for `startedAt`', () => {
+    const withEnvelope = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_1',
+        type: 'recording.started',
+        event_ts: EVENT_TS,
+        payload: { instance_id: INSTANCE_ID, recording_id: 'daily-rec-1' },
+      },
+      RECEIVED_AT
+    );
+    expect(
+      withEnvelope.ok &&
+        withEnvelope.event.kind === 'recording.started' &&
+        withEnvelope.event.startedAt
+    ).toEqual(new Date(EVENT_TS * 1000));
+
+    const withNeither = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_1',
+        type: 'recording.started',
+        payload: { instance_id: INSTANCE_ID, recording_id: 'daily-rec-1' },
+      },
+      RECEIVED_AT
+    );
+    expect(
+      withNeither.ok &&
+        withNeither.event.kind === 'recording.started' &&
+        withNeither.event.startedAt
+    ).toEqual(RECEIVED_AT);
+  });
+});
+
+describe('parseDailyWebhookEvent — recording.ready-to-download (BAL-473)', () => {
+  it('parses with a numeric duration', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_2',
+        type: 'recording.ready-to-download',
+        payload: { recording_id: 'daily-rec-1', room: ROOM, duration: 125.6 },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.event).toMatchObject({
+      kind: 'recording.ready-to-download',
+      dailyRecordingId: 'daily-rec-1',
+      roomName: ROOM,
+      durationSeconds: 126,
+    });
+  });
+
+  it('accepts `recordingId` as well as `recording_id`', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_2',
+        type: 'recording.ready-to-download',
+        payload: { recordingId: 'daily-rec-1' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(
+      result.ok &&
+        result.event.kind === 'recording.ready-to-download' &&
+        result.event.dailyRecordingId
+    ).toBe('daily-rec-1');
+  });
+
+  it('a non-numeric/negative/absent `duration` ⇒ `durationSeconds: null`, never a guess', () => {
+    for (const duration of [undefined, 'nonsense', -5, Number.POSITIVE_INFINITY]) {
+      const result = parseDailyWebhookEvent(
+        {
+          id: 'evt_rec_2',
+          type: 'recording.ready-to-download',
+          payload: { recording_id: 'daily-rec-1', duration },
+        },
+        RECEIVED_AT
+      );
+      expect(
+        result.ok &&
+          result.event.kind === 'recording.ready-to-download' &&
+          result.event.durationSeconds
+      ).toBeNull();
+    }
+  });
+
+  it('a missing recording_id ⇒ `unhandled`', () => {
+    const result = parseDailyWebhookEvent(
+      { id: 'evt_rec_2', type: 'recording.ready-to-download', payload: { room: ROOM } },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({ kind: 'unhandled', roomName: ROOM });
+  });
+
+  it('tolerates an ABSENT room — the fallback carries it, not a hard requirement', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_2',
+        type: 'recording.ready-to-download',
+        payload: { recording_id: 'daily-rec-1' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({
+      kind: 'recording.ready-to-download',
+      roomName: null,
+    });
+  });
+});
+
+describe('parseDailyWebhookEvent — recording.error (BAL-473)', () => {
+  const INSTANCE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+
+  it('parses with an instance id and an error message', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_3',
+        type: 'recording.error',
+        payload: { instance_id: INSTANCE_ID, room: ROOM, error_msg: 'disk full' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.event).toMatchObject({
+      kind: 'recording.error',
+      instanceId: INSTANCE_ID,
+      roomName: ROOM,
+      errorMessage: 'disk full',
+    });
+  });
+
+  it('⚠ `instance_id` IS OPTIONAL on this payload — an absent one still parses, room intact', () => {
+    const result = parseDailyWebhookEvent(
+      { id: 'evt_rec_3', type: 'recording.error', payload: { room: ROOM } },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({
+      kind: 'recording.error',
+      instanceId: null,
+      roomName: ROOM,
+      errorMessage: null,
+    });
+  });
+
+  it('accepts `errorMsg` as well as `error_msg`', () => {
+    const result = parseDailyWebhookEvent(
+      { id: 'evt_rec_3', type: 'recording.error', payload: { errorMsg: 'timeout' } },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({
+      kind: 'recording.error',
+      errorMessage: 'timeout',
+    });
   });
 });

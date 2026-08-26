@@ -35,7 +35,6 @@ export interface EnqueueTranscriptPipelineInput {
   meetingId: string;
   vendor: TranscriptVendor;
   payload: VendorTranscriptPayload; // raw vendor shape
-  recordingRef?: string | null; // nullable/deferred — no producer
   durationMs?: number | null;
 }
 

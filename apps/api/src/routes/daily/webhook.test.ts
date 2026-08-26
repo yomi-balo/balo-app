@@ -13,6 +13,16 @@ const {
   mockCheckRateLimit,
   mockWarn,
   mockErrorLog,
+  mockFindMeetingById,
+  mockFindRecordingById,
+  mockFindByDailyRecordingId,
+  mockFindCapturingForMeeting,
+  mockMarkStarted,
+  mockMarkSourceReady,
+  mockMarkRecordingFailed,
+  mockEnqueueRecordingEnsure,
+  mockEnqueueRecordingIngest,
+  mockTrackServer,
 } = vi.hoisted(() => ({
   mockCheckRateLimit: vi.fn(),
   mockFindByEventId: vi.fn(),
@@ -26,6 +36,16 @@ const {
   mockReconcileStatus: vi.fn(),
   mockWarn: vi.fn(),
   mockErrorLog: vi.fn(),
+  mockFindMeetingById: vi.fn(),
+  mockFindRecordingById: vi.fn(),
+  mockFindByDailyRecordingId: vi.fn(),
+  mockFindCapturingForMeeting: vi.fn(),
+  mockMarkStarted: vi.fn(),
+  mockMarkSourceReady: vi.fn(),
+  mockMarkRecordingFailed: vi.fn(),
+  mockEnqueueRecordingEnsure: vi.fn(),
+  mockEnqueueRecordingIngest: vi.fn(),
+  mockTrackServer: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -38,13 +58,38 @@ vi.mock('@balo/db', () => ({
     insertReceived: mockInsertReceived,
     markProcessed: mockMarkProcessed,
   },
-  meetingsRepository: { findByDailyRoomName: mockFindByRoomName },
+  meetingsRepository: { findByDailyRoomName: mockFindByRoomName, findById: mockFindMeetingById },
   meetingPresenceRepository: { closeAllOpen: mockCloseAllOpen },
+  meetingRecordingsRepository: {
+    findById: mockFindRecordingById,
+    findByDailyRecordingId: mockFindByDailyRecordingId,
+    findCapturingForMeeting: mockFindCapturingForMeeting,
+    markStarted: mockMarkStarted,
+    markSourceReady: mockMarkSourceReady,
+    markFailed: mockMarkRecordingFailed,
+  },
+}));
+vi.mock('@balo/analytics/server', () => ({
+  trackServer: mockTrackServer,
+  RECORDING_SERVER_EVENTS: {
+    RECORDING_STARTED: 'recording_started',
+    RECORDING_READY: 'recording_ready',
+    RECORDING_FAILED: 'recording_failed',
+  },
 }));
 vi.mock('../../services/meetings/presence-writer.js', () => ({
   resolvePresenceEffect: mockResolvePresenceEffect,
   applyPresenceEffect: mockApplyPresenceEffect,
   reconcileMeetingStatus: mockReconcileStatus,
+}));
+// BAL-473 — MANDATORY: `webhook.ts` now imports these two job modules, which transitively pull
+// in BullMQ + `../lib/queue.js` + `../lib/redis.js`. Left unmocked, any test that reaches an
+// enqueue would attempt a REAL Redis connection.
+vi.mock('../../jobs/recording-capture.js', () => ({
+  enqueueRecordingEnsure: mockEnqueueRecordingEnsure,
+}));
+vi.mock('../../jobs/recording-ingest.js', () => ({
+  enqueueRecordingIngest: mockEnqueueRecordingIngest,
 }));
 // ⚠ SPREADS THE REAL MODULE — a bare factory would drop `RATE_LIMIT_DEADLINE_MS`, which this
 // route imports, and a vitest factory mock throws on any omitted export the graph touches.
@@ -139,6 +184,16 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     mockReconcileStatus.mockResolvedValue('waiting_for_participants');
     // Run the callback with a stand-in tx, exactly as `db.transaction` does.
     mockTransaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn({}));
+    // BAL-473 — recording defaults: no row resolves unless a test says otherwise.
+    mockFindMeetingById.mockResolvedValue(MEETING);
+    mockFindRecordingById.mockResolvedValue(undefined);
+    mockFindByDailyRecordingId.mockResolvedValue(undefined);
+    mockFindCapturingForMeeting.mockResolvedValue(undefined);
+    mockMarkStarted.mockResolvedValue(undefined);
+    mockMarkSourceReady.mockResolvedValue(undefined);
+    mockMarkRecordingFailed.mockResolvedValue(undefined);
+    mockEnqueueRecordingEnsure.mockResolvedValue(undefined);
+    mockEnqueueRecordingIngest.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -292,6 +347,308 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     );
   });
 
+  // ── BAL-473 — THE THREE RECORDING ARMS ──────────────────────────────────────────────────
+
+  const RECORDING_ID = '33333333-3333-4333-8333-333333333333';
+  const INSTANCE_ID = RECORDING_ID;
+  const RECORDING_ROW = {
+    id: RECORDING_ID,
+    meetingId: MEETING_ID,
+    status: 'recording',
+    dailyRecordingId: null,
+  };
+
+  function recordingBody(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      id: 'evt_rec_1',
+      type: 'recording.started',
+      payload: { instance_id: INSTANCE_ID, recording_id: 'daily-rec-1' },
+      ...overrides,
+    });
+  }
+
+  describe('recording.started', () => {
+    it('resolves by instanceId, calls markStarted on the tx — no post-commit action', async () => {
+      mockFindRecordingById.mockResolvedValue(RECORDING_ROW);
+      mockMarkStarted.mockResolvedValue({ ...RECORDING_ROW, dailyRecordingId: 'daily-rec-1' });
+      const payload = recordingBody();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockFindRecordingById).toHaveBeenCalledWith(INSTANCE_ID);
+      expect(mockMarkStarted).toHaveBeenCalledWith(
+        expect.objectContaining({ id: RECORDING_ID, dailyRecordingId: 'daily-rec-1' }),
+        expect.anything()
+      );
+      expect(mockEnqueueRecordingIngest).not.toHaveBeenCalled();
+      expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
+    });
+
+    it('⚠ never inserts a row — an instance id resolving to no row acks with no effect', async () => {
+      mockFindRecordingById.mockResolvedValue(undefined);
+      const payload = recordingBody();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkStarted).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'recording.started' }),
+        expect.stringContaining('no row')
+      );
+    });
+
+    it('⚠⚠ the T5 residual — a failed row logs at ERROR rather than reviving', async () => {
+      mockFindRecordingById.mockResolvedValue({ ...RECORDING_ROW, status: 'failed' });
+      mockMarkStarted.mockResolvedValue(undefined);
+      const payload = recordingBody();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockErrorLog).toHaveBeenCalledWith(
+        expect.objectContaining({ recordingId: RECORDING_ID }),
+        expect.stringContaining('already marked failed')
+      );
+    });
+
+    it('does NOT call reconcileMeetingStatus for a recording arm', async () => {
+      mockFindRecordingById.mockResolvedValue(RECORDING_ROW);
+      mockMarkStarted.mockResolvedValue(RECORDING_ROW);
+      const payload = recordingBody();
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockReconcileStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('recording.ready-to-download', () => {
+    function readyPayload(overrides: Record<string, unknown> = {}): string {
+      return recordingBody({
+        type: 'recording.ready-to-download',
+        id: 'evt_rec_2',
+        payload: { recording_id: 'daily-rec-1', room: ROOM, duration: 90 },
+        ...overrides,
+      });
+    }
+
+    it('resolves by recording_id, marks source_ready, enqueues ingest + the re-arm', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(RECORDING_ROW);
+      mockMarkSourceReady.mockResolvedValue({ ...RECORDING_ROW, status: 'source_ready' });
+      const payload = readyPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockFindByDailyRecordingId).toHaveBeenCalledWith('daily-rec-1');
+      expect(mockMarkSourceReady).toHaveBeenCalledWith(
+        expect.objectContaining({ id: RECORDING_ID, dailyRecordingId: 'daily-rec-1' }),
+        expect.anything()
+      );
+      expect(mockEnqueueRecordingIngest).toHaveBeenCalledWith({ recordingId: RECORDING_ID });
+      // ⚠⚠ THE UNCONDITIONAL RE-ARM — the job gates itself, so this enqueue is free.
+      expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, trigger: 'rejoin' })
+      );
+    });
+
+    it('⚠ the FALLBACK ladder: a miss on recording_id resolves via room → capturing', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue(RECORDING_ROW); // dailyRecordingId: null
+      mockMarkSourceReady.mockResolvedValue({ ...RECORDING_ROW, status: 'source_ready' });
+      const payload = readyPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockFindByRoomName).toHaveBeenCalledWith(ROOM);
+      expect(mockFindCapturingForMeeting).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockMarkSourceReady).toHaveBeenCalled();
+    });
+
+    it('⚠⚠ REFUSES the fallback when the capturing row already has a DIFFERENT dailyRecordingId', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue({
+        ...RECORDING_ROW,
+        dailyRecordingId: 'some-other-daily-id',
+      });
+      const payload = readyPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkSourceReady).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'recording.ready-to-download' }),
+        expect.stringContaining('no row')
+      );
+    });
+
+    it('no ingest enqueue when the CAS was a no-op (replay) — but the unconditional re-arm still fires', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(RECORDING_ROW);
+      mockMarkSourceReady.mockResolvedValue(undefined);
+      const payload = readyPayload();
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockEnqueueRecordingIngest).not.toHaveBeenCalled();
+      // The unconditional re-arm still fires — it is unconditional BY DESIGN.
+      expect(mockEnqueueRecordingEnsure).toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠⚠ FIX ROUND 1 (F1) — a bare `await enqueueRecordingIngest(...)` would let this rejection
+     * escape the handler, 500 the delivery, and Daily's retry would short-circuit on
+     * `processedAt` with NO enqueue and NO transaction — the row wedged at `source_ready`
+     * forever, with no sweep and no ops signal. `enqueueBestEffort` must swallow it and the
+     * delivery must still ack `200`.
+     */
+    it('⚠⚠ a failed recording-ingest enqueue does NOT 500 the delivery — best-effort, logged', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(RECORDING_ROW);
+      mockMarkSourceReady.mockResolvedValue({ ...RECORDING_ROW, status: 'source_ready' });
+      mockEnqueueRecordingIngest.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      const payload = readyPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockErrorLog).toHaveBeenCalledWith(
+        expect.objectContaining({ recordingId: RECORDING_ID, error: 'ECONNREFUSED' }),
+        expect.stringContaining('recording-ingest enqueue failed')
+      );
+      // The unrelated re-arm enqueue still runs — one failed best-effort call must not block another.
+      expect(mockEnqueueRecordingEnsure).toHaveBeenCalled();
+    });
+  });
+
+  describe('recording.error', () => {
+    function errorPayload(overrides: Record<string, unknown> = {}): string {
+      return recordingBody({
+        type: 'recording.error',
+        id: 'evt_rec_3',
+        payload: { instance_id: INSTANCE_ID, room: ROOM, error_msg: 'disk full' },
+        ...overrides,
+      });
+    }
+
+    it('resolves by instance id, marks failed, emits recording_failed + the re-arm', async () => {
+      mockFindRecordingById.mockResolvedValue(RECORDING_ROW);
+      mockMarkRecordingFailed.mockResolvedValue({ ...RECORDING_ROW, status: 'failed' });
+      const payload = errorPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkRecordingFailed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: RECORDING_ID, stage: 'daily', reason: 'disk full' }),
+        expect.anything()
+      );
+      expect(mockTrackServer).toHaveBeenCalledWith('recording_failed', {
+        meeting_id: MEETING_ID,
+        stage: 'daily',
+        reason: 'vendor_reported',
+        distinct_id: MEETING_ID,
+      });
+      expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, trigger: 'rejoin' })
+      );
+    });
+
+    it('⚠ falls back via room → capturing when instance_id is absent', async () => {
+      mockFindCapturingForMeeting.mockResolvedValue(RECORDING_ROW);
+      mockMarkRecordingFailed.mockResolvedValue({ ...RECORDING_ROW, status: 'failed' });
+      const payload = errorPayload({ payload: { room: ROOM, error_msg: 'timeout' } });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockFindByRoomName).toHaveBeenCalledWith(ROOM);
+      expect(mockMarkRecordingFailed).toHaveBeenCalled();
+    });
+
+    it('⚠ refuses to overwrite a `ready` row — no analytics on a refused CAS', async () => {
+      mockFindRecordingById.mockResolvedValue({ ...RECORDING_ROW, status: 'ready' });
+      mockMarkRecordingFailed.mockResolvedValue(undefined);
+      const payload = errorPayload();
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockTrackServer).not.toHaveBeenCalled();
+      // The re-arm still fires — unconditional by design.
+      expect(mockEnqueueRecordingEnsure).toHaveBeenCalled();
+    });
+  });
+
+  it('⚠ a replayed recording delivery (processedAt set) short-circuits with NO transaction', async () => {
+    mockFindByEventId.mockResolvedValue({ id: 'marker-1', processedAt: new Date() });
+    const payload = recordingBody();
+
+    const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockFindRecordingById).not.toHaveBeenCalled();
+  });
+
+  it('⚠ insertReceived returning undefined (concurrent delivery) abandons the recording effect', async () => {
+    mockFindRecordingById.mockResolvedValue(RECORDING_ROW);
+    mockInsertReceived.mockResolvedValue(undefined);
+    const payload = recordingBody();
+
+    const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockMarkStarted).not.toHaveBeenCalled();
+    expect(mockMarkProcessed).not.toHaveBeenCalled();
+  });
+
   // ── ACK-AND-FORGET PATHS ────────────────────────────────────────────────────────────────
 
   /**
@@ -300,13 +657,13 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
    * DO care about down with it.
    */
   it('⚠ an UNKNOWN event type records its marker and acks 200 with no effect', async () => {
-    const payload = body({ type: 'recording.started', id: 'evt_rec' });
+    const payload = body({ type: 'room.created', id: 'evt_room' });
 
     const res = await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
 
     expect(res.statusCode).toBe(200);
     expect(mockInsertReceived).toHaveBeenCalledWith(
-      expect.objectContaining({ eventId: 'evt_rec', type: 'recording.started' }),
+      expect.objectContaining({ eventId: 'evt_room', type: 'room.created' }),
       expect.anything()
     );
     expect(mockResolvePresenceEffect).not.toHaveBeenCalled();
