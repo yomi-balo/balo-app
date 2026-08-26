@@ -203,7 +203,19 @@ export function clampedExpertPresentMs(clocks: MeetingClocks, scheduledStart: Da
   return Math.max(0, lastExpertPresenceMs - clockStartMs);
 }
 
-/** Which of the four D3 shapes applies, from the structural facts alone. */
+/**
+ * Which of the four D3 shapes applies, from the structural facts alone.
+ *
+ * ⚠⚠ BAL-466 — `no_show_client` IS STRUCTURALLY UNREACHABLE UNDER THE ADMISSION SEAM. A
+ * credit session now opens on the first CLIENT-side member's admission to a `case` meeting
+ * (`joinMeetingAsMember`); a client who never joins therefore never opens a session, so there
+ * is no row for this function to ever compute against. The expert is not paid the no-show
+ * floor when the client never arrives. Accepted gap, not fixed here — tracked as **BAL-474**
+ * ("Client no-show settlement under the admission seam — system-open at the no-show terminal
+ * rule"), decision recorded as **ADR-1052** (amends ADR-1044). BAL-412's waiting-stage no-show
+ * copy and in-app templates are UNCHANGED — nothing is live pre-BAL-80, so softening that copy
+ * now would be premature.
+ */
 function resolveShape(
   expertEverPresent: boolean,
   clientSideEverPresent: boolean,
@@ -304,10 +316,12 @@ function outcomeForShape(shape: MeetingSettlementShape): MeetingSettlementOutcom
  * client is billed for expert-absent minutes at the wall-clock meter's pace, while
  * `expertPresentMs` (this function's basis, per D1) would price it lower. Settlement then
  * fixes the figure at what was already drawn rather than writing a refund. **This is a REAL
- * overcharge path, not merely a data-integrity fault**, and it must be revisited before
- * BAL-466 makes any of this live (a refund primitive, or expert-absence-aware metering). Safe
- * to ship today only because nothing opens a `presence` session (D10). The caller
- * (`settleSessionFromPresence`) MUST `log.error` with the full context on this branch.
+ * overcharge path, not merely a data-integrity fault.** ⚠ BAL-466 makes `presence` sessions
+ * live (`joinMeetingAsMember` opens one at admission to a `case` meeting) WITHOUT building the
+ * refund primitive or expert-absence-aware metering this paragraph calls for — that remains a
+ * known, accepted, un-mitigated residual risk, not a silent gap. The caller
+ * (`settleSessionFromPresence`) MUST `log.error` with the full context on this branch, which is
+ * how it is surfaced in Axiom until a refund primitive lands.
  *
  * On the two ZERO shapes (`missed_call` / `abandoned_wait`), any `minutesAlreadyDrawn > 0` is
  * a DIFFERENT, PURE data-integrity fault (the expert never joined, or never crossed the

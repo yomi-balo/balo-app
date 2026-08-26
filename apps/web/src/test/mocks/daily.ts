@@ -92,6 +92,8 @@ export interface DailyMockState {
   currentSpeaker: MockDevice | null;
   /** ⚠ `true` ⇒ `join()` rejects, which is how the fatal-error branch is reached. */
   joinRejects: boolean;
+  /** BAL-473 — drives `useRecording().isRecording`, so `<RecordingIndicator/>` is testable. */
+  isRecording: boolean;
   /**
    * ⚠ `true` ⇒ `useDaily()` returns `null`, which is how the "no call object" guards are reached.
    *
@@ -130,6 +132,7 @@ function defaultState(): DailyMockState {
     currentSpeaker: makeDevice('spk-1', 'MacBook Pro Speakers', 'audiooutput'),
     joinRejects: false,
     callObjectAbsent: false,
+    isRecording: false,
   };
 }
 
@@ -161,6 +164,14 @@ export interface DailySpies {
   readonly setMicrophone: Mock;
   readonly setSpeaker: Mock;
   readonly refreshDevices: Mock;
+  /**
+   * BAL-473 — exposed so `recording-indicator.test.tsx` can assert NONE of the three is ever
+   * called: recording starts/stops server-side (D1), and `<RecordingIndicator/>` destructures
+   * `isRecording` only.
+   */
+  readonly startRecording: Mock;
+  readonly stopRecording: Mock;
+  readonly updateRecording: Mock;
 }
 
 export const dailySpies: DailySpies = {
@@ -176,6 +187,9 @@ export const dailySpies: DailySpies = {
   setMicrophone: vi.fn(),
   setSpeaker: vi.fn(),
   refreshDevices: vi.fn(),
+  startRecording: vi.fn(),
+  stopRecording: vi.fn(),
+  updateRecording: vi.fn(),
 };
 
 /** `useDailyEvent` registrations, so a test can fire `network-connection` or `left-meeting`. */
@@ -255,6 +269,17 @@ export function dailyReactModuleMock(): Record<string, unknown> {
       setMicrophone: dailySpies.setMicrophone,
       setSpeaker: dailySpies.setSpeaker,
       refreshDevices: dailySpies.refreshDevices,
+    }),
+    // BAL-473 — `<RecordingIndicator/>`'s only dependency. `startRecording`/`stopRecording`/
+    // `updateRecording` are returned SO A TEST CAN ASSERT THEY WERE NEVER CALLED — the whole
+    // point of the D1 guard on the real component.
+    useRecording: () => ({
+      isRecording: dailyState.isRecording,
+      isLocalParticipantRecorded: dailyState.isRecording,
+      error: false,
+      startRecording: dailySpies.startRecording,
+      stopRecording: dailySpies.stopRecording,
+      updateRecording: dailySpies.updateRecording,
     }),
   };
 }

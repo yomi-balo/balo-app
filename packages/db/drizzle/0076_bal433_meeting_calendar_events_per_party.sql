@@ -10,6 +10,9 @@
 --    forgets the column — the worse of the two failures.
 -- ⚠ THE INTEGRATION HARNESS MIGRATES AN EMPTY CONTAINER FROM SCRATCH, so a 23502 here would
 --    pass every gate. This form cannot be validated by CI; do not "simplify" it back.
+-- ⚠ RENUMBERED 0075 → 0076 when BAL-473 (#237) landed its own 0075 on main. Regenerated
+--    against main's 0075 snapshot rather than hand-renamed, so the snapshot `prevId` chain is
+--    intact.
 
 CREATE TYPE "public"."meeting_calendar_delivery_mode" AS ENUM('provider_event', 'ics');--> statement-breakpoint
 
@@ -36,7 +39,7 @@ ALTER TABLE "meeting_calendar_events" ALTER COLUMN "balo_booking_id" DROP NOT NU
 -- 4. The unique moves to (meeting_id, party). ⚠ THE `deleted_at IS NULL` PREDICATE STAYS —
 --    a cancelled-then-rebooked meeting must be able to write a SECOND entry, and both
 --    upserts restate this predicate as `targetWhere` or every write raises 42P10 at PLAN
---    time.
+--    time. ⚠ MUST come AFTER step 1 — the index references `party`.
 DROP INDEX "meeting_calendar_event_meeting_uq";--> statement-breakpoint
 CREATE UNIQUE INDEX "meeting_calendar_event_meeting_party_uq" ON "meeting_calendar_events" USING btree ("meeting_id","party") WHERE "meeting_calendar_events"."deleted_at" IS NULL;--> statement-breakpoint
 
@@ -51,4 +54,17 @@ CREATE UNIQUE INDEX "meeting_calendar_event_meeting_party_uq" ON "meeting_calend
 --    naming its ORIGINAL labels in a CHECK here carries no same-transaction enum hazard;
 --    `meeting_calendar_delivery_mode` is a fresh `CREATE TYPE` above, which is likewise safe.
 ALTER TABLE "meeting_calendar_events" ADD CONSTRAINT "meeting_calendar_event_party_two_sided" CHECK ("meeting_calendar_events"."party" IN ('client','expert'));--> statement-breakpoint
-ALTER TABLE "meeting_calendar_events" ADD CONSTRAINT "meeting_calendar_event_delivery_payload" CHECK (("meeting_calendar_events"."delivery_mode" = 'provider_event' AND "meeting_calendar_events"."connection_id" IS NOT NULL AND "meeting_calendar_events"."calendar_id" IS NOT NULL AND "meeting_calendar_events"."vendor_event_id" IS NOT NULL AND "meeting_calendar_events"."balo_booking_id" IS NOT NULL) OR ("meeting_calendar_events"."delivery_mode" = 'ics' AND "meeting_calendar_events"."connection_id" IS NULL AND "meeting_calendar_events"."calendar_id" IS NULL AND "meeting_calendar_events"."vendor_event_id" IS NULL AND "meeting_calendar_events"."balo_booking_id" IS NULL));
+ALTER TABLE "meeting_calendar_events" ADD CONSTRAINT "meeting_calendar_event_delivery_payload" CHECK (("meeting_calendar_events"."delivery_mode" = 'provider_event' AND "meeting_calendar_events"."connection_id" IS NOT NULL AND "meeting_calendar_events"."calendar_id" IS NOT NULL AND "meeting_calendar_events"."vendor_event_id" IS NOT NULL AND "meeting_calendar_events"."balo_booking_id" IS NOT NULL) OR ("meeting_calendar_events"."delivery_mode" = 'ics' AND "meeting_calendar_events"."connection_id" IS NULL AND "meeting_calendar_events"."calendar_id" IS NULL AND "meeting_calendar_events"."vendor_event_id" IS NULL AND "meeting_calendar_events"."balo_booking_id" IS NULL));--> statement-breakpoint
+
+-- ⚠⚠ NOT BAL-433's CHANGE — INHERITED DRIFT FROM BAL-473 (#237), CARRIED HERE DELIBERATELY.
+--    BAL-473 removed `transcripts.recording_ref` from the TS schema and its docblock states
+--    "DROPPED BY BAL-473 (D3, migration 0076)" — but #237 shipped as 0075 and that migration
+--    never drops the column. Main is therefore drifted: the schema says gone, the database
+--    still has it, and `db:generate` hands the orphaned DROP to whoever generates next. That
+--    happened to be this migration, which drew 0076 — the very number their comment names.
+--    Omitting it is NOT the safe option: this migration's snapshot is generated from the TS
+--    schema and already lacks the column, so a snapshot without the DROP would misrepresent
+--    the live database and lose the change silently.
+--    SAFE TO DROP: it was a producer-less nullable `text` and every write site passed `null`
+--    (their docblock, and the column has no writer anywhere in the repo), so no data is lost.
+ALTER TABLE "transcripts" DROP COLUMN "recording_ref";

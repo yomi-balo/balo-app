@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/node';
 import { buildApp } from './app.js';
 import { startWorkers } from './jobs/worker.js';
+import { assertNoShowFloorOverrideUnsetInProduction } from './config/billing-floor.js';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -11,6 +12,13 @@ Sentry.init({
 const app = await buildApp();
 
 try {
+  // BAL-466 (D13) — ⚠⚠ THROWS IN PRODUCTION IF `MEETING_NO_SHOW_FLOOR_MINUTES` IS SET. Unlike
+  // the two vendor-secret warnings below, this one is a HARD failure on purpose — an override
+  // here would silently corrupt a MONEY figure (see the function's own docblock) rather than
+  // degrade a feature, so crash-looping loudly is the correct trade. Run before `app.listen` so
+  // a misconfigured deployment never starts serving traffic on it.
+  assertNoShowFloorOverrideUnsetInProduction();
+
   await app.listen({
     port: parseInt(process.env.PORT || '3002'),
     host: '0.0.0.0',
@@ -50,6 +58,20 @@ try {
   if (!process.env.DAILY_WEBHOOK_SECRET) {
     app.log.warn(
       'DAILY_WEBHOOK_SECRET is not set — POST /webhooks/daily will 503 EVERY delivery, silently degrading meeting presence to sweep-only reconciliation until Daily disables the webhook'
+    );
+  }
+
+  // BAL-473 — the same posture as the Daily secret above: a WARNING, never a throw (throwing
+  // would crash-loop Railway on a missing vendor secret and take down every route to protect
+  // one integration).
+  if (!process.env.MUX_WEBHOOK_SECRET) {
+    app.log.warn(
+      'MUX_WEBHOOK_SECRET is not set — POST /webhooks/mux will 503 EVERY delivery, so no meeting recording will ever reach `ready` and no Daily source will ever be cleaned up'
+    );
+  }
+  if (!process.env.MUX_TOKEN_ID || !process.env.MUX_TOKEN_SECRET) {
+    app.log.warn(
+      'MUX_TOKEN_ID / MUX_TOKEN_SECRET are not set — every `recording-ingest` job will fail and meeting recordings will stall at `source_ready` (the Daily source is retained, so they are re-drivable)'
     );
   }
   const shutdown = async () => {

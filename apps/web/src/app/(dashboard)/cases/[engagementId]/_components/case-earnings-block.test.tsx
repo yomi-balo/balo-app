@@ -7,11 +7,18 @@ import { CaseEarningsBlock } from './case-earnings-block';
  * BAL-421 (D2) — the expert lens's own-earnings block.
  *
  * ⚠⚠ THE `not_yet` TESTS ARE THE REASON THIS FILE EXISTS, AND THEY ASSERT AN ABSENCE OVER THE
- * WHOLE RENDERED TREE rather than over one element. Nothing writes `credit_sessions.
- * engagement_id` yet (BAL-400 will), so EVERY case on `main` today resolves to `not_yet` — a
- * component that formatted a number regardless would render "A$0.00" to EVERY EXPERT ON THE
- * PLATFORM. That is a MONEY CLAIM about work that has not been billed, not a cosmetic bug, and
- * a per-element assertion would miss it if the figure moved to a different node.
+ * WHOLE RENDERED TREE rather than over one element. A component that formatted a number
+ * regardless of state would render "A$0.00" to EVERY EXPERT ON THE PLATFORM. That is a MONEY
+ * CLAIM about work that has not been billed, not a cosmetic bug, and a per-element assertion
+ * would miss it if the figure moved to a different node.
+ *
+ * ⚠⚠ BAL-466 (F9, review fix round) — CORRECTING A NOW-FALSE CLAIM. This used to say "Nothing
+ * writes `credit_sessions.engagement_id` yet (BAL-400 will), so EVERY case on `main` today
+ * resolves to `not_yet`". `openSession` writes it now for every session BAL-466's admission
+ * seam opens, so `pending`/`finalized` are reachable for a case with an admitted client — the
+ * `pending` and `finalized` describe blocks below exist for exactly that reason, and are the
+ * F9 addition to this file's coverage (previously only `not_yet` was exercised in production
+ * reality).
  *
  * ⚠ A `finalized` block CAN legitimately be `0` — a REAL zero — which is exactly why the three
  * states must stay visibly distinct and why "renders no figure" cannot be tested as "renders

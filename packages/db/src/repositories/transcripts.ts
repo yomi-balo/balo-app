@@ -11,8 +11,14 @@ import {
 /**
  * Input for persisting the raw canonical transcript (pipeline stage "persist raw"). The
  * pipeline builds `canonical` in-memory via `normalizeVendorPayload`; `status`/`filler_words`
- * fall to their column defaults (`processing` / `true`). `recordingRef` is deferred (no live
- * producer). `captureId` is the stable dedup key (partial-unique + BullMQ jobId basis).
+ * fall to their column defaults (`processing` / `true`). `captureId` is the stable dedup key
+ * (partial-unique + BullMQ jobId basis).
+ *
+ * ⚠ `recordingRef` WAS REMOVED BY BAL-473 (D3), NOT MISLAID. It was a producer-less `text`
+ * column standing in for "where the recording lives". Recordings now have a real anchor —
+ * `meeting_recordings`, 1:n per meeting on `meetings.id` — so a single nullable string on
+ * `transcripts` could only ever disagree with it. Resolve a meeting's recordings through
+ * `meetingRecordingsRepository.listByMeeting`; do not re-add a reference column here.
  */
 /**
  * The PROJECTED transcript reference the BAL-388 recap reads — id + status ONLY, never the
@@ -34,7 +40,6 @@ export interface InsertRawTranscriptInput {
   meetingId: string;
   vendor: TranscriptVendor;
   canonical: CanonicalTranscript;
-  recordingRef?: string | null;
   language?: string | null;
   durationMs?: number | null;
 }
@@ -63,7 +68,6 @@ export const transcriptsRepository = {
         meetingId: input.meetingId,
         vendor: input.vendor,
         canonical: input.canonical,
-        recordingRef: input.recordingRef ?? null,
         language: input.language ?? null,
         durationMs: input.durationMs ?? null,
       })

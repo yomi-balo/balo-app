@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import {
+  ExternalLink,
   MessageSquare,
   PauseCircle,
   Phone,
@@ -23,19 +25,44 @@ import { NudgeButton } from './nudge-button';
  * A dark call stage (elapsed time — NEVER a countdown — a live/paused pill, the
  * {@link SessionMeter}) over a warm notice card whose CTA is the client's Top up OR the
  * member's {@link NudgeButton}. The word "overdraft" never appears — grace is
- * "keeping you going". Fires the two client analytics impressions (session started on
- * connect; low-balance warning shown), each once per mount — **in the `'card'` variant only**.
+ * "keeping you going". Fires the `low_balance_warning_shown` client analytics impression, once
+ * per mount — **in the `'card'` variant only**.
+ *
+ * ⚠ BAL-466 (D7) — `session_started` NO LONGER FIRES FROM THIS COMPONENT. It moved server-side
+ * to the real connect seam. See the effect below for why.
  *
  * ── ⚠⚠ BAL-403 ADDED THE `variant` PROP — ADDITIVE, `'card'` IS BYTE-IDENTICAL TO BAL-378 ────
  *
  * `'card'` (the default, and what every existing consumer passes) is UNCHANGED: the stage
- * header, both lifecycle `track()` calls, the `max-w-[520px]` shadowed card. `'embedded'` is
+ * header, the lifecycle `track()` call, the `max-w-[520px]` shadowed card. `'embedded'` is
  * the in-call drawer's composition — see `components/balo/credit/in-call-balance-panel.tsx`
  * for why (no `CallStageHeader`, the dark block kept for `SessionMeter` alone, no outer card
- * chrome, neither lifecycle event, and — per the orchestrator's OQ1 decision — the CLIENT
- * lens's primary "Top up" button is ABSENT, never disabled, so no wallet money surface or
+ * chrome, no lifecycle event, and — per the orchestrator's OQ1 decision — the CLIENT
+ * lens's primary "Top up" BUTTON is ABSENT, never disabled, so no wallet money surface or
  * `TopUpLauncher` modal reaches the live call). The member lens's {@link NudgeButton} is
  * UNCHANGED in both variants.
+ *
+ * ⚠⚠ BAL-466 (F3, review fix round) — the CLIENT-lens escalation copy (`CLIENT_COPY` in
+ * `@balo/shared/credit/drawdown-state.ts`, e.g. "Top up to pick right back up") instructs an
+ * action that D9.2's deny-by-default CTA suppression left with NOTHING clickable in `'embedded'`
+ * — a dead end for a client whose session has literally paused. `NoticeCard` now renders a
+ * PLAIN navigation link (`EmbeddedTopUpLink`, opens `/billing/top-up` in a new tab) for that one
+ * arm — NOT the `TopUpLauncher` modal, and NOT `CtaArea`'s primary button (which needs
+ * `onTopUp`, never wired in `'embedded'`). It surfaces no wallet figures and no money payload,
+ * so OQ1 / D9.2's suppression of a money-bearing surface is untouched; this is a link to
+ * somewhere the client can already act, not a new affordance class.
+ *
+ * ⚠ GATED ON `cta.kind === 'client_topup'`, WHICH **IS** THE MANAGE_BILLING CHECK — not a
+ * separate one. `get-drawdown-state.ts` sets `lens = MANAGE_BILLING ? 'client' : 'member'` and
+ * `deriveDrawdownState` only ever produces a `'client_topup'` cta for the `'client'` lens
+ * (`drawdown-state.ts`'s `CLIENT_COPY`). So by construction this link can never render for a
+ * member without `MANAGE_BILLING` — they keep the existing {@link NudgeButton} affordance
+ * (BAL-381) instead, exactly as F3 requires.
+ *
+ * ⚠ REUSES SHIPPED WORDING ONLY — the link's visible text is `cta.label` (e.g. "Top up",
+ * "Top up to continue"), the exact string the `'card'` variant's button already renders for the
+ * same state; `dashboard-wallet-card.tsx`'s existing `/billing/top-up` link ships the same "Top
+ * up" wording for the plain case. No new money copy was written for this fix (MJ checkpoint).
  */
 
 interface ExpertSummary {
@@ -54,9 +81,9 @@ type InSessionPanelBaseProps = {
 
 /**
  * ⚠ A DISCRIMINATED UNION, NOT AN OPTIONAL PAIR OF PROPS. `expertProfileId` / `expert` are used
- * ONLY by `CallStageHeader` and the `session_started` event, both of which `'embedded'` omits —
- * so making them structurally unavailable there is a type-level statement that the call page
- * does not need to load the delivering expert's profile for this surface, not a runtime `if`.
+ * ONLY by `CallStageHeader`, which `'embedded'` omits — so making them structurally
+ * unavailable there is a type-level statement that the call page does not need to load the
+ * delivering expert's profile for this surface, not a runtime `if`.
  */
 type InSessionPanelProps = InSessionPanelBaseProps &
   (
@@ -261,6 +288,26 @@ function CtaArea({
   );
 }
 
+// ── Embedded top-up link (F3) ────────────────────────────────────────────────
+/**
+ * BAL-466 (F3) — the ONLY navigation affordance the `'embedded'` variant's client-lens notice
+ * gets: a plain link to the billing top-up page, opened in a new tab so it never navigates away
+ * from the live call. No wallet snapshot, no modal, no money figure — see the module docblock.
+ */
+function EmbeddedTopUpLink({ label }: Readonly<{ label: string }>): React.JSX.Element {
+  return (
+    <Link
+      href="/billing/top-up"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-primary focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 text-[13.5px] font-semibold underline decoration-1 underline-offset-2 hover:opacity-80 focus-visible:rounded-md focus-visible:ring-2 focus-visible:outline-none"
+    >
+      {label}
+      <ExternalLink className="size-3.5" strokeWidth={2.4} aria-hidden />
+    </Link>
+  );
+}
+
 // ── Notice card ─────────────────────────────────────────────────────────────
 function NoticeCard({
   state,
@@ -288,8 +335,22 @@ function NoticeCard({
    * ⚠ THIS BRANCHES ON `cta.kind`, NOT ON `lens` BY NAME — the server already folded the lens
    * into `cta.kind` (`get-drawdown-state.ts`), so the member's `member_nudge` CTA is untouched
    * by this check and `NudgeButton` renders exactly as shipped in both variants.
+   *
+   * ⚠⚠ BAL-466 (D9.2) — DENY BY DEFAULT. This used to EXCLUDE one known kind
+   * (`'client_topup'`), so a future money-bearing `DrawdownCta['kind']` would have rendered
+   * in-call by default. It now ALLOWS one known kind instead: the embedded variant renders a
+   * CTA only when it is the member NUDGE, which carries no money affordance and whose handler
+   * (`NudgeButton` → `nudgeAdminAction`) is real in-call.
+   *
+   * ⚠ NOT A NEW RULE — the same OQ1 outcome, expressed so that widening `DrawdownCta` fails
+   * SAFE. Payload absence is still the real fee-concealment control (`findForClientView`);
+   * this is defence in depth.
    */
-  const suppressTopUp = variant === 'embedded' && state.cta?.kind === 'client_topup';
+  const allowCta = variant !== 'embedded' || state.cta?.kind === 'member_nudge';
+  // BAL-466 (F3) — the embedded/client_topup dead end: allowCta denies the primary button here
+  // (correctly — see above), so give this ONE arm a plain nav link instead of nothing. See the
+  // module docblock for why `cta.kind === 'client_topup'` already IS the MANAGE_BILLING check.
+  const showEmbeddedTopUpLink = variant === 'embedded' && state.cta?.kind === 'client_topup';
 
   return (
     <div className={cn('relative overflow-hidden rounded-2xl border p-[18px]', tone.card)}>
@@ -314,7 +375,7 @@ function NoticeCard({
               {state.body}
             </div>
           ) : null}
-          {state.cta && !suppressTopUp ? (
+          {state.cta && allowCta ? (
             <div className="mt-3.5">
               <CtaArea
                 cta={state.cta}
@@ -324,6 +385,11 @@ function NoticeCard({
                 onTopUp={onTopUp}
                 onDismiss={onDismiss}
               />
+            </div>
+          ) : null}
+          {!allowCta && showEmbeddedTopUpLink && state.cta ? (
+            <div className="mt-3.5">
+              <EmbeddedTopUpLink label={state.cta.label} />
             </div>
           ) : null}
           <ChannelChips channels={state.channels} lens={state.lens} />
@@ -355,32 +421,12 @@ export function InSessionPanel(props: Readonly<InSessionPanelProps>): React.JSX.
   const isEmbedded = props.variant === 'embedded';
   const card = cardFields(props);
 
-  const startedTracked = useRef(false);
   const lowTracked = useRef(false);
-  /**
-   * BAL-403 fix round 1 (S4) — the FIELD, not the object. `cardFields(props)` returns a fresh
-   * object literal every render, so depending on `card` itself re-ran this effect on every
-   * render (harmless — the ref guard no-ops it — but it regressed from real-value keying). This
-   * depends on the one field the effect actually reads.
-   */
-  const expertProfileId = card?.expertProfileId ?? null;
 
-  // `session_started` — once per mount, only for a live (connected) session, and only in the
-  // `'card'` variant. No explicit connect UI exists in that lane, so the panel's first live
-  // render is the connect seam. ⚠ THE `'embedded'` VARIANT SUPPRESSES THIS — it belongs to the
-  // session's CONNECT seam, which the in-call surface does not own (deferred to the session-open
-  // ticket); `in_session_panel_viewed` is the in-call impression instead.
-  useEffect(() => {
-    if (expertProfileId === null || startedTracked.current) return;
-    if (state.status === 'active' || state.status === 'grace') {
-      startedTracked.current = true;
-      track(SESSION_EVENTS.STARTED, {
-        session_id: sessionId,
-        expert_profile_id: expertProfileId,
-        rate_per_minute_minor: state.ratePerMinuteMinor,
-      });
-    }
-  }, [expertProfileId, state.status, state.ratePerMinuteMinor, sessionId]);
+  // ⚠ BAL-466 (D7) — `session_started` NO LONGER FIRES HERE. It never fired in production (this
+  // component's only render is `variant="embedded"`, whose `expertProfileId` is typed `never`,
+  // so the effect always early-returned) and now fires SERVER-SIDE, at the real connect seam
+  // (`services/meetings/presence-writer.ts`'s co-presence transition). See `connect-session.ts`.
 
   // `low_balance_warning_shown` — a once-per-mount impression the first time the low card shows.
   // ⚠ SUPPRESSED IN `'embedded'`: superseded there by `in_session_panel_viewed { state: 'low' }`,

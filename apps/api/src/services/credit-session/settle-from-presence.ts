@@ -6,12 +6,14 @@
  * arithmetic of its own — every number it writes came out of the pure core, computed from
  * `meetingPresenceRepository.settlementFacts`.
  *
- * ⚠⚠ INERT ON MAIN (D10). Reachable only from a `duration_source='presence'` session, and
- * nothing on main opens one (BAL-400 booking → BAL-466 session open would). Both call sites —
- * `end-meeting.ts` and `meeting-lifecycle-sweep.ts` — invoke this BEST-EFFORT and NON-FATAL, the
- * same posture as `tearDownRoom`, so a settlement fault can never fail an End request or abort a
- * sweep tick. `credit-session-meter-sweep.ts`'s durability-backstop pass (§4.3) is what recovers
- * a meeting that ended with an unsettled session when the best-effort call itself failed.
+ * ⚠⚠ BAL-466 wires the enabling condition. Reachable from a `duration_source='presence'`
+ * session, which `joinMeetingAsMember` now opens when the first CLIENT-side member is admitted
+ * to a `case` meeting. Both call sites — `end-meeting.ts` and `meeting-lifecycle-sweep.ts` —
+ * invoke this BEST-EFFORT and NON-FATAL, the same posture as `tearDownRoom`, so a settlement
+ * fault can never fail an End request or abort a sweep tick. `credit-session-meter-sweep.ts`'s
+ * durability-backstop pass (§4.3) is what recovers a meeting that ended with an unsettled
+ * session when the best-effort call itself failed. Still returns `no_meeting` for every
+ * non-`case` meeting and for a Case whose client never joined.
  *
  * Five refusal codes, ALL returned from this ONE place rather than half thrown from the
  * repository (`session_not_found` / `no_meeting` / `meeting_not_terminal` / `not_presence_sourced`
@@ -155,9 +157,9 @@ export async function settleSessionFromPresence(input: {
 
   // ⚠⚠ Q1 — THE NO-REFUND CLAMP FIRING, MADE LOUD. See `resolveMeetingSettlement`'s docblock:
   // this is a REAL overcharge path (the expert's connection drops mid-call while the client
-  // holds the room open), not merely a data-integrity fault, and it must be revisited before
-  // BAL-466 makes any of this live. Safe to ship today only because nothing opens a `presence`
-  // session (D10).
+  // holds the room open), not merely a data-integrity fault. BAL-466 makes `presence` sessions
+  // live WITHOUT building the refund primitive this would need — a known, accepted residual
+  // risk, surfaced here rather than silently absorbed.
   if (settlement.billableMinutes > settlement.ruleMinutes) {
     log.error(
       {
@@ -170,9 +172,9 @@ export async function settleSessionFromPresence(input: {
       },
       'Presence settlement clamped UP to minutes already drawn — the no-refund rule (Q1). On ' +
         '`held`/`no_show_client` this is the KNOWN LIMITATION (expert drops mid-call, client ' +
-        'holds the room — a real overcharge, revisit before BAL-466); on the two zero shapes it ' +
-        'is a pure data-integrity fault (ticks were posted for a session that should never have ' +
-        'connected).'
+        'holds the room — a real overcharge, unmitigated as of BAL-466); on the two zero shapes ' +
+        'it is a pure data-integrity fault (ticks were posted for a session that should never ' +
+        'have connected).'
     );
   }
 
@@ -246,8 +248,11 @@ export async function settleSessionFromPresence(input: {
   );
 
   // F15 / plan §8.1 / CLAUDE.md (payment events are a mandatory `log.info`) — THE SUCCESS RECORD.
-  // ⚠ This path ships INERT (D10): when BAL-466 turns it on, these structured logs are the ONLY
-  // production evidence it ran at all. A silent money path is undebuggable.
+  // ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this used to say "This path
+  // ships INERT (D10): when BAL-466 turns it on, these structured logs are the ONLY production
+  // evidence it ran at all." BAL-466 turned it on — `joinMeetingAsMember` opens
+  // `duration_source='presence'` sessions at admission, so this path runs live for every
+  // settled Case consultation, and these structured logs ARE the production evidence.
   log.info(
     {
       sessionId: session.id,
@@ -268,8 +273,9 @@ export async function settleSessionFromPresence(input: {
 /**
  * The MEETING-grain entry point the terminal paths call — `end-meeting.ts` and
  * `meeting-lifecycle-sweep.ts` both know a `meetingId`, never a `sessionId`. Resolves the
- * meeting's live credit session and delegates. A meeting with no session — every meeting on main
- * today (D10) — returns `{ ok: false, code: 'no_meeting' }` and touches nothing.
+ * meeting's live credit session and delegates. A meeting with no session — every non-`case`
+ * meeting, and a Case whose client never joined — returns `{ ok: false, code: 'no_meeting' }`
+ * and touches nothing.
  *
  * ⚠⚠ **SYSTEM-ONLY. NEVER CALL THIS FROM A ROUTE** (F7) — it is a thin `meetingId`-keyed alias
  * for {@link settleSessionFromPresence} and inherits every word of that warning: no actor

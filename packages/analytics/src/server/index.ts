@@ -55,6 +55,15 @@ export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';
 export { TRANSCRIPT_SERVER_EVENTS } from '../events/transcript';
 export type { TranscriptVenue } from '../events/transcript';
+// BAL-473 — without this line `apps/api` cannot import `RECORDING_SERVER_EVENTS` at all
+// (it imports `@balo/analytics/server` ONLY). See the BAL-129 note above — the omission
+// lands in `apps/api`'s typecheck, not this package's own.
+export { RECORDING_SERVER_EVENTS } from '../events/recording';
+export type {
+  RecordingTrigger,
+  RecordingFailureStage,
+  RecordingFailureReason,
+} from '../events/recording';
 // BAL-390 — SERVER-ONLY by design: `review_*` here always means the STAR RATING, and
 // none of these three may be added to the client `@/lib/analytics` mock export list.
 export { REVIEW_SERVER_EVENTS } from '../events/review';

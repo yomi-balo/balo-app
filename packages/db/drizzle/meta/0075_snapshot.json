@@ -1,5 +1,5 @@
 {
-  "id": "0b2e89d9-bda8-4d4d-8dae-9a3e21718e1a",
+  "id": "212b5aa7-254b-4976-a68e-24e766e35310",
   "prevId": "98eedc9e-e5b2-4164-8996-dc6ffe7e9ebf",
   "version": "7",
   "dialect": "postgresql",
@@ -4413,43 +4413,29 @@
           "primaryKey": false,
           "notNull": true
         },
-        "party": {
-          "name": "party",
-          "type": "meeting_participant_party",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "delivery_mode": {
-          "name": "delivery_mode",
-          "type": "meeting_calendar_delivery_mode",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
         "connection_id": {
           "name": "connection_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "calendar_id": {
           "name": "calendar_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "vendor_event_id": {
           "name": "vendor_event_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "balo_booking_id": {
           "name": "balo_booking_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -4473,17 +4459,11 @@
         }
       },
       "indexes": {
-        "meeting_calendar_event_meeting_party_uq": {
-          "name": "meeting_calendar_event_meeting_party_uq",
+        "meeting_calendar_event_meeting_uq": {
+          "name": "meeting_calendar_event_meeting_uq",
           "columns": [
             {
               "expression": "meeting_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "party",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -4549,16 +4529,7 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "meeting_calendar_event_party_two_sided": {
-          "name": "meeting_calendar_event_party_two_sided",
-          "value": "\"meeting_calendar_events\".\"party\" IN ('client','expert')"
-        },
-        "meeting_calendar_event_delivery_payload": {
-          "name": "meeting_calendar_event_delivery_payload",
-          "value": "(\"meeting_calendar_events\".\"delivery_mode\" = 'provider_event' AND \"meeting_calendar_events\".\"connection_id\" IS NOT NULL AND \"meeting_calendar_events\".\"calendar_id\" IS NOT NULL AND \"meeting_calendar_events\".\"vendor_event_id\" IS NOT NULL AND \"meeting_calendar_events\".\"balo_booking_id\" IS NOT NULL) OR (\"meeting_calendar_events\".\"delivery_mode\" = 'ics' AND \"meeting_calendar_events\".\"connection_id\" IS NULL AND \"meeting_calendar_events\".\"calendar_id\" IS NULL AND \"meeting_calendar_events\".\"vendor_event_id\" IS NULL AND \"meeting_calendar_events\".\"balo_booking_id\" IS NULL)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.availability_overrides": {
@@ -10331,6 +10302,210 @@
       },
       "isRLSEnabled": false
     },
+    "public.meeting_recordings": {
+      "name": "meeting_recordings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "meeting_id": {
+          "name": "meeting_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "recording_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'recording'"
+        },
+        "daily_recording_id": {
+          "name": "daily_recording_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mux_asset_id": {
+          "name": "mux_asset_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mux_playback_id": {
+          "name": "mux_playback_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failed_stage": {
+          "name": "failed_stage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "capture_ended_at": {
+          "name": "capture_ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration_seconds": {
+          "name": "duration_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ready_at": {
+          "name": "ready_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_deleted_at": {
+          "name": "source_deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "meeting_recording_capturing_idx": {
+          "name": "meeting_recording_capturing_idx",
+          "columns": [
+            {
+              "expression": "meeting_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"meeting_recordings\".\"capture_ended_at\" IS NULL AND \"meeting_recordings\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_recording_meeting_idx": {
+          "name": "meeting_recording_meeting_idx",
+          "columns": [
+            {
+              "expression": "meeting_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"meeting_recordings\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_recording_daily_id_idx": {
+          "name": "meeting_recording_daily_id_idx",
+          "columns": [
+            {
+              "expression": "daily_recording_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"meeting_recordings\".\"daily_recording_id\" IS NOT NULL AND \"meeting_recordings\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_recording_mux_asset_idx": {
+          "name": "meeting_recording_mux_asset_idx",
+          "columns": [
+            {
+              "expression": "mux_asset_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"meeting_recordings\".\"mux_asset_id\" IS NOT NULL AND \"meeting_recordings\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "meeting_recordings_meeting_id_meetings_id_fk": {
+          "name": "meeting_recordings_meeting_id_meetings_id_fk",
+          "tableFrom": "meeting_recordings",
+          "tableTo": "meetings",
+          "columnsFrom": ["meeting_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "meeting_recording_capture_slot": {
+          "name": "meeting_recording_capture_slot",
+          "value": "\"meeting_recordings\".\"capture_ended_at\" IS NOT NULL OR \"meeting_recordings\".\"status\" = 'recording'"
+        },
+        "meeting_recording_duration_non_negative": {
+          "name": "meeting_recording_duration_non_negative",
+          "value": "\"meeting_recordings\".\"duration_seconds\" IS NULL OR \"meeting_recordings\".\"duration_seconds\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.party_domains": {
       "name": "party_domains",
       "schema": "",
@@ -12837,6 +13012,79 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.mux_webhook_events": {
+      "name": "mux_webhook_events",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "passthrough": {
+          "name": "passthrough",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payload_hash": {
+          "name": "payload_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "processed_at": {
+          "name": "processed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "mux_webhook_events_event_id_idx": {
+          "name": "mux_webhook_events_event_id_idx",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.apiroc_webhook_events": {
       "name": "apiroc_webhook_events",
       "schema": "",
@@ -13810,11 +14058,6 @@
       "schema": "public",
       "values": ["pending", "active", "requires_action", "failed"]
     },
-    "public.meeting_calendar_delivery_mode": {
-      "name": "meeting_calendar_delivery_mode",
-      "schema": "public",
-      "values": ["provider_event", "ics"]
-    },
     "public.meeting_context_type": {
       "name": "meeting_context_type",
       "schema": "public",
@@ -13952,6 +14195,11 @@
       "name": "proposal_status",
       "schema": "public",
       "values": ["submitted", "accepted", "withdrawn", "draft", "changes_requested", "resubmitted"]
+    },
+    "public.recording_status": {
+      "name": "recording_status",
+      "schema": "public",
+      "values": ["recording", "source_ready", "ingesting", "ready", "failed"]
     },
     "public.request_expert_relationship_status": {
       "name": "request_expert_relationship_status",

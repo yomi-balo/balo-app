@@ -231,9 +231,13 @@ export interface OpenSessionInput {
    * parties. Nothing here can check it — the predicate is cross-table and cannot be a CHECK,
    * an FK, or (by house style) a repository gate; the full ruling is on
    * `schema/credit-sessions.ts`. A divergent pair bills one engagement while BAL-425's
-   * sweep, which resolves through the seam, ages out another. CARRIED BY **BAL-400**
-   * (booking — the first caller to pass both) with **BAL-129** supplying the meeting;
-   * **BAL-412** and reporting consume `engagement_id` as given.
+   * sweep, which resolves through the seam, ages out another.
+   *
+   * ⚠ SUPERSEDED. BAL-400 (booking) was the recorded intent and is NOT the seam. **BAL-466**
+   * opens the session at ADMISSION — `joinMeetingAsMember`, first CLIENT-side member, `case`
+   * contexts only — and passes `meetingId` + `engagementId` + `durationSource: 'presence'`
+   * from there. `book-consultation.ts`'s "THE MONEY IS OUT OF SCOPE" stays true. **BAL-412**
+   * and reporting consume `engagement_id` as given.
    */
   meetingId?: string | null;
   engagementId?: string | null;
@@ -241,11 +245,12 @@ export interface OpenSessionInput {
    * BAL-412 seam (D11) — how this session's billable duration will be established. Defaults
    * to `'live_capture'`, which is exactly what every shipped caller gets today.
    *
-   * ⚠⚠ **NOTHING ON MAIN PASSES THIS, AND THAT IS THE INERTNESS (D10).** `'presence'` is the
-   * enabling condition for the entire settlement engine below — `settleFromPresence`,
-   * `findPresenceUnsettled` and the widened `findMeterable` are all unreachable in production
-   * until a caller sets it. The caller that will is **BAL-466** (session open), behind
-   * **BAL-400** (booking); `apps/web`'s `openSessionAction` has zero non-test callers today.
+   * ⚠ SUPERSEDED. BAL-400 (booking) was the recorded intent and is NOT the seam. **BAL-466**
+   * opens the session at ADMISSION — `joinMeetingAsMember`, first CLIENT-side member, `case`
+   * contexts only — and passes `meetingId` + `engagementId` + `durationSource: 'presence'`
+   * from there. `book-consultation.ts`'s "THE MONEY IS OUT OF SCOPE" stays true. `'presence'`
+   * is the enabling condition for the entire settlement engine below — `settleFromPresence`,
+   * `findPresenceUnsettled` and the widened `findMeterable`.
    *
    * ⚠ WRITE-ONCE, at `open`, inside the wallet advisory lock — like `meetingId` /
    * `engagementId` and for the same reason. NO UPDATE path anywhere sets it, so a session
@@ -258,7 +263,8 @@ export interface OpenSessionInput {
    * database can state, and this repository does not gate. `findPresenceUnsettled` requires
    * `meeting_id IS NOT NULL` by construction, so a meeting-less `presence` session is simply
    * never settled by the backstop — it would sit unsettled and visible, rather than settle
-   * wrongly. The obligation is BAL-466's.
+   * wrongly. The obligation was BAL-466's, and BAL-466 discharges it: `joinMeetingAsMember`
+   * passes `durationSource: 'presence'` alongside `meetingId`/`engagementId`.
    */
   durationSource?: CreditDurationSource;
 }
@@ -325,14 +331,21 @@ export interface EndSessionResult {
  * DISCRIMINATED UNION rather than a flat `{count, count, number}` triple.
  *
  * ⚠⚠ THE UNION IS THE POINT: "NO DATA" AND "A$0.00" MUST NOT BE THE SAME VALUE.
- * Nothing writes `credit_sessions.engagement_id` today (the live `openSession` service
- * passes neither it nor `meeting_id`; BAL-400 is the ticket that will), so EVERY case that
- * exists right now aggregates to `not_yet`. If that state carried `earningsAudMinor: 0`,
- * the case surface would render "A$0.00" — a MONEY CLAIM — for every expert on the
- * platform, and no amount of downstream care could tell it apart from a genuinely-zero
- * finalized session. Here the figure is STRUCTURALLY UNREPRESENTABLE until something has
- * actually finalized: `not_yet` and `pending` cannot HOLD a number, so the surface is
- * forced to render its designed empty/pending copy instead of a fabricated zero.
+ *
+ * ⚠⚠ BAL-466 (F9, review fix round) — CORRECTING A NOW-FALSE CLAIM. This used to say "nothing
+ * writes `credit_sessions.engagement_id` today… so EVERY case aggregates to `not_yet`" — true
+ * on `main` before this PR, false as of it: `openSession` (`open-session.ts:192-194`) spreads
+ * `{ meetingId, engagementId }` on every session the admission seam opens
+ * (`joinMeetingAsMember`, D1), so a `pending` block is reachable the moment a client is admitted
+ * to a Case call, and `finalized` the moment settlement runs. This IS a fourth money surface
+ * going live with BAL-466 — named in the PR body — not a hypothetical future state. `not_yet`
+ * remains correct for every case with NO admitted client, which is still the common case today.
+ * If a `pending`/`finalized` result carried `earningsAudMinor: 0`, the case surface would render
+ * "A$0.00" — a MONEY CLAIM — for every expert on the platform, and no amount of downstream care
+ * could tell it apart from a genuinely-zero finalized session. Here the figure is STRUCTURALLY
+ * UNREPRESENTABLE until something has actually finalized: `not_yet` and `pending` cannot HOLD a
+ * number, so the surface is forced to render its designed empty/pending copy instead of a
+ * fabricated zero.
  *
  * A `finalized` block CAN legitimately be `0` (a finalized session with zero connected
  * minutes). That is a REAL zero, and it is the reason the three states must stay distinct.
@@ -944,7 +957,10 @@ export const creditSessionsRepository = {
           meetingId: input.meetingId ?? null,
           engagementId: input.engagementId ?? null,
           // BAL-412 seam — write-once provenance. Omitted ⇒ `'live_capture'`, i.e. exactly
-          // what every shipped caller gets. NOTHING on main passes `'presence'` (D10).
+          // what every shipped caller gets. ⚠⚠ G4 (second review round) — CORRECTING A
+          // NOW-FALSE CLAIM: this used to say "NOTHING on main passes `'presence'` (D10)". As
+          // of BAL-466, `openSession` passes it for every session `joinMeetingAsMember` opens
+          // at admission — see the coherence guard's docblock (`open-session.ts`, D4/G1).
           durationSource: input.durationSource ?? 'live_capture',
         })
         .returning();
@@ -1148,10 +1164,16 @@ export const creditSessionsRepository = {
    * when its meeting resolves to this very case. That is the wanted behaviour, and it is
    * exactly what the divergence guard asserts.
    *
-   * ⚠ RETURNS `not_yet` FOR EVERY CASE ON `main` TODAY, AND THAT IS CORRECT — the live
-   * `openSession` service passes neither column (BAL-400 will). Do not "fix" the empty
-   * result by widening the read. See {@link CaseExpertEarningsAggregate} for why the empty
-   * state is a distinct value rather than a zero.
+   * ⚠⚠ BAL-466 (F9, review fix round) — CORRECTING A NOW-FALSE CLAIM. This used to say "RETURNS
+   * `not_yet` FOR EVERY CASE ON `main` TODAY… the live `openSession` service passes neither
+   * column (BAL-400 will)". `openSession` passes BOTH `meetingId` and `engagementId` as of this
+   * PR, for every session the admission seam opens (`joinMeetingAsMember`, D1) — so `pending`
+   * and `finalized` are now reachable for a case with an admitted client, INCLUDING mid-call,
+   * while the consultation is still live. `not_yet` remains correct only for a case with no
+   * admitted client at all. Still do not "fix" an empty result by widening the read — the AS-GIVEN
+   * rule three paragraphs up is unchanged; what changed is only how often the read is empty. See
+   * {@link CaseExpertEarningsAggregate} for why the empty state is a distinct value rather than a
+   * zero.
    *
    * FINALIZED-ONLY SUMMATION, mirroring `buildExpertMoneyBlock` ("pending ⇒ every figure is
    * 0"): a session whose `billing_finalized_at` is NULL contributes to
@@ -1572,8 +1594,8 @@ export const creditSessionsRepository = {
    * ⚠ IT DOES NOT CALL STRIPE. Pure DB, like `end()`: it returns `overdraftMinor` +
    * `mandateActive` for the service to drive the off-session charge.
    *
-   * ⚠ INERT ON MAIN (D10) — reachable only from a `duration_source='presence'` session, which
-   * nothing opens (BAL-400 booking → BAL-466 session open).
+   * ⚠ BAL-466 wires the enabling condition — reachable from a `duration_source='presence'`
+   * session, which `joinMeetingAsMember` now opens at admission to a `case` meeting.
    *
    * `exec` defaults to the base client and exists so a test can drive TWO GENUINELY
    * SIMULTANEOUS backends (`credit-sessions.settlement.concurrency.integration.test.ts`) —
@@ -2159,7 +2181,12 @@ export const creditSessionsRepository = {
    * Ordered oldest-ended first and batch-bounded via `limit`. ⚠ The CALLER must `log.warn`
    * when the batch FILLS — a silent cap on a money backstop reads as "nothing was stranded".
    *
-   * ⚠ RETURNS `[]` ON MAIN, ALWAYS (D10): nothing sets `duration_source='presence'`.
+   * ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM. This used to say "RETURNS `[]`
+   * ON MAIN, ALWAYS (D10): nothing sets `duration_source='presence'`" — true before BAL-466,
+   * false as of it: `openSession` (D1/D4) passes `durationSource: 'presence'` from
+   * `joinMeetingAsMember`'s admission seam for every Case consultation a client is admitted to,
+   * so this now returns real rows once such a session's meeting has ended and settlement has
+   * not yet landed within the grace window.
    */
   async findPresenceUnsettled(cutoff: Date, limit = 100): Promise<CreditSession[]> {
     const rows = await db

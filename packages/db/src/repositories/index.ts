@@ -475,6 +475,9 @@ export {
   type InsertReceivedDailyEventInput,
 } from './daily-webhook-events';
 export type { DailyWebhookEvent, NewDailyWebhookEvent } from '../schema';
+// ── Mux webhook idempotency (BAL-473) — the event-id log for `POST /webhooks/mux` ────────
+export { muxWebhookEventsRepository, type InsertReceivedMuxEventInput } from './mux-webhook-events';
+export type { MuxWebhookEvent, NewMuxWebhookEvent } from '../schema';
 // ── Apiroc webhook idempotency (BAL-468) — the THIRD webhook marker log ─────
 export {
   apirocWebhookEventsRepository,
@@ -555,6 +558,19 @@ export {
   type SoftDeleteMeetingFileInput,
   type FindMeetingFileInput,
 } from './meeting-files';
+// ── Meeting recordings (BAL-473) — 1:n recording SEGMENTS anchored on `meetings.id` ──────
+export {
+  meetingRecordingsRepository,
+  MEETING_RECORDING_LIST_LIMIT,
+  FAILURE_REASON_MAX_LENGTH,
+  type InsertCapturingRecordingInput,
+  type MarkRecordingStartedInput,
+  type MarkRecordingSourceReadyInput,
+  type MarkRecordingIngestingInput,
+  type MarkRecordingReadyInput,
+  type MarkRecordingFailedInput,
+  type MarkRecordingSourceDeletedInput,
+} from './meeting-recordings';
 /**
  * The judgement-free "who owns this meeting context" READ (BAL-423). Exported because BOTH
  * apps must resolve tenancy from ONE definition — it is NOT a gate, and every caller still
@@ -581,6 +597,9 @@ export type {
   MeetingFile,
   NewMeetingFile,
   MeetingFileSource,
+  MeetingRecording,
+  NewMeetingRecording,
+  MeetingRecordingStatus,
 } from '../schema';
 // ── Guest participation model (BAL-408 / ADR-1044) ─────────────────────────
 export {

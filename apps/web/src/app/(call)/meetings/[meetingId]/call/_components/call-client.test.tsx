@@ -26,11 +26,14 @@ import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
  *      frame showed the delivering EXPERT the CLIENT's billing promise.
  */
 
-const { mockJoinAsMemberAction, mockPush, mockReplace } = vi.hoisted(() => ({
-  mockJoinAsMemberAction: vi.fn(),
-  mockPush: vi.fn(),
-  mockReplace: vi.fn(),
-}));
+const { mockJoinAsMemberAction, mockPush, mockReplace, mockGetMeetingDrawdownStateAction } =
+  vi.hoisted(() => ({
+    mockJoinAsMemberAction: vi.fn(),
+    mockPush: vi.fn(),
+    mockReplace: vi.fn(),
+    /** BAL-466 — the post-join re-resolve probe. */
+    mockGetMeetingDrawdownStateAction: vi.fn(),
+  }));
 
 /**
  * ⚠ BOTH `push` AND `replace` ARE MOCKED even though the component only calls `replace`. Keeping
@@ -45,6 +48,9 @@ vi.mock('@/app/join/_actions/join-as-member', () => ({
   joinAsMemberAction: mockJoinAsMemberAction,
 }));
 vi.mock('@/components/balo/meetings/meeting-frame', () => ({ preloadMeetingFrame: vi.fn() }));
+vi.mock('../_actions/get-meeting-drawdown-state', () => ({
+  getMeetingDrawdownStateAction: mockGetMeetingDrawdownStateAction,
+}));
 
 /**
  * ⚠ THE SURFACE IS STOOD IN FOR BY A **ROUTE-CONTEXT PROBE**, deliberately. This file is about
@@ -134,6 +140,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({ shouldAdvanceTime: true });
   mockJoinAsMemberAction.mockResolvedValue({ success: true, grant: grantWith() });
+  // BAL-466 — the probe defaults to "no balance slot" so pre-existing tests that never opt in
+  // exercise exactly what they did before this effect joined the component.
+  mockGetMeetingDrawdownStateAction.mockResolvedValue({ success: true, state: null });
 });
 
 afterEach(() => {
@@ -422,6 +431,184 @@ describe('CallClient — BAL-403, the balance registration', () => {
     renderClient({ hasBalance: true });
 
     expect(await surface()).toHaveAttribute('data-has-balance', 'true');
+  });
+});
+
+/** BAL-466 (F15) — the pre-filter arms the probe on: this is a `case` meeting AND the viewer is the CLIENT. */
+function caseClientGrant(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return grantWith({
+    context: { type: 'case', id: CONTEXT_ID, title: 'Salesforce flow review' },
+    viewerRole: 'client',
+    ...extra,
+  });
+}
+
+describe('CallClient — BAL-466, the post-join re-resolve probe', () => {
+  beforeEach(() => {
+    mockJoinAsMemberAction.mockResolvedValue({ success: true, grant: caseClientGrant() });
+  });
+
+  it('with hasBalance:false, a successful join triggers EXACTLY ONE probe, and a non-null state registers the slot', async () => {
+    mockGetMeetingDrawdownStateAction.mockResolvedValue({
+      success: true,
+      state: { key: 'healthy' },
+    });
+
+    renderClient({ hasBalance: false });
+    await surface();
+
+    await waitFor(() => {
+      expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+    });
+    expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledWith({ meetingId: MEETING_ID });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('surface')).toHaveAttribute('data-has-balance', 'true');
+    });
+    // ⚠ F18 — re-asserted AFTER the state update that re-runs the effect (the dep array includes
+    // `balanceAppeared`), which is exactly when a double-fire would actually show up. The
+    // earlier `waitFor` above resolves the instant the count first hits 1 and can never observe
+    // a SECOND call arriving after that point.
+    expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('with hasBalance:true, no probe ever fires — the RSC verdict already registers the slot', async () => {
+    renderClient({ hasBalance: true });
+    await surface();
+
+    expect(mockGetMeetingDrawdownStateAction).not.toHaveBeenCalled();
+  });
+
+  it('a probe that answers { success: true, state: null } leaves the slot absent — the shipped inert degradation, and is NOT retried', async () => {
+    mockGetMeetingDrawdownStateAction.mockResolvedValue({ success: true, state: null });
+
+    renderClient({ hasBalance: false });
+    const el = await surface();
+
+    await waitFor(() => {
+      expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+    });
+    // A real verdict — not a transport blip — so F4's retry never engages, even after time passes.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+    expect(el).toHaveAttribute('data-has-balance', 'false');
+  });
+
+  it('the probe does not fire before the grant lands', async () => {
+    // Never resolves — the join stays pending.
+    mockJoinAsMemberAction.mockImplementation(() => new Promise(() => {}));
+
+    renderClient({ hasBalance: false });
+
+    expect(mockGetMeetingDrawdownStateAction).not.toHaveBeenCalled();
+  });
+
+  describe('F15 — pre-filtered to a case meeting where the viewer is the client', () => {
+    it('an EXPERT-side join never probes — the composed gate would answer null anyway', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({
+        success: true,
+        grant: caseClientGrant({ viewerRole: 'expert' }),
+      });
+
+      renderClient({ hasBalance: false });
+      await surface();
+
+      expect(mockGetMeetingDrawdownStateAction).not.toHaveBeenCalled();
+    });
+
+    it('a non-case context (e.g. project_discovery) never probes', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({
+        success: true,
+        grant: caseClientGrant({
+          context: { type: 'project_discovery', id: CONTEXT_ID, title: null },
+        }),
+      });
+
+      renderClient({ hasBalance: false });
+      await surface();
+
+      expect(mockGetMeetingDrawdownStateAction).not.toHaveBeenCalled();
+    });
+
+    it('no context at all (guest-shaped fallback) never probes', async () => {
+      mockJoinAsMemberAction.mockResolvedValue({ success: true, grant: grantWith() });
+
+      renderClient({ hasBalance: false });
+      await surface();
+
+      expect(mockGetMeetingDrawdownStateAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('F4 — one bounded retry on a transport failure', () => {
+    it('retries exactly once after a failed fetch, and a success on the retry registers the slot', async () => {
+      mockGetMeetingDrawdownStateAction
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockResolvedValueOnce({ success: true, state: { key: 'healthy' } });
+
+      renderClient({ hasBalance: false });
+      const el = await surface();
+
+      await waitFor(() => {
+        expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+      });
+      expect(el).toHaveAttribute('data-has-balance', 'false');
+
+      // The shipped join-retry cadence (`pollIntervalFor(0)` = 5s) — not a second schedule.
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await waitFor(() => {
+        expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(2);
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('surface')).toHaveAttribute('data-has-balance', 'true');
+      });
+    });
+
+    it('a SECOND consecutive failure leaves the slot absent — bounded, never an unbounded poll', async () => {
+      mockGetMeetingDrawdownStateAction.mockRejectedValue(new Error('network down'));
+
+      renderClient({ hasBalance: false });
+      const el = await surface();
+
+      await waitFor(() => {
+        expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await waitFor(() => {
+        expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(2);
+      });
+
+      // No third attempt, ever — the retry budget is bounded at one.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(2);
+      expect(el).toHaveAttribute('data-has-balance', 'false');
+    });
+
+    it('unmounting before the retry fires cancels it — no state update after unmount', async () => {
+      mockGetMeetingDrawdownStateAction.mockRejectedValue(new Error('network down'));
+
+      const { unmount } = render(
+        <CallClient
+          meetingId={MEETING_ID}
+          viewerName="Dana Okoro"
+          joinLinkUrl={JOIN_LINK}
+          hasChat
+          isRealtimeEnabled
+          chatChannelName={`conversation:${CONVERSATION_ID}`}
+          hasBalance={false}
+        />
+      );
+      await surface();
+
+      await waitFor(() => {
+        expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+      });
+      unmount();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(mockGetMeetingDrawdownStateAction).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

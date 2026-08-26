@@ -121,6 +121,19 @@ describe('endSession', () => {
     expect(mockEnd).not.toHaveBeenCalled();
   });
 
+  it('F1 (BAL-466 fix round) — refuses a presence-sourced session (forbidden, no metering or ending)', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      session: { ...SESSION, durationSource: 'presence' },
+      role: 'member',
+    });
+    const result = await endSession('session_1', 'user_1');
+    expect(result).toEqual({ ok: false, code: 'forbidden' });
+    expect(mockPark).not.toHaveBeenCalled();
+    expect(mockDriveSession).not.toHaveBeenCalled();
+    expect(mockEnd).not.toHaveBeenCalled();
+  });
+
   it('BAL-399: an EXTERNAL session PARKS awaiting duration — no metering / end / settlement', async () => {
     mockAuthorize.mockResolvedValue({
       ok: true,

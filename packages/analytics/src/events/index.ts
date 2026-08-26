@@ -212,6 +212,15 @@ export {
   type TranscriptServerEventMap,
   type TranscriptVenue,
 } from './transcript';
+// BAL-473 — the meeting-recording pipeline's SERVER-ONLY family (Daily cloud recording → Mux
+// ingest → signed playback). See `./recording` for why: no vendor ids, no vendor error text.
+export {
+  RECORDING_SERVER_EVENTS,
+  type RecordingServerEventMap,
+  type RecordingTrigger,
+  type RecordingFailureStage,
+  type RecordingFailureReason,
+} from './recording';
 export {
   REVIEW_SERVER_EVENTS,
   type ReviewServerEventMap,

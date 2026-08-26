@@ -107,6 +107,15 @@ export * from './reschedulable';
 // BAL-411 — the reschedule-PROPOSAL lifecycle's pure core: lazy expiry, liveness, and the
 // answer-time refusal vocabulary. Pure, no clock read — `now` is always injected.
 export * from './reschedule-proposal';
+// BAL-466 (D3) — the ONE participation rule ("is this actor a participant of this meeting"),
+// as a pure core over injected reads. `apps/api`'s gate and `apps/web`'s in-call money surface
+// are both thin fetch-and-call wrappers over this, so there is exactly one definition.
+export * from './participation';
+// BAL-473 — the meeting-recording concealment boundary: the client-safe view, its exact key
+// set, the concealed-key list, and the pure `@balo/db` row → view projection. Restated (not
+// imported) against `packages/db/src/schema/meeting-recordings.ts`'s `recordingStatusEnum`,
+// pinned to it at compile time via that file's `Exact<>` assertion.
+export * from './recording-view';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

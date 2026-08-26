@@ -11,12 +11,7 @@ vi.mock('../api-client', () => ({
   callSessionApi: (...args: unknown[]) => mockCall(...args),
 }));
 
-import {
-  connectSessionAction,
-  endSessionAction,
-  nudgeAdminAction,
-  openSessionAction,
-} from './session-mutations';
+import { nudgeAdminAction, openSessionAction } from './session-mutations';
 
 const EXPERT_ID = 'b0000000-0000-4000-8000-000000000001';
 const SESSION_ID = 'c0000000-0000-4000-8000-000000000002';
@@ -152,46 +147,14 @@ describe('openSessionAction', () => {
   });
 });
 
-describe('connectSessionAction', () => {
-  it('connects and returns the drawdown state', async () => {
-    const drawdown = { key: 'healthy', lens: 'client' };
-    mockCall.mockResolvedValue({ ok: true, status: 200, data: drawdown });
-
-    const result = await connectSessionAction(SESSION_ID);
-
-    expect(mockCall).toHaveBeenCalledWith(`/sessions/${SESSION_ID}/connect`, 'POST', {});
-    expect(result).toEqual({ success: true, data: drawdown });
-  });
-
-  it('rejects a malformed session id without calling the api', async () => {
-    const result = await connectSessionAction('nope');
-    expect(mockCall).not.toHaveBeenCalled();
-    expect(result.success).toBe(false);
-  });
-});
-
-describe('endSessionAction', () => {
-  it('ends and returns the settlement summary', async () => {
-    mockCall.mockResolvedValue({
-      ok: true,
-      status: 200,
-      data: { settlementStatus: 'not_required', overdraftSettledMinor: 0 },
-    });
-
-    const result = await endSessionAction(SESSION_ID);
-
-    expect(mockCall).toHaveBeenCalledWith(`/sessions/${SESSION_ID}/end`, 'POST', {});
-    expect(result.success).toBe(true);
-  });
-
-  it('returns a friendly error when the api rejects', async () => {
-    mockCall.mockResolvedValue({ ok: false, status: 409, error: 'x' });
-    const result = await endSessionAction(SESSION_ID);
-    expect(result.success).toBe(false);
-    if (result.success) throw new Error('expected failure');
-    expect(result.error.toLowerCase()).not.toContain('overdraft');
-  });
-});
+// ⚠ BAL-466 (F1, review fix round) — `connectSessionAction` and `endSessionAction` were DELETED
+// from `session-mutations.ts`, along with their describe blocks here. Both were zero-caller
+// `'use server'` exports gated only on CONSUME_CREDITS (any live company member), which became a
+// live payment-manipulation surface once the join seam (D1) started opening `'presence'`
+// sessions — see the module docblock in `session-mutations.ts` for the full account. A
+// `'presence'` session's `connect`/`end` lifecycle is now system-only; the api's `connectSession`
+// / `endSession` refuse an actor-initiated attempt outright, covered by
+// `apps/api/src/services/credit-session/connect-session.test.ts` and `end-session.test.ts`.
 
 describe('nudgeAdminAction', () => {
   it('nudges and returns ok', async () => {

@@ -28,6 +28,11 @@ export { meetingFactory } from './meeting.factory';
 export type { MeetingFactoryResult, MeetingFactoryContext } from './meeting.factory';
 export { meetingGuestFactory } from './meeting-guest.factory';
 export type { MeetingGuestFactoryResult } from './meeting-guest.factory';
+export { meetingRecordingFactory } from './meeting-recording.factory';
+export type {
+  MeetingRecordingFactoryResult,
+  MeetingRecordingFactoryOverrides,
+} from './meeting-recording.factory';
 export { transcriptFactory, transcriptArtifactFactory } from './transcript.factory';
 export type {
   TranscriptFactoryResult,

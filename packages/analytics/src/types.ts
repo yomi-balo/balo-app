@@ -38,6 +38,7 @@ import type { ScheduleEventMap } from './events/schedule';
 import type { MeetingCallEventMap } from './events/meeting-call';
 import type { MeetingPanelEventMap } from './events/meeting-panel';
 import type { TranscriptServerEventMap } from './events/transcript';
+import type { RecordingServerEventMap } from './events/recording';
 import type { ReviewServerEventMap } from './events/review';
 import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
@@ -119,6 +120,9 @@ export type ServerEvents = ExpertServerEventMap &
   // BAL-414 (D7) — SERVER-ONLY: both origins (the API credential-break/repair triggers and
   // the web dashboard read path, an `import 'server-only'` RSC) are server contexts.
   // Deliberately absent from `AllEvents`.
-  ExpertSetupServerEventMap;
+  ExpertSetupServerEventMap &
+  // BAL-473 — SERVER-ONLY: deliberately absent from `AllEvents` above. Every producer is an
+  // `apps/api` webhook arm or BullMQ job; there is no acting human on any of these paths.
+  RecordingServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

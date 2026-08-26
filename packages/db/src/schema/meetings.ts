@@ -6,6 +6,7 @@ import { meetingContexts } from './meeting-contexts';
 import { meetingPresence } from './meeting-presence';
 import { meetingGuests } from './guests';
 import { meetingFiles } from './meeting-files';
+import { meetingRecordings } from './meeting-recordings';
 
 /**
  * meetings (BAL-418 / ADR-1045 §2 + ADR-1043 §1) — the cross-cutting Meeting primitive.
@@ -232,6 +233,13 @@ export const meetingsRelations = relations(meetings, ({ many }) => ({
   // string `createPresignedMeetingFileDownload` signs. Any read that can reach a route MUST
   // pass an explicit `columns:` projection that omits it.
   files: many(meetingFiles),
+  // BAL-473. ⚠ `reference_drizzle_with_hydration_leaks_secrets`: a bare
+  // `with: { recordings: true }` hydrates `daily_recording_id`, `mux_asset_id`,
+  // `failed_stage` and `failure_reason` — all vendor/ops columns that the client-safe
+  // projection `toMeetingRecordingView` (`@balo/shared/meetings`) exists to conceal. Any
+  // read that can reach a route MUST pass an explicit `columns:` projection, or go through
+  // `meetingRecordingsRepository.listByMeeting` and project on the way out.
+  recordings: many(meetingRecordings),
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────

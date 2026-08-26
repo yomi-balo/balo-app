@@ -123,8 +123,11 @@ export const transcripts = pgTable(
 
     // Artifact #1: the canonical raw segments (jsonb owned here via `$type`).
     canonical: jsonb('canonical').notNull().$type<CanonicalTranscript>(),
-    // No live capture producer exists (BAL-126/140) — deferred everywhere.
-    recordingRef: text('recording_ref'),
+    // ⚠ `recording_ref` WAS DROPPED BY BAL-473 (D3, migration 0076). It was a producer-less
+    // nullable `text` standing in for "where the recording lives"; every write site passed
+    // `null`. Recordings now have a real anchor — `meeting_recordings`, 1:n SEGMENTS per
+    // meeting on `meetings.id` — which a single string on this row could only contradict.
+    // Do not re-add it: join through `meeting_id` instead.
 
     // Captured at the summary stage; survives even if not promoted to first-class action items.
     extractedActionItems: jsonb('extracted_action_items').$type<ExtractedActionItem[]>(),

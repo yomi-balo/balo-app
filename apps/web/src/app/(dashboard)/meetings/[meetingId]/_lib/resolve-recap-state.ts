@@ -109,9 +109,11 @@ export function resolveArtifacts(input: ArtifactsInput): RecapArtifactsView {
  * map its null `billing_finalized_at` to `pending` and the recap would read "Charge pending"
  * forever. A meeting whose only session was cancelled therefore falls to M1.
  *
- * ⚠ NO POLICY PROSE, NO MINIMUM, NO FLOOR, EVER. There is no 15-minute line here because
- * there is no 15-minute rule to state (BAL-412 is Backlog), and stating one would be a money
- * claim the page cannot back.
+ * ⚠ NO POLICY PROSE, NO MINIMUM, NO FLOOR, EVER. BAL-412 SHIPPED a 15-minute billing floor and
+ * BAL-466 made it reachable — and this page still does not state it. The figure the fragment
+ * renders is already floor-inclusive; restating the policy would be a claim this page cannot
+ * recompute (the floor is env-resolvable in `apps/api` alone), and a stale one the day it
+ * changes.
  */
 export function resolveMoneyView(input: {
   hasSession: boolean;

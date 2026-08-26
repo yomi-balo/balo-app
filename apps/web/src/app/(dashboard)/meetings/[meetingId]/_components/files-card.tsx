@@ -11,11 +11,18 @@ import { getMeetingFileDownloadAction } from '../_actions/get-meeting-file-downl
 /**
  * BAL-388 §R10 — FILES.
  *
- * ⚠⚠ IT IS "FILES", NOT "MEETING RECORDS", AND THE RENAME IS THE DESIGN DECISION. There is no
- * recording anywhere (owner decision D-B: no Mux, no recording column, Daily recording not
- * enabled), so a "records" container would always read as one-of-two with something missing.
- * "Files" is a category that is complete at any size, including zero. NO recording row, NO
- * coming-soon, NO disabled placeholder.
+ * ⚠ D-B IS SUPERSEDED BY BAL-473 (ADR-1013's 2026-07-14 amendment). Daily cloud recording, the
+ * `meeting_recordings` table and the Mux ingest all exist as of that ticket. The "Files" rename
+ * STANDS — it was always the better container name — but the reason recorded below ("there is
+ * no recording anywhere") is no longer true. **Whether this card gains a recording row is
+ * BAL-440's decision, not this file's** — BAL-473 ships the producer only and this component's
+ * rendered shape is UNCHANGED.
+ *
+ * ⚠⚠ THE ORIGINAL DECISION, FOR HISTORY (NOT DELETED): "It is 'Files', not 'Meeting Records',
+ * and the rename is the design decision. There is no recording anywhere (owner decision D-B: no
+ * Mux, no recording column, Daily recording not enabled), so a 'records' container would always
+ * read as one-of-two with something missing. 'Files' is a category that is complete at any
+ * size, including zero. NO recording row, NO coming-soon, NO disabled placeholder."
  *
  * ⚠⚠ `r2Key` NEVER CROSSES IN THE PAYLOAD. `MeetingFileView` omits it structurally, so the
  * props this component receives carry a file id and nothing else. Downloads go through

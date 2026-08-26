@@ -42,6 +42,7 @@ import {
 } from './meeting-notices';
 import { MeetingToolbar } from './meeting-toolbar';
 import { MeetingTopBar, type MeetingRoster } from './meeting-top-bar';
+import { RecordingIndicator } from './recording-indicator';
 import { PeoplePanel } from './people-panel';
 import { FilesPanel } from './files-panel';
 import { ChatPanel } from './chat-panel';
@@ -1480,29 +1481,35 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
           `pointer-events-none` on the rail keeps the stage clickable; each pill re-enables its
           own so "Change devices" still works.
         */}
-        {pill === null && deviceNotice === null ? null : (
-          <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex flex-col items-center gap-2">
-            {pill === null ? null : (
-              <span className="pointer-events-auto">
-                <MeetingPill
-                  message={pill}
-                  actionLabel="Change devices"
-                  onAction={() => setSettingsOpen(true)}
-                />
-              </span>
-            )}
-            {deviceNotice === null ? null : (
-              <span className="pointer-events-auto">
-                <MeetingPill
-                  message={deviceNotice}
-                  tone="warning"
-                  actionLabel="Show me how"
-                  onAction={() => setSettingsOpen(true)}
-                />
-              </span>
-            )}
-          </div>
-        )}
+        {
+          // BAL-473 — the rail now ALSO hosts `<RecordingIndicator/>`, which renders on its own
+          // condition (`isRecording`) this component cannot see ahead of time. So the rail
+          // mounts UNCONDITIONALLY (it is `pointer-events-none` and an empty container costs
+          // nothing) rather than gating on `pill`/`deviceNotice` alone; each pill keeps its own
+          // null check.
+        }
+        <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex flex-col items-center gap-2">
+          <RecordingIndicator />
+          {pill === null ? null : (
+            <span className="pointer-events-auto">
+              <MeetingPill
+                message={pill}
+                actionLabel="Change devices"
+                onAction={() => setSettingsOpen(true)}
+              />
+            </span>
+          )}
+          {deviceNotice === null ? null : (
+            <span className="pointer-events-auto">
+              <MeetingPill
+                message={deviceNotice}
+                tone="warning"
+                actionLabel="Show me how"
+                onAction={() => setSettingsOpen(true)}
+              />
+            </span>
+          )}
+        </div>
 
         <div className="relative flex min-h-0 flex-1">
           <motion.div
@@ -1867,7 +1874,7 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
           focusOpener(id);
           return null;
         }
-        track(MEETING_PANEL_EVENTS.OPENED, { panel: id });
+        track(MEETING_PANEL_EVENTS.OPENED, { panel: id, auto: false });
         return id;
       });
     },
@@ -1882,9 +1889,9 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
   const openPanel = useCallback((id: MeetingPanelId): void => {
     setPanel((current) => {
       if (current === id) return current;
-      // ⚠ THE SAME FUNNEL EVENT A MANUAL OPEN FIRES — auto-opens are not distinguished from
-      // manual ones today (noted as a future property addition in the BAL-403 plan, not built).
-      track(MEETING_PANEL_EVENTS.OPENED, { panel: id });
+      // BAL-466 (D9.3) — THE SAME FUNNEL EVENT A MANUAL OPEN FIRES, now distinguished by
+      // `auto: true` — this is the ladder's path, never a click.
+      track(MEETING_PANEL_EVENTS.OPENED, { panel: id, auto: true });
       return id;
     });
   }, []);

@@ -250,7 +250,9 @@ describe('InCallBalancePanel — analytics', () => {
 
   it('does NOT fire session_started or low_balance_warning_shown', () => {
     renderPanel(STATES.low ?? null);
-    expect(track).not.toHaveBeenCalledWith(SESSION_EVENTS.STARTED, expect.anything());
+    // ⚠ BAL-466 (D7) — `session_started` is now a SERVER event with no client producer at all,
+    // so it is asserted by its raw wire string rather than a (now nonexistent) client constant.
+    expect(track).not.toHaveBeenCalledWith('session_started', expect.anything());
     expect(track).not.toHaveBeenCalledWith(
       SESSION_EVENTS.LOW_BALANCE_WARNING_SHOWN,
       expect.anything()

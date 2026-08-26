@@ -63,6 +63,15 @@ export interface MeetingPillProps {
   readonly actionLabel?: string;
   readonly onAction?: () => void;
   readonly tone?: 'neutral' | 'warning';
+  /**
+   * ⚠⚠ FIX ROUND 1 (F15) — a small leading glyph. `RecordingIndicator` is the first caller: the
+   * plan's whole adequacy argument for always-on recording hangs on this pill being the
+   * "backstop" notice for a repeat joiner who skips PreJoin, but rendered through the SAME
+   * `tone="neutral"` treatment as an ambient "Change devices" hint it was indistinguishable
+   * from routine chrome. This is deliberately opt-in (`undefined` by default) so the ambient
+   * device pills stay exactly as calm as before.
+   */
+  readonly icon?: React.ReactNode;
 }
 
 /**
@@ -70,12 +79,19 @@ export interface MeetingPillProps {
  *
  * ⚠ A PILL, NOT A TOAST. Toasts belong to MUTATIONS; joining a call is navigation, and a device
  * change is a fact about the browser rather than something the person just did.
+ *
+ * ⚠⚠ FIX ROUND 1 (F16) — "SHORT-LIVED" NAMES THE COMMON CASE, NOT A CONSTRAINT.
+ * `RecordingIndicator` (BAL-473, D5) is a DELIBERATE, PERSISTENT exception: the always-on
+ * recording notice must stay visible for the entire call, and it reuses this exact primitive.
+ * A future edit that "fixes" the recording pill to auto-dismiss would silently break the
+ * persistence D5 depends on — read this before changing this component's lifecycle.
  */
 export function MeetingPill({
   message,
   actionLabel,
   onAction,
   tone = 'neutral',
+  icon,
 }: Readonly<MeetingPillProps>): React.JSX.Element {
   return (
     <output
@@ -84,6 +100,7 @@ export function MeetingPill({
         tone === 'warning' ? 'bg-warning/15 text-warning' : 'text-muted-foreground bg-white/6'
       )}
     >
+      {icon === undefined ? null : <span aria-hidden="true">{icon}</span>}
       <span>{message}</span>
       {actionLabel === undefined || onAction === undefined ? null : (
         <button
@@ -97,6 +114,31 @@ export function MeetingPill({
     </output>
   );
 }
+
+/**
+ * BAL-473 (D5) — ⚠⚠ **PLACEHOLDER COPY. LEGAL-ADJACENT, AND NOT THE BUILDER'S TO FINALISE.**
+ *
+ * Recording is ALWAYS-ON for v1 (D5) — no per-meeting or per-expert switch — so these two
+ * strings are the entirety of the notice a participant receives. They deliberately state a
+ * PLAIN FACT and nothing more: no consent language, no rights language, no retention claim.
+ * Consent posture beyond notice is an open question for Yomi/MJ, not a knob.
+ *
+ * ⚠ MJ/YOMI SIGN-OFF REQUIRED BEFORE THIS SHIPS TO PRODUCTION. Flagged in the PR body.
+ * ⚠ Gender-neutral, per CLAUDE.md — no pronouns, and none are needed.
+ *
+ * Both strings live in ONE module, exported, beside the other call-surface copy constants, so
+ * there is exactly one place for MJ/Yomi to change them.
+ */
+export const RECORDING_PILL_MESSAGE = 'This call is being recorded';
+/**
+ * ⚠⚠ FIX ROUND 1 (F2) — THE PREVIOUS COPY PROMISED A PLAYBACK SURFACE THIS PR DOES NOT SHIP.
+ * "…is available afterwards with the meeting recap" was false at ship time: `signedPlaybackUrl`
+ * has no production caller in this PR, and the recap/Files card is DELIBERATELY unchanged
+ * (OD-8) — BAL-440 is what renders playback, and BAL-440 has not shipped. Every participant who
+ * read the old copy would look for the recording afterwards and find nothing. State the fact
+ * and nothing more; no claim about where or when it turns up.
+ */
+export const RECORDING_LOBBY_NOTICE = 'This consultation is recorded.';
 
 /**
  * ⚠⚠ **THE POLITE LIVE REGION (§16).** One per frame, and the ONLY thing on this surface that

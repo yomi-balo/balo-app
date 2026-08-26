@@ -42,6 +42,7 @@ import {
   resolvePresenceEffect,
 } from '../services/meetings/presence-writer.js';
 import { deliveringPartyName } from '../services/meetings/delivering-party.js';
+import { enqueueRecordingEnsure, enqueueRecordingStop } from './recording-capture.js';
 
 /**
  * BAL-134 (§5.6) — THE PER-MINUTE MEETING LIFECYCLE SWEEP. Modelled on
@@ -304,9 +305,10 @@ async function terminateIfDue(
     now,
   });
 
-  // ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. INERT ON MAIN (D10): reachable only from a
-  // `duration_source='presence'` session, and nothing on main opens one (BAL-400 booking →
-  // BAL-466 session open would). BEST-EFFORT AND NON-FATAL, the same posture as `tearDownRoom`
+  // ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. BAL-466 wires it: `joinMeetingAsMember`
+  // opens a `duration_source='presence'` session when the first CLIENT-side member is admitted
+  // to a `case` meeting. Still returns `no_meeting` for every non-`case` meeting and for a Case
+  // whose client never joined. BEST-EFFORT AND NON-FATAL, the same posture as `tearDownRoom`
   // below — the meeting is already terminal in Postgres, so a settlement fault must never abort
   // this sweep tick (it would strand every OTHER candidate batched behind it). `actorUserId:
   // null` — the ADR-1030 system-actor exemption, same as `endMeeting` above. The meter sweep's
@@ -331,8 +333,28 @@ async function terminateIfDue(
     );
   }
 
+  // ⚠⚠ BAL-473 (§5.2, ARCHITECT AMENDMENT to OD-2) — also hook the four SYSTEM terminal rules,
+  // not just the human `end-meeting.ts` path. Exactly one of the four (`idle_end`) is scoped
+  // to a meeting that reached `in_progress`, which is the only status under which a recording
+  // exists; the other three no-op for free inside `recording-stop` itself (nothing capturing).
+  // BEST-EFFORT, the same posture as `tearDownRoom` immediately below: the meeting is already
+  // terminal in Postgres, so an enqueue fault must never abort this sweep tick.
+  await enqueueRecordingStopBestEffort(state.meeting.id);
+
   await tearDownRoom(state.meeting);
   return decision;
+}
+
+/** Best-effort `recording-stop` enqueue — mirrors `tearDownRoom`'s non-fatal posture. */
+async function enqueueRecordingStopBestEffort(meetingId: string): Promise<void> {
+  try {
+    await enqueueRecordingStop({ meetingId });
+  } catch (error) {
+    logger.error(
+      { meetingId, error: errorMessage(error) },
+      'recording-stop enqueue failed on the lifecycle sweep — best-effort, the meeting stays ended'
+    );
+  }
 }
 
 /**
@@ -493,7 +515,34 @@ async function repairStatusAndReload(meetingId: string, now: Date): Promise<Cand
   // label it moved the meeting to, so the terminal rules below evaluate against the status that
   // now exists — a third read would be one more instant for it to be wrong at.
   const repaired = transition === null ? fresh : { ...fresh, status: transition };
+
+  // ⚠ BAL-473 (§5.2) — the sweep repaired a MISSED forward transition to `in_progress` (a
+  // dropped `participant.joined` webhook). `recording-ensure` must fire here too, or a meeting
+  // whose transition only the sweep ever notices never gets a capturing segment at all.
+  // dedupeToken is MONOTONIC per minute, so repeated ticks within one minute collapse to one
+  // ensure per meeting — never the bare `meetingId` alone (memory
+  // `reference_bullmq_jobid_must_be_per_write_not_per_state`).
+  if (transition === 'in_progress') {
+    await enqueueRecordingEnsureBestEffort(meetingId, now);
+  }
+
   return loadCandidateState(repaired, now);
+}
+
+/** Best-effort `recording-ensure` enqueue — mirrors the sweep's other best-effort side effects. */
+async function enqueueRecordingEnsureBestEffort(meetingId: string, now: Date): Promise<void> {
+  try {
+    await enqueueRecordingEnsure({
+      meetingId,
+      trigger: 'in_progress',
+      dedupeToken: `sweep-${Math.floor(now.getTime() / 60_000)}`,
+    });
+  } catch (error) {
+    logger.error(
+      { meetingId, error: errorMessage(error) },
+      'recording-ensure enqueue failed on the lifecycle sweep — best-effort, next tick retries'
+    );
+  }
 }
 
 /** One candidate, fully processed. ⚠ EVERY CALL SITE WRAPS THIS IN ITS OWN TRY/CATCH. */

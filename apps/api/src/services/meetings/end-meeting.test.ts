@@ -9,6 +9,7 @@ const {
   mockTrackServer,
   mockError,
   mockSettleMeetingIfBillable,
+  mockEnqueueRecordingStop,
 } = vi.hoisted(() => ({
   mockAuthorizeParticipation: vi.fn(),
   mockResolveEndAuthority: vi.fn(),
@@ -18,6 +19,7 @@ const {
   mockTrackServer: vi.fn(),
   mockError: vi.fn(),
   mockSettleMeetingIfBillable: vi.fn(),
+  mockEnqueueRecordingStop: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -42,6 +44,12 @@ vi.mock('./authorize-end-meeting.js', () => ({
 // the settlement wrapper's own behaviour is covered in `settle-from-presence.test.ts`.
 vi.mock('../credit-session/settle-from-presence.js', () => ({
   settleMeetingIfBillable: mockSettleMeetingIfBillable,
+}));
+// BAL-473 — the recording-stop enqueue at the RECORDING_FINALIZATION_SEAM. Mocked so this
+// suite stays focused on the human-end sequence; the job's own behaviour is covered in
+// `jobs/recording-capture.test.ts`.
+vi.mock('../../jobs/recording-capture.js', () => ({
+  enqueueRecordingStop: mockEnqueueRecordingStop,
 }));
 // ⚠ `@balo/shared/meetings` is NOT mocked — the real `computeMeetingClocks` is what the
 // analytics numbers below assert, and it is the one definition of both spans.
@@ -274,6 +282,9 @@ describe('endMeeting (BAL-134 §5.4)', () => {
 
     expect(teardown.calls).toEqual([]);
     expect(mockTrackServer).not.toHaveBeenCalled();
+    // ⚠ NOT ON THE alreadyEnded PATH — the recording-stop enqueue is step 6, and nothing after
+    // step 5 runs on the idempotent branch.
+    expect(mockEnqueueRecordingStop).not.toHaveBeenCalled();
   });
 
   // ── R5 — THE ORDERING ───────────────────────────────────────────────────────────────────
@@ -284,7 +295,7 @@ describe('endMeeting (BAL-134 §5.4)', () => {
    * out of a live consultation with no record that it ended. The recording-finalization seam
    * sits between these two steps by construction.
    */
-  it('⚠ ends in Postgres BEFORE tearing the room down', async () => {
+  it('⚠ ends in Postgres, THEN enqueues recording-stop, THEN tears the room down', async () => {
     const order: string[] = [];
     mockEndMeeting.mockImplementation(async () => {
       order.push('endMeeting');
@@ -292,6 +303,9 @@ describe('endMeeting (BAL-134 §5.4)', () => {
         meeting: meetingRow({ status: 'ended', endedAt: NOW }),
         closedIntervals: 1,
       };
+    });
+    mockEnqueueRecordingStop.mockImplementation(async () => {
+      order.push('enqueueRecordingStop');
     });
     const teardown: RoomTeardown = {
       deleteRoom: async () => {
@@ -302,7 +316,33 @@ describe('endMeeting (BAL-134 §5.4)', () => {
 
     await endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown, now: NOW });
 
-    expect(order).toEqual(['endMeeting', 'deleteRoom']);
+    expect(order).toEqual(['endMeeting', 'enqueueRecordingStop', 'deleteRoom']);
+  });
+
+  it('enqueues recording-stop for the ended meeting id', async () => {
+    const teardown = fakeTeardown();
+
+    await endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown, now: NOW });
+
+    expect(mockEnqueueRecordingStop).toHaveBeenCalledWith({ meetingId: MEETING_ID });
+  });
+
+  /**
+   * ⚠ BEST-EFFORT, LIKE `tearDownRoom` — the meeting is already terminal in Postgres, so an
+   * enqueue fault must never fail the End request the person who ended the meeting is waiting
+   * on.
+   */
+  it('the enqueue failing does not fail the End — best-effort, like teardown', async () => {
+    mockEnqueueRecordingStop.mockRejectedValue(new Error('redis is down'));
+    const teardown = fakeTeardown();
+
+    await expect(
+      endMeeting({ meetingId: MEETING_ID, userId: USER_ID, teardown, now: NOW })
+    ).resolves.toMatchObject({ ok: true, alreadyEnded: false });
+
+    expect(mockError).toHaveBeenCalled();
+    // Teardown still runs — the fault is contained to the enqueue.
+    expect(teardown.calls).toEqual([ROOM_NAME]);
   });
 
   it('tears down the room the meeting actually names', async () => {
@@ -433,13 +473,14 @@ describe('endMeeting (BAL-134 §5.4)', () => {
 });
 
 /**
- * ⚠ THE AC "the End endpoint finalizes the recording before teardown" IS SATISFIED VACUOUSLY,
- * BY VERIFICATION RATHER THAN BY ASSUMPTION: nothing enables recording anywhere in this repo
- * (the room create body sends `{ name, privacy }`; no token property starts a recording; there
- * is no stop-recording call; `transcripts.recordingRef` is annotated "no producer"). What ships
- * is the ORDERING CONSTRAINT, and the test that actually pins it is
- * "⚠ ends in Postgres BEFORE tearing the room down" above — the seam sits between those two
- * steps by construction, so that assertion is the real guard.
+ * ⚠ THE AC "the End endpoint finalizes the recording before teardown" IS NOW SATISFIED FOR
+ * REAL (BAL-473, OD-2) — not vacuously. `rooms.ts` enables `enable_recording: 'cloud'` on
+ * every provisioned room, and `recording-stop` (`jobs/recording-capture.ts`) is a real BullMQ
+ * job enqueued at step 6, the `RECORDING_FINALIZATION_SEAM` position. The tests that pin this:
+ * "⚠ ends in Postgres, THEN enqueues recording-stop, THEN tears the room down" (the ordering),
+ * "enqueues recording-stop for the ended meeting id" (the call), "the enqueue failing does not
+ * fail the End" (the best-effort posture), and the idempotent-second-end test above (NOT on
+ * the `alreadyEnded` path).
  *
  * ⚠ THERE IS DELIBERATELY NO TEST OF `RECORDING_FINALIZATION_SEAM`'S TEXT. One used to exist —
  * `expect(RECORDING_FINALIZATION_SEAM).toContain('before teardown')` — and it asserted a string

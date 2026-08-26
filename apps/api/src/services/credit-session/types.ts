@@ -1,7 +1,7 @@
 /**
  * BAL-378 (ADR-1040 Lane 2) — credit-session service IO types (pure).
  */
-import type { CreditSession, CreditSettlementStatus } from '@balo/db';
+import type { CreditDurationSource, CreditSession, CreditSettlementStatus } from '@balo/db';
 import type { EligibleCompany } from '@balo/shared/credit';
 
 export interface OpenSessionServiceInput {
@@ -17,9 +17,14 @@ export interface OpenSessionServiceInput {
    */
   companyId?: string;
   /**
-   * BAL-129 (D5) — the Balo meeting this session bills. OPTIONAL; nothing sends it yet
-   * (**BAL-400** wires it when it books a Case consultation), and a `duration_source =
-   * 'external'` session legitimately has an engagement and NO Balo meeting.
+   * BAL-129 (D5) — the Balo meeting this session bills. OPTIONAL.
+   *
+   * ⚠ SUPERSEDED CLAIM, CORRECTED: this used to say "nothing sends it yet (BAL-400 wires it
+   * when it books a Case consultation)". BAL-400 (booking) was the recorded intent and is NOT
+   * the seam — **BAL-466** sends it from `joinMeetingAsMember`'s `openCaseSessionBestEffort`,
+   * at ADMISSION, alongside `durationSource: 'presence'` (see the bidirectional coherence guard
+   * below, G1). A `duration_source = 'external'` session still legitimately has an engagement
+   * and NO Balo meeting.
    *
    * ⚠ THE CLIENT NEVER SENDS `engagementId`, AND THAT IS THE WHOLE POINT.
    * `OpenSessionInput`'s docblock states the coherence obligation — `engagementId` must be
@@ -31,6 +36,27 @@ export interface OpenSessionServiceInput {
    * source. `openSession` derives `engagementId` from this id, server-side.
    */
   meetingId?: string;
+  /**
+   * BAL-466 (D4) — HOW THIS SESSION'S BILLABLE DURATION WILL BE ESTABLISHED. Omitted ⇒
+   * `'live_capture'`, exactly what every pre-BAL-466 caller gets.
+   *
+   * ⚠⚠ IT IS A **SERVICE** INPUT, NOT A WIRE FIELD, AND IT MUST STAY THAT WAY. See
+   * `routes/sessions/schema.ts` — `openSessionBodySchema` deliberately does NOT accept it.
+   * Provenance decides which settlement engine owns the money; a client that could choose it
+   * could open a `'presence'` session with no meeting, which `findPresenceUnsettled` can never
+   * select (it requires `meeting_id IS NOT NULL`) — an unsettleable row with a live hold.
+   *
+   * ⚠ `'presence'` REQUIRES `meetingId`. Enforced in `openSession`, because the predicate is
+   * cross-field policy and the repository deliberately does not gate
+   * (`OpenSessionInput`'s docblock, `credit-sessions.ts:256-262`, assigns this obligation to
+   * BAL-466 by name).
+   *
+   * ⚠ F13 — NARROWED to the two provenances a service caller may actually select. `'external'`
+   * belongs to externally-captured meetings (BAL-133) and is never chosen at open time by any
+   * caller in this codebase; admitting it here would make a third, unused value representable at
+   * a seam whose only coherence guard (`open-session.ts`) constrains `'presence'` alone.
+   */
+  durationSource?: Extract<CreditDurationSource, 'live_capture' | 'presence'>;
 }
 
 /** Gate outcomes surfaced as a discriminated union — the route maps codes to 403 / 409. */
