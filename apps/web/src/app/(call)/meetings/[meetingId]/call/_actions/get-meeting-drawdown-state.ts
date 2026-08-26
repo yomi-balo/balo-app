@@ -17,7 +17,7 @@ const inputSchema = z.object({ meetingId: z.uuid() }).strict();
  * ⚠⚠ **GENUINELY READ-ONLY, AND IT MUST STAY THAT WAY.** Bare `requireUser()` (via the thunk
  * form — see below) plus an entry on `_read-only-actions.ts`'s `READ_ONLY_ALLOWLIST`: it writes
  * nothing, anywhere, transitively. `onboarding-mutation-gate.test.ts` fails the build without
- * that entry. The audience gate and the membership + capability read both run inside
+ * that entry. The participation gate and the membership + capability read both run inside
  * `resolveInCallDrawdown` — same posture as `get-meeting-guests.ts` / `get-meeting-state.ts`.
  *
  * ⚠ THE THUNK FORM IS LOAD-BEARING: `enterCallAction(() => requireUser(), …)`, never
@@ -32,22 +32,25 @@ const inputSchema = z.object({ meetingId: z.uuid() }).strict();
  * REGISTERED. Round 1 shipped two different compositions — this action ran a participation gate
  * the RSC did not — and the two could disagree: the toolbar button would render while every poll
  * answered the inert arm below, opening onto a permanent empty skeleton. See that module's
- * docblock for the full incident and for the exact audience-vs-participation boundary
- * `authorizeMeetingFileAccess` enforces (round 1's claim that it closes "any connection to THIS
- * meeting" was wrong — it is company-audience, not call-participation — and the docblock has
- * been rewritten there rather than repeated here).
+ * docblock for the full incident. BAL-466 (D3, D8) changed WHICH gate that is —
+ * `authorizeMeetingParticipation`, the real participation resolver, not the company-audience
+ * gate this file used to name — and reordered it to run FIRST.
  *
- * ── ⚠⚠ THE INERT PATH — "NO CREDIT SESSION FOR THIS MEETING" — IS THE EXPECTED PATH TODAY ────
+ * ── ⚠⚠ BAL-466 — "NO CREDIT SESSION FOR THIS MEETING" IS NOW THE ANSWER ONLY FOR A NON-`case`
+ *    MEETING, OR A `case` WHOSE CLIENT HAS NOT YET BEEN ADMITTED ────────────────────────────
  *
- * `openSessionAction` and `connectSessionAction` (`lib/credit/actions/session-mutations.ts`)
- * have zero non-test callers, so `resolveInCallDrawdown` answers `null` for every meeting right
- * now. That is a **success**, `{ success: true, state: null }` — never an error — and the poll
- * treats it as a terminal-but-healthy stop (see `use-drawdown-poll.ts`). This is the same
- * forward-seam posture BAL-420 and BAL-387 already shipped; the session-open ticket (deferred,
- * tracked separately) is what makes this action's non-inert arm reachable.
+ * `apps/web`'s `openSessionAction` (`lib/credit/actions/session-mutations.ts`) still has zero
+ * non-test callers — the seam is server-side. (`connectSessionAction` no longer exists — F1 of
+ * the BAL-466 fix round deleted it; a `'presence'` session connects system-only.)
+ * `joinMeetingAsMember` (`apps/api`) opens a `duration_source='presence'` session when the
+ * first CLIENT-side member is admitted to a `case` meeting, so `resolveInCallDrawdown` now
+ * answers non-null for those meetings once admission has happened. That is a **success**,
+ * `{ success: true, state: <DrawdownState> }` — the poll treats a `null` answer as a
+ * terminal-but-healthy stop (see `use-drawdown-poll.ts`); this action is also `call-client.tsx`'s
+ * post-join RE-RESOLVE, called once when the RSC's verdict was stale `false`.
  *
  * ⚠⚠ **EVERY DENIAL COLLAPSES INTO THE SAME INERT ARM AS ABSENCE.** ADR-1029 requires a denial
- * to be indistinguishable from "does not exist" on the wire. No session, a denied audience
+ * to be indistinguishable from "does not exist" on the wire. No session, a denied participation
  * check, and a denied membership + capability read all answer `{ success: true, state: null }`;
  * the real reason (which check failed, for whom) goes to `log.warn` INSIDE
  * `resolveInCallDrawdown`, never here and never to the wire.
@@ -78,7 +81,7 @@ export async function getMeetingDrawdownStateAction(
     const result = await resolveInCallDrawdown(meetingId, userId);
     if (result === null) {
       // ⚠⚠ THE INERT / DENIED PATH. See the module docblock — this is a SUCCESS, and every
-      // denial (no session, denied audience, denied membership) is indistinguishable here.
+      // denial (no session, denied participation, denied membership) is indistinguishable here.
       return { success: true, state: null };
     }
     return { success: true, state: result.state, sessionId: result.sessionId };

@@ -1874,7 +1874,7 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
           focusOpener(id);
           return null;
         }
-        track(MEETING_PANEL_EVENTS.OPENED, { panel: id });
+        track(MEETING_PANEL_EVENTS.OPENED, { panel: id, auto: false });
         return id;
       });
     },
@@ -1889,9 +1889,9 @@ function useMeetingPanel(input: { readonly isRegistered: boolean; readonly isTer
   const openPanel = useCallback((id: MeetingPanelId): void => {
     setPanel((current) => {
       if (current === id) return current;
-      // ⚠ THE SAME FUNNEL EVENT A MANUAL OPEN FIRES — auto-opens are not distinguished from
-      // manual ones today (noted as a future property addition in the BAL-403 plan, not built).
-      track(MEETING_PANEL_EVENTS.OPENED, { panel: id });
+      // BAL-466 (D9.3) — THE SAME FUNNEL EVENT A MANUAL OPEN FIRES, now distinguished by
+      // `auto: true` — this is the ladder's path, never a click.
+      track(MEETING_PANEL_EVENTS.OPENED, { panel: id, auto: true });
       return id;
     });
   }, []);

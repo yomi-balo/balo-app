@@ -1151,8 +1151,8 @@ export const meetingsRepository = {
    * logs the `false` case — this repository does not log (`repositories-never-notify`'s
    * sibling rule); see the presence-settlement service.
    *
-   * ⚠ INERT ON MAIN (decision D10) — its only caller is the presence settlement, which no
-   * shipped path reaches (BAL-400 → BAL-466).
+   * ⚠ BAL-466 wires the enabling condition — its only caller is the presence settlement,
+   * which `joinMeetingAsMember` now makes reachable at admission to a `case` meeting.
    */
   async setOutcomeIfUnset(
     exec: DbExecutor,

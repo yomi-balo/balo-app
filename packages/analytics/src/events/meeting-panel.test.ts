@@ -1,6 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import { MEETING_PANEL_EVENTS, type MeetingPanelEventMap } from './meeting-panel';
 
+/**
+ * BAL-466 (D9.3) — `auto` on `OPENED` is REQUIRED, not optional. A caller that omits it must
+ * fail `pnpm --filter @balo/analytics typecheck`, not silently ship an `undefined` bucket.
+ * Mirrors `guest.test.ts:48-55`'s `distinct_id` compile-time guard.
+ */
+it('⚠ MEETING_PANEL_EVENTS.OPENED.auto is REQUIRED — a call omitting it must not compile', () => {
+  // @ts-expect-error — `auto` is missing; this must fail to typecheck.
+  const missingAuto: MeetingPanelEventMap[typeof MEETING_PANEL_EVENTS.OPENED] = {
+    panel: 'people',
+  };
+  const withAuto: MeetingPanelEventMap[typeof MEETING_PANEL_EVENTS.OPENED] = {
+    panel: 'people',
+    auto: true,
+  };
+
+  expect(withAuto.auto).toBe(true);
+  expect(missingAuto.panel).toBe('people');
+});
+
 describe('MEETING_PANEL_EVENTS (client)', () => {
   it('has exactly the expected keys', () => {
     expect(Object.keys(MEETING_PANEL_EVENTS)).toEqual([

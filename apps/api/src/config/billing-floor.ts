@@ -74,6 +74,45 @@ export function resolveBillingFloorMinutes(): number {
 }
 
 /**
+ * BAL-466 (D13) — PRODUCTION-ONLY STARTUP GUARD. `apps/web`'s `get-drawdown-state.ts` mirrors
+ * the shipped default (`MIN_MEETING_MINUTES`) rather than this env-resolved floor, because it
+ * cannot read `process.env.MEETING_NO_SHOW_FLOOR_MINUTES` — that reader lives in `apps/api`
+ * ALONE (ADR-1049 D8) and `@balo/shared/meetings` is deliberately client-reachable. So ANY
+ * override here makes the two silently disagree on a MONEY figure: the in-call panel's
+ * `minutesOfRunway` ESTIMATE drifts from the actual billing floor `resolveMeetingSettlement`
+ * charges. Dev and test may still set it locally; a real deployment must not be able to.
+ *
+ * ⚠ THROWS — DOES NOT LOG-AND-CONTINUE, unlike `index.ts`'s two vendor-secret warnings at
+ * boot, which degrade a feature loudly but survive. This one would otherwise corrupt a money
+ * DISPLAY silently, with nothing in Axiom pointing at why the two figures disagree — a
+ * crash-loop is the correct trade for a config mistake nobody would otherwise see. Removing
+ * this env var's mirror entirely (routing the web read through the gated api, or snapshotting
+ * the floor onto the credit-session row) is the long-term fix and is deferred to **BAL-398**
+ * (the platform-config ticket, still unmerged) — this is the structural stopgap until then.
+ *
+ * ⚠ CALL THIS AT BOOT, NOT ON EVERY REQUEST — `apps/api/src/index.ts` is the one call site.
+ *
+ * ⚠⚠ F2 — "SET" MEANS WHAT `meeting-timers.ts`'s `parseMinutes` SAYS IT MEANS, NOT MERELY
+ * "PRESENT". Railway writes an EMPTY STRING for an unset variable in some flows —
+ * `meeting-timers.ts:66` (the only actual CONSUMER of this variable) treats a blank string as
+ * ABSENT for exactly that reason, and `resolveBillingFloorMinutes()` correctly falls back to the
+ * default for it. A guard that instead throws on mere key-presence would crash-loop the API on a
+ * deploy shape that changes nothing about the resolved floor — checking `=== undefined` alone
+ * does that. Mirror `parseMinutes`'s emptiness rule exactly so the two agree on what "set" means.
+ */
+export function assertNoShowFloorOverrideUnsetInProduction(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  const raw = process.env.MEETING_NO_SHOW_FLOOR_MINUTES;
+  if (raw === undefined || raw.trim().length === 0) return; // ⚠ blank ⇒ ABSENT, per meeting-timers.ts
+  throw new Error(
+    'MEETING_NO_SHOW_FLOOR_MINUTES must not be set in production — apps/web mirrors the ' +
+      'shipped default (MIN_MEETING_MINUTES) and cannot read this env var, so an override ' +
+      'here makes the in-call panel and the actual billing floor silently disagree on a ' +
+      'MONEY figure. Unset it, or route the web read through the gated api first (BAL-398).'
+  );
+}
+
+/**
  * BAL-412 (F1) — THE UPPER BOUND ON A PRESENCE SETTLEMENT, in whole minutes, injected into
  * `resolveMeetingSettlement`'s required `maxBillableMinutes`.
  *

@@ -606,9 +606,9 @@ export const meetingPresenceRepository = {
    * open interval affects `expertOpen`/`anyOpen` and nothing time-valued. That is why passing
    * `now` to one reducer and not the other is correct rather than an oversight.
    *
-   * ⚠ INERT ON MAIN (decision D10): its caller is the presence-settlement service, which
-   * only ever acts on a `duration_source='presence'` session, and nothing on main opens one
-   * (BAL-400 booking → BAL-466 session open would).
+   * ⚠ BAL-466 wires the enabling condition: its caller is the presence-settlement service,
+   * which only ever acts on a `duration_source='presence'` session — and `joinMeetingAsMember`
+   * now opens one when the first CLIENT-side member is admitted to a `case` meeting.
    */
   async settlementFacts(
     meetingId: string,

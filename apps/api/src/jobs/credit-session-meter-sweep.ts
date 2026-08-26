@@ -41,9 +41,9 @@ import {
  *     because both terminal paths (`end-meeting.ts`, `meeting-lifecycle-sweep.ts`) call
  *     `settleMeetingIfBillable` BEST-EFFORT and NON-FATAL, so a fault there strands a session
  *     `findFinalizedMissingPayout` (pass 5) cannot see — that finder keys on
- *     `billing_finalized_at IS NOT NULL`, the exact opposite half of this space. ⚠⚠ INERT ON
- *     MAIN (D10): `findPresenceUnsettled` returns `[]` always — nothing sets
- *     `duration_source='presence'` today.
+ *     `billing_finalized_at IS NOT NULL`, the exact opposite half of this space. BAL-466 wires
+ *     `duration_source='presence'` at admission (`joinMeetingAsMember`), so this pass is now
+ *     reachable for a `case` meeting whose client was admitted.
  *
  * Metering is deterministic + idempotent (tickSeq minute-index ledger key), so a re-meter that
  * crosses nothing publishes nothing. All money/lock logic lives in `@balo/db` — this stays thin.
@@ -240,8 +240,10 @@ async function runFinalizedMissingPayoutPass(
  * guard), so a row picked up here and settled by a racing terminal path in the same instant is a
  * harmless `already_settled` no-op.
  *
- * ⚠⚠ INERT ON MAIN (D10) — `findPresenceUnsettled` returns `[]` always: nothing sets
- * `duration_source='presence'` today (BAL-400 booking → BAL-466 session open would).
+ * ⚠ BAL-466 wires it: `joinMeetingAsMember` opens a `duration_source='presence'` session when
+ * the first CLIENT-side member is admitted to a `case` meeting, so `findPresenceUnsettled` now
+ * selects a real row once that meeting ends unsettled — see `credit-sessions.integration.test.ts`
+ * for the end-to-end proof.
  */
 async function runPresenceSettlementPass(
   now: Date,

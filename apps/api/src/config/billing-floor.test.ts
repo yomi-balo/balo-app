@@ -13,6 +13,7 @@ vi.mock('@balo/shared/logging', () => ({
 import { MAX_MEETING_MINUTES } from '@balo/shared/meetings';
 import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
 import {
+  assertNoShowFloorOverrideUnsetInProduction,
   resolveBillingFloorMinutes,
   resolveBillingFloorMs,
   resolveMaxBillableMinutes,
@@ -106,5 +107,49 @@ describe('resolveBillingFloorMinutes / resolveBillingFloorMs (BAL-412, D5)', () 
       fs.readFileSync(new URL('./billing-floor.ts', import.meta.url), 'utf8')
     );
     expect(source).toContain('resolveMeetingTimers().noShowFloorMs');
+  });
+});
+
+describe('assertNoShowFloorOverrideUnsetInProduction (BAL-466, D13)', () => {
+  const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clear();
+  });
+  afterEach(() => {
+    clear();
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  });
+
+  it('throws when NODE_ENV=production and the override is set', () => {
+    process.env.NODE_ENV = 'production';
+    process.env[VARIABLE] = '15';
+    expect(() => assertNoShowFloorOverrideUnsetInProduction()).toThrow(
+      /must not be set in production/
+    );
+  });
+
+  it('does not throw in production when the override is unset', () => {
+    process.env.NODE_ENV = 'production';
+    expect(() => assertNoShowFloorOverrideUnsetInProduction()).not.toThrow();
+  });
+
+  it('does not throw outside production, even with the override set', () => {
+    process.env.NODE_ENV = 'test';
+    process.env[VARIABLE] = '15';
+    expect(() => assertNoShowFloorOverrideUnsetInProduction()).not.toThrow();
+  });
+
+  it('does not throw in development with the override set', () => {
+    process.env.NODE_ENV = 'development';
+    process.env[VARIABLE] = '15';
+    expect(() => assertNoShowFloorOverrideUnsetInProduction()).not.toThrow();
+  });
+
+  it('F2 — does not throw in production when the override is a BLANK STRING (Railway writes empty for unset)', () => {
+    process.env.NODE_ENV = 'production';
+    process.env[VARIABLE] = '';
+    expect(() => assertNoShowFloorOverrideUnsetInProduction()).not.toThrow();
   });
 });

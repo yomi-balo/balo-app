@@ -305,9 +305,10 @@ async function terminateIfDue(
     now,
   });
 
-  // ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. INERT ON MAIN (D10): reachable only from a
-  // `duration_source='presence'` session, and nothing on main opens one (BAL-400 booking →
-  // BAL-466 session open would). BEST-EFFORT AND NON-FATAL, the same posture as `tearDownRoom`
+  // ⚠⚠ BAL-412 (ADR-1044 §7) — PRESENCE SETTLEMENT. BAL-466 wires it: `joinMeetingAsMember`
+  // opens a `duration_source='presence'` session when the first CLIENT-side member is admitted
+  // to a `case` meeting. Still returns `no_meeting` for every non-`case` meeting and for a Case
+  // whose client never joined. BEST-EFFORT AND NON-FATAL, the same posture as `tearDownRoom`
   // below — the meeting is already terminal in Postgres, so a settlement fault must never abort
   // this sweep tick (it would strand every OTHER candidate batched behind it). `actorUserId:
   // null` — the ADR-1030 system-actor exemption, same as `endMeeting` above. The meter sweep's

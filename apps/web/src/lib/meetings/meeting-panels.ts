@@ -56,14 +56,17 @@ import type { MeetingReactionEmoji } from './meeting-reactions';
  * speculative calls: authorizing a read against a grant with no authenticated subject to bind
  * it to is worse than denying. **BAL-445** mints the session and fills the arm.
  *
- * ── ⚠⚠ BAL-403 ADDED `'balance'` — AND IT SHIPS INERT BY DESIGN ─────────────────────────────
+ * ── ⚠⚠ BAL-403 ADDED `'balance'`; BAL-466 MADE IT REACHABLE FOR A `case` CONSULTATION ────────
  *
  * `MeetingPanelRegistration.balance !== null` requires a `credit_sessions` row for THIS
- * meeting, and nothing in the app opens one today (`openSessionAction` / `connectSessionAction`
- * have zero non-test callers — the session-open ticket is deferred and tracked separately). So
- * `hasBalance: false` is the EXPECTED answer for every meeting right now, not a bug: no slot
- * button, no More-sheet row, no poll, no fetch, no panel. See `page.tsx`'s `resolveBalanceSlot`
- * docblock for the full inert-seam reasoning (the same posture BAL-420 and BAL-387 shipped).
+ * meeting. `apps/web`'s `openSessionAction` still has zero non-test callers — the seam is
+ * server-side (`connectSessionAction` no longer exists — F1 of the BAL-466 fix round deleted
+ * it): `joinMeetingAsMember` (`apps/api`) opens a
+ * `duration_source='presence'` session when the first CLIENT-side member is admitted to a
+ * `case` meeting. `hasBalance: false` is still the answer for every non-`case` meeting and for
+ * a Case whose client has not yet been admitted — not a bug: no slot button, no More-sheet row,
+ * no poll, no fetch, no panel. See `page.tsx`'s `resolveBalanceSlot` docblock for the full
+ * reasoning.
  */
 export type MeetingPanelId = 'people' | 'files' | 'chat' | 'balance';
 
@@ -264,10 +267,13 @@ export interface MeetingRealtimeRegistration {
  * consumer of the id (`nudgeAdminAction`, `in_session_panel_viewed`'s property) re-gates
  * server-side on its own, so the id is an opaque UUID that authorizes nothing by itself.
  *
- * ⚠⚠ THE SECOND ARM — `{ success: true, state: null }` — IS THE **EXPECTED, INERT PATH**
- * TODAY, AND IT IS A SUCCESS, NOT AN ERROR. See {@link MeetingPanelId}'s BAL-403 note. It means
- * `credit_sessions.meeting_id` resolved to no row (or a soft-deleted / cancelled one), which is
- * true of every meeting until the session-open ticket ships. Never surface it as an error state.
+ * ⚠⚠ THE SECOND ARM — `{ success: true, state: null }` — IS A **SUCCESS, NOT AN ERROR**. See
+ * {@link MeetingPanelId}'s BAL-403 note. It means `credit_sessions.meeting_id` resolved to no
+ * row (or a soft-deleted / cancelled one) — the ordinary answer for every non-`case` meeting and
+ * for a Case whose client has not yet been admitted. ⚠⚠ G4 (second review round) — CORRECTING A
+ * NOW-FALSE CLAIM: this used to say that was true "of every meeting until the session-open
+ * ticket ships". BAL-466 shipped that ticket — the first arm above IS now reachable, for an
+ * admitted Case consultation. Never surface the second arm as an error state.
  */
 export type GetMeetingDrawdownResult =
   | { readonly success: true; readonly state: DrawdownState; readonly sessionId: string }
@@ -308,9 +314,14 @@ export interface MeetingPanelRegistration {
   /**
    * BAL-403 — ⚠⚠ `null` ⇒ **NO BALANCE SLOT AT ALL.** Resolved SERVER-SIDE in the RSC
    * (`resolveBalanceSlot` in `page.tsx`), not in the browser, for the identical no-flash reason
-   * `chat` is. **`false`/`null` is the EXPECTED value for every meeting today** — see
-   * {@link MeetingPanelId}'s BAL-403 note. This is the forward seam; nothing opens a credit
-   * session yet.
+   * `chat` is. ⚠⚠ G4 (second review round) — CORRECTING A NOW-FALSE CLAIM: this used to say
+   * "`false`/`null` is the EXPECTED value for every meeting today… this is the forward seam;
+   * nothing opens a credit session yet." BAL-466 is that seam and it now opens one:
+   * `joinMeetingAsMember` opens a `duration_source='presence'` session the moment the first
+   * CLIENT-side member is admitted to a `case` meeting, so this slot is non-null from that
+   * point on. `null`/`false` remains the correct, EXPECTED answer for every non-`case` meeting
+   * and for a Case whose client has not yet been admitted — see {@link MeetingPanelId}'s
+   * BAL-403 note.
    */
   readonly balance: MeetingBalancePanelActions | null;
 }
