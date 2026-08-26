@@ -23,12 +23,18 @@ export interface DeleteConsultationEventInput {
  * changed their target calendar since the event was written; the delete must address the
  * calendar the event actually lives in.
  *
- * `undefined` from `findLiveByMeetingId` means "nothing to delete" (never written, or already
- * cancelled) — a no-op, not an error.
+ * `undefined` from `findLiveExpertProviderEvent` means "nothing to delete at the vendor" — never
+ * written (no connected calendar, or a BAL-433 ICS-fallback meeting), or already cancelled. A
+ * no-op, not an error.
+ *
+ * ⚠ EXPERT-PARTY ONLY, BOTH READ AND WRITE (BAL-433). The read is narrowed to
+ * `party='expert' AND delivery_mode='provider_event'` — an ICS-fallback row names no vendor
+ * event to delete — and the soft delete is party-scoped so a vendor failure on the EXPERT's
+ * calendar cannot take a client-party row with it.
  *
  * ⚠⚠ round-2 fix #14 — MARK BALO'S ROW FIRST, DELETE AT THE VENDOR SECOND. This resolves a
  * contradiction with an earlier revision of this function, which did the opposite and
- * directly contradicted `meetingCalendarEventsRepository.softDeleteByMeetingId`'s own
+ * directly contradicted `meetingCalendarEventsRepository.softDeleteByMeetingAndParty`'s own
  * docstring ("Marking first and deleting after is the right order"). That docstring's
  * reasoning is what this order follows: if the process dies between the two calls, marking
  * first leaves an ORPHANED VENDOR EVENT — still tagged with `baloBookingId`, and therefore
@@ -39,10 +45,10 @@ export interface DeleteConsultationEventInput {
  * accepted tradeoff, not an oversight.
  */
 export async function deleteConsultationEvent(input: DeleteConsultationEventInput): Promise<void> {
-  const row = await meetingCalendarEventsRepository.findLiveByMeetingId(input.meetingId);
+  const row = await meetingCalendarEventsRepository.findLiveExpertProviderEvent(input.meetingId);
   if (!row) return;
 
-  await meetingCalendarEventsRepository.softDeleteByMeetingId(input.meetingId);
+  await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(input.meetingId, 'expert');
 
   const client = getApirocClient();
   await callApiroc('events.delete', () =>

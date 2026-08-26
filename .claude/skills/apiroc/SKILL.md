@@ -123,16 +123,19 @@ Apiroc is Balo's calendar infrastructure. It handles:
 
 ## Architecture Summary
 
-⚠⚠ **This is the DESIGN. Almost none of it is wired today** (checked 2026-08-18 against
-`main` @ `eb6d4b2`). Read it as the target flow, not as a map of code you can go and open:
+⚠⚠ **MOST OF THIS IS NOW WIRED** (re-checked 2026-08-25 against `main` @ `944a742` + BAL-433).
+An earlier revision of this block said "almost none of it is wired today" and **four of its
+five rows were false** — read it as a map of code you can go and open, and check the row before
+assuming a seam is inert:
 
-| Step                                          | State                                                                           |
-| --------------------------------------------- | ------------------------------------------------------------------------------- |
-| SDK client + error boundary                   | **shipped but INERT** — `apps/api/src/lib/apiroc/`, no caller outside its tests |
-| `calendar_connections` per (expert, provider) | **shipped** — BAL-467, migration `0067`                                         |
-| Connect / callback / free-busy / event writes | **not built** — every calendar route is still Cronofy (BAL-396)                 |
-| Apiroc webhook route, subscriptions, renewal  | **not built**; `svix` is not even a dependency (BAL-468)                        |
-| `vendorBusyProvider.listBusyBlocks`           | **returns `[]`** — the availability seam exists, unwired                        |
+| Step                                              | State                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SDK client + error boundary                       | **shipped and LIVE** — `apps/api/src/lib/apiroc/`; `services/consultation-events/*`, `jobs/meeting-calendar-amend.ts` and `services/availability/vendor-busy.ts` all call through `callApiroc`                                                                                                                                                                                                                                                                                                   |
+| `calendar_connections` per (expert, provider)     | **shipped** — BAL-467, migration `0067`                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Connect / callback / free-busy / event writes     | **shipped (BAL-396)** — `routes/calendar/{auth,api,webhook}.ts`; create / update / delete all ship. ⚠ `deleteConsultationEvent` and `reconcileByTag` still have **zero production callers** (BAL-410 owns cancel; no orphan sweep)                                                                                                                                                                                                                                                               |
+| Apiroc webhook route, subscriptions, renewal      | **shipped (BAL-468)** — `svix ^1.99.1`; `routes/calendar/webhook.ts`; `jobs/calendar-subscription-{reconcile,monitor}.ts`, both registered in `jobs/worker.ts`                                                                                                                                                                                                                                                                                                                                   |
+| `vendorBusyProvider.listBusyBlocks`               | **shipped and live** — `services/availability/vendor-busy.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Per-party calendar grain + ICS-fallback condition | **shipped (BAL-433 Slice 1)** — `meeting_calendar_events` is unique on `(meeting_id, party)` with a `delivery_mode` discriminator (`provider_event` \| `ics`), and EVERY bookable context now projects (`services/consultation-events/calendar-context-registry.ts`). ⚠ There is **no vendor path for the CLIENT party** — `calendar_connections` is keyed on `expert_profile_id` and no client-side connection model exists. Delivery of the ICS is **BAL-475**; `METHOD:CANCEL` is **BAL-476** |
 
 Per-area detail, with the real signatures, is in `references/`.
 
@@ -298,19 +301,19 @@ rather than picking a side.
 
 **The artefacts themselves**, which both layers point at:
 
-| Subject                                                  | Where                                                                    |
-| -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| All captured runtime behaviour (the evidence)            | `spikes/apiroc-probe/FINDINGS.md` on the BAL-393 branch (PR #211)        |
-| The sync-strategy ruling + provider capability matrix    | `apps/api/src/services/calendar/sync-capability.ts` (shipped, **inert**) |
-| The guard that keeps delta-sync out                      | `apps/api/src/invariants/sync-token-parity.test.ts`                      |
-| The single busy-block port every availability path uses  | `apps/api/src/services/availability/vendor-busy.ts`                      |
-| The SDK adapter boundary (error + logging)               | `apps/api/src/lib/apiroc/`                                               |
-| Connection model + SDK adapter boundary                  | BAL-467 (shipped, PR #219)                                               |
-| Connect, free/busy, event write, reconnect, health probe | BAL-396                                                                  |
-| Webhooks, subscription lifecycle, renewal                | BAL-468                                                                  |
-| Pre-consent explainer + partial-grant recovery UX        | BAL-462                                                                  |
-| OAuth app registration (BYOC branding + scopes)          | BAL-394                                                                  |
-| Vendor liaison (bug reports, auto-renew question)        | BAL-455                                                                  |
+| Subject                                                  | Where                                                                                                                                                       |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| All captured runtime behaviour (the evidence)            | `spikes/apiroc-probe/FINDINGS.md` on the BAL-393 branch (PR #211)                                                                                           |
+| The sync-strategy ruling + provider capability matrix    | `apps/api/src/services/calendar/sync-capability.ts` (shipped; **read**, not inert — `sync-token-parity.test.ts` derives two live scan subject-sets from it) |
+| The guard that keeps delta-sync out                      | `apps/api/src/invariants/sync-token-parity.test.ts`                                                                                                         |
+| The single busy-block port every availability path uses  | `apps/api/src/services/availability/vendor-busy.ts`                                                                                                         |
+| The SDK adapter boundary (error + logging)               | `apps/api/src/lib/apiroc/`                                                                                                                                  |
+| Connection model + SDK adapter boundary                  | BAL-467 (shipped, PR #219)                                                                                                                                  |
+| Connect, free/busy, event write, reconnect, health probe | BAL-396                                                                                                                                                     |
+| Webhooks, subscription lifecycle, renewal                | BAL-468                                                                                                                                                     |
+| Pre-consent explainer + partial-grant recovery UX        | BAL-462                                                                                                                                                     |
+| OAuth app registration (BYOC branding + scopes)          | BAL-394                                                                                                                                                     |
+| Vendor liaison (bug reports, auto-renew question)        | BAL-455                                                                                                                                                     |
 
 ---
 

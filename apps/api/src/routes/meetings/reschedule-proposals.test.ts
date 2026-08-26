@@ -7,7 +7,7 @@ const {
   mockIsWindowAvailableForExpert,
   mockCheckRateLimit,
   mockFindByEngagementId,
-  mockFindLiveByMeetingId,
+  mockFindLiveExpertProviderEvent,
   mockFindProfileById,
   mockFindUserById,
   mockGetSummaryById,
@@ -26,7 +26,7 @@ const {
     mockIsWindowAvailableForExpert: vi.fn(),
     mockCheckRateLimit: vi.fn(),
     mockFindByEngagementId: vi.fn(),
-    mockFindLiveByMeetingId: vi.fn(),
+    mockFindLiveExpertProviderEvent: vi.fn(),
     mockFindProfileById: vi.fn(),
     mockFindUserById: vi.fn(),
     mockGetSummaryById: vi.fn(),
@@ -40,7 +40,7 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   RescheduleProposalAlreadyPendingError: RescheduleProposalAlreadyPendingErrorStub,
   caseEngagementsRepository: { findByEngagementId: mockFindByEngagementId },
-  meetingCalendarEventsRepository: { findLiveByMeetingId: mockFindLiveByMeetingId },
+  meetingCalendarEventsRepository: { findLiveExpertProviderEvent: mockFindLiveExpertProviderEvent },
   // Fix round 1 item 16 — the route now reads the PROJECTED finders, not the full-row ones.
   expertsRepository: { findDisplayProfileById: mockFindProfileById },
   usersRepository: { findDisplayById: mockFindUserById },
@@ -135,7 +135,7 @@ describe('POST /meetings/:meetingId/reschedule-proposals (BAL-411)', () => {
     mockCheckRateLimit.mockResolvedValue({ allowed: true, remaining: 9, ttlSeconds: 3600 });
     mockAuthorizeMeetingRescheduleProposal.mockResolvedValue(authOk());
     mockFindByEngagementId.mockResolvedValue({ title: 'Salesforce cleanup', closedAt: null });
-    mockFindLiveByMeetingId.mockResolvedValue(undefined);
+    mockFindLiveExpertProviderEvent.mockResolvedValue(undefined);
     mockFindProfileById.mockResolvedValue({
       userId: 'expert-user-1',
       agencyId: null,
@@ -271,7 +271,7 @@ describe('POST /meetings/:meetingId/reschedule-proposals (BAL-411)', () => {
     });
 
     it('threads excludeMeeting into isWindowAvailableForExpert, per option', async () => {
-      mockFindLiveByMeetingId.mockResolvedValue({ id: 'cal-event-1' });
+      mockFindLiveExpertProviderEvent.mockResolvedValue({ id: 'cal-event-1' });
       await call({ method: 'POST', url: URL, headers: AUTH, payload: proposeBody() });
       expect(mockIsWindowAvailableForExpert).toHaveBeenCalledWith(
         EXPERT_PROFILE_ID,

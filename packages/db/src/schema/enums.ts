@@ -1112,3 +1112,24 @@ export const recordingStatusEnum = pgEnum('recording_status', [
   'ready',
   'failed',
 ]);
+
+/**
+ * BAL-433 (ADR-1044 amendment 2026-08-25, Ruling 1) — HOW ONE PARTY'S CALENDAR ENTRY WAS
+ * DELIVERED, and the discriminator that makes "a provider write OR an ICS, NEVER BOTH" a
+ * CONSTRAINT rather than a convention.
+ *
+ *  · `provider_event` — Balo wrote the event into a connected Google/Microsoft calendar
+ *    through Apiroc. The row carries the connection, the calendar, the VENDOR-RETURNED event
+ *    id and the tag.
+ *  · `ics`            — no writable connection, so this party's entry is delivered as a
+ *    Balo-organizer ICS instead. The row carries NONE of the four provider columns.
+ *
+ * ⚠ NOT `ics_fallback`. For the EXPERT party it is a fallback (Ruling 1); for the CLIENT
+ * party (BAL-475) it is the only mode there will ever be — `calendar_connections` is keyed on
+ * `expert_profile_id` and no client-side connection model exists anywhere in the repo.
+ * ⚠ APPEND-ONLY: a new label goes at the END, never mid-array.
+ */
+export const meetingCalendarDeliveryModeEnum = pgEnum('meeting_calendar_delivery_mode', [
+  'provider_event',
+  'ics',
+]);

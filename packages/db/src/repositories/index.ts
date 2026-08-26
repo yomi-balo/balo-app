@@ -75,10 +75,20 @@ export type {
   ActiveConnectionWithoutSubscription,
 } from './calendar-subscriptions';
 export type { CalendarSubscription, NewCalendarSubscription } from '../schema';
-// ── Consultation calendar events (BAL-396 §5) — the vendor event id's only home ──────────
+// ── Consultation calendar events (BAL-396 §5, per-party since BAL-433) ───────────────────
+// The vendor event id's only home, and — since BAL-433 — the ICS-fallback condition's too.
 export { meetingCalendarEventsRepository } from './meeting-calendar-events';
-export type { RecordCalendarEventInput } from './meeting-calendar-events';
-export type { MeetingCalendarEvent, NewMeetingCalendarEvent } from '../schema';
+export type {
+  RecordProviderEventInput,
+  RecordIcsDeliveryInput,
+  MeetingCalendarEventParty,
+  MeetingCalendarProviderEvent,
+} from './meeting-calendar-events';
+export type {
+  MeetingCalendarEvent,
+  NewMeetingCalendarEvent,
+  MeetingCalendarDeliveryMode,
+} from '../schema';
 export { availabilityRulesRepository, type WeeklyRuleInput } from './availability-rules';
 export { availabilityOverridesRepository } from './availability-overrides';
 export type { CreateAvailabilityOverrideInput } from './availability-overrides';

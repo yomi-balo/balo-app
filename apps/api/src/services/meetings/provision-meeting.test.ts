@@ -9,12 +9,7 @@ const {
   mockTrackServer,
   mockFindByBookingIdempotencyKey,
   mockFindWithContexts,
-  mockFindByEngagementId,
-  mockFindCompanyById,
-  mockProjectBookingToExpertCalendar,
-  mockFindEngagementById,
-  mockFindProjectRequestById,
-  mockFindRelationshipById,
+  mockProjectBookingCalendarEvent,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockSetVenue: vi.fn(),
@@ -22,14 +17,19 @@ const {
   mockTrackServer: vi.fn(),
   mockFindByBookingIdempotencyKey: vi.fn(),
   mockFindWithContexts: vi.fn(),
-  mockFindByEngagementId: vi.fn(),
-  mockFindCompanyById: vi.fn(),
-  mockProjectBookingToExpertCalendar: vi.fn(),
-  mockFindEngagementById: vi.fn(),
-  mockFindProjectRequestById: vi.fn(),
-  mockFindRelationshipById: vi.fn(),
+  mockProjectBookingCalendarEvent: vi.fn(),
 }));
 
+/**
+ * ⚠ BAL-433 MOVED FIVE REPOSITORY MOCKS OUT OF THIS FILE. `caseEngagementsRepository`,
+ * `companiesRepository`, `engagementsRepository`, `projectRequestsRepository` and
+ * `requestExpertRelationshipsRepository` were mocked here because the per-context calendar
+ * RESOLVERS lived in `provision-meeting.ts`. They now live in
+ * `services/consultation-events/resolve-calendar-facts.ts`, and their behaviour is proved in
+ * `resolve-calendar-facts.test.ts` — not here, mocked, one layer away from the code under test.
+ * A vitest factory mock throws on any export the module imports and it omits, so this literal
+ * is a live statement of what `provision-meeting.ts` actually reaches.
+ */
 vi.mock('@balo/db', () => ({
   meetingsRepository: {
     findById: mockFindById,
@@ -37,25 +37,21 @@ vi.mock('@balo/db', () => ({
     findByBookingIdempotencyKey: mockFindByBookingIdempotencyKey,
     findWithContexts: mockFindWithContexts,
   },
-  caseEngagementsRepository: { findByEngagementId: mockFindByEngagementId },
-  companiesRepository: { findById: mockFindCompanyById },
-  // BAL-283 — the `request_interaction` resolver's two-hop reads. `engagementsRepository` is
-  // injected but never reached on that arm (its label is relationship-grain); it is mocked
-  // because a vitest factory mock throws on any export the module imports and it omits.
-  engagementsRepository: { findById: mockFindEngagementById },
-  projectRequestsRepository: { findById: mockFindProjectRequestById },
-  requestExpertRelationshipsRepository: { findById: mockFindRelationshipById },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
   MEETING_SERVER_EVENTS: {
     MEETING_PROVISIONED: 'meeting_provisioned',
     MEETING_PROVISION_FAILED: 'meeting_provision_failed',
+    // ⚠ THE LITERAL IS THE TRAP. This mock replaces the real constants object, so a key
+    // missing here makes the emit read `undefined` and the event is silently attributed to
+    // nothing — with every other assertion in the file still green.
+    MEETING_CALENDAR_PROJECTED: 'meeting_calendar_projected',
   },
 }));
 vi.mock('./meeting-availability.js', () => ({ bookMeeting: mockBookMeeting }));
-vi.mock('../consultation-events/project-booking-to-calendar.js', () => ({
-  projectBookingToExpertCalendar: mockProjectBookingToExpertCalendar,
+vi.mock('../consultation-events/booking-calendar-projection.js', () => ({
+  projectBookingCalendarEvent: mockProjectBookingCalendarEvent,
 }));
 // `@balo/shared/meetings` is deliberately NOT mocked — the real `dailyRoomNameForMeeting` is
 // the arbiter the whole idempotency argument rests on, so the tests must see the real name.
@@ -63,6 +59,9 @@ vi.mock('../consultation-events/project-booking-to-calendar.js', () => ({
 // The REAL error class — `instanceof` is what decides whether the vendor's response body
 // reaches the log, so a local stand-in would make that assertion vacuous.
 import { DailyApiError } from '../daily/errors.js';
+// ⚠ THE REAL TUPLE, NEVER A LOCAL LIST. A sixth bookable label must show up in the
+// no-context-is-skipped sweep below rather than being quietly absent from a hand-copied array.
+import { BOOKABLE_CONTEXT_TYPES } from '@balo/shared/meetings';
 import {
   bookAndProvisionMeeting,
   provisionMeeting,
@@ -136,6 +135,7 @@ beforeEach(() => {
     contexts: [],
     expertProfileId: 'expert_1',
   });
+  mockProjectBookingCalendarEvent.mockResolvedValue('provider_event');
 });
 
 afterEach(() => {
@@ -775,7 +775,21 @@ describe('bookAndProvisionMeeting — idempotent replay (BAL-400 Decision 7)', (
   });
 });
 
-describe('bookAndProvisionMeeting — the expert calendar projection (BAL-400 D2)', () => {
+/**
+ * BAL-400 (D2) / BAL-283 / BAL-433 — THE PROJECTION CALL, AND ONLY THE CALL.
+ *
+ * ⚠ WHAT THIS FILE DELIBERATELY NO LONGER TESTS. Until BAL-433 this suite reached through the
+ * projection into the per-context RESOLVERS (case → company; relationship → request → company)
+ * because those lived in `provision-meeting.ts`. They now live in
+ * `services/consultation-events/resolve-calendar-facts.ts` and are proved there, against the
+ * real `resolveContextOwner`. Re-asserting them here through two mocks would be a second,
+ * weaker copy of that suite — and it is precisely the copy that would keep passing after the
+ * real resolver broke.
+ *
+ * What is left is this module's own obligation: it calls the projection for EVERY bookable
+ * context, exactly once, on a fresh create only, and it reports the outcome.
+ */
+describe('bookAndProvisionMeeting — the expert calendar projection (BAL-433)', () => {
   function bookInput(
     contextType: BookAndProvisionInput['contextType'],
     overrides: Partial<BookAndProvisionInput> = {}
@@ -792,241 +806,127 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-400 D2
   }
 
   /**
-   * BAL-283 — the three contexts BAL-433 still owns. Pinned as a TABLE rather than one
-   * `project_kickoff` case, because the whole risk of widening the gate is widening it too far:
-   * if a future edit projects one of these with case-shaped facts, this fails immediately.
+   * ⚠⚠ ALL FIVE, PARAMETRISED — THIS IS THE SLICE-1 HEADLINE ASSERTION AT THE UNIT LEVEL.
+   * Three of these five (`project_kickoff`, `package_session`, `project_discovery`) have NO
+   * production booking producer on `main`, so this direct service call is the only place their
+   * arm runs at all. Before BAL-433 they reached no calendar: the expert held a real, confirmed
+   * Balo meeting that was absent from their own calendar, and because Balo READS their external
+   * free/busy, a colleague could book over it with nothing on either side detecting it.
    */
-  it.each(['project_kickoff', 'package_session', 'project_discovery'] as const)(
-    'writes NOTHING to a calendar for contextType "%s" (BAL-433 owns these)',
+  it.each([
+    'case',
+    'project_kickoff',
+    'package_session',
+    'project_discovery',
+    'request_interaction',
+  ] as const)(
+    'projects the booking for contextType "%s" — every bookable context',
     async (contextType) => {
-      mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
-      mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
-
-      await bookAndProvisionMeeting(bookInput(contextType, { engagementType: 'project' }), log, {
+      await bookAndProvisionMeeting(bookInput(contextType), log, {
         provisioner: fakeProvisioner(),
       });
 
-      expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+      expect(mockProjectBookingCalendarEvent).toHaveBeenCalledTimes(1);
+      expect(mockProjectBookingCalendarEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ expertProfileId: 'expert_1' }),
+        contextType,
+        CONTEXT_ID,
+        log
+      );
     }
   );
 
-  it('resolves the case + company and calls projectBookingToExpertCalendar for contextType "case"', async () => {
-    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
-    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
-
+  it('hands the projection the CREATED meeting, so the window and id come from the commit', async () => {
     await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
 
-    expect(mockProjectBookingToExpertCalendar).toHaveBeenCalledWith(
-      expect.objectContaining({
-        meetingId: MEETING_ID,
-        expertProfileId: 'expert_1',
-        clientCompanyName: 'Northwind Industrial',
-        caseTitle: 'CPQ rollout',
-        // BAL-283 REGRESSION — the case arm's headline noun must stay BAL-400's, byte for
-        // byte, now that it is one of two entries rather than the module's only literal.
-        eventLabel: 'Consultation',
-      }),
-      log
-    );
-    const [[calendarInput]] = mockProjectBookingToExpertCalendar.mock.calls;
-    expect((calendarInput as { joinUrl: string }).joinUrl).toContain(`/join/m/${MEETING_ID}`);
+    const [[created]] = mockProjectBookingCalendarEvent.mock.calls;
+    expect((created as { meeting: { id: string } }).meeting.id).toBe(MEETING_ID);
   });
 
-  it('⚠ REGRESSION — the case arm reads the case then the company, and nothing else', async () => {
-    // BAL-283 must not have re-routed the `case` two-hop through `resolveContextOwner`: a case
-    // context is engagement-grain and resolves its company from `case_engagements`, not from a
-    // request. If this starts calling the request/relationship finders, the arms have merged.
-    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
-    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
-
-    await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
-
-    expect(mockFindByEngagementId).toHaveBeenCalledWith(CONTEXT_ID);
-    expect(mockFindCompanyById).toHaveBeenCalledWith('company-1');
-    expect(mockFindProjectRequestById).not.toHaveBeenCalled();
-    expect(mockFindRelationshipById).not.toHaveBeenCalled();
+  /**
+   * ⚠ NO GATE IS LEFT. `isCalendarProjectedContext` is gone; exhaustiveness is the registry's
+   * `Record` and a sixth bookable label fails `tsc` there. This asserts the absence of the
+   * gate BEHAVIOURALLY: nothing this module does may make a context reach no calendar.
+   */
+  it('⚠ no context is skipped — the count matches BOOKABLE_CONTEXT_TYPES exactly', async () => {
+    for (const contextType of BOOKABLE_CONTEXT_TYPES) {
+      mockProjectBookingCalendarEvent.mockClear();
+      await bookAndProvisionMeeting(bookInput(contextType), log, {
+        provisioner: fakeProvisioner(),
+      });
+      expect(
+        mockProjectBookingCalendarEvent,
+        `${contextType} reached no calendar`
+      ).toHaveBeenCalledTimes(1);
+    }
+    expect(BOOKABLE_CONTEXT_TYPES.length).toBe(5);
   });
 
-  it('a throwing projection call does NOT fail the booking', async () => {
-    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
-    mockFindCompanyById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
-    mockProjectBookingToExpertCalendar.mockRejectedValue(new Error('should never happen'));
+  it.each(['provider_event', 'ics', 'skipped', 'failed'] as const)(
+    'emits meeting_calendar_projected with delivery "%s", verbatim from the projection',
+    async (delivery) => {
+      mockProjectBookingCalendarEvent.mockResolvedValue(delivery);
 
-    // `projectBookingToExpertCalendar`'s own contract is "never throws" (D2c) — but the CALL
-    // SITE wraps it in a try/catch too, defence-in-depth, so a violation of that contract
-    // still cannot turn a committed booking into a rejected promise.
+      await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
+
+      expect(mockTrackServer).toHaveBeenCalledWith('meeting_calendar_projected', {
+        meeting_id: MEETING_ID,
+        context_type: 'case',
+        // Slice 1 writes the expert side only — `calendar_connections` is keyed on
+        // `expert_profile_id` and no client-side connection model exists.
+        party: 'expert',
+        delivery,
+        distinct_id: USER_ID,
+      });
+    }
+  );
+
+  it('a throwing projection call does NOT fail the booking, and still reports an outcome', async () => {
+    // `projectBookingCalendarEvent`'s own contract is "never throws" (D2c) — but the CALL SITE
+    // wraps it in a try/catch too, defence-in-depth, so a violation of that contract still
+    // cannot turn a COMMITTED booking into a rejected promise. `POST /meetings` maps an
+    // unrecognised throw to a 500, and this module's header is explicit that telling the client
+    // "this failed" about a booking that exists is the worst of the available outcomes.
+    mockProjectBookingCalendarEvent.mockRejectedValue(new Error('should never happen'));
+
     const result = await bookAndProvisionMeeting(bookInput('case'), log, {
       provisioner: fakeProvisioner(),
     });
+
     expect(result.meeting.id).toBe(MEETING_ID);
+    // ⚠ EXACT KEY SET, not a partial match. This is the ONLY Axiom line for a
+    // contract-violation projection — it returns before the outcome line can fire — so an
+    // Axiom query on `deliveryMode` undercounts unless `party` and `deliveryMode` are here.
+    const [failureMeta] = vi.mocked(log.error).mock.calls.at(-1) ?? [];
+    expect(Object.keys(failureMeta as Record<string, unknown>).sort()).toEqual([
+      'contextId',
+      'contextType',
+      'deliveryMode',
+      'error',
+      'meetingId',
+      'party',
+      'stack',
+    ]);
     expect(vi.mocked(log.error)).toHaveBeenCalledWith(
-      expect.objectContaining({ meetingId: MEETING_ID, engagementId: CONTEXT_ID }),
-      'Failed to resolve case/company for the expert calendar projection'
-    );
-  });
-
-  it('skips silently (no throw) when the case has no live company row', async () => {
-    mockFindByEngagementId.mockResolvedValue({ companyId: 'company-1', title: 'CPQ rollout' });
-    mockFindCompanyById.mockResolvedValue(undefined);
-
-    await expect(
-      bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() })
-    ).resolves.toBeDefined();
-    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
-  });
-});
-
-/**
- * BAL-283 — RESOLUTION ENTRY TWO. Before this, an intro call blocked the expert's slot INSIDE
- * Balo (the `consultations` projection) and wrote NOTHING to their Google/Outlook — and because
- * Balo reads their external free/busy, a colleague could book over it undetected.
- *
- * ⚠ `@balo/shared/meetings` IS NOT MOCKED IN THIS FILE, so these exercise the REAL
- * `resolveContextOwner` two-hop — including its axis rule (the EXPERT comes from the
- * relationship, the COMPANY from the request). A stubbed resolver would let the two be swapped
- * and still pass.
- */
-describe('bookAndProvisionMeeting — the expert calendar projection for an intro call (BAL-283)', () => {
-  const RELATIONSHIP_ID = '66666666-6666-4666-8666-666666666666';
-  const REQUEST_ID = '77777777-7777-4777-8777-777777777777';
-
-  function introCallInput(overrides: Partial<BookAndProvisionInput> = {}): BookAndProvisionInput {
-    return {
-      contextType: 'request_interaction',
-      contextId: RELATIONSHIP_ID,
-      scheduledStart: START,
-      scheduledEnd: END,
-      // A `request_interaction` anchors on no engagement, so it carries no engagement type.
-      engagementType: null,
-      userId: USER_ID,
-      ...overrides,
-    };
-  }
-
-  /** The happy two-hop: relationship → request → company. */
-  function wireLiveGraph(requestTitle: string | null = 'Salesforce CPQ rollout'): void {
-    mockFindRelationshipById.mockResolvedValue({
-      id: RELATIONSHIP_ID,
-      projectRequestId: REQUEST_ID,
-      expertProfileId: 'expert_1',
-    });
-    mockFindProjectRequestById.mockResolvedValue({
-      id: REQUEST_ID,
-      companyId: 'company-9',
-      expertProfileId: 'expert_1',
-      title: requestTitle,
-    });
-    mockFindCompanyById.mockResolvedValue({ id: 'company-9', name: 'Northwind Industrial' });
-  }
-
-  it('projects the intro call with the client COMPANY and an "Intro call" title', async () => {
-    wireLiveGraph();
-
-    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
-
-    expect(mockProjectBookingToExpertCalendar).toHaveBeenCalledWith(
       expect.objectContaining({
         meetingId: MEETING_ID,
-        expertProfileId: 'expert_1',
-        // ADR-1044 §4 — the expert's event names the client COMPANY, never a person.
-        clientCompanyName: 'Northwind Industrial',
-        // The headline noun, which is what makes the event read as an intro call rather than
-        // as a "Consultation" the expert has not agreed to deliver.
-        eventLabel: 'Intro call',
-        // The subject line is the project request's own title (load-recap resolves this exact
-        // context the same way).
-        caseTitle: 'Salesforce CPQ rollout',
+        contextType: 'case',
+        party: 'expert',
+        deliveryMode: 'failed',
       }),
-      log
+      'The expert calendar projection threw despite its never-throws contract — booking stands'
     );
-    const [[calendarInput]] = mockProjectBookingToExpertCalendar.mock.calls;
-    expect((calendarInput as { joinUrl: string }).joinUrl).toContain(`/join/m/${MEETING_ID}`);
-  });
-
-  it('reads the company from the REQUEST, one hop past the relationship', async () => {
-    wireLiveGraph();
-
-    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
-
-    expect(mockFindRelationshipById).toHaveBeenCalledWith(RELATIONSHIP_ID);
-    expect(mockFindProjectRequestById).toHaveBeenCalledWith(REQUEST_ID);
-    expect(mockFindCompanyById).toHaveBeenCalledWith('company-9');
-    // The relationship names no company, so the case reader must never be consulted here.
-    expect(mockFindByEngagementId).not.toHaveBeenCalled();
-  });
-
-  it('falls back to the "Intro call" label when the request title is blank', async () => {
-    wireLiveGraph('   ');
-
-    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
-
-    expect(mockProjectBookingToExpertCalendar).toHaveBeenCalledWith(
-      expect.objectContaining({ caseTitle: 'Intro call' }),
-      log
+    // The emit stays unconditional — one outcome vocabulary across both paths.
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_calendar_projected',
+      expect.objectContaining({ delivery: 'failed' })
     );
-  });
-
-  it('⚠ carries NO attendees — comms stay in Balo (ADR-1044 §4 / BAL-433 Ruling 2)', async () => {
-    wireLiveGraph();
-
-    await bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() });
-
-    const [[calendarInput]] = mockProjectBookingToExpertCalendar.mock.calls;
-    expect(calendarInput).not.toHaveProperty('attendees');
-    expect(calendarInput).not.toHaveProperty('generateMeetingUrlProvider');
-  });
-
-  it.each([
-    ['relationship', () => mockFindRelationshipById.mockResolvedValue(undefined)],
-    ['request', () => mockFindProjectRequestById.mockResolvedValue(undefined)],
-    ['company', () => mockFindCompanyById.mockResolvedValue(undefined)],
-  ])('skips silently (no throw) when the %s row is missing', async (_label, breakRow) => {
-    wireLiveGraph();
-    breakRow();
-
-    await expect(
-      bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() })
-    ).resolves.toBeDefined();
-    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
-  });
-
-  it('never throws, and never undoes the booking, when a read rejects', async () => {
-    // The booking has ALREADY COMMITTED by the time the projection runs (D2c) — a repository
-    // wobble here must degrade to a logged no-op, never to a rejected promise.
-    wireLiveGraph();
-    mockFindRelationshipById.mockRejectedValue(new Error('db unavailable'));
-
-    const result = await bookAndProvisionMeeting(introCallInput(), log, {
-      provisioner: fakeProvisioner(),
-    });
-
-    expect(result.meeting.id).toBe(MEETING_ID);
-    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
-    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
-      expect.objectContaining({ meetingId: MEETING_ID, relationshipId: RELATIONSHIP_ID }),
-      'Failed to resolve request/company for the expert calendar projection'
-    );
-  });
-
-  it('skips the projection when the booking resolved no expertProfileId', async () => {
-    wireLiveGraph();
-    mockBookMeeting.mockResolvedValue({
-      meeting: unstampedMeeting(),
-      contexts: [],
-      expertProfileId: null,
-    });
-
-    await expect(
-      bookAndProvisionMeeting(introCallInput(), log, { provisioner: fakeProvisioner() })
-    ).resolves.toBeDefined();
-    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
   });
 
   it('⚠ does NOT project on the idempotent REPLAY path', async () => {
     // Re-running the projection would call `events.create` a SECOND time and, per apiroc skill
     // §M1, could strand a first vendor event rather than re-stamping Balo's own row. The replay
     // goes through `provisionMeeting`, which never reaches the projection at all.
-    wireLiveGraph();
     const stamped = {
       ...unstampedMeeting(),
       dailyRoomName: ROOM_NAME,
@@ -1036,18 +936,45 @@ describe('bookAndProvisionMeeting — the expert calendar projection for an intr
     };
     mockFindByBookingIdempotencyKey.mockResolvedValue(stamped);
     mockFindWithContexts.mockResolvedValue({
-      contexts: [{ contextType: 'request_interaction', contextId: RELATIONSHIP_ID }],
+      contexts: [{ contextType: 'case', contextId: CONTEXT_ID }],
     });
     mockFindById.mockResolvedValue(stamped);
 
     const result = await bookAndProvisionMeeting(
-      introCallInput({ bookingIdempotencyKey: 'key-intro-1' }),
+      bookInput('case', { bookingIdempotencyKey: 'key-replay-1' }),
       log,
       { provisioner: fakeProvisioner() }
     );
 
     expect(result.meeting.id).toBe(MEETING_ID);
     expect(mockBookMeeting).not.toHaveBeenCalled();
-    expect(mockProjectBookingToExpertCalendar).not.toHaveBeenCalled();
+    expect(mockProjectBookingCalendarEvent).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalledWith(
+      'meeting_calendar_projected',
+      expect.anything()
+    );
+  });
+
+  it('skips nothing itself when the booking resolved no expertProfileId — the projection answers that', async () => {
+    // ⚠ THE NULL-EXPERT BRANCH MOVED. `provision-meeting.ts` no longer inspects
+    // `expertProfileId`; `projectBookingCalendarEvent` owns that decision (and returns
+    // `'skipped'`). Asserting the CALL still happens is what stops someone re-adding a
+    // second, drifting copy of the check here.
+    mockBookMeeting.mockResolvedValue({
+      meeting: unstampedMeeting(),
+      contexts: [],
+      expertProfileId: null,
+    });
+    mockProjectBookingCalendarEvent.mockResolvedValue('skipped');
+
+    await bookAndProvisionMeeting(bookInput('project_discovery', { engagementType: null }), log, {
+      provisioner: fakeProvisioner(),
+    });
+
+    expect(mockProjectBookingCalendarEvent).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'meeting_calendar_projected',
+      expect.objectContaining({ delivery: 'skipped' })
+    );
   });
 });

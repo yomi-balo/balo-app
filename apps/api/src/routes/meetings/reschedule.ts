@@ -147,8 +147,13 @@ async function resolveRescheduleInput(
   // (`MatchModeDiscoveryNotBookableError` blocks it at booking), so no live row reaches here.
   // The skip is correct either way; only the stated reason was wrong.
   if (expertProfileId !== null) {
+    // ⚠ ONLY A `provider_event` COUNTS, AND THAT IS THE POINT OF THE NARROWED READ (BAL-433).
+    // `hasVendorEvent` feeds `enforceExpertScopedGuards`' availability exclusion; an
+    // ICS-fallback row (ADR-1044 Ruling 1 — no writable connection, so no vendor event exists)
+    // answering `true` here would drop a real busy block and let the expert be DOUBLE-BOOKED,
+    // typecheck-clean with every mocked test green.
     const hasVendorEvent =
-      (await meetingCalendarEventsRepository.findLiveByMeetingId(meetingId)) !== undefined;
+      (await meetingCalendarEventsRepository.findLiveExpertProviderEvent(meetingId)) !== undefined;
     if (
       await enforceExpertScopedGuards(
         {

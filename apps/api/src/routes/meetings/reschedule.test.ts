@@ -6,7 +6,7 @@ const {
   mockIsWindowAvailableForExpert,
   mockCheckRateLimit,
   mockFindById,
-  mockFindLiveByMeetingId,
+  mockFindLiveExpertProviderEvent,
   MeetingNotReschedulableErrorStub,
 } = vi.hoisted(() => {
   class MeetingNotReschedulableErrorImpl extends Error {
@@ -23,7 +23,7 @@ const {
     mockIsWindowAvailableForExpert: vi.fn(),
     mockCheckRateLimit: vi.fn(),
     mockFindById: vi.fn(),
-    mockFindLiveByMeetingId: vi.fn(),
+    mockFindLiveExpertProviderEvent: vi.fn(),
     MeetingNotReschedulableErrorStub: MeetingNotReschedulableErrorImpl,
   };
 });
@@ -34,7 +34,7 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   MeetingNotReschedulableError: MeetingNotReschedulableErrorStub,
   meetingsRepository: { findById: mockFindById },
-  meetingCalendarEventsRepository: { findLiveByMeetingId: mockFindLiveByMeetingId },
+  meetingCalendarEventsRepository: { findLiveExpertProviderEvent: mockFindLiveExpertProviderEvent },
 }));
 // ⚠ SPREADS THE REAL MODULE — a bare factory would drop `RATE_LIMIT_DEADLINE_MS`, which
 // `guards.js` imports, and a vitest factory mock throws on any export the graph touches but
@@ -144,7 +144,7 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
     vi.clearAllMocks();
     mockCheckRateLimit.mockResolvedValue({ allowed: true, remaining: 19, ttlSeconds: 3600 });
     mockAuthorizeMeetingReschedule.mockResolvedValue(authOk());
-    mockFindLiveByMeetingId.mockResolvedValue(undefined);
+    mockFindLiveExpertProviderEvent.mockResolvedValue(undefined);
     mockIsWindowAvailableForExpert.mockResolvedValue(true);
     mockRescheduleMeeting.mockResolvedValue({
       meeting: {
@@ -336,7 +336,7 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
   });
 
   it('threads excludeMeeting (self-collision fix) into isWindowAvailableForExpert', async () => {
-    mockFindLiveByMeetingId.mockResolvedValue({ id: 'cal-event-1' });
+    mockFindLiveExpertProviderEvent.mockResolvedValue({ id: 'cal-event-1' });
 
     await call({ method: 'POST', url: URL, headers: AUTH, payload: body() });
 
@@ -351,6 +351,36 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
         currentEnd: CURRENT_END,
         hasVendorEvent: true,
       })
+    );
+  });
+
+  /**
+   * ⚠⚠ BAL-433 — `hasVendorEvent` MUST COME FROM THE NARROWED READ, AND THIS IS WHY.
+   *
+   * It feeds `enforceExpertScopedGuards`' availability EXCLUSION: `true` tells the resolver
+   * "this meeting's busy block lives at the vendor, so subtract it". Since BAL-433 a meeting
+   * can also hold an ICS-FALLBACK row (ADR-1044 Ruling 1 — the expert has no writable
+   * connection, so NO vendor event exists). A whole-meeting read would hand that row back,
+   * `hasVendorEvent` would be `true`, a real busy block would be dropped, and the expert
+   * would be DOUBLE-BOOKED — typecheck-clean, with every mocked test still green.
+   *
+   * The `@balo/db` factory mock above names ONLY `findLiveExpertProviderEvent`, so a route
+   * that reached for a wider read would throw here rather than pass; this asserts the
+   * narrowed reader is the one actually consulted, and consulted once.
+   */
+  it('⚠ reads the EXPERT-PARTY PROVIDER event, never a whole-meeting calendar row', async () => {
+    mockFindLiveExpertProviderEvent.mockResolvedValue(undefined);
+
+    await call({ method: 'POST', url: URL, headers: AUTH, payload: body() });
+
+    expect(mockFindLiveExpertProviderEvent).toHaveBeenCalledTimes(1);
+    expect(mockFindLiveExpertProviderEvent).toHaveBeenCalledWith(MEETING_ID);
+    expect(mockIsWindowAvailableForExpert).toHaveBeenCalledWith(
+      EXPERT_PROFILE_ID,
+      new Date(NEW_START),
+      new Date(NEW_END),
+      expect.any(Date),
+      expect.objectContaining({ hasVendorEvent: false })
     );
   });
 

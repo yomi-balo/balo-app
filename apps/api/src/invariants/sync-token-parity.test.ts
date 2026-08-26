@@ -1,6 +1,3 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import {
   CALENDAR_PROVIDERS,
@@ -9,6 +6,12 @@ import {
   SYNC_STRATEGIES,
   resolveSyncStrategy,
 } from '../services/calendar/sync-capability.js';
+// ⚠ EXTRACTED BY BAL-433, NOT REWRITTEN. These are BAL-447's own primitives, moved verbatim so
+// `no-counterparty-address-on-calendar-writes.test.ts` can reuse the walk and the comment
+// classifier instead of copying ~60 lines into a second file in this directory (SonarCloud's
+// new-code duplication gate). Their docblocks — including the NO-REGEX and `import.meta.url`
+// warnings this file's own ⚠⚠ block below relies on — travelled with them.
+import { ALL_SOURCE_FILES, codeLines, isUnderAny, markersInCode, readRaw } from './_source-scan.js';
 
 /**
  * BAL-447 / ADR-1021 (amendment 2026-08-15, amended again 18 Aug 2026 for BAL-396) — NOBODY
@@ -167,77 +170,13 @@ import {
  * mechanism `services/meetings/authorize-engagement-host.test.ts:322` already relies on.
  * (It is NOT usable in `apps/web`'s jsdom suites, which is why those use a candidate list.)
  *
+ * ⚠ THE READING PRIMITIVES THEMSELVES NOW LIVE IN `./_source-scan.ts` (extracted by BAL-433 so
+ * a second invariant in this directory could reuse them rather than copy them). The two ⚠ notes
+ * immediately above describe THAT module's behaviour and travelled into its docblock verbatim;
+ * they are restated here because they are the reasoning every scan below depends on.
+ *
  * IF THIS TEST FAILS, THE REMEDY IS A DECISION, NOT A TEST EDIT: amend ADR-1021 first.
  */
-
-/** `apps/api/src`. */
-const SRC_DIR = fileURLToPath(new URL('../', import.meta.url));
-
-/** RAW source text of `apps/api/src/<rel>` — comments are NOT stripped. See the ⚠⚠ above. */
-function readRaw(rel: string): string {
-  return readFileSync(path.join(SRC_DIR, rel), 'utf8');
-}
-
-/**
- * Whether a line is a comment line. Conservative on purpose: `//` line comments, and the `*` /
- * `/*` opening forms of a block comment. Anything else — including a line whose comment starts
- * mid-line — counts as CODE, so a marker hidden after a trailing `//` still trips the scan.
- */
-function isCommentLine(line: string): boolean {
-  const trimmed = line.trimStart();
-  return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
-}
-
-/**
- * `raw` with its comment LINES removed, the remaining lines rejoined.
- *
- * This is the classifier, not a stripper: it never edits a line's contents, so a string literal
- * containing `//` survives intact (which is the whole point — see the ⚠⚠ docblock note).
- */
-function codeLines(raw: string): string {
-  return raw
-    .split('\n')
-    .filter((line) => !isCommentLine(line))
-    .join('\n');
-}
-
-/** Which of `markers` appear on at least one NON-comment line of `raw`. */
-function markersInCode(raw: string, markers: readonly string[]): string[] {
-  const code = codeLines(raw);
-  return markers.filter((marker) => code.includes(marker));
-}
-
-/**
- * Every non-test, non-`.d.ts` TypeScript file under `apps/api/src` — `.ts` AND `.tsx`
- * (BAL-396 fix round 2, Finding 3: a `.ts`-only filter left every `.tsx` file, all 51 of them
- * under `notifications/channels/templates/`, unscanned) — as paths relative to it.
- *
- * Test files are excluded because a test may legitimately NAME a forbidden construct while
- * proving it absent — this file being the obvious example.
- */
-function collectSourceFiles(dir: string, prefix: string): string[] {
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
-      out.push(...collectSourceFiles(path.join(dir, entry.name), rel));
-      continue;
-    }
-    if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.tsx')) continue;
-    if (entry.name.endsWith('.d.ts')) continue;
-    if (entry.name.includes('.test.') || entry.name.includes('.spec.')) continue;
-    out.push(rel);
-  }
-  return out;
-}
-
-const ALL_SOURCE_FILES = collectSourceFiles(SRC_DIR, '');
-
-/** True when `rel` equals, or falls under, one of `dirsOrFiles`. No regex (S5852). */
-function isUnderAny(rel: string, dirsOrFiles: readonly string[]): boolean {
-  return dirsOrFiles.some((entry) => rel === entry || rel.startsWith(entry));
-}
 
 // ── Layer 1 — DATA: the observed divergence is still recorded ────────────────────────────
 

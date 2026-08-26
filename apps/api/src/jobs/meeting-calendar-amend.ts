@@ -113,11 +113,24 @@ export async function processMeetingCalendarAmend(
     return;
   }
 
-  // 3. No live vendor event ⇒ the expert has no connected calendar, or the booking-time
-  //    projection was skipped. A normal case, not a failure.
-  const row = await meetingCalendarEventsRepository.findLiveByMeetingId(meetingId);
+  // 3. No live EXPERT-PARTY PROVIDER event ⇒ nothing at a vendor to move. A normal case, not
+  //    a failure: the expert has no connected calendar, the booking-time projection was
+  //    skipped, or — since BAL-433 — this meeting recorded an `ics` FALLBACK row instead
+  //    (ADR-1044 Ruling 1), which names no vendor event at all.
+  //
+  //    ⚠ RE-SENDING AN UPDATED ICS ON RESCHEDULE IS **NOT THIS JOB'S**, exactly as the cancel
+  //    at step 2 is BAL-410's. Building and delivering the ICS is BAL-475; `METHOD:CANCEL` and
+  //    the re-send fan-out are BAL-476. The accepted residual, stated rather than hidden: a
+  //    rescheduled ICS-fallback expert currently holds a STALE calendar entry.
+  //
+  //    ⚠ THE READ IS NARROWED TO `party='expert' AND delivery_mode='provider_event'` — a
+  //    whole-meeting read would hand back a client-party or ICS row and this job would try to
+  //    address a vendor event that does not exist.
+  const row = await meetingCalendarEventsRepository.findLiveExpertProviderEvent(meetingId);
   if (row === undefined) {
-    job.log(`Meeting ${meetingId} has no live calendar_events row — converged, nothing to amend`);
+    job.log(
+      `Meeting ${meetingId} has no live expert-party PROVIDER event — converged, nothing to amend`
+    );
     return;
   }
 
@@ -238,8 +251,13 @@ async function handleAmendError(
 
   switch (error.kind) {
     case 'not_found':
-      await meetingCalendarEventsRepository.softDeleteByMeetingId(context.meetingId);
-      log.warn(context, 'Vendor event missing on amend — Balo row soft-deleted');
+      // ⚠ PARTY-SCOPED (BAL-433). A vendor 404 happened on the EXPERT's calendar; soft-deleting
+      // the whole meeting's rows would take a client-party row down as collateral.
+      await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(
+        context.meetingId,
+        'expert'
+      );
+      log.warn(context, 'Vendor event missing on amend — Balo expert-party row soft-deleted');
       return;
 
     case 'unauthorized':

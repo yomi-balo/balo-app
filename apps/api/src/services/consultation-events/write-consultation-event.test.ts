@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockEventsCreate, mockRecord } = vi.hoisted(() => ({
+const { mockEventsCreate, mockRecordProviderEvent } = vi.hoisted(() => ({
   mockEventsCreate: vi.fn(),
-  mockRecord: vi.fn(),
+  mockRecordProviderEvent: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
-  meetingCalendarEventsRepository: { record: mockRecord },
+  meetingCalendarEventsRepository: { recordProviderEvent: mockRecordProviderEvent },
 }));
 
 vi.mock('../../lib/apiroc/index.js', () => ({
@@ -29,7 +29,7 @@ describe('writeConsultationEvent (BAL-396 §5/§10.6)', () => {
 
   it('creates the event and records the VENDOR-RETURNED id, not a derived one', async () => {
     mockEventsCreate.mockResolvedValue({ id: 'vendor-event-id-abc' });
-    mockRecord.mockResolvedValue({ id: 'row-1' });
+    mockRecordProviderEvent.mockResolvedValue({ id: 'row-1' });
 
     const result = await writeConsultationEvent({
       meetingId: 'meeting-1',
@@ -41,8 +41,11 @@ describe('writeConsultationEvent (BAL-396 §5/§10.6)', () => {
     });
 
     expect(mockEventsCreate).toHaveBeenCalledWith('eua-1', 'cal-primary', BASE_EVENT);
-    expect(mockRecord).toHaveBeenCalledWith({
+    expect(mockRecordProviderEvent).toHaveBeenCalledWith({
       meetingId: 'meeting-1',
+      // BAL-433 — STRUCTURAL, never a request field: `endUserAccountId` comes off a
+      // `calendar_connections` row and that table is keyed on `expert_profile_id`.
+      party: 'expert',
       connectionId: 'conn-1',
       calendarId: 'cal-primary',
       vendorEventId: 'vendor-event-id-abc',
@@ -66,12 +69,12 @@ describe('writeConsultationEvent (BAL-396 §5/§10.6)', () => {
       })
     ).rejects.toThrow(/different event id/i);
 
-    expect(mockRecord).not.toHaveBeenCalled();
+    expect(mockRecordProviderEvent).not.toHaveBeenCalled();
   });
 
   it('a vendor-returned id that MATCHES a caller-supplied id records normally', async () => {
     mockEventsCreate.mockResolvedValue({ id: 'same-id' });
-    mockRecord.mockResolvedValue({ id: 'row-1' });
+    mockRecordProviderEvent.mockResolvedValue({ id: 'row-1' });
 
     await writeConsultationEvent({
       meetingId: 'meeting-1',
@@ -82,6 +85,8 @@ describe('writeConsultationEvent (BAL-396 §5/§10.6)', () => {
       event: { ...BASE_EVENT, id: 'same-id' },
     });
 
-    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ vendorEventId: 'same-id' }));
+    expect(mockRecordProviderEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ vendorEventId: 'same-id' })
+    );
   });
 });

@@ -11,6 +11,8 @@ describe('MEETING_SERVER_EVENTS', () => {
     // letters, so `_` < `E` and `..._PROVISION_FAILED` comes first. The list below is the
     // `localeCompare` order; do not "correct" it to the code-unit one.
     expect(Object.keys(MEETING_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
+      // BAL-433 (1) — the expert-party calendar-delivery outcome. `C` < `E`, so it leads.
+      'MEETING_CALENDAR_PROJECTED',
       // BAL-134 (5). ⚠ THE ORDER BELOW IS `localeCompare`'s, NOT a code-unit sort's — see the
       // note above. `MEETING_ENDED` < `MEETING_EXPERT_…` because `N` < `X`; `MEETING_MISSED_…`
       // < `MEETING_PROVISION_FAILED` because `M` < `P`; and `MEETING_STARTED` <
@@ -36,6 +38,31 @@ describe('MEETING_SERVER_EVENTS', () => {
     expect(MEETING_SERVER_EVENTS.MEETING_EXPERT_ABSENT_ALERT).toBe('meeting_expert_absent_alert');
     expect(MEETING_SERVER_EVENTS.MEETING_MISSED_CALL).toBe('meeting_missed_call');
     expect(MEETING_SERVER_EVENTS.MEETING_ENDED).toBe('meeting_ended');
+    expect(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED).toBe('meeting_calendar_projected');
+  });
+
+  /**
+   * BAL-433 — the four delivery outcomes are a CLOSED union, and `party` is the two-sided
+   * pair. A COMPILE-TIME assertion: a fifth outcome (or a widened `party`) has to be added to
+   * the map on purpose, because the `@ts-expect-error` below would otherwise go unused —
+   * which is itself a type error.
+   */
+  it('⚠ `meeting_calendar_projected.delivery` is a CLOSED four-value union', () => {
+    const ics: MeetingServerEventMap['meeting_calendar_projected'] = {
+      meeting_id: 'meeting-1',
+      context_type: 'package_session',
+      party: 'expert',
+      delivery: 'ics',
+      distinct_id: 'user-1',
+    };
+    const invented: MeetingServerEventMap['meeting_calendar_projected'] = {
+      ...ics,
+      // @ts-expect-error — `delivered` is not one of the four outcomes.
+      delivery: 'delivered',
+    };
+
+    expect(ics.delivery).toBe('ics');
+    expect(invented.party).toBe('expert');
   });
 
   /**

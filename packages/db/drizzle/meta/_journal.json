@@ -533,6 +533,13 @@
       "when": 1787648705224,
       "tag": "0075_bal473_meeting_recordings",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1787752779143,
+      "tag": "0076_bal433_meeting_calendar_events_per_party",
+      "breakpoints": true
     }
   ]
 }
