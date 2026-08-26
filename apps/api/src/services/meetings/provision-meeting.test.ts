@@ -894,8 +894,26 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-433)',
     });
 
     expect(result.meeting.id).toBe(MEETING_ID);
+    // ⚠ EXACT KEY SET, not a partial match. This is the ONLY Axiom line for a
+    // contract-violation projection — it returns before the outcome line can fire — so an
+    // Axiom query on `deliveryMode` undercounts unless `party` and `deliveryMode` are here.
+    const [failureMeta] = vi.mocked(log.error).mock.calls.at(-1) ?? [];
+    expect(Object.keys(failureMeta as Record<string, unknown>).sort()).toEqual([
+      'contextId',
+      'contextType',
+      'deliveryMode',
+      'error',
+      'meetingId',
+      'party',
+      'stack',
+    ]);
     expect(vi.mocked(log.error)).toHaveBeenCalledWith(
-      expect.objectContaining({ meetingId: MEETING_ID, contextType: 'case' }),
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        contextType: 'case',
+        party: 'expert',
+        deliveryMode: 'failed',
+      }),
       'The expert calendar projection threw despite its never-throws contract — booking stands'
     );
     // The emit stays unconditional — one outcome vocabulary across both paths.

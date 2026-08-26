@@ -591,6 +591,14 @@ async function projectBookingCalendarEventSafely(
     log.error(
       {
         meetingId: created.meeting.id,
+        // ⚠ `party` + `deliveryMode` ARE THE CORRELATION KEYS, NOT DECORATION. This path
+        // returns BEFORE `projectBookingCalendarEvent` can emit its outcome line, so this is
+        // the ONLY Axiom record of a contract-violation projection. Without these two keys an
+        // Axiom query filtered on `deliveryMode` silently undercounts failures — while the
+        // PostHog emit at the call site carries both, so the two sources would disagree
+        // exactly when someone is debugging an incident. `sequence` joins this set in BAL-475.
+        party: 'expert',
+        deliveryMode: 'failed' satisfies ExpertCalendarDelivery,
         contextType: input.contextType,
         contextId: input.contextId,
         error: error instanceof Error ? error.message : String(error),
