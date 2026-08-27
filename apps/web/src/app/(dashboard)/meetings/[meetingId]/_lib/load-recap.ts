@@ -9,6 +9,7 @@ import {
   expertsRepository,
   meetingContextsRepository,
   meetingFilesRepository,
+  meetingRecordingsRepository,
   projectRequestsRepository,
   requestExpertRelationshipsRepository,
   reviewsRepository,
@@ -48,11 +49,17 @@ import {
 } from './resolve-recap-state';
 import { countOpenActionItems, mapRecapActionItems } from './map-recap-action-items';
 import { mapRecapFiles } from './map-recap-files';
+import { mapRecapRecordings } from './map-recap-recordings';
 
 /**
- * BAL-388 — the recap's SINGLE loader. Assembles five already-shipped primitives (meeting +
- * context seam, transcript artefacts, action items, meeting files, credit-session money block)
- * into ONE lens-aware payload.
+ * BAL-388 — the recap's SINGLE loader. Assembles six already-shipped primitives (meeting +
+ * context seam, transcript artefacts, action items, meeting files, meeting recordings (BAL-440),
+ * credit-session money block) into ONE lens-aware payload.
+ *
+ * ⚠ BAL-440 — `recordings` rides THIS SAME gate. `mapRecapRecordings` mints the poster URL
+ * downstream of `resolveRecapAccess`, so there is no second authorization decision anywhere on
+ * this read path; the on-demand playback mint (`getMeetingRecordingPlaybackAction`) re-runs the
+ * identical `authorizeMeetingFileAccess` gate at click time.
  *
  * ⚠ `cache()`-WRAPPED so `generateMetadata` and the page body share ONE set of reads per
  * render (React dedupes within a single server request) — the precedent is
@@ -306,6 +313,7 @@ export const loadRecap = cache(
 
     const [
       files,
+      recordingRows,
       actionItems,
       transcript,
       session,
@@ -316,6 +324,7 @@ export const loadRecap = cache(
       existingReview,
     ] = await Promise.all([
       meetingFilesRepository.listByMeeting(meetingId),
+      meetingRecordingsRepository.listByMeeting(meetingId),
       actionItemsRepository.listByMeeting(meetingId),
       transcriptsRepository.findByMeetingId(meetingId),
       isCase ? creditSessionsRepository.findIdByMeetingId(meetingId) : Promise.resolve(undefined),
@@ -355,10 +364,11 @@ export const loadRecap = cache(
     );
 
     // Independent reads, run together — no waterfall.
-    const [title, artifactContents, fileRows, labels, moneyBlock] = await Promise.all([
+    const [title, artifactContents, fileRows, recordings, labels, moneyBlock] = await Promise.all([
       resolveTitle(contextType, subject.contextId, caseRow),
       readArtifactContents(transcript?.id),
       mapRecapFiles(files, userId),
+      mapRecapRecordings(recordingRows, meeting.endedAt, now),
       resolveCounterparty(
         lens,
         profile,
@@ -444,6 +454,7 @@ export const loadRecap = cache(
       actionItems: panel,
       party: labels.party,
       files: fileRows,
+      recordings,
       notHeld,
     };
 

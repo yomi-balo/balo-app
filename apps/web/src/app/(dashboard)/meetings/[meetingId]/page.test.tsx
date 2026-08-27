@@ -59,6 +59,9 @@ vi.mock('./_actions/dismiss-resolution-request', () => ({
 vi.mock('./_actions/get-meeting-file-download', () => ({
   getMeetingFileDownloadAction: vi.fn(),
 }));
+vi.mock('./_actions/get-meeting-recording-playback', () => ({
+  getMeetingRecordingPlaybackAction: vi.fn(),
+}));
 
 import RecapPage, { generateMetadata } from './page';
 
@@ -97,6 +100,7 @@ const BASE = {
     ratingCount: 2,
   },
   files: [],
+  recordings: [],
   notHeld: null,
 };
 
@@ -231,8 +235,34 @@ describe('RecapPage — analytics', () => {
       source: 'direct',
       resolve_prompt_shown: true,
       resolve_prompt_variant: 'offered',
+      recording_state: 'absent',
       distinct_id: USER_ID,
     });
+  });
+
+  it('BAL-440 — reports recording_state: ready when the view carries a ready recording', async () => {
+    mockLoadRecap.mockResolvedValue({
+      ...CLIENT_VIEW,
+      recordings: [
+        {
+          recording: {
+            id: 'rec-1',
+            status: 'ready',
+            playbackId: 'pb_1',
+            durationSeconds: 600,
+            startedAt: '2026-07-29T04:14:00.000Z',
+            readyAt: '2026-07-29T04:24:00.000Z',
+          },
+          posterUrl: 'https://image.mux.example/thumb.jpg?token=t',
+          isLongTailProcessing: false,
+        },
+      ],
+    });
+    await RecapPage(props());
+    expect(mockTrack).toHaveBeenCalledWith(
+      'recap_viewed',
+      expect.objectContaining({ recording_state: 'ready' })
+    );
   });
 
   it('reports variant none on the EXPERT lens — it has no resolve field at all', async () => {

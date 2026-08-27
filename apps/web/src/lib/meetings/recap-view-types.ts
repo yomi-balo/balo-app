@@ -1,4 +1,5 @@
 import type { SessionMoneyBlock } from '@balo/shared/credit';
+import type { MeetingRecordingView } from '@balo/shared/meetings';
 import type {
   RecapContextType,
   RecapResolvePromptVariant,
@@ -11,12 +12,14 @@ import type { ActionItemsPanelView } from '@/lib/engagement/action-items-view';
  * BAL-388 — the recap page's single serializable contract. PLAIN TYPES ONLY: no values, no
  * functions, no constants.
  *
- * ⚠ CLIENT-SAFE BY CONSTRUCTION. Every import above is `import type`, so all four are ERASED
+ * ⚠ CLIENT-SAFE BY CONSTRUCTION. Every import above is `import type`, so all five are ERASED
  * at build and none drags `postgres` into a browser bundle (memory
  * `reference_balo_db_client_bundle_footgun`: a client component that VALUE-imports `@balo/db`
  * breaks `next build` because postgres cannot resolve `tls`). `ActionItemsPanelView` lives
  * behind a `server-only` module and is imported the same way `ActionItemsPanel` already
- * imports it — proven safe. Do NOT add a runtime import, a helper or a constant to this file.
+ * imports it — proven safe. `MeetingRecordingView` (BAL-440) is `@balo/shared/meetings`'s
+ * concealment-boundary projection — PURE and dependency-free itself, so it carries no risk of
+ * its own. Do NOT add a runtime import, a helper or a constant to this file.
  *
  * ⚠⚠ THE LENS IS A DISCRIMINANT, NOT A FLAG — AND THAT IS THE STRUCTURAL PROOF OF THE
  * ACCEPTANCE CRITERION that the expert lens never shows the resolve prompt. `RecapView` is a
@@ -31,7 +34,13 @@ import type { ActionItemsPanelView } from '@/lib/engagement/action-items-view';
  */
 
 /** Re-exported so a consumer needs ONE import for the whole recap contract. */
-export type { RecapContextType, RecapState, SessionMoneyBlock, MeetingFileView };
+export type {
+  RecapContextType,
+  RecapState,
+  SessionMoneyBlock,
+  MeetingFileView,
+  MeetingRecordingView,
+};
 // `RecapLens` is ONLY re-exported (nothing here consumes it), so it goes out via
 // `export ... from` rather than being imported first purely to be re-exported.
 export type { RecapLens } from '@balo/analytics/events';
@@ -175,6 +184,32 @@ export interface RecapFileRowView {
   uploaderLabel: string;
 }
 
+/**
+ * BAL-440 — one recording SEGMENT as the recap renders it.
+ *
+ * ⚠ `recording` IS THE PROJECTION, NOT THE ROW. `toMeetingRecordingView`
+ * (`@balo/shared/meetings`) is the concealment boundary; `muxAssetId`, `dailyRecordingId`,
+ * `failedStage`, `failureReason` and `sourceDeletedAt` are structurally absent from it. Never
+ * widen this field to a `@balo/db` `MeetingRecording` row.
+ */
+export interface RecapRecordingRowView {
+  readonly recording: MeetingRecordingView;
+  /**
+   * A SIGNED, TTL-BOUND Mux thumbnail URL, or `null`. Minted server-side at render (BAL-440
+   * C-3). `null` when the row is not `ready`, when there is more than one segment, or when
+   * minting failed — every one of which renders the same `bg-muted` fallback. ⚠ NEVER a raw
+   * storage URL.
+   */
+  readonly posterUrl: string | null;
+  /**
+   * Server-computed, anchored on `meetings.ended_at` — NEVER on the recording's own
+   * `started_at`, which is permanently NULL in the worst wedge case (the worker died before
+   * Daily's `recordings/start` returned), i.e. exactly the case this flag exists to catch.
+   * Always `false` on a `ready` or `failed` row.
+   */
+  readonly isLongTailProcessing: boolean;
+}
+
 export type RecapNotHeldReason = 'no_show_client' | 'missed_call' | 'cancelled';
 
 export interface RecapNotHeldView {
@@ -234,6 +269,11 @@ interface RecapViewBase {
   actionItems: ActionItemsPanelView | null;
   party: RecapPartyView;
   files: RecapFileRowView[];
+  /** BAL-440 — the meeting's recording SEGMENTS, in capture order. `[]` on every historical
+   * meeting and on any meeting recorded before capture shipped — the Files card's absence
+   * branch is driven by THIS LENGTH, never by a vendor knob (OD-1's forward-compatibility
+   * constraint for BAL-485's future opt-out). */
+  recordings: RecapRecordingRowView[];
   /** Present ⇒ R11 REPLACES summary / action items / transcript. */
   notHeld: RecapNotHeldView | null;
 }

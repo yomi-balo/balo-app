@@ -570,6 +570,7 @@ export {
   type MarkRecordingReadyInput,
   type MarkRecordingFailedInput,
   type MarkRecordingSourceDeletedInput,
+  type FindMeetingRecordingInput,
 } from './meeting-recordings';
 /**
  * The judgement-free "who owns this meeting context" READ (BAL-423). Exported because BOTH
