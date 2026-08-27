@@ -170,6 +170,52 @@ export function repositoryMemberCallsOf(
   return calls;
 }
 
+/**
+ * Every named import binding pulled from `import { ... } from '<moduleSpecifier>'` in `source`
+ * — the LOCAL name (after `as`, when aliased), with a leading `type` keyword stripped so a
+ * type-only member reads the same as a value one.
+ *
+ * ⚠⚠ EXTRACTED FOR BAL-445 fix-round-4's PER-MODULE `@balo/db` IMPORT PIN. `repositoryMemberCallsOf`
+ * only sees calls shaped `xxxRepository.member` — a bare export like `resolveMeetingContextOwner`
+ * has no `Repository.` in its name and is invisible to it, nor is anything else shaped like it.
+ * Pinning the whole named-import set per module closes that blind spot: a new bare export can
+ * only arrive by first widening the import statement, and that is what this function watches.
+ *
+ * Handles the multi-line brace form every `@balo/db` import in this codebase uses (opening
+ * brace on the `import {` line, closing brace on its own line before ` } from '...'`). Does not
+ * handle a default or namespace import (`import db from ...` / `import * as db from ...`) —
+ * `@balo/db` has neither today, so no caller needs it; a caller that DOES should extend this
+ * rather than special-case around it.
+ *
+ * NO REGEX, same convention as the rest of this file (SonarCloud S5852): both quote styles are
+ * checked literally (Prettier normalises to single quotes, but nothing type-checks a
+ * hand-written import), and the import body is found by nearest brace, then split on `,`.
+ */
+export function namedImportsFrom(source: string, moduleSpecifier: string): string[] {
+  const names: string[] = [];
+  for (const quote of ["'", '"']) {
+    const marker = `from ${quote}${moduleSpecifier}${quote}`;
+    let fromIdx = source.indexOf(marker);
+    while (fromIdx !== -1) {
+      const open = source.lastIndexOf('{', fromIdx);
+      const close = open === -1 ? -1 : source.indexOf('}', open);
+      if (open !== -1 && close !== -1 && close < fromIdx) {
+        for (const rawSpecifier of source.slice(open + 1, close).split(',')) {
+          const specifier = rawSpecifier.trim();
+          if (specifier.length === 0) continue;
+          const withoutType = specifier.startsWith('type ')
+            ? specifier.slice('type '.length).trim()
+            : specifier;
+          const asIdx = withoutType.indexOf(' as ');
+          names.push(asIdx === -1 ? withoutType : withoutType.slice(asIdx + ' as '.length).trim());
+        }
+      }
+      fromIdx = source.indexOf(marker, fromIdx + marker.length);
+    }
+  }
+  return names;
+}
+
 /** One scanned source file: its path relative to the route root, plus two views of it. */
 export interface ScannedFile {
   readonly rel: string;
