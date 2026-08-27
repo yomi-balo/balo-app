@@ -174,6 +174,22 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
  * opening paragraph warns about. If a future reader is tempted to add one because it is
  * anonymous in the ordinary sense (no WorkOS session), the answer is still `AUTH_HELPERS` — a
  * token IS a credential.
+ *
+ * ⚠⚠ WHERE THOSE THREE ACTUALLY LIVE: {@link GUEST_READ_ALLOWLIST}, below. Round-3 human
+ * review of PR #241 found that adding `resolveMeetingGuestSubject` to `AUTH_HELPERS` closed
+ * one hole (these three no longer misclassify as "public") but opened another: nothing else
+ * enrolled them in ANY invariant, so a future `app/join/_actions/*` module that merely
+ * *mentions* `resolveMeetingGuestSubject` and then writes through a repository would pass
+ * `onboarding-mutation-gate.test.ts` (it authenticates), `join-link-never-writes.test.ts` (it
+ * excludes `_actions` entirely) and `conversation-access-read-only.test.ts` (its subjects come
+ * from `READ_ONLY_ALLOWLIST`, which this isn't on) — all three, silently. `GUEST_READ_ALLOWLIST`
+ * is the fourth invariant that closes that gap: it asserts EXACT SET EQUALITY against every
+ * `app/join/_actions/*` module referencing `resolveMeetingGuestSubject`, and asserts each one
+ * touches no WRITE member on any repository it reaches. It is designed to fail the moment
+ * BAL-486 (which removes the `sender_user_id` schema constraint — one of the two remaining
+ * brakes on a guest write, the other being the `party: access.side` type error) lands a write
+ * on this surface without a deliberate edit here. **The property it enforces: reads only, never
+ * an act, never money.**
  */
 export const PUBLIC_ACTION_ALLOWLIST: readonly string[] = [
   // An ANONYMOUS visitor forwarded a bare meeting URL knocks to join the admission queue. They
@@ -185,6 +201,28 @@ export const PUBLIC_ACTION_ALLOWLIST: readonly string[] = [
   // a guest has no WorkOS session to send a Bearer from. Authorization: `apps/api`'s
   // `joinMeetingAsGuest`, which resolves the token hash and refuses everything else identically.
   'app/join/_actions/poll-guest-admission.ts',
+];
+
+/**
+ * BAL-445, fix-round-3, G1 — the three Server Actions that authenticate a token-bearing GUEST
+ * via `resolveMeetingGuestSubject` (an `AUTH_HELPERS` entry) and perform NO write anywhere in
+ * their own source. Enforced from BOTH directions by `guest-read-allowlist.test.ts`:
+ *   - every `app/join/_actions/*` module referencing `resolveMeetingGuestSubject` must be here
+ *     (a new guest action cannot land silently);
+ *   - every entry here must still reference no write member on any `xxxRepository` it touches
+ *     (an existing entry cannot grow a write silently either).
+ *
+ * Paths are relative to `apps/web/src`, matching every other list in this file.
+ */
+export const GUEST_READ_ALLOWLIST: readonly string[] = [
+  // Lists a meeting's files for a guest — `meetingFilesRepository.listByMeeting`, a SELECT.
+  'app/join/_actions/list-guest-meeting-files.ts',
+  // Mints a short-lived presigned GET for one meeting file — `meetingFilesRepository.findInMeeting`,
+  // a SELECT; the presign itself talks to R2, never a repository.
+  'app/join/_actions/get-guest-meeting-file-download.ts',
+  // Lists an in-call thread's messages for a guest — `conversationsRepository.listMessagesPage`,
+  // a SELECT (keyset-paginated).
+  'app/join/_actions/fetch-guest-meeting-thread.ts',
 ];
 
 /** The module whose two variants differ by whether they WRITE. */

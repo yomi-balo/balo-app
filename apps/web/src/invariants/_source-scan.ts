@@ -114,6 +114,62 @@ export function memberNamesOf(source: string, object: string): string[] {
   return names;
 }
 
+/**
+ * Every `<identifier>Repository.<member>` call in `source`, for WHATEVER repository object is
+ * referenced — unlike {@link memberNamesOf}, the caller does not name the object in advance.
+ *
+ * ⚠⚠ EXTRACTED FOR BAL-445's `GUEST_READ_ALLOWLIST` GUARD, WHICH NEEDS THIS GENERALITY. That
+ * guard asserts a Server Action touches no WRITE member on ANY repository it reaches — and a
+ * future guest read might reasonably call a different repository than today's two
+ * (`meetingFilesRepository`, `conversationsRepository`). Pinning the object name the way
+ * `memberNamesOf` does would silently stop covering a new repository the moment one was added,
+ * which is the exact class of miss `_read-only-actions.ts`'s docblock warns about.
+ *
+ * Every repository export in `packages/db/src/repositories/*.ts` is named `xxxRepository` — a
+ * fixed, load-bearing convention this scan relies on rather than re-derives. `Repository.` is
+ * searched for literally; the identifier is walked backward through word characters from there,
+ * and the member forward, using the SAME indexOf-driven algorithm as `memberNamesOf` — so this
+ * inherits its "no regex" property and its single caveat: the object and its member must be
+ * joined by a bare `.` with no intervening whitespace or line break (a multi-line method chain
+ * is not matched). None of today's callers chain across a line break.
+ */
+export function repositoryMemberCallsOf(
+  source: string
+): { readonly object: string; readonly member: string }[] {
+  const calls: { object: string; member: string }[] = [];
+  const marker = 'Repository.';
+  let i = source.indexOf(marker);
+  while (i !== -1) {
+    let start = i;
+    while (start > 0) {
+      const ch = source.charAt(start - 1);
+      const word =
+        (ch >= 'a' && ch <= 'z') ||
+        (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') ||
+        ch === '_';
+      if (!word) break;
+      start -= 1;
+    }
+    const object = source.slice(start, i + 'Repository'.length);
+    let end = i + marker.length;
+    while (end < source.length) {
+      const ch = source.charAt(end);
+      const word =
+        (ch >= 'a' && ch <= 'z') ||
+        (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') ||
+        ch === '_';
+      if (!word) break;
+      end += 1;
+    }
+    const member = source.slice(i + marker.length, end);
+    calls.push({ object, member: member.length === 0 ? '<unparsed>' : member });
+    i = source.indexOf(marker, end);
+  }
+  return calls;
+}
+
 /** One scanned source file: its path relative to the route root, plus two views of it. */
 export interface ScannedFile {
   readonly rel: string;

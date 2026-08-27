@@ -53,6 +53,17 @@ const inputSchema = z
  * projected (an opaque UUID; the guest panel resolves no name from it — ADR-1044's
  * concealment rule is about addresses, never ids).
  *
+ * ⚠⚠ G3 (fix-round-3) — `uploadedByUserId` IS DEAD ON ARRIVAL FOR A GUEST, AND IT STAYS ANYWAY.
+ * `GuestFilesPanel` passes a zero-arg `UPLOADER_LABEL = (): string => 'A participant'` as its
+ * `uploaderLabelFor`, so the field crosses the boundary for no reason today. It is kept rather
+ * than dropped because there is no cheap way to drop it: `MeetingFileView` — and
+ * `FilesPanelBody`'s `uploaderLabelFor: (file: MeetingFileView) => string` prop — are the SAME
+ * type the member `FilesPanel` uses, where `files-panel-row.tsx` genuinely needs the field for
+ * live-roster name resolution. Narrowing the guest projection would mean forking that shared
+ * type (or making `FilesPanelBody` generic) so a guest-only variant could omit one field neither
+ * consumer treats as sensitive — real cost, for a field that is already opaque and already
+ * unread. Left as-is; reconsider only if `MeetingFileView` forks for an unrelated reason first.
+ *
  * ⚠ ONE COLLAPSED FAILURE LITERAL for everything — bad shape, throttled, unresolvable token,
  * out-of-scope meeting, repository throw. This surface must not become an oracle a member
  * surface is not. The SHAPE goes to the log only.

@@ -11,6 +11,7 @@ import {
   JoinWaitingCard,
 } from '@/components/balo/meetings/join-notice-card';
 import {
+  GUEST_READ_UNAVAILABLE_ERROR,
   JOIN_UNAVAILABLE_TITLE,
   LOBBY_LONG_WAIT_AFTER_MS,
   LOBBY_TOKEN_STORAGE_KEY,
@@ -326,18 +327,31 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
    * this mount is a follow-up that should carry that GET-path read decision with it.
    *
    * ⚠ MEMOISED ON `[meetingId, lobbyToken]` ALONE, matching `join-control.tsx`'s pattern.
+   *
+   * ⚠⚠ G2 (fix-round-3) — `lobbyToken` IS NARROWED HERE, NEVER LAUNDERED WITH `?? ''`. This
+   * panel is only ever rendered once `state === 'admitted'`, by which point `lobbyToken` is
+   * always set (either from the just-completed claim or restored from storage on resume) — but
+   * the memo itself runs on every render regardless of `state`, so its callbacks must cope with
+   * a `null` token honestly rather than coercing it into a value the Zod `min(20)` schema then
+   * has to reject. A `null` check inside each callback makes the empty string UNREPRESENTABLE
+   * on the wire, rather than merely rejected once it gets there.
    */
   const panels = useMemo<MeetingGuestPanelRegistration>(
     () => ({
       audience: 'guest',
       files: {
-        list: () => listGuestMeetingFilesAction({ meetingId, guestToken: lobbyToken ?? '' }),
-        download: (fileId) =>
-          getGuestMeetingFileDownloadAction({
-            meetingId,
-            guestToken: lobbyToken ?? '',
-            fileId,
-          }),
+        list: () => {
+          if (lobbyToken === null) {
+            return Promise.resolve({ success: false, error: GUEST_READ_UNAVAILABLE_ERROR });
+          }
+          return listGuestMeetingFilesAction({ meetingId, guestToken: lobbyToken });
+        },
+        download: (fileId) => {
+          if (lobbyToken === null) {
+            return Promise.resolve({ success: false, error: GUEST_READ_UNAVAILABLE_ERROR });
+          }
+          return getGuestMeetingFileDownloadAction({ meetingId, guestToken: lobbyToken, fileId });
+        },
       },
       chat: null,
     }),
