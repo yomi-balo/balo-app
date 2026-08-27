@@ -30,6 +30,9 @@ vi.mock('../_actions/dismiss-resolution-request', () => ({
 vi.mock('../_actions/get-meeting-file-download', () => ({
   getMeetingFileDownloadAction: vi.fn(),
 }));
+vi.mock('../_actions/get-meeting-recording-playback', () => ({
+  getMeetingRecordingPlaybackAction: vi.fn(),
+}));
 // The action-items panel is a client island that imports the delivery-workspace Server
 // Actions; the compositions below never click them.
 vi.mock('@/app/(dashboard)/engagements/[id]/_actions/create-action-item', () => ({
@@ -97,6 +100,7 @@ const VIEW: RecapView = {
     ratingCount: 0,
   },
   files: [],
+  recordings: [],
   notHeld: null,
   lens: 'expert',
 };

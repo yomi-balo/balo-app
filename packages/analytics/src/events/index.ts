@@ -158,6 +158,9 @@ export {
   type CaseSurfaceAction,
   type CaseSurfaceState,
   type CaseResolveSource,
+  // BAL-440 — the recording posture dimension on `recap_viewed`, and `deriveRecordingState`'s
+  // (apps/web) return type.
+  type RecapRecordingState,
 } from './recap';
 export {
   END_OF_CALL_EVENTS,

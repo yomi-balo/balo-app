@@ -131,12 +131,18 @@ export function MeetingPill({
  */
 export const RECORDING_PILL_MESSAGE = 'This call is being recorded';
 /**
- * ⚠⚠ FIX ROUND 1 (F2) — THE PREVIOUS COPY PROMISED A PLAYBACK SURFACE THIS PR DOES NOT SHIP.
- * "…is available afterwards with the meeting recap" was false at ship time: `signedPlaybackUrl`
- * has no production caller in this PR, and the recap/Files card is DELIBERATELY unchanged
- * (OD-8) — BAL-440 is what renders playback, and BAL-440 has not shipped. Every participant who
- * read the old copy would look for the recording afterwards and find nothing. State the fact
- * and nothing more; no claim about where or when it turns up.
+ * ⚠⚠ FIX ROUND 1 (F2), REASONING UPDATED BY BAL-440 FIX ROUND 1 (m9) — KEPT ACCURATE, NOT
+ * RE-LITIGATED. F2 narrowed this copy because the ORIGINAL string promised a playback surface
+ * that did not exist yet: "…is available afterwards with the meeting recap" was false at F2's
+ * ship time — `signedPlaybackUrl` had no production caller, and the recap/Files card was
+ * deliberately unchanged (OD-8) pending BAL-440. BAL-440 HAS NOW SHIPPED (this PR) — the
+ * playback surface F2 was protecting against over-promising genuinely exists now
+ * (`recording-block.tsx`; the same "the shipping ticket hasn't shipped yet" staleness was fixed
+ * in this same round in `.claude/skills/mux/SKILL.md` and `packages/analytics/src/events/recap.ts`).
+ * The STRING below is left EXACTLY as F2 wrote it regardless — it states a plain fact and
+ * nothing more, and naming the recap, the playback mechanism, or a consent posture is copy that
+ * needs MJ/Yomi sign-off (see the `RECORDING_PILL_MESSAGE` docblock above), not something this
+ * fix round decides.
  */
 export const RECORDING_LOBBY_NOTICE = 'This consultation is recorded.';
 

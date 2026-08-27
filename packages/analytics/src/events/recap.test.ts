@@ -21,6 +21,7 @@ describe('RECAP_EVENTS (client)', () => {
       'CASE_ACTION_CLICKED',
       'CTA_CLICKED',
       'FILE_DOWNLOADED',
+      'RECORDING_PLAYED',
       'TRANSCRIPT_OPENED',
     ]);
   });
@@ -29,6 +30,7 @@ describe('RECAP_EVENTS (client)', () => {
     expect(RECAP_EVENTS.CASE_ACTION_CLICKED).toBe('case_action_clicked');
     expect(RECAP_EVENTS.CTA_CLICKED).toBe('recap_cta_clicked');
     expect(RECAP_EVENTS.FILE_DOWNLOADED).toBe('recap_file_downloaded');
+    expect(RECAP_EVENTS.RECORDING_PLAYED).toBe('recap_recording_played');
     expect(RECAP_EVENTS.TRANSCRIPT_OPENED).toBe('recap_transcript_opened');
   });
 
@@ -185,10 +187,6 @@ describe('BAL-388 declares no event without a producer', () => {
    * the thing a future reader is tempted to undo.
    */
   const UNDECLARED: readonly { readonly event: string; readonly why: string }[] = [
-    {
-      event: 'recap_recording_played',
-      why: 'D-B — no recording exists anywhere; BAL-126 / BAL-140 own capture',
-    },
     { event: 'recap_export', why: 'D-B — no export exists' },
     {
       event: 'case_resolved_manually',

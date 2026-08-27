@@ -126,6 +126,17 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
   // on this list — every 10-30s while the Balance slot is registered — which is an independent
   // reason it must never gain a write.
   'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-drawdown-state.ts',
+  // ── BAL-440, the recap recording's playback mint ──────────────────────────────────────
+  //
+  // ⚠ THE STANDING BAL-424 OBLIGATION DOES NOT BIND THIS ONE, for the same reason as the two
+  // meeting-file entries above: it resolves MEETING access via `authorizeMeetingFileAccess`,
+  // which performs NO WRITES AT ALL, and `meetingRecordingsRepository.findInMeeting` is a
+  // SELECT. There is no get-or-create pair anywhere in its import graph and no
+  // conversation-access module is named, so `conversation-access-read-only.test.ts` does not
+  // enrol it while `onboarding-mutation-gate.test.ts` still does.
+  //
+  // Mints a short-lived signed Mux playback URL for one recording segment — no mutation.
+  'app/(dashboard)/meetings/[meetingId]/_actions/get-meeting-recording-playback.ts',
 ];
 
 /**
