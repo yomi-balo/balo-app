@@ -5,6 +5,7 @@ import { log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
 import type { RecapEntrySource } from '@balo/analytics/events';
 import { loadRecap } from './_lib/load-recap';
+import { deriveRecordingState } from './_lib/map-recap-recordings';
 import { ClientRecap } from './_components/client-recap';
 import { ExpertRecap } from './_components/expert-recap';
 
@@ -147,6 +148,9 @@ export default async function RecapPage({
     source: resolveEntrySource(from),
     resolve_prompt_shown: resolveVariant !== 'none',
     resolve_prompt_variant: resolveVariant,
+    // BAL-440 — the meeting's recording posture at render time, so
+    // `recap_recording_played ÷ recap_viewed` is answerable BY STATE.
+    recording_state: deriveRecordingState(view.recordings),
     distinct_id: user.id,
   });
 

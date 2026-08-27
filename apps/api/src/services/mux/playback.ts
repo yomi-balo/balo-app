@@ -17,30 +17,29 @@
  * anything — the token is a live, bearer credential to a (currently unpublished) recording.
  */
 import Mux from '@mux/mux-node';
+import {
+  signMuxPlaybackUrl,
+  signMuxThumbnailUrl,
+  MUX_PLAYBACK_DEFAULT_TTL_SECONDS,
+  MUX_PLAYBACK_MAX_TTL_SECONDS,
+} from '@balo/shared/meetings';
 import { MuxConfigError } from './errors.js';
 
-/** ⚠ A CEILING, NOT A SUGGESTION. {@link clampTtlSeconds} CLAMPS any larger request down to this. */
-export const MUX_PLAYBACK_MAX_TTL_SECONDS = 2 * 60 * 60; // 2h
-export const MUX_PLAYBACK_DEFAULT_TTL_SECONDS = 60 * 60; // 1h
-const MUX_PLAYBACK_MIN_TTL_SECONDS = 60;
-
 /**
- * Clamp to `[60, MUX_PLAYBACK_MAX_TTL_SECONDS]`. A caller asking for a day gets two hours,
- * silently.
- *
- * ⚠⚠ FIX ROUND 1 (F11) — `Number.isFinite` GUARDS `NaN` (and `±Infinity`), because
- * `Math.min`/`Math.max` PROPAGATE `NaN` rather than clamping it: `clampTtlSeconds(NaN)`
- * returned `NaN`, which became `expiration: "NaNs"` on the signed JWT. Not a clamp bypass —
- * Mux would reject the token — but a caller-supplied non-numeric TTL should fall back to the
- * default, not manufacture a malformed expiration.
+ * BAL-440 — THE TTL CONSTANTS, THE CLAMP, THE OPTION-SHAPING LOGIC, AND (as of fix round 1,
+ * m8) THE WHOLE SIGNING ROUTINE now live in `@balo/shared/meetings` (`mux-playback-policy.ts`'s
+ * `signMuxPlaybackUrl` / `signMuxThumbnailUrl`); the two TTL constants below are RE-EXPORTED so
+ * this module's own callers (and its test, which asserts against these names) compile
+ * unchanged. `apps/web/src/lib/mux/playback.ts` is the second signer against the SAME policy —
+ * see that module's docblock and plan §2 for why the policy AND the option/URL-templating logic
+ * are hoisted while the vendor SDK CLIENT (`new Mux(...)`) is not: hoisting the SDK call itself
+ * would pull `@mux/mux-node` behind the `@balo/shared/meetings` barrel and break `next build`
+ * for every client component importing it (memory `reference_balo_db_client_bundle_footgun`).
+ * Each app therefore constructs its own throwaway client and hands the shared routine its
+ * `jwt.signPlaybackId` method as the `sign` callback — dependency injection, not a second
+ * definition of the signing logic.
  */
-function clampTtlSeconds(ttlSeconds: number | undefined): number {
-  const requested =
-    ttlSeconds !== undefined && Number.isFinite(ttlSeconds)
-      ? ttlSeconds
-      : MUX_PLAYBACK_DEFAULT_TTL_SECONDS;
-  return Math.min(Math.max(requested, MUX_PLAYBACK_MIN_TTL_SECONDS), MUX_PLAYBACK_MAX_TTL_SECONDS);
-}
+export { MUX_PLAYBACK_DEFAULT_TTL_SECONDS, MUX_PLAYBACK_MAX_TTL_SECONDS };
 
 /**
  * Keys read LAZILY, INSIDE A FUNCTION — never a module-level `const`. `getDailyApiKey`'s
@@ -79,14 +78,13 @@ function jwtClient(): Mux {
  * `aud: 'v'` (`TypeClaim.video`), RS256, key id carried as `keyid` → the JWT's `kid`.
  */
 export async function signedPlaybackUrl(playbackId: string, ttlSeconds?: number): Promise<string> {
-  const ttl = clampTtlSeconds(ttlSeconds);
-  const token = await jwtClient().jwt.signPlaybackId(playbackId, {
-    keyId: signingKeyId(),
-    keySecret: signingKeyPrivate(),
-    type: 'video',
-    expiration: `${ttl}s`,
-  });
-  return `https://stream.mux.com/${playbackId}.m3u8?token=${token}`;
+  const client = jwtClient();
+  return signMuxPlaybackUrl(
+    (id, options) => client.jwt.signPlaybackId(id, options),
+    playbackId,
+    { keyId: signingKeyId(), keySecret: signingKeyPrivate() },
+    ttlSeconds
+  );
 }
 
 /**
@@ -98,15 +96,11 @@ export async function signedThumbnailUrl(
   playbackId: string,
   options?: { ttlSeconds?: number; timeSeconds?: number }
 ): Promise<string> {
-  const ttl = clampTtlSeconds(options?.ttlSeconds);
-  const timeSeconds = options?.timeSeconds;
-  const token = await jwtClient().jwt.signPlaybackId(playbackId, {
-    keyId: signingKeyId(),
-    keySecret: signingKeyPrivate(),
-    type: 'thumbnail',
-    expiration: `${ttl}s`,
-    ...(timeSeconds === undefined ? {} : { params: { time: String(timeSeconds) } }),
-  });
-  const timeQuery = timeSeconds === undefined ? '' : `&time=${timeSeconds}`;
-  return `https://image.mux.com/${playbackId}/thumbnail.jpg?token=${token}${timeQuery}`;
+  const client = jwtClient();
+  return signMuxThumbnailUrl(
+    (id, opts) => client.jwt.signPlaybackId(id, opts),
+    playbackId,
+    { keyId: signingKeyId(), keySecret: signingKeyPrivate() },
+    options
+  );
 }

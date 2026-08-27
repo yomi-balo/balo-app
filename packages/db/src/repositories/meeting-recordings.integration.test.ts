@@ -402,6 +402,88 @@ describe('meetingRecordingsRepository.countFailedByStage', () => {
   });
 });
 
+// ── 3c. findInMeeting (BAL-440 — the ONLY client-reachable read) ─────────────
+
+describe('meetingRecordingsRepository.findInMeeting', () => {
+  it('returns the segment when the meeting AND the recording id both match', async () => {
+    const assetId = vendorId('asset');
+    const { meetingId, recording } = await meetingRecordingFactory({
+      status: 'ready',
+      muxAssetId: assetId,
+      muxPlaybackId: vendorId('pb'),
+      readyAt: new Date(),
+      durationSeconds: 2712,
+    });
+
+    const found = await meetingRecordingsRepository.findInMeeting({
+      meetingId,
+      recordingId: recording.id,
+    });
+
+    expect(found?.id).toBe(recording.id);
+    expect(found?.meetingId).toBe(meetingId);
+    // ⚠ THE FULL ROW CROSSES THIS SEAM, `mux_asset_id` INCLUDED — pinned deliberately. The
+    // repository does not project; `toMeetingRecordingView` (`@balo/shared/meetings`) is the
+    // concealment boundary and it is the WEB caller's obligation, not this layer's. A future
+    // change that starts projecting here would break that division silently.
+    expect(found?.muxAssetId).toBe(assetId);
+    expect(found?.durationSeconds).toBe(2712);
+  });
+
+  it('⚠⚠ THE IDOR PROOF: a recording that EXISTS but under a DIFFERENT meeting is undefined', async () => {
+    // The recording the attacker names — real, live, `ready`, and none of their business.
+    const other = await meetingRecordingFactory({ status: 'ready', readyAt: new Date() });
+    // The meeting they were actually authorized for.
+    const { meeting: authorized } = await meetingFactory();
+
+    // The row genuinely exists — so `undefined` below cannot be read as "seeded nothing".
+    expect((await meetingRecordingsRepository.findById(other.recording.id))?.id).toBe(
+      other.recording.id
+    );
+    expect(other.meetingId).not.toBe(authorized.id);
+
+    // Scoped by the GATE'S meeting, the foreign id resolves to exactly what a nonexistent one
+    // does. This is the whole reason `findInMeeting` exists rather than a bare `findById`.
+    expect(
+      await meetingRecordingsRepository.findInMeeting({
+        meetingId: authorized.id,
+        recordingId: other.recording.id,
+      })
+    ).toBeUndefined();
+  });
+
+  it('a soft-deleted segment is invisible even to its OWN meeting', async () => {
+    const { meetingId, recording } = await meetingRecordingFactory({
+      status: 'ready',
+      readyAt: new Date(),
+    });
+
+    expect(
+      (await meetingRecordingsRepository.findInMeeting({ meetingId, recordingId: recording.id }))
+        ?.id
+    ).toBe(recording.id);
+
+    await meetingRecordingsRepository.softDelete({ id: recording.id });
+
+    // `deleted_at IS NULL` is a term in the WHERE clause, not a post-filter — the repository
+    // convention, and what keeps a deleted segment out of the playback mint.
+    expect(
+      await meetingRecordingsRepository.findInMeeting({ meetingId, recordingId: recording.id })
+    ).toBeUndefined();
+  });
+
+  it('an unknown recordingId is undefined — the SAME answer a foreign one gets, so probing teaches nothing', async () => {
+    const { meeting } = await meetingFactory();
+
+    expect(
+      await meetingRecordingsRepository.findInMeeting({
+        meetingId: meeting.id,
+        recordingId: randomUUID(),
+      })
+    ).toBeUndefined();
+  });
+});
+
 // ── 4. markStarted (T2) ──────────────────────────────────────────────────────
 
 describe('meetingRecordingsRepository.markStarted', () => {

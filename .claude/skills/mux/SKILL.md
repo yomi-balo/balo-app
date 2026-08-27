@@ -8,8 +8,9 @@ description: >
   implementing or changing any Mux work. Trigger on: Mux, mux-node, `@mux/mux-node`, video
   asset, playback id, signed playback, playback policy, passthrough, `Mux-Signature`,
   `video.asset.ready`, `MUX_SIGNING_KEY_ID`, `MUX_WEBHOOK_SECRET`, recording ingest.
-  NOT for: the recap playback UI (BAL-440), Daily-side capture (`daily-co` skill), or
-  Recall.ai external-venue capture (a different vendor entirely).
+  NOT for: the recap playback UI's rendering (BAL-440 — it consumes the URL this skill
+  produces), Daily-side capture (`daily-co` skill), or Recall.ai external-venue capture (a
+  different vendor entirely).
 ---
 
 # Mux Integration Skill
@@ -18,8 +19,22 @@ Mux is Balo's video **storage and playback** vendor (ADR-1013). It is not a capt
 Daily records the consultation, and Mux ingests that recording, transcodes it, and serves it
 back under a **signed** playback URL. Shipped by BAL-473.
 
-Server side only. Nothing in `apps/web` talks to Mux, and no client-reachable payload ever
-carries a Mux **asset** id, a Daily recording id, or a download link.
+**Asset creation and webhook receipt are `apps/api`-only, structurally** — nothing in
+`apps/web`'s dependency graph can reach `apps/api`'s services, and no client-reachable payload
+ever carries a Mux **asset** id, a Daily recording id, or a download link.
+
+⚠ **SIGNING runs in `apps/web` too, as of BAL-440** — this is the one narrower claim this file
+used to make and no longer does. `apps/web/src/lib/mux/playback.ts` is a SECOND signer, next to
+`apps/api/src/services/mux/playback.ts`, because the recap's read gate
+(`authorizeMeetingFileAccess`) is `apps/web`-only with no `apps/api` counterpart — see BAL-440's
+plan §2 for the full rejection of the alternatives (a Fastify route; hoisting the whole signer,
+SDK included, into `@balo/shared`). The TTL bounds, the TTL-for-duration policy, the two URL
+templates, AND (as of fix round 1) the option-shaping + URL-building routine itself are hoisted
+into `@balo/shared/meetings` (`mux-playback-policy.ts`, PURE, zero imports) so the two signers
+cannot drift; each app hands its own `jwt.signPlaybackId` in as a callback, so only the vendor
+SDK client construction and key-reading exist twice. Only `MUX_SIGNING_KEY_ID` /
+`MUX_SIGNING_KEY_PRIVATE` — never `MUX_TOKEN_*` or `MUX_WEBHOOK_SECRET` — are provisioned on
+Vercel, because `apps/web` neither creates assets nor receives webhooks.
 
 ## Flow
 
@@ -103,18 +118,21 @@ rate-limit budget. Nothing is inherited from the Daily route.
 
 ## Env topology
 
-Five vars, all on the Railway API service. `apps/api` has **no env schema** — access is bare
-`process.env.X`, so each var's absent-key behaviour is documented at its declaration in
-`apps/api/.env.example` **and** the var is listed in root `turbo.json` `globalEnv`. Both places
-are required.
+Five vars total. All five are on the Railway API service (`apps/api` has **no env schema** —
+access is bare `process.env.X`, so each var's absent-key behaviour is documented at its
+declaration in `apps/api/.env.example` **and** the var is listed in root `turbo.json`
+`globalEnv`. Both places are required). As of BAL-440, **two** of the five — the signing pair —
+are ALSO provisioned on **Vercel** (`apps/web/.env.example`), because `apps/web/src/lib/mux/
+playback.ts` is the second signer. The other three (`MUX_TOKEN_*`, `MUX_WEBHOOK_SECRET`) stay
+Railway-only, since `apps/web` neither creates assets nor receives webhooks.
 
-| Var                       | Absent ⇒                                                                                                                                      |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MUX_TOKEN_ID`            | `getMuxClient()` throws; every `recording-ingest` fails and rows stall at `source_ready`. The Daily source is retained, so re-drivable.       |
-| `MUX_TOKEN_SECRET`        | as above                                                                                                                                      |
-| `MUX_WEBHOOK_SECRET`      | `POST /webhooks/mux` answers **503** to every delivery. Assets still transcode; nothing ever reaches `ready`; the source is never cleaned up. |
-| `MUX_SIGNING_KEY_ID`      | `signedPlaybackUrl()` / `signedThumbnailUrl()` throw. Ingest unaffected — only playback minting breaks.                                       |
-| `MUX_SIGNING_KEY_PRIVATE` | as above. Store the base64 PEM Mux hands out, verbatim.                                                                                       |
+| Var                       | Where                | Absent ⇒                                                                                                                                                                                                                           |
+| ------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MUX_TOKEN_ID`            | Railway only         | `getMuxClient()` throws; every `recording-ingest` fails and rows stall at `source_ready`. The Daily source is retained, so re-drivable.                                                                                            |
+| `MUX_TOKEN_SECRET`        | Railway only         | as above                                                                                                                                                                                                                           |
+| `MUX_WEBHOOK_SECRET`      | Railway only         | `POST /webhooks/mux` answers **503** to every delivery. Assets still transcode; nothing ever reaches `ready`; the source is never cleaned up.                                                                                      |
+| `MUX_SIGNING_KEY_ID`      | Railway **+ Vercel** | Each app's `signedPlaybackUrl()` / `signedThumbnailUrl()` throws. Ingest unaffected. On Vercel: the poster mint fails soft (`posterUrl: null`) and the playback mint toasts an error — the recap page still renders, nothing 500s. |
+| `MUX_SIGNING_KEY_PRIVATE` | Railway **+ Vercel** | as above. Store the base64 PEM Mux hands out, verbatim, in both places.                                                                                                                                                            |
 
 Registering the webhook endpoint is a **once-per-environment ops step**, not something code does.
 
@@ -126,7 +144,11 @@ that table as current pricing.
 
 ## Not this skill
 
-- **Recap playback UI** — BAL-440. This skill produces the signed URL; BAL-440 renders it.
+- **Recap playback UI** — BAL-440 (shipped). This skill produces the signed URL (now from
+  BOTH apps, see above); BAL-440's `apps/web` components (`RecordingBlock`,
+  `RecordingPlayerDialog`) render it, attach `hls.js` for non-Safari browsers, and fire the
+  playback analytics event. The mint's Server Action and mapper live under
+  `apps/web/src/app/(dashboard)/meetings/[meetingId]/_actions/` and `_lib/`.
 - **Daily-side capture** — the `daily-co` skill's `## Recording` section.
 - **Recall.ai** — external-venue capture, a different vendor, not Mux.
 - **Retention / deletion sweeps** — out of scope of BAL-473, tracked separately.

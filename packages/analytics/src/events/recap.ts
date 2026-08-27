@@ -14,15 +14,18 @@ import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
  * package `client/` AND `server/` allowlists, the `apps/web` client AND RSC allowlists, and the
  * `apps/web` test `vi.mock` list (CLIENT constants only — the server half must never join it).
  *
- * ⚠⚠ NO CONSTANT IS DECLARED WITHOUT A PRODUCER. Three events the design considered are
+ * ⚠⚠ NO CONSTANT IS DECLARED WITHOUT A PRODUCER. Two events the design considered are
  * deliberately ABSENT, and `recap.test.ts` pins each by name:
- *   · `recap_recording_played` — no recording exists anywhere (owner decision D-B; capture is
- *     BAL-126 / BAL-140's). It moves with the recording scope, whole.
  *   · `recap_export` — no export exists (D-B).
  *   · `guest_converted_to_member` — there is no guest lens on this surface (D-A; BAL-132 owns
  *     the guest arm). `events/guest.ts` already refuses this constant for the same reason and
  *     is NOT touched by this ticket.
  * A constant with no emitter reads as a 100% drop-off funnel step in PostHog.
+ *
+ * ⚠ `recap_recording_played` WAS THIS LIST'S THIRD ABSENT MEMBER, UNTIL BAL-440. BAL-473
+ * shipped capture (the `meeting_recordings` table, the client-safe projection, the JWT signer)
+ * and BAL-440 ships the transport + UI that plays it back, so the event is now DECLARED below
+ * and has a live producer (`RecordingPlayerDialog`'s first `playing` event).
  */
 
 /**
@@ -164,6 +167,19 @@ export type RecapResolvePromptVariant = 'requested' | 'offered' | 'none';
  */
 export type RecapCta = 'book_again' | 'case_resolved';
 
+/**
+ * BAL-440 — the meeting's recording POSTURE at the moment the recap rendered, for
+ * `recap_viewed.recording_state`. Without this dimension, `recap_recording_played ÷
+ * recap_viewed` is not answerable BY STATE — which is the entire measurement the new client
+ * event exists for (design open question 3).
+ *
+ * Precedence (computed by `deriveRecordingState` in `apps/web`): any `ready` segment ⇒
+ * `'ready'`; else any in-flight segment ⇒ `'processing'`; else any `failed` segment ⇒
+ * `'failed'`; else `'absent'`. The ordering answers "could this viewer have played
+ * something" — a meeting with one `ready` and one `failed` segment reads as `'ready'`.
+ */
+export type RecapRecordingState = 'absent' | 'processing' | 'ready' | 'failed';
+
 // ── Client (browser `track`) ──────────────────────────────────────────────
 export const RECAP_EVENTS = {
   /** The transcript section was expanded. */
@@ -186,6 +202,15 @@ export const RECAP_EVENTS = {
    * needs no allowlist change at all.
    */
   CASE_ACTION_CLICKED: 'case_action_clicked',
+  /**
+   * BAL-440 — playback genuinely STARTED for one recording segment.
+   *
+   * ⚠ TIED TO THE FIRST `playing` EVENT, NOT TO THE CLICK OR THE MODAL OPENING. A mint that
+   * succeeds and a viewer who never presses play is not a play, and counting it would make
+   * every playback-rate figure an intent figure.
+   * ⚠ ONCE PER MODAL OPEN — scrubbing, pausing and resuming do not re-fire.
+   */
+  RECORDING_PLAYED: 'recap_recording_played',
 } as const;
 
 export interface RecapEventMap {
@@ -203,6 +228,17 @@ export interface RecapEventMap {
   [RECAP_EVENTS.CASE_ACTION_CLICKED]: {
     action: CaseSurfaceAction;
     lens: RecapLens;
+  };
+  [RECAP_EVENTS.RECORDING_PLAYED]: {
+    meeting_id: string;
+    /** The viewer's resolved SIDE. Never `activeMode`, never a role. */
+    lens: RecapLens;
+    /** 1-based, matching the "Segment {n}" copy and the aria-label. Always 1 when there is one. */
+    segment_index: number;
+    /** How many segments the meeting has — 1 in the overwhelming majority. */
+    segment_count: number;
+    /** The PLAYABLE artefact's length, or null on a row Mux never reported one for. */
+    duration_seconds: number | null;
   };
 }
 
@@ -265,6 +301,8 @@ export interface RecapServerEventMap {
     source: RecapEntrySource;
     resolve_prompt_shown: boolean;
     resolve_prompt_variant: RecapResolvePromptVariant;
+    /** BAL-440 — the meeting's recording posture at render time. See {@link RecapRecordingState}. */
+    recording_state: RecapRecordingState;
     /** = the viewing user id. */
     distinct_id: string;
   };

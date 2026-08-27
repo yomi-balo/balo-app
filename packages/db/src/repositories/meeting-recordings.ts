@@ -84,6 +84,16 @@ export interface MarkRecordingSourceDeletedInput {
 }
 
 /**
+ * {@link meetingRecordingsRepository.findInMeeting} — the BAL-440 client-reachable read.
+ * Deliberately OUTSIDE the T1–T10 block above: it moves nothing, it only reads.
+ */
+export interface FindMeetingRecordingInput {
+  /** ⚠ THE GATE-VALIDATED meeting. It is a WHERE-clause term, never a post-filter. */
+  meetingId: string;
+  recordingId: string;
+}
+
+/**
  * `meetingRecordingsRepository` (BAL-473) — THE RECORDING STATE MACHINE'S ONLY WRITER.
  *
  * ⚠⚠ EVERY MUTATOR IS A COMPARE-AND-SET, AND `undefined` IS A SUCCESSFUL NO-OP. Read that
@@ -124,10 +134,16 @@ export interface MarkRecordingSourceDeletedInput {
  * migration transaction. Nothing constrains a plain `WHERE`, and every CAS below relies on
  * that.
  *
- * NO AUTHORIZATION LIVES HERE (ADR-1029) — and nothing in this PR is client-reachable at
- * all. Every caller is a signature-verified webhook or a BullMQ job on the admin `db`
+ * NO AUTHORIZATION LIVES HERE (ADR-1029) — and at BAL-473 nothing here was client-reachable
+ * at all. Every caller was a signature-verified webhook or a BullMQ job on the admin `db`
  * client, which is also why a bare {@link meetingRecordingsRepository.findById} is
  * acceptable here where `meeting_files` deliberately refuses one.
+ *
+ * ⚠ AMENDED BY BAL-440 — ONE read is now reachable from a client request, and it is
+ * {@link meetingRecordingsRepository.findInMeeting}, NOT `findById`. It takes the meeting as
+ * a WHERE-clause term precisely because its `recordingId` arrives from the browser. That
+ * changes nothing about authorization: the recap's gate still runs in `apps/web` BEFORE the
+ * call, and this method is containment for the id, not a substitute for the gate.
  */
 export const meetingRecordingsRepository = {
   /**
@@ -182,16 +198,61 @@ export const meetingRecordingsRepository = {
    * is worth stating so neither rule is cargo-culted onto the other. `meeting_files` refuses
    * one because a `fileId` arrives from a user request and an unscoped read would be an
    * IDOR. Here the id arrives ONLY from a vendor payload we ourselves minted (`instance_id`
-   * / `passthrough`) or from a BullMQ job body, nothing in this PR is client-reachable, and
-   * the resolving webhook has no `meetingId` to scope by anyway. If a client-reachable
-   * caller ever appears, it projects through `toMeetingRecordingView` and scopes by meeting
-   * — it does not call this.
+   * / `passthrough`) or from a BullMQ job body, and the resolving webhook has no `meetingId`
+   * to scope by anyway.
+   *
+   * ⚠ THE CLIENT-REACHABLE CALLER THIS DOCBLOCK ANTICIPATED NOW EXISTS, AND IT DOES NOT CALL
+   * THIS. BAL-440's recap playback mint reads through
+   * {@link meetingRecordingsRepository.findInMeeting} — scoped by the gate's meeting id — and
+   * projects through `toMeetingRecordingView` at the web boundary, exactly as reserved. Keep
+   * it that way: a browser-supplied `recordingId` must never reach `findById`.
    */
   async findById(id: string, exec: DbExecutor = db): Promise<MeetingRecording | undefined> {
     const [row] = await exec
       .select()
       .from(meetingRecordings)
       .where(and(eq(meetingRecordings.id, id), isNull(meetingRecordings.deletedAt)))
+      .limit(1);
+    return row;
+  },
+
+  /**
+   * ONE live segment, SCOPED BY MEETING — the shape {@link meetingRecordingsRepository.findById}'s
+   * docblock reserved for the first client-reachable caller (BAL-440's playback mint).
+   *
+   * ⚠ THE MEETING IS IN THE WHERE CLAUSE, AND THAT IS THE WHOLE IDOR STORY FOR `recordingId`.
+   * A foreign id, a soft-deleted one and an id that never existed all resolve identically to
+   * `undefined`, so probing learns nothing about which uuids exist. The caller MUST pass the
+   * GATE'S meeting id, never the parsed request input — passing the latter would scope the
+   * read to the attacker's own claim and contain nothing.
+   *
+   * ⚠ NOT `listByMeeting(...).find(...)`. That would depend silently on
+   * {@link MEETING_RECORDING_LIST_LIMIT} — a 51st segment would be unplayable — and would pull
+   * every row's `mux_asset_id` into memory to return one. The containment was never the array
+   * scan; it is the `meeting_id` term.
+   *
+   * ⚠ RETURNS THE FULL ROW, including `mux_asset_id` and `failure_reason`. That is correct at
+   * this layer and the caller's obligation at its own boundary: `toMeetingRecordingView`
+   * (`@balo/shared/meetings`) is the concealment boundary, and nothing here may hand a row
+   * straight to a client.
+   *
+   * Served by the primary key; `meeting_id` and `deleted_at` are filters on the single matched
+   * row, so NO new index is required.
+   */
+  async findInMeeting(
+    input: FindMeetingRecordingInput,
+    exec: DbExecutor = db
+  ): Promise<MeetingRecording | undefined> {
+    const [row] = await exec
+      .select()
+      .from(meetingRecordings)
+      .where(
+        and(
+          eq(meetingRecordings.id, input.recordingId),
+          eq(meetingRecordings.meetingId, input.meetingId),
+          isNull(meetingRecordings.deletedAt)
+        )
+      )
       .limit(1);
     return row;
   },

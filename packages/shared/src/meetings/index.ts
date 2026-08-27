@@ -116,6 +116,11 @@ export * from './participation';
 // imported) against `packages/db/src/schema/meeting-recordings.ts`'s `recordingStatusEnum`,
 // pinned to it at compile time via that file's `Exact<>` assertion.
 export * from './recording-view';
+// BAL-440 — the Mux-playback-signing policy: TTL bounds, the duration-aware TTL rule, and the
+// two URL templates. PURE (no imports at all), so it is safe behind this barrel; the vendor SDK
+// call itself stays in each app's own signer (`apps/web/src/lib/mux/playback.ts`,
+// `apps/api/src/services/mux/playback.ts`), which is what keeps this module import-free.
+export * from './mux-playback-policy';
 
 import type { MeetingPresenceParty } from './guest-participation';
 

@@ -11,6 +11,7 @@ vi.mock('server-only', () => ({}));
 
 const m = {
   listFiles: vi.fn(),
+  listRecordings: vi.fn(),
   listActionItems: vi.fn(),
   findTranscript: vi.fn(),
   findSession: vi.fn(),
@@ -30,6 +31,7 @@ const m = {
 vi.mock('@balo/db', () => ({
   isTwoSidedParty: (party: unknown) => party === 'client' || party === 'expert',
   meetingFilesRepository: { listByMeeting: (...a: unknown[]) => m.listFiles(...a) },
+  meetingRecordingsRepository: { listByMeeting: (...a: unknown[]) => m.listRecordings(...a) },
   actionItemsRepository: { listByMeeting: (...a: unknown[]) => m.listActionItems(...a) },
   transcriptsRepository: { findByMeetingId: (...a: unknown[]) => m.findTranscript(...a) },
   creditSessionsRepository: { findIdByMeetingId: (...a: unknown[]) => m.findSession(...a) },
@@ -53,6 +55,11 @@ vi.mock('@balo/db', () => ({
 const mockFetchMoneyBlock = vi.fn();
 vi.mock('@/lib/api/session-money-block', () => ({
   fetchSessionMoneyBlock: (...a: unknown[]) => mockFetchMoneyBlock(...a),
+}));
+
+const mockSignedThumbnailUrl = vi.fn();
+vi.mock('@/lib/mux/playback', () => ({
+  signedThumbnailUrl: (...a: unknown[]) => mockSignedThumbnailUrl(...a),
 }));
 
 const mockResolveAccess = vi.fn();
@@ -156,6 +163,7 @@ function seedRecapMocks(seed: RecapMockSeed = {}): void {
   vi.clearAllMocks();
   mockResolveAccess.mockResolvedValue(CASE_ACCESS);
   m.listFiles.mockResolvedValue([]);
+  m.listRecordings.mockResolvedValue([]);
   m.listActionItems.mockResolvedValue([]);
   m.findTranscript.mockResolvedValue(undefined);
   m.findSession.mockResolvedValue(undefined);
@@ -238,6 +246,69 @@ describe('loadRecap', () => {
     expect(serialised).not.toContain('pi_secret_intent');
     // …and the money block itself is unchanged: the id is still what the api is asked about.
     expect(mockFetchMoneyBlock).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('BAL-440 — carries an empty recordings array for a meeting with no recording rows', async () => {
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.recordings).toEqual([]);
+    expect(m.listRecordings).toHaveBeenCalledWith(MEETING_ID);
+  });
+
+  it('BAL-440 — maps a single ready row with a minted poster', async () => {
+    mockSignedThumbnailUrl.mockResolvedValue('https://image.mux.example/thumb.jpg?token=t');
+    m.listRecordings.mockResolvedValue([
+      {
+        id: 'rec-1',
+        meetingId: MEETING_ID,
+        status: 'ready',
+        dailyRecordingId: 'daily-1',
+        muxAssetId: 'asset-1',
+        muxPlaybackId: 'pb_1',
+        failedStage: null,
+        failureReason: null,
+        startedAt: new Date('2026-07-29T04:14:00Z'),
+        captureEndedAt: new Date('2026-07-29T04:58:00Z'),
+        durationSeconds: 2640,
+        readyAt: new Date('2026-07-29T04:59:00Z'),
+        sourceDeletedAt: null,
+        createdAt: new Date('2026-07-29T04:14:00Z'),
+        updatedAt: new Date('2026-07-29T04:59:00Z'),
+        deletedAt: null,
+      },
+    ]);
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    expect(view?.recordings).toHaveLength(1);
+    expect(view?.recordings[0]?.posterUrl).toBe('https://image.mux.example/thumb.jpg?token=t');
+    expect(view?.recordings[0]?.recording.status).toBe('ready');
+  });
+
+  it('BAL-440 — NEVER lets a concealed recording column reach the view', async () => {
+    m.listRecordings.mockResolvedValue([
+      {
+        id: 'rec-1',
+        meetingId: MEETING_ID,
+        status: 'failed',
+        dailyRecordingId: 'daily-SECRET',
+        muxAssetId: 'asset-SECRET',
+        muxPlaybackId: null,
+        failedStage: 'mux_ingest',
+        failureReason: 'SECRET-REASON',
+        startedAt: null,
+        captureEndedAt: new Date('2026-07-29T04:58:00Z'),
+        durationSeconds: null,
+        readyAt: null,
+        sourceDeletedAt: null,
+        createdAt: new Date('2026-07-29T04:14:00Z'),
+        updatedAt: new Date('2026-07-29T04:59:00Z'),
+        deletedAt: null,
+      },
+    ]);
+    const view = await loadRecap(MEETING_ID, USER_ID, NOW);
+    const serialised = JSON.stringify(view);
+    expect(serialised).not.toContain('daily-SECRET');
+    expect(serialised).not.toContain('asset-SECRET');
+    expect(serialised).not.toContain('SECRET-REASON');
+    expect(serialised).not.toContain('mux_ingest');
   });
 
   it('computes the duration from the two stamps', async () => {

@@ -134,7 +134,15 @@ export function RecapLayout({
               </UnlessDismissed>
             )}
             <Reveal delay={0.22} className="order-5 lg:order-none">
-              <FilesCard meetingId={view.meetingId} files={view.files} />
+              <FilesCard
+                meetingId={view.meetingId}
+                files={view.files}
+                lens={view.lens}
+                recordings={view.recordings}
+                transcriptReady={view.artifacts.transcript.state === 'ready'}
+                meetingTitle={view.header.title}
+                meetingOccurredAtIso={view.header.occurredAtIso}
+              />
             </Reveal>
           </div>
         </div>

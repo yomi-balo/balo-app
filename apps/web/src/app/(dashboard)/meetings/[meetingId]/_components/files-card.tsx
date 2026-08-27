@@ -1,28 +1,51 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Download, Folder, Loader2, Paperclip } from 'lucide-react';
 import { toast } from 'sonner';
 import { SectionEmpty, SectionHead } from '@/components/balo/section/section-states';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
-import type { RecapFileRowView } from '@/lib/meetings/recap-view-types';
+import type {
+  RecapFileRowView,
+  RecapLens,
+  RecapRecordingRowView,
+} from '@/lib/meetings/recap-view-types';
 import { getMeetingFileDownloadAction } from '../_actions/get-meeting-file-download';
 
 /**
- * BAL-388 §R10 — FILES.
+ * BAL-440 fix round 1 (m13) — CODE-SPLIT, NOT STATIC. `RecordingBlock` (and transitively
+ * `RecordingPlayerDialog` + `@radix-ui/react-dialog`) was a static import, so it entered this
+ * route's client bundle for EVERY meeting, including the ~100% with zero recordings — the
+ * absence path was byte-identical in the rendered DOM but not in the shipped payload. `ssr:
+ * true` (the default — no `{ ssr: false }` here) keeps it OUT of a separate loading state: it
+ * still renders as part of the initial server-rendered HTML for a meeting that DOES have a
+ * recording (no skeleton, matching the design's "no client fetch, no loading skeleton for the
+ * recording block itself"), while still landing in its own JS chunk that a zero-recording page
+ * never has to fetch.
+ */
+const RecordingBlock = dynamic(() => import('./recording-block').then((mod) => mod.RecordingBlock));
+
+/**
+ * BAL-388 §R10 — FILES, extended by BAL-440 into the content-driven "Recording & files" title.
  *
- * ⚠ D-B IS SUPERSEDED BY BAL-473 (ADR-1013's 2026-07-14 amendment). Daily cloud recording, the
- * `meeting_recordings` table and the Mux ingest all exist as of that ticket. The "Files" rename
- * STANDS — it was always the better container name — but the reason recorded below ("there is
- * no recording anywhere") is no longer true. **Whether this card gains a recording row is
- * BAL-440's decision, not this file's** — BAL-473 ships the producer only and this component's
- * rendered shape is UNCHANGED.
+ * ⚠⚠ THE ABSENCE PATH IS STRUCTURAL, NOT A KNOB. At `recordings.length === 0` this component
+ * renders EXACTLY what it rendered before BAL-440: title `"Files"`, the same `SectionHead`, the
+ * same empty/list branch, character-for-character. `RecordingBlock` never mounts at zero rows —
+ * there is no recording UI to hide, only UI that was never instantiated. This is OD-1's binding
+ * forward-compatibility constraint for BAL-485 (a future consent opt-out simply produces zero
+ * rows and renders correctly here with no rework): branch on ROW PRESENCE, never on a vendor
+ * knob, a Daily/Mux config flag, or a status check that assumes a row exists.
  *
- * ⚠⚠ THE ORIGINAL DECISION, FOR HISTORY (NOT DELETED): "It is 'Files', not 'Meeting Records',
+ * ⚠⚠ THE ORIGINAL D-B DECISION, FOR HISTORY (NOT DELETED): "It is 'Files', not 'Meeting Records',
  * and the rename is the design decision. There is no recording anywhere (owner decision D-B: no
  * Mux, no recording column, Daily recording not enabled), so a 'records' container would always
  * read as one-of-two with something missing. 'Files' is a category that is complete at any
- * size, including zero. NO recording row, NO coming-soon, NO disabled placeholder."
+ * size, including zero. NO recording row, NO coming-soon, NO disabled placeholder." BAL-473
+ * (ADR-1013's 2026-07-14 amendment) made "there is no recording anywhere" stop being globally
+ * true; BAL-440's content-driven title is the fix SCOPED to exactly the meetings that now have
+ * one — see `recording-block.tsx` and the design spec's "central design call" for the full
+ * reasoning against resurrecting a global "Meeting records" rename.
  *
  * ⚠⚠ `r2Key` NEVER CROSSES IN THE PAYLOAD. `MeetingFileView` omits it structurally, so the
  * props this component receives carry a file id and nothing else. Downloads go through
@@ -43,15 +66,43 @@ import { getMeetingFileDownloadAction } from '../_actions/get-meeting-file-downl
  */
 export function FilesCard({
   meetingId,
+  lens,
   files,
-}: Readonly<{ meetingId: string; files: RecapFileRowView[] }>): React.JSX.Element {
+  recordings,
+  transcriptReady,
+  meetingTitle,
+  meetingOccurredAtIso,
+}: Readonly<{
+  meetingId: string;
+  lens: RecapLens;
+  files: RecapFileRowView[];
+  recordings: RecapRecordingRowView[];
+  transcriptReady: boolean;
+  meetingTitle: string;
+  meetingOccurredAtIso: string;
+}>): React.JSX.Element {
+  const hasRecordings = recordings.length > 0;
+
   return (
     <section className="bg-card border-border rounded-2xl border p-6">
       <SectionHead
         icon={Folder}
-        title="Files"
+        title={hasRecordings ? 'Recording & files' : 'Files'}
         meta={files.length > 0 ? String(files.length) : undefined}
       />
+      {hasRecordings && (
+        <>
+          <RecordingBlock
+            meetingId={meetingId}
+            lens={lens}
+            recordings={recordings}
+            transcriptReady={transcriptReady}
+            meetingTitle={meetingTitle}
+            meetingOccurredAtIso={meetingOccurredAtIso}
+          />
+          <div className="border-border/60 my-2 border-t" />
+        </>
+      )}
       {files.length === 0 ? (
         <SectionEmpty
           icon={Paperclip}

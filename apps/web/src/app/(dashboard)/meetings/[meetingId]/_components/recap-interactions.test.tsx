@@ -36,6 +36,10 @@ vi.mock('../_actions/get-meeting-file-download', () => ({
   getMeetingFileDownloadAction: (...a: unknown[]) => mockDownload(...a),
 }));
 
+vi.mock('../_actions/get-meeting-recording-playback', () => ({
+  getMeetingRecordingPlaybackAction: vi.fn(),
+}));
+
 import { SummarySection } from './summary-section';
 import { TranscriptSection } from './transcript-section';
 import { FilesCard } from './files-card';
@@ -232,7 +236,17 @@ describe('TranscriptSection', () => {
 
 describe('FilesCard', () => {
   it('keeps the section at zero and states what it is, without inviting an upload', () => {
-    render(<FilesCard meetingId={MEETING_ID} files={[]} />);
+    render(
+      <FilesCard
+        meetingId={MEETING_ID}
+        files={[]}
+        recordings={[]}
+        lens="client"
+        transcriptReady={false}
+        meetingTitle="Flow interview stuck on a loop"
+        meetingOccurredAtIso="2026-07-29T04:14:00.000Z"
+      />
+    );
     expect(screen.getByText(/No files yet/)).toBeInTheDocument();
     // There is NO upload affordance anywhere in apps/web today (BAL-423 shipped the actions
     // with no consumer), so the copy must not ask for one.
@@ -240,13 +254,33 @@ describe('FilesCard', () => {
   });
 
   it('renders NO recording row and no coming-soon placeholder (D-B)', () => {
-    const { container } = render(<FilesCard meetingId={MEETING_ID} files={[FILE]} />);
+    const { container } = render(
+      <FilesCard
+        meetingId={MEETING_ID}
+        files={[FILE]}
+        recordings={[]}
+        lens="client"
+        transcriptReady={false}
+        meetingTitle="Flow interview stuck on a loop"
+        meetingOccurredAtIso="2026-07-29T04:14:00.000Z"
+      />
+    );
     expect(container.textContent).not.toMatch(/recording/i);
     expect(container.textContent).not.toMatch(/coming soon/i);
   });
 
   it('labels the uploader by first name and shows a human size', () => {
-    render(<FilesCard meetingId={MEETING_ID} files={[FILE]} />);
+    render(
+      <FilesCard
+        meetingId={MEETING_ID}
+        files={[FILE]}
+        recordings={[]}
+        lens="client"
+        transcriptReady={false}
+        meetingTitle="Flow interview stuck on a loop"
+        meetingOccurredAtIso="2026-07-29T04:14:00.000Z"
+      />
+    );
     expect(screen.getByText(/Amara · 2 KB/)).toBeInTheDocument();
   });
 
@@ -258,7 +292,17 @@ describe('FilesCard', () => {
     mockDownload.mockResolvedValue({ success: true, url: 'https://r2.example/signed' });
 
     const user = userEvent.setup();
-    render(<FilesCard meetingId={MEETING_ID} files={[FILE]} />);
+    render(
+      <FilesCard
+        meetingId={MEETING_ID}
+        files={[FILE]}
+        recordings={[]}
+        lens="client"
+        transcriptReady={false}
+        meetingTitle="Flow interview stuck on a loop"
+        meetingOccurredAtIso="2026-07-29T04:14:00.000Z"
+      />
+    );
     await user.click(screen.getByRole('button', { name: /Download deck.pdf/ }));
 
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://r2.example/signed'));
@@ -271,7 +315,17 @@ describe('FilesCard', () => {
   it('toasts the returned copy when the download is refused', async () => {
     mockDownload.mockResolvedValue({ success: false, error: 'That file is no longer available.' });
     const user = userEvent.setup();
-    render(<FilesCard meetingId={MEETING_ID} files={[FILE]} />);
+    render(
+      <FilesCard
+        meetingId={MEETING_ID}
+        files={[FILE]}
+        recordings={[]}
+        lens="client"
+        transcriptReady={false}
+        meetingTitle="Flow interview stuck on a loop"
+        meetingOccurredAtIso="2026-07-29T04:14:00.000Z"
+      />
+    );
     await user.click(screen.getByRole('button', { name: /Download deck.pdf/ }));
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith('That file is no longer available.')
@@ -281,13 +335,33 @@ describe('FilesCard', () => {
   it('toasts a friendly failure when the action throws', async () => {
     mockDownload.mockRejectedValue(new Error('network'));
     const user = userEvent.setup();
-    render(<FilesCard meetingId={MEETING_ID} files={[FILE]} />);
+    render(
+      <FilesCard
+        meetingId={MEETING_ID}
+        files={[FILE]}
+        recordings={[]}
+        lens="client"
+        transcriptReady={false}
+        meetingTitle="Flow interview stuck on a loop"
+        meetingOccurredAtIso="2026-07-29T04:14:00.000Z"
+      />
+    );
     await user.click(screen.getByRole('button', { name: /Download deck.pdf/ }));
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
   });
 
   it('has no accessibility violations', async () => {
-    const { container } = render(<FilesCard meetingId={MEETING_ID} files={[FILE]} />);
+    const { container } = render(
+      <FilesCard
+        meetingId={MEETING_ID}
+        files={[FILE]}
+        recordings={[]}
+        lens="client"
+        transcriptReady={false}
+        meetingTitle="Flow interview stuck on a loop"
+        meetingOccurredAtIso="2026-07-29T04:14:00.000Z"
+      />
+    );
     expect(await axe(container)).toHaveNoViolations();
   });
 });
