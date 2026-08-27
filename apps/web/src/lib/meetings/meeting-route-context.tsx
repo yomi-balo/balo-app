@@ -22,9 +22,18 @@ import {
  * {context}" destination are things ONE of the three mounts has and the other two structurally
  * do not, which is a Context, not a prop.
  *
- * ⚠ ONLY THE MEMBER ROUTE MOUNTS THE PROVIDER. `join-control.tsx` and `lobby-client.tsx` are
- * untouched, so both guest surfaces read `{ title: null, backTo: null }` — the neutral heading
- * and the `/dashboard` fallback link — **structurally, not by a lens check**.
+ * ⚠⚠ BAL-445 — **BOTH GUEST MOUNTS NOW MOUNT THE PROVIDER TOO.** `join-control.tsx` and
+ * `lobby-client.tsx` used to skip it entirely, which is what made `{ title: null, backTo: null }`
+ * true STRUCTURALLY, by absence. That mechanism changed: both now render
+ * `<MeetingRouteContextProvider>` around their admitted `<MeetingCallSurface>`, with
+ * `meetingId={null}`, `viewerName={null}`, `title={null}`, `backTo={null}`,
+ * `contextNoun="call"`, `waiting={null}` PASSED EXPLICITLY, and every other prop left at its
+ * documented default (`waitingPhase`, `waitingFacts`, `clock`, `endMeeting`, `onExit`). The
+ * ANSWER is unchanged — a guest still reads the neutral heading and the same defaults — but
+ * the MECHANISM is now "explicitly-passed EMPTY values", not "absent provider". The only
+ * field that differs between the two guest mounts and the (still-absent-on-guest) member
+ * default is `panels`, which now carries a `MeetingGuestPanelRegistration` instead of `null`.
+ * Pinned by `meeting-route-context.guest-mount.test.tsx` (G-NEW-2).
  *
  * ⚠ BAL-436 AND BAL-437 SHOULD EXTEND **THIS**, not the prop list.
  */
@@ -43,8 +52,11 @@ export interface MeetingRouteValue {
   /**
    * The meeting id, for analytics only.
    *
-   * ⚠ `null` ON BOTH GUEST MOUNTS — they do not mount this provider, so their events simply omit
-   * the property rather than carrying a fabricated one.
+   * ⚠ `null` ON BOTH GUEST MOUNTS — BAL-445: both now mount this provider, but pass
+   * `meetingId={null}` EXPLICITLY (§ the module docblock), so their events simply omit the
+   * property rather than carrying a fabricated one. `meetingId` stays `null` deliberately even
+   * though the guest mounts know it — see `join-control.tsx`'s own note: guest panels emit no
+   * analytics at all, so supplying it would put a real id on events that currently omit it.
    */
   readonly meetingId: string | null;
   /**
@@ -71,10 +83,13 @@ export interface MeetingRouteValue {
    * BAL-435 (ruling R10) — WHO THE WAITING STAGE IS WAITING FOR, and from when.
    *
    * ⚠⚠ `null` ⇒ **PARTY-NEUTRAL COPY**, and that is the whole point of the shape. It arrives on
-   * the member-join RESPONSE ENVELOPE (never on the frozen `JoinGrant`), so both GUEST mounts —
-   * which do not mount this provider — read `null` STRUCTURALLY and can never be shown a claim
-   * about somebody's clock. Before R10 the stage hard-coded `absentParty="expert"`, so the
-   * delivering EXPERT was shown the CLIENT's "you won't be charged for waiting" promise.
+   * the member-join RESPONSE ENVELOPE (never on the frozen `JoinGrant`), which a guest never
+   * calls, so both GUEST mounts pass `waiting={null}` EXPLICITLY (N5, fix-round-2 — corrected
+   * from "which do not mount this provider — read `null` STRUCTURALLY": BAL-445 §7 made both
+   * guest routes mount `MeetingRouteContextProvider` too, see the module docblock above) and can
+   * never be shown a claim about somebody's clock. Before R10 the stage hard-coded
+   * `absentParty="expert"`, so the delivering EXPERT was shown the CLIENT's "you won't be
+   * charged for waiting" promise.
    *
    * ⚠ IT IS A FACT ABOUT THE ROOM, NOT A LENS: `viewerRole` is `authorizeMeetingParticipation`'s
    * server-side verdict about which side the actor was resolved onto, never `activeMode`.
@@ -99,12 +114,18 @@ export interface MeetingRouteValue {
    * NOTHING"). A greyed-out People icon reads "people is broken"; an absent one reads "this
    * call doesn't have that".
    *
-   * ⚠⚠ BOTH **GUEST** MOUNTS READ `null` **STRUCTURALLY**, because neither `join-control.tsx`
-   * nor `lobby-client.tsx` mounts this provider — the same mechanism `backTo` already uses.
-   * That is not an optimisation: a token-authenticated guest satisfies NONE of the four gates
-   * behind this panel (`requireAuth` on the guests route, `requireUser()` on both file reads,
-   * `requireOnboardedUser()` on both file writes), so a registered slot would be a control
-   * that could only ever fail. **Never a lens check, never a role check, nowhere.**
+   * ⚠⚠ BAL-445 — **BOTH GUEST MOUNTS NOW REGISTER A `MeetingGuestPanelRegistration` HERE**,
+   * not `null`. That is the one field that changed when both mounts started mounting this
+   * provider: `join-control.tsx` and `lobby-client.tsx` each build a READ-ONLY registration
+   * (Files, and — for the invited-guest mount only — Chat) from their own token-gated Server
+   * Actions, and pass it as `panels`. It is a NARROWER TYPE than the member registration, not
+   * the member one with flags off — see `MeetingGuestPanelRegistration`'s own docblock for why
+   * that distinction is structural rather than conventional. There is still no People slot, no
+   * realtime and no balance slot for a guest: those fields do not exist on the guest arm of
+   * the `MeetingPanelRegistration` union at all, so a component that tried to reach them would
+   * fail to compile, not merely fail at runtime. **Never a lens check, never a role check,
+   * nowhere** — `resolvePanelCapabilities` (`panel-capabilities.ts`) is the one place "what
+   * may this audience reach" is decided, from the registration's own `audience` discriminant.
    *
    * ⚠ IT CARRIES CALLBACKS, NOT DATA — see `MeetingPanelRegistration`. Panel state lives in
    * the panel; `MeetingCallSurface`'s prop list stays frozen; and the panel components are
@@ -124,9 +145,11 @@ export interface MeetingRouteValue {
    * ("all timing is server-authoritative; the client renders a mirror") and it structurally
    * prevents an overridden server from disagreeing with a default-carrying browser bundle.
    *
-   * ⚠ `'pre-start'` ON BOTH GUEST MOUNTS, STRUCTURALLY — they mount no provider, so they keep
-   * exactly the value BAL-435 hard-coded, and the copy they see is the party-neutral set
-   * (`waiting` is `null` for them too).
+   * ⚠ `'pre-start'` ON BOTH GUEST MOUNTS — BAL-445: both now mount the provider, but neither
+   * passes `waitingPhase`, so they keep exactly the value the provider itself defaults to
+   * (`MeetingRouteContextProvider`'s own `waitingPhase = 'pre-start'`), which is the same
+   * value BAL-435 hard-coded when the provider was absent entirely. The copy they see is the
+   * party-neutral set (`waiting` is `null` for them too, explicitly).
    */
   readonly waitingPhase: WaitingPhase;
   /**
@@ -138,17 +161,19 @@ export interface MeetingRouteValue {
    * wholly absent" guarantee — a guest mount has a `null` subject and would still need somewhere
    * to record an unknown no-show floor.
    *
-   * ⚠ `UNKNOWN_WAITING_FACTS` ON BOTH GUEST MOUNTS AND BEFORE THE FIRST POLL, STRUCTURALLY. Each
-   * unknown makes the copy claim LESS: no number, no settled outcome, no counted time.
+   * ⚠ `UNKNOWN_WAITING_FACTS` ON BOTH GUEST MOUNTS AND BEFORE THE FIRST POLL. BAL-445: neither
+   * guest mount passes `waitingFacts`, so both keep the provider's own default. Each unknown
+   * makes the copy claim LESS: no number, no settled outcome, no counted time.
    */
   readonly waitingFacts: WaitingFacts;
   /**
    * BAL-134 (§7.3) — **THE TOP-BAR CLOCK CHIP'S STATE, OR `null` FOR "NO SERVER MIRROR".**
    *
    * ⚠⚠ `null` IS A LIVE PATH, NOT A GUARD, AND IT IS WHY THIS IS NULLABLE RATHER THAN
-   * DEFAULTED TO `{ kind: 'not_started' }`. Both GUEST mounts read it structurally (the state
-   * route is member-only), and so does the member route for the window between joining and the
-   * first poll landing. `null` means the frame keeps its shipped `hasJoined ? live :
+   * DEFAULTED TO `{ kind: 'not_started' }`. Both GUEST mounts read the provider's own default
+   * (BAL-445: neither passes `clock`) — the state-mirror route is member-only — and so does
+   * the member route for the window between joining and the first poll landing. `null` means
+   * the frame keeps its shipped `hasJoined ? live :
    * not_started` chrome — "Not started" on a guest's screen for the length of a live call would
    * be a regression this ticket has no reason to ship.
    *
@@ -159,11 +184,12 @@ export interface MeetingRouteValue {
   /**
    * BAL-134 / ADR-1049 — **END THE MEETING FOR EVERYONE, SERVER-SIDE.**
    *
-   * ⚠⚠ `null` ON BOTH GUEST MOUNTS, STRUCTURALLY — the same mechanism `panels` and `backTo`
-   * already use. That is not belt-and-braces for the `canEndMeeting` gate; it is the second,
-   * independent half of it. A guest holds no company membership and is not on the engagement
-   * axis, so the server hard-codes `canEndMeeting: false` for them AND there is no action here
-   * for them to reach. Neither alone would be enough to reason about; together they are.
+   * ⚠⚠ `null` ON BOTH GUEST MOUNTS — BAL-445: neither passes `endMeeting`, so both keep the
+   * provider's own default. That is not belt-and-braces for the `canEndMeeting` gate; it is
+   * the second, independent half of it. A guest holds no company membership and is not on the
+   * engagement axis, so the server hard-codes `canEndMeeting: false` for them AND there is no
+   * action here for them to reach. Neither alone would be enough to reason about; together
+   * they are.
    *
    * ⚠⚠ THE FRAME MUST **NOT** FALL BACK TO A LOCAL EJECT WHEN THIS IS `null`. A client-side
    * `updateParticipants({ '*': { eject: true } })` revokes NO token — the very defect BAL-134
@@ -178,17 +204,24 @@ const EMPTY: MeetingRouteValue = {
   viewerName: null,
   title: null,
   backTo: null,
-  // ⚠ NO PANEL SLOT ON EITHER GUEST MOUNT, STRUCTURALLY. See the field's docblock.
+  // ⚠ THE PROVIDER'S OWN DEFAULT, AND THE UNMOUNTED-PROVIDER ANSWER. BAL-445: this is what
+  // `useMeetingRoute()` still returns anywhere the provider is not mounted at all, and it is
+  // also `MeetingRouteContextProvider`'s own `panels = null` default — but BOTH guest mounts
+  // now mount the provider AND pass a `MeetingGuestPanelRegistration` explicitly, overriding
+  // this default. See the field's docblock.
   panels: null,
   // ⚠ THE HONEST FALLBACK. "…all stay with the call" is true of every context; naming the wrong
   // one on a destructive confirm is not.
   contextNoun: 'call',
-  // ⚠ NEUTRAL WAITING COPY ON BOTH GUEST MOUNTS, STRUCTURALLY — no viewer role, no name, no
+  // ⚠ NEUTRAL WAITING COPY ON BOTH GUEST MOUNTS — BAL-445: both now pass `waiting={null}`
+  // EXPLICITLY (matching this default), so the copy is still no viewer role, no name, no
   // clock claim. See the field's docblock.
   waiting: null,
-  // ⚠ BAL-134 — THE THREE STRUCTURALLY-NEUTRAL GUEST VALUES. `'pre-start'` is exactly what
-  // BAL-435 hard-coded, `null` keeps the shipped top-bar chrome, and `null` means there is no
-  // end action to reach. See each field's docblock.
+  // ⚠ BAL-134 — THE THREE NEUTRAL GUEST VALUES, still reached on both guest mounts because
+  // neither passes `waitingPhase` / `clock` / `endMeeting`, so both fall through to these
+  // provider defaults. `'pre-start'` is exactly what BAL-435 hard-coded, `null` keeps the
+  // shipped top-bar chrome, and `null` means there is no end action to reach. See each
+  // field's docblock.
   waitingPhase: 'pre-start',
   waitingFacts: UNKNOWN_WAITING_FACTS,
   clock: null,

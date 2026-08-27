@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { stripComments } from '@balo/shared/testing';
 
 /**
  * BAL-437 — the meeting → conversation-anchor resolution (ruling R3).
@@ -24,14 +27,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * ⚠⚠ `authorizeMeetingFileAccess` IS MOCKED, DELIBERATELY. This module composes that gate and
  * adds NOTHING to the authorization decision; re-testing the gate here would be a second,
  * drifting copy of `authorize-meeting-file-access.test.ts`. What IS tested here is everything
- * this module adds: the pure subject mapping, the `findByContext` READ, and the two arms'
- * DIFFERENT lifecycle policies.
+ * this module adds: the pure subject mapping, the `findByContext` READ, the two arms' DIFFERENT
+ * lifecycle policies, and — as of BAL-445 — the guest arm's scope resolution.
  */
 
 vi.mock('server-only', () => ({}));
 
 const MEETING_ID = 'm0000000-0000-4000-8000-000000000001';
+const GUEST_MEETING_ID = 'm0000000-0000-4000-8000-000000000099';
 const USER_ID = 'u0000000-0000-4000-8000-000000000002';
+const GUEST_ID = 'u0000000-0000-4000-8000-000000000201';
 const ENGAGEMENT_ID = 'e0000000-0000-4000-8000-000000000003';
 const RELATIONSHIP_ID = 'r0000000-0000-4000-8000-000000000004';
 const REQUEST_ID = 'q0000000-0000-4000-8000-000000000005';
@@ -44,6 +49,8 @@ const {
   mockEnsureManyForContexts,
   mockFindEngagement,
   mockFindRelationship,
+  mockListContexts,
+  mockListContextsByMeeting,
 } = vi.hoisted(() => ({
   mockAuthorize: vi.fn(),
   mockFindByContext: vi.fn(),
@@ -51,17 +58,21 @@ const {
   mockEnsureManyForContexts: vi.fn(),
   mockFindEngagement: vi.fn(),
   mockFindRelationship: vi.fn(),
+  mockListContexts: vi.fn(),
+  mockListContextsByMeeting: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   conversationsRepository: {
     findByContext: mockFindByContext,
+    listContexts: mockListContexts,
     // ⚠ TRIPWIRES. Both must stay uncalled — see the BAL-424 assertion at the bottom.
     ensureForContext: mockEnsureForContext,
     ensureManyForContexts: mockEnsureManyForContexts,
   },
   engagementsRepository: { findById: mockFindEngagement },
   requestExpertRelationshipsRepository: { findById: mockFindRelationship },
+  meetingContextsRepository: { listByMeeting: mockListContextsByMeeting },
 }));
 
 vi.mock('./authorize-meeting-file-access', () => ({
@@ -70,10 +81,11 @@ vi.mock('./authorize-meeting-file-access', () => ({
 
 import { resolveMeetingChatAccess } from './meeting-chat-anchor';
 
-/** A granted gate result, parameterised by the primary context it resolved. */
+/** A granted MEMBER gate result, parameterised by the primary context it resolved. */
 function granted(contextType: string, contextId: string | null): Record<string, unknown> {
   return {
     ok: true,
+    viewer: 'member',
     side: 'client',
     meeting: { id: MEETING_ID },
     subject: { contextType, contextId },
@@ -82,11 +94,56 @@ function granted(contextType: string, contextId: string | null): Record<string, 
   };
 }
 
+/**
+ * A granted GUEST gate result.
+ *
+ * ⚠⚠ F2 (fix-round-1) — `meeting` is the TARGET (`{ id: MEETING_ID }`, what the real gate
+ * actually returns for a call with `meetingId: MEETING_ID`), and `guestMeeting` is the guest's
+ * OWN meeting (`{ id: GUEST_MEETING_ID }`), threaded as a DISTINCT field. An earlier version of
+ * this fixture set `meeting: { id: GUEST_MEETING_ID }` for a gate called with
+ * `meetingId: MEETING_ID` — a result the real gate cannot produce (`authorize-meeting-file-
+ * access.ts` always returns the TARGET meeting on `meeting`) — which let these tests pass
+ * without proving `meeting-chat-anchor.ts` reads the right field.
+ */
+function grantedGuest(
+  contextType: string,
+  contextId: string | null,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    ok: true,
+    viewer: 'guest',
+    guestId: GUEST_ID,
+    accessScope: 'meeting',
+    meeting: { id: MEETING_ID },
+    guestMeeting: { id: GUEST_MEETING_ID },
+    subject: { contextType, contextId },
+    ...overrides,
+  };
+}
+
+/**
+ * A REAL-shaped `MeetingGuestSubject` for `actor.guest` — never `{} as never`. This module never
+ * reads `actor.guest` itself (it only forwards `actor` to the MOCKED `authorizeMeetingFileAccess`
+ * and consumes the returned `access` object), but an impossible fixture there hid that fact
+ * rather than proving it.
+ */
+function realGuestSubject(): Record<string, unknown> {
+  return {
+    guest: { id: GUEST_ID, accessScope: 'meeting' },
+    meeting: { id: GUEST_MEETING_ID, status: 'scheduled' },
+    side: 'client',
+    admission: 'admitted',
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindByContext.mockResolvedValue({ id: CONVERSATION_ID });
   mockFindEngagement.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'active' });
   mockFindRelationship.mockResolvedValue({ id: RELATIONSHIP_ID, status: 'accepted' });
+  mockListContexts.mockResolvedValue([]);
+  mockListContextsByMeeting.mockResolvedValue([]);
 });
 
 describe('resolveMeetingChatAccess — ⚠⚠ the anchor table, the five labels this module decides', () => {
@@ -100,9 +157,17 @@ describe('resolveMeetingChatAccess — ⚠⚠ the anchor table, the five labels 
   it.each(ENGAGEMENT_GRAIN)('%s ⇒ an ENGAGEMENT anchor, chat REGISTERED', async (contextType) => {
     mockAuthorize.mockResolvedValue(granted(contextType, ENGAGEMENT_ID));
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
-    expect(result).toMatchObject({ ok: true, side: 'client', meetingId: MEETING_ID });
+    expect(result).toMatchObject({
+      ok: true,
+      viewer: 'member',
+      side: 'client',
+      meetingId: MEETING_ID,
+    });
     expect(result.ok === true ? result.anchor : null).toMatchObject({
       conversationId: CONVERSATION_ID,
       subject: { contextType: 'engagement', contextId: ENGAGEMENT_ID },
@@ -117,7 +182,10 @@ describe('resolveMeetingChatAccess — ⚠⚠ the anchor table, the five labels 
   it('request_interaction ⇒ a RELATIONSHIP anchor, chat REGISTERED', async () => {
     mockAuthorize.mockResolvedValue(granted('request_interaction', RELATIONSHIP_ID));
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
     expect(result.ok === true ? result.anchor : null).toMatchObject({
       conversationId: CONVERSATION_ID,
@@ -129,9 +197,18 @@ describe('resolveMeetingChatAccess — ⚠⚠ the anchor table, the five labels 
   it('⚠⚠ project_discovery ⇒ NO ANCHOR — one request fans out to MANY experts’ threads', async () => {
     mockAuthorize.mockResolvedValue(granted('project_discovery', REQUEST_ID));
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
-    expect(result).toEqual({ ok: true, side: 'client', anchor: null, meetingId: MEETING_ID });
+    expect(result).toEqual({
+      ok: true,
+      viewer: 'member',
+      side: 'client',
+      anchor: null,
+      meetingId: MEETING_ID,
+    });
     // ⚠ AND NO LOOKUP AT ALL — the pure rule answers before any I/O.
     expect(mockFindByContext).not.toHaveBeenCalled();
   });
@@ -140,9 +217,18 @@ describe('resolveMeetingChatAccess — ⚠⚠ the anchor table, the five labels 
     mockAuthorize.mockResolvedValue(granted('case', ENGAGEMENT_ID));
     mockFindByContext.mockResolvedValue(undefined);
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
-    expect(result).toEqual({ ok: true, side: 'client', anchor: null, meetingId: MEETING_ID });
+    expect(result).toEqual({
+      ok: true,
+      viewer: 'member',
+      side: 'client',
+      anchor: null,
+      meetingId: MEETING_ID,
+    });
   });
 });
 
@@ -160,7 +246,10 @@ describe('resolveMeetingChatAccess — the ENGAGEMENT arm: closed is READ-ONLY, 
     mockAuthorize.mockResolvedValue(granted('case', ENGAGEMENT_ID));
     mockFindEngagement.mockResolvedValue({ status: 'active' });
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
     expect(result.ok === true ? result.anchor?.writable : null).toBe(true);
   });
@@ -171,7 +260,10 @@ describe('resolveMeetingChatAccess — the ENGAGEMENT arm: closed is READ-ONLY, 
       mockAuthorize.mockResolvedValue(granted('case', ENGAGEMENT_ID));
       mockFindEngagement.mockResolvedValue({ status });
 
-      const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+      const result = await resolveMeetingChatAccess({
+        meetingId: MEETING_ID,
+        actor: { kind: 'member', userId: USER_ID },
+      });
 
       const anchor = result.ok === true ? result.anchor : null;
       // The whole point: read access survives, write access does not.
@@ -185,7 +277,10 @@ describe('resolveMeetingChatAccess — the ENGAGEMENT arm: closed is READ-ONLY, 
     mockAuthorize.mockResolvedValue(granted('case', ENGAGEMENT_ID));
     mockFindEngagement.mockResolvedValue(undefined);
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
     expect(result.ok === true ? result.anchor?.writable : null).toBe(false);
   });
@@ -196,7 +291,10 @@ describe('resolveMeetingChatAccess — ⚠⚠ the RELATIONSHIP arm: a closed thr
     mockAuthorize.mockResolvedValue(granted('request_interaction', RELATIONSHIP_ID));
     mockFindRelationship.mockResolvedValue({ status: 'accepted' });
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
     expect(result.ok === true ? result.anchor : null).toMatchObject({
       conversationId: CONVERSATION_ID,
@@ -218,9 +316,18 @@ describe('resolveMeetingChatAccess — ⚠⚠ the RELATIONSHIP arm: a closed thr
       mockAuthorize.mockResolvedValue(granted('request_interaction', RELATIONSHIP_ID));
       mockFindRelationship.mockResolvedValue({ status });
 
-      const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+      const result = await resolveMeetingChatAccess({
+        meetingId: MEETING_ID,
+        actor: { kind: 'member', userId: USER_ID },
+      });
 
-      expect(result).toEqual({ ok: true, side: 'client', anchor: null, meetingId: MEETING_ID });
+      expect(result).toEqual({
+        ok: true,
+        viewer: 'member',
+        side: 'client',
+        anchor: null,
+        meetingId: MEETING_ID,
+      });
     }
   );
 
@@ -228,7 +335,10 @@ describe('resolveMeetingChatAccess — ⚠⚠ the RELATIONSHIP arm: a closed thr
     mockAuthorize.mockResolvedValue(granted('request_interaction', RELATIONSHIP_ID));
     mockFindRelationship.mockResolvedValue(undefined);
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
     expect(result.ok === true ? result.anchor : null).toBeNull();
   });
@@ -240,7 +350,7 @@ describe('resolveMeetingChatAccess — ⚠ `withWritability: false`', () => {
 
     const result = await resolveMeetingChatAccess({
       meetingId: MEETING_ID,
-      userId: USER_ID,
+      actor: { kind: 'member', userId: USER_ID },
       withWritability: false,
     });
 
@@ -260,12 +370,18 @@ describe('resolveMeetingChatAccess — ⚠ `withWritability: false`', () => {
 
     const result = await resolveMeetingChatAccess({
       meetingId: MEETING_ID,
-      userId: USER_ID,
+      actor: { kind: 'member', userId: USER_ID },
       withWritability: false,
     });
 
     expect(mockFindRelationship).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ ok: true, side: 'client', anchor: null, meetingId: MEETING_ID });
+    expect(result).toEqual({
+      ok: true,
+      viewer: 'member',
+      side: 'client',
+      anchor: null,
+      meetingId: MEETING_ID,
+    });
   });
 });
 
@@ -289,7 +405,10 @@ describe('resolveMeetingChatAccess — ⚠⚠ denial and the BAL-424 transitive-
   it('collapses every denial into ONE literal — cross-tenant, nonexistent, admin and ambiguous alike', async () => {
     mockAuthorize.mockResolvedValue({ ok: false, code: 'meeting_not_found' });
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
     expect(result).toEqual({ ok: false, code: 'meeting_not_found' });
     // ⚠ NOTHING is read after a denial — no anchor lookup, no lifecycle read.
@@ -301,7 +420,10 @@ describe('resolveMeetingChatAccess — ⚠⚠ denial and the BAL-424 transitive-
   it('⚠⚠ calls `findByContext` (a SELECT) and NEVER an `ensure*` — the BAL-424 regression guard', async () => {
     mockAuthorize.mockResolvedValue(granted('case', ENGAGEMENT_ID));
 
-    await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
     expect(mockFindByContext).toHaveBeenCalledTimes(1);
     expect(mockEnsureForContext).not.toHaveBeenCalled();
@@ -311,9 +433,180 @@ describe('resolveMeetingChatAccess — ⚠⚠ denial and the BAL-424 transitive-
   it('forwards the gate’s resolved SIDE unchanged — never re-derived here', async () => {
     mockAuthorize.mockResolvedValue({ ...granted('case', ENGAGEMENT_ID), side: 'expert' });
 
-    const result = await resolveMeetingChatAccess({ meetingId: MEETING_ID, userId: USER_ID });
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
 
-    expect(result).toMatchObject({ ok: true, side: 'expert' });
-    expect(mockAuthorize).toHaveBeenCalledWith({ meetingId: MEETING_ID, userId: USER_ID });
+    expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
+    expect(mockAuthorize).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
+  });
+});
+
+/**
+ * ⚠⚠ BAL-445 — THE GUEST ARM. `resolveGuestConversationScope` (@balo/shared/conversations) is
+ * called for real (pure, not mocked); these tests exercise the actual scope rule.
+ */
+describe('resolveMeetingChatAccess — guest arm (BAL-445)', () => {
+  it('a `meeting`-scoped guest gets `{ kind: "meeting" }` and `writable: null`', async () => {
+    mockAuthorize.mockResolvedValue(
+      grantedGuest('case', ENGAGEMENT_ID, { accessScope: 'meeting' })
+    );
+    mockListContexts.mockResolvedValue([{ contextType: 'engagement', contextId: ENGAGEMENT_ID }]);
+
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'guest', guest: realGuestSubject() as never },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      viewer: 'guest',
+      scope: { kind: 'meeting', meetingId: GUEST_MEETING_ID },
+      anchor: { conversationId: CONVERSATION_ID, writable: null },
+    });
+  });
+
+  it('an `engagement`-scoped guest whose own meeting IS the anchored engagement gets `{ kind: "full" }`', async () => {
+    mockAuthorize.mockResolvedValue(
+      grantedGuest('case', ENGAGEMENT_ID, { accessScope: 'engagement' })
+    );
+    mockListContextsByMeeting.mockResolvedValue([
+      { contextType: 'case', contextId: ENGAGEMENT_ID },
+    ]);
+    mockListContexts.mockResolvedValue([{ contextType: 'engagement', contextId: ENGAGEMENT_ID }]);
+
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'guest', guest: realGuestSubject() as never },
+    });
+
+    expect(result).toMatchObject({ ok: true, viewer: 'guest', scope: { kind: 'full' } });
+  });
+
+  it('an `engagement`-scoped guest whose own meeting resolves to a DIFFERENT envelope stays meeting-scoped', async () => {
+    mockAuthorize.mockResolvedValue(
+      grantedGuest('case', ENGAGEMENT_ID, { accessScope: 'engagement' })
+    );
+    mockListContextsByMeeting.mockResolvedValue([
+      { contextType: 'case', contextId: 'other-engagement' },
+    ]);
+    mockListContexts.mockResolvedValue([{ contextType: 'engagement', contextId: ENGAGEMENT_ID }]);
+
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'guest', guest: realGuestSubject() as never },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      viewer: 'guest',
+      scope: { kind: 'meeting', meetingId: GUEST_MEETING_ID },
+    });
+  });
+
+  it('denies outright when scope resolves to null — the guest’s OWN meeting is ambiguous/none', async () => {
+    mockAuthorize.mockResolvedValue(
+      grantedGuest('case', ENGAGEMENT_ID, { accessScope: 'engagement' })
+    );
+    // Two engagement-grain contexts on the guest's own meeting ⇒ ambiguous.
+    mockListContextsByMeeting.mockResolvedValue([
+      { contextType: 'case', contextId: 'e-1' },
+      { contextType: 'case', contextId: 'e-2' },
+    ]);
+    mockListContexts.mockResolvedValue([{ contextType: 'engagement', contextId: ENGAGEMENT_ID }]);
+
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'guest', guest: realGuestSubject() as never },
+    });
+
+    expect(result).toEqual({ ok: false, code: 'meeting_not_found' });
+  });
+
+  it('project_discovery ⇒ NO ANCHOR for a guest too, and no `listContexts` I/O at all', async () => {
+    mockAuthorize.mockResolvedValue(grantedGuest('project_discovery', REQUEST_ID));
+
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'guest', guest: realGuestSubject() as never },
+    });
+
+    expect(result).toMatchObject({ ok: true, viewer: 'guest', anchor: null });
+    expect(mockListContexts).not.toHaveBeenCalled();
+  });
+
+  it('a DECLINED relationship yields NO ANCHOR for a guest too — visibility, shared with members', async () => {
+    mockAuthorize.mockResolvedValue(grantedGuest('request_interaction', RELATIONSHIP_ID));
+    mockFindRelationship.mockResolvedValue({ status: 'declined' });
+
+    const result = await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'guest', guest: realGuestSubject() as never },
+    });
+
+    expect(result).toMatchObject({ ok: true, viewer: 'guest', anchor: null });
+    expect(mockListContexts).not.toHaveBeenCalled();
+  });
+
+  it('never resolves engagement writability for a guest — no composer to report it to', async () => {
+    mockAuthorize.mockResolvedValue(grantedGuest('case', ENGAGEMENT_ID));
+    mockListContexts.mockResolvedValue([{ contextType: 'engagement', contextId: ENGAGEMENT_ID }]);
+
+    await resolveMeetingChatAccess({
+      meetingId: MEETING_ID,
+      actor: { kind: 'guest', guest: realGuestSubject() as never },
+    });
+
+    expect(mockFindEngagement).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ⚠⚠ CRITICAL-4 / F6 (fix-round-1) — G-NEW-1's MIRROR. `authorize-meeting-file-access.test.ts`
+ * carries this exact guard for its own file; this module is DELIBERATELY ABSENT from
+ * `meeting-call-no-lens-gate.test.ts`'s `CALL_LIB_FILES` scan (a documented server-only
+ * carve-out — it legitimately imports `@/lib/logging` transitively and `@balo/db` directly), so
+ * without THIS block `meeting-chat-anchor.ts` had NO mechanical source guard of any kind — and
+ * its guest arm is exactly where a future edit would silently mirror the scope rule instead of
+ * calling it. Mirrors `authorize-meeting-file-access.test.ts`'s `stripComments` + non-vacuity
+ * preamble verbatim rather than inventing a second shape.
+ */
+describe('axis discipline', () => {
+  const raw = readFileSync(join(import.meta.dirname, 'meeting-chat-anchor.ts'), 'utf8');
+  const code = stripComments(raw);
+
+  it('reads its own source, and the stripper really ran (guards against a vacuous pass)', () => {
+    // If the read ever broke, every assertion below would pass for free — and so would they if
+    // `stripComments` silently became a no-op, because this module's docblocks NAME the
+    // identifiers scanned below (`hasEngagementCapability`), precisely to explain why they are
+    // absent from the code.
+    expect(code).toContain('export async function resolveMeetingChatAccess');
+    expect(raw).toContain('/**');
+    expect(code).not.toContain('/**');
+    expect(code).not.toContain('//');
+  });
+
+  it('never reaches for the engagement-capability axis', () => {
+    expect(code).not.toContain('hasEngagementCapability');
+    expect(code).not.toContain('HOST_MEETINGS');
+    expect(code).not.toContain('MANAGE_ENGAGEMENT');
+  });
+
+  it('calls the guest conversation-scope predicate — the guest arm is filled, not a hole', () => {
+    expect(code).toContain('resolveGuestConversationScope');
+  });
+
+  /**
+   * The scope rule is CALLED, never mirrored: nothing in this file may compare `accessScope`
+   * against a literal, because that comparison is `resolveGuestConversationScope`'s alone to
+   * make (its sibling `guestMayReadMeeting`'s binding contract, restated for the conversation
+   * grain).
+   */
+  it('never compares `accessScope` against a literal — the scope rule is called, never mirrored', () => {
+    expect(code).not.toMatch(/accessScope\s*===/);
   });
 });

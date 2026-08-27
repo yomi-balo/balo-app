@@ -249,7 +249,7 @@ describe('getCaseFileDownloadAction — the meeting arm', () => {
     await getCaseFileDownloadAction(MEETING_INPUT);
     expect(mockAuthorizeMeetingFile).toHaveBeenCalledWith({
       meetingId: INPUT_MEETING_ID,
-      userId: USER_ID,
+      actor: { kind: 'member', userId: USER_ID },
     });
   });
 

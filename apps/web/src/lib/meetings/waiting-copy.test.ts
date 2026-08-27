@@ -328,7 +328,9 @@ describe('waitingIconKindFor', () => {
 /**
  * ⚠⚠ RULING R10 — THE COPY WHEN WE DO NOT KNOW WHO IS MISSING.
  *
- * Both GUEST mounts land here structurally (no route provider ⇒ no viewer role, no counterparty,
+ * Both GUEST mounts land here (N5, fix-round-2 — corrected: NOT "no route provider" — both DO
+ * mount one; `waiting` arrives on the member-join response envelope, which a guest never calls,
+ * so both guest mounts explicitly pass `waiting={null}`, hence no viewer role, no counterparty,
  * no scheduled start). The requirement is exact: **name no party's clock.** Not the client's
  * billing promise, not the expert's counted time, and not "your expert" as a literal.
  */

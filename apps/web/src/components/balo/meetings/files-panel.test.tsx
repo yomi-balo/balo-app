@@ -5,7 +5,7 @@ import { axe } from 'jest-axe';
 import { toast } from 'sonner';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
-import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type { MeetingMemberPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { dailyState, resetDailyMock } from '@/test/mocks/daily';
 import { FilesPanel } from './files-panel';
 
@@ -77,7 +77,7 @@ function file(overrides: Partial<MeetingFileView> & { id: string }): MeetingFile
 }
 
 interface FilesFakes {
-  readonly panels: MeetingPanelRegistration;
+  readonly panels: MeetingMemberPanelRegistration;
   readonly list: ReturnType<typeof vi.fn>;
   readonly requestUpload: ReturnType<typeof vi.fn>;
   readonly confirmUpload: ReturnType<typeof vi.fn>;
@@ -106,13 +106,14 @@ function fakes(options: { files?: MeetingFileView[]; failList?: boolean } = {}):
     confirmUpload,
     download,
     panels: {
+      audience: 'member',
       joinLinkUrl: 'https://balo.test/join/m/x',
       loadGuests: vi.fn(),
       inviteGuests: vi.fn(),
       decideAdmission: vi.fn(),
       resendLink: vi.fn(),
       files: { list, requestUpload, confirmUpload, download },
-    } as unknown as MeetingPanelRegistration,
+    } as unknown as MeetingMemberPanelRegistration,
   };
 }
 

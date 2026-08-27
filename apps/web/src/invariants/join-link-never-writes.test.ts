@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { memberNamesOf, resolveRouteDir, scanRouteSources } from './_source-scan';
+import { codeLinesOf, memberNamesOf, resolveRouteDir, scanRouteSources } from './_source-scan';
 
 /**
  * BAL-408 / ADR-1044 — structural invariant for **THE JOIN LINK READS AND STAMPS; IT NEVER
@@ -121,14 +122,35 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
 
   it('guards the guard: the matcher can see a meetingGuestsRepository call that IS present', () => {
     // If `memberNamesOf` or `codeLinesOf` ever breaks, every assertion below passes
-    // vacuously. `page.tsx` legitimately calls three members — prove the very matcher the
-    // assertions use finds them.
+    // vacuously. `page.tsx` legitimately calls two members directly.
+    //
+    // ⚠ BAL-445 — `findLiveByTokenHash` MOVED to `lib/meetings/resolve-meeting-guest.ts`,
+    // which this scan's roots cannot see (it walks `app/join` only). It is re-pinned on the
+    // resolver below rather than dropped — shrinking a non-vacuity guard to make it pass is
+    // how a scan becomes decorative.
     const page = scanned.find((file) => file.rel === '[token]/page.tsx');
     expect(page).toBeDefined();
     const members = memberNamesOf(page?.code ?? '', 'meetingGuestsRepository');
-    expect(members).toContain('findLiveByTokenHash');
     expect(members).toContain('listLiveByMeeting');
     expect(members).toContain('recordAccess');
+  });
+
+  it('the extracted guest resolver uses ONLY the allow-listed members too', () => {
+    // ⚠ BAL-445 moved the token→row resolution out of the GET path's own tree. The rule
+    // follows the code: this module is what `[token]/page.tsx` now calls, so it inherits the
+    // same allow-list and the same participation-mutator ban.
+    const resolverPath = resolveRouteDir([
+      'src/lib/meetings/resolve-meeting-guest.ts',
+      'apps/web/src/lib/meetings/resolve-meeting-guest.ts',
+    ]);
+    expect(resolverPath).not.toBe('');
+    const code = codeLinesOf(readFileSync(resolverPath, 'utf8'));
+    const members = memberNamesOf(code, 'meetingGuestsRepository');
+    expect(members).toContain('findLiveByTokenHash'); // non-vacuity
+    expect(members.filter((m) => !ALLOWED_GUEST_REPOSITORY_MEMBERS.includes(m))).toEqual([]);
+    for (const mutator of PARTICIPATION_MUTATORS) {
+      expect(code).not.toContain(`meetingGuestsRepository.${mutator}`);
+    }
   });
 
   it('no GET-path file references a participation mutator', () => {

@@ -182,8 +182,20 @@ export async function confirmMeetingFileUploadAction(
   const { meetingId, key, fileName, sizeBytes, source } = parsed.data;
 
   try {
-    const access = await authorizeMeetingFileAccess({ meetingId, userId: user.id });
+    const access = await authorizeMeetingFileAccess({
+      meetingId,
+      actor: { kind: 'member', userId: user.id },
+    });
     if (!access.ok) {
+      return { success: false, error: 'This meeting is no longer available.' };
+    }
+    // ⚠⚠ THE GUEST-UPLOAD BRAKE (BAL-445), AND IT IS THE POINT — `party: access.side` cannot
+    // compile for a guest (the guest arm carries no `side`), so "a guest may not upload"
+    // is a type property, not a convention. Unreachable in production today: this action
+    // gates on `requireOnboardedUser()` above, which a guest never satisfies. Handled anyway,
+    // per `fetch-meeting-thread.ts`'s precedent that a Server Action is a public endpoint and
+    // must never assume its own UI.
+    if (access.viewer !== 'member') {
       return { success: false, error: 'This meeting is no longer available.' };
     }
 

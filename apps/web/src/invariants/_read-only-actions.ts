@@ -163,6 +163,17 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
  * ⚠ DO NOT ADD AN ENTRY TO MAKE A FAILING BUILD GREEN. The default for a mutating Server Action
  * is `requireOnboardedUser()`; an anonymous one needs a written reason, its own rate limit, and
  * a non-enumerating response.
+ *
+ * ⚠⚠ BAL-445's THREE GUEST **READ** ACTIONS ARE NOT ON THIS LIST, AND MUST NEVER BE ADDED.
+ * `listGuestMeetingFilesAction`, `getGuestMeetingFileDownloadAction` and
+ * `fetchGuestMeetingThreadAction` authenticate via `resolveMeetingGuestSubject` — a per-request
+ * resolver that turns a presented token into a persisted, revocable subject and fails closed,
+ * the same shape as `getSession()` / `getCurrentUser()`. That is `AUTH_HELPERS`' entry, not
+ * this list's: adding a guest READ here would silently reclassify an authorized read as
+ * "authenticates with nothing at all", which is precisely the disclosure this file's own
+ * opening paragraph warns about. If a future reader is tempted to add one because it is
+ * anonymous in the ordinary sense (no WorkOS session), the answer is still `AUTH_HELPERS` — a
+ * token IS a credential.
  */
 export const PUBLIC_ACTION_ALLOWLIST: readonly string[] = [
   // An ANONYMOUS visitor forwarded a bare meeting URL knocks to join the admission queue. They

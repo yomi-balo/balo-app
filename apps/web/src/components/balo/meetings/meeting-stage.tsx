@@ -230,9 +230,12 @@ export interface StageContentProps extends StageTilesProps {
   readonly selfIsPrimary?: boolean;
   readonly onSwapSelf?: () => void;
   /**
-   * BAL-436 — supplied ONLY when the People slot is registered, and threaded straight through
-   * to `OverflowTile`. ⚠ `undefined` ⇒ the overflow cell stays non-interactive, exactly as it
-   * shipped. Both GUEST mounts land there structurally.
+   * BAL-436 — supplied ONLY when the People slot is registered (`capabilities.hasPeople`), and
+   * threaded straight through to `OverflowTile`. ⚠ `undefined` ⇒ the overflow cell stays
+   * non-interactive, exactly as it shipped. Both GUEST mounts land there — `hasPeople` is always
+   * `false` on the guest arm of `resolvePanelCapabilities` (N5, fix-round-2 — corrected: NOT
+   * because they mount no route provider; both DO mount one, with a real registration whose
+   * `audience: 'guest'` simply carries no People capability at all).
    */
   readonly onOpenPeople?: () => void;
 }

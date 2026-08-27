@@ -14,7 +14,7 @@
  *   · `presencePartyForGuest` — THE MONEY RULE. See its docblock; getting this wrong bills
  *     a client for a guest's time.
  *   · `guestMayReadMeeting` — the retrospective read predicate. BAL-408 RECORDS the grant;
- *     **BAL-388 must call this to ENFORCE it.**
+ *     **BAL-445 CALLS THIS to ENFORCE it**, from `apps/web/src/lib/meetings/authorize-meeting-file-access.ts`.
  *   · `projectGuestForViewer` — counterparty concealment: names cross the party boundary,
  *     email addresses NEVER.
  *
@@ -495,17 +495,41 @@ export interface GuestMayReadMeetingInput {
  * the inviter agreed to in different terms. Adding a `>= invitedAt` clause here would
  * quietly break the grant the disclosure promised.
  *
- * ⚠ **BAL-408 RECORDS THE GRANT; IT DOES NOT ENFORCE THE READ.** Nothing in this PR calls
- * this function on a production path — the surfaces that would (the recap is BAL-388;
- * transcripts BAL-387 and action items BAL-391 ship inert) do not exist for a guest, and
- * there is no guest-authenticated read session anywhere. **BAL-388 MUST CALL THIS** rather
- * than re-derive the rule. It ships pure and tested for exactly that reason.
+ * ⚠ **BAL-408 RECORDED THE GRANT; BAL-445 ENFORCES THE READ.** This function is called from
+ * `authorizeMeetingFileAccess`'s guest arm (`apps/web/src/lib/meetings/authorize-meeting-file-access.ts`)
+ * for meeting files, and its conversation-grain sibling `resolveGuestConversationScope` is
+ * called from `meeting-chat-anchor.ts` for in-call chat. The recap (BAL-439) and transcripts
+ * (BAL-387) still ship inert/closed to guests — see `resolve-recap-access.ts`'s explicit
+ * guest gate. Callers supply the subject; they must NOT re-derive this rule.
  */
 export function guestMayReadMeeting(input: GuestMayReadMeetingInput): boolean {
   if (input.guestMeetingId === input.targetMeetingId) {
     return true;
   }
   return input.guestAccessScope === 'engagement' && input.targetSharesGuestEngagement;
+}
+
+/**
+ * BAL-445 fix-round-1 (F1) — is this guest HOLDING A SEAT, as opposed to merely having
+ * KNOCKED? `pending` is a lobby knock, not a grant: `claimLobbyPlace`
+ * (`apps/api/src/services/meetings/join-meeting.ts`) is DELIBERATELY UNAUTHENTICATED and
+ * mints a live `meeting_guests` row with `admission: 'pending'` for anyone holding only a
+ * forwarded `/join/m/{meetingId}` URL. `meetingGuestsRepository.findLiveByTokenHash` resolves
+ * `pending` rows on purpose — the `/join/[token]` landing and `pollGuestAdmissionAction` both
+ * legitimately need to render the waiting card for a not-yet-admitted guest — but a READ must
+ * answer a stricter question than "does a live row exist": `meeting-guests.ts`'s own words are
+ * *"`admission IN ('pre_admitted','admitted')` is the positive form of the rule … Waiting is
+ * not holding, and being refused is not holding."*
+ *
+ * ⚠ THIS IS THE SHARED PURE FORM OF `apps/api`'s `ADMITTED_STATES`
+ * (`join-meeting.ts:195,862`, `new Set(['pre_admitted', 'admitted'])`), which gates the Daily
+ * meeting-token mint (entry to the room). This function gates READS instead (files, in-call
+ * chat) from `apps/web`, which never calls into `apps/api`'s service layer. Two call sites,
+ * one rule, restated here because R6 forbids sharing code across the `apps/api`/`apps/web`
+ * boundary for this domain — do not write a THIRD expression of "admitted" anywhere else.
+ */
+export function guestIsAdmittedForRead(admission: MeetingGuestAdmissionLabel): boolean {
+  return admission === 'pre_admitted' || admission === 'admitted';
 }
 
 // ── §8: counterparty concealment ──────────────────────────────────────────────────────

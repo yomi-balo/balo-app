@@ -14,6 +14,11 @@ vi.mock('./authorize-meeting-file-access', () => ({
   authorizeMeetingFileAccess: (...args: unknown[]) => mockAuthorize(...args),
 }));
 
+const { mockLog } = vi.hoisted(() => ({
+  mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock('@/lib/logging', () => ({ log: mockLog }));
+
 import { resolveRecapAccess } from './resolve-recap-access';
 
 const MEETING = { id: MEETING_ID, status: 'ended' };
@@ -24,9 +29,10 @@ describe('resolveRecapAccess', () => {
     vi.clearAllMocks();
   });
 
-  it('passes the meetingId and userId straight through to the SHIPPED gate', async () => {
+  it('passes the meetingId and a MEMBER actor straight through to the SHIPPED gate', async () => {
     mockAuthorize.mockResolvedValue({
       ok: true,
+      viewer: 'member',
       side: 'client',
       meeting: MEETING,
       subject: SUBJECT,
@@ -36,12 +42,16 @@ describe('resolveRecapAccess', () => {
 
     await resolveRecapAccess(MEETING_ID, USER_ID);
     expect(mockAuthorize).toHaveBeenCalledTimes(1);
-    expect(mockAuthorize).toHaveBeenCalledWith({ meetingId: MEETING_ID, userId: USER_ID });
+    expect(mockAuthorize).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
   });
 
   it('renames side to lens VERBATIM on the client arm — it never re-derives it', async () => {
     mockAuthorize.mockResolvedValue({
       ok: true,
+      viewer: 'member',
       side: 'client',
       meeting: MEETING,
       subject: SUBJECT,
@@ -62,6 +72,7 @@ describe('resolveRecapAccess', () => {
   it('renames side to lens VERBATIM on the expert arm', async () => {
     mockAuthorize.mockResolvedValue({
       ok: true,
+      viewer: 'member',
       side: 'expert',
       meeting: MEETING,
       subject: SUBJECT,
@@ -76,6 +87,7 @@ describe('resolveRecapAccess', () => {
   it('threads a null expertProfileId through (a match-routed discovery names nobody)', async () => {
     mockAuthorize.mockResolvedValue({
       ok: true,
+      viewer: 'member',
       side: 'client',
       meeting: MEETING,
       subject: { contextType: 'project_discovery', contextId: 'req-1' },
@@ -85,6 +97,46 @@ describe('resolveRecapAccess', () => {
 
     const access = await resolveRecapAccess(MEETING_ID, USER_ID);
     expect(access?.expertProfileId).toBeNull();
+  });
+
+  /**
+   * ⚠⚠ R4 / §3.3 — THE BEHAVIOURAL PAIR THAT REPLACES THE WORTHLESS SOURCE SCAN. The old
+   * `expect(code).not.toContain('guestMayReadMeeting')` scanned only THIS file's own text,
+   * which never mentioned the predicate — so it stayed green while BAL-445 filled the file
+   * gate's guest arm and this pass-through opened the recap SILENTLY. A guard that cannot
+   * observe the thing it guards is worse than no guard.
+   */
+  it('⚠⚠ returns null for a GUEST subject the file gate now says yes to — guest recap is BAL-439’s', async () => {
+    // The file gate's guest arm is FILLED as of BAL-445, so this is the shape it really
+    // returns. The recap must refuse it on its own, not inherit a denial it no longer gets.
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      viewer: 'guest',
+      guestId: 'e0000000-0000-4000-8000-00000000000e',
+      accessScope: 'engagement',
+      meeting: MEETING,
+      subject: SUBJECT,
+    });
+    await expect(resolveRecapAccess(MEETING_ID, USER_ID)).resolves.toBeNull();
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      'Recap access refused for a guest subject',
+      expect.objectContaining({ meetingId: MEETING_ID })
+    );
+  });
+
+  it('⚠ and it still passes MEMBER subjects straight through — the gate is narrow, not blunt', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      viewer: 'member',
+      side: 'client',
+      meeting: MEETING,
+      subject: SUBJECT,
+      companyId: COMPANY_ID,
+      expertProfileId: PROFILE_ID,
+    });
+    await expect(resolveRecapAccess(MEETING_ID, USER_ID)).resolves.toMatchObject({
+      lens: 'client',
+    });
   });
 
   it('collapses EVERY gate denial into a single null — no existence oracle', async () => {
@@ -123,11 +175,11 @@ describe('resolve-recap-access SOURCE invariants', () => {
     expect(code).toContain('authorizeMeetingFileAccess');
   });
 
-  it('NEVER calls guestMayReadMeeting — the guest arm belongs to BAL-132 (D2)', () => {
-    // There is no guest-authenticated read session on main. Calling the predicate here would
-    // authorize a read against a grant with no authenticated subject to bind it to, which is
-    // worse than denying. `guestMayReadMeeting`'s own "BAL-388 MUST CALL THIS" docblock is
-    // STALE and is not authority.
+  it('NEVER calls guestMayReadMeeting directly — the guest arm belongs to BAL-439, gated via the file gate', () => {
+    // This module does not call the predicate itself: it composes `authorizeMeetingFileAccess`
+    // (which DOES call it, as of BAL-445) and then explicitly REFUSES whatever guest verdict
+    // comes back. See the module docblock and the behavioural pair above — this scan is a
+    // narrow style guard, not the guest-closure proof; the tests above are.
     expect(code).not.toContain('guestMayReadMeeting');
   });
 

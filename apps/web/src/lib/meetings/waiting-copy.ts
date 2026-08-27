@@ -317,9 +317,11 @@ export function waitingCopyFor(
 }
 
 /**
- * ⚠⚠ RULING R10 — **THE COPY WHEN WE DO NOT KNOW WHO IS MISSING.** Both GUEST mounts land here,
- * structurally: they do not mount the route provider, so no `viewerRole`, no counterparty name
- * and no scheduled start ever reach them.
+ * ⚠⚠ RULING R10 — **THE COPY WHEN WE DO NOT KNOW WHO IS MISSING.** Both GUEST mounts land here:
+ * `waiting` arrives on the member-join response envelope, which a guest never calls, so both
+ * guest mounts explicitly pass `waiting={null}` (N5, fix-round-2 — corrected: NOT because they
+ * mount no route provider; both DO mount one now), and no `viewerRole`, no counterparty name and
+ * no scheduled start ever reach them.
  *
  * ⚠⚠ IT NAMES **NO PARTY'S CLOCK**, AND THAT IS THE WHOLE REQUIREMENT. Not "you won't be charged"
  * (a promise that is meaningless to the person being paid), not "your time is counted" (a promise

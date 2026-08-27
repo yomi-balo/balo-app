@@ -4,6 +4,7 @@ import type { Meeting } from '@balo/db';
 import type { PrimaryMeetingContext } from '@balo/shared/meetings';
 import type { RecapLens } from '@balo/analytics/events';
 import { authorizeMeetingFileAccess } from './authorize-meeting-file-access';
+import { log } from '@/lib/logging';
 
 /**
  * BAL-388 — THE RECAP READ GATE. A THIN LENS ADAPTER over the SHIPPED
@@ -43,13 +44,22 @@ import { authorizeMeetingFileAccess } from './authorize-meeting-file-access';
  * reserved label no code path can emit is a dead union member, and it reads as coverage that
  * does not exist. Admin meetings belong on the PLATFORM axis (ADR-1035), out of scope here.
  *
- * ⚠⚠ THE GUEST ARM IS BAL-132 (D2)'S, AND IT IS NOT FILLED HERE. There is no
- * guest-authenticated read session on `main`; `/join/[token]` resolves an identity CLAIM only.
- * `guestMayReadMeeting`'s own docblock claims "BAL-388 MUST CALL THIS" — THAT CLAIM IS STALE
- * AND IS NOT AUTHORITY. This module deliberately does NOT call it, does not import it, and
- * does not invent a guest session: authorizing a read against a grant with no authenticated
- * subject to bind it to is worse than denying. A guest falls out with the same single
- * `null` a stranger gets.
+ * ⚠⚠ **THE RECAP STAYS CLOSED TO A GUEST — BAL-439 OWNS THE GUEST ARM, DELIBERATELY, NOT BY
+ * DEFAULT.** BAL-445 filled `authorizeMeetingFileAccess`'s guest arm for meeting files and
+ * in-call chat, which means this module's pass-through would otherwise open the recap
+ * SILENTLY — it has no independent gate of its own, only a rename over the file gate's
+ * answer. It must not open: BAL-439 owns guest recap and carries acceptance criteria this PR
+ * would bypass — no money block, no counterparty email, the conversion loop, the help-doc
+ * addendum. The gate below is that explicit, documented refusal.
+ *
+ * ⚠ `RecapLens` is NOT widened to admit `'guest'`. The type error `lens: access.side` would
+ * raise on the guest arm (which carries no `side` — see `authorize-meeting-file-access.ts`)
+ * is the natural compiler brake, and it is KEPT. The branch below is what satisfies the
+ * compiler — but it is written as a gate with a log line, not a cast, precisely so a future
+ * reader cannot silence it by widening the type.
+ *
+ * ⚠ IT ALSO CLOSES THE RECAP'S **MUTATION** PATH. `authorize-recap-case-mutation.ts` composes
+ * this function, so a guest can no more resolve a case from the recap than read one.
  */
 
 export interface RecapAccess {
@@ -77,10 +87,29 @@ export async function resolveRecapAccess(
   meetingId: string,
   userId: string
 ): Promise<RecapAccess | null> {
-  const access = await authorizeMeetingFileAccess({ meetingId, userId });
+  const access = await authorizeMeetingFileAccess({
+    meetingId,
+    actor: { kind: 'member', userId },
+  });
   if (!access.ok) {
     return null;
   }
+
+  /**
+   * ⚠⚠ THE GUEST GATE — DELIBERATE, DOCUMENTED, AND **NOT** INHERITED FROM THE FILE ARM. See
+   * the module docblock. `access.viewer !== 'member'` is unreachable IN PRACTICE given the
+   * `actor: { kind: 'member' }` passed above — but `AuthorizeMeetingFileAccessResult`'s guest
+   * `ok:true` arm is still part of the STATIC return type (TypeScript does not narrow a
+   * function's return type by the literal value of its input), so `access.side` below would
+   * not typecheck without this branch. That is the natural compiler brake, kept — and it is
+   * written as a logged, explicit refusal rather than a cast, so a future reader cannot
+   * silence it by widening `RecapLens`.
+   */
+  if (access.viewer !== 'member') {
+    log.warn('Recap access refused for a guest subject', { meetingId, guestId: access.guestId });
+    return null;
+  }
+
   return {
     lens: access.side,
     meeting: access.meeting,

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeMeetingClocks,
   findPrimaryMeetingContextRepoint,
+  guestIsAdmittedForRead,
   guestMayReadMeeting,
   presencePartyForGuest,
   projectGuestForViewer,
@@ -403,6 +404,30 @@ describe('guestMayReadMeeting', () => {
       targetSharesGuestEngagement: true,
     } as const;
     expect(guestMayReadMeeting(input)).toBe(guestMayReadMeeting(input));
+  });
+});
+
+/**
+ * BAL-445 fix-round-1 (F1) — the shared pure form of `apps/api`'s `ADMITTED_STATES`. This is
+ * the predicate `authorize-meeting-file-access.ts`'s guest arm checks FIRST, before the
+ * decline gate and before `guestMayReadMeeting`, so all four labels are pinned individually
+ * rather than left to that gate's own mocked tests to imply.
+ */
+describe('guestIsAdmittedForRead', () => {
+  it('HOLDS for `pre_admitted`', () => {
+    expect(guestIsAdmittedForRead('pre_admitted')).toBe(true);
+  });
+
+  it('HOLDS for `admitted`', () => {
+    expect(guestIsAdmittedForRead('admitted')).toBe(true);
+  });
+
+  it('REFUSES `pending` — a lobby knock is not a held seat', () => {
+    expect(guestIsAdmittedForRead('pending')).toBe(false);
+  });
+
+  it('REFUSES `denied` — being refused is not holding either', () => {
+    expect(guestIsAdmittedForRead('denied')).toBe(false);
   });
 });
 

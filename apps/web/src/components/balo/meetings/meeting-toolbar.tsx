@@ -73,9 +73,7 @@ export interface MeetingToolbarProps {
    * BAL-436 — which side panel is open, or `null`.
    *
    * ⚠ `undefined` (rather than `null`) MEANS **THE SLOT IS NOT REGISTERED AT ALL** — no
-   * People button, no Files button, no More-sheet rows. Both GUEST mounts land here
-   * structurally, because neither mounts the route context that carries the registration.
-   * Absent, never disabled.
+   * People button, no Files button, no More-sheet rows. Absent, never disabled.
    */
   readonly openPanel?: MeetingPanelId | null;
   /** ⚠ Supplied IFF `openPanel` is. Toggling: re-clicking the open panel's button closes it. */
@@ -84,6 +82,15 @@ export interface MeetingToolbarProps {
   readonly peopleButtonRef?: React.Ref<HTMLButtonElement>;
   readonly filesButtonRef?: React.Ref<HTMLButtonElement>;
   readonly chatButtonRef?: React.Ref<HTMLButtonElement>;
+  /**
+   * BAL-445 — ⚠ WHETHER THE **PEOPLE** SLOT IS REGISTERED, which is NARROWER than
+   * `onTogglePanel !== undefined`. `Files` is registered for both audiences (member and
+   * guest); `People` is a MEMBER-ONLY capability — a guest's registration carries no
+   * `loadGuests` / `inviteGuests` for a People panel to call. `false` ⇒ the button is ABSENT,
+   * never disabled — the same fail-closed default `hasChat` / `hasBalance` already use.
+   * `resolvePanelCapabilities` (`panel-capabilities.ts`) is the one place this is decided.
+   */
+  readonly hasPeople?: boolean;
   /**
    * BAL-437 — ⚠ WHETHER THE **CHAT** SLOT IS REGISTERED, which is NARROWER than
    * `onTogglePanel !== undefined`. A meeting can have People and Files and no conversation
@@ -163,6 +170,7 @@ export function MeetingToolbar({
   peopleButtonRef,
   filesButtonRef,
   chatButtonRef,
+  hasPeople = false,
   hasChat = false,
   unreadChat = false,
   reactionControl,
@@ -239,6 +247,7 @@ export function MeetingToolbar({
           <PanelSlotButtons
             openPanel={openPanel ?? null}
             onTogglePanel={onTogglePanel}
+            hasPeople={hasPeople}
             peopleButtonRef={peopleButtonRef}
             filesButtonRef={filesButtonRef}
           />
@@ -276,6 +285,7 @@ export function MeetingToolbar({
           onToggleScreenShare={onToggleScreenShare}
           onOpenSettings={onOpenSettings}
           {...panelSlot}
+          hasPeople={hasPeople}
           {...reactionSlot}
           hasBalance={hasBalance}
           balanceAttention={balanceAttention}
@@ -506,11 +516,14 @@ const BalanceSlot = forwardRef<
 function PanelSlotButtons({
   openPanel,
   onTogglePanel,
+  hasPeople,
   peopleButtonRef,
   filesButtonRef,
 }: Readonly<{
   openPanel: MeetingPanelId | null;
   onTogglePanel: (id: MeetingPanelId) => void;
+  /** BAL-445 — `false` ⇒ NO People button, never a disabled one (a guest's Files-only arm). */
+  hasPeople: boolean;
   peopleButtonRef?: React.Ref<HTMLButtonElement>;
   filesButtonRef?: React.Ref<HTMLButtonElement>;
 }>): React.JSX.Element {
@@ -527,17 +540,19 @@ function PanelSlotButtons({
         onClick={() => onTogglePanel('files')}
         className="hidden lg:flex"
       />
-      <MeetingToolbarButton
-        ref={peopleButtonRef}
-        icon={Users}
-        label="People"
-        tooltip={openPanel === 'people' ? 'Hide people' : 'People'}
-        state={openPanel === 'people' ? 'active' : 'default'}
-        pressed={openPanel === 'people'}
-        size="desktop"
-        onClick={() => onTogglePanel('people')}
-        className="hidden lg:flex"
-      />
+      {hasPeople ? (
+        <MeetingToolbarButton
+          ref={peopleButtonRef}
+          icon={Users}
+          label="People"
+          tooltip={openPanel === 'people' ? 'Hide people' : 'People'}
+          state={openPanel === 'people' ? 'active' : 'default'}
+          pressed={openPanel === 'people'}
+          size="desktop"
+          onClick={() => onTogglePanel('people')}
+          className="hidden lg:flex"
+        />
+      ) : null}
     </>
   );
 }

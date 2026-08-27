@@ -74,7 +74,11 @@ function renderWaiting(
   ).container;
 }
 
-/** The GUEST mounts, structurally: no route provider ⇒ no subject ⇒ no party's clock named. */
+/**
+ * The GUEST mounts: both explicitly pass `waiting={null}` (N5, fix-round-2 — corrected: NOT
+ * "no route provider" — both DO mount `MeetingRouteContextProvider` now) ⇒ no subject ⇒ no
+ * party's clock named.
+ */
 function renderNeutral(headingRef?: React.Ref<HTMLHeadingElement>): HTMLElement {
   return render(
     <WaitingStage

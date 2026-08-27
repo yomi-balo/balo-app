@@ -76,7 +76,10 @@ describe('requestMeetingFileUploadAction', () => {
       contentType: 'application/x-msdownload',
     });
     expect(result).toEqual({ success: false, error: 'This file type is not supported.' });
-    expect(mockAuthorize).toHaveBeenCalledWith({ meetingId: MEETING_ID, userId: USER_ID });
+    expect(mockAuthorize).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
     expect(mockPresign).not.toHaveBeenCalled();
   });
 
@@ -120,7 +123,10 @@ describe('requestMeetingFileUploadAction', () => {
         success: false,
         error: 'This file is too large. Please choose a smaller file.',
       });
-      expect(mockAuthorize).toHaveBeenCalledWith({ meetingId: MEETING_ID, userId: USER_ID });
+      expect(mockAuthorize).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        actor: { kind: 'member', userId: USER_ID },
+      });
       expect(mockPresign).not.toHaveBeenCalled();
     });
 

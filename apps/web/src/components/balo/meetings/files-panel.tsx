@@ -6,13 +6,13 @@ import { Paperclip, Plus } from 'lucide-react';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import { MEETING_FILE_ACCEPT } from '@/lib/storage/meeting-file-constraints';
 import type { MeetingFileView } from '@/lib/meetings/meeting-file-view-types';
-import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type { MeetingMemberPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { cn } from '@/lib/utils';
 import { MeetingSidePanel } from './meeting-side-panel';
-import { FilesPanelRow } from './files-panel-row';
-import { PanelErrorCard, PanelSkeletonRows } from './panel-states';
 import { useDailyIdentities } from './use-daily-identities';
 import { useMeetingFileUpload } from './use-meeting-file-upload';
+import { FilesPanelBody } from './files-panel-body';
+export { FilesPanelBody, type FilesPanelBodyProps } from './files-panel-body';
 
 /**
  * BAL-436 — the Files panel: a drop zone plus every file on this meeting, from BOTH in-call
@@ -46,16 +46,6 @@ import { useMeetingFileUpload } from './use-meeting-file-upload';
  * two validation stories. The server re-checks type and size from the R2 object itself and is
  * the source of truth; a 10 MB round trip to be told no is a bad experience mid-call.
  */
-
-/**
- * ⚠⚠ NOT IMPORTED FROM `@balo/db`, DELIBERATELY, EVEN THOUGH `MEETING_FILE_LIST_LIMIT` LIVES
- * THERE. A `'use client'` module that VALUE-imports `@balo/db` pulls `postgres` into the
- * browser graph and breaks `next build` with "can't resolve 'tls'" — a failure NO local
- * typecheck, lint or vitest run catches (memory `reference_balo_db_client_bundle_footgun`).
- * Restating one number is the cheap side of that trade; the server-side `log.warn` in
- * `list-meeting-files.ts` is the authoritative signal either way.
- */
-const MEETING_FILE_LIST_CAP = 200;
 
 /**
  * Start a download WITHOUT navigating the tab.
@@ -95,7 +85,8 @@ function startDownload(url: string): void {
 }
 
 export interface FilesPanelProps {
-  readonly panels: MeetingPanelRegistration;
+  /** ⚠ MEMBER ONLY — a guest renders `GuestFilesPanel` instead (BAL-445). */
+  readonly panels: MeetingMemberPanelRegistration;
   readonly onClose: () => void;
   /**
    * ⚠⚠ THE **EXACT SHAPE**, NEVER `Record<string, string>`. A `Record` index signature defeats
@@ -295,47 +286,21 @@ export function FilesPanel({
           }}
         />
 
-        {isLoading ? <PanelSkeletonRows /> : null}
-
-        {hasFailed ? (
-          <PanelErrorCard
-            title="We couldn't load the files"
-            body="The call itself is fine, and you can still share something — the drop zone above works."
-            onRetry={() => {
-              void load();
-            }}
-          />
-        ) : null}
-
-        {files !== null && files.length === 0 ? (
-          /* ⚠⚠ AN INVITATION, NEVER "No files yet". The person CAN act from here, so the empty
-             state leads with the action (CLAUDE.md's empty-state rule). */
-          <p className="text-muted-foreground px-2 py-4 text-center text-sm leading-relaxed">
-            Drop in anything you want to talk through — a screenshot, a spec, a spreadsheet.
-            It&apos;ll be here after the call too.
-          </p>
-        ) : null}
-
-        {files !== null && files.length > 0 ? (
-          <ul className="list-none">
-            {files.map((file) => (
-              <FilesPanelRow
-                key={file.id}
-                file={file}
-                uploaderLabel={uploaderLabelFor(file)}
-                onDownload={onDownload}
-                isDownloading={downloadingIds.has(file.id)}
-              />
-            ))}
-          </ul>
-        ) : null}
-
-        {/* ⚠ NO SILENT CAPS. The server logs the truncation; the reader deserves to know too. */}
-        {files !== null && files.length >= MEETING_FILE_LIST_CAP ? (
-          <p className="text-muted-foreground px-2 pt-2 text-xs">
-            Showing the {MEETING_FILE_LIST_CAP} most recent files.
-          </p>
-        ) : null}
+        <FilesPanelBody
+          files={files}
+          isLoading={isLoading}
+          hasFailed={hasFailed}
+          onRetry={() => {
+            void load();
+          }}
+          onDownload={onDownload}
+          downloadingIds={downloadingIds}
+          uploaderLabelFor={uploaderLabelFor}
+          // ⚠⚠ AN INVITATION, NEVER "No files yet". The person CAN act from here, so the empty
+          // state leads with the action (CLAUDE.md's empty-state rule).
+          emptyLine="Drop in anything you want to talk through — a screenshot, a spec, a spreadsheet. It'll be here after the call too."
+          errorBody="The call itself is fine, and you can still share something — the drop zone above works."
+        />
       </div>
     </MeetingSidePanel>
   );

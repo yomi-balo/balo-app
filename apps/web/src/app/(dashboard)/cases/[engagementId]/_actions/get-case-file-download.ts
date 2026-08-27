@@ -142,7 +142,10 @@ async function presignMeetingFile(
   fileId: string,
   userId: string
 ): Promise<string | null> {
-  const access = await authorizeMeetingFileAccess({ meetingId, userId });
+  const access = await authorizeMeetingFileAccess({
+    meetingId,
+    actor: { kind: 'member', userId },
+  });
   if (!access.ok) {
     return null;
   }

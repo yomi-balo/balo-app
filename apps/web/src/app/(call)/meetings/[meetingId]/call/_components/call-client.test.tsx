@@ -74,10 +74,10 @@ vi.mock('@/components/balo/meetings/meeting-call-surface', () => ({
         data-counterparty={route.waiting?.counterpartyFirstName ?? ''}
         data-start-label={route.waiting?.scheduledStartLabel ?? ''}
         data-has-panels={String(route.panels !== null)}
-        data-join-link={route.panels?.joinLinkUrl ?? ''}
+        data-join-link={route.panels?.audience === 'member' ? route.panels.joinLinkUrl : ''}
         // ⚠ BAL-403 — whether the BALANCE arm is registered.
         data-has-balance={String(
-          route.panels?.balance !== null && route.panels?.balance !== undefined
+          route.panels?.audience === 'member' && route.panels.balance !== null
         )}
       >
         <button type="button" onClick={() => route.onExit?.('host_ended')}>

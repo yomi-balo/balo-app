@@ -47,3 +47,23 @@ export function clientIp(headerList: Headers): string {
   }
   return headerList.get('x-real-ip') ?? 'unknown';
 }
+
+/**
+ * Rate-limit-safe form of {@link clientIp} — SHA-256 hex of the raw value, so the
+ * result can NEVER contain a `:` (or anything else) regardless of what
+ * `X-Forwarded-For` carries.
+ *
+ * ⚠⚠ BAL-445 fix round 2 (S1). `clientIp` is fully attacker-controlled and was fed
+ * straight into a limiter key that shared a namespace with a second, non-spoofable
+ * key (e.g. `guest-files:${clientIp(...)}` vs `guest-files:id:${guestId}`) — a
+ * caller could send `X-Forwarded-For: id:<victimGuestId>` and land on the victim's
+ * own bucket, byte-for-byte. Use this whenever a limiter key's IP segment shares a
+ * prefix with any other segment built from a non-spoofable id — the fixed-length hex
+ * output cannot be crafted to complete another key's literal, no matter how the two
+ * prefixes are later renamed. Namespacing the two prefixes apart is necessary but not
+ * sufficient on its own (a future rename can re-introduce the overlap); this closes
+ * it structurally.
+ */
+export function hashedClientIp(headerList: Headers): string {
+  return sha256Hex(clientIp(headerList));
+}

@@ -5,7 +5,7 @@ import { axe } from 'jest-axe';
 import { toast } from 'sonner';
 import type { GuestForViewer } from '@balo/shared/meetings';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
-import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type { MeetingMemberPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { containsEmailAddress } from '@/test/contains-email-address';
 import { dailyState, resetDailyMock } from '@/test/mocks/daily';
 import { PeoplePanel } from './people-panel';
@@ -102,7 +102,7 @@ const KNOCKER = guest({
 });
 
 interface PanelFakes {
-  readonly panels: MeetingPanelRegistration;
+  readonly panels: MeetingMemberPanelRegistration;
   readonly loadGuests: ReturnType<typeof vi.fn>;
   readonly inviteGuests: ReturnType<typeof vi.fn>;
   readonly decideAdmission: ReturnType<typeof vi.fn>;
@@ -137,6 +137,7 @@ function fakes(
     decideAdmission,
     resendLink,
     panels: {
+      audience: 'member',
       joinLinkUrl: JOIN_LINK,
       loadGuests,
       inviteGuests,
@@ -148,7 +149,7 @@ function fakes(
         confirmUpload: vi.fn(),
         download: vi.fn(),
       },
-    } as unknown as MeetingPanelRegistration,
+    } as unknown as MeetingMemberPanelRegistration,
   };
 }
 

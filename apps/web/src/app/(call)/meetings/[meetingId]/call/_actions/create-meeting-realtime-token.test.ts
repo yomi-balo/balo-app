@@ -123,7 +123,7 @@ describe('createMeetingRealtimeTokenAction — ⚠⚠ the channel list', () => {
     for (const [args] of mockResolveChatAccess.mock.calls) {
       expect(args).toEqual({
         meetingId: MEETING_ID,
-        userId: USER_ID,
+        actor: { kind: 'member', userId: USER_ID },
         withWritability: false,
       });
     }

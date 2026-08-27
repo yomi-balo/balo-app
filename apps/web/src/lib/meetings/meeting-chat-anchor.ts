@@ -3,18 +3,27 @@ import 'server-only';
 import {
   conversationsRepository,
   engagementsRepository,
+  meetingContextsRepository,
   requestExpertRelationshipsRepository,
 } from '@balo/db';
 import {
   conversationSubjectForMeetingContext,
   engagementConversationIsWritable,
+  resolveGuestConversationScope,
+  type ConversationReadScope,
   type ConversationSubject,
 } from '@balo/shared/conversations';
+import { selectPrimaryMeetingContext } from '@balo/shared/meetings';
 import { isThreadOpenStatus } from '@/lib/project-request/conversation-view-types';
 import {
   authorizeMeetingFileAccess,
+  type AuthorizeMeetingFileAccessResult,
+  type MeetingFileAccessActor,
   type MeetingFileAccessSide,
 } from './authorize-meeting-file-access';
+
+/** The `ok: true` half of the gate's result — either viewer. */
+type MeetingFileAccessOk = Extract<AuthorizeMeetingFileAccessResult, { ok: true }>;
 
 /**
  * BAL-437 — RESOLVE A MEETING TO THE CONVERSATION THREAD ITS IN-CALL CHAT WRITES INTO.
@@ -91,6 +100,7 @@ export interface MeetingChatAnchor {
 export type MeetingChatAccess =
   | {
       readonly ok: true;
+      readonly viewer: 'member';
       readonly side: MeetingChatSide;
       /**
        * ⚠⚠ `null` ⇒ THIS MEETING HAS NO CONVERSATION ANCHOR, AND THE CHAT SLOT IS THEN
@@ -119,12 +129,25 @@ export type MeetingChatAccess =
       readonly anchor: MeetingChatAnchor | null;
       readonly meetingId: string;
     }
+  | {
+      readonly ok: true;
+      readonly viewer: 'guest';
+      /**
+       * ⚠⚠ THE SCOPE THE REPOSITORY READ MUST BE GIVEN. Meaningful only when `anchor` is
+       * non-null — resolved by the SHIPPED pure rule (`resolveGuestConversationScope`), never
+       * by this module. When there is no anchor it carries the guest's own-meeting fallback,
+       * which no caller ever reads (every consumer checks `anchor === null` first).
+       */
+      readonly scope: ConversationReadScope;
+      readonly anchor: MeetingChatAnchor | null;
+      readonly meetingId: string;
+    }
   /** ⚠ ONE literal, inherited from the gate. There is deliberately no `forbidden`. */
   | { readonly ok: false; readonly code: 'meeting_not_found' };
 
 export interface ResolveMeetingChatAccessInput {
   readonly meetingId: string;
-  readonly userId: string;
+  readonly actor: MeetingFileAccessActor;
   /**
    * ⚠ `false` ⇒ SKIP THE **ENGAGEMENT** ARM'S LIFECYCLE READ and report `writable: null`.
    *
@@ -205,41 +228,127 @@ async function relationshipThreadIsOpen(contextId: string): Promise<boolean> {
  * runs no sweep. A decline mid-call takes effect on the next read and on the next token refresh
  * (≤15 min, `TOKEN_TTL_MS`) — the same bound `authorizeEngagementHost` documents.
  */
+/**
+ * The no-anchor answer, shaped for whichever viewer the gate resolved.
+ *
+ * ⚠ TAKES `access` AS A PARAMETER, NOT A CLOSURE — so `access.viewer === 'guest'` narrows the
+ * rest of the union normally within this function's own scope.
+ *
+ * ⚠ THE GUEST'S FALLBACK SCOPE IS THE OWN-MEETING ONE. No caller ever reads `scope` when
+ * `anchor` is `null` (every consumer checks `anchor === null` first), so this never needs a
+ * repository read to compute — see `MeetingChatAccess`'s guest-arm docblock.
+ *
+ * ⚠⚠ F2 (fix-round-1) — `access.guestMeeting.id`, NEVER `access.meeting.id`. `meeting` is the
+ * TARGET meeting (whatever `meetingId` resolved to); `guestMeeting` is the guest's OWN meeting
+ * (`meeting_guests.meeting_id`'s row), threaded by the gate for exactly this reason. Reading
+ * `meeting` here binds the fallback scope to caller-supplied input with no independent tie to
+ * the recorded grant.
+ */
+function noAnchorFor(access: MeetingFileAccessOk, meetingId: string): MeetingChatAccess {
+  if (access.viewer === 'guest') {
+    return {
+      ok: true,
+      viewer: 'guest',
+      scope: { kind: 'meeting', meetingId: access.guestMeeting.id },
+      anchor: null,
+      meetingId,
+    };
+  }
+  return { ok: true, viewer: 'member', side: access.side, anchor: null, meetingId };
+}
+
 export async function resolveMeetingChatAccess(
   input: ResolveMeetingChatAccessInput
 ): Promise<MeetingChatAccess> {
-  const { meetingId, userId, withWritability = true } = input;
+  const { meetingId, actor, withWritability = true } = input;
 
-  const access = await authorizeMeetingFileAccess({ meetingId, userId });
+  const access = await authorizeMeetingFileAccess({ meetingId, actor });
   if (!access.ok) {
     // ⚠ THE GATE ALREADY LOGGED THE SHAPE at `warn` with its own distinct `reason`. Logging a
     // second line here would double every denial in Axiom for no new information.
     return { ok: false, code: 'meeting_not_found' };
   }
 
-  const noAnchor: MeetingChatAccess = { ok: true, side: access.side, anchor: null, meetingId };
-
   // 1. THE PURE RULE, CONSUMED — never a second resolver. `conversationSubjectForMeetingContext`
   //    is total over `MeetingContextTypeWithHolder` with a `never` default, so a seventh
   //    holder-bearing label stops typechecking THERE rather than silently defaulting here.
   const subject = conversationSubjectForMeetingContext(access.subject);
-  if (subject === null) return noAnchor;
+  if (subject === null) return noAnchorFor(access, meetingId);
 
   // 2. A `SELECT`. ⚠ NEVER `ensureForContext` — see the module docblock.
   const conversation = await conversationsRepository.findByContext({
     contextType: subject.contextType,
     contextId: subject.contextId,
   });
-  if (conversation === undefined) return noAnchor;
+  if (conversation === undefined) return noAnchorFor(access, meetingId);
 
   // 3. THE LIFECYCLE READ — the only thing this module adds to the decision, and the one place
-  //    the two arms diverge. See the "two arms, two policies" note above.
+  //    the two arms diverge. See the "two arms, two policies" note above. SHARED by both
+  //    viewers on the RELATIONSHIP grain: whether a declined/withdrawn relationship's thread is
+  //    even VISIBLE is a read/subscribe question, not a member-only one.
   if (subject.contextType === 'relationship') {
     // ⚠ NEVER SKIPPED, even under `withWritability: false`: here the status decides whether
     // there is an anchor AT ALL, which is a read/subscribe question rather than a write one.
-    if (!(await relationshipThreadIsOpen(subject.contextId))) return noAnchor;
+    if (!(await relationshipThreadIsOpen(subject.contextId))) return noAnchorFor(access, meetingId);
+  }
+
+  if (access.viewer === 'guest') {
+    // ── THE GUEST ARM (BAL-445) — diverges here, once a live, visible anchor is confirmed. ──
+    //
+    // ⚠ A GUEST'S WRITABILITY IS NEVER RESOLVED. There is no composer to report it to, so the
+    // engagement arm's lifecycle read (`resolveEngagementWritable`) is skipped entirely — one
+    // fewer indexed read — and the anchor carries `writable: null`, which every consumer must
+    // read as NOT writable (`=== true` is the only safe test, and the guest panel has no
+    // `postMessage` callback to reach anyway).
+    //
+    // ⚠ `listContexts` IS A REAL READ, NOT `[subject]`. A project thread legitimately carries
+    // TWO live anchors after kickoff carry-over, so passing the derived subject back in would
+    // make the `anchored` test in `resolveGuestConversationScope` unconditionally true — the
+    // exact dead conjunct its docblock warns against.
+    const contexts = await conversationsRepository.listContexts(conversation.id);
+
+    // ⚠⚠ THE SHIPPED PURE RULE, CALLED — NOT REIMPLEMENTED. `resolveGuestConversationScope`
+    // (@balo/shared/conversations) is the conversation-grain analogue of `guestMayReadMeeting`;
+    // its own docblock records that the two are SIBLINGS, neither wrapping the other, and that
+    // calling `guestMayReadMeeting` here would be a dead conjunct dressed as reuse.
+    //
+    // ⚠⚠ F2 (fix-round-1) — `access.guestMeeting.id`, NEVER `access.meeting.id`. `meeting` is
+    // the TARGET meeting resolved from caller-supplied `meetingId`; binding this scope to it
+    // derives the read scope ENTIRELY from caller-supplied input, with no independent tie to the
+    // recorded grant — the property this resolver's own docblock advertises it preserves.
+    // `guestMeeting` is the recorded row (`meeting_guests.meeting_id`), threaded by the gate.
+    const scope = resolveGuestConversationScope({
+      guestAccessScope: access.accessScope,
+      guestMeetingId: access.guestMeeting.id,
+      guestMeetingPrimaryContext: selectPrimaryMeetingContext(
+        await meetingContextsRepository.listByMeeting(access.guestMeeting.id)
+      ),
+      conversationContexts: contexts.map((row) => ({
+        contextType: row.contextType,
+        contextId: row.contextId,
+      })),
+    });
+
+    // ⚠ `null` ⇒ DENY OUTRIGHT — the resolver's own contract, not a local policy. Reachable
+    // only when an `engagement`-scoped guest's OWN meeting resolves to `none`/`ambiguous`;
+    // handled anyway, because a Server Action is a public endpoint and must never assume its
+    // own UI.
+    if (scope === null) return { ok: false, code: 'meeting_not_found' };
+
     return {
       ok: true,
+      viewer: 'guest',
+      scope,
+      anchor: { conversationId: conversation.id, subject, writable: null },
+      meetingId,
+    };
+  }
+
+  // ── THE MEMBER ARM, unchanged. ──
+  if (subject.contextType === 'relationship') {
+    return {
+      ok: true,
+      viewer: 'member',
       side: access.side,
       // ⚠ AN OPEN RELATIONSHIP THREAD IS ALWAYS WRITABLE — the only closed shape returns above.
       anchor: { conversationId: conversation.id, subject, writable: true },
@@ -251,6 +360,7 @@ export async function resolveMeetingChatAccess(
 
   return {
     ok: true,
+    viewer: 'member',
     side: access.side,
     anchor: { conversationId: conversation.id, subject, writable },
     meetingId,

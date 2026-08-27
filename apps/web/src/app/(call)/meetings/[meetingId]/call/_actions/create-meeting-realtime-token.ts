@@ -53,7 +53,7 @@ export async function createMeetingRealtimeTokenAction(
     // declined relationship's thread.
     const access = await resolveMeetingChatAccess({
       meetingId,
-      userId: user.id,
+      actor: { kind: 'member', userId: user.id },
       withWritability: false,
     });
     if (!access.ok) {

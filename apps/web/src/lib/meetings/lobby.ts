@@ -16,10 +16,14 @@
  * How often the lobby asks "have I been let in yet?" — DECISION 7.
  *
  * ⚠ POLLING, NOT REAL-TIME, AND THAT IS AN EXPLICIT DECISION RATHER THAN A SHORTCUT. BAL-437
- * owns Ably, and **how a guest authenticates to Ably is an unsolved problem**: a guest has no
- * `user.id`, and the shipped `createConversationRealtimeTokenAction` sets `clientId = user.id`.
- * This ticket does not invent that answer. The endpoint stays the source of truth, so when
- * BAL-437 lands it can push an invalidation WITHOUT changing this contract.
+ * owns Ably, and **how a guest authenticates to Ably is STILL an unsolved problem** — BAL-445
+ * solves the guest READ subject (`resolveMeetingGuestSubject`), not the Ably `clientId`. A
+ * guest has no `user.id`, and the shipped `createConversationRealtimeTokenAction` sets
+ * `clientId = user.id`. If a future ticket mints a guest Ably token, `MeetingGuestSubject.guest.id`
+ * (`meeting_guests.id`) is the subject it should bind to — the same stable, revocable handle
+ * this ticket's read actions already key their `guestId` logging on. The polling contract here
+ * is unchanged either way: this endpoint stays the source of truth, so a future realtime push
+ * can layer an invalidation on top of it without changing this contract.
  */
 export const LOBBY_POLL_INTERVAL_MS = 5_000;
 
@@ -181,3 +185,15 @@ export const MEMBER_JOIN_OUTAGE_ERROR =
 
 /** ⚠ THE COLLAPSE. Everything else, byte for byte, so nothing can be inferred from the wording. */
 export const MEMBER_JOIN_UNAVAILABLE_ERROR = "This meeting isn't available to join.";
+
+/**
+ * BAL-445 — ⚠ ONE STRING FOR EVERY WAY A GUEST'S IN-CALL READ CAN FAIL: a revoked token, an
+ * expired one, a meeting outside their recorded grant, a cancelled meeting, a meeting id they
+ * guessed, a throttle, a repository throw. Same no-oracle rule as {@link JOIN_UNAVAILABLE_TITLE}
+ * — a guest read must not become an oracle a member read is not. It names no domain object and
+ * points at a human next step. It is here, not in an `app/join/_actions/*.ts` module, for the
+ * same reason every other literal in this file is: a `'use server'` file may export only async
+ * functions.
+ */
+export const GUEST_READ_UNAVAILABLE_ERROR =
+  "This isn't available to you. Whoever shared the link with you can help.";

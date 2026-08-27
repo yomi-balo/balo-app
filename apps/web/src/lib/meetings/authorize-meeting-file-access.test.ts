@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stripComments } from '@balo/shared/testing';
+import type { MeetingGuestSubject } from './resolve-meeting-guest';
 
 vi.mock('server-only', () => ({}));
 
@@ -48,6 +49,9 @@ const ENGAGEMENT_ID = 'e0000000-0000-4000-8000-000000000005';
 const REQUEST_ID = 'f0000000-0000-4000-8000-000000000006';
 const RELATIONSHIP_ID = 'f0000000-0000-4000-8000-000000000007';
 const OTHER_EXPERT_PROFILE_ID = 'c0000000-0000-4000-8000-00000000000c';
+const OTHER_ENGAGEMENT_ID = 'e0000000-0000-4000-8000-00000000000e';
+const GUEST_MEETING_ID = 'a0000000-0000-4000-8000-000000000101';
+const GUEST_ID = 'a0000000-0000-4000-8000-000000000201';
 
 const CLIENT_USER_ID = 'user-client';
 const EXPERT_USER_ID = 'user-expert';
@@ -60,6 +64,37 @@ const NOT_FOUND = { ok: false, code: 'meeting_not_found' };
 const MEETING = { id: MEETING_ID, status: 'scheduled' };
 const CONTEXT_ROW = { contextType: 'case', contextId: ENGAGEMENT_ID };
 const SUBJECT = { contextType: 'case', contextId: ENGAGEMENT_ID };
+
+function member(userId: string): { kind: 'member'; userId: string } {
+  return { kind: 'member', userId };
+}
+
+/** A `MeetingGuestSubject`-shaped actor for the guest arm. */
+function guestActor(
+  overrides: {
+    guestId?: string;
+    accessScope?: 'meeting' | 'engagement';
+    guestMeetingId?: string;
+    side?: 'client' | 'expert';
+    admission?: 'pre_admitted' | 'pending' | 'admitted' | 'denied';
+  } = {}
+): { kind: 'guest'; guest: MeetingGuestSubject } {
+  return {
+    kind: 'guest',
+    guest: {
+      guest: {
+        id: overrides.guestId ?? GUEST_ID,
+        accessScope: overrides.accessScope ?? 'meeting',
+      },
+      meeting: { id: overrides.guestMeetingId ?? GUEST_MEETING_ID, status: 'scheduled' },
+      side: overrides.side ?? 'client',
+      // ⚠ F1 (fix-round-1) — defaults to a HELD SEAT so every pre-existing test (written before
+      // the admission gate existed) keeps exercising the SCOPE rule, not the admission one. The
+      // dedicated admission tests below opt IN to `pending`/`denied` explicitly.
+      admission: overrides.admission ?? 'admitted',
+    } as unknown as MeetingGuestSubject,
+  };
+}
 
 /** An AGENCY-based expert profile by default; pass `agencyId: null` for an independent one. */
 function profile(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -101,10 +136,11 @@ describe('authorizeMeetingFileAccess', () => {
       mockGetMemberRole.mockResolvedValue('member');
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
       expect(result).toEqual({
         ok: true,
+        viewer: 'member',
         side: 'client',
         meeting: MEETING,
         subject: SUBJECT,
@@ -118,16 +154,16 @@ describe('authorizeMeetingFileAccess', () => {
       mockGetMemberRole.mockResolvedValue('owner');
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
-      expect(result).toMatchObject({ ok: true, side: 'client' });
+      expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'client' });
     });
 
     it('denies a live member whose role lacks PARTICIPATE, and never falls through to the expert arm', async () => {
       mockGetMemberRole.mockResolvedValue('not_a_real_role');
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('no_capability');
@@ -141,9 +177,9 @@ describe('authorizeMeetingFileAccess', () => {
       mockFindProfileById.mockResolvedValue(profile({ agencyId: null }));
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: EXPERT_USER_ID,
+        actor: member(EXPERT_USER_ID),
       });
-      expect(result).toMatchObject({ ok: true, side: 'expert' });
+      expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
       // ⚠ Exactly ONE membership read (the company arm). The agency lookup must not happen.
       expect(mockGetMemberRole).toHaveBeenCalledTimes(1);
       expect(mockGetMemberRole).not.toHaveBeenCalledWith(
@@ -157,9 +193,9 @@ describe('authorizeMeetingFileAccess', () => {
       mockFindProfileById.mockResolvedValue(profile());
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: EXPERT_USER_ID,
+        actor: member(EXPERT_USER_ID),
       });
-      expect(result).toMatchObject({ ok: true, side: 'expert' });
+      expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
       expect(mockGetMemberRole).toHaveBeenCalledTimes(1);
     });
 
@@ -177,9 +213,9 @@ describe('authorizeMeetingFileAccess', () => {
       );
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: COLLEAGUE_USER_ID,
+        actor: member(COLLEAGUE_USER_ID),
       });
-      expect(result).toMatchObject({ ok: true, side: 'expert' });
+      expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
       expect(mockGetMemberRole).toHaveBeenCalledWith('agency', AGENCY_ID, COLLEAGUE_USER_ID);
     });
 
@@ -191,9 +227,9 @@ describe('authorizeMeetingFileAccess', () => {
         );
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: COLLEAGUE_USER_ID,
+          actor: member(COLLEAGUE_USER_ID),
         });
-        expect(result).toMatchObject({ ok: true, side: 'expert' });
+        expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
       }
     });
 
@@ -201,7 +237,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockFindProfileById.mockResolvedValue(profile());
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: STRANGER_USER_ID,
+        actor: member(STRANGER_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('cross_tenant');
@@ -211,7 +247,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockFindProfileById.mockResolvedValue(undefined);
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: EXPERT_USER_ID,
+        actor: member(EXPERT_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('cross_tenant');
@@ -226,7 +262,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockResolveOwner.mockResolvedValue({ companyId: COMPANY_ID, expertProfileId: null });
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: STRANGER_USER_ID,
+        actor: member(STRANGER_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(mockFindProfileById).not.toHaveBeenCalled();
@@ -237,9 +273,14 @@ describe('authorizeMeetingFileAccess', () => {
       mockGetMemberRole.mockResolvedValue('member');
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
-      expect(result).toMatchObject({ ok: true, side: 'client', expertProfileId: null });
+      expect(result).toMatchObject({
+        ok: true,
+        viewer: 'member',
+        side: 'client',
+        expertProfileId: null,
+      });
     });
   });
 
@@ -291,7 +332,7 @@ describe('authorizeMeetingFileAccess', () => {
 
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: EXPERT_USER_ID,
+          actor: member(EXPERT_USER_ID),
         });
 
         expect(result).toEqual(NOT_FOUND);
@@ -311,7 +352,7 @@ describe('authorizeMeetingFileAccess', () => {
 
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: COLLEAGUE_USER_ID,
+          actor: member(COLLEAGUE_USER_ID),
         });
 
         expect(result).toEqual(NOT_FOUND);
@@ -329,7 +370,7 @@ describe('authorizeMeetingFileAccess', () => {
 
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: EXPERT_USER_ID,
+          actor: member(EXPERT_USER_ID),
         });
 
         expect(result).toEqual(NOT_FOUND);
@@ -342,10 +383,10 @@ describe('authorizeMeetingFileAccess', () => {
 
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: EXPERT_USER_ID,
+          actor: member(EXPERT_USER_ID),
         });
 
-        expect(result).toMatchObject({ ok: true, side: 'expert' });
+        expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
       });
 
       /**
@@ -361,17 +402,20 @@ describe('authorizeMeetingFileAccess', () => {
 
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: EXPERT_USER_ID,
+          actor: member(EXPERT_USER_ID),
         });
 
-        expect(result).toMatchObject({ ok: true, side: 'expert' });
+        expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
       });
 
       it('reads the relationship at this arms OWN grain', async () => {
         useContext(contextType);
         seedRelationship();
 
-        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, userId: EXPERT_USER_ID });
+        await authorizeMeetingFileAccess({
+          meetingId: MEETING_ID,
+          actor: member(EXPERT_USER_ID),
+        });
 
         const byId = contextType === 'request_interaction';
         expect(byId ? mockRelationshipFindById : mockListByRequest).toHaveBeenCalledWith(contextId);
@@ -386,10 +430,10 @@ describe('authorizeMeetingFileAccess', () => {
 
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: CLIENT_USER_ID,
+          actor: member(CLIENT_USER_ID),
         });
 
-        expect(result).toMatchObject({ ok: true, side: 'client' });
+        expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'client' });
         expect(mockRelationshipFindById).not.toHaveBeenCalled();
         expect(mockListByRequest).not.toHaveBeenCalled();
       });
@@ -415,10 +459,10 @@ describe('authorizeMeetingFileAccess', () => {
 
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: EXPERT_USER_ID,
+        actor: member(EXPERT_USER_ID),
       });
 
-      expect(result).toMatchObject({ ok: true, side: 'expert' });
+      expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
     });
 
     /**
@@ -436,43 +480,342 @@ describe('authorizeMeetingFileAccess', () => {
 
         const result = await authorizeMeetingFileAccess({
           meetingId: MEETING_ID,
-          userId: EXPERT_USER_ID,
+          actor: member(EXPERT_USER_ID),
         });
 
-        expect(result).toMatchObject({ ok: true, side: 'expert' });
+        expect(result).toMatchObject({ ok: true, viewer: 'member', side: 'expert' });
         expect(mockRelationshipFindById).not.toHaveBeenCalled();
         expect(mockListByRequest).not.toHaveBeenCalled();
       }
     );
   });
 
-  describe('the guest hole (D2) — closed, not open', () => {
+  describe('a signed-in stranger is still cross_tenant, with no guest-specific branch', () => {
     /**
-     * ⚠⚠ THIS PINS THE LOAD-BEARING FACT, NOT MERELY THE DENIAL. That a guest is denied is
-     * already covered by the stranger test above; asserting it again would be the same
-     * behaviour tested twice and asserted less. What is worth pinning is WHICH DENIAL:
-     * TODAY A GUEST IS DELIBERATELY INDISTINGUISHABLE FROM A STRANGER, so the log reason is
-     * `cross_tenant` and NOT some reserved guest label. There is no guest-authenticated
-     * session on `main` and `guestMayReadMeeting` has zero production callers, so a guest
-     * reaches no arm at all — the fail-closed direction.
-     *
-     * ⚠ THIS TEST IS SUPPOSED TO GO **RED** WHEN **BAL-445** FILLS THE GUEST ARM (the
-     * assignment moved off BAL-132, which shipped without filling it). That is the
-     * point: the moment a guest becomes a distinguishable actor, the reason stops being
-     * `cross_tenant` and this fails, forcing the guest branch and its own label to be written
-     * consciously rather than discovered in production. The AC "Guest access respects
-     * BAL-408's access_scope" is NOT met by this PR; it is restated as a contract
-     * BAL-445 / BAL-388 satisfy.
+     * A signed-in `userId` who is neither a company member nor expert-side is still refused
+     * with the same fail-closed `cross_tenant` literal a guest used to fall into before
+     * BAL-445. That is unchanged: a stranger has no `MeetingGuestSubject` to present, so
+     * `actor.kind` is `'member'` here and the member arms simply find no membership.
      */
-    it('denies a guest AS A STRANGER — `cross_tenant`, with no guest-specific branch', async () => {
+    it('denies a signed-in stranger — `cross_tenant`', async () => {
       mockGetMemberRole.mockResolvedValue(undefined);
       mockFindProfileById.mockResolvedValue(profile());
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: 'guest-user',
+        actor: member(STRANGER_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('cross_tenant');
+    });
+  });
+
+  /**
+   * ⚠⚠ BAL-445 — THE GUEST ARM, FILLED. `guestMayReadMeeting` (@balo/shared/meetings) is
+   * called for real here (not mocked — it is pure), so these tests exercise the actual scope
+   * rule, not a stand-in for it.
+   */
+  describe('guest arm — BAL-445', () => {
+    beforeEach(() => {
+      // The target meeting's own context, used both for `subject` and (when the guest's own
+      // meeting differs) for the envelope comparison.
+      mockListContexts.mockImplementation(async (id: string) => {
+        if (id === MEETING_ID) return [CONTEXT_ROW]; // engagement: ENGAGEMENT_ID
+        if (id === GUEST_MEETING_ID) return [CONTEXT_ROW]; // same engagement, by default
+        return [];
+      });
+    });
+
+    it('allows a guest reading their OWN meeting — the id-equality shortcut, no envelope read', async () => {
+      const result = await authorizeMeetingFileAccess({
+        meetingId: GUEST_MEETING_ID,
+        actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        viewer: 'guest',
+        guestId: GUEST_ID,
+        accessScope: 'meeting',
+      });
+      // ⚠ NO `side` ON THE GUEST ARM — the load-bearing decision (§2.1).
+      expect(result).not.toHaveProperty('side');
+      // Only the target meeting's own contexts are read — no second `listByMeeting` call for
+      // the guest's own meeting, because the ids already matched.
+      expect(mockListContexts).toHaveBeenCalledTimes(1);
+    });
+
+    it('denies a `meeting`-scoped guest reading a DIFFERENT meeting — guest_out_of_scope', async () => {
+      const result = await authorizeMeetingFileAccess({
+        meetingId: MEETING_ID,
+        actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+      });
+      expect(result).toEqual(NOT_FOUND);
+      expect(lastDenialReason()).toBe('guest_out_of_scope');
+    });
+
+    it('allows an `engagement`-scoped guest reading a DIFFERENT meeting in the SAME envelope', async () => {
+      // Both the guest's own meeting and the target share `ENGAGEMENT_ID` via the default mock.
+      const result = await authorizeMeetingFileAccess({
+        meetingId: MEETING_ID,
+        actor: guestActor({ accessScope: 'engagement', guestMeetingId: GUEST_MEETING_ID }),
+      });
+      expect(result).toMatchObject({ ok: true, viewer: 'guest', guestId: GUEST_ID });
+      expect(result).not.toHaveProperty('side');
+    });
+
+    /**
+     * ⚠⚠ F2 (fix-round-1) — `meeting` and `guestMeeting` MUST be two distinct fields once the
+     * target and the guest's own meeting differ. `meeting-chat-anchor.ts`'s guest arm derives
+     * `resolveGuestConversationScope`'s `guestMeetingId` from `guestMeeting`, never `meeting` —
+     * if this test ever collapses back to one field, that scope silently rebinds to caller-
+     * supplied input with no independent tie to the recorded grant (CRITICAL-2).
+     */
+    it("threads the TARGET meeting and the GUEST'S OWN meeting as two distinct fields", async () => {
+      const result = await authorizeMeetingFileAccess({
+        meetingId: MEETING_ID,
+        actor: guestActor({ accessScope: 'engagement', guestMeetingId: GUEST_MEETING_ID }),
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        viewer: 'guest',
+        meeting: { id: MEETING_ID },
+        guestMeeting: { id: GUEST_MEETING_ID },
+      });
+    });
+
+    it('denies an `engagement`-scoped guest reading a meeting in a DIFFERENT envelope', async () => {
+      mockListContexts.mockImplementation(async (id: string) => {
+        if (id === MEETING_ID) return [{ contextType: 'case', contextId: OTHER_ENGAGEMENT_ID }];
+        if (id === GUEST_MEETING_ID) return [CONTEXT_ROW]; // ENGAGEMENT_ID
+        return [];
+      });
+      const result = await authorizeMeetingFileAccess({
+        meetingId: MEETING_ID,
+        actor: guestActor({ accessScope: 'engagement', guestMeetingId: GUEST_MEETING_ID }),
+      });
+      expect(result).toEqual(NOT_FOUND);
+      expect(lastDenialReason()).toBe('guest_out_of_scope');
+    });
+
+    it('denies an `engagement`-scoped guest whose OWN meeting is a project_discovery (no envelope)', async () => {
+      mockListContexts.mockImplementation(async (id: string) => {
+        if (id === MEETING_ID) return [CONTEXT_ROW];
+        if (id === GUEST_MEETING_ID) {
+          return [{ contextType: 'project_discovery', contextId: REQUEST_ID }];
+        }
+        return [];
+      });
+      const result = await authorizeMeetingFileAccess({
+        meetingId: MEETING_ID,
+        actor: guestActor({ accessScope: 'engagement', guestMeetingId: GUEST_MEETING_ID }),
+      });
+      expect(result).toEqual(NOT_FOUND);
+      expect(lastDenialReason()).toBe('guest_out_of_scope');
+    });
+
+    it('never resolves an owning party for a guest on an ENGAGEMENT-grain context — resolveMeetingContextOwner is skipped', async () => {
+      await authorizeMeetingFileAccess({
+        meetingId: GUEST_MEETING_ID,
+        actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+      });
+      expect(mockResolveOwner).not.toHaveBeenCalled();
+      expect(mockGetMemberRole).not.toHaveBeenCalled();
+      expect(mockFindProfileById).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠⚠ F1 (fix-round-1) — THE CRITICAL. `pending` is a lobby KNOCK, not a grant:
+     * `claimLobbyPlaceAction` is deliberately unauthenticated and hands ANY visitor holding a
+     * forwarded `/join/m/{meetingId}` URL a live `meeting_guests` row with
+     * `admission: 'pending'`. Without this gate, that visitor could read every file and the
+     * whole in-call transcript without ever being admitted by a host.
+     */
+    describe('admission gate — F1 (fix-round-1)', () => {
+      it('DENIES a `pending` (never-admitted) guest — guest_not_admitted', async () => {
+        const result = await authorizeMeetingFileAccess({
+          meetingId: GUEST_MEETING_ID,
+          actor: guestActor({
+            accessScope: 'meeting',
+            guestMeetingId: GUEST_MEETING_ID,
+            admission: 'pending',
+          }),
+        });
+        expect(result).toEqual(NOT_FOUND);
+        expect(lastDenialReason()).toBe('guest_not_admitted');
+      });
+
+      it('DENIES a `denied` guest identically (defence in depth — unreachable via the resolver in practice)', async () => {
+        const result = await authorizeMeetingFileAccess({
+          meetingId: GUEST_MEETING_ID,
+          actor: guestActor({
+            accessScope: 'meeting',
+            guestMeetingId: GUEST_MEETING_ID,
+            admission: 'denied',
+          }),
+        });
+        expect(result).toEqual(NOT_FOUND);
+        expect(lastDenialReason()).toBe('guest_not_admitted');
+      });
+
+      it('ALLOWS a `pre_admitted` guest — a held seat, never knocked', async () => {
+        const result = await authorizeMeetingFileAccess({
+          meetingId: GUEST_MEETING_ID,
+          actor: guestActor({
+            accessScope: 'meeting',
+            guestMeetingId: GUEST_MEETING_ID,
+            admission: 'pre_admitted',
+          }),
+        });
+        expect(result).toMatchObject({ ok: true, viewer: 'guest' });
+      });
+
+      it('ALLOWS an `admitted` guest — the ordinary case', async () => {
+        const result = await authorizeMeetingFileAccess({
+          meetingId: GUEST_MEETING_ID,
+          actor: guestActor({
+            accessScope: 'meeting',
+            guestMeetingId: GUEST_MEETING_ID,
+            admission: 'admitted',
+          }),
+        });
+        expect(result).toMatchObject({ ok: true, viewer: 'guest' });
+      });
+
+      it('checks admission BEFORE the scope rule — a pending guest is refused even for their OWN meeting', async () => {
+        const result = await authorizeMeetingFileAccess({
+          meetingId: GUEST_MEETING_ID,
+          actor: guestActor({
+            accessScope: 'engagement',
+            guestMeetingId: GUEST_MEETING_ID,
+            admission: 'pending',
+          }),
+        });
+        expect(result).toEqual(NOT_FOUND);
+        expect(lastDenialReason()).toBe('guest_not_admitted');
+      });
+    });
+
+    /**
+     * ⚠⚠ F3 (fix-round-1) — reuses the (c) decline gate's OWN predicate
+     * (`requestGrainRelationshipDenies` → `relationshipDeniesHosting`) for a guest. Without
+     * this, a guest invited to a `request_interaction` / `project_discovery` meeting whose
+     * expert has since DECLINED the request kept reading files after the declining expert and
+     * their whole agency were denied — the exact defect BAL-423 shipped a fix for, reintroduced
+     * one actor removed.
+     */
+    describe('decline gate also gates a guest — F3 (fix-round-1)', () => {
+      function relationship(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+        return {
+          id: RELATIONSHIP_ID,
+          projectRequestId: REQUEST_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          status: 'invited',
+          declinedAt: null,
+          ...overrides,
+        };
+      }
+
+      describe.each([
+        { contextType: 'project_discovery' as const, contextId: REQUEST_ID },
+        { contextType: 'request_interaction' as const, contextId: RELATIONSHIP_ID },
+      ])('$contextType', ({ contextType, contextId }) => {
+        beforeEach(() => {
+          // The id-equality shortcut (`meetingId === guestMeetingId`) so no envelope read is
+          // needed — isolates the assertion to the decline gate alone.
+          mockListContexts.mockResolvedValue([{ contextType, contextId }]);
+          mockResolveOwner.mockResolvedValue({
+            companyId: COMPANY_ID,
+            expertProfileId: EXPERT_PROFILE_ID,
+          });
+        });
+
+        it('DENIES a guest once the relationship is declined', async () => {
+          mockRelationshipFindById.mockResolvedValue(
+            relationship({ status: 'declined', declinedAt: new Date('2026-08-01T00:00:00Z') })
+          );
+          mockListByRequest.mockResolvedValue([
+            relationship({ status: 'declined', declinedAt: new Date('2026-08-01T00:00:00Z') }),
+          ]);
+
+          const result = await authorizeMeetingFileAccess({
+            meetingId: GUEST_MEETING_ID,
+            actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+          });
+
+          expect(result).toEqual(NOT_FOUND);
+          expect(lastDenialReason()).toBe('declined_relationship');
+        });
+
+        it('ALLOWS a guest when the relationship is live, not declined', async () => {
+          mockRelationshipFindById.mockResolvedValue(relationship());
+          mockListByRequest.mockResolvedValue([relationship()]);
+
+          const result = await authorizeMeetingFileAccess({
+            meetingId: GUEST_MEETING_ID,
+            actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+          });
+
+          expect(result).toMatchObject({ ok: true, viewer: 'guest' });
+        });
+
+        it('ALLOWS when no relationship row exists at all (absence never denies)', async () => {
+          mockRelationshipFindById.mockResolvedValue(undefined);
+          mockListByRequest.mockResolvedValue([]);
+
+          const result = await authorizeMeetingFileAccess({
+            meetingId: GUEST_MEETING_ID,
+            actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+          });
+
+          expect(result).toMatchObject({ ok: true, viewer: 'guest' });
+        });
+      });
+
+      it('a `match`-routed project_discovery (no named expert) is ungated — evidence, not absence', async () => {
+        mockListContexts.mockResolvedValue([
+          { contextType: 'project_discovery', contextId: REQUEST_ID },
+        ]);
+        mockResolveOwner.mockResolvedValue({ companyId: COMPANY_ID, expertProfileId: null });
+
+        const result = await authorizeMeetingFileAccess({
+          meetingId: GUEST_MEETING_ID,
+          actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+        });
+
+        expect(result).toMatchObject({ ok: true, viewer: 'guest' });
+        expect(mockRelationshipFindById).not.toHaveBeenCalled();
+        expect(mockListByRequest).not.toHaveBeenCalled();
+      });
+
+      /**
+       * ⚠⚠ S2 (fix-round-2) regression — fix-round-1 left `owner === undefined` UNGATED for a
+       * guest, the mirror image of the bypass F3 closed: a REMOVED (not merely declined)
+       * relationship soft-deletes the row `resolveMeetingContextOwner`'s finders read
+       * (`deleted_at IS NULL`), so it resolves `undefined` — exactly the shape the shipped
+       * "remove invited expert" action produces. From that moment the member arm denies
+       * everyone (`subject_unresolvable`, asserted separately below), while fix-round-1's guest
+       * arm fell through to `guestMayReadMeeting` and kept reading. This pins the guest arm now
+       * denies on the SAME missing-owner condition, with its own reason collapsing to the one
+       * `meeting_not_found` literal, on BOTH request-grain context types.
+       */
+      describe.each([
+        { contextType: 'project_discovery' as const, contextId: REQUEST_ID },
+        { contextType: 'request_interaction' as const, contextId: RELATIONSHIP_ID },
+      ])('$contextType — owner unresolvable', ({ contextType, contextId }) => {
+        it('DENIES a guest when the owner cannot be resolved at all (e.g. the relationship was removed)', async () => {
+          mockListContexts.mockResolvedValue([{ contextType, contextId }]);
+          mockResolveOwner.mockResolvedValue(undefined);
+
+          const result = await authorizeMeetingFileAccess({
+            meetingId: GUEST_MEETING_ID,
+            actor: guestActor({ accessScope: 'meeting', guestMeetingId: GUEST_MEETING_ID }),
+          });
+
+          expect(result).toEqual(NOT_FOUND);
+          expect(lastDenialReason()).toBe('guest_owner_unresolvable');
+          expect(mockRelationshipFindById).not.toHaveBeenCalled();
+          expect(mockListByRequest).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 
@@ -481,7 +824,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockMeetingFindById.mockResolvedValue(undefined);
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('no_meeting');
@@ -492,7 +835,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockListContexts.mockResolvedValue([{ contextType: 'admin', contextId: null }]);
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('no_context');
@@ -505,7 +848,7 @@ describe('authorizeMeetingFileAccess', () => {
       ]);
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('ambiguous_context');
@@ -515,7 +858,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockResolveOwner.mockResolvedValue(undefined);
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
       expect(result).toEqual(NOT_FOUND);
       expect(lastDenialReason()).toBe('subject_unresolvable');
@@ -534,21 +877,21 @@ describe('authorizeMeetingFileAccess', () => {
 
       mockMeetingFindById.mockResolvedValue(undefined);
       results.push(
-        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, userId: STRANGER_USER_ID })
+        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, actor: member(STRANGER_USER_ID) })
       );
       reasons.push(lastDenialReason());
 
       mockMeetingFindById.mockResolvedValue(MEETING);
       mockListContexts.mockResolvedValue([]);
       results.push(
-        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, userId: STRANGER_USER_ID })
+        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, actor: member(STRANGER_USER_ID) })
       );
       reasons.push(lastDenialReason());
 
       mockListContexts.mockResolvedValue([CONTEXT_ROW]);
       mockResolveOwner.mockResolvedValue(undefined);
       results.push(
-        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, userId: STRANGER_USER_ID })
+        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, actor: member(STRANGER_USER_ID) })
       );
       reasons.push(lastDenialReason());
 
@@ -558,7 +901,7 @@ describe('authorizeMeetingFileAccess', () => {
       });
       mockFindProfileById.mockResolvedValue(profile());
       results.push(
-        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, userId: STRANGER_USER_ID })
+        await authorizeMeetingFileAccess({ meetingId: MEETING_ID, actor: member(STRANGER_USER_ID) })
       );
       reasons.push(lastDenialReason());
 
@@ -582,7 +925,7 @@ describe('authorizeMeetingFileAccess', () => {
       mockGetMemberRole.mockResolvedValue('member');
       const result = await authorizeMeetingFileAccess({
         meetingId: MEETING_ID,
-        userId: CLIENT_USER_ID,
+        actor: member(CLIENT_USER_ID),
       });
       expect(result).toMatchObject({ ok: true, meeting: ended });
     });
@@ -601,9 +944,10 @@ describe('authorizeMeetingFileAccess', () => {
  *     BAL-410/BAL-411 as originally deferred. THAT MAKES THIS GUARD MORE LOAD-BEARING, NOT
  *     LESS: the wrong import is now a keystroke away rather than impossible. Do not relax it.
  *
- * (2) The GUEST arm is a named, fail-closed hole (D2). The gate must not call the guest read
- *     predicate speculatively — BAL-408 records the grant, it does not enforce the read, and
- *     there is no guest session to bind it to.
+ * (2) The GUEST arm CALLS `guestMayReadMeeting` (BAL-445) — the shipped scope rule, never
+ *     re-derived. The binding contract requires the CALL, and forbids ever comparing
+ *     `accessScope` against a literal in this file (that comparison belongs to the pure rule
+ *     alone).
  *
  * ⚠ `stripComments` COMES FROM `@balo/shared/testing`, NOT A LOCAL REGEX. The naive
  * `/\/\*[\s\S]*?\*\//g` shape is super-linear (SonarCloud S5852 — `[\s\S]` does not exclude
@@ -617,10 +961,9 @@ describe('axis discipline', () => {
   it('reads its own source, and the stripper really ran (guards against a vacuous pass)', () => {
     // If the read ever broke, every assertion below would pass for free — and so would they
     // if `stripComments` silently became a no-op, because this module's docblocks NAME the
-    // identifiers scanned below (`hasEngagementCapability`, `guestMayReadMeeting`,
-    // `agencyRole`), precisely to explain why they are absent from the code. Pinned on comment
-    // SYNTAX rather than on any particular sentence, so ordinary prose edits cannot make this
-    // guard rot.
+    // identifiers scanned below (`hasEngagementCapability`, `agencyRole`), precisely to
+    // explain why they are absent from the code. Pinned on comment SYNTAX rather than on any
+    // particular sentence, so ordinary prose edits cannot make this guard rot.
     expect(code).toContain('export async function authorizeMeetingFileAccess');
     expect(raw).toContain('/**');
     expect(code).not.toContain('/**');
@@ -633,8 +976,21 @@ describe('axis discipline', () => {
     expect(code).not.toContain('MANAGE_ENGAGEMENT');
   });
 
-  it('never calls the guest read predicate (D2 — the hole stays closed)', () => {
-    expect(code).not.toContain('guestMayReadMeeting');
+  /**
+   * ⚠⚠ INVERTED FOR BAL-445 (G2). The guest hole is now FILLED: the predicate is called, not
+   * avoided. `guestMayReadMeeting` is the shipped scope rule, consumed here exactly once.
+   */
+  it('calls the guest read predicate — the guest arm is filled, not a hole', () => {
+    expect(code).toContain('guestMayReadMeeting');
+  });
+
+  /**
+   * G-NEW-1 — the §2.5 binding contract, pinned mechanically. The scope rule is CALLED, never
+   * mirrored: nothing in this file may compare `accessScope` against a literal, because that
+   * comparison is `guestMayReadMeeting`'s alone to make.
+   */
+  it('never compares `accessScope` against a literal — the scope rule is called, never mirrored', () => {
+    expect(code).not.toMatch(/accessScope\s*===/);
   });
 
   /**

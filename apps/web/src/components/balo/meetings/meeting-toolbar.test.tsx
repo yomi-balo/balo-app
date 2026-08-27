@@ -48,6 +48,11 @@ function renderToolbar(overrides: Partial<MeetingToolbarProps> = {}): HTMLElemen
     onLeave: vi.fn(),
     onEndForEveryone: vi.fn(),
     isEnding: false,
+    // ⚠ BAL-445 — `hasPeople` fails CLOSED like `hasChat`/`hasBalance`, so this file's
+    // pre-BAL-445 fixtures (which assume a MEMBER registration whenever a panel slot is
+    // registered at all) default it to `true`. The guest-narrowed case gets its own tests
+    // below, which override it to `false` explicitly.
+    hasPeople: true,
     ...overrides,
   };
   return render(
@@ -212,6 +217,18 @@ describe('MeetingToolbar — the day-one control set', () => {
 
       expect(screen.getByRole('button', { name: 'People' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+    });
+
+    /**
+     * ⚠⚠ BAL-445 — `hasPeople` IS NARROWER THAN `onTogglePanel !== undefined`. A guest's
+     * registration has Files but never People — `Files` still renders, `People` does not, and
+     * it is ABSENT, never disabled.
+     */
+    it('⚠⚠ renders Files but NOT People when hasPeople is false (the guest arm)', () => {
+      renderToolbar({ openPanel: null, onTogglePanel: vi.fn(), hasPeople: false });
+
+      expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
     });
 
     /**
@@ -489,6 +506,7 @@ describe('MeetingToolbar — the day-one control set', () => {
             onMoreOpenChange={vi.fn()}
             openPanel={null}
             onTogglePanel={onTogglePanel}
+            hasPeople
             canEndMeeting={false}
             contextNoun="case"
             isCase

@@ -15,7 +15,6 @@ import {
   selectPrimaryMeetingContext,
   type GuestAccessScopeLabel,
   type MeetingContextTypeLabel,
-  type MeetingGuestSide,
   type SelectPrimaryMeetingContextResult,
 } from '@balo/shared/meetings';
 import {
@@ -24,8 +23,10 @@ import {
   personWithOrgLabel,
 } from '@balo/shared/parties';
 import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
-import { clientIp, hashesMatch, sha256Hex } from '@/lib/magic-link';
+import { clientIp } from '@/lib/magic-link';
 import { formatUtcLongDate, formatUtcLongDateWithWeekday } from '@/lib/format/local-date';
+import { resolveMeetingGuestSubject } from '@/lib/meetings/resolve-meeting-guest';
+import { conversationSubjectForMeetingContext } from '@balo/shared/conversations';
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, GUEST_SERVER_EVENTS } from '@/lib/analytics/server';
 import { LinkNotActive } from './link-not-active';
@@ -187,21 +188,6 @@ async function resolveEngagementParties(
   };
 }
 
-/**
- * Narrow the three-label `meeting_participant_party` enum to the TWO a guest may sit on.
- *
- * `meeting_guest_party_two_sided` makes `observer` unrepresentable in this table, so `null`
- * here means a CORRUPT ROW, never a legitimate third case. The caller fails CLOSED on it: a
- * row we cannot place on a side cannot be attributed or projected either, and guessing is the
- * one direction it is not safe to be wrong in.
- */
-function guestSide(party: string): MeetingGuestSide | null {
-  if (party === 'client' || party === 'expert') {
-    return party;
-  }
-  return null;
-}
-
 interface DetailRowProps {
   readonly icon: React.ReactNode;
   readonly label: string;
@@ -279,6 +265,12 @@ interface InvitationViewProps {
   readonly meetingId: string;
   readonly scheduledStartIso: string;
   readonly scheduledEndIso: string;
+  /**
+   * BAL-445 §7 — resolved server-side from the SAME primary context this page already
+   * fetched, so the admitted guest mount can register a Chat slot (or not) without ever
+   * flashing a button onto a conversation that does not exist.
+   */
+  readonly hasChat: boolean;
 }
 
 /**
@@ -316,6 +308,7 @@ function InvitationView({
   meetingId,
   scheduledStartIso,
   scheduledEndIso,
+  hasChat,
 }: Readonly<InvitationViewProps>): React.JSX.Element {
   const headline = hasEnded ? 'This call has already taken place' : "You're invited";
   const roleLine = isDelegate
@@ -373,6 +366,7 @@ function InvitationView({
       scheduledEndIso={scheduledEndIso}
       utcWindowLabel={scheduledWindow}
       hasEnded={hasEnded}
+      hasChat={hasChat}
       nextStepLine={nextStepLine}
       expiresOn={expiresOn}
     >
@@ -489,23 +483,23 @@ export default async function JoinLandingPage({
     return <LinkNotActive />;
   }
 
-  const tokenHash = sha256Hex(token);
-  const row = await meetingGuestsRepository.findLiveByTokenHash(tokenHash);
-  if (row === undefined || !hashesMatch(tokenHash, row.guest.tokenHash)) {
-    // A hash PREFIX only — enough to correlate an incident, never enough to replay.
-    log.info('Guest join link not active', { tokenHashPrefix: tokenHash.slice(0, 8) });
+  // BAL-445 — the extracted per-request subject resolver. `null` for every failure shape
+  // identically (wrong/expired/revoked/denied token, cancelled/soft-deleted meeting, corrupt
+  // `party`) — see its own docblock for why that is the property this page relies on.
+  const subject = await resolveMeetingGuestSubject(token);
+  if (subject === null) {
     return <LinkNotActive />;
   }
-
-  const { guest, meeting } = row;
-  const side = guestSide(guest.party);
-  if (side === null) {
-    log.warn('Guest row carries an unplaceable party', { guestId: guest.id });
-    return <LinkNotActive />;
-  }
+  const { guest, meeting, side } = subject;
 
   const contexts = await meetingContextsRepository.listByMeeting(meeting.id);
   const primary = selectPrimaryMeetingContext(contexts);
+  // BAL-445 §7 — resolved SERVER-SIDE, once, so the guest mount can register (or not
+  // register) a Chat slot without ever flashing a button that opens onto nothing.
+  // `conversationSubjectForMeetingContext` is the same pure mapping the guest chat arm
+  // consumes; a `project_discovery` / `admin` / ambiguous primary maps to no envelope and
+  // `hasChat` is `false`.
+  const hasChat = primary.ok && conversationSubjectForMeetingContext(primary.context) !== null;
 
   const [parties, roster, inviterNames] = await Promise.all([
     resolveEngagementParties(primary),
@@ -570,6 +564,7 @@ export default async function JoinLandingPage({
       meetingId={meeting.id}
       scheduledStartIso={meeting.scheduledStart.toISOString()}
       scheduledEndIso={meeting.scheduledEnd.toISOString()}
+      hasChat={hasChat}
     />
   );
 }

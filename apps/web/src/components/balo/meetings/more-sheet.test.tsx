@@ -53,6 +53,10 @@ function renderMoreSheet(overrides: Partial<MoreSheetProps> = {}): HTMLElement {
     canShareScreen: true,
     onToggleScreenShare: vi.fn(),
     onOpenSettings: vi.fn(),
+    // ⚠ BAL-445 — fails CLOSED like the toolbar's identical prop; defaulted `true` here so
+    // this file's pre-BAL-445 fixtures keep exercising the MEMBER (People-registered) shape.
+    // The guest-narrowed case gets its own test below, overriding it to `false`.
+    hasPeople: true,
     ...overrides,
   };
   return render(
@@ -211,7 +215,9 @@ describe('MoreSheet — behaviour', () => {
 
   /**
    * BAL-436 — ⚠⚠ THE SLOT RULE, ON THE OVERFLOW. `onTogglePanel === undefined` means the two
-   * rows render NOTHING. Both GUEST mounts land there structurally.
+   * rows render NOTHING. (N5, fix-round-2 — corrected: this is the genuinely UNREGISTERED case,
+   * not "both GUEST mounts" — a real guest mount DOES register, and gets Files but never
+   * People; see the dedicated guest-arm test below.)
    */
   describe('the People and Files rows (BAL-436)', () => {
     it('⚠ renders NEITHER row when the slot is unregistered', async () => {
@@ -227,6 +233,14 @@ describe('MoreSheet — behaviour', () => {
 
       expect(await screen.findByRole('button', { name: 'People' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+    });
+
+    /** ⚠⚠ BAL-445 — a guest's registration has Files but never People. Absent, not disabled. */
+    it('⚠⚠ renders Files but NOT People when hasPeople is false (the guest arm)', async () => {
+      renderMoreSheet({ open: true, onTogglePanel: vi.fn(), hasPeople: false });
+
+      expect(await screen.findByRole('button', { name: 'Files' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
     });
 
     it.each([
