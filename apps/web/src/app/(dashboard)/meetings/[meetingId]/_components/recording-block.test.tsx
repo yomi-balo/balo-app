@@ -185,7 +185,7 @@ describe('FilesCard — the playback modal composes a REAL DialogDescription (m1
 });
 
 describe('FilesCard — processing states (single segment)', () => {
-  it('recent processing shows the time-based copy, no button, no Refresh link', async () => {
+  it('recent processing shows the time-based copy, no play button, but DOES offer Refresh', async () => {
     render(
       <FilesCard
         {...baseProps({
@@ -209,6 +209,34 @@ describe('FilesCard — processing states (single segment)', () => {
     expect(await screen.findByText('Processing your recording…')).toBeInTheDocument();
     expect(screen.queryByText('Still processing')).toBeNull();
     expect(screen.queryByRole('button', { name: /play/i })).toBeNull();
+    // ⚠ REVIEW FIX — this used to assert NO Refresh here. The recent tier is exactly when a
+    // refresh is most likely to surface a newly-ready recording, so it now gets the link too;
+    // the gate is "any row still processing", not "any row long-tail".
+    expect(screen.getByRole('button', { name: /refresh/i })).toBeInTheDocument();
+  });
+
+  it('offers NO Refresh when every row is terminal (ready / failed) — nothing left to change', async () => {
+    render(
+      <FilesCard
+        {...baseProps({
+          recordings: [
+            recordingRow(),
+            recordingRow({
+              recording: {
+                id: 'rec-2',
+                status: 'failed',
+                playbackId: null,
+                durationSeconds: null,
+                startedAt: '2026-07-29T04:14:00.000Z',
+                readyAt: null,
+              },
+              posterUrl: null,
+            }),
+          ],
+        })}
+      />
+    );
+    expect(await screen.findByText('Recordings (2)')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
   });
 

@@ -289,6 +289,22 @@ describe('RecordingPlayerDialog', () => {
     expect(mockStartLoad).toHaveBeenCalledOnce();
   });
 
+  it('REVIEW FIX — a play pressed BEFORE the dynamic import resolves still starts the load', async () => {
+    // The race: `hlsRef` is null until `import('hls.js')` resolves, so a `play` inside that
+    // window hits `handlePlay`'s optional chain and no-ops. With `autoStartLoad: false`,
+    // nothing would ever call `startLoad()` and the player would buffer forever. The element's
+    // own `paused` state is the durable record of that lost intent, so the attach path
+    // re-checks it. Simulate by marking the element as already-playing before attach lands.
+    render(<RecordingPlayerDialog {...baseProps()} />);
+    const video = getVideo(document.body);
+    Object.defineProperty(video, 'paused', { value: false, configurable: true });
+
+    await waitFor(() => expect(mockAttachMedia).toHaveBeenCalled());
+
+    // No `play` event was ever dispatched — this MUST come from the attach-path re-check.
+    expect(mockStartLoad).toHaveBeenCalledOnce();
+  });
+
   // ⚠ MUST STAY THE LAST TEST IN THIS FILE. `vi.doMock` (unhoisted) is the only reliable way
   // to override an already-resolved dynamic `import()`'s cached resolution, but the override
   // is NOT scoped to one test — it persists for the rest of the file's run, so every test that

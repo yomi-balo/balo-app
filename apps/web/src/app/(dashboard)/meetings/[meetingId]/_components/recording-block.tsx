@@ -119,7 +119,14 @@ export function RecordingBlock({
   }
 
   const [firstRow] = recordings;
-  const hasLongTail = recordings.some((row) => row.isLongTailProcessing);
+  // ⚠ REVIEW FIX — the Refresh link shows for ANY still-processing row, not just long-tail
+  // ones. The recent tier ("usually ready within a few minutes of the call ending") is
+  // precisely when a refresh is MOST likely to surface a newly-ready recording; gating it on
+  // long-tail only withheld the affordance from the tier that benefits most. `ready` and
+  // `failed` are terminal, so a refresh there would change nothing and the link stays hidden.
+  const hasProcessing = recordings.some(
+    (row) => row.recording.status !== 'ready' && row.recording.status !== 'failed'
+  );
   const caption = recordings.length === 1 ? 'Recording' : `Recordings (${recordings.length})`;
 
   return (
@@ -146,7 +153,7 @@ export function RecordingBlock({
         </ul>
       )}
 
-      {hasLongTail && (
+      {hasProcessing && (
         <button
           type="button"
           onClick={refresh}

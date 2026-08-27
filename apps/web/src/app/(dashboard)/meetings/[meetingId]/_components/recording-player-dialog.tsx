@@ -53,14 +53,20 @@ import type { RecapLens } from '@/lib/meetings/recap-view-types';
  * key is the most likely first-production failure, and it must not land on a message that tells
  * the viewer their BROWSER is the problem.
  *
- * ⚠ FIX ROUND 1 (m4) — `new Hls({ autoStartLoad: false })`. The design promises "no bytes
- * fetched until the user presses play inside the modal," but hls.js defaults
- * `autoStartLoad: true`, so `loadSource()` + `attachMedia()` alone would fetch the manifest and
- * first segments on modal OPEN — defeating `preload="none"` for every hls.js browser (Chrome,
- * Edge, Firefox: the majority). `hlsRef` holds the live instance so the video's own `onPlay`
- * (fired the moment playback is REQUESTED, before `onPlaying` fires) can call `startLoad()` —
- * the native/Safari branch needs no equivalent, since `video.src = url` with `preload="none"`
- * already defers the browser's own fetch until playback is requested.
+ * ⚠ FIX ROUND 1 (m4) — `new Hls({ autoStartLoad: false })`. hls.js defaults
+ * `autoStartLoad: true`, so `loadSource()` + `attachMedia()` alone would fetch the manifest AND
+ * the first segments on modal OPEN — defeating `preload="none"` for every hls.js browser
+ * (Chrome, Edge, Firefox: the majority). `hlsRef` holds the live instance so the video's own
+ * `onPlay` (fired the moment playback is REQUESTED, before `onPlaying` fires) can call
+ * `startLoad()` — the native/Safari branch needs no equivalent, since `video.src = url` with
+ * `preload="none"` already defers the browser's own fetch until playback is requested.
+ *
+ * ⚠ PRECISELY WHAT `autoStartLoad: false` DEFERS — do not overclaim it as "no bytes until
+ * play." `loadSource()` STILL fetches the master manifest on modal open; only the level
+ * playlists and the media fragments wait for `startLoad()`. That residual is a few hundred
+ * bytes, and it is arguably the better trade: a 403 from an absent `MUX_SIGNING_KEY_*`
+ * surfaces on OPEN rather than on first play, which is exactly the misprovisioning case
+ * called out above.
  *
  * ⚠ FIX ROUND 1 (m5) — SYMMETRIC TEARDOWN. The native branch now tears itself down
  * (`pause` / `removeAttribute('src')` / `load()`) exactly like the hls.js branch's
@@ -154,6 +160,16 @@ export function RecordingPlayerDialog({
         });
         hls.loadSource(url);
         hls.attachMedia(video);
+        // ⚠ REVIEW FIX — the early-play RACE. `hlsRef` is null until this dynamic import
+        // resolves, so a play pressed inside that window fires the native `play` event on a
+        // still-sourceless element, `handlePlay` optional-chains to a no-op, and nothing ever
+        // calls `startLoad()` — the player then sits buffering forever until the viewer
+        // toggles pause/play. Re-check the element's own state here: if playback was already
+        // requested, start the load now. Calling `startLoad()` this early is safe — hls.js
+        // records `forceStartLoad` and acts on it at `MANIFEST_PARSED`.
+        if (!video.paused) {
+          hls.startLoad();
+        }
       })
       .catch(() => setPlaybackError('load_failed'));
 
@@ -194,7 +210,7 @@ export function RecordingPlayerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-screen w-screen max-w-none gap-3 rounded-none p-4 sm:h-auto sm:max-w-4xl sm:rounded-2xl sm:p-6">
+      <DialogContent className="h-dvh w-screen max-w-none gap-3 rounded-none p-4 sm:h-auto sm:max-w-4xl sm:rounded-2xl sm:p-6">
         <DialogHeader>
           <DialogTitle>{dialogTitle}</DialogTitle>
           <DialogDescription>
