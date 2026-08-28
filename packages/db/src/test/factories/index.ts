@@ -55,3 +55,4 @@ export type {
   SearchExpertCompetencyInput,
   SearchExpertLanguageInput,
 } from './search-expert.factory';
+export { representationFactory } from './representation.factory';

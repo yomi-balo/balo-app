@@ -1133,3 +1133,39 @@ export const meetingCalendarDeliveryModeEnum = pgEnum('meeting_calendar_delivery
   'provider_event',
   'ics',
 ]);
+
+// ── BAL-313 — representations (schema/representations.ts) ───────────────────────────────
+
+/**
+ * BAL-313 — the GRAIN of ONE act-on-behalf grant: ORG-wide, or scoped to ONE project request.
+ * Paired with `project_request_id` by the `representation_scope_request_paired` CHECK, so the
+ * label and the column can never disagree.
+ *
+ * ⚠ APPEND-ONLY: a new label goes at the END, and must NOT be USED in the migration that adds
+ * it (memory `reference_enum_default_same_tx_migration_hazard`).
+ */
+export const representationScopeEnum = pgEnum('representation_scope', ['request', 'org']);
+
+/**
+ * BAL-313 — the lifecycle of ONE act-on-behalf grant.
+ *   active  → exercisable, SUBJECT to the lazy expiry predicate (a lapsed row still says
+ *             `active`; the READ refuses it, and the next `grant()` for the same subject
+ *             sweeps it to `expired` to free the partial-unique slot).
+ *   revoked → a human ended it. `revoked_at` NOT NULL (biconditional CHECK).
+ *   expired → it lapsed. Nobody acted, so `revoked_at` / `revoked_by_user_id` stay NULL
+ *             (ADR-1030's system-actor attribution exemption); `expires_at` records when.
+ *
+ * ⚠ `expired` IS NOT DECORATION. `now()` is not IMMUTABLE and may not appear in an index
+ * predicate, so the two partial uniques cannot know about expiry and a LAPSED grant still
+ * occupies its (actor, company[, request]) slot. Without this label, re-granting after an
+ * expiry would fail `23505` forever. Same defect, same fix as
+ * `reschedule_proposal_status.expired`.
+ *
+ * ⚠ APPEND-ONLY: a new label goes at the END, and must NOT be USED in the migration that adds
+ * it (memory `reference_enum_default_same_tx_migration_hazard`).
+ */
+export const representationStatusEnum = pgEnum('representation_status', [
+  'active',
+  'revoked',
+  'expired',
+]);

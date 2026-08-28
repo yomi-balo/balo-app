@@ -90,6 +90,19 @@ const PINNED_REPOSITORIES: readonly string[] = [
    * would fire from inside `db.transaction` and could not be rolled back.
    */
   'expert-searchability.ts',
+  /**
+   * BAL-313 adds the representations repository. It has NO caller today (the grant surface,
+   * the "who may grant" gate and the `hasCapability` wiring are all BAL-314's), which is
+   * exactly why the pin is worth adding NOW rather than later: BAL-314 will publish
+   * `representation.granted` / `representation.revoked` from the CALL SITE, post-commit, and
+   * this pin is what stops that publish landing INSIDE `grant()` / `revoke()` instead.
+   *
+   * The three-reason argument applies unchanged, and the third bites hardest here: `grant()`
+   * runs its whole body in `exec.transaction(...)` with a nested SAVEPOINT, so a publish from
+   * in there would fire before commit — a "you can now act for Northwind" email for a grant
+   * that then rolled back on the `RepresentationConflictError` path.
+   */
+  'representations.ts',
 ];
 
 /**

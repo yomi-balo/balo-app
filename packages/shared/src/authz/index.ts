@@ -158,3 +158,37 @@ export type { ExpertSideVisibilityProfile, AgencyRoleLookup } from './expert-sid
 export function rolesWithCapability(capability: Capability): string[] {
   return Object.keys(ROLE_CAPABILITIES).filter((role) => roleHasCapability(role, capability));
 }
+
+/**
+ * The ONLY capabilities a REPRESENTATION (act-on-behalf, ADR-1028 Phase 1 / BAL-313) may
+ * carry. A deliberate, minimal widening of THIS module — NOT a second capability vocabulary:
+ * `CAPABILITIES` remains the only token set (HARD CONSTRAINT B).
+ *
+ * ⚠ A REPRESENTATION IS NOT A ROLE BUNDLE, AND THAT IS THE WHOLE POINT. Reusing
+ * `MEMBER_BUNDLE` would hand a Balo AE `CONSUME_CREDITS` — a BASE member capability — and let
+ * them draw down the customer's wallet.
+ *
+ * The four excluded tokens, each for a stated reason:
+ *   · `APPROVE_OWN_PROPOSALS` — acceptance stays with the customer.
+ *   · `MANAGE_BILLING`, `CONSUME_CREDITS` — money stays with the customer.
+ *   · `MANAGE_MEMBERS` — governance stays with the customer.
+ * Adding a token here widens what a non-member may do on a customer's behalf. Not without an
+ * ADR.
+ */
+export const REPRESENTABLE_CAPABILITIES: readonly Capability[] = [
+  CAPABILITIES.PARTICIPATE,
+  CAPABILITIES.MANAGE_REQUESTS,
+];
+
+/**
+ * Runtime type guard — the write-path gate for `representations.capabilities` (jsonb, so
+ * Postgres validates nothing) and the read-path filter in `activeCapabilitiesFor`.
+ *
+ * Takes `unknown` on purpose: a `$type<Capability[]>()` on a jsonb column is a compile-time
+ * claim the database does not enforce, so the value reaching this guard may be anything.
+ */
+export function isRepresentableCapability(value: unknown): value is Capability {
+  return (
+    typeof value === 'string' && (REPRESENTABLE_CAPABILITIES as readonly string[]).includes(value)
+  );
+}

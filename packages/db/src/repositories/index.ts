@@ -654,3 +654,24 @@ export type {
   NewRescheduleProposalOption,
   RescheduleProposalStatus,
 } from '../schema';
+// ── Representations (BAL-313 / ADR-1028 Phase 1) ───────────────────────────
+// ⚠ SHIPS INERT — no UI, no Server Action, no API route, no notification and no analytics
+// consume any of this yet. BAL-314 is the first consumer, and it owns the grant surface, the
+// "who may grant" gate and the `hasCapability` role ∪ representation wiring.
+export {
+  representationsRepository,
+  RepresentationCapabilityError,
+  RepresentationScopeError,
+  RepresentationExpiryError,
+  RepresentationConflictError,
+  type RepresentationSubject,
+  type GrantRepresentationInput,
+  type GrantRepresentationResult,
+  type RevokeRepresentationInput,
+} from './representations';
+export type {
+  Representation,
+  NewRepresentation,
+  RepresentationScope,
+  RepresentationStatus,
+} from '../schema';
