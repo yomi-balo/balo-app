@@ -44,13 +44,14 @@ import { log } from '@/lib/logging';
  * reserved label no code path can emit is a dead union member, and it reads as coverage that
  * does not exist. Admin meetings belong on the PLATFORM axis (ADR-1035), out of scope here.
  *
- * ⚠⚠ **THE RECAP STAYS CLOSED TO A GUEST — BAL-439 OWNS THE GUEST ARM, DELIBERATELY, NOT BY
- * DEFAULT.** BAL-445 filled `authorizeMeetingFileAccess`'s guest arm for meeting files and
- * in-call chat, which means this module's pass-through would otherwise open the recap
- * SILENTLY — it has no independent gate of its own, only a rename over the file gate's
- * answer. It must not open: BAL-439 owns guest recap and carries acceptance criteria this PR
- * would bypass — no money block, no counterparty email, the conversion loop, the help-doc
- * addendum. The gate below is that explicit, documented refusal.
+ * ⚠⚠ **THIS MODULE STILL REFUSES A GUEST VERDICT — DELIBERATELY, NOT BY OVERSIGHT.** BAL-445
+ * filled `authorizeMeetingFileAccess`'s guest arm for meeting files and in-call chat, which
+ * means this module's pass-through would otherwise open the MEMBER recap to a guest SILENTLY
+ * — it has no independent gate of its own, only a rename over the file gate's answer. The gate
+ * below is that explicit, documented refusal, and it stays: `RecapLens` is NOT widened to admit
+ * `'guest'` (R5). **BAL-439 built the guest recap as a SIBLING, `resolve-guest-recap-access.ts`
+ * (`lib/meetings/`), with its own view-model — never a fourth lens value on this one.** There is
+ * still no guest lens on this surface; there is a different surface entirely.
  *
  * ⚠ `RecapLens` is NOT widened to admit `'guest'`. The type error `lens: access.side` would
  * raise on the guest arm (which carries no `side` — see `authorize-meeting-file-access.ts`)

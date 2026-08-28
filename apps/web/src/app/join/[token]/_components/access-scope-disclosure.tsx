@@ -41,12 +41,15 @@ interface AccessScopeDisclosureProps {
  * put a `meeting_contexts` → `engagements` read on a purely presentational component for
  * a distinction the reader does not need.)
  *
- * ⚠ FUTURE TENSE IS ACCURATE, NOT ASPIRATIONAL. BAL-408 **RECORDS** the grant; the read
- * surfaces it describes are BAL-388's (recap), BAL-387's (transcripts, inert) and
- * BAL-391's (action items, inert). Nothing on the platform enforces or serves this grant
- * to a guest today — there is no guest-authenticated read session at all. "You'll be able
- * to read" is therefore the correct tense for what has been GRANTED. **BAL-388 must call
- * `guestMayReadMeeting` to enforce it rather than re-derive the rule.**
+ * ⚠ FUTURE TENSE IS ACCURATE, NOT ASPIRATIONAL — though what it describes has partly SHIPPED
+ * since this was written. BAL-408 **RECORDS** the grant; BAL-445 enforces it for meeting files
+ * and in-call chat, and BAL-439 enforces it for the recap (through that SAME shared guest arm —
+ * `resolve-guest-recap-access.ts` composes `authorizeMeetingFileAccess` rather than re-deriving
+ * the rule). Transcripts (BAL-387) and action items (BAL-391) remain inert for a guest. **The
+ * COPY below does NOT change**: the clause list ("recaps, transcripts and action items")
+ * describes the FULL GRANT the inviter agreed to, in future tense, and a guest reading only
+ * part of it today does not change what was promised at invite time — the clause list and the
+ * retrospective clause stay load-bearing exactly as this docblock already states.
  *
  * ⚠ IT NAMES NO ORGANISATION AND NO PERSON. The inviter's company is stated once, above,
  * in the attribution line; repeating it here would make the disclosure vary by viewer for

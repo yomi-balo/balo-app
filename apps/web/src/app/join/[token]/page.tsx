@@ -14,7 +14,6 @@ import {
   MEETING_CONTEXT_PRECEDENCE,
   selectPrimaryMeetingContext,
   type GuestAccessScopeLabel,
-  type MeetingContextTypeLabel,
   type SelectPrimaryMeetingContextResult,
 } from '@balo/shared/meetings';
 import {
@@ -26,12 +25,14 @@ import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
 import { clientIp } from '@/lib/magic-link';
 import { formatUtcLongDate, formatUtcLongDateWithWeekday } from '@/lib/format/local-date';
 import { resolveMeetingGuestSubject } from '@/lib/meetings/resolve-meeting-guest';
+import { guestRecapPath } from '@/lib/meetings/join-link';
 import { conversationSubjectForMeetingContext } from '@balo/shared/conversations';
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, GUEST_SERVER_EVENTS } from '@/lib/analytics/server';
 import { LinkNotActive } from './link-not-active';
 import { JoinControl } from './join-control';
 import { AccessScopeDisclosure } from './_components/access-scope-disclosure';
+import { guestContextLabel } from './_lib/guest-context-label';
 
 // `node:crypto` (token hashing) + Drizzle need Node, not Edge.
 export const runtime = 'nodejs';
@@ -49,31 +50,6 @@ interface JoinLandingPageProps {
   /** ⚠ Next 16: this is a Promise and MUST be awaited. */
   params: Promise<{ token: string }>;
 }
-
-/**
- * Human labels for the primary `meeting_contexts.context_type`.
- *
- * TOTAL BY CONSTRUCTION (`Record<MeetingContextTypeLabel, string>`): an eighth context type
- * added to the pgEnum fails `pnpm typecheck` here until it is given a guest-facing name,
- * rather than silently rendering the generic fallback.
- *
- * ⚠ `admin` IS UNREACHABLE THROUGH THIS MAP and is listed anyway. `selectPrimaryMeetingContext`
- * scores it 0 and DROPS it, so an admin-only meeting resolves to `{ ok: false, reason: 'none' }`
- * and lands on {@link GENERIC_CONTEXT_LABEL}. Listing it keeps the record total; deleting it
- * would make the type non-exhaustive and hide the next enum addition.
- */
-const CONTEXT_LABELS: Record<MeetingContextTypeLabel, string> = {
-  case: 'Consultation',
-  project_kickoff: 'Project kickoff',
-  package_session: 'Package session',
-  retainer_checkin: 'Check-in',
-  request_interaction: 'Intro call',
-  project_discovery: 'Discovery call',
-  admin: 'Meeting',
-};
-
-/** What an unresolvable / ambiguous / admin-only context is called. Names nothing. */
-const GENERIC_CONTEXT_LABEL = 'Meeting';
 
 /**
  * The precedence tier at which a context names an `engagements.id` — DERIVED from the shared
@@ -271,6 +247,12 @@ interface InvitationViewProps {
    * flashing a button onto a conversation that does not exist.
    */
   readonly hasChat: boolean;
+  /**
+   * BAL-439 — the in-app path to the read-only recap, or `null` before the meeting has
+   * `ended`. Built OUTSIDE this tree by `guestRecapPath` (see `join-link.ts`'s docblock for
+   * why) so the `/join/` literal never appears in this route's own source.
+   */
+  readonly recapHref: string | null;
 }
 
 /**
@@ -309,6 +291,7 @@ function InvitationView({
   scheduledStartIso,
   scheduledEndIso,
   hasChat,
+  recapHref,
 }: Readonly<InvitationViewProps>): React.JSX.Element {
   const headline = hasEnded ? 'This call has already taken place' : "You're invited";
   const roleLine = isDelegate
@@ -343,11 +326,16 @@ function InvitationView({
    * still deliberately NO JOIN BUTTON (see this component's docblock; BAL-132 owns it), so
    * this line has to carry the whole expectation.
    *
-   * The `hasEnded` branch replaces "keep this link" with a REASON to keep it, which the
-   * closing line otherwise asserts without one.
+   * ⚠ BAL-439 — the `hasEnded` branch's copy CHANGED. The recap is not on THIS page and it
+   * does not "appear" — it is a link, rendered by `JoinControl` only once `recapHref` is
+   * non-null (R11 copy discipline: the old line was false in both ways).
+   *
+   * ⚠⚠ fix-round-1 / S7 — CHANGED AGAIN. "Everything from the call is here" sits directly
+   * BELOW a "View the recap" button that navigates elsewhere, so "here" was no longer true —
+   * the exact ambiguity the previous rewrite existed to close.
    */
   const nextStepLine = hasEnded
-    ? 'Nothing more to do — the recap will appear on this page once it’s ready.'
+    ? 'The recap has a short summary and anything that was shared on the call.'
     : 'Come back to this page when it’s time — you’ll join the video call from here.';
 
   /*
@@ -369,6 +357,7 @@ function InvitationView({
       hasChat={hasChat}
       nextStepLine={nextStepLine}
       expiresOn={expiresOn}
+      recapHref={recapHref}
     >
       <span className="border-border bg-muted/40 text-muted-foreground inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium">
         <Video className="h-3 w-3" aria-hidden="true" />
@@ -536,13 +525,17 @@ export default async function JoinLandingPage({
   // person "@" THEIR org, and drops the clause entirely when it cannot be resolved.
   const inviterOrg = side === 'client' ? parties.clientCompanyName : parties.expertPartyLabel;
   const counterparty = side === 'client' ? parties.expertPartyLabel : parties.clientCompanyName;
+  const hasEnded = meeting.status === 'ended';
+  // BAL-439 — built OUTSIDE this tree; see `join-link.ts`'s docblock for why. Only once the
+  // call has ended, and irrespective of whether any artefact exists yet (§11 of the plan): the
+  // recap itself states an absent write-up honestly, and reading `transcripts` here to decide
+  // would put two more reads on a hot public route for a decision the recap already owns.
+  const recapHref = hasEnded ? guestRecapPath(token, meeting.id) : null;
 
   return (
     <InvitationView
-      contextLabel={
-        primary.ok ? CONTEXT_LABELS[primary.context.contextType] : GENERIC_CONTEXT_LABEL
-      }
-      hasEnded={meeting.status === 'ended'}
+      contextLabel={guestContextLabel(primary.ok ? primary.context.contextType : null)}
+      hasEnded={hasEnded}
       isDelegate={guest.participationRole === 'delegate'}
       // ⚠ WEEKDAY-BEARING, matching the invite email's `Tue, 1 Sep 2026 …`. The reader is
       // working out whether they are free; the day of the week is the token they reason with.
@@ -565,6 +558,7 @@ export default async function JoinLandingPage({
       scheduledStartIso={meeting.scheduledStart.toISOString()}
       scheduledEndIso={meeting.scheduledEnd.toISOString()}
       hasChat={hasChat}
+      recapHref={recapHref}
     />
   );
 }

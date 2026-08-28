@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { Loader2, Video } from 'lucide-react';
+import { FileText, Loader2, Video } from 'lucide-react';
 import { toast } from 'sonner';
 import { MeetingCallSurface } from '@/components/balo/meetings/meeting-call-surface';
 import {
@@ -96,6 +97,12 @@ interface JoinControlProps {
    * fetched. `false` ⇒ the guest registration's `chat` slot is `null` ⇒ no Chat button.
    */
   readonly hasChat: boolean;
+  /**
+   * BAL-439 — the in-app path to the read-only recap, or `null` before the meeting has
+   * `ended`. Built OUTSIDE this tree by the RSC (`guestRecapPath`, see `join-link.ts`); this
+   * component only renders the link when both `hasEnded` and this are true.
+   */
+  readonly recapHref: string | null;
   /** The RSC's "what happens next" line, rendered below the control. */
   readonly nextStepLine: string;
   /** When the invitation link stops working, already formatted by the RSC. */
@@ -140,6 +147,7 @@ export function JoinControl({
   utcWindowLabel,
   hasEnded,
   hasChat,
+  recapHref,
   nextStepLine,
   expiresOn,
   children,
@@ -318,6 +326,7 @@ export function JoinControl({
       isLongWait={isLongWait}
       windowLabel={windowLabel}
       hasEnded={hasEnded}
+      recapHref={recapHref}
       isReduced={isReduced}
       nextStepLine={nextStepLine}
       expiresOn={expiresOn}
@@ -351,6 +360,7 @@ interface JoinPhaseContentProps {
   readonly isLongWait: boolean;
   readonly windowLabel: string;
   readonly hasEnded: boolean;
+  readonly recapHref: string | null;
   readonly isReduced: boolean;
   readonly nextStepLine: string;
   readonly expiresOn: string;
@@ -377,6 +387,7 @@ function JoinPhaseContent({
   isLongWait,
   windowLabel,
   hasEnded,
+  recapHref,
   isReduced,
   nextStepLine,
   expiresOn,
@@ -445,7 +456,7 @@ function JoinPhaseContent({
           Scheduled for <span className="text-foreground font-medium">{windowLabel}</span>
         </p>
 
-        {hasEnded ? null : (
+        {!hasEnded && (
           <motion.button
             type="button"
             onClick={onJoin}
@@ -464,6 +475,24 @@ function JoinPhaseContent({
             )}
             {isJoining ? 'Joining…' : 'Join the call'}
           </motion.button>
+        )}
+
+        {/*
+          ⚠⚠ BAL-439 — RENDERS WHETHER OR NOT ARTEFACTS EXIST (see the RSC's `recapHref`
+          docblock). ⚠⚠ `prefetch={false}` IS LOAD-BEARING: Next prefetches a `<Link>` on
+          viewport/hover, and this hover would run the full guest recap gate (2–6 reads) for
+          a page nobody asked for yet — the same hazard `join-link.ts` states for the
+          invitation back-link.
+        */}
+        {hasEnded && recapHref !== null && (
+          <Link
+            href={recapHref}
+            prefetch={false}
+            className="bg-primary text-primary-foreground focus-visible:ring-ring mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg px-4 text-base font-semibold transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none sm:text-[13.5px]"
+          >
+            <FileText className="h-4 w-4" aria-hidden="true" />
+            View the recap
+          </Link>
         )}
       </div>
 

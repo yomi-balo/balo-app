@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
@@ -76,7 +78,12 @@ const DEAD_TOKEN_FAILURE = {
 };
 
 function renderControl(
-  overrides: Partial<{ hasEnded: boolean; startIso: string; endIso: string }> = {}
+  overrides: Partial<{
+    hasEnded: boolean;
+    startIso: string;
+    endIso: string;
+    recapHref: string | null;
+  }> = {}
 ): ReturnType<typeof render> {
   return render(
     <JoinControl
@@ -87,6 +94,7 @@ function renderControl(
       utcWindowLabel={UTC_LABEL}
       hasEnded={overrides.hasEnded ?? false}
       hasChat={false}
+      recapHref={overrides.recapHref ?? null}
       nextStepLine={NEXT_STEP}
       expiresOn={EXPIRES_ON}
     >
@@ -230,6 +238,66 @@ describe('JoinControl — the invited guest`s join', () => {
       expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
     });
     expect(mockPoll).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * BAL-439 §9.7 — the "View the recap" link. Renders ONLY when the meeting has ended AND the
+ * RSC resolved a `recapHref` (an ended meeting with no artefacts still gets the link — the
+ * recap itself states an absent write-up honestly).
+ */
+describe('⚠ JoinControl — the BAL-439 recap link', () => {
+  const RECAP_HREF = `/join/${RAW_TOKEN}/recap/${MEETING_ID}`;
+
+  it('renders "View the recap" when the meeting has ended and a recapHref was resolved', () => {
+    renderControl({ hasEnded: true, recapHref: RECAP_HREF });
+
+    const link = screen.getByRole('link', { name: /view the recap/i });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', RECAP_HREF);
+  });
+
+  /**
+   * ⚠⚠ fix-round-1 / MUST-2 — this used to be BYTE-IDENTICAL to the test above it (same
+   * `href` assertion, nothing else), so `prefetch={false}` — called LOAD-BEARING in three
+   * docblocks, because a prefetch stamps `recordAccess` on a page nobody opened — was
+   * unverified on either link that carries it. `next/link`'s `prefetch` prop does not surface
+   * as a DOM attribute, so it is asserted at the SOURCE level instead, on both call sites:
+   * this component's own "View the recap" link AND `guest-recap-card.tsx`'s "Back to the
+   * invitation" link, which shares the exact same hazard for the exact same reason.
+   */
+  it('⚠⚠ MUST-2 — `prefetch={false}` is present in BOTH join-control.tsx and guest-recap-card.tsx (source-scanned)', () => {
+    const joinControlPath = resolveRouteDir([
+      'src/app/join/[token]/join-control.tsx',
+      'apps/web/src/app/join/[token]/join-control.tsx',
+    ]);
+    const guestRecapCardPath = resolveRouteDir([
+      'src/app/join/[token]/recap/_components/guest-recap-card.tsx',
+      'apps/web/src/app/join/[token]/recap/_components/guest-recap-card.tsx',
+    ]);
+    // Non-vacuity: the scan must have actually found both files.
+    expect(joinControlPath).not.toBe('');
+    expect(guestRecapCardPath).not.toBe('');
+
+    const joinControlCode = codeLinesOf(readFileSync(joinControlPath, 'utf8'));
+    const guestRecapCardCode = codeLinesOf(readFileSync(guestRecapCardPath, 'utf8'));
+
+    expect(joinControlCode).toContain('prefetch={false}');
+    expect(guestRecapCardCode).toContain('prefetch={false}');
+  });
+
+  it('is ABSENT when the meeting has ended but recapHref is null (no artefact-bearing recap resolved is not the reason — see the RSC)', () => {
+    renderControl({ hasEnded: true, recapHref: null });
+
+    expect(screen.queryByRole('link', { name: /view the recap/i })).not.toBeInTheDocument();
+  });
+
+  it('is ABSENT on the pre-call (not-yet-ended) card, even if a recapHref were somehow supplied', () => {
+    renderControl({ hasEnded: false, recapHref: RECAP_HREF });
+
+    expect(screen.queryByRole('link', { name: /view the recap/i })).not.toBeInTheDocument();
+    // …and the Join button is the one control on this card.
+    expect(screen.getByRole('button', { name: /join the call/i })).toBeInTheDocument();
   });
 });
 

@@ -28,6 +28,13 @@
  */
 
 /**
+ * ⚠⚠ BAL-439 fix-round-1 / MUST-8 — NAMED, rather than inlined as a fourth literal, so
+ * {@link redactGuestRecapMeetingId} below can identify "the `/join/` prefix matched" without a
+ * second hand-written `'/join/'` string to drift out of sync with the array entry.
+ */
+const JOIN_TOKEN_PREFIX = '/join/';
+
+/**
  * Path prefixes whose FOLLOWING segment is a secret and must never be logged.
  *
  * ⚠ PAIRED with `PUBLIC_PREFIXES` in `apps/web/src/lib/auth/route-config.ts`: a
@@ -72,7 +79,7 @@ export const SENSITIVE_PATH_PREFIXES: readonly string[] = [
   // deliberately NOT single-use (desktop → phone → rejoin after a network drop), so
   // one leaked line in Axiom or one `$referrer` in PostHog stays replayable for the
   // whole 7-day window. Redaction here, `referrer: 'no-referrer'` on the layout.
-  '/join/',
+  JOIN_TOKEN_PREFIX,
 ];
 
 const REDACTED = '[redacted]';
@@ -201,6 +208,27 @@ function redactAfterPrefix(
 }
 
 /**
+ * ⚠⚠ BAL-439 fix-round-1 / MUST-8 (security F3) — `/join/{token}/recap/{meetingId}` is a
+ * SECOND non-disclosable id chained after the token. `redactAfterPrefix` only ever replaces
+ * the ONE segment immediately following a prefix, so the `/join/` entry alone turns
+ * `/join/{token}/recap/{meetingId}` into `/join/[redacted]/recap/{meetingId}` — the
+ * credential is protected but the meeting UUID sails through untouched. The `/join/m/` entry
+ * above exists for exactly this reason: "a meeting exists at this uuid" is treated as
+ * non-disclosable to a third-party processor, and this route reintroduces that same shape.
+ *
+ * Chained onto the RESULT of the `/join/` redaction (never applied standalone, and never
+ * reachable through any other prefix) — so a `/join/{token}` with no `/recap/` suffix, or a
+ * `/join/{token}/lobby` sub-route, is untouched, matching the existing pinned behaviour for
+ * a trailing segment that is not `/recap/`.
+ */
+const RECAP_MEETING_ID_PREFIX = `${REDACTED}/recap/`;
+
+function redactGuestRecapMeetingId(value: string): string {
+  const redacted = redactAfterPrefix(value, value, RECAP_MEETING_ID_PREFIX, RAW_TOKEN_DELIMITERS);
+  return redacted ?? value;
+}
+
+/**
  * Redact the secret segment that follows a known sensitive prefix, anywhere within
  * `value`. Accepts a bare pathname (`/shared/proposals/abc`) OR a full URL
  * (`https://host/shared/proposals/abc?x=1`) OR a referrer OR a URL that carries a
@@ -214,6 +242,7 @@ function redactAfterPrefix(
  *   `/onboarding?from=%252Fjoin%252Fabc`   → `/onboarding?from=%252Fjoin%252F[redacted]`
  *   `/shared/proposals/` (no token)        → unchanged
  *   `/dashboard`                           → unchanged
+ *   `/join/tok/recap/a0000000-…`           → `/join/[redacted]/recap/[redacted]` (MUST-8)
  *
  * ⚠ IDEMPOTENT — feeding an already-redacted value back through is a no-op
  * (`[redacted]` contains no delimiter, so it is re-matched as the token and replaced by
@@ -226,7 +255,9 @@ function redactAfterPrefix(
 export function redactSensitivePath(value: string): string {
   for (const prefix of SENSITIVE_PATH_PREFIXES) {
     const redacted = redactAfterPrefix(value, value, prefix, RAW_TOKEN_DELIMITERS);
-    if (redacted !== null) return redacted;
+    if (redacted !== null) {
+      return prefix === JOIN_TOKEN_PREFIX ? redactGuestRecapMeetingId(redacted) : redacted;
+    }
   }
   // Every encoded form begins `%`; skipping the fold when there is none keeps the common
   // case (an ordinary pathname) at a single scan with no allocation.

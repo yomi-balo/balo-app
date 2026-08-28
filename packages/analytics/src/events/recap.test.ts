@@ -194,7 +194,7 @@ describe('BAL-388 declares no event without a producer', () => {
     },
     {
       event: 'guest_converted_to_member',
-      why: 'D-A — no guest lens; BAL-439 owns the guest recap arm (BAL-445 opened read-only files/chat, recap stays closed)',
+      why: 'D-A — still no guest lens (R5: BAL-439 opened the recap read-only to a guest via a SIBLING gate and view-model, never a fourth RecapLens value); undeclared because this PR has no producer (R7/R8) — BAL-489 owns the guest→user linkage writer',
     },
   ];
 

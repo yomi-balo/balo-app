@@ -498,9 +498,12 @@ export interface GuestMayReadMeetingInput {
  * ⚠ **BAL-408 RECORDED THE GRANT; BAL-445 ENFORCES THE READ.** This function is called from
  * `authorizeMeetingFileAccess`'s guest arm (`apps/web/src/lib/meetings/authorize-meeting-file-access.ts`)
  * for meeting files, and its conversation-grain sibling `resolveGuestConversationScope` is
- * called from `meeting-chat-anchor.ts` for in-call chat. The recap (BAL-439) and transcripts
- * (BAL-387) still ship inert/closed to guests — see `resolve-recap-access.ts`'s explicit
- * guest gate. Callers supply the subject; they must NOT re-derive this rule.
+ * called from `meeting-chat-anchor.ts` for in-call chat. **BAL-439 enforces the recap read
+ * through that SAME guest arm** — its `resolve-guest-recap-access.ts` gate composes
+ * `authorizeMeetingFileAccess` rather than calling this predicate directly, so "who may read
+ * this meeting" still has exactly one definition. Transcripts (BAL-387) stay closed to a
+ * guest — this is where that closure stays recorded. Callers supply the subject; they must
+ * NOT re-derive this rule.
  */
 export function guestMayReadMeeting(input: GuestMayReadMeetingInput): boolean {
   if (input.guestMeetingId === input.targetMeetingId) {

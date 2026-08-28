@@ -105,6 +105,9 @@ describe('resolveRecapAccess', () => {
    * which never mentioned the predicate — so it stayed green while BAL-445 filled the file
    * gate's guest arm and this pass-through opened the recap SILENTLY. A guard that cannot
    * observe the thing it guards is worse than no guard.
+   *
+   * @see resolve-guest-recap-access.test.ts — BAL-439's sibling coverage for the guest arm
+   * this test proves `resolveRecapAccess` itself still refuses.
    */
   it('⚠⚠ returns null for a GUEST subject the file gate now says yes to — guest recap is BAL-439’s', async () => {
     // The file gate's guest arm is FILLED as of BAL-445, so this is the shape it really

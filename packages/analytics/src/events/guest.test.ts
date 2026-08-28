@@ -22,9 +22,14 @@ describe('GUEST_SERVER_EVENTS', () => {
       // not collation-sensitive.
       'GUEST_JOINED',
       // ⚠ BAL-436. `GUEST_LINK_RESENT` sorts here under BOTH ICU `localeCompare` and
-      // code-unit order — after `GUEST_JOINED` (`J` < `L`) and before `GUEST_REMOVED`
+      // code-unit order — after `GUEST_JOINED` (`J` < `L`) and before `GUEST_RECAP_VIEWED`
       // (`L` < `R`) — so its position is not collation-sensitive either.
       'GUEST_LINK_RESENT',
+      // ⚠ BAL-439 (R12). `GUEST_RECAP_VIEWED` sorts here under BOTH ICU `localeCompare` and
+      // code-unit order — after `GUEST_LINK_RESENT` (`L` < `R`) and before `GUEST_REMOVED`
+      // (shared `GUEST_RE` prefix, then `C` < `M`) — so its position is not
+      // collation-sensitive either.
+      'GUEST_RECAP_VIEWED',
       'GUEST_REMOVED',
     ]);
   });
@@ -36,6 +41,7 @@ describe('GUEST_SERVER_EVENTS', () => {
     expect(GUEST_SERVER_EVENTS.GUEST_INVITED).toBe('guest_invited');
     expect(GUEST_SERVER_EVENTS.GUEST_JOINED).toBe('guest_joined');
     expect(GUEST_SERVER_EVENTS.GUEST_LINK_RESENT).toBe('guest_link_resent');
+    expect(GUEST_SERVER_EVENTS.GUEST_RECAP_VIEWED).toBe('guest_recap_viewed');
     expect(GUEST_SERVER_EVENTS.GUEST_REMOVED).toBe('guest_removed');
   });
 
@@ -115,5 +121,46 @@ describe('GUEST_SERVER_EVENTS', () => {
     };
 
     expect(withNull.join_method).toBe('link_share');
+  });
+
+  /**
+   * ⚠⚠ BAL-439 (R12) — `guest_recap_viewed` ARRIVED WITH ITS PRODUCER, in the same PR
+   * (`app/join/[token]/recap/[meetingId]/page.tsx`). Unlike `guest_converted_to_member`, this
+   * event is emitted, so it is declared — the exact rule R8 cites approvingly and R12 restates.
+   */
+  it('⚠ `guest_recap_viewed` carries no PII and no counterparty identity', () => {
+    const viewed: GuestServerEventMap['guest_recap_viewed'] = {
+      access_scope: 'engagement',
+      is_own_meeting: false,
+      summary_state: 'ready',
+      days_since_meeting: 5,
+      distinct_id: 'guest-4',
+    };
+
+    // ⚠ EXACT KEY SET — a future edit that adds an email, a company name or a counterparty
+    // name would widen this set and fail here loudly, rather than shipping unnoticed.
+    expect(Object.keys(viewed).sort()).toEqual([
+      'access_scope',
+      'days_since_meeting',
+      'distinct_id',
+      'is_own_meeting',
+      'summary_state',
+    ]);
+  });
+
+  /**
+   * ⚠⚠ fix-round-1 / S6 (R12) — `days_since_meeting` is a WHOLE, NON-NEGATIVE day count, never
+   * negative and never fractional at the type level (the runtime floor lives at the page).
+   */
+  it('⚠ `days_since_meeting` is a plain number — floored, non-negative, computed at the page', () => {
+    const openedTheSameDay: GuestServerEventMap['guest_recap_viewed'] = {
+      access_scope: 'meeting',
+      is_own_meeting: true,
+      summary_state: 'absent',
+      days_since_meeting: 0,
+      distinct_id: 'guest-5',
+    };
+
+    expect(openedTheSameDay.days_since_meeting).toBe(0);
   });
 });

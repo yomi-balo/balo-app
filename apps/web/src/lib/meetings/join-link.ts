@@ -77,3 +77,24 @@ export function meetingJoinLinkUrl(meetingId: string): string {
   // slash, which resolves fine in a browser and looks broken in an inbox.
   return `${withoutTrailingSlash(base)}/join/m/${meetingId}`;
 }
+
+/**
+ * BAL-439 — the guest recap's in-app path. A PATH, not an absolute URL — this is same-origin
+ * navigation from `[token]/page.tsx` and `[token]/join-control.tsx`, so no origin lookup and no
+ * `server-only` obligation apply to it the way they do to {@link meetingJoinLinkUrl}'s emailed
+ * absolute URL. It lives here for the same reason that one does: `join-link-never-writes.test.ts`
+ * bans the literal `/join/` in non-comment code under `app/join`, and rather than carve an
+ * exemption into that scan, the builder simply lives outside the scanned tree.
+ */
+export function guestRecapPath(token: string, meetingId: string): string {
+  return `/join/${token}/recap/${meetingId}`;
+}
+
+/**
+ * Back to the invitation card. ⚠ Its GET stamps `meetingGuestsRepository.recordAccess` —
+ * NEVER prefetch a `<Link>` built from this (see `[token]/page.tsx`'s own docblock on why a
+ * prefetch would stamp an access nobody made).
+ */
+export function guestInvitationPath(token: string): string {
+  return `/join/${token}`;
+}

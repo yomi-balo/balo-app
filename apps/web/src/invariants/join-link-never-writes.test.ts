@@ -77,6 +77,21 @@ const PINNED_GET_PATH_FILES: readonly string[] = [
   'm/[meetingId]/lobby-client.tsx',
   'm/[meetingId]/loading.tsx',
   'm/[meetingId]/error.tsx',
+  // ── BAL-439 — the guest recap ────────────────────────────────────────────────────────
+  //
+  // ⚠ These NINE files are the whole recap tree. The two-tier `[token]/_lib/` vs
+  // `recap/_lib/` split matches the placement rule in §7 of the plan: the context-label
+  // helper is shared by BOTH `[token]/page.tsx` and the recap loader, so it lives at the
+  // `[token]/` level; everything recap-specific lives under `recap/`.
+  '[token]/_lib/guest-context-label.ts',
+  '[token]/recap/[meetingId]/page.tsx',
+  '[token]/recap/[meetingId]/loading.tsx',
+  '[token]/recap/[meetingId]/error.tsx',
+  '[token]/recap/_lib/guest-recap-view-types.ts',
+  '[token]/recap/_lib/load-guest-recap.ts',
+  '[token]/recap/_components/guest-recap-card.tsx',
+  '[token]/recap/_components/guest-recap-summary.tsx',
+  '[token]/recap/_components/guest-recap-files.tsx',
 ];
 
 /**
@@ -302,6 +317,82 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
       offenders,
       `These files are inside app/join and hard-code a /join/ URL. Use a relative path; a ` +
         `hard-coded one is how a token ends up interpolated into markup:\n  ` +
+        offenders.join('\n  ')
+    ).toEqual([]);
+  });
+});
+
+/**
+ * BAL-439 fix-round-1 / MUST-7 (security F2) — `instrumentation-client.ts` refuses Session
+ * Replay outright on a token-bearing landing, and justifies doing so at INIT time (rather than
+ * merely scrubbing) by citing this file's own scan: "no <Link> anywhere in the app router
+ * points at /join/…". This PR added the FIRST two in-app `<Link>`s that resolve to a `/join/…`
+ * URL — `join-control.tsx`'s "View the recap" and `guest-recap-card.tsx`'s "Back to the
+ * invitation" — and BOTH pass the scan above only because their `href`s are built by
+ * `guestRecapPath` / `guestInvitationPath` in `lib/meetings/join-link.ts`, a module the scan
+ * above does not read at all (it greps `<Link>`-bearing source text for the literal `/join/`
+ * substring, and neither call site contains it).
+ *
+ * That leaves the guarantee the Sentry config leans on UNENFORCED going forward: the next
+ * `<Link href={guestRecapPath(...)}>` written from a dashboard page would start Replay there
+ * (that page is not itself under `/join/`), then soft-navigate into a token URL — and the
+ * rrweb META frame carrying the full `data.href` is unreachable by any scrubbing hook (see
+ * `instrumentation-client.ts`'s own docblock for why). The fix is a POSITIVE call-site
+ * restriction: every CALLER of the two TOKEN-BEARING path builders must live under
+ * `app/join/`, or be the `join-link.ts` definition file itself.
+ *
+ * ⚠ `meetingJoinLinkUrl` IS DELIBERATELY NOT PART OF THIS RESTRICTION. It is a different
+ * function with a different risk profile, and its own docblock states why: it is TOKENLESS
+ * (the anonymous lobby route, `/join/m/{meetingId}`, admits nobody by itself) and it is
+ * written to a CLIPBOARD, never rendered as an `href` — its one shipped caller today,
+ * `app/(call)/meetings/[meetingId]/call/page.tsx` (BAL-436), passes it as a `joinLinkUrl` prop
+ * for a "Copy join link" button, never a `<Link href>`. Nothing prefetches a clipboard string
+ * and there is no credential in it to leak, so folding it into this restriction would fail
+ * against real, intentional, pre-existing code for a hazard that function does not have.
+ */
+describe('invariant: guestRecapPath / guestInvitationPath are only called from app/join (BAL-439 MUST-7)', () => {
+  // ⚠ THE WHOLE `src` TREE, not just `src/app` — a future caller of these builders could just
+  // as easily be written under `src/lib` or `src/components`, and only a scan that is not
+  // scoped to the app router would catch it there.
+  const SRC_DIR = resolveRouteDir(['src', 'apps/web/src']);
+  const TOKEN_BEARING_BUILDERS: readonly string[] = ['guestRecapPath(', 'guestInvitationPath('];
+  const DEFINITION_FILE = 'lib/meetings/join-link.ts';
+
+  const scanned = scanRouteSources(SRC_DIR, '', []);
+
+  it('collects the whole src tree (guards against a vacuous pass)', () => {
+    expect(scanned.length).toBeGreaterThan(0);
+    expect(scanned.map((file) => file.rel)).toContain(DEFINITION_FILE);
+  });
+
+  it('guards the guard: a real call site is found, and it is under app/join', () => {
+    // If this ever finds zero callers, every assertion below passes for the wrong reason —
+    // both builders have a live caller today (`[token]/page.tsx` and `guest-recap-card.tsx`).
+    const callers = scanned.filter(
+      (file) =>
+        file.rel !== DEFINITION_FILE &&
+        TOKEN_BEARING_BUILDERS.some((builder) => file.code.includes(builder))
+    );
+    expect(callers.length).toBeGreaterThan(0);
+    for (const caller of callers) {
+      expect(caller.rel.startsWith('app/join/')).toBe(true);
+    }
+  });
+
+  it('no caller of guestRecapPath / guestInvitationPath lives outside app/join', () => {
+    const offenders = scanned
+      .filter((file) => file.rel !== DEFINITION_FILE && !file.rel.startsWith('app/join/'))
+      .filter((file) => TOKEN_BEARING_BUILDERS.some((builder) => file.code.includes(builder)))
+      .map((file) => file.rel);
+
+    expect(
+      offenders,
+      `These files call guestRecapPath / guestInvitationPath from OUTSIDE app/join. Session ` +
+        `Replay is refused only on landings instrumentation-client.ts recognises as sensitive ` +
+        `by URL at Sentry.init() time; a <Link> built from one of these functions on a ` +
+        `dashboard page would start Replay there and then soft-navigate into a token URL, ` +
+        `where the rrweb META frame carrying the full href is unreachable by any scrubbing ` +
+        `hook. Keep every call site under app/join/:\n  ` +
         offenders.join('\n  ')
     ).toEqual([]);
   });

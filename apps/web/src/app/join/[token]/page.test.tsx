@@ -464,6 +464,38 @@ describe('JoinLandingPage', () => {
     expect(container.textContent).toContain('every call in this piece of work');
   });
 
+  // ── BAL-439 — the recap link ───────────────────────────────────────────────
+  describe('the "View the recap" link', () => {
+    it('renders for an ENDED meeting, pointing at the guest recap path', async () => {
+      primeHappyPath({ meetingStatus: 'ended' });
+      await renderPage();
+
+      const link = screen.getByRole('link', { name: /view the recap/i });
+      expect(link).toHaveAttribute('href', `/join/${RAW_TOKEN}/recap/${MEETING_ID}`);
+    });
+
+    it('is ABSENT for a meeting that has not ended', async () => {
+      primeHappyPath({ meetingStatus: 'scheduled' });
+      await renderPage();
+
+      expect(screen.queryByRole('link', { name: /view the recap/i })).not.toBeInTheDocument();
+    });
+
+    it('⚠ the "next step" copy no longer promises the recap "appears on this page"', async () => {
+      primeHappyPath({ meetingStatus: 'ended' });
+      const container = await renderPage();
+
+      expect(container.textContent ?? '').not.toMatch(/appear on this page/i);
+      // ⚠⚠ fix-round-1 / S7 — the copy changed again: "Everything from the call is here" sat
+      // directly BELOW a "View the recap" button that navigates elsewhere, so "here" was no
+      // longer true either.
+      expect(container.textContent).not.toMatch(/is here/i);
+      expect(container.textContent).toContain(
+        'The recap has a short summary and anything that was shared on the call.'
+      );
+    });
+  });
+
   // ── THE ORACLE PROPERTY ────────────────────────────────────────────────────
   /**
    * ⚠⚠ THE ACCEPTANCE CRITERION. `findLiveByTokenHash` answers `undefined` IDENTICALLY for
