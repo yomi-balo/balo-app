@@ -115,6 +115,56 @@ export function memberNamesOf(source: string, object: string): string[] {
 }
 
 /**
+ * A source-text "word" character for the hand-rolled scanners in this file: ASCII letters,
+ * digits, and underscore — everything a valid JS/TS identifier segment can contain here. Shared
+ * by every backward/forward identifier walk below so the character class is defined exactly once.
+ */
+function isIdentifierChar(ch: string): boolean {
+  return (
+    (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch === '_'
+  );
+}
+
+/** Walk backward from `index` while the preceding character is an identifier character. */
+function identifierStartBefore(source: string, index: number): number {
+  let start = index;
+  while (start > 0 && isIdentifierChar(source.charAt(start - 1))) {
+    start -= 1;
+  }
+  return start;
+}
+
+/** Walk forward from `index` while the character at that position is an identifier character. */
+function identifierEndFrom(source: string, index: number): number {
+  let end = index;
+  while (end < source.length && isIdentifierChar(source.charAt(end))) {
+    end += 1;
+  }
+  return end;
+}
+
+/**
+ * The single `{ object, member }` pair for the `Repository.` marker found at `markerStart`, plus
+ * the index immediately after the parsed member — where the next `indexOf(marker, …)` resumes.
+ */
+function repositoryCallAt(
+  source: string,
+  markerStart: number,
+  marker: string
+): { readonly object: string; readonly member: string; readonly nextSearchFrom: number } {
+  const objectStart = identifierStartBefore(source, markerStart);
+  const object = source.slice(objectStart, markerStart + 'Repository'.length);
+  const memberStart = markerStart + marker.length;
+  const memberEnd = identifierEndFrom(source, memberStart);
+  const member = source.slice(memberStart, memberEnd);
+  return {
+    object,
+    member: member.length === 0 ? '<unparsed>' : member,
+    nextSearchFrom: memberEnd,
+  };
+}
+
+/**
  * Every `<identifier>Repository.<member>` call in `source`, for WHATEVER repository object is
  * referenced — unlike {@link memberNamesOf}, the caller does not name the object in advance.
  *
@@ -132,6 +182,10 @@ export function memberNamesOf(source: string, object: string): string[] {
  * inherits its "no regex" property and its single caveat: the object and its member must be
  * joined by a bare `.` with no intervening whitespace or line break (a multi-line method chain
  * is not matched). None of today's callers chain across a line break.
+ *
+ * ⚠ EXTRACTED INTO `identifierStartBefore` / `identifierEndFrom` / `repositoryCallAt` ONLY TO
+ * SHED COGNITIVE COMPLEXITY (SonarCloud capped this at 15; the inlined backward + forward walks
+ * put it at 19). The behaviour is byte-for-byte what the inlined version did.
  */
 export function repositoryMemberCallsOf(
   source: string
@@ -140,34 +194,46 @@ export function repositoryMemberCallsOf(
   const marker = 'Repository.';
   let i = source.indexOf(marker);
   while (i !== -1) {
-    let start = i;
-    while (start > 0) {
-      const ch = source.charAt(start - 1);
-      const word =
-        (ch >= 'a' && ch <= 'z') ||
-        (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') ||
-        ch === '_';
-      if (!word) break;
-      start -= 1;
-    }
-    const object = source.slice(start, i + 'Repository'.length);
-    let end = i + marker.length;
-    while (end < source.length) {
-      const ch = source.charAt(end);
-      const word =
-        (ch >= 'a' && ch <= 'z') ||
-        (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') ||
-        ch === '_';
-      if (!word) break;
-      end += 1;
-    }
-    const member = source.slice(i + marker.length, end);
-    calls.push({ object, member: member.length === 0 ? '<unparsed>' : member });
-    i = source.indexOf(marker, end);
+    const { object, member, nextSearchFrom } = repositoryCallAt(source, i, marker);
+    calls.push({ object, member });
+    i = source.indexOf(marker, nextSearchFrom);
   }
   return calls;
+}
+
+/** Strip a leading `type ` keyword from one `import { ... }` specifier, so `type Foo` reads as `Foo`. */
+function withoutLeadingTypeKeyword(specifier: string): string {
+  return specifier.startsWith('type ') ? specifier.slice('type '.length).trim() : specifier;
+}
+
+/** The LOCAL binding name for one `import { ... }` specifier — after `as`, when aliased. */
+function localNameOfSpecifier(rawSpecifier: string): string {
+  const withoutType = withoutLeadingTypeKeyword(rawSpecifier.trim());
+  const asIdx = withoutType.indexOf(' as ');
+  return asIdx === -1 ? withoutType : withoutType.slice(asIdx + ' as '.length).trim();
+}
+
+/** Every non-empty, comma-separated specifier inside one `{ ... }` import body, as local names. */
+function localNamesInBraceBody(body: string): string[] {
+  const names: string[] = [];
+  for (const rawSpecifier of body.split(',')) {
+    if (rawSpecifier.trim().length === 0) continue;
+    names.push(localNameOfSpecifier(rawSpecifier));
+  }
+  return names;
+}
+
+/**
+ * The named-import bindings for the `import { ... } from '<moduleSpecifier>'` statement whose
+ * `from '<moduleSpecifier>'` clause starts at `fromIdx` — found by walking back to the nearest
+ * `{` and forward to its matching `}`. Returns `[]` when no such brace pair is found before
+ * `fromIdx` (not a braced import — e.g. a default or namespace import).
+ */
+function namedImportsAtClause(source: string, fromIdx: number): string[] {
+  const open = source.lastIndexOf('{', fromIdx);
+  const close = open === -1 ? -1 : source.indexOf('}', open);
+  if (open === -1 || close === -1 || close >= fromIdx) return [];
+  return localNamesInBraceBody(source.slice(open + 1, close));
 }
 
 /**
@@ -190,6 +256,13 @@ export function repositoryMemberCallsOf(
  * NO REGEX, same convention as the rest of this file (SonarCloud S5852): both quote styles are
  * checked literally (Prettier normalises to single quotes, but nothing type-checks a
  * hand-written import), and the import body is found by nearest brace, then split on `,`.
+ *
+ * ⚠ EXTRACTED INTO `withoutLeadingTypeKeyword` / `localNameOfSpecifier` / `localNamesInBraceBody`
+ * / `namedImportsAtClause` ONLY TO SHED COGNITIVE COMPLEXITY (SonarCloud capped this at 15; the
+ * fully inlined version put it at 29). The behaviour is byte-for-byte what the inlined version
+ * did — same brace-matching condition (De Morgan'd from `open !== -1 && close !== -1 && close <
+ * fromIdx` to the early-return `open === -1 || close === -1 || close >= fromIdx`), same split /
+ * trim / `type` / `as` handling.
  */
 export function namedImportsFrom(source: string, moduleSpecifier: string): string[] {
   const names: string[] = [];
@@ -197,19 +270,7 @@ export function namedImportsFrom(source: string, moduleSpecifier: string): strin
     const marker = `from ${quote}${moduleSpecifier}${quote}`;
     let fromIdx = source.indexOf(marker);
     while (fromIdx !== -1) {
-      const open = source.lastIndexOf('{', fromIdx);
-      const close = open === -1 ? -1 : source.indexOf('}', open);
-      if (open !== -1 && close !== -1 && close < fromIdx) {
-        for (const rawSpecifier of source.slice(open + 1, close).split(',')) {
-          const specifier = rawSpecifier.trim();
-          if (specifier.length === 0) continue;
-          const withoutType = specifier.startsWith('type ')
-            ? specifier.slice('type '.length).trim()
-            : specifier;
-          const asIdx = withoutType.indexOf(' as ');
-          names.push(asIdx === -1 ? withoutType : withoutType.slice(asIdx + ' as '.length).trim());
-        }
-      }
+      names.push(...namedImportsAtClause(source, fromIdx));
       fromIdx = source.indexOf(marker, fromIdx + marker.length);
     }
   }

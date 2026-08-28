@@ -99,7 +99,7 @@ describe('GuestFilesPanel', () => {
     const { container } = render(
       <GuestFilesPanel panels={panels} onClose={vi.fn()} onAnnounce={vi.fn()} />
     );
-    await waitFor(() => expect(screen.getByText('spec.pdf')).toBeInTheDocument());
+    await screen.findByText('spec.pdf');
 
     expect(container.querySelector('input[type="file"]')).toBeNull();
     expect(screen.queryByText(/share a file/i)).toBeNull();
@@ -138,7 +138,7 @@ describe('GuestFilesPanel', () => {
     const { container } = render(
       <GuestFilesPanel panels={panels} onClose={vi.fn()} onAnnounce={vi.fn()} />
     );
-    await waitFor(() => expect(screen.getByText('spec.pdf')).toBeInTheDocument());
+    await screen.findByText('spec.pdf');
     expect(await axe(container)).toHaveNoViolations();
   });
 });

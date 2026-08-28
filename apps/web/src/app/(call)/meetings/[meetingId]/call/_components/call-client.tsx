@@ -307,7 +307,6 @@ export function CallClient({
           if (cancelled) return;
           if (attempts < MAX_PROBE_ATTEMPTS) {
             probeRetryTimerRef.current = setTimeout(runProbe, pollIntervalFor(0));
-            return;
           }
           /* bounded retry exhausted — absent slot is the shipped degradation from here */
         });

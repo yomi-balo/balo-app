@@ -413,7 +413,7 @@ function useSeatCountOnJoin(input: {
   useEffect(() => {
     // BAL-445 — a guest reads no roster; `loadGuests` does not exist on that arm of the
     // union, and the API route it calls is `requireAuth`-gated anyway (two closures).
-    if (!hasJoined || panels === null || panels.audience !== 'member' || hasReadRef.current) {
+    if (!hasJoined || panels?.audience !== 'member' || hasReadRef.current) {
       return;
     }
     hasReadRef.current = true;

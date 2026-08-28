@@ -630,27 +630,28 @@ describe('authorizeMeetingFileAccess', () => {
      * whole in-call transcript without ever being admitted by a host.
      */
     describe('admission gate — F1 (fix-round-1)', () => {
-      it('DENIES a `pending` (never-admitted) guest — guest_not_admitted', async () => {
+      it.each([
+        {
+          title: 'a `pending` (never-admitted) guest — guest_not_admitted',
+          accessScope: 'meeting' as const,
+          admission: 'pending' as const,
+        },
+        {
+          title:
+            'a `denied` guest identically (defence in depth — unreachable via the resolver in practice)',
+          accessScope: 'meeting' as const,
+          admission: 'denied' as const,
+        },
+        {
+          title:
+            'a pending guest even for their OWN meeting — admission is checked BEFORE the `engagement` scope rule',
+          accessScope: 'engagement' as const,
+          admission: 'pending' as const,
+        },
+      ])('DENIES $title', async ({ accessScope, admission }) => {
         const result = await authorizeMeetingFileAccess({
           meetingId: GUEST_MEETING_ID,
-          actor: guestActor({
-            accessScope: 'meeting',
-            guestMeetingId: GUEST_MEETING_ID,
-            admission: 'pending',
-          }),
-        });
-        expect(result).toEqual(NOT_FOUND);
-        expect(lastDenialReason()).toBe('guest_not_admitted');
-      });
-
-      it('DENIES a `denied` guest identically (defence in depth — unreachable via the resolver in practice)', async () => {
-        const result = await authorizeMeetingFileAccess({
-          meetingId: GUEST_MEETING_ID,
-          actor: guestActor({
-            accessScope: 'meeting',
-            guestMeetingId: GUEST_MEETING_ID,
-            admission: 'denied',
-          }),
+          actor: guestActor({ accessScope, guestMeetingId: GUEST_MEETING_ID, admission }),
         });
         expect(result).toEqual(NOT_FOUND);
         expect(lastDenialReason()).toBe('guest_not_admitted');
@@ -678,19 +679,6 @@ describe('authorizeMeetingFileAccess', () => {
           }),
         });
         expect(result).toMatchObject({ ok: true, viewer: 'guest' });
-      });
-
-      it('checks admission BEFORE the scope rule — a pending guest is refused even for their OWN meeting', async () => {
-        const result = await authorizeMeetingFileAccess({
-          meetingId: GUEST_MEETING_ID,
-          actor: guestActor({
-            accessScope: 'engagement',
-            guestMeetingId: GUEST_MEETING_ID,
-            admission: 'pending',
-          }),
-        });
-        expect(result).toEqual(NOT_FOUND);
-        expect(lastDenialReason()).toBe('guest_not_admitted');
       });
     });
 

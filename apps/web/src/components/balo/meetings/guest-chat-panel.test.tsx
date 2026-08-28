@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import type { ConversationMessageView } from '@/lib/conversations/conversation-view-types';
 import type {
@@ -142,7 +142,7 @@ describe('GuestChatPanel', () => {
     const { container } = render(
       <GuestChatPanel chat={chat} files={filesActions()} onClose={vi.fn()} onOpenFiles={vi.fn()} />
     );
-    await waitFor(() => expect(screen.getByText('Hello from the call')).toBeInTheDocument());
+    await screen.findByText('Hello from the call');
 
     expect(container.querySelector('textarea')).toBeNull();
     expect(screen.queryAllByRole('button', { name: /send/i })).toHaveLength(0);
@@ -162,7 +162,7 @@ describe('GuestChatPanel', () => {
     const { container } = render(
       <GuestChatPanel chat={chat} files={filesActions()} onClose={vi.fn()} onOpenFiles={vi.fn()} />
     );
-    await waitFor(() => expect(screen.getByText('Hello from the call')).toBeInTheDocument());
+    await screen.findByText('Hello from the call');
     expect(await axe(container)).toHaveNoViolations();
   });
 });
