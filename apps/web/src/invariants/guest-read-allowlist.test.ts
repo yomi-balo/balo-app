@@ -178,15 +178,39 @@ const ALLOWED_DB_IMPORTS: Readonly<Record<string, readonly string[]>> = {
     'meetingContextsRepository',
     'requestExpertRelationshipsRepository',
   ],
+  // BAL-439 — the guest RECAP gate. A sibling of resolveRecapAccess that composes the shipped
+  // guest arm; it calls no repository at all (see ALLOWED_LIB_REPOSITORY_CALLS below).
+  'lib/meetings/resolve-guest-recap-access.ts': ['Meeting'],
+  // BAL-439 — the guest recap loader. TWO repositories, both artefact reads, both projected.
+  'app/join/[token]/recap/_lib/load-guest-recap.ts': [
+    'transcriptArtifactsRepository',
+    'transcriptsRepository',
+  ],
+  // BAL-439 — pinned by the NEW coverage assertion below, which is what forced it into view.
+  // The join landing reads seven repositories for an unauthenticated external visitor and was
+  // pinned on the participation axis only (join-link-never-writes.test.ts) until now.
+  'app/join/[token]/page.tsx': [
+    'agenciesRepository',
+    'companiesRepository',
+    'engagementsRepository',
+    'expertsRepository',
+    'meetingContextsRepository',
+    'meetingGuestsRepository',
+    'usersRepository',
+  ],
 };
 
 /**
- * item 4 (BAL-445 fix-round-4) — the exact `(object, member)` pairs each of the THREE
- * `lib/meetings` modules on the guest path may call, transitively closing the gap the
+ * item 4 (BAL-445 fix-round-4) — the exact `(object, member)` pairs EVERY MODULE THE GUEST READ
+ * PATH REACHES BEYOND THE ACTIONS THEMSELVES may call, transitively closing the gap the
  * per-action scan cannot see: `fetch-guest-meeting-thread.ts` reaches
  * `conversationsRepository.findByContext` only via `meeting-chat-anchor.ts`. If that ever
  * became `ensureForContext` — BAL-424's exact defect class — a per-file scan of the action
  * alone would never notice.
+ *
+ * ⚠ BAL-439 GREW THIS MAP PAST "the three `lib/meetings` modules" the name once literally meant
+ * — it is keyed on arbitrary `src/`-relative paths, and the guest RECAP path (a page, not an
+ * action) is pinned here too, alongside its gate.
  */
 const ALLOWED_LIB_REPOSITORY_CALLS: Readonly<
   Record<string, readonly { readonly object: string; readonly member: string }[]>
@@ -208,6 +232,13 @@ const ALLOWED_LIB_REPOSITORY_CALLS: Readonly<
     { object: 'conversationsRepository', member: 'findByContext' },
     { object: 'conversationsRepository', member: 'listContexts' },
     { object: 'meetingContextsRepository', member: 'listByMeeting' },
+  ],
+  // ⚠ AN EMPTY PIN IS THE ASSERTION: this gate calls NO repository. It composes two lib modules
+  // that do, each pinned in its own right. Any repository call added here fails loudly.
+  'lib/meetings/resolve-guest-recap-access.ts': [],
+  'app/join/[token]/recap/_lib/load-guest-recap.ts': [
+    { object: 'transcriptsRepository', member: 'findByMeetingId' },
+    { object: 'transcriptArtifactsRepository', member: 'findByTranscriptAndKind' },
   ],
 };
 
@@ -390,4 +421,30 @@ describe('guest read actions never reach a write member on any repository (BAL-4
       ).toEqual([]);
     }
   );
+
+  /**
+   * BAL-439, item (c) — WITHOUT THIS, a future guest PAGE (not an action under `_actions/`)
+   * could read any repository with no pin at all: this whole file's exact-set-equality guards
+   * are keyed on `_actions/*` referencing `resolveMeetingGuestSubject`, and the guest RECAP
+   * loader deliberately lives outside `_actions/` (§7 of the plan). This closes that hole by
+   * scanning every source file under `app/join` OTHER than `_actions` and requiring every
+   * `@balo/db` importer among them to be pinned in `ALLOWED_DB_IMPORTS`.
+   */
+  it('every app/join module outside _actions that imports @balo/db is pinned (BAL-439)', () => {
+    const joinDir = resolveRouteDir(['src/app/join', 'apps/web/src/app/join']);
+    const scanned = scanRouteSources(joinDir, 'app/join', ['_actions']);
+    expect(scanned.length).toBeGreaterThan(0); // guards the guard
+    const unpinned = scanned
+      .filter((f) => f.code.includes("from '@balo/db'") || f.code.includes('from "@balo/db"'))
+      .map((f) => f.rel)
+      .filter((rel) => !Object.hasOwn(ALLOWED_DB_IMPORTS, rel))
+      .sort();
+    expect(
+      unpinned,
+      `These app/join modules (outside _actions) import @balo/db but are not pinned in ` +
+        `ALLOWED_DB_IMPORTS: ${unpinned.join(', ')}. A page or loader on the guest read path ` +
+        `must state its whole @balo/db import set here, exactly like the three lib/meetings ` +
+        `modules above.`
+    ).toEqual([]);
+  });
 });

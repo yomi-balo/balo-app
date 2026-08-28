@@ -224,6 +224,14 @@ export const PUBLIC_ACTION_ALLOWLIST: readonly string[] = [
  *     (an existing entry cannot grow a write silently either).
  *
  * Paths are relative to `apps/web/src`, matching every other list in this file.
+ *
+ * ⚠ BAL-439 ADDED A GUEST **PAGE**, NOT A GUEST ACTION, AND THIS LIST IS UNCHANGED BY DESIGN.
+ * The guest recap (`app/join/[token]/recap/[meetingId]/page.tsx`) reuses TWO of the three
+ * entries below verbatim (the Files card fetches through the shipped guest actions client-side)
+ * and adds no fourth. Its own gate and loader are pinned instead in
+ * `guest-read-allowlist.test.ts`'s `ALLOWED_DB_IMPORTS` / `ALLOWED_LIB_REPOSITORY_CALLS`
+ * (transitive pins), plus a new coverage assertion over the whole `app/join` tree — see that
+ * file's BAL-439 additions for what actually covers the page.
  */
 export const GUEST_READ_ALLOWLIST: readonly string[] = [
   // Lists a meeting's files for a guest — `meetingFilesRepository.listByMeeting`, a SELECT.

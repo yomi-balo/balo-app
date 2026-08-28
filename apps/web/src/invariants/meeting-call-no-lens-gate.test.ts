@@ -178,6 +178,14 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   // must resolve to a real, scannable file — `resolve-meeting-guest.ts` is real but is
   // deliberately not on this list, per the shipped convention those five carve-outs set.
   'panel-capabilities.ts',
+  // ── BAL-439 — the guest RECAP gate ──────────────────────────────────────────────────
+  //
+  // ⚠ `resolve-guest-recap-access.ts` IS **SCANNED, NOT CARVED OUT**, and that is the point:
+  // unlike every carve-out above, it imports neither `@balo/db` as a value nor
+  // `@/lib/logging` (no logging in this gate at all — see its own docblock), so nothing
+  // forces the carve-out. Being scanned here is the structural proof that the guest recap
+  // gate can never acquire a lens, an activeMode or a platformRole comparison.
+  'resolve-guest-recap-access.ts',
 ]);
 
 /**
@@ -331,6 +339,10 @@ const PINNED_FILES: readonly string[] = [
   // ⚠ PINNED, same reasoning as every block above: a missing name fails nothing.
   'components/chat-thread-body.tsx',
   'components/files-panel-body.tsx',
+  // ── BAL-439 — the guest recap gate. ⚠ PINNED **AND** ALLOW-LISTED (`CALL_LIB_FILES` above),
+  // same reasoning as every block above: a missing name fails nothing, so an unpinned new
+  // module is silently unscanned.
+  'lib/meetings/resolve-guest-recap-access.ts',
 ];
 
 /**

@@ -34,14 +34,25 @@
  * ⚠ ONE EVENT IS DELIBERATELY **NOT** DECLARED HERE, because an analytics constant with no
  * producer is a FALSE PostHog signal — a funnel step that can never fire reads as 100%
  * drop-off, and the exact-key-set guard in `guest.test.ts` would pin it forever:
- *   · `guest_converted_to_member` `{ days_since_meeting }` → **BAL-345**, whichever ticket
- *     makes domain auto-join live. Nothing writes `converted_to_user_id`.
+ *   · `guest_converted_to_member` `{ days_since_meeting }` → **BAL-489** (the guest→user
+ *     linkage writer split out of BAL-439; re-pointed from BAL-345, which owned the inert
+ *     domain-auto-join arm this constant originally reserved against). Nothing writes
+ *     `converted_to_user_id` yet.
  * The shape is written out above so that ticket adds it verbatim.
  *
  * ⚠ `guest_joined` WAS ON THAT LIST UNTIL BAL-132 AND HAS NOW LANDED, VERBATIM — the shape
  * this docblock reserved for it (`{ party, join_method, admitted }`) is exactly the shape
  * declared below, and it fires from `joinMeetingAsGuest` on every successful Daily token
  * mint. The discipline held: the constant arrived WITH its producer, in the same PR.
+ *
+ * ⚠ `guest_recap_viewed` LANDED THE SAME WAY (BAL-439, ADR-1046-adjacent ruling R12) — the
+ * guest recap page (`app/join/[token]/recap/[meetingId]/page.tsx`) fires it on a SUCCESSFUL
+ * render only; a denial keyed on a crafted token would itself be an enumeration signal. No
+ * PII, no counterparty identity: `access_scope` is the grant, `is_own_meeting` and
+ * `summary_state` describe what the reader saw, `days_since_meeting` (fix-round-1 / S6) is the
+ * floored day count from the meeting to this open, and `distinct_id` is `meeting_guests.id` —
+ * the same pseudonymous handle `guest_invite_opened` already uses, never a `users.id` a guest
+ * does not have.
  */
 import type {
   GuestAccessScopeLabel,
@@ -71,6 +82,11 @@ export const GUEST_SERVER_EVENTS = {
    * producer (the constant arrives WITH it, per this module's discipline).
    */
   GUEST_LINK_RESENT: 'guest_link_resent',
+  /**
+   * BAL-439 (R12) — the guest recap page rendered SUCCESSFULLY. Fires from
+   * `app/join/[token]/recap/[meetingId]/page.tsx`, its only producer.
+   */
+  GUEST_RECAP_VIEWED: 'guest_recap_viewed',
   /** A guest's access was revoked. */
   GUEST_REMOVED: 'guest_removed',
 } as const;
@@ -217,6 +233,33 @@ export interface GuestServerEventMap {
     access_scope: GuestAccessScopeLabel;
     /** `true` on the first ever open — `access_count` was 0 before this request. */
     first_open: boolean;
+    /** ⚠ `meeting_guests.id` — a guest has NO user id. See the module docblock. */
+    distinct_id: string;
+  };
+  /**
+   * BAL-439 (R12) — the guest recap rendered successfully.
+   *
+   * ⚠⚠ NO PII, NO COUNTERPARTY IDENTITY. No email, no company name, no counterparty name, no
+   * expert id — every property here describes the GRANT or the READER'S OWN VIEW, never who is
+   * on the other side. `summary_state` is `GuestRecapArtifactState` restated structurally
+   * (`'processing' | 'ready' | 'absent' | 'failed'`) rather than imported — this package cannot
+   * reach into `apps/web`, and TypeScript's structural typing makes the restatement a distinct
+   * declaration, not a second source of truth to keep in sync by hand.
+   */
+  [GUEST_SERVER_EVENTS.GUEST_RECAP_VIEWED]: {
+    /** The grant AS RECORDED on the guest's row — never re-derived. */
+    access_scope: GuestAccessScopeLabel;
+    /** `false` ⇒ an engagement-scope RETROSPECTIVE read of a meeting other than their own. */
+    is_own_meeting: boolean;
+    /** Which of the four states the summary card rendered in, for THIS reader. */
+    summary_state: 'processing' | 'ready' | 'absent' | 'failed';
+    /**
+     * ⚠⚠ fix-round-1 / S6 (R12) — whole days, floored, from the meeting to this open. The main
+     * question this event exists to answer ("how long after a call do guests open the recap")
+     * is unanswerable without it. Computed at the PAGE from `view.header.occurredAtIso` —
+     * never inside `resolveGuestSummary`, whose clock-free state machine is deliberate.
+     */
+    days_since_meeting: number;
     /** ⚠ `meeting_guests.id` — a guest has NO user id. See the module docblock. */
     distinct_id: string;
   };

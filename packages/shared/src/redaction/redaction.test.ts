@@ -105,6 +105,55 @@ describe('redactSensitivePath', () => {
   });
 
   /**
+   * ── ⚠⚠ BAL-439 fix-round-1 / MUST-8 (security F3) — THE GUEST RECAP'S MEETING ID ──────────
+   *
+   * `/join/` redacts only the SINGLE segment following it — the token. Before this fix,
+   * `/join/{token}/recap/{meetingId}` came out as `/join/[redacted]/recap/{meetingId}`: the
+   * credential was protected but the meeting UUID sailed through into Axiom, Sentry and
+   * PostHog's `$current_url`, from a page reachable by an unauthenticated guest. `/join/m/`
+   * exists on this same list for the identical reason: "a meeting exists at this uuid" is
+   * treated as non-disclosable to a third-party processor.
+   */
+  describe('BAL-439 — the guest recap meeting id', () => {
+    const MEETING_ID = 'a0000000-0000-4000-8000-000000000001';
+
+    it('⚠⚠ redacts BOTH the token AND the meeting id', () => {
+      expect(redactSensitivePath(`/join/tok_9f/recap/${MEETING_ID}`)).toBe(
+        '/join/[redacted]/recap/[redacted]'
+      );
+    });
+
+    it('⚠ the meeting id does not survive anywhere in the output', () => {
+      const redacted = redactSensitivePath(`/join/tok_9f/recap/${MEETING_ID}`);
+      expect(redacted).not.toContain(MEETING_ID);
+    });
+
+    it('preserves a trailing query string after the meeting id', () => {
+      expect(redactSensitivePath(`/join/tok_9f/recap/${MEETING_ID}?ref=email`)).toBe(
+        '/join/[redacted]/recap/[redacted]?ref=email'
+      );
+    });
+
+    it('redacts inside a full URL (the PostHog $current_url / $referrer shape)', () => {
+      expect(redactSensitivePath(`https://balo.expert/join/tok_9f/recap/${MEETING_ID}`)).toBe(
+        `https://balo.expert/join/[redacted]/recap/[redacted]`
+      );
+    });
+
+    it('⚠ a bare token with no /recap/ suffix is UNCHANGED by this chaining (regression guard)', () => {
+      // The pre-existing "trailing segment" pin: `/join/tok_9f/lobby` must still redact ONLY
+      // the token. This is the same code path — the chained redaction must not fire for a
+      // trailing segment that is not literally `/recap/`.
+      expect(redactSensitivePath('/join/tok_9f/lobby')).toBe('/join/[redacted]/lobby');
+      expect(redactSensitivePath('/join/tok_9f')).toBe('/join/[redacted]');
+    });
+
+    it('leaves a bare /recap/ (no meeting id) untouched beyond the token', () => {
+      expect(redactSensitivePath('/join/tok_9f/recap/')).toBe('/join/[redacted]/recap/');
+    });
+  });
+
+  /**
    * ── ⚠⚠ BAL-132 — THE ANONYMOUS LOBBY, AND THE ORDERING BUG IT EXPOSED ────────────────────
    *
    * `redactSensitivePath` replaces only THE SINGLE SEGMENT following a prefix and returns on
@@ -312,6 +361,8 @@ describe('redactSensitivePath', () => {
   describe('idempotence', () => {
     const ALREADY_REDACTED = [
       '/join/[redacted]',
+      // BAL-439 fix-round-1 / MUST-8 — the chained guest-recap meeting-id redaction.
+      '/join/[redacted]/recap/[redacted]',
       '/review/[redacted]?r=3',
       '/shared/proposals/[redacted]/extra',
       '/onboarding?from=%2Fjoin%2F[redacted]',

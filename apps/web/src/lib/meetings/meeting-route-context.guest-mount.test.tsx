@@ -179,6 +179,7 @@ describe('JoinControl — the REAL admitted mount (CRITICAL-3 / F6)', () => {
         utcWindowLabel="10:00 – 11:00 UTC"
         hasEnded={false}
         hasChat={false}
+        recapHref={null}
         nextStepLine="Come back to this page when it is time."
         expiresOn="8 September 2026"
       >

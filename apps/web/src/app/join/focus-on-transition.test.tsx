@@ -190,6 +190,7 @@ describe('⚠⚠ the invited guest — focus under AnimatePresence mode="wait"',
         utcWindowLabel="10:00 – 11:00 UTC"
         hasEnded={false}
         hasChat={false}
+        recapHref={null}
         nextStepLine="Come back to this page when it is time."
         expiresOn="8 September 2026"
       >

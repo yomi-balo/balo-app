@@ -17,11 +17,13 @@ import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
  * ⚠⚠ NO CONSTANT IS DECLARED WITHOUT A PRODUCER. Two events the design considered are
  * deliberately ABSENT, and `recap.test.ts` pins each by name:
  *   · `recap_export` — no export exists (D-B).
- *   · `guest_converted_to_member` — there is no guest lens on this surface (D-A; BAL-439 owns
- *     the guest recap arm — BAL-445 opened read-only meeting files and in-call chat to a
- *     guest, but the recap stays closed, deliberately, via `resolve-recap-access.ts`'s own
- *     guest gate). `events/guest.ts` already refuses this constant for the same reason and is
- *     NOT touched by this ticket.
+ *   · `guest_converted_to_member` — there is STILL no guest lens on this surface (D-A). BAL-439
+ *     opened the recap read-only to a guest through a SIBLING gate
+ *     (`resolve-guest-recap-access.ts`) and a separate view-model, never by widening `RecapLens`
+ *     to a fourth value (R5) — so "no guest lens" remains literally true even though the recap
+ *     itself is no longer closed. The constant stays undeclared because this PR has no producer
+ *     for it (R7/R8); `events/guest.ts` still refuses it for the same reason, unchanged by this
+ *     ticket (which instead adds `guest_recap_viewed`, WITH its producer).
  * A constant with no emitter reads as a 100% drop-off funnel step in PostHog.
  *
  * ⚠ `recap_recording_played` WAS THIS LIST'S THIRD ABSENT MEMBER, UNTIL BAL-440. BAL-473
