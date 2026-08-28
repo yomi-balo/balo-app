@@ -6,6 +6,7 @@ import {
   timestamp,
   index,
   uniqueIndex,
+  unique,
   check,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
@@ -116,6 +117,20 @@ export const projectRequests = pgTable(
     index('project_requests_expert_status_idx')
       .on(table.expertProfileId, table.status)
       .where(sql`${table.deletedAt} IS NULL`),
+    // ⚠ DO NOT DELETE THIS AS "REDUNDANT" — IT IS A COMPOSITE-FK TARGET (BAL-313).
+    // `id` is already the primary key, so `(id, company_id)` can never hold a duplicate
+    // and this constraint is trivially satisfied by any row set (which also makes the
+    // index build safe on a non-empty table). It exists ONLY because Postgres requires a
+    // matching UNIQUE CONSTRAINT on the referenced columns before it will accept a
+    // COMPOSITE foreign key — and `representations` FKs `(project_request_id,
+    // on_behalf_of_company_id)` here so a request-grain act-on-behalf grant is STRUCTURALLY
+    // unable to name a request belonging to a different company (cross-tenant escalation).
+    // A UNIQUE CONSTRAINT, not a uniqueIndex: composite FKs cannot reference an index.
+    // Exactly the `engagement_id_type_uq` / `request_expert_relationship_id_request_uq`
+    // pattern. ⚠ SIDE EFFECT, AND IT IS THE CORRECT ONE: `project_requests.company_id` can
+    // no longer be UPDATEd while a representation references the row (ON UPDATE NO ACTION
+    // on the child) — silently re-homing a request under another company must fail loudly.
+    unique('project_request_id_company_uq').on(table.id, table.companyId),
     // Routing invariant — two-sided so the modes are mutually exclusive at the
     // DB layer: direct ⇒ an expert is set; match ⇒ no expert leaks in.
     check(

@@ -55,3 +55,4 @@ export * from './apiroc-webhook-events';
 export * from './reviews';
 export * from './review-invite-tokens';
 export * from './reschedule-proposals';
+export * from './representations';

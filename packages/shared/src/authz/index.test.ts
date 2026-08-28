@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { CAPABILITIES, ROLE_CAPABILITIES, roleHasCapability, rolesWithCapability } from './index';
+import {
+  CAPABILITIES,
+  ROLE_CAPABILITIES,
+  roleHasCapability,
+  rolesWithCapability,
+  REPRESENTABLE_CAPABILITIES,
+  isRepresentableCapability,
+} from './index';
 
 /**
  * Unit tests for the pure role→capability map (BAL-345 / ADR-1029). This IS the
@@ -139,5 +146,57 @@ describe('rolesWithCapability', () => {
       'member',
       'expert',
     ]);
+  });
+});
+
+/**
+ * BAL-313 / ADR-1028 Phase 1 — the representation (act-on-behalf) capability allowlist.
+ * `REPRESENTABLE_CAPABILITIES` is a deliberate, minimal widening of THIS module's token
+ * set — never a second vocabulary — and `isRepresentableCapability` is the write-path
+ * security gate the `representations` repository has nowhere else to enforce (jsonb
+ * validates nothing). Pure, dependency-free: mocks nothing.
+ */
+describe('REPRESENTABLE_CAPABILITIES', () => {
+  it('is exactly [participate, manage_requests]', () => {
+    expect(REPRESENTABLE_CAPABILITIES).toEqual([
+      CAPABILITIES.PARTICIPATE,
+      CAPABILITIES.MANAGE_REQUESTS,
+    ]);
+  });
+
+  it('every entry is a real token in CAPABILITIES — no orphan value', () => {
+    const allCapabilities = Object.values(CAPABILITIES);
+    for (const capability of REPRESENTABLE_CAPABILITIES) {
+      expect(allCapabilities).toContain(capability);
+    }
+  });
+
+  // The exclusion guard, iterated: this is what stops a FUTURE token added to
+  // CAPABILITIES from silently becoming representable — a new entry in CAPABILITIES with
+  // no corresponding entry in REPRESENTABLE_CAPABILITIES must still be denied here.
+  it('denies every CAPABILITIES token that is NOT in the allowlist', () => {
+    const representable = new Set<string>(REPRESENTABLE_CAPABILITIES);
+    for (const capability of Object.values(CAPABILITIES)) {
+      if (representable.has(capability)) continue;
+      expect(isRepresentableCapability(capability)).toBe(false);
+    }
+  });
+
+  // Pinned side by side so an "alignment" refactor (reusing MEMBER_BUNDLE for
+  // representations) fails here: CONSUME_CREDITS is a base member capability a company
+  // `member` holds, but money must stay with the customer — it must NEVER be representable.
+  it('CONSUME_CREDITS is in the member bundle but is NOT representable', () => {
+    expect(roleHasCapability('member', CAPABILITIES.CONSUME_CREDITS)).toBe(true);
+    expect(isRepresentableCapability(CAPABILITIES.CONSUME_CREDITS)).toBe(false);
+  });
+
+  it('rejects non-string and unrecognized values — fail closed', () => {
+    expect(isRepresentableCapability(undefined)).toBe(false);
+    expect(isRepresentableCapability(null)).toBe(false);
+    expect(isRepresentableCapability('')).toBe(false);
+    expect(isRepresentableCapability(42)).toBe(false);
+    expect(isRepresentableCapability({})).toBe(false);
+    expect(isRepresentableCapability('admin')).toBe(false);
+    expect(isRepresentableCapability('super_admin')).toBe(false);
   });
 });
