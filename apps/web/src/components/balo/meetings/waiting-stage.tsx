@@ -29,7 +29,10 @@ import { MeetingAvatar } from './meeting-avatar';
  * So the three collapse into ONE nullable {@link WaitingSubject}: either the server told us who
  * is missing and from when, or it did not and **the copy names no party's clock**. It is
  * structurally impossible to supply a placeholder for one field and real data for the others.
- * Both GUEST mounts land on `null` because they do not mount the route provider.
+ * Both GUEST mounts land on `null` because they explicitly pass `waiting={null}` (N5,
+ * fix-round-2 — corrected: both DO mount `MeetingRouteContextProvider`; `waiting` arrives on
+ * the member-join response envelope, which a guest never calls, so both guest mounts pass the
+ * empty value rather than the provider being absent).
  *
  * ⚠ THE PHASE IS A **PROP**, NOT DERIVED HERE. Until BAL-134's presence writer lands,
  * `MeetingStage` supplies only `'pre-start'`, so only the first phase of each progression is

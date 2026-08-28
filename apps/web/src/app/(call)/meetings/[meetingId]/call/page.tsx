@@ -77,7 +77,10 @@ async function resolveChatSlot(
   if (userId === null) return { hasChat: false, chatChannelName: null };
 
   try {
-    const access = await resolveMeetingChatAccess({ meetingId, userId });
+    const access = await resolveMeetingChatAccess({
+      meetingId,
+      actor: { kind: 'member', userId },
+    });
     if (!access.ok || access.anchor === null) {
       return { hasChat: false, chatChannelName: null };
     }

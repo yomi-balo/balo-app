@@ -77,12 +77,18 @@ export async function postMeetingMessageAction(
   const { meetingId, body } = entry.data;
 
   try {
-    const access = await resolveMeetingChatAccess({ meetingId, userId: user.id });
+    const access = await resolveMeetingChatAccess({
+      meetingId,
+      actor: { kind: 'member', userId: user.id },
+    });
     if (!access.ok || access.anchor === null) {
       return { success: false, error: 'This conversation is no longer available.' };
     }
     // ⚠ `!== true`, NEVER `!writable`. `writable` is `boolean | null` and `null` means NOT
-    // RESOLVED (a caller passed `withWritability: false`) — which must refuse, not pass.
+    // RESOLVED (a caller passed `withWritability: false`, or — structurally, though this
+    // action always passes a MEMBER actor and can never reach it — a guest, whose arm never
+    // resolves writability at all). BAL-445: this single test is a real, independent closure
+    // on guest authorship, on top of `requireOnboardedUser()` above.
     if (access.anchor.writable !== true) {
       return { success: false, error: 'This case is closed, so the conversation is read-only.' };
     }

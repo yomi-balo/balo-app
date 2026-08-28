@@ -91,7 +91,7 @@ describe('confirmMeetingFileUploadAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRequireOnboardedUser.mockResolvedValue({ id: USER_ID });
-    mockAuthorize.mockResolvedValue({ ok: true, side: 'client' });
+    mockAuthorize.mockResolvedValue({ ok: true, viewer: 'member', side: 'client' });
     mockSend.mockResolvedValue({ ContentLength: 1234, ContentType: 'application/pdf' });
     mockAdd.mockImplementation((input: Record<string, unknown>) => Promise.resolve(rowFor(input)));
   });
@@ -111,10 +111,31 @@ describe('confirmMeetingFileUploadAction', () => {
     expect(mockAdd).not.toHaveBeenCalled();
   });
 
+  /**
+   * ⚠⚠ BAL-445 — THE GUEST-UPLOAD BRAKE, AND IT IS THE POINT. `party: access.side` cannot
+   * compile for a guest (the guest arm carries no `side`), so this action must narrow on
+   * `access.viewer` before ever reaching the insert. Unreachable in production today — this
+   * action gates on `requireOnboardedUser()` above, which a guest never satisfies — and
+   * handled anyway, per `fetch-meeting-thread.ts`'s precedent that a Server Action is a public
+   * endpoint and must never assume its own UI.
+   */
+  it('refuses a GUEST-viewer gate result and never HEADs or inserts', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      viewer: 'guest',
+      guestId: 'guest-1',
+      accessScope: 'meeting',
+    });
+    const result = await confirmMeetingFileUploadAction(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: 'This meeting is no longer available.' });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockAdd).not.toHaveBeenCalled();
+  });
+
   // ══ THE ANTI-CROSS-PARTY CONTROL ══════════════════════════════════════════════════════
   describe('party comes from the GATE, never from the request', () => {
     it('persists `client` for a client-side actor', async () => {
-      mockAuthorize.mockResolvedValue({ ok: true, side: 'client' });
+      mockAuthorize.mockResolvedValue({ ok: true, viewer: 'member', side: 'client' });
       const result = await confirmMeetingFileUploadAction(VALID_INPUT);
       expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({ party: 'client' }));
       expect(result).toMatchObject({
@@ -124,7 +145,7 @@ describe('confirmMeetingFileUploadAction', () => {
     });
 
     it('persists `expert` for an expert-side actor', async () => {
-      mockAuthorize.mockResolvedValue({ ok: true, side: 'expert' });
+      mockAuthorize.mockResolvedValue({ ok: true, viewer: 'member', side: 'expert' });
       const result = await confirmMeetingFileUploadAction(VALID_INPUT);
       expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({ party: 'expert' }));
       expect(result).toMatchObject({
@@ -139,7 +160,7 @@ describe('confirmMeetingFileUploadAction', () => {
      * That makes cross-party attribution structurally unreachable, not merely unchecked.
      */
     it('IGNORES a `party` field smuggled into the request body', async () => {
-      mockAuthorize.mockResolvedValue({ ok: true, side: 'client' });
+      mockAuthorize.mockResolvedValue({ ok: true, viewer: 'member', side: 'client' });
       const smuggled = { ...VALID_INPUT, party: 'expert' } as unknown as typeof VALID_INPUT;
       const result = await confirmMeetingFileUploadAction(smuggled);
       expect(result).toMatchObject({ success: true });
@@ -160,7 +181,7 @@ describe('confirmMeetingFileUploadAction', () => {
      * SonarCloud reliability bug (it sorts by UTF-16 code unit via string coercion).
      */
     it('the `add` payload has EXACTLY the eight expected keys — nothing smuggled survives', async () => {
-      mockAuthorize.mockResolvedValue({ ok: true, side: 'client' });
+      mockAuthorize.mockResolvedValue({ ok: true, viewer: 'member', side: 'client' });
       const smuggled = {
         ...VALID_INPUT,
         party: 'expert',
@@ -186,7 +207,7 @@ describe('confirmMeetingFileUploadAction', () => {
     });
 
     it('IGNORES it in the other direction too (expert actor, smuggled `client`)', async () => {
-      mockAuthorize.mockResolvedValue({ ok: true, side: 'expert' });
+      mockAuthorize.mockResolvedValue({ ok: true, viewer: 'member', side: 'expert' });
       const smuggled = { ...VALID_INPUT, party: 'client' } as unknown as typeof VALID_INPUT;
       await confirmMeetingFileUploadAction(smuggled);
       expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({ party: 'expert' }));

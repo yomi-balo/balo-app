@@ -116,6 +116,17 @@ const BARE_REQUIRE_USER_CALL = /\brequireUser\s*\(/;
  * without this entry all three registered as UNAUTHENTICATED and passed in silence, and
  * deleting their gate call would have shipped green.
  */
+/**
+ * ⚠⚠ `resolveMeetingGuestSubject` (BAL-445) — the second entry added for a reason OTHER than
+ * "a per-feature wrapper around `requireOnboardedUser()`". It resolves a presented credential
+ * to a **persisted, revocable subject** and fails closed — the same shape as `getSession()` /
+ * `getCurrentUser()` (both already above): a primitive through which an action learns *who is
+ * calling*. The subject is a `meeting_guests` row a host can revoke, that expires, and that
+ * the database re-validates on every single request. `PUBLIC_ACTION_ALLOWLIST` is for actions
+ * that authenticate with **nothing at all** and forward the real gate elsewhere; the three
+ * guest read actions authenticate HERE, so putting them there would silently reclassify an
+ * authorized read as public — precisely the failure mode `_read-only-actions.ts` warns about.
+ */
 const AUTH_HELPERS = [
   'requireUser',
   'requireOnboardedUser',
@@ -123,6 +134,7 @@ const AUTH_HELPERS = [
   'getSession',
   'getCurrentUser',
   'authorizeCaseMutation',
+  'resolveMeetingGuestSubject',
 ] as const;
 
 interface ServerActionScan {

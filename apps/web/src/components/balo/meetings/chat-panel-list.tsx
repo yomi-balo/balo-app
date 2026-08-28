@@ -78,8 +78,15 @@ export function mergeChatTimeline(
 
 export interface ChatPanelListProps {
   readonly items: readonly ChatTimelineItem[];
-  /** ⚠ THE ONLY IDENTITY THIS COMPONENT GETS, and it is used for alignment and nothing else. */
-  readonly viewerUserId: string;
+  /**
+   * ⚠ THE ONLY IDENTITY THIS COMPONENT GETS, and it is used for alignment and nothing else.
+   *
+   * ⚠⚠ `null` FOR A GUEST (BAL-445) — a guest has no `users.id`, so own-vs-other alignment is
+   * unanswerable and `senderUserId === null` is `false` for every row: every bubble renders as
+   * somebody else's, which is the honest answer (guest authorship is a separate, split-out
+   * ticket).
+   */
+  readonly viewerUserId: string | null;
   readonly hasEarlier: boolean;
   readonly isLoadingEarlier: boolean;
   /** ⚠ A FAILED "Show earlier" SAYS SO INLINE. A control that visibly does nothing reads broken. */

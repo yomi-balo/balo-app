@@ -13,13 +13,22 @@ vi.mock('@/app/join/_actions/poll-guest-admission', () => ({
  * ⚠⚠ THE `@balo/db` MOCK IS A TRIPWIRE, NOT A DEPENDENCY. This page performs ZERO database
  * reads by design (Decision 9), so every member below must stay uncalled. Mocking the module
  * is what lets the test ASSERT that, rather than merely relying on the absence of an import.
+ *
+ * ⚠⚠ `vi.hoisted`, NOT A PLAIN `const` — BAL-445. `vi.mock` factories are hoisted ABOVE every
+ * top-level statement, including a plain `const`, so a factory that closes over one throws
+ * "Cannot access 'dbSpies' before initialization" the moment the factory actually RUNS. It
+ * never ran before BAL-445: `lobby-client.tsx` imported nothing that reached `@balo/db`
+ * (Decision 9's own "ZERO database reads" rule, stated in its docblock). BAL-445 gave the
+ * guest mount its own `@balo/db`-reaching Server Action imports
+ * (`list-guest-meeting-files.ts`, `get-guest-meeting-file-download.ts`), which is exactly what
+ * this tripwire exists to catch — and catching it is what surfaced the latent hoisting bug.
  */
-const dbSpies = {
+const dbSpies = vi.hoisted(() => ({
   meetingFindById: vi.fn(),
   listByMeeting: vi.fn(),
   listLiveByMeeting: vi.fn(),
   findLiveByTokenHash: vi.fn(),
-};
+}));
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: dbSpies.meetingFindById },
   meetingContextsRepository: { listByMeeting: dbSpies.listByMeeting },

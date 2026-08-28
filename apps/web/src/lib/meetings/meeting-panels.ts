@@ -39,22 +39,28 @@ import type { MeetingReactionEmoji } from './meeting-reactions';
  * ambiguous context or an unprovisioned thread all render the slot ABSENT — no toolbar button,
  * no More-sheet row, no panel. Never a disabled control.
  *
- * ── ⚠⚠ THE GUEST SEAM, NAMED AND FAIL-CLOSED — **BAL-445 OWNS IT** ──────────────────────
+ * ── ⚠⚠ THE GUEST SEAM — BAL-445 OPENED READ-ONLY FILES + CHAT; WRITE STAYS CLOSED ────────
  *
- * A guest gets NO chat and NO reactions, and there is no check anywhere that says so. It is
- * structural, three times over:
+ * A guest now gets a READ-ONLY Files list and a READ-ONLY Chat transcript, never reactions and
+ * never authorship. Of the three structural closures the pre-BAL-445 version of this docblock
+ * named, two are now DELIBERATE NARROWINGS rather than absences, and one still fully holds:
  *
- *   1. `MeetingRouteContextProvider` is mounted ONLY on the member route, so both guest
- *      surfaces read the context default `panels: null`;
- *   2. all four in-call Server Actions gate on `requireUser()` / `requireOnboardedUser()`,
- *      which a guest satisfies neither of;
- *   3. `conversation_messages.sender_user_id` is `notNull` with an FK to `users.id`, so a
- *      guest **cannot author a message at all** without a migration adding a nullable sender
- *      plus a guest attribution column plus a CHECK.
+ *   1. Both guest mounts (`join/[token]/join-control.tsx`, `join/m/[meetingId]/lobby-client.tsx`)
+ *      DO mount `MeetingRouteContextProvider` now, with a `MeetingGuestPanelRegistration` —
+ *      a narrower TYPE than the member one, not the member one with flags off. See
+ *      `MeetingGuestPanelRegistration`'s own docblock.
+ *   2. The guest READ actions (`app/join/_actions/{list,get,fetch}-guest-…`) gate on
+ *      `resolveMeetingGuestSubject`, the BAL-445 per-request subject resolver — an AUTH HELPER,
+ *      not `requireUser()`. The four MEMBER in-call actions are untouched and still gate on
+ *      `requireUser()` / `requireOnboardedUser()`, which a guest satisfies neither of.
+ *   3. `conversation_messages.sender_user_id` is STILL `notNull` with an FK to `users.id` — this
+ *      is the ONE REMAINING BLOCK, and it is slice 4's (a split-out ticket, guest authorship).
+ *      A guest still cannot author a message at all without that migration.
  *
- * ⚠ DO NOT CALL `guestMayReadMeeting` TO "SUPPORT" GUESTS HERE. Its own docblock forbids
- * speculative calls: authorizing a read against a grant with no authenticated subject to bind
- * it to is worse than denying. **BAL-445** mints the session and fills the arm.
+ * The predicate IS now called — `authorizeMeetingFileAccess`'s guest arm and
+ * `resolveMeetingChatAccess`'s guest arm both call `guestMayReadMeeting` /
+ * `resolveGuestConversationScope`, the shipped scope rules, exactly once each. It is called
+ * from the GATE, never from a component.
  *
  * ── ⚠⚠ BAL-403 ADDED `'balance'`; BAL-466 MADE IT REACHABLE FOR A `case` CONSULTATION ────────
  *
@@ -188,6 +194,22 @@ export type FetchMeetingThreadResult =
     }
   | { readonly success: false; readonly error: string };
 
+/**
+ * BAL-445 — the GUEST read of the in-call thread.
+ *
+ * ⚠ THERE IS NO `viewerUserId` AND NO `writable` HERE, AND BOTH ABSENCES ARE THE POINT. A
+ * guest has no `users.id`, so own-vs-other bubble alignment is unanswerable and every bubble
+ * renders as somebody else's. And there is no composer to report writability to — R9: absence
+ * beats disablement.
+ */
+export type FetchGuestMeetingThreadResult =
+  | {
+      readonly success: true;
+      readonly messages: readonly ConversationMessageView[];
+      readonly hasEarlier: boolean;
+    }
+  | { readonly success: false; readonly error: string };
+
 export type PostMeetingMessageResult =
   | { readonly success: true; readonly message: ConversationMessageView }
   | { readonly success: false; readonly error: string };
@@ -286,7 +308,9 @@ export interface MeetingBalancePanelActions {
   readonly loadDrawdownState: () => Promise<GetMeetingDrawdownResult>;
 }
 
-export interface MeetingPanelRegistration {
+/** Everything the member route registers today, unchanged, plus the discriminant (BAL-445). */
+export interface MeetingMemberPanelRegistration {
+  readonly audience: 'member';
   /**
    * ⚠⚠ THE BARE, **TOKENLESS** JOIN URL — `${APP_URL}/join/m/{meetingId}`. Built server-side.
    *
@@ -325,3 +349,46 @@ export interface MeetingPanelRegistration {
    */
   readonly balance: MeetingBalancePanelActions | null;
 }
+
+// ── BAL-445 — the GUEST registration: a NARROWER TYPE, not the member one with flags off ──
+
+/**
+ * ⚠ READ-ONLY BY CONSTRUCTION. Two callbacks and one nullable slot — that is the whole surface.
+ * There is NO `requestUpload`, NO `confirmUpload` on this interface — a guest may not upload,
+ * and there is no expression in the type system that reaches one from here.
+ */
+export interface MeetingGuestFilePanelActions {
+  readonly list: () => Promise<ListMeetingFilesActionResult>;
+  readonly download: (fileId: string) => Promise<DownloadFileActionResult>;
+}
+
+/**
+ * ⚠ NO `postMessage`, NO upload pair. A guest reads the transcript; there is no composer to
+ * report writability to.
+ */
+export interface MeetingGuestChatPanelActions {
+  readonly fetchThread: (before?: {
+    createdAtIso: string;
+    id: string;
+  }) => Promise<FetchGuestMeetingThreadResult>;
+}
+
+/**
+ * ⚠⚠ THE GUEST REGISTRATION IS A **NARROWER TYPE**, NOT THE MEMBER ONE WITH FLAGS SET FALSE
+ * (R9). A boolean like `canUpload: false` would leave the upload callback sitting on the
+ * object, one `if` away from being reached. Absence of the CALLBACK is what replaces it: there
+ * is no expression in the type system that reaches an upload, an invite, a realtime token or a
+ * balance read from here.
+ */
+export interface MeetingGuestPanelRegistration {
+  readonly audience: 'guest';
+  readonly files: MeetingGuestFilePanelActions;
+  /** `null` ⇒ NO CHAT SLOT AT ALL — the meeting resolved to no conversation anchor. */
+  readonly chat: MeetingGuestChatPanelActions | null;
+  // ⚠ NO `joinLinkUrl` (a guest may not invite), NO People callbacks, NO `realtime`
+  //    (BAL-437 mints no guest Ably token), NO `balance` (a guest is not the payer).
+}
+
+export type MeetingPanelRegistration =
+  | MeetingMemberPanelRegistration
+  | MeetingGuestPanelRegistration;

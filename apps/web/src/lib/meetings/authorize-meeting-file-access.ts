@@ -16,11 +16,16 @@ import {
   roleHasCapability,
 } from '@balo/shared/authz';
 import {
+  guestIsAdmittedForRead,
+  guestMayReadMeeting,
   selectPrimaryMeetingContext,
+  type GuestAccessScopeLabel,
   type MeetingGuestSide,
   type PrimaryMeetingContext,
 } from '@balo/shared/meetings';
+import { conversationSubjectForMeetingContext } from '@balo/shared/conversations';
 import { log } from '@/lib/logging';
+import type { MeetingGuestSubject } from './resolve-meeting-guest';
 
 /**
  * BAL-423 — THE PARTICIPATION GATE FOR MEETING FILES. Resolve a `meetingId` to its PRIMARY
@@ -157,16 +162,36 @@ import { log } from '@/lib/logging';
  * call. Documented, not omitted: the `meeting` row is threaded back so a caller that needs
  * liveness has it without a second read.
  *
- * ⚠ IT SHIPS WITH NO PRODUCTION CALLER OUTSIDE THIS TICKET'S FOUR ACTIONS (D4) — the same
- * BAL-408 / BAL-413 / BAL-424 precedent of landing a gate ahead of its surface.
+ * ⚠⚠ **THE GUEST ARM — BAL-445.** As of BAL-445, `authorizeMeetingFileAccess` has EIGHT
+ * production callers (not four): `list-meeting-files.ts`, `get-meeting-file-download.ts`,
+ * `request-meeting-file-upload.ts`, `confirm-meeting-file-upload.ts`,
+ * `send-meeting-reaction.ts`, `get-case-file-download.ts`, `meeting-chat-anchor.ts`, and
+ * `resolve-recap-access.ts`. The AC "Guest access respects BAL-408's `access_scope`" is now
+ * MET for meeting files and in-call chat — see the guest arm below. The recap remains
+ * BAL-439's; `resolve-recap-access.ts` gates guests out explicitly, on purpose (R4).
  */
 
 /** Which side of the meeting the actor was resolved onto. NEVER taken from request input. */
 export type MeetingFileAccessSide = MeetingGuestSide;
 
+/**
+ * WHO IS ASKING. ⚠ AN EXPLICIT DISCRIMINATED UNION RATHER THAN AN OPTIONAL `guest` BESIDE
+ * `userId`: an optional field admits "both" and "neither", and this is the gate where an
+ * implicit state is most expensive. Same reasoning as `presencePartyForGuest`'s input object.
+ */
+export type MeetingFileAccessActor =
+  | { readonly kind: 'member'; readonly userId: string }
+  | { readonly kind: 'guest'; readonly guest: MeetingGuestSubject };
+
+export interface AuthorizeMeetingFileAccessInput {
+  readonly meetingId: string;
+  readonly actor: MeetingFileAccessActor;
+}
+
 export type AuthorizeMeetingFileAccessResult =
   | {
       ok: true;
+      viewer: 'member';
       /** ⚠ THE `party` EVERY FILE THIS ACTOR SHARES WILL CARRY. Returned, never accepted. */
       side: MeetingFileAccessSide;
       /** Threaded back so a caller needing liveness never re-reads it (nor can disagree). */
@@ -178,24 +203,42 @@ export type AuthorizeMeetingFileAccessResult =
       /** `null` for a `match`-routed `project_discovery`, which names nobody. */
       expertProfileId: string | null;
     }
-  /** ⚠ ONE literal. There is deliberately no `forbidden`. */
+  | {
+      ok: true;
+      viewer: 'guest';
+      /** `meeting_guests.id` — the only stable handle a guest has. NEVER a `users.id`. */
+      guestId: string;
+      /** The grant AS RECORDED, threaded so callers never re-read it. */
+      accessScope: GuestAccessScopeLabel;
+      /** The TARGET meeting — whatever `meetingId` resolved to. NOT the guest's own meeting. */
+      meeting: Meeting;
+      /**
+       * ⚠⚠ F2 (fix-round-1) — THE GUEST'S OWN meeting (`meeting_guests.meeting_id`'s row),
+       * threaded as a DISTINCT field from `meeting` above. A caller computing the guest's
+       * conversation-read scope (`meeting-chat-anchor.ts`) must derive it from THIS field, never
+       * from `meeting` — `meeting` is the target and is equal to the guest's own meeting only by
+       * coincidence (the id-equality shortcut, or envelope-equality for an `engagement`-scoped
+       * guest). Reading `meeting` there binds the scope rule to caller-supplied input with no
+       * independent tie to the recorded grant.
+       */
+      guestMeeting: Meeting;
+      subject: PrimaryMeetingContext;
+    }
+  /** ⚠ ONE literal. There is deliberately still no `forbidden`. */
   | { ok: false; code: 'meeting_not_found' };
-
-export interface AuthorizeMeetingFileAccessInput {
-  meetingId: string;
-  userId: string;
-}
 
 /**
  * Which read came back empty, or which axis refused — a LOG field, NEVER a wire value.
  *
  * ⚠ EVERY MEMBER IS REACHABLE, AND THAT IS A RULE RATHER THAN A COINCIDENCE. A reserved
  * label no code path can emit is a dead union member: it reads as coverage that does not
- * exist, and nothing fails when the branch it was meant to describe never arrives. There is
- * deliberately NO `guest_unsupported` here — a guest reaches no arm and falls out as
- * `cross_tenant`, DELIBERATELY INDISTINGUISHABLE FROM A STRANGER (the fail-closed
- * direction), and the test suite pins that literal so BAL-132 gets a RED test the moment it
- * fills the guest arm. Add the label in the same change that can emit it.
+ * exist, and nothing fails when the branch it was meant to describe never arrives.
+ *
+ * `guest_out_of_scope` joins this union in the SAME change that emits it (BAL-445, §2.2
+ * below): a token-bearing guest whose recorded `access_scope` does not cover the target
+ * meeting. A signed-in stranger with no membership anywhere is still `cross_tenant` —
+ * deliberately indistinguishable from a stranger, the fail-closed direction — but a guest
+ * now resolves on its own arm, with its own log shape.
  */
 type DenialReason =
   | 'no_meeting'
@@ -204,6 +247,9 @@ type DenialReason =
   | 'subject_unresolvable'
   | 'no_capability'
   | 'declined_relationship'
+  | 'guest_not_admitted'
+  | 'guest_out_of_scope'
+  | 'guest_owner_unresolvable'
   | 'cross_tenant';
 
 /** The single fail-closed exit. The SHAPE goes to the log; the wire gets one literal. */
@@ -293,6 +339,166 @@ async function requestGrainRelationshipDenies(
   return false;
 }
 
+/** `{ userId }` for a member, `{ guestId }` for a guest — a LOG field, never a wire value. */
+function actorLogFields(actor: MeetingFileAccessActor): Record<string, unknown> {
+  return actor.kind === 'member' ? { userId: actor.userId } : { guestId: actor.guest.guest.id };
+}
+
+/**
+ * Does the TARGET meeting sit inside the guest's own ENGAGEMENT ENVELOPE?
+ *
+ * ⚠⚠ THE IDENTITY OF AN ENVELOPE IS `conversationSubjectForMeetingContext`'s ANSWER, BORROWED
+ * FROM THE CONVERSATION SEAM SO THE TWO GRAINS CANNOT DISAGREE ABOUT WHAT "THE SAME
+ * ENGAGEMENT" MEANS. `resolveGuestConversationScope` already decides the conversation-grain
+ * question with that mapping; deriving a second notion here — "both are engagement-grain and
+ * the ids match" — would be a second definition that drifts the first time a seventh context
+ * label lands. The mapping is total over `MeetingContextTypeWithHolder` with a `never`
+ * default, so that seventh label fails to compile there rather than defaulting here.
+ *
+ * ⚠ FAIL-CLOSED THREE WAYS: a guest meeting whose primary context is `none`/`ambiguous`
+ * returns false; a `project_discovery` on EITHER side maps to `null` (it names a request that
+ * fans out to many threads, so it names no envelope) and returns false.
+ */
+async function targetSharesGuestEnvelope(
+  guestMeetingId: string,
+  targetSubject: PrimaryMeetingContext
+): Promise<boolean> {
+  const guestContexts = await meetingContextsRepository.listByMeeting(guestMeetingId);
+  const guestPrimary = selectPrimaryMeetingContext(guestContexts);
+  if (!guestPrimary.ok) return false;
+  const guestEnvelope = conversationSubjectForMeetingContext(guestPrimary.context);
+  const targetEnvelope = conversationSubjectForMeetingContext(targetSubject);
+  if (guestEnvelope === null || targetEnvelope === null) return false;
+  return (
+    guestEnvelope.contextType === targetEnvelope.contextType &&
+    guestEnvelope.contextId === targetEnvelope.contextId
+  );
+}
+
+/**
+ * ── THE GUEST ARM (BAL-445) — extracted so `authorizeMeetingFileAccess` stays under the
+ * cognitive-complexity ceiling, exactly the same move already made for `actorIsOnExpertSide`
+ * and `requestGrainRelationshipDenies` above. Called BEFORE owner resolution. A guest needs no
+ * owning party, so `resolveMeetingContextOwner` is not called for them — one fewer read, and
+ * "authorization before any coherence or state check" is preserved.
+ *
+ * ⚠⚠ THE GUEST ARM CARRIES NO `side`, AND THAT IS THE LOAD-BEARING DECISION. Three reasons:
+ *   1. It would be a third derivation from a placeholder — on a `link`-channel row
+ *      `meeting_guests.party` is NOT a resolved side (`presencePartyForGuest` and
+ *      `projectGuestForViewer` both already refuse to derive from it).
+ *   2. Nothing needs it — `meeting_files` reads are not party-filtered (BAL-423), and guest
+ *      upload is closed, so there is no `party` column for a guest to write.
+ *   3. It is the compiler brake R4 requires: `access.side` on a union whose guest arm lacks
+ *      the property is a hard `tsc` error at every consumer of `side` — the exact set of
+ *      call sites that must state, in code, what they do about a guest.
+ */
+async function authorizeGuestFileAccess(
+  meeting: Meeting,
+  meetingId: string,
+  subject: PrimaryMeetingContext,
+  guestSubject: MeetingGuestSubject
+): Promise<AuthorizeMeetingFileAccessResult> {
+  const { guest, meeting: guestMeeting, admission } = guestSubject;
+
+  // ⚠⚠ F1 (fix-round-1) — THE ADMISSION GATE, CHECKED FIRST AND BEFORE ANY OTHER GUEST CHECK.
+  // `resolveMeetingGuestSubject` deliberately still resolves a `pending` row — the `/join`
+  // landing and `pollGuestAdmissionAction` both legitimately need to render the waiting card
+  // for a not-yet-admitted guest — but a READ is a stricter question than "does a live row
+  // exist". `guestIsAdmittedForRead` (@balo/shared/meetings) is the shared pure form of
+  // `apps/api`'s `ADMITTED_STATES`: waiting is not holding, and being refused is not holding.
+  // Without this, ANY visitor who claims a lobby place off a forwarded `/join/m/{meetingId}`
+  // URL — never admitted by a host — could read every file and the whole in-call transcript.
+  if (!guestIsAdmittedForRead(admission)) {
+    return deny('guest_not_admitted', { guestId: guest.id, meetingId, admission });
+  }
+
+  // ⚠⚠ F3 (fix-round-1) — THE REQUEST-GRAIN DECLINE GATE ALSO GATES A GUEST. Without this, a
+  // guest invited to a `request_interaction` / `project_discovery` meeting whose expert has
+  // since DECLINED the request kept reading files after the declining expert and their whole
+  // agency were denied below — precisely the defect BAL-423 shipped a fix for, reintroduced
+  // one actor removed. Reuses `requestGrainRelationshipDenies` — the SAME predicate the
+  // member-expert arm runs, which itself reuses `relationshipDeniesHosting` — so there is
+  // exactly ONE definition of "declined" on this gate, never a second. Costs one extra read
+  // (`resolveMeetingContextOwner`) only on the two request-grain context types; every other
+  // primary context (case, project_kickoff, package_session, retainer_checkin) still resolves
+  // no owner for a guest, unchanged.
+  if (
+    subject.contextType === 'request_interaction' ||
+    subject.contextType === 'project_discovery'
+  ) {
+    const owner = await resolveMeetingContextOwner(subject);
+
+    // ⚠⚠ S2 (fix-round-2) — `owner === undefined` now DENIES the guest, matching the member
+    // arm's `subject_unresolvable` below, rather than falling through to `guestMayReadMeeting`
+    // as fix-round-1 left it. `resolveContextOwner`'s finders filter `deleted_at IS NULL`, so
+    // an owning row that is REMOVED (not merely declined) — e.g. the shipped "remove invited
+    // expert" action soft-deletes `request_expert_relationships` — also resolves `undefined`.
+    // Fix-round-1's fall-through meant that from that moment the delivering expert, their
+    // agency and every client member were denied below, while a guest holding a live token
+    // kept reading unchanged: the mirror image of the bypass F3 closed. Scoped to request
+    // grain only, matching F3 — an engagement-grain guest still resolves no owner at all and
+    // must not gain a lifecycle check this gate does not otherwise discharge for it.
+    if (owner === undefined) {
+      return deny('guest_owner_unresolvable', {
+        guestId: guest.id,
+        meetingId,
+        contextType: subject.contextType,
+      });
+    }
+
+    // `owner.expertProfileId` is `null` for a `match`-routed `project_discovery`, which names
+    // no expert — nothing to decline, so EVIDENCE, NOT ABSENCE applies here too: ungated.
+    if (
+      owner.expertProfileId !== null &&
+      (await requestGrainRelationshipDenies(subject, owner.expertProfileId))
+    ) {
+      return deny('declined_relationship', {
+        guestId: guest.id,
+        meetingId,
+        contextType: subject.contextType,
+      });
+    }
+  }
+
+  // ⚠ THE SHIPPED PREDICATE, CALLED — NOT REIMPLEMENTED. `guestMayReadMeeting`
+  // (@balo/shared/meetings) encodes the `meeting` vs `engagement` scope rule and is pure and
+  // tested. This ticket supplies the SUBJECT; it does not re-derive the RULE. There is no
+  // `accessScope === 'engagement'` comparison anywhere in this file, and there must never be
+  // one.
+  const targetSharesGuestEngagement =
+    guestMeeting.id === meetingId
+      ? // ⚠ NOT A SHORTCUT INTO THE PREDICATE'S FIRST BRANCH. A meeting trivially shares its
+        // own envelope; computing it would be a second read for an answer we already hold.
+        true
+      : await targetSharesGuestEnvelope(guestMeeting.id, subject);
+
+  if (
+    !guestMayReadMeeting({
+      guestAccessScope: guest.accessScope,
+      guestMeetingId: guestMeeting.id,
+      targetMeetingId: meetingId,
+      targetSharesGuestEngagement,
+    })
+  ) {
+    return deny('guest_out_of_scope', {
+      guestId: guest.id,
+      meetingId,
+      accessScope: guest.accessScope,
+      contextType: subject.contextType,
+    });
+  }
+
+  return {
+    ok: true,
+    viewer: 'guest',
+    guestId: guest.id,
+    accessScope: guest.accessScope,
+    meeting,
+    guestMeeting,
+    subject,
+  };
+}
+
 /**
  * Fail-closed participation authorization for a meeting's file surface.
  *
@@ -302,13 +508,13 @@ async function requestGrainRelationshipDenies(
 export async function authorizeMeetingFileAccess(
   input: AuthorizeMeetingFileAccessInput
 ): Promise<AuthorizeMeetingFileAccessResult> {
-  const { meetingId, userId } = input;
+  const { meetingId, actor } = input;
 
   // 1. The meeting. `findById` filters `deleted_at IS NULL`, so missing and soft-deleted are
   //    ONE outcome — which is what lets them share one literal without extra work.
   const meeting = await meetingsRepository.findById(meetingId);
   if (meeting === undefined) {
-    return deny('no_meeting', { userId, meetingId });
+    return deny('no_meeting', { ...actorLogFields(actor), meetingId });
   }
 
   // 2. The PRIMARY context (BAL-408's precedence rule, pure). `listByMeeting` filters
@@ -321,12 +527,22 @@ export async function authorizeMeetingFileAccess(
     // Both `none` and `ambiguous` answer the SAME literal — a distinct code
     // pre-authorization is an existence oracle. Only the log distinguishes them.
     return deny(primary.reason === 'ambiguous' ? 'ambiguous_context' : 'no_context', {
-      userId,
+      ...actorLogFields(actor),
       meetingId,
       contextCount: contexts.length,
     });
   }
   const subject = primary.context;
+
+  // ── THE GUEST ARM (BAL-445) — dispatched here, BEFORE owner resolution. A guest needs no
+  // owning party, so `resolveMeetingContextOwner` is not called for them — one fewer read, and
+  // "authorization before any coherence or state check" is preserved. See
+  // `authorizeGuestFileAccess` (above) for the full arm and its `⚠⚠ NO side` rationale.
+  if (actor.kind === 'guest') {
+    return authorizeGuestFileAccess(meeting, meetingId, subject, actor.guest);
+  }
+
+  const { userId } = actor;
 
   // 3. The owning party, from the primary context's OWN row. A judgement-free `@balo/db`
   //    read — it reports who owns the row and says nothing about who may see it.
@@ -352,7 +568,15 @@ export async function authorizeMeetingFileAccess(
       // the wire.
       return deny('no_capability', { userId, meetingId, companyId, side: 'client' });
     }
-    return { ok: true, side: 'client', meeting, subject, companyId, expertProfileId };
+    return {
+      ok: true,
+      viewer: 'member',
+      side: 'client',
+      meeting,
+      subject,
+      companyId,
+      expertProfileId,
+    };
   }
 
   // EXPERT ARM — the shipped VISIBILITY rule (see (b) above). Reached ONLY when the actor
@@ -374,36 +598,21 @@ export async function authorizeMeetingFileAccess(
         contextType: subject.contextType,
       });
     }
-    return { ok: true, side: 'expert', meeting, subject, companyId, expertProfileId };
+    return {
+      ok: true,
+      viewer: 'member',
+      side: 'expert',
+      meeting,
+      subject,
+      companyId,
+      expertProfileId,
+    };
   }
 
-  /**
-   * ⚠ THE GUEST ARM IS A NAMED, FAIL-CLOSED HOLE — ⚠⚠ **NOW ASSIGNED TO BAL-445**, "a
-   * guest-authenticated read session: ONE primitive for meeting files and in-call chat". The
-   * previous assignment to BAL-132 (D2) is STALE — BAL-132 shipped the anonymous lobby and did
-   * NOT fill this branch, and BAL-436 deliberately did not invent half of the primitive inside
-   * a panel ticket (BAL-437 needs the identical thing for Ably: "a guest has no `user.id`").
-   * One unsolved primitive, two consumers, one ticket.
-   *
-   * There is NO guest-authenticated read session on `main`: `/join/[token]` resolves an
-   * identity CLAIM only, and `guestMayReadMeeting` (`@balo/shared/meetings`) has ZERO
-   * production callers by design — its own docblock says BAL-408 "RECORDS THE GRANT; IT DOES
-   * NOT ENFORCE THE READ". This gate therefore takes an authenticated `userId` and nothing
-   * else. A guest reaches no arm and is denied with the same single literal as a stranger.
-   *
-   * DO NOT call `guestMayReadMeeting` speculatively and DO NOT invent a guest session here:
-   * BAL-445 mints the session, and BAL-445 fills this branch. Calling the predicate now would
-   * mean authorizing a read against a grant with no authenticated subject to bind it to —
-   * which is worse than denying.
-   *
-   * ⚠ THE ACCEPTANCE CRITERION "Guest access respects BAL-408's `access_scope`" IS STILL NOT
-   * MET. It is restated as a contract **BAL-445** / BAL-388 satisfy. This is a decision (D2),
-   * not an oversight, and the test suite closes the hole by name. ⚠ BAL-436's in-call Files
-   * panel is registered on the MEMBER mount ONLY, structurally (both guest mounts read a
-   * `null` panel registration), so it neither depends on nor widens this branch.
-   */
-
   // THE CROSS-TENANT ATTEMPT — the thing worth seeing in Axiom. The log distinguishes it from
-  // a genuinely missing meeting; the wire deliberately does not.
+  // a genuinely missing meeting; the wire deliberately does not. A signed-in stranger with no
+  // membership anywhere, and now also a token-bearing guest whose OWN meeting resolved to no
+  // subject at all (unreachable in practice — the guest arm above already returned), land here
+  // identically.
   return deny('cross_tenant', { userId, meetingId, companyId, contextType: subject.contextType });
 }

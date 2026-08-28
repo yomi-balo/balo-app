@@ -9,6 +9,8 @@ import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-contex
 import { END_MEETING_FAILED_COPY, type EndMeetingResult } from '@/lib/meetings/meeting-state';
 import type {
   GetMeetingDrawdownResult,
+  MeetingGuestPanelRegistration,
+  MeetingMemberPanelRegistration,
   MeetingPanelRegistration,
 } from '@/lib/meetings/meeting-panels';
 import {
@@ -94,8 +96,9 @@ function grantFor(overrides: Partial<typeof RAW_GRANT> = {}): ValidatedGrant {
  * half: registered means openable, the toggle closes, focus returns, and a terminal frame
  * closes the panel.
  */
-function panelsFake(): MeetingPanelRegistration {
+function panelsFake(): MeetingMemberPanelRegistration {
   return {
+    audience: 'member',
     joinLinkUrl: 'https://balo.test/join/m/0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d',
     loadGuests: vi.fn().mockResolvedValue({
       success: true,
@@ -114,7 +117,25 @@ function panelsFake(): MeetingPanelRegistration {
     // this, the fixture's missing `balance` key is `undefined`, and `!== null` reads that as
     // registered — a false positive this ticket's own tests would otherwise fall into.
     balance: null,
-  } as unknown as MeetingPanelRegistration;
+  } as unknown as MeetingMemberPanelRegistration;
+}
+
+/**
+ * BAL-445 fix round 2 (N4) — a REAL guest registration, the shape `join-control.tsx` /
+ * `lobby-client.tsx` actually build once admitted (`audience: 'guest'`, a `files` pair, an
+ * optional `chat`). `renderGuest()` mounts this by default now, so the guest branch of
+ * `resolvePanelCapabilities` / `FramePanel` / the toolbar is genuinely exercised here rather
+ * than only proven by reading the code.
+ */
+function guestPanelsFake(): MeetingGuestPanelRegistration {
+  return {
+    audience: 'guest',
+    files: {
+      list: vi.fn().mockResolvedValue({ success: true, files: [] }),
+      download: vi.fn(),
+    },
+    chat: null,
+  };
 }
 
 const DRAWDOWN_NOW = new Date('2026-07-16T12:00:00.000Z');
@@ -147,16 +168,21 @@ function drawdownStateFor(
  * every call (a single fixed answer is enough: these tests only exercise the FIRST, immediate
  * read on mount, never the schedule).
  */
-function panelsFakeWithBalance(result: GetMeetingDrawdownResult): MeetingPanelRegistration {
+function panelsFakeWithBalance(result: GetMeetingDrawdownResult): MeetingMemberPanelRegistration {
   return {
     ...panelsFake(),
     balance: { loadDrawdownState: vi.fn().mockResolvedValue(result) },
-  } as unknown as MeetingPanelRegistration;
+  } as unknown as MeetingMemberPanelRegistration;
 }
 
 interface RouteOptions {
   readonly onExit?: (reason: string) => void;
-  /** ⚠ ABSENT ⇒ THE SLOT IS UNREGISTERED, which is what both guest mounts read. */
+  /**
+   * ⚠ ABSENT ⇒ THE SLOT IS UNREGISTERED. Typed as the FULL union (N4, fix-round-2) — a
+   * narrower `MeetingMemberPanelRegistration`-only type made a guest registration
+   * unrepresentable through this options bag, which is exactly the gap `renderGuest()` used
+   * to paper over by mounting no provider at all.
+   */
   readonly panels?: MeetingPanelRegistration;
   readonly waiting?: {
     absentParty: 'expert' | 'client';
@@ -196,8 +222,46 @@ function renderMember(options: RouteOptions = {}, canEndMeeting = false): HTMLEl
   ).container;
 }
 
-/** ⚠ THE GUEST MOUNT: no provider at all, so no destination and no waiting subject exist. */
-function renderGuest(): HTMLElement {
+/**
+ * THE GUEST MOUNT — mirrors `join-control.tsx` / `lobby-client.tsx`'s own `phase ===
+ * 'admitted'` / `state === 'admitted'` branch: `MeetingRouteContextProvider` IS mounted, with
+ * every prop except `panels` at its empty value (no destination, no waiting subject, no
+ * `onExit`, no `endMeeting`).
+ *
+ * ⚠⚠ N4 (fix-round-2) — this used to render bare `<MeetingFrame>` with NO provider at all,
+ * which was true of BAL-435 but stopped being true of a real guest mount once BAL-445 §7
+ * (fix-round-1, CRITICAL-3) started mounting the provider for both guest routes. That made the
+ * `panels.audience === 'guest'` branch (`meeting-frame-impl.tsx`'s Files/People/toolbar wiring)
+ * untested here, AND unrepresentable at all once `RouteOptions.panels` was narrowed to the
+ * member-only type. Defaulting to a REAL guest registration closes both: every existing
+ * `renderGuest()` call below now exercises the actual guest branch, not a structural absence.
+ * Pass `panels: null` explicitly for the genuinely different "no registration at all" case.
+ */
+function renderGuest(panels: MeetingPanelRegistration | null = guestPanelsFake()): HTMLElement {
+  return render(
+    <MeetingRouteContextProvider
+      meetingId={null}
+      viewerName={null}
+      title={null}
+      backTo={null}
+      contextNoun="call"
+      waiting={null}
+      panels={panels}
+    >
+      <MeetingFrame grant={grantFor()} />
+    </MeetingRouteContextProvider>
+  ).container;
+}
+
+/**
+ * ⚠⚠ N4 (fix-round-2) — THE GENUINELY UNREGISTERED CASE, HONESTLY NAMED. This is NOT a guest
+ * mount (a real one always carries a `panels` registration — see `renderGuest()` above); it is
+ * `MeetingFrame` rendered with no `MeetingRouteContextProvider` ancestor at all, the defensive
+ * fallback `useMeetingRoute()`'s own default answers (`meeting-route-context.tsx`). The OLD
+ * `renderGuest()` used to be indistinguishable from this, which is what let a since-inverted
+ * "guests have no panel slot" assumption ship unnoticed.
+ */
+function renderWithNoRouteProviderAtAll(): HTMLElement {
   return render(<MeetingFrame grant={grantFor()} />).container;
 }
 
@@ -545,8 +609,15 @@ describe('MeetingFrame — the host end, and its pending state', () => {
  * BAL-436 — ⚠⚠ THE SIDE-PANEL SLOT, AT THE FRAME.
  *
  * `panels === null` means NO toolbar buttons, NO More-sheet rows, NO seat chip, NO interactive
- * overflow tile and NO panel. Not disabled — ABSENT. Both GUEST mounts read `null`
- * STRUCTURALLY, because neither mounts the route context at all.
+ * overflow tile and NO panel. Not disabled — ABSENT.
+ *
+ * ⚠⚠ N4/N5 (fix-round-2) — CORRECTING A NOW-FALSE CLAIM. This used to say "both GUEST mounts
+ * read `null` STRUCTURALLY, because neither mounts the route context at all" — true of BAL-435,
+ * false since BAL-445 §7 (fix-round-1, CRITICAL-3) started mounting
+ * `MeetingRouteContextProvider` on both guest routes WITH a real `panels` registration. A real
+ * guest mount DOES have a slot (Files; never People — see `resolvePanelCapabilities`). The
+ * genuinely unregistered case is `panels === null`, on EITHER audience, or no provider at all;
+ * none of the three is "the guest mount".
  */
 describe('MeetingFrame — the side panel (BAL-436)', () => {
   beforeEach(() => {
@@ -562,8 +633,28 @@ describe('MeetingFrame — the side panel (BAL-436)', () => {
     });
   });
 
-  it('⚠⚠ THE GUEST MOUNT HAS NO SLOT AT ALL — structurally, with no check anywhere', async () => {
+  it('⚠⚠ a REAL guest mount has a Files slot but NEVER a People one (N4, fix-round-2)', async () => {
     renderGuest();
+    await join();
+
+    expect(await screen.findByRole('button', { name: 'Files' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
+    // ⚠ NO SEAT CHIP FOR A GUEST — gated on `hasPeople`, not on `panels !== null`.
+    expect(screen.queryByTestId('meeting-roster')).toBeNull();
+  });
+
+  it('opens the guest Files panel from the toolbar', async () => {
+    const user = userEvent.setup();
+    renderGuest();
+    await join();
+
+    await user.click(await screen.findByRole('button', { name: 'Files' }));
+
+    expect(await screen.findByRole('heading', { level: 2, name: 'Files' })).toBeInTheDocument();
+  });
+
+  it('⚠ THE UNREGISTERED CASE, HONESTLY NAMED — a GUEST mount with `panels: null` has no slot at all', async () => {
+    renderGuest(null);
     await join();
 
     expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
@@ -578,6 +669,16 @@ describe('MeetingFrame — the side panel (BAL-436)', () => {
 
     expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
     expect(screen.queryByTestId('meeting-roster')).toBeNull();
+  });
+
+  it('⚠ NO ROUTE PROVIDER AT ALL is equally absent — the defensive fallback, not a real mount shape', async () => {
+    renderWithNoRouteProviderAtAll();
+    await join();
+
+    expect(screen.queryByRole('button', { name: 'People' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Files' })).toBeNull();
+    expect(screen.queryByTestId('meeting-roster')).toBeNull();
+    expect(screen.queryByTestId('meeting-side-panel')).toBeNull();
   });
 
   it('opens the People panel from the toolbar', async () => {
@@ -736,7 +837,7 @@ describe('MeetingFrame — the Balance slot (BAL-403)', () => {
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     renderMember({ panels });
     await join();
 
@@ -778,7 +879,7 @@ describe('MeetingFrame — the Balance slot (BAL-403)', () => {
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     renderMember({ panels });
     await join();
 
@@ -850,7 +951,7 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 1 (W5 — auto-ope
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     const user = userEvent.setup();
     const container = renderMember({ panels });
     await join();
@@ -888,7 +989,7 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 1 (C2 — retry)',
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     renderMember({ panels });
     await join();
 
@@ -932,7 +1033,7 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R3 — the had-
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     renderMember({ panels });
     await join();
 
@@ -969,7 +1070,7 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R3 — the had-
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     renderMember({ panels });
     await join();
 
@@ -1003,7 +1104,7 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R3 — the had-
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     renderMember({ panels });
     await join();
 
@@ -1059,7 +1160,7 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R5 — the badg
     const panels = {
       ...panelsFake(),
       balance: { loadDrawdownState: load },
-    } as unknown as MeetingPanelRegistration;
+    } as unknown as MeetingMemberPanelRegistration;
     const container = renderMember({ panels });
     await join();
 

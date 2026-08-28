@@ -252,7 +252,10 @@ describe('MeetingCallPage — BAL-437, ⚠⚠ the CHAT SLOT is resolved server-s
     const container = await renderPage();
     const client = container.querySelector('[data-testid="call-client"]');
 
-    expect(mockResolveChatAccess).toHaveBeenCalledWith({ meetingId: MEETING_ID, userId: USER_ID });
+    expect(mockResolveChatAccess).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      actor: { kind: 'member', userId: USER_ID },
+    });
     expect(client).toHaveAttribute('data-has-chat', 'true');
     expect(client).toHaveAttribute('data-chat-channel', `conversation:${CONVERSATION_ID}`);
   });

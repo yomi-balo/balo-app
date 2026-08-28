@@ -13,7 +13,10 @@ import {
 } from '@/lib/meetings/guest-roster';
 import { GUEST_ACTION_COPY } from '@/lib/meetings/guests-copy';
 import { guestIdFromParticipantClaim } from '@/lib/meetings/present-guest-ids';
-import type { MeetingGuestsPayload, MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type {
+  MeetingGuestsPayload,
+  MeetingMemberPanelRegistration,
+} from '@/lib/meetings/meeting-panels';
 import { MeetingSidePanel } from './meeting-side-panel';
 import { PeoplePanelRow, PresentParticipantRow } from './people-panel-row';
 import { LobbyQueueRow } from './lobby-queue-row';
@@ -69,7 +72,7 @@ const QUEUE_DISCLOSURE =
 const COPY_LINK_HELPER = 'Anyone using this link asks to be let in.';
 
 export interface PeoplePanelProps {
-  readonly panels: MeetingPanelRegistration;
+  readonly panels: MeetingMemberPanelRegistration;
   readonly onClose: () => void;
   /** Hoisted so the top-bar chip survives the panel closing. ⚠ SEATS, never a local count. */
   readonly onSeatsChange: (seats: { participantCount: number; participantCap: number }) => void;
@@ -468,7 +471,7 @@ function PeoplePanelFooter({
   seats,
   report,
 }: Readonly<{
-  panels: MeetingPanelRegistration;
+  panels: MeetingMemberPanelRegistration;
   /** ⚠ THE EXACT SHAPE — see `PeoplePanelProps.meetingProps` for why never a `Record`. */
   meetingProps: Readonly<{ meeting_id?: string }>;
   onInvited: () => Promise<void>;

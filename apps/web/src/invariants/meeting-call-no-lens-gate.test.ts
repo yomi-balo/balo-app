@@ -166,6 +166,18 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   // `reschedule-api-client.ts` because it resolves the viewer's Bearer from the
   // iron-session) and neither belongs in a browser bundle, so neither is scanned here.
   // Neither file names `lens` in any case.
+  //
+  // ── BAL-445 — the guest read arm ────────────────────────────────────────────────────
+  //
+  // ⚠ `resolve-meeting-guest.ts` IS DELIBERATELY ABSENT, on exactly the grounds every other
+  // carve-out above is: it carries `import 'server-only'`, it value-imports `@balo/db`, and
+  // it imports `@/lib/logging` — the same shape `guests-api-client.ts`,
+  // `meeting-lifecycle-client.ts`, `meeting-chat-anchor.ts`, `member-join-path.ts` and
+  // `reschedule-api-client.ts` already hold. It must never reach a browser bundle. If you are
+  // unsure whether a name belongs on this list, the rot guard below decides it: a name here
+  // must resolve to a real, scannable file — `resolve-meeting-guest.ts` is real but is
+  // deliberately not on this list, per the shipped convention those five carve-outs set.
+  'panel-capabilities.ts',
 ]);
 
 /**
@@ -305,6 +317,20 @@ const PINNED_FILES: readonly string[] = [
   'lib/meetings/drawdown-auto-open.ts',
   'lib/meetings/use-drawdown-poll.ts',
   'app/(call)/meetings/[meetingId]/call/_actions/get-meeting-drawdown-state.ts',
+  // ── BAL-445 — the guest read-only Files + Chat panels. ⚠ PINNED **AND** ALLOW-LISTED
+  // (`panel-capabilities.ts`), same reasoning as every block above: a missing name fails
+  // nothing, so an unpinned new module is silently unscanned. The two guest panel
+  // components live in `components/balo/meetings/` (scanned WHOLE, not filtered by an
+  // allow-list), so they need only a PINNED_FILES entry — the non-vacuity guard.
+  'components/guest-files-panel.tsx',
+  'components/guest-chat-panel.tsx',
+  'lib/meetings/panel-capabilities.ts',
+  // ── BAL-445 fix-round-1 (F5 / SUGGESTION-3) — `ChatThreadBody` / `FilesPanelBody` moved out
+  // of `chat-panel.tsx` / `files-panel.tsx` into their own modules, so the guest panels stop
+  // dragging the composer / upload hook into their bundle through module resolution alone.
+  // ⚠ PINNED, same reasoning as every block above: a missing name fails nothing.
+  'components/chat-thread-body.tsx',
+  'components/files-panel-body.tsx',
 ];
 
 /**

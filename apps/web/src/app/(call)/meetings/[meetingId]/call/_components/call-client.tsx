@@ -36,7 +36,7 @@ import {
   type EndMeetingResult,
 } from '@/lib/meetings/meeting-state';
 import type { MemberJoinResponse } from '@/lib/meetings/join-api-client';
-import type { MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type { MeetingMemberPanelRegistration } from '@/lib/meetings/meeting-panels';
 import { meetingChannelName } from '@/lib/realtime/channels';
 import { getMeetingStateAction } from '../_actions/get-meeting-state';
 import { endMeetingAction } from '../_actions/end-meeting';
@@ -307,7 +307,6 @@ export function CallClient({
           if (cancelled) return;
           if (attempts < MAX_PROBE_ATTEMPTS) {
             probeRetryTimerRef.current = setTimeout(runProbe, pollIntervalFor(0));
-            return;
           }
           /* bounded retry exhausted — absent slot is the shipped degradation from here */
         });
@@ -389,15 +388,16 @@ export function CallClient({
    * does — which is what keeps `MeetingRouteContextProvider`'s own `useMemo` from being
    * defeated on every render.
    *
-   * ⚠⚠ BOTH GUEST MOUNTS PASS NOTHING AND THEREFORE READ `null` — `join-control.tsx` and
-   * `lobby-client.tsx` do not mount this provider at all. That is STRUCTURAL, not a check: a
-   * token-authenticated guest satisfies none of the four gates behind this panel
-   * (`requireAuth` on the guests route, `requireUser()` on both file reads,
-   * `requireOnboardedUser()` on both file writes). ⚠ GUEST FILE ACCESS STAYS CLOSED AND IS
-   * **BAL-445**'s to open — one guest-authenticated read session, shared with BAL-437's chat.
+   * ⚠⚠ BAL-445 — THIS IS THE **MEMBER** REGISTRATION. Both guest mounts now DO mount
+   * `MeetingRouteContextProvider` (`join-control.tsx` and `lobby-client.tsx`), but with a
+   * `MeetingGuestPanelRegistration` — a NARROWER TYPE, not this one with flags off. That guest
+   * registration is built independently in each guest mount, closing over its own token and
+   * `resolveMeetingGuestSubject`-gated Server Actions; it shares no code with this memo beyond
+   * the `MeetingPanelRegistration` union both arms belong to.
    */
-  const panels = useMemo<MeetingPanelRegistration>(
+  const panels = useMemo<MeetingMemberPanelRegistration>(
     () => ({
+      audience: 'member',
       joinLinkUrl,
       loadGuests: () => getMeetingGuestsAction({ meetingId }),
       inviteGuests: (emails) => inviteMeetingGuestsAction({ meetingId, emails }),
@@ -548,10 +548,11 @@ export function CallClient({
   /**
    * BAL-134 / ADR-1049 — ⚠⚠ **THE END ACTION, WIRED ONLY ON THE MEMBER ROUTE.**
    *
-   * Both guest surfaces mount no provider, so they read `null` structurally — the second,
-   * independent half of the `canEndMeeting` gate. ⚠ The UI gate is not the gate: `apps/api`
-   * re-resolves both authority axes behind the tenancy gate on every call and collapses every
-   * denial to `404`.
+   * Both guest surfaces leave `endMeeting` at its default `null` (N5, fix-round-2 — corrected:
+   * NOT "mount no provider" — both DO mount `MeetingRouteContextProvider`; neither passes
+   * `endMeeting` explicitly) — the second, independent half of the `canEndMeeting` gate. ⚠ The
+   * UI gate is not the gate: `apps/api` re-resolves both authority axes behind the tenancy gate
+   * on every call and collapses every denial to `404`.
    */
   const endMeeting = useCallback((): Promise<EndMeetingResult> => {
     return endMeetingAction({ meetingId });

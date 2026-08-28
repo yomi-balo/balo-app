@@ -7,7 +7,10 @@ import {
   GUESTS_POLL_BACKOFF_INTERVAL_MS,
   GUESTS_POLL_INTERVAL_MS,
 } from '@/lib/meetings/guests-poll';
-import type { MeetingGuestsPayload, MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type {
+  MeetingGuestsPayload,
+  MeetingMemberPanelRegistration,
+} from '@/lib/meetings/meeting-panels';
 
 /**
  * BAL-436 — the People panel's ROSTER READ and its poll schedule.
@@ -48,7 +51,7 @@ export interface GuestRosterPollState {
 }
 
 export interface UseGuestRosterPollInput {
-  readonly panels: MeetingPanelRegistration;
+  readonly panels: MeetingMemberPanelRegistration;
   readonly onSeatsChange: (seats: { participantCount: number; participantCap: number }) => void;
 }
 

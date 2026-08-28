@@ -38,8 +38,9 @@ export interface TopBarClockInput {
    * The server mirror, or `null` when there isn't one yet.
    *
    * ⚠⚠ `null` IS A LIVE PATH, NOT A GUARD, AND IT HAS TWO REAL SOURCES: both GUEST mounts
-   * (which mount no route provider and poll nothing — the state route is member-only), and the
-   * member route in the window between joining and the first poll landing.
+   * (N5, fix-round-2 — corrected: NOT because they mount no route provider — both DO — but
+   * because the state-polling route is member-only, so neither guest mount ever has a snapshot
+   * to pass), and the member route in the window between joining and the first poll landing.
    */
   readonly snapshot: MeetingStateSnapshot | null;
 }

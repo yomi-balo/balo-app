@@ -111,7 +111,10 @@ export async function sendMeetingReactionAction(
 
   try {
     // ⚠ THE PARTICIPATION GATE, IN FULL — and nothing beyond it. See the docblock.
-    const access = await authorizeMeetingFileAccess({ meetingId, userId: user.id });
+    const access = await authorizeMeetingFileAccess({
+      meetingId,
+      actor: { kind: 'member', userId: user.id },
+    });
     if (!access.ok) {
       return { success: false, error: 'You are not in this call.' };
     }

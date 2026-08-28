@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Loader2, LogIn } from 'lucide-react';
 import { toast } from 'sonner';
@@ -11,6 +11,7 @@ import {
   JoinWaitingCard,
 } from '@/components/balo/meetings/join-notice-card';
 import {
+  GUEST_READ_UNAVAILABLE_ERROR,
   JOIN_UNAVAILABLE_TITLE,
   LOBBY_LONG_WAIT_AFTER_MS,
   LOBBY_TOKEN_STORAGE_KEY,
@@ -18,7 +19,13 @@ import {
 } from '@/lib/meetings/lobby';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { useAdmissionPoll } from '@/lib/meetings/use-admission-poll';
+import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
+import type { MeetingGuestPanelRegistration } from '@/lib/meetings/meeting-panels';
+// ⚠ C5 — RELATIVE IMPORTS, one level deeper than `join-control.tsx`'s (`_actions` sits at
+// `app/join/_actions`, this route is `app/join/m/[meetingId]`).
 import { claimLobbyPlaceAction } from '../../_actions/claim-lobby-place';
+import { listGuestMeetingFilesAction } from '../../_actions/list-guest-meeting-files';
+import { getGuestMeetingFileDownloadAction } from '../../_actions/get-guest-meeting-file-download';
 import type { JoinGrant } from '@/lib/meetings/join-api-client';
 
 /**
@@ -312,22 +319,71 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
 
   const isReduced = reduceMotion === true;
 
+  /**
+   * BAL-445 §7 — the anonymous lobby visitor's READ-ONLY registration: FILES ONLY, `chat:
+   * null`. `/join/m/[meetingId]/page.tsx` performs NO database read at all (a deliberate,
+   * documented decision — see its own docblock), so there is no server-resolved primary
+   * context to test `hasChat` against here the way `join-control.tsx` can. Opening Chat for
+   * this mount is a follow-up that should carry that GET-path read decision with it.
+   *
+   * ⚠ MEMOISED ON `[meetingId, lobbyToken]` ALONE, matching `join-control.tsx`'s pattern.
+   *
+   * ⚠⚠ G2 (fix-round-3) — `lobbyToken` IS NARROWED HERE, NEVER LAUNDERED WITH `?? ''`. This
+   * panel is only ever rendered once `state === 'admitted'`, by which point `lobbyToken` is
+   * always set (either from the just-completed claim or restored from storage on resume) — but
+   * the memo itself runs on every render regardless of `state`, so its callbacks must cope with
+   * a `null` token honestly rather than coercing it into a value the Zod `min(20)` schema then
+   * has to reject. A `null` check inside each callback makes the empty string UNREPRESENTABLE
+   * on the wire, rather than merely rejected once it gets there.
+   */
+  const panels = useMemo<MeetingGuestPanelRegistration>(
+    () => ({
+      audience: 'guest',
+      files: {
+        list: () => {
+          if (lobbyToken === null) {
+            return Promise.resolve({ success: false, error: GUEST_READ_UNAVAILABLE_ERROR });
+          }
+          return listGuestMeetingFilesAction({ meetingId, guestToken: lobbyToken });
+        },
+        download: (fileId) => {
+          if (lobbyToken === null) {
+            return Promise.resolve({ success: false, error: GUEST_READ_UNAVAILABLE_ERROR });
+          }
+          return getGuestMeetingFileDownloadAction({ meetingId, guestToken: lobbyToken, fileId });
+        },
+      },
+      chat: null,
+    }),
+    [meetingId, lobbyToken]
+  );
+
   let content: React.JSX.Element;
   if (state === 'admitted' && grant !== null) {
     content = (
-      <MeetingCallSurface
-        roomUrl={grant.roomUrl}
-        token={grant.token}
-        isOwner={grant.isOwner}
-        // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is — see
-        // `join-control.tsx`. PASSED THROUGH, never defaulted here.
-        canEndMeeting={grant.canEndMeeting}
-        expiresAt={grant.expiresAt}
-        participantId={grant.participantId}
-        // ⚠ THE TRANSITION THAT MATTERS MOST. Without this the one state the visitor actually
-        // waited for — "you're in" — was the only one that moved focus nowhere.
-        headingRef={headingRef}
-      />
+      <MeetingRouteContextProvider
+        meetingId={null}
+        viewerName={null}
+        title={null}
+        backTo={null}
+        contextNoun="call"
+        waiting={null}
+        panels={panels}
+      >
+        <MeetingCallSurface
+          roomUrl={grant.roomUrl}
+          token={grant.token}
+          isOwner={grant.isOwner}
+          // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is — see
+          // `join-control.tsx`. PASSED THROUGH, never defaulted here.
+          canEndMeeting={grant.canEndMeeting}
+          expiresAt={grant.expiresAt}
+          participantId={grant.participantId}
+          // ⚠ THE TRANSITION THAT MATTERS MOST. Without this the one state the visitor actually
+          // waited for — "you're in" — was the only one that moved focus nowhere.
+          headingRef={headingRef}
+        />
+      </MeetingRouteContextProvider>
     );
   } else if (state === 'retry_later') {
     // ⚠ "Try again" returns to the FORM, not to a re-poll: the token was cleared by `fail`, so

@@ -86,6 +86,7 @@ function renderControl(
       scheduledEndIso={overrides.endIso ?? END_ISO}
       utcWindowLabel={UTC_LABEL}
       hasEnded={overrides.hasEnded ?? false}
+      hasChat={false}
       nextStepLine={NEXT_STEP}
       expiresOn={EXPIRES_ON}
     >
@@ -135,9 +136,18 @@ describe('JoinControl — the invited guest`s join', () => {
 
     await user.click(screen.getByRole('button', { name: /join the call/i }));
 
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
-    });
+    // ⚠⚠ F5 (fix-round-1 / CRITICAL-6) — 5000ms, not the 1000ms default. The admitted subtree's
+    // module graph now pulls `meeting-frame-impl → guest-chat-panel → chat-panel →
+    // chat-composer → use-meeting-file-upload`, so the mount does not reliably complete inside
+    // 1000ms under worker contention. Reproduced 3/3 with `TZ=UTC npx vitest run src/lib/
+    // meetings src/app/join` from `apps/web`. See SUGGESTION-3 for the structural fix (the
+    // read-only guest surface should not import the composer at all).
+    await waitFor(
+      () => {
+        expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
+      },
+      { timeout: 5000 }
+    );
     expect(mockPoll).toHaveBeenCalledWith({ meetingId: MEETING_ID, guestToken: RAW_TOKEN });
     expect(mockPoll).toHaveBeenCalledTimes(1);
   });
@@ -147,9 +157,13 @@ describe('JoinControl — the invited guest`s join', () => {
     const { container } = renderControl();
 
     await user.click(screen.getByRole('button', { name: /join the call/i }));
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
-    });
+    // ⚠⚠ F5 (fix-round-1 / CRITICAL-6) — 5000ms, see the twin note above.
+    await waitFor(
+      () => {
+        expect(screen.getByRole('heading', { name: /ready to join/i })).toBeInTheDocument();
+      },
+      { timeout: 5000 }
+    );
 
     expect(container.textContent ?? '').not.toContain(RAW_TOKEN);
     expect(container.textContent ?? '').not.toContain(GRANT.token);

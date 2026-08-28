@@ -70,11 +70,15 @@ export interface MoreSheetProps {
   /**
    * BAL-436 — supplied ONLY when the side-panel slot is registered.
    *
-   * ⚠ `undefined` ⇒ THE TWO ROWS RENDER **NOTHING**. That is the slot rule, and both GUEST
-   * mounts land there structurally (neither mounts the route context that carries the
-   * registration). Never a disabled row.
+   * ⚠ `undefined` ⇒ BOTH ROWS RENDER **NOTHING**. That is the slot rule. Never a disabled row.
    */
   readonly onTogglePanel?: (id: MeetingPanelId) => void;
+  /**
+   * BAL-445 — ⚠ WHETHER THE **PEOPLE** ROW RENDERS, NARROWER THAN `onTogglePanel !== undefined`
+   * — see `meeting-toolbar.tsx`'s identical prop. A guest registers Files but never People.
+   * `false`/`undefined` ⇒ NO row, never a disabled one.
+   */
+  readonly hasPeople?: boolean;
   /**
    * BAL-437 — ⚠ SUPPLIED ONLY WHEN REALTIME IS CONFIGURED. `undefined` ⇒ NO Reactions row: a
    * reaction with no transport reaches nobody, and the slot rule forbids the disabled version.
@@ -107,6 +111,7 @@ export function MoreSheet({
   onToggleScreenShare,
   onOpenSettings,
   onTogglePanel,
+  hasPeople = false,
   onOpenReactions,
   triggerRef,
   hasBalance = false,
@@ -180,13 +185,22 @@ export function MoreSheet({
         answers. All three now say `lg`. ⚠ The Share-screen row above stays `md:hidden` on
         purpose: its bar twin is `hidden md:flex`, so that pair agrees with itself.
       */}
-      {onTogglePanel === undefined ? null : (
+      {/*
+        ⚠⚠ BAL-445 — TWO INDEPENDENT ROWS, NOT ONE GUARD. `Files` is registered for both
+        audiences; `People` is member-only (`hasPeople`). Splitting them is what lets a
+        guest's Files row render while People stays absent, never disabled.
+      */}
+      {onTogglePanel === undefined || !hasPeople ? null : (
         <div className="lg:hidden">
           <MeetingMenuItem
             icon={Users}
             label="People"
             onSelect={close(() => onTogglePanel('people'))}
           />
+        </div>
+      )}
+      {onTogglePanel === undefined ? null : (
+        <div className="lg:hidden">
           <MeetingMenuItem
             icon={Paperclip}
             label="Files"

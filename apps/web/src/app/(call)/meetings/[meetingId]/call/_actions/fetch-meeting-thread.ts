@@ -32,9 +32,13 @@ const inputSchema = z
  *
  * ⚠⚠ THE SCOPE IS `{ kind: 'full' }`, AND THAT IS HALF OF RULING R3. A **member** in the call
  * reads the whole engagement thread — *"a participant opening the panel sees the engagement's
- * thread, not an empty room"*. The `{ kind: 'meeting', meetingId }` narrowing exists for
- * GUESTS and belongs to **BAL-445**; it must not be used here, and
- * `resolveGuestConversationScope` must not gain a second expression to serve this surface.
+ * thread, not an empty room"*. The `{ kind: 'meeting'/'full', meetingId }` narrowing for GUESTS
+ * now has its own SIBLING action — **`fetchGuestMeetingThreadAction`**
+ * (`app/join/_actions/fetch-guest-meeting-thread.ts`, BAL-445) — which calls
+ * `resolveMeetingChatAccess({ actor: { kind: 'guest', … } })` and threads its `access.scope`
+ * straight through, never inlining `{ kind: 'meeting', … }` itself. This action keeps `{ kind:
+ * 'full' }` and must not narrow: it is a MEMBER-only read, gated on `requireUser()`, which a
+ * guest never satisfies.
  *
  * ⚠⚠ GENUINELY READ-ONLY, AND IT MUST STAY THAT WAY. It authenticates with bare
  * `requireUser()` — a pre-onboarding session may legitimately read — and therefore sits on
@@ -66,7 +70,10 @@ export async function fetchMeetingThreadAction(
   const { meetingId, before } = entry.data;
 
   try {
-    const access = await resolveMeetingChatAccess({ meetingId, userId: user.id });
+    const access = await resolveMeetingChatAccess({
+      meetingId,
+      actor: { kind: 'member', userId: user.id },
+    });
     if (!access.ok || access.anchor === null) {
       return { success: false, error: 'This conversation is no longer available.' };
     }

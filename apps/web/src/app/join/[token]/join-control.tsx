@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Loader2, Video } from 'lucide-react';
 import { toast } from 'sonner';
@@ -17,7 +17,14 @@ import {
 } from '@/lib/meetings/lobby';
 import { useAdmissionPoll } from '@/lib/meetings/use-admission-poll';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
+import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
+import type { MeetingGuestPanelRegistration } from '@/lib/meetings/meeting-panels';
+// ⚠ C5 — RELATIVE IMPORTS. `join-link-never-writes.test.ts` fails on any occurrence of the
+// literal `/join/` in non-comment code under `app/join/`; `'../_actions/…'` does not contain it.
 import { pollGuestAdmissionAction } from '../_actions/poll-guest-admission';
+import { listGuestMeetingFilesAction } from '../_actions/list-guest-meeting-files';
+import { getGuestMeetingFileDownloadAction } from '../_actions/get-guest-meeting-file-download';
+import { fetchGuestMeetingThreadAction } from '../_actions/fetch-guest-meeting-thread';
 import type { JoinGrant } from '@/lib/meetings/join-api-client';
 
 /**
@@ -84,6 +91,11 @@ interface JoinControlProps {
   readonly utcWindowLabel: string;
   /** An ended meeting has nothing to join. */
   readonly hasEnded: boolean;
+  /**
+   * BAL-445 §7 — resolved server-side by the RSC from the SAME primary context it already
+   * fetched. `false` ⇒ the guest registration's `chat` slot is `null` ⇒ no Chat button.
+   */
+  readonly hasChat: boolean;
   /** The RSC's "what happens next" line, rendered below the control. */
   readonly nextStepLine: string;
   /** When the invitation link stops working, already formatted by the RSC. */
@@ -127,12 +139,41 @@ export function JoinControl({
   scheduledEndIso,
   utcWindowLabel,
   hasEnded,
+  hasChat,
   nextStepLine,
   expiresOn,
   children,
 }: Readonly<JoinControlProps>): React.JSX.Element {
   const [phase, setPhase] = useState<ControlPhase>('idle');
   const [grant, setGrant] = useState<JoinGrant | null>(null);
+
+  /**
+   * BAL-445 §7 — the GUEST's READ-ONLY panel registration. `MeetingGuestFilePanelActions` and
+   * `MeetingGuestChatPanelActions` carry two callbacks and one nullable slot — the whole
+   * surface; there is no upload, no post, no invite, no realtime, no balance on this type.
+   *
+   * ⚠ MEMOISED ON `[meetingId, token, hasChat]` ALONE — every Server Action reference is a
+   * module-level import and therefore already stable, so this object's identity changes only
+   * when one of those three does, which is what keeps `MeetingRouteContextProvider`'s own
+   * `useMemo` from being defeated on every render.
+   */
+  const panels = useMemo<MeetingGuestPanelRegistration>(
+    () => ({
+      audience: 'guest',
+      files: {
+        list: () => listGuestMeetingFilesAction({ meetingId, guestToken: token }),
+        download: (fileId) =>
+          getGuestMeetingFileDownloadAction({ meetingId, guestToken: token, fileId }),
+      },
+      chat: hasChat
+        ? {
+            fetchThread: (before) =>
+              fetchGuestMeetingThreadAction({ meetingId, guestToken: token, before }),
+          }
+        : null,
+    }),
+    [meetingId, token, hasChat]
+  );
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [isLongWait, setIsLongWait] = useState(false);
   /** ⚠ STARTS AS THE SERVER'S UTC STRING, so the first client render matches the server's. */
@@ -272,6 +313,7 @@ export function JoinControl({
     <JoinPhaseContent
       phase={phase}
       grant={grant}
+      panels={panels}
       headingRef={headingRef}
       isLongWait={isLongWait}
       windowLabel={windowLabel}
@@ -304,6 +346,7 @@ export function JoinControl({
 interface JoinPhaseContentProps {
   readonly phase: ControlPhase;
   readonly grant: JoinGrant | null;
+  readonly panels: MeetingGuestPanelRegistration;
   readonly headingRef: React.Ref<HTMLHeadingElement>;
   readonly isLongWait: boolean;
   readonly windowLabel: string;
@@ -329,6 +372,7 @@ interface JoinPhaseContentProps {
 function JoinPhaseContent({
   phase,
   grant,
+  panels,
   headingRef,
   isLongWait,
   windowLabel,
@@ -342,20 +386,34 @@ function JoinPhaseContent({
 }: Readonly<JoinPhaseContentProps>): React.JSX.Element {
   if (phase === 'admitted' && grant !== null) {
     // ⚠⚠ REPLACES THE INVITATION CARD. See the module docblock — this is the nested-card fix.
+    //
+    // BAL-445 §7 — `MeetingRouteContextProvider` IS NOW MOUNTED HERE, with the guest's
+    // read-only `panels` and EVERY OTHER PROP AT ITS EMPTY VALUE, so mounting it changes
+    // NOTHING except `panels`. `MeetingCallSurface`'s own prop contract stays frozen.
     return (
-      <MeetingCallSurface
-        roomUrl={grant.roomUrl}
-        token={grant.token}
-        isOwner={grant.isOwner}
-        // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is: a guest
-        // holds no company membership and is not on the engagement axis, so they see Leave only
-        // (BAL-134 edge case 24). It is PASSED THROUGH, never defaulted here.
-        canEndMeeting={grant.canEndMeeting}
-        expiresAt={grant.expiresAt}
-        participantId={grant.participantId}
-        // ⚠ THE TRANSITION THAT MATTERS MOST — see `MeetingCallSurface.headingRef`.
-        headingRef={headingRef}
-      />
+      <MeetingRouteContextProvider
+        meetingId={null}
+        viewerName={null}
+        title={null}
+        backTo={null}
+        contextNoun="call"
+        waiting={null}
+        panels={panels}
+      >
+        <MeetingCallSurface
+          roomUrl={grant.roomUrl}
+          token={grant.token}
+          isOwner={grant.isOwner}
+          // ⚠ ALWAYS `false` ON THIS ARM, HARD-CODED SERVER-SIDE exactly as `isOwner` is: a guest
+          // holds no company membership and is not on the engagement axis, so they see Leave only
+          // (BAL-134 edge case 24). It is PASSED THROUGH, never defaulted here.
+          canEndMeeting={grant.canEndMeeting}
+          expiresAt={grant.expiresAt}
+          participantId={grant.participantId}
+          // ⚠ THE TRANSITION THAT MATTERS MOST — see `MeetingCallSurface.headingRef`.
+          headingRef={headingRef}
+        />
+      </MeetingRouteContextProvider>
     );
   }
   if (phase === 'unavailable') {

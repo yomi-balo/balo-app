@@ -10,10 +10,11 @@ import type {
   MeetingFilePanelActions,
 } from '@/lib/meetings/meeting-panels';
 import { MeetingSidePanel } from './meeting-side-panel';
-import { PanelErrorCard, PanelSkeletonRows } from './panel-states';
 import { ChatComposer } from './chat-composer';
-import { ChatPanelList, mergeChatTimeline } from './chat-panel-list';
+import { mergeChatTimeline } from './chat-panel-list';
 import type { MeetingRealtimeStatus } from './use-meeting-realtime';
+import { ChatThreadBody } from './chat-thread-body';
+export { ChatThreadBody, type ChatThreadBodyProps } from './chat-thread-body';
 
 /**
  * BAL-437 — the in-call Chat slot.
@@ -25,15 +26,22 @@ import type { MeetingRealtimeStatus } from './use-meeting-realtime';
  * `sent_during_meeting_id`. There is no per-meeting conversation and there must never be one:
  * BAL-424's context seam is 1:1 precisely so "two threads for one case" is unrepresentable.
  *
- * ── ⚠⚠ THE GUEST SEAM — **BAL-445 OWNS IT**, AND IT IS FAIL-CLOSED TODAY ────────────────
+ * ── ⚠⚠ THE GUEST SEAM — BAL-445 OPENED READ-ONLY, THIS COMPONENT IS MEMBER-ONLY ──────────
  *
- * A guest gets NO chat, structurally and with no check anywhere: both guest mounts do not
- * mount `MeetingRouteContextProvider`, so they read `panels: null` and this component is never
- * rendered; all four in-call Server Actions gate on `requireUser()`/`requireOnboardedUser()`;
- * and `conversation_messages.sender_user_id` is `notNull` with an FK to `users.id`, so a guest
- * **cannot author a message at all** without a migration. That third one is a finding, not a
- * design: it means the guest arm is a schema change plus a session primitive, which is exactly
- * why it is one ticket rather than half of this one. ⚠ Do NOT call `guestMayReadMeeting` here.
+ * A guest now gets a READ-ONLY transcript, rendered by the SEPARATE `GuestChatPanel` component
+ * (`guest-chat-panel.tsx`) — never by this one. This component keeps its `MeetingChatPanelActions`
+ * (`postMessage`, `requestUpload`, `confirmUpload`) and is reached ONLY through the member
+ * mount's `panels.audience === 'member'` arm in `meeting-frame-impl.tsx`'s `FramePanel`. The
+ * two panels share the read-only list rendering via `ChatThreadBody` (now its own module,
+ * `chat-thread-body.tsx`, re-exported here — see that file's docblock for why: importing it
+ * FROM this file would drag `ChatComposer` and `useMeetingFileUpload` into the guest bundle),
+ * so the two components cannot drift on skeleton / error / empty / row logic.
+ *
+ * `conversation_messages.sender_user_id` is STILL `notNull` with an FK to `users.id` — a guest
+ * still **cannot author a message at all** without a migration. That is the one remaining
+ * block, and it is slice 4's (a split-out ticket, guest authorship). ⚠ Do NOT call
+ * `guestMayReadMeeting` here — it is called from the GATE (`meeting-chat-anchor.ts`), never
+ * from a component.
  *
  * ── ⚠ THE FOUR STATES, AND THE FIFTH LINE THAT IS NOT A STATE ───────────────────────────
  *
@@ -396,41 +404,24 @@ export function ChatPanel({
         )
       }
     >
-      <div className="flex flex-col">
-        {realtimeLine === null ? null : (
-          <p className="text-muted-foreground border-border border-b px-3 py-2 text-[11px] leading-relaxed">
-            {realtimeLine}
-          </p>
-        )}
-
-        {isLoading ? <PanelSkeletonRows /> : null}
-
-        {hasFailed ? (
-          <PanelErrorCard
-            title="We couldn't load the conversation"
-            body="The call itself is fine. Try again, or carry on talking — nothing is lost."
-            onRetry={() => {
-              void load();
-            }}
-          />
-        ) : null}
-
-        {thread !== null && items.length === 0 ? (
-          <EmptyThreadLine writable={thread.writable} />
-        ) : null}
-
-        {thread !== null && items.length > 0 ? (
-          <ChatPanelList
-            items={items}
-            viewerUserId={thread.viewerUserId}
-            hasEarlier={thread.hasEarlier}
-            isLoadingEarlier={isLoadingEarlier}
-            earlierFailed={earlierFailed}
-            onLoadEarlier={loadEarlier}
-            onOpenFiles={onOpenFiles}
-          />
-        ) : null}
-      </div>
+      <ChatThreadBody
+        statusLine={realtimeLine}
+        isLoading={isLoading}
+        hasFailed={hasFailed}
+        onRetry={() => {
+          void load();
+        }}
+        errorBody="The call itself is fine. Try again, or carry on talking — nothing is lost."
+        hasLoaded={thread !== null}
+        items={items}
+        emptyNode={<EmptyThreadLine writable={thread?.writable ?? true} />}
+        viewerUserId={thread?.viewerUserId ?? null}
+        hasEarlier={thread?.hasEarlier ?? false}
+        isLoadingEarlier={isLoadingEarlier}
+        earlierFailed={earlierFailed}
+        onLoadEarlier={loadEarlier}
+        onOpenFiles={onOpenFiles}
+      />
     </MeetingSidePanel>
   );
 }

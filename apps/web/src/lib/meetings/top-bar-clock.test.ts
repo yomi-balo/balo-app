@@ -53,8 +53,9 @@ function snapshotOf(overrides: SnapshotOverrides = {}): MeetingStateSnapshot {
 /**
  * ⚠⚠ `null` RATHER THAN `{ kind: 'not_started' }` FOR "NO MIRROR", AND THE DIFFERENCE IS NOT
  * COSMETIC. Collapsing them would put "Not started" on a GUEST's screen for the whole of a live
- * call — the guest surfaces mount no provider and poll nothing — and would flash it on the member
- * route for the one render before the first poll returns.
+ * call — the guest surfaces poll nothing at all, the state route being member-only (N5,
+ * fix-round-2 — corrected: not because they mount no provider; both DO) — and would flash it on
+ * the member route for the one render before the first poll returns.
  */
 describe('resolveTopBarClock — no server mirror', () => {
   it('returns null so the frame keeps its shipped local chrome', () => {

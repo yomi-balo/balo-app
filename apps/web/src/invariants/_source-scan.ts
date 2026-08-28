@@ -114,6 +114,169 @@ export function memberNamesOf(source: string, object: string): string[] {
   return names;
 }
 
+/**
+ * A source-text "word" character for the hand-rolled scanners in this file: ASCII letters,
+ * digits, and underscore — everything a valid JS/TS identifier segment can contain here. Shared
+ * by every backward/forward identifier walk below so the character class is defined exactly once.
+ */
+function isIdentifierChar(ch: string): boolean {
+  return (
+    (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch === '_'
+  );
+}
+
+/** Walk backward from `index` while the preceding character is an identifier character. */
+function identifierStartBefore(source: string, index: number): number {
+  let start = index;
+  while (start > 0 && isIdentifierChar(source.charAt(start - 1))) {
+    start -= 1;
+  }
+  return start;
+}
+
+/** Walk forward from `index` while the character at that position is an identifier character. */
+function identifierEndFrom(source: string, index: number): number {
+  let end = index;
+  while (end < source.length && isIdentifierChar(source.charAt(end))) {
+    end += 1;
+  }
+  return end;
+}
+
+/**
+ * The single `{ object, member }` pair for the `Repository.` marker found at `markerStart`, plus
+ * the index immediately after the parsed member — where the next `indexOf(marker, …)` resumes.
+ */
+function repositoryCallAt(
+  source: string,
+  markerStart: number,
+  marker: string
+): { readonly object: string; readonly member: string; readonly nextSearchFrom: number } {
+  const objectStart = identifierStartBefore(source, markerStart);
+  const object = source.slice(objectStart, markerStart + 'Repository'.length);
+  const memberStart = markerStart + marker.length;
+  const memberEnd = identifierEndFrom(source, memberStart);
+  const member = source.slice(memberStart, memberEnd);
+  return {
+    object,
+    member: member.length === 0 ? '<unparsed>' : member,
+    nextSearchFrom: memberEnd,
+  };
+}
+
+/**
+ * Every `<identifier>Repository.<member>` call in `source`, for WHATEVER repository object is
+ * referenced — unlike {@link memberNamesOf}, the caller does not name the object in advance.
+ *
+ * ⚠⚠ EXTRACTED FOR BAL-445's `GUEST_READ_ALLOWLIST` GUARD, WHICH NEEDS THIS GENERALITY. That
+ * guard asserts a Server Action touches no WRITE member on ANY repository it reaches — and a
+ * future guest read might reasonably call a different repository than today's two
+ * (`meetingFilesRepository`, `conversationsRepository`). Pinning the object name the way
+ * `memberNamesOf` does would silently stop covering a new repository the moment one was added,
+ * which is the exact class of miss `_read-only-actions.ts`'s docblock warns about.
+ *
+ * Every repository export in `packages/db/src/repositories/*.ts` is named `xxxRepository` — a
+ * fixed, load-bearing convention this scan relies on rather than re-derives. `Repository.` is
+ * searched for literally; the identifier is walked backward through word characters from there,
+ * and the member forward, using the SAME indexOf-driven algorithm as `memberNamesOf` — so this
+ * inherits its "no regex" property and its single caveat: the object and its member must be
+ * joined by a bare `.` with no intervening whitespace or line break (a multi-line method chain
+ * is not matched). None of today's callers chain across a line break.
+ *
+ * ⚠ EXTRACTED INTO `identifierStartBefore` / `identifierEndFrom` / `repositoryCallAt` ONLY TO
+ * SHED COGNITIVE COMPLEXITY (SonarCloud capped this at 15; the inlined backward + forward walks
+ * put it at 19). The behaviour is byte-for-byte what the inlined version did.
+ */
+export function repositoryMemberCallsOf(
+  source: string
+): { readonly object: string; readonly member: string }[] {
+  const calls: { object: string; member: string }[] = [];
+  const marker = 'Repository.';
+  let i = source.indexOf(marker);
+  while (i !== -1) {
+    const { object, member, nextSearchFrom } = repositoryCallAt(source, i, marker);
+    calls.push({ object, member });
+    i = source.indexOf(marker, nextSearchFrom);
+  }
+  return calls;
+}
+
+/** Strip a leading `type ` keyword from one `import { ... }` specifier, so `type Foo` reads as `Foo`. */
+function withoutLeadingTypeKeyword(specifier: string): string {
+  return specifier.startsWith('type ') ? specifier.slice('type '.length).trim() : specifier;
+}
+
+/** The LOCAL binding name for one `import { ... }` specifier — after `as`, when aliased. */
+function localNameOfSpecifier(rawSpecifier: string): string {
+  const withoutType = withoutLeadingTypeKeyword(rawSpecifier.trim());
+  const asIdx = withoutType.indexOf(' as ');
+  return asIdx === -1 ? withoutType : withoutType.slice(asIdx + ' as '.length).trim();
+}
+
+/** Every non-empty, comma-separated specifier inside one `{ ... }` import body, as local names. */
+function localNamesInBraceBody(body: string): string[] {
+  const names: string[] = [];
+  for (const rawSpecifier of body.split(',')) {
+    if (rawSpecifier.trim().length === 0) continue;
+    names.push(localNameOfSpecifier(rawSpecifier));
+  }
+  return names;
+}
+
+/**
+ * The named-import bindings for the `import { ... } from '<moduleSpecifier>'` statement whose
+ * `from '<moduleSpecifier>'` clause starts at `fromIdx` — found by walking back to the nearest
+ * `{` and forward to its matching `}`. Returns `[]` when no such brace pair is found before
+ * `fromIdx` (not a braced import — e.g. a default or namespace import).
+ */
+function namedImportsAtClause(source: string, fromIdx: number): string[] {
+  const open = source.lastIndexOf('{', fromIdx);
+  const close = open === -1 ? -1 : source.indexOf('}', open);
+  if (open === -1 || close === -1 || close >= fromIdx) return [];
+  return localNamesInBraceBody(source.slice(open + 1, close));
+}
+
+/**
+ * Every named import binding pulled from `import { ... } from '<moduleSpecifier>'` in `source`
+ * — the LOCAL name (after `as`, when aliased), with a leading `type` keyword stripped so a
+ * type-only member reads the same as a value one.
+ *
+ * ⚠⚠ EXTRACTED FOR BAL-445 fix-round-4's PER-MODULE `@balo/db` IMPORT PIN. `repositoryMemberCallsOf`
+ * only sees calls shaped `xxxRepository.member` — a bare export like `resolveMeetingContextOwner`
+ * has no `Repository.` in its name and is invisible to it, nor is anything else shaped like it.
+ * Pinning the whole named-import set per module closes that blind spot: a new bare export can
+ * only arrive by first widening the import statement, and that is what this function watches.
+ *
+ * Handles the multi-line brace form every `@balo/db` import in this codebase uses (opening
+ * brace on the `import {` line, closing brace on its own line before ` } from '...'`). Does not
+ * handle a default or namespace import (`import db from ...` / `import * as db from ...`) —
+ * `@balo/db` has neither today, so no caller needs it; a caller that DOES should extend this
+ * rather than special-case around it.
+ *
+ * NO REGEX, same convention as the rest of this file (SonarCloud S5852): both quote styles are
+ * checked literally (Prettier normalises to single quotes, but nothing type-checks a
+ * hand-written import), and the import body is found by nearest brace, then split on `,`.
+ *
+ * ⚠ EXTRACTED INTO `withoutLeadingTypeKeyword` / `localNameOfSpecifier` / `localNamesInBraceBody`
+ * / `namedImportsAtClause` ONLY TO SHED COGNITIVE COMPLEXITY (SonarCloud capped this at 15; the
+ * fully inlined version put it at 29). The behaviour is byte-for-byte what the inlined version
+ * did — same brace-matching condition (De Morgan'd from `open !== -1 && close !== -1 && close <
+ * fromIdx` to the early-return `open === -1 || close === -1 || close >= fromIdx`), same split /
+ * trim / `type` / `as` handling.
+ */
+export function namedImportsFrom(source: string, moduleSpecifier: string): string[] {
+  const names: string[] = [];
+  for (const quote of ["'", '"']) {
+    const marker = `from ${quote}${moduleSpecifier}${quote}`;
+    let fromIdx = source.indexOf(marker);
+    while (fromIdx !== -1) {
+      names.push(...namedImportsAtClause(source, fromIdx));
+      fromIdx = source.indexOf(marker, fromIdx + marker.length);
+    }
+  }
+  return names;
+}
+
 /** One scanned source file: its path relative to the route root, plus two views of it. */
 export interface ScannedFile {
   readonly rel: string;

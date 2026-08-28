@@ -289,7 +289,7 @@ describe('sendMeetingReactionAction — refusals', () => {
     expect(mockAuthorizeMeetingFileAccess).toHaveBeenCalledTimes(1);
     expect(mockAuthorizeMeetingFileAccess).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
-      userId: USER_ID,
+      actor: { kind: 'member', userId: USER_ID },
     });
   });
 

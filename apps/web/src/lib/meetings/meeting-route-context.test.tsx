@@ -6,11 +6,15 @@ import { MeetingRouteContextProvider, useMeetingRoute } from './meeting-route-co
 /**
  * BAL-435 — route-scoped ambient data for the call frame.
  *
- * ⚠⚠ THE ABSENCE OF A PROVIDER **IS** THE GUEST CASE, AND EVERY FALLBACK BELOW IS A LIVE PATH.
- * `MeetingCallSurface`'s prop contract is frozen and this ticket adds nothing to it, so data that
- * one of three mounts has and the other two structurally do not is a Context, not a prop. Both
- * guest surfaces therefore read `null` for the title, the destination and the waiting subject —
- * without a single lens check anywhere.
+ * ⚠⚠ N5 (fix-round-2) — CORRECTING A NOW-FALSE CLAIM. This used to say "the absence of a
+ * provider IS the guest case" — true of BAL-435, false since BAL-445 §7 (fix-round-1,
+ * CRITICAL-3) made both `join-control.tsx` and `lobby-client.tsx` mount
+ * `MeetingRouteContextProvider` too, with a real `MeetingGuestPanelRegistration` as `panels`
+ * and every OTHER field passed explicitly at its empty value (`title={null}`, `backTo={null}`,
+ * `waiting={null}`, …). The describe block below is therefore the GENUINELY unregistered
+ * fallback — no provider ancestor at all, a defensive/structural answer, not a real mount
+ * shape — and is named that way. `meeting-route-context.guest-mount.test.tsx` covers the REAL
+ * guest mounts (G-NEW-2).
  */
 
 function Probe(): React.JSX.Element {
@@ -33,7 +37,7 @@ function Probe(): React.JSX.Element {
   );
 }
 
-describe('useMeetingRoute — with no provider (both GUEST mounts)', () => {
+describe('useMeetingRoute — with NO provider at all (the defensive fallback, NOT a real mount shape)', () => {
   it('⚠ never throws, and answers null for everything route-scoped', () => {
     render(<Probe />);
 
@@ -53,7 +57,7 @@ describe('useMeetingRoute — with no provider (both GUEST mounts)', () => {
     expect(screen.getByTestId('probe')).toHaveAttribute('data-noun', 'call');
   });
 
-  it('⚠⚠ has NO exit — a guest has no Balo destination, so the frame handles it itself', () => {
+  it('⚠⚠ has NO exit — matches a real guest mount, which never passes one either', () => {
     render(<Probe />);
 
     expect(screen.getByTestId('probe')).toHaveAttribute('data-has-exit', 'no');

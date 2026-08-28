@@ -191,10 +191,19 @@ export async function createPresignedMeetingFileUpload(
  * verified at confirm needs a persisted `ETag`, i.e. a NEW `meeting_files` column, which this
  * PR deliberately does not add. The size and type halves of that window are already closed by
  * the signed `ContentLength` + `ContentType` on the PUT.
+ *
+ * ⚠⚠ F8/Presign-residual (fix-round-1) — `expiresInSeconds` DEFAULTS to `DOWNLOAD_TTL_SECONDS`
+ * (300s), so every EXISTING caller is unaffected. The GUEST download action
+ * (`get-guest-meeting-file-download.ts`) passes 60s explicitly: a guest download is always an
+ * immediate user click, there is no batching case, and ruling R1 makes "removing a guest is
+ * immediate and total" the load-bearing justification for having no session at all — a longer
+ * window left revocation non-immediate for up to five minutes on exactly the surface where
+ * that promise matters most.
  */
 export async function createPresignedMeetingFileDownload(
   key: string,
-  fileName: string
+  fileName: string,
+  opts?: { readonly expiresInSeconds?: number }
 ): Promise<string> {
   // eslint-disable-next-line no-control-regex -- strip header-breaking control chars from the stored name
   const safeName = fileName.replaceAll(/["\\\u0000-\u001f]/g, '_');
@@ -203,7 +212,9 @@ export async function createPresignedMeetingFileDownload(
     Key: key,
     ResponseContentDisposition: `attachment; filename="${safeName}"`,
   });
-  return getSignedUrl(r2Client, command, { expiresIn: DOWNLOAD_TTL_SECONDS });
+  return getSignedUrl(r2Client, command, {
+    expiresIn: opts?.expiresInSeconds ?? DOWNLOAD_TTL_SECONDS,
+  });
 }
 
 // ── R2 deletion (server-only, fire-and-forget) ──

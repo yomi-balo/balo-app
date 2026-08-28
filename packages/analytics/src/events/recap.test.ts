@@ -194,7 +194,7 @@ describe('BAL-388 declares no event without a producer', () => {
     },
     {
       event: 'guest_converted_to_member',
-      why: 'D-A — no guest lens; BAL-132 owns the guest arm',
+      why: 'D-A — no guest lens; BAL-439 owns the guest recap arm (BAL-445 opened read-only files/chat, recap stays closed)',
     },
   ];
 

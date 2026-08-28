@@ -70,7 +70,10 @@ export async function getMeetingFileDownloadAction(
   const { meetingId, fileId } = parsed.data;
 
   try {
-    const access = await authorizeMeetingFileAccess({ meetingId, userId: user.id });
+    const access = await authorizeMeetingFileAccess({
+      meetingId,
+      actor: { kind: 'member', userId: user.id },
+    });
     if (!access.ok) {
       return { success: false, error: 'This meeting is no longer available.' };
     }

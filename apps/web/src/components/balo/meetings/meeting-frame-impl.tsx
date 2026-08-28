@@ -23,6 +23,7 @@ import { isVideoLayout, resolveStageKind, type LayoutOverride } from '@/lib/meet
 import { useMeetingRoute, type MeetingExitReason } from '@/lib/meetings/meeting-route-context';
 import { END_MEETING_FAILED_COPY } from '@/lib/meetings/meeting-state';
 import type { MeetingPanelId, MeetingPanelRegistration } from '@/lib/meetings/meeting-panels';
+import { resolvePanelCapabilities } from '@/lib/meetings/panel-capabilities';
 import type { WaitingFacts, WaitingPhase, WaitingSubject } from '@/lib/meetings/waiting-copy';
 import { useDrawdownPoll, type DrawdownPollState } from '@/lib/meetings/use-drawdown-poll';
 import { resolveAutoOpen } from '@/lib/meetings/drawdown-auto-open';
@@ -46,6 +47,8 @@ import { RecordingIndicator } from './recording-indicator';
 import { PeoplePanel } from './people-panel';
 import { FilesPanel } from './files-panel';
 import { ChatPanel } from './chat-panel';
+import { GuestFilesPanel } from './guest-files-panel';
+import { GuestChatPanel } from './guest-chat-panel';
 import { ReactionPicker } from './reaction-picker';
 import { ReactionFloaters } from './reaction-floaters';
 import { useMeetingCallRealtime, type MeetingCallRealtime } from './use-meeting-realtime';
@@ -392,8 +395,11 @@ function useCallAnnouncement(input: {
  * unavailable count is not a count, and there is no error state to show for a decoration on a
  * live call. `getMeetingGuestsAction` already logs the refusal server-side at `warn`.
  *
- * ⚠ UNREGISTERED ⇒ NO READ AT ALL. `panels === null` on both GUEST mounts, structurally, and
- * neither could satisfy `requireUser()` anyway.
+ * ⚠ UNREGISTERED OR GUEST ⇒ NO READ AT ALL. `panels === null` (no registration) OR
+ * `panels.audience !== 'member'` skips it (N5, fix-round-2 — corrected: BOTH guest mounts DO
+ * register a `panels` object now, `audience: 'guest'`, never `null`; the guard below reads the
+ * audience, not nullness) — a guest could not satisfy `requireUser()` anyway, and there is no
+ * `loadGuests` on its registration for the compiler to even offer.
  */
 function useSeatCountOnJoin(input: {
   readonly panels: MeetingPanelRegistration | null;
@@ -405,7 +411,11 @@ function useSeatCountOnJoin(input: {
   const hasReadRef = useRef(false);
 
   useEffect(() => {
-    if (!hasJoined || panels === null || hasReadRef.current) return;
+    // BAL-445 — a guest reads no roster; `loadGuests` does not exist on that arm of the
+    // union, and the API route it calls is `requireAuth`-gated anyway (two closures).
+    if (!hasJoined || panels?.audience !== 'member' || hasReadRef.current) {
+      return;
+    }
     hasReadRef.current = true;
     void panels.loadGuests().then((result) => {
       if (!result.success) return;
@@ -527,6 +537,8 @@ interface PanelSlots {
     peopleButtonRef?: React.RefObject<HTMLButtonElement | null>;
     filesButtonRef?: React.RefObject<HTMLButtonElement | null>;
     chatButtonRef?: React.RefObject<HTMLButtonElement | null>;
+    /** BAL-445 — fails CLOSED like `hasChat`/`hasBalance`: absent renders no People affordance. */
+    hasPeople?: boolean;
     hasChat?: boolean;
     unreadChat?: boolean;
     reactionControl?: React.ReactNode;
@@ -550,8 +562,10 @@ interface PanelSlots {
  * ⚠ A PURE MODULE HELPER RATHER THAN INLINE `const`s, exactly as `resolveFrameChrome` is, and
  * for exactly the same reason. The logic is unchanged.
  *
- * ⚠ THERE IS NO LENS, ROLE OR MODE ANYWHERE IN HERE. The only input is whether the route
- * mounted a registration, which both GUEST mounts structurally do not.
+ * ⚠ THERE IS NO LENS, ROLE OR MODE ANYWHERE IN HERE. The only input is the registration itself
+ * — `null` (unregistered) or its `audience` discriminant (N5, fix-round-2 — corrected: both
+ * GUEST mounts DO register a `panels` object, `audience: 'guest'`; `resolvePanelCapabilities`
+ * is what turns that into `hasPeople: false` etc., never a nullness check on this input).
  */
 function resolvePanelSlots({
   panels,
@@ -570,31 +584,37 @@ function resolvePanelSlots({
   if (panels === null) {
     return { openPeopleSlot: {}, toolbarPanelSlot: {}, roster: null };
   }
+  // BAL-445 — the ONE place "what may this audience reach" is decided. A guest gets Files and
+  // (maybe) Chat, never People, Balance or Reactions — and `hasPeople: false` is what makes
+  // the People button and seat chip absent for them, never a lens or role check.
+  const capabilities = resolvePanelCapabilities(panels);
   return {
-    openPeopleSlot: { onOpenPeople: () => togglePanel('people') },
+    // ⚠ NO SEAT CHIP FOR A GUEST — `capabilities.hasPeople` gates it, not `panels !== null`.
+    openPeopleSlot: capabilities.hasPeople ? { onOpenPeople: () => togglePanel('people') } : {},
     toolbarPanelSlot: {
       openPanel: panel,
       onTogglePanel: togglePanel,
       peopleButtonRef,
       filesButtonRef,
       chatButtonRef,
+      hasPeople: capabilities.hasPeople,
       // ⚠ BAL-437 — THREE INDEPENDENT REGISTRATIONS, NOT ONE. `panels !== null` gets you
-      // People and Files; `panels.chat !== null` gets you Chat; `panels.realtime !== null`
-      // gets you Reactions. A call can legitimately have the first without either of the
-      // others — an `admin` meeting has no conversation anchor, and a dev box has no
-      // `ABLY_API_KEY`. Collapsing them would ship a control that could only ever fail.
-      hasChat: panels.chat !== null,
+      // Files; `capabilities.hasChat` gets you Chat; `capabilities.hasReactions` gets you
+      // Reactions. A call can legitimately have the first without either of the others — an
+      // `admin` meeting has no conversation anchor, and a dev box has no `ABLY_API_KEY`.
+      // Collapsing them would ship a control that could only ever fail.
+      hasChat: capabilities.hasChat,
       unreadChat,
       ...(reactionControl === null ? {} : { reactionControl }),
       ...(onOpenReactions === null ? {} : { onOpenReactions }),
-      // BAL-403 — a FOURTH independent registration. `false` for every meeting today (see
-      // `meeting-panels.ts`), which is the expected, inert answer — no toolbar button, no
-      // More-sheet row.
+      // BAL-403 — a FOURTH independent registration. `false` for a guest, always, and `false`
+      // for every non-`case` member meeting too (see `meeting-panels.ts`).
       balanceButtonRef,
-      hasBalance: panels.balance !== null,
+      hasBalance: capabilities.hasBalance,
       balanceAttention,
     },
-    roster: seats,
+    // ⚠ NO SEAT CHIP FOR A GUEST — same gate as `openPeopleSlot`.
+    roster: capabilities.hasPeople ? seats : null,
   };
 }
 
@@ -662,8 +682,11 @@ function useCallRealtimeSlot(input: {
     [announce]
   );
 
+  // BAL-445 — a guest mints no Ably token at all; `panels.realtime` does not exist on that
+  // arm of the union.
+  const realtimeRegistration = panels?.audience === 'member' ? panels.realtime : null;
   const realtime = useMeetingCallRealtime({
-    registration: panels?.realtime ?? null,
+    registration: realtimeRegistration,
     isChatOpen: panel === 'chat',
     onReactionSent,
     onReactionError,
@@ -676,7 +699,7 @@ function useCallRealtimeSlot(input: {
   const openReactions = useCallback((): void => setReactionsOpen(true), []);
 
   // ⚠ EVERY HOOK ABOVE RUNS UNCONDITIONALLY; only the RETURN branches.
-  if (panels?.realtime == null) {
+  if (realtimeRegistration == null) {
     return { realtime, reactionControl: null, onOpenReactions: null };
   }
   return {
@@ -784,7 +807,10 @@ function useDrawdownBalanceSlot(input: {
   readonly togglePanel: (id: MeetingPanelId) => void;
 } {
   const { panels, panel, isTerminal, openPanel, closePanel, togglePanel, announce } = input;
-  const drawdown = useDrawdownPoll({ balance: panels?.balance ?? null });
+  // BAL-445 — a guest is not the payer; `panels.balance` does not exist on that arm.
+  const drawdown = useDrawdownPoll({
+    balance: panels?.audience === 'member' ? panels.balance : null,
+  });
   const highestRankRef = useRef(0);
   const [attention, setAttention] = useState(false);
   const [autoOpened, setAutoOpened] = useState(false);
@@ -1336,9 +1362,11 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
   const presenter = screens.at(0);
 
   /**
-   * BAL-436 — ⚠⚠ **REGISTERED MEANS OPENABLE.** `panels === null` (both GUEST mounts,
-   * structurally) means no toolbar buttons, no More-sheet rows, no seat chip, no interactive
-   * overflow tile and no panel. Not disabled — ABSENT.
+   * BAL-436 — ⚠⚠ **REGISTERED MEANS OPENABLE.** `panels === null` means no toolbar buttons, no
+   * More-sheet rows, no seat chip, no interactive overflow tile and no panel. Not disabled —
+   * ABSENT. (N5, fix-round-2 — corrected: this is no longer both GUEST mounts' structural
+   * answer. Both now register a real `MeetingGuestPanelRegistration`; `resolvePanelCapabilities`
+   * is what narrows what a guest may reach, e.g. no People button, never `panels === null`.)
    */
   const panels = route.panels;
   const {
@@ -1588,8 +1616,11 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
             trap (`meeting-side-panel.tsx` has the full argument). The split is CSS, so nothing
             flashes on first paint.
 
-            ⚠ RENDERED ONLY WHEN THE SLOT IS REGISTERED **AND** OPEN. `panels === null` on both
-            GUEST mounts, structurally — no lens check, no role check, nowhere.
+            ⚠ RENDERED ONLY WHEN THE SLOT IS REGISTERED **AND** OPEN. (N5, fix-round-2 —
+            corrected: `panels === null` is NOT both GUEST mounts' answer any more — they
+            register a real `MeetingGuestPanelRegistration`. What narrows a guest's reachable
+            panels is `resolvePanelCapabilities`, from the registration's own `audience`
+            discriminant — no lens check, no role check, nowhere.)
           */}
           {/*
             ⚠ `AnimatePresence` SO CLOSING IS NOT A HARD CUT. The panel animates IN and, without
@@ -1673,7 +1704,10 @@ interface FrameStageProps {
    *
    * ⚠⚠ **A LABEL THE SERVER COMPUTED**, from the env-resolved timers. The browser never derives
    * `near` from a duration; see `meeting-state.ts`'s docblock for why that is structural.
-   * `'pre-start'` on both GUEST mounts, structurally — they mount no route provider.
+   * `'pre-start'` on both GUEST mounts — the provider's own default (N5, fix-round-2 —
+   * corrected: both guest mounts DO mount `MeetingRouteContextProvider`; neither passes
+   * `waitingPhase` explicitly, so it falls to the shipped `'pre-start'` default, not to a
+   * missing provider).
    */
   readonly waitingPhase: WaitingPhase;
   /**
@@ -1809,8 +1843,9 @@ function FrameStage({
  * is over. It deliberately does NOT restore focus there: on a terminal frame the toolbar is
  * unmounted too, and the terminal card owns the heading and takes focus itself.
  *
- * ⚠ AN UNREGISTERED SLOT FORCES `null`. Both GUEST mounts land there structurally, so nothing
- * downstream needs a second "is it registered?" check.
+ * ⚠ AN UNREGISTERED SLOT FORCES `null`. (N5, fix-round-2 — corrected: both GUEST mounts no
+ * longer land there structurally — each registers a real `MeetingGuestPanelRegistration` — so
+ * this is the genuine `panels === null` case, on either audience, not a guest-specific one.)
  *
  * ⚠ A HOOK RATHER THAN INLINE STATE, ONLY TO SHED COGNITIVE COMPLEXITY: inline,
  * `MeetingFrameInner`'s own body scored 27 against SonarCloud's allowed 15. The repo's
@@ -1939,7 +1974,11 @@ function FramePanel({
   drawdown,
   balanceAutoOpened,
 }: Readonly<{
-  /** ⚠ `null` ⇒ UNREGISTERED. Both GUEST mounts, structurally. Renders nothing. */
+  /**
+   * ⚠ `null` ⇒ UNREGISTERED. Renders nothing. (N5, fix-round-2 — corrected: NOT both GUEST
+   * mounts' structural answer any more — see the `panels.audience === 'guest'` branch a few
+   * lines below, which is exactly the case a real guest registration reaches.)
+   */
   panels: MeetingPanelRegistration | null;
   panel: MeetingPanelId | null;
   onClose: () => void;
@@ -1961,6 +2000,31 @@ function FramePanel({
   balanceAutoOpened: boolean;
 }>): React.JSX.Element | null {
   if (panels === null) return null;
+
+  // BAL-445 — narrowed FIRST, by TYPE. A guest's registration has no `loadGuests`, no
+  // `balance`, and a `files`/`chat` shape with no upload/post callbacks — so the People and
+  // Balance arms are unreachable HERE by the compiler, not merely by the toolbar rendering no
+  // button for them.
+  if (panels.audience === 'guest') {
+    if (panel === 'files') {
+      // ⚠⚠ F4 (fix-round-1) — `onAnnounce` threaded through, same as every member panel below.
+      // It was omitted here, which left a failed guest download completely silent.
+      return <GuestFilesPanel panels={panels} onClose={onClose} onAnnounce={onAnnounce} />;
+    }
+    // ⚠ `panels.chat === null` ⇒ NO CHAT AT ALL — the toolbar renders no button either.
+    if (panel === 'chat' && panels.chat !== null) {
+      return (
+        <GuestChatPanel
+          chat={panels.chat}
+          files={panels.files}
+          onClose={onClose}
+          onOpenFiles={onOpenFiles}
+        />
+      );
+    }
+    return null;
+  }
+
   if (panel === 'people') {
     return (
       <PeoplePanel
