@@ -85,7 +85,10 @@ export function CaseHeader({ header }: Readonly<{ header: CaseHeaderView }>): Re
     <header className="bg-card border-border rounded-3xl border px-6 py-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-foreground text-xl leading-snug font-semibold">{header.title}</h1>
+          {/* BAL-499 F5: h2 — the chrome's Breadcrumbs `<h1>` (breadcrumbs.tsx) already carries
+              this same title; keeping this at h1 would duplicate it for a screen-reader user
+              navigating by heading. className unchanged, so nothing moves visually. */}
+          <h2 className="text-foreground text-xl leading-snug font-semibold">{header.title}</h2>
           <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-2 text-xs">
             <span>
               Opened <LocalDateTime iso={header.openedAtIso} variant="day-month" />

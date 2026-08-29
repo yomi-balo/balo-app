@@ -33,7 +33,12 @@ vi.mock('@/lib/credit/display-fx', () => ({
   resolveDisplayQuote: (...a: unknown[]) => mockResolveDisplayQuote(...a),
 }));
 
-import { loadDashboardWalletData, resolveDisplayFx, resolveBillingAdminLabel } from './wallet-read';
+import {
+  loadDashboardWalletData,
+  loadTopBarWalletData,
+  resolveDisplayFx,
+  resolveBillingAdminLabel,
+} from './wallet-read';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -150,5 +155,48 @@ describe('loadDashboardWalletData', () => {
     const data = await loadDashboardWalletData({ id: 'u-9' }, 'co-1');
 
     expect(data).toEqual({ kind: 'member', balanceMinor: 0, adminLabel: 'your billing admin' });
+  });
+});
+
+describe('loadTopBarWalletData', () => {
+  it('holder → the balance plus canTopUp: true', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 42_000 });
+
+    const data = await loadTopBarWalletData('u-1', 'co-1');
+
+    expect(data).toEqual({ balanceMinor: 42_000, canTopUp: true });
+    expect(mockHasCapability).toHaveBeenCalledWith({ id: 'u-1' }, 'billing.manage', {
+      companyId: 'co-1',
+    });
+  });
+
+  it('member → the SAME balance, canTopUp: false (D8 — no narrower money-visibility policy)', async () => {
+    mockHasCapability.mockResolvedValue(false);
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
+
+    const data = await loadTopBarWalletData('u-9', 'co-1');
+
+    expect(data).toEqual({ balanceMinor: 1_820, canTopUp: false });
+  });
+
+  it('defaults balanceMinor to 0 when no wallet is provisioned', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindByCompanyId.mockResolvedValue(undefined);
+
+    const data = await loadTopBarWalletData('u-1', 'co-1');
+
+    expect(data).toEqual({ balanceMinor: 0, canTopUp: true });
+  });
+
+  it('never reads the billing-admin label or the indicative FX — the Q3 cost mitigation', async () => {
+    mockHasCapability.mockResolvedValue(false);
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
+
+    await loadTopBarWalletData('u-9', 'co-1');
+
+    expect(mockListBillingUserIds).not.toHaveBeenCalled();
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockGetLatest).not.toHaveBeenCalled();
   });
 });

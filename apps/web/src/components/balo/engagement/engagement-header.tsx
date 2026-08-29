@@ -56,20 +56,23 @@ export function EngagementHeader({ header }: Readonly<EngagementHeaderProps>): R
       </Link>
 
       <div className="flex flex-wrap items-start gap-2.5">
-        <h1 className="text-foreground min-w-[220px] flex-1 text-xl leading-tight font-semibold sm:text-[22px]">
+        {/* BAL-499 F5: h2 — the chrome's Breadcrumbs `<h1>` (breadcrumbs.tsx) already carries
+            this same title; keeping this at h1 would duplicate it for a screen-reader user
+            navigating by heading. className unchanged, so nothing moves visually. */}
+        <h2 className="text-foreground min-w-[220px] flex-1 text-xl leading-tight font-semibold sm:text-[22px]">
           {header.engagementTitle}
-        </h1>
+        </h2>
         <StatusChip status={header.statusChip} />
       </div>
 
       <p className="text-muted-foreground mt-1.5 text-sm">{header.headerLine}</p>
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        {header.terms.map((item, index) => {
+        {header.terms.map((item) => {
           const Icon = TERMS_ICONS[item.icon];
           return (
             <Badge
-              key={`${item.label}-${index}`}
+              key={item.label}
               variant="secondary"
               aria-label={`${item.label}: ${item.value}`}
               className="bg-card text-muted-foreground border-border gap-1 font-medium"

@@ -29,6 +29,10 @@ vi.mock('next/navigation', () => ({
     throw redirectError;
   },
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  // BAL-499 — the page now renders <EntityCrumb>, which calls usePathname(). Not asserted on
+  // here (that lives in breadcrumbs.test.tsx); this mock only needs to exist so the render
+  // doesn't throw.
+  usePathname: () => `/cases/${ENGAGEMENT_ID}`,
 }));
 
 const mockRedirect = vi.fn();

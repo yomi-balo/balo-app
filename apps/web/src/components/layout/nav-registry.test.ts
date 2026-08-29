@@ -5,6 +5,7 @@ import {
   resolveNavItems,
   requiresCapability,
   NO_CAPABILITY_REQUIRED,
+  resolveBreadcrumbTrail,
   type NavContext,
 } from './nav-registry';
 import { CAPABILITIES } from '@balo/shared/authz';
@@ -130,5 +131,100 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('non-vacuity: 10 declared entries, 7 enabled', () => {
     expect(NAV_ENTRIES.length).toBe(10);
     expect(NAV_ENTRIES.filter((e) => e.enabled).length).toBe(7);
+  });
+});
+
+/**
+ * BAL-499 — the executable form of the Q1 decision: what every `(dashboard)` route's
+ * breadcrumb trail resolves to. 16 routes total (recounted from the resolver's "9 of 16" — see
+ * the plan's Q1 and orchestrator ruling R1): 6 have an exact registry `href`, 4 are supplemental
+ * list routes, 6 are entity routes (each resolving to ONLY its parent — the entity's own crumb
+ * is published separately by `EntityCrumb`).
+ */
+describe('resolveBreadcrumbTrail (BAL-499)', () => {
+  it.each([
+    // ── Exact registry hrefs ──────────────────────────────────────────────────────────────
+    ['/dashboard', [{ label: 'Dashboard', href: null }]],
+    ['/consultations', [{ label: 'Consultations', href: null }]],
+    ['/projects', [{ label: 'Projects', href: null }]],
+    ['/messages', [{ label: 'Messages', href: null }]],
+    ['/expert/settings', [{ label: 'Expert Settings', href: null }]],
+    // D10 regression pin — this page rendered the title "Dashboard" before BAL-499. NOT that.
+    ['/settings/team', [{ label: 'Team', href: null }]],
+    // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
+    ['/billing/top-up', [{ label: 'Top up', href: null }]],
+    ['/engagements', [{ label: 'Engagements', href: null }]],
+    ['/promo-codes', [{ label: 'Promo codes', href: null }]],
+    ['/redeem', [{ label: 'Redeem a code', href: null }]],
+    // ── Entity routes — parent crumb only; the entity's own label is published separately ──
+    ['/cases/case-1', [{ label: 'Consultations', href: '/consultations' }]],
+    ['/meetings/meeting-1', [{ label: 'Consultations', href: '/consultations' }]],
+    ['/meetings/meeting-1/end', [{ label: 'Consultations', href: '/consultations' }]],
+    ['/engagements/eng-1', [{ label: 'Engagements', href: '/engagements' }]],
+    ['/projects/req-1', [{ label: 'Projects', href: '/projects' }]],
+    ['/projects/req-1/proposal/rel-1', [{ label: 'Projects', href: '/projects' }]],
+  ] as const)('%s resolves to %j', (pathname, expected) => {
+    expect(resolveBreadcrumbTrail(pathname)).toEqual(expected);
+  });
+
+  it('unrecognised routes render no crumb — no crumb beats a wrong crumb (D11)', () => {
+    expect(resolveBreadcrumbTrail('/nope')).toEqual([]);
+    expect(resolveBreadcrumbTrail('/')).toEqual([]);
+    expect(resolveBreadcrumbTrail('/settings/unknown')).toEqual([]);
+  });
+
+  it('BAL-499 F3: a __proto__ / constructor path segment resolves to no crumb, never an inherited Object property', () => {
+    // A bare `ENTITY_PARENTS[segment]` (or `SUPPLEMENTAL_ROUTE_LABELS[pathname]`) indexes a
+    // plain object literal, which resolves INHERITED keys too — `constructor` would otherwise
+    // yield the `Object` constructor typed as a crumb, and `<Link href={undefined}>` would
+    // throw. `Object.hasOwn` closes that off; this pins the guard rather than the bug.
+    expect(resolveBreadcrumbTrail('/__proto__/anything')).toEqual([]);
+    expect(resolveBreadcrumbTrail('/constructor/anything')).toEqual([]);
+    expect(resolveBreadcrumbTrail('/toString/anything')).toEqual([]);
+    expect(resolveBreadcrumbTrail('/valueOf/anything')).toEqual([]);
+    expect(resolveBreadcrumbTrail('/constructor')).toEqual([]);
+    expect(resolveBreadcrumbTrail('/toString')).toEqual([]);
+  });
+
+  it('every entity route crumb carries a non-null href (the way back is never lost)', () => {
+    const entityRoutes = [
+      '/cases/case-1',
+      '/meetings/meeting-1',
+      '/meetings/meeting-1/end',
+      '/engagements/eng-1',
+      '/projects/req-1',
+      '/projects/req-1/proposal/rel-1',
+    ];
+    for (const pathname of entityRoutes) {
+      const [crumb] = resolveBreadcrumbTrail(pathname);
+      expect(crumb?.href).not.toBeNull();
+    }
+  });
+
+  it('every list-route crumb (exact registry or supplemental) has href: null', () => {
+    const listRoutes = [
+      '/dashboard',
+      '/consultations',
+      '/projects',
+      '/messages',
+      '/expert/settings',
+      '/settings/team',
+      '/billing/top-up',
+      '/engagements',
+      '/promo-codes',
+      '/redeem',
+    ];
+    for (const pathname of listRoutes) {
+      const [crumb] = resolveBreadcrumbTrail(pathname);
+      expect(crumb?.href).toBeNull();
+    }
+  });
+
+  it('drift guard: no supplemental route collides with an enabled registry href', () => {
+    const registryHrefs = new Set(NAV_ENTRIES.filter((e) => e.enabled).map((e) => e.href));
+    const supplementalRoutes = ['/billing/top-up', '/engagements', '/promo-codes', '/redeem'];
+    for (const route of supplementalRoutes) {
+      expect(registryHrefs.has(route)).toBe(false);
+    }
   });
 });
