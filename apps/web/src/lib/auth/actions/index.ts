@@ -15,3 +15,4 @@ export {
 export { nameWorkspaceAndCompleteAction } from './name-workspace-and-complete';
 export { joinMatchedCompanyAction } from './join-matched-company';
 export { requestJoinCompanyAction } from './request-join-company';
+export { switchWorkspaceAction } from './switch-workspace';

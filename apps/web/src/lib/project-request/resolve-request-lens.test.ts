@@ -351,3 +351,24 @@ describe('requestPhase', () => {
     expect(requestPhase('eoi_submitted')).toBe('phase2');
   });
 });
+
+describe('BAL-494 / ADR-1053 — expand/contract pin (site 1)', () => {
+  it('a SessionUser carrying activeWorkspace resolves identically — the resolver ignores the new field', () => {
+    const withWorkspace = user({
+      companyId: COMPANY_ID,
+      activeWorkspace: {
+        type: 'company',
+        key: `company:${COMPANY_ID}`,
+        companyId: COMPANY_ID,
+        name: 'Northwind Industrial',
+        via: 'membership',
+        isPersonal: false,
+      },
+    });
+    const withoutWorkspace = user({ companyId: COMPANY_ID });
+
+    expect(resolveRequestLens(withWorkspace, request())).toEqual(
+      resolveRequestLens(withoutWorkspace, request())
+    );
+  });
+});

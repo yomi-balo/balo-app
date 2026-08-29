@@ -96,7 +96,27 @@ export const usersRepository = {
   /**
    * Find minimal user fields for session sync comparison.
    * Intentionally does NOT filter deletedAt — needs to detect deleted users.
-   * Returns: status, activeMode, platformRole, onboardingCompleted, deletedAt, expertProfileId
+   * Returns: status, activeMode, platformRole, onboardingCompleted, deletedAt,
+   * expertProfileId, activeCompanyId, expertApprovedAt.
+   *
+   * The projection is EXPLICIT on purpose — never a relational `with:` hydration,
+   * which would materialise `workosId` / `email` / `phone` into a session-bound
+   * read (memory `reference_drizzle_with_hydration_leaks_secrets`).
+   *
+   * BAL-494 widened it by two columns, purely additively:
+   * - `activeCompanyId` — the STORED company-workspace choice (half of the
+   *   `(active_mode, active_company_id)` workspace pair).
+   * - `expertApprovedAt` — taken from the SAME left-joined `expert_profiles` row
+   *   that already produces `expertProfileId`, so the derived expert workspace and
+   *   the session's `expertProfileId` can never point at different profiles.
+   *   `verticalId` is deliberately NOT selected: nothing consumes it, and this row
+   *   feeds the session cookie, so an unused column is dead widening on a
+   *   session-bound read.
+   *
+   * ⚠ Known pre-existing wart, deliberately NOT fixed here: the left join +
+   * `.limit(1)` picks an arbitrary profile when a user holds profiles in several
+   * verticals. `expertProfileId` already inherits it; adding an ORDER BY would
+   * change drift behaviour on a shared seam for no ticket-scoped gain.
    */
   findForSessionSync: async (id: string) => {
     const rows = await db
@@ -107,6 +127,8 @@ export const usersRepository = {
         onboardingCompleted: users.onboardingCompleted,
         deletedAt: users.deletedAt,
         expertProfileId: expertProfiles.id,
+        activeCompanyId: users.activeCompanyId,
+        expertApprovedAt: expertProfiles.approvedAt,
       })
       .from(users)
       .leftJoin(expertProfiles, eq(expertProfiles.userId, users.id))

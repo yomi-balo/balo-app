@@ -2,8 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { partyDomains, auditEvents, users } from '../schema';
-import { userFactory, companyFactory, companyMemberFactory } from '../test/factories';
+import { partyDomains, auditEvents, users, companies } from '../schema';
+import {
+  userFactory,
+  companyFactory,
+  companyMemberFactory,
+  expertFactory,
+  expertDraftFactory,
+} from '../test/factories';
 import { usersRepository } from './users';
 
 describe('usersRepository.setPhoneVerified', () => {
@@ -607,5 +613,127 @@ describe('usersRepository.findDisplayById — the PROJECTED counterparty read (B
 
   it('returns undefined for an unknown id', async () => {
     await expect(usersRepository.findDisplayById(randomUUID())).resolves.toBeUndefined();
+  });
+});
+
+// ── BAL-494: the workspace column + the widened session-sync projection ───────
+
+describe('usersRepository.findForSessionSync — widened projection (BAL-494)', () => {
+  it('returns exactly the eight session-sync columns and NO PII (email / workosId / phone)', async () => {
+    const user = await userFactory();
+
+    const row = await usersRepository.findForSessionSync(user.id);
+
+    if (row === null) throw new Error('expected a session-sync row');
+    // The key SET is the invariant: this row feeds the session cookie, so a future
+    // `select()` regression must fail loudly here rather than leak silently.
+    expect(Object.keys(row).sort()).toEqual([
+      'activeCompanyId',
+      'activeMode',
+      'deletedAt',
+      'expertApprovedAt',
+      'expertProfileId',
+      'onboardingCompleted',
+      'platformRole',
+      'status',
+    ]);
+    expect(row).not.toHaveProperty('email');
+    expect(row).not.toHaveProperty('workosId');
+    expect(row).not.toHaveProperty('phone');
+    // `verticalId` has no consumer — it must NOT be re-added to a session-bound read.
+    expect(row).not.toHaveProperty('expertVerticalId');
+  });
+
+  it('returns nulls for the two new columns on a plain user with no expert profile', async () => {
+    const user = await userFactory();
+
+    const row = await usersRepository.findForSessionSync(user.id);
+
+    expect(row?.activeCompanyId).toBeNull();
+    expect(row?.expertProfileId).toBeNull();
+    expect(row?.expertApprovedAt).toBeNull();
+    // The pre-BAL-494 columns are unaffected by the widening.
+    expect(row?.activeMode).toBe('client');
+    expect(row?.status).toBe('active');
+  });
+
+  it('returns the stored activeCompanyId once a workspace choice is persisted', async () => {
+    const user = await userFactory();
+    const company = await companyFactory({ name: 'Chosen Co' });
+    await companyMemberFactory({ companyId: company.id, userId: user.id, role: 'member' });
+
+    await usersRepository.update(user.id, { activeCompanyId: company.id });
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.activeCompanyId).toBe(company.id);
+  });
+
+  it('carries approvedAt from the SAME expert_profiles row as expertProfileId', async () => {
+    const user = await userFactory();
+    const profile = await expertFactory({ userId: user.id });
+
+    const row = await usersRepository.findForSessionSync(user.id);
+
+    expect(row?.expertProfileId).toBe(profile.id);
+    // Approved → the derived expert workspace is legitimate.
+    expect(row?.expertApprovedAt).toBeInstanceOf(Date);
+  });
+
+  it('reports a DRAFT (unapproved) applicant as expertProfileId set but expertApprovedAt null', async () => {
+    // The load-bearing distinction: expert status is existence AND approvedAt, so an
+    // applicant awaiting review must not derive an expert workspace.
+    const user = await userFactory();
+    const draft = await expertDraftFactory({ userId: user.id });
+
+    const row = await usersRepository.findForSessionSync(user.id);
+
+    expect(row?.expertProfileId).toBe(draft.id);
+    expect(row?.expertApprovedAt).toBeNull();
+  });
+
+  it('still does NOT filter soft-deleted users (the sync route must detect them)', async () => {
+    const user = await userFactory();
+    await usersRepository.softDelete(user.id);
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('returns null for an unknown id', async () => {
+    await expect(usersRepository.findForSessionSync(randomUUID())).resolves.toBeNull();
+  });
+});
+
+describe('users.active_company_id (BAL-494 schema)', () => {
+  it('round-trips through usersRepository.update and can be cleared back to null', async () => {
+    const user = await userFactory();
+    const company = await companyFactory({ name: 'Round Trip Co' });
+    expect(user.activeCompanyId).toBeNull();
+
+    const set = await usersRepository.update(user.id, { activeCompanyId: company.id });
+    expect(set.activeCompanyId).toBe(company.id);
+
+    // Persisted, not just reflected in the returned row.
+    const reread = await usersRepository.findById(user.id);
+    expect(reread?.activeCompanyId).toBe(company.id);
+
+    const cleared = await usersRepository.update(user.id, { activeCompanyId: null });
+    expect(cleared.activeCompanyId).toBeNull();
+  });
+
+  it('is NULLED by the FK ON DELETE SET NULL when the company is hard-deleted (the user survives)', async () => {
+    // `companies` has no `deleted_at`, so a hard delete is the only removal path.
+    // SET NULL (not cascade — that would delete the USER; not restrict — that would
+    // fail the company delete with 23503) degrades to "no stored choice" → fallback.
+    const user = await userFactory();
+    const company = await companyFactory({ name: 'Doomed Co' });
+    await usersRepository.update(user.id, { activeCompanyId: company.id });
+
+    await db.delete(companies).where(eq(companies.id, company.id));
+
+    const reread = await usersRepository.findById(user.id);
+    expect(reread).toBeDefined();
+    expect(reread?.id).toBe(user.id);
+    expect(reread?.activeCompanyId).toBeNull();
   });
 });

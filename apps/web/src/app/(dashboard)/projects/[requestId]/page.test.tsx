@@ -34,6 +34,23 @@ vi.mock('@balo/db', () => ({
   projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
+
+// BAL-494 / ADR-1053 — the cross-workspace deep-link resolver. Default to `null` (no
+// alternate workspace) so every pre-existing denial test's behaviour is unaffected.
+const mockResolveWorkspaceForEntity = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/workspaces/resolve-workspace-for-entity', () => ({
+  resolveWorkspaceForEntity: (...args: unknown[]) => mockResolveWorkspaceForEntity(...args),
+  // Async since BAL-494's fix: the path now carries a SEALED token minted per navigation.
+  // Stubbed to a readable projection so the assertion below can pin WHAT gets sealed.
+  workspaceSwitchRedirectPath: async (
+    userId: string,
+    workspace: { key: string },
+    returnTo: string
+  ) => {
+    const sealed = `sealed(${userId}|${workspace.key}|${returnTo})`;
+    return `/api/auth/switch-workspace?t=${encodeURIComponent(sealed)}&returnTo=${encodeURIComponent(returnTo)}`;
+  },
+}));
 vi.mock('next/navigation', () => ({
   notFound: mockNotFound,
   redirect: mockRedirect,
@@ -144,6 +161,7 @@ async function renderPage(requestId = REQUEST_ID) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockResolveWorkspaceForEntity.mockResolvedValue(null);
   mockLoadConversationView.mockResolvedValue({
     viewerUserId: 'user-x',
     threads: [],
@@ -222,6 +240,73 @@ describe('RequestDetailPage (RSC) — auth + lens gating', () => {
 
     await renderPage();
     expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  it('BAL-494 — redirects to the switch-workspace route when another workspace owns the request, BEFORE the denial analytics', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    const otherWorkspace = {
+      type: 'company' as const,
+      key: `company:${COMPANY_ID}`,
+      companyId: COMPANY_ID,
+      name: 'Northwind Industrial',
+      via: 'membership' as const,
+      isPersonal: false,
+    };
+    mockResolveWorkspaceForEntity.mockResolvedValue(otherWorkspace);
+
+    await expect(renderPage()).rejects.toThrow('NEXT_REDIRECT');
+
+    expect(mockResolveWorkspaceForEntity).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: OTHER_COMPANY_ID }),
+      { companyId: COMPANY_ID }
+    );
+    const expectedToken = `sealed(user-x|company:${COMPANY_ID}|/projects/${REQUEST_ID})`;
+    const expectedReturnTo = `/projects/${REQUEST_ID}`;
+    expect(mockRedirect).toHaveBeenCalledWith(
+      `/api/auth/switch-workspace?t=${encodeURIComponent(expectedToken)}&returnTo=${encodeURIComponent(expectedReturnTo)}`
+    );
+    // Never a denial — the deep-link redirect wins, no notFound(), no analytics.
+    expect(mockNotFound).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+    expect(mockLogWarn).not.toHaveBeenCalled();
+  });
+
+  it('BAL-494 — a genuine stranger (no alternate workspace) still gets notFound() + REQUEST_ACCESS_DENIED', async () => {
+    const expertUser = user({
+      id: 'user-declined-expert',
+      companyId: OTHER_COMPANY_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      activeMode: 'expert',
+    });
+    mockGetCurrentUser.mockResolvedValue(expertUser);
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'proposal_submitted', relationships: [declinedRelationship()] })
+    );
+    mockResolveWorkspaceForEntity.mockResolvedValue(null); // no alternate workspace owns it
+
+    await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
+
+    expect(mockNotFound).toHaveBeenCalledTimes(1);
+    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
+      'project_request_access_denied',
+      expect.objectContaining({ reason: 'declined_relationship' })
+    );
+  });
+
+  it('BAL-494 — no redirect loop: when the target is already active, the resolver returns null and the page 404s', async () => {
+    // resolveWorkspaceForEntity's OWN loop guard already returns null when the caller is
+    // already in the target workspace — the page must simply fall through, never bounce.
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(request());
+    mockResolveWorkspaceForEntity.mockResolvedValue(null);
+
+    await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 
   it('logs an error and rethrows (to error.tsx) when the load throws', async () => {
@@ -356,5 +441,21 @@ describe('RequestDetailPage — generateMetadata (Fix 1: no existence/title leak
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
     mockFindByIdWithRelations.mockRejectedValue(new Error('db down'));
     expect((await meta()).title).toBe('Project request — Balo');
+  });
+
+  it('BAL-494 — generateMetadata is UNTOUCHED: still GENERIC for a cross-workspace stranger, never redirects', async () => {
+    // Even when the viewer holds another workspace that owns the request (the page body
+    // would redirect), generateMetadata performs no derivation, no redirect, no write —
+    // it keeps returning the leak-free generic title exactly as before BAL-494.
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: undefined })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(request());
+
+    const result = await meta();
+
+    expect(result.title).toBe('Project request — Balo');
+    expect(mockResolveWorkspaceForEntity).not.toHaveBeenCalled();
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 });

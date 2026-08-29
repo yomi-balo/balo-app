@@ -626,3 +626,71 @@ describe('companiesRepository.findNameById — the PROJECTED display read (BAL-3
     await expect(companiesRepository.findNameById(randomUUID())).resolves.toBeUndefined();
   });
 });
+
+describe('companiesRepository.findSummariesByIds — the PROJECTED batch read (BAL-494)', () => {
+  it('returns id + name + isPersonal for the requested subset, and nothing else', async () => {
+    const alpha = await companyFactory({ name: 'Alpha Co', isPersonal: false });
+    const beta = await companyFactory({ name: 'Beta Co', isPersonal: true });
+    const unrequested = await companyFactory({ name: 'Gamma Co' });
+
+    const rows = await companiesRepository.findSummariesByIds([alpha.id, beta.id]);
+
+    expect(rows).toHaveLength(2);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(alpha.id)).toEqual({ id: alpha.id, name: 'Alpha Co', isPersonal: false });
+    expect(byId.get(beta.id)).toEqual({ id: beta.id, name: 'Beta Co', isPersonal: true });
+    expect(byId.has(unrequested.id)).toBe(false);
+
+    // The key SET is the invariant — this row is destined for the session cookie, so a
+    // widening regression must fail here rather than leak billing columns silently.
+    const [firstRow] = rows;
+    if (firstRow === undefined) throw new Error('expected a summary row');
+    expect(Object.keys(firstRow).sort()).toEqual(['id', 'isPersonal', 'name']);
+    expect(firstRow).not.toHaveProperty('stripeCustomerId');
+    expect(firstRow).not.toHaveProperty('creditBalance');
+    expect(firstRow).not.toHaveProperty('domain');
+    expect(firstRow).not.toHaveProperty('logoUrl');
+  });
+
+  it('short-circuits empty input to [] without touching the DB (an empty inArray is a SQL error)', async () => {
+    await expect(companiesRepository.findSummariesByIds([])).resolves.toEqual([]);
+  });
+
+  it('skips unknown ids rather than throwing', async () => {
+    const known = await companyFactory({ name: 'Known Co' });
+
+    const rows = await companiesRepository.findSummariesByIds([known.id, randomUUID()]);
+
+    expect(rows.map((r) => r.id)).toEqual([known.id]);
+  });
+
+  it('orders name asc, then id asc — deterministic for the workspace list', async () => {
+    const zulu = await companyFactory({ name: 'Zulu Co' });
+    const alpha = await companyFactory({ name: 'Alpha Co' });
+    const mike = await companyFactory({ name: 'Mike Co' });
+
+    // Requested in a deliberately unsorted order.
+    const rows = await companiesRepository.findSummariesByIds([zulu.id, mike.id, alpha.id]);
+
+    expect(rows.map((r) => r.name)).toEqual(['Alpha Co', 'Mike Co', 'Zulu Co']);
+  });
+
+  it('breaks a name tie on id asc', async () => {
+    const first = await companyFactory({ name: 'Tie Co' });
+    const second = await companyFactory({ name: 'Tie Co' });
+    const expected = [first.id, second.id].sort((a, b) => (a < b ? -1 : 1));
+
+    const rows = await companiesRepository.findSummariesByIds([second.id, first.id]);
+
+    expect(rows.map((r) => r.id)).toEqual(expected);
+  });
+
+  it('accepts a readonly array (the derivation passes one straight through)', async () => {
+    const company = await companyFactory({ name: 'Readonly Co' });
+    const ids: readonly string[] = [company.id];
+
+    await expect(companiesRepository.findSummariesByIds(ids)).resolves.toEqual([
+      { id: company.id, name: 'Readonly Co', isPersonal: false },
+    ]);
+  });
+});

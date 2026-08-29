@@ -71,6 +71,13 @@ vi.mock('@/lib/domain-join/run-domain-join', () => ({
   runDomainJoinAndEmit: (...a: unknown[]) => mockRunDomainJoinAndEmit(...a),
 }));
 
+// BAL-494 — the workspace hydration seam. Default to `null` (no company at all) so every
+// pre-existing test's `SessionUser` shape is untouched unless a test opts in.
+const mockDeriveWorkspacesForUser = vi.fn();
+vi.mock('@/lib/workspaces/derive-workspaces', () => ({
+  deriveWorkspacesForUser: (...a: unknown[]) => mockDeriveWorkspacesForUser(...a),
+}));
+
 const mockRedirect = vi.fn((url: URL) => ({ url: url.toString(), cookies: { delete: vi.fn() } }));
 vi.mock('next/server', () => ({ NextResponse: { redirect: (url: URL) => mockRedirect(url) } }));
 
@@ -134,6 +141,7 @@ function setupNewUser(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSessionObj = { save: mockSave };
+  mockDeriveWorkspacesForUser.mockResolvedValue(null);
 });
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -340,5 +348,140 @@ describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', 
     const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
     expect(redirectedTo).toContain('/dashboard');
     expect(redirectedTo).not.toContain('error=');
+  });
+});
+
+describe('OAuth callback — BAL-494 / ADR-1053 workspace hydration', () => {
+  const membershipWorkspace = {
+    type: 'company' as const,
+    key: 'company:co-1',
+    companyId: 'co-1',
+    name: 'Corp',
+    via: 'membership' as const,
+    isPersonal: false,
+  };
+  const returningMembership = {
+    companyMemberships: [{ role: 'owner', company: { id: 'co-1', name: 'Corp' } }],
+  };
+  const returningUpdatedUser = {
+    id: 'user-1',
+    email: 'jane@corp.io',
+    firstName: 'Jane',
+    lastName: 'Doe',
+    avatarUrl: null,
+    activeMode: 'client',
+    onboardingCompleted: true,
+    platformRole: 'user',
+    emailVerified: true,
+  };
+
+  it('session gains activeWorkspace + the projection on login (the LIST is never sealed)', async () => {
+    mockAuthenticateWithCode.mockResolvedValue({
+      user: workosUser(),
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    mockFindByWorkosId.mockResolvedValue({ id: 'user-1', email: 'jane@corp.io', avatarUrl: null });
+    mockUpdate.mockResolvedValue(returningUpdatedUser);
+    mockFindWithCompany.mockResolvedValue(returningMembership);
+    mockExpertFindFirst.mockResolvedValue(null);
+    mockDeriveWorkspacesForUser.mockResolvedValue({
+      workspaces: [membershipWorkspace],
+      activeWorkspace: membershipWorkspace,
+      session: {
+        activeMode: 'client',
+        companyId: 'co-1',
+        companyName: 'Corp',
+        companyRole: 'owner',
+      },
+    });
+
+    await GET(makeReq('auth-code'));
+
+    expect(mockDeriveWorkspacesForUser).toHaveBeenCalledWith('user-1');
+    expect(mockSessionObj.user).toMatchObject({
+      activeWorkspace: membershipWorkspace,
+      companyId: 'co-1',
+      companyName: 'Corp',
+      companyRole: 'owner',
+    });
+    // ⚠ The derivation HAS a `workspaces` list (mocked above) and login must NOT seal it:
+    // the cookie's 4096-byte ceiling is crossed at five to eight company workspaces, and a
+    // silently discards an oversized `Set-Cookie` — an unrecoverable sign-in loop. The list
+    // is re-derived per request via `getWorkspacesForCurrentUser()`.
+    expect(mockSessionObj.user).not.toHaveProperty('workspaces');
+  });
+
+  it('a stored active_company_id is honoured on login (not companyMemberships[0])', async () => {
+    // The FIRST membership is `co-1` (companyMemberships[0]) per findWithCompany, but the
+    // user previously switched to `co-2` — the derivation (mocked here) reflects that
+    // STORED choice, and the session must follow it, not the raw membership order.
+    const storedChoiceWorkspace = {
+      type: 'company' as const,
+      key: 'company:co-2',
+      companyId: 'co-2',
+      name: 'Northwind',
+      via: 'membership' as const,
+      isPersonal: false,
+    };
+    mockAuthenticateWithCode.mockResolvedValue({
+      user: workosUser(),
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    mockFindByWorkosId.mockResolvedValue({ id: 'user-1', email: 'jane@corp.io', avatarUrl: null });
+    mockUpdate.mockResolvedValue(returningUpdatedUser);
+    mockFindWithCompany.mockResolvedValue(returningMembership); // companyMemberships[0] = co-1
+    mockExpertFindFirst.mockResolvedValue(null);
+    mockDeriveWorkspacesForUser.mockResolvedValue({
+      workspaces: [membershipWorkspace, storedChoiceWorkspace],
+      activeWorkspace: storedChoiceWorkspace,
+      session: {
+        activeMode: 'client',
+        companyId: 'co-2',
+        companyName: 'Northwind',
+        companyRole: 'owner',
+      },
+    });
+
+    await GET(makeReq('auth-code'));
+
+    expect(mockSessionObj.user).toMatchObject({ companyId: 'co-2', companyName: 'Northwind' });
+  });
+
+  it("DB active_mode='expert' with no approved profile lands as 'client' (fail-safe correction)", async () => {
+    mockAuthenticateWithCode.mockResolvedValue({
+      user: workosUser(),
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    mockFindByWorkosId.mockResolvedValue({ id: 'user-1', email: 'jane@corp.io', avatarUrl: null });
+    mockUpdate.mockResolvedValue({ ...returningUpdatedUser, activeMode: 'expert' });
+    mockFindWithCompany.mockResolvedValue(returningMembership);
+    mockExpertFindFirst.mockResolvedValue(null); // no expert profile
+    mockDeriveWorkspacesForUser.mockResolvedValue({
+      workspaces: [membershipWorkspace],
+      activeWorkspace: membershipWorkspace,
+      session: {
+        activeMode: 'client',
+        companyId: 'co-1',
+        companyName: 'Corp',
+        companyRole: 'owner',
+      },
+    });
+
+    await GET(makeReq('auth-code'));
+
+    expect(mockSessionObj.user).toMatchObject({ activeMode: 'client' });
+  });
+
+  it('leaves the session exactly as built when derivation resolves null (no company at all)', async () => {
+    setupNewUser();
+    mockDeriveWorkspacesForUser.mockResolvedValue(null);
+
+    await GET(makeReq('auth-code'));
+
+    expect(mockSessionObj.user).not.toHaveProperty('activeWorkspace');
+    expect(mockSessionObj.user).not.toHaveProperty('workspaces');
   });
 });

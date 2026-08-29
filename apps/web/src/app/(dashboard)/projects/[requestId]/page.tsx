@@ -5,10 +5,11 @@ import {
   projectRequestsRepository,
   companyBillingRepository,
   projectEngagementsRepository,
+  type ProjectRequestWithRelations,
 } from '@balo/db';
 import { extractEmailDomain } from '@balo/shared/domains';
 import { log } from '@/lib/logging';
-import { getCurrentUser } from '@/lib/auth/session';
+import { getCurrentUser, type SessionUser } from '@/lib/auth/session';
 import {
   requestPhase,
   resolveRequestLens,
@@ -16,6 +17,10 @@ import {
   type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
+import {
+  resolveWorkspaceForEntity,
+  workspaceSwitchRedirectPath,
+} from '@/lib/workspaces/resolve-workspace-for-entity';
 import {
   mapRequestToDetailView,
   type RequestDetailView,
@@ -82,6 +87,50 @@ async function loadBillingCapture(
   return { companyId, canManage, details };
 }
 
+/**
+ * The `!ctx` (non-participant) branch: BAL-494 / ADR-1053 cross-workspace
+ * deep-link redirect, or the classic not-a-participant denial → notFound().
+ * Extracted from the page body to keep its own Cognitive Complexity within
+ * budget — this function always throws (`redirect()` or `notFound()`) and
+ * never returns normally.
+ */
+async function redirectOrDenyRequestAccess(
+  user: SessionUser,
+  request: ProjectRequestWithRelations,
+  requestId: string
+): Promise<never> {
+  // BAL-494 / ADR-1053 — the viewer may hold ANOTHER workspace that owns this request.
+  // Persist the switch via the Route Handler and come back — never a write during render.
+  // Placed BEFORE the denial logging/analytics: a legitimate cross-workspace deep link is
+  // not a denial and must not pollute REQUEST_ACCESS_DENIED.
+  const target = await resolveWorkspaceForEntity(user, { companyId: request.companyId });
+  if (target !== null) {
+    // The redirect path carries a SHORT-TTL SEALED token (minted here, redeemed once by the
+    // Route Handler) rather than a raw `to=` param — see `lib/workspaces/switch-token.ts`.
+    redirect(await workspaceSwitchRedirectPath(user.id, target, `/projects/${requestId}`));
+  }
+
+  // Authenticated but not a participant/owner/admin → same not-found page.
+  // Distinguish a DECLINED expert (dropped out, still probing) from a plain
+  // stranger so we can measure declined experts hitting the wall (BAL-276).
+  const denialReason = resolveRequestDenialReason(user, request);
+  log.warn('Project request access denied', {
+    requestId,
+    userId: user.id,
+    companyId: user.companyId,
+    reason: denialReason ?? 'not_a_participant',
+  });
+  if (denialReason === 'declined_relationship') {
+    trackServerAndFlush(PROJECT_SERVER_EVENTS.REQUEST_ACCESS_DENIED, {
+      request_id: requestId,
+      reason: 'declined_relationship',
+      lens_attempted: 'expert',
+      distinct_id: user.id,
+    });
+  }
+  notFound();
+}
+
 export async function generateMetadata({
   params,
 }: Readonly<RequestDetailPageProps>): Promise<Metadata> {
@@ -144,25 +193,9 @@ export default async function RequestDetailPage({
 
   const ctx = resolveRequestLens(user, request);
   if (!ctx) {
-    // Authenticated but not a participant/owner/admin → same not-found page.
-    // Distinguish a DECLINED expert (dropped out, still probing) from a plain
-    // stranger so we can measure declined experts hitting the wall (BAL-276).
-    const denialReason = resolveRequestDenialReason(user, request);
-    log.warn('Project request access denied', {
-      requestId,
-      userId: user.id,
-      companyId: user.companyId,
-      reason: denialReason ?? 'not_a_participant',
-    });
-    if (denialReason === 'declined_relationship') {
-      trackServerAndFlush(PROJECT_SERVER_EVENTS.REQUEST_ACCESS_DENIED, {
-        request_id: requestId,
-        reason: 'declined_relationship',
-        lens_attempted: 'expert',
-        distinct_id: user.id,
-      });
-    }
-    notFound();
+    await redirectOrDenyRequestAccess(user, request, requestId);
+    // Unreachable — the helper above always throws (redirect() or notFound()).
+    throw new Error('unreachable: redirectOrDenyRequestAccess must throw');
   }
 
   // BAL-324 repeat-company auto-skip: when an admin loads the board and the client

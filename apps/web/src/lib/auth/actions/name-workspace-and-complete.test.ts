@@ -279,4 +279,75 @@ describe('nameWorkspaceAndCompleteAction', () => {
       expect(vi.mocked(log.error)).toHaveBeenCalled();
     });
   });
+
+  describe('BAL-494 / ADR-1053 — workspace name patch', () => {
+    it('the owner guard still passes with a NULL active_company_id (unchanged pre-onboarding behaviour)', async () => {
+      // No `activeCompanyId` concept in the session at all — this pins that the guard
+      // (`companyRole !== 'owner'`) is untouched by BAL-494.
+      const result = await nameWorkspaceAndCompleteAction('Acme Corp');
+      expect(result).toEqual({ success: true, data: { redirectTo: '/dashboard' } });
+    });
+
+    it('patches activeWorkspace.name alongside companyName', async () => {
+      const workspace = {
+        type: 'company' as const,
+        key: 'company:company-1',
+        companyId: 'company-1',
+        name: 'Personal Workspace',
+        via: 'membership' as const,
+        isPersonal: true,
+      };
+      (mockSessionObj.user as Record<string, unknown>).activeWorkspace = workspace;
+
+      await nameWorkspaceAndCompleteAction('Acme Corp');
+
+      const user = mockSessionObj.user as { activeWorkspace: typeof workspace };
+      expect(user.activeWorkspace.name).toBe('Acme Corp');
+      // Every other field on the workspace is preserved.
+      expect(user.activeWorkspace).toMatchObject({ companyId: 'company-1', via: 'membership' });
+    });
+
+    it('does NOT patch activeWorkspace when it names a DIFFERENT company', async () => {
+      const otherWorkspace = {
+        type: 'company' as const,
+        key: 'company:other-co',
+        companyId: 'other-co',
+        name: 'Other Co',
+        via: 'membership' as const,
+        isPersonal: false,
+      };
+      (mockSessionObj.user as Record<string, unknown>).activeWorkspace = otherWorkspace;
+
+      await nameWorkspaceAndCompleteAction('Acme Corp');
+
+      const user = mockSessionObj.user as { activeWorkspace: typeof otherWorkspace };
+      expect(user.activeWorkspace.name).toBe('Other Co');
+    });
+
+    it('never writes a workspace LIST onto the session (cookie budget)', async () => {
+      // The rename used to re-map a sealed `workspaces[]` too. That field is gone: the list
+      // crossed the browser's 4096-byte cookie limit at five to eight company workspaces and an
+      // oversized `Set-Cookie` is silently discarded. See `lib/auth/session-cookie-size.test.ts`.
+      const workspace = {
+        type: 'company' as const,
+        key: 'company:company-1',
+        companyId: 'company-1',
+        name: 'Personal Workspace',
+        via: 'membership' as const,
+        isPersonal: true,
+      };
+      (mockSessionObj.user as Record<string, unknown>).activeWorkspace = workspace;
+
+      await nameWorkspaceAndCompleteAction('Acme Corp');
+
+      expect(mockSessionObj.user).not.toHaveProperty('workspaces');
+    });
+
+    it('does not crash when the session carries no activeWorkspace yet (pre-BAL-494 mid-onboarding)', async () => {
+      // activeWorkspace is simply absent — default mockSessionObj shape.
+      const result = await nameWorkspaceAndCompleteAction('Acme Corp');
+      expect(result).toEqual({ success: true, data: { redirectTo: '/dashboard' } });
+      expect((mockSessionObj.user as Record<string, unknown>).activeWorkspace).toBeUndefined();
+    });
+  });
 });

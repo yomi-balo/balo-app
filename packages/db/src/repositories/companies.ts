@@ -1,4 +1,4 @@
-import { eq, and, isNull, sql } from 'drizzle-orm';
+import { eq, and, asc, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { companies, companyMembers, type Company, type User } from '../schema';
 import { auditEventsRepository } from './audit-events';
@@ -25,6 +25,18 @@ export interface PromoteToOrganizationInput {
   name: string;
   domain: string;
   actorUserId: string;
+}
+
+/**
+ * BAL-494 — the PROJECTED batch company read used to hydrate workspace entries.
+ * Exactly the three fields a workspace needs; deliberately no `logoUrl` (the
+ * workspace list is sealed into the ~4 KB `balo_session` cookie), and never the
+ * billing columns.
+ */
+export interface CompanySummary {
+  id: string;
+  name: string;
+  isPersonal: boolean;
 }
 
 /**
@@ -65,6 +77,38 @@ export const companiesRepository = {
       .where(eq(companies.id, id))
       .limit(1);
     return row;
+  },
+
+  /**
+   * BAL-494 — BATCH projected hydration of `id` / `name` / `isPersonal` for a set of
+   * company ids. The batch counterpart of {@link companiesRepository.findNameById}
+   * (there is no other batch company read today), added for the workspace derivation's
+   * representation arm, which knows only company ids.
+   *
+   * ⚠ EXPLICIT PROJECTION ONLY — never a full row. The result is destined for the
+   * `balo_session` cookie, and `findById` would carry `stripeCustomerId`, `creditBalance`,
+   * `domain` and the join-mode governance columns with it (the shape of memory
+   * `reference_drizzle_with_hydration_leaks_secrets`). Concealment is enforced by what the
+   * row CAN hold, not by remembering to omit downstream.
+   *
+   * Empty input short-circuits to `[]` WITHOUT touching the DB — an empty `inArray` is a
+   * SQL error, and this is the steady-state case in production (BAL-313 shipped
+   * `representations` with no writer, so the id set is always empty today).
+   *
+   * Unknown ids are simply absent from the result. Ordered `name asc, id asc` so the
+   * caller's workspace list is deterministic.
+   *
+   * NOTE: no `deleted_at` guard — the `companies` table has NO such column (see
+   * schema/companies.ts; same note as `updateName` / `promoteToOrganization`). A hard
+   * delete is the only removal path this table admits.
+   */
+  findSummariesByIds: async (ids: readonly string[]): Promise<CompanySummary[]> => {
+    if (ids.length === 0) return [];
+    return db
+      .select({ id: companies.id, name: companies.name, isPersonal: companies.isPersonal })
+      .from(companies)
+      .where(inArray(companies.id, [...ids]))
+      .orderBy(asc(companies.name), asc(companies.id));
   },
 
   findBySlug: async (slug: string): Promise<Company | undefined> => {

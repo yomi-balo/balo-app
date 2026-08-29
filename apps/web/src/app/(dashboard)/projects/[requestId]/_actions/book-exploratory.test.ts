@@ -98,4 +98,41 @@ describe('bookExploratoryMeetingAction (MOCK seam)', () => {
     expect(mockTransitionStatus).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
   });
+
+  describe('BAL-494 / ADR-1053 — expand/contract pin (site 2)', () => {
+    it('refuses a request owned by a company the user is a MEMBER of but is not currently switched into', async () => {
+      // `user.companyId` IS the active workspace's projected company (post-BAL-494) — a
+      // membership elsewhere does not widen this gate. The request is owned by
+      // 'company-2'; the session's active workspace is 'company-1' even though the user
+      // also holds a real membership in 'company-2'.
+      //
+      // ⚠ The OTHER membership is deliberately not represented on the session at all: the
+      // full workspace LIST is not sealed into the cookie (it overran the 4096-byte browser
+      // limit — see `SessionUser`), it is derived per request. The session carries only the
+      // POINTER, which is exactly the point being pinned — holding a second membership is
+      // invisible to this gate either way.
+      mockRequireUser.mockResolvedValue({
+        id: 'user-multi-company',
+        companyId: 'company-1', // the ACTIVE workspace
+        activeWorkspace: {
+          type: 'company',
+          key: 'company:company-1',
+          companyId: 'company-1',
+          name: 'Company One',
+          via: 'membership',
+          isPersonal: false,
+        },
+      });
+      mockFindById.mockResolvedValue({
+        id: REQUEST_ID,
+        companyId: 'company-2', // owned by the OTHER membership, not the active one
+        status: 'exploratory_meeting_requested',
+      });
+
+      const result = await bookExploratoryMeetingAction({ requestId: REQUEST_ID });
+
+      expect(result).toEqual({ success: false, error: 'You do not have permission to do this.' });
+      expect(mockTransitionStatus).not.toHaveBeenCalled();
+    });
+  });
 });

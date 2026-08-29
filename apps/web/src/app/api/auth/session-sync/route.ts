@@ -1,38 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { usersRepository } from '@balo/db';
+import { deriveWorkspaces, type StoredWorkspaceChoice } from '@balo/shared/workspaces';
 import { getSession } from '@/lib/auth/session';
+import { getSafeRedirectPath } from '@/lib/auth/safe-redirect';
+import { loadWorkspaceDerivationMaterials } from '@/lib/workspaces/derive-workspaces';
+import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 import { log } from '@/lib/logging';
-
-const DEFAULT_REDIRECT = '/dashboard';
-
-/**
- * Validate and normalize a returnTo path to prevent open redirects.
- * Uses URL parsing to ensure the path stays on the same origin.
- */
-function getSafeRedirectPath(returnTo: string | null, baseUrl: string): string {
-  if (!returnTo) return DEFAULT_REDIRECT;
-
-  try {
-    // Parse relative to the request origin — if returnTo contains a different
-    // host, new URL() will resolve it and we detect it below.
-    const parsed = new URL(returnTo, baseUrl);
-    const base = new URL(baseUrl);
-
-    // Must stay on the same origin (blocks absolute URLs, protocol-relative, etc.)
-    if (parsed.origin !== base.origin) return DEFAULT_REDIRECT;
-
-    const path = parsed.pathname;
-
-    // Block auth paths to prevent redirect loops
-    if (path.startsWith('/login') || path.startsWith('/signup') || path.startsWith('/api/auth')) {
-      return DEFAULT_REDIRECT;
-    }
-
-    return path;
-  } catch {
-    return DEFAULT_REDIRECT;
-  }
-}
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getSession();
@@ -77,6 +50,43 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   session.user.platformRole = dbUser.platformRole;
   session.user.onboardingCompleted = dbUser.onboardingCompleted;
   session.user.expertProfileId = dbUser.expertProfileId ?? undefined;
+
+  // BAL-494 / ADR-1053 — the read half only (NOT `deriveWorkspacesForUser`, which is React
+  // `cache()`'d: a second call in this same request would replay the PRE-repair memoized
+  // result instead of reflecting the DB write below). `loadWorkspaceDerivationMaterials` is
+  // ALSO cache()'d, but that is fine here — this is its first (and only) call this request.
+  const materials = await loadWorkspaceDerivationMaterials(session.user.id);
+  const derived = deriveWorkspaces(materials.input, materials.stored);
+  if (derived !== null) {
+    const hasExpertWorkspace = derived.workspaces.some((w) => w.type === 'expert');
+    const needsRepair = dbUser.activeMode === 'expert' && !hasExpertWorkspace;
+
+    // Narrow repair write — the ONLY DB write this route performs. If the DB still says
+    // `activeMode: 'expert'` but the derivation finds no expert workspace (e.g. the user's
+    // approval was revoked), demote it in the DB. Without this, the drift check's
+    // `activeMode` comparison would see the session say 'expert' (matching the stale DB)
+    // forever, and the projection invariant would fight it on every request → an infinite
+    // redirect loop.
+    if (needsRepair) {
+      await usersRepository.update(session.user.id, { activeMode: 'client' });
+      log.info('Workspace repair: activeMode demoted to client', { userId: session.user.id });
+    }
+
+    // Recompute PURELY from the same materials with the repaired stored choice — no second
+    // DB read, and no stale-cache risk (we never call the cache()'d wrapper twice).
+    const finalStored: StoredWorkspaceChoice = needsRepair
+      ? { activeMode: 'client', activeCompanyId: materials.stored.activeCompanyId }
+      : materials.stored;
+    const finalDerived = needsRepair ? deriveWorkspaces(materials.input, finalStored) : derived;
+    if (finalDerived !== null) {
+      applyWorkspaceDerivationToSessionUser(session.user, finalDerived);
+    }
+  }
+  // `derived === null` (no company at all) → leave the workspace fields absent; the layout
+  // then behaves exactly as today. A stale `active_company_id` is NOT cleared here — it is
+  // never trusted without revalidation (see `deriveWorkspaces`'s fallback rule) and retaining
+  // it restores the user's choice if they rejoin the company.
+
   await session.save();
 
   log.info('Session synced: drift detected and patched', {

@@ -91,3 +91,67 @@ describe('resolvePortfolioLens', () => {
     });
   });
 });
+
+describe('BAL-494 / ADR-1053 — expand/contract pin (site 5)', () => {
+  // `resolvePortfolioLens` reads only `activeMode` / `expertProfileId` / `platformRole` off
+  // `SessionUser` — it never looks at `activeWorkspace` or `workspaces`. These pins prove that
+  // behaviour is UNCHANGED now that `activeMode` is a PROJECTION of the active workspace
+  // (BAL-494) rather than an independent field: with `active_company_id = NULL` (every
+  // existing row), the derived `activeMode` reproduces today's exact value, so this resolver
+  // needs no edit.
+
+  it('a SessionUser carrying activeWorkspace resolves identically — the resolver ignores the new field', () => {
+    const withWorkspace = makeUser({
+      activeWorkspace: {
+        type: 'company',
+        key: 'company:company-1',
+        companyId: 'company-1',
+        name: 'Northwind Industrial',
+        via: 'membership',
+        isPersonal: false,
+      },
+    });
+    const withoutWorkspace = makeUser();
+
+    expect(resolvePortfolioLens(withWorkspace)).toEqual(resolvePortfolioLens(withoutWorkspace));
+  });
+
+  it('an active expert workspace (activeMode projected to "expert") defaults to the expert lens', () => {
+    // Reachable either the pre-BAL-494 way (approve-expert flips activeMode) or via a switch
+    // into the EXPERT_WORKSPACE — both project activeMode:'expert', and this resolver cannot
+    // tell them apart (by design: it never reads activeWorkspace).
+    const { lens, allowedLenses } = resolvePortfolioLens(
+      makeUser({
+        activeMode: 'expert',
+        expertProfileId: 'expert-1',
+        activeWorkspace: { type: 'expert', key: 'expert' },
+      })
+    );
+    expect(lens).toBe('expert');
+    expect(allowedLenses).toEqual(['client', 'expert']);
+  });
+
+  it('an unapproved applicant qualifies for the expert lens but never defaults to it', () => {
+    // deriveWorkspaces never builds an expert workspace for an unapproved applicant
+    // (hasApprovedExpertProfile: false), so activeMode can never reach 'expert' through a
+    // switch for this user — it stays projected as 'client'. `expertProfileId` is still set
+    // (the application exists), which is enough for allowedLenses to include 'expert' so the
+    // segmented control is visible, but the default view stays client.
+    const { lens, allowedLenses } = resolvePortfolioLens(
+      makeUser({
+        activeMode: 'client',
+        expertProfileId: 'expert-1',
+        activeWorkspace: {
+          type: 'company',
+          key: 'company:company-1',
+          companyId: 'company-1',
+          name: 'Northwind Industrial',
+          via: 'membership',
+          isPersonal: false,
+        },
+      })
+    );
+    expect(allowedLenses).toEqual(['client', 'expert']);
+    expect(lens).toBe('client');
+  });
+});

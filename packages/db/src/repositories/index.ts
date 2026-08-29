@@ -1,6 +1,7 @@
 export { usersRepository } from './users';
 export { companiesRepository } from './companies';
 export type {
+  CompanySummary,
   SetJoinModeResult,
   PromoteToOrganizationInput,
   PromoteToOrganizationResult,

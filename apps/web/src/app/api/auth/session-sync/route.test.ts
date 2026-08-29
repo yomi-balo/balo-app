@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import type { Workspace } from '@balo/shared/workspaces';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
 const mockFindForSessionSync = vi.fn();
+const mockUpdate = vi.fn();
 vi.mock('@balo/db', () => ({
   usersRepository: {
     findForSessionSync: (...args: unknown[]) => mockFindForSessionSync(...args),
+    update: (...args: unknown[]) => mockUpdate(...args),
   },
 }));
 
@@ -15,12 +18,67 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: () => mockGetSession(),
 }));
 
+const { mockLogInfo, mockLogWarn } = vi.hoisted(() => ({
+  mockLogInfo: vi.fn(),
+  mockLogWarn: vi.fn(),
+}));
 vi.mock('@/lib/logging', () => ({
   log: {
-    info: vi.fn(),
-    warn: vi.fn(),
+    info: mockLogInfo,
+    warn: mockLogWarn,
     error: vi.fn(),
   },
+}));
+
+const PERSONAL_ID = 'company-1';
+const COMPANY_WORKSPACE = {
+  type: 'company' as const,
+  key: `company:${PERSONAL_ID}`,
+  companyId: PERSONAL_ID,
+  name: 'Test Company',
+  via: 'membership' as const,
+  isPersonal: true,
+};
+const EXPERT_WORKSPACE = { type: 'expert' as const, key: 'expert' };
+
+function materials(overrides: Record<string, unknown> = {}) {
+  return {
+    input: {
+      hasApprovedExpertProfile: false,
+      memberships: [
+        { companyId: PERSONAL_ID, name: 'Test Company', isPersonal: true, role: 'owner' },
+      ],
+      eligibleCompanyIds: [PERSONAL_ID],
+      representedCompanies: [],
+    },
+    stored: { activeMode: 'client', activeCompanyId: null },
+    ...overrides,
+  };
+}
+
+/**
+ * Materials for an actor whose DB row still says `active_mode:'expert'`. `approved` decides
+ * whether an expert workspace is derivable — i.e. whether the route's narrow repair write
+ * fires. Hoisted because three cases need the identical block (Sonar duplication gate).
+ */
+function expertModeMaterials(approved: boolean) {
+  return materials({
+    input: {
+      hasApprovedExpertProfile: approved,
+      memberships: [
+        { companyId: PERSONAL_ID, name: 'Test Company', isPersonal: true, role: 'owner' },
+      ],
+      eligibleCompanyIds: [PERSONAL_ID],
+      representedCompanies: [],
+    },
+    stored: { activeMode: 'expert', activeCompanyId: null },
+  });
+}
+
+const mockLoadWorkspaceDerivationMaterials = vi.fn();
+vi.mock('@/lib/workspaces/derive-workspaces', () => ({
+  loadWorkspaceDerivationMaterials: (...args: unknown[]) =>
+    mockLoadWorkspaceDerivationMaterials(...args),
 }));
 
 import { GET } from './route';
@@ -30,7 +88,8 @@ import { GET } from './route';
 const BASE_URL = 'http://localhost:3000';
 
 function makeRequest(queryString = ''): NextRequest {
-  const url = `${BASE_URL}/api/auth/session-sync${queryString ? `?${queryString}` : ''}`;
+  const suffix = queryString ? `?${queryString}` : '';
+  const url = `${BASE_URL}/api/auth/session-sync${suffix}`;
   return new NextRequest(new URL(url));
 }
 
@@ -48,6 +107,9 @@ function createMockSession(userOverrides: Record<string, unknown> = {}) {
       companyName: 'Test Company',
       companyRole: 'owner',
       expertProfileId: undefined,
+      // BAL-494 / ADR-1053 — typed (not left to inference) so the route's mutations of
+      // `session.user.activeWorkspace` (asserted on below) typechecks.
+      activeWorkspace: undefined as Workspace | undefined,
       ...userOverrides,
     },
     save: vi.fn().mockResolvedValue(undefined),
@@ -78,6 +140,8 @@ function getRedirectLocation(response: Response): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockLoadWorkspaceDerivationMaterials.mockResolvedValue(materials());
+  mockUpdate.mockResolvedValue({});
 });
 
 describe('GET /api/auth/session-sync', () => {
@@ -172,6 +236,9 @@ describe('GET /api/auth/session-sync', () => {
           expertProfileId: 'ep-789',
         })
       );
+      // This user genuinely holds an approved expert profile (unlike the beforeEach
+      // default), so no BAL-494 repair-demotion fires and activeMode stays 'expert'.
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(true));
 
       const response = await GET(makeRequest('returnTo=/settings'));
 
@@ -298,6 +365,87 @@ describe('GET /api/auth/session-sync', () => {
 
       expect(response.status).toBe(307);
       expect(getRedirectLocation(response)).toBe('/projects/123');
+    });
+  });
+
+  describe('BAL-494 / ADR-1053 — workspace repopulation + repair', () => {
+    it('repopulates activeWorkspace on the session — and does NOT seal the list', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser());
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(materials());
+
+      await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(session.user.activeWorkspace).toEqual(COMPANY_WORKSPACE);
+      // The cookie's hard 4096-byte limit is crossed at five to eight company workspaces and an
+      // oversized `Set-Cookie` is silently discarded — so the sync route repopulates the
+      // POINTER only. See `lib/auth/session-cookie-size.test.ts`.
+      expect(session.user).not.toHaveProperty('workspaces');
+    });
+
+    it('demotes activeMode to client in the DB EXACTLY ONCE when the expert workspace vanished', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ activeMode: 'expert' }));
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(false));
+
+      await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
+      expect(mockUpdate).toHaveBeenCalledWith(session.user.id, { activeMode: 'client' });
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        'Workspace repair: activeMode demoted to client',
+        expect.objectContaining({ userId: session.user.id })
+      );
+      expect(session.user.activeMode).toBe('client');
+      expect(session.user.activeWorkspace).toEqual(COMPANY_WORKSPACE);
+    });
+
+    it('does NOT write to the DB when the expert workspace still exists', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ activeMode: 'expert' }));
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(true));
+
+      await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(session.user.activeMode).toBe('expert');
+      expect(session.user.activeWorkspace).toEqual(EXPERT_WORKSPACE);
+    });
+
+    it('still redirects to the safe returnTo after a repair write', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ activeMode: 'expert' }));
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(false));
+
+      const response = await GET(makeRequest('returnTo=/projects/123'));
+
+      expect(response.status).toBe(307);
+      expect(getRedirectLocation(response)).toBe('/projects/123');
+    });
+
+    it('leaves workspace fields absent (no crash) when the derivation resolves null', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser());
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(
+        materials({
+          input: {
+            hasApprovedExpertProfile: false,
+            memberships: [],
+            eligibleCompanyIds: [],
+            representedCompanies: [],
+          },
+        })
+      );
+
+      const response = await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(response.status).toBe(307);
+      expect(session.user.activeWorkspace).toBeUndefined();
     });
   });
 });
