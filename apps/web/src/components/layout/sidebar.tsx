@@ -3,6 +3,8 @@
 import { useSidebar } from './sidebar-context';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { SidebarNavLink } from './sidebar-nav-link';
+import { resolveNavItems, type NavBadgeSource, type EnabledNavEntry } from './nav-registry';
+import { useNavItemTracking } from './use-nav-item-tracking';
 import { Logo } from './logo';
 import { UserMenu } from './user-menu';
 import { Button } from '@/components/ui/button';
@@ -10,62 +12,25 @@ import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import {
-  LayoutDashboard,
-  Video,
-  FolderKanban,
-  MessageSquare,
-  Settings,
-  User,
-  Users,
-  PanelLeftClose,
-  PanelLeft,
-  Check,
-} from 'lucide-react';
+import { PanelLeftClose, PanelLeft, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Primary nav items -- same for both modes
-const TOP_NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/consultations', label: 'Consultations', icon: Video },
-  { href: '/projects', label: 'Projects', icon: FolderKanban },
-  { href: '/messages', label: 'Messages', icon: MessageSquare },
-];
-
-interface NavItem {
-  href: string;
-  label: string;
-  icon: typeof LayoutDashboard;
+interface NavBadgeCounts {
+  readonly checklistCompletedCount: number;
+  readonly checklistAllComplete: boolean;
 }
 
-export function getBottomNavItems(
-  activeMode: 'client' | 'expert',
-  canManageCompany: boolean
-): NavItem[] {
-  const items: NavItem[] = [];
-  if (activeMode === 'expert') {
-    items.push({
-      href: '/expert/settings',
-      label: 'Expert Settings',
-      icon: Settings,
-    });
-  }
-  // BAL-347: company "Team" surface — owner/admin on a non-personal company only.
-  // The page still hard-gates via hasCapability + notFound; this is UX defence-in-depth.
-  if (canManageCompany) {
-    items.push({
-      href: '/settings/team',
-      label: 'Team',
-      icon: Users,
-    });
-  }
-  items.push({
-    href: '/settings/account',
-    label: 'Account',
-    icon: User,
-  });
-  return items;
-}
+/**
+ * ⚠ A `Record` OVER THE UNION, ON PURPOSE. Adding a member to `NavBadgeSource` without adding a
+ * renderer here is a COMPILE ERROR — a `switch` or a ternary would silently render nothing.
+ * (`noUncheckedIndexedAccess` does not widen a finite-literal-keyed Record, so the lookup below
+ * is non-optional.)
+ */
+const NAV_BADGE_RENDERERS: Record<NavBadgeSource, (counts: NavBadgeCounts) => React.JSX.Element> = {
+  expertChecklist: ({ checklistCompletedCount, checklistAllComplete }) => (
+    <ChecklistBadge completedCount={checklistCompletedCount} allComplete={checklistAllComplete} />
+  ),
+};
 
 function ChecklistBadge({
   completedCount,
@@ -100,10 +65,26 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
     userAvatarUrl,
     checklistCompletedCount,
     checklistAllComplete,
-    canManageCompany,
+    navContext,
   } = useSidebar();
 
-  const bottomNavItems = getBottomNavItems(activeMode, canManageCompany);
+  const primaryItems = resolveNavItems(navContext, 'primary');
+  const secondaryItems = resolveNavItems(navContext, 'secondary');
+  const trackNavItem = useNavItemTracking('sidebar', navContext.workspaceType);
+  const badgeCounts: NavBadgeCounts = { checklistCompletedCount, checklistAllComplete };
+
+  const renderLink = (entry: EnabledNavEntry, isSecondary: boolean): React.JSX.Element => (
+    <SidebarNavLink
+      key={entry.key}
+      href={entry.href}
+      label={entry.label}
+      icon={entry.icon}
+      isCollapsed={isCollapsed}
+      isSecondary={isSecondary}
+      onClick={() => trackNavItem(entry.key)}
+      suffix={entry.badgeSource ? NAV_BADGE_RENDERERS[entry.badgeSource](badgeCounts) : undefined}
+    />
+  );
 
   return (
     <div className="flex h-full flex-col pb-14">
@@ -120,15 +101,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
       {/* Primary navigation */}
       <nav className="flex-1 space-y-1 p-3">
         <TooltipProvider delayDuration={0}>
-          {TOP_NAV_ITEMS.map((item) => (
-            <SidebarNavLink
-              key={item.href}
-              href={item.href}
-              label={item.label}
-              icon={item.icon}
-              isCollapsed={isCollapsed}
-            />
-          ))}
+          {primaryItems.map((entry) => renderLink(entry, false))}
         </TooltipProvider>
       </nav>
 
@@ -137,24 +110,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
       {/* Bottom navigation */}
       <div className="space-y-1 p-3">
         <TooltipProvider delayDuration={0}>
-          {bottomNavItems.map((item) => (
-            <SidebarNavLink
-              key={item.href}
-              href={item.href}
-              label={item.label}
-              icon={item.icon}
-              isCollapsed={isCollapsed}
-              isSecondary
-              suffix={
-                item.href === '/expert/settings' ? (
-                  <ChecklistBadge
-                    completedCount={checklistCompletedCount}
-                    allComplete={checklistAllComplete}
-                  />
-                ) : undefined
-              }
-            />
-          ))}
+          {secondaryItems.map((entry) => renderLink(entry, true))}
         </TooltipProvider>
       </div>
 

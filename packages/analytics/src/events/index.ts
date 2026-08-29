@@ -261,3 +261,14 @@ export {
 // BAL-494 / ADR-1053 — SERVER-ONLY: the switch is decided and dispatched entirely in
 // `switchWorkspace()` (apps/web); no browser code ever emits this event.
 export { WORKSPACE_SERVER_EVENTS, type WorkspaceServerEventMap } from './workspace';
+// BAL-495 / ADR-1053 — the nav registry's CLIENT event, shared by the sidebar today and by
+// BAL-501's bottom tabs / BAL-503's ⌘K palette later. `NAV_ITEM_KEYS` / `NAV_SURFACES` are the
+// canonical tuples `apps/web`'s `nav-registry.ts` derives its `NavItemKey` type from.
+export {
+  NAV_EVENTS,
+  type NavEventMap,
+  NAV_ITEM_KEYS,
+  type NavItemKey,
+  NAV_SURFACES,
+  type NavSurface,
+} from './nav';

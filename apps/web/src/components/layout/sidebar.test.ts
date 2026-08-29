@@ -1,27 +1,38 @@
 import { describe, it, expect } from 'vitest';
-import { getBottomNavItems } from './sidebar';
+import { CAPABILITIES } from '@balo/shared/authz';
+import { resolveNavItems, type NavContext } from './nav-registry';
 
-describe('getBottomNavItems (BAL-347 Team nav gating)', () => {
+describe('resolveNavItems secondary section (BAL-347 Team nav gating → BAL-495 registry)', () => {
   it('client, cannot manage company → Account only', () => {
-    expect(getBottomNavItems('client', false).map((i) => i.href)).toEqual(['/settings/account']);
+    const context: NavContext = { workspaceType: 'company', capabilities: [] };
+    expect(resolveNavItems(context, 'secondary').map((i) => i.href)).toEqual(['/settings/account']);
   });
 
   it('client, can manage company → Team + Account', () => {
-    expect(getBottomNavItems('client', true).map((i) => i.href)).toEqual([
+    const context: NavContext = {
+      workspaceType: 'company',
+      capabilities: [CAPABILITIES.MANAGE_MEMBERS],
+    };
+    expect(resolveNavItems(context, 'secondary').map((i) => i.href)).toEqual([
       '/settings/team',
       '/settings/account',
     ]);
   });
 
   it('expert, cannot manage company → Expert Settings + Account', () => {
-    expect(getBottomNavItems('expert', false).map((i) => i.href)).toEqual([
+    const context: NavContext = { workspaceType: 'expert', capabilities: [] };
+    expect(resolveNavItems(context, 'secondary').map((i) => i.href)).toEqual([
       '/expert/settings',
       '/settings/account',
     ]);
   });
 
   it('expert, can manage company → Expert Settings + Team + Account', () => {
-    expect(getBottomNavItems('expert', true).map((i) => i.href)).toEqual([
+    const context: NavContext = {
+      workspaceType: 'expert',
+      capabilities: [CAPABILITIES.MANAGE_MEMBERS],
+    };
+    expect(resolveNavItems(context, 'secondary').map((i) => i.href)).toEqual([
       '/expert/settings',
       '/settings/team',
       '/settings/account',
@@ -29,7 +40,11 @@ describe('getBottomNavItems (BAL-347 Team nav gating)', () => {
   });
 
   it('labels the Team item and points it at /settings/team', () => {
-    const team = getBottomNavItems('client', true).find((i) => i.href === '/settings/team');
+    const context: NavContext = {
+      workspaceType: 'company',
+      capabilities: [CAPABILITIES.MANAGE_MEMBERS],
+    };
+    const team = resolveNavItems(context, 'secondary').find((i) => i.href === '/settings/team');
     expect(team?.label).toBe('Team');
   });
 });

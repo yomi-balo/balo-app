@@ -13,6 +13,8 @@ interface SidebarNavLinkProps {
   isCollapsed: boolean;
   isSecondary?: boolean;
   suffix?: React.ReactNode;
+  /** BAL-495 — telemetry only. Navigation is still `<Link>`'s job; this never preventDefaults. */
+  onClick?: () => void;
 }
 
 export function SidebarNavLink({
@@ -22,6 +24,7 @@ export function SidebarNavLink({
   isCollapsed,
   isSecondary = false,
   suffix,
+  onClick,
 }: SidebarNavLinkProps): React.JSX.Element {
   const pathname = usePathname();
 
@@ -31,19 +34,24 @@ export function SidebarNavLink({
       ? pathname === '/dashboard'
       : pathname === href || pathname.startsWith(href + '/');
 
+  let inactiveTextClass =
+    'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground';
+  if (isSecondary) {
+    inactiveTextClass =
+      'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground';
+  }
+  const activeStateClass = isActive ? 'bg-primary/10 text-primary' : inactiveTextClass;
+
   const linkContent = (
     <Link
       href={href}
+      onClick={onClick}
       className={cn(
         'flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors',
         'min-h-[44px]',
         'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
         isSecondary ? 'text-xs font-normal' : 'text-sm font-medium',
-        isActive
-          ? 'bg-primary/10 text-primary'
-          : isSecondary
-            ? 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground'
-            : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground',
+        activeStateClass,
         isCollapsed && 'justify-center px-2'
       )}
     >

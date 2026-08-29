@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import type { NavContext } from './nav-registry';
 
 interface SidebarContextValue {
   isCollapsed: boolean;
@@ -16,15 +17,20 @@ interface SidebarContextValue {
   toggleCollapsed: () => void;
   setMobileOpen: (open: boolean) => void;
 
-  // Mode & user info
+  // Mode & user info. ⚠ `activeMode` is PRESENTATION ONLY here — the Logo expert badge and the
+  // user-pill subtitle. It is NEVER a nav gate; nav scopes on `navContext.workspaceType`.
   activeMode: 'client' | 'expert';
   userName: string;
   userInitials: string;
   userAvatarUrl: string | null;
   checklistCompletedCount: number;
   checklistAllComplete: boolean;
-  // BAL-347: gates the company "Team" nav item (owner/admin on a non-personal company).
-  canManageCompany: boolean;
+  /**
+   * BAL-495 — the SERVER-RESOLVED nav context every surface's registry lookup reads. Replaces
+   * the BAL-347 `canManageCompany` boolean: the Team gate is now the `manage_members` token
+   * inside `capabilities`, withheld server-side on a personal company.
+   */
+  navContext: NavContext;
 }
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
@@ -39,7 +45,7 @@ interface SidebarProviderProps {
   userAvatarUrl: string | null;
   checklistCompletedCount: number;
   checklistAllComplete: boolean;
-  canManageCompany: boolean;
+  navContext: NavContext;
 }
 
 export function SidebarProvider({
@@ -50,7 +56,7 @@ export function SidebarProvider({
   userAvatarUrl,
   checklistCompletedCount,
   checklistAllComplete,
-  canManageCompany,
+  navContext,
 }: SidebarProviderProps): React.JSX.Element {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -85,7 +91,7 @@ export function SidebarProvider({
       userAvatarUrl,
       checklistCompletedCount,
       checklistAllComplete,
-      canManageCompany,
+      navContext,
     }),
     [
       isCollapsed,
@@ -98,7 +104,7 @@ export function SidebarProvider({
       userAvatarUrl,
       checklistCompletedCount,
       checklistAllComplete,
-      canManageCompany,
+      navContext,
     ]
   );
 
