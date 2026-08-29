@@ -52,6 +52,11 @@ export {
   NAV_EVENTS,
   NAV_ITEM_KEYS,
   NAV_SURFACES,
+  // BAL-496 — the switcher's CLIENT event. ⚠ THE RE-EXPORT ALLOWLIST: omitting a name here
+  // fails in a DIFFERENT package (`apps/web` cannot import it), not in this one.
+  // ⚠⚠ `WORKSPACE_SERVER_EVENTS` must NEVER join this list — it is server-only and is exported
+  // from '../server' instead (cf. the identical warning on `AVAILABILITY_EVENTS` at :44-46).
+  WORKSPACE_EVENTS,
 } from '../events';
 
 export type {
@@ -138,4 +143,6 @@ export type {
   NavEventMap,
   NavItemKey,
   NavSurface,
+  // BAL-496 — the workspace switcher's client event payload.
+  WorkspaceEventMap,
 } from '../events';

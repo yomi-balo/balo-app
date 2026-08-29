@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import type { Workspace } from '@balo/shared/workspaces';
 import type { NavContext } from './nav-registry';
 
 interface SidebarContextValue {
@@ -31,6 +32,20 @@ interface SidebarContextValue {
    * inside `capabilities`, withheld server-side on a personal company.
    */
   navContext: NavContext;
+  /**
+   * BAL-496 — the actor's FULL workspace list, derived SERVER-side by
+   * `getWorkspacesForCurrentUser()` and passed down. ⚠ Deliberately NOT read off the session:
+   * the list overran the 4096-byte cookie ceiling and was removed from `SessionUser` in
+   * BAL-494's security round 2. `[]` is a valid, stable state (no switcher), never an error.
+   */
+  workspaces: readonly Workspace[];
+  /**
+   * `Workspace['key']` of the ACTIVE workspace, from `activeWorkspaceKeyOf(sessionUser)`.
+   * `null` only when there is no session user or the cookie predates BAL-494 — in both of which
+   * `workspaces` is `[]` (see `(dashboard)/layout.tsx` for the proof). Never names a
+   * representation workspace (R1).
+   */
+  activeWorkspaceKey: string | null;
 }
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
@@ -46,6 +61,8 @@ interface SidebarProviderProps {
   checklistCompletedCount: number;
   checklistAllComplete: boolean;
   navContext: NavContext;
+  workspaces: readonly Workspace[];
+  activeWorkspaceKey: string | null;
 }
 
 export function SidebarProvider({
@@ -57,6 +74,8 @@ export function SidebarProvider({
   checklistCompletedCount,
   checklistAllComplete,
   navContext,
+  workspaces,
+  activeWorkspaceKey,
 }: SidebarProviderProps): React.JSX.Element {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -92,6 +111,8 @@ export function SidebarProvider({
       checklistCompletedCount,
       checklistAllComplete,
       navContext,
+      workspaces,
+      activeWorkspaceKey,
     }),
     [
       isCollapsed,
@@ -105,6 +126,8 @@ export function SidebarProvider({
       checklistCompletedCount,
       checklistAllComplete,
       navContext,
+      workspaces,
+      activeWorkspaceKey,
     ]
   );
 

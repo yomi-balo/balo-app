@@ -4,6 +4,8 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
 import { buildNavContext } from '@/lib/navigation/nav-context';
+import { getWorkspacesForCurrentUser } from '@/lib/workspaces/get-workspaces';
+import { activeWorkspaceKeyOf } from '@/lib/workspaces/session-workspace';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { TopNav } from '@/components/layout/top-nav';
 import { Sidebar } from '@/components/layout/sidebar';
@@ -46,6 +48,18 @@ export default async function DashboardLayout({
 
   const navContext = await buildNavContext(user);
 
+  // BAL-496 (D13) — the switcher's list. Mirrors the `navContext` precedent BAL-495 added one
+  // commit ago: this layout is an async Server Component and the SOLE renderer of
+  // `SidebarProvider`. Costs no extra reads — `checkSessionDrift()` above already ran
+  // `deriveWorkspacesForUser` and it is React-`cache()`d per request, so this replays a memo.
+  // Returns `[]` (never throws) when there is no session user or nothing is derivable.
+  const workspaces = await getWorkspacesForCurrentUser();
+
+  // ⚠ THE ACTIVE-KEY SOURCE. `activeWorkspaceKeyOf` is the SINGLE reader of the session's
+  // active-workspace shape — nothing here hand-destructures `user.activeWorkspace`, and nothing
+  // recomputes the key from `activeMode`/`companyId`, which would fork the resolution rule.
+  const activeWorkspaceKey = user === null ? null : (activeWorkspaceKeyOf(user) ?? null);
+
   const userName = user
     ? [user.firstName, user.lastName].filter(Boolean).join(' ') ||
       user.email.split('@')[0] ||
@@ -64,6 +78,8 @@ export default async function DashboardLayout({
       checklistCompletedCount={checklistCompletedCount}
       checklistAllComplete={checklistAllComplete}
       navContext={navContext}
+      workspaces={workspaces}
+      activeWorkspaceKey={activeWorkspaceKey}
     >
       <div className="bg-background min-h-screen">
         <div className="flex">

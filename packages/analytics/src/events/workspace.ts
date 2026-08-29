@@ -24,3 +24,20 @@ export interface WorkspaceServerEventMap {
     distinct_id: string;
   };
 }
+
+// BAL-496 / ADR-1053 — the switcher's CLIENT event. ⚠ SIBLING, NOT A REPLACEMENT: the SWITCH
+// itself stays server-side (`WORKSPACE_SERVER_EVENTS.SWITCHED`, dispatched once inside
+// `switchWorkspace()`), and this measures only whether multi-context users FIND the switcher.
+// Open rate vs switch rate is the funnel.
+export const WORKSPACE_EVENTS = {
+  /** The workspace menu was opened. Fired on OPEN only — never on close, never on select, and
+   *  never for a single-context user (no menu is rendered for them). */
+  SWITCHER_OPENED: 'workspace_switcher_opened',
+} as const;
+
+export interface WorkspaceEventMap {
+  [WORKSPACE_EVENTS.SWITCHER_OPENED]: {
+    /** Rows rendered, INCLUDING the expert row and any DISABLED representation rows. */
+    workspace_count: number;
+  };
+}

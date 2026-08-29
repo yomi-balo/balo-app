@@ -44,7 +44,7 @@ import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 import type { BookingEventMap } from './events/booking';
-import type { WorkspaceServerEventMap } from './events/workspace';
+import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
 import type { NavEventMap } from './events/nav';
 
 /** Union of all client-side (browser) event maps. */
@@ -85,6 +85,9 @@ export type AllEvents = AuthEventMap &
   AvailabilityEventMap &
   // BAL-400 — the case-booking flow. All eight are client events; no server family.
   BookingEventMap &
+  // BAL-496 — the workspace switcher's CLIENT family. ⚠ `WorkspaceServerEventMap` stays in
+  // `ServerEvents` below; the two must never cross.
+  WorkspaceEventMap &
   // BAL-495 — the nav registry's CLIENT family. `useNavItemTracking` (apps/web) is the ONE
   // dispatch point.
   NavEventMap;

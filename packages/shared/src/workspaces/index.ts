@@ -46,6 +46,24 @@ export interface CompanyWorkspace {
   readonly via: WorkspaceVia;
   /** Orchestrator decision: personal workspaces are INCLUDED; BAL-496 decides presentation. */
   readonly isPersonal: boolean;
+  /**
+   * BAL-496 (D2) — the actor's REAL membership role in this company. BAL-494 kept a role only
+   * for the ACTIVE workspace (`WorkspaceSessionProjection.companyRole`) and DISCARDED
+   * `roleByCompanyId` for every other company, so a switcher row could not name it.
+   *
+   * ⚠⚠ INVARIANT — `role !== undefined` ⟺ `via === 'membership'`. A representation workspace
+   * carries NO role, never a fabricated `'member'`: BAL-494 deliberately DELETED exactly that
+   * fabrication (see the R1 note at the top of this file), because a fabricated role makes
+   * `hasCapability` and the presentation layer disagree — the thing ADR-1029 warns against.
+   * The invariant is enforced by CODE PATH, not by the type — `{ via: 'representation', role:
+   * 'owner' }` still type-checks (a discriminated union on `via` would make it a type-level
+   * guarantee, but this isn't one). In practice it never arises: only the membership arm below
+   * attaches a role, and `RepresentedCompanyInput` has no `role` field to attach. Pinned in
+   * `index.test.ts`.
+   *
+   * ⚠ PRESENTATION ONLY, exactly like `via`. Never an authorization input.
+   */
+  readonly role?: CompanyMemberRole;
 }
 
 export type Workspace = ExpertWorkspace | CompanyWorkspace;
@@ -295,7 +313,13 @@ export function deriveWorkspaces(
     if (seenCompanyIds.has(membership.companyId)) continue; // defensive: never double-count
     seenCompanyIds.add(membership.companyId);
     roleByCompanyId.set(membership.companyId, membership.role);
-    membershipWorkspaces.push(toCompanyWorkspace(membership, 'membership'));
+    // D2 — the role rides along ONLY here. The representation arm below calls the same builder
+    // WITHOUT this spread, and `RepresentedCompanyInput` has no `role` to supply, so the
+    // `role ⟺ membership` invariant is structural rather than conventional.
+    membershipWorkspaces.push({
+      ...toCompanyWorkspace(membership, 'membership'),
+      role: membership.role,
+    });
   }
 
   if (membershipWorkspaces.length === 0) {
