@@ -12,6 +12,7 @@ const {
   mockReconcileStatus,
   mockCheckRateLimit,
   mockWarn,
+  mockInfoLog,
   mockErrorLog,
   mockFindMeetingById,
   mockFindRecordingById,
@@ -35,6 +36,7 @@ const {
   mockApplyPresenceEffect: vi.fn(),
   mockReconcileStatus: vi.fn(),
   mockWarn: vi.fn(),
+  mockInfoLog: vi.fn(),
   mockErrorLog: vi.fn(),
   mockFindMeetingById: vi.fn(),
   mockFindRecordingById: vi.fn(),
@@ -49,7 +51,15 @@ const {
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: mockErrorLog }),
+  createLogger: () => ({
+    debug: vi.fn(),
+    // ⚠ BAL-480 fix round 1 — `info` is ASSERTED ON now: the room fallback logs every
+    // delivery it resolves with no start instant, which is the only way ops can tell whether
+    // the start-instant guard is armed in production at all.
+    info: mockInfoLog,
+    warn: mockWarn,
+    error: mockErrorLog,
+  }),
 }));
 vi.mock('@balo/db', () => ({
   db: { transaction: mockTransaction },
@@ -351,11 +361,13 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
 
   const RECORDING_ID = '33333333-3333-4333-8333-333333333333';
   const INSTANCE_ID = RECORDING_ID;
+  const RECORDING_CREATED_AT = new Date('2026-08-14T10:00:00.000Z');
   const RECORDING_ROW = {
     id: RECORDING_ID,
     meetingId: MEETING_ID,
     status: 'recording',
     dailyRecordingId: null,
+    createdAt: RECORDING_CREATED_AT,
   };
 
   function recordingBody(overrides: Record<string, unknown> = {}): string {
@@ -513,6 +525,198 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
       expect(mockWarn).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'recording.ready-to-download' }),
         expect.stringContaining('no row')
+      );
+    });
+
+    // ── BAL-480 — THE START-INSTANT GUARD ON THE ROOM FALLBACK ───────────────────────────
+
+    /**
+     * ⚠⚠ THE ORPHAN IS REFUSED. This `ready-to-download` names a recording that began FIVE
+     * MINUTES BEFORE the meeting's current capturing segment was even created — exactly the
+     * shape a stuck-slot reap's orphaned earlier Daily recording produces. Accepting it would
+     * mark the LIVE segment `source_ready` against the orphan's asset and release its slot
+     * mid-capture.
+     */
+    it('⚠⚠ BAL-480 — the orphan is refused: a start instant BEFORE the capturing row is created', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue({
+        ...RECORDING_ROW,
+        dailyRecordingId: null,
+        createdAt: RECORDING_CREATED_AT,
+      });
+      const startTs = (RECORDING_CREATED_AT.getTime() - 5 * 60_000) / 1000;
+      const payload = readyPayload({
+        payload: { recording_id: 'daily-rec-1', room: ROOM, start_ts: startTs },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkSourceReady).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ roomName: ROOM }),
+        expect.stringContaining('began BEFORE')
+      );
+      expect(mockEnqueueRecordingIngest).not.toHaveBeenCalled();
+    });
+
+    it('BAL-480 — the legitimate backfill still resolves (start instant just after createdAt)', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue({
+        ...RECORDING_ROW,
+        dailyRecordingId: null,
+        createdAt: RECORDING_CREATED_AT,
+      });
+      mockMarkSourceReady.mockResolvedValue({ ...RECORDING_ROW, status: 'source_ready' });
+      const startTs = (RECORDING_CREATED_AT.getTime() + 1_000) / 1000;
+      const payload = readyPayload({
+        payload: { recording_id: 'daily-rec-1', room: ROOM, start_ts: startTs },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkSourceReady).toHaveBeenCalledWith(
+        expect.objectContaining({ dailyRecordingId: 'daily-rec-1' }),
+        expect.anything()
+      );
+    });
+
+    it('BAL-480 — a start instant inside the clock-skew tolerance still resolves', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue({
+        ...RECORDING_ROW,
+        dailyRecordingId: null,
+        createdAt: RECORDING_CREATED_AT,
+      });
+      mockMarkSourceReady.mockResolvedValue({ ...RECORDING_ROW, status: 'source_ready' });
+      const startTs = (RECORDING_CREATED_AT.getTime() - 30_000) / 1000;
+      const payload = readyPayload({
+        payload: { recording_id: 'daily-rec-1', room: ROOM, start_ts: startTs },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkSourceReady).toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠⚠ BAL-480 FIX ROUND 1 — THE GUARD REFUSES AN UNINTERPRETABLE START INSTANT RATHER THAN
+     * FAILING OPEN. `instantFrom` returns an INVALID DATE (not `null`) for a present-but
+     * -unparseable value, and `NaN < x` is `false` — so a bare comparison would have let
+     * `start_ts: "garbage"` through and taken the pre-BAL-480 path, on precisely the input where
+     * we can least prove the payload belongs to the current segment.
+     */
+    it('⚠⚠ BAL-480 — an UNPARSEABLE start_ts is REFUSED, not silently accepted', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue({
+        ...RECORDING_ROW,
+        dailyRecordingId: null,
+        createdAt: RECORDING_CREATED_AT,
+      });
+      const payload = readyPayload({
+        payload: { recording_id: 'daily-rec-1', room: ROOM, start_ts: 'not-a-timestamp' },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkSourceReady).not.toHaveBeenCalled();
+      expect(mockEnqueueRecordingIngest).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ roomName: ROOM, eventKind: 'recording.ready-to-download' }),
+        expect.stringContaining('UNINTERPRETABLE')
+      );
+    });
+
+    /**
+     * ⚠⚠ BAL-480 FIX ROUND 1 — THE OBSERVABILITY HALF. The parser reads `start_ts` (either
+     * spelling) and this module could not verify that field name against docs.daily.co. If
+     * Daily's real payload omits or renames it, `startedAt` is permanently `null`, the guard
+     * NEVER ARMS, and without this log line nothing would say so. A guard nobody can prove is
+     * running is not a guard.
+     */
+    it('⚠⚠ BAL-480 — an ABSENT start_ts still resolves, and LOGS that the guard was unarmed', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue({
+        ...RECORDING_ROW,
+        dailyRecordingId: null,
+        createdAt: RECORDING_CREATED_AT,
+      });
+      mockMarkSourceReady.mockResolvedValue({ ...RECORDING_ROW, status: 'source_ready' });
+      const payload = readyPayload({
+        payload: { recording_id: 'daily-rec-1', room: ROOM },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkSourceReady).toHaveBeenCalled();
+      expect(mockInfoLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          roomName: ROOM,
+          recordingId: RECORDING_ID,
+          eventKind: 'recording.ready-to-download',
+        }),
+        expect.stringContaining('NO start instant')
+      );
+    });
+
+    /**
+     * ⚠ BAL-480 FIX ROUND 1 — `startTs` IS ACCEPTED TOO, end to end through the route. Every
+     * other field in `webhook-events.ts` takes both spellings; `start_ts` was the one exception,
+     * and it is the guard's whole discriminator.
+     */
+    it('BAL-480 — the camelCase `startTs` spelling arms the guard exactly like `start_ts`', async () => {
+      mockFindByDailyRecordingId.mockResolvedValue(undefined);
+      mockFindCapturingForMeeting.mockResolvedValue({
+        ...RECORDING_ROW,
+        dailyRecordingId: null,
+        createdAt: RECORDING_CREATED_AT,
+      });
+      const startTs = (RECORDING_CREATED_AT.getTime() - 5 * 60_000) / 1000;
+      const payload = readyPayload({
+        payload: { recording_id: 'daily-rec-1', room: ROOM, startTs },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkSourceReady).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ roomName: ROOM }),
+        expect.stringContaining('began BEFORE')
       );
     });
 

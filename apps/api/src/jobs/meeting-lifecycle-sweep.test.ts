@@ -24,6 +24,8 @@ const {
   mockSettleMeetingIfBillable,
   mockEnqueueRecordingEnsure,
   mockEnqueueRecordingStop,
+  mockFindCapturingForMeeting,
+  mockCountFailedByStage,
 } = vi.hoisted(() => ({
   mockListCandidates: vi.fn(),
   mockFindMeetingById: vi.fn(),
@@ -48,7 +50,12 @@ const {
   mockSettleMeetingIfBillable: vi.fn(),
   mockEnqueueRecordingEnsure: vi.fn(),
   mockEnqueueRecordingStop: vi.fn(),
+  mockFindCapturingForMeeting: vi.fn(),
+  mockCountFailedByStage: vi.fn(),
 }));
+
+/** See the `./recording-capture.js` mock below — a stand-in cap, not the real constant. */
+const MOCK_MAX_DAILY_FAILURES = vi.hoisted(() => 7);
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: mockInfo, warn: mockWarn, error: mockErrorLog }),
@@ -62,6 +69,13 @@ vi.mock('@balo/db', () => ({
   },
   meetingPresenceRepository: { listByMeeting: mockListByMeeting, listOpen: mockListOpen },
   meetingContextsRepository: { listByMeeting: mockListContexts },
+  // BAL-480 — MANDATORY: `needsRecordingEnsure` calls `findCapturingForMeeting` directly. A
+  // vitest factory mock throws on any export the import graph touches but the factory omits, so
+  // omitting this fails EVERY test in this file at import.
+  meetingRecordingsRepository: {
+    findCapturingForMeeting: mockFindCapturingForMeeting,
+    countFailedByStage: mockCountFailedByStage,
+  },
   resolveMeetingContextOwner: mockResolveOwner,
 }));
 vi.mock('@balo/analytics/server', () => ({
@@ -106,9 +120,18 @@ vi.mock('../services/daily/rooms.js', () => ({
 // → `../lib/redis.js`. Left unmocked, a test that actually TRIGGERS either enqueue (a terminal
 // rule firing, or a repaired `in_progress` transition) would call the REAL `getQueue()` and
 // attempt a real Redis connection — exactly the hang this suite's own comment below warns about.
+//
+// ⚠⚠ BAL-480 FIX ROUND 1 — `MAX_DAILY_FAILURES_PER_MEETING` MUST BE RE-EXPORTED BY THIS FACTORY.
+// `needsRecordingEnsure` now reads it, and a vitest factory mock throws on any export the import
+// graph touches but the factory omits — omitting it fails EVERY test in this file at import.
+// ⚠ THE VALUE HERE IS A STAND-IN, NOT THE REAL CONSTANT, and the tests below use the SAME
+// stand-in, so what they pin is the COMPARISON, never the number. The number itself is pinned
+// against the real module in `recording-capture.test.ts` ("the cap is now ATTEMPTS + re-arm
+// allowance + reap allowance").
 vi.mock('./recording-capture.js', () => ({
   enqueueRecordingEnsure: mockEnqueueRecordingEnsure,
   enqueueRecordingStop: mockEnqueueRecordingStop,
+  MAX_DAILY_FAILURES_PER_MEETING: MOCK_MAX_DAILY_FAILURES,
 }));
 // ⚠ NEITHER `../lib/redis.js` NOR `../lib/queue.js` IS REACHED: only `runMeetingLifecycleSweep`
 // is imported, and the Worker/cron constructors are never called. ⚠ `@balo/shared/meetings` is
@@ -116,6 +139,7 @@ vi.mock('./recording-capture.js', () => ({
 
 import { dailyParticipantIdFor, DEFAULT_MEETING_TIMERS } from '@balo/shared/meetings';
 import {
+  MAX_RECORDING_ENSURES_PER_SWEEP_TICK,
   MEETING_LIFECYCLE_BATCH_LIMIT,
   MEETING_LIFECYCLE_SWEEP_CRON,
   runMeetingLifecycleSweep,
@@ -176,6 +200,11 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     // most fixtures in this file are non-`case` / unfunded meetings, not because settlement is
     // globally inert.
     mockSettleMeetingIfBillable.mockResolvedValue({ ok: false, code: 'no_meeting' });
+    // BAL-480 — no capturing segment by default; individual tests override to exercise the
+    // level-triggered gate.
+    mockFindCapturingForMeeting.mockResolvedValue(undefined);
+    // BAL-480 fix round 1 — well under the per-meeting Daily failure cap by default.
+    mockCountFailedByStage.mockResolvedValue(0);
   });
 
   it('scans nothing and does nothing on an empty batch — no vendor call', async () => {
@@ -312,12 +341,24 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
    * disarmed by `expertEverPresent`, rules 2 and 4 need the room to be EMPTY or the expert to be
    * open on a pre-`in_progress` status, and rule 1 needs `in_progress`. NO rule can ever fire —
    * a non-terminal meeting accruing billable presence with nothing left to terminate it.
+   *
+   * ⚠ BAL-480 — the sweep now fires `recording-ensure` on the LEVEL (`needsRecordingEnsure`,
+   * evaluated from `processCandidate` after `terminateIfDue`), not on the EDGE of this repair —
+   * the repaired transition is SUBSUMED by the level gate rather than triggering it directly.
+   * The gate reads `state.facts.anyOpen`, which is POST-repair (`loadCandidateState`'s second
+   * call, after the reconciler opened both intervals), so this fixture supplies that read.
    */
   it('⚠⚠ C1 — a reconciler-opened expert+client pair drives the STATUS transition too', async () => {
     mockListCandidates.mockResolvedValue([meeting({ status: 'scheduled' })]);
     mockFindMeetingById.mockResolvedValue(meeting({ status: 'scheduled' }));
     mockApplyPresenceEffect.mockResolvedValue('opened');
     mockReconcileMeetingStatus.mockResolvedValue('in_progress');
+    // The FIRST `listByMeeting` call is `processCandidate`'s pre-reconciliation snapshot; the
+    // SECOND is the post-repair re-read the level gate's `anyOpen` reads.
+    mockListByMeeting.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(2), leftAt: null },
+    ]);
 
     await runMeetingLifecycleSweep(at(30), () => {}, {
       getAllPresence: async () => ({
@@ -334,11 +375,11 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
       expect.objectContaining({ id: MEETING_ID }),
       at(30)
     );
-    // BAL-473 (§5.2) — the sweep repaired a MISSED forward transition; recording-ensure must
-    // fire here too, monotonic-per-minute dedupe token, never the bare meetingId alone.
+    // BAL-480 — the LEVEL-triggered self-heal fires for the repaired candidate; monotonic
+    // per-minute dedupe token, never the bare meetingId alone.
     expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith({
       meetingId: MEETING_ID,
-      trigger: 'in_progress',
+      trigger: 'sweep',
       dedupeToken: `sweep-${Math.floor(at(30).getTime() / 60_000)}`,
     });
   });
@@ -420,6 +461,205 @@ describe('runMeetingLifecycleSweep (BAL-134 §5.6)', () => {
     expect(result.terminated).toBe(0);
     expect(mockEndMeeting).not.toHaveBeenCalled();
     expect(mockErrorLog).not.toHaveBeenCalled();
+  });
+
+  // ── ⚠⚠ BAL-480 — THE LEVEL-TRIGGERED recording-ensure SELF-HEAL ─────────────────────────
+
+  /**
+   * ⚠⚠ THE LEVEL TRIGGER FIRES WITH NO REPAIR AT ALL. BAL-473's edge trigger only fired on the
+   * tick that REPAIRED a `→ in_progress` transition; a healthy candidate that was ALREADY
+   * `in_progress` (no reconciliation needed this tick) never reached it. The level gate reads
+   * post-repair state, but when nothing needed repairing that is simply the initial snapshot —
+   * `mockReconcileMeetingStatus` never runs, proving this is not the old edge path.
+   */
+  it('⚠⚠ BAL-480 — the level trigger fires with NO repair on this tick', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    mockListOpen.mockResolvedValue([
+      { id: 'row-1', userId: USER_ID, meetingGuestId: null, party: 'client', joinedAt: at(1) },
+    ]);
+
+    await runMeetingLifecycleSweep(at(20), () => {}, {
+      getAllPresence: async () => ({
+        [ROOM]: [{ userId: dailyParticipantIdFor('user', USER_ID) }],
+      }),
+    });
+
+    expect(mockReconcileMeetingStatus).not.toHaveBeenCalled();
+    expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith({
+      meetingId: MEETING_ID,
+      trigger: 'sweep',
+      dedupeToken: `sweep-${Math.floor(at(20).getTime() / 60_000)}`,
+    });
+  });
+
+  it('BAL-480 — an empty room does not enqueue recording-ensure (anyOpen === false)', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    // Both left one minute ago — well under the 5-minute idle-end threshold, so this stays a
+    // pure `anyOpen === false` case rather than accidentally exercising termination.
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: at(19) },
+      { party: 'client', joinedAt: at(2), leftAt: at(19) },
+    ]);
+
+    await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
+    // ⚠ THE CHEAP CHECKS COME FIRST — `anyOpen === false` short-circuits before the recordings
+    // table is ever read.
+    expect(mockFindCapturingForMeeting).not.toHaveBeenCalled();
+  });
+
+  it('BAL-480 — a pre-in_progress candidate never reads the recordings table', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'waiting_for_participants' })]);
+
+    await runMeetingLifecycleSweep(at(3), () => {}, EMPTY_READER);
+
+    expect(mockFindCapturingForMeeting).not.toHaveBeenCalled();
+  });
+
+  /** ⚠ MC-6 — the ensure must not race the stop the terminal path itself enqueues. */
+  it('⚠ BAL-480 — a meeting terminated on this tick does not also enqueue recording-ensure', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: at(30) },
+      { party: 'client', joinedAt: at(2), leftAt: at(30) },
+    ]);
+
+    await runMeetingLifecycleSweep(at(35), () => {}, EMPTY_READER);
+
+    expect(mockEndMeeting).toHaveBeenCalled();
+    expect(mockEnqueueRecordingStop).toHaveBeenCalledWith({ meetingId: MEETING_ID });
+    expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
+    expect(mockFindCapturingForMeeting).not.toHaveBeenCalled();
+  });
+
+  it('BAL-480 — a healthy (Daily-acknowledged) capture suppresses the sweep enqueue', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    mockFindCapturingForMeeting.mockResolvedValue({ id: 'rec-1', dailyRecordingId: 'daily-1' });
+
+    await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(mockFindCapturingForMeeting).toHaveBeenCalledWith(MEETING_ID);
+    expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ THE LOAD-BEARING CASE (§10.5). Simplifying the suppression to `capturing !== undefined`
+   * would make `handleEnsure`'s stuck-slot reaper permanently unreachable from the sweep,
+   * silently — every OTHER test in this file would stay green. This is the one that pins it.
+   */
+  it('⚠⚠ BAL-480 — an UNACKNOWLEDGED capture is NOT suppressed (the reaper must stay reachable)', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    mockFindCapturingForMeeting.mockResolvedValue({ id: 'rec-1', dailyRecordingId: null });
+
+    await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, trigger: 'sweep' })
+    );
+  });
+
+  /**
+   * ⚠⚠ BAL-480 FIX ROUND 1 — THE CAP TERM IS WHAT STOPS THE FAN-OUT BUDGET STARVING. A meeting
+   * that has exhausted `MAX_DAILY_FAILURES_PER_MEETING` returns from `handleEnsure`'s step 5.5
+   * WITHOUT inserting, so it never acquires a capturing row, so the two cheap checks answer
+   * `true` for it on EVERY subsequent tick for the rest of its life. `listLifecycleCandidates`
+   * orders `asc(scheduledStart), asc(id)` — stable — so without this term twenty permanently
+   * -capped meetings would occupy the whole per-tick budget forever and no later meeting's
+   * self-heal would ever run. Post-outage, that is exactly when the budget must reach the
+   * meetings that are still recoverable.
+   */
+  it('⚠⚠ BAL-480 — a meeting AT the Daily failure cap is not enqueued (no budget starvation)', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    mockCountFailedByStage.mockResolvedValue(MOCK_MAX_DAILY_FAILURES);
+
+    await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(mockCountFailedByStage).toHaveBeenCalledWith(MEETING_ID, 'daily');
+    expect(mockEnqueueRecordingEnsure).not.toHaveBeenCalled();
+  });
+
+  it('BAL-480 — one BELOW the cap still enqueues', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    mockCountFailedByStage.mockResolvedValue(MOCK_MAX_DAILY_FAILURES - 1);
+
+    await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, trigger: 'sweep' })
+    );
+  });
+
+  /** ⚠ THE COUNT READ IS LAST — a healthy, acknowledged capture never pays for it. */
+  it('BAL-480 — a healthy capture short-circuits before the failure count is read', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    mockFindCapturingForMeeting.mockResolvedValue({ id: 'rec-1', dailyRecordingId: 'daily-1' });
+
+    await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(mockCountFailedByStage).not.toHaveBeenCalled();
+  });
+
+  it('⚠ BAL-480 — the fan-out cap defers the excess to later ticks', async () => {
+    const total = MAX_RECORDING_ENSURES_PER_SWEEP_TICK + 3;
+    mockListCandidates.mockResolvedValue(
+      Array.from({ length: total }, (_unused, index) =>
+        meeting({ id: `meeting-${index}`, status: 'in_progress' })
+      )
+    );
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+
+    await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(mockEnqueueRecordingEnsure).toHaveBeenCalledTimes(MAX_RECORDING_ENSURES_PER_SWEEP_TICK);
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: MAX_RECORDING_ENSURES_PER_SWEEP_TICK, deferred: 3 }),
+      expect.stringContaining('fan-out cap FILLED')
+    );
+  });
+
+  it('BAL-480 — a failed recording-ensure enqueue is non-fatal — the sweep tick still succeeds', async () => {
+    mockListCandidates.mockResolvedValue([meeting({ status: 'in_progress' })]);
+    mockListByMeeting.mockResolvedValue([
+      { party: 'expert', joinedAt: START, leftAt: null },
+      { party: 'client', joinedAt: at(1), leftAt: null },
+    ]);
+    mockEnqueueRecordingEnsure.mockRejectedValue(new Error('redis is down'));
+
+    const result = await runMeetingLifecycleSweep(at(20), () => {}, EMPTY_READER);
+
+    expect(result.scanned).toBe(1);
+    expect(mockErrorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, error: 'redis is down' }),
+      expect.stringContaining('recording-ensure enqueue failed')
+    );
   });
 
   // ── ⚠⚠ S1 — THE PLATFORM-WIDE-EMPTY SANITY GATE ────────────────────────────────────────

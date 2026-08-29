@@ -70,7 +70,11 @@ vi.mock('@balo/analytics/server', () => ({
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ error: logError, warn: logWarn, info: logInfo }),
 }));
-vi.mock('../services/daily/recordings.js', () => ({ startRoomRecording, stopRoomRecording }));
+vi.mock('../services/daily/recordings.js', () => ({
+  startRoomRecording,
+  stopRoomRecording,
+  MIN_IDLE_TIMEOUT_SECONDS: 60,
+}));
 
 import {
   enqueueRecordingEnsure,
@@ -79,14 +83,50 @@ import {
   RECORDING_CAPTURE_QUEUE,
   ATTEMPTS,
   MAX_DAILY_FAILURES_PER_MEETING,
+  STUCK_CAPTURE_THRESHOLD_MS,
 } from './recording-capture.js';
 
 const MEETING_ID = '11111111-1111-4111-8111-111111111111';
 const ROOM = 'balo-abc';
 const ROW = { id: 'rec-1', meetingId: MEETING_ID };
+const STUCK_ID = 'rec-stuck';
 
 function liveMeeting(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { id: MEETING_ID, status: 'in_progress', dailyRoomName: ROOM, ...overrides };
+}
+
+/** How the five reap tests differ from one another — everything else is identical. */
+interface StuckCaptureArrangement {
+  /** `false` ⇒ `markFailed` resolves `undefined`: the reap's CAS lost. */
+  readonly reapWins?: boolean;
+  /** What `countFailedByStage` reports at step 5.5. */
+  readonly dailyFailures?: number;
+  /** `false` ⇒ `insertCapturing` resolves `undefined`: the reinsert lost the unique index. */
+  readonly reinsertWins?: boolean;
+}
+
+/**
+ * The five-mock arrangement every reap test needs: a live, occupied meeting holding ONE
+ * capturing row that is stale (`createdAt` well past `STUCK_CAPTURE_THRESHOLD_MS`) and
+ * unacknowledged (`dailyRecordingId === null`).
+ *
+ * ⚠ EXTRACTED FOR THE DUPLICATION GATE, NOT FOR TIDINESS. Repeated verbatim across the reap
+ * tests it measured ~2.9% of this PR's new code against SonarCloud's ≥3% new-code duplication
+ * gate — jscpd at Sonar-like thresholds reported two clone pairs of 110 and 112 tokens.
+ */
+function arrangeStuckCapture(overrides: StuckCaptureArrangement = {}): void {
+  const { reapWins = true, dailyFailures = 0, reinsertWins = true } = overrides;
+  findById.mockResolvedValue(liveMeeting());
+  listOpen.mockResolvedValue([{ id: 'p1' }]);
+  findCapturingForMeeting.mockResolvedValue({
+    id: STUCK_ID,
+    dailyRecordingId: null,
+    createdAt: new Date(Date.now() - 10 * 60_000),
+  });
+  markFailed.mockResolvedValue(reapWins ? { id: STUCK_ID, status: 'failed' } : undefined);
+  countFailedByStage.mockResolvedValue(dailyFailures);
+  insertCapturing.mockResolvedValue(reinsertWins ? ROW : undefined);
+  startRoomRecording.mockResolvedValue(undefined);
 }
 
 describe('recording-capture job — enqueue', () => {
@@ -183,8 +223,8 @@ describe('recording-capture job — ensure handler', () => {
   /**
    * ⚠⚠ FIX ROUND 1 (F8) — a FRESH capturing row (created moments ago, `dailyRecordingId`
    * still `null` — the ordinary window between `insertCapturing` and the Daily call
-   * returning) must stay a routine `log.info`, not an error. Only STALE rows in this shape
-   * are the residual F8 makes observable.
+   * returning) must stay a routine `log.info`, not an error, and must NOT be reaped. Only
+   * STALE rows in this shape are the residual F8/BAL-480 makes observable.
    */
   it('a fresh capturing row with no dailyRecordingId yet logs at info, not error', async () => {
     findById.mockResolvedValue(liveMeeting());
@@ -200,33 +240,129 @@ describe('recording-capture job — ensure handler', () => {
       expect.stringContaining('already_capturing')
     );
     expect(logError).not.toHaveBeenCalled();
+    expect(markFailed).not.toHaveBeenCalled();
   });
 
   /**
-   * ⚠⚠ FIX ROUND 1 (F8) — THE LOAD-BEARING CASE. A worker died between `insertCapturing` and
-   * the Daily call; the row is old, `dailyRecordingId` is still `null`, and no Daily event
-   * will ever advance it. This must be observable at `error`, not silently absorbed at `info`
-   * — that silence is exactly what let the meeting record nothing with no signal anywhere.
+   * ⚠⚠ BAL-480 — THE REAP, END TO END IN ONE INVOCATION. A worker died between
+   * `insertCapturing` and the Daily call; the row is stale, `dailyRecordingId` is still
+   * `null`, and no Daily event will ever advance it. `handleEnsure` must REAP it (`markFailed`
+   * at stage `daily`, releasing the slot) and FALL THROUGH — in the SAME invocation — to
+   * insert a fresh segment and call Daily again. This replaces the old FIX ROUND 1 behaviour
+   * (log-and-return), which is exactly what this ticket removes.
    */
-  it('⚠⚠ a STALE capturing row with no dailyRecordingId logs at ERROR — a worker likely died mid-start', async () => {
-    findById.mockResolvedValue(liveMeeting());
-    listOpen.mockResolvedValue([{ id: 'p1' }]);
-    findCapturingForMeeting.mockResolvedValue({
-      id: 'rec-stuck',
-      dailyRecordingId: null,
-      createdAt: new Date(Date.now() - 5 * 60_000),
+  it('⚠⚠ a STALE capturing row with no dailyRecordingId is REAPED and falls through to a fresh insert', async () => {
+    arrangeStuckCapture();
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'sweep' });
+
+    expect(markFailed).toHaveBeenCalledWith({
+      id: STUCK_ID,
+      stage: 'daily',
+      reason: expect.stringContaining('stuck'),
+      at: expect.any(Date),
+      // ⚠⚠ FIX ROUND 1 — the TOCTOU term. Without it the reap overwrites a late
+      // `recording.started` and step 6 double-starts Daily. See the next test for the effect.
+      onlyIfUnacknowledged: true,
     });
-    await runEnsure({ meetingId: MEETING_ID, trigger: 'in_progress' });
+    expect(countFailedByStage).toHaveBeenCalledWith(MEETING_ID, 'daily');
+    expect(insertCapturing).toHaveBeenCalled();
+    expect(startRoomRecording).toHaveBeenCalledWith(ROOM, { instanceId: ROW.id });
     expect(logError).toHaveBeenCalledWith(
-      expect.objectContaining({ meetingId: MEETING_ID, recordingId: 'rec-stuck' }),
-      expect.stringContaining('never acknowledged')
+      expect.objectContaining({ meetingId: MEETING_ID, recordingId: STUCK_ID }),
+      expect.stringContaining('REAPED')
     );
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 1 — THE TOCTOU, AND WHY IT IS A BILLING BUG. `stuck` is decided from the row
+   * read at step 5; `markStarted` does NOT move `status`, so a `recording.started` committing
+   * inside that window is invisible to the base CAS. `onlyIfUnacknowledged` makes the reap LOSE
+   * to it (`markFailed` ⇒ `undefined`), the slot stays held, and the fall-through insert loses
+   * the partial unique index — so NO second Daily recording starts in the same room. Without
+   * the term, `markFailed` would win, the slot would be released, and `startRoomRecording`
+   * would fire against a room Daily is already recording: two concurrent captures, both
+   * billing.
+   */
+  it('⚠⚠ a LATE recording.started makes the reap lose — and no second Daily recording starts', async () => {
+    arrangeStuckCapture({ reapWins: false, reinsertWins: false });
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'sweep' });
+
+    expect(startRoomRecording).not.toHaveBeenCalled();
+    expect(trackServer).not.toHaveBeenCalledWith('recording_failed', expect.anything());
+    expect(logInfo).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID },
+      expect.stringContaining('lost the capturing-slot race')
+    );
+  });
+
+  it('the reap reason string embeds the exported threshold', async () => {
+    arrangeStuckCapture();
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'sweep' });
+
+    const [call] = markFailed.mock.calls as Array<[{ reason: string }]>;
+    expect(call?.[0].reason).toContain(String(STUCK_CAPTURE_THRESHOLD_MS));
+  });
+
+  /**
+   * ⚠ ANALYTICS GATED ON THE CAS. `markFailed` refuses `failed → failed`, so a concurrent
+   * ensure that reaped the slot first makes THIS call's `markFailed` resolve `undefined`. The
+   * slot is free either way, so the fall-through still proceeds to a fresh insert — but
+   * emitting `RECORDING_FAILED` here would double-count one reap.
+   */
+  it('⚠ analytics gated on the CAS — a lost reap race still falls through with no double-count', async () => {
+    arrangeStuckCapture({ reapWins: false });
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'sweep' });
+
+    expect(trackServer).not.toHaveBeenCalledWith('recording_failed', expect.anything());
+    expect(insertCapturing).toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, recordingId: STUCK_ID }),
+      expect.stringContaining('concurrent')
+    );
+  });
+
+  it('the reap analytics payload names stage "daily" and reason "stuck_capture"', async () => {
+    arrangeStuckCapture();
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'sweep' });
+
+    expect(trackServer).toHaveBeenCalledWith('recording_failed', {
+      meeting_id: MEETING_ID,
+      stage: 'daily',
+      reason: 'stuck_capture',
+      distinct_id: MEETING_ID,
+    });
+  });
+
+  /**
+   * ⚠⚠ THE CAP STILL REFUSES AFTER A REAP. The reap's own `failed` row is written BEFORE
+   * `countFailedByStage` reads (step 5.5 runs after step 5), so it is counted in the SAME
+   * invocation — that is what bounds the reap+re-arm loop.
+   */
+  it('⚠⚠ the cap still refuses after a reap — the slot is freed but no fresh capture starts', async () => {
+    arrangeStuckCapture({ dailyFailures: MAX_DAILY_FAILURES_PER_MEETING });
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'sweep' });
+
+    expect(markFailed).toHaveBeenCalled();
     expect(insertCapturing).not.toHaveBeenCalled();
+    expect(startRoomRecording).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        dailyFailures: MAX_DAILY_FAILURES_PER_MEETING,
+      }),
+      expect.stringContaining('repeatedly')
+    );
   });
 
   /**
    * ⚠ A stale row that already HAS a `dailyRecordingId` is genuinely capturing (Daily is mid
-   * -segment) — age alone must never trip the error path.
+   * -segment) — age alone must never trip the reap path.
    */
   it('a stale-but-otherwise-normal capturing row (has a dailyRecordingId) still logs at info', async () => {
     findById.mockResolvedValue(liveMeeting());
@@ -234,13 +370,45 @@ describe('recording-capture job — ensure handler', () => {
     findCapturingForMeeting.mockResolvedValue({
       id: 'rec-normal',
       dailyRecordingId: 'daily-rec-1',
-      createdAt: new Date(Date.now() - 5 * 60_000),
+      createdAt: new Date(Date.now() - 10 * 60_000),
     });
     await runEnsure({ meetingId: MEETING_ID, trigger: 'in_progress' });
     expect(logError).not.toHaveBeenCalled();
     expect(logInfo).toHaveBeenCalledWith(
       expect.objectContaining({ meetingId: MEETING_ID, recordingId: 'rec-normal' }),
       expect.stringContaining('already_capturing')
+    );
+    expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ WHAT THIS PINS — AND WHAT IT DOES **NOT** (fix round 1). It pins the ARITHMETIC: the
+   * threshold is `minIdleTimeOut + Daily's worst shutdown lag + one sweep tick`, so a future
+   * edit that pastes a number instead of deriving it fails here.
+   *
+   * ⚠⚠ IT IS NOT A TRIPWIRE ON `MIN_IDLE_TIMEOUT_SECONDS`. This file mocks
+   * `../services/daily/recordings.js` with a HARDCODED `MIN_IDLE_TIMEOUT_SECONDS: 60`, so both
+   * sides of the comparison move together and lowering the REAL constant would not fail this
+   * test. The real tripwire is `services/daily/recordings.test.ts`'s
+   * `expect(MIN_IDLE_TIMEOUT_SECONDS).toBe(60)`, which asserts the un-mocked value — change
+   * that one and this derivation must be revisited by hand.
+   */
+  it('⚠ the stuck-capture threshold is DERIVED (mocked minIdleTimeOut + shutdown lag + a tick)', () => {
+    expect(STUCK_CAPTURE_THRESHOLD_MS).toBe(60 * 1000 + 3 * 60_000 + 60_000);
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 1 — THE VENDOR-RATE PACER. `concurrency: 5` bounds jobs IN FLIGHT, not their
+   * RATE (≈25 Daily starts/s against a ~1/s tier), and overrunning that tier is destructive
+   * rather than slow: §5.1b stamps a `failed` row on every 429 attempt, so a rate-limit storm
+   * burns `MAX_DAILY_FAILURES_PER_MEETING` and permanently disables recording — post-outage
+   * recovery, the exact scenario this feature ships for. Removing the limiter re-opens that.
+   */
+  it('⚠⚠ the worker paces Daily starts at 1/s — concurrency alone never bounded the RATE', () => {
+    expect(WorkerMock).toHaveBeenCalledWith(
+      RECORDING_CAPTURE_QUEUE,
+      expect.any(Function),
+      expect.objectContaining({ concurrency: 5, limiter: { max: 1, duration: 1000 } })
     );
   });
 
@@ -282,6 +450,15 @@ describe('recording-capture job — ensure handler', () => {
     expect(MAX_DAILY_FAILURES_PER_MEETING).toBeGreaterThan(ATTEMPTS);
   });
 
+  /**
+   * ⚠ BAL-480 — THE CAP'S NEW DERIVATION. Pins that reaps got their OWN allowance rather than
+   * sharing the pre-existing re-arm one (`ATTEMPTS + 2`), so the worst case is
+   * `ATTEMPTS + 2 (re-arms) + 2 (reaps) = 7`, not `5`.
+   */
+  it('⚠ the cap is now ATTEMPTS + re-arm allowance + reap allowance, not just ATTEMPTS + 2', () => {
+    expect(MAX_DAILY_FAILURES_PER_MEETING).toBeGreaterThan(ATTEMPTS + 2);
+  });
+
   it('BELOW the failure threshold: the re-arm still starts a fresh capture', async () => {
     findById.mockResolvedValue(liveMeeting());
     listOpen.mockResolvedValue([{ id: 'p1' }]);
@@ -321,6 +498,26 @@ describe('recording-capture job — ensure handler', () => {
       distinct_id: MEETING_ID,
     });
     expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ BAL-480 — `trigger: 'sweep'` (the level-triggered lifecycle sweep self-heal) reaches
+   * `RECORDING_STARTED` on the clean path exactly like any other trigger, so PostHog can split
+   * self-heal attempts from webhook-origin ones.
+   */
+  it("BAL-480 — trigger: 'sweep' reaches RECORDING_STARTED", async () => {
+    findById.mockResolvedValue(liveMeeting());
+    listOpen.mockResolvedValue([{ id: 'p1' }]);
+    findCapturingForMeeting.mockResolvedValue(undefined);
+    insertCapturing.mockResolvedValue(ROW);
+    startRoomRecording.mockResolvedValue(undefined);
+
+    await runEnsure({ meetingId: MEETING_ID, trigger: 'sweep' });
+
+    expect(trackServer).toHaveBeenCalledWith(
+      'recording_started',
+      expect.objectContaining({ trigger: 'sweep' })
+    );
   });
 
   it('⚠⚠ a start failure stamps `failed` with stage "daily" BEFORE rethrowing', async () => {

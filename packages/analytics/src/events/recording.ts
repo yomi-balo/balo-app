@@ -23,8 +23,16 @@ export const RECORDING_SERVER_EVENTS = {
   RECORDING_FAILED: 'recording_failed',
 } as const;
 
-/** Which trigger armed the ensure. `rejoin` covers a genuine rejoin AND an idle-auto-stop re-arm. */
-export type RecordingTrigger = 'in_progress' | 'rejoin';
+/**
+ * Which trigger armed the ensure. `rejoin` covers a genuine rejoin AND an idle-auto-stop re-arm.
+ *
+ * ⚠ BAL-480 — `'sweep'` is the per-minute lifecycle sweep's LEVEL-triggered self-heal, and it is
+ * the split this family exists to measure: a rising `sweep` share is a Daily webhook-delivery
+ * problem, not a recording problem. Sweep-originated enqueues previously mislabelled themselves
+ * `'in_progress'`, which made self-heal indistinguishable from the webhook path. `'in_progress'`
+ * remains valid — the Daily webhook still produces it (`routes/daily/webhook.ts`).
+ */
+export type RecordingTrigger = 'in_progress' | 'rejoin' | 'sweep';
 /** Where in the pipeline it broke. */
 export type RecordingFailureStage = 'daily' | 'mux_ingest' | 'mux_asset';
 /**
@@ -41,6 +49,12 @@ export type RecordingFailureReason =
   | 'daily_api_error'
   | 'mux_api_error'
   | 'config_error'
+  /**
+   * BAL-480 — a capture slot held past `STUCK_CAPTURE_THRESHOLD_MS` by a segment Daily never
+   * acknowledged, reaped by `handleEnsure` so a fresh segment can start. Producer:
+   * `apps/api/src/jobs/recording-capture.ts`, gated on `markFailed` returning a row.
+   */
+  | 'stuck_capture'
   | 'unknown';
 
 export interface RecordingServerEventMap {

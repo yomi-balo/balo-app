@@ -358,6 +358,57 @@ describe('parseDailyWebhookEvent — recording.ready-to-download (BAL-473)', () 
     ).toBe('daily-rec-1');
   });
 
+  /**
+   * ⚠⚠ BAL-480 FIX ROUND 1 — `start_ts` IN EITHER SPELLING. It was snake_case only, the ONE
+   * exception in this file, and a silent one: this value is the discriminator for the room
+   * -fallback guard in `routes/daily/webhook.ts`, and this module's header records that the
+   * field names could NOT be verified against docs.daily.co. Read only as `start_ts`, a
+   * camelCase payload would leave `startedAt` permanently `null` and the guard permanently
+   * inert, with nothing to say so.
+   */
+  it("⚠⚠ accepts `startTs` as well as `start_ts` — the guard's discriminator", () => {
+    for (const key of ['start_ts', 'startTs']) {
+      const result = parseDailyWebhookEvent(
+        {
+          id: 'evt_rec_2',
+          type: 'recording.ready-to-download',
+          payload: { recording_id: 'daily-rec-1', room: ROOM, [key]: EVENT_TS },
+        },
+        RECEIVED_AT
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok || result.event.kind !== 'recording.ready-to-download') {
+        throw new Error('expected a ready-to-download event');
+      }
+      expect(result.event.startedAt?.toISOString()).toBe(new Date(EVENT_TS * 1000).toISOString());
+    }
+  });
+
+  /**
+   * ⚠ AN INVALID DATE, NOT `null`, FOR A PRESENT-BUT-UNPARSEABLE VALUE — the distinction
+   * `instantFrom`'s docblock calls load-bearing, preserved through `startTsFrom`. The consumer
+   * (`resolveRecordingByRoomFallback`) answers the two cases DIFFERENTLY: absent ⇒ accept and
+   * log; uninterpretable ⇒ refuse. Collapsing them here would re-open the fail-open.
+   */
+  it('⚠ a present-but-unparseable `start_ts` yields an INVALID Date, never `null`', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_rec_2',
+        type: 'recording.ready-to-download',
+        payload: { recording_id: 'daily-rec-1', room: ROOM, start_ts: 'not-a-timestamp' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || result.event.kind !== 'recording.ready-to-download') {
+      throw new Error('expected a ready-to-download event');
+    }
+    expect(result.event.startedAt).toBeInstanceOf(Date);
+    expect(Number.isNaN(result.event.startedAt?.getTime())).toBe(true);
+  });
+
   it('a non-numeric/negative/absent `duration` ⇒ `durationSeconds: null`, never a guess', () => {
     for (const duration of [undefined, 'nonsense', -5, Number.POSITIVE_INFINITY]) {
       const result = parseDailyWebhookEvent(
