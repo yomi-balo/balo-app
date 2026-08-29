@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, inArray, isNull, ne, notInArray } from 'drizzle-orm';
 import {
   assertMeetingTransition,
+  CANCELLABLE_MEETING_STATUSES,
   RESCHEDULABLE_MEETING_STATUSES,
   GUEST_TOKEN_TTL_AFTER_END_MS,
   type MeetingLifecycleStatus,
@@ -28,6 +29,7 @@ import { extendGuestExpiryForMeetingTx } from './_shared/guest-expiry';
 import {
   recordMeetingAudit,
   recordMeetingBooked,
+  recordMeetingCancelled,
   recordMeetingRescheduled,
 } from './_shared/meeting-audit';
 import { meetingPresenceRepository } from './meeting-presence';
@@ -288,6 +290,27 @@ export interface RescheduleMutationResult extends MeetingMutationResult {
    * Keying on this id makes every successful move its own event.
    */
   rescheduleAuditId: string;
+}
+
+/**
+ * BAL-410 — `cancel`'s result. Widens {@link MeetingMutationResult} with the audit row id the
+ * post-commit unwind and the outbound `booking.cancelled` publish both key on.
+ */
+export interface CancelMutationResult extends MeetingMutationResult {
+  /**
+   * The `meeting.cancelled` audit row's id — UNIQUE PER SUCCESSFUL CANCEL, because
+   * `audit_events` is append-only and the row is written inside the same transaction as the
+   * status flip (so it exists at most once per cancel, never on a rolled-back one).
+   *
+   * ⚠ THE OUTBOUND FAN-OUT'S IDEMPOTENCY KEY, PER **WRITE** AND NEVER PER **STATE** — the same
+   * rule `rescheduleAuditId` states above, and it bites here for a subtler reason. A cancel has
+   * NO destination window to key on, so the only state-shaped key available is the bare
+   * `meetingId`; BullMQ silently no-ops an `add` whose jobId is already in the retained
+   * completed set, so a state-keyed cancel notification would be swallowed by any earlier
+   * `meetingId`-keyed job for the same meeting. Keying on this id makes every cancel its own
+   * event.
+   */
+  cancelAuditId: string;
 }
 
 /**
@@ -668,10 +691,13 @@ export const meetingsRepository = {
    * re-resolved from the contexts; see `syncProjectionScheduleTx` for why re-resolving would
    * be a silent repoint.
    *
-   * ⚠⚠ THE `cancel()` ASYMMETRY IS NOW SETTLED, IN THE RESCHEDULE DIRECTION ONLY (orchestrator
-   * D-B). `repositories/meetings.ts:539-562`'s prior revision left this UNDECIDED between two
-   * options: widen `cancel()` to `waiting_for_participants`, or narrow this method to
-   * `scheduled` alone. **BAL-409 CHOSE THE SECOND.** The guard is now
+   * ⚠⚠ THE `cancel()` ASYMMETRY IS NOW SETTLED IN **BOTH** DIRECTIONS. An earlier revision of
+   * this file left it UNDECIDED between two options: widen `cancel()` to
+   * `waiting_for_participants`, or narrow this method to `scheduled` alone. **BAL-409 CHOSE THE
+   * SECOND for reschedule, and BAL-410 (orchestrator D5) kept `cancel()` at `scheduled` too** —
+   * so the two guards now AGREE on status and neither half of the asymmetry is open. See
+   * `cancel()`'s own docblock for the one state where they still deliberately differ (a
+   * past-start, never-joined meeting). The guard is now
    * `RESCHEDULABLE_MEETING_STATUSES` (`@balo/shared/meetings` — `readonly ['scheduled']`), the
    * SAME tuple the route's `resolveRescheduleRefusal` checks, so the repository guard and the
    * route guard cannot drift. Reasons, all load-bearing:
@@ -686,9 +712,11 @@ export const meetingsRepository = {
    *   3. It leaves no open presence interval spanning a move
    *      (`meeting-presence.ts`'s `resolveClockCeiling` residual).
    *
-   * **`cancel()`'s guard is UNCHANGED** — it still allows `scheduled` only, and it already
-   * agreed with this narrower reschedule guard by coincidence. BAL-410 inherits the cancel
-   * side of the asymmetry and has no production caller today.
+   * `cancel()`'s guard is now `CANCELLABLE_MEETING_STATUSES` (`@balo/shared/meetings` —
+   * `readonly ['scheduled']`), the SAME tuple its route's `resolveCancelRefusal` checks, exactly
+   * as this method's guard mirrors `resolveRescheduleRefusal`. It has a LIVE production caller
+   * (`POST /meetings/:meetingId/cancel` → `cancelMeeting`). See `cancel()`'s own docblock rather
+   * than restating its reasoning here.
    *
    * ⚠⚠ GUARDED AT ALL FOR A SHARPER REASON THAN THE ABOVE. Without any status guard,
    * CANCEL-THEN-RESCHEDULE REOPENS EXACTLY THE DOUBLE-BOOKING THIS TICKET CLOSES, in the one
@@ -810,37 +838,95 @@ export const meetingsRepository = {
 
   /**
    * BAL-410 CANCEL SEAM — THE ONLY THING THAT FREES A BOOKED SLOT. Flips the meeting to
-   * `status='cancelled'` and its projection to `status='cancelled'` in ONE transaction, so
-   * the resolver's `confirmed`-only filter re-opens the window at the same instant.
+   * `status='cancelled'`, flips its `consultations` projection to `'cancelled'`, and writes the
+   * `meeting.cancelled` audit row, all in ONE transaction — so the availability resolver's
+   * `confirmed`-only filter re-opens the window at the same instant the state changes, and the
+   * attribution commits or rolls back WITH it (ADR-1030, reasserted by ADR-1044 §5).
    *
-   * GUARDED ON `status='scheduled' AND deleted_at IS NULL`, and throws
-   * `MeetingNotCancellableError` otherwise: a meeting that already started, already ended,
-   * or was already cancelled must not silently "cancel" again and re-fire whatever the
-   * caller does post-commit.
+   * ⚠ THE STATUS ALLOW-LIST IS `CANCELLABLE_MEETING_STATUSES` (`@balo/shared/meetings`), the
+   * SAME tuple the route's `resolveCancelRefusal` consults — so the route guard and this
+   * compare-and-set cannot drift, exactly the arrangement BAL-409 shipped for reschedule. It
+   * throws `MeetingNotCancellableError` on no match: a meeting that already started, already
+   * ended, was already cancelled or is soft-deleted must not silently "cancel" again and
+   * re-fire the caller's post-commit unwind.
    *
-   * ⚠ THE WALL-CLOCK RULE IS NOT HERE. BAL-410's "free to cancel until the scheduled start"
-   * policy stays at the CALL SITE, exactly as `caseEngagementsRepository.close()` leaves
-   * capability checks to its caller. A repository that read the clock would make every
-   * fixture and every backfill subject to a product policy that can change.
+   * ⚠⚠ THE `scheduled`-ONLY / `waiting_for_participants`-EXCLUDED ASYMMETRY THIS FILE ONCE
+   * CALLED "UNDECIDED" IS NOW SETTLED (orchestrator D5), IN BOTH DIRECTIONS. BAL-409 narrowed
+   * `updateSchedule` to `RESCHEDULABLE_MEETING_STATUSES = ['scheduled']`; BAL-410 keeps cancel
+   * at `['scheduled']` too. That state guard is precisely what delivers the AC "cancellation is
+   * unavailable once the meeting has started" — the first presence interval flips the meeting to
+   * `waiting_for_participants`, so a meeting anybody joined is un-cancellable BY STATE.
+   *
+   * ⚠ THE WALL-CLOCK RULE IS NOT HERE, AND — UNLIKE RESCHEDULE — IT IS NOT AT THE CALL SITE
+   * EITHER. `resolveCancelRefusal` reads no clock at all. "Free until scheduled start" is a
+   * product promise delivered by the state guard above, not by comparing to `scheduled_start`;
+   * the ticket forbids inventing a cutoff, and D5 settles it. A repository that read the clock
+   * would in any case make every fixture and backfill subject to a policy that can change.
+   *
+   * ⚠ WHAT IS **NOT** IN THIS TRANSACTION, AND WHY IT CANNOT BE. The credit-hold release, the
+   * Daily room delete and the `booking.cancelled` publish all run POST-COMMIT in `apps/api`
+   * (`services/meetings/meeting-availability.ts`). `@balo/db` cannot enqueue (the BullMQ queue
+   * lives only in `apps/api`, pinned by `invariants/repositories-never-notify.test.ts`), the
+   * hold release takes the WALLET ADVISORY LOCK — folding it in here would hold the meeting row
+   * lock then the wallet lock while `openSession` takes them in the opposite order, i.e. a
+   * deliberate lock-ordering inversion — and a vendor HTTP call must never be able to roll back
+   * a committed cancellation.
+   *
+   * ── THE FULL TRANSACTION, IN ORDER, ALL ON `tx` ────────────────────────────────
+   *   1. The guarded compare-and-set, as above.
+   *   2. `cancelProjectionTx` — the `consultations` projection, and the read that tells the
+   *      caller WHOSE availability cache to rebuild.
+   *   3. `recordMeetingCancelled` — the audit row, LAST among the writes. An audit row left
+   *      behind by a rolled-back cancel would attest to a cancellation that never happened;
+   *      `updateSchedule`'s rule, verbatim.
    */
-  async cancel(id: string): Promise<MeetingMutationResult> {
+  async cancel(
+    id: string,
+    audit: {
+      actorUserId: string | null;
+      /**
+       * WHICH AUTHORIZATION ARM matched, or `'system'` for the ADR-1030 exemption (the dev
+       * seeder). Server-derived at the call site — never taken from request input.
+       */
+      actorRole: 'client' | 'expert' | 'admin' | 'system';
+    }
+  ): Promise<CancelMutationResult> {
     return db.transaction(async (tx) => {
       const now = new Date();
+      // 1. Guarded compare-and-set — the TOCTOU backstop AND the shared definition of "which
+      //    statuses may be cancelled".
       const [meeting] = await tx
         .update(meetings)
         // Enum literals at QUERY time are always safe — the house restriction is on index
         // predicates and CHECKs, which is why 0059 adds neither for this label.
         .set({ status: 'cancelled', updatedAt: now })
         .where(
-          and(eq(meetings.id, id), eq(meetings.status, 'scheduled'), isNull(meetings.deletedAt))
+          and(
+            eq(meetings.id, id),
+            inArray(meetings.status, [...CANCELLABLE_MEETING_STATUSES]),
+            isNull(meetings.deletedAt)
+          )
         )
         .returning();
       if (meeting === undefined) {
         throw new MeetingNotCancellableError(id);
       }
 
+      // 2. The projection — the same instant the resolver's `confirmed`-only filter reopens
+      //    the window.
       const expertProfileId = await cancelProjectionTx(tx, id);
-      return { meeting, expertProfileId };
+
+      // 3. LAST. See the docblock: an audit row must never outlive a rolled-back cancel.
+      const cancelAuditId = await recordMeetingCancelled(tx, {
+        meetingId: meeting.id,
+        actorUserId: audit.actorUserId,
+        actorRole: audit.actorRole,
+        scheduledStart: meeting.scheduledStart,
+        scheduledEnd: meeting.scheduledEnd,
+        expertProfileId,
+      });
+
+      return { meeting, expertProfileId, cancelAuditId };
     });
   },
 

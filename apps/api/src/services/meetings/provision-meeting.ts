@@ -66,10 +66,12 @@
  *       this PR — nothing calls `provisionMeeting` again, so nothing ever claims it. Owner:
  *       **BAL-400** (which owns the booking UX and is the only surface that will know a
  *       meeting is unprovisioned). Cheap to fix precisely because the name is re-derivable.
- *  (ii) `cancelMeeting` / `softDeleteMeeting` DELETE NO DAILY ROOM. A cancelled booking leaves
- *       its room behind for good. Owner: **BAL-410** (cancel). (Moot in this PR: neither has a
- *       production caller yet — see the note on irreversibility in
- *       `services/meetings/authorize-meeting-booking.ts`.)
+ *  (ii) `softDeleteMeeting` DELETES NO DAILY ROOM. ⚠ NARROWED BY BAL-410, which CLOSED the
+ *       cancel half: `cancelMeeting` now deletes the room post-commit (guarded by the
+ *       derived-name check, best-effort and non-fatal — `meeting-availability.ts`'s
+ *       `tearDownRoomBestEffort`). `softDeleteMeeting` still strands a room and has no route
+ *       and no owner; the residual is recorded here rather than pretended away. It is vendor
+ *       hygiene only: `MEETING_CLOSED_TO_JOIN` refuses a Balo-side rejoin either way.
  * (iii) `createRoom` REFUSES ITS OWN CREATION. The vendor-response checks in
  *       `services/daily/rooms.ts` — privacy, then the `name`/`url` fields — run AFTER the POST
  *       has already created the room, so a room the platform then refuses is stranded by the

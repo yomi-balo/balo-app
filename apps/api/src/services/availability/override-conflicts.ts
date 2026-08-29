@@ -55,8 +55,16 @@ export interface FindOverrideConflictsInput {
 /**
  * Does a proposed time-off block (`startDate`–`endDate`, inclusive, in the expert's own
  * schedule timezone) collide with any already-CONFIRMED consultation? Read-only — this
- * never cancels, moves or refunds anything (BAL-416 is detect-and-warn only; BAL-410 owns
- * any resolution beyond "block anyway").
+ * never cancels, moves or refunds anything (BAL-416 is detect-and-warn only).
+ *
+ * ⚠ CORRECTED SCOPE. BAL-410 has shipped the cancellation SEAM
+ * (`POST /meetings/:meetingId/cancel`), but it deliberately CUT the "block and cancel these
+ * sessions" affordance (orchestrator D11): wiring it is not thin, because `ConflictDto` is
+ * allow-listed and exposes no `meetingId`, the conflict list is TRUNCATED so a bulk action over
+ * it would be wrong, and the popover's one-event-per-decision resolution latch has no defined
+ * value for a partial success. So the resolution beyond "block anyway" remains UNOWNED, and its
+ * ticket also owns adding `'cancelled'` to `AvailabilityConflictResolution`. Do not re-derive
+ * this — see `packages/analytics/src/events/availability.ts`'s forbid-clause.
  *
  * ⚠ D1 — THE TIMEZONE EXPANSION IS THE SAME `expandOverrideBlocks` THE RESOLVER USES, called
  * with a ONE-ELEMENT ARRAY. A second expansion could disagree with the resolver about the

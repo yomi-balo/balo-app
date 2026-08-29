@@ -167,6 +167,15 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   // iron-session) and neither belongs in a browser bundle, so neither is scanned here.
   // Neither file names `lens` in any case.
   //
+  // ── BAL-410, cancel a booked consultation ───────────────────────────────────────────
+  //
+  // ⚠ `cancel-api-client.ts` IS DELIBERATELY ABSENT, on exactly the grounds
+  // `reschedule-api-client.ts` immediately above already is: it carries `import 'server-only'`
+  // because it resolves the viewer's Bearer from the iron-session, so it must never reach a
+  // browser bundle and is therefore not scanned here. It names `lens` nowhere in any case —
+  // the cancel axis is chosen server-side, per lens, in `cancel-consultation.ts`, and the API
+  // re-derives all three axes independently.
+  //
   // ── BAL-445 — the guest read arm ────────────────────────────────────────────────────
   //
   // ⚠ `resolve-meeting-guest.ts` IS DELIBERATELY ABSENT, on exactly the grounds every other

@@ -50,23 +50,18 @@
  * downstream re-reads them and nothing can disagree with itself.
  */
 import {
-  engagementsRepository,
   meetingContextsRepository,
   meetingsRepository,
   partyMembershipsRepository,
-  projectRequestsRepository,
-  requestExpertRelationshipsRepository,
   type Meeting,
 } from '@balo/db';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
-import {
-  resolveContextOwner,
-  selectPrimaryMeetingContext,
-  type MeetingContextOwner,
-  type MeetingContextOwnerReads,
-  type PrimaryMeetingContext,
-} from '@balo/shared/meetings';
+import { selectPrimaryMeetingContext, type PrimaryMeetingContext } from '@balo/shared/meetings';
+// BAL-410 — EXTRACTED. This module's own copy of the `@balo/db` owning-party binding was the
+// template BAL-410's cancel gate was modelled on; both now import the one definition rather than
+// carrying two. Behaviour is unchanged.
+import { loadOwningParty } from './resolve-meeting-owning-party.js';
 
 const log = createLogger('meeting-reschedule-authz');
 
@@ -98,48 +93,6 @@ type DenialReason =
   | 'subject_unresolvable'
   | 'cross_tenant'
   | 'no_capability';
-
-/**
- * THE REPOSITORY BINDING for the shared owning-party rule — the same three `@balo/db` finders
- * this module already imported, passed in rather than imported anew, so a factory-literal
- * `vi.mock('@balo/db')` in the test does not have to grow to cover a ready-bound resolver.
- * Each finder already filters `deleted_at IS NULL`.
- */
-const OWNING_PARTY_READS = {
-  findEngagement: (engagementId: string) => engagementsRepository.findById(engagementId),
-  findProjectRequest: (projectRequestId: string) =>
-    projectRequestsRepository.findById(projectRequestId),
-  findRelationship: (relationshipId: string) =>
-    requestExpertRelationshipsRepository.findById(relationshipId),
-} satisfies MeetingContextOwnerReads;
-
-/**
- * Per-context-type LOAD of the owning party, delegating to the ONE shared core in
- * `@balo/shared/meetings`. Deliberately judgement-free — it reports which company owns the row
- * and says nothing about whether the caller may see it.
- */
-async function loadOwningParty(
-  subject: PrimaryMeetingContext
-): Promise<MeetingContextOwner | undefined> {
-  const result = await resolveContextOwner(subject, OWNING_PARTY_READS);
-
-  switch (result.outcome) {
-    case 'resolved':
-      return result.owner;
-    // Missing OR soft-deleted, indistinguishable by construction.
-    case 'not_found':
-      return undefined;
-    default: {
-      // Compile-time exhaustiveness over the SIX holder-bearing labels — a SEVENTH non-admin
-      // label widens `UnhandledMeetingContextType` away from `never` and stops
-      // `pnpm --filter api typecheck` right here until an arm is consciously written. Fails
-      // CLOSED rather than throwing: this module is an authorization gate.
-      const exhaustive: never = result.contextType;
-      log.warn({ contextType: exhaustive }, 'Unhandled meeting context type — failing closed');
-      return undefined;
-    }
-  }
-}
 
 /** The single fail-closed exit. The SHAPE goes here; the wire gets one literal. */
 function deny(

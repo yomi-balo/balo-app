@@ -89,6 +89,13 @@ import {
   type BookingRescheduledInitiator,
 } from './booking-rescheduled.js';
 import {
+  BookingCancelledClientEmail,
+  BookingCancelledExpertEmail,
+  bookingCancelledSubject,
+  type BookingCancelledInitiator,
+  type BookingCancelledReason,
+} from './booking-cancelled.js';
+import {
   RescheduleProposalSentEmail,
   RescheduleProposalDeclinedEmail,
   rescheduleProposalSentSubject,
@@ -117,6 +124,25 @@ function arrayLength(value: unknown): number {
 /** Coerce a payload field to a non-negative integer count; 0 when absent. */
 function numberCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * BAL-410 — narrow the merged payload's `cancelledBy` to its union.
+ *
+ * ⚠ THE FALLBACK IS `'client'`, WHICH IS THE SAFE DIRECTION AND NOT AN ARBITRARY DEFAULT. It is
+ * the only value that never attributes the act to a party who did not perform it: a wrong
+ * `'admin'` would tell both parties Balo cancelled their call, and a wrong `'expert'` would
+ * blame the expert. `'client'` on a client-lens render degrades to "You cancelled …", which a
+ * deploy-skew payload cannot make worse than merely odd.
+ */
+function readCancelledBy(value: unknown): BookingCancelledInitiator {
+  if (value === 'expert' || value === 'admin') return value;
+  return 'client';
+}
+
+/** BAL-410 — narrow the merged payload's `reason`; anything unknown degrades to `'requested'`. */
+function readCancelReason(value: unknown): BookingCancelledReason {
+  return value === 'expert_time_off' ? 'expert_time_off' : 'requested';
 }
 
 /**
@@ -1652,6 +1678,57 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         initiatedBy,
       }),
       subject: bookingRescheduledSubject('client', expertParty, initiatedBy),
+    };
+  },
+
+  // BAL-410 — the CLIENT half of `booking.cancelled`. ⚠ ALSO the template rendered for the
+  // `meeting_party_participants` fan-out arm: those recipients ARE the client side, so they read
+  // the client copy. Prospective copy names the expert PARTY; the retrospective attribution
+  // (`cancelledByLabel`) is assembled by the publisher, person-with-"@ party".
+  // ⚠ `holdReleased` IS DELIBERATELY NOT PASSED. The email never mentions the hold — that line
+  // is in-app only (the ticket: no money moved, and an email implies something went wrong).
+  'booking-cancelled-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const engagementId = (data.engagementId as string) ?? '';
+    const cancelledBy = readCancelledBy(data.cancelledBy);
+    const reason = readCancelReason(data.reason);
+    return {
+      component: React.createElement(BookingCancelledClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: expertParty,
+        cancelledByLabel: (data.cancelledByLabel as string) ?? expertParty,
+        caseTitle: (data.caseTitle as string) ?? 'your case',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        cancelledBy,
+        reason,
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: bookingCancelledSubject('client', expertParty, cancelledBy, reason),
+    };
+  },
+
+  // BAL-410 — the EXPERT half. Prospective copy names the client COMPANY.
+  'booking-cancelled-expert': (data) => {
+    const clientCompany = (data.clientCompanyName as string) ?? 'A client';
+    const engagementId = (data.engagementId as string) ?? '';
+    const cancelledBy = readCancelledBy(data.cancelledBy);
+    const reason = readCancelReason(data.reason);
+    return {
+      component: React.createElement(BookingCancelledExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        counterpartyLabel: clientCompany,
+        cancelledByLabel: (data.cancelledByLabel as string) ?? clientCompany,
+        caseTitle: (data.caseTitle as string) ?? 'the case',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        durationMinutes: numberCount(data.durationMinutes),
+        cancelledBy,
+        reason,
+        caseUrl: `${BASE_URL}/cases/${engagementId}`,
+        baseUrl: BASE_URL,
+      }),
+      subject: bookingCancelledSubject('expert', clientCompany, cancelledBy, reason),
     };
   },
 

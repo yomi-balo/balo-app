@@ -29,6 +29,10 @@ export const BOOKING_EVENTS = {
   ABANDONED: 'booking_abandoned',
   /** BAL-409 — fired from `reschedule-dialog.tsx` after the Server Action returns `ok`. */
   RESCHEDULED: 'booking_rescheduled',
+  /** BAL-410 — fired from `cancel-consultation-dialog.tsx` after the Server Action returns `ok`. */
+  CANCELLED: 'booking_cancelled',
+  /** BAL-410 — the dialog was opened and dismissed without a successful cancel. */
+  CANCEL_ABANDONED: 'booking_cancel_abandoned',
   /** BAL-411 — the expert published a proposal. Fired from the propose dialog on `ok`. */
   RESCHEDULE_PROPOSED: 'reschedule_proposed',
   /**
@@ -99,6 +103,28 @@ export interface BookingEventMap {
     initiated_by: 'client' | 'expert';
     hours_before_start: number;
   };
+  [BOOKING_EVENTS.CANCELLED]: {
+    /**
+     * WHICH AXIS AUTHORIZED IT — taken verbatim from the API's `initiatedBy`, never re-derived
+     * client-side, so the funnel and the audit row cannot disagree about who cancelled.
+     */
+    initiated_by: 'client' | 'expert' | 'admin';
+    /**
+     * ⚠⚠ THE v2-CUTOFF DECISION INPUT — the ticket says so in as many words: "`hours_before_start`
+     * IS THE NUMBER THAT DECIDES WHETHER v2 NEEDS A CUTOFF". Notice given: `now` → the meeting's
+     * EXISTING `scheduledStart`, computed exactly as `reschedule-dialog.tsx` does for
+     * `booking_rescheduled`.
+     *
+     * ⚠ IT CAN BE NEGATIVE, AND A NEGATIVE IS NOT BAD DATA. `resolveCancelRefusal` reads no clock
+     * (BAL-410 D5), so a `scheduled` meeting whose start has passed but which NOBODY JOINED is
+     * still cancellable. A negative value means "cancelled after the scheduled start, with no
+     * presence" — which is the honest outcome there, because with no presence there is no
+     * no-show to settle. The cutoff analysis must treat it that way rather than filtering it out.
+     */
+    hours_before_start: number;
+  };
+  /** ⚠ NO PROPERTIES, per the ticket. Opened the dialog, backed out — nothing else is known. */
+  [BOOKING_EVENTS.CANCEL_ABANDONED]: Record<string, never>;
   [BOOKING_EVENTS.RESCHEDULE_PROPOSED]: {
     proposal_id: string;
     /** 1–3 — `RESCHEDULE_PROPOSAL_MAX_OPTIONS` in `@balo/shared/meetings`. */

@@ -59,10 +59,12 @@ export type AuthorizeMeetingParticipationResult =
  * ⚠⚠ THE ENGAGEMENT ARM ON THIS APP IS **TOTAL BUT NOT COMPLETE**, AND THAT IS A DECISION.
  *
  * `apps/web`'s engagement resolver (`lib/authz/engagement.ts`, opened by BAL-421) is NARROWED
- * BY TYPE to the four ENGAGEMENT-GRAIN labels; ADR-1046's amendment records that widening it to
- * the request-grain arms is BAL-410 / BAL-411's work. This switch is therefore TOTAL over the
- * six holder-bearing labels — a seventh breaks `pnpm --filter web check-types` right here — but
- * the two request-grain arms answer `false` rather than resolving.
+ * BY TYPE to the four ENGAGEMENT-GRAIN labels. ⚠ THAT NARROWING NO LONGER HAS A NAMED WIDENER:
+ * BAL-410 and BAL-411 have both shipped WITHOUT widening it (BAL-410 declined explicitly —
+ * orchestrator D7 — because its cancel action is structurally `contextType: 'case'`). See
+ * `engagement.ts`'s own "CORRECTED TRIGGER" note for the real trigger. This switch is therefore
+ * TOTAL over the six holder-bearing labels — a seventh breaks `pnpm --filter web check-types`
+ * right here — but the two request-grain arms answer `false` rather than resolving.
  *
  * ⚠ WHY THAT IS SAFE AT THIS CONSUMER, PROVEN RATHER THAN ASSERTED: the engagement arm can only
  * ever resolve an EXPERT-SIDE actor, and `resolveInCallDrawdown`'s third step
@@ -77,8 +79,8 @@ export type AuthorizeMeetingParticipationResult =
  * by the wrapper's `deny`.
  *
  * ⚠ A SECOND CONSUMER MUST RE-READ THIS. If a future web caller needs the expert arm to be
- * RIGHT rather than merely harmless, widen `lib/authz/engagement.ts` (BAL-410 / BAL-411) — do
- * not special-case it here.
+ * RIGHT rather than merely harmless, widen `lib/authz/engagement.ts` — do not special-case it
+ * here.
  */
 async function holdsMeetingEngagementCapability(
   userId: string,

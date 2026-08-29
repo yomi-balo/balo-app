@@ -25,6 +25,10 @@ const BASE = {
   onReschedule: vi.fn(),
   canProposeReschedule: false,
   onProposeReschedule: vi.fn(),
+  // BAL-410 — defaulted OFF, so every pre-existing case still asserts a nudge with no Cancel
+  // button and the new affordance has to be opted into explicitly.
+  canCancel: false,
+  onCancel: vi.fn(),
   busy: false,
 };
 
@@ -377,5 +381,91 @@ describe('CaseNudge — the resolution ask is the only interactive nudge', () =>
   it('offers the expert NO buttons on the pending state — nothing to do until they answer', () => {
     render(<CaseNudge {...BASE} nudge={{ kind: 'resolution_ask_pending' }} lens="expert" />);
     expect(screen.queryAllByRole('button')).toHaveLength(0);
+  });
+});
+
+// ── BAL-410 — the Cancel affordance ───────────────────────────────────────────
+
+describe('CaseNudge — the Cancel affordance (BAL-410)', () => {
+  it.each(LENSES)('does not render Cancel for the %s lens when canCancel is false', (lens) => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} canCancel={false} />);
+
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it.each(LENSES)('renders Cancel for the %s lens when canCancel is true', (lens) => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} canCancel />);
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
+  it('calls onCancel when clicked', async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" canCancel onCancel={onCancel} />);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⚠⚠ THE §10.3 DIVERGENCE. Cancel renders INSIDE the join window where Reschedule and Propose
+   * deliberately do not: `live` starts 15 minutes before the start, and the product promise is
+   * "free until scheduled start". The server's guard is STATE-based, so this is the client
+   * MATCHING the server, not loosening it.
+   */
+  it.each(LENSES)('⚠ renders Cancel for the %s lens even when the nudge is LIVE', (lens) => {
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ ...UPCOMING, live: true }}
+        lens={lens}
+        canCancel
+        canProposeReschedule
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    // …and the two MOVE actions are correctly hidden inside that same window.
+    expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+  });
+
+  it('renders BOTH actions on the client lens, with Reschedule first', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="client" canCancel />);
+
+    const buttons = screen
+      .getAllByRole('button')
+      .map((button) => button.textContent)
+      .filter((label) => label === 'Reschedule' || label === 'Cancel');
+    expect(buttons).toEqual(['Reschedule', 'Cancel']);
+  });
+
+  it('renders BOTH actions on the expert lens, with Propose first', () => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule canCancel />);
+
+    const buttons = screen
+      .getAllByRole('button')
+      .map((button) => button.textContent)
+      .filter((label) => label === 'Propose a new time' || label === 'Cancel');
+    expect(buttons).toEqual(['Propose a new time', 'Cancel']);
+  });
+
+  it('renders Cancel alone when no move action applies', () => {
+    // An expert with no `canProposeReschedule` still gets Cancel — the two are independent
+    // holder sets resolved by two independent server-side reads.
+    render(
+      <CaseNudge {...BASE} nudge={UPCOMING} lens="expert" canProposeReschedule={false} canCancel />
+    );
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+  });
+
+  it('does not render Cancel on a non-"upcoming" nudge, whatever the flag says', () => {
+    render(<CaseNudge {...BASE} nudge={{ kind: 'nothing_booked' }} lens="client" canCancel />);
+
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
   });
 });

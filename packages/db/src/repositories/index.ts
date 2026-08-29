@@ -501,6 +501,7 @@ export {
   MeetingContextRequiredError,
   MeetingNotCancellableError,
   MeetingNotReschedulableError,
+  type CancelMutationResult,
   type CreateMeetingInput,
   type CreatedMeeting,
   type MeetingContextInput,

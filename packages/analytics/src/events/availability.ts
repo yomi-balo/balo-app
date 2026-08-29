@@ -22,10 +22,21 @@ export const AVAILABILITY_EVENTS = {
 } as const;
 
 /**
- * ⚠ `'cancelled'` IS NOT A MEMBER AND MUST NOT BE ADDED HERE. BAL-416 ships
- * detect-and-warn ONLY; there is no expert-initiated consultation-cancellation seam
- * (BAL-410 owns building one). Adding the literal before the affordance exists would put a
- * permanently-zero arm in the funnel and imply a capability the platform does not have.
+ * ⚠ `'cancelled'` IS NOT A MEMBER AND MUST NOT BE ADDED HERE. BAL-416 ships detect-and-warn
+ * ONLY: its conflict warning offers "block anyway" or "abandon", and nothing on that screen
+ * cancels a consultation.
+ *
+ * ⚠ CORRECTED TRIGGER (BAL-410, orchestrator D11 — the affordance was CUT, deliberately).
+ * BAL-410 has now built the cancellation SEAM (`POST /meetings/:meetingId/cancel`), so the old
+ * "BAL-410 owns building one" no longer identifies what is missing. What is still missing is the
+ * AFFORDANCE — wiring "block and cancel these sessions" onto BAL-416's warning UI — and it is
+ * not thin wiring: the conflicts DTO deliberately exposes no `meetingId` (it is an allow-listed
+ * shape), the conflict list is TRUNCATED so a bulk action over it would be wrong, and
+ * `date-override-add-popover.tsx`'s one-event-per-decision latch has no defined `resolution`
+ * for a partial success (3 of 5 cancelled). Adding the literal before that affordance exists
+ * would still put a PERMANENTLY-ZERO arm in the funnel and imply a capability the platform does
+ * not have. The trigger is therefore: **the ticket that ships the "block and cancel" affordance
+ * adds this literal, in the same change.**
  */
 export type AvailabilityConflictResolution = 'blocked_anyway' | 'abandoned';
 

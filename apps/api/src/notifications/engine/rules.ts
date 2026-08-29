@@ -346,6 +346,43 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     ...emailAndInApp('client', 'booking-rescheduled-client', (ctx) => !!ctx.payload.recipientId),
     ...emailAndInApp('expert', 'booking-rescheduled-expert'),
   ],
+  // BAL-410 — a booked consultation was CANCELLED. THREE recipient arms, not two, and the third
+  // is what closes the ticket's "Cancelled by expert → client → email + in-app" requirement:
+  //
+  //   · `client` — the ACTING client's own confirmation. Conditioned on `recipientId`, which the
+  //     publisher sets ONLY on a client-initiated cancel.
+  //   · `expert` — the delivering expert, UNCONDITIONED (resolved from `payload.expertProfileId`
+  //     via `resolver.ts`'s `data.expert` hydration). Reached on every arm: it is the
+  //     counterparty notice on a client cancel and the actor's own confirmation otherwise.
+  //   · `meeting_party_participants` — the CLIENT company's live members, conditioned on the
+  //     publisher-resolved `payload.recipientUserIds`, which is populated ONLY on the
+  //     expert/admin arms. Renders the CLIENT template, because these recipients are the client
+  //     side. ⚠ The list is resolved by the PUBLISHER (`publish-booking-cancelled.ts`), never
+  //     hydrated here — that is what keeps a membership read out of the notification engine
+  //     (the shipped BAL-408 contract).
+  //
+  // The two client-side arms are MUTUALLY EXCLUSIVE by construction — the publisher sets exactly
+  // one of `recipientId` / `recipientUserIds` — so nobody is told twice.
+  //
+  // NO SMS. The ticket asks for it under 2h, but `recipientPhoneVerified` reads `ctx.data.user`,
+  // which `resolver.ts` hydrates ONLY from `payload.userId` — a field no booking payload carries.
+  // That is the exact defect recorded above for the legacy `booking-confirmed-sms` rule, and
+  // adding `userId` to route around it would collide with `recipient: 'self'` resolution. A
+  // half-wired SMS rule that can never fire is worse than none; see the PR body.
+  //
+  // The hold-release note is NOT a fourth rule and NOT a second event: the in-app CLIENT template
+  // branches on `holdReleased`, and the EMAIL template ignores it (no money moved — an email
+  // about it implies something went wrong).
+  'booking.cancelled': [
+    ...emailAndInApp('client', 'booking-cancelled-client', (ctx) => !!ctx.payload.recipientId),
+    ...emailAndInApp('expert', 'booking-cancelled-expert'),
+    ...emailAndInApp(
+      'meeting_party_participants',
+      'booking-cancelled-client',
+      (ctx) =>
+        Array.isArray(ctx.payload.recipientUserIds) && ctx.payload.recipientUserIds.length > 0
+    ),
+  ],
   // ── BAL-411 — the expert-initiated reschedule proposal ─────────────────────────────────
   //
   // The expert proposed up to three alternative times. `meeting_party_participants` reads the

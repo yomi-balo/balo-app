@@ -105,6 +105,14 @@ vi.mock('@/lib/authz/engagement', () => ({
   hasEngagementCapability: (...a: unknown[]) => mockHasEngagementCapability(...a),
 }));
 
+// BAL-410 — the MEMBERSHIP axis, mocked at its own seam. The client cancel flag is the first
+// capability-derived flag on the client arm, and it deliberately does NOT share the engagement
+// mock above: the two lenses are on two different axes.
+const mockHasCapability = vi.fn();
+vi.mock('@/lib/authz', () => ({
+  hasCapability: (...a: unknown[]) => mockHasCapability(...a),
+}));
+
 const mockIsRealtimeConfigured = vi.fn();
 vi.mock('@/lib/realtime/ably-server', () => ({
   isRealtimeConfigured: () => mockIsRealtimeConfigured(),
@@ -189,6 +197,7 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   vi.clearAllMocks();
   mockResolveCaseAccess.mockResolvedValue(access(over.access));
   mockHasEngagementCapability.mockResolvedValue(true);
+  mockHasCapability.mockResolvedValue(true);
   mockIsRealtimeConfigured.mockReturnValue(true);
   m.findCase.mockResolvedValue({ ...OPEN_CASE, ...over.caseRow });
   m.listMeetings.mockResolvedValue([meeting('m1')]);
@@ -573,6 +582,41 @@ describe('loadCase — the counterparty, per lens', () => {
     const view = await loadOrThrow();
     expect(view.party.orgLabel).toBe('CloudPeak');
     expect(view.header.counterpartyOrgLabel).toBe('CloudPeak');
+  });
+
+  /**
+   * ⚠⚠ BAL-410 / CLAUDE.md ATTRIBUTION-BY-TENSE. `counterpartyPartyLabel` feeds PROSPECTIVE copy
+   * ("… will see the slot open up again"), which must name the PARTY. This is the assertion whose
+   * ABSENCE let the cancel dialog ship naming the person: the agency test above pinned
+   * `orgLabel` only, and `counterpartyFirstName` stays `'Amara'` in this very scenario.
+   *
+   * The two halves are asserted TOGETHER on purpose — the rule is not "always the agency", it is
+   * "the agency, or the person's own name when they are INDEPENDENT", and only the pair pins that.
+   */
+  it('⚠ names the AGENCY as the prospective party label for an agency-delivered case', async () => {
+    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+    m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
+
+    const view = await loadOrThrow();
+
+    expect(view.counterpartyPartyLabel).toBe('CloudPeak');
+    // The person's name is still available — for the conversation's person-addressed register.
+    expect(view.conversation.counterpartyFirstName).toBe('Amara');
+  });
+
+  it('⚠ names the PERSON as the prospective party label for an INDEPENDENT expert', async () => {
+    // FAT_PROFILE is `type: 'freelancer'`, `agencyId: null` — the independent case.
+    const view = await loadOrThrow();
+
+    expect(view.counterpartyPartyLabel).toBe('Amara Okafor');
+  });
+
+  it('EXPERT lens names the client COMPANY as the prospective party label', async () => {
+    seed({ access: { lens: 'expert' } });
+
+    const view = await loadOrThrow();
+
+    expect(view.counterpartyPartyLabel).toBe('Northwind Industrial');
   });
 
   /**
@@ -1256,5 +1300,201 @@ describe('loadCase — the surface identity', () => {
     const view = await loadOrThrow();
     expect(view.engagementId).toBe(ENGAGEMENT_ID);
     expect(view.viewerUserId).toBe(USER_ID);
+  });
+});
+
+/**
+ * BAL-410 — `canCancelConsultation` lives on `CaseSurfaceViewBase`, so BOTH lenses carry it —
+ * but each resolves it on its OWN AXIS. That split is the whole point of this block: a shared
+ * flag would be the "lens alone is authorization" mistake CLAUDE.md forbids.
+ */
+describe('loadCase — canCancelConsultation (BAL-410)', () => {
+  const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
+
+  function scheduledMeeting(id = 'm1'): Record<string, unknown> {
+    return meeting(id, {
+      status: 'scheduled',
+      outcome: null,
+      startedAt: null,
+      scheduledStart: SCHEDULED_START,
+    });
+  }
+
+  describe('the CLIENT arm (membership axis)', () => {
+    it('is TRUE for a `participate` holder on an open case with an upcoming meeting', async () => {
+      seed({ access: { lens: 'client' } });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: true });
+    });
+
+    it('asks the MEMBERSHIP axis, and NOT the engagement axis', async () => {
+      seed({ access: { lens: 'client' } });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+      mockHasEngagementCapability.mockClear();
+
+      await loadOrThrow();
+
+      expect(mockHasCapability).toHaveBeenCalledTimes(1);
+      expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+    });
+
+    it('is FALSE when the membership axis says no', async () => {
+      seed({ access: { lens: 'client' } });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+      mockHasCapability.mockResolvedValue(false);
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: false });
+    });
+
+    it('is FALSE when nothing is booked — there is no meeting to cancel', async () => {
+      seed({ access: { lens: 'client' } });
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: false });
+    });
+
+    /** ⚠ The short-circuit invariant: a closed case resolves NO capability call at all. */
+    it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
+      seed({
+        access: { lens: 'client' },
+        caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+      });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+      mockHasCapability.mockClear();
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(mockHasCapability).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the EXPERT arm (engagement axis)', () => {
+    it('is TRUE for a `manage_engagement` holder on an open case with an upcoming meeting', async () => {
+      seed({ access: { lens: 'expert' } });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: true });
+    });
+
+    it('asks the ENGAGEMENT axis, and NOT the membership axis', async () => {
+      seed({ access: { lens: 'expert' } });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+      mockHasCapability.mockClear();
+
+      await loadOrThrow();
+
+      expect(mockHasEngagementCapability).toHaveBeenCalled();
+      expect(mockHasCapability).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠ THE CASE THAT MOTIVATES THE CAPABILITY TERM. An agency member with role `expert`
+     * resolves the expert lens (visibility is deliberately wider — ADR-1046 §7) but holds no
+     * `manage_engagement`, so the resolver answers `false` and the CTA must not render.
+     */
+    it('is FALSE when the engagement axis says no (e.g. an agency member with role `expert`)', async () => {
+      seed({ access: { lens: 'expert' } });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+      mockHasEngagementCapability.mockResolvedValue(false);
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: false });
+    });
+
+    it('is FALSE when nothing is booked', async () => {
+      seed({ access: { lens: 'expert' } });
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: false });
+    });
+
+    it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
+      seed({
+        access: { lens: 'expert' },
+        caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+      });
+      m.listMeetings.mockResolvedValue([scheduledMeeting()]);
+      mockHasEngagementCapability.mockClear();
+
+      const view = await loadOrThrow();
+
+      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * ⚠⚠ THE AC "CANCELLATION IS UNAVAILABLE ONCE THE MEETING HAS STARTED", ON THE RENDER HINT.
+   *
+   * Both statuses are still `caseConsultationIsUpcoming` — `waiting_for_participants` folds into
+   * the `'scheduled'` consultation state and `in_progress` is admitted deliberately (a live call
+   * is the most urgent thing the header can say) — so `nextScheduled !== null` alone would leave
+   * an enabled Cancel for the party who has NOT joined. `CANCELLABLE_MEETING_STATUSES` is the
+   * only source of truth for this, shared with the route guard and the repository CAS.
+   *
+   * ⚠ AND NO CANCEL CAPABILITY IS RESOLVED, on the same short-circuit invariant as a closed
+   * case: the status term sits ahead of the `await` in both arms. On the client arm that means
+   * ZERO membership reads (cancel is its only one); on the expert arm it means THREE engagement
+   * reads instead of four — the other three flags (`canRequestResolution`,
+   * `canProposeReschedule`, `canManageReschedule`) are unaffected by cancellability and still run.
+   */
+  describe('once the meeting has STARTED — the affordance collapses on BOTH arms', () => {
+    it.each(['waiting_for_participants', 'in_progress'] as const)(
+      'is FALSE for the CLIENT on a %s meeting, resolving no capability',
+      async (status) => {
+        seed({ access: { lens: 'client' } });
+        m.listMeetings.mockResolvedValue([meeting('m1', { status, outcome: null, endedAt: null })]);
+        mockHasCapability.mockClear();
+
+        const view = await loadOrThrow();
+
+        expect(view).toMatchObject({ canCancelConsultation: false });
+        expect(mockHasCapability).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['waiting_for_participants', 'in_progress'] as const)(
+      'is FALSE for the EXPERT on a %s meeting, without the fourth engagement read',
+      async (status) => {
+        seed({ access: { lens: 'expert' } });
+        m.listMeetings.mockResolvedValue([meeting('m1', { status, outcome: null, endedAt: null })]);
+        mockHasEngagementCapability.mockClear();
+
+        const view = await loadOrThrow();
+
+        expect(view).toMatchObject({ canCancelConsultation: false });
+        // 3, not 4 — the cancel term short-circuits ahead of its `await`; the other three
+        // engagement flags are unaffected by cancellability and still resolve.
+        expect(mockHasEngagementCapability).toHaveBeenCalledTimes(3);
+      }
+    );
+
+    /**
+     * ⚠ THE NUDGE ITSELF IS UNTOUCHED — this narrows the CANCEL hint only. A live call must keep
+     * rendering its `upcoming` nudge (with Join, once that lands); collapsing the whole nudge
+     * would show "Nothing booked yet" to two people who are mid-consultation.
+     */
+    it('still renders the upcoming nudge for the live meeting it refuses to cancel', async () => {
+      seed({ access: { lens: 'client' } });
+      m.listMeetings.mockResolvedValue([
+        meeting('m1', { status: 'in_progress', outcome: null, endedAt: null }),
+      ]);
+
+      const view = await loadOrThrow();
+
+      expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
+      expect(view.canCancelConsultation).toBe(false);
+    });
   });
 });

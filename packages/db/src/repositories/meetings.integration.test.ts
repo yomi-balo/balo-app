@@ -28,6 +28,13 @@ import {
   MeetingNotReschedulableError,
 } from './meetings';
 
+/**
+ * BAL-410 — `meetingsRepository.cancel` now takes an AUDIT TUPLE, because every cancel writes
+ * a `meeting.cancelled` row. A test harness has no acting human, so it passes the sanctioned
+ * ADR-1030 SYSTEM-ACTOR EXEMPTION: an unattributed row, never a fabricated actor.
+ */
+const SYSTEM_CANCEL_AUDIT = { actorUserId: null, actorRole: 'system' } as const;
+
 const HOUR_MS = 3_600_000;
 
 function schedule(offsetHours = 1): { scheduledStart: Date; scheduledEnd: Date } {
@@ -627,7 +634,7 @@ describe('meetingsRepository.listLifecycleCandidates', () => {
     const cancelledSeed = await meetingFactory({
       values: { scheduledStart: new Date(Date.now() - 20 * 60_000) },
     });
-    await meetingsRepository.cancel(cancelledSeed.meeting.id);
+    await meetingsRepository.cancel(cancelledSeed.meeting.id, SYSTEM_CANCEL_AUDIT);
     const deleted = await lifecycleMeeting('waiting_for_participants', -20);
     await meetingsRepository.softDelete(deleted);
     // ⚠ THE LOOKBACK FLOOR IS THE ONLY THING BOUNDING THE SCAN. A meeting three days stale is
@@ -741,7 +748,7 @@ describe('meetingsRepository.markWaitingForParticipants / markInProgress', () =>
 
   it('neither mutator touches a terminal, soft-deleted or unknown meeting', async () => {
     const cancelled = await meetingFactory();
-    await meetingsRepository.cancel(cancelled.meeting.id);
+    await meetingsRepository.cancel(cancelled.meeting.id, SYSTEM_CANCEL_AUDIT);
     const deleted = await lifecycleMeeting('scheduled');
     await meetingsRepository.softDelete(deleted);
     const unknown = randomUUID();
@@ -972,7 +979,7 @@ describe('meetingsRepository.endMeeting', () => {
 
   it('refuses a CANCELLED, a SOFT-DELETED and an unknown meeting, all as undefined', async () => {
     const cancelled = await meetingFactory();
-    await meetingsRepository.cancel(cancelled.meeting.id);
+    await meetingsRepository.cancel(cancelled.meeting.id, SYSTEM_CANCEL_AUDIT);
     const deleted = await lifecycleMeeting('in_progress');
     await meetingsRepository.softDelete(deleted);
 
@@ -1498,7 +1505,7 @@ describe('meetingsRepository.listActiveMeetingsForContexts (BAL-283)', () => {
       contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
     });
 
-    await meetingsRepository.cancel(created.meeting.id);
+    await meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT);
 
     const byContext = await meetingsRepository.listActiveMeetingsForContexts({
       contextType: 'request_interaction',
@@ -1558,5 +1565,206 @@ describe('meetingsRepository.listActiveMeetingsForContexts (BAL-283)', () => {
       contextIds: [],
     });
     expect(byContext.size).toBe(0);
+  });
+});
+
+/**
+ * BAL-410 — `meetingsRepository.cancel`, THE ONE THING THAT FREES A BOOKED SLOT.
+ *
+ * These are claims a mocked test cannot make: that the meeting flip, the `consultations`
+ * projection flip and the `meeting.cancelled` audit row genuinely land in ONE transaction; that
+ * the status allow-list genuinely refuses every non-`scheduled` state; and that a rolled-back
+ * cancel genuinely leaves NO audit row behind.
+ */
+describe('meetingsRepository.cancel (BAL-410)', () => {
+  async function bookedCase(): Promise<{
+    meetingId: string;
+    expertProfileId: string;
+    engagementId: string;
+    window: { scheduledStart: Date; scheduledEnd: Date };
+  }> {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const window = schedule();
+    const created = await meetingsRepository.create({
+      ...window,
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    return {
+      meetingId: created.meeting.id,
+      expertProfileId,
+      engagementId: engagement.id,
+      window,
+    };
+  }
+
+  it('flips the meeting AND its consultations projection to cancelled in ONE commit', async () => {
+    const actor = await userFactory();
+    const { meetingId, expertProfileId } = await bookedCase();
+
+    const result = await meetingsRepository.cancel(meetingId, {
+      actorUserId: actor.id,
+      actorRole: 'client',
+    });
+
+    expect(result.meeting.status).toBe('cancelled');
+    // The id comes from the LIVE PROJECTION ROW — it is what tells the caller whose
+    // availability cache to rebuild.
+    expect(result.expertProfileId).toBe(expertProfileId);
+
+    const [row] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+    expect(row?.status).toBe('cancelled');
+    const projection = await findProjectionForMeeting(meetingId);
+    expect(projection?.status).toBe('cancelled');
+  });
+
+  it('writes EXACTLY ONE meeting.cancelled audit row, naming the actor AND the arm', async () => {
+    const actor = await userFactory();
+    const { meetingId, expertProfileId, window } = await bookedCase();
+
+    const result = await meetingsRepository.cancel(meetingId, {
+      actorUserId: actor.id,
+      actorRole: 'expert',
+    });
+
+    const cancelled = (await auditEventsForEntity(meetingId)).filter(
+      // ⚠ `meeting.cancelled`, never `meeting.canceled`. A near-miss spelling is a row no
+      // "history of one meeting" read would ever find.
+      (row) => row.action === 'meeting.cancelled'
+    );
+    expect(cancelled).toHaveLength(1);
+
+    const [event] = cancelled;
+    expect(event?.entityType).toBe('meeting');
+    expect(event?.entityId).toBe(meetingId);
+    expect(event?.actorUserId).toBe(actor.id);
+    expect(event?.metadata).toEqual({
+      // WHICH AUTHORIZATION ARM matched — server-derived, never wire input.
+      actorRole: 'expert',
+      // ⚠ ISO STRINGS, NOT Dates — `metadata` is jsonb, so a Date round-trips as a string and
+      // typing the stored shape as Date would be a lie on the way out.
+      scheduledStart: window.scheduledStart.toISOString(),
+      scheduledEnd: window.scheduledEnd.toISOString(),
+      // Whose calendar this cancellation FREED.
+      expertProfileId,
+    });
+    // ⚠ THE RETURNED ID IS THAT ROW'S ID — the post-commit fan-out's per-WRITE dedup key.
+    expect(result.cancelAuditId).toBe(event?.id);
+  });
+
+  it('writes an UNATTRIBUTED row for the seeder path (null actor, actorRole "system")', async () => {
+    // ADR-1030 SYSTEM-ACTOR ATTRIBUTION EXEMPTION: an unattributed row, never a fabricated
+    // actor. `actorRole: 'system'` is what makes a null `actor_user_id` a COMPLETE record here.
+    const { meetingId } = await bookedCase();
+
+    await meetingsRepository.cancel(meetingId, SYSTEM_CANCEL_AUDIT);
+
+    const cancelled = (await auditEventsForEntity(meetingId)).filter(
+      (row) => row.action === 'meeting.cancelled'
+    );
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.actorUserId).toBeNull();
+    expect(cancelled[0]?.metadata).toMatchObject({ actorRole: 'system' });
+  });
+
+  /**
+   * ⚠⚠ THE AC: "cancellation is unavailable once the meeting has started." It is delivered by
+   * STATE, with no clock anywhere — the first presence interval flips a meeting out of
+   * `scheduled`, and that flip is monotone (the back-edge is declared legal but deliberately
+   * unimplemented). This table is what pins the allow-list.
+   */
+  it.each(['waiting_for_participants', 'in_progress', 'ended', 'cancelled'] as const)(
+    'REFUSES a %s meeting and writes nothing',
+    async (status) => {
+      const { meeting } = await meetingFactory({ values: { status } });
+
+      await expect(meetingsRepository.cancel(meeting.id, SYSTEM_CANCEL_AUDIT)).rejects.toThrow(
+        /not cancellable/
+      );
+
+      const cancelled = (await auditEventsForEntity(meeting.id)).filter(
+        (row) => row.action === 'meeting.cancelled'
+      );
+      expect(cancelled).toHaveLength(0);
+    }
+  );
+
+  it('REFUSES a soft-deleted meeting, and a meeting that does not exist', async () => {
+    const { meeting } = await meetingFactory();
+    await meetingsRepository.softDelete(meeting.id);
+
+    await expect(meetingsRepository.cancel(meeting.id, SYSTEM_CANCEL_AUDIT)).rejects.toThrow(
+      /not cancellable/
+    );
+    await expect(meetingsRepository.cancel(randomUUID(), SYSTEM_CANCEL_AUDIT)).rejects.toThrow(
+      /not cancellable/
+    );
+  });
+
+  /**
+   * ⚠ IDEMPOTENCY, THE WAY IT ACTUALLY WORKS. The CAS matches `status='scheduled'`, so a second
+   * cancel matches ZERO rows and throws — which is precisely what stops the caller's
+   * post-commit unwind (an availability rebuild, a hold release, a notification) re-firing for
+   * a slot that was already freed. And because the audit row rides the same transaction, there
+   * is never a second one.
+   */
+  it('is idempotent by REFUSAL: a second cancel throws and adds NO second audit row', async () => {
+    const actor = await userFactory();
+    const { meetingId } = await bookedCase();
+
+    const first = await meetingsRepository.cancel(meetingId, {
+      actorUserId: actor.id,
+      actorRole: 'client',
+    });
+    await expect(
+      meetingsRepository.cancel(meetingId, { actorUserId: actor.id, actorRole: 'client' })
+    ).rejects.toThrow(/not cancellable/);
+
+    const cancelled = (await auditEventsForEntity(meetingId)).filter(
+      (row) => row.action === 'meeting.cancelled'
+    );
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]?.id).toBe(first.cancelAuditId);
+  });
+
+  /**
+   * ⚠⚠ THE "AUDIT ROW LAST" RULE, PROVEN RATHER THAN ASSERTED. An audit row left behind by a
+   * rolled-back cancel would attest to a cancellation that never happened. Forced by passing an
+   * actor id that is NOT a live `users` row: the audit insert's `actor_user_id` FK rejects it,
+   * AFTER the meeting flip and the projection flip have already run on the same `tx`.
+   */
+  it('a FAILED audit insert rolls the WHOLE cancel back — no flip, no projection, no row', async () => {
+    const { meetingId } = await bookedCase();
+
+    await expect(
+      meetingsRepository.cancel(meetingId, { actorUserId: randomUUID(), actorRole: 'client' })
+    ).rejects.toThrow();
+
+    const [row] = await db.select().from(meetings).where(eq(meetings.id, meetingId));
+    expect(row?.status).toBe('scheduled');
+    const projection = await findProjectionForMeeting(meetingId);
+    expect(projection?.status).toBe('confirmed');
+    // ⚠ FILTER TO THE CANCEL ACTION. `bookedCase()` goes through `meetingsRepository.create`,
+    // which ALWAYS writes a `meeting.booked` row on this same entity — so an unfiltered
+    // `toHaveLength(0)` can never hold, and would be red for a reason that has nothing to do
+    // with the rollback. The property under test is that NO `meeting.cancelled` row survives.
+    const cancelled = (await auditEventsForEntity(meetingId)).filter(
+      (row) => row.action === 'meeting.cancelled'
+    );
+    expect(cancelled).toHaveLength(0);
+  });
+
+  it('returns a NULL expertProfileId for an admin meeting — it frees nobody’s calendar', async () => {
+    const created = await meetingsRepository.create({
+      ...schedule(),
+      contexts: [{ contextType: 'admin', contextId: null }],
+    });
+
+    const result = await meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT);
+
+    expect(result.expertProfileId).toBeNull();
+    const cancelled = (await auditEventsForEntity(created.meeting.id)).filter(
+      (row) => row.action === 'meeting.cancelled'
+    );
+    expect(cancelled[0]?.metadata).toMatchObject({ expertProfileId: null });
   });
 });

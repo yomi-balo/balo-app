@@ -51,6 +51,7 @@ import type {
   ExpertSearchabilityLostPayload,
   ExpertSearchabilityRestoredPayload,
   BookingConfirmedPayload,
+  BookingCancelledPayload,
   BookingRescheduledPayload,
   RescheduleProposalSentPayload,
   RescheduleProposalDeclinedPayload,
@@ -440,6 +441,12 @@ export type NotificationEvent =
   // `booking.confirmed`. Publishable from apps/web — deliberately NOT in
   // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
   | 'booking.rescheduled'
+  // BAL-410 — a booked consultation was CANCELLED, by the client, the delivering expert, or a
+  // platform admin. SERVER-ONLY (see below), unlike its two `booking.*` siblings: the ADMIN
+  // override arm is an explicit AC and has no web surface at all, so a web publisher would
+  // notify NOBODY on an admin cancel. Published from `apps/api`'s cancel ROUTE (never from
+  // `cancelMeeting`, which the dev seeder calls).
+  | 'booking.cancelled'
   // BAL-409 — the guest-facing half of the same move. SERVER-ONLY (see below): it carries no
   // secret, but it is published exclusively from `apps/api`'s post-commit block, which
   // already holds the meeting and its live guests.
@@ -549,6 +556,12 @@ export type ServerOnlyNotificationEvent =
   // ⚠ `booking.rescheduled` is deliberately NOT listed here: its publisher is a web Server
   // Action and needs its arm — same asymmetry as `booking.confirmed`.
   | 'meeting.guest_rescheduled'
+  // BAL-410: published by `apps/api`'s cancel ROUTE. ⚠ THE ASYMMETRY WITH `booking.confirmed` /
+  // `booking.rescheduled` IS DELIBERATE AND IS THE REASON THE EVENT EXISTS IN THIS SHAPE: the
+  // ADMIN override arm has no web surface, so a web publisher would notify nobody on an admin
+  // cancel. Being here means it must have NO `publishBodySchema` arm — adding one would be a
+  // `StraySchemaArm` and fail `tsc` with the name printed.
+  | 'booking.cancelled'
   // BAL-411: published EXCLUSIVELY by the BAL-420 dispatch tick — `scheduleNotification` is an
   // in-process `apps/api` function and ADR-1047 Decision 11 keeps the schedule/cancel seam off
   // HTTP entirely. So it has no `publishBodySchema` arm; adding one would be a `StraySchemaArm`
@@ -696,6 +709,7 @@ export interface EventPayloadMap {
   'expert.searchability_restored': ExpertSearchabilityRestoredPayload;
   'booking.confirmed': BookingConfirmedPayload;
   'booking.rescheduled': BookingRescheduledPayload;
+  'booking.cancelled': BookingCancelledPayload;
   'meeting.guest_rescheduled': MeetingGuestRescheduledPayload;
   'reschedule_proposal.sent': RescheduleProposalSentPayload;
   'reschedule_proposal.declined': RescheduleProposalDeclinedPayload;

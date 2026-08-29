@@ -77,6 +77,52 @@ export type RescheduleConsultationResult =
     }
   | { success: false; code: RescheduleFailureCode; error: string };
 
+// ── BAL-410 — cancel a booked consultation ──────────────────────────────────────────────
+
+/**
+ * BAL-410 — `cancelConsultationAction`'s failure vocabulary, mapped from the api's fixed
+ * literals + the transport layer's own `unauthenticated`/`request_failed`. Never a raw
+ * `err.message` — same rule as its reschedule sibling.
+ *
+ * ⚠ DELIBERATELY NOT `RescheduleFailureCode | …`. Cancel cannot produce `slot_unavailable` (it
+ * consumes no slot and makes no availability read), and reusing the union would put a
+ * permanently-unreachable arm in the dialog's failure map that SonarCloud counts as uncovered.
+ */
+export type CancelFailureCode =
+  | 'unauthenticated'
+  | 'invalid_request'
+  | 'not_permitted'
+  | 'meeting_not_found'
+  | 'meeting_not_cancellable'
+  | 'rate_limited'
+  | 'unknown';
+
+export interface CancelConsultationInput {
+  engagementId: string;
+  meetingId: string;
+}
+
+export type CancelConsultationResult =
+  | {
+      success: true;
+      /** ISO — the SERVER's released window, never anything the client submitted. */
+      scheduledStart: string;
+      /**
+       * WHICH AXIS authorized it, straight from the api. ⚠ The dialog reports THIS as
+       * `initiated_by`; it must never re-derive the value from the lens.
+       */
+      initiatedBy: 'client' | 'expert' | 'admin';
+      /**
+       * Whether a credit hold was released. `false` is the common case (nobody joined early).
+       *
+       * ⚠ `null` MEANS "NOT DISCLOSED", NEVER "no hold was released" — the api returns this on
+       * the CLIENT arm only (security LOW-1: the hold is the client's money, and the expert-side
+       * surfaces deliberately withhold its state). Nothing renders it; it is logged only.
+       */
+      holdReleased: boolean | null;
+    }
+  | { success: false; code: CancelFailureCode; error: string };
+
 /**
  * BAL-411 — the reschedule-PROPOSAL failure vocabulary. Extends `RescheduleFailureCode` (the
  * shipped BAL-409 union) with the four literals the proposal API adds — never a raw

@@ -469,7 +469,9 @@ describe('BAL-283 — the request_interaction arm (the loadSubject trap)', () =>
    * client-company member could POST `relationshipId`/`requestId` read out of the DOM and book
    * FREE calls against the DELIVERING expert, exactly the hours that must route through the
    * BILLED case/kickoff path. It applies equally to a LOSING expert on a decided request.
-   * Irreversible on this branch: `cancelMeeting` has zero production callers.
+   * ⚠ NO LONGER IRREVERSIBLE (BAL-410 shipped `POST /meetings/:meetingId/cancel`), which
+   * REDUCES but does not remove the exploit: the free call still gets BOOKED, and freeing the
+   * slot afterwards is a manual discovery by the expert. The gate below is what stops it.
    */
   it.each(['accepted', 'kickoff_approved'])(
     'DECIDED — a request at %s denies booking, and membership is never consulted',

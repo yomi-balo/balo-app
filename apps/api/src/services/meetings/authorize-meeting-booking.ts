@@ -108,17 +108,17 @@
  * Remove either and this arm becomes a calendar-DoS primitive again.
  *
  * ⚠ WHY "BOUNDED" AND NOT "CLOSED", STATED PLAINLY SO NOBODY CLOSES THE TICKET ON IT. Within
- * the rate limits, every slot the expert published is still consumable, and on this branch a
- * consumed slot STAYS consumed:
- *   · BOOKINGS ARE IRREVERSIBLE. `cancelMeeting` / `softDeleteMeeting` exist in
- *     `services/meetings/meeting-availability.ts` with ZERO production callers (tests only), so
- *     no shipped surface frees a slot again. Cancel is BAL-410's.
- *   · BOOKINGS ARE SILENT. Nothing publishes `booking.confirmed` — the rule and templates in
- *     `notifications/engine/rules.ts` are a documented orphan, and wiring them is BAL-400's —
- *     so the expert is not told their calendar is filling up.
- * A determined actor inside the limits can still take a marketplace expert's published slots
- * and neither the expert nor the platform undoes it. That residual is BAL-400's and BAL-410's,
- * and it is the reason the two rate limits fail CLOSED rather than open.
+ * the rate limits, every slot the expert published is still consumable:
+ *   · BOOKINGS ARE NO LONGER IRREVERSIBLE — ⚠ CORRECTED BY BAL-410, which shipped
+ *     `POST /meetings/:meetingId/cancel` (`routes/meetings/cancel.ts`). `cancelMeeting` HAS
+ *     production callers now, and the delivering EXPERT can cancel on the engagement axis, so
+ *     an expert whose calendar is being walked can free the slots themselves. The un-freed
+ *     residual is `softDeleteMeeting`, which still has no route.
+ *   · BOOKINGS ARE STILL SILENT. Nothing publishes `booking.confirmed` — the rule and templates
+ *     in `notifications/engine/rules.ts` are a documented orphan, and wiring them is BAL-400's —
+ *     so the expert is not TOLD their calendar is filling up, which is what makes the undo a
+ *     manual discovery rather than a prompt. That remaining residual is BAL-400's, and it is
+ *     the reason the two rate limits fail CLOSED rather than open.
  *
  * ── THE AXIS ────────────────────────────────────────────────────────────────
  *
@@ -361,8 +361,11 @@ async function loadSubject(
        * exactly the leak. It applies equally to a LOSING expert on a decided request, whose
        * thread also stays open.
        *
-       * ⚠ AND IT IS IRREVERSIBLE ON THIS BRANCH. `cancelMeeting` has ZERO production callers
-       * (cancel is BAL-410's), so every slot consumed this way stays consumed.
+       * ⚠ AND IT IS NO LONGER IRREVERSIBLE — corrected by BAL-410, which shipped the cancel
+       * route. A `request_interaction` booking IS reachable by that route's expert arm
+       * (`authorize-engagement-host.ts` implements all seven context labels, including both
+       * request-grain arms), so a slot consumed this way can be freed. The gate below still
+       * matters: it stops the slot being taken in the first place.
        *
        * ⚠ THE THRESHOLD IS `accepted`, MATCHING THE WEB'S OWN `beforeKickoff` DERIVATION —
        * `deriveThreadActions` stops offering the CTA at `accepted`, and this is the server-side

@@ -66,13 +66,14 @@
  * OVERLAPPING ones. Both matter most for `project_kickoff` / `project_discovery`, which carry
  * NO credit hold, so nothing charges for the slot either. Hence:
  *
- * ⚠ AND THE THREE TOGETHER **BOUND** THE ABUSE — THEY DO NOT CLOSE IT. Say it that way, because
- * on this branch a consumed slot stays consumed: `cancelMeeting` / `softDeleteMeeting` have
- * ZERO production callers (tests only), so no shipped surface frees a slot again (BAL-410's),
- * and NOTHING publishes `booking.confirmed` — the rule and templates in
- * `notifications/engine/rules.ts` are a documented orphan (BAL-400's) — so the expert is never
- * told their calendar is filling up. Inside the limits, bookings here are IRREVERSIBLE and
- * SILENT. That is the residual these three controls hold to a slow walk rather than eliminate.
+ * ⚠ AND THE THREE TOGETHER **BOUND** THE ABUSE — THEY DO NOT CLOSE IT. The residual has NARROWED
+ * since this paragraph was written, and the correction matters: a consumed slot is no longer
+ * consumed forever. BAL-410 shipped `POST /meetings/:meetingId/cancel` (`cancel.ts`), so
+ * `cancelMeeting` HAS production callers and a booked slot can be freed by the client, the
+ * delivering expert or a platform admin. `softDeleteMeeting` still has no route. What remains
+ * true is that a booking is SILENT to the expert until BAL-400's `booking.confirmed` publisher
+ * lands, so a walk of an expert's calendar still is not announced — these three controls hold
+ * that to a slow walk rather than eliminate it.
  *
  *   1. AVAILABILITY VALIDATION (`isWindowAvailableForExpert`) — the load-bearing one. The
  *      window must lie wholly inside availability the expert PUBLISHED and be free of every
@@ -118,8 +119,10 @@
  *   · A `DailyConfigError` / `DailyApiError` IS NOT AN ERROR RESPONSE AT ALL. The booking has
  *     already committed, so it returns `201` with `provisioned: false` (see
  *     `provision-meeting.ts`). `MeetingNotCancellableError` / `MeetingNotReschedulableError`
- *     cannot arise from a booking; `MeetingNotReschedulableError` is now mapped in
- *     `reschedule.ts` (BAL-409) — `MeetingNotCancellableError` remains BAL-410's.
+ *     cannot arise from a booking; each is mapped at its OWN route —
+ *     `MeetingNotReschedulableError` in `reschedule.ts` (BAL-409),
+ *     `MeetingNotCancellableError` in `cancel.ts` (BAL-410), both to a 409 with no message
+ *     echo.
  */
 import {
   MatchModeDiscoveryNotBookableError,
@@ -146,6 +149,7 @@ import { meetingJoinRoutes } from './join.js';
 import { meetingEndRoutes } from './end.js';
 import { meetingStateRoutes } from './state.js';
 import { meetingRescheduleRoutes } from './reschedule.js';
+import { meetingCancelRoutes } from './cancel.js';
 import { meetingRescheduleProposalRoutes } from './reschedule-proposals.js';
 import { meetingRescheduleProposalAnswerRoutes } from './reschedule-proposal-answers.js';
 import {
@@ -363,6 +367,11 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
   // BAL-409 — client-initiated reschedule. A sibling registration, same reasoning as the
   // routes above: one prefix, one `requireAuth` idiom.
   await meetingRescheduleRoutes(fastify);
+
+  // BAL-410 — cancel a booked consultation (client / expert / admin, three axes). A sibling
+  // registration for the same reason as every route above; it is the FIRST shipped surface that
+  // frees a booked slot again.
+  await meetingCancelRoutes(fastify);
 
   // BAL-411 — expert-initiated reschedule PROPOSALS. Two sibling registrations split by axis
   // (engagement vs membership) so the two API gate modules can never be folded into one.

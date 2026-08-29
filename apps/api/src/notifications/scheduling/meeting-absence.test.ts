@@ -429,3 +429,72 @@ describe('the two schedulers (§6.1)', () => {
     }
   });
 });
+
+/**
+ * ⚠⚠ BAL-410 (orchestrator D3) — CANCELLING A MEETING CANCELS NOTHING IN THE QUEUE, AND IT DOES
+ * NOT HAVE TO. THIS IS THE WHOLE DELIVERABLE FOR FAN-OUT STEP 6.
+ *
+ * The ticket lists "cancel queued BullMQ reminder jobs" as a cancellation step. D3 re-scoped it
+ * to a TEST rather than a call, for three independent reasons, and this block is that test:
+ *
+ *   1. ADR-1047 Decision 11 is explicit that the scheduled-notification cancel seam "never gets
+ *      an HTTP route, ever" — pinned by `scheduled-notifications-api-only.test.ts`. BAL-410's
+ *      cancel is an HTTP route, so it structurally cannot reach one.
+ *   2. Nothing is ARMED on a merely-booked meeting. Both absence promises are armed by the
+ *      lifecycle sweep once the meeting is live, so a meeting cancelled while `scheduled` has no
+ *      pending row to void in the first place.
+ *   3. For the case that CAN arise — armed while live, then cancelled — the fire-time recheck
+ *      already self-skips on a terminal meeting. That is what these two cases pin: NOT that a
+ *      cancel call happened, but that no promise fires for a cancelled meeting.
+ *
+ * `reschedule-proposal.test.ts` pins the equivalent for the proposal reminder; this is the same
+ * property for the two absence promises. ⚠ Deliberately NO assertion that any queue removal or
+ * `notificationEvents.cancel` was invoked — adding one would be asserting a call this design
+ * says must never exist.
+ */
+describe('BAL-410 D3 — an armed promise self-skips once its meeting is CANCELLED', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListByMeeting.mockResolvedValue([]);
+    mockListAdminUserIds.mockResolvedValue(['user-a']);
+  });
+
+  it('the EXPERT-absent alert, armed on a LIVE meeting, skips once it is cancelled at fire time', async () => {
+    // Arm-time reality: the meeting was live and the expert had not joined, so the promise was
+    // legitimately armed and is sitting in `scheduled_notifications`.
+    mockMeetingFindById.mockResolvedValue(meeting('waiting_for_participants'));
+    const armed = await meetingExpertAbsentRecheck(row({ minutesPastStart: 5 }));
+    expect(armed.publish).toBe(true);
+
+    // Fire-time reality: BAL-410 cancelled it in between. The recheck re-reads the meeting and
+    // refuses — no ops page for a call nobody was waiting for.
+    vi.clearAllMocks();
+    mockMeetingFindById.mockResolvedValue(meeting('cancelled'));
+
+    await expect(meetingExpertAbsentRecheck(row({ minutesPastStart: 5 }))).resolves.toEqual({
+      publish: false,
+      reason: 'meeting_terminal',
+    });
+    // …and no analytics event either: a cancelled meeting is not an absence.
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('the CLIENT-absent nudge, armed on a LIVE meeting, skips once it is cancelled at fire time', async () => {
+    mockMeetingFindById.mockResolvedValue(meeting('waiting_for_participants'));
+    mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+    const armed = await meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }));
+    expect(armed.publish).toBe(true);
+
+    vi.clearAllMocks();
+    mockMeetingFindById.mockResolvedValue(meeting('cancelled'));
+    mockListByMeeting.mockResolvedValue([{ party: 'expert', joinedAt: START, leftAt: null }]);
+
+    await expect(meetingClientAbsentRecheck(row({ companyId: COMPANY_ID }))).resolves.toEqual({
+      publish: false,
+      reason: 'meeting_terminal',
+    });
+    // ⚠ AND THE MEMBERSHIP READ NEVER RUNS — the terminal check short-circuits before it, so a
+    // cancelled meeting costs no recipient resolution at all.
+    expect(mockListAdminUserIds).not.toHaveBeenCalled();
+  });
+});

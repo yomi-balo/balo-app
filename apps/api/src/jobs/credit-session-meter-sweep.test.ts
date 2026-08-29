@@ -8,12 +8,14 @@ const {
   mockFindStuckSettling,
   mockFindFinalizedMissingPayout,
   mockFindPresenceUnsettled,
+  mockFindPendingForCancelledMeetings,
   mockCancel,
   mockDriveSession,
   mockEndSession,
   mockReconcile,
   mockFinalizeBilling,
   mockSettleSessionFromPresence,
+  mockLoggerWarn,
 } = vi.hoisted(() => ({
   mockFindMeterable: vi.fn(),
   mockFindWrappedIdle: vi.fn(),
@@ -21,16 +23,20 @@ const {
   mockFindStuckSettling: vi.fn(),
   mockFindFinalizedMissingPayout: vi.fn(),
   mockFindPresenceUnsettled: vi.fn(),
+  mockFindPendingForCancelledMeetings: vi.fn(),
   mockCancel: vi.fn(),
   mockDriveSession: vi.fn(),
   mockEndSession: vi.fn(),
   mockReconcile: vi.fn(),
   mockFinalizeBilling: vi.fn(),
   mockSettleSessionFromPresence: vi.fn(),
+  // ⚠ HOISTED so the no-silent-caps warns are ASSERTABLE. The module calls `createLogger`
+  // once at import, so a factory that mints a fresh `vi.fn()` per call is unreachable here.
+  mockLoggerWarn: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockLoggerWarn, error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: {
@@ -40,6 +46,7 @@ vi.mock('@balo/db', () => ({
     findStuckSettling: mockFindStuckSettling,
     findFinalizedMissingPayout: mockFindFinalizedMissingPayout,
     findPresenceUnsettled: mockFindPresenceUnsettled,
+    findPendingForCancelledMeetings: mockFindPendingForCancelledMeetings,
     cancel: mockCancel,
   },
 }));
@@ -76,6 +83,7 @@ describe('runSessionMeterSweep', () => {
     mockFindStuckSettling.mockResolvedValue([]);
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockFindPresenceUnsettled.mockResolvedValue([]);
+    mockFindPendingForCancelledMeetings.mockResolvedValue([]);
     mockDriveSession.mockImplementation(async (id: string) => ({
       session: activeSession({ id }),
       transitions: {},
@@ -250,6 +258,114 @@ describe('runSessionMeterSweep', () => {
       const result = await runSessionMeterSweep(NOW);
       expect(mockSettleSessionFromPresence).not.toHaveBeenCalled();
       expect(result.presenceSettled).toBe(0);
+    });
+  });
+
+  /**
+   * BAL-410 — pass 3b, the CANCELLED-MEETING HOLD BACKSTOP.
+   *
+   * ⚠ THE IN-REQUEST RELEASE IS THE ONLY OTHER ACTOR, AND IT HAS NO SECOND CHANCE. Cancelling
+   * removes the meeting from every reaper, so one transient failure in the cancel route strands
+   * the hold PERMANENTLY and locks the company out of every future Case session.
+   */
+  describe('cancelled-meeting hold backstop (pass 3b)', () => {
+    function pendingSession(id: string) {
+      return { id, status: 'pending', durationSource: 'presence', meetingId: 'meeting_1' };
+    }
+
+    it('cancels every session the finder returns, and counts them', async () => {
+      mockFindPendingForCancelledMeetings.mockResolvedValue([
+        pendingSession('s1'),
+        pendingSession('s2'),
+      ]);
+
+      const result = await runSessionMeterSweep(NOW);
+
+      expect(mockCancel).toHaveBeenCalledTimes(2);
+      expect(result.cancelledMeetingHolds).toBe(2);
+    });
+
+    it('⚠ passes `memberId: null` — the ADR-1030 system-actor exemption, never a fabricated actor', async () => {
+      mockFindPendingForCancelledMeetings.mockResolvedValue([pendingSession('s1')]);
+
+      await runSessionMeterSweep(NOW);
+
+      expect(mockCancel).toHaveBeenCalledWith('s1', { memberId: null });
+    });
+
+    it('isolates a per-row failure — one bad row never stops the batch', async () => {
+      mockFindPendingForCancelledMeetings.mockResolvedValue([
+        pendingSession('s1'),
+        pendingSession('s2'),
+      ]);
+      mockCancel.mockRejectedValueOnce(new Error('deadlock detected'));
+
+      const result = await runSessionMeterSweep(NOW);
+
+      expect(mockCancel).toHaveBeenCalledTimes(2);
+      expect(result.cancelledMeetingHolds).toBe(1);
+    });
+
+    it('is a NO-OP when nothing is stranded — the expected steady state', async () => {
+      mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+
+      const result = await runSessionMeterSweep(NOW);
+
+      expect(mockCancel).not.toHaveBeenCalled();
+      expect(result.cancelledMeetingHolds).toBe(0);
+    });
+
+    /**
+     * ⚠ IT IS A SEPARATE PASS, NOT A WIDENING OF `findStalePending`. That finder EXCLUDES
+     * `duration_source='presence'` to protect the no-show settlement of an ENDED meeting; this
+     * one is scoped by the MEETING's status instead, so the two select disjoint rows and
+     * neither can reach the other's.
+     */
+    it('runs its OWN finder, never the stale-pending one', async () => {
+      mockFindPendingForCancelledMeetings.mockResolvedValue([pendingSession('s1')]);
+
+      await runSessionMeterSweep(NOW);
+
+      expect(mockFindPendingForCancelledMeetings).toHaveBeenCalledTimes(1);
+      // …and the stale-pending finder still ran independently, on its own cutoff.
+      expect(mockFindStalePending).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * ⚠⚠ NO SILENT CAPS — the same rule the presence pass states out loud. Calling the finder
+     * BARE would take the repository's default limit and cap the tick invisibly, so a batch
+     * that filled would read as "swept everything". A burst of cancellations during a DB blip
+     * is exactly what this backstop is for, and exactly what queues more than one batch.
+     */
+    it('⚠ bounds the batch EXPLICITLY — never a bare call on the repository default', async () => {
+      mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+
+      await runSessionMeterSweep(NOW);
+
+      expect(mockFindPendingForCancelledMeetings).toHaveBeenCalledWith(100);
+    });
+
+    it('⚠ WARNS when the batch FILLS — stranded holds were dropped from this tick', async () => {
+      const full = Array.from({ length: 100 }, (_unused, index) => pendingSession(`s${index}`));
+      mockFindPendingForCancelledMeetings.mockResolvedValue(full);
+
+      await runSessionMeterSweep(NOW);
+
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 100, oldestSessionId: 's0' }),
+        expect.stringContaining('FILLED')
+      );
+    });
+
+    it('does NOT warn about a full batch when the batch is short', async () => {
+      mockFindPendingForCancelledMeetings.mockResolvedValue([pendingSession('s1')]);
+
+      await runSessionMeterSweep(NOW);
+
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('FILLED')
+      );
     });
   });
 });

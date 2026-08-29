@@ -3023,3 +3023,261 @@ describe('creditSessionsRepository — legacy rows are unchanged by BAL-412', ()
     }
   });
 });
+
+/**
+ * ⚠⚠ BAL-410 — THE CREDIT UNWIND OF A CANCELLED MEETING. THE HIGHEST-VALUE COVERAGE IN THAT
+ * TICKET, AND THE ONLY PROOF ITS MOST IMPORTANT HALF RAN — nothing on screen changes whether or
+ * not the hold is released.
+ *
+ * Two claims live here:
+ *   1. the AC "no ledger entry other than the hold release", asserted as the LEDGER MODEL
+ *      ACTUALLY WORKS (see the comment on the first test — do not "fix" it), and
+ *   2. `findPendingForCancelledMeetings`, the DURABILITY BACKSTOP. The in-request release in
+ *      `apps/api`'s cancel route has no second chance: cancelling removes the meeting from
+ *      every reaper, so one transient failure would strand the hold permanently and lock the
+ *      company out of every future Case session.
+ */
+describe('creditSessionsRepository — cancelling a booked meeting’s session (BAL-410)', () => {
+  /** A `scheduled` meeting — the state a cancellable booking is in. */
+  async function scheduledMeeting(): Promise<string> {
+    const { meeting } = await meetingFactory({ values: { status: 'scheduled' } });
+    return meeting.id;
+  }
+
+  async function cancelMeetingRow(meetingId: string): Promise<void> {
+    await db.update(meetings).set({ status: 'cancelled' }).where(eq(meetings.id, meetingId));
+  }
+
+  async function ledgerRowCount(walletId: string): Promise<number> {
+    const rows = await db.select().from(creditLedger).where(eq(creditLedger.walletId, walletId));
+    return rows.length;
+  }
+
+  /**
+   * ⚠⚠ THE AC, ASSERTED AS THE LEDGER MODEL ACTUALLY WORKS. The ticket says "assert no ledger
+   * entry OTHER THAN the hold release" — but a hold release writes NO `credit_ledger` row at
+   * all: `creditHoldsRepository` imports only `credit_holds` / `credit_wallets` and never calls
+   * `applyLedgerEntry`. A hold RESERVES against the available balance; it moves no money. So
+   * the correct, testable form of the AC is: the ledger row count is UNCHANGED across the
+   * cancel, AND the hold transitions `active → released`. ⚠ DO NOT "CORRECT" THIS TO EXPECT ONE
+   * RELEASE ROW — there is none, and the test would fail.
+   */
+  it('⚠ AC — releases the hold in full and writes NO credit_ledger row', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await scheduledMeeting();
+    const sessionId = await openPresence(ctx, meetingId, 30);
+
+    const heldMinor = 30 * CLIENT_RATE_PER_MIN;
+    const balanceBefore = await creditWalletsRepository.findById(ctx.walletId);
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(heldMinor);
+    // The available balance is REDUCED while the hold stands — that is the thing a stranded
+    // hold would reduce forever.
+    expect(await creditHoldsRepository.getAvailableBalance(ctx.walletId)).toBe(
+      (balanceBefore?.balanceMinor ?? 0) - heldMinor
+    );
+    const ledgerBefore = await ledgerRowCount(ctx.walletId);
+
+    await cancelMeetingRow(meetingId);
+    const cancelled = await creditSessionsRepository.cancel(sessionId, {
+      memberId: ctx.memberId,
+    });
+
+    expect(cancelled.status).toBe('cancelled');
+    // 1. NOT ONE new ledger row.
+    expect(await ledgerRowCount(ctx.walletId)).toBe(ledgerBefore);
+    // 2. The hold moved `active → released`, stamped with the resolving actor.
+    const [hold] = await db
+      .select()
+      .from(creditHolds)
+      .where(eq(creditHolds.id, cancelled.holdId ?? ''));
+    expect(hold?.status).toBe('released');
+    expect(hold?.resolvedAt).not.toBeNull();
+    expect(hold?.memberId).toBe(ctx.memberId);
+    // 3. The available balance is back to the pre-hold figure.
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
+    expect(await creditHoldsRepository.getAvailableBalance(ctx.walletId)).toBe(
+      balanceBefore?.balanceMinor ?? 0
+    );
+  });
+
+  /**
+   * ⚠ RETRY IDEMPOTENCY, FOR FREE. `findIdByMeetingId` filters `status <> 'cancelled'`, so the
+   * in-request release finds nothing on a second pass — one of the two independent mechanisms
+   * that make the whole unwind safe to retry (the other is `cancel`'s own early return).
+   */
+  it('findIdByMeetingId stops seeing the session once it is cancelled', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await scheduledMeeting();
+    const sessionId = await openPresence(ctx, meetingId, 30);
+
+    expect(await creditSessionsRepository.findIdByMeetingId(meetingId)).toEqual({ id: sessionId });
+
+    await creditSessionsRepository.cancel(sessionId, { memberId: ctx.memberId });
+
+    expect(await creditSessionsRepository.findIdByMeetingId(meetingId)).toBeUndefined();
+  });
+
+  /**
+   * ⚠ THE BAL-412 BOUNDARY. A metering session means the call is UNDERWAY, which is the
+   * no-show / settlement path, NOT cancellation. `cancel` refuses it — and releases nothing, so
+   * a caller that swallowed the throw would not silently free money mid-call.
+   */
+  it('REFUSES an already-connected session and releases NOTHING', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await liveMeeting();
+    const sessionId = await openPresence(ctx, meetingId, 30);
+    await creditSessionsRepository.connect(sessionId, { now: BASE });
+    const heldBefore = await creditHoldsRepository.sumActiveByWallet(ctx.walletId);
+
+    await expect(
+      creditSessionsRepository.cancel(sessionId, { memberId: ctx.memberId })
+    ).rejects.toBeInstanceOf(InvalidSessionTransitionError);
+
+    expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(heldBefore);
+  });
+});
+
+describe('creditSessionsRepository.findPendingForCancelledMeetings (BAL-410 backstop)', () => {
+  async function meetingWithStatus(status: 'scheduled' | 'cancelled' | 'ended'): Promise<string> {
+    const { meeting } = await meetingFactory({
+      values:
+        status === 'ended' ? { status, endedBy: 'expert_host', endedAt: meterAt(20) } : { status },
+    });
+    return meeting.id;
+  }
+
+  async function cancelMeetingRow(meetingId: string): Promise<void> {
+    await db.update(meetings).set({ status: 'cancelled' }).where(eq(meetings.id, meetingId));
+  }
+
+  it('finds a PENDING session whose meeting is cancelled', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await meetingWithStatus('scheduled');
+    const id = await openPresence(ctx, meetingId, 30);
+    await cancelMeetingRow(meetingId);
+
+    const ids = (await creditSessionsRepository.findPendingForCancelledMeetings()).map((r) => r.id);
+
+    expect(ids).toContain(id);
+  });
+
+  /**
+   * ⚠⚠ NO `duration_source` FILTER, AND THAT IS THE POINT — it is what distinguishes this
+   * finder from `findStalePending`, which EXCLUDES `presence` to protect the no-show settlement
+   * of an ENDED meeting. On a CANCELLED meeting there is nothing to settle for ANY provenance
+   * (`findPresenceUnsettled` requires `status='ended'`), so every one is releasable.
+   */
+  it('⚠ finds a session of EITHER provenance — live_capture as well as presence', async () => {
+    /**
+     * ⚠ TWO WALLETS, DELIBERATELY — NOT a tidiness choice. `open()`'s
+     * one-live-session-per-wallet gate refuses a second session while the first is still
+     * `pending`, and cancelling the MEETING row does not cancel the SESSION — that stranding is
+     * the whole premise of this backstop. Seeding both provenances on ONE wallet would assert
+     * the gate, not the finder. The finder is not wallet-scoped, so two wallets still prove the
+     * "no `duration_source` filter" claim in a single call.
+     */
+    const presenceCtx = await setup({ balanceMinor: 200_000 });
+    const presenceMeetingId = await meetingWithStatus('scheduled');
+    const presenceId = await openPresence(presenceCtx, presenceMeetingId, 15);
+    await cancelMeetingRow(presenceMeetingId);
+
+    const captureCtx = await setup({ balanceMinor: 200_000 });
+    const captureMeetingId = await meetingWithStatus('scheduled');
+    const captureRes = await creditSessionsRepository.open({
+      walletId: captureCtx.walletId,
+      companyId: captureCtx.companyId,
+      expertProfileId: captureCtx.expertProfileId,
+      initiatingMemberId: captureCtx.memberId,
+      estimatedMinutes: 15,
+      meetingId: captureMeetingId,
+    });
+    if (!captureRes.ok) throw new Error(`expected open ok, got ${captureRes.code}`);
+    await cancelMeetingRow(captureMeetingId);
+
+    const ids = (await creditSessionsRepository.findPendingForCancelledMeetings()).map((r) => r.id);
+
+    expect(ids).toContain(presenceId);
+    expect(ids).toContain(captureRes.session.id);
+  });
+
+  it.each(['scheduled', 'ended'] as const)(
+    'IGNORES a session whose meeting is %s — only a cancelled meeting frees its hold here',
+    async (status) => {
+      const ctx = await setup({ balanceMinor: 50_000 });
+      const meetingId = await meetingWithStatus(status);
+      const id = await openPresence(ctx, meetingId, 15);
+
+      const ids = (await creditSessionsRepository.findPendingForCancelledMeetings()).map(
+        (r) => r.id
+      );
+
+      expect(ids).not.toContain(id);
+    }
+  );
+
+  it('IGNORES an already-cancelled session — the exit condition, so the sweep converges', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const meetingId = await meetingWithStatus('scheduled');
+    const id = await openPresence(ctx, meetingId, 15);
+    await cancelMeetingRow(meetingId);
+    await creditSessionsRepository.cancel(id, { memberId: ctx.memberId });
+
+    const ids = (await creditSessionsRepository.findPendingForCancelledMeetings()).map((r) => r.id);
+
+    expect(ids).not.toContain(id);
+  });
+
+  it('IGNORES a soft-deleted session and a soft-deleted meeting', async () => {
+    const ctx = await setup({ balanceMinor: 200_000 });
+
+    const deletedSessionMeetingId = await meetingWithStatus('scheduled');
+    const deletedSessionId = await openPresence(ctx, deletedSessionMeetingId, 15);
+    await cancelMeetingRow(deletedSessionMeetingId);
+    await db
+      .update(creditSessions)
+      .set({ deletedAt: new Date() })
+      .where(eq(creditSessions.id, deletedSessionId));
+
+    const deletedMeetingId = await meetingWithStatus('scheduled');
+    const onDeletedMeetingId = await openPresence(ctx, deletedMeetingId, 15);
+    await cancelMeetingRow(deletedMeetingId);
+    await db
+      .update(meetings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetings.id, deletedMeetingId));
+
+    const ids = (await creditSessionsRepository.findPendingForCancelledMeetings()).map((r) => r.id);
+
+    expect(ids).not.toContain(deletedSessionId);
+    expect(ids).not.toContain(onDeletedMeetingId);
+  });
+
+  it('IGNORES a session with NO meeting at all — structurally absent (INNER join)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const orphanRes = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 15,
+    });
+    if (!orphanRes.ok) throw new Error(`expected open ok, got ${orphanRes.code}`);
+
+    const ids = (await creditSessionsRepository.findPendingForCancelledMeetings()).map((r) => r.id);
+
+    expect(ids).not.toContain(orphanRes.session.id);
+  });
+
+  it('honours the batch limit — the bound a caller must not silently exceed', async () => {
+    // ⚠ A WALLET PER SESSION — see the EITHER-provenance test above: a stranded `pending`
+    // session blocks the next `open()` on the same wallet, so three sessions need three wallets.
+    for (let i = 0; i < 3; i += 1) {
+      const ctx = await setup({ balanceMinor: 500_000 });
+      const meetingId = await meetingWithStatus('scheduled');
+      await openPresence(ctx, meetingId, 15);
+      await cancelMeetingRow(meetingId);
+    }
+
+    expect(await creditSessionsRepository.findPendingForCancelledMeetings(2)).toHaveLength(2);
+  });
+});

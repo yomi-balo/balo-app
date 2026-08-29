@@ -55,7 +55,21 @@ import { log } from '@/lib/logging';
  * The request-grain arms (`project_discovery`, `request_interaction`) and `admin` are
  * UNREPRESENTABLE BY TYPE here, so this module CANNOT silently answer a question it has not
  * implemented — a caller that tried would fail `tsc`, not get a wrong `false` at runtime.
- * BAL-410 / BAL-411 widen it when they need those grains.
+ *
+ * ⚠ CORRECTED TRIGGER. This used to read "BAL-410 / BAL-411 widen it when they need those
+ * grains". NEITHER DID, and both have now shipped: BAL-411 landed without widening, and BAL-410
+ * DECLINED explicitly (orchestrator D7). BAL-410's web cancel action is structurally
+ * `contextType: 'case'` — it is mounted only from the case surface, its input is
+ * `{ engagementId, meetingId }`, and `resolveBoundMeeting` REQUIRES a live `case` context whose
+ * `contextId === engagementId` — so the narrow type is never a constraint for it. Its API
+ * counterpart (`apps/api/src/services/meetings/authorize-engagement-host.ts`) implements ALL
+ * SEVEN labels, including both request-grain arms, so a `request_interaction` cancel IS gated
+ * correctly today; only the web AFFORDANCE is case-scoped, which matches where it lives.
+ *
+ * THE REAL TRIGGER, stated so the next reader does not re-derive a settled decision: **the
+ * first `apps/web` surface that ACTS on a request-grain meeting.** Widening means porting the
+ * two request-grain arms plus the `relationshipDeniesHosting` predicate — and CLAUDE.md is
+ * explicit that predicate must have exactly ONE definition, so PORT it, never restate it.
  */
 export type EngagementGrainHostSubject = {
   readonly contextType: 'case' | 'project_kickoff' | 'package_session' | 'retainer_checkin';
@@ -117,7 +131,9 @@ export async function hasEngagementCapability(
  * ⚠ WHY IT EXISTS AT ALL. `shareAvailabilityAction` gates a PRE-ENGAGEMENT act on a
  * `request_expert_relationships` row: there is no engagement, so `EngagementGrainHostSubject`
  * (deliberately narrowed to the four engagement-grain labels) cannot represent it, and
- * widening that type is BAL-410 / BAL-411's, not this ticket's. Before this, that action
+ * widening that type belongs to the first web surface that ACTS on a request-grain meeting —
+ * ⚠ NOT BAL-410 / BAL-411, both of which have shipped without widening (see the narrowing
+ * note above). Before this, that action
  * compared `access.ctx.lens !== 'expert'` — a `lens ===` gate, which CLAUDE.md forbids
  * categorically: `lens` gates the VIEW, a capability gates the MUTATION.
  *

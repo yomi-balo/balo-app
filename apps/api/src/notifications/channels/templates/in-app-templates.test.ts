@@ -876,6 +876,126 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('booking-cancelled-client (BAL-410)', () => {
+    const BASE = {
+      expertPartyLabel: 'CloudPeak',
+      cancelledByLabel: 'Priya Raman @ CloudPeak',
+      engagementId: 'engagement-123',
+    };
+
+    it('acknowledges the client’s own act and deep-links to the case', () => {
+      const result = getInAppTemplate('booking-cancelled-client', {
+        ...BASE,
+        cancelledBy: 'client',
+      });
+      expect(result).toEqual({
+        title: 'Consultation cancelled',
+        body: 'You cancelled your consultation with CloudPeak. Nothing was charged.',
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('names the PERSON who cancelled when it was not the client', () => {
+      const result = getInAppTemplate('booking-cancelled-client', {
+        ...BASE,
+        cancelledBy: 'expert',
+      });
+      expect(result.body).toBe(
+        'Priya Raman @ CloudPeak cancelled your consultation. Nothing was charged.'
+      );
+    });
+
+    it('states the time-off reason as a neutral fact', () => {
+      const result = getInAppTemplate('booking-cancelled-client', {
+        ...BASE,
+        cancelledBy: 'expert',
+        reason: 'expert_time_off',
+      });
+      expect(result.body).toBe(
+        'Your consultation with CloudPeak was cancelled — that time is no longer available. Nothing was charged.'
+      );
+    });
+
+    /**
+     * ⚠⚠ THE HOLD LINE IS THE ONE THING THIS TEMPLATE OWNS THAT NO EMAIL MAY SAY, and it must
+     * appear ONLY when a hold actually moved `active → released`. `false`/absent is the
+     * overwhelmingly common case (nobody joined early); claiming a release there would be a
+     * money statement that is simply untrue.
+     */
+    it('appends the hold-release line ONLY when holdReleased is true', () => {
+      const released = getInAppTemplate('booking-cancelled-client', {
+        ...BASE,
+        cancelledBy: 'client',
+        holdReleased: true,
+      });
+      expect(released.body).toContain('the credit we were holding is back in your balance');
+    });
+
+    it.each([{ holdReleased: false }, {}])('omits the hold-release line for %o', (holdOverride) => {
+      const result = getInAppTemplate('booking-cancelled-client', {
+        ...BASE,
+        cancelledBy: 'client',
+        ...holdOverride,
+      });
+      expect(result.body).not.toContain('holding');
+      expect(result.body).toContain('Nothing was charged.');
+    });
+
+    it('falls back to a safe expert label when the payload omits them', () => {
+      const result = getInAppTemplate('booking-cancelled-client', {});
+      expect(result.body).toBe('Your expert cancelled your consultation. Nothing was charged.');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('booking-cancelled-expert (BAL-410)', () => {
+    const BASE = {
+      clientCompanyName: 'Northwind Industrial',
+      cancelledByLabel: 'Dana Okoro @ Northwind Industrial',
+      engagementId: 'engagement-123',
+    };
+
+    it('acknowledges the expert’s own act', () => {
+      const result = getInAppTemplate('booking-cancelled-expert', {
+        ...BASE,
+        cancelledBy: 'expert',
+      });
+      expect(result).toEqual({
+        title: 'Booking cancelled',
+        body: 'You cancelled a consultation with Northwind Industrial. That slot is open again.',
+        actionUrl: '/cases/engagement-123',
+      });
+    });
+
+    it('names the PERSON who cancelled otherwise', () => {
+      const result = getInAppTemplate('booking-cancelled-expert', {
+        ...BASE,
+        cancelledBy: 'client',
+      });
+      expect(result.body).toBe(
+        'Dana Okoro @ Northwind Industrial cancelled a consultation with you. That slot is open again.'
+      );
+    });
+
+    /** ⚠ The hold is the CLIENT's money. The expert is never told about its state. */
+    it('NEVER mentions the hold, even when one was released', () => {
+      const result = getInAppTemplate('booking-cancelled-expert', {
+        ...BASE,
+        cancelledBy: 'client',
+        holdReleased: true,
+      });
+      expect(result.body.toLowerCase()).not.toContain('hold');
+      expect(result.body.toLowerCase()).not.toContain('balance');
+    });
+
+    it('falls back to "A client" when clientCompanyName is missing', () => {
+      const result = getInAppTemplate('booking-cancelled-expert', { cancelledBy: 'expert' });
+      expect(result.body).toBe(
+        'You cancelled a consultation with A client. That slot is open again.'
+      );
+    });
+  });
+
   describe('reschedule-proposal-sent (BAL-411)', () => {
     it('names the expert party and deep-links to the case', () => {
       const result = getInAppTemplate('reschedule-proposal-sent', {

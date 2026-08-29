@@ -112,7 +112,7 @@ describe('processMeetingCalendarAmend — T-JOB (BAL-409 §4)', () => {
     expect(mockUpdateConsultationEvent).not.toHaveBeenCalled();
   });
 
-  it('cancelled meeting ⇒ converged, no vendor call (the delete is BAL-410’s)', async () => {
+  it('cancelled meeting ⇒ converged, no vendor call (the delete is BAL-476’s)', async () => {
     mockFindById.mockResolvedValue(meetingRow({ status: 'cancelled' }));
 
     await processMeetingCalendarAmend(fakeJob());

@@ -9,13 +9,16 @@ import { notificationRules, type NotificationRule } from './rules.js';
  * event.
  */
 function expectEmailAndInAppPair(
-  event: 'booking.confirmed' | 'booking.rescheduled',
+  event: 'booking.confirmed' | 'booking.rescheduled' | 'booking.cancelled',
   clientTemplate: string,
-  expertTemplate: string
+  expertTemplate: string,
+  // BAL-410 — `booking.cancelled` adds a THIRD recipient arm (the client-side party fan-out),
+  // so the total is 6 rather than 4. Defaulted, so both shipped callers are unchanged.
+  expectedRuleCount = 4
 ): void {
   const rules = notificationRules[event];
   expect(rules).toBeDefined();
-  expect(rules).toHaveLength(4);
+  expect(rules).toHaveLength(expectedRuleCount);
   for (const rule of rules!) {
     expect(rule.timing).toBe('immediate');
   }
@@ -39,7 +42,7 @@ function expectEmailAndInAppPair(
 
 /** N13 — the gating half: client rules require `recipientId`, expert rules are unconditioned. */
 function expectClientRulesGatedOnRecipientId(
-  event: 'booking.confirmed' | 'booking.rescheduled'
+  event: 'booking.confirmed' | 'booking.rescheduled' | 'booking.cancelled'
 ): void {
   const rules = notificationRules[event]!;
   const clientRules = rules.filter((r) => r.recipient === 'client');
@@ -112,6 +115,62 @@ describe('notificationRules', () => {
 
   it('booking.rescheduled: the client rules are gated on recipientId; the expert rules are unconditioned', () => {
     expectClientRulesGatedOnRecipientId('booking.rescheduled');
+  });
+
+  it('booking.cancelled: client + expert each get email + in-app, PLUS the party fan-out — 6 rules, no SMS', () => {
+    expectEmailAndInAppPair(
+      'booking.cancelled',
+      'booking-cancelled-client',
+      'booking-cancelled-expert',
+      6
+    );
+  });
+
+  it('booking.cancelled: the client rules are gated on recipientId; the expert rules are unconditioned', () => {
+    expectClientRulesGatedOnRecipientId('booking.cancelled');
+  });
+
+  /**
+   * ⚠⚠ THE THIRD ARM IS WHAT CLOSES THE AC "Cancelled by expert → client → email + in-app".
+   * `recipient: 'client'` resolves only a SINGLE `payload.recipientId`, which does not exist on
+   * the expert/admin arms — without this fan-out the client is never told. The list is resolved
+   * by the PUBLISHER (`payload.recipientUserIds`), never hydrated in the engine, which is what
+   * keeps a membership read out of the notification engine (the shipped BAL-408 contract).
+   */
+  it('booking.cancelled: a meeting_party_participants fan-out renders the CLIENT template on both channels', () => {
+    const rules = notificationRules['booking.cancelled']!;
+    const fanout = rules.filter((r) => r.recipient === 'meeting_party_participants');
+
+    expect(fanout).toHaveLength(2);
+    expect(fanout.every((r) => r.template === 'booking-cancelled-client')).toBe(true);
+    expect(fanout.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+      'email',
+      'in-app',
+    ]);
+  });
+
+  it('booking.cancelled: the fan-out arm fires ONLY on a non-empty publisher-resolved list', () => {
+    const rules = notificationRules['booking.cancelled']!;
+    const fanout = rules.filter((r) => r.recipient === 'meeting_party_participants');
+    const base = { event: 'booking.cancelled', data: {} };
+
+    for (const rule of fanout) {
+      expect(rule.condition).toBeDefined();
+      expect(rule.condition!({ ...base, payload: { recipientUserIds: ['user-1'] } })).toBe(true);
+      expect(rule.condition!({ ...base, payload: { recipientUserIds: [] } })).toBe(false);
+      expect(rule.condition!({ ...base, payload: {} })).toBe(false);
+    }
+  });
+
+  /**
+   * ⚠ NO SMS, AND THE ABSENCE IS DELIBERATE. `recipientPhoneVerified` reads `ctx.data.user`,
+   * hydrated ONLY from `payload.userId` — a field no booking payload carries. That is the exact
+   * defect that killed `booking-confirmed-sms`; a half-wired rule that can never fire is worse
+   * than none. See the rule's own comment.
+   */
+  it('booking.cancelled: has NO sms rule on any arm', () => {
+    const rules = notificationRules['booking.cancelled']!;
+    expect(rules.some((r) => r.channel === 'sms')).toBe(false);
   });
 
   it('meeting.guest_rescheduled: EMAIL ONLY, to the external `email_address`', () => {
@@ -1013,18 +1072,26 @@ describe('notificationRules', () => {
       }
     });
 
-    it('⚠ `meeting_party_participants` is used by the guest FYI, the BAL-134 client nudge and BAL-411', () => {
+    it('⚠ `meeting_party_participants` is used by the guest FYI, the BAL-134 client nudge, BAL-411 and BAL-410', () => {
       // A new fan-out KIND is a dispatcher branch; pinning its consumers means a future reuse
       // has to come past this test and state itself. BAL-134 is the SECOND consumer and BAL-411
       // is the THIRD/FOURTH: both the proposal-sent notice and its unanswered reminder fan out
       // to the client company's members the same way — resolved by the PUBLISHER (or the
       // fire-time recheck) into `payload.recipientUserIds`, keeping a membership read out of
       // `engine/resolver.ts`.
+      //
+      // ⚠ BAL-410 IS THE FIFTH, AND IT IS THE REUSE THIS GUARD EXISTS TO MAKE DELIBERATE. A
+      // cancel initiated by the EXPERT or by a platform ADMIN has no single client user id to
+      // put in `payload.recipientId`, so `recipient: 'client'` cannot reach the client at all —
+      // this kind is what delivers the ticket's "Cancelled by expert → client → email +
+      // in-app". Chosen over inventing a new recipient kind precisely because its contract
+      // (publisher-resolved list, no membership read in the engine) already fits.
       const users = Object.entries(notificationRules)
         .filter(([, rules]) => rules.some((r) => r.recipient === 'meeting_party_participants'))
         .map(([event]) => event);
 
       expect(users).toEqual([
+        'booking.cancelled',
         'reschedule_proposal.sent',
         'reschedule_proposal.unanswered',
         'meeting.guest_added',

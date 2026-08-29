@@ -6,6 +6,8 @@ describe('BOOKING_EVENTS', () => {
     expect(Object.keys(BOOKING_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'ABANDONED',
       'ATTACHED_TO_CASE',
+      'CANCEL_ABANDONED',
+      'CANCELLED',
       'CASE_BOOKED',
       'CASE_CHOICE_SHOWN',
       'COMPANY_SELECTION_SHOWN',
@@ -29,6 +31,8 @@ describe('BOOKING_EVENTS', () => {
     expect(BOOKING_EVENTS.CASE_BOOKED).toBe('case_booked');
     expect(BOOKING_EVENTS.ABANDONED).toBe('booking_abandoned');
     expect(BOOKING_EVENTS.RESCHEDULED).toBe('booking_rescheduled');
+    expect(BOOKING_EVENTS.CANCELLED).toBe('booking_cancelled');
+    expect(BOOKING_EVENTS.CANCEL_ABANDONED).toBe('booking_cancel_abandoned');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSED).toBe('reschedule_proposed');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED).toBe('reschedule_proposal_answered');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST).toBe('reschedule_proposal_slot_lost');

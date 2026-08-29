@@ -2210,4 +2210,54 @@ export const creditSessionsRepository = {
       .limit(limit);
     return rows.map((row) => row.session);
   },
+
+  /**
+   * BAL-410 BACKSTOP FINDER — `pending` sessions whose MEETING is `cancelled`.
+   *
+   * ⚠⚠ WHY A BACKSTOP EXISTS AT ALL. Cancelling a meeting removes it from the ONLY actor that
+   * would ever have ended its session: `meeting-lifecycle-sweep` scans
+   * `['scheduled','waiting_for_participants','in_progress']` and never sees a `cancelled` row.
+   * The in-request release in `apps/api`'s cancel route therefore has NO SECOND CHANCE, and a
+   * single transient failure between the meeting commit and that release strands the hold
+   * PERMANENTLY: the company's available balance is reduced forever AND `open()`'s
+   * one-live-session-per-wallet gate (`session_in_progress`) locks that company out of every
+   * future Case session. This finder is that second chance.
+   *
+   * ⚠⚠ THIS IS NOT A WIDENING OF `findStalePending`, AND THE DISTINCTION IS THE WHOLE POINT.
+   * That finder excludes `duration_source='presence'` to protect the NO-SHOW SETTLEMENT of an
+   * ENDED meeting, and its docblock says outright "Do not fix the asymmetry by widening it
+   * back" — because `cancelled` is a trap door for a settleable row. On a CANCELLED meeting
+   * there is nothing to settle: `findPresenceUnsettled` requires `meetings.status='ended'`, so
+   * no settlement can ever run for these rows, and `cancelled` is the only correct terminal for
+   * them. Hence there is deliberately NO `duration_source` filter here — every provenance is
+   * releasable once its meeting is gone — and this finder is scoped by the MEETING's status
+   * rather than by a clock, so it can never reach a row `findStalePending` is protecting.
+   *
+   * ⚠ NO CUTOFF, DELIBERATELY. A cancelled meeting is immediately final; there is no grace
+   * window to respect, and racing the in-request release is safe because
+   * `creditSessionsRepository.cancel` returns early on an already-`cancelled` session.
+   *
+   * Join shape mirrors `findPresenceUnsettled` — an INNER join, so a session with a NULL
+   * `meeting_id` is structurally absent (it has no meeting to have been cancelled). Both
+   * `deleted_at` guards. Ordered oldest-created first and batch-bounded via `limit`.
+   */
+  async findPendingForCancelledMeetings(limit = 100): Promise<CreditSession[]> {
+    const rows = await db
+      .select({ session: creditSessions })
+      .from(creditSessions)
+      .innerJoin(meetings, eq(meetings.id, creditSessions.meetingId))
+      .where(
+        and(
+          // Enum literals at QUERY time are always safe (the ADD-VALUE restriction is index
+          // predicates + CHECKs).
+          eq(creditSessions.status, 'pending'),
+          isNull(creditSessions.deletedAt),
+          eq(meetings.status, 'cancelled'),
+          isNull(meetings.deletedAt)
+        )
+      )
+      .orderBy(asc(creditSessions.createdAt), asc(creditSessions.id))
+      .limit(limit);
+    return rows.map((row) => row.session);
+  },
 };

@@ -62,6 +62,25 @@ export const RESCHEDULE_USER_RATE_LIMIT: RateLimitConfig = {
 };
 
 /**
+ * BAL-410 — the CANCEL route's PER-USER limit.
+ *
+ * ⚠ ITS OWN BUCKET, NOT SHARED WITH RESCHEDULE — the same reasoning the split above gives for
+ * separating reschedule from booking. Cancelling and moving are different acts with different
+ * abuse profiles, and a shared counter lets one exhaust the other: a client who has just
+ * rescheduled twenty times would be unable to cancel at all.
+ *
+ * ⚠ THERE IS DELIBERATELY NO EXPERT-SCOPED SECOND LIMIT. `enforceExpertScopedGuards` exists to
+ * protect one expert's published calendar from being walked by a caller consuming slots; a
+ * cancel CONSUMES nothing, performs no vendor free/busy round-trip, and only ever FREES a slot.
+ * There is nothing scarce for a per-pair bucket to protect.
+ */
+export const CANCEL_USER_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meetings:cancel:user',
+  maxRequests: 20,
+  windowSeconds: 3600,
+};
+
+/**
  * BAL-411 — the reschedule-PROPOSAL route's PER-USER limit. A SEPARATE, TIGHTER bucket from
  * `RESCHEDULE_USER_RATE_LIMIT`: proposing performs up to `RESCHEDULE_PROPOSAL_MAX_OPTIONS`
  * vendor free/busy round-trips per request (one per option, via `isWindowAvailableForExpert`),
