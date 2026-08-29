@@ -36,6 +36,10 @@ export {
   // `track()`. NOT in the client `@/lib/analytics` barrel and NOT in `src/test/setup.ts`'s
   // client `vi.mock` list — that mock is client-only (mirrors GUEST_SERVER_EVENTS/REVIEW_SERVER_EVENTS).
   EXPERT_SETUP_SERVER_EVENTS,
+  // BAL-494 — `switchWorkspace()` (this app's own workspace switch service) is the ONE
+  // dispatch point for `workspace_switched`. NOT in the client `@/lib/analytics` barrel and
+  // NOT in `src/test/setup.ts`'s client `vi.mock` list — that mock is client-only.
+  WORKSPACE_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type {
   RecapState,

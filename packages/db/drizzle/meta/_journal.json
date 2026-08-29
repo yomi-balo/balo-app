@@ -547,6 +547,13 @@
       "when": 1787889059835,
       "tag": "0077_bal313_representations",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1787957195714,
+      "tag": "0078_bal494_users_active_company_id",
+      "breakpoints": true
     }
   ]
 }

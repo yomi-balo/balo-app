@@ -84,3 +84,7 @@ export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '../event
 // `@balo/analytics/server` ONLY, so skipping this line makes them unimportable there —
 // same fourth-step trap as MEETING_SERVER_EVENTS / GUEST_SERVER_EVENTS above.
 export { AVAILABILITY_SERVER_EVENTS } from '../events/availability';
+// BAL-494 — `switchWorkspace()` (apps/web) imports from `@balo/analytics/server` ONLY;
+// omitting this line makes `WORKSPACE_SERVER_EVENTS` unimportable there, which fails
+// `apps/web`'s typecheck, not this package's own (same fourth-step trap noted above).
+export { WORKSPACE_SERVER_EVENTS } from '../events/workspace';

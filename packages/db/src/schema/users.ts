@@ -1,7 +1,7 @@
-import { pgTable, uuid, text, boolean, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, boolean, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { userModeEnum, userStatusEnum, platformRoleEnum, signupIntentEnum } from './enums';
-import { companyMembers } from './companies';
+import { companies, companyMembers } from './companies';
 import { timestamps, softDelete } from './helpers';
 
 export const users = pgTable(
@@ -30,6 +30,22 @@ export const users = pgTable(
     countryCode: text('country_code'),
     onboardingCompleted: boolean('onboarding_completed').default(false).notNull(),
     signupIntent: signupIntentEnum('signup_intent'), // nullable -- null for OAuth or pre-existing users
+    /**
+     * BAL-494 / ADR-1053 — the user's STORED active COMPANY workspace. NULL = "no explicit
+     * choice yet" (every pre-BAL-494 row), which resolves to the default company workspace.
+     * The workspace itself is the PAIR (`active_mode`, `active_company_id`): `active_mode='expert'`
+     * selects the expert workspace; otherwise this column selects the company.
+     *
+     * `set null` (NOT cascade -- that would delete the USER; NOT restrict -- that would make a
+     * company hard-delete fail 23503). `companies` has no `deleted_at`, so a hard delete is the
+     * only removal path and SET NULL degrades cleanly to "no stored choice" -> fallback rule.
+     * Nullable with no default and no backfill, so the migration is a PG catalog-only ADD COLUMN
+     * (no table rewrite) and the FK validation scan is trivial (every existing value is NULL).
+     * ⚠ A value here is NEVER trusted without revalidating it against the derived list.
+     */
+    activeCompanyId: uuid('active_company_id').references(() => companies.id, {
+      onDelete: 'set null',
+    }),
 
     // Status
     status: userStatusEnum('status').default('active').notNull(),
@@ -51,6 +67,10 @@ export const users = pgTable(
     uniqueIndex('users_email_unique')
       .on(t.email)
       .where(sql`${t.deletedAt} IS NULL`),
+    // BAL-494: FK columns get an index (drizzle-schema skill). Also serves the
+    // reverse lookup "which users have this company as their active workspace",
+    // which PG uses when validating the ON DELETE SET NULL on a company delete.
+    index('users_active_company_id_idx').on(t.activeCompanyId),
   ]
 );
 

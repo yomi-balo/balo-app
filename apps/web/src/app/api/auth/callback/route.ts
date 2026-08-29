@@ -10,6 +10,8 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
+import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
+import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 
 export const dynamic = 'force-dynamic';
 
@@ -121,6 +123,17 @@ async function createSession(
       verticalId: expertProfile.verticalId,
     }),
   };
+
+  // BAL-494 / ADR-1053 — hydrate the workspace + projection on login. This is what makes AC
+  // "persists across sessions/devices" true: a returning user lands in their STORED
+  // `active_company_id`, not in `companyMemberships[0]`. `derived === null` (no company
+  // membership at all) leaves `sessionUser` exactly as built above — the existing
+  // `resolveOrCreateUser` guard (`throw new Error('User has no company membership')`) already
+  // makes this unreachable for a returning user; keep the fallback anyway for defense in depth.
+  const derived = await deriveWorkspacesForUser(resolved.user.id);
+  if (derived !== null) {
+    applyWorkspaceDerivationToSessionUser(sessionUser, derived);
+  }
 
   session.user = sessionUser;
   session.accessToken = accessToken;

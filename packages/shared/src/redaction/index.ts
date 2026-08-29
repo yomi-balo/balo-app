@@ -1,9 +1,10 @@
 /**
- * Secret-in-URL redaction (BAL-386, extended by BAL-390 and BAL-408). Some public routes
+ * Secret-in-URL redaction (BAL-386, extended by BAL-390, BAL-408 and BAL-494). Some routes
  * carry a high-entropy secret in the URL path itself — the email-bound magic-link token
  * behind `/shared/proposals/{token}`, the review-invite token behind
  * `/review/{token}`, and the guest join token behind
- * `/join/{token}`. Platform-wide instrumentation that captures the URL
+ * `/join/{token}` — and one carries it in a QUERY PARAMETER
+ * ({@link SENSITIVE_QUERY_PARAMS}). Platform-wide instrumentation that captures the URL
  * verbatim (Edge middleware request logging → Axiom; PostHog client pageview
  * autocapture → third party) would otherwise defeat the "raw token is never logged"
  * invariant.
@@ -16,6 +17,7 @@
  *
  * ⚠ THE SINK REGISTRY — every place a URL leaves the process must route through here:
  *   1. `apps/web/src/middleware.ts`            → the Axiom request line, and `?from=` / `returnTo`
+ *      (which is also where the BAL-494 `?t=` switch token is stripped from the request log)
  *   2. `packages/analytics/src/client/client.ts` → PostHog `$current_url` / `$pathname` / `$referrer`
  *   3. `apps/web/src/lib/observability/sentry-scrub.ts` → Sentry errors, transactions,
  *      breadcrumbs and Session Replay, wired into all three `Sentry.init` runtimes.
@@ -162,8 +164,41 @@ const ENCODED_SENSITIVE_PATH_PREFIXES: readonly string[] = SENSITIVE_PATH_PREFIX
   (prefix) => ENCODED_SLASH_FORMS.map((slash) => toAsciiLowerCase(prefix).replaceAll('/', slash))
 );
 
+/**
+ * ⚠ A SECOND, SEPARATE REGISTRY: secrets carried as a QUERY VALUE, scoped to the path that
+ * carries them (BAL-494 security fix round 2).
+ *
+ * ⚠ WHY NOT AN ENTRY IN `SENSITIVE_PATH_PREFIXES`. Two reasons, both structural:
+ *   1. SHAPE — that list redacts the path SEGMENT after a prefix. `?t=<sealed>` is not a
+ *      segment; a `/api/auth/switch-workspace` entry there would match nothing.
+ *   2. THE PAIRING INVARIANT — every entry in that list is also a PUBLIC prefix in
+ *      `apps/web/src/lib/auth/route-config.ts`, and `route-config.test.ts` asserts the
+ *      containment. `/api/auth/switch-workspace` REQUIRES a session; adding it there would
+ *      either break that test or, worse, be "fixed" by making an authenticated route public.
+ *
+ * ⚠ WHAT IS BEING PROTECTED. The BAL-494 deep-link auto-switch redirect is
+ * `/api/auth/switch-workspace?t=<sealed token>&returnTo=…`. The seal is unforgeable and
+ * TTL-bounded (120s effective — see `switch-token.ts`), so this is a short-lived credential
+ * rather than a 7-day one, but it is still a credential and it still reaches Sentry
+ * verbatim: an unhandled throw inside the route ships `event.request.url` AND
+ * `contexts.nextjs.request_path`, neither of which `sendDefaultPii: false` gates. It also
+ * reaches the Edge request log. `param` is matched only when `pathMarker` is present, so no
+ * other route's `?t=` is touched.
+ */
+const SENSITIVE_QUERY_PARAMS: readonly { readonly pathMarker: string; readonly param: string }[] = [
+  { pathMarker: '/api/auth/switch-workspace', param: 't' },
+];
+
 /** A raw path secret runs until the next path/query/fragment delimiter, or the end. */
 const RAW_TOKEN_DELIMITERS = '/?#';
+
+/**
+ * A query VALUE ends at the next parameter (`&`) or at the fragment (`#`). Deliberately does
+ * NOT stop at `/` or `%`: a sealed iron token is base64url-ish but `returnTo`-style values
+ * legitimately contain both, and over-consuming a value we have already decided is secret is
+ * harmless while under-consuming would leak its tail.
+ */
+const QUERY_VALUE_DELIMITERS = '&#';
 
 /**
  * An ENCODED secret additionally ends at `&` (the next query parameter) and at `%` (the
@@ -229,6 +264,37 @@ function redactGuestRecapMeetingId(value: string): string {
 }
 
 /**
+ * A parameter can be first in the query string (`?t=`) or not (`&t=`); its position is not
+ * ours to fix, since a redirect chain or an instrumentation rewrite can reorder it.
+ */
+const QUERY_PARAM_LEADS: readonly string[] = ['?', '&'];
+
+/**
+ * The {@link SENSITIVE_QUERY_PARAMS} pass. Runs BEFORE the path pass and independently of it:
+ * the path pass returns on its FIRST match, so folding this in as another prefix entry would
+ * make whichever matched first suppress the other.
+ *
+ * Idempotent, like the path pass — `[redacted]` contains no delimiter, so a second run
+ * replaces it with itself.
+ */
+function redactSensitiveQueryParams(value: string): string {
+  let result = value;
+  for (const { pathMarker, param } of SENSITIVE_QUERY_PARAMS) {
+    if (!result.includes(pathMarker)) continue;
+    for (const lead of QUERY_PARAM_LEADS) {
+      const redacted = redactAfterPrefix(
+        result,
+        result,
+        `${lead}${param}=`,
+        QUERY_VALUE_DELIMITERS
+      );
+      if (redacted !== null) result = redacted;
+    }
+  }
+  return result;
+}
+
+/**
  * Redact the secret segment that follows a known sensitive prefix, anywhere within
  * `value`. Accepts a bare pathname (`/shared/proposals/abc`) OR a full URL
  * (`https://host/shared/proposals/abc?x=1`) OR a referrer OR a URL that carries a
@@ -253,6 +319,10 @@ function redactGuestRecapMeetingId(value: string): string {
  * (`/join/raw?from=%2Freview%2Fenc`) redacts the one that is actually being navigated to.
  */
 export function redactSensitivePath(value: string): string {
+  return redactSensitivePathPrefixes(redactSensitiveQueryParams(value));
+}
+
+function redactSensitivePathPrefixes(value: string): string {
   for (const prefix of SENSITIVE_PATH_PREFIXES) {
     const redacted = redactAfterPrefix(value, value, prefix, RAW_TOKEN_DELIMITERS);
     if (redacted !== null) {

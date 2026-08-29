@@ -258,3 +258,6 @@ export {
   // `AvailabilityConflictResolution`.
   type RescheduleProposalOutcome,
 } from './booking';
+// BAL-494 / ADR-1053 — SERVER-ONLY: the switch is decided and dispatched entirely in
+// `switchWorkspace()` (apps/web); no browser code ever emits this event.
+export { WORKSPACE_SERVER_EVENTS, type WorkspaceServerEventMap } from './workspace';

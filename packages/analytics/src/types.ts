@@ -44,6 +44,7 @@ import type { MeetingServerEventMap } from './events/meeting';
 import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 import type { BookingEventMap } from './events/booking';
+import type { WorkspaceServerEventMap } from './events/workspace';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -123,6 +124,9 @@ export type ServerEvents = ExpertServerEventMap &
   ExpertSetupServerEventMap &
   // BAL-473 — SERVER-ONLY: deliberately absent from `AllEvents` above. Every producer is an
   // `apps/api` webhook arm or BullMQ job; there is no acting human on any of these paths.
-  RecordingServerEventMap;
+  RecordingServerEventMap &
+  // BAL-494 — SERVER-ONLY: deliberately absent from `AllEvents` above. `switchWorkspace()`
+  // (apps/web, `import 'server-only'`) is the ONE dispatch point; no browser code emits it.
+  WorkspaceServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

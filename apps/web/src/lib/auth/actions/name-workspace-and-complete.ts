@@ -157,6 +157,19 @@ export async function nameWorkspaceAndCompleteAction(
     session.user.activeMode = 'client';
     session.user.onboardingCompleted = true;
     session.user.companyName = resolvedCompanyName; // fresh (promoted org, or renamed personal)
+
+    // BAL-494 / ADR-1053 — a rename/promote here is the ONE case where a company's NAME
+    // changes without a workspace switch, so `activeWorkspace` must be patched alongside
+    // `companyName`. Drift's key comparison cannot see a rename (keys are compared, names are
+    // not, on purpose); drift's PROJECTION comparison can, but only on the next render — this
+    // keeps the session honest immediately. Only the POINTER is patched: the full list is not
+    // sealed (cookie budget — see `SessionUser`), it is re-derived per request. Defensive:
+    // pre-BAL-494 sessions that reach onboarding mid-flight carry no `activeWorkspace` yet.
+    const { activeWorkspace, companyId } = session.user;
+    if (activeWorkspace?.type === 'company' && activeWorkspace.companyId === companyId) {
+      session.user.activeWorkspace = { ...activeWorkspace, name: resolvedCompanyName };
+    }
+
     await session.save();
 
     return { success: true, data: { redirectTo: '/dashboard' } };

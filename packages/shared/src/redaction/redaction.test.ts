@@ -376,6 +376,78 @@ describe('redactSensitivePath', () => {
   });
 });
 
+// ── BAL-494 fix round 2: the switch token in a QUERY VALUE ──────────────────
+
+describe('redactSensitivePath — sensitive query parameters', () => {
+  const SEALED = 'Fe26.2**abc123DEF456ghi789JKL**mno**pqr-stu_vwx**yz';
+
+  it('redacts the sealed switch token from the route URL', () => {
+    expect(redactSensitivePath(`/api/auth/switch-workspace?t=${SEALED}`)).toBe(
+      '/api/auth/switch-workspace?t=[redacted]'
+    );
+  });
+
+  it('preserves returnTo — only the credential is stripped', () => {
+    expect(
+      redactSensitivePath(`/api/auth/switch-workspace?t=${SEALED}&returnTo=%2Fprojects%2Freq-1`)
+    ).toBe('/api/auth/switch-workspace?t=[redacted]&returnTo=%2Fprojects%2Freq-1');
+  });
+
+  it('redacts the token when it is NOT the first parameter', () => {
+    expect(
+      redactSensitivePath(`/api/auth/switch-workspace?returnTo=%2Fdashboard&t=${SEALED}`)
+    ).toBe('/api/auth/switch-workspace?returnTo=%2Fdashboard&t=[redacted]');
+  });
+
+  it('redacts inside a full URL (the Sentry `request.url` shape)', () => {
+    expect(redactSensitivePath(`https://balo.expert/api/auth/switch-workspace?t=${SEALED}`)).toBe(
+      'https://balo.expert/api/auth/switch-workspace?t=[redacted]'
+    );
+  });
+
+  it('stops at the fragment', () => {
+    expect(redactSensitivePath(`/api/auth/switch-workspace?t=${SEALED}#top`)).toBe(
+      '/api/auth/switch-workspace?t=[redacted]#top'
+    );
+  });
+
+  it('leaves a `t` parameter on ANY OTHER path completely alone', () => {
+    // The registry is path-scoped on purpose: `?t=` is a common, innocuous parameter name.
+    expect(redactSensitivePath('/dashboard?t=1234')).toBe('/dashboard?t=1234');
+    expect(redactSensitivePath('/experts?q=salesforce&t=table')).toBe(
+      '/experts?q=salesforce&t=table'
+    );
+  });
+
+  it('does not touch a longer parameter that merely ENDS in t', () => {
+    expect(redactSensitivePath('/api/auth/switch-workspace?at=keep-me')).toBe(
+      '/api/auth/switch-workspace?at=keep-me'
+    );
+  });
+
+  it('tolerates the parameter being present but empty', () => {
+    expect(redactSensitivePath('/api/auth/switch-workspace?t=&returnTo=%2Fx')).toBe(
+      '/api/auth/switch-workspace?t=&returnTo=%2Fx'
+    );
+  });
+
+  it('is idempotent', () => {
+    const once = redactSensitivePath(`/api/auth/switch-workspace?t=${SEALED}`);
+    expect(redactSensitivePath(once)).toBe(once);
+  });
+
+  it('leaves the route URL untouched when it carries no token at all', () => {
+    expect(redactSensitivePath('/api/auth/switch-workspace')).toBe('/api/auth/switch-workspace');
+  });
+
+  it('still redacts a PATH secret on a URL that also carries a scoped query secret', () => {
+    // The two passes are independent — neither suppresses the other.
+    expect(redactSensitivePath(`/join/guest-token-abc?next=%2Fapi%2Fauth%2Fswitch-workspace`)).toBe(
+      '/join/[redacted]?next=%2Fapi%2Fauth%2Fswitch-workspace'
+    );
+  });
+});
+
 describe('SENSITIVE_PATH_PREFIXES', () => {
   it('lists exactly the four registered landings', () => {
     expect([...SENSITIVE_PATH_PREFIXES].sort((a, b) => a.localeCompare(b))).toEqual([
