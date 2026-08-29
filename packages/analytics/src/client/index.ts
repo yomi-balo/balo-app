@@ -47,6 +47,11 @@ export {
   // BAL-400 — the case-booking flow. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a
   // DIFFERENT package (`apps/web` cannot import it), not in this one.
   BOOKING_EVENTS,
+  // BAL-495 — the nav registry's canonical event + key/surface tuples. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  NAV_EVENTS,
+  NAV_ITEM_KEYS,
+  NAV_SURFACES,
 } from '../events';
 
 export type {
@@ -129,4 +134,8 @@ export type {
   BookingAbandonStep,
   // BAL-411 CONSIDER item — the reschedule-proposal answer vocabulary.
   RescheduleProposalOutcome,
+  // BAL-495 — the nav registry's event payload and key/surface vocabularies.
+  NavEventMap,
+  NavItemKey,
+  NavSurface,
 } from '../events';

@@ -131,6 +131,12 @@ vi.mock('@/lib/analytics', async () => {
     // component test throws on an undefined constant (memory
     // `reference_web_analytics_test_mock_export_list`).
     BOOKING_EVENTS: events.BOOKING_EVENTS,
+    // BAL-495 — the nav registry's CLIENT event + canonical key/surface tuples. ⚠ WITHOUT THIS
+    // LINE every test whose module graph reaches the sidebar (or `use-nav-item-tracking`)
+    // throws on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
+    NAV_EVENTS: events.NAV_EVENTS,
+    NAV_ITEM_KEYS: events.NAV_ITEM_KEYS,
+    NAV_SURFACES: events.NAV_SURFACES,
     initAnalytics: vi.fn(),
   };
 });

@@ -45,6 +45,7 @@ import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 import type { BookingEventMap } from './events/booking';
 import type { WorkspaceServerEventMap } from './events/workspace';
+import type { NavEventMap } from './events/nav';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -83,7 +84,10 @@ export type AllEvents = AuthEventMap &
   // slot-picker events. One map, two tickets; see `./events/availability.ts`.
   AvailabilityEventMap &
   // BAL-400 — the case-booking flow. All eight are client events; no server family.
-  BookingEventMap;
+  BookingEventMap &
+  // BAL-495 — the nav registry's CLIENT family. `useNavItemTracking` (apps/web) is the ONE
+  // dispatch point.
+  NavEventMap;
 
 export type EventName = keyof AllEvents;
 

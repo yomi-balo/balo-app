@@ -41,6 +41,10 @@ export {
   AVAILABILITY_EVENTS,
   /** BAL-400 — the case-booking flow. All eight are client events. */
   BOOKING_EVENTS,
+  /** BAL-495 — the nav registry's event constant + canonical key/surface tuples. */
+  NAV_EVENTS,
+  NAV_ITEM_KEYS,
+  NAV_SURFACES,
 } from '@balo/analytics/client';
 
 export type {
@@ -88,4 +92,8 @@ export type {
   BookingAbandonStep,
   /** BAL-411 CONSIDER item — the reschedule-proposal answer vocabulary. */
   RescheduleProposalOutcome,
+  /** BAL-495 — the nav registry's event payload and key/surface vocabularies. */
+  NavEventMap,
+  NavItemKey,
+  NavSurface,
 } from '@balo/analytics/client';
