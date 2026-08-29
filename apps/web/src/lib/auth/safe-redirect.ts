@@ -12,6 +12,17 @@ const DEFAULT_REDIRECT = '/dashboard';
  * protocol-relative URLs, dot-segment smuggling (see the guard below — a bug the extracted
  * original carried, fixed here for BOTH routes), and `/login` / `/signup` / `/api/auth`
  * (which also prevents a switch → switch redirect loop).
+ *
+ * ⚠ RETURNS `pathname` ONLY — the query string and fragment are DROPPED. Pre-existing
+ * behaviour, inherited verbatim from the extracted original, and harmless today because every
+ * current caller passes a query-less `returnTo` (`/projects/{id}`). Called out because this is
+ * now the shared guard for a growing caller set: the first deep link carrying `?tab=…` will
+ * silently lose it at redirect time, and the symptom — landing on the right page with the
+ * wrong tab — is otherwise hard to trace back to here.
+ *
+ * If a caller ever needs them preserved, append `parsed.search` / `parsed.hash` to the
+ * returned path. Do NOT return `returnTo` unmodified instead: that reintroduces the
+ * dot-segment bypass the guard below exists to stop.
  */
 export function getSafeRedirectPath(returnTo: string | null, baseUrl: string): string {
   if (!returnTo) return DEFAULT_REDIRECT;

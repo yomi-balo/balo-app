@@ -67,6 +67,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // `activeMode` comparison would see the session say 'expert' (matching the stale DB)
     // forever, and the projection invariant would fight it on every request → an infinite
     // redirect loop.
+    //
+    // ADR-1030 — DELIBERATELY NOT AUDITED, same ruling as the switch write in
+    // `lib/workspaces/switch-workspace.ts` (see the full rationale there). Additionally, this
+    // write is a SYSTEM-INITIATED CONSEQUENCE, not an actor's act: it is the derivation
+    // reconciling stale state after the expert profile lost approval, and THAT event is the
+    // auditable one, at its own source. Auditing the echo here would attribute a state change
+    // to whichever user happened to trigger the next page render. The `log.info` below is the
+    // correct home for it per ADR-1030's Pino/Axiom split.
     if (needsRepair) {
       await usersRepository.update(session.user.id, { activeMode: 'client' });
       log.info('Workspace repair: activeMode demoted to client', { userId: session.user.id });

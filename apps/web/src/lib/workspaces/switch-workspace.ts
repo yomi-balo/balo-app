@@ -86,6 +86,23 @@ export async function switchWorkspace(
     return { ok: true, workspace: target, changed: false };
   }
 
+  // ADR-1030 — DELIBERATELY NOT AUDITED. Ruled 2026-08-29 (ADR authority: Yomi), in response to
+  // a review question, so it is not re-litigated: a workspace switch is a SELF-DIRECTED
+  // PREFERENCE, not a consequential authority or money-boundary action.
+  //   • It GRANTS NOTHING — it selects among workspaces the actor already holds. The grant lives
+  //     in `company_members`, and that is where it is auditable.
+  //   • No counterparty effect, no money boundary, and it is none of ADR-1030's seven v1 actions
+  //     — whose risk table says "hold v1 to the seven listed actions; expand only on
+  //     demonstrated need".
+  //   • Every consequential act performed WHILE in a workspace already writes its own
+  //     attribution including `company_id`, so "who was acting as company X when they did Y" is
+  //     answerable from Y's own row — never reconstructed from a switch log.
+  //   • ADR-1030 routes the residual forensic question ("who was acting as X at time T") to
+  //     Pino/Axiom by design; its own table puts that class explicitly OUT of the DB.
+  // No existing `activeMode` writer audits either, so this removes nothing. If a counterparty
+  // effect is ever attached to the switch, revisit: the write and the `audit_events` row must
+  // then share ONE `db.transaction` per ADR-1030's spine, at BOTH write sites (here and the
+  // repair write in `api/auth/session-sync/route.ts`).
   if (target.type === 'expert') {
     // `activeCompanyId` is deliberately left alone — a trip through the expert workspace
     // must not lose the user's company choice.
