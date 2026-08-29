@@ -47,8 +47,17 @@ interface ExpertProfileClientProps {
   autoOpenBookingSource: BookingSource;
 }
 
-/** BAL-502 — clears the sticky marketing header (h-14/md:h-16) + the in-page StickyNav. */
-const SECTION_SCROLL_MT = 'scroll-mt-[128px] md:scroll-mt-[136px]';
+/**
+ * BAL-502 — clears the sticky marketing header (h-14/md:h-16) + the in-page StickyNav.
+ * ⚠ FIX round: this offset used to be duplicated as a bare `-72px` literal in the
+ * IntersectionObserver `rootMargin` below, and the paired edit that moved the sections to
+ * `scroll-mt-[128px]` never updated it — the scroll-spy pill would highlight a section still
+ * hidden behind the header + in-page-nav stack. Both now derive from this ONE constant so they
+ * cannot drift apart again. The `md:` value stays a CSS-only literal — `rootMargin` cannot be
+ * responsive, so the base (smallest-viewport) offset is the correct shared value.
+ */
+const SECTION_SCROLL_OFFSET_PX = 128;
+const SECTION_SCROLL_MT = `scroll-mt-[${SECTION_SCROLL_OFFSET_PX}px] md:scroll-mt-[136px]`;
 
 const SECTION_LABELS: Record<ProfileSectionKey, string> = {
   about: 'About',
@@ -135,7 +144,7 @@ export function ExpertProfileClient({
         const key = (top.target as HTMLElement).dataset.section as ProfileSectionKey | undefined;
         if (key) setActiveNav(key);
       },
-      { rootMargin: '-72px 0px -55% 0px', threshold: 0 }
+      { rootMargin: `-${SECTION_SCROLL_OFFSET_PX}px 0px -55% 0px`, threshold: 0 }
     );
 
     for (const section of sections) {

@@ -11,6 +11,7 @@ export {
   EXPERT_EVENTS,
   type ExpertEventMap,
   type ExpertStepName,
+  type DraftFlushOutcome,
   EXPERT_SERVER_EVENTS,
   type ExpertServerEventMap,
 } from './expert';

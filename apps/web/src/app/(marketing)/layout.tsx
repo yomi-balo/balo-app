@@ -1,6 +1,6 @@
 import { getCurrentUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
-import { toMarketingViewer } from '@/components/marketing/marketing-viewer';
+import { toMarketingViewer, type MarketingViewer } from '@/components/marketing/marketing-viewer';
 import { MarketingHeader } from '@/components/marketing/marketing-header';
 
 /**
@@ -33,9 +33,16 @@ import { MarketingHeader } from '@/components/marketing/marketing-header';
 export default async function MarketingLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>): Promise<React.JSX.Element> {
-  let user: Awaited<ReturnType<typeof getCurrentUser>> = null;
+  // BAL-502 FIX round — `toMarketingViewer` moved INSIDE the try. This layout advertises
+  // "fails open" to the signed-out header on ANY session-read problem; the projection itself
+  // isn't currently exploitable to throw (`toMarketingViewer` only touches `SessionUser` fields
+  // that are `notNull` in the schema — `packages/db/src/schema/users.ts:14`), but the fail-open
+  // contract should cover the whole derivation, not just the cookie read, so a future change to
+  // the projection can't silently reintroduce an uncaught throw here.
+  let viewer: MarketingViewer | null = null;
   try {
-    user = await getCurrentUser();
+    const user = await getCurrentUser();
+    viewer = toMarketingViewer(user);
   } catch (error) {
     log.warn('Marketing layout session read failed; rendering the signed-out header', {
       error: error instanceof Error ? error.message : String(error),
@@ -44,7 +51,7 @@ export default async function MarketingLayout({
 
   return (
     <>
-      <MarketingHeader viewer={toMarketingViewer(user)} />
+      <MarketingHeader viewer={viewer} />
       {children}
     </>
   );

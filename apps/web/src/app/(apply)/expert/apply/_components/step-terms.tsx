@@ -14,6 +14,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Form, FormField, FormItem, FormControl, FormMessage } from '@/components/ui/form';
 import { cn } from '@/lib/utils';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
+import { useAuthModal } from '@/hooks/use-auth-modal';
 import {
   termsStepSchema,
   type TermsStepData,
@@ -29,6 +30,7 @@ interface StepTermsProps {
 
 export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.Element {
   const router = useRouter();
+  const authModal = useAuthModal();
   const {
     termsData,
     productsData,
@@ -42,6 +44,8 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     submitState,
     setSubmitState,
     registerSubmit,
+    isAnonymous,
+    saveAnonymousDraftNow,
   } = useWizard();
 
   const [summaryOpen, setSummaryOpen] = useState(true);
@@ -100,6 +104,38 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     return () => viewport.removeEventListener('scroll', handleScroll);
   }, []);
 
+  // BAL-502 §22.4 — anonymous submit gate. The wizard is fully filled and valid;
+  // rather than a hard redirect (which would destroy it), write the envelope
+  // SYNCHRONOUSLY and open the unified auth modal in place. No submit call — the
+  // wizard resumes after auth via the context's post-auth flush (§22.9).
+  //
+  // Extracted to its own callback (FIX round) — inlining it in `handleSubmit`
+  // pushed that function's cognitive complexity past SonarCloud's gate (16 > 15)
+  // once WARNING 7's failure branch was added.
+  const handleAnonymousSubmitGate = useCallback((): void => {
+    // WARNING 7 (FIX round) — `saveAnonymousDraftNow` can fail (Safari private
+    // mode, storage quota near the ~5MB origin cap) and its result was
+    // previously discarded: the visitor would fill the whole wizard,
+    // authenticate, and arrive at an EMPTY resume with no explanation. Surface
+    // the failure HERE, before they commit to creating an account, and refuse
+    // to open the auth modal — signing in now would silently lose everything.
+    const persisted = saveAnonymousDraftNow();
+    isSubmittingRef.current = false;
+    if (!persisted) {
+      toast.error(
+        "We couldn't save your progress in this browser (private browsing, or storage is full). " +
+          "Signing in now would lose what you've filled in — try a normal browser window, or " +
+          'free up space, then submit again.'
+      );
+      return;
+    }
+    track(EXPERT_EVENTS.APPLICATION_AUTH_GATE_REACHED, {
+      last_step: 'terms',
+      step_number: STEP_CONFIG.length,
+    });
+    authModal.open({ onSuccess: () => router.refresh() });
+  }, [saveAnonymousDraftNow, authModal, router]);
+
   const handleSubmit = useCallback(async (): Promise<void> => {
     // Guard double-clicks while submitting/success — the button is intentionally
     // NOT disabled (per BAL-327), so this prevents a duplicate server call. The
@@ -118,6 +154,11 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
       const container = termsFieldRef.current;
       container?.scrollIntoView({ block: 'center' });
       container?.querySelector<HTMLElement>('[role="checkbox"]')?.focus({ preventScroll: true });
+      return;
+    }
+
+    if (isAnonymous) {
+      handleAnonymousSubmitGate();
       return;
     }
 
@@ -181,6 +222,8 @@ export function StepTerms({ headingRef }: Readonly<StepTermsProps>): React.JSX.E
     workHistoryData,
     router,
     goToStep,
+    isAnonymous,
+    handleAnonymousSubmitGate,
   ]);
 
   // Register the submit handler so the relocated bar button can invoke it

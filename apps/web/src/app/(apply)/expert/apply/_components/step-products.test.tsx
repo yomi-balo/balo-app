@@ -92,11 +92,7 @@ const referenceData: ReferenceData = {
 function renderStep(): void {
   const headingRef = createRef<HTMLHeadingElement>();
   render(
-    <ExpertApplicationProvider
-      draft={null}
-      referenceData={referenceData}
-      user={{ id: 'user-1', email: 'jane@example.com' }}
-    >
+    <ExpertApplicationProvider draft={null} referenceData={referenceData} user={{ id: 'user-1' }}>
       <StepProducts headingRef={headingRef} />
     </ExpertApplicationProvider>
   );

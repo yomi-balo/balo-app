@@ -200,7 +200,7 @@ function renderStep(draftArg: ApplicationWithRelations | null): void {
     <ExpertApplicationProvider
       draft={draftArg}
       referenceData={referenceData}
-      user={{ id: 'user-1', email: 'jane@example.com' }}
+      user={{ id: 'user-1' }}
     >
       <StepAssessment headingRef={headingRef} />
     </ExpertApplicationProvider>

@@ -16,10 +16,16 @@ export const PUBLIC_PATHS = new Set([
   '/admin-dev',
   // BAL-502 — the marketing header's supply-side "For experts" link target. EXACT PATH ONLY:
   // `PUBLIC_PATHS` is matched with `.has(pathname)` (see `isPublicRoute` below), so
-  // `/expert/apply/success` and `/expert/apply/review` stay protected. The page keeps its own
-  // unconditional guard (`(apply)/expert/apply/page.tsx`), which now becomes the active gate
-  // for anonymous requests; it redirects to `/login?returnTo=/expert/apply` before touching
-  // any data, and `loadDraftAction` is `withAuth`-wrapped regardless.
+  // `/expert/apply/success` and `/expert/apply/review` stay protected.
+  //
+  // ⚠ This one is GENUINELY reachable signed-out — it does not merely defer to a page-level
+  // redirect. `(apply)/expert/apply/page.tsx` renders an anonymous preview for a null user
+  // (BAL-502 §22): public taxonomy only, via `loadReferenceData()`. No draft is read, no user
+  // is dereferenced, and there is NO anonymous write path — an anonymous draft lives in
+  // `sessionStorage` and is replayed through the auth-owning flush endpoint only after
+  // sign-in. The auth wall sits at SUBMIT (`step-terms.tsx`), not at view.
+  //
+  // `loadDraftAction` remains `withAuth`-wrapped, so the authenticated branch is unchanged.
   '/expert/apply',
 ]);
 

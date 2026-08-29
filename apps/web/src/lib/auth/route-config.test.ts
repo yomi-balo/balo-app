@@ -46,9 +46,11 @@ describe('isPublicRoute', () => {
     expect(isPublicRoute('/admin/users')).toBe(false);
   });
 
-  // BAL-502 — the marketing header's supply-side link target. Public so the page (not the
-  // Edge) owns the anonymous experience; the page's own guard still redirects to /login
-  // before any read.
+  // BAL-502 §22 — the marketing header's supply-side link target. Public so the page (not
+  // the Edge) owns the anonymous experience: `/expert/apply` renders a genuine anonymous
+  // preview (public taxonomy only, via `loadReferenceData()`) rather than redirecting to
+  // /login — the auth wall moved to SUBMIT. See `route-config.ts`'s own comment on this
+  // entry for the full detail.
   it('makes /expert/apply public, exact match only', () => {
     expect(isPublicRoute('/expert/apply')).toBe(true);
     // ⚠ EXACT MATCH ONLY — the children must stay protected.

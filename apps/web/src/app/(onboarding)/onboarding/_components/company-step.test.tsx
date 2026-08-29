@@ -33,9 +33,18 @@ import { CompanyStep } from './company-step';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-function renderStep(authMethod: AuthMethodSignal = 'email') {
+function renderStep(
+  authMethod: AuthMethodSignal = 'email',
+  pendingApplyReturnTo: string | null = null
+) {
   return render(
-    <CompanyStep authMethod={authMethod} timezone="Europe/London" stepNumber={5} onBack={vi.fn()} />
+    <CompanyStep
+      authMethod={authMethod}
+      timezone="Europe/London"
+      stepNumber={5}
+      onBack={vi.fn()}
+      pendingApplyReturnTo={pendingApplyReturnTo}
+    />
   );
 }
 
@@ -110,6 +119,31 @@ describe('CompanyStep', () => {
       );
     }
   );
+
+  // HIGH 3 (BAL-502 FIX round) — the create-branch terminal honours a pending
+  // apply-intent, and ordinary (non-applicant) signups are unaffected.
+  it('applicant-with-pending-intent: pendingApplyReturnTo overrides the create-branch redirect to /expert/apply', async () => {
+    const user = userEvent.setup();
+    mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
+    renderStep('email', '/expert/apply');
+
+    await screen.findByRole('heading', { name: /name your workspace/i });
+    await user.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
+    expect(mockPush).not.toHaveBeenCalledWith('/dashboard');
+  });
+
+  it('ordinary signup: with no pendingApplyReturnTo, the create branch is unaffected (still /dashboard)', async () => {
+    const user = userEvent.setup();
+    mockResolve.mockResolvedValue({ status: 'new', suggestion: 'Acme' });
+    renderStep('email', null);
+
+    await screen.findByRole('heading', { name: /name your workspace/i });
+    await user.click(screen.getByRole('button', { name: /continue/i }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+  });
 
   it('marks prefill_edited when the user changes the suggested name', async () => {
     const user = userEvent.setup();

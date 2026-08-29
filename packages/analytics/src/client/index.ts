@@ -66,6 +66,7 @@ export type {
   OnboardingStepName,
   ExpertEventMap,
   ExpertStepName,
+  DraftFlushOutcome,
   ExpertSetupEventMap,
   ExpertRateEventMap,
   ExpertPayoutEventMap,

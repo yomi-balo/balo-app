@@ -20,7 +20,11 @@ import { StepTerms } from './step-terms';
 interface ExpertApplicationWizardProps {
   draft: ApplicationWithRelations | null;
   referenceData: ReferenceData;
-  user: { id: string; email: string };
+  /** `null` for an anonymous visitor (BAL-502 §22). `user === null` IS the anonymous
+   * signal — the wizard renders fully and is fully fillable either way. FIX round
+   * (smaller item) — `{ id }` only: no `_components/` consumer reads `.email`, so
+   * the visitor's own email address doesn't need to ship into this client payload. */
+  user: { id: string } | null;
 }
 
 // Step-slide variants with a reduced-motion guard. Pure + exported so the

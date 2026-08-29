@@ -38,6 +38,11 @@ interface CompanyStepProps {
   timezone?: string | null;
   stepNumber: number;
   onBack: () => void;
+  /** HIGH 3 (BAL-502 FIX round) — see `intent-step.tsx`'s prop of the same name.
+   * Overrides every terminal redirect below so a visitor who started at the
+   * anonymous /expert/apply wizard but picked "Find an Expert" here still lands
+   * back on their in-progress application, rather than losing it at `/dashboard`. */
+  pendingApplyReturnTo?: string | null;
 }
 
 /**
@@ -49,7 +54,7 @@ interface CompanyStepProps {
  * by the resolve action, never passed as a prop.
  */
 export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(function CompanyStep(
-  { authMethod, timezone, stepNumber, onBack },
+  { authMethod, timezone, stepNumber, onBack, pendingApplyReturnTo = null },
   ref
 ) {
   const router = useRouter();
@@ -167,10 +172,10 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
           intent: 'client',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        router.push(result.data?.redirectTo ?? '/dashboard');
+        router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
       });
     },
-    [authMethod, resolvedStatus, stepNumber, timezone, router]
+    [authMethod, resolvedStatus, stepNumber, timezone, router, pendingApplyReturnTo]
   );
 
   // Escape hatch from the JOIN branch / pending screen — "This isn't my company /
@@ -222,7 +227,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
           intent: 'client',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        router.push(result.data?.redirectTo ?? '/dashboard');
+        router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
         return;
       }
 
@@ -234,7 +239,7 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
       track(DOMAIN_JOIN_EVENTS.INTERSTITIAL_CONTINUED, { mode: 'request', party_type: 'company' });
       setPhase('pending');
     });
-  }, [joinCompany, authMethod, stepNumber, timezone, router]);
+  }, [joinCompany, authMethod, stepNumber, timezone, router, pendingApplyReturnTo]);
 
   // "Explore Balo while you wait" from the pending screen — completes onboarding
   // (client mode, no rename/join) and navigates. Fails CLOSED — an inline banner
@@ -256,9 +261,9 @@ export const CompanyStep = forwardRef<HTMLHeadingElement, CompanyStepProps>(func
         intent: 'client',
         timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
-      router.push(result.data?.redirectTo ?? '/dashboard');
+      router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
     });
-  }, [authMethod, stepNumber, timezone, router]);
+  }, [authMethod, stepNumber, timezone, router, pendingApplyReturnTo]);
 
   if (phase === 'resolving') {
     return (

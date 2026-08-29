@@ -12,6 +12,11 @@ export interface MarketingNavEntry {
   isActive: (pathname: string) => boolean;
 }
 
+// ⚠ Named `MARKETING_NAV_ITEMS`, NOT `MARKETING_NAV_ENTRIES` — this is deliberate, not a
+// missed-the-BAL-495-convention accident. `nav-registry-capability-gated.test.ts` (Scan C,
+// :113-118) asserts `components/layout/nav-registry.ts` is the ONLY non-test source file whose
+// text contains the literal substring `NAV_ENTRIES`. Renaming this constant to end in
+// `_ENTRIES` would trip that invariant and fail the suite — leave the name as-is.
 export const MARKETING_NAV_ITEMS: readonly MarketingNavEntry[] = [
   {
     key: 'find_experts',

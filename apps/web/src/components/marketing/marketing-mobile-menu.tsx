@@ -28,7 +28,9 @@ interface MobileMenuItemProps {
 }
 
 const MENU_ITEM_CLASS = cn(
-  'flex min-h-11 w-full items-center gap-3 rounded-lg px-2 text-[15px] font-medium transition-colors',
+  // BAL-502 FIX round — `motion-reduce:transition-none` was already present on the desktop nav
+  // link (`marketing-header.tsx`); it was missing here.
+  'flex min-h-11 w-full items-center gap-3 rounded-lg px-2 text-[15px] font-medium transition-colors motion-reduce:transition-none',
   'text-foreground hover:bg-accent',
   'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none'
 );

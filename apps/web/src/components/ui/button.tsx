@@ -5,7 +5,16 @@ import { Slot } from 'radix-ui';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+  // BAL-502 FIX round — `active:scale-[.97]` is the design reference's `.bn-press` (motion spec
+  // line 33: "press scale .97, 120-160ms"), applied broadly so every variant gets tactile press
+  // feedback via the existing `transition-all` above (no separate `transition-transform` — that
+  // would win a tailwind-merge conflict against `transition-all` and silently kill the hover
+  // color/shadow transitions on every button). `gradient` overrides this with its own .98 +
+  // hover lift below (the design reference's `.bn-cta`, reserved for the CTA class of button).
+  // `motion-reduce:active:scale-100` is the stacked-variant idiom already proven in this repo
+  // (`PaymentSection.tsx`) — it beats the plain `active:scale-[.97]` rule on source order at
+  // equal specificity, so the press effect is fully inert under prefers-reduced-motion.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all active:scale-[.97] motion-reduce:active:scale-100 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
   {
     variants: {
       variant: {
@@ -24,9 +33,14 @@ const buttonVariants = cva(
          * marketing surface — never for a secondary action.
          * ⚠ tailwind-merge trap: a CONDITIONAL solid background layered over this needs an
          * explicit `bg-none` to win. See `(apply)/expert/apply/_components/wizard-action-bar.tsx:65`.
+         *
+         * BAL-502 FIX round — motion spec line 33 (`.bn-cta`): hover lift 1px + press scale
+         * .98, both inert under `motion-reduce` via the stacked-variant idiom. `active:scale-[.98]`
+         * overrides the base's broader `active:scale-[.97]` (this class string is concatenated
+         * AFTER the base string, so tailwind-merge keeps this one).
          */
         gradient:
-          'from-primary bg-gradient-to-r to-violet-600 text-white shadow-sm hover:shadow-md dark:to-violet-500',
+          'from-primary bg-gradient-to-r to-violet-600 text-white shadow-sm hover:shadow-md hover:-translate-y-px active:scale-[.98] motion-reduce:hover:translate-y-0 motion-reduce:active:scale-100 dark:to-violet-500',
       },
       size: {
         default: 'h-9 px-4 py-2 has-[>svg]:px-3',

@@ -4,10 +4,14 @@ import { AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 /**
- * BAL-502 — group-level error boundary for `(marketing)`. Catches render-time throws in the
- * layout (the session read itself already degrades gracefully to the signed-out header — see
- * `layout.tsx` — so this only fires on a genuinely unexpected render failure). The thrown
- * error is reported to Sentry by the global handler; this boundary only renders the fallback.
+ * BAL-502 — group-level error boundary for `(marketing)`. Per Next.js's own contract, an
+ * `error.tsx` does NOT catch an error thrown by the layout in its own segment (only errors from
+ * that segment's page and nested children) — so this boundary does not, in fact, protect against
+ * a `MarketingLayout` render failure. That is not a gap in practice: `layout.tsx`'s session read
+ * is already try/caught and degrades to the signed-out header rather than throwing (see
+ * `layout.tsx`), so there is nothing left in that layout to escape upward. This boundary exists
+ * for genuinely unexpected failures in the PAGE tree beneath it. The thrown error is reported to
+ * Sentry by the global handler; this boundary only renders the fallback.
  */
 export default function MarketingError({
   reset,

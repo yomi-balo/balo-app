@@ -79,6 +79,10 @@ export function MarketingHeader({ viewer }: Readonly<MarketingHeaderProps>): Rea
 
   return (
     <header className="border-border bg-background/90 supports-[backdrop-filter]:bg-background/70 sticky top-0 z-40 w-full border-b backdrop-blur">
+      {/* BAL-502 FIX round — `lg:px-8` (32px) vs the prototype's flat `padding: '0 40px'` is a
+          deliberate scale-down, not a missed pixel: CLAUDE.md's own "Content padding" table
+          (and 10 other call sites in this app) standardize on `px-4 sm:px-6 lg:px-8`, and the
+          marketing header follows that shared responsive scale rather than a one-off 40px. */}
       <div className="mx-auto flex h-14 max-w-[1320px] items-center gap-4 px-4 sm:px-6 md:h-16 md:gap-9 lg:px-8">
         <Logo />
         <nav aria-label="Marketing" className="hidden items-center gap-[26px] md:flex">

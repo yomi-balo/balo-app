@@ -124,7 +124,7 @@ function OutcomeCard({
 // ── Step ──────────────────────────────────────────────────────────
 
 export function StepAgency({ headingRef }: Readonly<StepAgencyProps>): React.JSX.Element {
-  const { expertProfileId, goNext } = useWizard();
+  const { expertProfileId, goNext, isAnonymous } = useWizard();
   const reduce = useReducedMotion() ?? false;
 
   const [result, setResult] = useState<ResolveExpertAgencyResult | null>(null);
@@ -145,7 +145,11 @@ export function StepAgency({ headingRef }: Readonly<StepAgencyProps>): React.JSX
 
   // Resolve the determined outcome on mount. The action already fails open to `solo`;
   // the `.catch` is a defensive belt-and-braces so a rejection still lands somewhere.
+  // ⚠ Anonymous — unresolvable by nature (§22.5): `resolveExpertAgencyAction` reads
+  // the verified signup email off the `users` row, and with no account there is no
+  // input to resolve from. Skip the call entirely rather than let it fail open.
   useEffect(() => {
+    if (isAnonymous) return;
     let active = true;
     resolveExpertAgencyAction()
       .then((resolved) => {
@@ -157,7 +161,7 @@ export function StepAgency({ headingRef }: Readonly<StepAgencyProps>): React.JSX
     return () => {
       active = false;
     };
-  }, []);
+  }, [isAnonymous]);
 
   // Move focus to the outcome heading once it renders (the wizard's on-enter focus
   // fires while this step is still the loading spinner, so re-focus here).
@@ -204,6 +208,37 @@ export function StepAgency({ headingRef }: Readonly<StepAgencyProps>): React.JSX
     // satisfies no-floating-promises without the void operator (Sonar S3735).
     handleContinue().catch(() => undefined);
   }, [handleContinue]);
+
+  const handleAnonymousContinue = useCallback((): void => {
+    // Self-advancing: goNext() skips the shared validation/save for this step and
+    // just advances — there is nothing to resolve or write anonymously (§22.5).
+    goNext().catch(() => undefined);
+  }, [goNext]);
+
+  // ── Anonymous — unresolvable by nature; forward-looking panel only (§22.5) ──
+  if (isAnonymous) {
+    return (
+      <OutcomeCard
+        headingRef={headingRef}
+        badge={
+          <AgencyBadge tone="primary">
+            <Sparkles className="h-6 w-6" aria-hidden="true" />
+          </AgencyBadge>
+        }
+        heading="We'll sort this out once you're signed in"
+        actionError={null}
+        busy={false}
+        busyLabel=""
+        reduce={reduce}
+        onContinue={handleAnonymousContinue}
+      >
+        <p>
+          We&apos;ll match you to your agency — or set you up as an independent expert — once your
+          email is confirmed. Nothing to do here yet.
+        </p>
+      </OutcomeCard>
+    );
+  }
 
   // ── Loading ─────────────────────────────────────────────────────
   if (result === null) {

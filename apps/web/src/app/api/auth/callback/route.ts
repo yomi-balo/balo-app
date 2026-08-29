@@ -4,6 +4,7 @@ import { getSession, type SessionUser } from '@/lib/auth/session';
 import { mapWorkosAuthMethod } from '@/lib/auth/auth-method';
 import { db, usersRepository } from '@balo/db';
 import { isValidReturnTo } from '@/lib/auth/validation';
+import { PENDING_APPLY_PATH } from '@/lib/auth/onboarding-return-to';
 import { AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser } from '@/lib/auth/resolve-identity';
 import { log } from '@/lib/logging';
@@ -143,14 +144,25 @@ async function createSession(
 
 function determineRedirectUrl(resolved: ResolvedUser, req: NextRequest): string {
   const needsOnboarding = resolved.isNewUser || resolved.user.onboardingCompleted === false;
+  const returnTo = req.cookies.get('auth_return_to')?.value;
+  const validReturnTo = returnTo && isValidReturnTo(returnTo) ? returnTo : null;
 
   if (needsOnboarding) {
+    // HIGH 3 (BAL-502 FIX round) — the `auth_return_to` cookie used to be
+    // dropped unread here, so a brand-new OAuth signup started from the
+    // anonymous /expert/apply wizard (BAL-502 §22) never returned there once
+    // onboarding completed. Thread it through as a query param instead —
+    // restricted to that one origin specifically (not a generic returnTo): a
+    // wider carry-through would change onboarding's terminal redirect for every
+    // OAuth signup, not just this one, which is out of scope for this fix.
+    if (validReturnTo === PENDING_APPLY_PATH) {
+      return `/onboarding?returnTo=${encodeURIComponent(validReturnTo)}`;
+    }
     return '/onboarding';
   }
 
-  const returnTo = req.cookies.get('auth_return_to')?.value;
-  if (returnTo && isValidReturnTo(returnTo)) {
-    return returnTo;
+  if (validReturnTo) {
+    return validReturnTo;
   }
 
   return resolved.user.activeMode === 'expert' ? '/expert/dashboard' : '/dashboard';

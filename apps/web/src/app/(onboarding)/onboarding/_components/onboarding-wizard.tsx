@@ -12,6 +12,7 @@ import { ProgressDots } from './progress-dots';
 import { cn } from '@/lib/utils';
 import { track, ONBOARDING_EVENTS } from '@/lib/analytics';
 import type { AuthMethodSignal } from '@/lib/auth/auth-method';
+import { hasPendingApplyIntent, PENDING_APPLY_PATH } from '@/lib/auth/onboarding-return-to';
 
 interface OnboardingWizardProps {
   firstName: string | null;
@@ -34,6 +35,18 @@ export function OnboardingWizard({
   // BAL-361: the fail-closed middleware gate appends ?forced=1 when it redirected an
   // un-onboarded user here (e.g. from /experts). Used for the explanatory line + analytics.
   const forced = searchParams.get('forced') === '1';
+
+  // HIGH 3 (BAL-502 FIX round) — a new signup started from the anonymous
+  // /expert/apply wizard carries `?returnTo=/expert/apply` (threaded by
+  // `signup-step.tsx` / `verify-step.tsx` / the OAuth callback route via
+  // `buildOnboardingUrl`). `hasPendingApplyIntent` exact-matches it — never
+  // forwards the raw param into a `router.push`, so this is a boolean gate, not
+  // an open-redirect surface. `null` here means "no pending intent", and every
+  // existing terminal redirect (`result.data?.redirectTo ?? '/dashboard'`) is
+  // untouched for that population.
+  const pendingApplyReturnTo = hasPendingApplyIntent(searchParams.get('returnTo'))
+    ? PENDING_APPLY_PATH
+    : null;
 
   const needsNameStep = firstName === null;
   // BAL-350: base + 1 for the new client-only company step (the client terminal).
@@ -135,6 +148,7 @@ export function OnboardingWizard({
               onClientContinue={goForward}
               timezone={selectedTimezone}
               stepNumber={4}
+              pendingApplyReturnTo={pendingApplyReturnTo}
             />
           );
         case 5:
@@ -145,6 +159,7 @@ export function OnboardingWizard({
               timezone={selectedTimezone}
               onBack={goBack}
               stepNumber={5}
+              pendingApplyReturnTo={pendingApplyReturnTo}
             />
           );
         default:
@@ -172,6 +187,7 @@ export function OnboardingWizard({
             onBack={goBack}
             onClientContinue={goForward}
             timezone={selectedTimezone}
+            pendingApplyReturnTo={pendingApplyReturnTo}
           />
         );
       case 4:
@@ -182,6 +198,7 @@ export function OnboardingWizard({
             timezone={selectedTimezone}
             onBack={goBack}
             stepNumber={4}
+            pendingApplyReturnTo={pendingApplyReturnTo}
           />
         );
       default:

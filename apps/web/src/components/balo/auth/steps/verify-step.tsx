@@ -8,6 +8,7 @@ import { AuthHeader } from '../auth-header';
 import { VerificationCodeInput } from '../verification-code-input';
 import { verifyEmailAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
+import { buildOnboardingUrl } from '@/lib/auth/onboarding-return-to';
 
 interface VerifyStepProps {
   email: string;
@@ -57,7 +58,10 @@ export function VerifyStep({
           active_mode: result.data?.activeMode,
           platform_role: result.data?.platformRole,
         });
-        router.push('/onboarding');
+        // HIGH 3 (BAL-502 FIX round) — see the matching comment in
+        // `signup-step.tsx`: threads a pending /expert/apply intent through
+        // onboarding's terminal redirect for the email-verification signup path.
+        router.push(buildOnboardingUrl(globalThis.location.pathname));
         onSuccess();
       } else {
         track(AUTH_EVENTS.VERIFICATION_CODE_SUBMITTED, { success: false });

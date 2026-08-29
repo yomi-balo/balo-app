@@ -114,11 +114,18 @@ const draft = {
 function renderStep(): { container: HTMLElement } {
   const headingRef = createRef<HTMLHeadingElement>();
   const utils = render(
-    <ExpertApplicationProvider
-      draft={draft}
-      referenceData={referenceData}
-      user={{ id: 'user-1', email: 'jane@example.com' }}
-    >
+    <ExpertApplicationProvider draft={draft} referenceData={referenceData} user={{ id: 'user-1' }}>
+      <StepAgency headingRef={headingRef} />
+    </ExpertApplicationProvider>
+  );
+  return { container: utils.container };
+}
+
+// BAL-502 §22.5 — the anonymous branch: no draft, no user.
+function renderAnonymousStep(): { container: HTMLElement } {
+  const headingRef = createRef<HTMLHeadingElement>();
+  const utils = render(
+    <ExpertApplicationProvider draft={null} referenceData={referenceData} user={null}>
       <StepAgency headingRef={headingRef} />
     </ExpertApplicationProvider>
   );
@@ -259,5 +266,35 @@ describe('StepAgency', () => {
     const { container } = renderStep();
     await screen.findByRole('heading', { name: /let's set up your expert profile/i });
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // ── Anonymous branch (BAL-502 §22.5) ──────────────────────────────
+
+  describe('anonymous', () => {
+    it('never calls resolveExpertAgencyAction or linkExpertAgencyAction', async () => {
+      renderAnonymousStep();
+      await screen.findByRole('heading', { name: /sort this out once you're signed in/i });
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockLink).not.toHaveBeenCalled();
+    });
+
+    it('renders the forward-looking panel and Continue advances client-side via goNext', async () => {
+      const user = userEvent.setup();
+      renderAnonymousStep();
+
+      const heading = await screen.findByRole('heading', {
+        name: /sort this out once you're signed in/i,
+      });
+      expect(heading).toBeInTheDocument();
+      expect(screen.getByText(/we'll match you to your agency/i)).toBeInTheDocument();
+
+      const continueBtn = screen.getByRole('button', { name: /continue/i });
+      await user.click(continueBtn);
+
+      // Self-advancing goNext skips validation/save entirely for this step — no
+      // server call of any kind, anonymous or otherwise.
+      expect(saveDraftMock).not.toHaveBeenCalled();
+      expect(mockLink).not.toHaveBeenCalled();
+    });
   });
 });

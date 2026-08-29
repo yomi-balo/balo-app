@@ -1,27 +1,14 @@
 'use server';
 import 'server-only';
 import { withAuth } from '@/lib/auth/with-auth';
-import {
-  expertsRepository,
-  referenceDataRepository,
-  type ApplicationWithRelations,
-  type ProductsByCategory,
-  type CertificationsByCategory,
-  type Vertical,
-  type SupportType,
-  type Language,
-  type Industry,
-} from '@balo/db';
+import { expertsRepository, type ApplicationWithRelations } from '@balo/db';
 import { log } from '@/lib/logging';
+import { loadReferenceData } from '@/lib/expert-apply/reference-data';
 
-export interface ReferenceData {
-  productsByCategory: ProductsByCategory[];
-  supportTypes: SupportType[];
-  certificationsByCategory: CertificationsByCategory[];
-  languages: Language[];
-  industries: Industry[];
-  vertical: Vertical;
-}
+// Re-exported from its new home (BAL-502 §22) so every existing import path
+// (`../_actions/load-draft`, and `./index`) keeps working unchanged.
+export type { ReferenceData } from '@/lib/expert-apply/reference-data';
+import type { ReferenceData } from '@/lib/expert-apply/reference-data';
 
 export interface LoadDraftResult {
   draft: ApplicationWithRelations | null;
@@ -30,24 +17,21 @@ export interface LoadDraftResult {
 
 export const loadDraftAction = withAuth(async (session): Promise<LoadDraftResult> => {
   try {
-    const vertical = await referenceDataRepository.getSalesforceVertical();
+    // The ONE definition of the six public taxonomy reads — shared with the
+    // anonymous branch of `page.tsx` (`@/lib/expert-apply/reference-data`). This
+    // composition serialises the draft lookup after the taxonomy reads (which have
+    // their own internal Promise.all) rather than duplicating the six calls to
+    // preserve the previous single-Promise.all shape.
+    const referenceData = await loadReferenceData();
 
     const existingProfile = await expertsRepository.findApplicationByUserId(
       session.user.id,
-      vertical.id
+      referenceData.vertical.id
     );
 
-    const [draft, productsByCategory, supportTypes, certsByCategory, languages, industries] =
-      await Promise.all([
-        existingProfile
-          ? expertsRepository.findApplicationWithRelations(existingProfile.id)
-          : Promise.resolve(null),
-        referenceDataRepository.getProductsByVertical(vertical.id),
-        referenceDataRepository.getSupportTypes(vertical.id),
-        referenceDataRepository.getCertificationsByVertical(vertical.id),
-        referenceDataRepository.getLanguages(),
-        referenceDataRepository.getIndustries(),
-      ]);
+    const draft = existingProfile
+      ? await expertsRepository.findApplicationWithRelations(existingProfile.id)
+      : null;
 
     log.info('Expert application draft loaded', {
       userId: session.user.id,
@@ -57,14 +41,7 @@ export const loadDraftAction = withAuth(async (session): Promise<LoadDraftResult
 
     return {
       draft: draft ?? null,
-      referenceData: {
-        productsByCategory,
-        supportTypes,
-        certificationsByCategory: certsByCategory,
-        languages,
-        industries,
-        vertical,
-      },
+      referenceData,
     };
   } catch (error) {
     log.error('Failed to load expert application draft', {
