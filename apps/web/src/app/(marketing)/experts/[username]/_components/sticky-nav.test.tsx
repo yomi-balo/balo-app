@@ -43,6 +43,15 @@ describe('StickyNav', () => {
     expect(onJump).toHaveBeenCalledWith('reviews');
   });
 
+  // BAL-502 — the marketing header is `sticky top-0 z-40`; `top-0` here would slide this
+  // in-page nav underneath it instead of stacking below.
+  it('sits below the marketing header rather than at the viewport top', () => {
+    const { container } = render(<StickyNav sections={SECTIONS} active="about" onJump={vi.fn()} />);
+    const nav = container.querySelector('nav');
+    expect(nav?.className).toContain('top-14');
+    expect(nav?.className).toContain('md:top-16');
+  });
+
   it('has no accessibility violations', async () => {
     const { container } = render(<StickyNav sections={SECTIONS} active="about" onJump={vi.fn()} />);
     expect(await axe(container)).toHaveNoViolations();

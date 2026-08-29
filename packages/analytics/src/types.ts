@@ -46,6 +46,7 @@ import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/
 import type { BookingEventMap } from './events/booking';
 import type { WorkspaceServerEventMap } from './events/workspace';
 import type { NavEventMap } from './events/nav';
+import type { MarketingEventMap } from './events/marketing';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -87,7 +88,10 @@ export type AllEvents = AuthEventMap &
   BookingEventMap &
   // BAL-495 — the nav registry's CLIENT family. `useNavItemTracking` (apps/web) is the ONE
   // dispatch point.
-  NavEventMap;
+  NavEventMap &
+  // BAL-502 — the public marketing chrome's CLIENT family. `useMarketingTracking` (apps/web)
+  // is the ONE dispatch point.
+  MarketingEventMap;
 
 export type EventName = keyof AllEvents;
 

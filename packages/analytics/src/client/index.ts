@@ -52,6 +52,11 @@ export {
   NAV_EVENTS,
   NAV_ITEM_KEYS,
   NAV_SURFACES,
+  // BAL-502 — the marketing chrome's canonical event + link/surface tuples. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  MARKETING_EVENTS,
+  MARKETING_NAV_LINKS,
+  MARKETING_SURFACES,
 } from '../events';
 
 export type {
@@ -138,4 +143,8 @@ export type {
   NavEventMap,
   NavItemKey,
   NavSurface,
+  // BAL-502 — the marketing chrome's event payload and link/surface vocabularies.
+  MarketingEventMap,
+  MarketingNavLink,
+  MarketingSurface,
 } from '../events';

@@ -17,6 +17,16 @@ const buttonVariants = cva(
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
         ghost: 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
         link: 'text-primary underline-offset-4 hover:underline',
+        /**
+         * BAL-502 — the signature blue→violet conversion CTA, promoted from ~20 inline
+         * copies of this literal to a named variant (the design reference calls it
+         * `variant="gradient"`). Reserved for conversion CTAs — "Get started" on the
+         * marketing surface — never for a secondary action.
+         * ⚠ tailwind-merge trap: a CONDITIONAL solid background layered over this needs an
+         * explicit `bg-none` to win. See `(apply)/expert/apply/_components/wizard-action-bar.tsx:65`.
+         */
+        gradient:
+          'from-primary bg-gradient-to-r to-violet-600 text-white shadow-sm hover:shadow-md dark:to-violet-500',
       },
       size: {
         default: 'h-9 px-4 py-2 has-[>svg]:px-3',

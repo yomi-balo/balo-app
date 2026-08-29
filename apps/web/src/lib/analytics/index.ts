@@ -45,6 +45,10 @@ export {
   NAV_EVENTS,
   NAV_ITEM_KEYS,
   NAV_SURFACES,
+  /** BAL-502 — the marketing chrome's event constant + canonical link/surface tuples. */
+  MARKETING_EVENTS,
+  MARKETING_NAV_LINKS,
+  MARKETING_SURFACES,
 } from '@balo/analytics/client';
 
 export type {
@@ -96,4 +100,8 @@ export type {
   NavEventMap,
   NavItemKey,
   NavSurface,
+  /** BAL-502 — the marketing chrome's event payload and link/surface vocabularies. */
+  MarketingEventMap,
+  MarketingNavLink,
+  MarketingSurface,
 } from '@balo/analytics/client';

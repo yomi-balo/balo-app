@@ -47,6 +47,9 @@ interface ExpertProfileClientProps {
   autoOpenBookingSource: BookingSource;
 }
 
+/** BAL-502 — clears the sticky marketing header (h-14/md:h-16) + the in-page StickyNav. */
+const SECTION_SCROLL_MT = 'scroll-mt-[128px] md:scroll-mt-[136px]';
+
 const SECTION_LABELS: Record<ProfileSectionKey, string> = {
   about: 'About',
   expertise: 'Expertise',
@@ -230,10 +233,10 @@ export function ExpertProfileClient({
         <div className="grid grid-cols-1 items-start gap-4 pt-5 min-[820px]:grid-cols-[minmax(0,1fr)_360px] min-[820px]:gap-7 min-[820px]:pt-7">
           {/* Left column */}
           <div className="flex flex-col gap-4">
-            <section id="section-about" data-section="about" className="scroll-mt-[72px]">
+            <section id="section-about" data-section="about" className={SECTION_SCROLL_MT}>
               <AboutSection bio={view.bio} firstName={view.firstName} />
             </section>
-            <section id="section-expertise" data-section="expertise" className="scroll-mt-[72px]">
+            <section id="section-expertise" data-section="expertise" className={SECTION_SCROLL_MT}>
               <ExpertiseSection
                 competencies={view.competencies}
                 certifications={view.certifications}
@@ -242,7 +245,7 @@ export function ExpertProfileClient({
             <section
               id="section-quickstarts"
               data-section="quickstarts"
-              className="scroll-mt-[72px]"
+              className={SECTION_SCROLL_MT}
             >
               <QuickStartsSection
                 packages={[]}
@@ -251,11 +254,11 @@ export function ExpertProfileClient({
               />
             </section>
             {view.workHistory.length > 0 && (
-              <section id="section-work" data-section="work" className="scroll-mt-[72px]">
+              <section id="section-work" data-section="work" className={SECTION_SCROLL_MT}>
                 <WorkSection workHistory={view.workHistory} firstName={view.firstName} />
               </section>
             )}
-            <section id="section-reviews" data-section="reviews" className="scroll-mt-[72px]">
+            <section id="section-reviews" data-section="reviews" className={SECTION_SCROLL_MT}>
               <ReviewsSection
                 firstName={view.firstName}
                 ratingAverage={view.ratingAverage}
