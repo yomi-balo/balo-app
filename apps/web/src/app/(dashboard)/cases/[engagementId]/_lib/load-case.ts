@@ -18,8 +18,12 @@ import {
   type CaseExpertEarningsAggregate,
   type Meeting,
 } from '@balo/db';
-import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
-import { MIN_MEETING_MINUTES, rescheduleProposalIsLive } from '@balo/shared/meetings';
+import { CAPABILITIES, ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
+import {
+  MIN_MEETING_MINUTES,
+  rescheduleProposalIsLive,
+  resolveCancelRefusal,
+} from '@balo/shared/meetings';
 import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
 import {
   caseConsultationIsUpcoming,
@@ -32,6 +36,7 @@ import { formatLongUtc } from '@/lib/format/utc-date';
 import { errorMessage, log } from '@/lib/logging';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
+import { hasCapability } from '@/lib/authz';
 import { hasEngagementCapability } from '@/lib/authz/engagement';
 import { resolveCaseAccess, type CaseAccess } from '@/lib/cases/resolve-case-access';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
@@ -320,6 +325,16 @@ interface CounterpartyLabels {
   /** What the conversation composer and the "Theirs" action-item heading address. */
   counterpartyName: string;
   counterpartyFirstName: string;
+  /**
+   * ⚠ THE PROSPECTIVE COUNTERPARTY *PARTY* LABEL, LENS-RELATIVE — never a person on the client
+   * lens. CLAUDE.md's attribution-by-tense rule: prospective copy ("X will see the slot open up
+   * again") names the PARTY — the agency for an agency-delivered case, the person's own name only
+   * for an independent expert. It is DERIVED FROM `expertPartyShort`, i.e. from the single
+   * `expertPartyDisplayName` definition in `@balo/shared/parties` — do NOT re-derive the
+   * agency-vs-person branch here or anywhere else. `counterpartyFirstName` above stays a bare
+   * first name and belongs to the conversation's person-addressed register ("chat with Alex").
+   */
+  counterpartyPartyLabel: string;
   /** The org line under the case title: the agency (client lens) or the company (expert). */
   counterpartyOrgLabel: string;
 }
@@ -385,6 +400,9 @@ async function resolveCounterparty(
       expertPartyShort,
       counterpartyName: expertPerson,
       counterpartyFirstName: personDisplayName(firstName, null, expertPartyShort),
+      // The expert PARTY — the agency when they deliver through one, their own name when
+      // independent. Already resolved by `expertPartyDisplayName` above; reused, never re-derived.
+      counterpartyPartyLabel: expertPartyShort,
       counterpartyOrgLabel: agencyLabel ?? expertPartyShort,
       party: {
         name: expertPerson,
@@ -404,6 +422,9 @@ async function resolveCounterparty(
     expertPartyShort,
     counterpartyName: clientCompanyName,
     counterpartyFirstName: clientCompanyName,
+    // The expert lens's counterparty IS the client COMPANY — already a party, never a person
+    // (see this function's docblock on the deliberate departure from the design fixture).
+    counterpartyPartyLabel: clientCompanyName,
     counterpartyOrgLabel: clientCompanyName,
     party: {
       name: clientCompanyName,
@@ -578,6 +599,29 @@ export const loadCase = cache(
 
     const isOpen = caseRow.closedAt === null;
     const nextScheduled = selectNextScheduled(meetings, meetingIdsWithLiveProposal);
+    /**
+     * ⚠⚠ BAL-410 — THE CANCEL RENDER HINT'S STATUS TERM, AND THE **SAME SOURCE OF TRUTH THE
+     * WRITE PATH USES**. `nextScheduled !== null` is deliberately WIDER than cancellable: it
+     * admits `in_progress` (correctly — a call happening right now is the most urgent thing the
+     * header can say) and `waiting_for_participants` folds into the same `'scheduled'`
+     * consultation STATE. Neither is cancellable.
+     *
+     * Without this term, the moment ONE party joins early the meeting flips to
+     * `waiting_for_participants` server-side and the OTHER party — who has seen nothing happen —
+     * still gets a fully enabled "Cancel" that can only 409. That is the AC "cancellation is
+     * unavailable once the meeting has started" leaking through the render hint.
+     *
+     * ⚠ `resolveCancelRefusal` / `CANCELLABLE_MEETING_STATUSES` FROM `@balo/shared/meetings`,
+     * NEVER A RE-LISTED STATUS LITERAL — the allow-list is the ONE definition, shared with the
+     * route guard and the repository CAS, so a sixth `meeting_status` label is denied by default
+     * in all three places at once.
+     *
+     * Per CLAUDE.md's empty-state rule this HIDES the affordance rather than disabling it: the
+     * nudge renders `canCancel ? <Button/> : null`, and a disabled Cancel with no explanation
+     * would be worse than its absence for a party who never saw the call start.
+     */
+    const nextScheduledIsCancellable =
+      nextScheduled !== null && resolveCancelRefusal(nextScheduled.status) === null;
     // BAL-411 — the nudge cares about the proposal on THE NEXT meeting only: a live proposal's
     // meeting is always `caseConsultationIsUpcoming`, so if `nextScheduled` exists and carries a
     // proposal, this finds it; a proposal on some OTHER, later meeting is represented on that
@@ -641,7 +685,30 @@ export const loadCase = cache(
       { name: labels.counterpartyName, isViewer: false },
     ];
 
+    // ⚠⚠ BAL-410 — THE **CLIENT** CANCEL FLAG, RESOLVED BEFORE THE LENS SPLIT because it lives on
+    // `CaseSurfaceViewBase` (both lenses have it — the AC gives cancel to client AND expert).
+    //
+    // ⚠ THE EXPERT ARM DOES **NOT** USE THIS VALUE. It is overwritten inside the `lens ===
+    // 'expert'` branch below with a FOURTH independent `hasEngagementCapability` call, because
+    // the two lenses are on DIFFERENT AXES: membership `participate` for the client, engagement
+    // `manage_engagement` for the expert. Computing one flag for both would be exactly the
+    // "lens alone is authorization" mistake CLAUDE.md forbids.
+    //
+    // ⚠ SHORT-CIRCUITS ON `isOpen` AND `nextScheduled` FIRST, so a closed case (or one with
+    // nothing booked) resolves NO capability call at all — the same pre-existing invariant the
+    // three engagement-capability flags below preserve.
+    //
+    // ⚠ THIS IS THE FIRST CAPABILITY-DERIVED FLAG ON THE CLIENT ARM (which previously returned
+    // only `canClose: isOpen`), so it is genuinely new surface area rather than a copy.
+    const mayCancelAsClient =
+      lens === 'client' &&
+      isOpen &&
+      nextScheduledIsCancellable &&
+      (await hasCapability({ id: userId }, CAPABILITIES.PARTICIPATE, { companyId }));
+
     const base = {
+      canCancelConsultation: mayCancelAsClient,
+      counterpartyPartyLabel: labels.counterpartyPartyLabel,
       engagementId,
       expertProfileId,
       viewerUserId: userId,
@@ -668,70 +735,139 @@ export const loadCase = cache(
     // object cannot HOLD an expert's earnings figure. The expert arm has no `canClose`,
     // because only a client may close a case (BAL-417); the expert may only ASK.
     if (lens === 'expert') {
-      // ⚠⚠ THE CAPABILITY TERM IS REQUIRED — VISIBILITY IS DELIBERATELY WIDER THAN THE ACT.
-      // `resolveCaseAccess` admits ANY live agency member, INCLUDING agency role `expert`
-      // (`actorHasExpertSideVisibility`, BAL-419 — deliberately wide, never narrow it). But
-      // `requestResolutionAction` gates on the ENGAGEMENT axis, which role `expert` does not
-      // hold. Deriving this flag from lens alone therefore rendered a button that always
-      // failed with a bare permission error — the one dead-end CTA on a surface whose own
-      // rule is "an absent action beats a dead one" (`case-view-types.ts`). The read is
-      // resolved here so the action stays the authority and this stays a render hint: the
-      // server action re-checks independently and is NOT trusting this flag.
-      // ⚠ EACH FLAG SHORT-CIRCUITS ITS OWN `await hasEngagementCapability(...)` INDEPENDENTLY —
-      // NOT a shared/hoisted call. A shared call was tried and reverted: it made the capability
-      // check unconditional on `isOpen` alone, which broke the pre-existing invariant (pinned
-      // by its own test) that a CLOSED case, or a case with a resolution ALREADY requested,
-      // resolves NO capability call at all. Three calls with identical short-circuit shape cost
-      // nothing extra in the common case (at most one of the three ever actually awaits,
-      // because at most one of `canRequestResolution`/`canProposeReschedule`/
-      // `canManageReschedule` is relevant to any one case state) and keep every existing
-      // short-circuit guarantee intact.
-      const mayRequestResolution =
-        isOpen &&
-        caseRow.resolutionRequestedAt === null &&
-        (await hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, {
-          contextType: 'case',
-          contextId: engagementId,
-        }));
-      // BAL-411 — the SAME resolve-server-side/re-check-in-the-action pattern as
-      // `mayRequestResolution` immediately above. `rescheduleProposalForNudge === null` is the
-      // "no LIVE proposal already outstanding on the next meeting" half — mirroring the DB's
-      // own partial unique index (at most one pending proposal per meeting), so the button
-      // never invites a 409 `proposal_already_pending` the picker itself could have prevented.
-      const mayProposeReschedule =
-        isOpen &&
-        nextScheduled !== null &&
-        rescheduleProposalForNudge === null &&
-        (await hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, {
-          contextType: 'case',
-          contextId: engagementId,
-        }));
-      // Item 18 (security LOW) — the WITHDRAW holder set. `canProposeReschedule` is
-      // STRUCTURALLY FALSE exactly when Withdraw would be relevant (a live proposal already
-      // exists — that is `rescheduleProposalForNudge !== null`), so it cannot be reused as-is
-      // to gate the Withdraw button the way its own docblock suggested; this is the SAME
-      // capability check, without the "no live proposal" condition, so the card can gate
-      // Withdraw on the actual holder set instead of `lens === 'expert'` alone (which also
-      // admits an agency member with role `expert` — a legitimate viewer of the case surface
-      // who is deliberately and permanently NOT a `manage_engagement` holder, ADR-1046 §7).
-      const canManageReschedule =
-        isOpen &&
-        (await hasEngagementCapability({ id: userId }, ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT, {
-          contextType: 'case',
-          contextId: engagementId,
-        }));
+      const expertCapabilities = await resolveExpertLensCapabilities({
+        userId,
+        engagementId,
+        isOpen,
+        resolutionRequestedAt: caseRow.resolutionRequestedAt,
+        nextScheduled,
+        nextScheduledIsCancellable,
+        rescheduleProposalForNudge,
+      });
       return {
         ...base,
+        canCancelConsultation: expertCapabilities.mayCancelAsExpert,
         lens: 'expert',
         earnings: toEarningsView(earningsAggregate ?? EMPTY_EARNINGS),
-        canRequestResolution: mayRequestResolution,
-        canProposeReschedule: mayProposeReschedule,
-        canManageReschedule,
+        canRequestResolution: expertCapabilities.mayRequestResolution,
+        canProposeReschedule: expertCapabilities.mayProposeReschedule,
+        canManageReschedule: expertCapabilities.canManageReschedule,
       };
     }
     return { ...base, lens: 'client', canClose: isOpen };
   }
 );
+
+/** `selectNextScheduled`'s return shape — named so `resolveExpertLensCapabilities` need not repeat it. */
+type NextScheduledMeeting = ReturnType<typeof selectNextScheduled>;
+
+interface ExpertLensCapabilitiesInput {
+  userId: string;
+  engagementId: string;
+  isOpen: boolean;
+  resolutionRequestedAt: Date | null;
+  nextScheduled: NextScheduledMeeting;
+  nextScheduledIsCancellable: boolean;
+  rescheduleProposalForNudge: Awaited<
+    ReturnType<typeof resolveRescheduleProposalForNudge>
+  >['proposal'];
+}
+
+interface ExpertLensCapabilities {
+  mayRequestResolution: boolean;
+  mayProposeReschedule: boolean;
+  canManageReschedule: boolean;
+  mayCancelAsExpert: boolean;
+}
+
+/**
+ * The four independent, short-circuiting `manage_engagement` capability checks gated on the
+ * expert lens — extracted from `loadCase` to keep it under SonarCloud's cognitive-complexity
+ * ceiling of 15. Behaviour is UNCHANGED by the extraction; every reasoning comment below is
+ * copied verbatim from the call site it used to sit at.
+ *
+ * ⚠⚠ THE CAPABILITY TERM IS REQUIRED ON EVERY FLAG — VISIBILITY IS DELIBERATELY WIDER THAN THE
+ * ACT. `resolveCaseAccess` admits ANY live agency member, INCLUDING agency role `expert`
+ * (`actorHasExpertSideVisibility`, BAL-419 — deliberately wide, never narrow it), who is NOT a
+ * `manage_engagement` holder (ADR-1046 §7) and would otherwise get a dead-end button — the one
+ * kind of CTA this surface's own rule forbids ("an absent action beats a dead one",
+ * `case-view-types.ts`). The read is resolved here so the server action stays the authority and
+ * this stays a render hint: it is NOT trusted by the action, which re-checks independently.
+ *
+ * ⚠ EACH FLAG SHORT-CIRCUITS ITS OWN `await hasEngagementCapability(...)` INDEPENDENTLY — NOT a
+ * shared/hoisted call. A shared call was tried and reverted: it made the capability check
+ * unconditional on `isOpen` alone, which broke the pre-existing invariant (pinned by its own
+ * test) that a CLOSED case resolves no capability call at all. Four calls with identical
+ * short-circuit shape cost nothing extra in the common case — at most one of the four ever
+ * actually awaits, because at most one of `canRequestResolution`/`canProposeReschedule`/
+ * `canManageReschedule`/`mayCancelAsExpert` is relevant to any one case state.
+ */
+async function resolveExpertLensCapabilities(
+  input: ExpertLensCapabilitiesInput
+): Promise<ExpertLensCapabilities> {
+  const {
+    userId,
+    engagementId,
+    isOpen,
+    resolutionRequestedAt,
+    nextScheduled,
+    nextScheduledIsCancellable,
+    rescheduleProposalForNudge,
+  } = input;
+  const contextSubject = { contextType: 'case' as const, contextId: engagementId };
+
+  const mayRequestResolution =
+    isOpen &&
+    resolutionRequestedAt === null &&
+    (await hasEngagementCapability(
+      { id: userId },
+      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+      contextSubject
+    ));
+  // BAL-411 — the SAME resolve-server-side/re-check-in-the-action pattern as
+  // `mayRequestResolution` immediately above. `rescheduleProposalForNudge === null` is the
+  // "no LIVE proposal already outstanding on the next meeting" half — mirroring the DB's
+  // own partial unique index (at most one pending proposal per meeting), so the button
+  // never invites a 409 `proposal_already_pending` the picker itself could have prevented.
+  const mayProposeReschedule =
+    isOpen &&
+    nextScheduled !== null &&
+    rescheduleProposalForNudge === null &&
+    (await hasEngagementCapability(
+      { id: userId },
+      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+      contextSubject
+    ));
+  // Item 18 (security LOW) — the WITHDRAW holder set. `canProposeReschedule` is
+  // STRUCTURALLY FALSE exactly when Withdraw would be relevant (a live proposal already
+  // exists — that is `rescheduleProposalForNudge !== null`), so it cannot be reused as-is
+  // to gate the Withdraw button the way its own docblock suggested; this is the SAME
+  // capability check, without the "no live proposal" condition, so the card can gate
+  // Withdraw on the actual holder set instead of `lens === 'expert'` alone (which also
+  // admits an agency member with role `expert` — a legitimate viewer of the case surface
+  // who is deliberately and permanently NOT a `manage_engagement` holder, ADR-1046 §7).
+  const canManageReschedule =
+    isOpen &&
+    (await hasEngagementCapability(
+      { id: userId },
+      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+      contextSubject
+    ));
+  // BAL-410 — the FOURTH independent short-circuiting call, on the SAME pattern and for the
+  // same reason the docblock above gives: at most one of the four ever actually awaits for
+  // any given case state, and hoisting them would break the pinned invariant that a CLOSED
+  // case resolves no capability call at all.
+  const mayCancelAsExpert =
+    isOpen &&
+    nextScheduledIsCancellable &&
+    (await hasEngagementCapability(
+      { id: userId },
+      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
+      contextSubject
+    ));
+
+  return { mayRequestResolution, mayProposeReschedule, canManageReschedule, mayCancelAsExpert };
+}
 
 /**
  * The `not_yet` aggregate, for the unreachable case where the expert-lens read resolved to
@@ -758,7 +894,12 @@ const EMPTY_EARNINGS: CaseExpertEarningsAggregate = {
 function selectNextScheduled(
   meetings: readonly Meeting[],
   meetingIdsWithLiveProposal: ReadonlySet<string>
-): { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null {
+): {
+  meetingId: string;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+  status: Meeting['status'];
+} | null {
   const upcoming = meetings
     .filter((meeting) => {
       const state = deriveCaseConsultationState({
@@ -782,11 +923,17 @@ function selectNextScheduled(
   if (next === undefined) return null;
   // BAL-409 — `scheduledEnd` rides alongside for the reschedule dialog's duration pin
   // (`toNudgeView`). `selectCaseNudge`'s own `nextScheduled` parameter type only reads
-  // `meetingId`/`scheduledStart`; the extra field is structurally ignored there.
+  // `meetingId`/`scheduledStart`; the extra fields are structurally ignored there.
+  //
+  // ⚠ BAL-410 — `status` RIDES ALONGSIDE TOO, and it is NOT decoration. This selector admits
+  // `waiting_for_participants` and `in_progress` (both fold into the `'scheduled'` consultation
+  // STATE, and `in_progress` must count — see the docblock above), but neither is CANCELLABLE.
+  // The cancel render hints gate on it through `resolveCancelRefusal`.
   return {
     meetingId: next.id,
     scheduledStart: next.scheduledStart,
     scheduledEnd: next.scheduledEnd,
+    status: next.status,
   };
 }
 

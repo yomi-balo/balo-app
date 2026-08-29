@@ -294,6 +294,34 @@ interface CaseSurfaceViewBase {
   filesTruncated: boolean;
   party: CasePartyView;
   people: CasePersonView[];
+  /**
+   * BAL-410 — may THIS viewer cancel the upcoming consultation? ⚠ ON THE **BASE**, so BOTH
+   * lenses carry it: the AC gives cancel to the client AND the delivering expert, on two
+   * different axes (membership `participate` / engagement `manage_engagement`), resolved
+   * server-side in `load-case.ts`.
+   *
+   * A RENDER HINT ONLY. `cancelConsultationAction` re-checks the axis independently, and
+   * `apps/api`'s `authorizeMeetingCancel` re-derives all three axes from the MEETING's own
+   * context row and is the actual authority. This exists so the surface never shows a
+   * dead-end CTA — the case surface's own rule is "an absent action beats a dead one".
+   */
+  canCancelConsultation: boolean;
+  /**
+   * BAL-410 — the counterparty's PARTY label, lens-relative: the expert's agency (or their own
+   * name when independent) on the client lens, the client company on the expert lens.
+   *
+   * ⚠⚠ NEVER A PERSON ON THE CLIENT LENS, and that is the whole reason this field exists
+   * separately from `conversation.counterpartyFirstName`. CLAUDE.md's attribution-by-tense rule:
+   * PROSPECTIVE copy ("… will see the slot open up again") names the PARTY, because rights sit on
+   * company/agency membership (ADR-1029) and a client who booked through an agency may never have
+   * been told the individual expert's name. `counterpartyFirstName` is the RETROSPECTIVE /
+   * person-addressed register (the conversation composer) and is not interchangeable with this.
+   *
+   * Resolved server-side in `load-case.ts` from `expertPartyDisplayName` (`@balo/shared/parties`)
+   * — the SAME single definition `publish-booking-cancelled.ts` uses for the email copy, so the
+   * two surfaces cannot drift.
+   */
+  counterpartyPartyLabel: string;
 }
 
 /**

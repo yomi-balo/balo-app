@@ -332,8 +332,9 @@ export function selectPrimaryMeetingContext(
  * ⚠ THIS MEANS AMBIGUITY ON A **BOOKED** MEETING IS A REAL AVAILABILITY HAZARD, PRE-EXISTING
  * AND **NOT CLOSED BY BAL-469**. `attach` could always produce `ambiguous`; this ticket does
  * not change that it can, only refuses a REPOINT. Closing the billing-input exception is the
- * delivering-party ambiguity follow-up, BAL-471 — which must land on the same gate as this
- * ticket (before BAL-410/BAL-411 give `attach` its first production caller).
+ * delivering-party ambiguity follow-up, BAL-471 — which must land before whatever ticket gives
+ * `attach` its first production caller. ⚠ NOT BAL-410 OR BAL-411: both have SHIPPED and neither
+ * calls `attach` or `detach` (cancel flips `meetings.status` and leaves the context rows alone).
  *
  * ⚠ THIS IS WHY, ACROSS A SINGLE `attach` CALL, `meetingContextsRepository.attach` CANNOT
  * CHANGE THE COMPANY A MEETING NAMES. The company a meeting resolves to is a pure function of

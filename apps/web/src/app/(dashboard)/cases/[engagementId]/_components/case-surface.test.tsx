@@ -95,6 +95,38 @@ vi.mock('@/components/booking/propose-times-dialog', () => ({
     ) : null,
 }));
 
+// BAL-410 — a minimal stand-in for `CancelConsultationDialog`, the SAME reason the two above
+// are stubbed: the real component posts a Server Action, out of scope for a composition test.
+vi.mock('@/components/booking/cancel-consultation-dialog', () => ({
+  CancelConsultationDialog: (props: {
+    open: boolean;
+    onClose: () => void;
+    onCancelled: () => void;
+    onTerminalFailure?: () => void;
+    lens: string;
+    meetingId: string;
+    counterpartyLabel: string;
+  }) =>
+    props.open ? (
+      <div data-testid="cancel-dialog-stub">
+        <span>meeting: {props.meetingId}</span>
+        <span>lens: {props.lens}</span>
+        {/* ⚠ SURFACED so the PARTY-vs-PERSON wiring is pinned here rather than assumed — see
+            the test named "⚠ hands the dialog the PARTY label" below. */}
+        <span data-testid="cancel-dialog-counterparty">{props.counterpartyLabel}</span>
+        <button type="button" onClick={props.onClose}>
+          Stub cancel-close
+        </button>
+        <button type="button" onClick={props.onCancelled}>
+          Stub cancelled
+        </button>
+        <button type="button" onClick={props.onTerminalFailure}>
+          Stub cancel-terminal
+        </button>
+      </div>
+    ) : null,
+}));
+
 // BAL-411 — `RescheduleProposalCard` fires Server Actions of its own; a minimal stand-in keeps
 // this file a pure composition test the same way the two dialog stubs above do.
 vi.mock('./reschedule-proposal-card', () => ({
@@ -183,6 +215,10 @@ const BASE = {
     { name: 'Dana Reyes', isViewer: true },
     { name: 'Amara Okafor', isViewer: false },
   ],
+  // BAL-410 — defaulted OFF so every pre-existing case still asserts a surface with no Cancel
+  // affordance; the new render gates opt in explicitly.
+  canCancelConsultation: false,
+  counterpartyPartyLabel: 'CloudPeak Consulting',
 } satisfies Omit<CaseSurfaceView, 'lens' | 'canClose'>;
 
 function clientView(over: Record<string, unknown> = {}): CaseSurfaceView {
@@ -687,5 +723,150 @@ describe('CaseSurface — no meeting join secret crosses the projection boundary
     );
     // No absolute URL of any kind belongs in a consultation row.
     expect(container.innerHTML).not.toContain('https://');
+  });
+});
+
+// ── BAL-410 — the cancel CTA → dialog seam ────────────────────────────────────
+
+describe('BAL-410 — cancel CTA → dialog seam', () => {
+  const UPCOMING_NUDGE = {
+    kind: 'upcoming' as const,
+    meetingId: 'm-upcoming-1',
+    scheduledStartIso: '2026-09-01T10:00:00Z',
+    live: false,
+    durationMinutes: 45,
+  };
+
+  it('renders NO Cancel button when the server flag is false', () => {
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: false })} />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+
+  it('renders Cancel for a CLIENT-lens upcoming nudge when the flag is true', () => {
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+    );
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠⚠ THE §10.3 DIVERGENCE, PINNED. Cancel renders INSIDE the join window (`live: true`) where
+   * Reschedule and Propose deliberately do not — because `live` starts 15 minutes before the
+   * start and the product promise is "free until scheduled start". This is not the client being
+   * looser than the server: the server's guard is STATE-based, and a meeting nobody has joined
+   * is still `scheduled` inside that window.
+   */
+  it('⚠ renders Cancel even when the nudge is LIVE, where Reschedule does not', () => {
+    render(
+      <CaseSurface
+        view={clientView({
+          nudge: { ...UPCOMING_NUDGE, live: true },
+          canCancelConsultation: true,
+        })}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reschedule' })).not.toBeInTheDocument();
+  });
+
+  it('renders Cancel beside "Propose a new time" on the EXPERT lens', () => {
+    render(
+      <CaseSurface
+        view={expertView({
+          nudge: UPCOMING_NUDGE,
+          canProposeReschedule: true,
+          canCancelConsultation: true,
+        })}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Propose a new time' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
+  it('the dialog is NOT mounted while closed, even with an upcoming nudge', () => {
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+    );
+
+    expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
+  });
+
+  it('clicking Cancel opens the dialog, mounted with the nudge’s meetingId and the lens', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    const stub = screen.getByTestId('cancel-dialog-stub');
+    expect(stub).toHaveTextContent('meeting: m-upcoming-1');
+    expect(stub).toHaveTextContent('lens: client');
+  });
+
+  /**
+   * ⚠⚠ THE PARTY, NOT THE PERSON. The dialog body is entirely PROSPECTIVE copy ("… will see the
+   * slot open up again"), which CLAUDE.md's attribution-by-tense rule requires to name the PARTY
+   * — the agency for an agency-delivered case, the person's own name only for an independent.
+   * The fixture deliberately sets the two to DIFFERENT strings ('CloudPeak Consulting' vs
+   * 'Amara') so passing the wrong one cannot pass this test. `counterpartyFirstName` still
+   * reaches the nudge and the conversation, which address a person on purpose.
+   */
+  it('⚠ hands the dialog the PARTY label, never the counterparty’s first name', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    const label = screen.getByTestId('cancel-dialog-counterparty');
+    expect(label).toHaveTextContent('CloudPeak Consulting');
+    expect(label).not.toHaveTextContent('Amara');
+  });
+
+  it('onClose closes the dialog WITHOUT refreshing the page', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Stub cancel-close' }));
+
+    expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
+    expect(mockRouterRefresh).not.toHaveBeenCalled();
+  });
+
+  it('onCancelled closes the dialog AND refreshes — the nudge itself is about to disappear', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Stub cancelled' }));
+
+    expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
+    expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('onTerminalFailure closes the dialog AND refreshes, exactly like a success', async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseSurface view={clientView({ nudge: UPCOMING_NUDGE, canCancelConsultation: true })} />
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Stub cancel-terminal' }));
+
+    expect(screen.queryByTestId('cancel-dialog-stub')).not.toBeInTheDocument();
+    expect(mockRouterRefresh).toHaveBeenCalledTimes(1);
   });
 });

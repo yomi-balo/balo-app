@@ -418,7 +418,10 @@ interface BookedSeedSlots {
  * A `cancelled` fixture is BOOKED FIRST, THEN CANCELLED — the same two steps a real
  * cancellation takes — so the projection ends up `status='cancelled'` via
  * `cancelProjectionTx` rather than being written cancelled from nothing. That is what makes
- * the seeder's booked-then-cancelled edge case a genuine rehearsal of BAL-410's path.
+ * the seeder's booked-then-cancelled edge case a genuine rehearsal of BAL-410's path — which
+ * has since SHIPPED, so this is now a rehearsal of a live route's repository half (the seeder
+ * deliberately does NOT go through `cancelMeeting`: that would enqueue an availability rebuild
+ * and, worse, a route-level publish would email real people on every `pnpm db:seed`).
  *
  * ⚠ RUNS OUTSIDE ANY TRANSACTION. Both repositories open their own; see the module
  * docblock. A failure part-way therefore leaves a partially-booked seed set, which the next
@@ -467,7 +470,14 @@ async function bookSeedConsultations(
       }
 
       if (slot.status === 'cancelled') {
-        await meetingsRepository.cancel(created.meeting.id);
+        // ⚠ `{ actorUserId: null, actorRole: 'system' }` — the sanctioned ADR-1030 SYSTEM-ACTOR
+        // ATTRIBUTION EXEMPTION (BAL-410). The seeder has no human to name, so the
+        // `meeting.cancelled` audit row is written UNATTRIBUTED rather than with a fabricated
+        // actor, exactly as `recordMeetingBooked` is called from this same seeder.
+        await meetingsRepository.cancel(created.meeting.id, {
+          actorUserId: null,
+          actorRole: 'system',
+        });
         consultationsCancelled += 1;
       } else {
         consultationsSeeded += 1;

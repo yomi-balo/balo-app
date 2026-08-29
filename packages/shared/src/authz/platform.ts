@@ -19,6 +19,17 @@ export const PLATFORM_CAPABILITIES = {
   MANAGE_PLATFORM_FEES: 'manage_platform_fees',
   /** Mint / deactivate / cap-edit promo codes on the credit system (BAL-384). */
   MANAGE_PROMO_CODES: 'manage_promo_codes',
+  /**
+   * BAL-410 — cancel ANY booked consultation, on any tenant: the support-mediated override the
+   * ticket names ("Admin override path exists and is audited with the acting admin's ID").
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY. Neither shipped token fits, and
+   * authorizing "cancel somebody's call" with a FEE token would make this map lie about what it
+   * grants — the one thing a capability map must never do. The PLATFORM axis (ADR-1035) is the
+   * right axis because the admin arm holds no membership on either party by construction; the
+   * client arm stays on membership `participate` and the expert arm on the engagement axis.
+   */
+  CANCEL_ANY_MEETING: 'cancel_any_meeting',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -28,6 +39,7 @@ export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLA
 const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
   PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES,
+  PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING,
 ];
 
 /**

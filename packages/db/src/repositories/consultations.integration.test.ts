@@ -4,6 +4,13 @@ import { consultationsRepository } from './consultations';
 import { meetingsRepository } from './meetings';
 
 /**
+ * BAL-410 — `meetingsRepository.cancel` now takes an AUDIT TUPLE, because every cancel writes
+ * a `meeting.cancelled` row. A test harness has no acting human, so it passes the sanctioned
+ * ADR-1030 SYSTEM-ACTOR EXEMPTION: an unattributed row, never a fabricated actor.
+ */
+const SYSTEM_CANCEL_AUDIT = { actorUserId: null, actorRole: 'system' } as const;
+
+/**
  * BAL-428 REWRITE. `consultationsRepository.create` no longer exists — `consultations` is a
  * READ MODEL of `meetings` with exactly one writer, so every fixture here books a MEETING
  * and lets the projection write the row. All twelve original overlap/filter cases are
@@ -120,7 +127,7 @@ describe('consultationsRepository.listConfirmedInRange — filters', () => {
       '2026-06-01T11:00:00.000Z',
       '2026-06-01T11:30:00.000Z'
     );
-    await meetingsRepository.cancel(cancelledMeetingId);
+    await meetingsRepository.cancel(cancelledMeetingId, SYSTEM_CANCEL_AUDIT);
 
     const rows = await consultationsRepository.listConfirmedInRange(
       expert.expertProfileId,

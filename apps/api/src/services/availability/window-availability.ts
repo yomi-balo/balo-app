@@ -63,13 +63,15 @@ const log = createLogger('availability-window-check');
  * including the residual (it is a check, not a lock).
  *
  * ⚠ WHAT REMAINS OPEN, STATED SO NOBODY READS "BOUNDED" AS "SOLVED". Every slot an expert
- * published is still consumable, and in BAL-129 a consumed slot stays consumed:
- *   · BOOKINGS ARE IRREVERSIBLE ON THIS BRANCH. `cancelMeeting` / `softDeleteMeeting` exist in
- *     `services/meetings/meeting-availability.ts` and have ZERO production callers — only tests
- *     — so no shipped surface frees a slot again. Cancel is BAL-410's.
- *   · BOOKINGS ARE SILENT. Nothing publishes `booking.confirmed` (the rule and templates are a
- *     documented orphan; wiring them is BAL-400's), so an expert whose calendar is being walked
- *     is not told about it by the platform.
+ * published is still consumable:
+ *   · BOOKINGS ARE NO LONGER IRREVERSIBLE — ⚠ CORRECTED BY BAL-410, which shipped
+ *     `POST /meetings/:meetingId/cancel`. `cancelMeeting` has production callers now, and the
+ *     delivering expert holds the engagement-axis arm, so a walked slot can be freed.
+ *     `softDeleteMeeting` remains route-less.
+ *   · BOOKINGS ARE STILL SILENT. Nothing publishes `booking.confirmed` (the rule and templates
+ *     are a documented orphan; wiring them is BAL-400's), so an expert whose calendar is being
+ *     walked is not told about it by the platform — the undo exists, but the prompt to use it
+ *     does not.
  * The two rate limits on `POST /meetings` are what keep the walk slow; they are not a cure.
  *
  * ⚠ READ-ONLY, DELIBERATELY, AND NOT VIA `resolveAndCacheAvailability`. That function WRITES

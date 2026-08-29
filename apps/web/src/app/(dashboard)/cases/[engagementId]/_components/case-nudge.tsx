@@ -53,6 +53,11 @@ interface CaseNudgeProps {
   canProposeReschedule: boolean;
   /** BAL-411 — opens `ProposeTimesDialog`. Presentational only, mirroring `onReschedule`. */
   onProposeReschedule: () => void;
+  /** BAL-410 — BOTH lenses. Whether "Cancel" renders at all — server-resolved
+   *  (`canCancelConsultation`, on two different axes by lens), never derived here. */
+  canCancel: boolean;
+  /** BAL-410 — opens `CancelConsultationDialog`. Presentational only, mirroring `onReschedule`. */
+  onCancel: () => void;
   /** True while the close/dismiss mutation is in flight. */
   busy: boolean;
 }
@@ -67,6 +72,8 @@ export function CaseNudge({
   onReschedule,
   canProposeReschedule,
   onProposeReschedule,
+  canCancel,
+  onCancel,
   busy,
 }: Readonly<CaseNudgeProps>): React.JSX.Element | null {
   if (nudge === null) {
@@ -81,6 +88,8 @@ export function CaseNudge({
         canProposeReschedule={canProposeReschedule}
         onReschedule={onReschedule}
         onProposeReschedule={onProposeReschedule}
+        canCancel={canCancel}
+        onCancel={onCancel}
       />
     );
   }
@@ -166,6 +175,8 @@ interface UpcomingNudgeProps {
   canProposeReschedule: boolean;
   onReschedule: () => void;
   onProposeReschedule: () => void;
+  canCancel: boolean;
+  onCancel: () => void;
 }
 
 /**
@@ -179,6 +190,8 @@ function UpcomingNudge({
   canProposeReschedule,
   onReschedule,
   onProposeReschedule,
+  canCancel,
+  onCancel,
 }: Readonly<UpcomingNudgeProps>): React.JSX.Element {
   // `!nudge.live` on BOTH sides — inside the join window the honest action is to join, not
   // to move, and the nudge is already the "starting soon" moment. This is STRICTER than the
@@ -186,20 +199,53 @@ function UpcomingNudge({
   // direction — a stale page that submits at T-2min still succeeds server-side.
   const canReschedule = lens === 'client' && !nudge.live;
   const canPropose = lens === 'expert' && !nudge.live && canProposeReschedule;
-  let upcomingAction: React.ReactNode;
+  let moveAction: React.ReactNode;
   if (canReschedule) {
-    upcomingAction = (
+    moveAction = (
       <Button type="button" size="sm" variant="outline" onClick={onReschedule}>
         Reschedule
       </Button>
     );
   } else if (canPropose) {
-    upcomingAction = (
+    moveAction = (
       <Button type="button" size="sm" variant="outline" onClick={onProposeReschedule}>
         Propose a new time
       </Button>
     );
   }
+
+  /**
+   * ⚠⚠ BAL-410 — CANCEL RENDERS EVEN WHEN `nudge.live` IS TRUE, UNLIKE RESCHEDULE AND PROPOSE,
+   * AND THAT DIVERGENCE IS DELIBERATE. `live` turns true `CASE_JOIN_WINDOW_MINUTES` (15) BEFORE
+   * the start, so hiding cancel there would contradict the product's own promise — "free until
+   * scheduled start" — and the AC's "up to scheduled start". Unlike the two move actions this
+   * is NOT the client being stricter than the server: the server's guard is STATE-based
+   * (`CANCELLABLE_MEETING_STATUSES`), and a meeting nobody has joined is still `scheduled`
+   * inside the join window. So this is the client matching the server exactly.
+   *
+   * VISUAL WEIGHT: `ghost` with a destructive HOVER, and rendered SECOND — cancel must never
+   * outrank "Reschedule" or (once it lands) "Join". It is available, not invited.
+   */
+  const cancelAction = canCancel ? (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="text-muted-foreground hover:text-destructive"
+      onClick={onCancel}
+    >
+      Cancel
+    </Button>
+  ) : null;
+
+  const upcomingAction =
+    moveAction || cancelAction ? (
+      <div className="flex items-center gap-2">
+        {moveAction}
+        {cancelAction}
+      </div>
+    ) : undefined;
+
   return (
     <NudgeShell
       icon={nudge.live ? Video : CalendarClock}

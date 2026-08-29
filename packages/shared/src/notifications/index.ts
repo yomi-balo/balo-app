@@ -1235,6 +1235,86 @@ export interface BookingRescheduledPayload {
 }
 
 /**
+ * BAL-410 — a booked consultation was CANCELLED. Published by `apps/api`'s cancel ROUTE after
+ * the meeting flip commits, so nothing notifies on a failed cancel.
+ *
+ * ⚠ PUBLISHED FROM `apps/api`, NOT `apps/web` — a deliberate divergence from
+ * `booking.rescheduled`/`booking.confirmed`. The ADMIN override arm is an explicit AC and has
+ * no web surface at all, so a web publisher would notify NOBODY on an admin cancel. It is
+ * therefore in `ServerOnlyNotificationEvent` and must have NO `publishBodySchema` arm (adding
+ * one is a `StraySchemaArm` and fails `tsc`). The payload is still declared HERE, once, per
+ * orchestrator D9 — beside its ADR-1044 concealment siblings, for the day a web producer
+ * appears and so the duplication gate cannot be tripped by a second declaration.
+ *
+ * ⚠ COUNTERPARTY CONTACT CONCEALMENT (ADR-1044 §3): names cross the party boundary, addresses
+ * NEVER. No field here is or contains an email address, and there is deliberately no
+ * `recipientEmail` — that field exists only on the `recipient: 'email_address'` kind, which is
+ * for NON-USERS (guests, external invitees). The guest arm of a cancellation is BAL-476's,
+ * together with the `METHOD:CANCEL` it must accompany.
+ * ⚠ FEE CONCEALMENT: no rate, no total, no hold AMOUNT. `holdReleased` is a BOOLEAN, not money.
+ */
+export interface BookingCancelledPayload {
+  /**
+   * `${meetingId}:${cancelAuditId}` — the BullMQ jobId dedup key, per WRITE and never per
+   * STATE. The `meeting.cancelled` AUDIT ROW id; `audit_events` is append-only, so it is unique
+   * per successful cancel. A bare `meetingId` would collide against the retained-completed set,
+   * and — unlike a reschedule — there is no destination window to key on, because nothing moved.
+   */
+  correlationId: string;
+  meetingId: string;
+  /** The CASE engagement id. v1 publishes for `contextType: 'case'` only. */
+  engagementId: string;
+  /**
+   * The CLIENT-side actor's user id → recipient 'client'. Present ONLY on a client-initiated
+   * cancel (it IS the acting user); absent on the expert/admin arms, where the client side is
+   * reached through `recipientUserIds` instead. Absent ⇒ the `client` rule skips.
+   */
+  recipientId?: string;
+  /**
+   * → recipient 'meeting_party_participants'. ⚠ RESOLVED BY THE PUBLISHER, never hydrated by
+   * `engine/resolver.ts` — that is what keeps a membership read out of the notification engine
+   * (the shipped BAL-408 contract). Populated ONLY on the expert/admin arms, with the CLIENT
+   * company's live `MANAGE_MEMBERS` holders, which is how "Cancelled by expert → client →
+   * email + in-app" is delivered without inventing a new recipient kind. Empty/absent ⇒ the
+   * fan-out rule delivers nothing.
+   */
+  recipientUserIds?: string[];
+  /** → recipient 'expert'; `engine/resolver.ts` hydrates `data.expert` off THIS field name. */
+  expertProfileId: string;
+  /** Prospective copy names the PARTY (CLAUDE.md). */
+  clientCompanyName: string;
+  expertPartyLabel: string;
+  caseTitle: string;
+  /** The window that was released. ISO. */
+  scheduledStartIso: string;
+  durationMinutes: number;
+  /** Which axis authorized the cancel — SERVER-DERIVED from the matching arm, never wire input. */
+  cancelledBy: 'client' | 'expert' | 'admin';
+  /**
+   * RETROSPECTIVE attribution (CLAUDE.md's by-tense rule): the PERSON who cancelled, with
+   * "@ company/agency" on first mention — e.g. "Dana @ Northwind Industrial". `'Balo support'`
+   * on the admin arm: a Balo staff member is never named to the parties. Degrades to the acting
+   * side's PARTY label when the person read fails.
+   */
+  cancelledByLabel: string;
+  /**
+   * True iff a credit hold actually moved `active → released`. Rendered by the IN-APP client
+   * template ONLY — never by the email. The ticket is explicit: no money moved, and an email
+   * about it implies something went wrong.
+   */
+  holdReleased: boolean;
+  /**
+   * ⚠ A RESERVED VARIANT WITH NO PRODUCER TODAY, and that is legitimate for a UNION MEMBER in a
+   * way it would not be for a COLUMN (`packages/db/src/repositories/_shared/meeting-audit.ts`):
+   * a column materialises a NULL on every row, a union member materialises nothing. `'requested'`
+   * is the only value any shipped caller passes. `'expert_time_off'` is BAL-416's cancel branch,
+   * whose affordance is deliberately NOT in this PR (orchestrator D11 — cut); its producer will
+   * be API-side, on this same family, as a REASON VARIANT and never a second event.
+   */
+  reason: 'requested' | 'expert_time_off';
+}
+
+/**
  * BAL-411 — the expert proposed up to three alternative times for a booked consultation.
  * Published from `apps/web` after the propose api route returns 200 (mirrors
  * `BookingRescheduledPayload`'s posture).

@@ -70,6 +70,13 @@ const PAYOUT_RECONCILE_GRACE_MINUTES = 5;
 const PRESENCE_SETTLEMENT_GRACE_MINUTES = 2;
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
 const PRESENCE_SETTLEMENT_BATCH_LIMIT = 100;
+/**
+ * BAL-410 — the cancelled-meeting hold backstop's bound. ⚠ SAME NO-SILENT-CAPS RULE, and it
+ * matters MORE here than for presence: a burst of cancellations during a DB blip is precisely
+ * the scenario this backstop exists for, and it is precisely the scenario that queues >100 rows.
+ * A silent cap would read as "swept everything" on a tick that stranded the rest.
+ */
+const CANCELLED_MEETING_BATCH_LIMIT = 100;
 
 const logger = createLogger('credit-session-meter-sweep');
 
@@ -175,6 +182,74 @@ async function runStalePendingPass(now: Date, log: (message: string) => void): P
     }
   }
   return cancelled;
+}
+
+/**
+ * Pass 3b (BAL-410) — THE CANCELLED-MEETING HOLD BACKSTOP.
+ *
+ * ⚠⚠ WHY IT EXISTS, AND WHY IT IS NOT A WIDENING OF PASS 3. Cancelling a meeting is the ONE
+ * state change that removes it from every reaper: `findStalePending` excludes
+ * `duration_source='presence'` (deliberately — BAL-412 F4), `findPresenceUnsettled` requires
+ * `meetings.status='ended'`, and the meeting-lifecycle sweep scans only the three non-terminal
+ * statuses. So the in-request release in the cancel route (`meeting-availability.ts`'s
+ * `releaseCreditHoldBestEffort`) has NO SECOND CHANCE, and one transient DB error there strands
+ * the hold PERMANENTLY: the company's available balance is reduced forever AND `open()`'s
+ * one-live-session-per-wallet gate locks that company out of every future Case session. This
+ * pass is that second chance.
+ *
+ * ⚠ NO CUTOFF, AND NO `duration_source` FILTER — both deliberate, both explained on
+ * `findPendingForCancelledMeetings`'s own docblock. A cancelled meeting is immediately final,
+ * and on a cancelled meeting there is nothing to settle for ANY provenance, so `cancelled` is
+ * the only correct terminal. Racing the in-request release is safe: `cancel` returns early on an
+ * already-`cancelled` session.
+ *
+ * ⚠ `memberId: null` — the ADR-1030 SYSTEM-ACTOR EXEMPTION. The hold's `member_id` records WHO
+ * resolved it; the sweep is nobody, and a fabricated actor would be worse than an unattributed
+ * row. Matches pass 3, which passes no `memberId` at all.
+ *
+ * ⚠ BOUNDED AND LOUD ABOUT IT — `CANCELLED_MEETING_BATCH_LIMIT`, with the same "batch FILLED"
+ * warn `runPresenceSettlementPass` uses. Never call the finder bare: its default limit would
+ * cap the tick silently.
+ *
+ * Per-row try/catch so one bad row never stops the batch — the shape every pass here uses.
+ */
+async function runCancelledMeetingPass(log: (message: string) => void): Promise<number> {
+  let released = 0;
+  const sessions = await creditSessionsRepository.findPendingForCancelledMeetings(
+    CANCELLED_MEETING_BATCH_LIMIT
+  );
+  if (sessions.length === CANCELLED_MEETING_BATCH_LIMIT) {
+    // ⚠ NO SILENT CAPS — a full batch means stranded holds were DROPPED from this tick, and
+    // every one of them is a company locked out of its next Case session until the next tick.
+    const [oldest] = sessions;
+    logger.warn(
+      { limit: CANCELLED_MEETING_BATCH_LIMIT, oldestSessionId: oldest?.id },
+      'Cancelled-meeting hold batch FILLED — stranded holds were dropped from this tick'
+    );
+  }
+  for (const session of sessions) {
+    try {
+      await creditSessionsRepository.cancel(session.id, { memberId: null });
+      released += 1;
+    } catch (error) {
+      const message = errorMessage(error);
+      log(`cancelled-meeting hold release failed for session ${session.id}: ${message}`);
+      logger.error(
+        { sessionId: session.id, error: message },
+        'Cancelled-meeting hold release backstop failed'
+      );
+    }
+  }
+  if (released > 0) {
+    // ⚠ LOUD ON PURPOSE. The in-request release is meant to handle every one of these; a
+    // non-zero count here means the cancel route's step 2 failed, which is the money leak this
+    // backstop exists to catch. The RATE is the health signal.
+    logger.warn(
+      { released },
+      'Cancelled-meeting hold backstop released holds the cancel route should already have released'
+    );
+  }
+  return released;
 }
 
 /** Pass 4 — reconcile settlements stuck in `processing` (re-invoke the session-keyed charge). */
@@ -301,6 +376,9 @@ export async function runSessionMeterSweep(
   metered: number;
   ended: number;
   cancelled: number;
+  /** BAL-410 — holds freed by the cancelled-meeting backstop. Non-zero ⇒ the cancel route's
+   *  in-request release failed; see `runCancelledMeetingPass`. */
+  cancelledMeetingHolds: number;
   reconciled: number;
   recovered: number;
   presenceSettled: number;
@@ -308,14 +386,25 @@ export async function runSessionMeterSweep(
   const metered = await runMeterPass(now, log);
   const ended = await runWrappedIdlePass(now, log);
   const cancelled = await runStalePendingPass(now, log);
+  // BAL-410 — runs beside the stale-pending pass, never inside it: the two select DISJOINT rows
+  // for opposite reasons. See `runCancelledMeetingPass`.
+  const cancelledMeetingHolds = await runCancelledMeetingPass(log);
   const reconciled = await runStuckSettlingPass(now, log);
   const recovered = await runFinalizedMissingPayoutPass(now, log);
   const presenceSettled = await runPresenceSettlementPass(now, log);
   logger.info(
-    { metered, ended, cancelled, reconciled, recovered, presenceSettled },
+    { metered, ended, cancelled, cancelledMeetingHolds, reconciled, recovered, presenceSettled },
     'Session meter sweep complete'
   );
-  return { metered, ended, cancelled, reconciled, recovered, presenceSettled };
+  return {
+    metered,
+    ended,
+    cancelled,
+    cancelledMeetingHolds,
+    reconciled,
+    recovered,
+    presenceSettled,
+  };
 }
 
 /** Start the credit-session meter sweep worker (concurrency 1 — serialised passes). */

@@ -104,6 +104,11 @@ export * from './reactions';
 // route (apps/api) and the repository compare-and-set (@balo/db) cannot drift on "which
 // statuses may move". Pure, no clock read.
 export * from './reschedulable';
+// BAL-410 (orchestrator D5) — the CANCEL gate's fail-closed allow-list, shared so the route
+// (apps/api) and the repository compare-and-set (@balo/db) cannot drift on "which statuses may
+// be cancelled". Pure — and, unlike `reschedulable`, it reads NO clock and takes no window at
+// all: the "not once it has started" rule is delivered by STATE. See its docblock.
+export * from './cancellable';
 // BAL-411 — the reschedule-PROPOSAL lifecycle's pure core: lazy expiry, liveness, and the
 // answer-time refusal vocabulary. Pure, no clock read — `now` is always injected.
 export * from './reschedule-proposal';

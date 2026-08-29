@@ -21,6 +21,28 @@ function arrayLength(value: unknown): number {
 }
 
 /**
+ * BAL-410 — the client-side cancellation opening sentence, extracted so the body assembly stays
+ * a single expression and SonarCloud's no-nested-ternary rule is satisfied structurally rather
+ * than by formatting.
+ *
+ * Three arms, in precedence order: the client's own act, the expert's time-off variant, and the
+ * ordinary "somebody cancelled it" case. All gender-neutral, all non-adversarial.
+ */
+function resolveClientCancelOpening(
+  cancelledByClient: boolean,
+  timeOff: boolean,
+  labels: { expertParty: string; cancelledByLabel: string }
+): string {
+  if (cancelledByClient) {
+    return `You cancelled your consultation with ${labels.expertParty}.`;
+  }
+  if (timeOff) {
+    return `Your consultation with ${labels.expertParty} was cancelled — that time is no longer available.`;
+  }
+  return `${labels.cancelledByLabel} cancelled your consultation.`;
+}
+
+/**
  * BAL-412 (F16, ADR-1044 §7) — the IN-APP half of the no-show notice; the email half is
  * `noShowClientSentence` in `./index.ts`.
  *
@@ -221,6 +243,51 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
         initiatedBy === 'expert'
           ? `${clientCompany} accepted your new time.`
           : `${clientCompany} moved a consultation with you to a new time.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-410 — the CLIENT half of `booking.cancelled`. ⚠ ALSO what the `meeting_party_participants`
+  // fan-out arm renders: those recipients ARE the client side.
+  //
+  // ⚠⚠ THIS IS THE **ONLY** SURFACE THAT MENTIONS THE HOLD, AND ONLY WHEN ONE WAS ACTUALLY
+  // RELEASED. The ticket: "Hold released → client → in-app only. Not email — no money moved, and
+  // an email implies something went wrong." `holdReleased` is `false` in the overwhelmingly
+  // common case (nobody joined early), so the line is APPENDED rather than always present —
+  // claiming a release that did not happen would be a money statement that is simply untrue.
+  'booking-cancelled-client': (data) => {
+    const expertParty = (data.expertPartyLabel as string) ?? 'Your expert';
+    const cancelledByLabel = (data.cancelledByLabel as string) ?? expertParty;
+    const engagementId = data.engagementId as string | undefined;
+    const cancelledByClient = data.cancelledBy === 'client';
+    const timeOff = data.reason === 'expert_time_off';
+    const opening = resolveClientCancelOpening(cancelledByClient, timeOff, {
+      expertParty,
+      cancelledByLabel,
+    });
+    return {
+      title: 'Consultation cancelled',
+      body:
+        data.holdReleased === true
+          ? `${opening} Nothing was charged, and the credit we were holding is back in your balance.`
+          : `${opening} Nothing was charged.`,
+      actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
+    };
+  },
+
+  // BAL-410 — the EXPERT half. Prospective copy names the client COMPANY; retrospective copy
+  // names the person who cancelled. ⚠ NO hold language on this side at all — the hold is the
+  // CLIENT's money and the expert has no business being told about its state.
+  'booking-cancelled-expert': (data) => {
+    const clientCompany = (data.clientCompanyName as string) ?? 'A client';
+    const cancelledByLabel = (data.cancelledByLabel as string) ?? clientCompany;
+    const engagementId = data.engagementId as string | undefined;
+    return {
+      title: 'Booking cancelled',
+      body:
+        data.cancelledBy === 'expert'
+          ? `You cancelled a consultation with ${clientCompany}. That slot is open again.`
+          : `${cancelledByLabel} cancelled a consultation with you. That slot is open again.`,
       actionUrl: engagementId ? `/cases/${engagementId}` : undefined,
     };
   },

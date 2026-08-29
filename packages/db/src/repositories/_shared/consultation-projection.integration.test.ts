@@ -25,6 +25,13 @@ import {
 } from './consultation-projection';
 
 /**
+ * BAL-410 — `meetingsRepository.cancel` now takes an AUDIT TUPLE, because every cancel writes
+ * a `meeting.cancelled` row. A test harness has no acting human, so it passes the sanctioned
+ * ADR-1030 SYSTEM-ACTOR EXEMPTION: an unattributed row, never a fabricated actor.
+ */
+const SYSTEM_CANCEL_AUDIT = { actorUserId: null, actorRole: 'system' } as const;
+
+/**
  * BAL-428 — `consultations` as a READ MODEL of `meetings`.
  *
  * This suite owns the projection writer itself: expert resolution through the
@@ -361,7 +368,7 @@ describe('consultation projection — a request_interaction call BLOCKS the cand
       contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
     });
 
-    const cancelled = await meetingsRepository.cancel(created.meeting.id);
+    const cancelled = await meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT);
 
     expect(cancelled.expertProfileId).toBe(created.expertProfileId);
     expect((await findProjectionForMeeting(created.meeting.id))?.status).toBe('cancelled');
@@ -443,7 +450,7 @@ describe('consultation projection — lifecycle', () => {
       contexts: [{ contextType: 'case', contextId: engagement.id }],
     });
 
-    await meetingsRepository.cancel(created.meeting.id);
+    await meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT);
 
     const target = schedule(48);
     const targetRange = [
@@ -567,7 +574,7 @@ describe('consultation projection — lifecycle', () => {
       await consultationsRepository.listConfirmedInRange(expert.id, rangeStart, rangeEnd)
     ).toHaveLength(1);
 
-    const result = await meetingsRepository.cancel(created.meeting.id);
+    const result = await meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT);
 
     expect(result.meeting.status).toBe('cancelled');
     expect(result.expertProfileId).toBe(expert.id);
@@ -588,15 +595,21 @@ describe('consultation projection — lifecycle', () => {
       contexts: [{ contextType: 'case', contextId: engagement.id }],
     });
 
-    await meetingsRepository.cancel(created.meeting.id);
+    await meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT);
 
     // Cancelling twice must not "succeed" again and re-fire whatever the caller does
     // post-commit (an availability rebuild today; a notification tomorrow).
-    await expect(meetingsRepository.cancel(created.meeting.id)).rejects.toThrow(/not cancellable/);
+    await expect(
+      meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT)
+    ).rejects.toThrow(/not cancellable/);
 
     const { meeting: inProgress } = await meetingFactory({ values: { status: 'in_progress' } });
-    await expect(meetingsRepository.cancel(inProgress.id)).rejects.toThrow(/not cancellable/);
-    await expect(meetingsRepository.cancel(randomUUID())).rejects.toThrow(/not cancellable/);
+    await expect(meetingsRepository.cancel(inProgress.id, SYSTEM_CANCEL_AUDIT)).rejects.toThrow(
+      /not cancellable/
+    );
+    await expect(meetingsRepository.cancel(randomUUID(), SYSTEM_CANCEL_AUDIT)).rejects.toThrow(
+      /not cancellable/
+    );
   });
 
   it('softDelete STAMPS the projection and reports whose availability changed', async () => {
@@ -797,7 +810,7 @@ describe('findProjectionDrift — did availability and meetings ever disagree?',
       ...schedule(5),
       contexts: [{ contextType: 'case', contextId: engagementId }],
     });
-    await meetingsRepository.cancel(cancelled.meeting.id);
+    await meetingsRepository.cancel(cancelled.meeting.id, SYSTEM_CANCEL_AUDIT);
     const deleted = await meetingsRepository.create({
       ...schedule(7),
       contexts: [{ contextType: 'case', contextId: engagementId }],

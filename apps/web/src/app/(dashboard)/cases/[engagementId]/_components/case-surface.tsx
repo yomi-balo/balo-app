@@ -8,6 +8,7 @@ import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseSurfaceView } from '@/lib/cases/case-view-types';
 import { RescheduleDialog } from '@/components/booking/reschedule-dialog';
 import { ProposeTimesDialog } from '@/components/booking/propose-times-dialog';
+import { CancelConsultationDialog } from '@/components/booking/cancel-consultation-dialog';
 import { resolveCaseAction } from '../_actions/resolve-case';
 import { dismissResolutionRequestAction } from '../_actions/dismiss-resolution-request';
 import { CaseHeader } from './case-header';
@@ -56,6 +57,8 @@ export function CaseSurface({
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   // BAL-411 — the propose-times dialog's open state, owned the SAME way.
   const [proposeOpen, setProposeOpen] = useState(false);
+  // BAL-410 — the cancel dialog's open state, owned the SAME way.
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   const counterpartyFirstName = view.conversation.counterpartyFirstName;
 
@@ -105,6 +108,22 @@ export function CaseSurface({
     setProposeOpen(true);
   }, []);
 
+  const handleOpenCancel = useCallback(() => {
+    setCancelOpen(true);
+  }, []);
+
+  /**
+   * BAL-410 — close AND refresh. ⚠ THE REFRESH IS LOAD-BEARING HERE IN A WAY IT IS NOT FOR
+   * RESCHEDULE: `caseConsultationIsUpcoming` excludes `'cancelled'`, so a successful cancel
+   * drops the meeting out of `selectNextScheduled` and the `'upcoming'` nudge — and therefore
+   * this dialog's own mount gate — disappears. Reused for the TERMINAL-failure path too, where
+   * the CTA is equally stale.
+   */
+  const handleCancelled = useCallback(() => {
+    setCancelOpen(false);
+    router.refresh();
+  }, [router]);
+
   const handleProposed = useCallback(() => {
     setProposeOpen(false);
     router.refresh();
@@ -122,6 +141,9 @@ export function CaseSurface({
   const canProposeReschedule = view.lens === 'expert' && view.canProposeReschedule;
   // Item 18 — same posture, for the Withdraw button's holder set (see `RescheduleProposalCard`).
   const canManageReschedule = view.lens === 'expert' && view.canManageReschedule;
+  // BAL-410 — read straight off the BASE (both lenses carry it, resolved on their own axis
+  // server-side), so no lens branch is needed and none is written.
+  const canCancelConsultation = view.canCancelConsultation;
 
   return (
     <div className="from-background to-muted/30 min-h-full bg-gradient-to-b">
@@ -139,6 +161,8 @@ export function CaseSurface({
               onReschedule={handleOpenReschedule}
               canProposeReschedule={canProposeReschedule}
               onProposeReschedule={handleOpenPropose}
+              canCancel={canCancelConsultation}
+              onCancel={handleOpenCancel}
               busy={pending}
             />
             {/* BAL-411 — the ONE place accept/decline/withdraw actually happen; the nudge above
@@ -175,6 +199,37 @@ export function CaseSurface({
             currentScheduledStartIso={view.nudge.scheduledStartIso}
             durationMinutes={view.nudge.durationMinutes}
             caseTitle={view.header.title}
+          />
+        )}
+
+        {/* BAL-410 — same mount gate as the two dialogs around it. ⚠ Mounted for BOTH lenses,
+            because the AC gives cancel to the client AND the delivering expert; which one may
+            actually see the CTA is `canCancelConsultation`, resolved per-axis server-side. */}
+        {view.nudge !== null && view.nudge.kind === 'upcoming' && (
+          <CancelConsultationDialog
+            open={cancelOpen}
+            onClose={() => setCancelOpen(false)}
+            onCancelled={handleCancelled}
+            // A TERMINAL failure means this nudge/CTA is now stale, exactly as a successful
+            // cancel does: close AND refresh, reusing the same handler.
+            onTerminalFailure={handleCancelled}
+            lens={view.lens}
+            engagementId={view.engagementId}
+            meetingId={view.nudge.meetingId}
+            // ⚠⚠ THE PARTY LABEL, NOT `counterpartyFirstName` — the one dialog on this surface
+            // that must NOT take the person. The whole body is PROSPECTIVE copy ("… will see the
+            // slot open up again"), which CLAUDE.md's attribution-by-tense rule requires to name
+            // the PARTY: the agency for an agency-delivered case (a client who booked through
+            // CloudPeak may never have been told the expert is Alex), the person's own name only
+            // when the expert is independent. `counterpartyPartyLabel` is resolved server-side
+            // from the SAME `expertPartyDisplayName` the cancellation email uses, so the dialog
+            // and the email cannot disagree.
+            counterpartyLabel={view.counterpartyPartyLabel}
+            scheduledStartIso={view.nudge.scheduledStartIso}
+            // N1 — the SAME `live` the nudge uses to hide Reschedule / Propose a new time. Cancel
+            // itself stays available inside the join window; only the copy that points at the
+            // now-absent alternative drops.
+            live={view.nudge.live}
           />
         )}
 

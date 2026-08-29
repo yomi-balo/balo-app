@@ -8,13 +8,15 @@ import type { DbExecutor } from './db-executor';
  * compile time WITHOUT the generic repo needing to know it. Mirrors
  * `_shared/schedule-audit.ts`.
  *
- * ⚠ THREE OF THE FOUR NOW HAVE WRITERS: `meeting.booked` (BAL-129, on `create`), `meeting.ended`
- * (BAL-134, on `endMeeting`), and — as of BAL-409 — `meeting.rescheduled` (on
- * `meetingsRepository.updateSchedule`, via `recordMeetingRescheduled` below). `meeting.cancelled`
- * is still RESERVED — declared here so its eventual writer (BAL-410, on `cancel`) inherits THIS
- * vocabulary rather than minting a near-miss spelling (`meeting.canceled`) that no "history of
- * one meeting" read would ever find. `audit_events.action` is open TEXT, so a reserved label
- * costs no migration and no enum value.
+ * ⚠ ALL FOUR NOW HAVE WRITERS, AS OF BAL-410: `meeting.booked` (BAL-129, on `create`),
+ * `meeting.ended` (BAL-134, on `endMeeting`), `meeting.rescheduled` (BAL-409, on
+ * `meetingsRepository.updateSchedule`, via `recordMeetingRescheduled` below) and — new here —
+ * `meeting.cancelled` (BAL-410, on `meetingsRepository.cancel`, via `recordMeetingCancelled`).
+ * The label was RESERVED ahead of its writer precisely so that writer would inherit THIS
+ * vocabulary rather than mint a near-miss spelling (`meeting.canceled`) that no "history of one
+ * meeting" read would ever find; that worked, and the reservation is now discharged.
+ * `audit_events.action` is open TEXT, so neither the reservation nor its writer cost a migration
+ * or an enum value.
  *
  * ⚠ `meeting.ended` IS WRITTEN WITH A NULL ACTOR ON FOUR OF THE FIVE TERMINAL PATHS, and that
  * is the ADR-1030 system-actor exemption, not a miss: idle end, no-show, missed call and
@@ -32,10 +34,18 @@ import type { DbExecutor } from './db-executor';
  * visible only to someone reading this file. That is why the reserved labels ship and an
  * attribution column on `meetings` does not (see `meetingsRepository.create`).
  *
- * `meeting.cancelled`'s mutator (`cancel`) exists and is unaudited today, which is safe only
- * because it has NO PRODUCTION CALLER (`repositories/meetings.ts`) — so it cannot yet produce an
- * unattributed, party-visible state change. Wiring a caller without also wiring its audit row
- * re-opens exactly the ADR-1044 §5 gap BAL-129 closes here.
+ * ⚠ AND THAT ARGUMENT IS WHY BAL-410 ADDED **NO** `cancelled_by_user_id` COLUMN AND NO MIGRATION
+ * (orchestrator D8). Every read path that could have forced one was checked and none needs
+ * cancelled-by: the consultation row renders a lens-independent "Cancelled — nothing charged"
+ * naming nobody, `deriveCaseConsultationState` reads `meetings.status` alone, and the
+ * `booking.cancelled` notification resolves the actor label IN-PROCESS from the `actorUserId`
+ * the route already holds. An admin "who cancelled this" screen, if one is ever built, joins
+ * `audit_events` on `(entity_type='meeting', entity_id, action='meeting.cancelled')`.
+ *
+ * ⚠ `cancel` USED TO BE UNAUDITED, which was safe only while it had no production caller. It has
+ * one now (`POST /meetings/:meetingId/cancel`), and `recordMeetingCancelled` below is what keeps
+ * that from re-opening the ADR-1044 §5 gap BAL-129 closes here: a party-visible state change
+ * that names no actor.
  */
 export type MeetingAuditAction =
   | 'meeting.booked'
@@ -184,6 +194,62 @@ export async function recordMeetingRescheduled(
       scheduledEnd: input.scheduledEnd.toISOString(),
       expertProfileId: input.expertProfileId,
       guestLinksExtended: input.guestLinksExtended,
+    },
+  });
+}
+
+/**
+ * Record the `meeting.cancelled` row for ONE cancellation, inside `meetingsRepository.cancel`'s
+ * transaction. BAL-410 — the LAST of the four reserved labels to gain a writer.
+ *
+ * ⚠ THE ACTION LITERAL IS `'meeting.cancelled'`, NEVER `'meeting.canceled'`. That single-`l`
+ * near-miss is the exact failure the reservation at the top of this file exists to prevent: a
+ * "history of one meeting" read filters on the label, so a misspelling is not a typo, it is a
+ * row nobody will ever find again.
+ *
+ * ⚠ THE WINDOW IS STORED AS ISO STRINGS, NOT `Date` — the same rule `recordMeetingBooked` and
+ * `recordMeetingRescheduled` state. `metadata` is `jsonb`, so a `Date` written into it round-
+ * trips as a string; typing the stored shape as `Date` would be a lie on the way back out.
+ *
+ * ⚠ `expertProfileId` IS WHOSE CALENDAR THIS CANCELLATION FREED, resolved inside the same
+ * transaction by `cancelProjectionTx` from the LIVE projection row — never re-derived later,
+ * because a context edit would resolve a different expert. `null` is an admin meeting, which
+ * frees nobody's calendar.
+ *
+ * `actorUserId` is REQUIRED but NULLABLE. `null` is the ADR-1030 SYSTEM-ACTOR ATTRIBUTION
+ * EXEMPTION — an unattributed row, never a fabricated actor — and the dev seeder
+ * (`services/seed/seed-service.ts`) is its one live caller, paired with `actorRole: 'system'`.
+ * Every human path passes the acting user AND the arm that authorized them, so the pair
+ * `(actorUserId: null, actorRole: 'system')` is a complete record and
+ * `(null, 'client'|'expert'|'admin')` would be a bug.
+ *
+ * ⚠ RETURNS THE AUDIT ROW ID, and — exactly as for reschedule — that is LOAD-BEARING rather
+ * than a convenience. `audit_events` is append-only, so the id is UNIQUE PER SUCCESSFUL CANCEL,
+ * and the post-commit fan-out keys its BullMQ jobId off it. A `meetingId`-derived key would be
+ * unique per MEETING, not per WRITE, and BullMQ silently no-ops an `add` whose jobId is already
+ * in the retained completed set.
+ */
+export async function recordMeetingCancelled(
+  exec: DbExecutor,
+  input: {
+    meetingId: string;
+    actorUserId: string | null;
+    actorRole: 'client' | 'expert' | 'admin' | 'system';
+    scheduledStart: Date;
+    scheduledEnd: Date;
+    expertProfileId: string | null;
+  }
+): Promise<string> {
+  return recordMeetingAudit(exec, {
+    actorUserId: input.actorUserId,
+    action: 'meeting.cancelled',
+    meetingId: input.meetingId,
+    metadata: {
+      // WHICH AUTHORIZATION ARM matched — server-derived, never taken from the wire.
+      actorRole: input.actorRole,
+      scheduledStart: input.scheduledStart.toISOString(),
+      scheduledEnd: input.scheduledEnd.toISOString(),
+      expertProfileId: input.expertProfileId,
     },
   });
 }

@@ -105,10 +105,16 @@ export async function processMeetingCalendarAmend(
     return;
   }
 
-  // 2. Cancelled ⇒ the vendor DELETE is BAL-410's, not this job's.
+  // 2. Cancelled ⇒ the vendor calendar DELETE is BAL-476's, not this job's.
+  //    ⚠ CORRECTED OWNER (orchestrator D2). This used to name BAL-410, which was true when it
+  //    was written and is now false: BAL-410 shipped the CANCEL PRODUCER (the state flip, the
+  //    `meeting.cancelled` audit row, the hold release, the Daily room delete and the
+  //    `booking.cancelled` event) and deliberately emits NO calendar event and NO ICS. BAL-476
+  //    owns the Apiroc `deleteConsultationEvent` call and the `METHOD:CANCEL` fan-out, and it
+  //    names itself that function's first consumer.
   if (meeting.status === 'cancelled') {
     job.log(
-      `Meeting ${meetingId} is cancelled — the vendor delete belongs to BAL-410, not this job`
+      `Meeting ${meetingId} is cancelled — the vendor calendar delete belongs to BAL-476, not this job`
     );
     return;
   }
@@ -118,8 +124,8 @@ export async function processMeetingCalendarAmend(
   //    skipped, or — since BAL-433 — this meeting recorded an `ics` FALLBACK row instead
   //    (ADR-1044 Ruling 1), which names no vendor event at all.
   //
-  //    ⚠ RE-SENDING AN UPDATED ICS ON RESCHEDULE IS **NOT THIS JOB'S**, exactly as the cancel
-  //    at step 2 is BAL-410's. Building and delivering the ICS is BAL-475; `METHOD:CANCEL` and
+  //    ⚠ RE-SENDING AN UPDATED ICS ON RESCHEDULE IS **NOT THIS JOB'S**, exactly as the vendor
+  //    delete at step 2 is BAL-476's. Building and delivering the ICS is BAL-475; `METHOD:CANCEL` and
   //    the re-send fan-out are BAL-476. The accepted residual, stated rather than hidden: a
   //    rescheduled ICS-fallback expert currently holds a STALE calendar entry.
   //

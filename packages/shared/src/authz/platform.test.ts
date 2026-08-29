@@ -37,9 +37,27 @@ describe('platformRoleHasCapability', () => {
   });
 });
 
+/**
+ * BAL-410 — the cancel-override token. Same allow/deny table as its siblings: a cancel that
+ * bypasses BOTH party axes is Balo-staff-only, and a plain `user` must never hold it.
+ */
+describe('platformRoleHasCapability — CANCEL_ANY_MEETING', () => {
+  it.each(['admin', 'super_admin'])('grants CANCEL_ANY_MEETING to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])('denies CANCEL_ANY_MEETING to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING)).toBe(false);
+  });
+});
+
 describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
   it('maps MANAGE_PLATFORM_FEES to its snake_case token', () => {
     expect(PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES).toBe('manage_platform_fees');
+  });
+
+  it('maps CANCEL_ANY_MEETING to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING).toBe('cancel_any_meeting');
   });
 
   it('gives admin and super_admin the identical staff bundle, and omits user', () => {

@@ -240,7 +240,9 @@ describe('BAL-428 — booking a meeting removes the slot the marketplace adverti
     expect(cached?.earliestAvailableAt?.toISOString()).toBe('2026-09-07T10:00:00.000Z');
 
     // ── CANCEL ──
-    const cancelled = await cancelMeeting(booked.meetingId, log);
+    // BAL-410 — the audit tuple is now part of the signature. `system` is the sanctioned
+    // exemption for a caller with no acting human (here, a test harness).
+    const cancelled = await cancelMeeting(booked.meetingId, null, 'system', log);
     expect(cancelled.expertProfileId).toBe(expert.expertProfileId);
     expect(mockQueueAdd).toHaveBeenCalledTimes(2);
 

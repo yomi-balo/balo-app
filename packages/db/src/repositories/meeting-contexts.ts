@@ -378,9 +378,11 @@ export const meetingContextsRepository = {
    * site is a test), so both sequences ship inert, exactly like the hazard `attach`'s guard
    * fixes did before this ticket. The closure — most likely the same
    * `findPrimaryMeetingContextRepoint` call in `detach`'s own update path, which today runs no
-   * transaction at all — is tracked as BAL-471 and MUST land before whichever ticket
-   * (BAL-410 / BAL-411) gives `detach` its first production caller. Until then this is a named
-   * residual, not a rediscovered bug.
+   * transaction at all — is tracked as BAL-471 and MUST land before whichever ticket gives
+   * `detach` its first production caller. ⚠ NOT BAL-410 OR BAL-411: both have now SHIPPED and
+   * neither calls `attach` or `detach` — cancel flips `meetings.status` and leaves the context
+   * rows exactly where they are, and reschedule moves the window only. Until some ticket does,
+   * this is a named residual, not a rediscovered bug.
    */
   async detach(
     meetingId: string,

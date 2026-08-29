@@ -10,8 +10,14 @@ import { shared, EmailShell, LogoRow, StatusPill, SupportFooter } from './shared
  * notice never carries the client charge/markup/margin.
  */
 
-/** The pill accent: a calm primary receipt vs a success earnings-assurance. */
-export type CaseBillingReceiptTone = 'primary' | 'success';
+/**
+ * The pill accent: a calm primary receipt, a success earnings-assurance, or — BAL-410 — a
+ * NEUTRAL `muted` for an event that is neither good news nor bad. A cancellation is a plain
+ * fact; rendering it `primary` would give it brand emphasis it has not earned, and `success`
+ * would celebrate it. There is deliberately NO destructive/red tone: a free cancellation is not
+ * an error, and colouring it as one is exactly the adversarial framing the copy rules forbid.
+ */
+export type CaseBillingReceiptTone = 'primary' | 'success' | 'muted';
 
 export interface CaseBillingReceiptEmailProps {
   readonly firstName: string;
@@ -40,6 +46,13 @@ const PILL_STYLES: Record<CaseBillingReceiptTone, Record<string, string>> = {
     background: 'rgba(18, 153, 107, 0.18)',
     border: '1px solid rgba(18, 153, 107, 0.35)',
     color: '#A7F3D0',
+  },
+  // BAL-410 — a slate neutral, deliberately the lowest-contrast of the three.
+  muted: {
+    ...shared.statusPillBase,
+    background: 'rgba(148, 163, 184, 0.16)',
+    border: '1px solid rgba(148, 163, 184, 0.32)',
+    color: '#CBD5E1',
   },
 };
 
