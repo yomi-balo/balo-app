@@ -55,6 +55,10 @@ vi.mock('next/navigation', () => ({
   notFound: mockNotFound,
   redirect: mockRedirect,
   useRouter: () => ({ push: vi.fn() }),
+  // BAL-499 — the page now renders <EntityCrumb>, which calls usePathname(). Not asserted on
+  // here (that lives in breadcrumbs.test.tsx); this mock only needs to exist so the render
+  // doesn't throw.
+  usePathname: () => '/projects/req-1',
 }));
 vi.mock('@/lib/logging', () => ({ log: { warn: mockLogWarn, error: mockLogError } }));
 // Server analytics seam (BAL-276): the denial boundary emits the

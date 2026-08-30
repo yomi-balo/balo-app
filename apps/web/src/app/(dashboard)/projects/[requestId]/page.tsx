@@ -37,6 +37,7 @@ import {
   type KickoffBillingCapture,
 } from '@/lib/billing/billing-capture';
 import { RequestDetailShell } from '@/components/balo/project-request/request-detail-shell';
+import { EntityCrumb } from '@/components/layout/breadcrumb-context';
 
 interface RequestDetailPageProps {
   params: Promise<{ requestId: string }>;
@@ -241,14 +242,19 @@ export default async function RequestDetailPage({
   const viewerEmailDomain = extractEmailDomain(user.email);
 
   return (
-    <RequestDetailShell
-      view={view}
-      ctx={ctx}
-      conversation={conversation}
-      adminBilling={adminBilling}
-      billingCapture={billingCapture}
-      deliveryEngagementId={deliveryEngagementId}
-      viewerEmailDomain={viewerEmailDomain}
-    />
+    <>
+      {/* BAL-499 — publishes the request's title into the top bar's breadcrumb trail. Safe
+          here: this is the already-authorised return path, after every gate above. */}
+      <EntityCrumb label={request.title} />
+      <RequestDetailShell
+        view={view}
+        ctx={ctx}
+        conversation={conversation}
+        adminBilling={adminBilling}
+        billingCapture={billingCapture}
+        deliveryEngagementId={deliveryEngagementId}
+        viewerEmailDomain={viewerEmailDomain}
+      />
+    </>
   );
 }

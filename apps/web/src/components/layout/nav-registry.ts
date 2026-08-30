@@ -275,3 +275,82 @@ export function resolveNavItems(
       entry.requires(context)
   );
 }
+
+/**
+ * BAL-499 — one rendered breadcrumb. `href === null` means this crumb is the current page,
+ * never a link target.
+ */
+export interface NavCrumb {
+  readonly label: string;
+  readonly href: string | null;
+}
+
+/**
+ * BAL-499 (D5/D11) — labels for `(dashboard)` routes that are real destinations but deliberately
+ * NOT nav entries (adding them would ship unwanted sidebar/bottom-tab/⌘K items — `NAV_ENTRIES`
+ * drives all three surfaces). Kept HERE rather than in the breadcrumb component so `NAV_ENTRIES`
+ * still has exactly one consumer (Scan C), and so route labels have ONE home.
+ */
+const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
+  '/billing/top-up': 'Top up',
+  '/engagements': 'Engagements',
+  '/promo-codes': 'Promo codes',
+  '/redeem': 'Redeem a code',
+};
+
+/**
+ * BAL-499 (D5/D11) — first path segment to the list an entity route sits under. The parent crumb
+ * ALWAYS carries an href, so the way back is never lost even when the entity itself has
+ * published no label yet.
+ */
+const ENTITY_PARENTS: Readonly<Record<string, NavCrumb>> = {
+  cases: { label: 'Consultations', href: '/consultations' },
+  meetings: { label: 'Consultations', href: '/consultations' },
+  engagements: { label: 'Engagements', href: '/engagements' },
+  projects: { label: 'Projects', href: '/projects' },
+};
+
+/**
+ * An enabled registry entry's label for `pathname`, else the supplemental table's, else
+ * `undefined`.
+ *
+ * ⚠ `Object.hasOwn`, NOT a bare index — `SUPPLEMENTAL_ROUTE_LABELS[pathname]` indexes a plain
+ * object literal, which resolves INHERITED keys too: a `pathname` of `constructor` / `toString`
+ * / `valueOf` / `__proto__` would return a non-`undefined` value, pass the `=== undefined` guard
+ * in `resolveBreadcrumbTrail`, and hand a non-string to `<Link>`. Safe only incidentally today
+ * because every key here starts with `/`. This repo already treats the bare-index class as a
+ * defect — see the `Object.hasOwn` docblock at `meetings/[meetingId]/page.tsx:56-62`.
+ */
+function exactCrumbLabelFor(pathname: string): string | undefined {
+  const entry = NAV_ENTRIES.filter(isEnabled).find((candidate) => candidate.href === pathname);
+  if (entry !== undefined) return entry.label;
+  if (!Object.hasOwn(SUPPLEMENTAL_ROUTE_LABELS, pathname)) return undefined;
+  return SUPPLEMENTAL_ROUTE_LABELS[pathname];
+}
+
+/** The path's first segment (between the leading `/` and the next `/`, or the end of string). */
+function firstSegmentOf(pathname: string): string {
+  const [, segment] = pathname.split('/');
+  return segment ?? '';
+}
+
+/**
+ * BAL-499 (D5) — the route-derived crumb trail for `pathname`, deepest-last. An entity route
+ * yields ONLY its parent — the entity's own crumb is published by the page (`EntityCrumb`,
+ * `breadcrumb-context.tsx`) and appended by `Breadcrumbs`. An unrecognised route yields `[]`: no
+ * crumb beats a wrong crumb (D11) — the old silent `'Dashboard'` fallback is gone.
+ *
+ * ⚠ `Object.hasOwn` guards `ENTITY_PARENTS` for the same reason as `exactCrumbLabelFor` above:
+ * `firstSegmentOf` returns a bare path segment, and `constructor` / `toString` / `valueOf` /
+ * `__proto__` are all reachable inputs once ANY `(dashboard)/[slug]` catch-all route exists. Not
+ * reachable today (no such route), but this repo treats the class as a defect regardless of
+ * reachability (see the docblock above).
+ */
+export function resolveBreadcrumbTrail(pathname: string): readonly NavCrumb[] {
+  const exact = exactCrumbLabelFor(pathname);
+  if (exact !== undefined) return [{ label: exact, href: null }];
+  const segment = firstSegmentOf(pathname);
+  if (!Object.hasOwn(ENTITY_PARENTS, segment)) return [];
+  const parent = ENTITY_PARENTS[segment];
+  return parent === undefined ? [] : [parent];
+}
