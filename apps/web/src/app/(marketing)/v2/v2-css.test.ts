@@ -32,6 +32,39 @@ describe('v2.css — stylesheet AC guards', () => {
     expect(CSS).not.toMatch(/(^|\n)html,\s*body\s*\{/);
   });
 
+  // ⚠ THE GUARD THAT MATTERS, and the one that was too narrow. This file is UNLAYERED author
+  // CSS, so any rule here beats every layered rule in `globals.css` and all Tailwind output,
+  // unconditionally — and Next's App Router does not reliably unload a page-scoped stylesheet
+  // on a soft navigation. A single top-level rule therefore escapes /v2 and applies app-wide
+  // for the life of the tab. The earlier version of this test pinned only `body {`, so
+  // `html { scroll-behavior: smooth }` walked straight through it.
+  //
+  // Every top-level selector must be `.mk2-`-scoped or an `html:has(.mk2-page)` guard. The
+  // only bare at-rules permitted are @media / @keyframes wrappers, whose own contents are
+  // checked by the same rule below.
+  it('leaks nothing to the host document — every top-level selector is page-scoped', () => {
+    // Strip comments, then collect every selector that opens a declaration block.
+    // Written without `\s*` padding around the capture: `\s*` next to `[^@{}]+` can exchange
+    // whitespace with it, which is super-linear backtracking (regexp/no-super-linear-backtracking).
+    // `[^@{}]+` excludes `{`, so the match is deterministic; whitespace is trimmed in JS below.
+    const withoutComments = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const selectors = [...withoutComments.matchAll(/(^|\})([^@{}]+)\{/g)]
+      .map((m) => m[2] ?? '')
+      .flatMap((group) => group.split(','))
+      .map((sel) => sel.trim())
+      .filter((sel) => sel.length > 0 && !sel.startsWith('@'))
+      // `from` / `to` / `70%` are @keyframes stops, not selectors — they cannot escape a
+      // stylesheet and the keyframe NAMES they belong to are all `mk2-`-prefixed.
+      .filter((sel) => !/^(from|to|-?\d+(\.\d+)?%)$/.test(sel));
+
+    expect(selectors.length).toBeGreaterThan(50); // the regex actually matched something
+
+    const escaped = selectors.filter(
+      (sel) => !sel.includes('.mk2-') && !sel.startsWith('html:has(.mk2-page)')
+    );
+    expect(escaped).toEqual([]);
+  });
+
   it('deletes the control-strip CSS (edit 4)', () => {
     expect(CSS).not.toContain('.mk2-ctl');
     expect(CSS).not.toContain('.mk2-seg');

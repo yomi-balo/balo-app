@@ -1,13 +1,27 @@
-*,
-*::before,
-*::after {
+/* ── Scoped globals (BAL-510) ────────────────────────────────────────────────
+   The ref sets these on `*` and `html` because it is a standalone prototype that OWNS the
+   document. Here it does not: this file is unlayered author CSS, which beats every layered
+   rule (all of `globals.css`'s `@layer base` and all Tailwind output) unconditionally, and
+   Next's App Router does not reliably unload a page-scoped stylesheet on a soft navigation.
+   Left unscoped, one visit to /v2 would apply smooth scrolling app-wide for the life of the
+   tab — and this page ships ~44 links to /experts, so that is the common path, not an edge
+   case. `:has()` keeps both rules alive exactly while the page is mounted and retires them
+   the moment it unmounts, so teardown leaves nothing behind. Where `:has()` is unsupported
+   the rules simply do not apply: anchors jump instead of glide, which is the ref's own
+   reduced-motion behaviour, so the failure mode is degradation, never breakage.
+   `scroll-behavior` must stay on the scrolling element (`html`) — it is inert on a
+   non-scrolling descendant, so scoping it to `.mk2-page` would silently disable it. */
+.mk2-page,
+.mk2-page *,
+.mk2-page *::before,
+.mk2-page *::after {
   box-sizing: border-box;
 }
-html {
+html:has(.mk2-page) {
   scroll-behavior: smooth;
 }
 @media (prefers-reduced-motion: reduce) {
-  html {
+  html:has(.mk2-page) {
     scroll-behavior: auto;
   }
 }
@@ -1429,6 +1443,11 @@ html {
   .mk2-page .mk2-aur,
   .mk2-page .mk2-ticker-track,
   .mk2-page .mk2-receipt,
+  /* `.mk2-hero > *` (not just the `.mk2-wrap` children) so the TICKER's own one-shot
+     `mk2-up` entry is covered too — without it a reduced-motion visitor still gets one
+     0.9s fade-up before hydration. This now mirrors the `.mk2-page.reduced` block above
+     exactly, rather than covering a subset of it. */
+  .mk2-page .mk2-hero > *,
   .mk2-page .mk2-hero .mk2-wrap > * {
     animation: none;
   }
