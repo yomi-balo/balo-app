@@ -39,9 +39,8 @@ import 'server-only';
  * invitation — stamping an access on a link nobody opened and leaking the token in a
  * `Referer`. That scan is deliberately blunt and must stay that way.
  *
- * This URL is neither of those things: it is TOKENLESS, it is the anonymous LOBBY route
- * (`/join/m/{meetingId}`, not `/join/{token}`), and it is written to a clipboard rather than
- * rendered as an href — so nothing prefetches it and there is no credential in it to leak.
+ * This URL is neither of those things: it is TOKENLESS and it is the anonymous LOBBY route
+ * (`/join/m/{meetingId}`, not `/join/{token}`) — so there is no credential in it to leak.
  * Rather than carve an exemption into a security scan for a convenience, the builder simply
  * lives outside the scanned tree, where it belongs anyway: it is a pure function of an env var
  * and an id, and it is unit-testable here.
@@ -49,6 +48,32 @@ import 'server-only';
  * ⚠ THE RECIPIENT IS NOT ADMITTED BY HOLDING THIS. They land in the pending lobby and a host
  * must let them in — which is exactly what the panel's helper line says, and why the row they
  * arrive as is marked UNVERIFIED.
+ *
+ * ⚠ BAL-498 — SECOND CALLER, AND IT IS NAVIGATED TO, NEVER RENDERED (not a clipboard write
+ * either). The expert calendar page (`app/(dashboard)/expert/calendar/`) calls this server-side
+ * and passes the result down as a plain string prop, which `_components/join-meeting-button.tsx`
+ * holds in a closure and hands to `globalThis.location.assign` from a `<button>` click handler.
+ *
+ * ⚠⚠ THE URL NEVER BECOMES A DOM ATTRIBUTE, AND THAT IS THE POINT — DO NOT "RESTORE" AN
+ * `<a href>`/`Button asChild`. An attribute is not a URL: PostHog autocapture is ON and ships
+ * `$elements[].attr__href`, which `sanitizeAnalyticsEvent` never walks; Sentry
+ * `replayIntegration` records rrweb DOM snapshots whose default `maskAttributes` (`title`,
+ * `placeholder`, `aria-label`) excludes `href`. Neither redaction hook reaches an attribute, so
+ * an `href` here shipped the tokenless-but-sensitive-by-policy `/join/m/{meetingId}` to two
+ * external processors before any click. (An earlier revision of THIS paragraph described the
+ * fix-round-2 state — an `<a href>` rendered via `Button asChild` — and so stated the exact
+ * opposite of the invariant it points at; fix round 3 replaced that render with the button, and
+ * fix round 5 corrected the comment.)
+ *
+ * ⚠ STILL NEVER `next/link`, AND STILL LOAD-BEARING — for a second reason on top of prefetch.
+ * `location.assign` is a HARD DOCUMENT NAVIGATION, and `instrumentation-client.ts:52` refuses
+ * Session Replay by inspecting the landing URL at `Sentry.init()` time; only a real navigation
+ * makes `onSensitiveLanding` re-evaluate on the lobby. A soft navigation (`next/link`,
+ * `router.push`) would start Replay on the calendar and carry it INTO the token-adjacent route.
+ *
+ * See `join-link-never-writes.test.ts` — its amended docblock records why this tokenless URL is
+ * safe to navigate to, and its `'invariant: the expert calendar never renders a join URL as an
+ * href (BAL-498 S1)'` block is the source-level pin for everything above.
  */
 
 /**

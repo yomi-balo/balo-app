@@ -87,9 +87,12 @@ describe('MobileTabBar (BAL-501)', () => {
   it('renders one Link per resolved tab plus a More button for an expert workspace', () => {
     renderTabBar({ workspaceType: 'expert' });
     const links = screen.getAllByRole('link');
+    // BAL-498: Calendar is expert-only and sits between Consultations and Messages in registry
+    // order, filling the bar to MOBILE_TAB_LIMIT. The company case above stays at three.
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
       '/consultations',
+      '/expert/calendar',
       '/messages',
     ]);
     // Default checklist state (incomplete) puts the rollup dot on the accessible name — match

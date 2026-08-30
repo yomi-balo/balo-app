@@ -129,23 +129,41 @@ function primaryNav(): HTMLElement {
 
 describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () => {
   it('renders the top items in exact order for both modes', () => {
-    for (const mode of ['client', 'expert'] as const) {
-      const { unmount } = renderSidebar({ mode, canManageCompany: false });
-      const links = within(primaryNav()).getAllByRole('link');
-      expect(links.map((l) => l.textContent?.trim())).toEqual([
-        'Dashboard',
-        'Consultations',
-        'Projects',
-        'Messages',
-      ]);
-      expect(links.map((l) => l.getAttribute('href'))).toEqual([
-        '/dashboard',
-        '/consultations',
-        '/projects',
-        '/messages',
-      ]);
-      unmount();
-    }
+    // Calendar (BAL-498) is expert-only, so the two modes now diverge — client keeps the
+    // original four-item list, expert gains Calendar between Projects and Messages.
+    const client = renderSidebar({ mode: 'client', canManageCompany: false });
+    const clientLinks = within(primaryNav()).getAllByRole('link');
+    expect(clientLinks.map((l) => l.textContent?.trim())).toEqual([
+      'Dashboard',
+      'Consultations',
+      'Projects',
+      'Messages',
+    ]);
+    expect(clientLinks.map((l) => l.getAttribute('href'))).toEqual([
+      '/dashboard',
+      '/consultations',
+      '/projects',
+      '/messages',
+    ]);
+    client.unmount();
+
+    const expert = renderSidebar({ mode: 'expert', canManageCompany: false });
+    const expertLinks = within(primaryNav()).getAllByRole('link');
+    expect(expertLinks.map((l) => l.textContent?.trim())).toEqual([
+      'Dashboard',
+      'Consultations',
+      'Projects',
+      'Calendar',
+      'Messages',
+    ]);
+    expect(expertLinks.map((l) => l.getAttribute('href'))).toEqual([
+      '/dashboard',
+      '/consultations',
+      '/projects',
+      '/expert/calendar',
+      '/messages',
+    ]);
+    expert.unmount();
   });
 
   it('bottom gating matrix — client, cannot manage company → Settings + Account', () => {
@@ -179,7 +197,15 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       .map((l) => l.getAttribute('href'))
       .filter(
         (href) =>
-          href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
+          href &&
+          ![
+            '/dashboard',
+            '/consultations',
+            '/projects',
+            '/expert/calendar',
+            '/messages',
+            '/',
+          ].includes(href)
       );
     expect(bottomHrefs).toEqual(['/expert/settings', '/settings/account']);
   });
@@ -191,7 +217,15 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       .map((l) => l.getAttribute('href'))
       .filter(
         (href) =>
-          href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
+          href &&
+          ![
+            '/dashboard',
+            '/consultations',
+            '/projects',
+            '/expert/calendar',
+            '/messages',
+            '/',
+          ].includes(href)
       );
     expect(bottomHrefs).toEqual(['/expert/settings', '/settings/team', '/settings/account']);
   });

@@ -8,8 +8,16 @@ import { timestamps, softDelete } from './helpers';
 /**
  * `consultations` — THE AVAILABILITY READ MODEL OF THE MEETING LIFECYCLE (BAL-428
  * decision, Option C). The resolver subtracts these rows from an expert's open windows
- * (`consultations_expert_status_range_idx`); nothing else reads them except the
- * confirmed-consultation hero stat (`_shared/consultation-count.ts`).
+ * (`consultations_expert_status_range_idx`).
+ *
+ * ⚠ BAL-498 — THIS TABLE NOW HAS A THIRD READER. `meetingsRepository.listCalendarForExpert`
+ * (`repositories/meetings.ts`) joins through it as the ownership-resolving index for the
+ * expert calendar page — `consultations.expert_profile_id` is the primary predicate that
+ * proves a meeting is this expert's before any polymorphic `meeting_contexts.context_id`
+ * lookup runs. The full reader list is therefore: the BAL-243 availability resolver, the
+ * confirmed-consultation hero stat (`_shared/consultation-count.ts`), and the BAL-498
+ * calendar read. All three are READS. The one-writer rule below is UNCHANGED by this —
+ * BAL-498 adds a reader, never a writer.
  *
  * ⚠ THIS TABLE HAS EXACTLY ONE WRITER: `repositories/_shared/consultation-projection.ts`,
  * called ONLY from `meetingsRepository` and `meetingContextsRepository`, ALWAYS inside

@@ -1,15 +1,22 @@
-import { and, asc, eq, gte, inArray, isNull, ne, notInArray } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, notInArray } from 'drizzle-orm';
 import {
   assertMeetingTransition,
   CANCELLABLE_MEETING_STATUSES,
   RESCHEDULABLE_MEETING_STATUSES,
   GUEST_TOKEN_TTL_AFTER_END_MS,
+  selectPrimaryMeetingContext,
   type MeetingLifecycleStatus,
+  type MeetingContextTypeWithHolder,
 } from '@balo/shared/meetings';
 import { db } from '../client';
 import {
   meetings,
   meetingContexts,
+  consultations,
+  engagements,
+  projectRequests,
+  requestExpertRelationships,
+  companies,
   type Meeting,
   type MeetingContext,
   type MeetingContextType,
@@ -18,6 +25,7 @@ import {
   type MeetingStatus,
   type NewMeeting,
 } from '../schema';
+import type { EngagementType } from './_shared/engagement-supertype';
 import {
   cancelProjectionTx,
   projectNewMeetingTx,
@@ -33,6 +41,9 @@ import {
   recordMeetingRescheduled,
 } from './_shared/meeting-audit';
 import { meetingPresenceRepository } from './meeting-presence';
+import { createLogger } from '@balo/shared/logging';
+
+const logger = createLogger('meetings-repository');
 
 /**
  * ⚠⚠ THE THREE STATUS MUTATORS' COMPARE-AND-SET **FROM** SETS, DECLARED ONCE AND CHECKED
@@ -387,6 +398,357 @@ async function updateLiveMeeting(
  * is BAL-400's. Cancellations are BAL-410's, reschedules BAL-409/BAL-411's. Publishing from
  * here would fire on a dev seed run, since the seeder is a live caller of `create`/`cancel`.
  */
+
+/**
+ * BAL-498 — one raw row from `listCalendarForExpert`'s step-1 query, and also the shape a
+ * meeting is reduced to after step 2's fold. Same shape both before and after folding: a
+ * pre-fold row is one (meeting, context) pair; a folded row is the winning pair.
+ */
+interface RawMeetingContextRow {
+  meetingId: string;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+  status: MeetingStatus;
+  /** The FULL label set pre-fold — a meeting's fanned-out rows can include `admin`.
+   *  {@link selectPrimaryMeetingContext} is what narrows this to
+   *  {@link MeetingContextTypeWithHolder} on the way out. */
+  contextType: MeetingContextType;
+  /** Nullable pre-fold — `admin` contexts carry a `null` `context_id`. Never null post-fold:
+   *  {@link selectPrimaryMeetingContext} drops any candidate with a null id. */
+  contextId: string | null;
+}
+
+const MS_PER_DAY = 86_400_000;
+
+/**
+ * BAL-498 fix round 3 (S2) — the widest range {@link meetingsRepository.listCalendarForExpert}
+ * will serve. `?week=1000-01-01` passed every shape and calendar-date check the page had and
+ * opened a thousand-year window on a read with no `LIMIT`.
+ *
+ * ⚠ SIZED AGAINST THE PAGE'S OWN CLAMP — keep the two in step. `page.tsx` bounds `?week=` to
+ * ±365 days of today; `weekStartDayKey` can round back a further 6; and `load-expert-calendar.ts`
+ * clamps `rangeEnd` forward to at least `today + 28` (the Agenda horizon). The widest LEGITIMATE
+ * request is therefore a far-past week: `371 + 28 = 399` days, ±1h of DST. 420 leaves real
+ * head-room above that without leaving the class of defect open.
+ */
+export const MAX_CALENDAR_RANGE_DAYS = 420;
+
+/** Hard row cap for the same read. Context rows, not meetings — see the call site. */
+export const MAX_CALENDAR_ROWS = 2000;
+
+/** Thrown, never truncated: a range this wide is a CALLER BUG, and silently returning a
+ *  narrower answer would hide it behind a plausible-looking calendar. */
+export class CalendarRangeTooWideError extends Error {
+  constructor(rangeStart: Date, rangeEnd: Date) {
+    super(
+      `listCalendarForExpert: range ${rangeStart.toISOString()}..${rangeEnd.toISOString()} ` +
+        `exceeds the maximum of ${MAX_CALENDAR_RANGE_DAYS} days`
+    );
+    this.name = 'CalendarRangeTooWideError';
+  }
+}
+
+/** Thrown when the DEFAULT row cap is reached — see {@link assertCalendarRowCapNotExceeded}. */
+export class CalendarTooManyRowsError extends Error {
+  constructor(expertProfileId: string, rowLimit: number) {
+    super(
+      `listCalendarForExpert: expert ${expertProfileId} has at least ${rowLimit} context rows in ` +
+        `the requested range, the maximum this read will serve`
+    );
+    this.name = 'CalendarTooManyRowsError';
+  }
+}
+
+/**
+ * BAL-498 fix round 4, item 3 — the DEFAULT row cap is FAIL-CLOSED, like the span check beside it,
+ * because truncation here drops the WRONG END of the window.
+ *
+ * `.limit(n)` is applied after `orderBy(asc(scheduledStart))`, so an over-limit read discards the
+ * LATEST rows. A far-past `?week=` gives a `rangeStart` up to 371 days back with `rangeEnd` clamped
+ * forward to `today + 28` (`load-expert-calendar.ts`, N5), so the meetings silently lost would be
+ * TODAY'S and the Agenda horizon's — quietly reintroducing, behind a `warn`, the exact "You're all
+ * clear" -with-a-call-in-two-hours symptom the N5 clamp exists to prevent. An honest error (the
+ * route segment's `error.tsx`, with a retry) beats a plausible-looking calendar missing today.
+ *
+ * ⚠ AN EXPLICIT `limit` IS EXEMPT and still truncates. Passing one is opting into a narrower
+ * answer — no shipped caller does; only the integration tests, which pin the
+ * {@link dropPossiblyTruncatedTrailingMeeting} fold-safety behaviour that must keep working.
+ */
+export function assertCalendarRowCapNotExceeded(args: {
+  rowCount: number;
+  rowLimit: number;
+  /** `true` when the caller passed its own `limit`, i.e. deliberately asked to be truncated. */
+  limitIsCallerSupplied: boolean;
+  expertProfileId: string;
+}): void {
+  if (args.limitIsCallerSupplied) return;
+  if (args.rowCount < args.rowLimit) return;
+  throw new CalendarTooManyRowsError(args.expertProfileId, args.rowLimit);
+}
+
+/**
+ * Drops the LAST meeting's rows when the row limit was actually reached, because that meeting's
+ * fanned-out context set may have been sliced by the `LIMIT` — and a half context set folds to
+ * the wrong precedence winner. A no-op below the limit, which is every real call.
+ */
+function dropPossiblyTruncatedTrailingMeeting(
+  rows: readonly RawMeetingContextRow[],
+  rowLimit: number,
+  expertProfileId: string
+): readonly RawMeetingContextRow[] {
+  if (rows.length < rowLimit) return rows;
+  const last = rows.at(-1);
+  if (last === undefined) return rows;
+  logger.warn(
+    { expertProfileId, rowLimit, truncatedMeetingId: last.meetingId },
+    'Expert calendar read hit its row limit; dropping the trailing (possibly truncated) meeting'
+  );
+  return rows.filter((row) => row.meetingId !== last.meetingId);
+}
+
+/** Post-fold: one row per meeting, its `contextId` narrowed to non-null by
+ *  {@link selectPrimaryMeetingContext}. */
+interface FoldedCalendarMeeting {
+  meetingId: string;
+  scheduledStart: Date;
+  scheduledEnd: Date;
+  status: MeetingStatus;
+  contextType: MeetingContextTypeWithHolder;
+  contextId: string;
+}
+
+/**
+ * `listCalendarForExpert` step 2 — reduce each meeting's fanned-out context rows to ONE primary
+ * context via {@link selectPrimaryMeetingContext}. Extracted as a named module-private helper
+ * (SonarCloud `sonarjs/cognitive-complexity` gate on the un-extracted method was 34, allowed 15)
+ * and exported so it is unit-testable without Docker (plan-bal-498.md § 12.1).
+ */
+export function foldMeetingContextRowsToPrimary(
+  rows: readonly RawMeetingContextRow[],
+  expertProfileId: string
+): FoldedCalendarMeeting[] {
+  const byMeeting = new Map<string, RawMeetingContextRow[]>();
+  for (const row of rows) {
+    const bucket = byMeeting.get(row.meetingId);
+    if (bucket === undefined) {
+      byMeeting.set(row.meetingId, [row]);
+    } else {
+      bucket.push(row);
+    }
+  }
+
+  const folded: FoldedCalendarMeeting[] = [];
+  for (const [meetingId, meetingRows] of byMeeting) {
+    const [first] = meetingRows;
+    if (first === undefined) {
+      continue;
+    }
+    const primary = selectPrimaryMeetingContext(meetingRows);
+    if (!primary.ok) {
+      // BOTH reasons are logged, not just `'ambiguous'` (BAL-498 fix round 3, R9). A meeting
+      // folding to `'none'` (every context row is `admin`, or carries a null `context_id`) still
+      // OCCUPIES the expert's availability through `consultations`, yet vanishes from their
+      // calendar — silently dropping it made that state unobservable, while this method's own
+      // docblock promised "OMITTED, fail-closed, and logged" for both.
+      logger.warn(
+        { meetingId, expertProfileId, reason: primary.reason },
+        'Meeting omitted from the expert calendar read: no usable primary context'
+      );
+      continue;
+    }
+    folded.push({
+      meetingId,
+      scheduledStart: first.scheduledStart,
+      scheduledEnd: first.scheduledEnd,
+      status: first.status,
+      contextType: primary.context.contextType,
+      contextId: primary.context.contextId,
+    });
+  }
+  return folded;
+}
+
+export interface CalendarContextIdBuckets {
+  readonly engagementIds: ReadonlySet<string>;
+  readonly projectDiscoveryIds: ReadonlySet<string>;
+  readonly requestInteractionIds: ReadonlySet<string>;
+}
+
+/**
+ * `listCalendarForExpert` step 3a — classify each folded meeting's winning context by grain, so
+ * step 3b can batch-load one query per non-empty bucket. Exhaustive `switch` with `const
+ * unhandled: never` — an eighth `meeting_context_type` label fails `pnpm typecheck` here.
+ */
+export function classifyCalendarContextIds(
+  folded: readonly FoldedCalendarMeeting[]
+): CalendarContextIdBuckets {
+  const engagementIds = new Set<string>();
+  const projectDiscoveryIds = new Set<string>();
+  const requestInteractionIds = new Set<string>();
+  for (const meeting of folded) {
+    switch (meeting.contextType) {
+      case 'case':
+      case 'project_kickoff':
+      case 'package_session':
+      case 'retainer_checkin':
+        engagementIds.add(meeting.contextId);
+        break;
+      case 'project_discovery':
+        projectDiscoveryIds.add(meeting.contextId);
+        break;
+      case 'request_interaction':
+        requestInteractionIds.add(meeting.contextId);
+        break;
+      default: {
+        const unhandled: never = meeting.contextType;
+        throw new Error(`Unhandled meeting context type: ${String(unhandled)}`);
+      }
+    }
+  }
+  return { engagementIds, projectDiscoveryIds, requestInteractionIds };
+}
+
+interface EngagementGrainOwner {
+  readonly id: string;
+  readonly engagementType: EngagementType;
+  readonly companyName: string;
+}
+interface ProjectDiscoveryOwner {
+  readonly id: string;
+  readonly companyName: string;
+}
+interface RequestInteractionOwner {
+  readonly id: string;
+  readonly projectRequestId: string;
+  readonly companyName: string;
+}
+
+export interface CalendarOwnerLookups {
+  readonly engagementById: ReadonlyMap<string, EngagementGrainOwner>;
+  readonly projectDiscoveryById: ReadonlyMap<string, ProjectDiscoveryOwner>;
+  readonly requestInteractionById: ReadonlyMap<string, RequestInteractionOwner>;
+}
+
+/**
+ * `listCalendarForExpert` step 4 — resolve each folded meeting's counterparty from the batch-load
+ * results and assemble the final `ExpertCalendarMeeting[]`. Mirrors the exhaustive `switch` from
+ * {@link classifyCalendarContextIds} (rather than `includes()`/`else if`/`else`) so a seventh
+ * holder-bearing label cannot silently fall into the `request_interaction` bucket.
+ *
+ * `owningRowFound` is surfaced on every row (not just logged) so the WEB LOADER can refuse to
+ * render a link when the owning row could not be resolved — the SAME fail-closed discipline the
+ * missing-row branch already applies to `counterpartyCompanyName`, now applied to `href` too
+ * (security-bal-498.md MEDIUM finding).
+ */
+export function assembleCalendarMeetings(
+  folded: readonly FoldedCalendarMeeting[],
+  owners: CalendarOwnerLookups,
+  expertProfileId: string
+): ExpertCalendarMeeting[] {
+  const result: ExpertCalendarMeeting[] = [];
+  for (const meeting of folded) {
+    const resolved = resolveCalendarMeetingOwner(meeting, owners);
+
+    if (!resolved.owningRowFound) {
+      logger.warn(
+        {
+          meetingId: meeting.meetingId,
+          contextType: meeting.contextType,
+          contextId: meeting.contextId,
+          expertProfileId,
+        },
+        'Expert calendar meeting context resolved to no live owning row'
+      );
+    }
+
+    result.push({
+      meetingId: meeting.meetingId,
+      scheduledStart: meeting.scheduledStart,
+      scheduledEnd: meeting.scheduledEnd,
+      status: meeting.status,
+      contextType: meeting.contextType,
+      // ⚠ NULLED WITH EVERY OTHER IDENTITY FIELD when the per-arm re-check found no live owning
+      // row (BAL-498 fix round 3, R8). `meeting_contexts.context_id` has no FK and no RLS, so on
+      // a drifted or forged row this value is ANOTHER TENANT'S `engagements.id` — emitting it
+      // beside three deliberately-nulled siblings handed every consumer of the exported
+      // `ExpertCalendarMeeting` an unverified cross-tenant identifier behind nothing but a
+      // docblock. Fail closed here, once, rather than at each call site.
+      contextId: resolved.owningRowFound ? meeting.contextId : null,
+      ...resolved,
+    });
+  }
+  return result;
+}
+
+interface ResolvedCalendarMeetingOwner {
+  readonly engagementType: EngagementType | null;
+  readonly projectRequestId: string | null;
+  readonly counterpartyCompanyName: string | null;
+  readonly owningRowFound: boolean;
+}
+
+/**
+ * The per-meeting half of {@link assembleCalendarMeetings} — one folded meeting's winning context
+ * resolved against the batch-load results. Extracted ONLY to shed cognitive complexity (the R8
+ * `contextId` gate took the combined function from 15 to 16, and SonarCloud caps it at 15); the
+ * behaviour is byte-for-byte what the inlined switch did.
+ *
+ * The exhaustive `switch` with `const unhandled: never` is deliberate (rather than
+ * `includes()`/`else if`/`else`) so a seventh holder-bearing label cannot silently fall into the
+ * `request_interaction` bucket — it fails `pnpm typecheck` instead.
+ */
+function resolveCalendarMeetingOwner(
+  meeting: FoldedCalendarMeeting,
+  owners: CalendarOwnerLookups
+): ResolvedCalendarMeetingOwner {
+  const missing: ResolvedCalendarMeetingOwner = {
+    engagementType: null,
+    projectRequestId: null,
+    counterpartyCompanyName: null,
+    owningRowFound: false,
+  };
+
+  switch (meeting.contextType) {
+    case 'case':
+    case 'project_kickoff':
+    case 'package_session':
+    case 'retainer_checkin': {
+      const owning = owners.engagementById.get(meeting.contextId);
+      if (owning === undefined) return missing;
+      return {
+        engagementType: owning.engagementType,
+        projectRequestId: null,
+        counterpartyCompanyName: owning.companyName,
+        owningRowFound: true,
+      };
+    }
+    case 'project_discovery': {
+      const owning = owners.projectDiscoveryById.get(meeting.contextId);
+      if (owning === undefined) return missing;
+      return {
+        engagementType: null,
+        projectRequestId: owning.id,
+        counterpartyCompanyName: owning.companyName,
+        owningRowFound: true,
+      };
+    }
+    case 'request_interaction': {
+      const owning = owners.requestInteractionById.get(meeting.contextId);
+      if (owning === undefined) return missing;
+      return {
+        engagementType: null,
+        projectRequestId: owning.projectRequestId,
+        counterpartyCompanyName: owning.companyName,
+        owningRowFound: true,
+      };
+    }
+    default: {
+      const unhandled: never = meeting.contextType;
+      throw new Error(`Unhandled meeting context type: ${String(unhandled)}`);
+    }
+  }
+}
+
 export const meetingsRepository = {
   /**
    * Insert the meeting, its context rows AND its `consultations` projection in ONE
@@ -1273,4 +1635,220 @@ export const meetingsRepository = {
     });
     return true;
   },
+
+  /**
+   * BAL-498 — one row per live meeting on this expert's calendar, already reduced to ONE
+   * context. See `packages/db/src/repositories/consultations.ts`'s docblock for why this
+   * lives HERE and not there: the rows returned ARE meetings, `consultations` is only the
+   * ownership-resolving join index.
+   *
+   * ⚠ THE OWNERSHIP PREDICATE IS DATA, NOT AUTHORIZATION. `consultations.expert_profile_id`
+   * (a NOT NULL FK, written by the one module allowed to resolve it) is the primary filter;
+   * every one of the three type-discriminated batch loads below ALSO re-checks
+   * `expert_profile_id = :expertProfileId` independently, so a forged or drifted
+   * `meeting_contexts.context_id` (no FK, no RLS) can never surface another tenant's company
+   * name. `hasEngagementCapability` is NOT used and must not be — a `true` from that seam
+   * authorizes the ACT, never the READ (ADR-1046/CLAUDE.md). The caller must supply
+   * `expertProfileId` from the session, never a URL param.
+   *
+   * ⚠ `consultations.status = 'confirmed'` AND `meetings.status <> 'cancelled'` are BOTH
+   * present, on purpose. The first rides `consultations_expert_status_range_idx`; the second
+   * is the TRUTH (`meetings` is the source of truth, the projection is derived). If they ever
+   * disagree the stricter one wins and the meeting is hidden — fail-closed.
+   *
+   * ⚠ `meetings.scheduledStart`/`scheduledEnd` are SELECTED; `consultations.startAt`/`endAt`
+   * are only FILTERED on. They are kept in lockstep by `syncProjectionScheduleTx`.
+   *
+   * Selects NO join credential (`dailyRoomName`/`joinUrl`) — the Join affordance is built
+   * from the meeting id alone via the tokenless lobby URL.
+   *
+   * A meeting whose contexts fold to `'none'` or `'ambiguous'` (via
+   * {@link selectPrimaryMeetingContext}) is OMITTED, fail-closed, and logged.
+   *
+   * ⚠ BOUNDED, TWICE (BAL-498 fix round 3, S2). The only shipped caller derives its range from a
+   * `?week=` query param; the page clamps that param, and this method independently REFUSES a
+   * range wider than {@link MAX_CALENDAR_RANGE_DAYS} and caps the row count at
+   * {@link MAX_CALENDAR_ROWS}. A future caller that forgets to clamp gets a thrown error, not a
+   * full-history index scan plus an unbounded `inArray` bind list. Keep BOTH — the limit alone
+   * would truncate a legitimately wide window instead of naming the mistake. BOTH bounds are
+   * fail-closed for the default path: see {@link assertCalendarRowCapNotExceeded} for why reaching
+   * the row cap throws rather than returning a calendar that is missing TODAY.
+   */
+  async listCalendarForExpert(input: {
+    expertProfileId: string;
+    /** Half-open, UTC instants. Span must not exceed {@link MAX_CALENDAR_RANGE_DAYS}. */
+    rangeStart: Date;
+    rangeEnd: Date;
+    /** Defaults to {@link MAX_CALENDAR_ROWS}; clamped to it, never above. Supplying one opts
+     *  INTO silent truncation (the default cap throws instead) — tests only. */
+    limit?: number;
+  }): Promise<ExpertCalendarMeeting[]> {
+    const spanMs = input.rangeEnd.getTime() - input.rangeStart.getTime();
+    if (!Number.isFinite(spanMs) || spanMs > MAX_CALENDAR_RANGE_DAYS * MS_PER_DAY) {
+      throw new CalendarRangeTooWideError(input.rangeStart, input.rangeEnd);
+    }
+    const rowLimit = Math.min(
+      MAX_CALENDAR_ROWS,
+      Math.max(1, Math.trunc(input.limit ?? MAX_CALENDAR_ROWS))
+    );
+    const rows = await db
+      .select({
+        meetingId: meetings.id,
+        scheduledStart: meetings.scheduledStart,
+        scheduledEnd: meetings.scheduledEnd,
+        status: meetings.status,
+        contextType: meetingContexts.contextType,
+        contextId: meetingContexts.contextId,
+      })
+      .from(consultations)
+      .innerJoin(meetings, eq(meetings.id, consultations.meetingId))
+      .innerJoin(meetingContexts, eq(meetingContexts.meetingId, meetings.id))
+      .where(
+        and(
+          eq(consultations.expertProfileId, input.expertProfileId),
+          eq(consultations.status, 'confirmed'),
+          isNull(consultations.deletedAt),
+          lt(consultations.startAt, input.rangeEnd),
+          gt(consultations.endAt, input.rangeStart),
+          isNull(meetings.deletedAt),
+          ne(meetings.status, 'cancelled'),
+          isNull(meetingContexts.deletedAt)
+        )
+      )
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id))
+      .limit(rowLimit);
+
+    // Step 1b — the default cap is fail-closed, because `asc(scheduledStart)` + `LIMIT` truncates
+    // the FUTURE end of the window (BAL-498 fix round 4, item 3).
+    assertCalendarRowCapNotExceeded({
+      rowCount: rows.length,
+      rowLimit,
+      limitIsCallerSupplied: input.limit !== undefined,
+      expertProfileId: input.expertProfileId,
+    });
+
+    // Step 2 — fold each meeting's fanned-out context rows to ONE primary context.
+    // ⚠ `rows` are CONTEXT rows, not meetings: one meeting fans out to several. A hard `LIMIT`
+    // can therefore slice a meeting's context set in half, and half a context set folds to the
+    // WRONG precedence winner (or to `'ambiguous'`). So the trailing — possibly truncated —
+    // meeting group is dropped whenever the limit was actually reached. Unreachable in practice
+    // (the range is clamped to weeks and MAX_CALENDAR_ROWS is generous), fail-closed if it ever is.
+    const folded = foldMeetingContextRowsToPrimary(
+      dropPossiblyTruncatedTrailingMeeting(rows, rowLimit, input.expertProfileId),
+      input.expertProfileId
+    );
+
+    // Step 3a — classify winning contexts by grain, then one batch load per non-empty bucket.
+    const { engagementIds, projectDiscoveryIds, requestInteractionIds } =
+      classifyCalendarContextIds(folded);
+
+    const [engagementRows, projectDiscoveryRows, requestInteractionRows] = await Promise.all([
+      engagementIds.size === 0
+        ? []
+        : db
+            .select({
+              id: engagements.id,
+              engagementType: engagements.engagementType,
+              companyName: companies.name,
+            })
+            .from(engagements)
+            .innerJoin(companies, eq(companies.id, engagements.companyId))
+            .where(
+              and(
+                inArray(engagements.id, [...engagementIds]),
+                eq(engagements.expertProfileId, input.expertProfileId),
+                isNull(engagements.deletedAt)
+              )
+            ),
+      projectDiscoveryIds.size === 0
+        ? []
+        : db
+            .select({
+              id: projectRequests.id,
+              companyName: companies.name,
+            })
+            .from(projectRequests)
+            .innerJoin(companies, eq(companies.id, projectRequests.companyId))
+            .where(
+              and(
+                inArray(projectRequests.id, [...projectDiscoveryIds]),
+                eq(projectRequests.expertProfileId, input.expertProfileId),
+                isNull(projectRequests.deletedAt)
+              )
+            ),
+      requestInteractionIds.size === 0
+        ? []
+        : db
+            .select({
+              id: requestExpertRelationships.id,
+              projectRequestId: projectRequests.id,
+              companyName: companies.name,
+            })
+            .from(requestExpertRelationships)
+            .innerJoin(
+              projectRequests,
+              eq(projectRequests.id, requestExpertRelationships.projectRequestId)
+            )
+            .innerJoin(companies, eq(companies.id, projectRequests.companyId))
+            .where(
+              and(
+                inArray(requestExpertRelationships.id, [...requestInteractionIds]),
+                eq(requestExpertRelationships.expertProfileId, input.expertProfileId),
+                isNull(requestExpertRelationships.deletedAt),
+                isNull(projectRequests.deletedAt)
+              )
+            ),
+    ]);
+
+    const engagementById = new Map(engagementRows.map((row) => [row.id, row]));
+    const projectDiscoveryById = new Map(projectDiscoveryRows.map((row) => [row.id, row]));
+    const requestInteractionById = new Map(requestInteractionRows.map((row) => [row.id, row]));
+
+    // Step 4 — resolve counterparties and assemble. Result order is ALREADY the SQL ORDER BY's
+    // order (folding preserves first-encounter order via `Map` insertion order) — no second,
+    // redundant JS sort.
+    return assembleCalendarMeetings(
+      folded,
+      { engagementById, projectDiscoveryById, requestInteractionById },
+      input.expertProfileId
+    );
+  },
 };
+
+/**
+ * One row per live meeting on an expert's calendar (BAL-498), already reduced to ONE context
+ * by {@link selectPrimaryMeetingContext}. See {@link meetingsRepository.listCalendarForExpert}.
+ */
+export interface ExpertCalendarMeeting {
+  readonly meetingId: string;
+  /** Source of truth for the rendered window — `meetings`, never the projection copy. */
+  readonly scheduledStart: Date;
+  readonly scheduledEnd: Date;
+  /** Never `'cancelled'` (filtered both sides). */
+  readonly status: MeetingStatus;
+  /** The precedence winner from {@link selectPrimaryMeetingContext}. */
+  readonly contextType: MeetingContextTypeWithHolder;
+  /**
+   * The winning `meeting_contexts.context_id` — `null` whenever {@link owningRowFound} is
+   * `false`, exactly like `engagementType` / `projectRequestId` / `counterpartyCompanyName`.
+   * That column crosses a seam with no FK and no RLS, so an unverified value is another tenant's
+   * identifier, not this expert's (BAL-498 fix round 3, R8).
+   */
+  readonly contextId: string | null;
+  /** Non-null for the four engagement-grain labels only. */
+  readonly engagementType: EngagementType | null;
+  /** `project_requests.id` — non-null for the two request-grain labels only (link target). */
+  readonly projectRequestId: string | null;
+  /** The CLIENT COMPANY. `null` when the owning row is absent/soft-deleted (drifted projection). */
+  readonly counterpartyCompanyName: string | null;
+  /**
+   * `true` only when the per-arm re-check (`expert_profile_id = :expertProfileId` on the owning
+   * engagement/request/relationship row) actually matched a live row. `false` on a drifted or
+   * forged `context_id`, or a soft-deleted owning row — the SAME condition that forces
+   * `counterpartyCompanyName` to `null`. Callers building a link (`href`) MUST gate on this, not
+   * on `contextId`/`projectRequestId` alone: those columns survive a no-FK, no-RLS polymorphic
+   * seam unverified, and rendering one as a live href when this is `false` would leak another
+   * tenant's identifier (security-bal-498.md MEDIUM finding).
+   */
+  readonly owningRowFound: boolean;
+}

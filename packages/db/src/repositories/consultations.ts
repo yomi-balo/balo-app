@@ -3,8 +3,15 @@ import { db } from '../client';
 import { consultations, type Consultation } from '../schema';
 
 /**
- * `consultationsRepository` — READ-ONLY (BAL-428). The minimum surface the BAL-243
- * availability resolver needs, and nothing else.
+ * `consultationsRepository` — READ-ONLY (BAL-428).
+ *
+ * ⚠ BAL-498 amendment: this repository still exposes only the one method the BAL-243
+ * availability resolver needs — that sentence is now scoped to THIS repository, not to the
+ * table. The BAL-498 expert calendar reads the SAME `consultations` table, but through
+ * `meetingsRepository.listCalendarForExpert` (`repositories/meetings.ts`), not through a
+ * method added here. This repository stays read-only and un-widened; the calendar read
+ * lives in `meetingsRepository` because its result rows are meetings, not consultations —
+ * see that method's own docblock for the full placement argument.
  *
  * ⚠ `create()` WAS DELETED HERE, DELIBERATELY. `consultations` is now a READ MODEL of the
  * meeting lifecycle with a NOT NULL `meeting_id`, and it has exactly ONE writer:
