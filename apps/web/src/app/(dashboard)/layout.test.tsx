@@ -41,6 +41,19 @@ vi.mock('@/lib/credit/wallet-read', () => ({
   loadTopBarWalletData: (...args: unknown[]) => mockLoadTopBarWalletData(...args),
 }));
 
+// BAL-499 F1 fix — `layout.tsx:61` awaits `getWorkspacesForCurrentUser()`, which reaches
+// `deriveWorkspacesForUser` → `usersRepository.findForSessionSync` → a REAL `db.select`.
+// Unmocked, both tests in this file died with "Cannot read properties of undefined (reading
+// 'select')" before reaching a single assertion — `db` is undefined under vitest. The layout's
+// own comment promises `[]` "when there is no session user or nothing is derivable", but that
+// contract only covers a null user; it does not survive an absent client.
+//
+// The switcher's list is irrelevant to the credits-chip gate under test here, so it is stubbed
+// flat, alongside every other collaborator this file already mocks.
+vi.mock('@/lib/workspaces/get-workspaces', () => ({
+  getWorkspacesForCurrentUser: () => Promise.resolve([]),
+}));
+
 vi.mock('@/components/layout/sidebar', () => ({
   Sidebar: () => <div data-testid="sidebar-stub" />,
 }));
