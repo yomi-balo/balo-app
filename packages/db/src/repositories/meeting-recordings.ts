@@ -75,6 +75,30 @@ export interface MarkRecordingFailedInput {
   /** ⚠ Capped at {@link FAILURE_REASON_MAX_LENGTH} by this repository, never by the caller. */
   reason: string;
   at: Date;
+  /**
+   * ⚠⚠ BAL-480 FIX ROUND 1 — AN **OPTIONAL** NARROWING TERM, ADDED FOR ONE CALLER: the
+   * stuck-slot reaper in `apps/api/src/jobs/recording-capture.ts`. When `true`, the CAS
+   * additionally requires `daily_recording_id IS NULL`.
+   *
+   * ⚠ ABSENT ⇒ THE TERM IS NOT EMITTED AT ALL, so every existing caller keeps today's exact
+   * semantics. The others are all stamping a failure they OBSERVED (a vendor `recording.error`,
+   * a Mux failure, their own failed start call) and must still win against a row that already
+   * knows its Daily id.
+   *
+   * ⚠⚠ WHY THE REAPER NEEDS IT — A TOCTOU THAT DOUBLE-BILLS. The reaper decides a row is stuck
+   * from a read taken earlier in the same invocation, and {@link markStarted} does **not** move
+   * `status`, so the base CAS (`status <> 'ready' AND status <> 'failed'`) cannot see a
+   * `recording.started` that commits inside that window. Without this term the reap would
+   * overwrite a LATE acknowledgement: a row that HAS a Daily id is marked `failed`, its slot is
+   * released, and the same invocation starts a SECOND Daily recording in the same room — two
+   * concurrent captures, both billing — while the first one's `ready-to-download` is then
+   * refused by {@link markSourceReady}'s `status = 'recording'` CAS and lost. The reaper's
+   * threshold selects precisely for LATE deliveries, so the window is not theoretical.
+   *
+   * With the term the late acknowledgement WINS: this returns `undefined`, the slot is still
+   * held, and the reaper's fall-through insert loses the partial unique index cleanly.
+   */
+  onlyIfUnacknowledged?: boolean;
 }
 
 /** {@link meetingRecordingsRepository.markSourceDeleted} — T10, from `recording-cleanup-source`. */
@@ -564,6 +588,10 @@ export const meetingRecordingsRepository = {
    * error body; the cap belongs at the single write point so no caller can forget it. Sliced
    * in JS rather than via SQL `left()` — the two differ only for astral-plane text well past
    * the 500th character, and this keeps the statement Drizzle-native.
+   *
+   * ⚠⚠ BAL-480 FIX ROUND 1 — `onlyIfUnacknowledged` ADDS `daily_recording_id IS NULL` TO THE
+   * CAS, and only when the caller asks for it. See {@link MarkRecordingFailedInput} for the
+   * double-billing TOCTOU it closes for the stuck-slot reaper, and for why it must stay opt-in.
    */
   // ⚠ `${...toISOString()}::timestamptz` — NOT a bare Date. A Date interpolated into a raw
   // `sql` template is bound WITHOUT the column's timestamptz mapper, so postgres-js receives
@@ -592,7 +620,12 @@ export const meetingRecordingsRepository = {
           // losing the FIRST failure's root cause — the one a runbook or a dispute would need.
           // First failure wins; `captureEndedAt`'s COALESCE already protects the release
           // instant the same way.
-          ne(meetingRecordings.status, 'failed')
+          ne(meetingRecordings.status, 'failed'),
+          // ⚠⚠ BAL-480 — OPT-IN ONLY. `undefined` is dropped by `and()`, so an absent flag
+          // emits no term and leaves every pre-existing caller's CAS byte-for-byte unchanged.
+          input.onlyIfUnacknowledged === true
+            ? isNull(meetingRecordings.dailyRecordingId)
+            : undefined
         )
       )
       .returning();
@@ -640,14 +673,20 @@ export const meetingRecordingsRepository = {
    * ⚠ AN OPS ESCAPE HATCH WITH **NO PRODUCTION CALLER IN THIS PR**, and it exists for one
    * named situation: a row STUCK at `recording` because Daily sent neither
    * `ready-to-download` nor `recording.error`. Such a row holds its meeting's capture slot
-   * forever and there is deliberately NO reaper (a retention sweep is out of scope and needs
-   * its own ruling), so soft-deleting it by hand is how the slot is freed. Both partial
+   * forever and there is deliberately NO RETENTION reaper (a retention sweep is out of scope
+   * and needs its own ruling), so soft-deleting it by hand is how the slot is freed. ⚠ BAL-480's
+   * stuck-slot reaper is a DIFFERENT, narrower thing — see the note below. Both partial
    * uniques carry `deleted_at IS NULL`, so this also vacates the row's `daily_recording_id`
    * and `mux_asset_id` for reuse.
    *
    * ⚠ IT DELETES NO VENDOR ARTEFACT. The Daily source and the Mux asset both survive this;
    * removing them is out of scope, exactly as `meetingFilesRepository.softDelete` leaves its
    * R2 object to a separate, caller-owned step.
+   *
+   * ⚠ BAL-480 — since the stuck-slot reaper shipped, this is no longer the routine remedy for
+   * the F8 residual (`recording-capture.ts`'s `handleEnsure` reaps that automatically); it
+   * remains the remedy for the two residuals BAL-480 does not close (schema docblock). Still no
+   * production caller — do not add one here.
    */
   async softDelete(input: { id: string }): Promise<MeetingRecording | undefined> {
     const [row] = await db

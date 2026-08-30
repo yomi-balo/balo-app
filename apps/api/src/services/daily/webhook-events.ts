@@ -142,6 +142,22 @@ function instantFrom(value: unknown): Date | null {
   return null;
 }
 
+/**
+ * ⚠⚠ BAL-480 FIX ROUND 1 — `payload.start_ts` **IN EITHER SPELLING**, like every other field in
+ * this file. It was snake_case only, which was the ONE exception here, and a silent one: this
+ * value is the discriminator for `routes/daily/webhook.ts`'s room-fallback guard, and this
+ * module's own header records that the field names could NOT be verified against docs.daily.co.
+ * If Daily's real payload used the camelCase spelling, `startedAt` would be permanently `null`,
+ * the guard would never arm, and nothing would say so. (The other half of that fix is on the
+ * consuming side, which now logs every delivery that reaches the fallback with no start instant.)
+ *
+ * ⚠ RETURNS WHATEVER {@link instantFrom} RETURNS, INCLUDING AN INVALID DATE — the present-but
+ * -unparseable case must stay distinguishable from the absent one all the way to the caller.
+ */
+function startTsFrom(payload: Record<string, unknown> | undefined): Date | null {
+  return instantFrom(payload?.start_ts ?? payload?.startTs);
+}
+
 /** What the route dispatches on. Six arms; the last is the ack-and-forget one. */
 export type DailyWebhookEvent =
   | {
@@ -252,7 +268,7 @@ export function parseDailyWebhookEvent(body: unknown, receivedAt: Date): ParseDa
         roomName: null,
         instanceId,
         dailyRecordingId,
-        startedAt: instantFrom(payload?.start_ts) ?? envelopeInstant ?? receivedAt,
+        startedAt: startTsFrom(payload) ?? envelopeInstant ?? receivedAt,
       },
     };
   }
@@ -271,7 +287,7 @@ export function parseDailyWebhookEvent(body: unknown, receivedAt: Date): ParseDa
         roomName,
         dailyRecordingId,
         durationSeconds: durationFrom(payload),
-        startedAt: instantFrom(payload?.start_ts),
+        startedAt: startTsFrom(payload),
       },
     };
   }

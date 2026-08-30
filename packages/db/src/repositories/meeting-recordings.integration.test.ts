@@ -941,6 +941,79 @@ describe('meetingRecordingsRepository.markFailed', () => {
     expect(row?.failureReason).toBe('the ORIGINAL root cause');
     expect(row?.captureEndedAt?.toISOString()).toBe(firstAt.toISOString());
   });
+
+  /**
+   * ⚠⚠ BAL-480 FIX ROUND 1 — `onlyIfUnacknowledged` ADDS `daily_recording_id IS NULL` TO THE
+   * CAS, for the stuck-slot reaper alone. `markStarted` does NOT move `status`, so the base
+   * predicate cannot see a `recording.started` that lands between the reaper's staleness read
+   * and its write; without this term the reap would overwrite a LIVE acknowledgement, release
+   * its capture slot, and let a SECOND Daily recording start in the same room.
+   */
+  it('⚠⚠ onlyIfUnacknowledged REFUSES a row that already carries a Daily id (the reaper TOCTOU)', async () => {
+    const { recording } = await meetingRecordingFactory();
+    const acknowledged = await meetingRecordingsRepository.markStarted(
+      { id: recording.id, dailyRecordingId: vendorId('daily'), startedAt: new Date() },
+      db
+    );
+    expect(acknowledged?.dailyRecordingId).toBeDefined();
+
+    const refused = await meetingRecordingsRepository.markFailed(
+      {
+        id: recording.id,
+        stage: 'daily',
+        reason: 'stuck: no Daily acknowledgement',
+        at: new Date(),
+        onlyIfUnacknowledged: true,
+      },
+      db
+    );
+    expect(refused).toBeUndefined();
+
+    // The live segment is untouched — still `recording`, still holding its capture slot.
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.status).toBe('recording');
+    expect(row?.captureEndedAt).toBeNull();
+    expect(row?.failureReason).toBeNull();
+  });
+
+  it('onlyIfUnacknowledged still ALLOWS the reap of a row Daily never acknowledged', async () => {
+    const { recording } = await meetingRecordingFactory();
+
+    const reaped = await meetingRecordingsRepository.markFailed(
+      {
+        id: recording.id,
+        stage: 'daily',
+        reason: 'stuck: no Daily acknowledgement',
+        at: new Date(),
+        onlyIfUnacknowledged: true,
+      },
+      db
+    );
+
+    expect(reaped?.status).toBe('failed');
+    // The capture slot is RELEASED, which is what lets the reaper reinsert in one invocation.
+    expect(reaped?.captureEndedAt).toBeInstanceOf(Date);
+  });
+
+  /**
+   * ⚠ THE DEFAULT IS UNCHANGED, AND THAT IS THE POINT OF THE FLAG BEING OPT-IN. Every
+   * pre-existing caller stamps a failure it OBSERVED and must still win against an acknowledged
+   * row — a Daily `recording.error` on a segment that is mid-capture is exactly that case.
+   */
+  it('⚠ WITHOUT the flag, an acknowledged row is still failable — no caller changed semantics', async () => {
+    const { recording } = await meetingRecordingFactory();
+    await meetingRecordingsRepository.markStarted(
+      { id: recording.id, dailyRecordingId: vendorId('daily'), startedAt: new Date() },
+      db
+    );
+
+    const failed = await meetingRecordingsRepository.markFailed(
+      { id: recording.id, stage: 'daily', reason: 'Daily reported an error', at: new Date() },
+      db
+    );
+
+    expect(failed?.status).toBe('failed');
+  });
 });
 
 // ── 9. markSourceDeleted (T10) ───────────────────────────────────────────────

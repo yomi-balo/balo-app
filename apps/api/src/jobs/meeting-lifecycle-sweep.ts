@@ -3,6 +3,7 @@ import {
   db,
   meetingContextsRepository,
   meetingPresenceRepository,
+  meetingRecordingsRepository,
   meetingsRepository,
   resolveMeetingContextOwner,
   type Meeting,
@@ -42,7 +43,11 @@ import {
   resolvePresenceEffect,
 } from '../services/meetings/presence-writer.js';
 import { deliveringPartyName } from '../services/meetings/delivering-party.js';
-import { enqueueRecordingEnsure, enqueueRecordingStop } from './recording-capture.js';
+import {
+  enqueueRecordingEnsure,
+  enqueueRecordingStop,
+  MAX_DAILY_FAILURES_PER_MEETING,
+} from './recording-capture.js';
 
 /**
  * BAL-134 (§5.6) — THE PER-MINUTE MEETING LIFECYCLE SWEEP. Modelled on
@@ -96,6 +101,32 @@ const LIFECYCLE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 /** ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule. It does, below. */
 export const MEETING_LIFECYCLE_BATCH_LIMIT = 200;
+
+/**
+ * ⚠⚠ BAL-480 — THE CROSS-MEETING FAN-OUT BOUND, AND THE ONE THIS FEATURE ITSELF CREATES.
+ * `POST /rooms/:name/recordings/start` sits in Daily's TIGHTEST tier — ~1/s (5 per 5s), against
+ * 20/s for everything else (`.claude/skills/daily-co/SKILL.md`, "Rate limits"). Steady state is
+ * free (a healthy meeting is suppressed by `needsRecordingEnsure` and makes no Daily call at
+ * all), so the exposure is the RECOVERY THUNDERING HERD — a Daily outage ends and the next tick
+ * tries to start a recording for every affected meeting at once, up to
+ * `MEETING_LIFECYCLE_BATCH_LIMIT`.
+ *
+ * ⚠ EXCEEDING THE TIER IS NOT MERELY SLOW, IT IS DESTRUCTIVE. A `429` is retryable
+ * (`isUnrecoverableDailyError` exempts it), but `recording-capture.ts`'s §5.1b stamps a `failed`
+ * row on EVERY attempt BEFORE rethrowing — so a rate-limit storm burns
+ * `MAX_DAILY_FAILURES_PER_MEETING` and disables recording for the rest of those meetings. The cap
+ * exists to stop the feature from doing that to itself.
+ *
+ * 20/min = 0.33/s leaves two thirds of the sustained tier for the LATENCY-SENSITIVE
+ * webhook-origin ensures (a real rejoin must record now, not next minute). A full 200-candidate
+ * herd drains in ten sweep minutes, and a reap can only recur once per
+ * `STUCK_CAPTURE_THRESHOLD_MS` per meeting anyway, so the queue self-drains: a meeting served
+ * this tick is suppressed on the next.
+ *
+ * ⚠ THE CALLER MUST WARN WHEN THIS FILLS — the no-silent-caps rule, same as the batch limit. It
+ * does, below.
+ */
+export const MAX_RECORDING_ENSURES_PER_SWEEP_TICK = 20;
 
 const logger = createLogger('meeting-lifecycle-sweep');
 
@@ -516,25 +547,24 @@ async function repairStatusAndReload(meetingId: string, now: Date): Promise<Cand
   // now exists — a third read would be one more instant for it to be wrong at.
   const repaired = transition === null ? fresh : { ...fresh, status: transition };
 
-  // ⚠ BAL-473 (§5.2) — the sweep repaired a MISSED forward transition to `in_progress` (a
-  // dropped `participant.joined` webhook). `recording-ensure` must fire here too, or a meeting
-  // whose transition only the sweep ever notices never gets a capturing segment at all.
-  // dedupeToken is MONOTONIC per minute, so repeated ticks within one minute collapse to one
-  // ensure per meeting — never the bare `meetingId` alone (memory
-  // `reference_bullmq_jobid_must_be_per_write_not_per_state`).
-  if (transition === 'in_progress') {
-    await enqueueRecordingEnsureBestEffort(meetingId, now);
-  }
-
   return loadCandidateState(repaired, now);
 }
 
-/** Best-effort `recording-ensure` enqueue — mirrors the sweep's other best-effort side effects. */
+/**
+ * Best-effort `recording-ensure` enqueue — mirrors the sweep's other best-effort side effects.
+ *
+ * ⚠ BAL-480 — THE SWEEP'S LEVEL-TRIGGERED SELF-HEAL. Called once per candidate per tick from
+ * {@link processCandidate} (never from `repairStatusAndReload`, which BAL-473 used — see
+ * `needsRecordingEnsure`'s docblock for the subsumption proof), and subject to
+ * `MAX_RECORDING_ENSURES_PER_SWEEP_TICK`. dedupeToken is MONOTONIC per minute, so repeated ticks
+ * within one minute collapse to one ensure per meeting — never the bare `meetingId` alone (memory
+ * `reference_bullmq_jobid_must_be_per_write_not_per_state`).
+ */
 async function enqueueRecordingEnsureBestEffort(meetingId: string, now: Date): Promise<void> {
   try {
     await enqueueRecordingEnsure({
       meetingId,
-      trigger: 'in_progress',
+      trigger: 'sweep',
       dedupeToken: `sweep-${Math.floor(now.getTime() / 60_000)}`,
     });
   } catch (error) {
@@ -545,6 +575,61 @@ async function enqueueRecordingEnsureBestEffort(meetingId: string, now: Date): P
   }
 }
 
+/**
+ * ⚠⚠ BAL-480 — THE LEVEL TRIGGER'S GATE. BAL-473 armed `recording-ensure` only on the EDGE (the
+ * tick that repaired a `→ in_progress` transition), so a meeting that exhausted the ensure's
+ * three attempts during a Daily outage, or whose capture slot is held by a segment Daily never
+ * acknowledged, stayed silently unrecorded for the rest of the call with nothing on any clock to
+ * retry it. This is that clock.
+ *
+ * ⚠ `state` IS POST-REPAIR. `processCandidate` binds it from `repairStatusAndReload` whenever
+ * reconciliation wrote anything, and that function threads the CAS's own transition into the row
+ * it returns — so this gate SUBSUMES the edge trigger it replaced rather than sitting beside it.
+ * One call site is also what makes the `trigger: 'sweep'` label unambiguous: two enqueues on one
+ * tick would collide on the jobId `recording-ensure--<id>--sweep-<bucket>` and BullMQ keeps the
+ * FIRST payload, so the label would be silently dropped on exactly the repair ticks.
+ *
+ * ⚠ THE RECORDINGS READ IS LAST, AND ONLY FOR A LIVE CALL. The two cheap column checks run
+ * first, so a `scheduled` / `waiting_for_participants` candidate costs nothing extra per tick.
+ *
+ * ⚠⚠ `dailyRecordingId !== null` IS THE SUPPRESSION, AND IT MUST NOT BE SIMPLIFIED TO
+ * `capturing !== undefined`. A segment whose Daily id never arrived is EXACTLY the stuck slot
+ * `handleEnsure`'s reaper exists to release — suppressing it here would make the reaper
+ * permanently unreachable from the sweep, which is half of what this ticket ships. Deliberately
+ * WIDER than the handler's own stuck predicate: this enqueues for a young unacknowledged row
+ * too, and the handler (which owns the threshold) no-ops on it. Widening costs a no-op job;
+ * narrowing costs the feature.
+ *
+ * ⚠⚠ FIX ROUND 1 — THE CAP TERM IS WHAT STOPS THE FAN-OUT BUDGET STARVING. A meeting that has
+ * exhausted `MAX_DAILY_FAILURES_PER_MEETING` returns from `handleEnsure`'s step 5.5 WITHOUT
+ * inserting, so it never acquires a capturing row, so the two checks above answer `true` for it
+ * on EVERY subsequent tick for the rest of its life. `listLifecycleCandidates` orders
+ * `asc(scheduledStart), asc(id)` — stable — so without this term twenty permanently-capped
+ * meetings would occupy the whole of `MAX_RECORDING_ENSURES_PER_SWEEP_TICK` forever and no later
+ * meeting's self-heal would ever run. That matters precisely POST-OUTAGE, when many meetings are
+ * capped at once and the budget must reach the ones still recoverable.
+ *
+ * ⚠ IT IS A NEW CALL SITE OF AN EXISTING READ, and it is LAST for the same reason the
+ * recordings read is: a healthy meeting is already suppressed by the line above, so this costs
+ * nothing on the healthy path. It duplicates the handler's own step-5.5 gate deliberately —
+ * that one still owns the refusal (the webhook path reaches it without passing here); this one
+ * only stops the sweep from spending a scarce per-tick unit on a job guaranteed to no-op.
+ */
+async function needsRecordingEnsure(state: CandidateState): Promise<boolean> {
+  if (state.meeting.status !== 'in_progress' || !state.facts.anyOpen) {
+    return false;
+  }
+  const capturing = await meetingRecordingsRepository.findCapturingForMeeting(state.meeting.id);
+  if (capturing !== undefined && capturing.dailyRecordingId !== null) {
+    return false;
+  }
+  const dailyFailures = await meetingRecordingsRepository.countFailedByStage(
+    state.meeting.id,
+    'daily'
+  );
+  return dailyFailures < MAX_DAILY_FAILURES_PER_MEETING;
+}
+
 /** One candidate, fully processed. ⚠ EVERY CALL SITE WRAPS THIS IN ITS OWN TRY/CATCH. */
 async function processCandidate(
   meeting: Meeting,
@@ -552,7 +637,7 @@ async function processCandidate(
   platformRosterEmpty: boolean,
   timers: MeetingTimers,
   now: Date
-): Promise<{ terminated: boolean; closed: number; opened: number }> {
+): Promise<{ terminated: boolean; closed: number; opened: number; needsRecordingEnsure: boolean }> {
   const initial = await loadCandidateState(meeting, now);
   const { closed, opened } = await reconcileMeeting(initial, roster, platformRosterEmpty, now);
 
@@ -562,16 +647,21 @@ async function processCandidate(
   // tick, and would leave a webhook-dropped meeting permanently unterminable (above).
   const state = closed + opened > 0 ? await repairStatusAndReload(meeting.id, now) : initial;
   if (state === null) {
-    return { terminated: false, closed, opened };
+    return { terminated: false, closed, opened, needsRecordingEnsure: false };
   }
 
   const decision = await terminateIfDue(state, timers, now);
   if (decision !== null) {
-    return { terminated: true, closed, opened };
+    return { terminated: true, closed, opened, needsRecordingEnsure: false };
   }
 
   await armAbsenceReminders(state, timers, now);
-  return { terminated: false, closed, opened };
+  return {
+    terminated: false,
+    closed,
+    opened,
+    needsRecordingEnsure: await needsRecordingEnsure(state),
+  };
 }
 
 export interface MeetingLifecycleSweepResult {
@@ -579,6 +669,122 @@ export interface MeetingLifecycleSweepResult {
   terminated: number;
   intervalsClosed: number;
   intervalsOpened: number;
+  /**
+   * BAL-480 — how many `recording-ensure` self-heals this tick **attempted**.
+   *
+   * ⚠ ATTEMPTED, NOT CONFIRMED, AND THE WORD IS EXACT. The counter is incremented BEFORE
+   * `enqueueRecordingEnsureBestEffort`, which swallows its own errors, so a tick with Redis
+   * unreachable reports its full budget as spent while nothing reached the queue. That is the
+   * deliberate direction: this number's job is to bound the DAILY-facing producer rate
+   * (`MAX_RECORDING_ENSURES_PER_SWEEP_TICK`), and an enqueue whose acknowledgement was lost may
+   * well have landed — counting it is the conservative side of that bound. Read it as
+   * "self-heals this tick tried to schedule", and read `logger.error`'s "recording-ensure
+   * enqueue failed" lines for the ones that did not land.
+   */
+  recordingEnsures: number;
+}
+
+/**
+ * ⚠ NO SILENT CAPS. A full batch means meetings were DROPPED from this tick, and the sweep is the
+ * only layer that can say so — `@balo/db` has no business logging a business event.
+ */
+function warnIfBatchFilled(candidates: readonly Meeting[]): void {
+  if (candidates.length === MEETING_LIFECYCLE_BATCH_LIMIT) {
+    const [oldest] = candidates;
+    logger.warn(
+      {
+        limit: MEETING_LIFECYCLE_BATCH_LIMIT,
+        oldestScheduledStart: oldest?.scheduledStart.toISOString(),
+      },
+      'Meeting lifecycle batch FILLED — meetings were dropped from this tick'
+    );
+  }
+}
+
+/** What one platform-wide presence read yields — see {@link readPlatformRoster}. */
+interface PlatformRosterRead {
+  readonly roster: Record<string, string[]>;
+  /** `false` ONLY when the vendor call REJECTED. A parseable-but-empty `200` is `true`. */
+  readonly rosterAvailable: boolean;
+}
+
+/**
+ * ⚠ ONE `GET /presence` FOR THE WHOLE PLATFORM, not one per room. The skill names this Daily's
+ * recommended "current state" endpoint, and a per-room call per candidate would multiply a 20/s
+ * rate-limit tier by the batch size.
+ *
+ * ⚠ A VENDOR FAILURE DEGRADES TO AN EMPTY ROSTER RATHER THAN ABORTING THE TICK — and the empty
+ * roster is treated as UNKNOWN, not as "the rooms are empty": `reconcileMeeting` is skipped
+ * entirely so a Daily outage can never close every interval on the platform at once.
+ * ⚠ AN UNPARSEABLE 200 LANDS HERE TOO: `getAllPresence` validates the body with Zod and THROWS on
+ * a shape it does not recognise, precisely so a vendor contract change takes the outage path
+ * rather than degrading silently into a confident-looking empty map.
+ */
+async function readPlatformRoster(presenceReader: PresenceReader): Promise<PlatformRosterRead> {
+  let roster: Record<string, string[]> = {};
+  try {
+    const presence = await presenceReader.getAllPresence();
+    roster = Object.fromEntries(
+      Object.entries(presence).map(([room, participants]) => [
+        room,
+        participants.flatMap((participant) =>
+          typeof participant.userId === 'string' ? [participant.userId] : []
+        ),
+      ])
+    );
+  } catch (error) {
+    logger.error(
+      { error: errorMessage(error) },
+      'Daily presence read failed — skipping reconciliation this tick (terminal rules still run)'
+    );
+    return { roster, rosterAvailable: false };
+  }
+  return { roster, rosterAvailable: true };
+}
+
+/**
+ * ⚠ `null` WHEN THE ROSTER IS UNKNOWN — a vendor failure, or an un-provisioned meeting with no
+ * room name. Never `[]`, which would mean "confirmed empty". See {@link reconcileMeeting}.
+ */
+function roomRosterFor(
+  meeting: Meeting,
+  roster: Record<string, string[]>,
+  rosterAvailable: boolean
+): readonly string[] | null {
+  return rosterAvailable && meeting.dailyRoomName !== null
+    ? (roster[meeting.dailyRoomName] ?? [])
+    : null;
+}
+
+/**
+ * The per-tick fan-out budget, carried as ONE MUTABLE ACCUMULATOR on purpose: the increment must
+ * stay BEFORE the enqueue (see `MeetingLifecycleSweepResult.recordingEnsures` — the count is
+ * ATTEMPTS, and a swallowed enqueue error still spends a unit), and threading the two numbers
+ * back through a return value would put that ordering at the mercy of the call site.
+ */
+interface RecordingEnsureBudget {
+  enqueued: number;
+  deferred: number;
+}
+
+/**
+ * Spend one unit of {@link MAX_RECORDING_ENSURES_PER_SWEEP_TICK} on this meeting, or defer it.
+ *
+ * ⚠ THE COUNTER MOVES FIRST, THEN THE ENQUEUE — `enqueueRecordingEnsureBestEffort` swallows its
+ * own errors, so counting afterwards would make the cap unenforceable on the failing path. This
+ * is the ordering `recordingEnsures`'s "ATTEMPTED, NOT CONFIRMED" docblock describes.
+ */
+async function spendRecordingEnsureBudget(
+  meetingId: string,
+  now: Date,
+  budget: RecordingEnsureBudget
+): Promise<void> {
+  if (budget.enqueued < MAX_RECORDING_ENSURES_PER_SWEEP_TICK) {
+    budget.enqueued += 1;
+    await enqueueRecordingEnsureBestEffort(meetingId, now);
+  } else {
+    budget.deferred += 1;
+  }
 }
 
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
@@ -594,58 +800,21 @@ export async function runMeetingLifecycleSweep(
     limit: MEETING_LIFECYCLE_BATCH_LIMIT,
   });
 
-  if (candidates.length === MEETING_LIFECYCLE_BATCH_LIMIT) {
-    // ⚠ NO SILENT CAPS. A full batch means meetings were DROPPED from this tick, and the sweep
-    // is the only layer that can say so — `@balo/db` has no business logging a business event.
-    const [oldest] = candidates;
-    logger.warn(
-      {
-        limit: MEETING_LIFECYCLE_BATCH_LIMIT,
-        oldestScheduledStart: oldest?.scheduledStart.toISOString(),
-      },
-      'Meeting lifecycle batch FILLED — meetings were dropped from this tick'
-    );
-  }
+  warnIfBatchFilled(candidates);
 
   const result: MeetingLifecycleSweepResult = {
     scanned: candidates.length,
     terminated: 0,
     intervalsClosed: 0,
     intervalsOpened: 0,
+    recordingEnsures: 0,
   };
   if (candidates.length === 0) {
     return result;
   }
 
-  // ⚠ ONE `GET /presence` FOR THE WHOLE PLATFORM, not one per room. The skill names this
-  // Daily's recommended "current state" endpoint, and a per-room call per candidate would
-  // multiply a 20/s rate-limit tier by the batch size.
-  //
-  // ⚠ A VENDOR FAILURE DEGRADES TO AN EMPTY ROSTER RATHER THAN ABORTING THE TICK — and the
-  // empty roster is treated as UNKNOWN, not as "the rooms are empty": `reconcileMeeting` is
-  // skipped entirely so a Daily outage can never close every interval on the platform at once.
-  // ⚠ AN UNPARSEABLE 200 LANDS HERE TOO: `getAllPresence` validates the body with Zod and
-  // THROWS on a shape it does not recognise, precisely so a vendor contract change takes the
-  // outage path rather than degrading silently into a confident-looking empty map.
-  let roster: Record<string, string[]> = {};
-  let rosterAvailable = true;
-  try {
-    const presence = await presenceReader.getAllPresence();
-    roster = Object.fromEntries(
-      Object.entries(presence).map(([room, participants]) => [
-        room,
-        participants.flatMap((participant) =>
-          typeof participant.userId === 'string' ? [participant.userId] : []
-        ),
-      ])
-    );
-  } catch (error) {
-    rosterAvailable = false;
-    logger.error(
-      { error: errorMessage(error) },
-      'Daily presence read failed — skipping reconciliation this tick (terminal rules still run)'
-    );
-  }
+  // The ONE platform-wide presence read, and its outage degrade — see `readPlatformRoster`.
+  const { roster, rosterAvailable } = await readPlatformRoster(presenceReader);
 
   // ⚠ "THE VENDOR SAYS NOBODY IS IN ANY ROOM ON THE WHOLE PLATFORM." Legal, and on an idle
   // platform even true — but it is ALSO what an unexpected-but-parseable body looks like, and
@@ -653,24 +822,31 @@ export async function runMeetingLifecycleSweep(
   // UNKNOWN for any candidate that actually holds open intervals; see the gate there.
   const platformRosterEmpty = rosterAvailable && Object.keys(roster).length === 0;
 
+  const recordingEnsureBudget: RecordingEnsureBudget = { enqueued: 0, deferred: 0 };
+
   for (const meeting of candidates) {
     try {
-      // ⚠ `null` WHEN THE ROSTER IS UNKNOWN — a vendor failure, or an un-provisioned meeting
-      // with no room name. Never `[]`, which would mean "confirmed empty". See
-      // `reconcileMeeting`.
-      const roomRoster =
-        rosterAvailable && meeting.dailyRoomName !== null
-          ? (roster[meeting.dailyRoomName] ?? [])
-          : null;
+      const roomRoster = roomRosterFor(meeting, roster, rosterAvailable);
       const outcome = await processCandidate(meeting, roomRoster, platformRosterEmpty, timers, now);
       result.terminated += outcome.terminated ? 1 : 0;
       result.intervalsClosed += outcome.closed;
       result.intervalsOpened += outcome.opened;
+      if (outcome.needsRecordingEnsure) {
+        await spendRecordingEnsureBudget(meeting.id, now, recordingEnsureBudget);
+      }
     } catch (error) {
       const message = errorMessage(error);
       log(`lifecycle sweep failed for meeting ${meeting.id}: ${message}`);
       logger.error({ meetingId: meeting.id, error: message }, 'Meeting lifecycle sweep failed');
     }
+  }
+  result.recordingEnsures = recordingEnsureBudget.enqueued;
+
+  if (recordingEnsureBudget.deferred > 0) {
+    logger.warn(
+      { limit: MAX_RECORDING_ENSURES_PER_SWEEP_TICK, deferred: recordingEnsureBudget.deferred },
+      "recording-ensure fan-out cap FILLED — self-heal deferred to later ticks to stay inside Daily's ~1/s recording-start tier"
+    );
   }
 
   logger.info(result, 'Meeting lifecycle sweep complete');
@@ -684,7 +860,7 @@ export function startMeetingLifecycleSweepWorker(): Worker {
     async (job: Job) => {
       const result = await runMeetingLifecycleSweep(new Date(), (m) => job.log(m));
       job.log(
-        `meeting lifecycle sweep: ${result.scanned} scanned, ${result.terminated} terminated, ${result.intervalsClosed} intervals closed, ${result.intervalsOpened} opened`
+        `meeting lifecycle sweep: ${result.scanned} scanned, ${result.terminated} terminated, ${result.intervalsClosed} intervals closed, ${result.intervalsOpened} opened, ${result.recordingEnsures} recording-ensures attempted`
       );
     },
     {

@@ -38,6 +38,11 @@
  * `recording.started` carries NO `room_name` at all (see `services/daily/webhook-events.ts`'s
  * docblock). `resolveEffect` therefore branches on the three recording kinds BEFORE the
  * room-name gate below, which governs only the presence/meeting arms.
+ *
+ * ⚠ BAL-480 — the recording arms still resolve by instance/recording id first; the
+ * `ready-to-download` ROOM FALLBACK is additionally gated on the payload's start instant, so a
+ * stuck-slot reap's fresh segment cannot be mistaken for an orphaned earlier recording of the
+ * same room (see `resolveRecordingByRoomFallback`).
  */
 import {
   db,
@@ -142,26 +147,86 @@ async function resolveRecordingRow(
     if (byDailyId !== undefined) {
       return byDailyId;
     }
-    return resolveRecordingByRoomFallback(event.roomName);
+    return resolveRecordingByRoomFallback(event.roomName, event.startedAt, event.kind);
   }
-  // recording.error
+  // ⚠⚠ recording.error — THE ONE RECORDING ARM THE BAL-480 GUARD CANNOT ARM. The residual that
+  // leaves is STATED here rather than gated (fix round 1, item 8 — of the two options offered,
+  // this is the one chosen, and the reasoning is below).
+  //
+  // This payload carries no start instant of any kind, so `null` is passed and the room fallback
+  // runs UNGATED. `instance_id` is not the reassurance it looks like: `instanceIdFrom` requires a
+  // UUID and the union's own comment says even that field is optional, so an absent or non-UUID
+  // `instance_id` falls straight through to the room fallback.
+  //
+  // THE RESIDUAL, CONCRETELY: after a stuck-slot reap, a `recording.error` about the ORPHANED
+  // earlier recording — with no usable `instance_id` — resolves the meeting's NEW, still-live
+  // capturing segment by room name and `markFailed`s it.
+  //
+  // WHY IT IS NOT GATED: the only discriminator available here is `capturing.createdAt` age
+  // against the delivery instant, and it points the WRONG way. A legitimate `recording.error` for
+  // the current segment normally arrives while that row is still YOUNG (its start call has just
+  // failed) — the same shape as the misattribution — so no threshold separates them, and a gate
+  // would trade a rare misattribution for a common LOST failure stamp. A lost failure stamp is
+  // strictly worse: it leaves the capture slot held (`capture_ended_at` never set). The bounding
+  // facts: the fallback already refuses any row that HAS a Daily id, so the exposure is only the
+  // brief unacknowledged window after a reap, and the reap's own `recording_failed`
+  // {reason: 'stuck_capture'} emit is the signal that the window is open at all.
   if (event.instanceId !== null) {
     const byInstanceId = await meetingRecordingsRepository.findById(event.instanceId);
     if (byInstanceId !== undefined) {
       return byInstanceId;
     }
   }
-  return resolveRecordingByRoomFallback(event.roomName);
+  return resolveRecordingByRoomFallback(event.roomName, null, event.kind);
 }
+
+/**
+ * ⚠⚠ BAL-480 — CLOCK-SKEW TOLERANCE ON THE ROOM FALLBACK'S START-INSTANT GUARD. The legitimate
+ * gap between `insertCapturing` committing and Daily's `start_ts` is sub-second; the illegitimate
+ * gap (an orphan from a reaped slot) is at least `STUCK_CAPTURE_THRESHOLD_MS` — five minutes. One
+ * minute sits an order of magnitude above any plausible skew between Postgres `now()` and Daily's
+ * clock, and five times below the smallest gap the guard must catch.
+ */
+const ROOM_FALLBACK_CLOCK_SKEW_MS = 60_000;
 
 /**
  * The FALLBACK ladder for a dropped `recording.started` (§5.1a): room name → the meeting's
  * CAPTURING segment, accepted ONLY when that row's `dailyRecordingId IS NULL` — otherwise a
  * capturing row that already knows its Daily id could be claimed by a DIFFERENT recording's
  * payload, which is exactly the mis-attachment window this guard closes.
+ *
+ * ⚠⚠ BAL-480 — THE SECOND GUARD, AND WHY THE FIRST ONE STOPPED BEING ENOUGH. `handleEnsure`'s
+ * stuck-slot reaper releases a capture slot whose `recording.started` never arrived and
+ * immediately arms a FRESH segment. If Daily actually WAS recording (only the delivery was
+ * lost), that first recording is now an ORPHAN, and when it finishes its `ready-to-download`
+ * resolves nothing by `recording_id` and lands here — where `findCapturingForMeeting` returns
+ * the NEW, STILL-LIVE segment. `dailyRecordingId IS NULL` does not save us, because the very
+ * fault that caused the reap (a dropped `recording.started`) is likely to have hit the new
+ * segment too. Marking a live segment `source_ready` against the orphan's asset releases its
+ * slot mid-capture and CASCADES.
+ *
+ * ⚠ `startedAt` IS THE DISCRIMINATOR because the row is created BEFORE Daily is asked to start
+ * it, so a legitimate `start_ts` is never earlier than `createdAt`.
+ *
+ * ⚠⚠ THERE ARE **TWO** DEGRADE PATHS, NOT ONE, AND THEY ARE ANSWERED DIFFERENTLY (fix round 1):
+ *   · `null` — "the vendor did not tell us when". `recording.error` always takes this path (it
+ *     carries no `start_ts` at all); `ready-to-download` takes it when the field is absent. The
+ *     guard cannot be evaluated, so the row is ACCEPTED — the pre-BAL-480 behaviour — and the
+ *     acceptance is LOGGED, because a guard nobody can prove is running is not a guard. A
+ *     production stream of that log line on `ready-to-download` means `start_ts` is not the
+ *     field name Daily actually sends and the guard is inert.
+ *   · AN **INVALID DATE** — "the vendor told us something we cannot interpret". `instantFrom`
+ *     (`services/daily/webhook-events.ts`) returns exactly this rather than `null`, deliberately.
+ *     It is REFUSED. `NaN < x` is `false`, so a bare comparison would have failed OPEN on
+ *     `start_ts: "garbage"` — the one input where we can least prove the payload belongs to the
+ *     current segment. Refusing costs one un-ingested orphan (an already-accepted, logged
+ *     residual); accepting corrupts a live segment mid-capture. Same posture as
+ *     `applyRecordingStarted`'s non-finite refusal, below.
  */
 async function resolveRecordingByRoomFallback(
-  roomName: string | null
+  roomName: string | null,
+  recordingStartedAt: Date | null,
+  eventKind: RecordingWebhookEvent['kind']
 ): Promise<MeetingRecording | undefined> {
   if (roomName === null || !BALO_ROOM_NAME_PATTERN.test(roomName)) {
     return undefined;
@@ -172,6 +237,37 @@ async function resolveRecordingByRoomFallback(
   }
   const capturing = await meetingRecordingsRepository.findCapturingForMeeting(meeting.id);
   if (capturing === undefined || capturing.dailyRecordingId !== null) {
+    return undefined;
+  }
+  if (recordingStartedAt === null) {
+    // ⚠ THE GUARD IS NOT ARMED FOR THIS DELIVERY — the ONLY way ops can tell whether it is
+    // armed in production at all. Expected on every `recording.error`; on
+    // `recording.ready-to-download` it means the payload carried no `start_ts`/`startTs`.
+    log.info(
+      { roomName, meetingId: meeting.id, recordingId: capturing.id, eventKind },
+      'Daily room fallback resolved a capturing segment with NO start instant — the BAL-480 start-instant guard could not be evaluated for this delivery'
+    );
+    return capturing;
+  }
+  const startedAtMs = recordingStartedAt.getTime();
+  if (!Number.isFinite(startedAtMs)) {
+    log.warn(
+      { roomName, meetingId: meeting.id, recordingId: capturing.id, eventKind },
+      'Daily room fallback carried an UNINTERPRETABLE start instant — refusing rather than failing open, since an unparseable timestamp cannot prove the payload belongs to the current capturing segment (BAL-480)'
+    );
+    return undefined;
+  }
+  if (startedAtMs < capturing.createdAt.getTime() - ROOM_FALLBACK_CLOCK_SKEW_MS) {
+    log.warn(
+      {
+        roomName,
+        meetingId: meeting.id,
+        recordingId: capturing.id,
+        startedAt: recordingStartedAt.toISOString(),
+        capturingCreatedAt: capturing.createdAt.toISOString(),
+      },
+      "Daily ready-to-download names a recording that began BEFORE this meeting's current capturing segment — refusing the room fallback; an orphaned Daily recording from a reaped capture slot (BAL-480)"
+    );
     return undefined;
   }
   return capturing;
