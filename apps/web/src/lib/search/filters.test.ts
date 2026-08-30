@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { applyBaloFee, DEFAULT_BALO_FEE_BPS } from '@balo/shared/pricing';
 import {
   parseSearchParams,
   serializeSearchFilters,
@@ -125,13 +126,15 @@ describe('round-trip parse(serialize(x)) === x', () => {
 });
 
 describe('filtersToSearchRequest', () => {
-  it('passes facet ids through and converts A$ → cents', () => {
+  it('passes facet ids through and converts client A$ → EXPERT-facing cents', () => {
     const req = filtersToSearchRequest(
       make({ products: ['p1'], rateMinDollars: 2, rateMaxDollars: 8.5 })
     );
     expect(req.products).toEqual(['p1']);
-    expect(req.rateMin).toBe(200);
-    expect(req.rateMax).toBe(850);
+    // A$2.00 client → 200c client → ceil(200 × 10000 / 12500) = 160c expert.
+    expect(req.rateMin).toBe(160);
+    // A$8.50 client → 850c client → floor(850 × 10000 / 12500) = 680c expert.
+    expect(req.rateMax).toBe(680);
   });
 
   it('omits q/timeframe/rate when absent and sets defaults', () => {
@@ -146,8 +149,47 @@ describe('filtersToSearchRequest', () => {
     expect(req.pageSize).toBe(DEFAULT_PAGE_SIZE);
   });
 
-  it('rounds fractional dollar amounts to nearest cent', () => {
-    expect(filtersToSearchRequest(make({ rateMinDollars: 3.336 })).rateMin).toBe(334);
+  it('rounds fractional dollar amounts to nearest cent before removing the fee', () => {
+    // A$3.336 → 334c client → ceil(334 × 10000 / 12500) = ceil(267.2) = 268c expert.
+    expect(filtersToSearchRequest(make({ rateMinDollars: 3.336 })).rateMin).toBe(268);
+  });
+
+  /**
+   * BAL-493 fix round 1 — the fee-concealment regression guard. The slider is CLIENT-facing
+   * (D1 displays `applyBaloFee(rate_cents, 2500)`); the API bound is EXPERT-facing. If this
+   * mapper ever passed the client figure through unconverted, an anonymous visitor could
+   * bisect `?rateMax=` to recover an expert's raw `rate_cents` and read Balo's markup off the
+   * displayed rate. These assertions are stated as a ROUND TRIP through `applyBaloFee` — they
+   * fail if the conversion is dropped, and they fail if floor/ceil are swapped.
+   */
+  describe('the client→expert rate-bound conversion (fee concealment)', () => {
+    it('never sends the client-facing figure as the expert-facing bound', () => {
+      const req = filtersToSearchRequest(make({ rateMinDollars: 5, rateMaxDollars: 5 }));
+      expect(req.rateMin).not.toBe(500);
+      expect(req.rateMax).not.toBe(500);
+    });
+
+    it('max: the widest admitted expert rate still DISPLAYS at or under the slider max', () => {
+      const clientMaxCents = 500; // the A$5.00/min the user actually dragged to
+      const req = filtersToSearchRequest(make({ rateMaxDollars: 5 }));
+      const bound = req.rateMax;
+      expect(bound).toBe(400);
+      if (bound === undefined) throw new Error('expected a rateMax bound');
+      expect(applyBaloFee(bound, DEFAULT_BALO_FEE_BPS)).toBeLessThanOrEqual(clientMaxCents);
+      // …and the first expert rate the bound rejects really displays ABOVE the slider max.
+      expect(applyBaloFee(bound + 1, DEFAULT_BALO_FEE_BPS)).toBeGreaterThan(clientMaxCents);
+    });
+
+    it('min: the narrowest admitted expert rate still DISPLAYS at or over the slider min', () => {
+      const clientMinCents = 500;
+      const req = filtersToSearchRequest(make({ rateMinDollars: 5 }));
+      const bound = req.rateMin;
+      expect(bound).toBe(400);
+      if (bound === undefined) throw new Error('expected a rateMin bound');
+      expect(applyBaloFee(bound, DEFAULT_BALO_FEE_BPS)).toBeGreaterThanOrEqual(clientMinCents);
+      // …and the last expert rate the bound rejects really displays BELOW the slider min.
+      expect(applyBaloFee(bound - 1, DEFAULT_BALO_FEE_BPS)).toBeLessThan(clientMinCents);
+    });
   });
 });
 

@@ -34,7 +34,14 @@ export function formatWholeCurrency(cents: number, currency: string): string {
   return formatter.format(centsToDollars(cents));
 }
 
-/** Calculate client rate from expert rate (both in cents). */
+/**
+ * Calculate client rate from expert rate (both in cents).
+ *
+ * ⚠ N2 (BAL-493) — `PLATFORM_PRICING.MARKUP_MULTIPLIER` here is a DIFFERENT markup from the
+ * canonical PUBLIC-DISPLAY markup, `publicDisplayRatePerMinute` in `@balo/shared/pricing`. Any
+ * new public-facing "from A$…/min" surface should call that shared helper, not this one — do
+ * not add a second caller to this function for display purposes.
+ */
 export function calculateClientRate(expertRateCents: number): number {
   return Math.round(expertRateCents * PLATFORM_PRICING.MARKUP_MULTIPLIER);
 }

@@ -61,8 +61,10 @@ describe('mapRowToExpertSearchResult', () => {
     expect(mapRowToExpertSearchResult(row, NOW).name).toBe('');
   });
 
-  it('converts rate cents to dollars', () => {
-    expect(mapRowToExpertSearchResult(buildRow({ rateCents: 250 }), NOW).rate).toBe(2.5);
+  it('converts rate cents to the CLIENT ALL-IN dollars rate (fee included)', () => {
+    // BAL-493 / D1 — applyBaloFee(250, 2500) = round(312.5) = 313 → 3.13.
+    // Was `2.5` (the un-marked-up consultant rate) before the D1 serializer fix.
+    expect(mapRowToExpertSearchResult(buildRow({ rateCents: 250 }), NOW).rate).toBe(3.13);
   });
 
   it('maps null rate to null', () => {
@@ -70,6 +72,7 @@ describe('mapRowToExpertSearchResult', () => {
   });
 
   it('keeps a zero rate as 0 (not null)', () => {
+    // applyBaloFee(0, ·) = 0 — the markup does not fabricate a rate.
     expect(mapRowToExpertSearchResult(buildRow({ rateCents: 0 }), NOW).rate).toBe(0);
   });
 
@@ -183,5 +186,69 @@ describe('mapRowToExpertSearchResult', () => {
     expect(result.avatarUrl).toBe('https://cdn.example.com/a.png');
     expect(result.headline).toBe('Salesforce architect');
     expect(result.bio).toBe('Ten years of platform work.');
+  });
+});
+
+/**
+ * BAL-493 AC-5 / D1 — the PUBLIC SERIALIZER BOUNDARY invariant.
+ *
+ * Two things are pinned here, and they are why this is a describe and not a comment:
+ *
+ * (a) the emitted `rate` is the CLIENT ALL-IN rate (Balo fee applied at the DEFAULT bps).
+ *     The un-marked-up consultant rate lives on the DB row and stays there —
+ *     `packages/db/src/repositories/experts.integration.test.ts` pins `rateCents` as
+ *     un-marked-up and MUST keep passing unchanged. If it ever fails, the markup was put in
+ *     the wrong layer: move the markup, never that assertion.
+ *
+ * (b) NO margin, fee-bps or expert-earnings field is present in the public payload AT ALL.
+ *     The key-set assertion is EXHAUSTIVE on purpose, so that widening the public DTO becomes
+ *     a reviewed act (the same discipline the DB projection test applies) rather than
+ *     something that rides along with an unrelated field.
+ */
+describe('public serializer boundary (BAL-493 AC-5)', () => {
+  it('emits the marked-up client rate, not the consultant rate', () => {
+    // applyBaloFee(250, 2500) = round(250 × 12500 / 10000) = round(312.5) = 313 → 3.13
+    const dto = mapRowToExpertSearchResult(buildRow({ rateCents: 250 }), NOW);
+    expect(dto.rate).toBe(3.13);
+    // The un-marked-up consultant rate must NOT be what ships.
+    expect(dto.rate).not.toBe(2.5);
+  });
+
+  it('emits EXACTLY these keys — widening the public DTO must be a reviewed act', () => {
+    const dto = mapRowToExpertSearchResult(buildRow(), NOW);
+    expect(Object.keys(dto).sort()).toEqual([
+      'agency',
+      'avatarUrl',
+      'bio',
+      'competencies',
+      'consultationCount',
+      'countryCode',
+      'distinctions',
+      'headline',
+      'id',
+      'languages',
+      'name',
+      'nextAvailableAt',
+      'rate',
+      'rating',
+      'ratingCount',
+      'username',
+      'yearsExperience',
+    ]);
+  });
+
+  it('leaks no margin, fee-bps or expert-earnings field', () => {
+    const dto = mapRowToExpertSearchResult(buildRow(), NOW);
+    expect(dto).not.toHaveProperty('rateCents');
+    expect(dto).not.toHaveProperty('baloFeeBps');
+    expect(dto).not.toHaveProperty('feeBps');
+    expect(dto).not.toHaveProperty('margin');
+    expect(dto).not.toHaveProperty('expertEarnings');
+    expect(dto).not.toHaveProperty('payout');
+  });
+
+  it('keeps the null and zero rate edges intact under the markup', () => {
+    expect(mapRowToExpertSearchResult(buildRow({ rateCents: null }), NOW).rate).toBeNull();
+    expect(mapRowToExpertSearchResult(buildRow({ rateCents: 0 }), NOW).rate).toBe(0);
   });
 });

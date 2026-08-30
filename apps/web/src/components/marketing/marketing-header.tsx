@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { LayoutDashboard, Menu } from 'lucide-react';
@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { NotificationBell } from '@/components/balo/notification-bell';
 import { useAuthModal } from '@/hooks/use-auth-modal';
 import { cn } from '@/lib/utils';
+import { isMarketingHomePath } from '@/lib/marketing/is-marketing-home-path';
 import type { MarketingNavLink } from '@/lib/analytics';
 import { MARKETING_NAV_ITEMS } from './marketing-nav';
 import { MarketingMobileMenu } from './marketing-mobile-menu';
@@ -20,6 +21,49 @@ interface MarketingHeaderProps {
   /** `null` for a signed-out visitor. `viewer !== null` IS the signed-in signal — there is no
    * separate `isLoggedIn` boolean. */
   viewer: MarketingViewer | null;
+}
+
+/** Scroll depth (px) past which the home hero header switches from transparent to frosted. */
+const SCROLL_GLASS_THRESHOLD_PX = 24;
+
+/**
+ * BAL-493 / D3 §9.3 — page-aware transparent → frosted. Only `/` has a hero to sit
+ * transparently over; every other marketing route (`/experts`, `/experts/{username}`) keeps
+ * today's frosted appearance at all times — the pre-BAL-493 default. `overHero` gates whether
+ * the scroll listener is installed at all (nothing to observe off `/`), and the effect handles
+ * the browser-back-restores-scroll-position case by reading `scrollY` once on mount.
+ */
+function useHeaderGlass(pathname: string): boolean {
+  const overHero = isMarketingHomePath(pathname);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    if (!overHero) {
+      setScrolled(false);
+      return;
+    }
+
+    let raf = 0;
+    const readScroll = (): void => {
+      setScrolled(globalThis.scrollY > SCROLL_GLASS_THRESHOLD_PX);
+    };
+    const onScroll = (): void => {
+      if (raf !== 0) return;
+      raf = globalThis.requestAnimationFrame(() => {
+        raf = 0;
+        readScroll();
+      });
+    };
+
+    readScroll();
+    globalThis.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      globalThis.removeEventListener('scroll', onScroll);
+      if (raf !== 0) globalThis.cancelAnimationFrame(raf);
+    };
+  }, [overHero]);
+
+  return !overHero || scrolled;
 }
 
 /**
@@ -34,6 +78,7 @@ export function MarketingHeader({ viewer }: Readonly<MarketingHeaderProps>): Rea
   const authModal = useAuthModal();
   const headerTracking = useMarketingTracking('header');
   const mobileTracking = useMarketingTracking('mobile_menu');
+  const glass = useHeaderGlass(pathname);
 
   const handleOpenMenu = useCallback(() => setMenuOpen(true), []);
 
@@ -42,11 +87,6 @@ export function MarketingHeader({ viewer }: Readonly<MarketingHeaderProps>): Rea
   const handleLogIn = useCallback(() => {
     authModal.open({ onSuccess: () => router.refresh() });
   }, [authModal, router]);
-
-  const handleGetStarted = useCallback(() => {
-    headerTracking.getStartedClicked();
-    authModal.open({ defaultStep: 'signup', onSuccess: () => router.refresh() });
-  }, [headerTracking, authModal, router]);
 
   const handleDashboardClick = useCallback(() => {
     headerTracking.dashboardClicked();
@@ -69,16 +109,19 @@ export function MarketingHeader({ viewer }: Readonly<MarketingHeaderProps>): Rea
     () => mobileTracking.dashboardClicked(),
     [mobileTracking]
   );
-  const handleMobileGetStarted = useCallback(() => {
-    mobileTracking.getStartedClicked();
-    authModal.open({ defaultStep: 'signup', onSuccess: () => router.refresh() });
-  }, [mobileTracking, authModal, router]);
   const handleMobileLogIn = useCallback(() => {
     authModal.open({ onSuccess: () => router.refresh() });
   }, [authModal, router]);
 
   return (
-    <header className="border-border bg-background/90 supports-[backdrop-filter]:bg-background/70 sticky top-0 z-40 w-full border-b backdrop-blur">
+    <header
+      className={cn(
+        'sticky top-0 z-40 w-full border-b transition-colors motion-reduce:transition-none',
+        glass
+          ? 'border-border bg-background/90 supports-[backdrop-filter]:bg-background/70 backdrop-blur'
+          : 'border-transparent bg-transparent'
+      )}
+    >
       {/* BAL-502 FIX round — `lg:px-8` (32px) vs the prototype's flat `padding: '0 40px'` is a
           deliberate scale-down, not a missed pixel: CLAUDE.md's own "Content padding" table
           (and 10 other call sites in this app) standardize on `px-4 sm:px-6 lg:px-8`, and the
@@ -147,13 +190,12 @@ export function MarketingHeader({ viewer }: Readonly<MarketingHeaderProps>): Rea
               >
                 Log in
               </Button>
-              <Button
-                variant="gradient"
-                size="sm"
-                className="hidden md:inline-flex"
-                onClick={handleGetStarted}
-              >
-                Get started
+              {/* BAL-493 / D3 — "Find an expert" replaces "Get started". A plain destination
+                  link, not a conversion action: no tracking dispatch (§9.2), solid `--primary`
+                  with white `--primary-foreground` text (never the `gradient` variant, which
+                  is reserved for the hero submit / spotlight / final-band CTAs). */}
+              <Button asChild size="sm" className="hidden md:inline-flex">
+                <Link href="/experts">Find an expert</Link>
               </Button>
             </>
           )}
@@ -175,7 +217,6 @@ export function MarketingHeader({ viewer }: Readonly<MarketingHeaderProps>): Rea
         viewer={viewer}
         onNavigate={handleMobileNavigate}
         onDashboard={handleMobileDashboard}
-        onGetStarted={handleMobileGetStarted}
         onLogIn={handleMobileLogIn}
       />
     </header>

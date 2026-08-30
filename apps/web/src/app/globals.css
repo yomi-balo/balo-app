@@ -31,6 +31,28 @@
   --warning-foreground: oklch(0.206 0.039 265.5);
   --info: oklch(0.61 0.155 241.4);
   --info-foreground: oklch(1 0 0);
+
+  /* BAL-493 — marketing surfaces (D4). Light values are converted from the design
+     reference's palette (marketing-home.jsx:190-209). See the .dark block below for
+     why the dark values are DESIGNED, not converted — the "For experts" band inverts
+     rather than reusing --night as-is (ADR precedent: this file's own .expert-hero). */
+  --mist: oklch(0.973 0.006 264);
+  --night: oklch(0.155 0.026 265.5);
+  --night-foreground: oklch(1 0 0);
+  --line: oklch(0.925 0.008 258);
+  --line-soft: oklch(0.952 0.006 260);
+  --primary-deep: oklch(0.488 0.217 264.4);
+  --violet: oklch(0.541 0.281 293);
+  --violet-deep: oklch(0.491 0.27 292.6);
+  --subtle-foreground: oklch(0.714 0.019 261.3);
+
+  /* Composed expressions — :root ONLY. Their operands (--primary, --violet, etc.) are
+     already per-mode, so they re-resolve automatically under .dark; duplicating them in
+     .dark would fork two copies of the same derivation and is a bug farm. */
+  --grad: linear-gradient(135deg, var(--primary) 0%, var(--violet) 100%);
+  --grad-hover: linear-gradient(135deg, var(--primary-deep) 0%, var(--violet-deep) 100%);
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
   --chart-1: oklch(0.552 0.228 260.9);
   --chart-2: oklch(0.623 0.169 149.2);
   --chart-3: oklch(0.77 0.165 70.6);
@@ -73,6 +95,25 @@
   --warning-foreground: oklch(0.147 0.019 264.6);
   --info: oklch(0.68 0.155 241.4);
   --info-foreground: oklch(0.147 0.019 264.6);
+
+  /* BAL-493 (D4) — dark rhythm. These are DESIGNED, not converted from the light hexes.
+     Invariant (pinned by marketing-home-css.test.ts, do not "fix" toward the light values):
+       L(--mist) < L(--background) < L(--night)
+     --mist stays RECESSED (darker than --background) so white/--card content keeps
+     floating above it, same as light mode. --night INVERTS: a near-black band on a
+     near-black page has zero contrast, so it becomes the lightest, most chromatic
+     surface instead — the "For experts" band's job (maximum separation from its
+     neighbours) survives by flipping direction, not by keeping the light hex. */
+  --mist: oklch(0.118 0.018 264.6);
+  --night: oklch(0.262 0.062 271);
+  --night-foreground: oklch(0.984 0.003 247.9);
+  --line: oklch(0.275 0.036 259.7);
+  --line-soft: oklch(0.232 0.031 261);
+  --primary-deep: oklch(0.556 0.216 260);
+  --violet: oklch(0.606 0.257 293);
+  --violet-deep: oklch(0.541 0.281 293);
+  --subtle-foreground: oklch(0.6 0.028 258);
+
   --chart-1: oklch(0.626 0.186 259.6);
   --chart-2: oklch(0.72 0.192 149.5);
   --chart-3: oklch(0.77 0.165 70.6);
@@ -116,6 +157,19 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+
+  /* BAL-493 (D4) — marketing surfaces. Colour tokens only; --grad/--grad-hover/--ease
+     are not colours and are consumed directly as var(--grad) etc. in marketing-home.css. */
+  --color-mist: var(--mist);
+  --color-night: var(--night);
+  --color-night-foreground: var(--night-foreground);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-primary-deep: var(--primary-deep);
+  --color-violet: var(--violet);
+  --color-violet-deep: var(--violet-deep);
+  --color-subtle-foreground: var(--subtle-foreground);
+
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -241,6 +295,16 @@
     50% {
       transform: translate(20px, -16px);
     }
+  }
+}
+
+/* BAL-493 — the marketing home's smooth-scroll anchor navigation, scoped to `.mk-page`
+   only via `:has()` so it never applies to the rest of the app. The ref's global
+   `html { scroll-behavior: smooth }` + reduced-motion reset is replaced by this single
+   rule (see marketing-home.css's own strip/transform notes at the top of that file). */
+@media (prefers-reduced-motion: no-preference) {
+  html:has(.mk-page) {
+    scroll-behavior: smooth;
   }
 }
 

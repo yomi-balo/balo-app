@@ -578,6 +578,48 @@ describe('expertsRepository.findPublicProfileByUsername', () => {
     expect(result).toBeUndefined();
   });
 
+  /**
+   * BAL-493 fix round 1 (security LOW) — the `users.deleted_at IS NULL` term.
+   *
+   * `searchable` and `approved_at` are PROFILE columns and `expert_profiles` has no
+   * `deleted_at`, so soft-deleting the owning USER left this read fully passing: the profile
+   * stayed approved + searchable and kept resolving by username. `isPubliclyVisible` has
+   * always filtered the joined user row; this read did not. It was unreachable in practice —
+   * until BAL-493 pointed the public front page's curated spotlight at exactly this method.
+   *
+   * The first assertion is the one that matters: it establishes the profile IS otherwise
+   * publicly visible, so the `undefined` after the soft delete can only be the new term.
+   */
+  it('returns undefined once the OWNING USER is soft-deleted, though the profile stays approved + searchable', async () => {
+    const username = uniq('soft-deleted-user');
+    const expert = await searchExpertFactory({ username, searchable: true });
+
+    // Baseline: visible before the deletion, so the assertion below is not vacuous.
+    await expect(expertsRepository.findPublicProfileByUsername(username)).resolves.toBeDefined();
+
+    await usersRepository.softDelete(expert.userId);
+
+    // The profile row is untouched — only the user was soft-deleted.
+    const profileAfter = await db.query.expertProfiles.findFirst({
+      where: eq(expertProfiles.id, expert.id),
+      columns: { searchable: true, approvedAt: true },
+    });
+    expect(profileAfter?.searchable).toBe(true);
+    expect(profileAfter?.approvedAt).not.toBeNull();
+
+    await expect(expertsRepository.findPublicProfileByUsername(username)).resolves.toBeUndefined();
+  });
+
+  it('agrees with isPubliclyVisible on the soft-deleted-user case (one visibility rule, not two)', async () => {
+    const username = uniq('soft-delete-parity');
+    const expert = await searchExpertFactory({ username, searchable: true });
+
+    await usersRepository.softDelete(expert.userId);
+
+    expect(await expertsRepository.isPubliclyVisible(expert.id)).toBe(false);
+    await expect(expertsRepository.findPublicProfileByUsername(username)).resolves.toBeUndefined();
+  });
+
   it('eager-loads every relation and orders work history by sortOrder', async () => {
     // ── Seed taxonomy + agency rows the factory does not create itself ──
     const vertical = await referenceDataRepository.getSalesforceVertical();

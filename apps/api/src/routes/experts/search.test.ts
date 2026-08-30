@@ -156,7 +156,9 @@ describe('GET /experts/search', () => {
     expect(body).toHaveProperty('experts');
     expect(body).toHaveProperty('total', 1);
     expect(body.facetCounts).toEqual(EMPTY_FACETS);
-    expect(body.experts[0]).toMatchObject({ id: 'expert-1', name: 'Jane Doe', rate: 2.5 });
+    // BAL-493 / D1 — `rate` is the CLIENT ALL-IN figure: the fixture's `rateCents: 250`
+    // serializes as applyBaloFee(250, 2500) / 100 = 3.13, not the consultant's 2.5.
+    expect(body.experts[0]).toMatchObject({ id: 'expert-1', name: 'Jane Doe', rate: 3.13 });
   });
 
   it("passes each expert's competencies through to the response", async () => {
