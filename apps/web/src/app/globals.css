@@ -436,6 +436,24 @@
   }
 }
 
+/* BAL-501 — the active bottom-tab icon pop (balo-nav-explorer.jsx:121 `bnTabPop`).
+   ⚠ A NAMED CLASS, not an `animate-[…]` arbitrary utility, precisely so the reduced-motion
+   block below can name it — see that block's docblock. */
+@keyframes tabIconPop {
+  0% {
+    transform: scale(0.85);
+  }
+  55% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.animate-tab-icon-pop {
+  animation: tabIconPop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
 /* ⚠⚠ THIS BLOCK MUST LIST TAILWIND'S OWN ANIMATIONS TOO, NOT ONLY BALO'S CUSTOM KEYFRAMES.
    `animate-spin` and `animate-pulse` ship with Tailwind and are NOT covered by the
    `motion-reduce:` variant unless a component remembers to write it — and the join surfaces
@@ -453,6 +471,7 @@
   .animate-bar-fill,
   .animate-pulse-dot,
   .animate-float-glow,
+  .animate-tab-icon-pop, /* BAL-501 */
   .animate-spin,
   .animate-pulse {
     animation: none;

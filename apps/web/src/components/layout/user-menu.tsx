@@ -1,8 +1,7 @@
 'use client';
 
 import { useTheme } from 'next-themes';
-import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
-import { logoutAction } from '@/lib/auth/actions';
+import { useLogout } from './use-logout';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +30,7 @@ export function UserMenu({
 }: UserMenuProps): React.JSX.Element {
   const { setTheme } = useTheme();
   const sidebar = useSidebarOptional();
+  const logout = useLogout();
 
   const userName = userNameProp ?? sidebar?.userName ?? 'User';
   const userInitials = userInitialsProp ?? sidebar?.userInitials ?? 'U';
@@ -97,14 +97,7 @@ export function UserMenu({
 
         <DropdownMenuSeparator />
 
-        <DropdownMenuItem
-          onClick={() => {
-            track(AUTH_EVENTS.LOGOUT_COMPLETED, {});
-            // Defer reset so PostHog flushes the event with the user's identity
-            setTimeout(() => analytics.reset(), 500);
-            logoutAction();
-          }}
-        >
+        <DropdownMenuItem onClick={logout}>
           <LogOut className="mr-2 h-4 w-4" />
           Log out
         </DropdownMenuItem>

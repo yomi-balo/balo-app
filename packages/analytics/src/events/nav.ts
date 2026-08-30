@@ -22,16 +22,21 @@ export const NAV_ITEM_KEYS = [
 export type NavItemKey = (typeof NAV_ITEM_KEYS)[number];
 
 /**
- * The three ADR-1053 surfaces. Only `'sidebar'` is emitted today; `'bottom_tabs'` (BAL-501) and
- * `'command_palette'` (BAL-503) are declared-but-unemitted, exactly like the disabled registry
- * entries. ⚠ The mobile DRAWER reports `'sidebar'` — it renders `SidebarContent` verbatim.
+ * The ADR-1053 surfaces. ⚠ BAL-501 DELETED THE MOBILE DRAWER, so `'sidebar'` now means DESKTOP
+ * for the first time — the old note here ("the mobile DRAWER reports 'sidebar'") no longer holds
+ * and must not be left in place to mislead a PostHog query.
+ * `'command_palette'` (BAL-503) is still declared-but-unemitted.
  */
-export const NAV_SURFACES = ['sidebar', 'bottom_tabs', 'command_palette'] as const;
+export const NAV_SURFACES = ['sidebar', 'bottom_tabs', 'more_sheet', 'command_palette'] as const;
 export type NavSurface = (typeof NAV_SURFACES)[number];
 
 export const NAV_EVENTS = {
   /** A nav destination was activated. CLIENT-side; `useNavItemTracking` is the ONE dispatch point. */
   ITEM_CLICKED: 'nav_item_clicked',
+  /** The More sheet was OPENED. An intent signal, not a destination activation — hence a second
+   *  member of this family rather than a `surface` on ITEM_CLICKED. Precedent:
+   *  `WORKSPACE_EVENTS.SWITCHER_OPENED`. Emitted on open only. */
+  MORE_OPENED: 'nav_more_opened',
 } as const;
 
 export interface NavEventMap {
@@ -41,4 +46,5 @@ export interface NavEventMap {
     /** `Workspace['type']` imported, never re-declared — `@balo/shared/workspaces` is its home. */
     workspace_type: Workspace['type'];
   };
+  [NAV_EVENTS.MORE_OPENED]: { workspace_type: Workspace['type'] };
 }

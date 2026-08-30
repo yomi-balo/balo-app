@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { LucideIcon } from 'lucide-react';
+import { isNavItemActive } from './is-nav-item-active';
 
 interface SidebarNavLinkProps {
   href: string;
@@ -27,12 +28,7 @@ export function SidebarNavLink({
   onClick,
 }: SidebarNavLinkProps): React.JSX.Element {
   const pathname = usePathname();
-
-  // Exact match for "/dashboard", prefix match for everything else
-  const isActive =
-    href === '/dashboard'
-      ? pathname === '/dashboard'
-      : pathname === href || pathname.startsWith(href + '/');
+  const isActive = isNavItemActive(pathname, href);
 
   let inactiveTextClass =
     'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground';

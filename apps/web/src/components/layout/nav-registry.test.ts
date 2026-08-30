@@ -6,7 +6,12 @@ import {
   requiresCapability,
   NO_CAPABILITY_REQUIRED,
   resolveBreadcrumbTrail,
+  splitMobileNav,
+  resolveMobileTabs,
+  resolveMoreItems,
+  MOBILE_TAB_LIMIT,
   type NavContext,
+  type EnabledNavEntry,
 } from './nav-registry';
 import { CAPABILITIES } from '@balo/shared/authz';
 
@@ -46,6 +51,11 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('preserves NAV_ENTRIES order for the primary section despite interleaved disabled entries', () => {
     const keys = resolveNavItems(COMPANY_MANAGE, 'primary').map((entry) => entry.key);
     expect(keys).toEqual(['dashboard', 'consultations', 'projects', 'messages']);
+  });
+
+  it('NAV_ENTRIES is authored as one primary block then one secondary block (resolveMobileNav depends on it)', () => {
+    const sections = NAV_ENTRIES.map((e) => e.section);
+    expect(sections.indexOf('primary', sections.lastIndexOf('secondary'))).toBe(-1);
   });
 
   it('scopes expert_settings to the expert workspace only', () => {
@@ -139,6 +149,125 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('non-vacuity: 11 declared entries, 8 enabled', () => {
     expect(NAV_ENTRIES.length).toBe(11);
     expect(NAV_ENTRIES.filter((e) => e.enabled).length).toBe(8);
+  });
+
+  it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
+    const byKey = new Map(NAV_ENTRIES.map((e) => [e.key, e]));
+    expect(byKey.get('dashboard')?.shortLabel).toBe('Home');
+    expect(byKey.get('find_experts')?.shortLabel).toBe('Experts');
+    expect(byKey.get('consultations')?.shortLabel).toBe('Consults');
+    const withShortLabel = NAV_ENTRIES.filter((e) => e.shortLabel !== undefined).map((e) => e.key);
+    expect(withShortLabel.sort()).toEqual(['consultations', 'dashboard', 'find_experts'].sort());
+  });
+});
+
+/**
+ * BAL-501 — the bar/sheet split. `splitMobileNav` is the pure cap+overflow rule;
+ * `resolveMobileTabs`/`resolveMoreItems` are the real, context-driven callers.
+ */
+describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () => {
+  function tabEntry(key: string): EnabledNavEntry {
+    return {
+      key: key as EnabledNavEntry['key'],
+      label: key,
+      icon: NAV_ENTRIES[0]?.icon as EnabledNavEntry['icon'],
+      section: 'primary',
+      workspaceTypes: ['company', 'expert'],
+      requires: NO_CAPABILITY_REQUIRED,
+      mobilePriority: 'tab',
+      enabled: true,
+      href: `/${key}`,
+    };
+  }
+
+  function moreEntry(key: string): EnabledNavEntry {
+    return { ...tabEntry(key), mobilePriority: 'more' };
+  }
+
+  it('caps tabs at the limit; overflow entries land in moreItems at their original index', () => {
+    const synthetic = [
+      tabEntry('a'),
+      tabEntry('b'),
+      tabEntry('c'),
+      tabEntry('d'),
+      tabEntry('e'),
+      tabEntry('f'),
+    ];
+    const { tabs, moreItems } = splitMobileNav(synthetic, 4);
+    expect(tabs.map((e) => e.key)).toEqual(['a', 'b', 'c', 'd']);
+    // Overflow ('e', 'f') is what remains AFTER subtraction — original relative order preserved,
+    // not appended to a pre-existing 'more' list.
+    expect(moreItems.map((e) => e.key)).toEqual(['e', 'f']);
+  });
+
+  it('overflow folds back at its registry index — a pre-existing "more" entry interleaved before the cap is NOT displaced by later overflow', () => {
+    // A "filter non-tab, then concat overflow" implementation would produce
+    // moreItems === ['e', 'm'] here — the same wrong shape the plan warns against. Only a true
+    // subtraction (items minus the tabs Set, in original order) yields 'm' first.
+    const synthetic = [
+      tabEntry('a'),
+      tabEntry('b'),
+      moreEntry('m'),
+      tabEntry('c'),
+      tabEntry('d'),
+      tabEntry('e'),
+    ];
+    const { tabs, moreItems } = splitMobileNav(synthetic, 4);
+    expect(tabs.map((e) => e.key)).toEqual(['a', 'b', 'c', 'd']);
+    expect(moreItems.map((e) => e.key)).toEqual(['m', 'e']); // 'm' FIRST — overflow not appended
+  });
+
+  it('respects the default MOBILE_TAB_LIMIT when no limit is passed', () => {
+    const synthetic = [tabEntry('a'), tabEntry('b'), tabEntry('c'), tabEntry('d'), tabEntry('e')];
+    const { tabs } = splitMobileNav(synthetic);
+    expect(tabs).toHaveLength(MOBILE_TAB_LIMIT);
+  });
+
+  it('empty input yields empty everything', () => {
+    expect(splitMobileNav([])).toEqual({ tabs: [], moreItems: [] });
+  });
+
+  it('resolveMobileTabs today: dashboard/consultations/messages, for BOTH workspace types', () => {
+    expect(resolveMobileTabs(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual([
+      'dashboard',
+      'consultations',
+      'messages',
+    ]);
+    expect(resolveMobileTabs(EXPERT_MANAGE).map((e) => e.key)).toEqual([
+      'dashboard',
+      'consultations',
+      'messages',
+    ]);
+  });
+
+  it('resolveMoreItems today, by context — Projects always first (order-preserving subtraction)', () => {
+    expect(resolveMoreItems(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual(['projects', 'account']);
+    expect(resolveMoreItems(COMPANY_MANAGE).map((e) => e.key)).toEqual([
+      'projects',
+      'team',
+      'account',
+    ]);
+    expect(resolveMoreItems(EXPERT_MANAGE).map((e) => e.key)).toEqual([
+      'projects',
+      'expert_settings',
+      'team',
+      'account',
+    ]);
+  });
+
+  it('conservation: tabs + moreItems is a permutation of the primary+secondary resolution, for every context', () => {
+    for (const context of ALL_CONTEXTS) {
+      const tabs = resolveMobileTabs(context);
+      const moreItems = resolveMoreItems(context);
+      const combined = [...tabs, ...moreItems].map((e) => e.key).sort();
+      const expected = [
+        ...resolveNavItems(context, 'primary'),
+        ...resolveNavItems(context, 'secondary'),
+      ]
+        .map((e) => e.key)
+        .sort();
+      expect(combined).toEqual(expected);
+    }
   });
 });
 

@@ -1,8 +1,6 @@
 'use client';
 
-import { useCallback, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
-import { toast } from 'sonner';
+import { useCallback } from 'react';
 import { ChevronsUpDown, Loader2, Check } from 'lucide-react';
 import type { CompanyWorkspace, Workspace } from '@balo/shared/workspaces';
 import {
@@ -13,15 +11,16 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { switchWorkspaceAction } from '@/lib/auth/actions/switch-workspace';
 import { track, WORKSPACE_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
+import { workspaceDisplayName, workspaceSubtitle } from './workspace-presentation';
 import {
-  workspaceDisplayName,
-  workspaceInitials,
-  workspaceSubtitle,
-} from './workspace-presentation';
+  WorkspaceAvatar,
+  WorkspaceLabelStack,
+  WORKSPACE_GROUP_LABELS,
+  WORKSPACE_SECTION_LABEL_CLASSNAME,
+} from './workspace-row-parts';
+import { useWorkspaceSwitch } from './use-workspace-switch';
 
 /**
  * BAL-496 — the sidebar header's workspace switcher. Three render states by list length
@@ -40,49 +39,6 @@ export interface WorkspaceSwitcherProps {
   readonly actorInitials: string;
   readonly actorAvatarUrl: string | null;
   readonly isCollapsed: boolean;
-}
-
-interface AvatarProps {
-  readonly workspace: Workspace;
-  readonly actorInitials: string;
-  readonly actorAvatarUrl: string | null;
-}
-
-/** Expert row: the actor's photo with initials fallback. Company row: derived initials, no
- *  photo (there is no company avatar field — D12). Mirrors `sidebar.tsx:131-136`. */
-function WorkspaceAvatar({
-  workspace,
-  actorInitials,
-  actorAvatarUrl,
-}: AvatarProps): React.JSX.Element {
-  const initials = workspaceInitials(workspace, actorInitials);
-  return (
-    <Avatar className="size-7 shrink-0 rounded-lg">
-      {workspace.type === 'expert' && actorAvatarUrl !== null && (
-        <AvatarImage src={actorAvatarUrl} alt="" />
-      )}
-      <AvatarFallback className="bg-primary/10 text-primary rounded-lg text-[11px] font-semibold">
-        {initials}
-      </AvatarFallback>
-    </Avatar>
-  );
-}
-
-interface LabelStackProps {
-  readonly workspace: Workspace;
-  readonly actorName: string;
-}
-
-/** Name (truncating) over subtitle. `min-w-0 flex-1` so the truncate actually engages. */
-function WorkspaceLabelStack({ workspace, actorName }: LabelStackProps): React.JSX.Element {
-  return (
-    <div className="min-w-0 flex-1 text-left">
-      <p className="text-sidebar-foreground truncate text-sm font-medium">
-        {workspaceDisplayName(workspace, actorName)}
-      </p>
-      <p className="text-muted-foreground truncate text-xs">{workspaceSubtitle(workspace)}</p>
-    </div>
-  );
 }
 
 interface StaticLabelProps {
@@ -197,19 +153,8 @@ function WorkspaceRow({
 
 function SectionLabel({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
   return (
-    <DropdownMenuLabel className="text-muted-foreground px-2 pt-2 pb-1 text-[10px] font-semibold tracking-wider uppercase">
-      {children}
-    </DropdownMenuLabel>
+    <DropdownMenuLabel className={WORKSPACE_SECTION_LABEL_CLASSNAME}>{children}</DropdownMenuLabel>
   );
-}
-
-/**
- * The post-switch success toast's copy. Deliberately NOT `workspaceDisplayName` — that helper
- * borrows the actor's own name for the expert row label, but the toast says "your expert
- * workspace" instead of naming the person, which reads oddly in a sentence about switching.
- */
-function switchedWorkspaceLabel(workspace: Workspace): string {
-  return workspace.type === 'expert' ? 'your expert workspace' : workspace.name;
 }
 
 interface WorkspaceMenuProps {
@@ -231,47 +176,7 @@ function WorkspaceMenu({
   actorAvatarUrl,
   isCollapsed,
 }: WorkspaceMenuProps): React.JSX.Element {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
-  const [isSwitching, setIsSwitching] = useState(false);
-
-  const handleSelect = useCallback(
-    (targetKey: string): void => {
-      // No-op guard: selecting the current workspace just closes the menu. `switchWorkspace`
-      // short-circuits this server-side too, and emits no analytics, but not calling at all
-      // keeps the toast honest — there was no switch.
-      if (targetKey === activeWorkspaceKey) return;
-
-      setIsSwitching(true);
-      switchWorkspaceAction(targetKey)
-        .then((result) => {
-          if (result.success) {
-            // `AuthResult<T>.data` is typed optional (`data?: T`) even though this action
-            // always populates it on success — guard rather than assert (`noUncheckedIndexedAccess`
-            // convention: destructure + guard, never `!`). The success TOAST does not depend on
-            // it being present: CLAUDE.md requires a toast on every user-initiated mutation, so
-            // a successful switch always gets one — `data` only decides which label it gets.
-            const { data } = result;
-            const label = data === undefined ? 'workspace' : switchedWorkspaceLabel(data.workspace);
-            toast.success(`Switched to ${label}`);
-            return;
-          }
-          toast.error(result.error);
-        })
-        .catch(() => {
-          toast.error('Something went wrong. Please try again.');
-        })
-        .finally(() => {
-          setIsSwitching(false);
-          // D1 — a BARE `router.refresh()`. `switchWorkspaceAction` already calls
-          // `revalidatePath('/', 'layout')` internally on success; this is only what makes the
-          // client tree pick the new server render up. Do NOT add a second revalidation, a
-          // `window.location` assignment, or a full page reload.
-          startTransition(() => router.refresh());
-        });
-    },
-    [activeWorkspaceKey, router]
-  );
+  const { isBusy, switchTo } = useWorkspaceSwitch(activeWorkspaceKey);
 
   const handleOpenChange = useCallback(
     (open: boolean): void => {
@@ -284,7 +189,6 @@ function WorkspaceMenu({
 
   const expertWorkspace = workspaces.find((w) => w.type === 'expert');
   const companyWorkspaces = workspaces.filter((w): w is CompanyWorkspace => w.type === 'company');
-  const isBusy = isSwitching || isPending;
 
   return (
     <DropdownMenu onOpenChange={handleOpenChange}>
@@ -342,20 +246,20 @@ function WorkspaceMenu({
       >
         {expertWorkspace !== undefined && (
           <DropdownMenuGroup>
-            <SectionLabel>Your expert workspace</SectionLabel>
+            <SectionLabel>{WORKSPACE_GROUP_LABELS.expert}</SectionLabel>
             <WorkspaceRow
               workspace={expertWorkspace}
               isCurrent={expertWorkspace.key === activeWorkspaceKey}
               actorName={actorName}
               actorInitials={actorInitials}
               actorAvatarUrl={actorAvatarUrl}
-              onSelect={handleSelect}
+              onSelect={switchTo}
             />
           </DropdownMenuGroup>
         )}
         {companyWorkspaces.length > 0 && (
           <DropdownMenuGroup>
-            <SectionLabel>Companies</SectionLabel>
+            <SectionLabel>{WORKSPACE_GROUP_LABELS.companies}</SectionLabel>
             {companyWorkspaces.map((w) => (
               <WorkspaceRow
                 key={w.key}
@@ -364,7 +268,7 @@ function WorkspaceMenu({
                 actorName={actorName}
                 actorInitials={actorInitials}
                 actorAvatarUrl={actorAvatarUrl}
-                onSelect={handleSelect}
+                onSelect={switchTo}
               />
             ))}
           </DropdownMenuGroup>

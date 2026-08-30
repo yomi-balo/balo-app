@@ -80,6 +80,10 @@ export function requiresCapability(...required: readonly NavCapability[]): NavRe
 interface NavEntryBase {
   readonly key: NavItemKey;
   readonly label: string;
+  /** BAL-501 — the bottom-tab cell's label, when `label` itself is too long at ~10.5px in a
+   *  4-or-5-column bar on a 360px viewport. Falls back to `label` when absent. Sidebar, the
+   *  More sheet, and the breadcrumb `<h1>` always render `label` — never this. */
+  readonly shortLabel?: string;
   readonly icon: LucideIcon;
   readonly section: NavSection;
   readonly workspaceTypes: readonly NavWorkspaceType[];
@@ -119,6 +123,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
+    shortLabel: 'Home',
     icon: LayoutDashboard,
     href: '/dashboard',
     section: 'primary',
@@ -132,6 +137,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   {
     key: 'find_experts',
     label: 'Find experts',
+    shortLabel: 'Experts',
     icon: Search,
     href: '/experts',
     section: 'primary',
@@ -145,6 +151,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   {
     key: 'consultations',
     label: 'Consultations',
+    shortLabel: 'Consults',
     icon: Video,
     href: '/consultations',
     section: 'primary',
@@ -294,6 +301,50 @@ export function resolveNavItems(
       entry.workspaceTypes.includes(context.workspaceType) &&
       entry.requires(context)
   );
+}
+
+/** BAL-501 — the bar's cap. At most 4 tabs + the always-present More cell = 5 columns. */
+export const MOBILE_TAB_LIMIT = 4;
+
+export interface MobileNavSplit {
+  readonly tabs: readonly EnabledNavEntry[];
+  readonly moreItems: readonly EnabledNavEntry[];
+}
+
+/**
+ * The cap + overflow rule, over an ALREADY-RESOLVED list, in registry order.
+ * Exported for test: with only 3 `'tab'` candidates enabled today the cap branch is unreachable
+ * through a NavContext, and an untested `.slice()` is exactly the vacuous-AC failure the resolver
+ * flagged for badges. BAL-497 makes it 4; a 5th would make it live.
+ */
+export function splitMobileNav(
+  items: readonly EnabledNavEntry[],
+  limit: number = MOBILE_TAB_LIMIT
+): MobileNavSplit {
+  const tabs = items.filter((entry) => entry.mobilePriority === 'tab').slice(0, limit);
+  const promoted = new Set(tabs);
+  return { tabs, moreItems: items.filter((entry) => !promoted.has(entry)) };
+}
+
+function resolveMobileNav(context: NavContext): MobileNavSplit {
+  // `NAV_ENTRIES` is authored primary-block-then-secondary-block, so this concatenation IS
+  // registry order. Pinned by test.
+  return splitMobileNav([
+    ...resolveNavItems(context, 'primary'),
+    ...resolveNavItems(context, 'secondary'),
+  ]);
+}
+
+/** BAL-501 — the bottom tab bar's resolved entries, capped at `MOBILE_TAB_LIMIT`, registry order. */
+export function resolveMobileTabs(context: NavContext): readonly EnabledNavEntry[] {
+  return resolveMobileNav(context).tabs;
+}
+
+/** BAL-501 — the More sheet's resolved entries: every `'more'` entry plus any tab overflow,
+ *  in their original registry position (subtraction from the same ordered list — see
+ *  `splitMobileNav`). */
+export function resolveMoreItems(context: NavContext): readonly EnabledNavEntry[] {
+  return resolveMobileNav(context).moreItems;
 }
 
 /**
