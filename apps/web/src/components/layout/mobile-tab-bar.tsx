@@ -86,7 +86,21 @@ export function MobileTabBar(): React.JSX.Element | null {
     checklistCompletedCount,
     checklistAllComplete,
   });
-  const moreActive = moreOpen || !tabs.some((entry) => isNavItemActive(pathname, entry.href));
+  /*
+   * ⚠ A POSITIVE rule, deliberately NOT `!tabs.some(...)`. `isNavItemActive` is a pure href-prefix
+   * rule, but an entity route reaches its list only via `ENTITY_PARENTS` in the breadcrumb
+   * resolver: `/cases/:id` and `/meetings/:id` belong to Consultations, whose tab href is
+   * `/consultations`, so NO tab prefix-matches them. A negated rule would light More on every case
+   * and meeting page — directly contradicting the top bar's own "Back to Consultations" crumb.
+   * Desktop shares the rule gap but fails NEUTRAL (nothing lit); a negated fallback turns that gap
+   * into a WRONG signal. Same for `/engagements`, `/billing/top-up`, `/promo-codes`, `/redeem`,
+   * none of which is a registry entry.
+   *
+   * Teaching `isNavItemActive` about `ENTITY_PARENTS` is the proper fix, but it also changes
+   * BAL-495's FROZEN desktop rule, so it needs its own ticket and its own pin in `sidebar.test.tsx`
+   * rather than riding along here.
+   */
+  const moreActive = moreOpen || moreItems.some((entry) => isNavItemActive(pathname, entry.href));
 
   const handleOpenChange = (open: boolean): void => {
     setMoreOpen(open);
@@ -116,6 +130,11 @@ export function MobileTabBar(): React.JSX.Element | null {
           <button
             type="button"
             className={CELL_CLASSNAME}
+            /* ⚠ The `1` is a LITERAL, honest only while `expertChecklist` is the sole
+               `NavBadgeSource`. `hasMoreAttention` is a predicate, so the `Record<NavBadgeSource>`
+               guard forces a new PREDICATE for a second source — never a new COUNT — and this label
+               would then silently say "1 item" for two. `countMoreAttention` (the deferred
+               follow-up) is what makes it honest; wire it here when a second source lands. */
             aria-label={moreButtonLabel(needsAttention ? 1 : 0)}
           >
             <span className="relative">

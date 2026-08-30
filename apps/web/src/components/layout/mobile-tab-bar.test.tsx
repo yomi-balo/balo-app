@@ -124,6 +124,35 @@ describe('MobileTabBar (BAL-501)', () => {
     expect(moreLabel.className).toContain('text-primary');
   });
 
+  /*
+   * ⚠ THE REGRESSION PIN for the negated-fallback bug. `moreActive` must be a POSITIVE rule over
+   * `moreItems`, never `!tabs.some(...)`. These routes reach a list only via `ENTITY_PARENTS` /
+   * `SUPPLEMENTAL_ROUTE_LABELS`, so NO tab prefix-matches them and no More item does either — the
+   * honest answer is "nothing lit", matching desktop. Under the old negated rule every one of them
+   * lit More while the top bar simultaneously rendered "Back to Consultations".
+   */
+  it.each([
+    ['/cases/abc', 'a case (Consultations via ENTITY_PARENTS)'],
+    ['/meetings/abc', 'a meeting (Consultations via ENTITY_PARENTS)'],
+    ['/engagements', 'a non-registry route'],
+    ['/billing/top-up', 'a supplemental route'],
+    ['/promo-codes', 'a supplemental route'],
+    ['/redeem', 'a supplemental route'],
+  ])('pathname "%s" — %s lights NO tab and NOT More (fails neutral, like desktop)', (path) => {
+    pathname = path;
+    renderTabBar({ workspaceType: 'company' });
+    for (const link of screen.getAllByRole('link')) {
+      expect(link).not.toHaveAttribute('aria-current', 'page');
+    }
+    expect(screen.getByText('More').className).not.toContain('text-primary');
+  });
+
+  it('pathname "/settings/account" — a More ITEM being active is what lights More', () => {
+    pathname = '/settings/account';
+    renderTabBar({ workspaceType: 'company' });
+    expect(screen.getByText('More').className).toContain('text-primary');
+  });
+
   it('pathname "/consultations/abc" — Consultations is active via the prefix rule', () => {
     pathname = '/consultations/abc';
     renderTabBar({ workspaceType: 'company' });

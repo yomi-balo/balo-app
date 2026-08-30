@@ -119,10 +119,13 @@ export function Breadcrumbs(): React.JSX.Element | null {
                 />
               )}
               {/* ⚠⚠ THE ONE <h1>. Same node in both layouts. 17px/600 on mobile per the
-                  prototype (balo-nav-explorer.jsx:2324-2333), text-sm from lg up (today's value). */}
+                  prototype (balo-nav-explorer.jsx:2324-2333), text-sm from lg up (today's value).
+                  ⚠ `lg:tracking-normal` pairs with `lg:text-sm`: BOTH mobile-only type tweaks must
+                  be reverted at `lg`, or desktop silently inherits the mobile tracking and this
+                  "internal responsive branch" stops being a no-op for desktop. */}
               <h1
                 aria-current="page"
-                className="min-w-0 truncate text-[17px] font-semibold tracking-[-0.01em] lg:text-sm"
+                className="min-w-0 truncate text-[17px] font-semibold tracking-[-0.01em] lg:text-sm lg:tracking-normal"
               >
                 {crumbContent(crumb, 'last')}
               </h1>
