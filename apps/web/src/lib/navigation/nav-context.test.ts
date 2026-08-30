@@ -10,7 +10,7 @@ vi.mock('@balo/db', () => ({
 // by `vitest.config.ts`.
 import { companiesRepository } from '@balo/db';
 import { log } from '@/lib/logging';
-import { buildNavContext } from './nav-context';
+import { buildNavContext, readCompanyForRequest } from './nav-context';
 
 const findById = vi.mocked(companiesRepository.findById);
 
@@ -105,4 +105,30 @@ describe('buildNavContext (BAL-347 → BAL-495 equivalence)', () => {
     );
     expect((await buildNavContext(null)).workspaceType).toBe('company');
   });
+});
+
+describe('readCompanyForRequest (BAL-503)', () => {
+  it('returns the company row for the given id', async () => {
+    findById.mockResolvedValue({ id: 'company_1', isPersonal: false } as never);
+    await expect(readCompanyForRequest('company_1')).resolves.toEqual({
+      id: 'company_1',
+      isPersonal: false,
+    });
+    expect(findById).toHaveBeenCalledWith('company_1');
+  });
+
+  it('propagates a missing row as undefined rather than throwing', async () => {
+    findById.mockResolvedValue(undefined);
+    await expect(readCompanyForRequest('company_gone')).resolves.toBeUndefined();
+  });
+
+  // ⚠ THE PER-REQUEST DEDUPE IS DELIBERATELY NOT ASSERTED HERE.
+  // React `cache()` memoises only inside a request/render scope, which vitest does not provide —
+  // outside one it is a passthrough, so a `toHaveBeenCalledTimes(1)` assertion here fails against
+  // CORRECT code and would have to be deleted or faked. `lib/credit/wallet-read.ts`'s
+  // `resolveWalletAudience` is the established precedent in this repo and its test asserts the
+  // dedupe no more than this one does.
+  // The property is instead protected structurally by the wiring test below: if a caller goes
+  // back to `companiesRepository.findById` directly, the dedupe silently breaks, and THAT is
+  // both the realistic regression and the testable one.
 });

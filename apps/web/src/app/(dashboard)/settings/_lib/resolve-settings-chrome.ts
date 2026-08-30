@@ -1,8 +1,7 @@
 import 'server-only';
 
-import { companiesRepository } from '@balo/db';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
-import { navWorkspaceTypeOf } from '@/lib/navigation/nav-context';
+import { navWorkspaceTypeOf, readCompanyForRequest } from '@/lib/navigation/nav-context';
 import { log } from '@/lib/logging';
 import type { SessionUser } from '@/lib/auth/session';
 
@@ -49,7 +48,7 @@ export async function resolveSettingsChrome(user: SessionUser): Promise<Settings
   try {
     const [allowed, company] = await Promise.all([
       hasCapability(user, CAPABILITIES.MANAGE_MEMBERS, { companyId: user.companyId }),
-      companiesRepository.findById(user.companyId),
+      readCompanyForRequest(user.companyId),
     ]);
     const showTeamSection = allowed && company !== undefined && !company.isPersonal;
     return { showSectionNav, showTeamSection };

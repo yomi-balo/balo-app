@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 import { log } from '@/lib/logging';
 import type { SessionUser } from '@/lib/auth/session';
 
@@ -8,15 +10,13 @@ const { mockNavWorkspaceTypeOf, mockHasCapability, mockFindById } = vi.hoisted((
   mockFindById: vi.fn(),
 }));
 
-vi.mock('@balo/db', () => ({
-  companiesRepository: { findById: mockFindById },
+vi.mock('@/lib/navigation/nav-context', async () => ({
+  navWorkspaceTypeOf: mockNavWorkspaceTypeOf,
+  readCompanyForRequest: mockFindById,
 }));
 vi.mock('@/lib/authz', () => ({
   hasCapability: mockHasCapability,
   CAPABILITIES: { MANAGE_MEMBERS: 'manage_members' },
-}));
-vi.mock('@/lib/navigation/nav-context', () => ({
-  navWorkspaceTypeOf: mockNavWorkspaceTypeOf,
 }));
 
 import { resolveSettingsChrome } from './resolve-settings-chrome';
@@ -101,5 +101,32 @@ describe('resolveSettingsChrome', () => {
       'Failed to resolve settings chrome',
       expect.objectContaining({ userId: 'user-1', companyId: 'company-1' })
     );
+  });
+});
+
+describe('the company read goes through the shared cached reader (BAL-503)', () => {
+  // ⚠ The per-request dedupe itself is not observable under vitest (React `cache()` memoises only
+  // inside a request scope — see `nav-context.test.ts`). What IS observable, and what would
+  // actually regress, is the WIRING: a future edit reaching for `companiesRepository.findById`
+  // directly here would silently reintroduce a second read of the same row on every
+  // `/settings/*` render, with every behavioural test still green.
+  const source = codeLinesOf(
+    readFileSync(
+      resolveRouteDir([
+        'src/app/(dashboard)/settings/_lib/resolve-settings-chrome.ts',
+        'apps/web/src/app/(dashboard)/settings/_lib/resolve-settings-chrome.ts',
+      ]),
+      'utf8'
+    )
+  );
+
+  it('guards the guard: the scanned source is non-empty', () => {
+    expect(source.length).toBeGreaterThan(0);
+    expect(source).toContain('resolveSettingsChrome');
+  });
+
+  it('never calls companiesRepository directly — it uses readCompanyForRequest', () => {
+    expect(source).not.toContain('companiesRepository');
+    expect(source).toContain('readCompanyForRequest');
   });
 });
