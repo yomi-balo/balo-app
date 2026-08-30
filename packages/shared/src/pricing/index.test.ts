@@ -259,7 +259,14 @@ describe('clientBoundToExpertRateCents (BAL-493 fix round 1 — inverse of apply
    * Because `applyBaloFee` rounds half-UP, a raw rate can display exactly the client's minimum
    * while sitting just BELOW the ceil'd bound (586 → 733). Ceil drops it. That is the safe
    * direction: the min bound never admits an expert whose displayed rate is under what the
-   * client asked for. The max bound has no such slack (floor is exact there).
+   * client asked for.
+   *
+   * ⚠ THE MAX BOUND HAS THE MIRROR CASE — an earlier version of this comment claimed it did not.
+   * At clientMax 501¢, raw 401 displays exactly 501 (`round(401 × 1.25) = 501`) and so ought to
+   * be admitted, but `floor(400.8) = 400` excludes it. Both bounds are therefore CONSERVATIVE:
+   * each errs toward the client, never over-admits, and never leaks. Unreachable from the
+   * whole-dollar slider (`RATE_BOUNDS`), which cannot express 501¢. Do not "fix" either side by
+   * widening it — the conservative direction is the one that keeps the displayed rate honest.
    */
   it('min is conservative, never permissive, when the quotient is not integral', () => {
     const clientMin = 733; // 733 × 10000 / 12500 = 586.4 → ceil 587.
@@ -268,6 +275,20 @@ describe('clientBoundToExpertRateCents (BAL-493 fix round 1 — inverse of apply
     // The dropped rate displays exactly the minimum — excluding it errs toward the client.
     expect(applyBaloFee(586, FEE)).toBe(733);
     expect(586).toBeLessThan(bound);
+  });
+
+  /**
+   * The mirror of the case above, pinned so the corrected comment cannot rot back into the
+   * false "floor is exact there" claim. Same conservative direction: the max bound excludes a
+   * raw rate that displays EXACTLY the client's maximum.
+   */
+  it('max is conservative too, when the quotient is not integral', () => {
+    const clientMax = 501; // 501 × 10000 / 12500 = 400.8 → floor 400.
+    const bound = clientBoundToExpertRateCents(clientMax, FEE, 'max');
+    expect(bound).toBe(400);
+    // Raw 401 displays exactly the client's max, yet sits above the floor'd bound.
+    expect(applyBaloFee(401, FEE)).toBe(501);
+    expect(401).toBeGreaterThan(bound);
   });
 
   it('is the identity at a zero fee (no markup ⇒ client bound IS the expert bound)', () => {

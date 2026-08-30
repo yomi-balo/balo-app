@@ -96,7 +96,7 @@ describe('SpotlightGrid — spotlight_expert_clicked (AC-6)', () => {
     expect(mockPush).toHaveBeenCalledWith('/experts/anil');
   });
 
-  it('"Book a call" fires action:"book" and deep-links with book=1&src=search', async () => {
+  it('"Book a call" fires action:"book" and deep-links with book=1&src=home_spotlight', async () => {
     const user = userEvent.setup();
     render(
       <SpotlightGrid
@@ -113,7 +113,7 @@ describe('SpotlightGrid — spotlight_expert_clicked (AC-6)', () => {
       action: 'book',
       position: 0,
     });
-    expect(mockPush).toHaveBeenCalledWith('/experts/anil?book=1&src=search');
+    expect(mockPush).toHaveBeenCalledWith('/experts/anil?book=1&src=home_spotlight');
   });
 
   it('the second card in the grid reports position 1, not 0', async () => {

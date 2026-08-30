@@ -37,10 +37,16 @@ export function formatWholeCurrency(cents: number, currency: string): string {
 /**
  * Calculate client rate from expert rate (both in cents).
  *
- * ⚠ N2 (BAL-493) — `PLATFORM_PRICING.MARKUP_MULTIPLIER` here is a DIFFERENT markup from the
- * canonical PUBLIC-DISPLAY markup, `publicDisplayRatePerMinute` in `@balo/shared/pricing`. Any
- * new public-facing "from A$…/min" surface should call that shared helper, not this one — do
- * not add a second caller to this function for display purposes.
+ * ⚠ BAL-493 — this is a DUPLICATE DEFINITION of the SAME arithmetic, not a different markup.
+ * `PLATFORM_PRICING.MARKUP_MULTIPLIER` (1.25) and `DEFAULT_BALO_FEE_BPS` (2500 bps) are both
+ * 25%; they agree today and there is no discrepancy to "fix". The risk is DRIFT — two constants
+ * encoding one business rule, which can silently diverge.
+ *
+ * `publicDisplayRatePerMinute` in `@balo/shared/pricing` (over the canonical `applyBaloFee`) is
+ * the single source of truth for any PUBLIC-FACING "From A$…/min" figure. Do not add a display
+ * caller to this function. Longer term this should delegate to `applyBaloFee` so the two cannot
+ * drift at all; it is left alone here only to keep BAL-493 off the authenticated
+ * expert-settings path, which is this function's sole remaining consumer.
  */
 export function calculateClientRate(expertRateCents: number): number {
   return Math.round(expertRateCents * PLATFORM_PRICING.MARKUP_MULTIPLIER);

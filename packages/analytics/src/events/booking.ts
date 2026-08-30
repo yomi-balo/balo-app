@@ -50,7 +50,17 @@ export const BOOKING_EVENTS = {
 export type RescheduleProposalOutcome = 'accepted' | 'declined' | 'withdrawn';
 
 /** Where the booking wrapper was opened from (D4a's four entry points, minus "book again" being its own source). */
-export type BookingSource = 'profile' | 'search' | 'case_quick_pick' | 'book_again';
+/**
+ * Where a booking was initiated from. `home_spotlight` (BAL-493) is the marketing home's
+ * expert spotlight — deliberately DISTINCT from `search`, so front-page demand is not
+ * counted as search-originated in the funnel.
+ */
+export type BookingSource =
+  | 'profile'
+  | 'search'
+  | 'case_quick_pick'
+  | 'book_again'
+  | 'home_spotlight';
 
 /** Whether the confirm step renders the case chooser or a FIXED case (D4a #3). */
 export type BookingEntryMode = 'chooser' | 'fixed_case';

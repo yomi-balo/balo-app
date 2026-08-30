@@ -33,7 +33,7 @@ function SpotlightCard({ expert, position }: Readonly<SpotlightCardProps>): Reac
   const handleBook = useCallback(() => {
     tracking.spotlightExpertClicked(expert.id, 'book', position);
     if (expert.username) {
-      router.push(`/experts/${expert.username}?book=1&src=search`);
+      router.push(`/experts/${expert.username}?book=1&src=home_spotlight`);
     }
   }, [tracking, expert.id, expert.username, position, router]);
 
