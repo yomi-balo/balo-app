@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { SENSITIVE_PATH_PREFIXES } from '@balo/shared/redaction';
 import {
@@ -59,6 +62,29 @@ describe('isPublicRoute', () => {
     // And the singular prefix must not have opened the plural directory or vice-versa.
     expect(isPublicRoute('/expert')).toBe(false);
     expect(isPublicRoute('/expert/settings')).toBe(false);
+  });
+
+  // BAL-510 — TEMPORARY, and the pairing is the whole point of this test.
+  //
+  // `/v2` is the marketing-home direction preview. It is granted anonymous access so it can be
+  // read with the signed-out `MarketingHeader`, the way `/` and `/experts` are. That grant is
+  // only defensible while the preview page is actually there: a `PUBLIC_PATHS` entry that
+  // outlives its route is a permanently unauthenticated path sitting in the registry, waiting
+  // for some future surface to be mounted at exactly `/v2` and silently inherit it.
+  //
+  // The two facts must move together. When the V1-vs-V2 decision lands and
+  // `app/(marketing)/v2/` is deleted, THIS TEST GOES RED until the registry line goes too —
+  // which is the only mechanism that survives whoever does the teardown not having read the
+  // ticket.
+  it('keeps /v2 public only while the preview page exists (paired teardown)', () => {
+    const previewPage = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../app/(marketing)/v2/page.tsx'
+    );
+    expect(PUBLIC_PATHS.has('/v2')).toBe(existsSync(previewPage));
+    // ⚠ EXACT MATCH ONLY — no `PUBLIC_PREFIXES` entry was added, so children stay protected.
+    expect(isPublicRoute('/v2/anything')).toBe(false);
+    expect(isPublicRoute('/v2x')).toBe(false);
   });
 
   it('does not match similar-but-different paths', () => {

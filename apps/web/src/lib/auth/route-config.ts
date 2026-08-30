@@ -27,6 +27,16 @@ export const PUBLIC_PATHS = new Set([
   //
   // `loadDraftAction` remains `withAuth`-wrapped, so the authenticated branch is unchanged.
   '/expert/apply',
+  // BAL-510 — TEMPORARY. The `/v2` marketing-home direction preview. Unlinked and
+  // `noindex`, but it must be reachable SIGNED OUT: it is a marketing home, so the whole
+  // point is seeing it with the anonymous `MarketingHeader` variant, the same way `/` and
+  // `/experts` are seen. Without this line middleware 307s anonymous visitors to
+  // `/login?returnTo=%2Fv2` and the V1-vs-V2 comparison cannot be done in a fresh browser.
+  // Safe to expose: the page renders only hard-coded sample data plus the same PUBLIC
+  // product taxonomy `/experts` already serves anonymously — no user is dereferenced and
+  // there is no write path of any kind.
+  // ⚠ PAIRED TEARDOWN: delete this line together with `app/(marketing)/v2/` (see BAL-493).
+  '/v2',
 ]);
 
 /** Prefix-based public paths */
