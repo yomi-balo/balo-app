@@ -9,6 +9,7 @@ import {
   REPRESENTING_WORKSPACE_SUBTITLE,
   PERSONAL_WORKSPACE_SUBTITLE,
   PLAIN_CLIENT_SUBTITLE,
+  REPRESENTATION_SWITCH_UNAVAILABLE_NOTE,
 } from './workspace-presentation';
 
 function company(overrides: Partial<CompanyWorkspace> = {}): CompanyWorkspace {
@@ -101,5 +102,11 @@ describe('workspaceInitials', () => {
 
   it('lower-case input upper-cases', () => {
     expect(workspaceInitials(company({ name: 'northwind industrial' }), 'DL')).toBe('NI');
+  });
+});
+
+describe('REPRESENTATION_SWITCH_UNAVAILABLE_NOTE', () => {
+  it('is the exact shipped switcher string, byte-for-byte (incl. the U+2019 apostrophe)', () => {
+    expect(REPRESENTATION_SWITCH_UNAVAILABLE_NOTE).toBe('Switching here isn’t available yet');
   });
 });

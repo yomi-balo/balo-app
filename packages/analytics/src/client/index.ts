@@ -62,6 +62,11 @@ export {
   MARKETING_EVENTS,
   MARKETING_NAV_LINKS,
   MARKETING_SURFACES,
+  // BAL-500 — the ⌘K command palette's canonical event + method/type tuples. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  COMMAND_PALETTE_EVENTS,
+  COMMAND_PALETTE_OPEN_METHODS,
+  COMMAND_PALETTE_ACTION_TYPES,
 } from '../events';
 
 export type {
@@ -155,4 +160,8 @@ export type {
   MarketingEventMap,
   MarketingNavLink,
   MarketingSurface,
+  // BAL-500 — the ⌘K command palette's event payload and method/type vocabularies.
+  CommandPaletteEventMap,
+  CommandPaletteOpenMethod,
+  CommandPaletteActionType,
 } from '../events';

@@ -65,7 +65,10 @@ vi.mock('@/components/balo/notification-bell', () => ({
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
   redirect: vi.fn(),
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }), // ⚠ NEW — or the render throws
 }));
+
+vi.mock('@/lib/auth/actions/switch-workspace', () => ({ switchWorkspaceAction: vi.fn() }));
 
 vi.mock('@/hooks/use-mobile', () => ({
   useIsMobile: () => false,

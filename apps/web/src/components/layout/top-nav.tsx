@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Menu } from 'lucide-react';
 import { NotificationBell } from '@/components/balo/notification-bell';
 import { Breadcrumbs } from './breadcrumbs';
+import { CommandPalette } from './command-palette';
 
 interface TopNavProps {
   /**
@@ -38,8 +39,9 @@ export function TopNav({ creditsChip = null }: Readonly<TopNavProps>): React.JSX
           </Button>
         )}
         <Breadcrumbs />
-        {/* Spacer — BAL-503's ⌘K trigger lands here, beside the chip, without a re-layout. */}
+        {/* Spacer — the ⌘K palette sits between it and the chip, per the design reference. */}
         <div className="flex-1" />
+        <CommandPalette />
         {/* BAL-499 F7 — no wrapper `<div>` around the chip: a classless wrapper is still a flex
             item (and so still consumes this row's `gap-3`) even when its content resolves to
             `null` (the slot's error path) or is CSS-hidden below `sm` (the chip's own `hidden

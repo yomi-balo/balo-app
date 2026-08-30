@@ -4,7 +4,15 @@ import { render, screen, within } from '@testing-library/react';
 // ── Mocks ───────────────────────────────────────────────────────
 
 vi.mock('./sidebar-context', () => ({
-  useSidebar: () => ({ setMobileOpen: vi.fn() }),
+  useSidebar: () => ({
+    setMobileOpen: vi.fn(),
+    // BAL-500 — the ⌘K palette is a sibling in this row and reads the shell context ITSELF;
+    // `top-nav.tsx` may never name these fields (credits-chip-server-gated.test.ts).
+    navContext: { workspaceType: 'company', capabilities: [] },
+    workspaces: [],
+    activeWorkspaceKey: null,
+    userName: 'Jane Doe',
+  }),
 }));
 
 vi.mock('@/hooks/use-mobile', () => ({
@@ -13,7 +21,10 @@ vi.mock('@/hooks/use-mobile', () => ({
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }), // ⚠ REQUIRED — see trap T5
 }));
+
+vi.mock('@/lib/auth/actions/switch-workspace', () => ({ switchWorkspaceAction: vi.fn() }));
 
 // Mock NotificationBell to avoid fetch calls
 vi.mock('@/components/balo/notification-bell', () => ({
@@ -64,6 +75,18 @@ describe('TopNav', () => {
     // row's `gap-3`, even when the chip inside it is `null` (the slot's error path) or
     // CSS-hidden below `sm`. The chip's parentElement must be the row itself, not an
     // intermediate wrapper.
+    const row = screen.getByRole('banner').firstElementChild;
+    expect(chip.parentElement).toBe(row);
+  });
+
+  it('renders the ⌘K trigger after the spacer and before the credits chip', () => {
+    render(<TopNav creditsChip={<div data-testid="chip-stub">chip</div>} />);
+
+    const trigger = screen.getByRole('button', { name: 'Search' });
+    const chip = screen.getByTestId('chip-stub');
+    expect(trigger.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Re-assert F7 in this test too, so a future refactor that wraps the trigger+chip pair
+    // fails here as well as in the dedicated F7 test above.
     const row = screen.getByRole('banner').firstElementChild;
     expect(chip.parentElement).toBe(row);
   });

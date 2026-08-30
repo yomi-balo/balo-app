@@ -289,3 +289,13 @@ export {
   MARKETING_SURFACES,
   type MarketingSurface,
 } from './marketing';
+// BAL-500 / ADR-1053 — the ⌘K command palette's CLIENT event family. Navigation is measured by
+// the already-shipped `nav_item_clicked` (`surface: 'command_palette'`); see the module docblock.
+export {
+  COMMAND_PALETTE_EVENTS,
+  type CommandPaletteEventMap,
+  COMMAND_PALETTE_OPEN_METHODS,
+  type CommandPaletteOpenMethod,
+  COMMAND_PALETTE_ACTION_TYPES,
+  type CommandPaletteActionType,
+} from './command-palette';

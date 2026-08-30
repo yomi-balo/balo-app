@@ -2,7 +2,6 @@
 
 import { useCallback, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { toast } from 'sonner';
 import { ChevronsUpDown, Loader2, Check } from 'lucide-react';
 import type { CompanyWorkspace, Workspace } from '@balo/shared/workspaces';
 import {
@@ -21,7 +20,12 @@ import {
   workspaceDisplayName,
   workspaceInitials,
   workspaceSubtitle,
+  REPRESENTATION_SWITCH_UNAVAILABLE_NOTE,
 } from './workspace-presentation';
+import {
+  toastWorkspaceSwitchOutcome,
+  toastWorkspaceSwitchThrew,
+} from './workspace-switch-feedback';
 
 /**
  * BAL-496 — the sidebar header's workspace switcher. Three render states by list length
@@ -170,7 +174,7 @@ function WorkspaceRow({
               already-muted token, likely failing WCAG AA — which would defeat D5/A9's whole
               rationale for choosing visible inline copy over a tooltip. */}
           <p className="text-muted-foreground mt-0.5 text-[11px]">
-            Switching here isn’t available yet
+            {REPRESENTATION_SWITCH_UNAVAILABLE_NOTE}
           </p>
         </div>
       </DropdownMenuItem>
@@ -201,15 +205,6 @@ function SectionLabel({ children }: { readonly children: React.ReactNode }): Rea
       {children}
     </DropdownMenuLabel>
   );
-}
-
-/**
- * The post-switch success toast's copy. Deliberately NOT `workspaceDisplayName` — that helper
- * borrows the actor's own name for the expert row label, but the toast says "your expert
- * workspace" instead of naming the person, which reads oddly in a sentence about switching.
- */
-function switchedWorkspaceLabel(workspace: Workspace): string {
-  return workspace.type === 'expert' ? 'your expert workspace' : workspace.name;
 }
 
 interface WorkspaceMenuProps {
@@ -244,23 +239,8 @@ function WorkspaceMenu({
 
       setIsSwitching(true);
       switchWorkspaceAction(targetKey)
-        .then((result) => {
-          if (result.success) {
-            // `AuthResult<T>.data` is typed optional (`data?: T`) even though this action
-            // always populates it on success — guard rather than assert (`noUncheckedIndexedAccess`
-            // convention: destructure + guard, never `!`). The success TOAST does not depend on
-            // it being present: CLAUDE.md requires a toast on every user-initiated mutation, so
-            // a successful switch always gets one — `data` only decides which label it gets.
-            const { data } = result;
-            const label = data === undefined ? 'workspace' : switchedWorkspaceLabel(data.workspace);
-            toast.success(`Switched to ${label}`);
-            return;
-          }
-          toast.error(result.error);
-        })
-        .catch(() => {
-          toast.error('Something went wrong. Please try again.');
-        })
+        .then(toastWorkspaceSwitchOutcome)
+        .catch(toastWorkspaceSwitchThrew)
         .finally(() => {
           setIsSwitching(false);
           // D1 — a BARE `router.refresh()`. `switchWorkspaceAction` already calls

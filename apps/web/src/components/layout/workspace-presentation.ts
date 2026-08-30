@@ -27,6 +27,16 @@ export const PERSONAL_WORKSPACE_SUBTITLE = 'Client · Personal';
 export const PLAIN_CLIENT_SUBTITLE = 'Client';
 
 /**
+ * BAL-496 (D5) / BAL-500 — the visible note on a representation row, which is listed but NEVER
+ * switchable (`switchWorkspace` rejects `via:'representation'` with
+ * `reason:'representation_switch_not_enabled'`). Lives HERE so the sidebar switcher and the ⌘K
+ * palette cannot drift; the two surfaces must agree word for word. BAL-314 is what removes the
+ * restriction — until then do NOT widen `switchWorkspaceAction` to surface `AuthResult.code`.
+ * ⚠ The apostrophe is U+2019 (’), matching the shipped switcher string exactly.
+ */
+export const REPRESENTATION_SWITCH_UNAVAILABLE_NOTE = 'Switching here isn’t available yet';
+
+/**
  * FIRST MATCH WINS, and the order is load-bearing (D3):
  *   1. expert                     → 'Expert workspace'
  *   2. via === 'representation'   → 'Client · Representing'
