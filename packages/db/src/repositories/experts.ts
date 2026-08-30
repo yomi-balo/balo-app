@@ -480,15 +480,41 @@ export const expertsRepository = {
   /**
    * Public profile read for /experts/[username]. Returns the full graph the
    * detail page renders. Visibility-gated: only approved + searchable profiles
-   * are publicly visible — drafts/unapproved/non-searchable resolve to undefined
-   * (→ 404). Username match is exact (the unique username index).
+   * belonging to a LIVE user are publicly visible — drafts/unapproved/
+   * non-searchable/soft-deleted resolve to undefined (→ 404). Username match is
+   * exact (the unique username index).
+   *
+   * ⚠ BAL-493 ADDED THE `users.deleted_at IS NULL` TERM. `isPubliclyVisible` (below) has
+   * always carried it; this read did not, so a soft-deleted expert who was approved and
+   * searchable at deletion time stayed reachable by username. Pre-existing and unreachable
+   * in practice — until BAL-493 promoted this exact read to the PUBLIC FRONT PAGE's curated
+   * spotlight. `expert_profiles` has no `deletedAt` of its own, so the term has to be on the
+   * joined USER row, and a relational `findFirst` cannot join.
+   *
+   * ⚠⚠ IT IS A RAW `sql` EXISTS, NOT `exists(db.select()…)`, AND THAT IS NOT STYLE. The
+   * relational query builder aliases the top-level table as `"expertProfiles"` (camelCase, the
+   * JS key — see any query it logs). A Column embedded in a raw `sql` template is rendered
+   * WITH that alias in scope; a nested `db.select().from(users).where(eq(…, expertProfiles.
+   * userId))` is compiled as an independent query and emits the bare table name
+   * `"expert_profiles"`, which is not in the outer FROM → Postgres 42P01, "invalid reference
+   * to FROM-clause entry", on EVERY call. Typecheck and lint are both clean on that version;
+   * only `experts.integration.test.ts` catches it. Use the same embedding
+   * `consultationCountExpression` uses for its correlated `${expertProfiles.id}` below.
+   *
+   * ⚠ WHERE-CLAUSE ONLY. No schema change, no migration, and the `rateCents` projection
+   * stays the RAW un-marked-up consultant rate — the D1 markup lives at the serializer, never
+   * in `packages/db`.
    */
   async findPublicProfileByUsername(username: string) {
     return db.query.expertProfiles.findFirst({
       where: and(
         eq(expertProfiles.username, username),
         eq(expertProfiles.searchable, true),
-        isNotNull(expertProfiles.approvedAt)
+        isNotNull(expertProfiles.approvedAt),
+        sql`EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.id = ${expertProfiles.userId} AND u.deleted_at IS NULL
+        )`
       ),
       // Defense-in-depth: explicit allowlist of the ONLY top-level columns the
       // public view-model + page consume. Keeps sensitive columns
@@ -575,16 +601,18 @@ export const expertsRepository = {
    *
    * ⚠ `expert_profiles` has NO `deleted_at` — do NOT add a soft-delete predicate ON THIS TABLE.
    *
-   * ⚠ THE OWNING `users` ROW'S SOFT DELETE IS FILTERED HERE, and this is the one place among the
-   * three that does it. `searchable` is a profile column, so a soft-deleted user whose profile
-   * still carries `searchable = true` would keep publishing live calendar data — the complement
-   * of a real person's calendar, from a public unauthenticated endpoint, after they asked to be
-   * deleted. Unreachable today (`usersRepository.softDelete` has no application-code caller),
-   * which is exactly why it is cheap to close now rather than at the moment account deletion
-   * ships. The divergence from the other two public predicates is DELIBERATE and strictly
-   * stricter; whoever ships account deletion should add the same term to
-   * `findPublicProfileByUsername` and `buildWhereConditions` and flip `searchable = false` in the
-   * deletion transaction.
+   * ⚠ THE OWNING `users` ROW'S SOFT DELETE IS FILTERED HERE. `searchable` is a profile column,
+   * so a soft-deleted user whose profile still carries `searchable = true` would keep
+   * publishing live calendar data — the complement of a real person's calendar, from a public
+   * unauthenticated endpoint, after they asked to be deleted. Unreachable today
+   * (`usersRepository.softDelete` has no application-code caller), which is exactly why it is
+   * cheap to close ahead of account deletion shipping.
+   *
+   * ⚠ BAL-493 BROUGHT `findPublicProfileByUsername` INTO LINE (it now carries the same term via
+   * a correlated `exists`), because that read is what the public front page's curated spotlight
+   * calls. `buildWhereConditions` (`expert-search.ts`) is still WITHOUT it — the remaining
+   * divergence, and the one whoever ships account deletion must close, alongside flipping
+   * `searchable = false` in the deletion transaction.
    */
   async isPubliclyVisible(expertProfileId: string): Promise<boolean> {
     const rows = await db

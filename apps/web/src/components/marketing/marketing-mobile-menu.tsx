@@ -16,7 +16,6 @@ interface MarketingMobileMenuProps {
   viewer: MarketingViewer | null;
   onNavigate: (link: MarketingNavLink) => void;
   onDashboard: () => void;
-  onGetStarted: () => void;
   onLogIn: () => void;
 }
 
@@ -77,7 +76,6 @@ export function MarketingMobileMenu({
   viewer,
   onNavigate,
   onDashboard,
-  onGetStarted,
   onLogIn,
 }: Readonly<MarketingMobileMenuProps>): React.JSX.Element {
   const handleNavigate = useCallback(
@@ -93,10 +91,13 @@ export function MarketingMobileMenu({
     onDashboard();
   }, [onOpenChange, onDashboard]);
 
-  const handleGetStarted = useCallback(() => {
+  // BAL-493 / D3 — "Find an expert" is now a plain `<Link>`, not a tracked action: no
+  // `onGetStarted` callback exists to invoke. The stacking guard (close-before-navigate) still
+  // applies — a `<Link>` needs no action callback, so it just closes the sheet in its own
+  // `onClick` and lets the navigation proceed (§9.1).
+  const handleFindAnExpert = useCallback(() => {
     onOpenChange(false);
-    onGetStarted();
-  }, [onOpenChange, onGetStarted]);
+  }, [onOpenChange]);
 
   const handleLogIn = useCallback(() => {
     onOpenChange(false);
@@ -129,8 +130,10 @@ export function MarketingMobileMenu({
           />
         ) : (
           <div className="flex flex-col gap-2 px-1">
-            <Button variant="gradient" size="lg" className="w-full" onClick={handleGetStarted}>
-              Get started
+            {/* BAL-493 / D3 — solid `--primary` / white text, not `gradient` (reserved for the
+                hero submit / spotlight / final-band conversion CTAs). */}
+            <Button asChild size="lg" className="w-full" onClick={handleFindAnExpert}>
+              <Link href="/experts">Find an expert</Link>
             </Button>
             <Button variant="outline" size="lg" className="w-full" onClick={handleLogIn}>
               Log in

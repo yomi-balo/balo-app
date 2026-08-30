@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@/test/utils';
+import { render, screen, fireEvent, waitFor } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { MARKETING_EVENTS, track } from '@/lib/analytics';
@@ -32,40 +32,40 @@ const VIEWER: MarketingViewer = {
   avatarUrl: null,
 };
 
+/** jsdom's `window.scrollY` is a getter-only WebIDL attribute — direct assignment throws. */
+function setScrollY(value: number): void {
+  Object.defineProperty(globalThis, 'scrollY', { value, writable: true, configurable: true });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   state.pathname = '/experts';
+  setScrollY(0);
 });
 
 describe('MarketingHeader — signed out', () => {
-  it('shows Log in and Get started, and hides every signed-in element', () => {
+  it('shows Log in and Find an expert, and hides every signed-in element', () => {
     render(<MarketingHeader viewer={null} />);
     expect(screen.getByRole('button', { name: 'Log in' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Get started' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Find an expert' })).toBeInTheDocument();
     expect(screen.queryByTestId('notification-bell')).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Dashboard/ })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Go to your dashboard/)).not.toBeInTheDocument();
   });
 
-  it('Get started carries the gradient variant', () => {
+  it('Find an expert links straight to /experts and carries no gradient variant', () => {
     render(<MarketingHeader viewer={null} />);
-    expect(screen.getByRole('button', { name: 'Get started' })).toHaveAttribute(
-      'data-variant',
-      'gradient'
-    );
+    const cta = screen.getByRole('link', { name: 'Find an expert' });
+    expect(cta).toHaveAttribute('href', '/experts');
+    expect(cta).not.toHaveAttribute('data-variant', 'gradient');
   });
 
-  it('clicking Get started tracks the event and opens the signup step', async () => {
+  it('clicking Find an expert navigates and fires no marketing event (D3 — unemitted)', async () => {
     const user = userEvent.setup();
     render(<MarketingHeader viewer={null} />);
-    await user.click(screen.getByRole('button', { name: 'Get started' }));
-    expect(track).toHaveBeenCalledWith(MARKETING_EVENTS.GET_STARTED_CLICKED, {
-      surface: 'header',
-    });
-    expect(mockOpen).toHaveBeenCalledWith({
-      defaultStep: 'signup',
-      onSuccess: expect.any(Function),
-    });
+    await user.click(screen.getByRole('link', { name: 'Find an expert' }));
+    expect(track).not.toHaveBeenCalledWith(MARKETING_EVENTS.GET_STARTED_CLICKED, expect.anything());
+    expect(mockOpen).not.toHaveBeenCalled();
   });
 
   it('clicking Log in opens the auth modal without emitting any marketing event', async () => {
@@ -89,10 +89,10 @@ describe('MarketingHeader — signed in', () => {
     expect(screen.getByText('DO')).toBeInTheDocument();
   });
 
-  it('hides Log in and Get started', () => {
+  it('hides Log in and Find an expert', () => {
     render(<MarketingHeader viewer={VIEWER} />);
     expect(screen.queryByRole('button', { name: 'Log in' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Get started' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Find an expert' })).not.toBeInTheDocument();
   });
 
   it('clicking Dashboard and clicking the avatar each track marketing_dashboard_clicked', async () => {
@@ -150,6 +150,43 @@ describe('MarketingHeader — nav links (both variants)', () => {
   });
 });
 
+describe('MarketingHeader — page-aware transparent → frosted (D3 §9.3)', () => {
+  it('is transparent at scroll 0 over the home hero', () => {
+    state.pathname = '/';
+    const { container } = render(<MarketingHeader viewer={null} />);
+    const header = container.querySelector('header');
+    expect(header).toHaveClass('bg-transparent');
+    expect(header).not.toHaveClass('bg-background/90');
+  });
+
+  it('is frosted at scroll 0 on a non-home marketing route (no hero to sit over)', () => {
+    state.pathname = '/experts';
+    const { container } = render(<MarketingHeader viewer={null} />);
+    const header = container.querySelector('header');
+    expect(header).toHaveClass('bg-background/90');
+    expect(header).not.toHaveClass('bg-transparent');
+  });
+
+  it('is frosted at scroll 0 on an expert profile route too', () => {
+    state.pathname = '/experts/dana';
+    const { container } = render(<MarketingHeader viewer={null} />);
+    const header = container.querySelector('header');
+    expect(header).toHaveClass('bg-background/90');
+  });
+
+  it('switches to frosted once the home page scrolls past the threshold', async () => {
+    state.pathname = '/';
+    const { container } = render(<MarketingHeader viewer={null} />);
+    setScrollY(100);
+    // globalThis IS window in jsdom; fireEvent's DOM-target type just doesn't know that.
+    fireEvent.scroll(globalThis as unknown as Window);
+    // The scroll handler is rAF-throttled (§9.3) — the class flip lands a frame later.
+    await waitFor(() => {
+      expect(container.querySelector('header')).toHaveClass('bg-background/90');
+    });
+  });
+});
+
 describe('MarketingHeader — accessibility', () => {
   it('has no accessibility violations, signed out', async () => {
     const { container } = render(<MarketingHeader viewer={null} />);
@@ -158,6 +195,12 @@ describe('MarketingHeader — accessibility', () => {
 
   it('has no accessibility violations, signed in', async () => {
     const { container } = render(<MarketingHeader viewer={VIEWER} />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('has no accessibility violations in the transparent home-hero state', async () => {
+    state.pathname = '/';
+    const { container } = render(<MarketingHeader viewer={null} />);
     expect(await axe(container)).toHaveNoViolations();
   });
 });

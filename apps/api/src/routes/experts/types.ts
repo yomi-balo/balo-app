@@ -51,7 +51,17 @@ export interface ExpertSearchResult {
   bio: string | null;
   /** users.country_code */
   countryCode: string | null;
-  /** rate_cents / 100 (dollars/min); null if rate_cents null */
+  /**
+   * CLIENT ALL-IN rate per minute, in dollars, **Balo service fee INCLUDED** — computed at
+   * `DEFAULT_BALO_FEE_BPS` by `publicDisplayRatePerMinute` (`@balo/shared/pricing`), NOT a bare
+   * `rate_cents / 100` (BAL-493 / D1: that published a rate lower than the client is charged).
+   *
+   * ⚠ A **"FROM" FIGURE.** The fee is session/engagement grain — there is no per-expert fee
+   * column — so a session opened at a non-default fee charges differently. Render it as
+   * "From A$…/min", never as an exact promise.
+   *
+   * `null` if `rate_cents` is null; `0` stays `0`.
+   */
   rate: number | null;
   /** earliest_available_at ISO 8601; null when gate OFF + no cache */
   nextAvailableAt: string | null;

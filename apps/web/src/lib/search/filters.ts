@@ -13,7 +13,15 @@
  * - `vertical` defaults to `'salesforce'` and is omitted from the URL unless changed.
  * - Invalid `sort` / `timeframe` / `page` / rate values are clamped to defaults on
  *   parse (the URL is user-editable).
+ *
+ * ⚠ BAL-493 / D1 — **THE RATE SLIDER AND THE API RATE BOUND ARE DIFFERENT CURRENCIES OF
+ * MEANING.** Everything in `SearchFilters` is CLIENT-facing: `rateMinDollars` /
+ * `rateMaxDollars` are the all-in, fee-included A$/min the cards display. `SearchRequest`'s
+ * `rateMin` / `rateMax` are EXPERT-facing: `expert-search.ts` compares them against the raw,
+ * un-marked-up `expert_profiles.rate_cents`. `filtersToSearchRequest` is the ONE place that
+ * crosses that boundary, and it must divide the fee back out (see the comment there).
  */
+import { clientBoundToExpertRateCents, DEFAULT_BALO_FEE_BPS } from '@balo/shared/pricing';
 
 export const SORT_VALUES = ['best_match', 'soonest', 'lowest_rate', 'most_experienced'] as const;
 export type SortValue = (typeof SORT_VALUES)[number];
@@ -159,9 +167,9 @@ export interface SearchRequest {
   supportTypes: string[];
   languages: string[];
   timeframe?: TimeframeValue;
-  /** Per-minute cents (int). */
+  /** EXPERT-facing per-minute cents (int) — compared against raw `expert_profiles.rate_cents`. */
   rateMin?: number;
-  /** Per-minute cents (int). */
+  /** EXPERT-facing per-minute cents (int) — compared against raw `expert_profiles.rate_cents`. */
   rateMax?: number;
   vertical: string;
   sort: SortValue;
@@ -177,6 +185,16 @@ function dollarsToCents(dollars: number): number {
 /**
  * Map filters to the API request shape. Facet IDs pass straight through; rate is
  * converted A$ → cents here, the only place that conversion happens.
+ *
+ * ⚠ **THE RATE BOUNDS ALSO CHANGE MEANING HERE, NOT JUST UNITS.** The slider the user drags
+ * is CLIENT-facing — since D1 every public surface displays `applyBaloFee(rate_cents, 2500)`,
+ * so "max A$5.00/min" means "no card may READ more than A$5.00". The API bound is
+ * EXPERT-facing: `expert-search.ts` compares it against the raw `expert_profiles.rate_cents`.
+ * Passing the client figure through unconverted would (a) return cards reading A$6.25 under a
+ * A$5.00 max, and (b) let an anonymous visitor bisect `?rateMax=` to recover an expert's raw
+ * rate and read Balo's markup off the displayed one. `clientBoundToExpertRateCents` divides
+ * the fee back out; floor for the max and ceil for the min is what makes the DISPLAYED rate
+ * honour the slider in both directions (that function's docblock has the boundary arithmetic).
  */
 export function filtersToSearchRequest(filters: SearchFilters): SearchRequest {
   const request: SearchRequest = {
@@ -191,8 +209,20 @@ export function filtersToSearchRequest(filters: SearchFilters): SearchRequest {
 
   if (filters.q.trim() !== '') request.q = filters.q;
   if (filters.timeframe) request.timeframe = filters.timeframe;
-  if (filters.rateMinDollars != null) request.rateMin = dollarsToCents(filters.rateMinDollars);
-  if (filters.rateMaxDollars != null) request.rateMax = dollarsToCents(filters.rateMaxDollars);
+  if (filters.rateMinDollars != null) {
+    request.rateMin = clientBoundToExpertRateCents(
+      dollarsToCents(filters.rateMinDollars),
+      DEFAULT_BALO_FEE_BPS,
+      'min'
+    );
+  }
+  if (filters.rateMaxDollars != null) {
+    request.rateMax = clientBoundToExpertRateCents(
+      dollarsToCents(filters.rateMaxDollars),
+      DEFAULT_BALO_FEE_BPS,
+      'max'
+    );
+  }
 
   return request;
 }

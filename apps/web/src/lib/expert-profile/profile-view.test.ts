@@ -112,13 +112,54 @@ describe('mapProfileToView — names & basics', () => {
   });
 });
 
+/**
+ * BAL-493 / D1 — this block PREVIOUSLY PINNED THE BUG: it asserted `rateCents: 950 → 9.5`,
+ * i.e. the un-marked-up consultant rate, which is LOWER than the client is actually charged.
+ * The public profile now emits the client all-in rate, matching `/experts`.
+ */
 describe('mapProfileToView — rate', () => {
-  it('converts rateCents to dollars per minute', () => {
-    expect(mapProfileToView(makeProfile({ rateCents: 950 })).rate).toBe(9.5);
+  it('emits the CLIENT ALL-IN rate per minute (Balo fee included)', () => {
+    // applyBaloFee(950, 2500) = round(950 × 12500 / 10000) = round(1187.5) = 1188 → 11.88
+    expect(mapProfileToView(makeProfile({ rateCents: 950 })).rate).toBe(11.88);
+    // Was 9.5 before D1 — the consultant rate must not be what the public page shows.
+    expect(mapProfileToView(makeProfile({ rateCents: 950 })).rate).not.toBe(9.5);
+  });
+
+  it('keeps a zero rate as 0, never null', () => {
+    expect(mapProfileToView(makeProfile({ rateCents: 0 })).rate).toBe(0);
   });
 
   it('maps null rateCents to null rate', () => {
     expect(mapProfileToView(makeProfile({ rateCents: null })).rate).toBeNull();
+  });
+});
+
+/**
+ * BAL-493 AC-5 / D1 — the PUBLIC SERIALIZER BOUNDARY invariant, mirrored from
+ * `apps/api/src/routes/experts/mapper.test.ts`. Two public serializers, one invariant: the
+ * emitted rate is marked up, and no margin / fee-bps / expert-earnings field reaches the
+ * client. The un-marked-up `rateCents` stays on the DB row, where
+ * `packages/db/src/repositories/experts.integration.test.ts` pins it — that test must keep
+ * passing unchanged; if it fails, the markup was put in the wrong layer.
+ */
+describe('mapProfileToView — public serializer boundary (BAL-493 AC-5)', () => {
+  it('leaks no margin, fee-bps or expert-earnings field to the client view-model', () => {
+    const view = mapProfileToView(makeProfile({ rateCents: 950 }));
+    expect(view).not.toHaveProperty('rateCents');
+    expect(view).not.toHaveProperty('baloFeeBps');
+    expect(view).not.toHaveProperty('feeBps');
+    expect(view).not.toHaveProperty('margin');
+    expect(view).not.toHaveProperty('expertEarnings');
+    expect(view).not.toHaveProperty('payout');
+  });
+
+  it('carries the money figure ONLY as the marked-up `rate` field', () => {
+    const view = mapProfileToView(makeProfile({ rateCents: 950 }));
+    const moneyKeys = Object.keys(view).filter(
+      (k) => k === 'rate' || k.endsWith('Cents') || k.endsWith('Minor') || k.endsWith('Bps')
+    );
+    expect(moneyKeys).toEqual(['rate']);
+    expect(view.rate).toBe(11.88);
   });
 });
 
