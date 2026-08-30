@@ -14,6 +14,7 @@ import {
 } from '@/lib/analytics/server';
 import { EngagementWorkspace } from '@/components/balo/engagement/engagement-workspace';
 import type { ReviewInitialAction } from '@/components/balo/engagement/review-banner-actions';
+import { EntityCrumb } from '@/components/layout/breadcrumb-context';
 
 interface EngagementWorkspacePageProps {
   params: Promise<{ id: string }>;
@@ -156,10 +157,15 @@ export default async function EngagementWorkspacePage({
   });
 
   return (
-    <EngagementWorkspace
-      view={view}
-      initialAction={resolveInitialAction(action)}
-      actionItems={actionItemsView}
-    />
+    <>
+      {/* BAL-499 — publishes the engagement's title into the top bar's breadcrumb trail. Safe
+          here: this is the already-authorised return path, after every gate above. */}
+      <EntityCrumb label={view.header.engagementTitle} />
+      <EngagementWorkspace
+        view={view}
+        initialAction={resolveInitialAction(action)}
+        actionItems={actionItemsView}
+      />
+    </>
   );
 }

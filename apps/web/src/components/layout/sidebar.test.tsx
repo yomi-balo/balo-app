@@ -3,6 +3,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { CAPABILITIES } from '@balo/shared/authz';
+import type { Workspace } from '@balo/shared/workspaces';
+import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
+import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
 import type { NavContext } from './nav-registry';
 
 /**
@@ -17,6 +20,15 @@ import type { NavContext } from './nav-registry';
  * `renderSidebar` builds `sidebarValue` from a SEMANTIC input (`mode`, `canManageCompany`), so
  * after the refactor only its body changes (`canManageCompany` boolean → `navContext: {
  * workspaceType, capabilities }`) — everything else in this file is frozen.
+ *
+ * ⚠⚠ BAL-496 — INTENTIONAL, TICKET-AUTHORISED UNFREEZE (decision D13). This file declared itself
+ * frozen for BAL-495's refactor, and every assertion below is still frozen. What changed, and
+ * only this: `renderSidebar` now also supplies `workspaces` + `activeWorkspaceKey`, because
+ * `SidebarContent` reads them from the (wholesale-mocked) context and would otherwise render
+ * against `undefined`. The default fixture is a SINGLE company workspace on purpose — that is
+ * BAL-496's static-label branch, which adds NO new interactive element, so every pre-existing
+ * role/label/order assertion below still means what it meant. One `it()` block is ADDED (the
+ * AC-5 badge gate); none is edited or removed.
  */
 
 // ── Mocks (declared BEFORE the component import — hoisting-safe, top-nav.test.tsx precedent) ──
@@ -34,6 +46,10 @@ vi.mock('@/hooks/use-mobile', () => ({
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
+  // BAL-496 fix-round S2 — a multi-workspace fixture renders `WorkspaceMenu`, which calls
+  // `useRouter()` (workspace-switcher.test.tsx precedent). Not exercised by any click in this
+  // file, but the mock must exist or the render itself throws.
+  useRouter: () => ({ refresh: vi.fn() }),
 }));
 
 // ⚠ MUST MOCK: user-menu.tsx imports `logoutAction` from the `@/lib/auth/actions` BARREL, which
@@ -64,6 +80,9 @@ function renderSidebar(opts: {
   canManageCompany: boolean;
   checklistCompletedCount?: number;
   checklistAllComplete?: boolean;
+  workspaces?: readonly Workspace[];
+  activeWorkspaceKey?: string;
+  isCollapsed?: boolean;
 }): ReturnType<typeof render> {
   sidebarValue = {
     activeMode: opts.mode,
@@ -73,7 +92,9 @@ function renderSidebar(opts: {
     checklistCompletedCount: opts.checklistCompletedCount ?? 0,
     checklistAllComplete: opts.checklistAllComplete ?? false,
     navContext: navContextFor(opts.mode, opts.canManageCompany),
-    isCollapsed: false,
+    workspaces: opts.workspaces ?? [SINGLE_COMPANY_WORKSPACE],
+    activeWorkspaceKey: opts.activeWorkspaceKey ?? SINGLE_COMPANY_WORKSPACE.key,
+    isCollapsed: opts.isCollapsed ?? false,
     isMobileOpen: true,
     // Stateful by construction: mutates the module-level `sidebarValue` so a subsequent
     // `rerender(<Sidebar />)` observes the flip. `useSidebar` is mocked as `() => sidebarValue`,
@@ -204,6 +225,34 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
   });
 
+  // BAL-496 fix-round S2 — D10/A1's collapsed-header branch (`sidebar.tsx:107`, `showLogo`) had
+  // zero coverage: both suites pinned `isCollapsed: false`. These two cases exercise both arms.
+  it('collapsed + multi-workspace: the switcher avatar renders, the Logo mark does not', () => {
+    renderSidebar({
+      mode: 'client',
+      canManageCompany: false,
+      isCollapsed: true,
+      workspaces: [SINGLE_COMPANY_WORKSPACE, EXPERT_WORKSPACE],
+      activeWorkspaceKey: SINGLE_COMPANY_WORKSPACE.key,
+    });
+    // D10 — the Logo mark yields the collapsed rail to the switcher once there is one.
+    expect(document.querySelector('a[href="/"]')).not.toBeInTheDocument();
+    // D11 — length >= 2 renders the full dropdown, avatar-only when collapsed.
+    expect(screen.getByRole('button', { name: /Switch workspace/ })).toBeInTheDocument();
+    expect(screen.queryByText(SINGLE_COMPANY_WORKSPACE.name)).not.toBeInTheDocument();
+  });
+
+  it('collapsed + zero workspaces: the Logo mark returns (A1 exception)', () => {
+    renderSidebar({
+      mode: 'client',
+      canManageCompany: false,
+      isCollapsed: true,
+      workspaces: [],
+    });
+    expect(document.querySelector('a[href="/"]')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Switch workspace/ })).not.toBeInTheDocument();
+  });
+
   it('mobile drawer renders ALL enabled entries, including Projects', async () => {
     const user = userEvent.setup();
     isMobile = true;
@@ -216,6 +265,8 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
         checklistCompletedCount: 0,
         checklistAllComplete: false,
         navContext: navContextFor('expert', true),
+        workspaces: [SINGLE_COMPANY_WORKSPACE],
+        activeWorkspaceKey: SINGLE_COMPANY_WORKSPACE.key,
         isCollapsed: false,
         isMobileOpen: false,
         toggleCollapsed: vi.fn(),
@@ -266,6 +317,23 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
 
     renderSidebar({ mode: 'client', canManageCompany: false });
     expect(screen.getByText('Client')).toBeInTheDocument();
+  });
+
+  // BAL-496 / D7 — THE AC-5 GATE. The pre-existing assertion above stays GREEN after the badge
+  // is deleted, because the user pill still emits the word "Expert" — so the AC had no gate at
+  // all. This pins the BADGE, not the word.
+  it('AC5: the Logo expert badge no longer renders in expert mode', () => {
+    // ⚠ `checklistAllComplete: false` is LOAD-BEARING. `ChecklistBadge`'s all-complete branch
+    // uses the SAME `bg-success/10 text-success` pair as the deleted logo badge, so a complete
+    // checklist would make the class query below false-positive.
+    renderSidebar({ mode: 'expert', canManageCompany: false, checklistAllComplete: false });
+
+    // (a) class gate — nothing carries the deleted badge's exact class pair (`logo.tsx`).
+    expect(document.querySelectorAll('.bg-success\\/10.text-success')).toHaveLength(0);
+
+    // (b) structural gate that survives a class rename — the Logo link has no "Expert" inside it.
+    const logo = screen.getByRole('link', { name: /balo/i });
+    expect(within(logo).queryByText('Expert')).toBeNull();
   });
 
   it('active state: Dashboard link carries active styling, Projects does not (pathname /dashboard)', () => {

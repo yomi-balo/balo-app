@@ -6,8 +6,9 @@
 // WIDGET_VIEWED fires once on card mount for a resolved resting state (holder or member lens);
 // loading / error emit nothing (no meaningful lens/state). NUDGE_CLICKED fires when a member
 // presses the nudge (on intent, before the async result). TOPUP_CLICKED fires when a holder
-// clicks Top up, before navigating to `/billing/top-up`. No `identify` / `reset` — the
-// dashboard triggers no session change.
+// clicks Top up, before navigating to `/billing/top-up`. CHIP_CLICKED (BAL-499) fires when
+// either lens clicks the top-bar credits chip, before navigating to `/billing/top-up`. No
+// `identify` / `reset` — the dashboard triggers no session change.
 export const WALLET_EVENTS = {
   /** Wallet card mounted with a resolved resting state (holder or member lens). */
   WIDGET_VIEWED: 'wallet_widget_viewed',
@@ -15,6 +16,8 @@ export const WALLET_EVENTS = {
   NUDGE_CLICKED: 'wallet_nudge_clicked',
   /** Holder clicked Top up (fires before navigation to the top-up route). */
   TOPUP_CLICKED: 'wallet_topup_clicked',
+  /** BAL-499 — either lens clicked the top-bar credits chip (fires before navigation). */
+  CHIP_CLICKED: 'wallet_chip_clicked',
 } as const;
 
 /** The lens the wallet card resolved to (capability-branched, never role/activeMode). */
@@ -27,4 +30,5 @@ export interface WalletEventMap {
   [WALLET_EVENTS.WIDGET_VIEWED]: { lens: WalletLens; state: WalletRestingStateName };
   [WALLET_EVENTS.NUDGE_CLICKED]: { state: 'low' | 'zero' };
   [WALLET_EVENTS.TOPUP_CLICKED]: { state: WalletRestingStateName };
+  [WALLET_EVENTS.CHIP_CLICKED]: { lens: WalletLens; state: WalletRestingStateName };
 }

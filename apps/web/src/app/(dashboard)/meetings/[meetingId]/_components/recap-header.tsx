@@ -47,9 +47,12 @@ export function RecapHeader({
         {header.eyebrow}
       </p>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h1 className="text-foreground line-clamp-2 text-xl leading-snug font-semibold">
+        {/* BAL-499 F5: h2 — the chrome's Breadcrumbs `<h1>` (breadcrumbs.tsx) already carries
+            this same title; keeping this at h1 would duplicate it for a screen-reader user
+            navigating by heading. className unchanged, so nothing moves visually. */}
+        <h2 className="text-foreground line-clamp-2 text-xl leading-snug font-semibold">
           {header.title}
-        </h1>
+        </h2>
         <RecapStatusChip status={header.status} />
       </div>
 

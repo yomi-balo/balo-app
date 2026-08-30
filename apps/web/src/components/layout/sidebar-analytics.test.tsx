@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CAPABILITIES } from '@balo/shared/authz';
 import { track, NAV_EVENTS } from '@/lib/analytics';
+import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
 import type { NavContext } from './nav-registry';
 
 /**
@@ -45,6 +46,8 @@ function buildSidebarValue(mode: 'client' | 'expert'): Record<string, unknown> {
     checklistCompletedCount: 0,
     checklistAllComplete: false,
     navContext,
+    workspaces: [SINGLE_COMPANY_WORKSPACE],
+    activeWorkspaceKey: SINGLE_COMPANY_WORKSPACE.key,
     isCollapsed: false,
     isMobileOpen: true,
     toggleCollapsed: vi.fn(),

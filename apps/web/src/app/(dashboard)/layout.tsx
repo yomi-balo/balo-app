@@ -1,12 +1,19 @@
+import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { getCurrentUser } from '@/lib/auth/session';
 import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
 import { buildNavContext } from '@/lib/navigation/nav-context';
+import { getWorkspacesForCurrentUser } from '@/lib/workspaces/get-workspaces';
+import { activeWorkspaceKeyOf } from '@/lib/workspaces/session-workspace';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
+import { BreadcrumbProvider } from '@/components/layout/breadcrumb-context';
 import { TopNav } from '@/components/layout/top-nav';
 import { Sidebar } from '@/components/layout/sidebar';
+import { CreditsChipSlot } from '@/components/layout/credits-chip-slot';
+import { CreditsChipSkeleton } from '@/components/layout/credits-chip';
+import { creditsChipIsInScope } from '@/components/layout/credits-chip-scope';
 import { log } from '@/lib/logging';
 import { getAvatarUrl } from '@/lib/storage/avatar-url';
 
@@ -46,6 +53,18 @@ export default async function DashboardLayout({
 
   const navContext = await buildNavContext(user);
 
+  // BAL-496 (D13) — the switcher's list. Mirrors the `navContext` precedent BAL-495 added one
+  // commit ago: this layout is an async Server Component and the SOLE renderer of
+  // `SidebarProvider`. Costs no extra reads — `checkSessionDrift()` above already ran
+  // `deriveWorkspacesForUser` and it is React-`cache()`d per request, so this replays a memo.
+  // Returns `[]` (never throws) when there is no session user or nothing is derivable.
+  const workspaces = await getWorkspacesForCurrentUser();
+
+  // ⚠ THE ACTIVE-KEY SOURCE. `activeWorkspaceKeyOf` is the SINGLE reader of the session's
+  // active-workspace shape — nothing here hand-destructures `user.activeWorkspace`, and nothing
+  // recomputes the key from `activeMode`/`companyId`, which would fork the resolution rule.
+  const activeWorkspaceKey = user === null ? null : (activeWorkspaceKeyOf(user) ?? null);
+
   const userName = user
     ? [user.firstName, user.lastName].filter(Boolean).join(' ') ||
       user.email.split('@')[0] ||
@@ -54,6 +73,18 @@ export default async function DashboardLayout({
   const userInitials = user
     ? [user.firstName?.[0], user.lastName?.[0]].filter(Boolean).join('').toUpperCase() || 'U'
     : 'U';
+
+  // BAL-499 (D2/D8) — THE GATE, resolved server-side and OUTSIDE the `<Suspense>` boundary: in
+  // an expert workspace this ternary yields `null`, so neither the chip nor its skeleton is ever
+  // constructed and the RSC payload carries no chip node to hydrate. Never gated client-side
+  // from `useSidebar()` / `navContext` — that would re-introduce exactly the hydration flash
+  // the AC prohibits.
+  const creditsChip =
+    user !== null && creditsChipIsInScope(navContext) ? (
+      <Suspense fallback={<CreditsChipSkeleton />}>
+        <CreditsChipSlot actorId={user.id} companyId={user.companyId} />
+      </Suspense>
+    ) : null;
 
   return (
     <SidebarProvider
@@ -64,18 +95,22 @@ export default async function DashboardLayout({
       checklistCompletedCount={checklistCompletedCount}
       checklistAllComplete={checklistAllComplete}
       navContext={navContext}
+      workspaces={workspaces}
+      activeWorkspaceKey={activeWorkspaceKey}
     >
-      <div className="bg-background min-h-screen">
-        <div className="flex">
-          <Sidebar />
-          <div className="flex min-h-screen flex-1 flex-col">
-            <TopNav />
-            <main className="flex-1 p-6 lg:p-8">
-              <div className="mx-auto max-w-7xl">{children}</div>
-            </main>
+      <BreadcrumbProvider>
+        <div className="bg-background min-h-screen">
+          <div className="flex">
+            <Sidebar />
+            <div className="flex min-h-screen flex-1 flex-col">
+              <TopNav creditsChip={creditsChip} />
+              <main className="flex-1 p-6 lg:p-8">
+                <div className="mx-auto max-w-7xl">{children}</div>
+              </main>
+            </div>
           </div>
         </div>
-      </div>
+      </BreadcrumbProvider>
     </SidebarProvider>
   );
 }

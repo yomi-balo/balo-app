@@ -15,8 +15,14 @@ vi.mock('./derive-workspaces', () => ({
 }));
 
 const mockUpdate = vi.fn();
+// BAL-499 (D7) — additive: `companiesRepository.findById` is what `buildNavContext` (via
+// `resolveNavCapabilities`) reaches when the actor's session `companyRole` grants
+// MANAGE_MEMBERS. Not exercised by the pre-existing `switchWorkspace` tests, only by the D7
+// block below, which chains the real `buildNavContext` on top of a real switch.
+const mockFindCompanyById = vi.fn();
 vi.mock('@balo/db', () => ({
   usersRepository: { update: (...args: unknown[]) => mockUpdate(...args) },
+  companiesRepository: { findById: (...args: unknown[]) => mockFindCompanyById(...args) },
 }));
 
 const mockTrackServerAndFlush = vi.fn();
@@ -38,6 +44,9 @@ const mockGetSession = vi.fn();
 vi.mock('@/lib/auth/session', () => ({ getSession: () => mockGetSession() }));
 
 import { switchWorkspace } from './switch-workspace';
+import { buildNavContext } from '@/lib/navigation/nav-context';
+import { creditsChipIsInScope } from '@/components/layout/credits-chip-scope';
+import type { SessionUser } from '@/lib/auth/session';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -89,6 +98,7 @@ beforeEach(() => {
   };
   mockGetSession.mockResolvedValue(mockSessionObj);
   mockUpdate.mockResolvedValue({});
+  mockFindCompanyById.mockResolvedValue({ isPersonal: false });
 });
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -230,5 +240,40 @@ describe('switchWorkspace', () => {
         trigger: 'switcher',
       })
     );
+  });
+});
+
+/**
+ * BAL-499 (D7) — "no expert workspace ever paints the chip, including across a switch" is
+ * testable TODAY at the session/RSC level, without any BAL-496 switcher UI: the REAL
+ * `switchWorkspace` (this file's subject) mutates the session in place, the REAL
+ * `buildNavContext` projects it into a `NavContext`, and the REAL `creditsChipIsInScope` gates
+ * on that context — chained end to end, no stub, no mock of any of the three.
+ */
+describe('credits chip never survives a switch into the expert workspace (BAL-499 D7)', () => {
+  it('switching into the expert workspace takes the chip out of scope', async () => {
+    const result = await switchWorkspace(user, 'expert', 'switcher');
+    expect(result.ok).toBe(true);
+
+    // F9 — names the real target type instead of routing through `never`. `mockSessionObj.user`
+    // is only a PARTIAL `SessionUser` fixture (the fields `buildNavContext` actually reads), so
+    // TS won't allow the single-step `as SessionUser` (types don't "sufficiently overlap");
+    // `unknown` is the required intermediate, not a further type-safety hole.
+    const ctx = await buildNavContext(mockSessionObj.user as unknown as SessionUser);
+
+    expect(ctx.workspaceType).toBe('expert');
+    expect(creditsChipIsInScope(ctx)).toBe(false);
+  });
+
+  it('the mirror: switching into a company workspace keeps the chip in scope', async () => {
+    mockLoadWorkspaceDerivationMaterials.mockResolvedValue(materials(twoCompanyOverrides()));
+
+    const result = await switchWorkspace(user, `company:${ORG_ID}`, 'switcher');
+    expect(result.ok).toBe(true);
+
+    const ctx = await buildNavContext(mockSessionObj.user as unknown as SessionUser);
+
+    expect(ctx.workspaceType).toBe('company');
+    expect(creditsChipIsInScope(ctx)).toBe(true);
   });
 });

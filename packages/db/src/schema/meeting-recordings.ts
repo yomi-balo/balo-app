@@ -50,18 +50,26 @@ import { timestamps, softDelete } from './helpers';
  * A consequence, stated so it is not rediscovered as a bug: a row stuck at `recording`
  * (Daily never sent `ready-to-download` and never sent `recording.error`) holds that ONE
  * meeting's capture slot until it is soft-deleted by hand. Blast radius is one meeting, and
- * meetings are short-lived. There is deliberately NO reaper — a retention/reaper sweep is
- * out of scope (see the ticket's out-of-scope list) and would need its own ruling.
+ * meetings are short-lived. There is deliberately NO RETENTION reaper — a retention sweep is
+ * out of scope (see the ticket's out-of-scope list) and would need its own ruling. ⚠ That is not
+ * a claim that nothing reaps: BAL-480's stuck-slot reaper is described two paragraphs down, and
+ * it releases a NARROWER shape (`daily_recording_id IS NULL`) than the row described here.
  *
- * ⚠⚠ A SECOND, NARROWER RESIDUAL (fix round 1, F8): a worker can die BETWEEN `insertCapturing`
- * committing and the Daily `recordings/start` call returning (a deploy, an OOM). The row this
- * leaves behind is INDISTINGUISHABLE FROM THE FIRST RESIDUAL BY SHAPE — `status = 'recording'`,
- * `daily_recording_id IS NULL` — but no Daily event will EVER arrive for it, because Daily was
- * never actually asked to start it. `recording-capture.ts`'s `handleEnsure` (step 5) makes this
- * OBSERVABLE — `log.error` rather than `log.info` once the row is older than
- * `STUCK_CAPTURE_THRESHOLD_MS` with no Daily id — but the REMEDY is the SAME manual soft-delete
- * as the first residual. There is still no automatic reaper; this only stops it from being
- * silent.
+ * ⚠ NOT CLOSED BY BAL-480's stuck-slot reaper. The reaper keys on `daily_recording_id IS NULL`
+ * (see `recording-capture.ts`'s `STUCK_CAPTURE_THRESHOLD_MS`), so a row that DID learn its Daily
+ * id and then never received a terminal webhook is not reaped, and the level-triggered sweep
+ * ensure no-ops against it (step 5's `already_capturing`). Its manual `softDelete` remains the
+ * remedy — widening the reaper's predicate to a bare age check would wrongly kill a
+ * legitimately long-running segment.
+ *
+ * ⚠⚠ A SECOND, NARROWER RESIDUAL (fix round 1, F8), CLOSED BY BAL-480: a worker can die BETWEEN
+ * `insertCapturing` committing and the Daily `recordings/start` call returning (a deploy, an
+ * OOM). The row this leaves behind is INDISTINGUISHABLE FROM THE FIRST RESIDUAL BY SHAPE —
+ * `status = 'recording'`, `daily_recording_id IS NULL` — but no Daily event will EVER arrive for
+ * it, because Daily was never actually asked to start it. The remedy is no longer a manual
+ * soft-delete: `recording-capture.ts`'s `handleEnsure` (step 5) now REAPS the row (`markFailed`
+ * at stage `daily`, which releases the slot via `capture_ended_at`) and arms a fresh segment in
+ * the same invocation, bounded by `MAX_DAILY_FAILURES_PER_MEETING`.
  *
  * ⚠⚠ A THIRD RESIDUAL (fix round 2, R3): a `video.asset.ready` that arrives while the row is
  * STILL `source_ready` — a fast Mux transcode racing a slow `markIngesting` commit. `markReady`'s

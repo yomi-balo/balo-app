@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
 import type { RecapEntrySource } from '@balo/analytics/events';
+import { EntityCrumb } from '@/components/layout/breadcrumb-context';
 import { loadRecap } from './_lib/load-recap';
 import { deriveRecordingState } from './_lib/map-recap-recordings';
 import { ClientRecap } from './_components/client-recap';
@@ -154,8 +155,20 @@ export default async function RecapPage({
     distinct_id: user.id,
   });
 
+  // BAL-499 — publishes the meeting's title into the top bar's breadcrumb trail on BOTH lens
+  // branches. Safe here: this is the already-authorised return path, after every gate above.
   if (view.lens === 'client') {
-    return <ClientRecap view={view} />;
+    return (
+      <>
+        <EntityCrumb label={view.header.title} />
+        <ClientRecap view={view} />
+      </>
+    );
   }
-  return <ExpertRecap view={view} />;
+  return (
+    <>
+      <EntityCrumb label={view.header.title} />
+      <ExpertRecap view={view} />
+    </>
+  );
 }

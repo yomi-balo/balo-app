@@ -462,6 +462,67 @@ describe('parseWorkspaceKey', () => {
   });
 });
 
+// ── BAL-496 (D2) — CompanyWorkspace.role ─────────────────────────────────────
+
+describe('BAL-496 (D2) — CompanyWorkspace.role', () => {
+  it('membership workspaces carry the REAL role — one case each for owner / admin / member', () => {
+    for (const role of ['owner', 'admin', 'member'] as const) {
+      const result = deriveNonNull(baseInput({ memberships: [membership({ role })] }), stored());
+      const [companyWorkspace] = companyWorkspaces(result.workspaces);
+      expect(companyWorkspace?.role).toBe(role);
+    }
+  });
+
+  it("a representation-only workspace has role === undefined AND 'role' in w === false", () => {
+    const result = deriveNonNull(baseInput({ representedCompanies: [represented()] }), stored());
+    const repWorkspace = companyWorkspaces(result.workspaces).find(
+      (w) => w.via === 'representation'
+    );
+    expect(repWorkspace).toBeDefined();
+    expect(repWorkspace?.role).toBeUndefined();
+    expect('role' in (repWorkspace ?? {})).toBe(false);
+  });
+
+  it('THE INVARIANT — for every company workspace, (role !== undefined) === (via === "membership")', () => {
+    const result = deriveNonNull(
+      baseInput({
+        memberships: [
+          membership(),
+          membership({ companyId: ORG_ID, name: 'Northwind', role: 'admin' }),
+        ],
+        eligibleCompanyIds: [PERSONAL_ID, ORG_ID],
+        representedCompanies: [represented()],
+      }),
+      stored()
+    );
+    for (const workspace of companyWorkspaces(result.workspaces)) {
+      expect(workspace.role !== undefined).toBe(workspace.via === 'membership');
+    }
+  });
+
+  it('membership WINS for a company held both ways: keeps via:membership AND the real role', () => {
+    const result = deriveNonNull(
+      baseInput({
+        memberships: [membership({ companyId: ORG_ID, name: 'Northwind', role: 'admin' })],
+        eligibleCompanyIds: [ORG_ID],
+        representedCompanies: [represented({ companyId: ORG_ID, name: 'Northwind' })],
+      }),
+      stored()
+    );
+    const companies = companyWorkspaces(result.workspaces);
+    expect(companies).toHaveLength(1);
+    expect(companies[0]).toMatchObject({ companyId: ORG_ID, via: 'membership', role: 'admin' });
+  });
+
+  it('REGRESSION GUARD — session.companyRole is unchanged by adding role to the list', () => {
+    const result = deriveNonNull(
+      baseInput({ memberships: [membership({ role: 'admin' })] }),
+      stored()
+    );
+    expect(result.session.companyRole).toBe('admin');
+  });
+});
+
 // ── Derivation scale (was: "cookie budget") ─────────────────────────────────
 
 describe('derivation at scale', () => {

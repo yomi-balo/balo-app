@@ -45,6 +45,9 @@ export {
   NAV_EVENTS,
   NAV_ITEM_KEYS,
   NAV_SURFACES,
+  /** BAL-496 — the switcher's CLIENT event. ⚠ `WORKSPACE_SERVER_EVENTS` must NEVER join this
+   *  list — it is server-only. */
+  WORKSPACE_EVENTS,
   /** BAL-502 — the marketing chrome's event constant + canonical link/surface tuples. */
   MARKETING_EVENTS,
   MARKETING_NAV_LINKS,
@@ -100,6 +103,8 @@ export type {
   NavEventMap,
   NavItemKey,
   NavSurface,
+  /** BAL-496 — the workspace switcher's client event payload. */
+  WorkspaceEventMap,
   /** BAL-502 — the marketing chrome's event payload and link/surface vocabularies. */
   MarketingEventMap,
   MarketingNavLink,

@@ -6,6 +6,7 @@ import { errorMessage, log } from '@/lib/logging';
 import { trackServerAndFlush, RECAP_SERVER_EVENTS } from '@/lib/analytics/server';
 import type { CaseSurfaceState } from '@/lib/analytics/server';
 import type { CaseHeaderView } from '@/lib/cases/case-view-types';
+import { EntityCrumb } from '@/components/layout/breadcrumb-context';
 import { loadCase } from './_lib/load-case';
 import { CaseSurface } from './_components/case-surface';
 
@@ -113,7 +114,14 @@ export default async function CasePage({
   // point 3) is honest about same-domain access, same as the profile-page entry points.
   const viewerEmailDomain = extractEmailDomain(user.email);
 
-  return <CaseSurface view={view} viewerEmailDomain={viewerEmailDomain} />;
+  return (
+    <>
+      {/* BAL-499 — publishes the case's title into the top bar's breadcrumb trail. Safe here:
+          this is the already-authorised return path, after every gate above and notFound(). */}
+      <EntityCrumb label={view.header.title} />
+      <CaseSurface view={view} viewerEmailDomain={viewerEmailDomain} />
+    </>
+  );
 }
 
 /**
