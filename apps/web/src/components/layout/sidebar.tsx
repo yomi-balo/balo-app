@@ -6,6 +6,7 @@ import { SidebarNavLink } from './sidebar-nav-link';
 import { resolveNavItems, type NavBadgeSource, type EnabledNavEntry } from './nav-registry';
 import { useNavItemTracking } from './use-nav-item-tracking';
 import { Logo } from './logo';
+import { WorkspaceSwitcher } from './workspace-switcher';
 import { UserMenu } from './user-menu';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -66,12 +67,16 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
     checklistCompletedCount,
     checklistAllComplete,
     navContext,
+    workspaces,
+    activeWorkspaceKey,
   } = useSidebar();
 
   const primaryItems = resolveNavItems(navContext, 'primary');
   const secondaryItems = resolveNavItems(navContext, 'secondary');
   const trackNavItem = useNavItemTracking('sidebar', navContext.workspaceType);
   const badgeCounts: NavBadgeCounts = { checklistCompletedCount, checklistAllComplete };
+  // D10 + D11: the Logo yields the collapsed rail TO the switcher — but only when there IS one.
+  const showLogo = !isCollapsed || workspaces.length === 0;
 
   const renderLink = (entry: EnabledNavEntry, isSecondary: boolean): React.JSX.Element => (
     <SidebarNavLink
@@ -88,14 +93,39 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
 
   return (
     <div className="flex h-full flex-col pb-14">
-      {/* Logo */}
-      <div
-        className={cn(
-          'border-sidebar-border flex h-14 items-center border-b px-4',
-          isCollapsed && 'justify-center px-2'
+      {/* Workspace header — D10: EXPANDED = Logo above the switcher; COLLAPSED = switcher
+          avatar only (the prototype hides the Logo when collapsed,
+          `balo-nav-explorer.jsx:966-970`; the shipped `Logo` always renders its 8×8 mark, so
+          rendering both in the 40px rail box stacks two circles).
+          ⚠ EXCEPTION — with ZERO workspaces there is no switcher, so nothing collides and the
+          collapsed rail keeps the Logo mark rather than showing an empty 40px box.
+          ⚠ The fixed `h-14` is GONE (D10 says the block gets taller). Consequence to expect in
+          review: the sidebar header's `border-b` no longer lines up with `TopNav`'s `h-14`
+          seam. That is what the prototype does too, and CLAUDE.md makes the prototype the
+          design source of truth. */}
+      <div className={cn('border-sidebar-border border-b px-3 pt-3.5 pb-3', isCollapsed && 'px-2')}>
+        {showLogo && (
+          <div
+            className={cn(
+              !isCollapsed && 'px-1',
+              // `mb-2.5` only when the switcher actually renders beneath the Logo — with zero
+              // workspaces `WorkspaceSwitcher` returns `null`, and the margin would otherwise
+              // dangle under nothing.
+              !isCollapsed && workspaces.length > 0 && 'mb-2.5',
+              isCollapsed && 'flex justify-center'
+            )}
+          >
+            <Logo collapsed={isCollapsed} />
+          </div>
         )}
-      >
-        <Logo collapsed={isCollapsed} showExpertBadge={activeMode === 'expert'} />
+        <WorkspaceSwitcher
+          workspaces={workspaces}
+          activeWorkspaceKey={activeWorkspaceKey}
+          actorName={userName}
+          actorInitials={userInitials}
+          actorAvatarUrl={userAvatarUrl}
+          isCollapsed={isCollapsed}
+        />
       </div>
 
       {/* Primary navigation */}

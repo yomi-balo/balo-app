@@ -38,6 +38,7 @@ const COMPANY_WORKSPACE = {
   name: 'Test Company',
   via: 'membership' as const,
   isPersonal: true,
+  role: 'owner' as const,
 };
 const EXPERT_WORKSPACE = { type: 'expert' as const, key: 'expert' };
 

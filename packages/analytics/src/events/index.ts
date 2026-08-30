@@ -258,9 +258,15 @@ export {
   // `AvailabilityConflictResolution`.
   type RescheduleProposalOutcome,
 } from './booking';
-// BAL-494 / ADR-1053 — SERVER-ONLY: the switch is decided and dispatched entirely in
-// `switchWorkspace()` (apps/web); no browser code ever emits this event.
-export { WORKSPACE_SERVER_EVENTS, type WorkspaceServerEventMap } from './workspace';
+// BAL-494 / ADR-1053 — `WORKSPACE_SERVER_EVENTS` is SERVER-ONLY: the switch is decided and
+// dispatched entirely in `switchWorkspace()` (apps/web); no browser code ever emits it.
+// BAL-496 adds `WORKSPACE_EVENTS` — the CLIENT half, emitted by the sidebar switcher on menu open.
+export {
+  WORKSPACE_SERVER_EVENTS,
+  type WorkspaceServerEventMap,
+  WORKSPACE_EVENTS,
+  type WorkspaceEventMap,
+} from './workspace';
 // BAL-495 / ADR-1053 — the nav registry's CLIENT event, shared by the sidebar today and by
 // BAL-501's bottom tabs / BAL-503's ⌘K palette later. `NAV_ITEM_KEYS` / `NAV_SURFACES` are the
 // canonical tuples `apps/web`'s `nav-registry.ts` derives its `NavItemKey` type from.
