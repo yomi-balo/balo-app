@@ -1,0 +1,2077 @@
+/**
+ * BAL-493 (D4/§2) — the marketing home's `mk-*` stylesheet, ported from
+ * `.claude/design-references/marketing-home.jsx:211-660`. Imported once, from
+ * `(marketing)/page.tsx`. Every rule is scoped under `.mk-page`.
+ *
+ * ⚠⚠ `.mk-page` DECLARES NO COLOUR CUSTOM PROPERTY — ONLY `--wrap`. The ref's
+ * `.mk-page { --ink…; --primary…; --success…; }` block would SHADOW the app's global
+ * tokens (`globals.css`) for every descendant, including `ExpertCard`, shadcn `Button`,
+ * `ProductSelector` and Sonner, and would make dark mode structurally impossible. Every
+ * colour here is `var(--token)` resolved against `globals.css`'s `:root` / `.dark`.
+ *
+ * Stripped/transformed from the ref (exhaustive, per plan §2.2):
+ *   - The Google Fonts `@import` (Geist already loads via `next/font/local`, see
+ *     `apps/web/src/app/layout.tsx`; this file uses `var(--font-geist-sans)` /
+ *     `var(--font-geist-mono))` directly rather than a page-local `--sans`/`--mono` alias).
+ *   - `body { background: <night> }` — would leak into every route in the app.
+ *   - `html { scroll-behavior: smooth }` — replaced by the scoped
+ *     `html:has(.mk-page)` rule in `globals.css` (kept there, not here, per the plan's
+ *     file-change table: `globals.css` owns that rule).
+ *   - `.mk-ctl` / `.mk-ctl-*` / `.mk-seg` — the prototype control strip. Never ships.
+ *   - Every `.mk-page.deep …` rule — the prototype-only "deep hero" variant.
+ *   - `.mk-nav` / `.mk-nav-*` / `.mk-logo*` / `.mk-burger` / `.mk-mnav*` — `MarketingHeader`
+ *     is the real header; its transparent→frosted treatment is Tailwind in the component
+ *     (D3), not here.
+ *   - `.mk-xc-*` (the ref's hand-rolled spotlight card internals) — the spotlight section
+ *     renders the canonical `ExpertCard` unmodified (§8.3), not a forked card. Only the
+ *     WRAPPER classes survive: `.mk-experts` (grid), `.mk-xc-frame` (elevation/hover-lift/
+ *     radius around the card) and `.mk-xc-invite` (the 0-card invitation panel).
+ *   - Every `.mk-page.reduced X` rule → `@media (prefers-reduced-motion: reduce) { .mk-page X {…} }`,
+ *     since the `.reduced` class was toggled by the deleted control strip and OS
+ *     preference is now the only source. Two of the ref's target selectors
+ *     (`.mk-xc-avail-dot`, `.mk-nav-link::after`) named classes this port itself drops
+ *     (spotlight internals / nav chrome — see above), so they drop out of the group too.
+ *   - `--wrap` is `1320px`, not the ref's `1180px`, so the hero's left edge aligns with
+ *     `MarketingHeader` (`max-w-[1320px]`) and `/experts` at every breakpoint — see plan
+ *     §19 deviation #10. Page padding is `16px / sm:24px / lg:32px` to match
+ *     `marketing-header.tsx`'s `px-4 sm:px-6 lg:px-8`.
+ *
+ * New additions not in the ref:
+ *   - `.mk-mark-blue|violet|teal|amber|slate` — the bench tiles' tint classes (plan §4.3),
+ *     each a `color-mix()` over a semantic token rather than the ref's hardcoded hex pair.
+ *   - `.mk-experts`, `.mk-xc-frame`, `.mk-xc-invite` — see above.
+ *   - The nine `:is(.dark) .mk-…` alpha overrides at the bottom (Table B, plan §2.4) — the
+ *     DESIGNED dark counterpart of the ref's light-only glow/scrim alphas. No more than
+ *     nine; do not fork the rest of the stylesheet for dark mode.
+ *
+ * NO HEX LITERAL appears anywhere below except inside a `box-shadow:` / `filter:`
+ * declaration or an `rgba(...)` / `color-mix(...)` call — and in practice none of those
+ * use hex either; every colour is a token or a plain numeric `rgba()` alpha overlay.
+ * `#000`/`transparent` mask stops (pure alpha, not colour) use the `black` keyword
+ * instead of `#000` so the file is honestly hex-free, not hex-free-by-technicality.
+ * Enforced by `marketing-home-css.test.ts`.
+ */
+
+/* ── Page root + the ONE token this file is allowed to declare ── */
+.mk-page {
+  --wrap: 1320px;
+  font-family: var(--font-geist-sans);
+  color: var(--foreground);
+  background: var(--background);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+.mk-wrap {
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding: 0 16px;
+}
+@media (min-width: 640px) {
+  .mk-wrap {
+    padding: 0 24px;
+  }
+}
+@media (min-width: 1024px) {
+  .mk-wrap {
+    padding: 0 32px;
+  }
+}
+.mk-mono {
+  font-family: var(--font-geist-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.mk-page a {
+  color: inherit;
+}
+.mk-page button {
+  font-family: inherit;
+}
+.mk-page :focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.mk-search-field input:focus-visible {
+  outline: none; /* the ring comes from .mk-search:focus-within */
+}
+
+/* ── Buttons ── */
+.mk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 12px;
+  font: 600 14px/1 var(--font-geist-sans);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  transition:
+    transform 0.2s var(--ease),
+    box-shadow 0.2s var(--ease),
+    background 0.2s,
+    border-color 0.2s,
+    color 0.2s;
+}
+.mk-btn:active {
+  transform: translateY(0) scale(0.98);
+}
+.mk-btn-lg {
+  height: 52px;
+  padding: 0 26px;
+  font-size: 15px;
+  border-radius: 14px;
+}
+/* AC-2 amendment (2026-08-30): every CTA with the blue→violet gradient background
+   renders WHITE text. `color` is declared here, on `.mk-btn-grad` itself, and no later
+   rule in this file (or a shared Button variant) may override it — pinned by
+   `_home/gradient-cta.test.tsx` (P4). */
+.mk-btn-grad {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--grad);
+  color: var(--primary-foreground);
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.28);
+}
+.mk-btn-grad::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--grad-hover);
+  opacity: 0;
+  transition: opacity 0.25s;
+  z-index: -1;
+}
+.mk-btn-grad:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.32);
+}
+.mk-btn-grad:hover::before {
+  opacity: 1;
+}
+.mk-btn-solid {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+}
+.mk-btn-solid:hover {
+  background: var(--primary-deep);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.3);
+}
+.mk-btn-ghost {
+  background: transparent;
+  color: var(--foreground);
+  border-color: var(--line);
+}
+.mk-btn-ghost:hover {
+  background: var(--mist);
+  border-color: color-mix(in oklch, var(--line) 60%, var(--foreground) 20%);
+}
+.mk-btn-text {
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 12px;
+}
+.mk-btn-text:hover {
+  color: var(--foreground);
+  background: var(--mist);
+}
+/* A light button meant for the dark "For experts" band — paired tokens so it stays
+   correct under both modes (--night-foreground/--night invert together, see globals.css). */
+.mk-btn-white {
+  background: var(--night-foreground);
+  color: var(--night);
+}
+.mk-btn-white:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+}
+.mk-btn-outline-light {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--night-foreground);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.mk-btn-outline-light:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.mk-btn svg {
+  transition: transform 0.2s var(--ease);
+}
+.mk-btn:hover svg.mk-arrow {
+  transform: translateX(3px);
+}
+
+/* ── Hero ── */
+.mk-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 60px 0 0;
+  background: var(--background); /* Table A row 1 */
+}
+.mk-hero-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.mk-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(50px);
+  will-change: transform;
+}
+.mk-blob-a {
+  width: 640px;
+  height: 640px;
+  left: -160px;
+  top: -260px;
+  background: radial-gradient(
+    circle at 40% 40%,
+    color-mix(in oklch, var(--primary) 30%, transparent),
+    transparent 65%
+  );
+  animation: mk-drift-a 22s ease-in-out infinite alternate;
+}
+.mk-blob-b {
+  width: 720px;
+  height: 720px;
+  right: -220px;
+  top: -220px;
+  background: radial-gradient(
+    circle at 60% 40%,
+    color-mix(in oklch, var(--violet) 26%, transparent),
+    transparent 65%
+  );
+  animation: mk-drift-b 26s ease-in-out infinite alternate;
+}
+.mk-blob-c {
+  width: 520px;
+  height: 520px;
+  left: 36%;
+  top: 260px;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--primary) 12%, transparent),
+    transparent 65%
+  );
+  animation: mk-drift-c 30s ease-in-out infinite alternate;
+}
+/* The masked dot-grid. `black`/`transparent` are pure alpha mask stops (mask defaults to
+   alpha mode), not a visible colour, so the `black` keyword is used instead of the ref's
+   `#000` — no hex either way, but this is honest about why. */
+.mk-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.16;
+  background-image: radial-gradient(
+    color-mix(in oklch, var(--foreground) 40%, transparent) 0.8px,
+    transparent 0.9px
+  );
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 28%, black 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 28%, black 30%, transparent 75%);
+}
+.mk-hero-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 200px;
+  background: linear-gradient(to bottom, transparent, var(--background));
+}
+
+.mk-hero-inner {
+  position: relative;
+  text-align: center;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+.mk-hero-inner > * {
+  animation: mk-up 0.75s var(--ease) both;
+}
+.mk-hero-inner > :nth-child(1) {
+  animation-delay: 0.05s;
+}
+.mk-hero-inner > :nth-child(2) {
+  animation-delay: 0.14s;
+}
+.mk-hero-inner > :nth-child(3) {
+  animation-delay: 0.24s;
+}
+.mk-hero-inner > :nth-child(4) {
+  animation-delay: 0.34s;
+}
+.mk-hero-inner > :nth-child(5) {
+  animation-delay: 0.44s;
+}
+
+.mk-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px 6px 9px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.mk-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: mk-ping 2s infinite;
+}
+.mk-live-n {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.mk-h1 {
+  font-size: clamp(34px, 7vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  font-weight: 750;
+  margin: 24px 0 20px;
+}
+.mk-h1-em {
+  position: relative;
+  white-space: nowrap;
+}
+.mk-underline {
+  position: absolute;
+  left: -1%;
+  bottom: -0.06em;
+  width: 102%;
+  height: 0.2em;
+  overflow: visible;
+}
+.mk-underline path {
+  animation: mk-draw 1.1s var(--ease) 0.9s forwards;
+}
+.mk-lede {
+  font-size: clamp(16px, 1.6vw, 19px);
+  color: var(--muted-foreground);
+  max-width: 600px;
+  margin: 0 auto 30px;
+  line-height: 1.55;
+}
+
+/* ── Search ── */
+.mk-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 6px 6px 6px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow:
+    0 10px 40px rgba(17, 24, 39, 0.08),
+    0 1px 2px rgba(17, 24, 39, 0.05);
+  transition:
+    box-shadow 0.25s var(--ease),
+    border-color 0.25s;
+  text-align: left;
+}
+.mk-search:focus-within {
+  border-color: color-mix(in oklch, var(--primary) 50%, transparent);
+  box-shadow:
+    0 12px 44px color-mix(in oklch, var(--primary) 14%, transparent),
+    0 0 0 4px color-mix(in oklch, var(--primary) 10%, transparent);
+}
+.mk-search-icon {
+  color: var(--subtle-foreground);
+  display: flex;
+  flex-shrink: 0;
+}
+.mk-search-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+}
+.mk-search-field input {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: 500 16px var(--font-geist-sans);
+  color: var(--foreground);
+  padding: 0;
+}
+.mk-search-ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  font-size: 16px;
+  color: var(--subtle-foreground);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 100%;
+}
+.mk-caret {
+  display: inline-block;
+  width: 2px;
+  height: 18px;
+  background: var(--primary);
+  margin-left: 2px;
+  animation: mk-blink 1s steps(2) infinite;
+}
+.mk-sdiv {
+  width: 1px;
+  align-self: stretch;
+  margin: 8px 0;
+  background: var(--line-soft);
+  flex-shrink: 0;
+}
+
+/* Product facet (mirrors the BAL-249 unified-bar segment) */
+.mk-facet {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+.mk-facet:hover,
+.mk-facet.is-open {
+  background: var(--mist);
+}
+.mk-facet-txt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+.mk-facet-lab {
+  font-family: var(--font-geist-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--subtle-foreground);
+}
+.mk-facet-val {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--subtle-foreground);
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mk-facet-val.has {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.mk-facet-badge {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mk-facet svg {
+  transition: transform 0.2s var(--ease);
+}
+.mk-facet svg.mk-rot {
+  transform: rotate(180deg);
+}
+
+.mk-facet-pop {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(460px, calc(100vw - 48px));
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px -12px rgba(17, 24, 39, 0.25);
+  padding: 14px;
+  z-index: 30;
+  text-align: left;
+  animation: mk-drop 0.2s var(--ease) both;
+}
+.mk-pop-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--subtle-foreground);
+}
+.mk-pop-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: 500 13.5px var(--font-geist-sans);
+  color: var(--foreground);
+}
+.mk-pop-search input:focus-visible {
+  outline: none;
+}
+.mk-pop-x {
+  display: flex;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--subtle-foreground);
+  padding: 2px;
+}
+.mk-pop-sel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.mk-pop-sel button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: 500 12px var(--font-geist-sans);
+  color: var(--muted-foreground);
+  text-decoration: underline;
+}
+.mk-pop-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+  margin-top: 12px;
+  padding-right: 4px;
+}
+.mk-pop-group {
+  margin-bottom: 14px;
+}
+.mk-pop-glab {
+  font-family: var(--font-geist-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted-foreground);
+  margin-bottom: 8px;
+}
+.mk-pop-glab em {
+  font-style: normal;
+  color: var(--subtle-foreground);
+  margin-left: 6px;
+}
+.mk-pop-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.mk-pchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  font: 500 12.5px var(--font-geist-sans);
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+.mk-pchip:hover {
+  border-color: color-mix(in oklch, var(--primary) 45%, transparent);
+  background: var(--mist);
+}
+.mk-pchip.on {
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 8%, var(--card));
+  border-color: color-mix(in oklch, var(--primary) 35%, var(--card));
+  font-weight: 600;
+}
+.mk-pchip-more {
+  border-style: dashed;
+  color: var(--muted-foreground);
+}
+.mk-pop-none {
+  font-size: 13px;
+  color: var(--subtle-foreground);
+  text-align: center;
+  padding: 18px 0;
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .mk-search {
+    flex-wrap: wrap;
+    padding: 10px;
+    border-radius: 16px;
+    gap: 8px;
+  }
+  .mk-search-icon {
+    display: none;
+  }
+  .mk-search-field {
+    flex-basis: 100%;
+    padding: 0 8px;
+  }
+  .mk-sdiv {
+    display: none;
+  }
+  .mk-facet {
+    flex: 1;
+    justify-content: center;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .mk-search .mk-btn {
+    flex: 1;
+  }
+  .mk-facet-pop {
+    left: 0;
+    right: 0;
+    width: auto;
+  }
+}
+
+.mk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin: 18px auto 0;
+  max-width: 720px;
+}
+.mk-chips-label {
+  font-size: 12.5px;
+  color: var(--subtle-foreground);
+  margin-right: 2px;
+}
+.mk-chip {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in oklch, var(--card) 72%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 13px;
+  cursor: pointer;
+  transition: all 0.18s var(--ease);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.mk-chip:hover {
+  color: var(--primary);
+  border-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  background: var(--card);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+}
+.mk-chip.on {
+  color: var(--primary);
+  border-color: color-mix(in oklch, var(--primary) 50%, transparent);
+  background: color-mix(in oklch, var(--primary) 8%, var(--card));
+  font-weight: 600;
+}
+
+/* ── Bench (parallax expert tiles) ── */
+.mk-bench {
+  position: relative;
+  margin-top: 60px;
+  padding: 6px 0 44px;
+  overflow: hidden;
+  animation: mk-up 0.9s var(--ease) 0.55s both;
+  -webkit-mask-image: linear-gradient(to right, transparent, black 12%, black 88%, transparent);
+  mask-image: linear-gradient(to right, transparent, black 12%, black 88%, transparent);
+}
+.mk-bench-row {
+  display: flex;
+  gap: 14px;
+  width: max-content;
+  margin-left: -40px;
+  padding: 4px 0;
+  will-change: transform;
+}
+.mk-bench-row-b {
+  margin-top: 14px;
+  margin-left: -240px;
+}
+.mk-tile {
+  color: var(--foreground);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px 10px 10px;
+  background: color-mix(in oklch, var(--card) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow:
+    0 1px 2px rgba(17, 24, 39, 0.04),
+    0 8px 24px -12px rgba(17, 24, 39, 0.14);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  transition:
+    transform 0.25s var(--ease),
+    box-shadow 0.25s var(--ease),
+    border-color 0.2s;
+}
+.mk-tile:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 30px -12px rgba(37, 99, 235, 0.28);
+  border-color: color-mix(in oklch, var(--primary) 35%, transparent);
+}
+.mk-avatar {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary-foreground);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.02em;
+  flex-shrink: 0;
+}
+.mk-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mk-tile-name {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.mk-tile-count {
+  font-family: var(--font-geist-mono);
+  font-size: 11px;
+  color: var(--subtle-foreground);
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+/* Bench-tile tint classes (plan §4.3). The ref's `TINTS` were five hardcoded {bg,fg}
+   hex pairs; here each is `color-mix()` over the nearest semantic token, so both the
+   fg colour and the bg wash re-resolve automatically under `.dark`. The `:is(.dark)`
+   variants bump the mix percentage — a light wash needs more presence on a dark card. */
+.mk-mark-blue {
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+.mk-mark-violet {
+  background: color-mix(in oklch, var(--violet) 12%, transparent);
+  color: var(--violet);
+}
+.mk-mark-teal {
+  background: color-mix(in oklch, var(--success) 12%, transparent);
+  color: var(--success);
+}
+.mk-mark-amber {
+  background: color-mix(in oklch, var(--warning) 12%, transparent);
+  color: var(--warning);
+}
+.mk-mark-slate {
+  background: color-mix(in oklch, var(--muted-foreground) 12%, transparent);
+  color: var(--muted-foreground);
+}
+:is(.dark) .mk-mark-blue {
+  background: color-mix(in oklch, var(--primary) 20%, transparent);
+}
+:is(.dark) .mk-mark-violet {
+  background: color-mix(in oklch, var(--violet) 20%, transparent);
+}
+:is(.dark) .mk-mark-teal {
+  background: color-mix(in oklch, var(--success) 20%, transparent);
+}
+:is(.dark) .mk-mark-amber {
+  background: color-mix(in oklch, var(--warning) 20%, transparent);
+}
+:is(.dark) .mk-mark-slate {
+  background: color-mix(in oklch, var(--muted-foreground) 20%, transparent);
+}
+
+/* ── Proof band ── */
+.mk-proof {
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--background); /* Table A row 2 */
+}
+.mk-proof-inner {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+.mk-proof-item {
+  padding: 26px 20px;
+  text-align: center;
+  border-left: 1px solid var(--line-soft);
+}
+.mk-proof-item:first-child {
+  border-left: none;
+}
+.mk-proof-val {
+  font-family: var(--font-geist-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.mk-proof-lab {
+  font-size: 13px;
+  color: var(--muted-foreground);
+  margin-top: 8px;
+}
+@media (max-width: 720px) {
+  .mk-proof-inner {
+    grid-template-columns: 1fr 1fr;
+  }
+  .mk-proof-item {
+    padding: 20px 12px;
+  }
+  .mk-proof-item:nth-child(3) {
+    border-left: none;
+  }
+  .mk-proof-item:nth-child(n + 3) {
+    border-top: 1px solid var(--line-soft);
+  }
+}
+
+/* ── Sections ── */
+.mk-section {
+  padding: 100px 0;
+  background: var(--background);
+}
+.mk-mist {
+  background: var(--mist); /* Table A rows 3, 5, 8 */
+}
+.mk-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-geist-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.mk-eyebrow::before {
+  content: '';
+  width: 18px;
+  height: 2px;
+  background: var(--grad);
+  border-radius: 2px;
+}
+.mk-h2 {
+  font-size: clamp(30px, 3.6vw, 44px);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+  margin: 14px 0 14px;
+  text-wrap: balance;
+}
+.mk-sub {
+  font-size: 17px;
+  color: var(--muted-foreground);
+  max-width: 560px;
+  line-height: 1.55;
+  margin: 0;
+}
+.mk-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  margin-bottom: 48px;
+}
+.mk-head-link {
+  font-weight: 600;
+  color: var(--primary);
+  text-decoration: none;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+  padding-bottom: 6px;
+}
+.mk-head-link svg {
+  transition: transform 0.2s var(--ease);
+}
+.mk-head-link:hover svg {
+  transform: translateX(3px);
+}
+@media (max-width: 720px) {
+  .mk-section {
+    padding: 64px 0;
+  }
+  .mk-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 36px;
+  }
+}
+
+/* ── Scroll reveals ──
+   ⚠⚠ `opacity: 0` is CSS-first — a bare `.mk-reveal { opacity: 0 }` would render the
+   page BLANK with JS disabled (`RevealGroup` never mounts to add `.is-in`). The hidden
+   state is therefore scoped to `.mk-reveal-group:not(.is-in) .mk-reveal`, AND a
+   `@media (scripting: none)` fallback forces full visibility for browsers with no active
+   scripting at all (the case `:not(.is-in)` alone cannot cover, since without JS the
+   group can never gain `.is-in`). Pinned by marketing-home-css.test.ts. */
+.mk-reveal {
+  transform: translateY(18px);
+  transition:
+    opacity 0.75s var(--ease),
+    transform 0.75s var(--ease);
+  transition-delay: calc(var(--i, 0) * 90ms);
+}
+.mk-reveal-group:not(.is-in) .mk-reveal {
+  opacity: 0;
+}
+.mk-reveal-group.is-in .mk-reveal {
+  opacity: 1;
+  transform: none;
+}
+@media (scripting: none) {
+  .mk-reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* Hover-transform cards sit INSIDE a .mk-reveal wrapper so the reveal's
+   transition-delay never leaks into hover/un-hover. */
+.mk-reveal > .mk-way,
+.mk-reveal > .mk-quote,
+.mk-reveal > .mk-perk {
+  height: 100%;
+}
+
+/* ── Ways to work ── */
+.mk-ways {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+.mk-way {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 28px;
+  overflow: hidden;
+  transition:
+    transform 0.3s var(--ease),
+    box-shadow 0.3s var(--ease),
+    border-color 0.2s;
+}
+.mk-way::before {
+  content: '';
+  position: absolute;
+  right: -70px;
+  top: -70px;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--violet) 13%, transparent),
+    transparent 65%
+  );
+  opacity: 0;
+  transition: opacity 0.35s;
+}
+.mk-way:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 48px -24px rgba(17, 24, 39, 0.22);
+  border-color: color-mix(in oklch, var(--line) 65%, var(--foreground) 12%);
+}
+.mk-way:hover::before {
+  opacity: 1;
+}
+.mk-way-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mist);
+  color: var(--primary);
+  border: 1px solid var(--line-soft);
+  transition: all 0.3s var(--ease);
+  position: relative;
+}
+.mk-way:hover .mk-way-icon {
+  background: var(--grad);
+  color: var(--primary-foreground);
+  border-color: transparent;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
+}
+.mk-way-kicker {
+  font-family: var(--font-geist-mono);
+  font-size: 11.5px;
+  color: var(--subtle-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 22px;
+}
+.mk-way h3 {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  margin: 6px 0 10px;
+  font-weight: 700;
+}
+.mk-way p {
+  color: var(--muted-foreground);
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 0;
+}
+.mk-way-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+.mk-way-tag {
+  font-family: var(--font-geist-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.mk-way-link {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary);
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  text-decoration: none;
+}
+.mk-way-link svg {
+  transition: transform 0.2s var(--ease);
+}
+.mk-way:hover .mk-way-link svg {
+  transform: translateX(3px);
+}
+@media (max-width: 900px) {
+  .mk-ways {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── How it works ── */
+.mk-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 22px;
+  position: relative;
+}
+.mk-steps-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 5px;
+  height: 2px;
+  background: var(--line);
+}
+.mk-steps-progress {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  height: 2px;
+  width: 100%;
+  background: var(--grad);
+  transform-origin: left;
+  transform: scaleX(0);
+  transition: transform 1.6s var(--ease) 0.25s;
+}
+.mk-reveal-group.is-in .mk-steps-progress {
+  transform: scaleX(1);
+}
+.mk-step {
+  position: relative;
+  padding-top: 26px;
+}
+.mk-step-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 2px solid var(--line);
+  transition: all 0.4s var(--ease);
+  transition-delay: calc(var(--i, 0) * 260ms);
+}
+.mk-reveal-group.is-in .mk-step-dot {
+  background: var(--grad);
+  border-color: transparent;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+.mk-step-num {
+  font-family: var(--font-geist-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+  letter-spacing: 0.06em;
+}
+.mk-step h3 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  margin: 8px 0 6px;
+}
+.mk-step p {
+  font-size: 14.5px;
+  color: var(--muted-foreground);
+  margin: 0;
+  line-height: 1.55;
+}
+.mk-frag {
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+  min-height: 112px;
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition:
+    transform 0.25s var(--ease),
+    box-shadow 0.25s var(--ease);
+}
+.mk-step:hover .mk-frag {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -14px rgba(17, 24, 39, 0.2);
+}
+.mk-frag-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+}
+.mk-frag-search > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mk-frag-tag {
+  align-self: flex-start;
+  font-family: var(--font-geist-mono);
+  font-size: 10.5px;
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 8%, transparent);
+  border-radius: 6px;
+  padding: 3px 7px;
+}
+.mk-frag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+}
+.mk-frag-row.on {
+  background: color-mix(in oklch, var(--primary) 6%, transparent);
+  border-color: color-mix(in oklch, var(--primary) 18%, transparent);
+}
+.mk-frag-av {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  color: var(--primary-foreground);
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mk-frag-name {
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.mk-frag-meta {
+  color: var(--subtle-foreground);
+  font-size: 10.5px;
+  font-family: var(--font-geist-mono);
+}
+.mk-frag-check {
+  margin-left: auto;
+  color: var(--success);
+  display: flex;
+}
+.mk-frag-day {
+  font-size: 10.5px;
+  color: var(--subtle-foreground);
+  font-family: var(--font-geist-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.mk-frag-slots {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mk-frag-slots span {
+  font-family: var(--font-geist-mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--muted-foreground);
+}
+.mk-frag-slots span.on {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: transparent;
+}
+.mk-frag-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted-foreground);
+}
+.mk-frag-line .mk-mono {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.mk-frag-paid {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--success);
+  background: color-mix(in oklch, var(--success) 10%, transparent);
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+@media (max-width: 900px) {
+  .mk-steps {
+    grid-template-columns: 1fr 1fr;
+  }
+  .mk-steps-track,
+  .mk-steps-progress {
+    display: none;
+  }
+  .mk-step {
+    padding-top: 0;
+    padding-left: 24px;
+  }
+  .mk-step-dot {
+    top: 4px;
+  }
+}
+@media (max-width: 560px) {
+  .mk-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Vetting strip ── */
+.mk-vet {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 40px;
+}
+.mk-vet-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.mk-vet-check {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--success) 12%, transparent);
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.mk-vet-item strong {
+  display: block;
+  font-weight: 600;
+}
+.mk-vet-item span {
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+@media (max-width: 900px) {
+  .mk-vet {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* ── Spotlight grid ──
+   The cards themselves are the canonical `ExpertCard` (unmodified — plan §8.3). Only the
+   grid + the wrapper that gives the card its marketing-page elevation/hover-lift/radius,
+   and the 0-card invitation panel, live here. */
+.mk-experts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px;
+}
+.mk-experts--2 {
+  grid-template-columns: repeat(2, 1fr);
+  max-width: 760px;
+  margin: 0 auto;
+}
+.mk-experts--1 {
+  grid-template-columns: 1fr;
+  max-width: 380px;
+  margin: 0 auto;
+}
+.mk-xc-frame {
+  border-radius: 20px;
+  box-shadow: 0 4px 24px rgba(17, 24, 39, 0.06);
+  transition:
+    transform 0.3s var(--ease),
+    box-shadow 0.3s var(--ease);
+}
+.mk-xc-frame:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 48px -20px rgba(17, 24, 39, 0.25);
+}
+@media (max-width: 900px) {
+  .mk-experts {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .mk-experts,
+  .mk-experts--2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mk-xc-invite {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 40px 32px;
+  text-align: center;
+}
+.mk-xc-invite p {
+  color: var(--muted-foreground);
+  font-size: 14px;
+  margin: 10px 0 22px;
+}
+
+/* ── Pricing ── */
+.mk-price {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 64px;
+  align-items: center;
+}
+.mk-price-list {
+  list-style: none;
+  padding: 0;
+  margin: 28px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.mk-price-list li {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  font-size: 15px;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+.mk-price-list li strong {
+  color: var(--foreground);
+  font-weight: 600;
+  display: block;
+  margin-bottom: 2px;
+}
+.mk-tick {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--primary) 10%, transparent);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.mk-price-nos {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 28px;
+}
+.mk-no {
+  font-family: var(--font-geist-mono);
+  font-size: 12px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--muted-foreground);
+}
+.mk-receipt-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.mk-receipt-glow {
+  position: absolute;
+  inset: 18% 12%;
+  background: var(--grad);
+  filter: blur(60px);
+  opacity: 0.18; /* Table B: 0.18 → 0.26 in dark, below */
+  border-radius: 40px;
+}
+.mk-receipt {
+  position: relative;
+  width: 360px;
+  max-width: 100%;
+  background: var(--card);
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  box-shadow:
+    0 30px 60px -30px rgba(17, 24, 39, 0.35),
+    0 2px 6px rgba(17, 24, 39, 0.06);
+  padding: 22px;
+  will-change: transform;
+}
+.mk-rc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mk-rc-kicker {
+  font-family: var(--font-geist-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--subtle-foreground);
+}
+.mk-rc-paid {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--success);
+  background: color-mix(in oklch, var(--success) 10%, transparent);
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+.mk-rc-who {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 16px 0 12px;
+}
+.mk-rc-who strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.mk-rc-who span {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.mk-rc-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted-foreground);
+}
+.mk-rc-row .mk-mono {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.mk-rc-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-top: 14px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--line);
+  font-weight: 600;
+}
+.mk-rc-total-val {
+  font-family: var(--font-geist-mono);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+.mk-rc-foot {
+  font-size: 12px;
+  color: var(--subtle-foreground);
+  margin-top: 12px;
+  font-family: var(--font-geist-mono);
+}
+@media (max-width: 900px) {
+  .mk-price {
+    grid-template-columns: 1fr;
+    gap: 44px;
+  }
+}
+
+/* ── Expert band (the inverted "For experts" band — Table A/B row 7) ── */
+.mk-xband {
+  position: relative;
+  background: var(--night);
+  color: var(--night-foreground);
+  overflow: hidden;
+  padding: 108px 0;
+}
+.mk-xband-glow {
+  position: absolute;
+  width: 900px;
+  height: 900px;
+  right: -320px;
+  top: -320px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--violet) 38%, transparent),
+    transparent 60%
+  );
+  filter: blur(30px);
+  will-change: transform;
+  pointer-events: none;
+}
+.mk-xband-glow2 {
+  right: auto;
+  top: auto;
+  left: -340px;
+  bottom: -420px;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--primary) 30%, transparent),
+    transparent 60%
+  );
+}
+.mk-xband-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.07;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.7) 0.8px, transparent 0.9px);
+  background-size: 26px 26px;
+  pointer-events: none;
+}
+.mk-xband-inner {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 56px;
+  align-items: center;
+}
+.mk-xband .mk-eyebrow {
+  color: color-mix(in oklch, var(--violet) 45%, var(--night-foreground) 55%);
+}
+.mk-xband .mk-h2 {
+  color: var(--night-foreground);
+}
+.mk-xband .mk-sub {
+  color: color-mix(in oklch, var(--night-foreground) 70%, transparent);
+}
+.mk-xband-ctas {
+  display: flex;
+  gap: 10px;
+  margin-top: 30px;
+  flex-wrap: wrap;
+}
+.mk-perks {
+  display: grid;
+  gap: 12px;
+}
+.mk-perk {
+  display: flex;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  transition:
+    background 0.2s,
+    border-color 0.2s,
+    transform 0.25s var(--ease);
+}
+.mk-perk:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  transform: translateX(4px);
+}
+.mk-perk-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in oklch, var(--violet) 40%, var(--night-foreground) 60%);
+  flex-shrink: 0;
+}
+.mk-perk strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.mk-perk span {
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.5;
+}
+@media (max-width: 900px) {
+  .mk-xband {
+    padding: 72px 0;
+  }
+  .mk-xband-inner {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+}
+
+/* ── Testimonials ── */
+.mk-quotes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+.mk-quote {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  transition:
+    transform 0.3s var(--ease),
+    box-shadow 0.3s var(--ease);
+}
+.mk-quote:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 20px 40px -24px rgba(17, 24, 39, 0.25);
+}
+.mk-stars {
+  display: flex;
+  gap: 2px;
+  color: var(--warning);
+}
+.mk-quote p {
+  font-size: 15.5px;
+  line-height: 1.55;
+  margin: 0;
+  flex: 1;
+}
+.mk-quote-who {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.mk-quote-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.mk-quote-role {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.mk-quote-ctx {
+  font-family: var(--font-geist-mono);
+  font-size: 11px;
+  color: var(--subtle-foreground);
+  border-top: 1px solid var(--line-soft);
+  padding-top: 12px;
+}
+@media (max-width: 900px) {
+  .mk-quotes {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Final CTA ── */
+.mk-final {
+  padding: 0 0 100px;
+  background: var(--background); /* Table A row 9 (section) */
+}
+.mk-final-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 28px;
+  background: var(--grad);
+  color: var(--primary-foreground);
+  padding: 76px 48px;
+  text-align: center;
+}
+.mk-final-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% 20%, rgba(255, 255, 255, 0.2), transparent 45%),
+    radial-gradient(circle at 85% 85%, rgba(255, 255, 255, 0.14), transparent 40%);
+}
+.mk-final-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.14;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.9) 0.8px, transparent 0.9px);
+  background-size: 24px 24px;
+}
+.mk-final h2 {
+  position: relative;
+  font-size: clamp(30px, 4vw, 48px);
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  margin: 0 0 14px;
+  text-wrap: balance;
+}
+.mk-final p {
+  position: relative;
+  font-size: 17px;
+  color: rgba(255, 255, 255, 0.84);
+  margin: 0 auto 30px;
+  max-width: 520px;
+}
+.mk-final-ctas {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+@media (max-width: 720px) {
+  .mk-final {
+    padding-bottom: 64px;
+  }
+  .mk-final-card {
+    padding: 52px 24px;
+    border-radius: 22px;
+  }
+}
+
+/* ── Footer ── */
+.mk-footer {
+  border-top: 1px solid var(--line);
+  padding: 56px 0 32px;
+  background: var(--background); /* Table A row 10 */
+}
+.mk-footer-grid {
+  display: grid;
+  grid-template-columns: 1.6fr repeat(4, 1fr);
+  gap: 32px;
+}
+.mk-footer-brand p {
+  font-size: 14px;
+  color: var(--muted-foreground);
+  max-width: 260px;
+  margin: 12px 0 0;
+  line-height: 1.55;
+}
+.mk-footer h3 {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--subtle-foreground);
+  margin: 0 0 14px;
+  font-family: var(--font-geist-mono);
+  font-weight: 500;
+}
+.mk-footer ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.mk-footer li a {
+  font-size: 14px;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+.mk-footer li a:hover {
+  color: var(--foreground);
+}
+.mk-footer-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 48px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 13px;
+  color: var(--subtle-foreground);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.mk-footer-bottom nav {
+  display: flex;
+  gap: 18px;
+}
+.mk-footer-bottom nav a {
+  text-decoration: none;
+  color: var(--subtle-foreground);
+}
+.mk-footer-bottom nav a:hover {
+  color: var(--foreground);
+}
+@media (max-width: 900px) {
+  .mk-footer-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .mk-footer-brand {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ── Reduced motion ──
+   The ref toggled these via a `.mk-page.reduced` class set by the (deleted) prototype
+   control strip. OS preference is the only source now, so every `.mk-page.reduced X`
+   selector becomes `.mk-page X` inside this media query, unchanged bodies. */
+@media (prefers-reduced-motion: reduce) {
+  .mk-page .mk-blob,
+  .mk-page .mk-live-dot {
+    animation: none;
+  }
+  .mk-page .mk-hero-inner > *,
+  .mk-page .mk-bench {
+    animation: none;
+  }
+  .mk-page .mk-underline path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .mk-page .mk-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .mk-page .mk-facet-pop {
+    animation: none;
+  }
+  .mk-page .mk-steps-progress {
+    transition: none;
+    transform: scaleX(1);
+  }
+  .mk-page .mk-step-dot {
+    transition: none;
+  }
+  .mk-page .mk-btn,
+  .mk-page .mk-way,
+  .mk-page .mk-tile,
+  .mk-page .mk-chip,
+  .mk-page .mk-pchip,
+  .mk-page .mk-facet {
+    transition-duration: 0.01s;
+  }
+  /* The gradient CTA's hover crossfade lives on a PSEUDO-ELEMENT with its own
+     `transition: opacity 0.25s` (see `.mk-btn-grad::before` above). A host-element rule does
+     NOT cascade into a pseudo-element's independently-declared transition, so the `.mk-btn`
+     entry above leaves this one animating at full duration — AC-7 row 10 would read satisfied
+     while the crossfade still ran. It needs its own entry. */
+  .mk-page .mk-btn-grad::before {
+    transition-duration: 0.01s;
+  }
+}
+
+/* ── Keyframes ── */
+@keyframes mk-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes mk-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes mk-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes mk-blink {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes mk-ping {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(52, 211, 153, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+  }
+}
+@keyframes mk-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+@keyframes mk-drift-a {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(70px, 50px, 0);
+  }
+}
+@keyframes mk-drift-b {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-60px, 70px, 0);
+  }
+}
+@keyframes mk-drift-c {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(40px, -40px, 0) scale(1.12);
+  }
+}
+
+/* ══ Dark rhythm — Table B (plan §2.4). Exactly nine `:is(.dark) .mk-…` alpha overrides,
+   no more. Everything else (the .mk-mist/--night background swaps, .mk-xband text, the
+   .mk-mark-* tints above) already re-resolves through globals.css's per-mode tokens with
+   no override needed here — that is the whole point of D4's token design. ══ */
+
+/* 1-3: hero blobs — alpha rises so the glow still reads against a near-black page. */
+:is(.dark) .mk-blob-a {
+  background: radial-gradient(
+    circle at 40% 40%,
+    color-mix(in oklch, var(--primary) 42%, transparent),
+    transparent 65%
+  );
+}
+:is(.dark) .mk-blob-b {
+  background: radial-gradient(
+    circle at 60% 40%,
+    color-mix(in oklch, var(--violet) 38%, transparent),
+    transparent 65%
+  );
+}
+:is(.dark) .mk-blob-c {
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--primary) 18%, transparent),
+    transparent 65%
+  );
+}
+/* 4: hero dot-grid — dimmer in dark (the dots themselves already flip via --foreground). */
+:is(.dark) .mk-grid {
+  opacity: 0.1;
+}
+/* 5: pricing receipt glow — a --grad glow needs more presence on near-black. */
+:is(.dark) .mk-receipt-glow {
+  opacity: 0.26;
+}
+/* 6-7: the "for experts" band's glows — drop because the band itself is already the
+   lightest, most chromatic surface on the page in dark mode (Table B row 7). */
+:is(.dark) .mk-xband-glow {
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--violet) 30%, transparent),
+    transparent 60%
+  );
+}
+:is(.dark) .mk-xband-glow2 {
+  background: radial-gradient(
+    circle,
+    color-mix(in oklch, var(--primary) 24%, transparent),
+    transparent 60%
+  );
+}
+/* 8: final-card white highlight radials — drop, the gradient itself is already brighter. */
+:is(.dark) .mk-final-card::before {
+  background:
+    radial-gradient(circle at 18% 20%, rgba(255, 255, 255, 0.14), transparent 45%),
+    radial-gradient(circle at 85% 85%, rgba(255, 255, 255, 0.1), transparent 40%);
+}
+/* 9: for-experts dot-grid — a touch more presence to match the band's own inversion. */
+:is(.dark) .mk-xband-grid {
+  opacity: 0.1;
+}

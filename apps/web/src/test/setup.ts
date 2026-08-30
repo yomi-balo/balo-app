@@ -148,6 +148,16 @@ vi.mock('@/lib/analytics', async () => {
     MARKETING_EVENTS: events.MARKETING_EVENTS,
     MARKETING_NAV_LINKS: events.MARKETING_NAV_LINKS,
     MARKETING_SURFACES: events.MARKETING_SURFACES,
+    // BAL-493 — the marketing HOME PAGE's CLIENT event + its five vocabulary tuples. ⚠ WITHOUT
+    // THESE LINES every test whose module graph reaches the home page (or
+    // `use-marketing-home-tracking`) throws on an undefined constant (memory
+    // `reference_web_analytics_test_mock_export_list`).
+    MARKETING_HOME_EVENTS: events.MARKETING_HOME_EVENTS,
+    MARKETING_HOME_SECTIONS: events.MARKETING_HOME_SECTIONS,
+    MARKETING_HOME_CTA_PLACEMENTS: events.MARKETING_HOME_CTA_PLACEMENTS,
+    MARKETING_HOME_BENCH_ROWS: events.MARKETING_HOME_BENCH_ROWS,
+    MARKETING_HOME_PRODUCT_SOURCES: events.MARKETING_HOME_PRODUCT_SOURCES,
+    MARKETING_HOME_SPOTLIGHT_ACTIONS: events.MARKETING_HOME_SPOTLIGHT_ACTIONS,
     // BAL-503 — the client Settings surface's CLIENT event + canonical section tuple. ⚠ WITHOUT
     // THIS LINE every test whose module graph reaches the Settings tab bar throws on an
     // undefined constant (memory `reference_web_analytics_test_mock_export_list`).

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyBaloFee,
+  clientBoundToExpertRateCents,
   DEFAULT_BALO_FEE_BPS,
   DEFAULT_OVERDRAFT_CEILING_MINOR,
   DEFAULT_TOPUP_RELOAD_MINOR,
@@ -21,6 +22,7 @@ import {
   OVERDRAFT_GRACE_MINUTES,
   parseFeePercentToBps,
   PENDING_STALE_CANCEL_MINUTES,
+  publicDisplayRatePerMinute,
   sumEstimatedMinutes,
   WALLET_EXPIRY_MONTHS,
   WRAPPED_IDLE_END_MINUTES,
@@ -136,6 +138,167 @@ describe('applyBaloFee', () => {
 
   it('exposes DEFAULT_BALO_FEE_BPS as 2500', () => {
     expect(DEFAULT_BALO_FEE_BPS).toBe(2500);
+  });
+});
+
+/**
+ * BAL-493 / D1 — the ONE public-display markup wrapper. Before this existed both public
+ * serializers emitted `rateCents / 100`, i.e. a rate LOWER than the client is actually
+ * charged. These assertions are the arithmetic half of the AC-5 serializer-boundary
+ * invariant (the DTO-shape half lives at each serializer's own test).
+ */
+describe('publicDisplayRatePerMinute (BAL-493 / D1)', () => {
+  it('applies the default Balo fee and converts to dollars (250c → 3.13)', () => {
+    // applyBaloFee(250, 2500) = round(250 × 12500 / 10000) = round(312.5) = 313 → 3.13
+    expect(publicDisplayRatePerMinute(250)).toBe(3.13);
+  });
+
+  it('marks up the profile fixture rate (950c → 11.88)', () => {
+    // applyBaloFee(950, 2500) = round(1187.5) = 1188 → 11.88
+    expect(publicDisplayRatePerMinute(950)).toBe(11.88);
+  });
+
+  it('keeps a zero rate as 0, never null', () => {
+    expect(publicDisplayRatePerMinute(0)).toBe(0);
+  });
+
+  it('maps a null rate to null (no rate set)', () => {
+    expect(publicDisplayRatePerMinute(null)).toBeNull();
+  });
+
+  it('rounds to whole cents before dividing (no sub-cent float leak)', () => {
+    // 333 × 1.25 = 416.25 → round 416 → 4.16 (not 4.1625)
+    expect(publicDisplayRatePerMinute(333)).toBe(4.16);
+    // 1 × 1.25 = 1.25 → round 1 → 0.01
+    expect(publicDisplayRatePerMinute(1)).toBe(0.01);
+  });
+
+  it('agrees with applyBaloFee at the default fee for a large rate', () => {
+    expect(publicDisplayRatePerMinute(12_000)).toBe(
+      applyBaloFee(12_000, DEFAULT_BALO_FEE_BPS) / 100
+    );
+  });
+});
+
+/**
+ * BAL-493 fix round 1 — the INVERSE of the D1 markup, and the fee-concealment leak it closes.
+ *
+ * The rate slider is CLIENT-facing (it is the number D1 now displays); `expert-search.ts`'s
+ * `gte`/`lte` are EXPERT-facing (raw `expert_profiles.rate_cents`). Before this function the
+ * web boundary handed one straight to the other, so an anonymous visitor could bisect
+ * `?rateMax=` until an expert dropped out, recover that expert's raw rate, and divide the
+ * displayed rate by it to read Balo's markup to the basis point.
+ *
+ * ⚠ THE ASSERTIONS BELOW ARE ROUND-TRIPS THROUGH `applyBaloFee`, NOT RESTATEMENTS OF THE
+ * FORMULA. Each boundary case names the raw rate that must be IN and the adjacent one that
+ * must be OUT, and proves the claim by re-deriving what that raw rate DISPLAYS. A
+ * floor/ceil swap fails here; a test that only recomputed `clientCents × 10000 / 12500`
+ * would not.
+ */
+describe('clientBoundToExpertRateCents (BAL-493 fix round 1 — inverse of applyBaloFee)', () => {
+  const FEE = DEFAULT_BALO_FEE_BPS; // 2500 bps
+
+  it('max: floors — clientMax 500c ⇒ expert bound 400c, so raw 400 is IN and raw 401 is OUT', () => {
+    const bound = clientBoundToExpertRateCents(500, FEE, 'max');
+    expect(bound).toBe(400);
+
+    // raw 400 displays exactly the slider's max ⇒ must be admitted by `rate_cents <= bound`.
+    expect(applyBaloFee(400, FEE)).toBe(500);
+    expect(400).toBeLessThanOrEqual(bound);
+
+    // raw 401 displays 501 — above the slider's max ⇒ must be excluded.
+    expect(applyBaloFee(401, FEE)).toBe(501);
+    expect(401).toBeGreaterThan(bound);
+  });
+
+  it('min: ceils — clientMin 500c ⇒ expert bound 400c, so raw 400 is IN and raw 399 is OUT', () => {
+    const bound = clientBoundToExpertRateCents(500, FEE, 'min');
+    expect(bound).toBe(400);
+
+    // raw 400 displays exactly the slider's min ⇒ must be admitted by `rate_cents >= bound`.
+    expect(applyBaloFee(400, FEE)).toBe(500);
+    expect(400).toBeGreaterThanOrEqual(bound);
+
+    // raw 399 displays 499 — below the slider's min ⇒ must be excluded.
+    expect(applyBaloFee(399, FEE)).toBe(499);
+    expect(399).toBeLessThan(bound);
+  });
+
+  it('floor and ceil diverge on a non-integral quotient (the whole reason mode exists)', () => {
+    // 505 × 10000 / 12500 = 404.0 exactly → both agree.
+    expect(clientBoundToExpertRateCents(505, FEE, 'max')).toBe(404);
+    expect(clientBoundToExpertRateCents(505, FEE, 'min')).toBe(404);
+    // 501 × 10000 / 12500 = 400.8 → max floors to 400, min ceils to 401.
+    expect(clientBoundToExpertRateCents(501, FEE, 'max')).toBe(400);
+    expect(clientBoundToExpertRateCents(501, FEE, 'min')).toBe(401);
+  });
+
+  it('every expert rate admitted by the max bound really displays at or under the client max', () => {
+    const clientMax = 733;
+    const bound = clientBoundToExpertRateCents(clientMax, FEE, 'max');
+    for (let raw = 0; raw <= bound; raw += 1) {
+      expect(applyBaloFee(raw, FEE)).toBeLessThanOrEqual(clientMax);
+    }
+    // …and the first rate the bound rejects really displays ABOVE it.
+    expect(applyBaloFee(bound + 1, FEE)).toBeGreaterThan(clientMax);
+  });
+
+  it('every expert rate admitted by the min bound really displays at or over the client min', () => {
+    const clientMin = 750; // 750 × 10000 / 12500 = 600 exactly.
+    const bound = clientBoundToExpertRateCents(clientMin, FEE, 'min');
+    expect(bound).toBe(600);
+    for (let raw = bound; raw <= bound + 50; raw += 1) {
+      expect(applyBaloFee(raw, FEE)).toBeGreaterThanOrEqual(clientMin);
+    }
+    // …and the last rate the bound rejects really displays BELOW it.
+    expect(applyBaloFee(bound - 1, FEE)).toBeLessThan(clientMin);
+  });
+
+  /**
+   * ⚠ DELIBERATE ASYMMETRY — do not "tighten" this into `ceil((clientCents - 0.5) / factor)`.
+   * Because `applyBaloFee` rounds half-UP, a raw rate can display exactly the client's minimum
+   * while sitting just BELOW the ceil'd bound (586 → 733). Ceil drops it. That is the safe
+   * direction: the min bound never admits an expert whose displayed rate is under what the
+   * client asked for.
+   *
+   * ⚠ THE MAX BOUND HAS THE MIRROR CASE — an earlier version of this comment claimed it did not.
+   * At clientMax 501¢, raw 401 displays exactly 501 (`round(401 × 1.25) = 501`) and so ought to
+   * be admitted, but `floor(400.8) = 400` excludes it. Both bounds are therefore CONSERVATIVE:
+   * each errs toward the client, never over-admits, and never leaks. Unreachable from the
+   * whole-dollar slider (`RATE_BOUNDS`), which cannot express 501¢. Do not "fix" either side by
+   * widening it — the conservative direction is the one that keeps the displayed rate honest.
+   */
+  it('min is conservative, never permissive, when the quotient is not integral', () => {
+    const clientMin = 733; // 733 × 10000 / 12500 = 586.4 → ceil 587.
+    const bound = clientBoundToExpertRateCents(clientMin, FEE, 'min');
+    expect(bound).toBe(587);
+    // The dropped rate displays exactly the minimum — excluding it errs toward the client.
+    expect(applyBaloFee(586, FEE)).toBe(733);
+    expect(586).toBeLessThan(bound);
+  });
+
+  /**
+   * The mirror of the case above, pinned so the corrected comment cannot rot back into the
+   * false "floor is exact there" claim. Same conservative direction: the max bound excludes a
+   * raw rate that displays EXACTLY the client's maximum.
+   */
+  it('max is conservative too, when the quotient is not integral', () => {
+    const clientMax = 501; // 501 × 10000 / 12500 = 400.8 → floor 400.
+    const bound = clientBoundToExpertRateCents(clientMax, FEE, 'max');
+    expect(bound).toBe(400);
+    // Raw 401 displays exactly the client's max, yet sits above the floor'd bound.
+    expect(applyBaloFee(401, FEE)).toBe(501);
+    expect(401).toBeGreaterThan(bound);
+  });
+
+  it('is the identity at a zero fee (no markup ⇒ client bound IS the expert bound)', () => {
+    expect(clientBoundToExpertRateCents(500, MIN_BALO_FEE_BPS, 'max')).toBe(500);
+    expect(clientBoundToExpertRateCents(500, MIN_BALO_FEE_BPS, 'min')).toBe(500);
+  });
+
+  it('keeps a zero bound at zero in both directions', () => {
+    expect(clientBoundToExpertRateCents(0, FEE, 'max')).toBe(0);
+    expect(clientBoundToExpertRateCents(0, FEE, 'min')).toBe(0);
   });
 });
 

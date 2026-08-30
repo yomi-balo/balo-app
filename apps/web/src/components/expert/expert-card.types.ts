@@ -35,7 +35,19 @@ export interface ExpertCardData {
   headline: string | null; // was title
   bio: string | null;
   countryCode: string | null; // replaces `location: string`
-  rate: number | null; // dollars/min; now nullable (was number)
+  /**
+   * CLIENT ALL-IN rate per minute, in dollars, **Balo service fee INCLUDED** — computed at
+   * `DEFAULT_BALO_FEE_BPS` by `publicDisplayRatePerMinute` (`@balo/shared/pricing`) at the
+   * public serializer, NOT a bare `rate_cents / 100` (BAL-493 / D1: that published a rate
+   * lower than the client is charged).
+   *
+   * ⚠ A **"FROM" FIGURE.** The fee is session/engagement grain — there is no per-expert fee
+   * column — so a session opened at a non-default fee charges differently. Render it as
+   * "From A$…/min", never as an exact promise.
+   *
+   * `null` when no rate is set (nullable since BAL-247; was `number`); `0` stays `0`.
+   */
+  rate: number | null;
   nextAvailableAt: string | null; // ISO 8601 | null — replaces `available: boolean`
   languages: ExpertCardLanguage[];
   agency: ExpertCardAgency | null;

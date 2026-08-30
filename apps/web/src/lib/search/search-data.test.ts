@@ -65,7 +65,13 @@ describe('searchExperts', () => {
     expect(q.has('rateMin')).toBe(false);
   });
 
-  it('serializes arrays as repeated keys and converts rate to cents', async () => {
+  /**
+   * ⚠ BAL-493 fix round 1 — `rateMin` on the wire is the EXPERT-facing bound, not the client
+   * dollars the slider shows. `filtersToSearchRequest` divides the Balo fee back out, because
+   * the API compares this number against the raw `expert_profiles.rate_cents` while every
+   * public surface DISPLAYS `rate × 1.25`. A$2.00 client → 200c client → 160c expert.
+   */
+  it('serializes arrays as repeated keys and converts the client rate to an expert-facing bound', async () => {
     mockLoggedFetch.mockResolvedValue(jsonResponse({}));
     await searchExperts(
       make({ products: ['p1', 'p2'], q: 'flows', rateMinDollars: 2, timeframe: 'today' })
@@ -73,7 +79,7 @@ describe('searchExperts', () => {
     const q = fetchedQuery();
     expect(q.getAll('products')).toEqual(['p1', 'p2']);
     expect(q.get('q')).toBe('flows');
-    expect(q.get('rateMin')).toBe('200');
+    expect(q.get('rateMin')).toBe('160');
     expect(q.get('timeframe')).toBe('today');
   });
 

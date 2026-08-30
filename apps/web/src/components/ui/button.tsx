@@ -29,8 +29,13 @@ const buttonVariants = cva(
         /**
          * BAL-502 — the signature blue→violet conversion CTA, promoted from ~20 inline
          * copies of this literal to a named variant (the design reference calls it
-         * `variant="gradient"`). Reserved for conversion CTAs — "Get started" on the
-         * marketing surface — never for a secondary action.
+         * `variant="gradient"`). Reserved for conversion CTAs — never for a secondary action.
+         * ⚠ BAL-493 (D3) — the marketing header's signed-out CTA is no longer "Get started"
+         * and no longer `gradient`; it is now solid `--primary` "Find an expert" (`marketing-
+         * header.tsx`). `gradient` itself is now reserved for the marketing HOME page's
+         * (`(marketing)/_home/`) three highest-intent CTAs — the hero search submit, the
+         * spotlight "Book a call", and the final CTA band — see AC-2's white-text amendment,
+         * which this variant's `text-white` satisfies.
          * ⚠ tailwind-merge trap: a CONDITIONAL solid background layered over this needs an
          * explicit `bg-none` to win. See `(apply)/expert/apply/_components/wizard-action-bar.tsx:65`.
          *

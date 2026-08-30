@@ -30,7 +30,14 @@ export const MARKETING_EVENTS = {
   NAV_CLICKED: 'marketing_nav_clicked',
   /** A signed-in visitor returned to the app shell. Leg 2 of the ADR-1053 ping-pong metric. */
   DASHBOARD_CLICKED: 'marketing_dashboard_clicked',
-  /** The signed-out conversion CTA was activated. */
+  /**
+   * ⚠ BAL-493 / D3 — UNEMITTED as of BAL-493. The signed-out header CTA was replaced by
+   * "Find an expert" (a plain `<Link href="/experts">`, no tracking dispatch); this key and
+   * its value are KEPT, not deleted, because PostHog holds historical data under it. Same
+   * declared-but-unemitted treatment as `MARKETING_NAV_LINKS`' `how_it_works`/`pricing` and
+   * BAL-495's disabled keys. If a future "Get started"-shaped CTA returns to the marketing
+   * chrome, re-wire it to THIS constant rather than minting a new one.
+   */
   GET_STARTED_CLICKED: 'marketing_get_started_clicked',
 } as const;
 
