@@ -1,3 +1,4 @@
+import { Logo } from '@/components/layout/logo';
 interface AuthLayoutProps {
   children: React.ReactNode;
 }
@@ -16,15 +17,16 @@ export default function AuthLayout({ children }: Readonly<AuthLayoutProps>): Rea
       <div className="relative z-10 flex w-full flex-col items-center justify-center px-4 py-12">
         {/* Branding area */}
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
-          <div className="bg-primary flex h-12 w-12 items-center justify-center rounded-xl shadow-lg">
-            <span className="text-primary-foreground text-lg font-semibold">B</span>
-          </div>
-          <div>
-            <h1 className="text-foreground text-2xl font-semibold tracking-tight">balo</h1>
-            <p className="text-muted-foreground mt-1 text-sm">
-              Connect with expert technology consultants
-            </p>
-          </div>
+          {/* The mark IS the page heading — the `<img alt="Balo">` inside gives the `<h1>` its
+              accessible name, so swapping the old text wordmark for the brand asset keeps the
+              heading semantics intact. `asLink` is off: this screen is already the destination,
+              so a link back to marketing would be a dead end mid-sign-in. */}
+          <h1>
+            <Logo asLink={false} height={40} />
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            Connect with expert technology consultants
+          </p>
         </div>
 
         {children}
