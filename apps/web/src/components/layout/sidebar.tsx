@@ -115,7 +115,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
               isCollapsed && 'flex justify-center'
             )}
           >
-            <Logo collapsed={isCollapsed} />
+            <Logo iconOnly={isCollapsed} />
           </div>
         )}
         <WorkspaceSwitcher

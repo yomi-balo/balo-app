@@ -1,4 +1,5 @@
 import { Eye } from 'lucide-react';
+import { Logo } from '@/components/layout/logo';
 
 interface SharedProposalHeaderProps {
   sharerName: string;
@@ -16,8 +17,12 @@ export function SharedProposalHeader({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 bg-gradient-to-br from-slate-900 to-slate-800 px-5 py-3.5 sm:px-6">
       <div className="flex items-center gap-3">
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10 text-sm font-bold text-white">
-          b
+        {/* `variant="dark"` is pinned, not theme-following: this header is a slate gradient in
+            BOTH themes, so the light (navy) mark would disappear into it for a light-mode
+            reader. `asLink` is off — the recipient is an unauthenticated guest holding a share
+            token, and a link to `/` is not where they are trying to go. */}
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/10">
+          <Logo asLink={false} iconOnly variant="dark" height={18} />
         </span>
         <div className="min-w-0">
           <p className="text-[13.5px] font-semibold text-white">Shared proposal</p>

@@ -79,94 +79,99 @@ export function MarketingHeader({ viewer }: Readonly<MarketingHeaderProps>): Rea
 
   return (
     <header className="border-border bg-background/90 supports-[backdrop-filter]:bg-background/70 sticky top-0 z-40 w-full border-b backdrop-blur">
-      {/* BAL-502 FIX round — `lg:px-8` (32px) vs the prototype's flat `padding: '0 40px'` is a
-          deliberate scale-down, not a missed pixel: CLAUDE.md's own "Content padding" table
-          (and 10 other call sites in this app) standardize on `px-4 sm:px-6 lg:px-8`, and the
-          marketing header follows that shared responsive scale rather than a one-off 40px. */}
-      <div className="mx-auto flex h-14 max-w-[1320px] items-center gap-4 px-4 sm:px-6 md:h-16 md:gap-9 lg:px-8">
-        <Logo />
-        <nav aria-label="Marketing" className="hidden items-center gap-[26px] md:flex">
-          {MARKETING_NAV_ITEMS.map((entry) => {
-            const isActive = entry.isActive(pathname);
-            return (
-              <Link
-                key={entry.key}
-                href={entry.href}
-                aria-current={isActive ? 'page' : undefined}
-                onClick={handleNavClick(entry.key)}
-                className={cn(
-                  'text-[13.5px] font-medium transition-colors motion-reduce:transition-none',
-                  isActive
-                    ? 'text-foreground font-semibold'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {entry.label}
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="flex-1" />
-        <div className="flex items-center gap-2">
-          {viewer ? (
-            <>
-              <NotificationBell />
-              <Button
-                asChild
-                variant="outline"
-                size="sm"
-                className="hidden md:inline-flex"
-                onClick={handleDashboardClick}
-              >
-                <Link href="/dashboard">
-                  <LayoutDashboard className="size-3.5" />
-                  Dashboard
+      {/* The gutter sits OUTSIDE the `max-w-[1320px]` box, and uses the same `px-4 sm:px-6
+          md:px-8` scale as the route group's pages (`experts/page.tsx`, `experts/loading.tsx`).
+          That pairing is what makes the header's first and last child line up with the page
+          content beneath it. Putting the padding INSIDE the max-width box instead — as this did
+          originally — shrinks the header's content to `1320px - 2×gutter` while the page below
+          still spans the full 1320px, so the logo and the auth buttons sat visibly inset from
+          the search bar and the results grid. */}
+      <div className="px-4 sm:px-6 md:px-8">
+        <div className="mx-auto flex h-14 max-w-[1320px] items-center gap-4 md:h-16 md:gap-9">
+          <Logo />
+          <nav aria-label="Marketing" className="hidden items-center gap-[26px] md:flex">
+            {MARKETING_NAV_ITEMS.map((entry) => {
+              const isActive = entry.isActive(pathname);
+              return (
+                <Link
+                  key={entry.key}
+                  href={entry.href}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={handleNavClick(entry.key)}
+                  className={cn(
+                    'text-[13.5px] font-medium transition-colors motion-reduce:transition-none',
+                    isActive
+                      ? 'text-foreground font-semibold'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  {entry.label}
                 </Link>
-              </Button>
-              <Link
-                href="/dashboard"
-                aria-label={`Go to your dashboard, ${viewer.displayName}`}
-                onClick={handleDashboardClick}
-                className="focus-visible:ring-ring flex size-11 items-center justify-center rounded-full focus-visible:ring-2 focus-visible:outline-none md:size-9"
-              >
-                <Avatar className="size-8">
-                  {viewer.avatarUrl && <AvatarImage src={viewer.avatarUrl} alt="" />}
-                  <AvatarFallback className="from-primary bg-gradient-to-br to-violet-600 text-xs font-semibold text-white">
-                    {viewer.initials}
-                  </AvatarFallback>
-                </Avatar>
-              </Link>
-            </>
-          ) : (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="min-h-11 md:min-h-9"
-                onClick={handleLogIn}
-              >
-                Log in
-              </Button>
-              <Button
-                variant="gradient"
-                size="sm"
-                className="hidden md:inline-flex"
-                onClick={handleGetStarted}
-              >
-                Get started
-              </Button>
-            </>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 md:hidden"
-            aria-label="Open menu"
-            aria-expanded={menuOpen}
-            onClick={handleOpenMenu}
-          >
-            <Menu className="size-5" />
-          </Button>
+              );
+            })}
+          </nav>
+          <div className="flex-1" />
+          <div className="flex items-center gap-2">
+            {viewer ? (
+              <>
+                <NotificationBell />
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="hidden md:inline-flex"
+                  onClick={handleDashboardClick}
+                >
+                  <Link href="/dashboard">
+                    <LayoutDashboard className="size-3.5" />
+                    Dashboard
+                  </Link>
+                </Button>
+                <Link
+                  href="/dashboard"
+                  aria-label={`Go to your dashboard, ${viewer.displayName}`}
+                  onClick={handleDashboardClick}
+                  className="focus-visible:ring-ring flex size-11 items-center justify-center rounded-full focus-visible:ring-2 focus-visible:outline-none md:size-9"
+                >
+                  <Avatar className="size-8">
+                    {viewer.avatarUrl && <AvatarImage src={viewer.avatarUrl} alt="" />}
+                    <AvatarFallback className="from-primary bg-gradient-to-br to-violet-600 text-xs font-semibold text-white">
+                      {viewer.initials}
+                    </AvatarFallback>
+                  </Avatar>
+                </Link>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="min-h-11 md:min-h-9"
+                  onClick={handleLogIn}
+                >
+                  Log in
+                </Button>
+                <Button
+                  variant="gradient"
+                  size="sm"
+                  className="hidden md:inline-flex"
+                  onClick={handleGetStarted}
+                >
+                  Get started
+                </Button>
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-11 md:hidden"
+              aria-label="Open menu"
+              aria-expanded={menuOpen}
+              onClick={handleOpenMenu}
+            >
+              <Menu className="size-5" />
+            </Button>
+          </div>
         </div>
       </div>
       <MarketingMobileMenu

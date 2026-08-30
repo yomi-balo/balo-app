@@ -1,3 +1,4 @@
+import { Logo } from '@/components/layout/logo';
 import { OnboardingSignOut } from './onboarding/_components/onboarding-sign-out';
 
 interface OnboardingLayoutProps {
@@ -18,12 +19,12 @@ export default function OnboardingLayout({
 
       {/* Content */}
       <div className="relative z-10 flex w-full flex-col items-center justify-center px-4 py-8 sm:py-12">
-        {/* Branding — logo mark + wordmark */}
-        <div className="mb-12 flex flex-col items-center gap-3 text-center">
-          <div className="bg-primary flex h-12 w-12 items-center justify-center rounded-xl shadow-lg">
-            <span className="text-primary-foreground text-lg font-semibold">B</span>
-          </div>
-          <p className="text-foreground text-2xl font-semibold tracking-tight">balo</p>
+        {/* Branding — the wordmark alone. `asLink` is off because BAL-361's fail-closed gate
+            traps un-onboarded users on this screen; a logo linking to `/` would look like an
+            exit that the gate immediately bounces them back from. The real exit is the
+            `OnboardingSignOut` control below. */}
+        <div className="mb-12 flex justify-center">
+          <Logo asLink={false} height={40} />
         </div>
 
         {children}
