@@ -52,6 +52,9 @@ export {
   MARKETING_EVENTS,
   MARKETING_NAV_LINKS,
   MARKETING_SURFACES,
+  /** BAL-503 — the client Settings surface's event constant + canonical section tuple. */
+  SETTINGS_EVENTS,
+  SETTINGS_SECTIONS,
 } from '@balo/analytics/client';
 
 export type {
@@ -109,4 +112,7 @@ export type {
   MarketingEventMap,
   MarketingNavLink,
   MarketingSurface,
+  /** BAL-503 — the client Settings surface's event payload and section vocabulary. */
+  SettingsEventMap,
+  SettingsSection,
 } from '@balo/analytics/client';

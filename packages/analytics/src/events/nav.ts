@@ -14,6 +14,7 @@ export const NAV_ITEM_KEYS = [
   'calendar',
   'messages',
   'expert_settings',
+  'settings', // BAL-503 — the client counterpart to `expert_settings`.
   'team',
   'account',
   'help',

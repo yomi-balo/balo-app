@@ -17,7 +17,7 @@ import { log } from '@/lib/logging';
  * projection gates nothing would contradict the code it feeds. It scopes WHICH entries are even
  * candidates for a workspace; it never decides whether an actor is authorized to see one.
  */
-function navWorkspaceTypeOf(user: SessionUser | null): NavWorkspaceType {
+export function navWorkspaceTypeOf(user: SessionUser | null): NavWorkspaceType {
   return user?.activeMode === 'expert' ? 'expert' : 'company';
 }
 

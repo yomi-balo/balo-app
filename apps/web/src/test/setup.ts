@@ -148,6 +148,11 @@ vi.mock('@/lib/analytics', async () => {
     MARKETING_EVENTS: events.MARKETING_EVENTS,
     MARKETING_NAV_LINKS: events.MARKETING_NAV_LINKS,
     MARKETING_SURFACES: events.MARKETING_SURFACES,
+    // BAL-503 — the client Settings surface's CLIENT event + canonical section tuple. ⚠ WITHOUT
+    // THIS LINE every test whose module graph reaches the Settings tab bar throws on an
+    // undefined constant (memory `reference_web_analytics_test_mock_export_list`).
+    SETTINGS_EVENTS: events.SETTINGS_EVENTS,
+    SETTINGS_SECTIONS: events.SETTINGS_SECTIONS,
     initAnalytics: vi.fn(),
   };
 });

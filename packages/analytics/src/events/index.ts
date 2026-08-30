@@ -289,3 +289,11 @@ export {
   MARKETING_SURFACES,
   type MarketingSurface,
 } from './marketing';
+// BAL-503 — the client Settings surface's CLIENT event family + canonical section tuple.
+// Deliberately separate from `NAV_EVENTS` (see `./settings.ts`'s header comment).
+export {
+  SETTINGS_EVENTS,
+  type SettingsEventMap,
+  SETTINGS_SECTIONS,
+  type SettingsSection,
+} from './settings';

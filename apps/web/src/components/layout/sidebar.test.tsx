@@ -29,6 +29,15 @@ import type { NavContext } from './nav-registry';
  * BAL-496's static-label branch, which adds NO new interactive element, so every pre-existing
  * role/label/order assertion below still means what it meant. One `it()` block is ADDED (the
  * AC-5 badge gate); none is edited or removed.
+ *
+ * ⚠⚠ BAL-503 — a SECOND, TICKET-AUTHORISED UNFREEZE (in the same spirit as BAL-496's D13 above).
+ * D1 deliberately CHANGES the client bottom section: `team` narrows to the expert workspace only,
+ * and a new `settings` entry (`/settings`) takes its place for the client. Exactly the two
+ * `it()` blocks asserting the CLIENT bottom-href arrays are updated below (`'/settings/team'` →
+ * `'/settings'`, both the no-manage and can-manage cases — the two are now IDENTICAL, which is
+ * the executable evidence that the client bottom section no longer varies by capability). Every
+ * other assertion in this file — including both EXPERT bottom-href cases and the mobile drawer
+ * fixture (expert mode) — stays frozen with no edit.
  */
 
 // ── Mocks (declared BEFORE the component import — hoisting-safe, top-nav.test.tsx precedent) ──
@@ -132,7 +141,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     }
   });
 
-  it('bottom gating matrix — client, cannot manage company → Account only', () => {
+  it('bottom gating matrix — client, cannot manage company → Settings + Account', () => {
     renderSidebar({ mode: 'client', canManageCompany: false });
     const allLinks = screen.getAllByRole('link');
     const bottomHrefs = allLinks
@@ -141,10 +150,10 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
         (href) =>
           href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
       );
-    expect(bottomHrefs).toEqual(['/settings/account']);
+    expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
 
-  it('bottom gating matrix — client, can manage company → Team + Account', () => {
+  it('bottom gating matrix — client, can manage company → Settings + Account (identical to the no-manage case)', () => {
     renderSidebar({ mode: 'client', canManageCompany: true });
     const allLinks = screen.getAllByRole('link');
     const bottomHrefs = allLinks
@@ -153,7 +162,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
         (href) =>
           href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
       );
-    expect(bottomHrefs).toEqual(['/settings/team', '/settings/account']);
+    expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
 
   it('bottom gating matrix — expert, cannot manage company → Expert Settings + Account', () => {

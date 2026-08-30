@@ -62,6 +62,10 @@ export {
   MARKETING_EVENTS,
   MARKETING_NAV_LINKS,
   MARKETING_SURFACES,
+  // BAL-503 — the client Settings surface's canonical event + section tuple. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  SETTINGS_EVENTS,
+  SETTINGS_SECTIONS,
 } from '../events';
 
 export type {
@@ -155,4 +159,7 @@ export type {
   MarketingEventMap,
   MarketingNavLink,
   MarketingSurface,
+  // BAL-503 — the client Settings surface's event payload and section vocabulary.
+  SettingsEventMap,
+  SettingsSection,
 } from '../events';
