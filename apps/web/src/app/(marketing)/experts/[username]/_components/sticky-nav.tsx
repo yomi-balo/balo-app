@@ -31,7 +31,9 @@ export function StickyNav({
   return (
     <nav
       aria-label="Profile sections"
-      className="border-border/60 bg-background/85 sticky top-0 z-20 border-b backdrop-blur-md"
+      // BAL-502 — sits BELOW the marketing header (`sticky top-0 z-40`, h-14/md:h-16), not
+      // at the viewport top. `top-0` here would slide this in-page nav under the header.
+      className="border-border/60 bg-background/85 sticky top-14 z-20 border-b backdrop-blur-md md:top-16"
     >
       <div className="mx-auto flex max-w-[1120px] gap-6 overflow-x-auto px-5 [scrollbar-width:none] md:px-8 [&::-webkit-scrollbar]:hidden">
         {sections.map((section) => {

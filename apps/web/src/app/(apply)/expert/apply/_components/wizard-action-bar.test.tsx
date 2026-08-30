@@ -128,11 +128,15 @@ const termsDraft = {
 
 function renderBar(draft: ApplicationWithRelations | null): void {
   render(
-    <ExpertApplicationProvider
-      draft={draft}
-      referenceData={referenceData}
-      user={{ id: 'user-1', email: 'jane@example.com' }}
-    >
+    <ExpertApplicationProvider draft={draft} referenceData={referenceData} user={{ id: 'user-1' }}>
+      <WizardActionBar />
+    </ExpertApplicationProvider>
+  );
+}
+
+function renderAnonymousBar(draft: ApplicationWithRelations | null): void {
+  render(
+    <ExpertApplicationProvider draft={draft} referenceData={referenceData} user={null}>
       <WizardActionBar />
     </ExpertApplicationProvider>
   );
@@ -214,6 +218,23 @@ describe('WizardActionBar', () => {
     // The relocated Submit Application button takes Next's slot on Terms.
     expect(
       screen.getAllByRole('button', { name: /submit application/i }).length
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── Anonymous (BAL-502 FIX round WARNING 5 / copy) ────────────────
+
+  it('hides Save & exit on BOTH viewports for an anonymous visitor (WARNING 5) — there is nothing distinct for it to do, and routing to /dashboard would dead-end at /login', () => {
+    renderAnonymousBar(null);
+
+    expect(screen.queryByRole('button', { name: /save & exit/i })).toBeNull();
+  });
+
+  it('labels the relocated submit affordance honestly for an anonymous visitor (copy) — it opens sign-in, it never submits', () => {
+    renderAnonymousBar(termsDraft);
+
+    expect(screen.queryByRole('button', { name: /submit application/i })).toBeNull();
+    expect(
+      screen.getAllByRole('button', { name: /sign in to submit/i }).length
     ).toBeGreaterThanOrEqual(1);
   });
 });

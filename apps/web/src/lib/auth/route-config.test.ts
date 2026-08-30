@@ -46,6 +46,21 @@ describe('isPublicRoute', () => {
     expect(isPublicRoute('/admin/users')).toBe(false);
   });
 
+  // BAL-502 §22 — the marketing header's supply-side link target. Public so the page (not
+  // the Edge) owns the anonymous experience: `/expert/apply` renders a genuine anonymous
+  // preview (public taxonomy only, via `loadReferenceData()`) rather than redirecting to
+  // /login — the auth wall moved to SUBMIT. See `route-config.ts`'s own comment on this
+  // entry for the full detail.
+  it('makes /expert/apply public, exact match only', () => {
+    expect(isPublicRoute('/expert/apply')).toBe(true);
+    // ⚠ EXACT MATCH ONLY — the children must stay protected.
+    expect(isPublicRoute('/expert/apply/success')).toBe(false);
+    expect(isPublicRoute('/expert/apply/review')).toBe(false);
+    // And the singular prefix must not have opened the plural directory or vice-versa.
+    expect(isPublicRoute('/expert')).toBe(false);
+    expect(isPublicRoute('/expert/settings')).toBe(false);
+  });
+
   it('does not match similar-but-different paths', () => {
     // /experts is exact match, /experts/ is prefix — /expertsx should not match
     expect(isPublicRoute('/expertsx')).toBe(false);

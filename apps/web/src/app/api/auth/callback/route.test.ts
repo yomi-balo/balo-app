@@ -60,7 +60,15 @@ vi.mock('@/lib/analytics/server', () => ({
   },
 }));
 
-vi.mock('@/lib/auth/validation', () => ({ isValidReturnTo: () => false }));
+// HIGH 3 (BAL-502 FIX round) — a controllable mock so the returnTo-threading
+// tests below can exercise a VALID returnTo; every pre-existing test in this
+// file relies on the original always-false default (no returnTo in play).
+const { mockIsValidReturnTo } = vi.hoisted(() => ({
+  mockIsValidReturnTo: vi.fn<(...a: unknown[]) => boolean>(() => false),
+}));
+vi.mock('@/lib/auth/validation', () => ({
+  isValidReturnTo: (...a: unknown[]) => mockIsValidReturnTo(...a),
+}));
 vi.mock('@/lib/logging', () => ({ log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
 vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: () => Promise.resolve(),
@@ -85,14 +93,14 @@ import { GET } from './route';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-function makeReq(code: string | null): NextRequest {
+function makeReq(code: string | null, cookies: Record<string, string> = {}): NextRequest {
   return {
     nextUrl: {
       searchParams: { get: (k: string) => (k === 'code' ? code : null) },
       pathname: '/api/auth/callback',
     },
     url: 'https://app.test/api/auth/callback',
-    cookies: { get: () => undefined },
+    cookies: { get: (name: string) => (name in cookies ? { value: cookies[name] } : undefined) },
   } as unknown as NextRequest;
 }
 
@@ -142,6 +150,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockSessionObj = { save: mockSave };
   mockDeriveWorkspacesForUser.mockResolvedValue(null);
+  mockIsValidReturnTo.mockReturnValue(false);
 });
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -483,5 +492,81 @@ describe('OAuth callback — BAL-494 / ADR-1053 workspace hydration', () => {
 
     expect(mockSessionObj.user).not.toHaveProperty('activeWorkspace');
     expect(mockSessionObj.user).not.toHaveProperty('workspaces');
+  });
+});
+
+describe('OAuth callback — HIGH 3 (BAL-502 FIX round): pending apply-intent threaded through onboarding', () => {
+  it('a NEW user with a valid auth_return_to=/expert/apply cookie is redirected to /onboarding?returnTo=%2Fexpert%2Fapply — never dropped', async () => {
+    setupNewUser();
+    mockIsValidReturnTo.mockReturnValue(true);
+
+    await GET(makeReq('auth-code', { auth_return_to: '/expert/apply' }));
+
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding?returnTo=%2Fexpert%2Fapply');
+  });
+
+  it('ordinary signup population: a NEW user with NO auth_return_to cookie still lands on plain /onboarding (unaffected)', async () => {
+    setupNewUser();
+
+    await GET(makeReq('auth-code'));
+
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding');
+    expect(redirectedTo).not.toContain('returnTo');
+  });
+
+  it('a NEW user with an auth_return_to cookie pointed somewhere OTHER than /expert/apply is not threaded through onboarding (narrow, not a generic returnTo)', async () => {
+    setupNewUser();
+    mockIsValidReturnTo.mockReturnValue(true);
+
+    await GET(makeReq('auth-code', { auth_return_to: '/experts' }));
+
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding');
+    expect(redirectedTo).not.toContain('returnTo');
+  });
+
+  it('an INVALID (unsafe) auth_return_to cookie is never threaded through, even if it happens to read /expert/apply verbatim', async () => {
+    setupNewUser();
+    mockIsValidReturnTo.mockReturnValue(false); // isValidReturnTo rejects it
+
+    await GET(makeReq('auth-code', { auth_return_to: '/expert/apply' }));
+
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding');
+    expect(redirectedTo).not.toContain('returnTo');
+  });
+
+  it('a RETURNING (already-onboarded) user still gets the plain returnTo redirect — this branch is unchanged', async () => {
+    mockAuthenticateWithCode.mockResolvedValue({
+      user: workosUser(),
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    mockFindByWorkosId.mockResolvedValue({ id: 'user-1', email: 'jane@corp.io', avatarUrl: null });
+    mockUpdate.mockResolvedValue({
+      id: 'user-1',
+      email: 'jane@corp.io',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      avatarUrl: null,
+      activeMode: 'client',
+      onboardingCompleted: true,
+      platformRole: 'user',
+      emailVerified: true,
+    });
+    mockFindWithCompany.mockResolvedValue({
+      companyMemberships: [{ role: 'owner', company: { id: 'co-1', name: 'Corp' } }],
+    });
+    mockExpertFindFirst.mockResolvedValue(null);
+    mockIsValidReturnTo.mockReturnValue(true);
+
+    await GET(makeReq('auth-code', { auth_return_to: '/expert/apply' }));
+
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    // Returning user: the raw returnTo wins directly, no /onboarding wrapping.
+    expect(redirectedTo).toContain('/expert/apply');
+    expect(redirectedTo).not.toContain('/onboarding');
   });
 });

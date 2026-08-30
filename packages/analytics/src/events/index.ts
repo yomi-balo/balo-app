@@ -11,6 +11,7 @@ export {
   EXPERT_EVENTS,
   type ExpertEventMap,
   type ExpertStepName,
+  type DraftFlushOutcome,
   EXPERT_SERVER_EVENTS,
   type ExpertServerEventMap,
 } from './expert';
@@ -278,3 +279,13 @@ export {
   NAV_SURFACES,
   type NavSurface,
 } from './nav';
+// BAL-502 / ADR-1053 — the public marketing chrome's CLIENT event family. Deliberately
+// separate from `./nav`, which is the DASHBOARD nav registry's server-resolved family.
+export {
+  MARKETING_EVENTS,
+  type MarketingEventMap,
+  MARKETING_NAV_LINKS,
+  type MarketingNavLink,
+  MARKETING_SURFACES,
+  type MarketingSurface,
+} from './marketing';

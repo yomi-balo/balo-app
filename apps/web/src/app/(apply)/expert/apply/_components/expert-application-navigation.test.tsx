@@ -172,11 +172,7 @@ const agencyGateDraft = {
 
 function renderHarness(draft: ApplicationWithRelations | null): void {
   render(
-    <ExpertApplicationProvider
-      draft={draft}
-      referenceData={referenceData}
-      user={{ id: 'user-1', email: 'jane@example.com' }}
-    >
+    <ExpertApplicationProvider draft={draft} referenceData={referenceData} user={{ id: 'user-1' }}>
       <Harness />
     </ExpertApplicationProvider>
   );

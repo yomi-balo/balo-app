@@ -47,6 +47,18 @@ interface ExpertProfileClientProps {
   autoOpenBookingSource: BookingSource;
 }
 
+/**
+ * BAL-502 — clears the sticky marketing header (h-14/md:h-16) + the in-page StickyNav.
+ * ⚠ FIX round: this offset used to be duplicated as a bare `-72px` literal in the
+ * IntersectionObserver `rootMargin` below, and the paired edit that moved the sections to
+ * `scroll-mt-[128px]` never updated it — the scroll-spy pill would highlight a section still
+ * hidden behind the header + in-page-nav stack. Both now derive from this ONE constant so they
+ * cannot drift apart again. The `md:` value stays a CSS-only literal — `rootMargin` cannot be
+ * responsive, so the base (smallest-viewport) offset is the correct shared value.
+ */
+const SECTION_SCROLL_OFFSET_PX = 128;
+const SECTION_SCROLL_MT = `scroll-mt-[${SECTION_SCROLL_OFFSET_PX}px] md:scroll-mt-[136px]`;
+
 const SECTION_LABELS: Record<ProfileSectionKey, string> = {
   about: 'About',
   expertise: 'Expertise',
@@ -132,7 +144,7 @@ export function ExpertProfileClient({
         const key = (top.target as HTMLElement).dataset.section as ProfileSectionKey | undefined;
         if (key) setActiveNav(key);
       },
-      { rootMargin: '-72px 0px -55% 0px', threshold: 0 }
+      { rootMargin: `-${SECTION_SCROLL_OFFSET_PX}px 0px -55% 0px`, threshold: 0 }
     );
 
     for (const section of sections) {
@@ -230,10 +242,10 @@ export function ExpertProfileClient({
         <div className="grid grid-cols-1 items-start gap-4 pt-5 min-[820px]:grid-cols-[minmax(0,1fr)_360px] min-[820px]:gap-7 min-[820px]:pt-7">
           {/* Left column */}
           <div className="flex flex-col gap-4">
-            <section id="section-about" data-section="about" className="scroll-mt-[72px]">
+            <section id="section-about" data-section="about" className={SECTION_SCROLL_MT}>
               <AboutSection bio={view.bio} firstName={view.firstName} />
             </section>
-            <section id="section-expertise" data-section="expertise" className="scroll-mt-[72px]">
+            <section id="section-expertise" data-section="expertise" className={SECTION_SCROLL_MT}>
               <ExpertiseSection
                 competencies={view.competencies}
                 certifications={view.certifications}
@@ -242,7 +254,7 @@ export function ExpertProfileClient({
             <section
               id="section-quickstarts"
               data-section="quickstarts"
-              className="scroll-mt-[72px]"
+              className={SECTION_SCROLL_MT}
             >
               <QuickStartsSection
                 packages={[]}
@@ -251,11 +263,11 @@ export function ExpertProfileClient({
               />
             </section>
             {view.workHistory.length > 0 && (
-              <section id="section-work" data-section="work" className="scroll-mt-[72px]">
+              <section id="section-work" data-section="work" className={SECTION_SCROLL_MT}>
                 <WorkSection workHistory={view.workHistory} firstName={view.firstName} />
               </section>
             )}
-            <section id="section-reviews" data-section="reviews" className="scroll-mt-[72px]">
+            <section id="section-reviews" data-section="reviews" className={SECTION_SCROLL_MT}>
               <ReviewsSection
                 firstName={view.firstName}
                 ratingAverage={view.ratingAverage}

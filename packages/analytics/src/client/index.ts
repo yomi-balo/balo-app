@@ -57,6 +57,11 @@ export {
   // ⚠⚠ `WORKSPACE_SERVER_EVENTS` must NEVER join this list — it is server-only and is exported
   // from '../server' instead (cf. the identical warning on `AVAILABILITY_EVENTS` at :44-46).
   WORKSPACE_EVENTS,
+  // BAL-502 — the marketing chrome's canonical event + link/surface tuples. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  MARKETING_EVENTS,
+  MARKETING_NAV_LINKS,
+  MARKETING_SURFACES,
 } from '../events';
 
 export type {
@@ -66,6 +71,7 @@ export type {
   OnboardingStepName,
   ExpertEventMap,
   ExpertStepName,
+  DraftFlushOutcome,
   ExpertSetupEventMap,
   ExpertRateEventMap,
   ExpertPayoutEventMap,
@@ -145,4 +151,8 @@ export type {
   NavSurface,
   // BAL-496 — the workspace switcher's client event payload.
   WorkspaceEventMap,
+  // BAL-502 — the marketing chrome's event payload and link/surface vocabularies.
+  MarketingEventMap,
+  MarketingNavLink,
+  MarketingSurface,
 } from '../events';

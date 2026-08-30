@@ -65,9 +65,17 @@ function SaveExitButton({ className }: Readonly<{ className?: string }>): React.
  * The success state adds `bg-none`: it and the base `bg-gradient-to-r` are in the
  * same background-image group, so `cn()`/tailwind-merge drops the gradient and the
  * solid `bg-success` shows through (mode-independent, order-independent).
+ *
+ * FIX round (copy) — the idle label is honest about what a click actually does:
+ * for an anonymous visitor it never submits anything (it opens the sign-in modal —
+ * §22.4), so labelling it "Submit Application" would be a lie the whole way
+ * through. `submitState` only ever reaches 'submitting'/'success' on the
+ * authenticated path (the anonymous handler returns before setting it), so those
+ * two labels stay unconditional.
  */
 function SubmitButton({ className }: Readonly<{ className?: string }>): React.JSX.Element {
-  const { submitState, submit } = useWizard();
+  const { submitState, submit, isAnonymous } = useWizard();
+  const idleLabel = isAnonymous ? 'Sign in to submit' : 'Submit Application';
   return (
     <Button
       type="button"
@@ -88,7 +96,7 @@ function SubmitButton({ className }: Readonly<{ className?: string }>): React.JS
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            Submit Application
+            {idleLabel}
           </motion.span>
         )}
         {submitState === 'submitting' && (
@@ -123,7 +131,7 @@ function SubmitButton({ className }: Readonly<{ className?: string }>): React.JS
 }
 
 export function WizardActionBar(): React.JSX.Element {
-  const { currentStep, goNext, goPrevious, skipStep } = useWizard();
+  const { currentStep, goNext, goPrevious, skipStep, isAnonymous } = useWizard();
   const stepConfig = STEP_CONFIG[currentStep] ?? STEP_CONFIG[0];
   const isFirst = currentStep === 0;
   const isLast = currentStep === STEP_CONFIG.length - 1;
@@ -139,7 +147,14 @@ export function WizardActionBar(): React.JSX.Element {
       {/* Desktop action bar */}
       <div className="border-border mt-8 hidden items-center justify-between border-t pt-6 md:flex">
         <div className="flex items-center gap-3">
-          <SaveExitButton />
+          {/* WARNING 5 (FIX round) — hidden for an anonymous visitor. `abandon()`
+              writes to sessionStorage today the same way the debounce already does
+              continuously, so this control has nothing distinct left to DO for
+              them; keeping it would mean either a false "saved" claim (nothing new
+              was saved) or routing to `/dashboard`, which middleware immediately
+              bounces to `/login` — a friendly "come back anytime" that actually
+              force-walls them. */}
+          {!isAnonymous && <SaveExitButton />}
           {!isFirst && (
             <Button type="button" variant="ghost" className="group" onClick={goPrevious}>
               <motion.span className="inline-flex items-center gap-1.5" whileHover={{ x: -3 }}>
@@ -218,7 +233,7 @@ export function WizardActionBar(): React.JSX.Element {
               </Button>
             ))}
         </div>
-        <SaveExitButton className="mt-2 min-h-11 w-full" />
+        {!isAnonymous && <SaveExitButton className="mt-2 min-h-11 w-full" />}
       </div>
     </>
   );

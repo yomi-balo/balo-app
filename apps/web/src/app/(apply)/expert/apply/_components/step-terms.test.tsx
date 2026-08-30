@@ -25,6 +25,23 @@ vi.mock('../_actions/submit-application', () => ({
   submitApplicationAction: vi.fn().mockResolvedValue({ success: true }),
 }));
 
+const authModalOpen = vi.fn();
+vi.mock('@/hooks/use-auth-modal', () => ({
+  useAuthModal: () => ({ open: authModalOpen }),
+}));
+
+// HIGH 4 (FIX round) — wraps the REAL `writeAnonymousDraft` in a spy (rather than
+// stubbing it out) so `sessionStorage`-based assertions elsewhere keep working,
+// while giving us `.mock.invocationCallOrder` to prove ordering against
+// `authModalOpen` WITHOUT racing the 800ms `scheduleAnonymousSave` debounce — the
+// exact false-green the reviewer found (a `waitFor` with its default 1000ms
+// budget let the debounced write land before the assertion ran, so deleting the
+// synchronous `saveAnonymousDraftNow()` call in step-terms.tsx still passed).
+vi.mock('@/lib/expert-apply/anonymous-draft', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/expert-apply/anonymous-draft')>();
+  return { ...actual, writeAnonymousDraft: vi.fn(actual.writeAnonymousDraft) };
+});
+
 // Stub motion to render plain elements.
 const MOTION_PROPS = new Set([
   'initial',
@@ -65,12 +82,14 @@ import { StepTerms } from './step-terms';
 import { WizardActionBar } from './wizard-action-bar';
 import { ExpertApplicationProvider } from './expert-application-context';
 import { submitApplicationAction } from '../_actions/submit-application';
+import { writeAnonymousDraft } from '@/lib/expert-apply/anonymous-draft';
 import { toast } from 'sonner';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
 
 const submitMock = vi.mocked(submitApplicationAction);
 const toastError = vi.mocked(toast.error);
 const trackMock = vi.mocked(track);
+const writeAnonymousDraftMock = vi.mocked(writeAnonymousDraft);
 
 // ── Fixtures ─────────────────────────────────────────────────────
 
@@ -145,8 +164,24 @@ function renderStep(draftArg: ApplicationWithRelations | null): void {
     <ExpertApplicationProvider
       draft={draftArg}
       referenceData={referenceData}
-      user={{ id: 'user-1', email: 'jane@example.com' }}
+      user={{ id: 'user-1' }}
     >
+      <StepTerms headingRef={headingRef} />
+      <WizardActionBar />
+    </ExpertApplicationProvider>
+  );
+}
+
+// BAL-502 §22.4 — the anonymous submit-gate variant: `user={null}`. Reuses the same
+// filled-out `draft` fixture as `renderStep` so `resolveInitialStep` lands on the
+// Terms step (last index) and the relocated Submit button renders — `isAnonymous`
+// is driven purely by `user`, independent of `draft` (a production render never
+// combines a non-null draft with a null user; this is a test-only shortcut to reach
+// the last step without simulating six steps of navigation).
+function renderAnonymousStep(): void {
+  const headingRef = createRef<HTMLHeadingElement>();
+  render(
+    <ExpertApplicationProvider draft={draft} referenceData={referenceData} user={null}>
       <StepTerms headingRef={headingRef} />
       <WizardActionBar />
     </ExpertApplicationProvider>
@@ -159,6 +194,7 @@ describe('StepTerms', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     submitMock.mockResolvedValue({ success: true });
+    globalThis.sessionStorage.clear();
   });
 
   it('renders the terms heading and the agreement checkbox', () => {
@@ -331,5 +367,118 @@ describe('StepTerms', () => {
       EXPERT_EVENTS.APPLICATION_SUBMIT_FAILED,
       expect.objectContaining({ error_message: 'Unknown error' })
     );
+  });
+
+  // ── Anonymous submit gate (BAL-502 §22.4) ─────────────────────────
+
+  describe('anonymous submit gate', () => {
+    it('renders the honest "Sign in to submit" label, never "Submit Application", for an anonymous visitor', () => {
+      renderAnonymousStep();
+      expect(screen.queryByRole('button', { name: /submit application/i })).toBeNull();
+      expect(
+        screen.getAllByRole('button', { name: /sign in to submit/i }).length
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    // HIGH 4 (FIX round) — the reviewer PROVED this test was a false green:
+    // deleting `saveAnonymousDraftNow()` from step-terms.tsx still passed it,
+    // because the checkbox click ALSO schedules `scheduleAnonymousSave`'s 800ms
+    // debounce, and `waitFor`'s DEFAULT 1000ms budget let that debounced write
+    // land before the `sessionStorage` assertion ran. This version instead
+    // compares `.mock.invocationCallOrder` between the (spied, still-real)
+    // `writeAnonymousDraft` and `authModalOpen` — an ORDER proof, not a timing
+    // race, so it cannot be satisfied by a write that happens to land later.
+    //
+    // Verified by deleting `saveAnonymousDraftNow();` at step-terms.tsx:133 and
+    // re-running this test: it FAILS (`writeAnonymousDraftMock` is never called
+    // by the time `authModalOpen` fires — the debounced write is scheduled but
+    // hasn't landed within the click's synchronous window). Restored afterward.
+    it('calls writeAnonymousDraft strictly BEFORE opening the auth modal (call-order proof), and never calls submitApplicationAction', async () => {
+      const user = userEvent.setup();
+      renderAnonymousStep();
+
+      await user.click(screen.getByRole('checkbox'));
+      const [submitBtn] = screen.getAllByRole('button', { name: /sign in to submit/i });
+      if (submitBtn === undefined) throw new Error('Submit button not rendered');
+
+      expect(globalThis.sessionStorage.getItem('balo.expert-apply.anon-draft.v1')).toBeNull();
+      await user.click(submitBtn);
+
+      await waitFor(() => expect(authModalOpen).toHaveBeenCalled());
+      expect(writeAnonymousDraftMock).toHaveBeenCalled();
+      expect(globalThis.sessionStorage.getItem('balo.expert-apply.anon-draft.v1')).not.toBeNull();
+
+      const [writeOrder] = writeAnonymousDraftMock.mock.invocationCallOrder;
+      const [openOrder] = authModalOpen.mock.invocationCallOrder;
+      if (writeOrder === undefined || openOrder === undefined) {
+        throw new Error('expected both mocks to have been invoked');
+      }
+      expect(writeOrder).toBeLessThan(openOrder);
+
+      expect(authModalOpen).toHaveBeenCalledTimes(1);
+      expect(submitMock).not.toHaveBeenCalled();
+    });
+
+    it('opens the auth modal with the unified entry (no defaultStep) and tracks the auth-gate event', async () => {
+      const user = userEvent.setup();
+      renderAnonymousStep();
+
+      await user.click(screen.getByRole('checkbox'));
+      const [submitBtn] = screen.getAllByRole('button', { name: /sign in to submit/i });
+      if (submitBtn === undefined) throw new Error('Submit button not rendered');
+      await user.click(submitBtn);
+
+      await waitFor(() => expect(authModalOpen).toHaveBeenCalled());
+      const [openArgs] = authModalOpen.mock.calls[0] as [Record<string, unknown>];
+      expect(openArgs).not.toHaveProperty('defaultStep');
+      expect(typeof openArgs.onSuccess).toBe('function');
+
+      expect(trackMock).toHaveBeenCalledWith(
+        EXPERT_EVENTS.APPLICATION_AUTH_GATE_REACHED,
+        expect.objectContaining({ last_step: 'terms' })
+      );
+    });
+
+    it('still validates the terms checkbox before gating — an unchecked box shows the zod message and never opens the modal', async () => {
+      const user = userEvent.setup();
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = vi.fn();
+
+      try {
+        renderAnonymousStep();
+        const [submitBtn] = screen.getAllByRole('button', { name: /sign in to submit/i });
+        if (submitBtn === undefined) throw new Error('Submit button not rendered');
+        await user.click(submitBtn);
+
+        expect(
+          await screen.findByText('You must accept the terms to continue')
+        ).toBeInTheDocument();
+        expect(authModalOpen).not.toHaveBeenCalled();
+      } finally {
+        Element.prototype.scrollIntoView = originalScrollIntoView;
+      }
+    });
+
+    // WARNING 7 (FIX round) — the failure must be surfaced BEFORE the visitor
+    // commits to signing up, not discovered afterward with an empty resume.
+    it('surfaces a writeAnonymousDraft failure at the gate — blocks the modal, toasts, and never tracks the auth-gate event', async () => {
+      const user = userEvent.setup();
+      writeAnonymousDraftMock.mockReturnValueOnce(false);
+      renderAnonymousStep();
+
+      await user.click(screen.getByRole('checkbox'));
+      const [submitBtn] = screen.getAllByRole('button', { name: /sign in to submit/i });
+      if (submitBtn === undefined) throw new Error('Submit button not rendered');
+      await user.click(submitBtn);
+
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(expect.stringContaining("couldn't save"))
+      );
+      expect(authModalOpen).not.toHaveBeenCalled();
+      expect(trackMock).not.toHaveBeenCalledWith(
+        EXPERT_EVENTS.APPLICATION_AUTH_GATE_REACHED,
+        expect.anything()
+      );
+    });
   });
 });

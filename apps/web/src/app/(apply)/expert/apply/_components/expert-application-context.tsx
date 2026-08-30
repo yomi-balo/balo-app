@@ -28,6 +28,14 @@ import {
 } from '../_actions/schemas';
 import type { ReferenceData } from '../_actions/load-draft';
 import type { ApplicationWithRelations } from '@balo/db';
+import {
+  readAnonymousDraft,
+  writeAnonymousDraft,
+  clearAnonymousDraft,
+  type AnonymousApplicationDraftV1,
+} from '@/lib/expert-apply/anonymous-draft';
+import { flushAnonymousDraft } from '@/lib/expert-apply/flush-anonymous-draft';
+import { reloadWithToast, consumePendingToast } from '@/lib/expert-apply/reload-with-toast';
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -52,7 +60,17 @@ interface WizardState {
   workHistoryData: Partial<WorkHistoryStepData>;
   termsData: Partial<TermsStepData>;
   referenceData: ReferenceData;
-  user: { id: string; email: string };
+  /**
+   * `null` for an anonymous visitor (BAL-502 §22); `{ id }` when signed in. FIX round
+   * (smaller item) — `email` was dropped: nothing under `_components/` ever reads
+   * `.id` or `.email` off this value (only its nullness matters, for `isAnonymous`
+   * and the post-auth-flush effect's dependency array), so shipping the visitor's
+   * own email into the client payload was dead weight. `id` is kept as a stable,
+   * harmless identifier for any future consumer (logging, etc.).
+   */
+  user: { id: string } | null;
+  /** `true` when `user === null` — the sole anonymous signal (BAL-502 §22). */
+  isAnonymous: boolean;
 }
 
 interface WizardActions {
@@ -72,6 +90,13 @@ interface WizardActions {
     failingStep?: string;
   }>;
   abandon: () => Promise<void>;
+  /** BAL-502 §22.4 — writes the anonymous envelope SYNCHRONOUSLY, stamping
+   * `authGateAt` (WARNING 6). Called by the Terms step immediately before opening
+   * the auth modal, so an OAuth full-page redirect can never race the debounced
+   * background save. Returns whether the write actually landed (WARNING 7) — the
+   * caller must surface a `false` result rather than silently proceed as if the
+   * visitor's work is safe. */
+  saveAnonymousDraftNow: () => boolean;
 }
 
 type WizardContextType = WizardState & WizardActions;
@@ -289,8 +314,49 @@ interface ExpertApplicationProviderProps {
   children: ReactNode;
   draft: ApplicationWithRelations | null;
   referenceData: ReferenceData;
-  user: { id: string; email: string };
+  /** `null` for an anonymous visitor (BAL-502 §22). See `WizardState.user` above for
+   * why this is `{ id }`, not `{ id, email }`. */
+  user: { id: string } | null;
 }
+
+// Toast copy for the post-auth flush (§22.9, §22.11) — warm, non-blaming,
+// gender-neutral, per CLAUDE.md's copy rules.
+//
+// "Two quick things and you're done" is accurate BECAUSE `reloadWithToast` below
+// forces a real document reload: a fresh mount re-hydrates every step's status from
+// the just-written server draft, so `agency` (never written by the anonymous flush
+// — §22.5) is the only step landing back as incomplete, and `terms` (never
+// auto-completed) is the other. Everything else the flush posted — products,
+// assessment, certifications, work-history — comes back `completed`/`skipped`. A
+// SOFT `router.refresh()` cannot do this (CRITICAL 1 / HIGH 2): the provider's
+// state comes from `useState(() => hydrate*(draft))` lazy initializers that only
+// run once at mount, so a soft refresh would leave every step stuck as it was
+// mid-session and this copy would be a lie.
+const FLUSH_SUCCESS_TOAST = "Your progress is saved. Two quick things and you're done.";
+// FIX round (copy) — names the DISCARD explicitly. The bare "we've loaded the
+// application" line read as if nothing happened to what was just typed; a visitor
+// who filled in real details anonymously deserves to be told, plainly, that those
+// specific entries were not carried onto their account (server wins, §22.11) —
+// never silent data loss.
+const FLUSH_SUPERSEDED_TOAST =
+  "Welcome back — we've loaded the application you already had in progress. " +
+  "What you just entered here wasn't added to your account, so nothing gets overwritten.";
+const FLUSH_FAILED_TOAST = "We couldn't restore your saved progress. Please try again.";
+
+/**
+ * BAL-502 FIX round (WARNING 6) — an anonymous envelope carries no identity of its
+ * own; any session that shows up in this tab can claim it. `authGateAt` (stamped
+ * once, only at the submit gate) bounds how long a draft stays claimable: a window
+ * this generous covers the slowest realistic path (fill the wizard, hit Submit,
+ * complete a WorkOS OAuth round-trip including a provider login) with margin, while
+ * still meaningfully narrowing the shared/kiosk-browser hazard where a draft could
+ * otherwise sit claimable indefinitely. A stricter per-visitor confirmation
+ * ("We found an application in progress — is this yours?") was considered and
+ * deferred: it adds a full UI surface + copy for a hazard that requires the SAME
+ * tab to still be open AND a second person signing in within the window — narrow
+ * enough that the time bound alone is a reasonable first line of defense.
+ */
+const AUTH_GATE_FLUSH_WINDOW_MS = 30 * 60 * 1000;
 
 export function ExpertApplicationProvider({
   children,
@@ -300,6 +366,7 @@ export function ExpertApplicationProvider({
 }: Readonly<ExpertApplicationProviderProps>): React.JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const isAnonymous = user === null;
 
   const initialStep = useMemo(
     () => resolveInitialStep(searchParams, draft),
@@ -363,12 +430,18 @@ export function ExpertApplicationProvider({
   // Only a confirmed `saveDraftAction` success may ever write `lastSavedByStepRef`.
   const beaconAttemptByStepRef = useRef<Partial<Record<StepKey, string>>>({});
 
-  // Fire analytics on mount
+  // Fire analytics on mount. `APPLICATION_STARTED` is SUPPRESSED for an anonymous
+  // visitor — firing it would silently change the historical meaning of
+  // `expert_application_started` ("a signed-in user began an application") and
+  // break every funnel built on it (BAL-502 §22.10). The two are mutually exclusive
+  // by construction: exactly one of them fires per mount.
   const hasTrackedRef = useRef(false);
   useEffect(() => {
     if (hasTrackedRef.current) return;
     hasTrackedRef.current = true;
-    if (draft) {
+    if (isAnonymous) {
+      track(EXPERT_EVENTS.APPLICATION_ANONYMOUS_STARTED, {});
+    } else if (draft) {
       track(EXPERT_EVENTS.APPLICATION_RESUMED, {
         resumed_at_step: STEP_CONFIG[initialStep]?.key ?? 'profile',
       });
@@ -433,10 +506,12 @@ export function ExpertApplicationProvider({
     stepKey: StepKey;
     data: unknown;
     expertProfileId: string | null;
+    isAnonymous: boolean;
   }>({
     stepKey: getCurrentStepKey(),
     data: getStepData(getCurrentStepKey()),
     expertProfileId,
+    isAnonymous,
   });
 
   // Seed EVERY step's baseline so a pristine load isn't seen as dirty. At mount all step
@@ -452,9 +527,48 @@ export function ExpertApplicationProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // BAL-502 §22.3 — the full-envelope snapshot written to sessionStorage. Every key
+  // is populated unconditionally from live state (cheap, local, idempotent) so a
+  // single call always captures the whole wizard, not just the step being left.
+  const buildAnonymousEnvelope = useCallback((): AnonymousApplicationDraftV1 => {
+    const steps: Partial<Record<StepKey, unknown>> = {};
+    for (const step of STEP_CONFIG) {
+      steps[step.key] = getStepData(step.key);
+    }
+    return {
+      v: 1,
+      savedAt: new Date().toISOString(),
+      currentStep,
+      maxReachedStep,
+      steps,
+    };
+  }, [getStepData, currentStep, maxReachedStep]);
+
+  const saveAnonymousDraftNow = useCallback((): boolean => {
+    // WARNING 6 — `authGateAt` is stamped ONLY here (the submit-gate call site),
+    // never by the 800ms background debounce (`scheduleAnonymousSave` below) —
+    // that timestamp means "the visitor deliberately hit Submit", not "some field
+    // changed". WARNING 7 — the write's success is returned (not discarded) so the
+    // caller (step-terms) can tell the visitor before they commit to signing up.
+    return writeAnonymousDraft({
+      ...buildAnonymousEnvelope(),
+      authGateAt: new Date().toISOString(),
+    });
+  }, [buildAnonymousEnvelope]);
+
   const performSave = useCallback(async (): Promise<boolean> => {
     const stepKey = getCurrentStepKey();
     const data = getStepData(stepKey);
+
+    if (isAnonymous) {
+      // No anonymous writes, anywhere — `saveDraftAction` is `withAuth`-wrapped and
+      // would just 401. sessionStorage is the persistence layer for this path; a
+      // synchronous write here keeps goNext/skipStep/goPrevious safe to call
+      // unconditionally without branching at every call site.
+      writeAnonymousDraft(buildAnonymousEnvelope());
+      lastSavedByStepRef.current[stepKey] = JSON.stringify(data);
+      return true;
+    }
 
     setAutoSaveState('saving');
     try {
@@ -483,7 +597,7 @@ export function ExpertApplicationProvider({
       toast.error("Couldn't save your progress. Retrying...");
       return false;
     }
-  }, [getCurrentStepKey, getStepData, expertProfileId]);
+  }, [getCurrentStepKey, getStepData, expertProfileId, isAnonymous, buildAnonymousEnvelope]);
 
   const scheduleIdleSave = useCallback((): void => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -495,6 +609,17 @@ export function ExpertApplicationProvider({
       }
     }, 30_000);
   }, [getCurrentStepKey, getStepData, performSave]);
+
+  // BAL-502 §22.3 — the anonymous mirror of `scheduleIdleSave`, debounced to
+  // sessionStorage instead of the server. A short debounce is fine (unlike the
+  // 30s server debounce) because a local write has no network cost.
+  const anonSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleAnonymousSave = useCallback((): void => {
+    if (anonSaveTimerRef.current) clearTimeout(anonSaveTimerRef.current);
+    anonSaveTimerRef.current = setTimeout(() => {
+      writeAnonymousDraft(buildAnonymousEnvelope());
+    }, 800);
+  }, [buildAnonymousEnvelope]);
 
   // Save-on-exit: reads the CURRENT step's key + data synchronously, so when called
   // before `setCurrentStep(...)` it captures the step being LEFT (no stale closure).
@@ -517,6 +642,7 @@ export function ExpertApplicationProvider({
       stepKey: getCurrentStepKey(),
       data: getStepData(getCurrentStepKey()),
       expertProfileId,
+      isAnonymous,
     };
   });
 
@@ -524,7 +650,16 @@ export function ExpertApplicationProvider({
   // reads `flushStateRef` so it never sees stale state.
   useEffect(() => {
     const flush = (): void => {
-      const { stepKey, data, expertProfileId: profileId } = flushStateRef.current;
+      const {
+        stepKey,
+        data,
+        expertProfileId: profileId,
+        isAnonymous: anonymous,
+      } = flushStateRef.current;
+      // No anonymous writes, anywhere — this path POSTs to an auth-gated route.
+      // sessionStorage (via `performSave`/`scheduleAnonymousSave`) is the anonymous
+      // persistence layer; there is nothing for this unload beacon to do.
+      if (anonymous) return;
       // Only flush when there are unsaved changes relative to THAT step's last save...
       const serialized = JSON.stringify(data);
       if (serialized === lastSavedByStepRef.current[stepKey]) return;
@@ -618,9 +753,13 @@ export function ExpertApplicationProvider({
         terms: (d) => setTermsData(d as Partial<TermsStepData>),
       };
       setters[step](data);
-      scheduleIdleSave();
+      if (isAnonymous) {
+        scheduleAnonymousSave();
+      } else {
+        scheduleIdleSave();
+      }
     },
-    [scheduleIdleSave]
+    [scheduleIdleSave, scheduleAnonymousSave, isAnonymous]
   );
 
   const goToStep = useCallback(
@@ -728,6 +867,14 @@ export function ExpertApplicationProvider({
   }, [expertProfileId]);
 
   const abandon = useCallback(async (): Promise<void> => {
+    // WARNING 5 — defense in depth. `WizardActionBar` hides `SaveExitButton` for an
+    // anonymous visitor (there's nothing distinct for it to do — anonymous progress
+    // already persists continuously via `scheduleAnonymousSave`), but if this were
+    // ever invoked anonymously anyway, `router.push('/dashboard')` below would
+    // dead-end at `/login` (middleware) — directly contradicting "come back
+    // anytime". No-op instead of lying.
+    if (isAnonymous) return;
+
     // Save current state before leaving; bail if it fails so the user keeps
     // their data and doesn't get a false "saved" confirmation.
     const saved = await performSave();
@@ -747,13 +894,111 @@ export function ExpertApplicationProvider({
 
     toast.success('Your progress has been saved. Come back anytime!');
     router.push('/dashboard');
-  }, [currentStep, performSave, router]);
+  }, [currentStep, performSave, router, isAnonymous]);
 
   // Cleanup idle timer on unmount
   useEffect(() => {
     return () => {
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      if (anonSaveTimerRef.current) clearTimeout(anonSaveTimerRef.current);
     };
+  }, []);
+
+  // BAL-502 §22.9/§22.11 — the post-auth flush. Triggers on the wizard mounting (or
+  // re-rendering after a same-tab auth transition) WITH a session AND a pending
+  // anonymous envelope — deliberately NOT the auth modal's `onSuccess`, because the
+  // WorkOS OAuth path is a full-page redirect that may land anywhere, so an
+  // `onSuccess`-triggered flush would never fire for OAuth signups. Depending on
+  // `user` (rather than `[]`) covers both: a fresh mount that already has a session
+  // (OAuth round-trip back to this page) and a props update from null → non-null on
+  // the SAME mount (the email-modal path, via `router.refresh()`).
+  const hasAttemptedFlushRef = useRef(false);
+  useEffect(() => {
+    if (!user) return;
+    if (hasAttemptedFlushRef.current) return;
+    hasAttemptedFlushRef.current = true;
+
+    const envelope = readAnonymousDraft();
+    if (!envelope) return; // No pending envelope — nothing to flush, no toast.
+
+    // WARNING 6 — refuse to attribute a STALE envelope to whoever happens to be
+    // signing in right now (shared/kiosk browser: a draft that has sat untouched
+    // for hours belongs to whoever left the tab open, not necessarily to the
+    // person currently authenticating in it). `authGateAt` is stamped only at the
+    // deliberate submit-gate moment (`saveAnonymousDraftNow`); its absence or age
+    // beyond the window means this session never proved the draft is its own.
+    // A NEGATIVE age (future-dated `authGateAt`) is rejected too, not just an
+    // over-window one: clock skew aside, a future stamp would otherwise keep an
+    // envelope "fresh" indefinitely and re-open the exact window this guard
+    // bounds. Only a stamp in the past can have been made by a real submit gate.
+    const gateAgeMs = envelope.authGateAt
+      ? Date.now() - Date.parse(envelope.authGateAt)
+      : Number.NaN;
+    if (!Number.isFinite(gateAgeMs) || gateAgeMs < 0 || gateAgeMs > AUTH_GATE_FLUSH_WINDOW_MS) {
+      clearAnonymousDraft(); // Untrustworthy — don't leave it around to be re-tried.
+      return; // No toast — this identity never proved the draft belongs to it.
+    }
+
+    let cancelled = false;
+
+    flushAnonymousDraft({ draft: envelope, hasServerDraft: draft !== null })
+      .then((result) => {
+        if (cancelled) return;
+
+        track(EXPERT_EVENTS.APPLICATION_DRAFT_FLUSHED, {
+          outcome: result.outcome,
+          steps_flushed: result.stepsFlushed,
+        });
+
+        if (result.outcome === 'flushed') {
+          clearAnonymousDraft();
+          // CRITICAL 1 / HIGH 2 — `router.refresh()` cannot rehydrate this
+          // provider (see the comment on `FLUSH_SUCCESS_TOAST` above): its state
+          // comes from `useState(() => hydrate*(draft))` lazy initializers that
+          // only run once, and nothing puts a `key` on the provider to force a
+          // remount. A soft refresh would leave the wizard showing whatever the
+          // anonymous session had in memory while `expertProfileId` stays stuck
+          // at null (`submitApplication` then permanently returns "No
+          // application to submit"). A REAL reload is the only fix — it forces a
+          // fresh mount that re-derives every field, including step-completion
+          // status, from the server draft the flush just wrote.
+          reloadWithToast(FLUSH_SUCCESS_TOAST);
+        } else if (result.outcome === 'superseded') {
+          // Server wins (§22.11) — an existing server-side draft for this account
+          // always supersedes the anonymous envelope. Discard, don't merge: the
+          // two sides aren't comparable, and merging would destroy real data.
+          // Same reload requirement as 'flushed' — otherwise the visitor keeps
+          // looking at their now-discarded anonymous entries while the "server
+          // wins" toast claims otherwise, AND `expertProfileId` never picks up
+          // the pre-existing server draft's real id (CRITICAL 1).
+          clearAnonymousDraft();
+          reloadWithToast(FLUSH_SUPERSEDED_TOAST);
+        } else if (result.outcome === 'failed') {
+          // Keep the envelope — every per-step write is idempotent, so a retry
+          // (e.g. a later visit in the same tab) is possible. No identity change
+          // happened, so no reload is needed here.
+          toast.error(FLUSH_FAILED_TOAST);
+        }
+        // 'nothing_to_flush' — the envelope carried no profile step data; nothing to
+        // do, no toast.
+      })
+      .catch(() => {
+        if (!cancelled) toast.error(FLUSH_FAILED_TOAST);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  // BAL-502 FIX round (CRITICAL 1 / HIGH 2) — replays the toast stashed by
+  // `reloadWithToast` immediately before it forced the document reload above. Runs
+  // unconditionally on mount (both anonymous and authenticated) since by the time
+  // this fresh mount exists, the reload has already happened.
+  useEffect(() => {
+    const pending = consumePendingToast();
+    if (pending) toast.success(pending);
   }, []);
 
   const value = useMemo<WizardContextType>(
@@ -774,6 +1019,7 @@ export function ExpertApplicationProvider({
       termsData,
       referenceData,
       user,
+      isAnonymous,
       goToStep,
       goNext,
       goPrevious,
@@ -786,6 +1032,7 @@ export function ExpertApplicationProvider({
       triggerSave,
       submitApplication: submitApplicationFn,
       abandon,
+      saveAnonymousDraftNow,
     }),
     [
       expertProfileId,
@@ -804,6 +1051,7 @@ export function ExpertApplicationProvider({
       termsData,
       referenceData,
       user,
+      isAnonymous,
       goToStep,
       goNext,
       goPrevious,
@@ -816,6 +1064,7 @@ export function ExpertApplicationProvider({
       triggerSave,
       submitApplicationFn,
       abandon,
+      saveAnonymousDraftNow,
     ]
   );
 

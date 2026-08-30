@@ -208,4 +208,58 @@ describe('OnboardingWizard', () => {
     render(<OnboardingWizard firstName="Sarah" />);
     expect(screen.getByText(/finish setting up your account to continue/i)).toBeInTheDocument();
   });
+
+  // ── HIGH 3 (BAL-502 FIX round) — pending apply-intent threading ───
+
+  describe('pending apply-intent (?returnTo=/expert/apply)', () => {
+    it('applicant-with-pending-intent: the CLIENT path (picked "Find an Expert" by mistake) still lands back on /expert/apply, not /dashboard', async () => {
+      mockSearchParams = new URLSearchParams('returnTo=%2Fexpert%2Fapply');
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="email" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /find an expert/i }));
+      await user.click(screen.getByRole('button', { name: /^continue$/i }));
+
+      await waitFor(() => expect(mockNameWorkspace).toHaveBeenCalledWith('Acme'));
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
+      expect(mockPush).not.toHaveBeenCalledWith('/dashboard');
+    });
+
+    it('applicant-with-pending-intent: the EXPERT path also lands on /expert/apply (already did — this pins it does not regress)', async () => {
+      mockSearchParams = new URLSearchParams('returnTo=%2Fexpert%2Fapply');
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="oauth_google" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /become an expert/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/expert/apply'));
+    });
+
+    it('ordinary signup (no returnTo param): the CLIENT path is completely unaffected — still lands on /dashboard', async () => {
+      mockSearchParams = new URLSearchParams(); // no returnTo
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="email" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /find an expert/i }));
+      await user.click(screen.getByRole('button', { name: /^continue$/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+      expect(mockPush).not.toHaveBeenCalledWith('/expert/apply');
+    });
+
+    it('an unrelated returnTo value is NOT treated as a pending apply-intent (narrow exact match only)', async () => {
+      mockSearchParams = new URLSearchParams('returnTo=%2Fexperts');
+      const user = userEvent.setup();
+      render(<OnboardingWizard firstName="Sarah" authMethod="email" />);
+
+      await advanceToIntent(user);
+      await user.click(screen.getByRole('button', { name: /find an expert/i }));
+      await user.click(screen.getByRole('button', { name: /^continue$/i }));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
+    });
+  });
 });

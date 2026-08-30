@@ -14,6 +14,7 @@ import { SocialAuthButtons } from '../social-auth-buttons';
 import { AuthDivider } from '../auth-divider';
 import { signUpAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
+import { buildOnboardingUrl } from '@/lib/auth/onboarding-return-to';
 import { unifiedSignUpSchema, type UnifiedSignUpFormData } from '../schemas';
 
 interface SignupStepProps {
@@ -59,7 +60,12 @@ export function SignupStep({
             platform_role: result.data.platformRole,
           });
           if (result.data.needsOnboarding) {
-            router.push('/onboarding');
+            // HIGH 3 (BAL-502 FIX round) — a brand-new signup started from the
+            // anonymous /expert/apply wizard must land back there once onboarding
+            // completes, or the filled application dead-ends in sessionStorage.
+            // `buildOnboardingUrl` recognises ONLY that origin — every other
+            // signup keeps pushing to plain `/onboarding`, unaffected.
+            router.push(buildOnboardingUrl(globalThis.location.pathname));
           }
           onSuccess();
         } else if (result.data?.pendingAuthToken) {

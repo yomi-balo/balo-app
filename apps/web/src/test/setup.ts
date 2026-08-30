@@ -142,6 +142,12 @@ vi.mock('@/lib/analytics', async () => {
     // `reference_web_analytics_test_mock_export_list`). ⚠ `WORKSPACE_SERVER_EVENTS` must NEVER
     // join this list — this mock stands in for `@/lib/analytics`, the CLIENT barrel.
     WORKSPACE_EVENTS: events.WORKSPACE_EVENTS,
+    // BAL-502 — the marketing chrome's CLIENT event + canonical link/surface tuples. ⚠ WITHOUT
+    // THIS LINE every test whose module graph reaches the marketing header or mobile menu
+    // throws on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
+    MARKETING_EVENTS: events.MARKETING_EVENTS,
+    MARKETING_NAV_LINKS: events.MARKETING_NAV_LINKS,
+    MARKETING_SURFACES: events.MARKETING_SURFACES,
     initAnalytics: vi.fn(),
   };
 });

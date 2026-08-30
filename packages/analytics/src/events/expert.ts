@@ -11,7 +11,16 @@ export const EXPERT_EVENTS = {
   REFERRAL_INVITES_SENT: 'expert_referral_invites_sent', // numerator (invites dispatched)
   // BAL-337 — fired when Done is clicked on a product with no rating yet.
   ASSESSMENT_DONE_BLOCKED: 'expert_application_assessment_done_blocked',
+  // BAL-502 §22 — the anonymous-viewable /expert/apply wizard.
+  APPLICATION_ANONYMOUS_STARTED: 'expert_application_anonymous_started',
+  APPLICATION_AUTH_GATE_REACHED: 'expert_application_auth_gate_reached',
+  APPLICATION_DRAFT_FLUSHED: 'expert_application_draft_flushed',
 } as const;
+
+/** The outcome of replaying an anonymous sessionStorage draft (BAL-502 §22.9). Kept
+ * as a local literal union rather than imported from apps/web — packages/analytics
+ * must not depend on the consuming app. */
+export type DraftFlushOutcome = 'flushed' | 'superseded' | 'failed' | 'nothing_to_flush';
 
 export type ExpertStepName =
   | 'profile'
@@ -55,6 +64,15 @@ export interface ExpertEventMap {
   };
   [EXPERT_EVENTS.ASSESSMENT_DONE_BLOCKED]: {
     product_id: string;
+  };
+  [EXPERT_EVENTS.APPLICATION_ANONYMOUS_STARTED]: Record<string, never>;
+  [EXPERT_EVENTS.APPLICATION_AUTH_GATE_REACHED]: {
+    last_step: ExpertStepName;
+    step_number: number;
+  };
+  [EXPERT_EVENTS.APPLICATION_DRAFT_FLUSHED]: {
+    outcome: DraftFlushOutcome;
+    steps_flushed: number;
   };
 }
 

@@ -19,6 +19,12 @@ interface IntentStepProps {
   // BAL-350: the CLIENT branch ADVANCES to the company step (client terminal)
   // instead of completing here. The EXPERT branch still completes at Intent.
   onClientContinue: () => void;
+  /** HIGH 3 (BAL-502 FIX round) — non-null only for a signup that started at the
+   * anonymous /expert/apply wizard. Overrides the computed terminal redirect so
+   * that population always lands back there, regardless of which intent they
+   * pick here — losing the filled application because they clicked "Find an
+   * Expert" first is a worse outcome than a redirect override. */
+  pendingApplyReturnTo?: string | null;
 }
 
 type Intent = 'client' | 'expert';
@@ -34,7 +40,7 @@ const item = {
 };
 
 export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(function IntentStep(
-  { onBack, timezone, stepNumber = 3, onClientContinue },
+  { onBack, timezone, stepNumber = 3, onClientContinue, pendingApplyReturnTo = null },
   ref
 ) {
   const router = useRouter();
@@ -82,7 +88,11 @@ export const IntentStep = forwardRef<HTMLHeadingElement, IntentStepProps>(functi
           intent: 'expert',
           timezone: timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         });
-        router.push(result.data?.redirectTo ?? '/dashboard');
+        // HIGH 3 — `pendingApplyReturnTo` wins when present; otherwise unchanged
+        // (the expert intent's computed `redirectTo` is already `/expert/apply`
+        // today, so this is a no-op for that branch and only matters as a
+        // defensive floor / for future redirectTo changes).
+        router.push(pendingApplyReturnTo ?? result.data?.redirectTo ?? '/dashboard');
       } else {
         // Allow a retry after a failed expert completion.
         submittingRef.current = false;

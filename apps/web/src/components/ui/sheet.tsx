@@ -30,7 +30,13 @@ function SheetOverlay({
     <SheetPrimitive.Overlay
       data-slot="sheet-overlay"
       className={cn(
-        'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50',
+        // BAL-502 FIX round — `motion-reduce:animate-none` (the idiom already used across this
+        // repo, e.g. `meeting-overlay.tsx`) so the scrim fade is inert under
+        // prefers-reduced-motion. Fixed once here rather than per call site — every consumer of
+        // Sheet (14 at last count: auth modal, booking/reschedule dialogs, filter sheet, the
+        // marketing mobile menu, etc.) gets the guard for free, and none loses existing behavior
+        // outside reduced-motion.
+        'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50 motion-reduce:animate-none',
         className
       )}
       {...props}
@@ -54,7 +60,9 @@ function SheetContent({
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
+          // BAL-502 FIX round — `motion-reduce:animate-none` (see `SheetOverlay` above for the
+          // rationale; same fix, same reused idiom, applied once for every Sheet consumer).
+          'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 motion-reduce:animate-none',
           side === 'right' &&
             'data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-3/4 border-l sm:max-w-sm',
           side === 'left' &&

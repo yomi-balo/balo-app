@@ -509,16 +509,19 @@ describe('ExpertProfileClient — CTA handlers', () => {
 describe('ExpertProfileClient — IntersectionObserver effects', () => {
   type Cb = (entries: ReadonlyArray<Partial<IntersectionObserverEntry>>) => void;
   const callbacks: Cb[] = [];
+  const observerInits: IntersectionObserverInit[] = [];
   const original = globalThis.IntersectionObserver;
 
   beforeEach(() => {
     vi.clearAllMocks();
     callbacks.length = 0;
+    observerInits.length = 0;
     // Capture each observer's callback so the test can feed it entries, exercising
     // the scroll-spy (client) and section-viewed (analytics) callback bodies.
     class CapturingObserver {
-      constructor(cb: IntersectionObserverCallback) {
+      constructor(cb: IntersectionObserverCallback, init?: IntersectionObserverInit) {
         callbacks.push(cb as unknown as Cb);
+        if (init) observerInits.push(init);
       }
       observe(): void {}
       unobserve(): void {}
@@ -574,5 +577,32 @@ describe('ExpertProfileClient — IntersectionObserver effects', () => {
       expert_id: 'expert-1',
       section: 'expertise',
     });
+  });
+
+  // ⚠ BAL-502 FIX round — the scroll-spy's rootMargin top offset must match the sections'
+  // `scroll-mt-[128px]`. A regression here (e.g. reverting to the stale `-72px`) means the
+  // active-nav pill highlights a section still hidden behind the sticky header + StickyNav.
+  it('scroll-spy rootMargin top offset matches the sections scroll-mt (128px)', () => {
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+
+    // Isolate the scroll-spy's own observer: the analytics observer in
+    // `ExpertProfileAnalytics` sets no `rootMargin` at all, and the mounted
+    // `ProjectRequestPanel` registers its own (a positive `200px` lookahead) — neither
+    // matches the scroll-spy's negative top-offset shape.
+    const scrollSpyInits = observerInits.filter(
+      (init) => typeof init.rootMargin === 'string' && init.rootMargin.startsWith('-')
+    );
+    expect(scrollSpyInits.length).toBeGreaterThanOrEqual(1);
+    for (const init of scrollSpyInits) {
+      expect(init.rootMargin).toBe('-128px 0px -55% 0px');
+    }
   });
 });
