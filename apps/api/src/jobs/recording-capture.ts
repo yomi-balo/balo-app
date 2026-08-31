@@ -76,6 +76,9 @@ export async function enqueueRecordingEnsure(input: EnqueueRecordingEnsureInput)
       jobId: `recording-ensure--${input.meetingId}--${input.dedupeToken}`,
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
+      // BAL-508 — latency-sensitive: outranks `stop` under the 1/s limiter. See the constant's
+      // docblock, further down beside `DAILY_RECORDING_START_LIMITER`.
+      priority: RECORDING_ENSURE_PRIORITY,
     }
   );
 }
@@ -99,6 +102,10 @@ export async function enqueueRecordingStop(input: EnqueueRecordingStopInput): Pr
       jobId: `recording-stop--${input.meetingId}`,
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
+      // ⚠ BAL-508 — MUST be set EXPLICITLY, never omitted or left at 0. An unprioritized job
+      // lands in the plain `wait` list, which BullMQ drains before the prioritized ZSET — it
+      // would jump ahead of every `ensure` and invert this ticket. See the constant's docblock.
+      priority: RECORDING_STOP_PRIORITY,
     }
   );
 }
@@ -454,7 +461,16 @@ async function handleEnsure(job: Job<RecordingEnsureJobData>): Promise<void> {
       distinct_id: meetingId,
     });
     log.info(
-      { meetingId, recordingId: row.id, trigger },
+      {
+        meetingId,
+        recordingId: row.id,
+        trigger,
+        // BAL-508 — queue wait for this ensure: the ops signal (Axiom, not PostHog) for whether
+        // the priority change is doing its job. ⚠ On a RETRIED job `job.timestamp` stays the
+        // ORIGINAL creation time, so this includes exponential backoff and is NOT pure queue
+        // wait — read attempt 1 when you want the queueing signal alone.
+        waitedMs: Date.now() - job.timestamp,
+      },
       'recording-ensure: Daily recording started'
     );
   } catch (error) {
@@ -524,17 +540,90 @@ async function handleStop(job: Job<RecordingStopJobData>): Promise<void> {
  *     `minIdleTimeOut` (60s) regardless of whether our stop request has run, and
  *     `stopRoomRecording` maps the resulting 400/404 to `nothing_to_stop`. A delayed stop
  *     costs nothing; it can only arrive after Daily already did the work.
- *   · BullMQ DELAYS, IT DOES NOT FAIL. A rate-limited job is moved back to `wait`
- *     (`Worker.moveLimitedBackToWait`) and retried when the window opens — no attempt is
- *     consumed, so this cannot burn the `attempts: 3` budget.
+ *   · BullMQ DELAYS, IT DOES NOT FAIL — AND SINCE BAL-508, A PRIORITIZED JOB KEEPS ITS PLACE.
+ *     Under this automatic limiter a rate-limited job is never popped in the first place: it
+ *     stays in the prioritized ZSET with its original score, because `moveToActive-11.lua`
+ *     checks the window before dequeuing anything. On the manual `worker.rateLimit()` path it is
+ *     pushed back to the FRONT of its own priority band (`pushBackJobWithPriority`), not to the
+ *     `wait` tail. Either way no attempt is consumed, so this cannot burn the `attempts: 3`
+ *     budget.
  *
- * ⚠ RESIDUAL, STATED RATHER THAN HIDDEN: this is head-of-line, not priority-aware. A large
- * simultaneous `stop` burst (many meetings ending in one tick) delays a brand-new meeting's
- * `ensure` behind it at 1/s. Fixing that needs BullMQ job priority, which is a separate ticket
- * — the trade is accepted because the alternative failure mode (a 429 storm permanently
- * disabling recording) is unrecoverable, and this one is a bounded delay.
+ * ⚠ RESIDUAL CLOSED BY BAL-508 — THIS TAP IS NOW PRIORITY-AWARE. A large simultaneous `stop`
+ * burst (many meetings ending in one tick) no longer delays a brand-new meeting's `ensure`
+ * behind it: `ensure` outranks `stop` on every enqueue. Values, numeric direction, the docs
+ * check behind them, and what remains ACCEPTED (a `stop` can starve; a one-time inversion in the
+ * rolling-deploy window) live on `RECORDING_ENSURE_PRIORITY` / `RECORDING_STOP_PRIORITY`
+ * immediately below. The limiter itself is deliberately UNCHANGED — priority reorders the queue,
+ * it does not widen the tap, and the reason for the tap (a 429 storm burning
+ * `MAX_DAILY_FAILURES_PER_MEETING` and permanently disabling recording) is untouched.
  */
 const DAILY_RECORDING_START_LIMITER = { max: 1, duration: 1000 } as const;
+
+/**
+ * BAL-508 — JOB PRIORITY ON THIS ONE QUEUE (not a second queue: the limiter above is per-queue,
+ * so splitting would split the 1/s budget across two workers and need coordinating). `ensure` and
+ * `stop` share that tap and have OPPOSITE latency profiles, which makes FIFO the wrong order:
+ *   · `stop` MAY ALWAYS WAIT. Daily auto-stops an idle segment on `minIdleTimeOut` (60s) whether
+ *     or not our request ever runs, and `stopRoomRecording` maps the resulting 400/404 to
+ *     `nothing_to_stop`. A late stop can only ever arrive after Daily already did the work.
+ *   · `ensure` MAY NOT. Until it runs, a billable consultation is NOT BEING RECORDED — and the
+ *     webhook-origin ensures (`participant.joined`) are exactly the ones that must not queue
+ *     behind housekeeping. Before this, N meetings ending in one minute delayed a brand-new
+ *     meeting's `ensure` by up to N seconds at 1/s.
+ *
+ * ⚠⚠ BOTH VALUES MUST BE >= 1, AND BOTH HELPERS MUST SET ONE. `priority: 0` is NOT "highest
+ * priority", despite BullMQ's own JSDoc on the option ("Ranges from 0 (highest priority)"): `0`
+ * is FALSY, so `classes/scripts.js` skips the prioritized branch and RPUSHes the job onto the
+ * plain `wait` LIST, and `moveToActive-11.lua` drains that list ENTIRELY before it consults the
+ * prioritized ZSET. An unprioritized job therefore beats EVERY prioritized job, unconditionally.
+ * Two consequences, both of which would typecheck and look right:
+ *   · `ensure: 0` would "work" only via the unprioritized-vs-prioritized interleaving this ticket
+ *     explicitly refuses to depend on (a semantic that shifts between majors).
+ *   · prioritising `ensure` alone and leaving `stop` unprioritized would INVERT the intended
+ *     order — every `stop` ahead of every `ensure` — i.e. strictly worse than shipping nothing.
+ *
+ * DOCS CHECK (Scope 3), performed against bullmq@5.70.4, the version `apps/api/package.json`
+ * pins and the one installed:
+ *   · DIRECTION — BullMQ Guide → Jobs → Prioritized <https://docs.bullmq.io/guide/jobs/prioritized>,
+ *     verbatim: "prioritized jobs use values from 1 to 2 097 151, where a lower number is always a
+ *     higher priority than higher numbers", with FIFO within one value. So `ensure` takes the
+ *     NUMERICALLY SMALLER number. Corroborated in code: `getPriorityScore` composes the ZSET score
+ *     as `priority * 0x100000000 + counter` and `moveJobFromPrioritizedToActive` pops with ZPOPMIN.
+ *   · PRIORITY × LIMITER — ⚠ THE PUBLIC DOCS ARE SILENT ON THIS INTERACTION. BullMQ Guide → Rate
+ *     limiting <https://docs.bullmq.io/guide/rate-limiting> says only that rate-limited jobs
+ *     "stay in the waiting state". The two properties this design needs were therefore verified
+ *     against the SHIPPED LUA in bullmq@5.70.4 — do not re-attribute them to the docs:
+ *       (a) A RATE-LIMITED JOB KEEPS ITS PLACE. Under the automatic `limiter` option — our path —
+ *           `moveToActive-11.lua` checks the window BEFORE popping anything and returns early, so
+ *           the job is never dequeued at all and keeps its original score. On the manual
+ *           `worker.rateLimit()` path, `moveJobFromActiveToWait-9.lua` branches on priority into
+ *           `pushBackJobWithPriority.lua`, which re-scores with counter 0 — the FRONT of its own
+ *           band. (That branch's `else` RPUSHes an UNPRIORITIZED job to the wait-list TAIL: an
+ *           independent second reason both helpers must set a priority.)
+ *       (b) NO `attempts` UNIT IS CONSUMED. The job never becomes active on the automatic path,
+ *           and `Worker`'s RATE_LIMIT_ERROR branch returns before `shouldRetryJob` on the manual
+ *           one; neither Lua script writes `attemptsMade`. The limiter bullet above still holds.
+ *
+ * ⚠ JOBID DEDUPE KEEPS THE FIRST JOB'S OPTS — BY DESIGN, DO NOT "FIX" IT. `addStandardJob-9.lua`
+ * returns early through `handleDuplicatedJob` when the job key already exists and never rewrites
+ * the hash, so a deduped re-enqueue cannot change a live job's priority. Unobservable for both
+ * helpers, for different reasons: `ensure`'s jobId carries a PER-TRIGGER dedupe token (a Daily
+ * event id, or a per-minute sweep bucket), so a genuinely new trigger is a NEW jobId and gets a
+ * fresh, correctly-prioritized job; `stop`'s jobId is per-meeting and enqueued exactly once, on a
+ * terminal CAS transition, so there is no second enqueue whose priority could differ.
+ *
+ * ⚠ ACCEPTED, NOT OVERLOOKED: `stop` CAN STARVE. The prioritized set is a plain ZSET drained by
+ * ZPOPMIN with no aging term anywhere, so sustained `ensure` load can hold `stop` back
+ * indefinitely. Accepted rather than fixed with weighted fairness or priority aging: a starved
+ * `stop` is a no-op Daily has already performed itself on `minIdleTimeOut`.
+ *
+ * ⚠ ONE-TIME ROLLING-DEPLOY EFFECT — EXPECTED, NOT A REGRESSION. Jobs already sitting in `wait`
+ * when this deploys were enqueued unprioritized, so by the read path above they drain AHEAD of
+ * every newly-prioritized `ensure`. Bounded by queue depth ÷ 1/s and self-clearing: expect one
+ * `waitedMs` bump in Axiom on deploy day and nothing after.
+ */
+export const RECORDING_ENSURE_PRIORITY = 1;
+export const RECORDING_STOP_PRIORITY = 10;
 
 /**
  * Start the `recording-capture` worker — event-triggered, no cron. Dispatches on `job.name`.
