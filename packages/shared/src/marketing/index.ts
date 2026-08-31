@@ -22,13 +22,27 @@
  * ⚠ ZERO IMPORTS, DELIBERATELY (see @balo/shared/availability for the Turbopack rationale).
  * No `.js` extensions on any relative import in packages/shared.
  *
- * ⚠ SHIPS EMPTY. The list is a content decision and there is no consent record yet —
- * shipping usernames the builder invents would be exactly the misrepresentation D2 exists to
- * prevent. The 0-card state (`apps/web/src/app/(marketing)/_home/experts-section.tsx`) is
- * therefore the shipped default, and it is designed, not degraded. The admin UI to edit this
- * list is out of scope for BAL-493 — editing the const is a code change until BAL-398 lands.
+ * ⚠⚠ THE ENTRIES BELOW ARE SEEDED TEST DATA, NOT CURATED REAL EXPERTS. They are usernames
+ * from the dev database's generated fixtures, added at Yomi's request so the spotlight renders
+ * during development. They are NOT a consent record and MUST be replaced before this surface
+ * is shown to real traffic. Two properties make that safe to sit here in the meantime:
+ *   1. the read re-checks `searchable = true AND approved_at IS NOT NULL` per entry, and
+ *   2. an unresolvable username is simply omitted (`load-home-data.ts`), so in an environment
+ *      where these fixtures do not exist the section falls back to its 0-card invitation state
+ *      rather than erroring.
+ * When real experts are curated, REPLACE this array wholesale and delete this warning.
+ *
+ * The 0-card state (`apps/web/src/app/(marketing)/_home/experts-section.tsx`) remains a
+ * designed state, not a degraded one — it is what an empty or fully-filtered list renders.
+ * The admin UI to edit this list is out of scope for BAL-493 — editing the const is a code
+ * change until BAL-398 lands.
  */
-export const FEATURED_EXPERT_USERNAMES: readonly string[] = [] as const;
+export const FEATURED_EXPERT_USERNAMES: readonly string[] = [
+  // TODO(Yomi/MJ): dev-fixture usernames — replace with consented real experts before launch.
+  'gustavo-cruickshank-1',
+  'herbert-connelly-2',
+  'freda-macgyver-3',
+] as const;
 
 /** The spotlight never renders more than this many cards, regardless of list length. */
 export const FEATURED_EXPERT_LIMIT = 3;

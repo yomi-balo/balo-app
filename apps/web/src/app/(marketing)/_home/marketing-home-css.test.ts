@@ -215,6 +215,39 @@ describe('marketing-home.css — stripped prototype-only surfaces', () => {
   });
 });
 
+describe('marketing-home.css — button colours beat the anchor reset (BAL-493 follow-up)', () => {
+  /**
+   * REGRESSION GUARD for a real, user-visible defect found by rendering the page.
+   *
+   * `.mk-page a { color: inherit }` is specificity (0,1,1); every `.mk-btn-*` colour is a
+   * single class, (0,1,0). So a CTA rendered as a <Link> inherited its SECTION's colour
+   * instead of its own — and on the dark "For experts" band and the gradient final-CTA card
+   * that colour is white, so `.mk-btn-white` shipped WHITE TEXT ON WHITE and the labels
+   * "Apply to join" and "Find an expert" were invisible.
+   *
+   * The `a.mk-btn-*` rules are (0,2,1) and win. If someone "simplifies" them away, the
+   * buttons go invisible again in exactly two places that no jsdom test can see (jsdom does
+   * not compute the cascade), which is why this is a source scan.
+   */
+  it('scopes every coloured button class for anchors', () => {
+    for (const sel of [
+      '.mk-page a.mk-btn-white',
+      '.mk-page a.mk-btn-outline-light',
+      '.mk-page a.mk-btn-ghost',
+      '.mk-page a.mk-btn-text',
+    ]) {
+      expect(marketingHomeCss).toContain(sel);
+    }
+    // solid + grad share one rule; assert both selectors are present in it.
+    expect(marketingHomeCss).toContain('.mk-page a.mk-btn-solid');
+    expect(marketingHomeCss).toContain('.mk-page a.mk-btn-grad');
+  });
+
+  it('still resets ordinary prose links to inherit', () => {
+    expect(marketingHomeCss).toContain('.mk-page a {');
+  });
+});
+
 describe('marketing-home.css — no hex-colour literal anywhere', () => {
   // This port uses zero hex literals full stop (var()/color-mix()/rgba()/named keywords
   // only, including `black` in place of the ref's `#000` mask stops) — a strictly
