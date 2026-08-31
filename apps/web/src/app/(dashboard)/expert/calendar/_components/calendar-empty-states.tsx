@@ -13,8 +13,13 @@ interface NoCalendarConnectedEmptyStateProps {
 /**
  * Empty state (a) — no calendar connected. Invitation-framed (balo-ui-skill: keep-with-
  * invitation), takes priority over (b), keyed on `checklist.items.calendar` (never meeting
- * count). CTA fires `calendar_edit_availability_clicked` with `source: 'empty_state_no_calendar'`
- * — a materially different intent from the header action, sharing one destination (D4 / plan §9).
+ * count). CTA fires `calendar_connect_cta_clicked` with `source: 'empty_state'`.
+ *
+ * ⚠ BAL-512 MOVED THIS EVENT. It used to fire
+ * `calendar_edit_availability_clicked { source: 'empty_state_no_calendar' }`, which put a
+ * CONNECTION intent into the availability-UPKEEP funnel — the two things BAL-498's business
+ * questions ask about separately. The destinations were never the same either: this CTA goes to
+ * `?tab=schedule&setup=calendar`, the header action to `?tab=schedule`. Do not move it back.
  */
 export function NoCalendarConnectedEmptyState({
   href,
@@ -32,9 +37,7 @@ export function NoCalendarConnectedEmptyState({
       <div className="mt-6 flex justify-center">
         <Button
           asChild
-          onClick={() =>
-            track(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED, { source: 'empty_state_no_calendar' })
-          }
+          onClick={() => track(CALENDAR_EVENTS.CONNECT_CTA_CLICKED, { source: 'empty_state' })}
         >
           {/* R5 — an ordinary in-app settings route: `next/link`, not a full document reload. */}
           <Link href={href}>Connect your calendar</Link>

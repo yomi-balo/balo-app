@@ -7,6 +7,7 @@ import {
   zonedMinutesOfDay,
   addDaysToDayKey,
   weekStartDayKey,
+  weeksBetweenDayKeys,
   formatZonedTimeRange,
   zonedMeetingSpan,
 } from './zoned-grid';
@@ -108,6 +109,75 @@ describe('weekStartDayKey', () => {
 
   it('a Sunday maps back to the previous Monday, across a year boundary', () => {
     expect(weekStartDayKey('2027-01-03')).toBe('2026-12-28');
+  });
+});
+
+describe('weeksBetweenDayKeys (BAL-512)', () => {
+  it('is 0 for the same day key', () => {
+    expect(weeksBetweenDayKeys('2026-08-24', '2026-08-24')).toBe(0);
+  });
+
+  it('normalises BOTH arguments to their Monday week start, so mid-week keys in the same week are 0', () => {
+    expect(weeksBetweenDayKeys('2026-08-24', '2026-08-27')).toBe(0);
+    expect(weeksBetweenDayKeys('2026-08-27', '2026-08-24')).toBe(0);
+  });
+
+  it('counts forward across whole weeks', () => {
+    expect(weeksBetweenDayKeys('2026-08-24', '2026-09-07')).toBe(2);
+  });
+
+  it('counts backward with a negative sign', () => {
+    expect(weeksBetweenDayKeys('2026-08-24', '2026-08-10')).toBe(-2);
+  });
+
+  it('normalises when NEITHER argument is a week start', () => {
+    // '2026-08-27' (Thu, week of 08-24) -> '2026-09-09' (Wed, week of 09-07) === 2
+    expect(weeksBetweenDayKeys('2026-08-27', '2026-09-09')).toBe(2);
+  });
+
+  it('treats Sunday as the END of its week, not the start (Monday-anchored)', () => {
+    // '2026-08-30' (Sun, week of 08-24) -> '2026-08-31' (Mon) === 1
+    expect(weeksBetweenDayKeys('2026-08-30', '2026-08-31')).toBe(1);
+  });
+
+  it('crosses a year boundary', () => {
+    expect(weeksBetweenDayKeys('2026-12-28', '2027-01-04')).toBe(1);
+  });
+
+  // ── DST-crossing contract pins (the ticket asks for one; both Sydney transitions are pinned
+  // because the module's existing DST block pins both). They PASS today and must keep passing.
+  //
+  // ⚠ WHAT THEY DO NOT DO: they cannot catch a rewrite of the helper onto a browser-local
+  // `Date`. A transition shifts the range by one hour — 0.006 of a week — and the `Math.round`
+  // in `weeksBetweenDayKeys` absorbs it long before it could change the answer, so no assertion
+  // on the RETURN VALUE can see the difference. The real guarantee is the `Z` suffix on the two
+  // parses in the helper; these cases pin the contract, not that implementation choice.
+  it('spans Australia/Sydney SPRING FORWARD (2026-10-04) without losing an hour', () => {
+    // '2026-09-28' (Mon) -> '2026-10-12' (Mon) === 2 — 14 calendar days containing a 23-hour day.
+    expect(weeksBetweenDayKeys('2026-09-28', '2026-10-12')).toBe(2);
+  });
+
+  it('spans Australia/Sydney FALL BACK (2026-04-05) without gaining an hour', () => {
+    // '2026-03-30' (Mon) -> '2026-04-13' (Mon) === 2 — 14 calendar days containing a 25-hour day.
+    expect(weeksBetweenDayKeys('2026-03-30', '2026-04-13')).toBe(2);
+  });
+
+  it('is independent of the host process TZ', () => {
+    // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
+    const originalTz = process.env.TZ;
+    // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
+    process.env.TZ = 'Pacific/Kiritimati'; // UTC+14 — transitions at local midnight for many zones
+    try {
+      expect(weeksBetweenDayKeys('2026-09-28', '2026-10-12')).toBe(2);
+    } finally {
+      // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
+      process.env.TZ = originalTz;
+    }
+  });
+
+  it('throws rather than coercing an invalid day key, from either position', () => {
+    expect(() => weeksBetweenDayKeys('nope', '2026-08-24')).toThrow(/invalid day key/);
+    expect(() => weeksBetweenDayKeys('2026-08-24', 'nope')).toThrow(/invalid day key/);
   });
 });
 

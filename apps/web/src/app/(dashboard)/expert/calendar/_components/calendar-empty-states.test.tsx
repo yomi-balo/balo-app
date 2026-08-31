@@ -37,13 +37,22 @@ describe('NoCalendarConnectedEmptyState', () => {
     expect(cta).toHaveAttribute('data-next-link', 'true');
   });
 
-  it('fires calendar_edit_availability_clicked with the empty-state discriminator on CTA click', async () => {
+  it('fires exactly one calendar_connect_cta_clicked { source: "empty_state" }, and no upkeep event (BAL-512)', async () => {
     const user = userEvent.setup();
     render(<NoCalendarConnectedEmptyState href="/expert/settings?tab=schedule&setup=calendar" />);
+
     await user.click(screen.getByRole('link', { name: /Connect your calendar/i }));
-    expect(trackMock).toHaveBeenCalledWith(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED, {
-      source: 'empty_state_no_calendar',
+
+    expect(trackMock).toHaveBeenCalledTimes(1);
+    expect(trackMock).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_CTA_CLICKED, {
+      source: 'empty_state',
     });
+    // The regression BAL-512 closes: this CONNECTION intent used to be logged as availability
+    // UPKEEP (`source: 'empty_state_no_calendar'`), conflating the two funnels in one event.
+    expect(trackMock).not.toHaveBeenCalledWith(
+      CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED,
+      expect.anything()
+    );
   });
 });
 
