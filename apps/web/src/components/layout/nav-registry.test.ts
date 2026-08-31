@@ -241,12 +241,21 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
   });
 
   it('resolveMoreItems today, by context — Projects always first (order-preserving subtraction)', () => {
-    expect(resolveMoreItems(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual(['projects', 'account']);
-    expect(resolveMoreItems(COMPANY_MANAGE).map((e) => e.key)).toEqual([
+    // ⚠ BAL-503 moved these numbers: it added a company-only `settings` entry and narrowed `team`
+    // to the EXPERT workspace. The two company cases are now IDENTICAL — which is the executable
+    // evidence that the client's More list no longer varies by capability (BAL-503 D1, and the
+    // same property its own `sidebar.test.tsx` bottom-href cases pin for desktop).
+    expect(resolveMoreItems(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual([
       'projects',
-      'team',
+      'settings',
       'account',
     ]);
+    expect(resolveMoreItems(COMPANY_MANAGE).map((e) => e.key)).toEqual([
+      'projects',
+      'settings',
+      'account',
+    ]);
+    // The expert workspace keeps `team` (BAL-503 narrowed it TO expert) and has no `settings`.
     expect(resolveMoreItems(EXPERT_MANAGE).map((e) => e.key)).toEqual([
       'projects',
       'expert_settings',

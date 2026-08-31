@@ -106,7 +106,14 @@ describe('MobileMoreSheet (BAL-501)', () => {
   it('THE RELOCATED PIN — renders every resolved more item, including Projects, for a company workspace', () => {
     renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: false }));
     const links = screen.getAllByRole('link');
-    expect(links.map((l) => l.getAttribute('href'))).toEqual(['/projects', '/settings/account']);
+    // `/settings` is BAL-503's company-only Settings entry, which lands in the More list. The
+    // load-bearing half of this pin is `/projects` — the guarantee relocated from the deleted
+    // drawer block — not the list's exact length.
+    expect(links.map((l) => l.getAttribute('href'))).toEqual([
+      '/projects',
+      '/settings',
+      '/settings/account',
+    ]);
   });
 
   it('renders every resolved more item, in order, for an expert workspace with manage_members', () => {
