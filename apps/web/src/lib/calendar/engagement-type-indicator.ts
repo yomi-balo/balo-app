@@ -26,15 +26,17 @@ export const ENGAGEMENT_TYPE_INDICATOR: Record<
   EngagementTypeIndicator
 > = {
   case: { icon: Video, borderClass: 'border-l-primary', label: 'Case' },
-  project_kickoff: { icon: FolderKanban, borderClass: 'border-l-violet-500', label: 'Project' },
+  // BAL-511 D5 — `--violet` is a semantic token (`globals.css:45`, dark `:113`, exported as
+  // `--color-violet` at `:169`); `violet-500` is a raw Tailwind palette scale literal.
+  project_kickoff: { icon: FolderKanban, borderClass: 'border-l-violet', label: 'Project' },
   project_discovery: {
     icon: FolderKanban,
-    borderClass: 'border-l-violet-500',
+    borderClass: 'border-l-violet',
     label: 'Discovery call',
   },
   request_interaction: {
     icon: FolderKanban,
-    borderClass: 'border-l-violet-500',
+    borderClass: 'border-l-violet',
     label: 'Intro call',
   },
   package_session: { icon: Package, borderClass: 'border-l-success', label: 'Package' },

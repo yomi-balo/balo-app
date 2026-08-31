@@ -3,7 +3,6 @@
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 import type { SettingsSection } from '@/lib/analytics';
@@ -30,6 +29,14 @@ interface SettingsSectionNavProps {
  * `lastFired` ref, `dashboard-wallet-card.tsx` precedent), and NEVER for a section whose tab is
  * not visible to this actor (`notFound()` still mounts this layout, so without the `isVisible`
  * guard a member typing `/settings/team` would emit a view for a page they never saw).
+ *
+ * BAL-511 / ADR-1053 (orchestrator scope addition — see the PR body). This was a THIRD
+ * sliding-pill tab bar carrying the same `layoutId="settings-section-pill"` spring violation as
+ * `calendar-view-switcher.tsx` and `expert/settings/_components/settings-tabs.tsx`. The motion
+ * spec's `tabs` line reads: "deliberately static — no underline slide, no panel fade, no press
+ * scale, uniform font-weight (animated tabs read as jitter here)". Flattened the same way as the
+ * other two: the active state is now a static class on the link itself, uniform font weight
+ * across both arms. `aria-current="page"` and the route/link behaviour are unchanged.
  */
 export function SettingsSectionNav({
   showTeamSection,
@@ -59,27 +66,17 @@ export function SettingsSectionNav({
               href={href}
               aria-current={isActive ? 'page' : undefined}
               className={cn(
-                'focus-visible:ring-ring relative z-10 inline-flex min-h-11 items-center gap-1.5 rounded-lg px-4 py-2 text-sm whitespace-nowrap transition-colors duration-200 focus-visible:ring-2 focus-visible:outline-none',
+                'focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors duration-200 focus-visible:ring-2 focus-visible:outline-none',
                 isActive
-                  ? 'text-foreground font-medium'
+                  ? 'bg-card text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              {isActive && (
-                <motion.div
-                  layoutId="settings-section-pill"
-                  className="bg-card absolute inset-0 rounded-lg shadow-sm"
-                  transition={{ type: 'spring', duration: 0.35, bounce: 0.15 }}
-                />
-              )}
               <Icon
                 aria-hidden="true"
-                className={cn(
-                  'relative z-10 h-4 w-4',
-                  isActive ? 'text-primary' : 'text-muted-foreground'
-                )}
+                className={cn('h-4 w-4', isActive ? 'text-primary' : 'text-muted-foreground')}
               />
-              <span className="relative z-10">{label}</span>
+              <span>{label}</span>
             </Link>
           );
         })}

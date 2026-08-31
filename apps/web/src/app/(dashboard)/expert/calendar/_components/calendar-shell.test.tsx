@@ -19,6 +19,29 @@ vi.mock('motion/react', async () => {
   return createMotionStub();
 });
 
+/**
+ * BAL-511 — the "Edit availability" header action is `<Button asChild><Link>`. The real
+ * app-router `Link` needs an `AppRouterContext` that `@/test/utils` does not provide, and
+ * clicking it is required by the analytics test case below — copied verbatim from
+ * `calendar-empty-states.test.tsx:9-21` (same directory family, same `Button asChild` + `Link` +
+ * `onClick` track shape). Existing assertions elsewhere in this file that query links by href
+ * still pass against the plain `<a>` this mock renders.
+ */
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    children,
+    ...rest
+  }: {
+    href: string;
+    children: React.ReactNode;
+  } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} data-next-link="true" {...rest}>
+      {children}
+    </a>
+  ),
+}));
+
 let mockSearchParams = new URLSearchParams();
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -626,5 +649,54 @@ describe('CalendarShell — WeekNav mounted only in Week view', () => {
     render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
 
     expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * BAL-511 (D9). The collapse is pure CSS (`sm:` utilities) and jsdom applies no stylesheets, so
+ * "assert the accessible name at both viewports" is unfalsifiable as the ticket originally wrote
+ * it — the `sr-only` label is in the accessible name at every viewport either way. `useIsMobile`
+ * is also the wrong lever here: `hooks/use-mobile.ts` defaults to a 1024px breakpoint, not `sm`
+ * (640px), and this shell uses it only to pick the DEFAULT view — flipping the mock swaps
+ * Week↔Agenda and unmounts the grid while leaving this button byte-identical. What is pinned
+ * instead: the accessible name is exactly "Edit availability", `CalendarDays` always renders, the
+ * label carries the `sm:`-scoped visibility classes, and a click still fires the unchanged
+ * analytics event. `<Button asChild>` renders an `<a>`, so every query below is `getByRole('link'
+ * , …)`, never `getByRole('button', …)`.
+ */
+describe('CalendarShell — the "Edit availability" header action (BAL-511)', () => {
+  it('reads "Edit availability" to assistive tech and points at the schedule settings deep link', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    const action = screen.getByRole('link', { name: 'Edit availability' });
+    expect(action).toHaveAttribute('href', '/expert/settings?tab=schedule');
+  });
+
+  it('collapses to icon-only below sm without ever dropping the label from the a11y tree', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    const label = screen.getByText('Edit availability');
+    expect(label.className).toContain('sr-only');
+    expect(label.className).toContain('sm:not-sr-only');
+    const action = screen.getByRole('link', { name: 'Edit availability' });
+    expect(action.className).toContain('w-11');
+    expect(action.className).toContain('sm:w-auto');
+    expect(action.className).toContain('min-h-11'); // the 44px minimum survives the collapse
+    // ⚠ THE ICON IS THE WHOLE CONTROL BELOW `sm`. The docblock claims `CalendarDays` always
+    // renders; without this assertion nothing enforced it, and deleting the icon left all three
+    // tests green while the button rendered as an empty 44px box to a sighted mobile user (the
+    // label being `sr-only` there). Pinned as presence, not identity — swapping the glyph is a
+    // design call, rendering NOTHING is a bug.
+    expect(action.querySelector('svg')).not.toBeNull();
+  });
+
+  it('the collapsed control still fires calendar_edit_availability_clicked { source: "header" }', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Edit availability' }));
+
+    expect(mockTrack).toHaveBeenCalledWith(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED, {
+      source: 'header',
+    });
   });
 });

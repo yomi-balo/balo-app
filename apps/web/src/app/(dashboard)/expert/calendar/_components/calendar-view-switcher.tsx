@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useRef } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
 import { CalendarDays, List } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -18,46 +17,15 @@ const OPTIONS: ReadonlyArray<{ key: CalendarViewMode; label: string; icon: typeo
     { key: 'agenda', label: 'Agenda', icon: List },
   ];
 
-/** The shared-layout id that makes the pill SLIDE between options rather than cross-fade. */
-const VIEW_PILL_LAYOUT_ID = 'calendar-view-pill';
-
 /**
- * The sliding pill's motion props, as ONE pure function — exported because the repo's
- * `motion/react` test stub strips `layoutId` and `transition` before they reach the DOM, so a
- * render-only test can pin neither arm (BAL-498 fix round 5, B3).
- *
- * ⚠ ~220ms `easeOut`, NOT a spring. balo-ui `references/motion-patterns.md:28` puts a tab
- * switch in the "State change" band (200–300ms, `easeOut`), and the same file's anti-pattern
- * list bans "bounce/spring easings on business UI". The pattern this component copied from
- * `expert/settings/_components/settings-tabs.tsx` ships `{ type: 'spring', duration: 0.35,
- * bounce: 0.15 }` — off-spec on duration AND on easing. Corrected here rather than propagated;
- * `settings-tabs.tsx` is out of this ticket's scope and is deliberately left alone.
- *
- * ⚠⚠ UNDER `prefers-reduced-motion` THE SHARED `layoutId` IS DROPPED ENTIRELY, not merely
- * zeroed. Keeping `layoutId` and setting `duration: 0` still runs a layout projection between
- * the two buttons; dropping it means the pill simply mounts inside the newly-active option,
- * already painted in its final position. The pill still RENDERS — reduced motion removes the
- * movement, never the "which view am I on" affordance — which is why the `duration: 0`
- * transition is kept alongside: it covers the opacity/colour work `motion` would otherwise
- * tween on mount.
- */
-export function calendarViewPillMotionProps(reduceMotion: boolean): {
-  readonly layoutId: string | undefined;
-  readonly transition: { readonly duration: number; readonly ease?: 'easeOut' };
-} {
-  if (reduceMotion) {
-    return { layoutId: undefined, transition: { duration: 0 } };
-  }
-  return { layoutId: VIEW_PILL_LAYOUT_ID, transition: { duration: 0.22, ease: 'easeOut' } };
-}
-
-/**
- * BAL-498 — reuses the pill-with-sliding-indicator pattern shipped in
- * `expert/settings/_components/settings-tabs.tsx`, per the design's explicit "don't invent a
- * fourth tab style" rule. TWO deliberate divergences from it, both repairs rather than new
- * style: the semantics (radiogroup, below) and the pill's TIMING + reduced-motion arm (see
- * {@link calendarViewPillMotionProps} — the source pattern's spring is off-spec against
- * balo-ui's motion table and it handles `prefers-reduced-motion` not at all).
+ * BAL-511 / ADR-1053. `.claude/design-references/balo-nav-explorer.jsx`'s motion spec reads:
+ *   `tabs  deliberately static — no underline slide, no panel fade, no press scale,
+ *          uniform font-weight (animated tabs read as jitter here)`
+ * BAL-498 shipped a sliding pill here (`layoutId="calendar-view-pill"`) by copying
+ * `settings-tabs.tsx` under a "don't invent a fourth tab style" rule — the right instinct, the
+ * wrong precedent. The spec is the precedent, and `settings-tabs.tsx` is flattened in this same
+ * PR. BAL-497's sidebar sliding pill is UNAFFECTED — the spec's separate `sidebar pill` line
+ * keeps that one deliberately.
  *
  * ⚠⚠ THIS IS A RADIO GROUP, NOT A TABLIST — DO NOT "RESTORE" `role="tab"` (fix round 3, A3).
  * It shipped announcing "tab, selected" while carrying no `aria-controls`, no `role="tabpanel"`
@@ -73,11 +41,6 @@ export function CalendarViewSwitcher({
   onChange,
 }: Readonly<CalendarViewSwitcherProps>): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
-  // `useReducedMotion()` is `boolean | null` (null before the media query resolves) — coerced the
-  // way `step-agency.tsx` already does. This is the repo's one mechanism for the preference; no
-  // new one is introduced here.
-  const reduceMotion = useReducedMotion() ?? false;
-  const pillMotion = calendarViewPillMotionProps(reduceMotion);
 
   const focusOption = useCallback((index: number) => {
     const buttons = containerRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
@@ -131,7 +94,7 @@ export function CalendarViewSwitcher({
       ref={containerRef}
       role="radiogroup"
       aria-label="Calendar view"
-      className="bg-muted relative inline-flex gap-1 rounded-xl p-1"
+      className="bg-muted inline-flex gap-1 rounded-xl p-1"
     >
       {OPTIONS.map((option) => {
         const Icon = option.icon;
@@ -147,28 +110,17 @@ export function CalendarViewSwitcher({
             onClick={() => onChange(option.key)}
             onKeyDown={handleKeyDown}
             className={cn(
-              'relative z-10 inline-flex min-h-11 items-center gap-1.5 rounded-lg px-4 py-2 text-sm whitespace-nowrap transition-colors duration-200',
+              'inline-flex min-h-11 items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors duration-200',
               isActive
-                ? 'text-foreground font-medium'
+                ? 'bg-card text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            {isActive && (
-              <motion.div
-                layoutId={pillMotion.layoutId}
-                transition={pillMotion.transition}
-                data-testid="calendar-view-pill"
-                className="bg-card absolute inset-0 rounded-lg shadow-sm"
-              />
-            )}
             <Icon
-              className={cn(
-                'relative z-10 h-4 w-4',
-                isActive ? 'text-primary' : 'text-muted-foreground'
-              )}
+              className={cn('h-4 w-4', isActive ? 'text-primary' : 'text-muted-foreground')}
               aria-hidden="true"
             />
-            <span className="relative z-10">{option.label}</span>
+            <span>{option.label}</span>
           </button>
         );
       })}

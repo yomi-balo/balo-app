@@ -286,6 +286,23 @@
     }
   }
 
+  /* BAL-511 / ADR-1053 — the motion spec's `ambient  live-call ping ring 1.8s`. 1.8s is a SHARED
+     ambient tempo (the same line also sets `skeleton opacity pulse 1.8s`), not a number invented
+     for Join.
+     ⚠⚠ DO NOT "SIMPLIFY" THIS BY OVERRIDING `--animate-ping`. `expert-card.tsx:141` uses the
+     stock `animate-ping` and would silently retime.
+     ⚠ Its own keyframes on purpose. Reusing core's `ping` name would make this token's animation
+     depend on some OTHER file still using `animate-ping` for the keyframes to reach the bundle —
+     a silent no-animation regression no gate can see. */
+  --animate-ping-slow: pingSlow 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  @keyframes pingSlow {
+    75%,
+    100% {
+      transform: scale(2);
+      opacity: 0;
+    }
+  }
+
   --animate-float-glow: floatGlow 14s ease-in-out infinite;
   @keyframes floatGlow {
     0%,

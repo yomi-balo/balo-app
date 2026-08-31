@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ProfileSettingsData } from '@balo/db';
 
@@ -21,31 +21,6 @@ vi.mock('./schedule-tab', () => ({ ScheduleTab: () => <div data-testid="schedule
 vi.mock('./agency-domains-tab', () => ({
   AgencyDomainsTab: () => <div data-testid="agency-domains-tab" />,
 }));
-
-// Stub motion to plain elements (JSDOM-friendly).
-const MOTION_PROPS = new Set(['initial', 'animate', 'exit', 'variants', 'transition', 'layoutId']);
-vi.mock('motion/react', async () => {
-  const React = await import('react');
-  return {
-    motion: new Proxy(
-      {},
-      {
-        get: (_t: unknown, prop: string) =>
-          React.forwardRef(function MotionStub(
-            props: Record<string, unknown>,
-            ref: React.Ref<unknown>
-          ) {
-            const filtered: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(props)) {
-              if (!MOTION_PROPS.has(key)) filtered[key] = value;
-            }
-            return React.createElement(prop, { ...filtered, ref });
-          }),
-      }
-    ),
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
-  };
-});
 
 import { SettingsTabs, type AgencyDomainsTabData } from './settings-tabs';
 
@@ -141,5 +116,56 @@ describe('SettingsTabs — agency Domains tab (BAL-347)', () => {
 
     await user.click(domainsTab);
     expect(screen.getByTestId('agency-domains-tab')).toBeInTheDocument();
+  });
+});
+
+/**
+ * BAL-511 / ADR-1053. The design reference's motion spec reads:
+ *   `tabs  deliberately static — no underline slide, no panel fade, no press scale,
+ *          uniform font-weight (animated tabs read as jitter here)`
+ * `settings-tabs.tsx` predated the spec and was the pattern the calendar switcher wrongly copied
+ * — the spec, not this file, is the precedent. Flattened here: no `layoutId`, no
+ * `AnimatePresence`, one font weight per tab row.
+ */
+describe('SettingsTabs — deliberately static (ADR-1053, BAL-511)', () => {
+  it('renders exactly one tabpanel', () => {
+    renderTabs({ defaultTab: 'rate' });
+    expect(screen.getByRole('tabpanel')).toBeInTheDocument();
+  });
+
+  it('puts the new panel in the DOM synchronously — no await, no findBy, no exit hold', () => {
+    renderTabs({
+      canManageAgency: true,
+      agencyDomains: { agencyId: 'a1', partyName: 'Lattice', domains: [] },
+    });
+    // `fireEvent` (not `userEvent`) on purpose: it is fully synchronous, so a single expression
+    // after it proves the panel swapped in the same commit. Under `AnimatePresence mode="wait"`
+    // the outgoing panel is held for an extra commit and this fails.
+    fireEvent.click(screen.getByRole('tab', { name: /domains/i }));
+    expect(screen.getByTestId('agency-domains-tab')).toBeInTheDocument();
+    expect(screen.queryByTestId('rate-tab')).not.toBeInTheDocument();
+  });
+
+  // ⚠ Two tablists, one tabpanel. `getAllByRole('tab')` returns both rows' tabs, so each weight
+  // test is scoped to its own tablist by name (BAL-511 D11).
+  const fontClassesOf = (el: HTMLElement): string[] =>
+    el.className.split(' ').filter((token) => token.startsWith('font-'));
+
+  it('the main pill row carries ONE font weight, present and identical on both arms', () => {
+    renderTabs({ defaultTab: 'rate' });
+    const tablist = within(screen.getByRole('tablist', { name: 'Settings sections' }));
+    const active = tablist.getByRole('tab', { name: /rate/i });
+    const inactive = tablist.getByRole('tab', { name: /payouts/i });
+    expect(fontClassesOf(active)).toEqual(['font-medium']);
+    expect(fontClassesOf(inactive)).toEqual(fontClassesOf(active));
+  });
+
+  it('the profile sub-tab row carries ONE font weight, present and identical on both arms', () => {
+    renderTabs({ defaultTab: 'profile', profileData: PROFILE, referenceData: REFERENCE });
+    const tablist = within(screen.getByRole('tablist', { name: 'Profile sections' }));
+    const active = tablist.getByRole('tab', { name: /^profile$/i });
+    const inactive = tablist.getByRole('tab', { name: /expertise/i });
+    expect(fontClassesOf(active)).toEqual(['font-medium']);
+    expect(fontClassesOf(inactive)).toEqual(fontClassesOf(active));
   });
 });
