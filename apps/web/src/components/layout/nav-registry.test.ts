@@ -33,7 +33,7 @@ const EXPERT_MANAGE: NavContext = {
 };
 
 const ALL_CONTEXTS = [COMPANY_NO_MANAGE, COMPANY_MANAGE, EXPERT_NO_MANAGE, EXPERT_MANAGE];
-const DISABLED_KEYS = ['find_experts', 'calendar', 'help'];
+const DISABLED_KEYS = ['find_experts', 'help'];
 
 describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('excludes disabled entries from every context, in either section (AC #2)', () => {
@@ -56,6 +56,11 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('NAV_ENTRIES is authored as one primary block then one secondary block (resolveMobileNav depends on it)', () => {
     const sections = NAV_ENTRIES.map((e) => e.section);
     expect(sections.indexOf('primary', sections.lastIndexOf('secondary'))).toBe(-1);
+  });
+
+  it('preserves NAV_ENTRIES order for the primary section in an expert context (calendar is expert-only)', () => {
+    const keys = resolveNavItems(EXPERT_MANAGE, 'primary').map((entry) => entry.key);
+    expect(keys).toEqual(['dashboard', 'consultations', 'projects', 'calendar', 'messages']);
   });
 
   it('scopes expert_settings to the expert workspace only', () => {
@@ -88,7 +93,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     const more = primary.filter((e) => e.mobilePriority === 'more').map((e) => e.key);
     const tab = primary.filter((e) => e.mobilePriority === 'tab').map((e) => e.key);
     expect(more).toEqual(['projects']);
-    expect(tab).toEqual(['dashboard', 'consultations', 'messages']);
+    expect(tab).toEqual(['dashboard', 'consultations', 'calendar', 'messages']);
   });
 
   it('every secondary entry is mobilePriority "more"', () => {
@@ -111,7 +116,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(withJumpOut[0]?.key).toBe('find_experts');
   });
 
-  it('href pins: every enabled entry matches today’s literal; calendar and help are null', () => {
+  it('href pins: every enabled entry matches today’s literal; help is null', () => {
     const byKey = new Map(NAV_ENTRIES.map((e) => [e.key, e]));
     expect(byKey.get('dashboard')?.href).toBe('/dashboard');
     expect(byKey.get('consultations')?.href).toBe('/consultations');
@@ -122,7 +127,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('settings')?.href).toBe('/settings');
     expect(byKey.get('account')?.href).toBe('/settings/account');
     expect(byKey.get('find_experts')?.href).toBe('/experts');
-    expect(byKey.get('calendar')?.href).toBeNull();
+    expect(byKey.get('calendar')?.href).toBe('/expert/calendar');
     expect(byKey.get('help')?.href).toBeNull();
   });
 
@@ -146,9 +151,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 11 declared entries, 8 enabled', () => {
-    expect(NAV_ENTRIES.length).toBe(11);
-    expect(NAV_ENTRIES.filter((e) => e.enabled).length).toBe(8);
+  it('non-vacuity: 11 declared entries, 9 enabled', () => {
+    expect(NAV_ENTRIES).toHaveLength(11);
+    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(9);
   });
 
   it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
@@ -227,7 +232,11 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
     expect(splitMobileNav([])).toEqual({ tabs: [], moreItems: [] });
   });
 
-  it('resolveMobileTabs today: dashboard/consultations/messages, for BOTH workspace types', () => {
+  // ⚠ BAL-498 made the two workspace types DIVERGE here. `calendar` is expert-only and carries
+  // `mobilePriority: 'tab'`, so the expert bar fills to exactly MOBILE_TAB_LIMIT (4) with no
+  // overflow, while company stays at three. Asserted separately so neither can silently absorb
+  // a future entry belonging to the other.
+  it('resolveMobileTabs today: company gets three; expert gets four, Calendar before Messages', () => {
     expect(resolveMobileTabs(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual([
       'dashboard',
       'consultations',
@@ -236,8 +245,10 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
     expect(resolveMobileTabs(EXPERT_MANAGE).map((e) => e.key)).toEqual([
       'dashboard',
       'consultations',
+      'calendar',
       'messages',
     ]);
+    expect(resolveMobileTabs(EXPERT_MANAGE)).toHaveLength(MOBILE_TAB_LIMIT);
   });
 
   it('resolveMoreItems today, by context — Projects always first (order-preserving subtraction)', () => {

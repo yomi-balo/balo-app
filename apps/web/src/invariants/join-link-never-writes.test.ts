@@ -343,12 +343,44 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
  *
  * ⚠ `meetingJoinLinkUrl` IS DELIBERATELY NOT PART OF THIS RESTRICTION. It is a different
  * function with a different risk profile, and its own docblock states why: it is TOKENLESS
- * (the anonymous lobby route, `/join/m/{meetingId}`, admits nobody by itself) and it is
- * written to a CLIPBOARD, never rendered as an `href` — its one shipped caller today,
- * `app/(call)/meetings/[meetingId]/call/page.tsx` (BAL-436), passes it as a `joinLinkUrl` prop
- * for a "Copy join link" button, never a `<Link href>`. Nothing prefetches a clipboard string
- * and there is no credential in it to leak, so folding it into this restriction would fail
- * against real, intentional, pre-existing code for a hazard that function does not have.
+ * (the anonymous lobby route, `/join/m/{meetingId}`, admits nobody by itself).
+ *
+ * ⚠⚠ BAL-498 UPDATE — the "never rendered as an `href`" clause above still HOLDS, and the
+ * fix-round-3 amendment below records why an earlier revision of this block was wrong to relax
+ * it. `app/(call)/meetings/[meetingId]/call/page.tsx` (BAL-436) passes the URL as a
+ * `joinLinkUrl` prop for a "Copy join link" button. The expert calendar page (BAL-498,
+ * `app/(dashboard)/expert/calendar/`) is a SECOND caller, and it navigates to the URL from a
+ * `<button>` handler (`globalThis.location.assign`) — it does NOT put it in the DOM. Why it is
+ * safe:
+ *   1. TOKENLESS — the id in the URL admits nobody; a host must still explicitly admit.
+ *   2. The lobby page (`app/join/m/[meetingId]/page.tsx`) performs ZERO database reads and
+ *      renders a byte-identical card for every id — its own acceptance criterion — so even a
+ *      prefetch (which cannot happen here anyway; see below) would disclose nothing meeting-
+ *      specific.
+ *   3. `SENSITIVE_PATH_PREFIXES` (`packages/shared/src/redaction/index.ts`) carries an
+ *      explicit `'/join/m/'` entry ordered BEFORE the general `'/join/'` entry, so the meeting
+ *      id is redacted wherever a redaction hook actually runs: Axiom/Pino log records, Sentry
+ *      event URLs, and the PostHog `$current_url`/`$pathname`/`$referrer` properties that
+ *      `sanitizeAnalyticsEvent` rewrites.
+ *      ⚠ NARROWED IN FIX ROUND 3 (security WARNING #1). This clause used to claim redaction
+ *      "regardless of how the URL reaches the browser". That is true of a URL and FALSE of a
+ *      DOM ATTRIBUTE, which no redaction hook in this codebase reaches: PostHog autocapture is
+ *      ON and ships `$elements[].attr__href`, which `sanitizeAnalyticsEvent` never walks; and
+ *      Sentry `replayIntegration` records rrweb DOM snapshots whose default `maskAttributes`
+ *      (`title`, `placeholder`, `aria-label`) does not include `href`. So an `<a href>` on an
+ *      authenticated page shipped the meeting id to two external processors un-redacted,
+ *      before any click.
+ *   4. There is no credential in the URL to leak via `Referer`.
+ *   5. The navigation is a HARD DOCUMENT NAVIGATION (`location.assign`), never `next/link` and
+ *      never `router.push`. Two things depend on that: Next's prefetch-on-viewport/hover — the
+ *      mechanism this whole file exists to prevent for TOKEN-bearing links — never fires; and
+ *      `instrumentation-client.ts`'s init-time Replay refusal re-evaluates `onSensitiveLanding`
+ *      on the lobby, which a soft navigation would skip.
+ * This is deliberately NOT folded into the `guestRecapPath`/`guestInvitationPath` call-site
+ * restriction above: that restriction exists because those two builders carry a single-use-
+ * adjacent, replayable TOKEN whose exposure (via prefetch, via `Referer`, via Replay) is the
+ * hazard. `meetingJoinLinkUrl`'s URL has no token to expose. Two different risk profiles, two
+ * different rules — this repository does not need a third.
  */
 describe('invariant: guestRecapPath / guestInvitationPath are only called from app/join (BAL-439 MUST-7)', () => {
   // ⚠ THE WHOLE `src` TREE, not just `src/app` — a future caller of these builders could just
@@ -395,5 +427,76 @@ describe('invariant: guestRecapPath / guestInvitationPath are only called from a
         `hook. Keep every call site under app/join/:\n  ` +
         offenders.join('\n  ')
     ).toEqual([]);
+  });
+});
+
+/**
+ * BAL-498 fix round 3 (security WARNING #1) — the SOURCE half of "the lobby URL never becomes a
+ * DOM attribute". The DOM half is pinned at the component level
+ * (`_components/meeting-block.test.tsx`, `_components/agenda-list.test.tsx`), which is what
+ * catches a behavioural regression; this half catches the same regression written a different
+ * way — a `<Button asChild><a href={meeting.joinUrl}>` reintroduced anywhere on the route,
+ * including on a surface no component test happens to render.
+ *
+ * Why an attribute is the hazard and a navigation is not: PostHog autocapture is ON and ships
+ * `$elements[].attr__href`, which `sanitizeAnalyticsEvent` does not walk; Sentry
+ * `replayIntegration` records rrweb DOM snapshots and its default `maskAttributes` excludes
+ * `href`. Both processors therefore see a raw `/join/m/{meetingId}` the moment it is rendered —
+ * no click required. `globalThis.location.assign(joinUrl)` from a `<button>` handler keeps it out
+ * of the DOM entirely, and remains the hard document navigation D4 and the init-time Replay
+ * refusal in `instrumentation-client.ts` both require.
+ */
+describe('invariant: the expert calendar never renders a join URL as an href (BAL-498 S1)', () => {
+  const CALENDAR_DIR = resolveRouteDir([
+    'src/app/(dashboard)/expert/calendar',
+    'apps/web/src/app/(dashboard)/expert/calendar',
+  ]);
+  const scanned = scanRouteSources(CALENDAR_DIR, '', []);
+
+  /**
+   * `href={ … joinUrl … }` in any JSX-attribute shape. An indexOf walk, NOT a regex — the same
+   * convention `_source-scan.ts` keeps for exactly this reason (SonarCloud S5852).
+   */
+  function bindsJoinUrlToHref(code: string): boolean {
+    const marker = 'href={';
+    let index = code.indexOf(marker);
+    while (index !== -1) {
+      const close = code.indexOf('}', index + marker.length);
+      const expression = close === -1 ? code.slice(index) : code.slice(index, close);
+      if (expression.includes('joinUrl')) return true;
+      index = code.indexOf(marker, index + marker.length);
+    }
+    return false;
+  }
+
+  it('collects the calendar route sources (guards against a vacuous pass)', () => {
+    expect(scanned.length).toBeGreaterThan(0);
+    expect(scanned.map((file) => file.rel)).toContain('_components/join-meeting-button.tsx');
+  });
+
+  it('the join URL is navigated to, never bound to an href', () => {
+    const offenders = scanned
+      .filter((file) => bindsJoinUrlToHref(file.code))
+      .map((file) => file.rel);
+
+    expect(
+      offenders,
+      `These files bind a join URL to an href. That puts /join/m/{meetingId} — declared ` +
+        `sensitive-by-policy in SENSITIVE_PATH_PREFIXES — into the DOM, where PostHog ` +
+        `autocapture ($elements[].attr__href) and Sentry Session Replay (rrweb DOM snapshots, ` +
+        `href is not in maskAttributes) both collect it un-redacted, with no click required. ` +
+        `Use <JoinMeetingButton>, which navigates via globalThis.location.assign:\n  ` +
+        offenders.join('\n  ')
+    ).toEqual([]);
+  });
+
+  it('the Join affordance still performs a HARD document navigation, not a soft one', () => {
+    const joinButton = scanned.find((file) => file.rel === '_components/join-meeting-button.tsx');
+    if (joinButton === undefined) throw new Error('join-meeting-button.tsx was not scanned');
+    // D4 + instrumentation-client.ts:52 — `onSensitiveLanding` is evaluated at Sentry.init(),
+    // so Replay is only refused on the lobby if the browser genuinely re-initialises there.
+    expect(joinButton.code).toContain('globalThis.location.assign');
+    expect(joinButton.code).not.toContain('next/link');
+    expect(joinButton.code).not.toContain('router.push');
   });
 });

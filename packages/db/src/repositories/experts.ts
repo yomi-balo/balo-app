@@ -375,10 +375,24 @@ export const expertsRepository = {
    * Focused single-column read of an expert's timezone — used by the availability
    * resolver wire-up on every webhook + staleness cron run. Returns null if the
    * profile doesn't exist (so callers can short-circuit without throwing).
+   *
+   * ⚠ THE SCOPED OVERLOAD (`scope.userId`) — BAL-498 fix round 3, S3. `expert_profiles` has no
+   * RLS, so a bare by-id read trusts whatever id the caller supplies. Session-boundary callers
+   * (the expert Calendar page's `resolveExpertScheduleTimezone`) pass `{ userId: session.user.id }`
+   * to add an `AND expert_profiles.user_id = :userId` term — a no-op for a well-formed session,
+   * and a fail-closed guard against a future caller passing an id it did not derive from the
+   * session. Identical in shape to `expertSearchabilityRepository.loadInputs`'s S4 overload; the
+   * system callers (webhook / cron) legitimately have no user and omit it.
    */
-  async findTimezone(expertProfileId: string): Promise<string | null> {
+  async findTimezone(
+    expertProfileId: string,
+    scope?: { readonly userId: string }
+  ): Promise<string | null> {
     const row = await db.query.expertProfiles.findFirst({
-      where: eq(expertProfiles.id, expertProfileId),
+      where:
+        scope === undefined
+          ? eq(expertProfiles.id, expertProfileId)
+          : and(eq(expertProfiles.id, expertProfileId), eq(expertProfiles.userId, scope.userId)),
       columns: { timezone: true },
     });
     return row?.timezone ?? null;

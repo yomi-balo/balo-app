@@ -515,6 +515,8 @@ export {
   type ListLifecycleCandidatesInput,
   type EndMeetingInput,
   type EndMeetingResult,
+  // BAL-498 — the expert calendar's read row shape.
+  type ExpertCalendarMeeting,
 } from './meetings';
 // ── Consultation projection (BAL-428) — `consultations` as a read model of `meetings` ──
 // The WRITERS are deliberately NOT exported: they are transaction-scoped internals of

@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { CALENDAR_SERVER_EVENTS, toCalendarEventProvider } from './calendar';
+import { CALENDAR_EVENTS, CALENDAR_SERVER_EVENTS, toCalendarEventProvider } from './calendar';
+
+describe('CALENDAR_EVENTS — BAL-498 additions', () => {
+  it('pins the three new calendar-page event values', () => {
+    expect(CALENDAR_EVENTS.VIEWED).toBe('calendar_viewed');
+    expect(CALENDAR_EVENTS.JOIN_CLICKED).toBe('calendar_join_clicked');
+    expect(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED).toBe('calendar_edit_availability_clicked');
+  });
+
+  it('uses snake_case event values throughout', () => {
+    for (const value of Object.values(CALENDAR_EVENTS)) {
+      expect(value).toMatch(/^[a-z0-9]+(_[a-z0-9]+)*$/);
+    }
+  });
+});
 
 describe('CALENDAR_SERVER_EVENTS', () => {
   it('exposes exactly the calendar server events (guards against accidental drift)', () => {

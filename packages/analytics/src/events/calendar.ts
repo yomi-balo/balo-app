@@ -1,3 +1,5 @@
+import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
+
 export const CALENDAR_EVENTS = {
   CONNECT_INITIATED: 'calendar_connect_initiated',
   DISCONNECT_INITIATED: 'calendar_disconnect_initiated',
@@ -13,9 +15,29 @@ export const CALENDAR_EVENTS = {
   O365_WAITING_TRY_AGAIN: 'calendar_o365_waiting_try_again',
   SESSION_EXPIRED_TRY_AGAIN: 'calendar_session_expired_try_again',
   CONNECTING_TIMEOUT: 'calendar_connecting_timeout',
+  // BAL-498 — the Calendar page (ADR-1053).
+  VIEWED: 'calendar_viewed',
+  JOIN_CLICKED: 'calendar_join_clicked',
+  EDIT_AVAILABILITY_CLICKED: 'calendar_edit_availability_clicked',
 } as const;
 
 export interface CalendarEventMap {
+  [CALENDAR_EVENTS.VIEWED]: {
+    view: 'week' | 'agenda';
+    /** How this view became active — the viewport default vs a deliberate switch. */
+    source: 'initial' | 'switch';
+  };
+  [CALENDAR_EVENTS.JOIN_CLICKED]: {
+    view: 'week' | 'agenda';
+    context_type: MeetingContextTypeWithHolder;
+    /** Signed minutes to scheduled start — negative once the meeting has begun. */
+    minutes_to_start: number;
+  };
+  [CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED]: {
+    /** Distinguishes the header action from the "no calendar connected" empty-state CTA —
+     *  materially different intents that share one destination. */
+    source: 'header' | 'empty_state_no_calendar';
+  };
   [CALENDAR_EVENTS.CONNECT_INITIATED]: {
     provider: 'google' | 'microsoft';
     /** BAL-397 — WHICH affordance started this round trip. Optional so no existing call site

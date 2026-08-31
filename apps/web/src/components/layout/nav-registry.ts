@@ -174,17 +174,18 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     enabled: true,
   },
 
-  // BAL-497 flips this on AND must add the route — there is no (dashboard)/expert/calendar today.
+  // BAL-498 flipped this on and added the route at app/(dashboard)/expert/calendar. The path is
+  // under `expert/` so it inherits the ONLY expert-workspace hard gate (expert/layout.tsx).
   {
     key: 'calendar',
     label: 'Calendar',
     icon: CalendarDays,
-    href: null,
+    href: '/expert/calendar',
     section: 'primary',
     workspaceTypes: ['expert'],
     requires: NO_CAPABILITY_REQUIRED,
     mobilePriority: 'tab',
-    enabled: false,
+    enabled: true,
   },
 
   {
@@ -281,7 +282,8 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
  * (which TypeScript never checks). Applied FIRST and standalone: deleting the conjunct from an
  * inline `(entry): entry is EnabledNavEntry => entry.enabled && ...` predicate would still
  * compile, silently leaking a disabled entry — `find_experts` (a live href) into the resolved
- * list, or `href: null` (calendar/help) into `<Link>`, crashing the shell.
+ * list, or `href: null` (help — calendar gained a real href in BAL-498) into `<Link>`, crashing
+ * the shell.
  */
 const isEnabled = (entry: NavEntry): entry is EnabledNavEntry => entry.enabled === true;
 

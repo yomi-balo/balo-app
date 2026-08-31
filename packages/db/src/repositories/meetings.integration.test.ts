@@ -5,6 +5,7 @@ import { db } from '../client';
 import {
   auditEvents,
   consultations,
+  engagements,
   meetingContexts,
   meetingGuests,
   meetings,
@@ -12,6 +13,7 @@ import {
 } from '../schema';
 import {
   caseEngagementFactory,
+  engagementFactory,
   expertDraftFactory,
   meetingFactory,
   meetingGuestFactory,
@@ -26,6 +28,8 @@ import {
   meetingsRepository,
   MeetingContextRequiredError,
   MeetingNotReschedulableError,
+  CalendarRangeTooWideError,
+  MAX_CALENDAR_RANGE_DAYS,
 } from './meetings';
 
 /**
@@ -1766,5 +1770,330 @@ describe('meetingsRepository.cancel (BAL-410)', () => {
       (row) => row.action === 'meeting.cancelled'
     );
     expect(cancelled[0]?.metadata).toMatchObject({ expertProfileId: null });
+  });
+});
+
+/**
+ * BAL-498 — `listCalendarForExpert`. Cases 2 and 3 (tenant isolation, forged polymorphic
+ * context) are the SECURITY-CRITICAL ones — see plan-bal-498.md § 12.3/§ 20.
+ */
+describe('meetingsRepository.listCalendarForExpert', () => {
+  const RANGE = {
+    rangeStart: new Date(Date.now() - HOUR_MS),
+    rangeEnd: new Date(Date.now() + 30 * 24 * HOUR_MS),
+  };
+
+  it('returns meetings from two engagement types for one expert, ordered by scheduledStart, with engagementType and company name', async () => {
+    const {
+      engagement: caseEngagement,
+      expertProfileId,
+      companyId,
+    } = await caseEngagementFactory();
+    const { engagement: projectEngagement } = await engagementFactory({
+      expertProfileId,
+      companyId,
+    });
+
+    const caseMeeting = await meetingsRepository.create({
+      ...schedule(2),
+      contexts: [{ contextType: 'case', contextId: caseEngagement.id }],
+    });
+    const projectMeeting = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'project_kickoff', contextId: projectEngagement.id }],
+    });
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result.map((row) => row.meetingId)).toEqual([
+      projectMeeting.meeting.id,
+      caseMeeting.meeting.id,
+    ]);
+    const [projectRow, caseRow] = result;
+    expect(projectRow?.contextType).toBe('project_kickoff');
+    expect(projectRow?.engagementType).toBe('project');
+    expect(projectRow?.counterpartyCompanyName).toBe('Acme Co');
+    expect(caseRow?.contextType).toBe('case');
+    expect(caseRow?.engagementType).toBe('case');
+    expect(caseRow?.counterpartyCompanyName).toBe('Acme Co');
+  });
+
+  it('tenant isolation — expert A never sees expert B’s meetings', async () => {
+    const { engagement: engagementA, expertProfileId: expertA } = await caseEngagementFactory();
+    const { engagement: engagementB, expertProfileId: expertB } = await caseEngagementFactory();
+
+    const meetingA = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: engagementA.id }],
+    });
+    const meetingB = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: engagementB.id }],
+    });
+
+    const resultA = await meetingsRepository.listCalendarForExpert({
+      expertProfileId: expertA,
+      ...RANGE,
+    });
+
+    expect(resultA.map((row) => row.meetingId)).toEqual([meetingA.meeting.id]);
+    expect(resultA.map((row) => row.meetingId)).not.toContain(meetingB.meeting.id);
+  });
+
+  it('a context row pointing at ANOTHER expert’s engagement never leaks that tenant’s company name', async () => {
+    const { engagement: ownEngagement, expertProfileId } = await caseEngagementFactory();
+    const { engagement: otherEngagement } = await caseEngagementFactory();
+
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: ownEngagement.id }],
+    });
+
+    // Simulate a drifted/forged polymorphic context: the winning context row now points at
+    // another tenant's engagement, while `consultations.expertProfileId` (written correctly
+    // at booking time) still names the real owner. This is exactly the hazard
+    // `schema/meeting-contexts.ts` documents — no FK, no RLS on `context_id`.
+    await db
+      .update(meetingContexts)
+      .set({ contextId: otherEngagement.id })
+      .where(eq(meetingContexts.meetingId, created.meeting.id));
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result).toHaveLength(1);
+    // The winning context resolved to no LIVE OWNING row for this expert — fail-closed, no
+    // other tenant's company name, engagement type or project request id is ever returned, and
+    // `owningRowFound` is surfaced as `false` so the WEB LOADER can also refuse to render a link
+    // (BAL-498 fix round 1, B7 / security-bal-498.md MEDIUM finding).
+    expect(result[0]?.counterpartyCompanyName).toBeNull();
+    expect(result[0]?.engagementType).toBeNull();
+    expect(result[0]?.projectRequestId).toBeNull();
+    expect(result[0]?.owningRowFound).toBe(false);
+    // ⚠ AND THE RAW POLYMORPHIC ID ITSELF (BAL-498 fix round 3, R8). This assertion is the point
+    // of the whole test: `contextId` used to be emitted unconditionally, so on exactly this
+    // drifted/forged row it was the OTHER TENANT'S `engagements.id`, sitting beside three
+    // deliberately-nulled identity fields. `ExpertCalendarMeeting` is exported from the barrel,
+    // so the next consumer would have inherited it with only a docblock in the way.
+    expect(result[0]?.contextId).toBeNull();
+    expect(result[0]?.contextId).not.toBe(otherEngagement.id);
+  });
+
+  it('a soft-deleted OWNING engagement still returns the meeting (it still occupies the calendar), with counterpartyCompanyName null and owningRowFound false', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    // The MEETING is still live; only the owning engagement row is soft-deleted underneath it —
+    // a data-repair/soft-delete class hazard, not an attacker-reachable write (plan-bal-498.md
+    // § 1.6). The calendar's job is "what occupies my time", so the meeting must still render —
+    // just without a counterparty name or a link into the now-gone engagement.
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.meetingId).toBe(created.meeting.id);
+    expect(result[0]?.contextType).toBe('case');
+    expect(result[0]?.counterpartyCompanyName).toBeNull();
+    expect(result[0]?.engagementType).toBeNull();
+    expect(result[0]?.owningRowFound).toBe(false);
+  });
+
+  it('excludes cancelled meetings', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    await meetingsRepository.cancel(created.meeting.id, SYSTEM_CANCEL_AUDIT);
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result).toEqual([]);
+  });
+
+  it('excludes soft-deleted meetings', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    await meetingsRepository.softDelete(created.meeting.id);
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result).toEqual([]);
+  });
+
+  /**
+   * BAL-498 fix round 3, S2. `?week=1000-01-01` passed the page's shape AND real-calendar-date
+   * checks and handed this method a ~1000-year window with no `LIMIT`: every meeting the expert
+   * has ever had, an unbounded `inArray` bind list, and the whole lot serialised into the RSC
+   * payload. The page now clamps the param; THIS assertion is the durable half, so a future
+   * caller that forgets cannot reintroduce it silently.
+   */
+  it('REFUSES a range wider than the maximum span rather than serving an unbounded scan (S2)', async () => {
+    const { expertProfileId } = await caseEngagementFactory();
+
+    await expect(
+      meetingsRepository.listCalendarForExpert({
+        expertProfileId,
+        rangeStart: new Date('1000-01-01T00:00:00.000Z'),
+        rangeEnd: new Date(Date.now() + 30 * 24 * HOUR_MS),
+      })
+    ).rejects.toThrow(CalendarRangeTooWideError);
+  });
+
+  it('a range at the maximum span is still served (the guard is a ceiling, not a narrowing)', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    const rangeStart = new Date(Date.now() - HOUR_MS);
+    const result = await meetingsRepository.listCalendarForExpert({
+      expertProfileId,
+      rangeStart,
+      rangeEnd: new Date(rangeStart.getTime() + MAX_CALENDAR_RANGE_DAYS * 24 * HOUR_MS),
+    });
+
+    expect(result.map((row) => row.meetingId)).toContain(created.meeting.id);
+  });
+
+  it('caps the returned rows, and drops the trailing meeting whose context set the LIMIT may have sliced (S2)', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    await meetingsRepository.create({
+      ...schedule(2),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    // `limit: 1` means the ONE row fetched is the earlier meeting's only context row — and,
+    // because the limit was reached, that meeting's context set might have been truncated, so it
+    // is dropped rather than folded from a partial set (half a context set folds to the WRONG
+    // precedence winner).
+    const result = await meetingsRepository.listCalendarForExpert({
+      expertProfileId,
+      ...RANGE,
+      limit: 1,
+    });
+
+    expect(result).toEqual([]);
+  });
+
+  it('an admin-only meeting is structurally absent — it projects no consultations row', async () => {
+    const { expertProfileId } = await caseEngagementFactory();
+    await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'admin', contextId: null }],
+    });
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result).toEqual([]);
+  });
+
+  it('a request_interaction meeting resolves its counterparty through relationship -> request -> company', async () => {
+    const { relationship, projectRequestId, expertProfileId } =
+      await requestExpertRelationshipFactory();
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+    });
+
+    const result = await meetingsRepository.listCalendarForExpert({ expertProfileId, ...RANGE });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.meetingId).toBe(created.meeting.id);
+    expect(result[0]?.contextType).toBe('request_interaction');
+    expect(result[0]?.projectRequestId).toBe(projectRequestId);
+    expect(result[0]?.counterpartyCompanyName).toBe('Acme Co');
+  });
+
+  it('a project_discovery meeting (send_to=direct) appears and resolves its company', async () => {
+    const request = await projectRequestFactory();
+    if (request.expertProfileId === null) {
+      throw new Error('projectRequestFactory: expected a direct request with a non-null expert');
+    }
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+
+    const result = await meetingsRepository.listCalendarForExpert({
+      expertProfileId: request.expertProfileId,
+      ...RANGE,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.meetingId).toBe(created.meeting.id);
+    expect(result[0]?.contextType).toBe('project_discovery');
+    expect(result[0]?.counterpartyCompanyName).toBe('Acme Co');
+  });
+
+  it('precedence: a meeting carrying BOTH project_discovery and project_kickoff returns ONCE, as project_kickoff', async () => {
+    const relationship = await requestExpertRelationshipFactory();
+    const { engagement } = await engagementFactory({
+      expertProfileId: relationship.expertProfileId,
+    });
+
+    const created = await meetingsRepository.create({
+      ...schedule(1),
+      contexts: [
+        { contextType: 'project_discovery', contextId: relationship.projectRequestId },
+        { contextType: 'project_kickoff', contextId: engagement.id },
+      ],
+    });
+
+    const result = await meetingsRepository.listCalendarForExpert({
+      expertProfileId: relationship.expertProfileId,
+      ...RANGE,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.meetingId).toBe(created.meeting.id);
+    expect(result[0]?.contextType).toBe('project_kickoff');
+  });
+
+  it('range boundaries: excludes a meeting ending exactly at rangeStart or starting exactly at rangeEnd; includes one straddling rangeStart', async () => {
+    const { engagement, expertProfileId } = await caseEngagementFactory();
+    const rangeStart = new Date(Date.now() + 10 * HOUR_MS);
+    const rangeEnd = new Date(rangeStart.getTime() + 7 * 24 * HOUR_MS);
+
+    const endsAtStart = await meetingsRepository.create({
+      scheduledStart: new Date(rangeStart.getTime() - HOUR_MS),
+      scheduledEnd: rangeStart,
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    const startsAtEnd = await meetingsRepository.create({
+      scheduledStart: rangeEnd,
+      scheduledEnd: new Date(rangeEnd.getTime() + HOUR_MS),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+    const straddling = await meetingsRepository.create({
+      scheduledStart: new Date(rangeStart.getTime() - 30 * 60_000),
+      scheduledEnd: new Date(rangeStart.getTime() + 30 * 60_000),
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+    });
+
+    const result = await meetingsRepository.listCalendarForExpert({
+      expertProfileId,
+      rangeStart,
+      rangeEnd,
+    });
+    const ids = result.map((row) => row.meetingId);
+
+    expect(ids).not.toContain(endsAtStart.meeting.id);
+    expect(ids).not.toContain(startsAtEnd.meeting.id);
+    expect(ids).toContain(straddling.meeting.id);
   });
 });
