@@ -53,7 +53,17 @@ export interface ExpertSearchResultDTO {
   headline: string | null;
   bio: string | null;
   countryCode: string | null;
-  /** dollars/min; `null` if rate unset. */
+  /**
+   * CLIENT ALL-IN rate per minute, in dollars, **Balo service fee INCLUDED** — the API applies
+   * `publicDisplayRatePerMinute` (`@balo/shared/pricing`) at `DEFAULT_BALO_FEE_BPS` in
+   * `routes/experts/mapper.ts`; this mirror must NOT re-apply it (BAL-493 / D1).
+   *
+   * ⚠ A **"FROM" FIGURE.** The fee is session/engagement grain — there is no per-expert fee
+   * column — so a session opened at a non-default fee charges differently. Render it as
+   * "From A$…/min", never as an exact promise.
+   *
+   * `null` if the rate is unset; `0` stays `0`.
+   */
   rate: number | null;
   /** ISO 8601; `null` when gate OFF + no cache. */
   nextAvailableAt: string | null;

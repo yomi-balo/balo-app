@@ -82,7 +82,18 @@ export interface ExpertProfileView {
   avatarKey: string | null;
   countryCode: string | null;
   country: string | null;
-  /** Dollars per minute, or null when no rate is set. */
+  /**
+   * CLIENT ALL-IN rate per minute, in dollars, **Balo service fee INCLUDED** — computed at
+   * `DEFAULT_BALO_FEE_BPS` by `publicDisplayRatePerMinute` (`@balo/shared/pricing`) inside
+   * `mapProfileToView`, NOT a bare `rate_cents / 100` (BAL-493 / D1: that published a rate
+   * lower than the client is charged).
+   *
+   * ⚠ A **"FROM" FIGURE.** The fee is session/engagement grain — there is no per-expert fee
+   * column — so a session opened at a non-default fee charges differently. Render it as
+   * "From A$…/min", never as an exact promise.
+   *
+   * `null` when no rate is set; `0` stays `0`.
+   */
   rate: number | null;
   /** Years of Salesforce experience, or null when unknown. */
   yearsExperience: number | null;

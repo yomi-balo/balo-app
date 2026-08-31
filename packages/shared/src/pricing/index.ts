@@ -126,6 +126,78 @@ export function applyBaloFee(cents: number, feeBps: number): number {
   return Math.round((cents * (10_000 + feeBps)) / 10_000);
 }
 
+/**
+ * BAL-493 / D1 — THE public display rate: an expert's per-minute rate WITH the Balo fee
+ * applied, in dollars. This is the number a client is quoted and the only per-minute rate
+ * that may appear on a public surface (`/`, `/experts`, `/experts/{username}`).
+ *
+ * ⚠ THE FEE IS SESSION/ENGAGEMENT GRAIN, NOT EXPERT GRAIN. There is no per-expert fee column:
+ * `credit_sessions.baloFeeBps` is `notNull().default(2500)` (schema/credit-sessions.ts, CHECK
+ * 0..10000) and `engagements.balo_fee_bps` is NULL for cases by biconditional CHECK. This
+ * therefore computes at `DEFAULT_BALO_FEE_BPS` and is a "FROM" figure — public copy must read
+ * "From A$…/min", never an exact promise. A session opened at a non-default fee charges
+ * differently.
+ *
+ * ⚠ NEVER apply this in `packages/db`. `experts.integration.test.ts` pins that `rateCents` is
+ * the UN-MARKED-UP consultant rate; that invariant is about the DB row and stays true precisely
+ * because the markup lives here, at the serializer.
+ *
+ * ⚠ `PLATFORM_PRICING.MARKUP_MULTIPLIER` / `calculateClientRate()`
+ * (`apps/web/src/lib/utils/currency.ts`) is a DUPLICATE of this arithmetic kept for the
+ * expert-settings rate editor. Never add a public-surface caller to it; use this function.
+ *
+ * `null` in ⇒ `null` out (no rate set). `0` stays `0`, never `null`.
+ */
+export function publicDisplayRatePerMinute(rateCents: number | null): number | null {
+  return rateCents == null ? null : applyBaloFee(rateCents, DEFAULT_BALO_FEE_BPS) / 100;
+}
+
+/** Which end of a client-facing range a bound is — decides floor vs ceil. */
+export type ClientRateBoundMode = 'min' | 'max';
+
+/**
+ * BAL-493 fix round 1 — THE INVERSE OF `applyBaloFee`, deliberately parked next to
+ * `publicDisplayRatePerMinute` so the pair is always read together.
+ *
+ * D1 made every public surface DISPLAY `applyBaloFee(rate_cents, 2500)` — the client all-in
+ * rate. The expert-search rate filter, however, compares its bound against the RAW,
+ * UN-MARKED-UP `expert_profiles.rate_cents` (`expert-search.ts`'s `gte`/`lte`). Sending a
+ * client-facing figure straight through as that bound is wrong twice over:
+ *
+ *   1. **Wrong results.** A "max A$5.00/min" filter returns cards that READ "A$6.25/min" —
+ *      the filter contradicts the very number the page calls "what you pay".
+ *   2. **It leaks the Balo fee, anonymously, from the public front door.** A visitor who
+ *      bisects `?rateMax=` until an expert drops out recovers that expert's exact raw
+ *      `rate_cents`, divides the displayed rate by it, and reads the markup to the basis
+ *      point. Fee concealment is a core product invariant (CLAUDE.md).
+ *
+ * So a client-facing bound must be converted DOWN through the fee before it reaches the API.
+ *
+ * ⚠ **THE ROUNDING DIRECTION IS THE WHOLE POINT, AND IT IS ASYMMETRIC.** `applyBaloFee`
+ * rounds, so several adjacent raw rates map onto one displayed rate. The bound must be the
+ * widest expert-rate value whose DISPLAYED rate still honours the slider:
+ *
+ *   · `'max'` ⇒ **floor** — admit every expert whose displayed rate is ≤ the client's max.
+ *     At 2500 bps, clientMax 500¢ ⇒ 400¢: raw 400 displays 500 (in ✓), raw 401 displays
+ *     501 (out ✓).
+ *   · `'min'` ⇒ **ceil** — admit every expert whose displayed rate is ≥ the client's min.
+ *     At 2500 bps, clientMin 500¢ ⇒ 400¢: raw 400 displays 500 (in ✓), raw 399 displays
+ *     499 (out ✓).
+ *
+ * Swapping the two silently admits (or drops) one cent's worth of experts at each boundary —
+ * which is precisely the observable the bisection above reads. Pinned in `index.test.ts`.
+ *
+ * Integer minor units in ⇒ integer minor units out.
+ */
+export function clientBoundToExpertRateCents(
+  clientCents: number,
+  feeBps: number,
+  mode: ClientRateBoundMode
+): number {
+  const exact = (clientCents * 10_000) / (10_000 + feeBps);
+  return mode === 'max' ? Math.floor(exact) : Math.ceil(exact);
+}
+
 // ── Client Credit System platform-money constants (BAL-376 / ADR-1040) ────
 //
 // No platform-config table exists, so these live as code constants alongside

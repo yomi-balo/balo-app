@@ -58,6 +58,10 @@ vi.mock('@/components/layout/sidebar', () => ({
   Sidebar: () => <div data-testid="sidebar-stub" />,
 }));
 
+vi.mock('@/components/layout/mobile-tab-bar', () => ({
+  MobileTabBar: () => null,
+}));
+
 vi.mock('@/components/balo/notification-bell', () => ({
   NotificationBell: () => <div data-testid="notification-bell" />,
 }));
@@ -65,14 +69,15 @@ vi.mock('@/components/balo/notification-bell', () => ({
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
   redirect: vi.fn(),
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }), // ⚠ NEW — or the render throws
+  // ⚠ REQUIRED — this file renders the REAL `TopNav`, and BAL-500's ⌘K palette inside it calls
+  // `useRouter()`. Without this the render throws before the first assertion.
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 
+// The palette's `useWorkspaceSwitch` value-imports this `'use server'` module. `@/hooks/use-mobile`
+// deliberately gets NO stub: BAL-501 removed the hamburger from `top-nav.tsx`, and the only
+// remaining consumer (`MobileTabBar`) is already replaced wholesale by the stub above.
 vi.mock('@/lib/auth/actions/switch-workspace', () => ({ switchWorkspaceAction: vi.fn() }));
-
-vi.mock('@/hooks/use-mobile', () => ({
-  useIsMobile: () => false,
-}));
 
 import DashboardLayout from './layout';
 

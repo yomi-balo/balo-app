@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { cache } from 'react';
 import { companiesRepository } from '@balo/db';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import type { SessionUser } from '@/lib/auth/session';
@@ -17,9 +18,29 @@ import { log } from '@/lib/logging';
  * projection gates nothing would contradict the code it feeds. It scopes WHICH entries are even
  * candidates for a workspace; it never decides whether an actor is authorized to see one.
  */
-function navWorkspaceTypeOf(user: SessionUser | null): NavWorkspaceType {
+export function navWorkspaceTypeOf(user: SessionUser | null): NavWorkspaceType {
   return user?.activeMode === 'expert' ? 'expert' : 'company';
 }
+
+/**
+ * BAL-503 — THE per-request company read for nav + settings chrome. `cache()`d and keyed on the
+ * companyId STRING.
+ *
+ * ⚠ Keyed on a string DELIBERATELY, not on the `SessionUser` object. `getCurrentUser()` re-reads
+ * the sealed cookie and returns a FRESH object on every call, so an object-keyed `cache()` would
+ * miss between layouts and dedupe nothing — it would look like a fix and do nothing.
+ *
+ * Collapses what were three reads of the SAME row on one `/settings/billing` render:
+ * `(dashboard)/layout.tsx`'s `buildNavContext`, `settings/layout.tsx`'s `resolveSettingsChrome`,
+ * and the billing page's own workspace-scope gate.
+ *
+ * ⚠ Lives HERE rather than in its own module because the BAL-495 invariant
+ * (`nav-registry-capability-gated.test.ts`, Scan B) asserts this file still references
+ * `companiesRepository` — moving the read out would fail that guard.
+ */
+export const readCompanyForRequest = cache(async (companyId: string) =>
+  companiesRepository.findById(companyId)
+);
 
 /**
  * BAL-347 → BAL-495. Byte-for-byte the outcome of the deleted `resolveCanManageCompany`, with the
@@ -35,7 +56,7 @@ async function resolveNavCapabilities(user: SessionUser | null): Promise<readonl
   if (!user) return [];
   if (!roleHasCapability(user.companyRole, CAPABILITIES.MANAGE_MEMBERS)) return [];
   try {
-    const company = await companiesRepository.findById(user.companyId);
+    const company = await readCompanyForRequest(user.companyId);
     if (company === undefined || company.isPersonal) return [];
     return [CAPABILITIES.MANAGE_MEMBERS];
   } catch (error) {

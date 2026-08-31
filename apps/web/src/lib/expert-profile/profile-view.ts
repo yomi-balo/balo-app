@@ -1,4 +1,5 @@
 import type { PublicExpertProfile } from '@balo/db';
+import { publicDisplayRatePerMinute } from '@balo/shared/pricing';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { deriveInitials } from '@/lib/search/expert-card-mapper';
 import type {
@@ -125,6 +126,17 @@ function mapWorkHistory(workHistory: PublicExpertProfile['workHistory']): WorkHi
  *
  * ⚠ `topRated` STAYS `false`. It is a separate editorial badge with no defined threshold, and
  * deriving it from `ratingAverage` here would invent a rule nobody decided.
+ *
+ * ⚠ BAL-493 / D1 — THIS IS A PUBLIC SERIALIZER BOUNDARY. `profile.rateCents` is the
+ * UN-MARKED-UP consultant rate (pinned as such by `packages/db`'s
+ * `experts.integration.test.ts`); the Balo fee is applied HERE, once, so the public profile
+ * quotes the same client all-in rate as `/experts`. Never move this into the repository.
+ *
+ * ⚠ The fee is SESSION/ENGAGEMENT grain, not expert grain — there is no per-expert fee column
+ * (`credit_sessions.balo_fee_bps` defaults to 2500; `engagements.balo_fee_bps` is NULL for
+ * cases). `rate` is computed at `DEFAULT_BALO_FEE_BPS` and is a "FROM" figure; copy must read
+ * "From A$…/min", never an exact promise. No margin, fee-bps or expert-earnings field may join
+ * this view-model — pinned by `profile-view.test.ts`'s AC-5 boundary describe.
  */
 export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileView {
   const { user } = profile;
@@ -160,7 +172,8 @@ export function mapProfileToView(profile: PublicExpertProfile): ExpertProfileVie
     avatarKey: user.avatarUrl,
     countryCode: user.countryCode,
     country: user.country,
-    rate: profile.rateCents == null ? null : profile.rateCents / 100,
+    // BAL-493 / D1 — client all-in, Balo fee included at the DEFAULT bps. See the docblock.
+    rate: publicDisplayRatePerMinute(profile.rateCents),
     yearsExperience,
     consultationCount: profile.consultationCount,
     certCount: certifications.length,

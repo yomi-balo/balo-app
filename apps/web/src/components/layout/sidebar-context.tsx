@@ -14,9 +14,7 @@ import type { NavContext } from './nav-registry';
 
 interface SidebarContextValue {
   isCollapsed: boolean;
-  isMobileOpen: boolean;
   toggleCollapsed: () => void;
-  setMobileOpen: (open: boolean) => void;
 
   // Mode & user info. ⚠ `activeMode` is PRESENTATION ONLY here — the Logo expert badge and the
   // user-pill subtitle. It is NEVER a nav gate; nav scopes on `navContext.workspaceType`.
@@ -78,7 +76,6 @@ export function SidebarProvider({
   activeWorkspaceKey,
 }: SidebarProviderProps): React.JSX.Element {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
 
   // Hydrate from localStorage on mount
   useEffect(() => {
@@ -94,16 +91,10 @@ export function SidebarProvider({
     });
   }, []);
 
-  const setMobileOpenCb = useCallback((open: boolean) => {
-    setIsMobileOpen(open);
-  }, []);
-
   const value = useMemo(
     () => ({
       isCollapsed,
-      isMobileOpen,
       toggleCollapsed,
-      setMobileOpen: setMobileOpenCb,
       activeMode,
       userName,
       userInitials,
@@ -116,9 +107,7 @@ export function SidebarProvider({
     }),
     [
       isCollapsed,
-      isMobileOpen,
       toggleCollapsed,
-      setMobileOpenCb,
       activeMode,
       userName,
       userInitials,

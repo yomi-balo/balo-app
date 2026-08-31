@@ -6,7 +6,12 @@ import {
   requiresCapability,
   NO_CAPABILITY_REQUIRED,
   resolveBreadcrumbTrail,
+  splitMobileNav,
+  resolveMobileTabs,
+  resolveMoreItems,
+  MOBILE_TAB_LIMIT,
   type NavContext,
+  type EnabledNavEntry,
 } from './nav-registry';
 import { CAPABILITIES } from '@balo/shared/authz';
 
@@ -48,6 +53,11 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(keys).toEqual(['dashboard', 'consultations', 'projects', 'messages']);
   });
 
+  it('NAV_ENTRIES is authored as one primary block then one secondary block (resolveMobileNav depends on it)', () => {
+    const sections = NAV_ENTRIES.map((e) => e.section);
+    expect(sections.indexOf('primary', sections.lastIndexOf('secondary'))).toBe(-1);
+  });
+
   it('scopes expert_settings to the expert workspace only', () => {
     expect(resolveNavItems(COMPANY_MANAGE, 'secondary').map((e) => e.key)).not.toContain(
       'expert_settings'
@@ -57,15 +67,20 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     );
   });
 
-  it('dashboard, team (when granted), and account resolve under both workspace types', () => {
-    for (const [companyCtx, expertCtx] of [[COMPANY_MANAGE, EXPERT_MANAGE]] as const) {
-      expect(resolveNavItems(companyCtx, 'primary').map((e) => e.key)).toContain('dashboard');
-      expect(resolveNavItems(expertCtx, 'primary').map((e) => e.key)).toContain('dashboard');
-      expect(resolveNavItems(companyCtx, 'secondary').map((e) => e.key)).toContain('team');
-      expect(resolveNavItems(expertCtx, 'secondary').map((e) => e.key)).toContain('team');
-      expect(resolveNavItems(companyCtx, 'secondary').map((e) => e.key)).toContain('account');
-      expect(resolveNavItems(expertCtx, 'secondary').map((e) => e.key)).toContain('account');
-    }
+  it('dashboard and account resolve under both workspace types; team is expert-only and settings is company-only', () => {
+    expect(resolveNavItems(COMPANY_MANAGE, 'primary').map((e) => e.key)).toContain('dashboard');
+    expect(resolveNavItems(EXPERT_MANAGE, 'primary').map((e) => e.key)).toContain('dashboard');
+    expect(resolveNavItems(COMPANY_MANAGE, 'secondary').map((e) => e.key)).toContain('account');
+    expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('account');
+
+    // team — expert-only, regardless of capability.
+    expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('team');
+    expect(resolveNavItems(COMPANY_MANAGE, 'secondary').map((e) => e.key)).not.toContain('team');
+
+    // settings — company-only, ungated.
+    expect(resolveNavItems(COMPANY_MANAGE, 'secondary').map((e) => e.key)).toContain('settings');
+    expect(resolveNavItems(COMPANY_NO_MANAGE, 'secondary').map((e) => e.key)).toContain('settings');
+    expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).not.toContain('settings');
   });
 
   it('mobilePriority: exactly projects is "more" among resolved primary items; rest are "tab" in source order', () => {
@@ -77,8 +92,10 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   });
 
   it('every secondary entry is mobilePriority "more"', () => {
-    const secondary = resolveNavItems(EXPERT_MANAGE, 'secondary');
-    expect(secondary.every((e) => e.mobilePriority === 'more')).toBe(true);
+    for (const context of ALL_CONTEXTS) {
+      const secondary = resolveNavItems(context, 'secondary');
+      expect(secondary.every((e) => e.mobilePriority === 'more')).toBe(true);
+    }
   });
 
   it('badgeSource: exactly one entry has one, and it is expert_settings → expertChecklist', () => {
@@ -102,6 +119,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('messages')?.href).toBe('/messages');
     expect(byKey.get('expert_settings')?.href).toBe('/expert/settings');
     expect(byKey.get('team')?.href).toBe('/settings/team');
+    expect(byKey.get('settings')?.href).toBe('/settings');
     expect(byKey.get('account')?.href).toBe('/settings/account');
     expect(byKey.get('find_experts')?.href).toBe('/experts');
     expect(byKey.get('calendar')?.href).toBeNull();
@@ -128,18 +146,146 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 10 declared entries, 7 enabled', () => {
-    expect(NAV_ENTRIES.length).toBe(10);
-    expect(NAV_ENTRIES.filter((e) => e.enabled).length).toBe(7);
+  it('non-vacuity: 11 declared entries, 8 enabled', () => {
+    expect(NAV_ENTRIES.length).toBe(11);
+    expect(NAV_ENTRIES.filter((e) => e.enabled).length).toBe(8);
+  });
+
+  it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
+    const byKey = new Map(NAV_ENTRIES.map((e) => [e.key, e]));
+    expect(byKey.get('dashboard')?.shortLabel).toBe('Home');
+    expect(byKey.get('find_experts')?.shortLabel).toBe('Experts');
+    expect(byKey.get('consultations')?.shortLabel).toBe('Consults');
+    const withShortLabel = NAV_ENTRIES.filter((e) => e.shortLabel !== undefined).map((e) => e.key);
+    expect(withShortLabel.sort()).toEqual(['consultations', 'dashboard', 'find_experts'].sort());
+  });
+});
+
+/**
+ * BAL-501 — the bar/sheet split. `splitMobileNav` is the pure cap+overflow rule;
+ * `resolveMobileTabs`/`resolveMoreItems` are the real, context-driven callers.
+ */
+describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () => {
+  function tabEntry(key: string): EnabledNavEntry {
+    return {
+      key: key as EnabledNavEntry['key'],
+      label: key,
+      icon: NAV_ENTRIES[0]?.icon as EnabledNavEntry['icon'],
+      section: 'primary',
+      workspaceTypes: ['company', 'expert'],
+      requires: NO_CAPABILITY_REQUIRED,
+      mobilePriority: 'tab',
+      enabled: true,
+      href: `/${key}`,
+    };
+  }
+
+  function moreEntry(key: string): EnabledNavEntry {
+    return { ...tabEntry(key), mobilePriority: 'more' };
+  }
+
+  it('caps tabs at the limit; overflow entries land in moreItems at their original index', () => {
+    const synthetic = [
+      tabEntry('a'),
+      tabEntry('b'),
+      tabEntry('c'),
+      tabEntry('d'),
+      tabEntry('e'),
+      tabEntry('f'),
+    ];
+    const { tabs, moreItems } = splitMobileNav(synthetic, 4);
+    expect(tabs.map((e) => e.key)).toEqual(['a', 'b', 'c', 'd']);
+    // Overflow ('e', 'f') is what remains AFTER subtraction — original relative order preserved,
+    // not appended to a pre-existing 'more' list.
+    expect(moreItems.map((e) => e.key)).toEqual(['e', 'f']);
+  });
+
+  it('overflow folds back at its registry index — a pre-existing "more" entry interleaved before the cap is NOT displaced by later overflow', () => {
+    // A "filter non-tab, then concat overflow" implementation would produce
+    // moreItems === ['e', 'm'] here — the same wrong shape the plan warns against. Only a true
+    // subtraction (items minus the tabs Set, in original order) yields 'm' first.
+    const synthetic = [
+      tabEntry('a'),
+      tabEntry('b'),
+      moreEntry('m'),
+      tabEntry('c'),
+      tabEntry('d'),
+      tabEntry('e'),
+    ];
+    const { tabs, moreItems } = splitMobileNav(synthetic, 4);
+    expect(tabs.map((e) => e.key)).toEqual(['a', 'b', 'c', 'd']);
+    expect(moreItems.map((e) => e.key)).toEqual(['m', 'e']); // 'm' FIRST — overflow not appended
+  });
+
+  it('respects the default MOBILE_TAB_LIMIT when no limit is passed', () => {
+    const synthetic = [tabEntry('a'), tabEntry('b'), tabEntry('c'), tabEntry('d'), tabEntry('e')];
+    const { tabs } = splitMobileNav(synthetic);
+    expect(tabs).toHaveLength(MOBILE_TAB_LIMIT);
+  });
+
+  it('empty input yields empty everything', () => {
+    expect(splitMobileNav([])).toEqual({ tabs: [], moreItems: [] });
+  });
+
+  it('resolveMobileTabs today: dashboard/consultations/messages, for BOTH workspace types', () => {
+    expect(resolveMobileTabs(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual([
+      'dashboard',
+      'consultations',
+      'messages',
+    ]);
+    expect(resolveMobileTabs(EXPERT_MANAGE).map((e) => e.key)).toEqual([
+      'dashboard',
+      'consultations',
+      'messages',
+    ]);
+  });
+
+  it('resolveMoreItems today, by context — Projects always first (order-preserving subtraction)', () => {
+    // ⚠ BAL-503 moved these numbers: it added a company-only `settings` entry and narrowed `team`
+    // to the EXPERT workspace. The two company cases are now IDENTICAL — which is the executable
+    // evidence that the client's More list no longer varies by capability (BAL-503 D1, and the
+    // same property its own `sidebar.test.tsx` bottom-href cases pin for desktop).
+    expect(resolveMoreItems(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual([
+      'projects',
+      'settings',
+      'account',
+    ]);
+    expect(resolveMoreItems(COMPANY_MANAGE).map((e) => e.key)).toEqual([
+      'projects',
+      'settings',
+      'account',
+    ]);
+    // The expert workspace keeps `team` (BAL-503 narrowed it TO expert) and has no `settings`.
+    expect(resolveMoreItems(EXPERT_MANAGE).map((e) => e.key)).toEqual([
+      'projects',
+      'expert_settings',
+      'team',
+      'account',
+    ]);
+  });
+
+  it('conservation: tabs + moreItems is a permutation of the primary+secondary resolution, for every context', () => {
+    for (const context of ALL_CONTEXTS) {
+      const tabs = resolveMobileTabs(context);
+      const moreItems = resolveMoreItems(context);
+      const combined = [...tabs, ...moreItems].map((e) => e.key).sort();
+      const expected = [
+        ...resolveNavItems(context, 'primary'),
+        ...resolveNavItems(context, 'secondary'),
+      ]
+        .map((e) => e.key)
+        .sort();
+      expect(combined).toEqual(expected);
+    }
   });
 });
 
 /**
  * BAL-499 — the executable form of the Q1 decision: what every `(dashboard)` route's
- * breadcrumb trail resolves to. 16 routes total (recounted from the resolver's "9 of 16" — see
- * the plan's Q1 and orchestrator ruling R1): 6 have an exact registry `href`, 4 are supplemental
- * list routes, 6 are entity routes (each resolving to ONLY its parent — the entity's own crumb
- * is published separately by `EntityCrumb`).
+ * breadcrumb trail resolves to. 20 routes total (BAL-503 adds `/settings`, `/settings/company`,
+ * `/settings/billing`, `/settings/notifications`): 7 have an exact registry `href`, 7 are
+ * supplemental list routes, 6 are entity routes (each resolving to ONLY its parent — the
+ * entity's own crumb is published separately by `EntityCrumb`).
  */
 describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it.each([
@@ -151,11 +297,18 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/expert/settings', [{ label: 'Expert Settings', href: null }]],
     // D10 regression pin — this page rendered the title "Dashboard" before BAL-499. NOT that.
     ['/settings/team', [{ label: 'Team', href: null }]],
+    // BAL-503 — `/settings` always redirects, so this crumb never actually renders. Pinned
+    // anyway as executable documentation.
+    ['/settings', [{ label: 'Settings', href: null }]],
     // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
     ['/billing/top-up', [{ label: 'Top up', href: null }]],
     ['/engagements', [{ label: 'Engagements', href: null }]],
     ['/promo-codes', [{ label: 'Promo codes', href: null }]],
     ['/redeem', [{ label: 'Redeem a code', href: null }]],
+    // BAL-503 — the three new Settings sections.
+    ['/settings/company', [{ label: 'Company', href: null }]],
+    ['/settings/billing', [{ label: 'Credits & billing', href: null }]],
+    ['/settings/notifications', [{ label: 'Notifications', href: null }]],
     // ── Entity routes — parent crumb only; the entity's own label is published separately ──
     ['/cases/case-1', [{ label: 'Consultations', href: '/consultations' }]],
     ['/meetings/meeting-1', [{ label: 'Consultations', href: '/consultations' }]],
@@ -213,6 +366,10 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/engagements',
       '/promo-codes',
       '/redeem',
+      '/settings',
+      '/settings/company',
+      '/settings/billing',
+      '/settings/notifications',
     ];
     for (const pathname of listRoutes) {
       const [crumb] = resolveBreadcrumbTrail(pathname);
@@ -222,7 +379,17 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
 
   it('drift guard: no supplemental route collides with an enabled registry href', () => {
     const registryHrefs = new Set(NAV_ENTRIES.filter((e) => e.enabled).map((e) => e.href));
-    const supplementalRoutes = ['/billing/top-up', '/engagements', '/promo-codes', '/redeem'];
+    // ⚠ Do not add '/settings' here — it IS an enabled registry href, so adding it would make
+    // this drift guard fail correctly.
+    const supplementalRoutes = [
+      '/billing/top-up',
+      '/engagements',
+      '/promo-codes',
+      '/redeem',
+      '/settings/company',
+      '/settings/billing',
+      '/settings/notifications',
+    ];
     for (const route of supplementalRoutes) {
       expect(registryHrefs.has(route)).toBe(false);
     }

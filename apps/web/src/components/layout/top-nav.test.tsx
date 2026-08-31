@@ -3,11 +3,13 @@ import { render, screen, within } from '@testing-library/react';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
+// BAL-501 REMOVED the hamburger from `top-nav.tsx`, so this file no longer mocks
+// `@/hooks/use-mobile` and no longer supplies `setMobileOpen` — nothing in TopNav's subtree reads
+// either any more. The `useSidebar` mock survives for a DIFFERENT reason: BAL-500's ⌘K palette is
+// a sibling in this row and reads the shell context ITSELF, because `top-nav.tsx` may never name
+// `navContext` / `workspaceType` / `activeMode` (credits-chip-server-gated.test.ts).
 vi.mock('./sidebar-context', () => ({
   useSidebar: () => ({
-    setMobileOpen: vi.fn(),
-    // BAL-500 — the ⌘K palette is a sibling in this row and reads the shell context ITSELF;
-    // `top-nav.tsx` may never name these fields (credits-chip-server-gated.test.ts).
     navContext: { workspaceType: 'company', capabilities: [] },
     workspaces: [],
     activeWorkspaceKey: null,
@@ -15,15 +17,14 @@ vi.mock('./sidebar-context', () => ({
   }),
 }));
 
-vi.mock('@/hooks/use-mobile', () => ({
-  useIsMobile: () => false,
-}));
-
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }), // ⚠ REQUIRED — see trap T5
+  // ⚠ `useRouter` REQUIRED — the palette pushes on navigate, and `useWorkspaceSwitch` refreshes.
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 
+// `useWorkspaceSwitch` value-imports this `'use server'` module; stub it so the server graph is
+// never loaded here.
 vi.mock('@/lib/auth/actions/switch-workspace', () => ({ switchWorkspaceAction: vi.fn() }));
 
 // Mock NotificationBell to avoid fetch calls
@@ -44,11 +45,6 @@ describe('TopNav', () => {
   it('renders the NotificationBell component', () => {
     render(<TopNav />);
     expect(screen.getByTestId('notification-bell')).toBeInTheDocument();
-  });
-
-  it('does not render mobile menu button on desktop', () => {
-    render(<TopNav />);
-    expect(screen.queryByRole('button', { name: 'Open navigation menu' })).not.toBeInTheDocument();
   });
 
   it('bare <TopNav /> renders no credits chip at all (D2 — no client-side re-decision)', () => {

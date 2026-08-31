@@ -52,6 +52,16 @@ export {
   MARKETING_EVENTS,
   MARKETING_NAV_LINKS,
   MARKETING_SURFACES,
+  /** BAL-493 — the marketing HOME PAGE's event constant + its five vocabulary tuples. */
+  MARKETING_HOME_EVENTS,
+  MARKETING_HOME_SECTIONS,
+  MARKETING_HOME_CTA_PLACEMENTS,
+  MARKETING_HOME_BENCH_ROWS,
+  MARKETING_HOME_PRODUCT_SOURCES,
+  MARKETING_HOME_SPOTLIGHT_ACTIONS,
+  /** BAL-503 — the client Settings surface's event constant + canonical section tuple. */
+  SETTINGS_EVENTS,
+  SETTINGS_SECTIONS,
   /** BAL-500 — the ⌘K command palette's event constant + canonical method/type tuples. */
   COMMAND_PALETTE_EVENTS,
   COMMAND_PALETTE_OPEN_METHODS,
@@ -113,6 +123,16 @@ export type {
   MarketingEventMap,
   MarketingNavLink,
   MarketingSurface,
+  /** BAL-493 — the marketing home page's event payload and its five vocabularies. */
+  MarketingHomeEventMap,
+  MarketingHomeSection,
+  MarketingHomeCtaPlacement,
+  MarketingHomeBenchRow,
+  MarketingHomeProductSource,
+  MarketingHomeSpotlightAction,
+  /** BAL-503 — the client Settings surface's event payload and section vocabulary. */
+  SettingsEventMap,
+  SettingsSection,
   /** BAL-500 — the ⌘K command palette's event payload and method/type vocabularies. */
   CommandPaletteEventMap,
   CommandPaletteOpenMethod,

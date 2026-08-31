@@ -29,19 +29,38 @@ import type { NavContext } from './nav-registry';
  * BAL-496's static-label branch, which adds NO new interactive element, so every pre-existing
  * role/label/order assertion below still means what it meant. One `it()` block is ADDED (the
  * AC-5 badge gate); none is edited or removed.
+ *
+ * ⚠⚠ BAL-503 — a SECOND, TICKET-AUTHORISED UNFREEZE (in the same spirit as BAL-496's D13 above).
+ * D1 deliberately CHANGES the client bottom section: `team` narrows to the expert workspace only,
+ * and a new `settings` entry (`/settings`) takes its place for the client. Exactly the two
+ * `it()` blocks asserting the CLIENT bottom-href arrays are updated below (`'/settings/team'` →
+ * `'/settings'`, both the no-manage and can-manage cases — the two are now IDENTICAL, which is
+ * the executable evidence that the client bottom section no longer varies by capability). Every
+ * other assertion in this file — including both EXPERT bottom-href cases and the mobile drawer
+ * fixture (expert mode) — stays frozen with no edit.
+ *
+ * ⚠⚠ BAL-501 — INTENTIONAL, TICKET-AUTHORISED UNFREEZE (the THIRD). ADR-1053 deletes the mobile
+ * drawer: `Sidebar` no longer renders a `Sheet` and `TopNav` no longer renders a hamburger, so
+ * the `mobile drawer renders ALL enabled entries, including Projects` block asserts against
+ * markup that no longer exists. It is DELETED, not edited — an edited version would pin the new
+ * surface from the wrong file. Its ONE load-bearing guarantee — Projects stays reachable on a
+ * phone — moves to `mobile-more-sheet.test.tsx` ('renders every resolved more item, including
+ * Projects'), so the coverage is RELOCATED, never dropped. The `useIsMobile` mock and the
+ * `TopNav` import go with it (both existed only for that block). Every other assertion in this
+ * file is still frozen.
+ *
+ * ⚠ Reading the two notes together: BAL-503's "the mobile drawer fixture stays frozen" was true
+ * when written, one commit before BAL-501 deleted that block outright. The notes are a
+ * chronological record, not a description of the file's current state — same convention as
+ * BAL-496's note above.
  */
 
 // ── Mocks (declared BEFORE the component import — hoisting-safe, top-nav.test.tsx precedent) ──
 
 let sidebarValue: Record<string, unknown>;
-let isMobile = false;
 
 vi.mock('./sidebar-context', () => ({
   useSidebar: () => sidebarValue,
-}));
-
-vi.mock('@/hooks/use-mobile', () => ({
-  useIsMobile: () => isMobile,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -65,7 +84,6 @@ vi.mock('@/components/balo/notification-bell', () => ({
 }));
 
 import { Sidebar } from './sidebar';
-import { TopNav } from './top-nav';
 
 // ── THE ONLY THING THAT MAY CHANGE IN THE REFACTOR (decision 6: renderSidebar's BODY only) ──
 function navContextFor(mode: 'client' | 'expert', canManageCompany: boolean): NavContext {
@@ -95,14 +113,12 @@ function renderSidebar(opts: {
     workspaces: opts.workspaces ?? [SINGLE_COMPANY_WORKSPACE],
     activeWorkspaceKey: opts.activeWorkspaceKey ?? SINGLE_COMPANY_WORKSPACE.key,
     isCollapsed: opts.isCollapsed ?? false,
-    isMobileOpen: true,
     // Stateful by construction: mutates the module-level `sidebarValue` so a subsequent
     // `rerender(<Sidebar />)` observes the flip. `useSidebar` is mocked as `() => sidebarValue`,
     // so this closure reassigning the outer binding is what makes the collapse toggle testable.
     toggleCollapsed: () => {
       sidebarValue = { ...sidebarValue, isCollapsed: !sidebarValue.isCollapsed };
     },
-    setMobileOpen: vi.fn(),
   };
   return render(<Sidebar />);
 }
@@ -132,7 +148,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     }
   });
 
-  it('bottom gating matrix — client, cannot manage company → Account only', () => {
+  it('bottom gating matrix — client, cannot manage company → Settings + Account', () => {
     renderSidebar({ mode: 'client', canManageCompany: false });
     const allLinks = screen.getAllByRole('link');
     const bottomHrefs = allLinks
@@ -141,10 +157,10 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
         (href) =>
           href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
       );
-    expect(bottomHrefs).toEqual(['/settings/account']);
+    expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
 
-  it('bottom gating matrix — client, can manage company → Team + Account', () => {
+  it('bottom gating matrix — client, can manage company → Settings + Account (identical to the no-manage case)', () => {
     renderSidebar({ mode: 'client', canManageCompany: true });
     const allLinks = screen.getAllByRole('link');
     const bottomHrefs = allLinks
@@ -153,7 +169,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
         (href) =>
           href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
       );
-    expect(bottomHrefs).toEqual(['/settings/team', '/settings/account']);
+    expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
 
   it('bottom gating matrix — expert, cannot manage company → Expert Settings + Account', () => {
@@ -251,63 +267,6 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     });
     expect(document.querySelector('a[href="/"]')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Switch workspace/ })).not.toBeInTheDocument();
-  });
-
-  it('mobile drawer renders ALL enabled entries, including Projects', async () => {
-    const user = userEvent.setup();
-    isMobile = true;
-    try {
-      sidebarValue = {
-        activeMode: 'expert',
-        userName: 'Jane Doe',
-        userInitials: 'JD',
-        userAvatarUrl: null,
-        checklistCompletedCount: 0,
-        checklistAllComplete: false,
-        navContext: navContextFor('expert', true),
-        workspaces: [SINGLE_COMPANY_WORKSPACE],
-        activeWorkspaceKey: SINGLE_COMPANY_WORKSPACE.key,
-        isCollapsed: false,
-        isMobileOpen: false,
-        toggleCollapsed: vi.fn(),
-        setMobileOpen: vi.fn(),
-      };
-
-      const { rerender } = render(
-        <>
-          <TopNav />
-          <Sidebar />
-        </>
-      );
-
-      await user.click(screen.getByRole('button', { name: 'Open navigation menu' }));
-
-      // The mock setMobileOpen doesn't actually flip isMobileOpen, so re-render with it true.
-      sidebarValue = { ...sidebarValue, isMobileOpen: true };
-      rerender(
-        <>
-          <TopNav />
-          <Sidebar />
-        </>
-      );
-
-      expect(screen.getByText('Navigation')).toBeInTheDocument();
-      const dialog = screen.getByRole('dialog');
-      const links = within(dialog).getAllByRole('link');
-      const hrefs = links.map((l) => l.getAttribute('href'));
-      expect(hrefs).toEqual([
-        '/', // the Logo link, also rendered inside SidebarContent
-        '/dashboard',
-        '/consultations',
-        '/projects',
-        '/messages',
-        '/expert/settings',
-        '/settings/team',
-        '/settings/account',
-      ]);
-    } finally {
-      isMobile = false;
-    }
   });
 
   it('presentation survivors: expert mode shows Expert badge/subtitle, client mode shows Client', () => {

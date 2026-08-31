@@ -80,6 +80,10 @@ export function requiresCapability(...required: readonly NavCapability[]): NavRe
 interface NavEntryBase {
   readonly key: NavItemKey;
   readonly label: string;
+  /** BAL-501 — the bottom-tab cell's label, when `label` itself is too long at ~10.5px in a
+   *  4-or-5-column bar on a 360px viewport. Falls back to `label` when absent. Sidebar, the
+   *  More sheet, and the breadcrumb `<h1>` always render `label` — never this. */
+  readonly shortLabel?: string;
   readonly icon: LucideIcon;
   readonly section: NavSection;
   readonly workspaceTypes: readonly NavWorkspaceType[];
@@ -119,6 +123,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
+    shortLabel: 'Home',
     icon: LayoutDashboard,
     href: '/dashboard',
     section: 'primary',
@@ -132,6 +137,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   {
     key: 'find_experts',
     label: 'Find experts',
+    shortLabel: 'Experts',
     icon: Search,
     href: '/experts',
     section: 'primary',
@@ -145,6 +151,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   {
     key: 'consultations',
     label: 'Consultations',
+    shortLabel: 'Consults',
     icon: Video,
     href: '/consultations',
     section: 'primary',
@@ -206,15 +213,35 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     enabled: true,
   },
 
+  // BAL-503 — the CLIENT counterpart to `expert_settings`: one Settings destination fronting
+  // Company / Team / Credits & billing / Notifications (`/settings/<section>`). Ungated at the
+  // nav layer on purpose — every section either has no gate (billing, company, notifications) or
+  // keeps its own live server-side gate (team, `settings/team/page.tsx`). See ADR-1029 + `:64`
+  // above.
+  {
+    key: 'settings',
+    label: 'Settings',
+    icon: Settings,
+    href: '/settings',
+    section: 'secondary',
+    workspaceTypes: ['company'],
+    requires: NO_CAPABILITY_REQUIRED,
+    mobilePriority: 'more',
+    enabled: true,
+  },
+
   // BAL-347: owner/admin on a NON-personal company. The personal-company half is enforced
   // SERVER-SIDE by withholding the token (`buildNavContext`) — never re-derived here.
+  // BAL-503: narrowed to the EXPERT workspace only — the company client now reaches Team via
+  // the `settings` entry above (`/settings/team`, a nested Settings section). `href` and
+  // `requires` are unchanged — only `workspaceTypes` narrows.
   {
     key: 'team',
     label: 'Team',
     icon: Users,
     href: '/settings/team',
     section: 'secondary',
-    workspaceTypes: ['company', 'expert'],
+    workspaceTypes: ['expert'],
     requires: requiresCapability(CAPABILITIES.MANAGE_MEMBERS),
     mobilePriority: 'more',
     enabled: true,
@@ -232,7 +259,9 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     enabled: true,
   },
 
-  // BAL-500 flips this on and supplies the help-centre URL. No href today — modelled honestly.
+  // Awaits its OWN ticket to flip on and supply the help-centre URL. ⚠ NOT BAL-500: the ⌘K
+  // palette shipped WITHOUT touching this entry — it resolves through the same `enabled` gate as
+  // every other surface, so `help` stays absent there too. No href today — modelled honestly.
   {
     key: 'help',
     label: 'Help',
@@ -276,6 +305,50 @@ export function resolveNavItems(
   );
 }
 
+/** BAL-501 — the bar's cap. At most 4 tabs + the always-present More cell = 5 columns. */
+export const MOBILE_TAB_LIMIT = 4;
+
+export interface MobileNavSplit {
+  readonly tabs: readonly EnabledNavEntry[];
+  readonly moreItems: readonly EnabledNavEntry[];
+}
+
+/**
+ * The cap + overflow rule, over an ALREADY-RESOLVED list, in registry order.
+ * Exported for test: with only 3 `'tab'` candidates enabled today the cap branch is unreachable
+ * through a NavContext, and an untested `.slice()` is exactly the vacuous-AC failure the resolver
+ * flagged for badges. BAL-497 makes it 4; a 5th would make it live.
+ */
+export function splitMobileNav(
+  items: readonly EnabledNavEntry[],
+  limit: number = MOBILE_TAB_LIMIT
+): MobileNavSplit {
+  const tabs = items.filter((entry) => entry.mobilePriority === 'tab').slice(0, limit);
+  const promoted = new Set(tabs);
+  return { tabs, moreItems: items.filter((entry) => !promoted.has(entry)) };
+}
+
+function resolveMobileNav(context: NavContext): MobileNavSplit {
+  // `NAV_ENTRIES` is authored primary-block-then-secondary-block, so this concatenation IS
+  // registry order. Pinned by test.
+  return splitMobileNav([
+    ...resolveNavItems(context, 'primary'),
+    ...resolveNavItems(context, 'secondary'),
+  ]);
+}
+
+/** BAL-501 — the bottom tab bar's resolved entries, capped at `MOBILE_TAB_LIMIT`, registry order. */
+export function resolveMobileTabs(context: NavContext): readonly EnabledNavEntry[] {
+  return resolveMobileNav(context).tabs;
+}
+
+/** BAL-501 — the More sheet's resolved entries: every `'more'` entry plus any tab overflow,
+ *  in their original registry position (subtraction from the same ordered list — see
+ *  `splitMobileNav`). */
+export function resolveMoreItems(context: NavContext): readonly EnabledNavEntry[] {
+  return resolveMobileNav(context).moreItems;
+}
+
 /**
  * BAL-499 — one rendered breadcrumb. `href === null` means this crumb is the current page,
  * never a link target.
@@ -296,6 +369,11 @@ const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
   '/engagements': 'Engagements',
   '/promo-codes': 'Promo codes',
   '/redeem': 'Redeem a code',
+  // BAL-503 — the three NEW Settings sections. `/settings` itself and `/settings/team` are both
+  // enabled registry hrefs, so `exactCrumbLabelFor` matches them first and they need no row here.
+  '/settings/company': 'Company',
+  '/settings/billing': 'Credits & billing',
+  '/settings/notifications': 'Notifications',
 };
 
 /**

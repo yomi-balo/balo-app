@@ -25,7 +25,8 @@
     "./experts": "./src/experts/index.ts",
     "./redaction": "./src/redaction/index.ts",
     "./reviews": "./src/reviews/index.ts",
-    "./testing": "./src/testing/index.ts"
+    "./testing": "./src/testing/index.ts",
+    "./marketing": "./src/marketing/index.ts"
   },
   "dependencies": {
     "pino": "^9.0.0",

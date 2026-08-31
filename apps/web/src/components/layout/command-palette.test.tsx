@@ -6,7 +6,11 @@ import { CAPABILITIES } from '@balo/shared/authz';
 import type { Workspace, CompanyWorkspace } from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
-import type { NavCapability } from './nav-registry';
+// ⚠ `NAV_ENTRIES` is imported ON PURPOSE, and only a TEST may do this. Invariant Scan C
+// (`nav-registry-capability-gated.test.ts`) pins `nav-registry.ts` as the sole NON-TEST consumer;
+// its walker skips any filename containing `.test.` (`invariants/_source-scan.ts:333`), so this
+// import cannot trip it. T8 needs the real table — see the comment there.
+import { NAV_ENTRIES, type NavCapability } from './nav-registry';
 
 // cmdk / Radix UI need `hasPointerCapture`, which jsdom lacks and — unlike `ResizeObserver` and
 // `scrollIntoView` — `src/test/setup.ts` does NOT already stub globally.
@@ -116,6 +120,22 @@ async function escapeAndExpectFocus(
   await waitFor(() => expect(target).toHaveFocus());
 }
 
+/**
+ * Pins `navigator.platform`, which is what `isApplePlatform()` reads.
+ *
+ * ⚠ THE HOST'S OWN PLATFORM MUST NEVER DECIDE THIS. jsdom reports `platform: ''` and a
+ * `Mozilla/5.0 (<process.platform>) …` userAgent, so an unstubbed run reads as NON-Apple — and
+ * CI is Linux while a developer is on macOS. Pinning it per test is what keeps the ⌘K and Ctrl-K
+ * cases meaningful in both places. `configurable: true` shadows jsdom's prototype getter and lets
+ * the next `beforeEach` redefine it.
+ */
+function stubPlatform(platform: string): void {
+  Object.defineProperty(globalThis.navigator, 'platform', { value: platform, configurable: true });
+}
+
+const APPLE_PLATFORM = 'MacIntel';
+const WINDOWS_PLATFORM = 'Win32';
+
 /** Dispatches a raw ⌘K / Ctrl-K keydown on `document`, wrapped in `act` (this bypasses RTL's
  *  event helpers, which do not synthesize `metaKey`+key combos reliably). Returns the event so
  *  callers can assert on `defaultPrevented`. */
@@ -133,15 +153,30 @@ function dispatchShortcut(opts: { metaKey?: boolean; ctrlKey?: boolean }): Keybo
   return event;
 }
 
+/** Render, then fire one shortcut — the shared arrange for the three "does this modifier open
+ *  it?" cases (T4b, T4c), so the two negative tests don't repeat the same two lines. */
+function dispatchShortcutOn(
+  opts: RenderPaletteOptions,
+  modifiers: { metaKey?: boolean; ctrlKey?: boolean }
+): KeyboardEvent {
+  renderPalette(opts);
+  return dispatchShortcut(modifiers);
+}
+
 describe('CommandPalette', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Apple is the DEFAULT for this suite so the ⌘K cases below read naturally. The Ctrl-K and
+    // Windows cases override it explicitly; this reset is what stops that leaking forward.
+    stubPlatform(APPLE_PLATFORM);
   });
 
   it('T1: trigger renders with the shortcut hint, no dialog yet', () => {
     renderPalette({ workspaceType: 'company' });
     const trigger = screen.getByRole('button', { name: 'Search' });
-    expect(trigger).toHaveAttribute('aria-keyshortcuts', 'Meta+K Control+K');
+    // Platform-accurate, not the union: this suite runs as Apple (see `beforeEach`), and the
+    // Windows counterpart is asserted in T4c.
+    expect(trigger).toHaveAttribute('aria-keyshortcuts', 'Meta+K');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
@@ -164,12 +199,37 @@ describe('CommandPalette', () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it('T4: Ctrl-K opens too', () => {
+  it('T4: Ctrl-K opens on a NON-Apple platform', () => {
+    stubPlatform(WINDOWS_PLATFORM);
     renderPalette({ workspaceType: 'company' });
     dispatchShortcut({ ctrlKey: true });
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(track).toHaveBeenCalledWith('command_palette_opened', { method: 'shortcut' });
+  });
+
+  it('T4b: Ctrl-K does NOT open on macOS — the native kill-to-end-of-line binding is left alone', () => {
+    // The review nit. `metaKey || ctrlKey` on EVERY platform stole macOS's emacs Ctrl-K inside
+    // text fields; only ⌘ opens here. `defaultPrevented` is the load-bearing half — had the
+    // handler merely returned early AFTER `preventDefault()`, the keystroke would still be eaten
+    // and the native binding still lost, so asserting "no dialog" alone would pass a broken fix.
+    const event = dispatchShortcutOn({ workspaceType: 'company' }, { ctrlKey: true });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(event.defaultPrevented).toBe(false);
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('T4c: ⌘K does NOT open on Windows, and the hint names Ctrl there', () => {
+    stubPlatform(WINDOWS_PLATFORM);
+    const event = dispatchShortcutOn({ workspaceType: 'company' }, { metaKey: true });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Control+K'
+    );
   });
 
   it('T5: ⌘K toggles an open palette closed and emits nothing on the close edge', async () => {
@@ -185,9 +245,13 @@ describe('CommandPalette', () => {
   });
 
   it('T6: capability gating is differential — the two label sets differ by exactly ["Team"]', async () => {
-    const withoutManage = await openAndListOptions({ workspaceType: 'company', capabilities: [] });
+    // ⚠ EXPERT, not company. BAL-503 narrowed the only capability-gated entry (`team`,
+    // `requires: MANAGE_MEMBERS`) to `workspaceTypes: ['expert']` — the company client now reaches
+    // Team through `/settings/team` instead. Gating a COMPANY context on MANAGE_MEMBERS therefore
+    // produces no difference at all, and this test measured an empty diff against an empty diff.
+    const withoutManage = await openAndListOptions({ workspaceType: 'expert', capabilities: [] });
     const withManage = await openAndListOptions({
-      workspaceType: 'company',
+      workspaceType: 'expert',
       capabilities: [CAPABILITIES.MANAGE_MEMBERS],
     });
 
@@ -204,6 +268,18 @@ describe('CommandPalette', () => {
   });
 
   it('T8: disabled registry keys never surface, in any context', async () => {
+    // ⚠ DERIVED FROM THE REGISTRY, NEVER HARD-CODED. This used to list
+    // `['Help', 'Find experts', 'Calendar']` literally, which made the test a hostage to every
+    // OTHER open PR: BAL-497 (#257) flips `calendar` on and BAL-498 flips `find_experts`, so
+    // whichever of those and this one merged second went red for a reason that was not a bug.
+    // Deriving it means the assertion tracks whatever the registry says today.
+    const disabledLabels = NAV_ENTRIES.filter((entry) => !entry.enabled).map((e) => e.label);
+
+    // Guards the guard: with an empty derived set every assertion in the loop below would pass
+    // vacuously, and this test would silently stop covering anything. If this ever fires, every
+    // registry entry is enabled and the test needs a rethink, not a bigger fixture.
+    expect(disabledLabels.length).toBeGreaterThan(0);
+
     const contexts: RenderPaletteOptions[] = [
       { workspaceType: 'company', capabilities: [] },
       { workspaceType: 'company', capabilities: [CAPABILITIES.MANAGE_MEMBERS] },
@@ -212,9 +288,9 @@ describe('CommandPalette', () => {
     ];
     for (const context of contexts) {
       const labels = await openAndListOptions(context);
-      expect(labels).not.toContain('Help');
-      expect(labels).not.toContain('Find experts');
-      expect(labels).not.toContain('Calendar');
+      for (const disabledLabel of disabledLabels) {
+        expect(labels).not.toContain(disabledLabel);
+      }
     }
   });
 
@@ -283,6 +359,47 @@ describe('CommandPalette', () => {
 
     await user.click(companyBRow);
     expect(mockSwitchWorkspaceAction).toHaveBeenCalledWith(COMPANY_B.key);
+  });
+
+  it('T12b: two workspaces with the SAME NAME stay distinct options', async () => {
+    // The review nit. cmdk keys selection off `value` — `aria-selected` is
+    // `item.value === store.value` — so when `value` was the display string
+    // (`Switch to ${name}`), an actor in two identically-named companies got ONE highlight
+    // spanning BOTH rows. `workspace.key` is unique by construction, which is the fix.
+    const user = userEvent.setup();
+    const twin = (key: string): CompanyWorkspace => ({
+      type: 'company',
+      key,
+      companyId: key.replace('company:', ''),
+      name: 'Acme',
+      via: 'membership',
+      isPersonal: false,
+      role: 'member',
+    });
+    const first = twin('company:44444444-4444-4444-8444-444444444444');
+    const second = twin('company:55555555-5555-4555-8555-555555555555');
+    renderPalette({
+      workspaceType: 'company',
+      workspaces: [COMPANY_A, first, second],
+      activeWorkspaceKey: COMPANY_A.key,
+    });
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+
+    const rows = screen.getAllByRole('option', { name: /Switch to Acme/ });
+    expect(rows).toHaveLength(2);
+    // The deterministic half — distinct `data-value`s. Under the old display-string `value` both
+    // read `Switch to Acme`, so this fails on the unfixed component regardless of what is
+    // highlighted.
+    expect(rows[0]?.getAttribute('data-value')).not.toBe(rows[1]?.getAttribute('data-value'));
+
+    // The behavioural half. Typing narrows to exactly these two, so cmdk auto-selects the FIRST
+    // of them — and under a shared `value` the second would light up as well. Asserting over the
+    // two twins only (not the whole list) keeps this failing for the right reason.
+    await user.type(screen.getByRole('combobox'), 'Acme');
+    const twinsAfterFilter = screen.getAllByRole('option', { name: /Switch to Acme/ });
+    expect(twinsAfterFilter).toHaveLength(2);
+    const selected = twinsAfterFilter.filter((row) => row.getAttribute('aria-selected') === 'true');
+    expect(selected).toHaveLength(1);
   });
 
   it('T13: an empty or active-only workspace list renders no heading and no separator', async () => {

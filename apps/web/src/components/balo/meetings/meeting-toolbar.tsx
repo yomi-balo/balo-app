@@ -189,7 +189,7 @@ export function MeetingToolbar({
   const { panelSlot, reactionSlot } = resolveToolbarSlots({ onTogglePanel, onOpenReactions });
 
   return (
-    <div className="border-border flex h-[88px] shrink-0 items-center justify-between border-t px-4 pb-[env(safe-area-inset-bottom)] md:h-24 md:justify-center md:gap-2.5">
+    <div className="border-border flex min-h-[88px] shrink-0 items-center justify-between border-t px-4 pb-[env(safe-area-inset-bottom)] md:min-h-24 md:justify-center md:gap-2.5">
       <div className="flex items-center gap-2.5">
         {/*
           ⚠ ONE COMPONENT, TWO SIZES, SWITCHED IN CSS. Rendering the control twice (once per

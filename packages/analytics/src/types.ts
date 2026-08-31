@@ -47,6 +47,8 @@ import type { BookingEventMap } from './events/booking';
 import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
 import type { NavEventMap } from './events/nav';
 import type { MarketingEventMap } from './events/marketing';
+import type { MarketingHomeEventMap } from './events/marketing-home';
+import type { SettingsEventMap } from './events/settings';
 import type { CommandPaletteEventMap } from './events/command-palette';
 
 /** Union of all client-side (browser) event maps. */
@@ -96,6 +98,12 @@ export type AllEvents = AuthEventMap &
   // BAL-502 — the public marketing chrome's CLIENT family. `useMarketingTracking` (apps/web)
   // is the ONE dispatch point.
   MarketingEventMap &
+  // BAL-493 — the marketing HOME PAGE's CLIENT family. `useMarketingHomeTracking` (apps/web) is
+  // the ONE dispatch point; no island calls `track()` directly.
+  MarketingHomeEventMap &
+  // BAL-503 — the client Settings surface's CLIENT family. `SettingsSectionNav` (apps/web)
+  // is the ONE dispatch point. Deliberately separate from `NavEventMap`.
+  SettingsEventMap &
   // BAL-500 — the ⌘K command palette's CLIENT family. `'navigate'` is deliberately absent; see
   // `./events/command-palette.ts`.
   CommandPaletteEventMap;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search, Building2, UserRound } from 'lucide-react';
 import {
@@ -14,19 +14,15 @@ import {
   CommandShortcut,
 } from '@/components/ui/command';
 import { track, COMMAND_PALETTE_EVENTS } from '@/lib/analytics';
-import { switchWorkspaceAction } from '@/lib/auth/actions/switch-workspace';
 import { useSidebar } from './sidebar-context';
 import { resolveNavItems, type EnabledNavEntry } from './nav-registry';
 import { useNavItemTracking } from './use-nav-item-tracking';
+import { useWorkspaceSwitch } from './use-workspace-switch';
 import {
   workspaceDisplayName,
   workspaceSubtitle,
   REPRESENTATION_SWITCH_UNAVAILABLE_NOTE,
 } from './workspace-presentation';
-import {
-  toastWorkspaceSwitchOutcome,
-  toastWorkspaceSwitchThrew,
-} from './workspace-switch-feedback';
 import type { Workspace } from '@balo/shared/workspaces';
 
 /**
@@ -38,6 +34,29 @@ import type { Workspace } from '@balo/shared/workspaces';
  * `workspaceType` — identifiers `top-nav.tsx` is structurally forbidden to name
  * (`credits-chip-server-gated.test.ts`). `top-nav.tsx` renders this component and nothing else.
  */
+
+/**
+ * Which modifier opens the palette: ⌘ on Apple platforms, Ctrl everywhere else.
+ *
+ * ⚠ NOT `metaKey || ctrlKey` on every platform. On macOS **Ctrl-K is the native emacs
+ * "kill to end of line" binding inside text fields**, so accepting it there steals a keystroke
+ * the OS already owns — the user loses a real editing command every time they use it in an input.
+ * Symmetrically, ⌘K means nothing on Windows/Linux, so accepting it there is dead weight.
+ *
+ * ⚠ `globalThis.navigator`, NEVER a bare `window` / `global` (SonarCloud S7764), and guarded for
+ * jsdom + any non-DOM render pass where `navigator` is absent. `platform` is soft-deprecated but
+ * still the most reliable Apple signal; `userAgent` is the fallback. The literal alternation has
+ * no quantifier, so it carries no ReDoS shape (S5852).
+ *
+ * ⚠ Called at EVENT TIME, never during render — a render-time read would make the server's HTML
+ * and the client's first paint disagree and trip a hydration mismatch. `aria-keyshortcuts` needs
+ * it at render, so that one is resolved in an effect after mount (see `CommandPalette`).
+ */
+function isApplePlatform(): boolean {
+  const nav: Navigator | undefined = globalThis.navigator;
+  if (nav === undefined) return false;
+  return /Mac|iPhone|iPad|iPod/i.test(`${nav.platform} ${nav.userAgent}`);
+}
 
 interface NavGroupProps {
   readonly heading: string;
@@ -74,12 +93,27 @@ interface WorkspaceRowProps {
   readonly onSelect: (key: string) => void;
 }
 
+/**
+ * ⚠ `value` IS `workspace.key`, NEVER A DISPLAY STRING. cmdk keys selection off `value`
+ * (`aria-selected` is `item.value === store.value`), so two rows sharing a value BOTH highlight
+ * and BOTH count as the same option — reachable two ways here: an actor in two companies with the
+ * same name, or a workspace whose name equals a nav item's label. `Workspace['key']` is unique by
+ * construction (`'expert'` | `company:${companyId}`), which makes the collision unrepresentable.
+ *
+ * The human-readable text moves into `keywords`: cmdk's default filter scores
+ * `value + ' ' + keywords.join(' ')` (`command-score`'s alias handling), so typing a company's
+ * name still matches its row even though the name is no longer the value.
+ */
 function WorkspaceRow({ workspace, actorName, onSelect }: WorkspaceRowProps): React.JSX.Element {
   // Narrowed directly in the `if` (switcher precedent, workspace-switcher.tsx:149-152) so
   // TypeScript carries `CompanyWorkspace` into this branch and `.name` is only reached here.
   if (workspace.type === 'company' && workspace.via === 'representation') {
     return (
-      <CommandItem value={workspace.name} keywords={['switch', 'workspace']} disabled>
+      <CommandItem
+        value={workspace.key}
+        keywords={['switch', 'workspace', workspace.name]}
+        disabled
+      >
         <Building2 aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <p className="truncate">{workspace.name}</p>
@@ -101,8 +135,8 @@ function WorkspaceRow({ workspace, actorName, onSelect }: WorkspaceRowProps): Re
   const name = workspaceDisplayName(workspace, actorName);
   return (
     <CommandItem
-      value={`Switch to ${name}`}
-      keywords={['workspace', workspaceSubtitle(workspace)]}
+      value={workspace.key}
+      keywords={['switch', 'workspace', name, workspaceSubtitle(workspace)]}
       onSelect={() => onSelect(workspace.key)}
     >
       <Icon aria-hidden="true" />
@@ -118,15 +152,17 @@ interface PaletteTriggerProps {
   readonly onOpen: () => void;
   /** See the focus-restore effect in `CommandPalette` for why this ref exists. */
   readonly ref: React.Ref<HTMLButtonElement>;
+  /** The shortcut this platform actually honours — see `isApplePlatform`. */
+  readonly keyshortcuts: string;
 }
 
-function PaletteTrigger({ onOpen, ref }: PaletteTriggerProps): React.JSX.Element {
+function PaletteTrigger({ onOpen, ref, keyshortcuts }: PaletteTriggerProps): React.JSX.Element {
   return (
     <button
       ref={ref}
       type="button"
       onClick={onOpen}
-      aria-keyshortcuts="Meta+K Control+K"
+      aria-keyshortcuts={keyshortcuts}
       className="border-border bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring hidden h-8 w-[220px] shrink-0 items-center gap-2 rounded-lg border px-2.5 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none lg:inline-flex"
     >
       <Search className="size-3.5 shrink-0" aria-hidden="true" />
@@ -148,8 +184,11 @@ function PaletteTrigger({ onOpen, ref }: PaletteTriggerProps): React.JSX.Element
 export function CommandPalette(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const router = useRouter();
-  const [, startTransition] = useTransition();
   const { navContext, workspaces, activeWorkspaceKey, userName } = useSidebar();
+  // BAL-501 (D9) — the ONE switch implementation, shared with the sidebar switcher and the mobile
+  // More sheet. `isBusy` is deliberately unused: the trigger pill gets no busy affordance (the
+  // dialog is already closed by the time the round-trip starts).
+  const { switchTo } = useWorkspaceSwitch(activeWorkspaceKey);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wasOpenRef = useRef(false);
   // F5 — whatever had focus immediately BEFORE the palette opened. Captured synchronously in the
@@ -157,6 +196,14 @@ export function CommandPalette(): React.JSX.Element {
   // comment for why that distinction matters.
   const previouslyFocusedRef = useRef<Element | null>(null);
   const trackNavItem = useNavItemTracking('command_palette', navContext.workspaceType);
+  // Resolved AFTER mount, never during render: `isApplePlatform()` reads `navigator`, which the
+  // server render cannot see, so computing it inline would make the SSR HTML and the hydrated
+  // client tree disagree on this attribute. `Control+K` is the pre-hydration value because it is
+  // the safe majority default; the effect corrects it to `Meta+K` on Apple in the same tick.
+  const [keyshortcuts, setKeyshortcuts] = useState('Control+K');
+  useEffect(() => {
+    if (isApplePlatform()) setKeyshortcuts('Meta+K');
+  }, []);
 
   const primaryItems = resolveNavItems(navContext, 'primary');
   const secondaryItems = resolveNavItems(navContext, 'secondary');
@@ -164,7 +211,9 @@ export function CommandPalette(): React.JSX.Element {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.metaKey && !event.ctrlKey) return;
+      // Exactly ONE modifier is accepted, chosen per platform — see `isApplePlatform` for why
+      // `metaKey || ctrlKey` everywhere is wrong (it steals macOS's native Ctrl-K in text fields).
+      if (!(isApplePlatform() ? event.metaKey : event.ctrlKey)) return;
       if (event.key.toLowerCase() !== 'k') return;
       // ⚠ REQUIRED. ⌘K / Ctrl-K is a browser default (Chrome: focus the omnibox in search mode;
       // Firefox: focus the search bar). Without this the browser chrome steals the keystroke.
@@ -254,17 +303,17 @@ export function CommandPalette(): React.JSX.Element {
       // intent grain.
       track(COMMAND_PALETTE_EVENTS.ACTION, { type: 'switch_workspace', destination: targetKey });
       setOpen(false); // ← closes BEFORE the round-trip
-      switchWorkspaceAction(targetKey)
-        .then(toastWorkspaceSwitchOutcome)
-        .catch(toastWorkspaceSwitchThrew)
-        .finally(() => startTransition(() => router.refresh()));
+      // ⚠ NO analytics inside the hook, and none re-emitted here: `workspace_switched` fires
+      // EXACTLY ONCE, server-side, inside `switchWorkspace()`. The event above is the INTENT
+      // grain; joining the two gives the palette's switch success rate.
+      switchTo(targetKey);
     },
-    [router]
+    [switchTo]
   );
 
   return (
     <>
-      <PaletteTrigger onOpen={handleOpenViaClick} ref={triggerRef} />
+      <PaletteTrigger onOpen={handleOpenViaClick} ref={triggerRef} keyshortcuts={keyshortcuts} />
       <CommandDialog
         open={open}
         onOpenChange={setOpen}

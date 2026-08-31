@@ -289,6 +289,32 @@ export {
   MARKETING_SURFACES,
   type MarketingSurface,
 } from './marketing';
+// BAL-493 — the marketing HOME PAGE's CLIENT event family. Deliberately separate from
+// `./marketing`, which is the marketing CHROME's family: widening its pinned `MARKETING_SURFACES`
+// tuple with page sections would retroactively change what a historical
+// `marketing_nav_clicked{surface}` means.
+export {
+  MARKETING_HOME_EVENTS,
+  type MarketingHomeEventMap,
+  MARKETING_HOME_SECTIONS,
+  type MarketingHomeSection,
+  MARKETING_HOME_CTA_PLACEMENTS,
+  type MarketingHomeCtaPlacement,
+  MARKETING_HOME_BENCH_ROWS,
+  type MarketingHomeBenchRow,
+  MARKETING_HOME_PRODUCT_SOURCES,
+  type MarketingHomeProductSource,
+  MARKETING_HOME_SPOTLIGHT_ACTIONS,
+  type MarketingHomeSpotlightAction,
+} from './marketing-home';
+// BAL-503 — the client Settings surface's CLIENT event family + canonical section tuple.
+// Deliberately separate from `NAV_EVENTS` (see `./settings.ts`'s header comment).
+export {
+  SETTINGS_EVENTS,
+  type SettingsEventMap,
+  SETTINGS_SECTIONS,
+  type SettingsSection,
+} from './settings';
 // BAL-500 / ADR-1053 — the ⌘K command palette's CLIENT event family. Navigation is measured by
 // the already-shipped `nav_item_clicked` (`surface: 'command_palette'`); see the module docblock.
 export {
