@@ -13,14 +13,9 @@ import type { NavContext } from './nav-registry';
  */
 
 let sidebarValue: Record<string, unknown>;
-let isMobile = false;
 
 vi.mock('./sidebar-context', () => ({
   useSidebar: () => sidebarValue,
-}));
-
-vi.mock('@/hooks/use-mobile', () => ({
-  useIsMobile: () => isMobile,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -49,9 +44,7 @@ function buildSidebarValue(mode: 'client' | 'expert'): Record<string, unknown> {
     workspaces: [SINGLE_COMPANY_WORKSPACE],
     activeWorkspaceKey: SINGLE_COMPANY_WORKSPACE.key,
     isCollapsed: false,
-    isMobileOpen: true,
     toggleCollapsed: vi.fn(),
-    setMobileOpen: vi.fn(),
   };
 }
 
@@ -90,24 +83,5 @@ describe('Sidebar nav click tracking (BAL-495)', () => {
       surface: 'sidebar',
       workspace_type: 'expert',
     });
-  });
-
-  it('mobile drawer also reports surface "sidebar" — it renders SidebarContent verbatim', async () => {
-    const user = userEvent.setup();
-    isMobile = true;
-    try {
-      sidebarValue = buildSidebarValue('client');
-      render(<Sidebar />);
-
-      await user.click(screen.getByRole('link', { name: /^Dashboard/ }));
-
-      expect(track).toHaveBeenCalledWith(NAV_EVENTS.ITEM_CLICKED, {
-        item: 'dashboard',
-        surface: 'sidebar',
-        workspace_type: 'company',
-      });
-    } finally {
-      isMobile = false;
-    }
   });
 });

@@ -228,4 +228,86 @@ describe('Breadcrumbs', () => {
     );
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  // ── BAL-501 §2.2 — the internal responsive branch, one <h1> in both layouts ────────────────
+  describe('BAL-501 — mobile responsive branch', () => {
+    it('exactly one level-1 heading on a list route', () => {
+      pathname = '/consultations';
+      render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('exactly one level-1 heading on an entity route with a published label', () => {
+      pathname = '/cases/e-1';
+      render(
+        <BreadcrumbProvider>
+          <EntityCrumb label="Case #1042" />
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('exactly one level-1 heading on an entity route with no published label', () => {
+      pathname = '/cases/e-1';
+      render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('an entity route renders a "Back to {parent}" link carrying lg:hidden', () => {
+      pathname = '/cases/e-1';
+      render(
+        <BreadcrumbProvider>
+          <EntityCrumb label="Case #1042" />
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      const back = screen.getByRole('link', { name: 'Back to Consultations' });
+      expect(back).toHaveAttribute('href', '/consultations');
+      expect(back.className).toContain('lg:hidden');
+    });
+
+    it('a list route (single crumb) renders no back link', () => {
+      pathname = '/consultations';
+      render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      expect(screen.queryByRole('link', { name: /^Back to/ })).not.toBeInTheDocument();
+    });
+
+    it('the earlier-crumb <li> carries hidden and lg:flex (asserted on className, not visibility — jsdom loads no Tailwind)', () => {
+      pathname = '/cases/e-1';
+      render(
+        <BreadcrumbProvider>
+          <EntityCrumb label="Case #1042" />
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      const earlierLink = screen.getByRole('link', { name: 'Consultations' });
+      const earlierLi = earlierLink.closest('li');
+      expect(earlierLi?.className).toContain('hidden');
+      expect(earlierLi?.className).toContain('lg:flex');
+    });
+
+    it('crumbs.length === 0 still renders null — no "Balo" fallback (D18)', () => {
+      pathname = '/nope';
+      render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+      expect(screen.queryByLabelText('Breadcrumb')).not.toBeInTheDocument();
+      expect(screen.queryByText('Balo')).not.toBeInTheDocument();
+    });
+  });
 });

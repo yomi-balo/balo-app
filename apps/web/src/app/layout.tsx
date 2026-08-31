@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
 import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
@@ -42,6 +42,13 @@ export const metadata: Metadata = {
     card: 'summary_large_image',
   },
 };
+
+/**
+ * BAL-501 — `viewportFit: 'cover'` is what makes `env(safe-area-inset-*)` non-zero on iOS.
+ * `width` / `initialScale` restate Next's defaults so adding this export changes nothing else.
+ * ⚠ Do NOT add `maximumScale` / `userScalable: false` — blocking pinch-zoom is an a11y defect.
+ */
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
 export default async function RootLayout({
   children,

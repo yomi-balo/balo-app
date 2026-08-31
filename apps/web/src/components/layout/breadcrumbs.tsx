@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronRight } from 'lucide-react';
+import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { resolveBreadcrumbTrail, type NavCrumb } from './nav-registry';
 import { useEntityCrumbLabel } from './breadcrumb-context';
 
@@ -70,30 +70,65 @@ export function Breadcrumbs(): React.JSX.Element | null {
   const crumbs: readonly NavCrumb[] =
     entityLabel === null ? routeTrail : [...routeTrail, { label: entityLabel, href: null }];
 
-  if (crumbs.length === 0) return null;
+  if (crumbs.length === 0) return null; // D18 — unchanged; no mobile-only fallback
 
   const lastIndex = crumbs.length - 1;
+  const parent = crumbs[lastIndex - 1]; // NavCrumb | undefined (noUncheckedIndexedAccess)
+  const backHref = parent === undefined || parent.href === null ? null : parent.href;
 
   return (
-    <nav aria-label="Breadcrumb" className="min-w-0">
+    <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5">
+      {/* MOBILE-ONLY back affordance. A real <Link>, never history.back() — a deep-linked
+          entity page has no in-app history to go back to (design-spec.md:104-108). */}
+      {backHref !== null && parent !== undefined && (
+        <Link
+          href={backHref}
+          aria-label={`Back to ${parent.label}`}
+          className="text-foreground hover:bg-accent focus-visible:ring-ring -ml-2 inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:ring-2 focus-visible:outline-none lg:hidden"
+        >
+          <ArrowLeft className="size-[18px]" aria-hidden="true" />
+        </Link>
+      )}
+
       <ol className="flex min-w-0 items-center gap-1.5 text-sm">
         {crumbs.map((crumb, index) => {
           const isLast = index === lastIndex;
+          if (!isLast) {
+            // EARLIER crumbs — desktop only. `hidden lg:flex`, NOT a second component.
+            return (
+              <li
+                key={crumb.href ?? crumb.label}
+                className="hidden min-w-0 items-center gap-1.5 lg:flex"
+              >
+                {index > 0 && (
+                  <ChevronRight
+                    className="text-muted-foreground size-3.5 shrink-0"
+                    aria-hidden="true"
+                  />
+                )}
+                {crumbContent(crumb, 'earlier')}
+              </li>
+            );
+          }
           return (
             <li key={crumb.href ?? crumb.label} className="flex min-w-0 items-center gap-1.5">
               {index > 0 && (
                 <ChevronRight
-                  className="text-muted-foreground size-3.5 shrink-0"
+                  className="text-muted-foreground hidden size-3.5 shrink-0 lg:block"
                   aria-hidden="true"
                 />
               )}
-              {isLast ? (
-                <h1 aria-current="page" className="min-w-0 truncate">
-                  {crumbContent(crumb, 'last')}
-                </h1>
-              ) : (
-                crumbContent(crumb, 'earlier')
-              )}
+              {/* ⚠⚠ THE ONE <h1>. Same node in both layouts. 17px/600 on mobile per the
+                  prototype (balo-nav-explorer.jsx:2324-2333), text-sm from lg up (today's value).
+                  ⚠ `lg:tracking-normal` pairs with `lg:text-sm`: BOTH mobile-only type tweaks must
+                  be reverted at `lg`, or desktop silently inherits the mobile tracking and this
+                  "internal responsive branch" stops being a no-op for desktop. */}
+              <h1
+                aria-current="page"
+                className="min-w-0 truncate text-[17px] font-semibold tracking-[-0.01em] lg:text-sm lg:tracking-normal"
+              >
+                {crumbContent(crumb, 'last')}
+              </h1>
             </li>
           );
         })}

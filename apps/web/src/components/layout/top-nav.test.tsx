@@ -3,14 +3,6 @@ import { render, screen, within } from '@testing-library/react';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
-vi.mock('./sidebar-context', () => ({
-  useSidebar: () => ({ setMobileOpen: vi.fn() }),
-}));
-
-vi.mock('@/hooks/use-mobile', () => ({
-  useIsMobile: () => false,
-}));
-
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
 }));
@@ -33,11 +25,6 @@ describe('TopNav', () => {
   it('renders the NotificationBell component', () => {
     render(<TopNav />);
     expect(screen.getByTestId('notification-bell')).toBeInTheDocument();
-  });
-
-  it('does not render mobile menu button on desktop', () => {
-    render(<TopNav />);
-    expect(screen.queryByRole('button', { name: 'Open navigation menu' })).not.toBeInTheDocument();
   });
 
   it('bare <TopNav /> renders no credits chip at all (D2 — no client-side re-decision)', () => {

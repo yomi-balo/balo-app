@@ -3,11 +3,12 @@ import { NAV_EVENTS, NAV_ITEM_KEYS, NAV_SURFACES } from './nav';
 
 describe('NAV_EVENTS', () => {
   it('has exactly the expected keys', () => {
-    expect(Object.keys(NAV_EVENTS)).toEqual(['ITEM_CLICKED']);
+    expect(Object.keys(NAV_EVENTS)).toEqual(['ITEM_CLICKED', 'MORE_OPENED']);
   });
 
   it('maps each constant to its snake_case event name', () => {
     expect(NAV_EVENTS.ITEM_CLICKED).toBe('nav_item_clicked');
+    expect(NAV_EVENTS.MORE_OPENED).toBe('nav_more_opened');
   });
 
   it('values follow the naming convention {feature}_{noun}_{past_tense_verb}', () => {
@@ -42,6 +43,6 @@ describe('NAV_ITEM_KEYS', () => {
 
 describe('NAV_SURFACES', () => {
   it('is the exact pinned tuple, in order', () => {
-    expect(NAV_SURFACES).toEqual(['sidebar', 'bottom_tabs', 'command_palette']);
+    expect(NAV_SURFACES).toEqual(['sidebar', 'bottom_tabs', 'more_sheet', 'command_palette']);
   });
 });

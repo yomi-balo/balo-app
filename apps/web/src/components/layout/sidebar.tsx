@@ -1,10 +1,10 @@
 'use client';
 
 import { useSidebar } from './sidebar-context';
-import { useIsMobile } from '@/hooks/use-mobile';
 import { SidebarNavLink } from './sidebar-nav-link';
-import { resolveNavItems, type NavBadgeSource, type EnabledNavEntry } from './nav-registry';
+import { resolveNavItems, type EnabledNavEntry } from './nav-registry';
 import { useNavItemTracking } from './use-nav-item-tracking';
+import { NAV_BADGE_RENDERERS, type NavBadgeCounts } from './nav-badges';
 import { Logo } from './logo';
 import { WorkspaceSwitcher } from './workspace-switcher';
 import { UserMenu } from './user-menu';
@@ -12,51 +12,8 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { PanelLeftClose, PanelLeft, Check } from 'lucide-react';
+import { PanelLeftClose, PanelLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-interface NavBadgeCounts {
-  readonly checklistCompletedCount: number;
-  readonly checklistAllComplete: boolean;
-}
-
-/**
- * ⚠ A `Record` OVER THE UNION, ON PURPOSE. Adding a member to `NavBadgeSource` without adding a
- * renderer here is a COMPILE ERROR — a `switch` or a ternary would silently render nothing.
- * (`noUncheckedIndexedAccess` does not widen a finite-literal-keyed Record, so the lookup below
- * is non-optional.)
- */
-const NAV_BADGE_RENDERERS: Record<NavBadgeSource, (counts: NavBadgeCounts) => React.JSX.Element> = {
-  expertChecklist: ({ checklistCompletedCount, checklistAllComplete }) => (
-    <ChecklistBadge completedCount={checklistCompletedCount} allComplete={checklistAllComplete} />
-  ),
-};
-
-function ChecklistBadge({
-  completedCount,
-  allComplete,
-}: {
-  completedCount: number;
-  allComplete: boolean;
-}): React.JSX.Element {
-  if (allComplete) {
-    return (
-      <span
-        className="bg-success/10 text-success flex h-5 w-5 items-center justify-center rounded-full"
-        style={{ animation: 'checkPop 0.3s ease-out' }}
-      >
-        <Check className="h-3 w-3" />
-      </span>
-    );
-  }
-
-  return (
-    <span className="bg-primary/10 text-primary rounded-full px-2 py-0.5 text-[10px] font-semibold">
-      {completedCount}/5
-    </span>
-  );
-}
 
 function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.Element {
   const {
@@ -180,28 +137,14 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
 }
 
 export function Sidebar(): React.JSX.Element {
-  const { isCollapsed, isMobileOpen, toggleCollapsed, setMobileOpen } = useSidebar();
-  const isMobile = useIsMobile();
+  const { isCollapsed, toggleCollapsed } = useSidebar();
 
-  // Mobile: render sidebar inside a Sheet (left-sliding drawer)
-  if (isMobile) {
-    return (
-      <Sheet open={isMobileOpen} onOpenChange={setMobileOpen}>
-        <SheetContent side="left" className="bg-sidebar text-sidebar-foreground w-64 p-0">
-          <SheetHeader className="sr-only">
-            <SheetTitle>Navigation</SheetTitle>
-          </SheetHeader>
-          <SidebarContent isCollapsed={false} />
-        </SheetContent>
-      </Sheet>
-    );
-  }
-
-  // Desktop: fixed sidebar with collapse toggle
+  // §2.1 — CSS-gated, never `useIsMobile`: `hidden lg:block` avoids the first-paint flash a
+  // JS-gated ladder would produce (`use-mobile.ts` renders `false` on first paint).
   return (
     <aside
       className={cn(
-        'bg-sidebar text-sidebar-foreground border-sidebar-border relative border-r',
+        'bg-sidebar text-sidebar-foreground border-sidebar-border relative hidden border-r lg:block',
         'sticky top-0 h-screen shrink-0',
         'transition-[width] duration-200 ease-in-out',
         isCollapsed ? 'w-[56px]' : 'w-64'

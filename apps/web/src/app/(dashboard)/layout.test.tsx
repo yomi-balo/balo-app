@@ -58,6 +58,10 @@ vi.mock('@/components/layout/sidebar', () => ({
   Sidebar: () => <div data-testid="sidebar-stub" />,
 }));
 
+vi.mock('@/components/layout/mobile-tab-bar', () => ({
+  MobileTabBar: () => null,
+}));
+
 vi.mock('@/components/balo/notification-bell', () => ({
   NotificationBell: () => <div data-testid="notification-bell" />,
 }));
@@ -65,10 +69,6 @@ vi.mock('@/components/balo/notification-bell', () => ({
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
   redirect: vi.fn(),
-}));
-
-vi.mock('@/hooks/use-mobile', () => ({
-  useIsMobile: () => false,
 }));
 
 import DashboardLayout from './layout';

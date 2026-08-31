@@ -11,6 +11,7 @@ import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { BreadcrumbProvider } from '@/components/layout/breadcrumb-context';
 import { TopNav } from '@/components/layout/top-nav';
 import { Sidebar } from '@/components/layout/sidebar';
+import { MobileTabBar } from '@/components/layout/mobile-tab-bar';
 import { CreditsChipSlot } from '@/components/layout/credits-chip-slot';
 import { CreditsChipSkeleton } from '@/components/layout/credits-chip';
 import { creditsChipIsInScope } from '@/components/layout/credits-chip-scope';
@@ -99,14 +100,21 @@ export default async function DashboardLayout({
       activeWorkspaceKey={activeWorkspaceKey}
     >
       <BreadcrumbProvider>
-        <div className="bg-background min-h-screen">
+        {/* §2.3 — `min-h-dvh`, NEVER `min-h-screen`: mobile browser chrome makes `100vh` taller
+            than the visible viewport, which would leave phantom scroll under the sticky tab
+            bar. `100dvh === 100vh` on desktop, so this is inert there. */}
+        <div className="bg-background min-h-dvh">
           <div className="flex">
             <Sidebar />
-            <div className="flex min-h-screen flex-1 flex-col">
+            <div className="flex min-h-dvh flex-1 flex-col">
               <TopNav creditsChip={creditsChip} />
               <main className="flex-1 p-6 lg:p-8">
                 <div className="mx-auto max-w-7xl">{children}</div>
               </main>
+              {/* `sticky bottom-0` IN FLOW (never `fixed`) — §2.3's ruling. `<main>` needs no
+                  extra bottom padding and `AppFooter` (rendered by the root layout, outside
+                  this tree) needs no changes. */}
+              <MobileTabBar />
             </div>
           </div>
         </div>
