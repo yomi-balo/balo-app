@@ -17,7 +17,10 @@ import {
   WORKSPACE_GROUP_LABELS,
   WORKSPACE_SECTION_LABEL_CLASSNAME,
 } from './workspace-row-parts';
-import { workspaceSubtitle } from './workspace-presentation';
+import {
+  workspaceSubtitle,
+  REPRESENTATION_SWITCH_UNAVAILABLE_NOTE,
+} from './workspace-presentation';
 import { useWorkspaceSwitch } from './use-workspace-switch';
 import { useLogout } from './use-logout';
 
@@ -69,7 +72,7 @@ function MoreWorkspaceRow({
               reductions compound with the parent's own `disabled:opacity-50` dim. */}
           <p className="text-muted-foreground truncate text-xs">{workspaceSubtitle(workspace)}</p>
           <p className="text-muted-foreground mt-0.5 text-[11px]">
-            Switching here isn’t available yet
+            {REPRESENTATION_SWITCH_UNAVAILABLE_NOTE}
           </p>
         </div>
       </button>

@@ -163,6 +163,13 @@ vi.mock('@/lib/analytics', async () => {
     // undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     SETTINGS_EVENTS: events.SETTINGS_EVENTS,
     SETTINGS_SECTIONS: events.SETTINGS_SECTIONS,
+    // BAL-500 — the ⌘K command palette's CLIENT event + canonical method/type tuples. ⚠ WITHOUT
+    // THIS LINE every test whose module graph reaches the palette (incl. top-nav.test.tsx,
+    // sidebar.test.tsx, (dashboard)/layout.test.tsx) throws on an undefined constant (memory
+    // `reference_web_analytics_test_mock_export_list`).
+    COMMAND_PALETTE_EVENTS: events.COMMAND_PALETTE_EVENTS,
+    COMMAND_PALETTE_OPEN_METHODS: events.COMMAND_PALETTE_OPEN_METHODS,
+    COMMAND_PALETTE_ACTION_TYPES: events.COMMAND_PALETTE_ACTION_TYPES,
     initAnalytics: vi.fn(),
   };
 });

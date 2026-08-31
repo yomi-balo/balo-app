@@ -13,7 +13,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { track, WORKSPACE_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
-import { workspaceDisplayName, workspaceSubtitle } from './workspace-presentation';
+import {
+  workspaceDisplayName,
+  workspaceSubtitle,
+  REPRESENTATION_SWITCH_UNAVAILABLE_NOTE,
+} from './workspace-presentation';
 import {
   WorkspaceAvatar,
   WorkspaceLabelStack,
@@ -126,7 +130,7 @@ function WorkspaceRow({
               already-muted token, likely failing WCAG AA — which would defeat D5/A9's whole
               rationale for choosing visible inline copy over a tooltip. */}
           <p className="text-muted-foreground mt-0.5 text-[11px]">
-            Switching here isn’t available yet
+            {REPRESENTATION_SWITCH_UNAVAILABLE_NOTE}
           </p>
         </div>
       </DropdownMenuItem>

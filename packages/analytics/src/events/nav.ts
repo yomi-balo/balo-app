@@ -25,7 +25,11 @@ export type NavItemKey = (typeof NAV_ITEM_KEYS)[number];
  * The ADR-1053 surfaces. ⚠ BAL-501 DELETED THE MOBILE DRAWER, so `'sidebar'` now means DESKTOP
  * for the first time — the old note here ("the mobile DRAWER reports 'sidebar'") no longer holds
  * and must not be left in place to mislead a PostHog query.
- * `'command_palette'` (BAL-503) is still declared-but-unemitted.
+ * `'command_palette'` is NOW EMITTED — BAL-500 shipped the ⌘K palette, whose nav rows dispatch
+ * through the same `useNavItemTracking('command_palette', …)` hook as every other surface. It is
+ * deliberately the ONLY measure of palette NAVIGATION: `command_palette_action` narrows its `type`
+ * to `'switch_workspace'` precisely so the two families cannot double-count a navigate.
+ * All four surfaces are live; none is declared-but-unemitted.
  */
 export const NAV_SURFACES = ['sidebar', 'bottom_tabs', 'more_sheet', 'command_palette'] as const;
 export type NavSurface = (typeof NAV_SURFACES)[number];

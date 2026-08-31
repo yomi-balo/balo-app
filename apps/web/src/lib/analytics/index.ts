@@ -62,6 +62,10 @@ export {
   /** BAL-503 — the client Settings surface's event constant + canonical section tuple. */
   SETTINGS_EVENTS,
   SETTINGS_SECTIONS,
+  /** BAL-500 — the ⌘K command palette's event constant + canonical method/type tuples. */
+  COMMAND_PALETTE_EVENTS,
+  COMMAND_PALETTE_OPEN_METHODS,
+  COMMAND_PALETTE_ACTION_TYPES,
 } from '@balo/analytics/client';
 
 export type {
@@ -129,4 +133,8 @@ export type {
   /** BAL-503 — the client Settings surface's event payload and section vocabulary. */
   SettingsEventMap,
   SettingsSection,
+  /** BAL-500 — the ⌘K command palette's event payload and method/type vocabularies. */
+  CommandPaletteEventMap,
+  CommandPaletteOpenMethod,
+  CommandPaletteActionType,
 } from '@balo/analytics/client';

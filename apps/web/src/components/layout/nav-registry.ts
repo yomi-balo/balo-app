@@ -259,7 +259,9 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     enabled: true,
   },
 
-  // BAL-500 flips this on and supplies the help-centre URL. No href today — modelled honestly.
+  // Awaits its OWN ticket to flip on and supply the help-centre URL. ⚠ NOT BAL-500: the ⌘K
+  // palette shipped WITHOUT touching this entry — it resolves through the same `enabled` gate as
+  // every other surface, so `help` stays absent there too. No href today — modelled honestly.
   {
     key: 'help',
     label: 'Help',
