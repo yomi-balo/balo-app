@@ -73,11 +73,15 @@ describe('MobileTabBar (BAL-501)', () => {
     isMobile = true;
   });
 
-  it('renders one Link per resolved tab plus a More button, in registry order, for a company workspace', () => {
+  it('renders one Link per resolved tab plus a More button, in registry order, for a company workspace, filling the bar to MOBILE_TAB_LIMIT', () => {
+    // BAL-497 (D2) flipped `find_experts` on; the same registry feeds all three surfaces, so the
+    // company bar goes 3 → 4 = the cap exactly (not over — `resolveMoreItems` is unchanged,
+    // verified by the untouched `mobile-more-sheet.test.tsx`).
     renderTabBar({ workspaceType: 'company' });
     const links = screen.getAllByRole('link');
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
+      '/experts',
       '/consultations',
       '/messages',
     ]);
@@ -88,7 +92,8 @@ describe('MobileTabBar (BAL-501)', () => {
     renderTabBar({ workspaceType: 'expert' });
     const links = screen.getAllByRole('link');
     // BAL-498: Calendar is expert-only and sits between Consultations and Messages in registry
-    // order, filling the bar to MOBILE_TAB_LIMIT. The company case above stays at three.
+    // order, filling the bar to MOBILE_TAB_LIMIT. The company case above is also at four now
+    // (BAL-497 flipped `find_experts` on), not three.
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
       '/consultations',
@@ -106,6 +111,10 @@ describe('MobileTabBar (BAL-501)', () => {
     expect(screen.getByText('Consults')).toBeInTheDocument();
     expect(screen.getByText('Messages')).toBeInTheDocument();
     expect(screen.queryByText('Dashboard')).not.toBeInTheDocument();
+    // BAL-497 — the only place `find_experts`'s `shortLabel` fallback is exercised for the tab
+    // bar's 10.5px cell; the long `label` ("Find experts") must NOT reach it.
+    expect(screen.getByText('Experts')).toBeInTheDocument();
+    expect(screen.queryByText('Find experts')).not.toBeInTheDocument();
   });
 
   it('pathname "/dashboard" — Dashboard carries aria-current="page"; More is not active', () => {

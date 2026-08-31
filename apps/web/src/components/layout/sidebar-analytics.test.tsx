@@ -84,4 +84,23 @@ describe('Sidebar nav click tracking (BAL-495)', () => {
       workspace_type: 'expert',
     });
   });
+
+  // BAL-497 / D12 — ZERO new analytics code. `nav_item_clicked` already exists, `find_experts` is
+  // already in `NAV_ITEM_KEYS`, and `sidebar.tsx` already fires the hook for EVERY rendered entry —
+  // so flipping the registry entry on is what starts the event. This is the gate on that claim:
+  // leg 1 of the ADR-1053 shell ping-pong metric.
+  it('emits nav_item_clicked for the jump-out Find experts entry, surface "sidebar"', async () => {
+    const user = userEvent.setup();
+    sidebarValue = buildSidebarValue('client');
+    render(<Sidebar />);
+
+    await user.click(screen.getByRole('link', { name: /^Find experts/ }));
+
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(NAV_EVENTS.ITEM_CLICKED, {
+      item: 'find_experts',
+      surface: 'sidebar',
+      workspace_type: 'company',
+    });
+  });
 });

@@ -33,7 +33,7 @@ const EXPERT_MANAGE: NavContext = {
 };
 
 const ALL_CONTEXTS = [COMPANY_NO_MANAGE, COMPANY_MANAGE, EXPERT_NO_MANAGE, EXPERT_MANAGE];
-const DISABLED_KEYS = ['find_experts', 'help'];
+const DISABLED_KEYS = ['help'];
 
 describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('excludes disabled entries from every context, in either section (AC #2)', () => {
@@ -50,7 +50,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
 
   it('preserves NAV_ENTRIES order for the primary section despite interleaved disabled entries', () => {
     const keys = resolveNavItems(COMPANY_MANAGE, 'primary').map((entry) => entry.key);
-    expect(keys).toEqual(['dashboard', 'consultations', 'projects', 'messages']);
+    expect(keys).toEqual(['dashboard', 'find_experts', 'consultations', 'projects', 'messages']);
   });
 
   it('NAV_ENTRIES is authored as one primary block then one secondary block (resolveMobileNav depends on it)', () => {
@@ -151,9 +151,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 11 declared entries, 9 enabled', () => {
+  it('non-vacuity: 11 declared entries, 10 enabled', () => {
     expect(NAV_ENTRIES).toHaveLength(11);
-    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(9);
+    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(10);
   });
 
   it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
@@ -232,16 +232,19 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
     expect(splitMobileNav([])).toEqual({ tabs: [], moreItems: [] });
   });
 
-  // ⚠ BAL-498 made the two workspace types DIVERGE here. `calendar` is expert-only and carries
-  // `mobilePriority: 'tab'`, so the expert bar fills to exactly MOBILE_TAB_LIMIT (4) with no
-  // overflow, while company stays at three. Asserted separately so neither can silently absorb
-  // a future entry belonging to the other.
-  it('resolveMobileTabs today: company gets three; expert gets four, Calendar before Messages', () => {
+  // ⚠ BAL-498 made the two workspace types DIVERGE here — `calendar` is expert-only and carries
+  // `mobilePriority: 'tab'`, so the expert bar filled to exactly MOBILE_TAB_LIMIT (4) with no
+  // overflow while company stayed at three. BAL-497 closes that gap from the other side:
+  // `find_experts` is company-only and also `mobilePriority: 'tab'`, so the company bar now
+  // fills to MOBILE_TAB_LIMIT too — the cap is exactly reached (not exceeded) on both sides.
+  it('resolveMobileTabs today: BOTH workspace types now fill the bar to MOBILE_TAB_LIMIT', () => {
     expect(resolveMobileTabs(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual([
       'dashboard',
+      'find_experts',
       'consultations',
       'messages',
     ]);
+    expect(resolveMobileTabs(COMPANY_NO_MANAGE)).toHaveLength(MOBILE_TAB_LIMIT);
     expect(resolveMobileTabs(EXPERT_MANAGE).map((e) => e.key)).toEqual([
       'dashboard',
       'consultations',

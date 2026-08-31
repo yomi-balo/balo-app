@@ -270,7 +270,7 @@ describe('CommandPalette', () => {
   it('T8: disabled registry keys never surface, in any context', async () => {
     // ⚠ DERIVED FROM THE REGISTRY, NEVER HARD-CODED. This used to list
     // `['Help', 'Find experts', 'Calendar']` literally, which made the test a hostage to every
-    // OTHER open PR: BAL-497 (#257) flips `calendar` on and BAL-498 flips `find_experts`, so
+    // OTHER open PR: BAL-498 (#257) flips `calendar` on and BAL-497 flips `find_experts`, so
     // whichever of those and this one merged second went red for a reason that was not a bug.
     // Deriving it means the assertion tracks whatever the registry says today.
     const disabledLabels = NAV_ENTRIES.filter((entry) => !entry.enabled).map((e) => e.label);

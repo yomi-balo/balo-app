@@ -2,6 +2,7 @@
 
 import { useSidebar } from './sidebar-context';
 import { SidebarNavLink } from './sidebar-nav-link';
+import { SidebarNavSection } from './sidebar-nav-section';
 import { resolveNavItems, type EnabledNavEntry } from './nav-registry';
 import { useNavItemTracking } from './use-nav-item-tracking';
 import { NAV_BADGE_RENDERERS, type NavBadgeCounts } from './nav-badges';
@@ -43,6 +44,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
       icon={entry.icon}
       isCollapsed={isCollapsed}
       isSecondary={isSecondary}
+      jumpOut={entry.jumpOut === true}
       onClick={() => trackNavItem(entry.key)}
       suffix={entry.badgeSource ? NAV_BADGE_RENDERERS[entry.badgeSource](badgeCounts) : undefined}
     />
@@ -85,19 +87,25 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
         />
       </div>
 
-      {/* Primary navigation */}
-      <nav className="flex-1 space-y-1 p-3">
+      {/* Primary navigation. BAL-497 — `space-y-1` moved INTO `SidebarNavSection`'s row stack as
+          `gap-1`: `space-y-*` is a `~` sibling selector, so the pill (a sibling of the rows) would
+          otherwise push every row down by 4px. */}
+      <nav className="flex-1 p-3">
         <TooltipProvider delayDuration={0}>
-          {primaryItems.map((entry) => renderLink(entry, false))}
+          <SidebarNavSection section="primary" hrefs={primaryItems.map((entry) => entry.href)}>
+            {primaryItems.map((entry) => renderLink(entry, false))}
+          </SidebarNavSection>
         </TooltipProvider>
       </nav>
 
       <Separator className="bg-sidebar-border" />
 
       {/* Bottom navigation */}
-      <div className="space-y-1 p-3">
+      <div className="p-3">
         <TooltipProvider delayDuration={0}>
-          {secondaryItems.map((entry) => renderLink(entry, true))}
+          <SidebarNavSection section="secondary" hrefs={secondaryItems.map((entry) => entry.href)}>
+            {secondaryItems.map((entry) => renderLink(entry, true))}
+          </SidebarNavSection>
         </TooltipProvider>
       </div>
 
@@ -146,7 +154,7 @@ export function Sidebar(): React.JSX.Element {
       className={cn(
         'bg-sidebar text-sidebar-foreground border-sidebar-border relative hidden border-r lg:block',
         'sticky top-0 h-screen shrink-0',
-        'transition-[width] duration-200 ease-in-out',
+        'transition-[width] duration-[240ms] ease-[cubic-bezier(.4,0,.2,1)] motion-reduce:transition-none',
         isCollapsed ? 'w-[56px]' : 'w-64'
       )}
     >
