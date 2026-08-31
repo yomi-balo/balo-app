@@ -49,6 +49,26 @@ import type { NavContext } from './nav-registry';
  * `TopNav` import go with it (both existed only for that block). Every other assertion in this
  * file is still frozen.
  *
+ * ⚠⚠ BAL-497 — INTENTIONAL, TICKET-AUTHORISED UNFREEZE (the FOURTH), granted by orchestrator
+ * decision D8 and extended by the architect's §0.1. Flipping the `find_experts` registry entry on
+ * (client workspaces only) adds a FIFTH top item, and D5/D6/D7 move the active background off the
+ * link onto a per-section pill and keep the collapsed label MOUNTED. FIVE blocks change, named
+ * here so the rest of the file stays genuinely frozen:
+ *   1. `renders the top items in exact order for both modes` — the CLIENT arrays gain
+ *      'Find experts' / '/experts' in position 2. The EXPERT arrays are untouched (find_experts is
+ *      `workspaceTypes: ['company']`).
+ *   2+3. BOTH `bottom gating matrix — client, …` blocks — NOT in D8's original three, and they
+ *      break for a mechanical reason the orchestrator did not foresee: each subtracts a HARD-CODED
+ *      denylist of primary hrefs from `getAllByRole('link')`, and the primary section gained one.
+ *      The ONLY edit is adding '/experts' to that denylist; the expectation, title and intent are
+ *      unchanged. The two EXPERT counterparts are untouched.
+ *   4. `collapsed path: hides labels and badges` — INVERTED by D6: the label span must stay mounted
+ *      for `max-width` to animate, so it is now present-but-clipped-and-`aria-hidden`, and the
+ *      link's accessible name comes from `aria-label` (exactly ONE label). Badges still hide.
+ *   5. `active state: Dashboard link carries active styling` — D7 moved `bg-primary/10` off the
+ *      link and onto the pill. The link keeps `text-primary` only.
+ * Every other assertion in this file is still frozen and was verified unchanged.
+ *
  * ⚠ Reading the two notes together: BAL-503's "the mobile drawer fixture stays frozen" was true
  * when written, one commit before BAL-501 deleted that block outright. The notes are a
  * chronological record, not a description of the file's current state — same convention as
@@ -129,18 +149,21 @@ function primaryNav(): HTMLElement {
 
 describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () => {
   it('renders the top items in exact order for both modes', () => {
-    // Calendar (BAL-498) is expert-only, so the two modes now diverge — client keeps the
-    // original four-item list, expert gains Calendar between Projects and Messages.
+    // Calendar (BAL-498) is expert-only and Find experts (BAL-497) is company-only, so the two
+    // modes now diverge in BOTH directions: client gains Find experts in position 2, expert
+    // gains Calendar between Projects and Messages.
     const client = renderSidebar({ mode: 'client', canManageCompany: false });
     const clientLinks = within(primaryNav()).getAllByRole('link');
     expect(clientLinks.map((l) => l.textContent?.trim())).toEqual([
       'Dashboard',
+      'Find experts',
       'Consultations',
       'Projects',
       'Messages',
     ]);
     expect(clientLinks.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
+      '/experts',
       '/consultations',
       '/projects',
       '/messages',
@@ -169,11 +192,17 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
   it('bottom gating matrix — client, cannot manage company → Settings + Account', () => {
     renderSidebar({ mode: 'client', canManageCompany: false });
     const allLinks = screen.getAllByRole('link');
+    // BAL-497 — '/experts' added to the denylist: the primary section gained a fifth href, and
+    // this array's job is to name every PRIMARY href so the subtraction below isolates the
+    // bottom section. The expectation, title and intent are unchanged.
     const bottomHrefs = allLinks
       .map((l) => l.getAttribute('href'))
       .filter(
         (href) =>
-          href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
+          href &&
+          !['/dashboard', '/experts', '/consultations', '/projects', '/messages', '/'].includes(
+            href
+          )
       );
     expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
@@ -181,11 +210,15 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
   it('bottom gating matrix — client, can manage company → Settings + Account (identical to the no-manage case)', () => {
     renderSidebar({ mode: 'client', canManageCompany: true });
     const allLinks = screen.getAllByRole('link');
+    // BAL-497 — '/experts' added to the denylist (see the no-manage case above for why).
     const bottomHrefs = allLinks
       .map((l) => l.getAttribute('href'))
       .filter(
         (href) =>
-          href && !['/dashboard', '/consultations', '/projects', '/messages', '/'].includes(href)
+          href &&
+          !['/dashboard', '/experts', '/consultations', '/projects', '/messages', '/'].includes(
+            href
+          )
       );
     expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
@@ -256,7 +289,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(expertSettingsLink.querySelector('.bg-success\\/10')).toBeInTheDocument();
   });
 
-  it('collapsed path: hides labels and badges, toggle relabels to Expand sidebar', async () => {
+  it('collapsed path: labels stay mounted but clipped and aria-hidden, badges hide, toggle relabels to Expand sidebar', async () => {
     const user = userEvent.setup();
     const { rerender } = renderSidebar({
       mode: 'expert',
@@ -267,10 +300,19 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     await user.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
     rerender(<Sidebar />);
 
-    expect(screen.queryByText('Dashboard')).not.toBeInTheDocument();
-    expect(screen.queryByText('Consultations')).not.toBeInTheDocument();
+    // D6 — INVERTED from "not.toBeInTheDocument". The span must stay MOUNTED for `max-width` to
+    // animate; it is removed from the ACCESSIBILITY tree instead of from the DOM.
+    const dashboardLabel = screen.getByText('Dashboard');
+    expect(dashboardLabel).toHaveAttribute('aria-hidden', 'true');
+    expect(dashboardLabel.className).toContain('max-w-0');
+    expect(dashboardLabel.className).toContain('opacity-0');
+    expect(screen.getByText('Consultations')).toHaveAttribute('aria-hidden', 'true');
+
+    // …and the collapsed link therefore names itself, exactly ONCE, via aria-label.
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toBe(dashboardLabel.closest('a'));
+
+    // Badges still hide entirely when collapsed (unchanged).
     expect(screen.queryByText('3/5')).not.toBeInTheDocument();
-    // Links still exist (icon-only)
     expect(screen.getAllByRole('link').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
   });
@@ -329,12 +371,23 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(within(logo).queryByText('Expert')).toBeNull();
   });
 
-  it('active state: Dashboard link carries active styling, Projects does not (pathname /dashboard)', () => {
+  it('active state: the PILL carries the active background, Dashboard carries text-primary, Projects carries neither (pathname /dashboard)', () => {
     renderSidebar({ mode: 'client', canManageCompany: false });
     const dashboardLink = screen.getByRole('link', { name: /^Dashboard/ });
     const projectsLink = screen.getByRole('link', { name: /^Projects/ });
-    expect(dashboardLink.className).toContain('bg-primary/10');
+
+    // D7 — the background moved OFF the link. Neither link paints it; double-painting would
+    // render the same token at 20%.
+    expect(dashboardLink.className).not.toContain('bg-primary/10');
     expect(projectsLink.className).not.toContain('bg-primary/10');
+    expect(dashboardLink.className).toContain('text-primary');
+    expect(projectsLink.className).not.toContain('text-primary');
+
+    // …and the primary pill paints it, parked on row 0 (Dashboard is index 0).
+    const pill = within(primaryNav()).getByTestId('sidebar-nav-pill-primary');
+    expect(pill.className).toContain('bg-primary/10');
+    expect(pill.className).toContain('opacity-100');
+    expect(pill.style.transform).toBe('translateY(0px)');
   });
 
   // ⚠ Decision rule: if this fails against the UNMODIFIED sidebar, that is a pre-existing a11y

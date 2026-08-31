@@ -17,7 +17,7 @@ import type { NavItemKey } from '@/lib/analytics'; // TYPE-ONLY — erased; no p
 
 /**
  * BAL-495 — the single declarative source for the desktop sidebar, mobile bottom tabs (BAL-501)
- * and ⌘K palette (BAL-503). ADR-1053 gives all three surfaces the same destinations; this is the
+ * and ⌘K palette (BAL-500). ADR-1053 gives all three surfaces the same destinations; this is the
  * Lane-0 shared data those surfaces consume.
  *
  * ⚠ NO `'use client'` — this module is data + pure functions, importable from both server and
@@ -145,7 +145,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     requires: NO_CAPABILITY_REQUIRED,
     mobilePriority: 'tab',
     jumpOut: true,
-    enabled: false,
+    enabled: true,
   },
 
   {

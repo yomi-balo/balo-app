@@ -7,7 +7,7 @@ import type { NavWorkspaceType } from './nav-registry';
 
 /**
  * BAL-495 — the ONE nav-click dispatch point, shared by the sidebar today and by BAL-501's bottom
- * tabs / BAL-503's ⌘K palette. Surfaces pass their own `surface`; nothing else emits this event.
+ * tabs / BAL-500's ⌘K palette. Surfaces pass their own `surface`; nothing else emits this event.
  */
 export function useNavItemTracking(
   surface: NavSurface,
