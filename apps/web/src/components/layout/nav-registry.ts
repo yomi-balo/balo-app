@@ -206,15 +206,35 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     enabled: true,
   },
 
+  // BAL-503 — the CLIENT counterpart to `expert_settings`: one Settings destination fronting
+  // Company / Team / Credits & billing / Notifications (`/settings/<section>`). Ungated at the
+  // nav layer on purpose — every section either has no gate (billing, company, notifications) or
+  // keeps its own live server-side gate (team, `settings/team/page.tsx`). See ADR-1029 + `:64`
+  // above.
+  {
+    key: 'settings',
+    label: 'Settings',
+    icon: Settings,
+    href: '/settings',
+    section: 'secondary',
+    workspaceTypes: ['company'],
+    requires: NO_CAPABILITY_REQUIRED,
+    mobilePriority: 'more',
+    enabled: true,
+  },
+
   // BAL-347: owner/admin on a NON-personal company. The personal-company half is enforced
   // SERVER-SIDE by withholding the token (`buildNavContext`) — never re-derived here.
+  // BAL-503: narrowed to the EXPERT workspace only — the company client now reaches Team via
+  // the `settings` entry above (`/settings/team`, a nested Settings section). `href` and
+  // `requires` are unchanged — only `workspaceTypes` narrows.
   {
     key: 'team',
     label: 'Team',
     icon: Users,
     href: '/settings/team',
     section: 'secondary',
-    workspaceTypes: ['company', 'expert'],
+    workspaceTypes: ['expert'],
     requires: requiresCapability(CAPABILITIES.MANAGE_MEMBERS),
     mobilePriority: 'more',
     enabled: true,
@@ -296,6 +316,11 @@ const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
   '/engagements': 'Engagements',
   '/promo-codes': 'Promo codes',
   '/redeem': 'Redeem a code',
+  // BAL-503 — the three NEW Settings sections. `/settings` itself and `/settings/team` are both
+  // enabled registry hrefs, so `exactCrumbLabelFor` matches them first and they need no row here.
+  '/settings/company': 'Company',
+  '/settings/billing': 'Credits & billing',
+  '/settings/notifications': 'Notifications',
 };
 
 /**

@@ -57,15 +57,20 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     );
   });
 
-  it('dashboard, team (when granted), and account resolve under both workspace types', () => {
-    for (const [companyCtx, expertCtx] of [[COMPANY_MANAGE, EXPERT_MANAGE]] as const) {
-      expect(resolveNavItems(companyCtx, 'primary').map((e) => e.key)).toContain('dashboard');
-      expect(resolveNavItems(expertCtx, 'primary').map((e) => e.key)).toContain('dashboard');
-      expect(resolveNavItems(companyCtx, 'secondary').map((e) => e.key)).toContain('team');
-      expect(resolveNavItems(expertCtx, 'secondary').map((e) => e.key)).toContain('team');
-      expect(resolveNavItems(companyCtx, 'secondary').map((e) => e.key)).toContain('account');
-      expect(resolveNavItems(expertCtx, 'secondary').map((e) => e.key)).toContain('account');
-    }
+  it('dashboard and account resolve under both workspace types; team is expert-only and settings is company-only', () => {
+    expect(resolveNavItems(COMPANY_MANAGE, 'primary').map((e) => e.key)).toContain('dashboard');
+    expect(resolveNavItems(EXPERT_MANAGE, 'primary').map((e) => e.key)).toContain('dashboard');
+    expect(resolveNavItems(COMPANY_MANAGE, 'secondary').map((e) => e.key)).toContain('account');
+    expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('account');
+
+    // team — expert-only, regardless of capability.
+    expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('team');
+    expect(resolveNavItems(COMPANY_MANAGE, 'secondary').map((e) => e.key)).not.toContain('team');
+
+    // settings — company-only, ungated.
+    expect(resolveNavItems(COMPANY_MANAGE, 'secondary').map((e) => e.key)).toContain('settings');
+    expect(resolveNavItems(COMPANY_NO_MANAGE, 'secondary').map((e) => e.key)).toContain('settings');
+    expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).not.toContain('settings');
   });
 
   it('mobilePriority: exactly projects is "more" among resolved primary items; rest are "tab" in source order', () => {
@@ -77,8 +82,10 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   });
 
   it('every secondary entry is mobilePriority "more"', () => {
-    const secondary = resolveNavItems(EXPERT_MANAGE, 'secondary');
-    expect(secondary.every((e) => e.mobilePriority === 'more')).toBe(true);
+    for (const context of ALL_CONTEXTS) {
+      const secondary = resolveNavItems(context, 'secondary');
+      expect(secondary.every((e) => e.mobilePriority === 'more')).toBe(true);
+    }
   });
 
   it('badgeSource: exactly one entry has one, and it is expert_settings → expertChecklist', () => {
@@ -102,6 +109,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('messages')?.href).toBe('/messages');
     expect(byKey.get('expert_settings')?.href).toBe('/expert/settings');
     expect(byKey.get('team')?.href).toBe('/settings/team');
+    expect(byKey.get('settings')?.href).toBe('/settings');
     expect(byKey.get('account')?.href).toBe('/settings/account');
     expect(byKey.get('find_experts')?.href).toBe('/experts');
     expect(byKey.get('calendar')?.href).toBeNull();
@@ -128,18 +136,18 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 10 declared entries, 7 enabled', () => {
-    expect(NAV_ENTRIES.length).toBe(10);
-    expect(NAV_ENTRIES.filter((e) => e.enabled).length).toBe(7);
+  it('non-vacuity: 11 declared entries, 8 enabled', () => {
+    expect(NAV_ENTRIES.length).toBe(11);
+    expect(NAV_ENTRIES.filter((e) => e.enabled).length).toBe(8);
   });
 });
 
 /**
  * BAL-499 — the executable form of the Q1 decision: what every `(dashboard)` route's
- * breadcrumb trail resolves to. 16 routes total (recounted from the resolver's "9 of 16" — see
- * the plan's Q1 and orchestrator ruling R1): 6 have an exact registry `href`, 4 are supplemental
- * list routes, 6 are entity routes (each resolving to ONLY its parent — the entity's own crumb
- * is published separately by `EntityCrumb`).
+ * breadcrumb trail resolves to. 20 routes total (BAL-503 adds `/settings`, `/settings/company`,
+ * `/settings/billing`, `/settings/notifications`): 7 have an exact registry `href`, 7 are
+ * supplemental list routes, 6 are entity routes (each resolving to ONLY its parent — the
+ * entity's own crumb is published separately by `EntityCrumb`).
  */
 describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it.each([
@@ -151,11 +159,18 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/expert/settings', [{ label: 'Expert Settings', href: null }]],
     // D10 regression pin — this page rendered the title "Dashboard" before BAL-499. NOT that.
     ['/settings/team', [{ label: 'Team', href: null }]],
+    // BAL-503 — `/settings` always redirects, so this crumb never actually renders. Pinned
+    // anyway as executable documentation.
+    ['/settings', [{ label: 'Settings', href: null }]],
     // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
     ['/billing/top-up', [{ label: 'Top up', href: null }]],
     ['/engagements', [{ label: 'Engagements', href: null }]],
     ['/promo-codes', [{ label: 'Promo codes', href: null }]],
     ['/redeem', [{ label: 'Redeem a code', href: null }]],
+    // BAL-503 — the three new Settings sections.
+    ['/settings/company', [{ label: 'Company', href: null }]],
+    ['/settings/billing', [{ label: 'Credits & billing', href: null }]],
+    ['/settings/notifications', [{ label: 'Notifications', href: null }]],
     // ── Entity routes — parent crumb only; the entity's own label is published separately ──
     ['/cases/case-1', [{ label: 'Consultations', href: '/consultations' }]],
     ['/meetings/meeting-1', [{ label: 'Consultations', href: '/consultations' }]],
@@ -213,6 +228,10 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/engagements',
       '/promo-codes',
       '/redeem',
+      '/settings',
+      '/settings/company',
+      '/settings/billing',
+      '/settings/notifications',
     ];
     for (const pathname of listRoutes) {
       const [crumb] = resolveBreadcrumbTrail(pathname);
@@ -222,7 +241,17 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
 
   it('drift guard: no supplemental route collides with an enabled registry href', () => {
     const registryHrefs = new Set(NAV_ENTRIES.filter((e) => e.enabled).map((e) => e.href));
-    const supplementalRoutes = ['/billing/top-up', '/engagements', '/promo-codes', '/redeem'];
+    // ⚠ Do not add '/settings' here — it IS an enabled registry href, so adding it would make
+    // this drift guard fail correctly.
+    const supplementalRoutes = [
+      '/billing/top-up',
+      '/engagements',
+      '/promo-codes',
+      '/redeem',
+      '/settings/company',
+      '/settings/billing',
+      '/settings/notifications',
+    ];
     for (const route of supplementalRoutes) {
       expect(registryHrefs.has(route)).toBe(false);
     }

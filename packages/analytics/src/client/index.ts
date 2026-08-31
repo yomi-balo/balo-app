@@ -71,6 +71,10 @@ export {
   MARKETING_HOME_BENCH_ROWS,
   MARKETING_HOME_PRODUCT_SOURCES,
   MARKETING_HOME_SPOTLIGHT_ACTIONS,
+  // BAL-503 — the client Settings surface's canonical event + section tuple. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  SETTINGS_EVENTS,
+  SETTINGS_SECTIONS,
 } from '../events';
 
 export type {
@@ -171,4 +175,7 @@ export type {
   MarketingHomeBenchRow,
   MarketingHomeProductSource,
   MarketingHomeSpotlightAction,
+  // BAL-503 — the client Settings surface's event payload and section vocabulary.
+  SettingsEventMap,
+  SettingsSection,
 } from '../events';

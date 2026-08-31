@@ -48,6 +48,7 @@ import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/worksp
 import type { NavEventMap } from './events/nav';
 import type { MarketingEventMap } from './events/marketing';
 import type { MarketingHomeEventMap } from './events/marketing-home';
+import type { SettingsEventMap } from './events/settings';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -98,7 +99,10 @@ export type AllEvents = AuthEventMap &
   MarketingEventMap &
   // BAL-493 — the marketing HOME PAGE's CLIENT family. `useMarketingHomeTracking` (apps/web) is
   // the ONE dispatch point; no island calls `track()` directly.
-  MarketingHomeEventMap;
+  MarketingHomeEventMap &
+  // BAL-503 — the client Settings surface's CLIENT family. `SettingsSectionNav` (apps/web)
+  // is the ONE dispatch point. Deliberately separate from `NavEventMap`.
+  SettingsEventMap;
 
 export type EventName = keyof AllEvents;
 

@@ -158,6 +158,11 @@ vi.mock('@/lib/analytics', async () => {
     MARKETING_HOME_BENCH_ROWS: events.MARKETING_HOME_BENCH_ROWS,
     MARKETING_HOME_PRODUCT_SOURCES: events.MARKETING_HOME_PRODUCT_SOURCES,
     MARKETING_HOME_SPOTLIGHT_ACTIONS: events.MARKETING_HOME_SPOTLIGHT_ACTIONS,
+    // BAL-503 — the client Settings surface's CLIENT event + canonical section tuple. ⚠ WITHOUT
+    // THIS LINE every test whose module graph reaches the Settings tab bar throws on an
+    // undefined constant (memory `reference_web_analytics_test_mock_export_list`).
+    SETTINGS_EVENTS: events.SETTINGS_EVENTS,
+    SETTINGS_SECTIONS: events.SETTINGS_SECTIONS,
     initAnalytics: vi.fn(),
   };
 });

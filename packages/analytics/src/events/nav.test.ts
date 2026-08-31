@@ -27,15 +27,16 @@ describe('NAV_ITEM_KEYS', () => {
       'calendar',
       'messages',
       'expert_settings',
+      'settings',
       'team',
       'account',
       'help',
     ]);
   });
 
-  it('has 10 entries with no duplicates', () => {
-    expect(NAV_ITEM_KEYS.length).toBe(10);
-    expect(new Set(NAV_ITEM_KEYS).size).toBe(10);
+  it('has 11 entries with no duplicates', () => {
+    expect(NAV_ITEM_KEYS.length).toBe(11);
+    expect(new Set(NAV_ITEM_KEYS).size).toBe(11);
   });
 });
 
