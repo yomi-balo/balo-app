@@ -135,6 +135,7 @@ describe('CalendarShell — calendar_viewed analytics (plan §12.2)', () => {
     expect(mockTrack).toHaveBeenCalledWith(CALENDAR_EVENTS.VIEWED, {
       view: 'week',
       source: 'initial',
+      week_offset: 0,
     });
   });
 
@@ -150,6 +151,7 @@ describe('CalendarShell — calendar_viewed analytics (plan §12.2)', () => {
     expect(mockTrack).toHaveBeenCalledWith(CALENDAR_EVENTS.VIEWED, {
       view: 'agenda',
       source: 'switch',
+      week_offset: 0,
     });
     // ⚠ `replace`, not `push` — see the F4 block at the bottom of this file for why. This
     // assertion was `mockPush` until BAL-498 fix round 5.
@@ -698,5 +700,150 @@ describe('CalendarShell — the "Edit availability" header action (BAL-511)', ()
     expect(mockTrack).toHaveBeenCalledWith(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED, {
       source: 'header',
     });
+  });
+});
+
+describe('CalendarShell — calendar_viewed carries week_offset (BAL-512)', () => {
+  // FIXED_NOW is Monday 2026-08-24 in Australia/Sydney, so that IS the current week.
+  const CASES: [label: string, weekStart: string, expected: number][] = [
+    ['this week', '2026-08-24', 0],
+    ['a deep-linked ?week= two weeks ahead', '2026-09-07', 2],
+    ['a past week', '2026-08-10', -2],
+  ];
+
+  it.each(CASES)('%s (week of %s) → week_offset %s', (_label, weekStart, expected) => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey={weekStart} />);
+
+    expect(mockTrack).toHaveBeenCalledWith(CALENDAR_EVENTS.VIEWED, {
+      view: 'week',
+      source: 'initial',
+      week_offset: expected,
+    });
+  });
+});
+
+describe('CalendarShell — the contextual nudges are instrumented (BAL-512)', () => {
+  it('the banner’s connect link fires exactly one calendar_connect_cta_clicked { source: "banner" }, and no upkeep event', () => {
+    // M5 — the banner renders only inside the `!showFullPageConnectEmptyState` branch, so it
+    // needs no connected calendar AND at least one meeting. Same setup as the A5 test above.
+    render(
+      <CalendarShell
+        view={pageView({ hasConnectedCalendar: false, meetings: [meeting()] })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+    mockTrack.mockClear(); // drop the mount's calendar_viewed
+
+    fireEvent.click(screen.getByRole('link', { name: /Set up your calendar connection/i }));
+
+    expect(mockTrack).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith(CALENDAR_EVENTS.CONNECT_CTA_CLICKED, {
+      source: 'banner',
+    });
+  });
+
+  it('the not-configured note’s link fires calendar_edit_availability_clicked { source: "not_configured_note" } and points at its OWN destination', () => {
+    // M5 — this note renders in WEEK view only (`availabilityView` resets to null off Week).
+    mockAvailabilityView = { kind: 'not_configured' };
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+    mockTrack.mockClear();
+
+    const link = screen.getByRole('link', { name: /Set your availability/i });
+    // M4 — the two surviving EDIT_AVAILABILITY_CLICKED sources point at DIFFERENT destinations.
+    // Pinned here so the "they share one destination" claim cannot creep back into the docblock.
+    expect(link).toHaveAttribute('href', '/expert/settings?tab=schedule&setup=availability');
+
+    fireEvent.click(link);
+
+    expect(mockTrack).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED, {
+      source: 'not_configured_note',
+    });
+  });
+});
+
+/**
+ * BAL-512 week navigation.
+ *
+ * ⚠ THE `rerender` CALLS ARE LOAD-BEARING AND THE COMPONENT IS CORRECT — do not "fix" it.
+ * `initialWeekStartDayKey` is a SERVER prop (`page.tsx:105`) and `WeekNav` derives its
+ * destination from it. `useRouter` is mocked here (`:49`), so `router.push` never triggers the
+ * RSC round trip that would hand the shell a new prop. Without an explicit `rerender` between
+ * clicks, two consecutive "Previous week" clicks both compute -1 — an artefact of the mock, not
+ * of the shell. Each `rerender` below stands in for exactly one push → RSC response.
+ */
+describe('CalendarShell — week navigation analytics (BAL-512)', () => {
+  /** Just the `calendar_week_navigated` payloads, in emission order. */
+  function weekNavPayloads(): unknown[] {
+    return mockTrack.mock.calls
+      .filter(([name]) => name === CALENDAR_EVENTS.WEEK_NAVIGATED)
+      .map(([, props]) => props);
+  }
+
+  it('paging two weeks back then pressing Today yields offsets -1, -2, 0 (AC)', () => {
+    const { rerender } = render(
+      <CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
+    rerender(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-17" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
+    rerender(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-10" />);
+
+    // Now two weeks back, so Today is live (not aria-disabled).
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+
+    expect(weekNavPayloads()).toEqual([
+      { direction: 'previous', week_offset: -1 },
+      { direction: 'previous', week_offset: -2 },
+      { direction: 'today', week_offset: 0 },
+    ]);
+    // Paging weeks is not a new VIEW: `viewedRef` keeps calendar_viewed at exactly one for the
+    // whole lifecycle, even though `weekOffset` now sits in that effect's deps.
+    expect(mockTrack.mock.calls.filter(([name]) => name === CALENDAR_EVENTS.VIEWED)).toHaveLength(
+      1
+    );
+  });
+
+  it('Next week from the current week fires { direction: "next", week_offset: 1 }', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next week' }));
+
+    expect(weekNavPayloads()).toEqual([{ direction: 'next', week_offset: 1 }]);
+  });
+
+  /**
+   * The documented semantic, pinned. `direction` names the DESTINATION, not the button: a
+   * Previous click from next week lands on the current week and is reported `'today'`. Both
+   * routes to offset 0 must agree, or `direction` and `week_offset` could contradict each other
+   * in PostHog. `WeekNav` stays dumb (`onNavigate(dayKey)`), which is what makes this the rule.
+   */
+  it('direction === "today" ⟺ week_offset === 0, whichever affordance got there', () => {
+    // Route A — Previous week, pressed from the week AFTER this one.
+    const { unmount } = render(
+      <CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-31" />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Previous week' }));
+    expect(weekNavPayloads()).toEqual([{ direction: 'today', week_offset: 0 }]);
+    unmount();
+    mockTrack.mockClear();
+
+    // Route B — the Today button, pressed from a week that does not contain today.
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-09-21" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+    expect(weekNavPayloads()).toEqual([{ direction: 'today', week_offset: 0 }]);
+  });
+
+  it('the Today button is inert on the current week, so it emits nothing', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    const today = screen.getByRole('button', { name: 'Today' });
+    expect(today).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(today);
+
+    expect(weekNavPayloads()).toEqual([]);
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });

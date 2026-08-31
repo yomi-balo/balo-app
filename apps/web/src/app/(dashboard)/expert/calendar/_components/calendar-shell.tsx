@@ -12,6 +12,7 @@ import { MAX_AVAILABILITY_WINDOW_DAYS } from '@balo/shared/availability';
 import {
   addDaysToDayKey,
   todayDayKey,
+  weeksBetweenDayKeys,
   zonedDayKey,
   zonedMeetingSpan,
   zonedMinutesOfDay,
@@ -35,6 +36,23 @@ const NOW_TICK_MS = 60_000;
 const EDIT_AVAILABILITY_HREF = '/expert/settings?tab=schedule';
 const CONNECT_CALENDAR_HREF = '/expert/settings?tab=schedule&setup=calendar';
 const SET_AVAILABILITY_HREF = '/expert/settings?tab=schedule&setup=availability';
+
+/**
+ * BAL-512 — `calendar_week_navigated.direction`, derived from OFFSETS because `WeekNav` reports a
+ * destination day key only (`onNavigate(nextWeekStartDayKey)`) and this ticket deliberately keeps
+ * it that way. The wire contract these three values mean is documented on `CalendarEventMap` in
+ * `@balo/analytics`; the rule itself is: landing on the current week always wins as `'today'`,
+ * otherwise compare against the week the expert was on.
+ *
+ * Module scope, not a `useCallback`: pure, and it must not be re-created per render.
+ */
+function weekNavigationDirection(
+  currentWeekOffset: number,
+  nextWeekOffset: number
+): 'previous' | 'next' | 'today' {
+  if (nextWeekOffset === 0) return 'today';
+  return nextWeekOffset < currentWeekOffset ? 'previous' : 'next';
+}
 
 /**
  * D3 §7.3 — the number of days (`1..MAX_AVAILABILITY_WINDOW_DAYS`) to request from the
@@ -136,14 +154,40 @@ export function CalendarShell({
     return () => clearInterval(interval);
   }, []);
 
+  /**
+   * ⚠ HOISTED ABOVE THE `calendar_viewed` EFFECT ON PURPOSE (BAL-512). This used to be declared
+   * ~130 lines below, next to `agendaMeetings`. A `useEffect` deps array is evaluated DURING
+   * RENDER, so naming `todayKey` (or anything derived from it) in the effect's deps from down
+   * there throws a temporal-dead-zone `ReferenceError` on every mount — a runtime failure that
+   * no typecheck catches. Do not move it back down. Its four other consumers (`agendaMeetings`,
+   * `WeekNav`'s `todayDayKey` prop, and the shading child's `todayDayKey` /
+   * `coverageEndDayKey`) all sit below this point and are unaffected.
+   */
+  const todayKey = todayDayKey(view.timezone, now);
+  /**
+   * Signed weeks from the current week to the VISIBLE week — `calendar_viewed.week_offset`, and
+   * the baseline `handleWeekNavigate` measures a destination against.
+   *
+   * ⚠ NO `useMemo`, ON PURPOSE (BAL-512, answering M3). React compares effect deps with
+   * `Object.is`, and both `todayKey` (a `string`) and `weekOffset` (a `number`) are PRIMITIVES:
+   * recomputing them on every 60-second tick yields the identical VALUE, so `exhaustive-deps` is
+   * satisfied and the effect below does not re-run. A `useMemo` would still recompute each tick
+   * (its own dep, `now`, changes) and would buy nothing but a hook. The one moment either value
+   * genuinely changes is local midnight; `viewedRef` already makes that a no-op.
+   */
+  const weekOffset = weeksBetweenDayKeys(todayKey, initialWeekStartDayKey);
+
   const viewedRef = useRef<CalendarViewMode | null>(null);
   useEffect(() => {
     if (viewMode === null) return;
     if (viewedRef.current === viewMode) return;
     const source = viewedRef.current === null ? 'initial' : 'switch';
     viewedRef.current = viewMode;
-    track(CALENDAR_EVENTS.VIEWED, { view: viewMode, source });
-  }, [viewMode]);
+    track(CALENDAR_EVENTS.VIEWED, { view: viewMode, source, week_offset: weekOffset });
+    // `weekOffset` joins the deps because `exhaustive-deps` requires it; the `viewedRef` guard
+    // above means a week change (which does change it) re-runs this effect and fires NOTHING.
+    // That is correct: paging weeks is `calendar_week_navigated`'s job, not a second view.
+  }, [viewMode, weekOffset]);
 
   const handleViewChange = useCallback(
     (next: CalendarViewMode) => {
@@ -163,6 +207,12 @@ export function CalendarShell({
 
   const handleWeekNavigate = useCallback(
     (nextWeekStartDayKey: string) => {
+      const nextWeekOffset = weeksBetweenDayKeys(todayKey, nextWeekStartDayKey);
+      // Emitted BEFORE the push, so the event is not lost if navigation throws.
+      track(CALENDAR_EVENTS.WEEK_NAVIGATED, {
+        direction: weekNavigationDirection(weekOffset, nextWeekOffset),
+        week_offset: nextWeekOffset,
+      });
       const params = new URLSearchParams(searchParams.toString());
       params.set('week', nextWeekStartDayKey);
       if (viewMode !== null) params.set('view', viewMode);
@@ -172,7 +222,11 @@ export function CalendarShell({
       // navigation, toggling the view is not (BAL-498 fix round 5, F4).
       router.push(`/expert/calendar?${params.toString()}`, { scroll: false });
     },
-    [router, searchParams, viewMode]
+    // ⚠ `todayKey`, NEVER `now` — the BAL-511 D1 lesson (see `handleJoinClick` above). `todayKey`
+    // is a value-stable `string` and `weekOffset` a value-stable `number` across the tick, so
+    // this callback's identity survives every tick; depending on `now` would re-create it every
+    // 60 seconds.
+    [router, searchParams, viewMode, todayKey, weekOffset]
   );
 
   const handleJoinClick = useCallback(
@@ -195,6 +249,18 @@ export function CalendarShell({
 
   const handleEditAvailabilityClick = useCallback(() => {
     track(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED, { source: 'header' });
+  }, []);
+
+  /** BAL-512 — the inline warning banner's connect link. Same CONNECTION funnel as the empty
+   *  state's CTA, different surface. */
+  const handleBannerConnectClick = useCallback(() => {
+    track(CALENDAR_EVENTS.CONNECT_CTA_CLICKED, { source: 'banner' });
+  }, []);
+
+  /** BAL-512 — the `not_configured` note's link. UPKEEP, not connection: it points at
+   *  `SET_AVAILABILITY_HREF`, a different destination from the header action's. */
+  const handleSetAvailabilityClick = useCallback(() => {
+    track(CALENDAR_EVENTS.EDIT_AVAILABILITY_CLICKED, { source: 'not_configured_note' });
   }, []);
 
   const dayKeys = useMemo(
@@ -273,7 +339,6 @@ export function CalendarShell({
     [view.meetings, view.timezone, dayKeys, previousWeekLookbackDayKey]
   );
 
-  const todayKey = todayDayKey(view.timezone, now);
   const agendaMeetings = useMemo(
     () =>
       view.meetings.filter(
@@ -447,7 +512,11 @@ export function CalendarShell({
               {!view.hasConnectedCalendar && (
                 <p className="text-warning border-warning/30 bg-warning/10 mb-3 rounded-md border px-3 py-2 text-sm">
                   Balo isn&apos;t connected to your calendar right now.{' '}
-                  <Link href={CONNECT_CALENDAR_HREF} className="font-medium underline">
+                  <Link
+                    href={CONNECT_CALENDAR_HREF}
+                    className="font-medium underline"
+                    onClick={handleBannerConnectClick}
+                  >
                     Set up your calendar connection
                   </Link>{' '}
                   to keep availability shading accurate. Your existing bookings are unaffected.
@@ -460,7 +529,11 @@ export function CalendarShell({
               )}
               {availabilityView?.kind === 'not_configured' && (
                 <p className="text-muted-foreground mb-3 text-sm">
-                  <Link href={SET_AVAILABILITY_HREF} className="underline">
+                  <Link
+                    href={SET_AVAILABILITY_HREF}
+                    className="underline"
+                    onClick={handleSetAvailabilityClick}
+                  >
                     Set your availability
                   </Link>{' '}
                   to see shading here.
