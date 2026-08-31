@@ -1,15 +1,12 @@
 'use client';
 
+import { memo, useCallback } from 'react';
 import { motion } from 'motion/react';
 import Link from 'next/link';
 import { Video, Info } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { ENGAGEMENT_TYPE_INDICATOR } from '@/lib/calendar/engagement-type-indicator';
-import {
-  calendarJoinAffordanceVisible,
-  joinAffordanceTimingLabel,
-} from '@/lib/calendar/join-window';
 import { formatZonedTimeRange, formatZonedTime } from '@/lib/calendar/zoned-grid';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 import { JoinMeetingButton } from './join-meeting-button';
@@ -17,11 +14,17 @@ import { JoinMeetingButton } from './join-meeting-button';
 interface MeetingBlockProps {
   readonly meeting: CalendarMeetingView;
   readonly timezone: string;
-  readonly now: Date;
   readonly top: number;
   readonly height: number;
   readonly leftPercent: number;
   readonly widthPercent: number;
+  /** The meeting has ended, as of the shell's last 60-second tick. */
+  readonly isPast: boolean;
+  /** Join is inside its window, as of the shell's last 60-second tick. */
+  readonly joinVisible: boolean;
+  /** The Join `aria-label`'s timing suffix ("starting now" / "starting in 5 minutes").
+   *  `null` exactly when `joinVisible` is false — see `calendarMeetingTiming`. */
+  readonly joinTimingLabel: string | null;
   readonly onJoinClick: (meeting: CalendarMeetingView) => void;
   /** The 0:00-anchored second half of a meeting that crosses local midnight — same meeting,
    *  same targets, rendered in the NEXT day's column so it never silently disappears. */
@@ -44,34 +47,43 @@ const COMPACT_HEIGHT_PX = 24;
  * unreachable at any input method once it does. Instead a small info affordance opens a `Popover`
  * (tap AND click) with the full time range, party name, and a real Join link, so nothing about a
  * short meeting is actually unreachable (design "Week" section, compact-block rule).
+ *
+ * ⚠ MEMOISED — DO NOT REINTRODUCE A `now`/OBJECT PROP (BAL-511 D1). `CalendarShell` ticks `now`
+ * every 60 seconds and re-renders the whole tree; without this memo every `MeetingBlock` on the
+ * page — a full week's worth — re-rendered on every tick regardless of whether anything about it
+ * actually changed. `WeekGrid` now computes `isPast`/`joinVisible`/`joinTimingLabel` via
+ * `calendarMeetingTiming` and hands down three PRIMITIVES, never the composed object and never
+ * `now` itself — every prop here must stay a primitive or a reference the parent memoises, or the
+ * comparison this wrapper performs degrades back to a no-op.
  */
-export function MeetingBlock({
+export const MeetingBlock = memo(function MeetingBlock({
   meeting,
   timezone,
-  now,
   top,
   height,
   leftPercent,
   widthPercent,
+  isPast,
+  joinVisible,
+  joinTimingLabel,
   onJoinClick,
   isContinuationFragment = false,
 }: Readonly<MeetingBlockProps>): React.JSX.Element {
   const indicator = ENGAGEMENT_TYPE_INDICATOR[meeting.contextType];
   const Icon = indicator.icon;
-  const start = new Date(meeting.scheduledStart);
-  const end = new Date(meeting.scheduledEnd);
-  const isPast = now.getTime() >= end.getTime();
-  const joinVisible = calendarJoinAffordanceVisible(now, start, end);
   const compact = height < COMPACT_HEIGHT_PX;
   const partyName = meeting.counterpartyCompanyName ?? 'Balo';
   const timeRange = formatZonedTimeRange(meeting.scheduledStart, meeting.scheduledEnd, timezone);
   const accessibleLabel = `${timeRange}, ${indicator.label} with ${partyName}${
     isContinuationFragment ? ', continued from yesterday' : ''
   }`;
-  const joinAriaLabel = `Join ${partyName}'s meeting, ${joinAffordanceTimingLabel(now, start)}`;
+  // `joinTimingLabel` is only ever read under a `joinVisible` guard below, so the `?? ''` never
+  // surfaces — it exists only to satisfy the type without a non-null assertion.
+  const joinAriaLabel = `Join ${partyName}'s meeting, ${joinTimingLabel ?? ''}`;
   const continuationPrefix = isContinuationFragment ? '⌃ ' : '';
   const compactLabel = `${formatZonedTime(meeting.scheduledStart, timezone)} ${partyName}`;
   const fullLabel = `${continuationPrefix}${timeRange}`;
+  const handleJoin = useCallback(() => onJoinClick(meeting), [onJoinClick, meeting]);
 
   const cardBody = (
     <span
@@ -135,15 +147,14 @@ export function MeetingBlock({
         <JoinMeetingButton
           joinUrl={meeting.joinUrl}
           ariaLabel={joinAriaLabel}
-          onJoin={() => onJoinClick(meeting)}
+          onJoin={handleJoin}
           size="icon-xs"
           // A1 — the 24px visual chip keeps its docked corner position; `after:-inset-2.5`
           // (10px each side) grows the ACTUAL tap target to 44px, so a hurried thumb no longer
-          // lands on the card's detail link seconds before a call.
-          className={cn(
-            'absolute top-0.5 right-0.5 z-10 rounded-full after:-inset-2.5',
-            'motion-reduce:ring-primary/40 motion-safe:animate-pulse motion-reduce:ring-2'
-          )}
+          // lands on the card's detail link seconds before a call. The live ping ring and its
+          // reduced-motion fallback (BAL-511 / ADR-1053) are now baked into `JoinMeetingButton`
+          // itself — see that component's docblock.
+          className="absolute top-0.5 right-0.5 z-10 rounded-full after:-inset-2.5"
         >
           <Video className="h-3 w-3" aria-hidden="true" />
         </JoinMeetingButton>
@@ -177,9 +188,11 @@ export function MeetingBlock({
               <JoinMeetingButton
                 joinUrl={meeting.joinUrl}
                 ariaLabel={joinAriaLabel}
-                onJoin={() => onJoinClick(meeting)}
+                onJoin={handleJoin}
                 size="sm"
-                // In normal flow inside the popover, so the 44px minimum is met directly.
+                // In normal flow inside the popover, so the 44px minimum is met directly. Also
+                // the net-new site for the live ping ring (BAL-511 D2) — it now inherits the cue
+                // and reduced-motion fallback from `JoinMeetingButton` like the other two sites.
                 className="mt-2 min-h-11 w-full"
               >
                 <Video className="h-4 w-4" aria-hidden="true" />
@@ -191,4 +204,4 @@ export function MeetingBlock({
       )}
     </motion.div>
   );
-}
+});

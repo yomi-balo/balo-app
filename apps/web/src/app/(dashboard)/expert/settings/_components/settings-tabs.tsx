@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle,
   Calendar,
@@ -129,11 +128,11 @@ export function SettingsTabs({
 
   return (
     <div>
-      {/* ── Main tabs (pill style with sliding indicator) ── */}
+      {/* ── Main tabs (pill style) — BAL-511 / ADR-1053 "tabs deliberately static" ── */}
       <div
         role="tablist"
         aria-label="Settings sections"
-        className="bg-muted relative mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1"
+        className="bg-muted mb-7 inline-flex gap-1 overflow-x-auto rounded-xl p-1"
       >
         {mainTabs.map((t) => {
           const Icon = t.icon;
@@ -146,27 +145,17 @@ export function SettingsTabs({
               aria-selected={isActive}
               onClick={() => handleMainTabChange(t.key)}
               className={cn(
-                'relative z-10 inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm whitespace-nowrap transition-colors duration-200',
+                'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors duration-200',
                 isActive
-                  ? 'text-foreground font-medium'
+                  ? 'bg-card text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
-              {isActive && (
-                <motion.div
-                  layoutId="main-tab-pill"
-                  className="bg-card absolute inset-0 rounded-lg shadow-sm"
-                  transition={{ type: 'spring', duration: 0.35, bounce: 0.15 }}
-                />
-              )}
               <Icon
-                className={cn(
-                  'relative z-10 h-4 w-4',
-                  isActive ? 'text-primary' : 'text-muted-foreground'
-                )}
+                className={cn('h-4 w-4', isActive ? 'text-primary' : 'text-muted-foreground')}
                 aria-hidden="true"
               />
-              <span className="relative z-10">{t.label}</span>
+              <span>{t.label}</span>
             </button>
           );
         })}
@@ -190,9 +179,9 @@ export function SettingsTabs({
                 aria-selected={isActive}
                 onClick={() => handleTabChange(t.key)}
                 className={cn(
-                  '-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm whitespace-nowrap transition-all duration-150',
+                  '-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors duration-150',
                   isActive
-                    ? 'border-primary text-primary font-semibold'
+                    ? 'border-primary text-primary'
                     : 'text-muted-foreground hover:text-foreground hover:border-border border-transparent'
                 )}
               >
@@ -208,29 +197,24 @@ export function SettingsTabs({
       )}
 
       {/* ── Tab content ── */}
-      <AnimatePresence mode="wait">
-        <motion.div
-          role="tabpanel"
-          key={tab}
-          initial={{ y: 8, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: -8, opacity: 0 }}
-          transition={{ duration: 0.2, ease: 'easeOut' }}
-        >
-          <TabPanelContent
-            tab={tab}
-            profileData={profileData}
-            referenceData={referenceData}
-            certCategories={certCategories}
-            initialPhone={initialPhone}
-            phoneVerifiedAt={phoneVerifiedAt}
-            accessToken={accessToken}
-            initialRateCents={initialRateCents}
-            initialPayoutDetails={initialPayoutDetails}
-            agencyDomains={agencyDomains}
-          />
-        </motion.div>
-      </AnimatePresence>
+      {/* ADR-1053 `tabs  … no panel fade`. A plain div: the new panel is in the DOM in the SAME
+          commit as the state change, with no exit hold. ⚠ `key={tab}` STAYS — it is not
+          decoration, it forces the same remount-per-tab semantics the earlier exit-hold
+          implementation had, so no tab's subtree can inherit another's internal state. */}
+      <div role="tabpanel" key={tab}>
+        <TabPanelContent
+          tab={tab}
+          profileData={profileData}
+          referenceData={referenceData}
+          certCategories={certCategories}
+          initialPhone={initialPhone}
+          phoneVerifiedAt={phoneVerifiedAt}
+          accessToken={accessToken}
+          initialRateCents={initialRateCents}
+          initialPayoutDetails={initialPayoutDetails}
+          agencyDomains={agencyDomains}
+        />
+      </div>
     </div>
   );
 }

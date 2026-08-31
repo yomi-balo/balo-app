@@ -9,12 +9,6 @@ vi.mock('next/navigation', () => ({
   usePathname: () => pathname,
 }));
 
-// Stub motion to plain elements (JSDOM-friendly) — the shared `@/test/motion-stub` helper.
-vi.mock('motion/react', async () => {
-  const { createMotionStub } = await import('@/test/motion-stub');
-  return createMotionStub();
-});
-
 import { SettingsSectionNav } from './settings-section-nav';
 
 beforeEach(() => {
@@ -121,5 +115,46 @@ describe('SettingsSectionNav', () => {
   it('has no accessibility violations', async () => {
     const { container } = render(<SettingsSectionNav showTeamSection />);
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+/**
+ * BAL-511 / ADR-1053 (orchestrator scope addition, D18). This was a THIRD sliding-pill tab bar
+ * carrying the same `layoutId="settings-section-pill"` spring as the other two flattened
+ * controls. `aria-current="page"` and the link/routing behaviour are unchanged — only the motion
+ * is removed.
+ */
+describe('SettingsSectionNav — deliberately static (ADR-1053, BAL-511)', () => {
+  it('renders no sliding pill element at all', () => {
+    pathname = '/settings/billing';
+    const { container } = render(<SettingsSectionNav showTeamSection />);
+    // ⚠ Narrowed to the PILL's own signature (`absolute` + `inset-0`) rather than bare
+    // `absolute`, which would false-alarm on any future legitimate absolutely-positioned element
+    // in this tree — a badge, a focus ring, a dropdown — and send someone hunting a pill that is
+    // not there. The removed pill was `bg-card absolute inset-0 rounded-lg shadow-sm`.
+    expect(container.querySelector('[class*="absolute"][class*="inset-0"]')).toBeNull();
+  });
+
+  it('carries ONE font weight, present and identical on the active and inactive links', () => {
+    pathname = '/settings/billing';
+    render(<SettingsSectionNav showTeamSection />);
+    const fontClassesOf = (el: HTMLElement): string[] =>
+      el.className.split(' ').filter((token) => token.startsWith('font-'));
+
+    const active = screen.getByRole('link', { name: /Credits & billing/ });
+    const inactive = screen.getByRole('link', { name: /Company/ });
+    expect(fontClassesOf(active)).toEqual(['font-medium']);
+    expect(fontClassesOf(inactive)).toEqual(fontClassesOf(active));
+  });
+
+  it('differentiates the active link by background and colour only', () => {
+    pathname = '/settings/billing';
+    render(<SettingsSectionNav showTeamSection />);
+    const active = screen.getByRole('link', { name: /Credits & billing/ });
+    const inactive = screen.getByRole('link', { name: /Company/ });
+    expect(active.className).toContain('bg-card');
+    expect(active.className).toContain('shadow-sm');
+    expect(inactive.className).not.toContain('bg-card');
+    expect(inactive.className).not.toContain('shadow-sm');
   });
 });

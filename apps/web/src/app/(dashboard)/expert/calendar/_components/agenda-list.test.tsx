@@ -184,6 +184,16 @@ describe('AgendaList', () => {
     // `size="sm"` alone is 32px tall — under balo-ui's 44×44 NEVER-rule.
     const joinButton = screen.getByRole('button', { name: /Join Northwind's meeting/i });
     expect(joinButton.className).toContain('min-h-11');
+    // BAL-511 / ADR-1053 — the ambient live-call ping ring, baked into JoinMeetingButton itself,
+    // replacing the old whole-button animate-pulse.
+    expect(joinButton.className).toContain('motion-safe:before:animate-ping-slow');
+    expect(joinButton.className).toContain('motion-reduce:ring-2');
+    expect(joinButton.className).toContain('motion-reduce:ring-primary');
+    // ⚠ NO ALPHA MODIFIER. `toContain('motion-reduce:ring-primary')` alone also matches
+    // `motion-reduce:ring-primary/40` — the pre-existing value that measures 1.47:1 in light
+    // mode, below WCAG 1.4.11's 3:1 floor. This pins FULL opacity so re-adding an alpha fails.
+    expect(joinButton.className).not.toContain('motion-reduce:ring-primary/');
+    expect(joinButton.className).not.toContain('animate-pulse');
   });
 
   it('Join reads "starting now" once the meeting has actually started (M1)', () => {

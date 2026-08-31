@@ -57,3 +57,34 @@ export function joinAffordanceTimingLabel(now: Date, scheduledStart: Date): stri
   const unit = minutes === 1 ? 'minute' : 'minutes';
   return `starting in ${minutes} ${unit}`;
 }
+
+/** The three `now`-derived inputs a rendered meeting needs, as ONE composition of the primitives
+ *  above — computed by the PARENT so `MeetingBlock` can take primitives and be `React.memo`'d
+ *  (BAL-511 D1).
+ *
+ *  ⚠⚠ `joinTimingLabel` IS `null` WHENEVER JOIN IS NOT VISIBLE, AND THAT IS LOAD-BEARING.
+ *  `joinAffordanceTimingLabel` is a function of `now`, so computing it unconditionally would
+ *  change every 60 seconds for EVERY meeting on the page ("starting in 180 minutes" → "…179…") —
+ *  a prop that changes on every tick, which is precisely the memo this whole change exists to
+ *  make possible. Only a meeting inside the join window may carry a label, and such a meeting is
+ *  SUPPOSED to re-render each minute so its `aria-label` stays true.
+ *
+ *  ⚠ RETURNS AN OBJECT, BUT THE CALLER MUST SPREAD ITS FIELDS AS SEPARATE PROPS. Passing the
+ *  object itself as one prop would hand `MeetingBlock` a fresh reference every render and defeat
+ *  the memo exactly as `now` did. */
+export function calendarMeetingTiming(
+  now: Date,
+  scheduledStart: Date,
+  scheduledEnd: Date
+): {
+  readonly isPast: boolean;
+  readonly joinVisible: boolean;
+  readonly joinTimingLabel: string | null;
+} {
+  const joinVisible = calendarJoinAffordanceVisible(now, scheduledStart, scheduledEnd);
+  return {
+    isPast: now.getTime() >= scheduledEnd.getTime(),
+    joinVisible,
+    joinTimingLabel: joinVisible ? joinAffordanceTimingLabel(now, scheduledStart) : null,
+  };
+}

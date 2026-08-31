@@ -97,6 +97,18 @@ export function CalendarShell({
     return requested === 'week' || requested === 'agenda' ? requested : null;
   });
   const [now, setNow] = useState(() => new Date());
+  // ⚠⚠ `handleJoinClick` MUST NOT DEPEND ON `now`. It is re-created every 60 seconds if it does,
+  // which changes `MeetingBlock`'s `onJoinClick` prop identity every tick and defeats the memo for
+  // every block on the page (BAL-511 D1).
+  // ⚠⚠ AND IT MUST STILL READ THE **TICKED** `now`, NOT `new Date()` AT CLICK TIME. The
+  // `calendar_join_clicked` payload's `minutes_to_start` is quantised to the tick today; reading
+  // wall-clock instead would change every emitted value. BAL-512 owns analytics — this is an
+  // IDENTITY fix only, and the payload must come out byte-identical (same event key, same three
+  // properties, same values). `calendar-shell-tick-stability.test.tsx` pins that.
+  const nowRef = useRef(now);
+  useEffect(() => {
+    nowRef.current = now;
+  }, [now]);
   const [availabilityView, setAvailabilityView] = useState<AvailabilityView | null>(null);
   // R4 — the shading sub-surface's retry action. Held in a ref (not state) because the hook's
   // `reload` is already stable and storing a FUNCTION in state needs the `setX(() => fn)`
@@ -168,14 +180,17 @@ export function CalendarShell({
       // ⚠ UNFLOORED — the analytics contract requires the sign to survive past the scheduled
       // start (BAL-498 fix round 2, N7). `minutesUntilCalendarStart` (floored at 0) drives only
       // the Join aria-label text; never feed it into analytics.
-      const minutesToStart = signedMinutesUntilCalendarStart(now, new Date(meeting.scheduledStart));
+      const minutesToStart = signedMinutesUntilCalendarStart(
+        nowRef.current,
+        new Date(meeting.scheduledStart)
+      );
       track(CALENDAR_EVENTS.JOIN_CLICKED, {
         view: viewMode ?? 'week',
         context_type: meeting.contextType,
         minutes_to_start: minutesToStart,
       });
     },
-    [viewMode, now]
+    [viewMode]
   );
 
   const handleEditAvailabilityClick = useCallback(() => {
@@ -376,11 +391,22 @@ export function CalendarShell({
         </div>
         {/* R5 — `next/link`: an ordinary in-app route, so a full document reload here was never
             justified by the tokenless-join-URL rule (which applies only to the Join affordance,
-            now a button entirely). */}
-        <Button asChild variant="outline" onClick={handleEditAvailabilityClick}>
+            now a button entirely).
+            BAL-511 — icon-only below `sm`. ⚠ THE LABEL IS NEVER REMOVED, only visually hidden:
+            `sr-only sm:not-sr-only` keeps "Edit availability" in the accessible name at EVERY
+            viewport, which is what the AC asks for, and needs no `aria-label` to duplicate.
+            ⚠ `size` CANNOT be made responsive through the `size` prop — only utility classes can,
+            hence `w-11 sm:w-auto`. `min-h-11` holds the collapsed control at the 44px balo-ui
+            minimum (the default `Button` is `h-9` = 36px). */}
+        <Button
+          asChild
+          variant="outline"
+          onClick={handleEditAvailabilityClick}
+          className="min-h-11 w-11 sm:w-auto"
+        >
           <Link href={EDIT_AVAILABILITY_HREF}>
             <CalendarDays className="h-4 w-4" aria-hidden="true" />
-            Edit availability
+            <span className="sr-only sm:not-sr-only">Edit availability</span>
           </Link>
         </Button>
       </div>

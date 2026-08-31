@@ -5,6 +5,7 @@ import {
   minutesUntilCalendarStart,
   signedMinutesUntilCalendarStart,
   joinAffordanceTimingLabel,
+  calendarMeetingTiming,
 } from './join-window';
 
 const SCHEDULED_START = new Date('2026-06-15T10:00:00.000Z');
@@ -112,5 +113,50 @@ describe('joinAffordanceTimingLabel', () => {
     expect(joinAffordanceTimingLabel(minutesBeforeStart(5), SCHEDULED_START)).toBe(
       'starting in 5 minutes'
     );
+  });
+});
+
+/**
+ * BAL-511 D1 — the composition `WeekGrid` computes so `MeetingBlock` can take primitives and be
+ * `React.memo`'d. `joinTimingLabel` must be `null` exactly when `joinVisible` is false — the
+ * single biggest trap in the ticket (an unconditional label changes every block's props on every
+ * 60-second tick and silently reverts the memo to a no-op).
+ */
+describe('calendarMeetingTiming', () => {
+  it('outside the window, before start: joinVisible false, joinTimingLabel null', () => {
+    const result = calendarMeetingTiming(minutesBeforeStart(20), SCHEDULED_START, SCHEDULED_END);
+    expect(result).toEqual({ isPast: false, joinVisible: false, joinTimingLabel: null });
+  });
+
+  it('inside the window (5 min out): joinVisible true, labelled', () => {
+    const result = calendarMeetingTiming(minutesBeforeStart(5), SCHEDULED_START, SCHEDULED_END);
+    expect(result.joinVisible).toBe(true);
+    expect(result.joinTimingLabel).toBe('starting in 5 minutes');
+    expect(result.isPast).toBe(false);
+  });
+
+  it('in progress (past start, before end): joinVisible true, "starting now", not past', () => {
+    const midMeeting = new Date(SCHEDULED_START.getTime() + 10 * 60_000);
+    const result = calendarMeetingTiming(midMeeting, SCHEDULED_START, SCHEDULED_END);
+    expect(result.joinVisible).toBe(true);
+    expect(result.joinTimingLabel).toBe('starting now');
+    expect(result.isPast).toBe(false);
+  });
+
+  it('after end: isPast true, joinVisible false, joinTimingLabel null', () => {
+    const longAfter = new Date(SCHEDULED_END.getTime() + 60 * 60_000);
+    const result = calendarMeetingTiming(longAfter, SCHEDULED_START, SCHEDULED_END);
+    expect(result).toEqual({ isPast: true, joinVisible: false, joinTimingLabel: null });
+  });
+
+  it('the non-tick pin: a meeting 3 hours out carries a null label at now AND at now + 60s', () => {
+    const threeHoursOut = new Date(SCHEDULED_START.getTime() - 3 * 60 * 60_000);
+    const oneTickLater = new Date(threeHoursOut.getTime() + 60_000);
+    expect(
+      calendarMeetingTiming(threeHoursOut, SCHEDULED_START, SCHEDULED_END).joinTimingLabel
+    ).toBe(null);
+    expect(
+      calendarMeetingTiming(oneTickLater, SCHEDULED_START, SCHEDULED_END).joinTimingLabel
+    ).toBe(null);
   });
 });

@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { calendarMeetingTiming } from '@/lib/calendar/join-window';
 import { MeetingBlock } from './meeting-block';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 
@@ -359,20 +360,33 @@ export function WeekGrid({
                 }
               >
                 {isToday && <NowLine now={now} timezone={timezone} gridRange={gridRange} />}
-                {positioned.map((entry) => (
-                  <MeetingBlock
-                    key={`${entry.meeting.meetingId}${entry.isContinuationFragment ? '-continuation' : ''}`}
-                    meeting={entry.meeting}
-                    timezone={timezone}
-                    now={now}
-                    top={entry.top}
-                    height={entry.height}
-                    leftPercent={entry.leftPercent}
-                    widthPercent={entry.widthPercent}
-                    onJoinClick={onJoinClick}
-                    isContinuationFragment={entry.isContinuationFragment}
-                  />
-                ))}
+                {positioned.map((entry) => {
+                  // ⚠ COMPUTED HERE, NOT IN THE CHILD (BAL-511 D1). `MeetingBlock` is
+                  // `React.memo`'d; a `now: Date` prop would change every 60 seconds and make the
+                  // memo a no-op for every block on the page. These three primitives change only
+                  // when a real boundary is crossed.
+                  const timing = calendarMeetingTiming(
+                    now,
+                    new Date(entry.meeting.scheduledStart),
+                    new Date(entry.meeting.scheduledEnd)
+                  );
+                  return (
+                    <MeetingBlock
+                      key={`${entry.meeting.meetingId}${entry.isContinuationFragment ? '-continuation' : ''}`}
+                      meeting={entry.meeting}
+                      timezone={timezone}
+                      top={entry.top}
+                      height={entry.height}
+                      leftPercent={entry.leftPercent}
+                      widthPercent={entry.widthPercent}
+                      isPast={timing.isPast}
+                      joinVisible={timing.joinVisible}
+                      joinTimingLabel={timing.joinTimingLabel}
+                      onJoinClick={onJoinClick}
+                      isContinuationFragment={entry.isContinuationFragment}
+                    />
+                  );
+                })}
               </div>
             </div>
           );

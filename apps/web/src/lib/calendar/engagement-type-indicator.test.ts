@@ -35,8 +35,21 @@ describe('ENGAGEMENT_TYPE_INDICATOR', () => {
   });
 
   it('groups the three request/discovery-flavoured labels under the same violet accent', () => {
-    expect(ENGAGEMENT_TYPE_INDICATOR.project_kickoff.borderClass).toBe('border-l-violet-500');
-    expect(ENGAGEMENT_TYPE_INDICATOR.project_discovery.borderClass).toBe('border-l-violet-500');
-    expect(ENGAGEMENT_TYPE_INDICATOR.request_interaction.borderClass).toBe('border-l-violet-500');
+    expect(ENGAGEMENT_TYPE_INDICATOR.project_kickoff.borderClass).toBe('border-l-violet');
+    expect(ENGAGEMENT_TYPE_INDICATOR.project_discovery.borderClass).toBe('border-l-violet');
+    expect(ENGAGEMENT_TYPE_INDICATOR.request_interaction.borderClass).toBe('border-l-violet');
+  });
+
+  it('every borderClass is a semantic token, never a raw Tailwind palette scale', () => {
+    for (const [key, entry] of Object.entries(ENGAGEMENT_TYPE_INDICATOR)) {
+      // No regex, deliberately (SonarCloud S5852 / the repo's invariant convention): a raw scale
+      // ends in a number — `border-l-violet-500`. A semantic token never does.
+      const lastSegment = entry.borderClass.split('-').at(-1) ?? '';
+      expect(Number.isNaN(Number(lastSegment)), `${key}: ${entry.borderClass}`).toBe(true);
+      // ⚠ THE SCALE CHECK ALONE MISSES AN ARBITRARY-VALUE HEX. `border-l-[#7c3aed]` has last
+      // segment `[#7c3aed]`, so `Number(…)` is NaN and the assertion above passes — while the AC
+      // says "no raw hex OR palette literals". Cheap second guard, still no regex.
+      expect(entry.borderClass.includes('#'), `${key}: ${entry.borderClass}`).toBe(false);
+    }
   });
 });

@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { axe } from 'jest-axe';
 import { render, screen, fireEvent } from '@/test/utils';
-import { CalendarViewSwitcher, calendarViewPillMotionProps } from './calendar-view-switcher';
+import { CalendarViewSwitcher } from './calendar-view-switcher';
 
 /**
  * BAL-498 fix round 3, A3. The switcher shipped with `role="tablist"` / `role="tab"` /
@@ -11,21 +11,6 @@ import { CalendarViewSwitcher, calendarViewPillMotionProps } from './calendar-vi
  * region, so the pattern it actually matches is a radio group. This file is also the co-located
  * test (with an axe pass) the component previously lacked entirely.
  */
-
-/**
- * ⚠ THE SHARED STUB HARD-CODES `useReducedMotion: () => false`, so it cannot express the reduced
- * arm. Overridden here off a mutable flag — the same shape `step-assessment.test.tsx` already
- * uses — rather than by editing the shared stub, which every other consumer depends on.
- */
-const motionState = { reduce: false };
-vi.mock('motion/react', async () => {
-  const { createMotionStub } = await import('@/test/motion-stub');
-  return { ...createMotionStub(), useReducedMotion: () => motionState.reduce };
-});
-
-beforeEach(() => {
-  motionState.reduce = false;
-});
 
 describe('CalendarViewSwitcher — radio-group semantics (A3)', () => {
   it('exposes a named radiogroup with one radio per view, and marks the active one checked', () => {
@@ -143,68 +128,44 @@ describe('CalendarViewSwitcher — radio-group semantics (A3)', () => {
 });
 
 /**
- * BAL-498 fix round 5, B3. The sliding pill STAYS — balo-ui
- * `references/motion-patterns.md:28` puts a tab switch in the "State change" band and
- * explicitly sanctions animating it. Two defects inside it did not:
+ * BAL-511 / ADR-1053. The design reference's motion spec reads:
+ *   `tabs  deliberately static — no underline slide, no panel fade, no press scale,
+ *          uniform font-weight (animated tabs read as jitter here)`
+ * BAL-498 shipped a sliding pill here by copying `settings-tabs.tsx` under a "don't invent a
+ * fourth tab style" rule — the right instinct, the wrong precedent. The spec is the precedent.
  *
- *   1. `{ type: 'spring', duration: 0.35, bounce: 0.15 }` — copied verbatim from
- *      `settings-tabs.tsx` — is off-spec on BOTH axes of that same table: 350ms is outside the
- *      200–300ms band, and the file's anti-pattern list bans "bounce/spring easings on business
- *      UI".
- *   2. The file had NO `prefers-reduced-motion` handling at all, while the rest of the PR does
- *      (the Join affordance carries a `motion-reduce:` fallback).
- *
- * The transition and `layoutId` are asserted through the exported pure function, NOT the DOM:
- * `@/test/motion-stub` lists both in `MOTION_PROPS` and strips them before they reach the
- * element, so a render-only assertion would pass no matter what the component passed.
+ * ⚠ THE DOM HALF BELOW IS WEAK EVIDENCE ON ITS OWN. `@/test/motion-stub`'s MOTION_PROPS
+ * includes `layoutId`, which is exactly why BAL-498 had to pin the pill through an exported
+ * pure function rather than the DOM. `src/invariants/tabs-are-static.test.ts` is what actually
+ * enforces the invariant; this pins the user-visible half (BAL-511 D13).
  */
-describe('CalendarViewSwitcher — the sliding pill (B3)', () => {
-  it('animates a view switch inside balo-ui’s 200–300ms easeOut "State change" band, never a spring', () => {
-    const props = calendarViewPillMotionProps(false);
-
-    expect(props.transition.ease).toBe('easeOut');
-    expect(props.transition.duration).toBeGreaterThanOrEqual(0.2);
-    expect(props.transition.duration).toBeLessThanOrEqual(0.3);
-    // The exact regression: reverting to the source pattern's spring puts `type: 'spring'`,
-    // `bounce: 0.15` and a 0.35 duration back, failing all three assertions above.
-    expect(props.transition).not.toHaveProperty('type');
-    expect(props.transition).not.toHaveProperty('bounce');
+describe('CalendarViewSwitcher — deliberately static (ADR-1053)', () => {
+  it('renders no sliding pill element at all', () => {
+    render(<CalendarViewSwitcher view="agenda" onChange={vi.fn()} />);
+    expect(screen.queryByTestId('calendar-view-pill')).toBeNull();
   });
 
-  it('SLIDES between options by default — the shared layoutId is what produces the movement', () => {
-    expect(calendarViewPillMotionProps(false).layoutId).toBe('calendar-view-pill');
+  it('carries ONE font weight, present and identical on the checked and unchecked options', () => {
+    render(<CalendarViewSwitcher view="week" onChange={vi.fn()} />);
+    const fontClassesOf = (el: HTMLElement): string[] =>
+      el.className.split(' ').filter((token) => token.startsWith('font-'));
+
+    const checked = screen.getByRole('radio', { name: /week/i });
+    const unchecked = screen.getByRole('radio', { name: /agenda/i });
+    // Non-vacuity: a REAL token must be present on both. Simply deleting `font-medium` from the
+    // active arm leaves `[] === []` — true, and still true if a weight is later re-added to one
+    // arm only (BAL-511 D11).
+    expect(fontClassesOf(checked)).toEqual(['font-medium']);
+    expect(fontClassesOf(unchecked)).toEqual(fontClassesOf(checked));
   });
 
-  it('under prefers-reduced-motion it JUMPS: no shared layoutId, no duration', () => {
-    const props = calendarViewPillMotionProps(true);
-
-    // Dropping `layoutId` (rather than only zeroing the duration) is what removes the layout
-    // projection entirely — the pill simply mounts already in its final position.
-    expect(props.layoutId).toBeUndefined();
-    expect(props.transition.duration).toBe(0);
-  });
-
-  it.each([
-    ['motion allowed', false],
-    ['reduced motion', true],
-  ] as const)(
-    'the active pill still RENDERS under %s — reduced motion removes the movement, never the affordance',
-    (_label, reduce) => {
-      motionState.reduce = reduce;
-      render(<CalendarViewSwitcher view="agenda" onChange={vi.fn()} />);
-
-      const pills = screen.getAllByTestId('calendar-view-pill');
-      expect(pills).toHaveLength(1);
-      // ...and it is inside the CHECKED option, so "which view am I on" survives the preference.
-      expect(screen.getByRole('radio', { name: /agenda/i })).toContainElement(pills[0] ?? null);
-      expect(screen.getByRole('radio', { name: /week/i })).not.toContainElement(pills[0] ?? null);
-    }
-  );
-
-  it('has no axe violations under reduced motion either', async () => {
-    motionState.reduce = true;
-    const { container } = render(<CalendarViewSwitcher view="week" onChange={vi.fn()} />);
-
-    expect(await axe(container)).toHaveNoViolations();
+  it('differentiates the checked option by background and colour only', () => {
+    render(<CalendarViewSwitcher view="week" onChange={vi.fn()} />);
+    const checked = screen.getByRole('radio', { name: /week/i });
+    const unchecked = screen.getByRole('radio', { name: /agenda/i });
+    expect(checked.className).toContain('bg-card');
+    expect(checked.className).toContain('shadow-sm');
+    expect(unchecked.className).not.toContain('bg-card');
+    expect(unchecked.className).not.toContain('shadow-sm');
   });
 });

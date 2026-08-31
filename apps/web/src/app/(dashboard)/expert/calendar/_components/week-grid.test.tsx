@@ -361,6 +361,68 @@ describe('WeekGrid — AC: a meeting crossing local midnight renders TWO fragmen
   });
 });
 
+/**
+ * BAL-511 D1 — `WeekGrid` now computes `isPast`/`joinVisible`/`joinTimingLabel` via
+ * `calendarMeetingTiming` and hands PRIMITIVES down to the memoised `MeetingBlock`. The
+ * behavioural coverage `meeting-block.test.tsx` lost ("Join appears when imminent") lands here,
+ * where the derivation now actually lives.
+ */
+describe('WeekGrid — the now-derived MeetingBlock inputs are computed HERE (BAL-511)', () => {
+  const WG_NOW = new Date('2026-08-25T09:00:00.000Z');
+
+  it('offers Join only for the meeting inside the window, and names its timing', () => {
+    render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'soon',
+            scheduledStart: '2026-08-25T09:05:00.000Z',
+            scheduledEnd: '2026-08-25T09:35:00.000Z',
+            counterpartyCompanyName: 'Soon Co',
+          }),
+          meeting({
+            meetingId: 'later',
+            scheduledStart: '2026-08-25T10:00:00.000Z',
+            scheduledEnd: '2026-08-25T10:30:00.000Z',
+            counterpartyCompanyName: 'Later Co',
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    expect(
+      screen.getByRole('button', { name: "Join Soon Co's meeting, starting in 5 minutes" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Join Later Co/i })).not.toBeInTheDocument();
+  });
+
+  it('mutes a meeting that has already ended', () => {
+    const { container } = render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'ended',
+            scheduledStart: '2026-08-25T07:00:00.000Z',
+            scheduledEnd: '2026-08-25T07:30:00.000Z',
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    expect(container.innerHTML).toContain('opacity-60');
+  });
+});
+
 describe('WeekGrid — mobile renders a genuine single-day grid, not a shrunken 7-column one (H6)', () => {
   it('mobile shows exactly ONE day column, defaulting to today', () => {
     const monday = meeting({

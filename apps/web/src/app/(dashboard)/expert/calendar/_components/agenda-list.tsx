@@ -154,8 +154,10 @@ export function AgendaList({
                           size="sm"
                           // A1 — Agenda is the MOBILE DEFAULT surface and this is the page's one
                           // moment of urgency: `min-h-11` + `px-4` puts the real tap target at
-                          // 44px, up from `size="sm"`'s 32px.
-                          className="motion-reduce:ring-primary/40 min-h-11 px-4 motion-safe:animate-pulse motion-reduce:ring-2"
+                          // 44px, up from `size="sm"`'s 32px. The live ping ring and its
+                          // reduced-motion fallback (BAL-511 / ADR-1053) are baked into
+                          // `JoinMeetingButton` itself.
+                          className="min-h-11 px-4"
                         >
                           <Video className="h-4 w-4" aria-hidden="true" />
                           Join
