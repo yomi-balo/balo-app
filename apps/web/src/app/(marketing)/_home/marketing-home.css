@@ -62,18 +62,25 @@
   -webkit-font-smoothing: antialiased;
   overflow-x: clip;
 }
-.mk-wrap {
+/* The page content column. `.mk-bench` shares these selectors DELIBERATELY (rather than
+   duplicating the numbers) so the product bench can never drift out of alignment with the
+   sections above and below it — its faded edges land exactly where the Ways cards and the
+   proof-band dividers do. */
+.mk-wrap,
+.mk-bench {
   max-width: var(--wrap);
   margin: 0 auto;
   padding: 0 16px;
 }
 @media (min-width: 640px) {
-  .mk-wrap {
+  .mk-wrap,
+  .mk-bench {
     padding: 0 24px;
   }
 }
 @media (min-width: 1024px) {
-  .mk-wrap {
+  .mk-wrap,
+  .mk-bench {
     padding: 0 32px;
   }
 }
@@ -201,6 +208,38 @@
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.4);
 }
+/* ⚠⚠ SPECIFICITY FIX — DO NOT DELETE, AND DO NOT "SIMPLIFY" BACK TO THE SINGLE-CLASS RULES.
+   `.mk-page a { color: inherit }` (line ~85) is specificity (0,1,1); every `.mk-btn-*` colour
+   above is a single class, (0,1,0). So the anchor reset WINS on any CTA rendered as a <Link>,
+   and the button inherits its SECTION's colour instead of its own.
+
+   That shipped a real, user-visible defect: on the dark "For experts" band and on the gradient
+   final-CTA card the inherited colour is white, so `.mk-btn-white` rendered WHITE TEXT ON A
+   WHITE BACKGROUND — "Apply to join" and "Find an expert" were both invisible. (The design
+   reference has the same collision; it was ported faithfully, bug included.)
+
+   These `a.mk-btn-*` rules are (0,2,1), so they beat the reset for anchors while leaving the
+   reset in place for ordinary prose links. Mirrors the colours declared above, exactly. */
+.mk-page a.mk-btn-white {
+  color: var(--night);
+}
+.mk-page a.mk-btn-outline-light {
+  color: var(--night-foreground);
+}
+.mk-page a.mk-btn-solid,
+.mk-page a.mk-btn-grad {
+  color: var(--primary-foreground);
+}
+.mk-page a.mk-btn-ghost {
+  color: var(--foreground);
+}
+.mk-page a.mk-btn-text {
+  color: var(--muted-foreground);
+}
+.mk-page a.mk-btn-text:hover {
+  color: var(--foreground);
+}
+
 .mk-btn svg {
   transition: transform 0.2s var(--ease);
 }
@@ -705,8 +744,19 @@
 }
 
 /* ── Bench (parallax expert tiles) ── */
+/* ⚠ CENTRED, NOT LEFT-ANCHORED. `align-items: center` on a flex column centres a row that is
+   WIDER than its container, so the overflow (and therefore the mask fade below) is symmetric on
+   both sides. `margin: 0 auto` would NOT do this — auto margins do not centre overflow, they
+   only ever push it right. The rows previously carried hard-coded `-40px` / `-240px` offsets
+   from the prototype, which anchored them left and left a half-clipped tile hard against the
+   viewport edge. */
 .mk-bench {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   position: relative;
+  /* ⚠ `margin-top` only — `margin: 0 auto` is set by the shared `.mk-wrap, .mk-bench` rule
+     above and must not be clobbered by a shorthand here, or the bench stops centring. */
   margin-top: 60px;
   padding: 6px 0 44px;
   overflow: hidden;
@@ -718,13 +768,11 @@
   display: flex;
   gap: 14px;
   width: max-content;
-  margin-left: -40px;
   padding: 4px 0;
   will-change: transform;
 }
 .mk-bench-row-b {
   margin-top: 14px;
-  margin-left: -240px;
 }
 .mk-tile {
   color: var(--foreground);
@@ -1380,7 +1428,19 @@
   max-width: 380px;
   margin: 0 auto;
 }
+/* ⚠ EQUAL-HEIGHT CARDS. The grid ITEM is `.mk-reveal` (spotlight-grid.tsx wraps each card in
+   a reveal div, with `.mk-xc-frame` inside it). Grid stretches the item, but the frame and the
+   reveal wrapper are plain divs that shrink to content, so `ExpertCard`'s own `h-full` had
+   nothing definite to resolve against and the three cards ended up ragged. Making both
+   full-height lets the card fill the row — ExpertCard is already `flex h-full flex-col` with
+   `mt-auto` on its CTA row, so the buttons align across all three. */
+.mk-experts > *,
+.mk-experts--2 > *,
+.mk-experts--1 > * {
+  height: 100%;
+}
 .mk-xc-frame {
+  height: 100%;
   border-radius: 20px;
   box-shadow: 0 4px 24px rgba(17, 24, 39, 0.06);
   transition:
