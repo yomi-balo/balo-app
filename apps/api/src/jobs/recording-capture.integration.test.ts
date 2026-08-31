@@ -111,7 +111,14 @@ const SCHEDULED_END = new Date('2026-01-01T11:00:00.000Z');
 
 async function runEnsure(meetingId: string): Promise<void> {
   startRecordingCaptureWorker();
-  await wired.processor?.({ name: 'ensure', data: { meetingId, trigger: 'sweep' } });
+  // `timestamp` mirrors the real BullMQ `Job` (non-optional at 5.70.4) so BAL-508's
+  // `waitedMs` computes a number here rather than NaN. Unasserted — this suite has no log
+  // assertions — but it keeps the fake job faithful for anyone who adds one.
+  await wired.processor?.({
+    name: 'ensure',
+    data: { meetingId, trigger: 'sweep' },
+    timestamp: Date.now(),
+  });
 }
 
 /** A per-test unique Daily-shaped room name — `meeting_daily_room_name_idx` is unique. */

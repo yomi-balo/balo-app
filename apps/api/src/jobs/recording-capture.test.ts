@@ -84,6 +84,8 @@ import {
   ATTEMPTS,
   MAX_DAILY_FAILURES_PER_MEETING,
   STUCK_CAPTURE_THRESHOLD_MS,
+  RECORDING_ENSURE_PRIORITY,
+  RECORDING_STOP_PRIORITY,
 } from './recording-capture.js';
 
 const MEETING_ID = '11111111-1111-4111-8111-111111111111';
@@ -146,6 +148,7 @@ describe('recording-capture job — enqueue', () => {
         jobId: `recording-ensure--${MEETING_ID}--evt_1`,
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
+        priority: RECORDING_ENSURE_PRIORITY,
       }
     );
   });
@@ -160,12 +163,25 @@ describe('recording-capture job — enqueue', () => {
         jobId: `recording-stop--${MEETING_ID}`,
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
+        priority: RECORDING_STOP_PRIORITY,
       }
     );
   });
 
   it('exposes the queue name', () => {
     expect(RECORDING_CAPTURE_QUEUE).toBe('recording-capture');
+  });
+
+  /**
+   * BAL-508 — pins the ORDERING and the >= 1 FLOOR rather than the literal values, so a future
+   * retune cannot silently invert the intent. The floor is load-bearing: BullMQ treats
+   * `priority: 0` as UNPRIORITIZED and drains unprioritized jobs BEFORE the prioritized set, so a
+   * `0` here would invert this feature while typechecking and reading correctly.
+   */
+  it('BAL-508 — ensure outranks stop, and neither is the falsy/unprioritized 0', () => {
+    expect(RECORDING_ENSURE_PRIORITY).toBeLessThan(RECORDING_STOP_PRIORITY);
+    expect(RECORDING_ENSURE_PRIORITY).toBeGreaterThanOrEqual(1);
+    expect(RECORDING_STOP_PRIORITY).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -177,8 +193,11 @@ describe('recording-capture job — ensure handler', () => {
     startRecordingCaptureWorker();
   });
 
-  async function runEnsure(data: { meetingId: string; trigger: string }): Promise<void> {
-    await wired.processor?.({ name: 'ensure', data });
+  async function runEnsure(
+    data: { meetingId: string; trigger: string },
+    opts: { timestamp?: number } = {}
+  ): Promise<void> {
+    await wired.processor?.({ name: 'ensure', data, timestamp: opts.timestamp ?? Date.now() });
   }
 
   it('no-ops when the meeting is absent/soft-deleted', async () => {
@@ -498,6 +517,32 @@ describe('recording-capture job — ensure handler', () => {
       distinct_id: MEETING_ID,
     });
     expect(markFailed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * BAL-508 — `waitedMs` is the Axiom signal for whether the priority change is working, so it is
+   * pinned to a CONCRETE value on a frozen clock. `expect.any(Number)` would pin nothing (and
+   * would pass on a `NaN`-adjacent regression from a job with no `timestamp`).
+   */
+  it('BAL-508 — the started log carries waitedMs = Date.now() - job.timestamp', async () => {
+    const NOW = 1_767_225_600_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      findById.mockResolvedValue(liveMeeting());
+      listOpen.mockResolvedValue([{ id: 'p1' }]);
+      findCapturingForMeeting.mockResolvedValue(undefined);
+      insertCapturing.mockResolvedValue(ROW);
+      startRoomRecording.mockResolvedValue(undefined);
+
+      await runEnsure({ meetingId: MEETING_ID, trigger: 'in_progress' }, { timestamp: NOW - 1500 });
+
+      expect(logInfo).toHaveBeenCalledWith(
+        { meetingId: MEETING_ID, recordingId: ROW.id, trigger: 'in_progress', waitedMs: 1500 },
+        'recording-ensure: Daily recording started'
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   /**
