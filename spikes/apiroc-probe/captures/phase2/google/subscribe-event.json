@@ -1,0 +1,28 @@
+{
+  "probe": "subscribe-event",
+  "request": {
+    "method": "POST",
+    "url": "https://api.apiroc.com/api/v1/calendarSubscriptions/cmssf6bhg1pnwoi2k3ovlula8",
+    "authMode": "valid",
+    "body": {
+      "calendarId": "«email-redacted»",
+      "webhookUrl": "https://recall-needs-founder-bat.trycloudflare.com/hook/cmssf6bhg1pnwoi2k3ovlula8/yomikadri2023%40gmail.com",
+      "subscriptionType": "event"
+    }
+  },
+  "durationMs": 1577,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "9939e064d9dc3c9253424427592d85a7",
+      "date": "Fri, 14 Aug 2026 08:35:12 GMT"
+    },
+    "bodyRaw": "{\"webhookSubscriptionId\":\"cmssoyzws1qs2oi2k08up0zjo\",\"endpointSecret\":\"«string present, 38 chars — REDACTED»\"}",
+    "bodyParsed": {
+      "webhookSubscriptionId": "cmssoyzws1qs2oi2k08up0zjo",
+      "endpointSecret": "«string present, 38 chars — REDACTED»"
+    }
+  }
+}

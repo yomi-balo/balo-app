@@ -1,0 +1,23 @@
+{
+  "probe": "event-delete",
+  "request": {
+    "method": "DELETE",
+    "url": "https://api.apiroc.com/api/v1/events/cmssgqb791pukoi2kuqn2trt0/AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA/AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgENAAAADjIgqYA_gUmE3S5GKAxtJgAAAix7AAAA",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 717,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "b7667d9db8c61c493425fe773a1c076d",
+      "date": "Fri, 14 Aug 2026 07:28:42 GMT"
+    },
+    "bodyRaw": "{\"success\":true}",
+    "bodyParsed": {
+      "success": true
+    }
+  }
+}

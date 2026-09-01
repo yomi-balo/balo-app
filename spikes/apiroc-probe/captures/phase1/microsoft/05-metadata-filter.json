@@ -1,0 +1,67 @@
+{
+  "probe": "metadata-roundtrip",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/events/cmssgqb791pukoi2kuqn2trt0/AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA?metadataFilters=%7B%22baloBookingId%22%3A%22spike-test-1%22%7D",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 463,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "72d698ff2aed6d36da2a9704185673d1",
+      "date": "Fri, 14 Aug 2026 07:28:40 GMT"
+    },
+    "bodyRaw": "{\"data\":[{\"id\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgENAAAADjIgqYA_gUmE3S5GKAxtJgAAAix7AAAA\",\"title\":\"BAL-393 spike — ignore\",\"description\":\"Created by the BAL-393 throwaway harness. Safe to delete. https://balo.daily.co/spike-test-1\",\"etag\":\"DjIgqYA+gUmE3S5GKAxtJgAAAAAREw==\",\"createdAt\":\"2026-08-14T07:28:39.6689279Z\",\"updatedAt\":\"2026-08-14T07:28:39.7963663Z\",\"start\":{\"dateTime\":\"2026-08-20T10:00:00.000Z\",\"timeZone\":\"Etc/UTC\"},\"end\":{\"dateTime\":\"2026-08-20T10:30:00.000Z\",\"timeZone\":\"Etc/UTC\"},\"isAllDay\":false,\"publicExtendedProperties\":{},\"privateExtendedProperties\":{\"baloBookingId\":\"spike-test-1\"},\"isRecurring\":false,\"isException\":false,\"isCancelled\":false,\"myResponseStatus\":\"accepted\",\"attendees\":[],\"visibility\":\"default\",\"webLink\":\"https://outlook.live.com/owa/?itemid=AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC%2BEwcADjIgqYA%2BgUmE3S5GKAxtJgAAAgENAAAADjIgqYA%2BgUmE3S5GKAxtJgAAAix7AAAA&exvsurl=1&path=/calendar/item\",\"transparency\":\"opaque\",\"eventType\":\"default\",\"organizer\":{\"name\":\"Yomi Balo\",\"email\":\"«email-redacted»\",\"isSelf\":true},\"creator\":{\"name\":\"Yomi Balo\",\"email\":\"«email-redacted»\",\"isSelf\":true},\"reminders\":{\"isReminderOn\":true}}]}",
+    "bodyParsed": {
+      "data": [
+        {
+          "id": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgENAAAADjIgqYA_gUmE3S5GKAxtJgAAAix7AAAA",
+          "title": "BAL-393 spike — ignore",
+          "description": "Created by the BAL-393 throwaway harness. Safe to delete. https://balo.daily.co/spike-test-1",
+          "etag": "DjIgqYA+gUmE3S5GKAxtJgAAAAAREw==",
+          "createdAt": "2026-08-14T07:28:39.6689279Z",
+          "updatedAt": "2026-08-14T07:28:39.7963663Z",
+          "start": {
+            "dateTime": "2026-08-20T10:00:00.000Z",
+            "timeZone": "Etc/UTC"
+          },
+          "end": {
+            "dateTime": "2026-08-20T10:30:00.000Z",
+            "timeZone": "Etc/UTC"
+          },
+          "isAllDay": false,
+          "publicExtendedProperties": {},
+          "privateExtendedProperties": {
+            "baloBookingId": "spike-test-1"
+          },
+          "isRecurring": false,
+          "isException": false,
+          "isCancelled": false,
+          "myResponseStatus": "accepted",
+          "attendees": [],
+          "visibility": "default",
+          "webLink": "https://outlook.live.com/owa/?itemid=AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC%2BEwcADjIgqYA%2BgUmE3S5GKAxtJgAAAgENAAAADjIgqYA%2BgUmE3S5GKAxtJgAAAix7AAAA&exvsurl=1&path=/calendar/item",
+          "transparency": "opaque",
+          "eventType": "default",
+          "organizer": {
+            "name": "Yomi Balo",
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "creator": {
+            "name": "Yomi Balo",
+            "email": "«email-redacted»",
+            "isSelf": true
+          },
+          "reminders": {
+            "isReminderOn": true
+          }
+        }
+      ]
+    }
+  }
+}
