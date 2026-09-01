@@ -136,6 +136,30 @@ export type {
   HostContextResolution,
 } from './engagement';
 
+// The FILE-PLANE audience core (BAL-431 / ADR-1048) — NOT a fourth axis: no token, no
+// role→capability map. It answers "is this track live FOR FILES" and "can this track see this
+// file", and its `declined` arm IS `relationshipDeniesHosting` (Ruling 2's location correction
+// puts it here, beside that single definition). See `./request-files.ts`.
+//
+// ⚠ `requestTrackIsLiveForFiles` is NOT `isThreadOpenStatus` (apps/web) — that one excludes
+// `invited` by design and is pinned by a test; this one INCLUDES it. Do not conflate them, and
+// do not adopt this predicate into messages or meetings without a ruling.
+export {
+  resolveRequestTrackFileAccess,
+  requestTrackIsLiveForFiles,
+  trackCanReadAllAudienceShare,
+  requestFileVisibleToTrack,
+  resolveRequestFileAudience,
+} from './request-files';
+export type {
+  RequestTrackFileStanding,
+  RequestTrackFileAccess,
+  RequestFileAudienceFacts,
+  RequestTrackRef,
+  RequestFileAudienceVia,
+  ResolvedRequestFileAudienceEntry,
+} from './request-files';
+
 // The expert-side VISIBILITY rule (BAL-419 / ADR-1046 §7) — the counterpart to `./engagement`'s
 // ACT rule, deliberately WIDER (it includes agency role `expert`). NOT a fourth axis: no token,
 // no role→capability map. See `./expert-side-visibility.ts`.

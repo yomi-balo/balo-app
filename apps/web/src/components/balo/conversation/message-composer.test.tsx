@@ -185,6 +185,37 @@ describe('MessageComposer', () => {
     expect(onAttach).toHaveBeenCalledWith(file);
   });
 
+  /**
+   * BAL-431 (OSD-2) — `onAttach` became OPTIONAL so the project-request stage, which retired its
+   * in-thread file affordance, can render a composer with no attach control at all. The CASE
+   * surface still passes it and every case above still covers that arm; this pair pins the new
+   * one from both sides, because the failure it guards against is silent: a live paperclip wired
+   * to nothing swallows the user's file with no error.
+   */
+  it('renders NO attach button and NO file input when `onAttach` is omitted', () => {
+    render(
+      <MessageComposer
+        expertFirstName="Priya"
+        sending={false}
+        uploading={null}
+        value=""
+        onChange={vi.fn()}
+        onSend={vi.fn().mockResolvedValue(true)}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Attach a file' })).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    // Messaging itself is untouched — this removes ONLY the file affordance.
+    expect(screen.getByRole('textbox', { name: 'Message Priya' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeInTheDocument();
+  });
+
+  it('still renders the attach button when `onAttach` IS supplied (the case surface)', () => {
+    renderComposer();
+    expect(screen.getByRole('button', { name: 'Attach a file' })).toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).not.toBeNull();
+  });
+
   it('reports focus changes (mobile rail hides while typing)', async () => {
     const user = userEvent.setup();
     const onFocusChange = vi.fn();

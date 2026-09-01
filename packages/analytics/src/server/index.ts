@@ -88,3 +88,8 @@ export { AVAILABILITY_SERVER_EVENTS } from '../events/availability';
 // omitting this line makes `WORKSPACE_SERVER_EVENTS` unimportable there, which fails
 // `apps/web`'s typecheck, not this package's own (same fourth-step trap noted above).
 export { WORKSPACE_SERVER_EVENTS } from '../events/workspace';
+// BAL-431 — `confirm-request-file-upload.ts` / `get-request-file-download.ts` /
+// `revoke-request-file-grant.ts` (apps/web) import from `@balo/analytics/server` ONLY;
+// omitting this line makes `REQUEST_FILE_SERVER_EVENTS` unimportable there, which fails
+// `apps/web`'s typecheck, not this package's own (same fourth-step trap noted above).
+export { REQUEST_FILE_SERVER_EVENTS } from '../events/request-files';

@@ -268,6 +268,21 @@ export {
   WORKSPACE_EVENTS,
   type WorkspaceEventMap,
 } from './workspace';
+// BAL-431 / ADR-1048 — request-stage shared-file events. ALL THREE ARE SERVER-ONLY:
+// `uploader_side`/`viewer_side`/`via_all_audience` are gate-resolved facts (the
+// `meeting_files.party` discipline), so none may be emitted client-side.
+export {
+  REQUEST_FILE_SERVER_EVENTS,
+  type RequestFileServerEventMap,
+  REQUEST_FILE_AUDIENCE_TYPES,
+  type RequestFileAudienceProp,
+  REQUEST_FILE_SIDES,
+  type RequestFileSideProp,
+  REQUEST_FILE_AUDIENCE_ACTIONS,
+  type RequestFileAudienceActionProp,
+  REQUEST_FILE_VIEWER_SIDES,
+  type RequestFileViewerSideProp,
+} from './request-files';
 // BAL-495 / ADR-1053 — the nav registry's CLIENT event, shared by the sidebar today and by
 // BAL-501's bottom tabs / BAL-503's ⌘K palette later. `NAV_ITEM_KEYS` / `NAV_SURFACES` are the
 // canonical tuples `apps/web`'s `nav-registry.ts` derives its `NavItemKey` type from.

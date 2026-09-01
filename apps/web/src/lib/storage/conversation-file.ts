@@ -1,9 +1,9 @@
 import 'server-only';
 
-import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
-import { log } from '@/lib/logging';
+import { deletePrefixedObjectFromR2 } from '@/lib/storage/delete-prefixed-object';
 
 /**
  * R2 storage seam for CONVERSATION files (BAL-271 / A4 — D5). Mirrors the
@@ -85,16 +85,14 @@ export async function createPresignedConversationFileDownload(
 }
 
 // ── R2 deletion (server-only, fire-and-forget) ──
+/**
+ * ⚠ EXPORTED NAME, SIGNATURE AND BEHAVIOUR UNCHANGED (BAL-431 / OSD-4) — a one-line delegation
+ * to the shared primitive so its existing call sites stay untouched. Those call sites are now
+ * the three in `confirm-case-file-upload.ts` — the matching request-surface uploader was
+ * deleted by BAL-431 (OSD-2), which changed the COUNT and nothing else about this function.
+ * Its guard is `CONVERSATION_FILE_PREFIX`-only; it is NOT widened to also
+ * accept request-file keys — see `request-file.ts`'s `deleteRequestFileFromR2` for that scope.
+ */
 export async function deleteConversationFileFromR2(key: string): Promise<void> {
-  // Prefix guard — refuse to delete anything outside the conversation-files space.
-  if (!key.startsWith(CONVERSATION_FILE_PREFIX)) return;
-
-  try {
-    await r2Client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-  } catch (error) {
-    log.warn('Failed to delete conversation file from R2', {
-      key,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  return deletePrefixedObjectFromR2(key, CONVERSATION_FILE_PREFIX, 'conversation');
 }

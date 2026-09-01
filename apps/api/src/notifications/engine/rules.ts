@@ -447,6 +447,15 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     ...emailAndInApp('expert', 'intro-call-booked-expert'),
   ],
 
+  // BAL-431 / ADR-1048 — a CLIENT shared a file with one candidate track. `recipient:
+  // 'expert'` resolves via `payload.expertProfileId` (the generic resolver hydration). Email +
+  // in-app; NO SMS — routine async, and an SMS would leak urgency the share does not have.
+  // Neither touches `resolver.ts`'s admin/billing fan-out allowlists — no membership read.
+  'request_file.shared_with_expert': emailAndInApp('expert', 'request-file-shared-expert'),
+  // BAL-431 — an EXPERT uploaded to their own track. `recipient: 'client'` resolves via
+  // `payload.recipientId` (the request's creator). Email + in-app; no SMS.
+  'request_file.shared_with_client': emailAndInApp('client', 'request-file-shared-client'),
+
   // BAL-409 — the guest-facing half of the same move. EMAIL ONLY — a guest is a non-user with
   // no in-app surface (matching `meeting.guest_invited`'s posture). `recipient: 'email_address'`
   // resolves off `payload.recipientEmail`, the same lever every guest event uses.

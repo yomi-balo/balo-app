@@ -11,8 +11,6 @@ function renderHeader(input: {
   lens?: 'client' | 'expert';
   requestStatus?: ProjectRequestStatus;
   threadOverrides?: Partial<ConversationThreadView>;
-  fileCount?: number;
-  filesOpen?: boolean;
   /** Non-null → the proposal slot renders enabled (client lens, A5). */
   onRequestProposal?: (() => void) | null;
   /** Non-null → the expert "Build proposal" CTA renders enabled (A6.2). */
@@ -20,47 +18,44 @@ function renderHeader(input: {
   /** Non-null → the "View proposal"/"View submitted" CTA renders enabled (A6.3). */
   onViewProposal?: (() => void) | null;
 }): {
-  onToggleFiles: ReturnType<typeof vi.fn>;
   onCall: ReturnType<typeof vi.fn>;
 } {
   const lens = input.lens ?? 'client';
   const requestStatus = input.requestStatus ?? 'eoi_submitted';
   const t = thread(input.threadOverrides);
   const actions = deriveThreadActions({ lens, requestStatus, thread: t, nudgeIsProposal: false });
-  const onToggleFiles = vi.fn();
   const onCall = vi.fn();
   render(
     <ThreadHeader
       thread={t}
       showYouSuffix={lens === 'expert'}
-      fileCount={input.fileCount ?? 0}
-      filesOpen={input.filesOpen ?? false}
       actions={actions}
       callPending={false}
-      onToggleFiles={onToggleFiles}
       onCall={onCall}
       onRequestProposal={input.onRequestProposal ?? null}
       onBuildProposal={input.onBuildProposal ?? null}
       onViewProposal={input.onViewProposal ?? null}
     />
   );
-  return { onToggleFiles, onCall };
+  return { onCall };
 }
 
 describe('ThreadHeader', () => {
-  it('shows the expert identity and the Files pill with its count', () => {
-    renderHeader({ fileCount: 3 });
+  it('shows the expert identity', () => {
+    renderHeader({});
     expect(screen.getByText('Priya Nair')).toBeInTheDocument();
-    const filesButton = screen.getByRole('button', { name: /Files/ });
-    expect(filesButton).toHaveAttribute('aria-expanded', 'false');
-    expect(filesButton).toHaveTextContent('3');
   });
 
-  it('toggles the files panel', async () => {
-    const user = userEvent.setup();
-    const { onToggleFiles } = renderHeader({});
-    await user.click(screen.getByRole('button', { name: /Files/ }));
-    expect(onToggleFiles).toHaveBeenCalled();
+  /**
+   * ⚠ REPLACES the two deleted "Files pill" cases (BAL-431 / OSD-2). Those asserted the count
+   * badge and the toggle callback of an affordance that no longer exists, so they were removed
+   * as genuinely-gone behaviour rather than to silence a failure — and this NEGATIVE assertion
+   * took their place so a re-introduced second file home on the request surface fails here.
+   */
+  it('renders NO files affordance — the request surface has one file home, and it is not this', () => {
+    renderHeader({ threadOverrides: { fileCount: 3 } });
+    expect(screen.queryByRole('button', { name: /Files/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('3')).not.toBeInTheDocument();
   });
 
   it('client lens without a handler: Book a call + disabled Request proposal stub', async () => {

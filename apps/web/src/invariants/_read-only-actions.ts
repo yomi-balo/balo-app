@@ -33,9 +33,24 @@
  */
 export const READ_ONLY_ALLOWLIST: readonly string[] = [
   // Lists conversation messages/files — pure read.
+  //
+  // ⚠ ITS SIBLING `get-conversation-file-download.ts` WAS DELETED, NOT MOVED (BAL-431 / OSD-2).
+  // The project-request surface retired its in-thread file affordance in favour of the
+  // request-level file home below, so there is no longer a request-surface conversation-file
+  // reader to allowlist. Do NOT re-add an entry for it. The CASE equivalent
+  // (`get-case-file-download.ts`) is untouched and still listed further down.
   'app/(dashboard)/projects/[requestId]/_actions/fetch-thread.ts',
-  // Mints a short-lived presigned GET URL for a conversation file — no mutation.
-  'app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download.ts',
+  // ── BAL-431 / ADR-1048 — the request-shared-file reader ───────────────────────────────
+  //
+  // Mints a short-lived presigned GET for one REQUEST-shared file — no mutation.
+  // ⚠ THE STANDING BAL-424 OBLIGATION DOES NOT BIND THIS ONE: it resolves access via
+  // `authorizeRequestFileScope`, which performs NO WRITES AT ALL — it never mints a
+  // conversation/relationship row, so there is no writing/read-only pair to choose between and
+  // no `resolveConversationAccess` (nor any get-or-create) anywhere in its import graph.
+  // `conversation-access-read-only.test.ts` therefore does not enrol it (it names no
+  // conversation-access module) while `onboarding-mutation-gate.test.ts` still does. Same shape
+  // as the BAL-423 meeting-file entries below.
+  'app/(dashboard)/projects/[requestId]/_actions/get-request-file-download.ts',
   // Mints a short-lived presigned GET URL for a proposal document — no mutation.
   //
   // ⚠ ITS LENS CHECK RUNS *AFTER* ACCESS RESOLUTION, which is what made the writing variant

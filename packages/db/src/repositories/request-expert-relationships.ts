@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne } from 'drizzle-orm';
 import { db } from '../client';
 import {
   projectRequests,
@@ -6,6 +6,7 @@ import {
   type RequestExpertRelationship,
 } from '../schema';
 import { deriveRequestStatus } from './_shared/derive-request-status';
+import type { DbExecutor } from './_shared/db-executor';
 import { conversationsRepository } from './conversations';
 
 export type RelationshipStatus = RequestExpertRelationship['status'];
@@ -169,6 +170,57 @@ export async function advanceRelationshipStatus(
   }
 
   return updated;
+}
+
+/**
+ * BAL-431 / ADR-1048 §5 (Ruling 2) — AWARD CLOSURE. Stamp `not_selected_at` on every LIVE,
+ * not-already-closed relationship of a request EXCEPT the winner.
+ *
+ * ⚠ EXPORTED SO `materializeFromKickoff` RUNS IT INSIDE ITS OWN TRANSACTION. Closure and
+ * lineage are ONE hook, both effects, so a rolled-back kickoff closes nobody. It is NOT
+ * called from `proposalsRepository.accept` — that path creates no engagement, and a second
+ * write site is exactly the "two mechanisms" Ruling 2 forbids. (The resulting kickoff-window
+ * divergence from `deriveThreadStage` is accepted in OSD-5 and documented on the column.)
+ *
+ * ⚠ FILE PLANE ONLY IN THIS PR. Messages, meetings and the thread stage are NOT adopted onto
+ * this predicate (standing constraint 3).
+ *
+ * IDEMPOTENT — `not_selected_at IS NULL` is in the WHERE, so a replayed kickoff is a no-op
+ * and never re-stamps a LATER instant over an earlier one (historical-read is an inequality
+ * against that instant, so re-stamping would silently WIDEN access).
+ *
+ * ALREADY-DECLINED ROWS ARE EXCLUDED, deliberately. `resolveRequestTrackFileAccess` takes the
+ * EARLIEST of the three instants, so stamping a declined row would be harmless — but leaving
+ * it unstamped keeps "earliest instant" honest at the source rather than relying on the
+ * reducer to undo a write we chose to make.
+ *
+ * NO AUDIT EVENT. Closure is a derived consequence of `engagement.created`, which is already
+ * audited in the same transaction, and Ruling 4's contract names four FILE actions, not five.
+ * Returns the stamped ids so the caller can `log.info` the count.
+ */
+export async function markNotSelectedByAward(
+  tx: DbExecutor,
+  input: { projectRequestId: string; winningRelationshipId: string; at: Date }
+): Promise<string[]> {
+  const stamped = await tx
+    .update(requestExpertRelationships)
+    // ⚠ A MAPPED `.set()`, NOT A RAW `sql` TEMPLATE. A `Date` inside a raw `sql` template
+    // throws at bind time; typecheck stays green and only an integration test catches it
+    // (memory `reference_date_in_raw_sql_template_throws`).
+    .set({ notSelectedAt: input.at, updatedAt: input.at })
+    .where(
+      and(
+        eq(requestExpertRelationships.projectRequestId, input.projectRequestId),
+        ne(requestExpertRelationships.id, input.winningRelationshipId),
+        isNull(requestExpertRelationships.deletedAt),
+        isNull(requestExpertRelationships.notSelectedAt),
+        isNull(requestExpertRelationships.declinedAt),
+        ne(requestExpertRelationships.status, 'declined')
+      )
+    )
+    .returning({ id: requestExpertRelationships.id });
+
+  return stamped.map((row) => row.id);
 }
 
 export const requestExpertRelationshipsRepository = {

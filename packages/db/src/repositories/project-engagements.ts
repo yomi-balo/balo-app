@@ -15,6 +15,9 @@ import {
 import { UNTITLED_ENGAGEMENT_LABEL, type RatingNudgeCandidate } from './reviews';
 import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
+// BAL-431 (Ruling 2) — award closure fires from THIS hook, in THIS transaction, alongside the
+// §5 lineage it is paired with. One hook, both effects.
+import { markNotSelectedByAward } from './request-expert-relationships';
 import { assertEngagementTermsCoherent } from './proposal-coherence';
 import { conversationsRepository } from './conversations';
 import { listByProposalTx } from './proposal-milestones';
@@ -960,7 +963,16 @@ export const projectEngagementsRepository = {
     depositCents?: number;
     rateCents?: number;
     cadence?: ProposalCadence;
-  }): Promise<{ engagement: ProjectEngagementRow; request: ProjectRequest }> {
+  }): Promise<{
+    engagement: ProjectEngagementRow;
+    request: ProjectRequest;
+    /**
+     * BAL-431 (Ruling 2) — the LOSING tracks closed by this award, stamped in this same
+     * transaction. Returned (additively — no existing caller breaks) so `approve-kickoff.ts`
+     * can `log.info` the count. Empty on a single-track request.
+     */
+    closedRelationshipIds: string[];
+  }> {
     return db.transaction(async (tx) => {
       const [current] = await tx
         .select()
@@ -1067,7 +1079,25 @@ export const projectEngagementsRepository = {
         relationshipId: input.relationshipId,
       });
 
-      return { engagement: toProjectRow(parent, child), request };
+      /**
+       * BAL-431 / ADR-1048 §5 (Ruling 2) — AWARD CLOSURE. Every OTHER live track on this
+       * request is now a LOSING track: it receives nothing new and keeps historical read of
+       * everything shared before this instant. Stamped HERE, in the same transaction as the
+       * lineage the ADR pairs it with, so the award's two effects are ATOMIC — a rolled-back
+       * kickoff closes nobody.
+       *
+       * ⚠ FILE PLANE ONLY IN THIS PR. Messages, meetings and the thread stage are NOT adopted
+       * onto this predicate (standing constraint 3); `deriveThreadStage` keeps its own
+       * render-time rule, and the resulting kickoff-window divergence is deliberate — see the
+       * `not_selected_at` docblock in `schema/request-origination.ts`.
+       */
+      const closedRelationshipIds = await markNotSelectedByAward(tx, {
+        projectRequestId: input.requestId,
+        winningRelationshipId: input.relationshipId,
+        at: new Date(),
+      });
+
+      return { engagement: toProjectRow(parent, child), request, closedRelationshipIds };
     });
   },
 

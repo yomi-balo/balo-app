@@ -45,6 +45,7 @@ import type { GuestServerEventMap } from './events/guest';
 import type { AvailabilityEventMap, AvailabilityServerEventMap } from './events/availability';
 import type { BookingEventMap } from './events/booking';
 import type { WorkspaceEventMap, WorkspaceServerEventMap } from './events/workspace';
+import type { RequestFileServerEventMap } from './events/request-files';
 import type { NavEventMap } from './events/nav';
 import type { MarketingEventMap } from './events/marketing';
 import type { MarketingHomeEventMap } from './events/marketing-home';
@@ -150,6 +151,10 @@ export type ServerEvents = ExpertServerEventMap &
   RecordingServerEventMap &
   // BAL-494 — SERVER-ONLY: deliberately absent from `AllEvents` above. `switchWorkspace()`
   // (apps/web, `import 'server-only'`) is the ONE dispatch point; no browser code emits it.
-  WorkspaceServerEventMap;
+  WorkspaceServerEventMap &
+  // BAL-431 / ADR-1048 — SERVER-ONLY: deliberately absent from `AllEvents` above.
+  // `uploader_side` / `viewer_side` / `via_all_audience` are gate-resolved facts; a client
+  // emission would let the browser assert its own side.
+  RequestFileServerEventMap;
 
 export type ServerEventName = keyof ServerEvents;

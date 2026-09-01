@@ -43,9 +43,26 @@
  *     grant list. Audience shape reveals competitor count. All client files
  *     look identical to an expert; the expert serializer must not emit the
  *     audience fields at all (negative-assertion test, fee-concealment style).
- * 10. Delete own file (decided 2026-08-07): uploader-only, both sides. Soft
- *     delete — tombstone + audit_events, R2 object retained; SILENT like
- *     revoke; admin lens shows the tombstone; never follows promotion lineage.
+ * 10. Delete own file (decided 2026-08-07; AMENDED by Ruling 1 + Ruling 3,
+ *     2026-08-31, overriding ADR-1048 §4 — the ADR amendment itself is Yomi's):
+ *       · RETENTION: soft delete — tombstone + audit_events; **the R2 OBJECT IS
+ *         DELETED** (best-effort, prefix-guarded, through the shared
+ *         `deletePrefixedObjectFromR2` primitive). The platform file-deletion
+ *         rule at meeting-files.ts:22-31 (PR #200, 11 Aug) is NEWER than
+ *         ADR-1048 (7 Aug) and stands. Because the bytes are gone, the delete
+ *         audit event snapshots the RESOLVED AUDIENCE at delete time — that
+ *         snapshot plus the tombstone is the only remaining answer to "who had
+ *         access to what, when".
+ *       · WHO MAY DELETE: **party-level** on BOTH sides, not uploader-only —
+ *         delete right ≡ upload right on that side (the SAME participation
+ *         predicate; no `uploaded_by_user_id === actor` check, no new rule).
+ *         Attribution survives: uploaded_by AND the deleting actor are both
+ *         recorded. A declined/closed expert can neither upload nor delete,
+ *         which is exactly what `f.by === viewAs && !declined` (:729) and the
+ *         disabled upload button (:750) already show below — the simulation is
+ *         UNCHANGED, only this note is new.
+ *       Still SILENT like revoke; admin lens shows the tombstone; a deleted
+ *       file never follows promotion lineage.
  *
  * OUT OF SCOPE (do not infer UI from absence): AV/quarantine states
  * (BAL-278/292), promotion lineage onto the engagement, retention policy,
@@ -813,7 +830,7 @@ function AdminPanel({ files, audit, visibleChips }) {
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {f.deleted && (
                     <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                      Removed · day {f.deletedDay} · retained for audit
+                      Removed · record retained
                     </span>
                   )}
                   <span className="text-xs text-zinc-400">Visible now to:</span>

@@ -22,6 +22,10 @@ export * from './consultations';
 export * from './project-tags';
 export * from './project-requests';
 export * from './request-origination';
+// BAL-431 — THE FIFTH FILE SCOPE. Its own file (the `meeting-files.ts` precedent), NOT buried
+// inside `request-origination.ts`: BAL-424's lesson was that burying a file/messaging domain
+// there made it undiscoverable.
+export * from './request-files';
 export * from './expert-referral-invites';
 export * from './engagements';
 export * from './project-engagements';

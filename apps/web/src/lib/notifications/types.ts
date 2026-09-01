@@ -30,6 +30,8 @@ import type {
   RescheduleProposalDeclinedPayload,
   ConversationAvailabilitySharedPayload,
   ConversationIntroCallBookedPayload,
+  RequestFileSharedWithExpertPayload,
+  RequestFileSharedWithClientPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -278,7 +280,12 @@ export type NotificationEvent =
   | 'conversation.availability_shared'
   // BAL-283 — a free intro call was booked on a project-request thread, published from
   // `bookIntroCallAction` AFTER `POST /meetings` returns 201.
-  | 'conversation.intro_call_booked';
+  | 'conversation.intro_call_booked'
+  // BAL-431 / ADR-1048 — published from `confirm-request-file-upload.ts` after the share
+  // transaction commits (once per resolved track). Mirror of
+  // apps/api/src/notifications/events.ts — keep in lockstep.
+  | 'request_file.shared_with_expert'
+  | 'request_file.shared_with_client';
 
 export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
@@ -327,4 +334,6 @@ export interface EventPayloadMap {
   'reschedule_proposal.declined': RescheduleProposalDeclinedPayload;
   'conversation.availability_shared': ConversationAvailabilitySharedPayload;
   'conversation.intro_call_booked': ConversationIntroCallBookedPayload;
+  'request_file.shared_with_expert': RequestFileSharedWithExpertPayload;
+  'request_file.shared_with_client': RequestFileSharedWithClientPayload;
 }

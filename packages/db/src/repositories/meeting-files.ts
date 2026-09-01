@@ -86,7 +86,7 @@ export const MEETING_FILE_LIST_LIMIT = 200;
  * ⚠ THERE IS NO BARE `findById`, DELIBERATELY — AND `findInMeeting` IS NOT ONE. Every
  * by-id read on this table takes the MEETING alongside the file id, and the meeting is a
  * term in the WHERE clause rather than a post-filter. That is the containment
- * `get-conversation-file-download.ts` names as "the whole IDOR story for `fileId`": a file
+ * `get-case-file-download.ts` names as "the whole IDOR story for `fileId`": a file
  * belonging to another meeting resolves to `undefined`, identically to a stale uuid, so
  * probing teaches nothing. A bare `findById` would invite a caller to skip the containment
  * and hand back another meeting's file to anyone holding its uuid. `softDelete` and

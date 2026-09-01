@@ -40,6 +40,10 @@ export {
   // dispatch point for `workspace_switched`. NOT in the client `@/lib/analytics` barrel and
   // NOT in `src/test/setup.ts`'s client `vi.mock` list — that mock is client-only.
   WORKSPACE_SERVER_EVENTS,
+  // BAL-431 / ADR-1048 — `uploader_side` / `viewer_side` / `via_all_audience` are gate-resolved
+  // facts. NOT in the client `@/lib/analytics` barrel and NOT in `src/test/setup.ts`'s client
+  // `vi.mock` list — those are client-only (mirrors WORKSPACE_SERVER_EVENTS above).
+  REQUEST_FILE_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type {
   RecapState,

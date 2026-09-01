@@ -13,6 +13,7 @@ import {
   projectRequests,
   proposalMilestones,
   proposals,
+  requestExpertRelationships,
   type AuditEvent,
 } from '../schema';
 import {
@@ -43,6 +44,9 @@ import {
 import { EngagementTermsCoherenceError } from './proposal-coherence';
 import { projectRequestsRepository, InvalidStatusTransitionError } from './project-requests';
 import { conversationsRepository } from './conversations';
+// BAL-431 (Ruling 2) — award closure, asserted directly for the idempotence property that a
+// replayed kickoff cannot reach (the status guard rejects first).
+import { markNotSelectedByAward } from './request-expert-relationships';
 
 /**
  * Read delivery audit rows for one entity from main's generic `audit_events` table
@@ -2601,5 +2605,164 @@ describe('projectEngagementsRepository.listAcceptedBetween', () => {
     await expect(
       projectEngagementsRepository.listAcceptedBetween(new Date(empty.getTime() - 3_600_000), empty)
     ).resolves.toEqual([]);
+  });
+});
+
+/**
+ * BAL-431 / ADR-1048 §5 (Ruling 2) — AWARD CLOSURE. Closure and lineage fire from ONE hook,
+ * `materializeFromKickoff`, inside its existing transaction: a rolled-back kickoff closes
+ * nobody. NOT `proposalsRepository.accept` — that path creates no engagement, and a second
+ * write site is exactly the "two mechanisms" Ruling 2 forbids.
+ */
+describe('projectEngagementsRepository.materializeFromKickoff — award closure (BAL-431)', () => {
+  /** Add `count` extra LIVE `invited` tracks to an existing request. */
+  async function addSiblingTracks(projectRequestId: string, count: number): Promise<string[]> {
+    const ids: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const expert = await expertDraftFactory();
+      const sibling = await requestExpertRelationshipFactory({
+        projectRequestId,
+        expertProfileId: expert.id,
+      });
+      ids.push(sibling.relationship.id);
+    }
+    return ids;
+  }
+
+  async function notSelectedAtFor(relationshipId: string): Promise<Date | null> {
+    const [row] = await db
+      .select({ notSelectedAt: requestExpertRelationships.notSelectedAt })
+      .from(requestExpertRelationships)
+      .where(eq(requestExpertRelationships.id, relationshipId));
+    return row?.notSelectedAt ?? null;
+  }
+
+  function kickoffArgs(
+    source: ProposalFactoryResult,
+    companyId: string,
+    adminId: string
+  ): Parameters<typeof projectEngagementsRepository.materializeFromKickoff>[0] {
+    return {
+      requestId: source.projectRequestId,
+      companyId,
+      expertProfileId: source.expertProfileId,
+      sourceProposalId: source.proposal.id,
+      relationshipId: source.relationshipId,
+      approvingAdminUserId: adminId,
+      pricingMethod: 'fixed',
+      priceCents: 250_000,
+      baloFeeBps: 2500,
+    };
+  }
+
+  it('stamps not_selected_at on every live non-winner and NEVER on the winner', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const losers = await addSiblingTracks(source.projectRequestId, 2);
+
+    const { closedRelationshipIds } = await projectEngagementsRepository.materializeFromKickoff(
+      kickoffArgs(source, companyId, adminId)
+    );
+
+    expect(closedRelationshipIds.sort()).toEqual([...losers].sort());
+    for (const loser of losers) {
+      expect(await notSelectedAtFor(loser)).toBeInstanceOf(Date);
+    }
+    // ⚠ THE WINNER IS NEVER STAMPED — it is the track the engagement was materialised for.
+    expect(await notSelectedAtFor(source.relationshipId)).toBeNull();
+  });
+
+  it('closes NOBODY when the kickoff transaction rolls back', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const losers = await addSiblingTracks(source.projectRequestId, 2);
+
+    await expect(
+      projectEngagementsRepository.materializeFromKickoff({
+        ...kickoffArgs(source, companyId, adminId),
+        // Incoherent `tm` terms (no rate) → the coherence guard throws, rolling the whole
+        // transaction back. Closure must roll back WITH the lineage it is paired with.
+        pricingMethod: 'tm',
+      })
+    ).rejects.toBeInstanceOf(EngagementTermsCoherenceError);
+
+    for (const loser of losers) {
+      expect(await notSelectedAtFor(loser)).toBeNull();
+    }
+  });
+
+  it('leaves an ALREADY-DECLINED track unstamped, keeping "earliest instant" honest', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const [declined, live] = await addSiblingTracks(source.projectRequestId, 2);
+    if (declined === undefined || live === undefined) throw new Error('seed too small');
+
+    await db
+      .update(requestExpertRelationships)
+      .set({ status: 'declined', declinedAt: new Date('2026-01-01T00:00:00.000Z') })
+      .where(eq(requestExpertRelationships.id, declined));
+
+    const { closedRelationshipIds } = await projectEngagementsRepository.materializeFromKickoff(
+      kickoffArgs(source, companyId, adminId)
+    );
+
+    expect(closedRelationshipIds).toEqual([live]);
+    expect(await notSelectedAtFor(declined)).toBeNull();
+  });
+
+  it('leaves a WITHDRAWN (soft-deleted) track unstamped', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    const [withdrawn] = await addSiblingTracks(source.projectRequestId, 1);
+    if (withdrawn === undefined) throw new Error('seed too small');
+
+    await db
+      .update(requestExpertRelationships)
+      .set({ deletedAt: new Date() })
+      .where(eq(requestExpertRelationships.id, withdrawn));
+
+    const { closedRelationshipIds } = await projectEngagementsRepository.materializeFromKickoff(
+      kickoffArgs(source, companyId, adminId)
+    );
+
+    expect(closedRelationshipIds).toEqual([]);
+    expect(await notSelectedAtFor(withdrawn)).toBeNull();
+  });
+
+  it('does not touch tracks on ANOTHER request', async () => {
+    const { source, companyId, adminId } = await seedAcceptedKickoff({ bothGates: true });
+    await addSiblingTracks(source.projectRequestId, 1);
+    const foreign = await requestExpertRelationshipFactory();
+
+    await projectEngagementsRepository.materializeFromKickoff(
+      kickoffArgs(source, companyId, adminId)
+    );
+
+    expect(await notSelectedAtFor(foreign.relationship.id)).toBeNull();
+  });
+
+  /**
+   * IDEMPOTENCE is asserted on the helper directly: a REPLAYED kickoff cannot reach it (the
+   * request is already `kickoff_approved`, so the status guard rejects first). The property
+   * that matters is that a second stamp never overwrites the first with a LATER instant —
+   * historical-read is an inequality against that instant, so re-stamping would silently
+   * WIDEN access.
+   */
+  it('markNotSelectedByAward is idempotent — a second run never re-stamps a later instant', async () => {
+    const { source } = await seedAcceptedKickoff({ bothGates: true });
+    const [loser] = await addSiblingTracks(source.projectRequestId, 1);
+    if (loser === undefined) throw new Error('seed too small');
+
+    const first = new Date('2026-05-01T00:00:00.000Z');
+    const firstRun = await markNotSelectedByAward(db, {
+      projectRequestId: source.projectRequestId,
+      winningRelationshipId: source.relationshipId,
+      at: first,
+    });
+    expect(firstRun).toEqual([loser]);
+
+    const secondRun = await markNotSelectedByAward(db, {
+      projectRequestId: source.projectRequestId,
+      winningRelationshipId: source.relationshipId,
+      at: new Date('2026-09-01T00:00:00.000Z'),
+    });
+    expect(secondRun).toEqual([]);
+    expect(await notSelectedAtFor(loser)).toEqual(first);
   });
 });

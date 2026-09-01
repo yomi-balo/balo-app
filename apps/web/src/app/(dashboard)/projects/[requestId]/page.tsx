@@ -30,6 +30,7 @@ import { loadAdminKickoffBilling } from '@/lib/project-request/load-admin-kickof
 import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
+import { loadRequestFiles, type RequestFilesView } from '@/lib/request-files/load-request-files';
 import {
   canManageBilling,
   type CapturedBillingDetails,
@@ -241,6 +242,16 @@ export default async function RequestDetailPage({
   // case surface (`cases/[engagementId]/page.tsx`).
   const viewerEmailDomain = extractEmailDomain(user.email);
 
+  // BAL-431 / ADR-1048 — the request-file audience panel. Rendered for EVERY lens whenever the
+  // request has at least one relationship — deliberately NOT gated on `requestPhase(...) ===
+  // 'phase2'` (an `invited` expert must see share-to-all files the moment their track exists,
+  // the ticket's headline scenario). `loadRequestFiles` runs its own `authorizeRequestFileScope`
+  // gate internally, so the load is authorization-complete on its own.
+  let requestFilesView: RequestFilesView | null = null;
+  if (request.relationships.length > 0) {
+    requestFilesView = await loadRequestFiles(user, requestId);
+  }
+
   return (
     <>
       {/* BAL-499 — publishes the request's title into the top bar's breadcrumb trail. Safe
@@ -254,6 +265,7 @@ export default async function RequestDetailPage({
         billingCapture={billingCapture}
         deliveryEngagementId={deliveryEngagementId}
         viewerEmailDomain={viewerEmailDomain}
+        requestFilesView={requestFilesView}
       />
     </>
   );

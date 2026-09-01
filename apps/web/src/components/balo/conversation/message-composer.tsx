@@ -22,7 +22,18 @@ interface MessageComposerProps {
   onChange: (text: string) => void;
   /** Resolves `true` when sent (the stage clears that thread's draft); `false` keeps it. */
   onSend: (text: string) => Promise<boolean>;
-  onAttach: (file: File) => void;
+  /**
+   * In-thread file sharing. **OMITTED ⇒ the attach button and its file input are not rendered
+   * at all** — the surface has no in-thread file home.
+   *
+   * ⚠ OPTIONAL SINCE BAL-431 (OSD-2), AND THE DEFAULT IS DELIBERATELY "RENDER IT". The CASE
+   * surface still shares files in-thread and passes this; the PROJECT-REQUEST surface retired
+   * its in-thread file affordance in favour of the request-level `RequestFilesPanel` and passes
+   * nothing. The alternative — keeping the prop required and passing a no-op — would leave a
+   * live paperclip that silently swallows the user's file, which is worse than the two homes
+   * it was retiring. Absence of a handler is what hides the control; there is no second flag.
+   */
+  onAttach?: (file: File) => void;
   onFocusChange?: (focused: boolean) => void;
 }
 
@@ -32,8 +43,9 @@ const COUNTER_VISIBLE_FROM = MESSAGE_MAX_TEXT - 200;
 
 /**
  * Plain-text composer (D4 — no rich-text toolbar): auto-growing textarea,
- * Enter sends / Shift+Enter newline, attach button driving the presign → XHR
- * PUT → confirm pipeline, gradient send button. CONTROLLED: the stage owns the
+ * Enter sends / Shift+Enter newline, an OPTIONAL attach button driving the
+ * presign → XHR PUT → confirm pipeline (rendered only when `onAttach` is
+ * supplied — see that prop), gradient send button. CONTROLLED: the stage owns the
  * draft per thread, so switching tabs swaps drafts instead of leaking one
  * thread's reply into another. While sending the textarea is `readOnly` (not
  * disabled) so focus — and the mobile keyboard — survive the round trip; the
@@ -113,7 +125,7 @@ export function MessageComposer({
   const handleFileChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>): void => {
       const [file] = Array.from(event.target.files ?? []);
-      if (file !== undefined) onAttach(file);
+      if (file !== undefined) onAttach?.(file);
       // Allow re-selecting the same file.
       event.target.value = '';
     },
@@ -139,24 +151,28 @@ export function MessageComposer({
         </div>
       )}
       <div className="flex items-end gap-2 px-3.5 py-3">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={CONVERSATION_FILE_ACCEPT}
-          onChange={handleFileChange}
-          className="hidden"
-          aria-hidden="true"
-          tabIndex={-1}
-        />
-        <button
-          type="button"
-          onClick={handleAttachClick}
-          disabled={disabled || isUploading}
-          aria-label="Attach a file"
-          className="border-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] border transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
-        >
-          <Paperclip className="h-4 w-4" aria-hidden="true" />
-        </button>
+        {onAttach !== undefined && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={CONVERSATION_FILE_ACCEPT}
+              onChange={handleFileChange}
+              className="hidden"
+              aria-hidden="true"
+              tabIndex={-1}
+            />
+            <button
+              type="button"
+              onClick={handleAttachClick}
+              disabled={disabled || isUploading}
+              aria-label="Attach a file"
+              className="border-border bg-card text-muted-foreground hover:text-foreground focus-visible:ring-ring flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] border transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:opacity-60"
+            >
+              <Paperclip className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </>
+        )}
         <textarea
           ref={textareaRef}
           rows={1}

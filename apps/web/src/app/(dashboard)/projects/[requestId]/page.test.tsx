@@ -76,6 +76,15 @@ vi.mock('@/lib/project-request/conversation-view', () => ({
   loadConversationView: (...args: unknown[]) => mockLoadConversationView(...args),
 }));
 
+// BAL-431 / ADR-1048 — the request-file audience panel's loader. Its own unit/integration
+// tests cover the real implementation (it runs its own `authorizeRequestFileScope` gate and
+// several `@balo/db` reads this page-level test does not otherwise mock); here we only need
+// the page to render without throwing. Defaults to `null` (no panel) for every fixture below.
+const mockLoadRequestFiles = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/request-files/load-request-files', () => ({
+  loadRequestFiles: (...args: unknown[]) => mockLoadRequestFiles(...args),
+}));
+
 // useIsMobile (inside the conversation island) reads window.matchMedia.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 

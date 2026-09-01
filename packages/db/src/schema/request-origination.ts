@@ -94,6 +94,42 @@ export const requestExpertRelationships = pgTable(
     // (`findById`) or of the relationship child rows of `findByIdWithRelations` —
     // never a WHERE/JOIN/ORDER BY predicate → NO INDEX.
     availabilitySharedAt: timestamp('availability_shared_at', { withTimezone: true }),
+    /**
+     * BAL-431 / ADR-1048 §5 (Ruling 2) — when this track was CLOSED BY AWARD, i.e. the
+     * request's project engagement was materialised naming a DIFFERENT relationship.
+     * NULL ⇒ never closed by award.
+     *
+     * ⚠ A STAMPED COLUMN, NOT A DERIVATION, AND THE REASON IS DURABILITY. "Not selected"
+     * could be derived by joining `project_engagements` — but
+     * `project_engagements.relationship_id` is NULLABLE and `ON DELETE SET NULL`
+     * (`schema/project-engagements.ts:97-99`), so the derivation SILENTLY REVERTS every
+     * losing track to "live" if that column is ever nulled. It also yields no INSTANT, and
+     * historical-read is an inequality on instants (`sharedAt < closedAt`).
+     *
+     * ⚠ IT IS NOT A STATUS. `request_expert_relationship_status` has no `not_selected`
+     * member and gains none: the enum is the EOI/proposal lifecycle, and a losing track's
+     * proposal really did stay `submitted`.
+     *
+     * ⚠ IT DELIBERATELY DIVERGES FROM `deriveThreadStage`
+     * (`apps/web/src/lib/project-request/conversation-view-types.ts:127-133`), which labels
+     * a track "not selected" as soon as the REQUEST reaches `accepted`. That is a RENDER
+     * label; this is the ACCESS instant, and it is stamped later, at kickoff approval,
+     * because Ruling 2 requires closure and lineage to fire from ONE hook. During the
+     * kickoff window (gated on `client_billing_confirmed_at` + `expert_terms_confirmed_at`,
+     * potentially days) the two disagree BY DESIGN: the UI says "not selected" while files
+     * still flow. Accepted in OSD-5 — do NOT "reconcile" them by adding a second stamp at
+     * `proposalsRepository.accept` without a ruling; that is the "two mechanisms" Ruling 2
+     * forbids.
+     *
+     * Written ONLY by `markNotSelectedByAward`, called from
+     * `projectEngagementsRepository.materializeFromKickoff` inside its existing transaction.
+     *
+     * NO INDEX — read as part of the already-indexed per-request relationship list
+     * (`listByRequest`, served by `request_expert_relationship_request_idx`), never a
+     * WHERE/JOIN/ORDER BY predicate on its own. Same reasoning as `proposalRequestedAt`
+     * and `availabilitySharedAt` above.
+     */
+    notSelectedAt: timestamp('not_selected_at', { withTimezone: true }),
     ...timestamps,
     ...softDelete,
   },
