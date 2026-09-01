@@ -2,8 +2,10 @@
 
 import { z } from 'zod';
 import {
+  db,
   creditWalletsRepository,
   promoRedemptionsRepository,
+  type CreditWallet,
   type PromoValidationReason,
 } from '@balo/db';
 import { requireOnboardedUser, getCompanyContext } from '@/lib/auth/session';
@@ -81,7 +83,7 @@ export type StartPurchaseResult =
       setupClientSecret: string | null;
       walletId: string;
     }
-  | { ok: false; error: 'unauthorized' | 'no_wallet' | 'invalid_input' | 'stripe_error' };
+  | { ok: false; error: 'unauthorized' | 'invalid_input' | 'stripe_error' };
 
 export type ValidatePromoResult =
   | { ok: true; grantMinor: number }
@@ -114,6 +116,23 @@ async function requireBillingActor(): Promise<{ userId: string; companyId: strin
     return null;
   }
   return { userId: user.id, companyId };
+}
+
+/**
+ * Resolve the company's wallet, CREATING it if this is the company's first credit event.
+ * A company that has never held credit has no `credit_wallets` row, and every path to one is
+ * a money event — so the purchase path has to be able to bootstrap it, or a client who never
+ * redeemed a promo code can never buy credit at all (the shipped BAL-377 flow dead-ended on
+ * `no_wallet` here). `ensureForCompany` is race-safe, so two concurrent first purchases
+ * converge on one row rather than colliding on the one-wallet-per-company unique.
+ *
+ * Faults deliberately PROPAGATE to each action's catch boundary. Absence is no longer a
+ * possible outcome, so anything thrown here is infrastructure (pool exhausted, statement
+ * timeout, the corruption case `ensureForCompany` guards) — reporting that to the buyer as
+ * "we couldn't find your balance" would be a lie about a system they cannot act on.
+ */
+async function ensureWallet(companyId: string): Promise<CreditWallet> {
+  return creditWalletsRepository.ensureForCompany(db, companyId);
 }
 
 async function persistLowBalanceConfig(
@@ -153,10 +172,7 @@ export async function startPurchaseAction(
       return { ok: false, error: 'unauthorized' };
     }
 
-    const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
-    if (wallet === undefined) {
-      return { ok: false, error: 'no_wallet' };
-    }
+    const wallet = await ensureWallet(actor.companyId);
 
     // Config is a preference — persist it regardless of payment outcome.
     await persistLowBalanceConfig(wallet.id, input.config);
@@ -254,10 +270,9 @@ export async function saveLowBalanceConfigAction(
       return { ok: false, error: 'unauthorized' };
     }
 
-    const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
-    if (wallet === undefined) {
-      return { ok: false, error: 'invalid_input' };
-    }
+    // Same provisioning rule as the purchase path — saving a preference must not depend on a
+    // row that only a money event would otherwise create.
+    const wallet = await ensureWallet(actor.companyId);
 
     await persistLowBalanceConfig(wallet.id, parsed.data);
     return { ok: true };

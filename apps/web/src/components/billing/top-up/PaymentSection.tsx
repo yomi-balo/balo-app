@@ -50,7 +50,6 @@ function getStripe(): Promise<Stripe | null> {
 
 const START_ERROR_COPY: Record<string, string> = {
   unauthorized: "You don't have permission to top up this balance.",
-  no_wallet: "We couldn't find your team's balance. Please refresh and try again.",
   invalid_input: 'Something looks off with the amount. Please adjust and try again.',
   stripe_error: "We couldn't start the payment just now — no charge was made. Give it another go?",
 };

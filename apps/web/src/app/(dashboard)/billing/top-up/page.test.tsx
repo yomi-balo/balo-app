@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DEFAULT_TOPUP_RELOAD_MINOR, DEFAULT_TOPUP_THRESHOLD_MINOR } from '@balo/shared/pricing';
 import { render, screen } from '@/test/utils';
 import type { WalletSnapshot, DisplayFxSnapshot } from '@/components/billing/top-up/types';
 
@@ -33,7 +34,13 @@ vi.mock('@balo/db', () => ({
   usersRepository: { findById: mockFindUserById },
   fxDisplayRatesRepository: { getLatest: mockGetLatestFx },
 }));
-vi.mock('@balo/shared/pricing', () => ({ isFxRateStale: mockIsFxRateStale }));
+// Spread the REAL module: the page also reads DEFAULT_TOPUP_{RELOAD,THRESHOLD}_MINOR from here
+// for the unprovisioned-wallet projection, and a bare factory would blank them to `undefined`
+// — the assertions below would then pass against undefined on both sides.
+vi.mock('@balo/shared/pricing', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@balo/shared/pricing')>()),
+  isFxRateStale: mockIsFxRateStale,
+}));
 vi.mock('@/lib/auth/session', () => ({
   requireUser: mockRequireUser,
   getCompanyContext: mockGetCompanyContext,
@@ -54,6 +61,10 @@ vi.mock('@/components/billing/top-up/TopUpComposer', () => ({
       data-testid="composer"
       data-balance={String(wallet.balanceMinor)}
       data-hascard={String(wallet.hasCard)}
+      data-mode={wallet.lowBalanceMode}
+      data-reload={String(wallet.topupReloadMinor)}
+      data-threshold={String(wallet.topupThresholdMinor)}
+      data-walletid={String(wallet.walletId)}
       data-fx={fx ? fx.currency : 'none'}
     />
   ),
@@ -143,14 +154,21 @@ describe('TopUpPage (RSC) — member (no MANAGE_BILLING) nudge branch', () => {
 });
 
 describe('TopUpPage (RSC) — billing holder composer branch', () => {
-  it('shows the "setting up your balance" fallback when no wallet exists yet', async () => {
+  it('renders the composer against schema defaults when no wallet row exists yet', async () => {
+    // A company that has never held credit has no `credit_wallets` row. That must NOT dead-end
+    // the buyer: the row is materialised by the first purchase (`ensureForCompany`), so the
+    // composer renders now, showing exactly the figures that row will be created holding.
     mockHasCapability.mockResolvedValue(true);
     mockFindWallet.mockResolvedValue(undefined);
 
     await renderPage();
 
-    expect(screen.getByText(/setting up your team/i)).toBeInTheDocument();
-    expect(screen.queryByTestId('composer')).not.toBeInTheDocument();
+    const composer = screen.getByTestId('composer');
+    expect(composer).toHaveAttribute('data-balance', '0');
+    expect(composer).toHaveAttribute('data-hascard', 'false');
+    expect(composer).toHaveAttribute('data-mode', 'notify_only');
+    expect(composer).toHaveAttribute('data-reload', String(DEFAULT_TOPUP_RELOAD_MINOR));
+    expect(composer).toHaveAttribute('data-threshold', String(DEFAULT_TOPUP_THRESHOLD_MINOR));
     expect(screen.queryByTestId('nudge')).not.toBeInTheDocument();
   });
 

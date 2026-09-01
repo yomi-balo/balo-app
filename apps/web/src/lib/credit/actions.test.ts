@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const mockFindByCompanyId = vi.fn();
+const mockEnsureForCompany = vi.fn();
 const mockUpdateConfig = vi.fn();
 const mockValidate = vi.fn();
 vi.mock('@balo/db', () => ({
+  db: {},
   creditWalletsRepository: {
-    findByCompanyId: (...a: unknown[]) => mockFindByCompanyId(...a),
+    ensureForCompany: (...a: unknown[]) => mockEnsureForCompany(...a),
     updateConfig: (...a: unknown[]) => mockUpdateConfig(...a),
   },
   promoRedemptionsRepository: {
@@ -73,7 +74,7 @@ describe('credit actions', () => {
     mockRequireUser.mockResolvedValue({ id: 'user-1' });
     mockGetCompanyContext.mockResolvedValue({ companyId: 'company-1' });
     mockHasCapability.mockResolvedValue(true);
-    mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
+    mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
     mockCreatePurchaseIntent.mockResolvedValue({
       clientSecret: 'pi_secret',
       paymentIntentId: 'pi_1',
@@ -88,6 +89,8 @@ describe('credit actions', () => {
       const res = await startPurchaseAction(baseStartInput());
       expect(res).toEqual({ ok: false, error: 'unauthorized' });
       expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
+      // Provisioning is a WRITE — it must never run ahead of the capability gate.
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
     });
 
     it('rejects an out-of-range amount as invalid_input', async () => {
@@ -95,10 +98,36 @@ describe('credit actions', () => {
       expect(res).toEqual({ ok: false, error: 'invalid_input' });
     });
 
-    it('returns no_wallet when the company has no wallet', async () => {
-      mockFindByCompanyId.mockResolvedValue(undefined);
+    it('PROVISIONS the wallet when the company has never held credit', async () => {
+      // The regression this guards: a company with no `credit_wallets` row used to dead-end on
+      // `no_wallet`, and since promo redemption was the only other path that creates one, a
+      // client who never redeemed a code could never buy credit at all.
+      mockEnsureForCompany.mockResolvedValue({ id: 'wallet-new', balanceMinor: 0 });
+
       const res = await startPurchaseAction(baseStartInput());
-      expect(res).toEqual({ ok: false, error: 'no_wallet' });
+
+      expect(res).toMatchObject({ ok: true, walletId: 'wallet-new' });
+      expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
+      expect(mockCreatePurchaseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({ walletId: 'wallet-new' })
+      );
+    });
+
+    it('reports a provisioning fault as stripe_error, not as a missing balance', async () => {
+      // Absence is no longer possible here, so a throw is infrastructure. The buyer must be
+      // told no charge was made — never "we couldn't find your balance", which invites them
+      // to retry a lookup that was never the problem.
+      mockEnsureForCompany.mockRejectedValue(new Error('pool exhausted'));
+
+      const res = await startPurchaseAction(baseStartInput());
+
+      expect(res).toEqual({ ok: false, error: 'stripe_error' });
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Top-up purchase intent creation failed',
+        expect.objectContaining({ error: 'pool exhausted' })
+      );
+      // A provisioning fault must never reach Stripe — no charge is attempted.
+      expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
     });
 
     it('persists config, creates BOTH intents for a card-backed mode, and returns both secrets', async () => {
@@ -115,7 +144,7 @@ describe('credit actions', () => {
     });
 
     it('skips the SetupIntent when the wallet already has an ACTIVE mandate (no downgrade)', async () => {
-      mockFindByCompanyId.mockResolvedValue({
+      mockEnsureForCompany.mockResolvedValue({
         id: 'wallet-1',
         balanceMinor: 0,
         mandateStatus: 'active',
@@ -211,6 +240,23 @@ describe('credit actions', () => {
         topupThresholdMinor: 5_000,
       });
       expect(res).toEqual({ ok: false, error: 'unauthorized' });
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+    });
+
+    it('provisions the wallet when the company has never held credit', async () => {
+      mockEnsureForCompany.mockResolvedValue({ id: 'wallet-new', balanceMinor: 0 });
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'notify_only',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: true });
+      expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
+      expect(mockUpdateConfig).toHaveBeenCalledWith('wallet-new', {
+        lowBalanceMode: 'notify_only',
+      });
     });
 
     it('persists valid config', async () => {

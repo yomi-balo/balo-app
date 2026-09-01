@@ -6,6 +6,7 @@ import { MemberWalletNudge } from '@/components/billing/top-up/MemberWalletNudge
 import type { WalletSnapshot } from '@/components/billing/top-up/types';
 import { resolveBuyerCurrency, resolveDisplayQuote } from '@/lib/credit/display-fx';
 import { resolveDisplayFx, resolveBillingAdminLabel } from '@/lib/credit/wallet-read';
+import { DEFAULT_TOPUP_RELOAD_MINOR, DEFAULT_TOPUP_THRESHOLD_MINOR } from '@balo/shared/pricing';
 
 /**
  * BAL-377 top-up route (ADR-1040 Lane 1). Capability-gated: a MANAGE_BILLING holder gets the
@@ -14,6 +15,23 @@ import { resolveDisplayFx, resolveBillingAdminLabel } from '@/lib/credit/wallet-
  * only projected, serialisable snapshots to the client (never the full wallet row → no Stripe
  * customer / payment-method / mandate-ref secrets reach the client bundle).
  */
+
+/**
+ * The projection for a company that has never held credit. Its `credit_wallets` row does not
+ * exist yet, which is a normal resting state — NOT an error and NOT a transient setup step
+ * (nothing provisions on render; the row is materialised by the first money event, when
+ * `startPurchaseAction` calls `ensureForCompany`). The figures below mirror the schema
+ * defaults on `credit_wallets`, so what the buyer configures against here is exactly what the
+ * row will be created holding.
+ */
+const UNPROVISIONED_WALLET: WalletSnapshot = {
+  walletId: null,
+  balanceMinor: 0,
+  lowBalanceMode: 'notify_only',
+  hasCard: false,
+  topupReloadMinor: DEFAULT_TOPUP_RELOAD_MINOR,
+  topupThresholdMinor: DEFAULT_TOPUP_THRESHOLD_MINOR,
+};
 
 export default async function TopUpPage() {
   const user = await requireUser();
@@ -42,24 +60,17 @@ export default async function TopUpPage() {
     );
   }
 
-  if (wallet === undefined) {
-    return (
-      <div className={shell}>
-        <div className="border-border bg-card text-muted-foreground w-full max-w-[540px] rounded-2xl border p-8 text-sm shadow-sm">
-          We&apos;re setting up your team&apos;s balance. Please refresh in a moment.
-        </div>
-      </div>
-    );
-  }
-
-  const snapshot: WalletSnapshot = {
-    walletId: wallet.id,
-    balanceMinor: wallet.balanceMinor,
-    lowBalanceMode: wallet.lowBalanceMode,
-    hasCard: wallet.mandateStatus === 'active',
-    topupReloadMinor: wallet.topupReloadMinor,
-    topupThresholdMinor: wallet.topupThresholdMinor,
-  };
+  const snapshot: WalletSnapshot =
+    wallet === undefined
+      ? UNPROVISIONED_WALLET
+      : {
+          walletId: wallet.id,
+          balanceMinor: wallet.balanceMinor,
+          lowBalanceMode: wallet.lowBalanceMode,
+          hasCard: wallet.mandateStatus === 'active',
+          topupReloadMinor: wallet.topupReloadMinor,
+          topupThresholdMinor: wallet.topupThresholdMinor,
+        };
 
   return (
     <div className={shell}>

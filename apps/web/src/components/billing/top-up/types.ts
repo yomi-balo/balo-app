@@ -7,7 +7,12 @@ import type { DisplayCurrency } from '@/lib/credit/display-constants';
  * payment-method / mandate-ref secrets reach the client bundle).
  */
 export interface WalletSnapshot {
-  walletId: string;
+  /**
+   * `null` until the company's `credit_wallets` row exists. A company that has never held
+   * credit has no row — the composer still renders (against the defaults the row will be
+   * created with) and the first purchase materialises it via `ensureForCompany`.
+   */
+  walletId: string | null;
   balanceMinor: number;
   lowBalanceMode: LowBalanceMode;
   /** Whether an ACTIVE off-session mandate already exists (a card is on file). */
