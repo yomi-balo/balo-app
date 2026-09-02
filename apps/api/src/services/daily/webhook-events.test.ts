@@ -16,7 +16,7 @@ function envelope(overrides: Record<string, unknown> = {}): unknown {
 }
 
 describe('parseDailyWebhookEvent (BAL-134 §5.1 / BAL-473 §7.3)', () => {
-  it('handles exactly six event types, in order', () => {
+  it('handles exactly eight event types, in order', () => {
     expect([...HANDLED_DAILY_EVENT_TYPES]).toEqual([
       'participant.joined',
       'participant.left',
@@ -24,6 +24,8 @@ describe('parseDailyWebhookEvent (BAL-134 §5.1 / BAL-473 §7.3)', () => {
       'recording.started',
       'recording.ready-to-download',
       'recording.error',
+      'batch-processor.job-finished',
+      'batch-processor.error',
     ]);
   });
 
@@ -499,6 +501,179 @@ describe('parseDailyWebhookEvent — recording.error (BAL-473)', () => {
     expect(result.ok && result.event).toMatchObject({
       kind: 'recording.error',
       errorMessage: 'timeout',
+    });
+  });
+});
+
+describe('parseDailyWebhookEvent — batch-processor.job-finished / .error (BAL-483)', () => {
+  const JOB_ID = '02c2508e-8835-4f3e-bcf2-e319d00f0eec';
+
+  it('parses batch-processor.job-finished into its arm with roomName: null', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_1',
+        type: 'batch-processor.job-finished',
+        payload: { id: JOB_ID, preset: 'transcript', status: 'finished', input: {}, output: {} },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.event).toMatchObject({
+      kind: 'batch-processor.job-finished',
+      eventId: 'evt_batch_1',
+      roomName: null,
+      batchJobId: JOB_ID,
+      preset: 'transcript',
+      dailyRecordingId: null,
+    });
+  });
+
+  it('parses batch-processor.error into its arm with roomName: null', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_2',
+        type: 'batch-processor.error',
+        payload: {
+          id: JOB_ID,
+          preset: 'transcript',
+          status: 'error',
+          input: {},
+          error: 'transcript job failed: Error: Failed to download: 403 Forbidden',
+        },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.event).toMatchObject({
+      kind: 'batch-processor.error',
+      roomName: null,
+      batchJobId: JOB_ID,
+      errorMessage: 'transcript job failed: Error: Failed to download: 403 Forbidden',
+    });
+  });
+
+  it('⚠ payload.id absent ⇒ unhandled', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_3',
+        type: 'batch-processor.job-finished',
+        payload: { preset: 'transcript' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({ kind: 'unhandled', roomName: null });
+  });
+
+  it('⚠ preset: "summarize" ⇒ unhandled — Balo submits transcript jobs only', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_4',
+        type: 'batch-processor.job-finished',
+        payload: { id: JOB_ID, preset: 'summarize' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({ kind: 'unhandled', roomName: null });
+  });
+
+  it('⚠ preset ABSENT still parses — the deliberate permissiveness', () => {
+    const result = parseDailyWebhookEvent(
+      { id: 'evt_batch_5', type: 'batch-processor.job-finished', payload: { id: JOB_ID } },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({
+      kind: 'batch-processor.job-finished',
+      batchJobId: JOB_ID,
+      preset: null,
+    });
+  });
+
+  it('input.recordingId present ⇒ carried; absent ⇒ dailyRecordingId: null', () => {
+    const withId = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_6',
+        type: 'batch-processor.job-finished',
+        payload: { id: JOB_ID, input: { recordingId: 'daily-rec-1' } },
+      },
+      RECEIVED_AT
+    );
+    expect(
+      withId.ok &&
+        withId.event.kind === 'batch-processor.job-finished' &&
+        withId.event.dailyRecordingId
+    ).toBe('daily-rec-1');
+
+    const withSnakeCase = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_7',
+        type: 'batch-processor.job-finished',
+        payload: { id: JOB_ID, input: { recording_id: 'daily-rec-2' } },
+      },
+      RECEIVED_AT
+    );
+    expect(
+      withSnakeCase.ok &&
+        withSnakeCase.event.kind === 'batch-processor.job-finished' &&
+        withSnakeCase.event.dailyRecordingId
+    ).toBe('daily-rec-2');
+
+    const withoutId = parseDailyWebhookEvent(
+      { id: 'evt_batch_8', type: 'batch-processor.job-finished', payload: { id: JOB_ID } },
+      RECEIVED_AT
+    );
+    expect(
+      withoutId.ok &&
+        withoutId.event.kind === 'batch-processor.job-finished' &&
+        withoutId.event.dailyRecordingId
+    ).toBeNull();
+  });
+
+  it('error text is carried on the error arm', () => {
+    const result = parseDailyWebhookEvent(
+      { id: 'evt_batch_9', type: 'batch-processor.error', payload: { id: JOB_ID, error: 'boom' } },
+      RECEIVED_AT
+    );
+
+    expect(
+      result.ok && result.event.kind === 'batch-processor.error' && result.event.errorMessage
+    ).toBe('boom');
+  });
+
+  it('⚠⚠ FIX ROUND 1 — `errorMessage` is NOT a real Daily spelling for this event; an errorMessage-only payload leaves errorMessage: null', () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_11',
+        type: 'batch-processor.error',
+        payload: { id: JOB_ID, errorMessage: 'not a real Daily field for this event' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(
+      result.ok && result.event.kind === 'batch-processor.error' && result.event.errorMessage
+    ).toBeNull();
+  });
+
+  it("⚠ a non-UUID job id IS ACCEPTED — contrast `instanceIdFrom`, this is the VENDOR's id", () => {
+    const result = parseDailyWebhookEvent(
+      {
+        id: 'evt_batch_10',
+        type: 'batch-processor.job-finished',
+        payload: { id: 'not-a-uuid-at-all' },
+      },
+      RECEIVED_AT
+    );
+
+    expect(result.ok && result.event).toMatchObject({
+      kind: 'batch-processor.job-finished',
+      batchJobId: 'not-a-uuid-at-all',
     });
   });
 });

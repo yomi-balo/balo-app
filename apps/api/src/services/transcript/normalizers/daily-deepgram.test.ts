@@ -66,3 +66,80 @@ describe('normalizeDailyDeepgram', () => {
     expect(result.language).toBeNull();
   });
 });
+
+/**
+ * BAL-483 §8.3 — the DIARIZED attribution arm (the post-call Batch Processor path). These four
+ * cases prove the widening is ADDITIVE: every case above still passes unchanged (attribution
+ * absent ⇒ identical to `'authenticated'`), and the diarized arm never writes a `userId`.
+ */
+describe('normalizeDailyDeepgram — attribution: "diarized" (BAL-483)', () => {
+  it('maps a diarized speakerLabel to source: diarized, userId: null, displayName: null', () => {
+    const result = normalizeDailyDeepgram({
+      language: 'en',
+      durationSeconds: 10,
+      participants: [],
+      attribution: 'diarized',
+      utterances: [
+        {
+          userId: null,
+          speakerLabel: 'speaker-0',
+          start: 0,
+          end: 3,
+          transcript: 'hi',
+          confidence: 0.9,
+        },
+        {
+          userId: null,
+          speakerLabel: 'speaker-1',
+          start: 3,
+          end: 6,
+          transcript: 'hello',
+          confidence: 0.8,
+        },
+      ],
+    });
+
+    expect(result.speakers).toHaveLength(2);
+    for (const speaker of result.speakers) {
+      expect(speaker.source).toBe('diarized');
+      expect(speaker.userId).toBeNull();
+      expect(speaker.displayName).toBeNull();
+    }
+    expect(result.speakers.map((s) => s.ref)).toEqual(['speaker-0', 'speaker-1']);
+  });
+
+  it('diarized + a missing speakerLabel ⇒ the synthetic "unknown" ref, never dropped', () => {
+    const result = normalizeDailyDeepgram({
+      language: 'en',
+      durationSeconds: 5,
+      participants: [],
+      attribution: 'diarized',
+      utterances: [
+        {
+          userId: null,
+          speakerLabel: null,
+          start: 0,
+          end: 2,
+          transcript: 'silence?',
+          confidence: null,
+        },
+      ],
+    });
+
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]?.speakerRef).toBe('unknown');
+    const [speaker] = result.speakers;
+    expect(speaker?.ref).toBe('unknown');
+    expect(speaker?.userId).toBeNull();
+  });
+
+  it('attribution absent ⇒ identical output to attribution: "authenticated"', () => {
+    const withAttribution = normalizeDailyDeepgram({
+      ...dailyMultiSpeaker,
+      attribution: 'authenticated',
+    });
+    const withoutAttribution = normalizeDailyDeepgram(dailyMultiSpeaker);
+
+    expect(withoutAttribution).toEqual(withAttribution);
+  });
+});

@@ -41,7 +41,7 @@
  */
 import { z } from 'zod';
 
-/** The six types this feature acts on. Everything else acks and does nothing. */
+/** The eight types this feature acts on. Everything else acks and does nothing. */
 export const HANDLED_DAILY_EVENT_TYPES = [
   'participant.joined',
   'participant.left',
@@ -50,6 +50,14 @@ export const HANDLED_DAILY_EVENT_TYPES = [
   'recording.started',
   'recording.ready-to-download',
   'recording.error',
+  // BAL-483 — the Batch Processor arms (post-call transcription). ⚠ NEITHER carries
+  // `room_name`, `instance_id` OR `mtg_session_id` — verified against
+  // docs.daily.co/reference/rest-api/webhooks/events/batch-processor-{job-finished,error}.md
+  // on 2026-09-02. Both are resolved by `payload.id` (the batch job id, stamped on
+  // `meeting_recordings.transcript_job_id` at submit) with `payload.input.recordingId` as a
+  // fallback, so — like the recording arms — they must be parsed BEFORE the room-name gate.
+  'batch-processor.job-finished',
+  'batch-processor.error',
 ] as const;
 
 export type HandledDailyEventType = (typeof HANDLED_DAILY_EVENT_TYPES)[number];
@@ -117,6 +125,45 @@ function durationFrom(payload: Record<string, unknown> | undefined): number | nu
 /** BAL-473 — `payload.error_msg` (either spelling), Daily's `recording.error` text. */
 function errorMsgFrom(payload: Record<string, unknown> | undefined): string | null {
   const msg = payload?.error_msg ?? payload?.errorMsg;
+  return typeof msg === 'string' && msg.length > 0 ? msg : null;
+}
+
+/** BAL-483 — `payload.preset`. Balo submits `'transcript'` only; anything else is not ours. */
+function batchPresetFrom(payload: Record<string, unknown> | undefined): string | null {
+  const preset = payload?.preset;
+  return typeof preset === 'string' && preset.length > 0 ? preset : null;
+}
+
+/**
+ * BAL-483 — `payload.input.recordingId` (either spelling) — DAILY's recording id, the
+ * FALLBACK correlation handle.
+ * ⚠ INFERRED, NOT SHOWN. `GET /batch-processor/:id` documents `input.recordingId`, but both
+ * webhook examples use `sourceType: 'uri'`, so this field is unconfirmed on the webhook.
+ * Absence is a first-class answer (`null`), never a refusal — the job id is the primary.
+ */
+function batchInputRecordingIdFrom(payload: Record<string, unknown> | undefined): string | null {
+  const input = payload?.input;
+  if (typeof input !== 'object' || input === null) {
+    return null;
+  }
+  const record = input as Record<string, unknown>;
+  const id = record.recordingId ?? record.recording_id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/**
+ * BAL-483 — `payload.error`, the batch job's failure text.
+ *
+ * ⚠ FIX ROUND 1 — `?? payload?.errorMessage` was REMOVED. The plan's §2 vendor table and the
+ * `daily-co` skill both pin the `batch-processor.error` payload as `id`, `preset`, `status`,
+ * `input`, `error` (string), `output: {}` — `errorMessage` is not a documented spelling anywhere
+ * for this event, unlike the genuinely dual-spelled fields elsewhere in this file
+ * (`room`/`room_name`, `error_msg`/`errorMsg`, `start_ts`/`startTs`). An invented fallback
+ * spelling is worse than no fallback: it invites a FUTURE Daily field that happens to share the
+ * name to be silently misread as this one.
+ */
+function batchErrorFrom(payload: Record<string, unknown> | undefined): string | null {
+  const msg = payload?.error;
   return typeof msg === 'string' && msg.length > 0 ? msg : null;
 }
 
@@ -216,6 +263,28 @@ export type DailyWebhookEvent =
       readonly errorMessage: string | null;
     }
   | {
+      /** ⚠ NO ROOM, NO INSTANCE. Resolved by `batchJobId`, falling back to `dailyRecordingId`. */
+      readonly kind: 'batch-processor.job-finished';
+      readonly eventId: string;
+      readonly type: string;
+      readonly roomName: null;
+      readonly batchJobId: string;
+      /** `null` when Daily omitted it. Only `'transcript'` is ours. */
+      readonly preset: string | null;
+      /** From `payload.input.recordingId`. ⚠ May be `null` — see `batchInputRecordingIdFrom`. */
+      readonly dailyRecordingId: string | null;
+    }
+  | {
+      readonly kind: 'batch-processor.error';
+      readonly eventId: string;
+      readonly type: string;
+      readonly roomName: null;
+      readonly batchJobId: string;
+      readonly preset: string | null;
+      readonly dailyRecordingId: string | null;
+      readonly errorMessage: string | null;
+    }
+  | {
       /** A type Balo does not act on, or a handled type with no resolvable room/instance/id. */
       readonly kind: 'unhandled';
       readonly eventId: string;
@@ -226,6 +295,56 @@ export type DailyWebhookEvent =
 export type ParseDailyWebhookResult =
   | { readonly ok: true; readonly event: DailyWebhookEvent }
   | { readonly ok: false; readonly reason: 'malformed_envelope' };
+
+/**
+ * BAL-483 — the two batch-processor arms, resolved by `payload.id` (the batch job id), NEVER
+ * by room. Neither payload carries a room, an instance id or a session id. Extracted purely to
+ * keep {@link parseDailyWebhookEvent}'s own Cognitive Complexity under SonarCloud's gate —
+ * behaviour is unchanged from the inline form.
+ */
+function parseBatchProcessorEvent(
+  type: 'batch-processor.job-finished' | 'batch-processor.error',
+  eventId: string,
+  roomName: string | null,
+  payload: Record<string, unknown> | undefined
+): ParseDailyWebhookResult {
+  const batchJobId = typeof payload?.id === 'string' && payload.id.length > 0 ? payload.id : null;
+  const preset = batchPresetFrom(payload);
+  // ⚠ REFUSE ONLY ON A PRESENT-AND-WRONG PRESET. Balo submits no `summarize` jobs, but an
+  // ops/manual one must be a CLEAN no-op rather than a delivery that resolves to nothing
+  // noisily. An ABSENT preset is not evidence of anything, so it is let through.
+  if (batchJobId === null || (preset !== null && preset !== 'transcript')) {
+    return { ok: true, event: { kind: 'unhandled', eventId, type, roomName } };
+  }
+  const dailyRecordingId = batchInputRecordingIdFrom(payload);
+  if (type === 'batch-processor.job-finished') {
+    return {
+      ok: true,
+      event: {
+        kind: 'batch-processor.job-finished',
+        eventId,
+        type,
+        roomName: null,
+        batchJobId,
+        preset,
+        dailyRecordingId,
+      },
+    };
+  }
+  return {
+    ok: true,
+    event: {
+      kind: 'batch-processor.error',
+      eventId,
+      type,
+      roomName: null,
+      batchJobId,
+      preset,
+      dailyRecordingId,
+      errorMessage: batchErrorFrom(payload),
+    },
+  };
+}
 
 /**
  * Parse one verified delivery.
@@ -304,6 +423,12 @@ export function parseDailyWebhookEvent(body: unknown, receivedAt: Date): ParseDa
         errorMessage: errorMsgFrom(payload),
       },
     };
+  }
+
+  // ── BAL-483 — the two batch-processor arms, resolved by `payload.id`, NEVER by room. Also
+  // BEFORE the room-name gate below, for the same reason the recording arms are.
+  if (type === 'batch-processor.job-finished' || type === 'batch-processor.error') {
+    return parseBatchProcessorEvent(type, eventId, roomName, payload);
   }
 
   // ⚠ EVERY REMAINING HANDLED TYPE (the presence/meeting arms) REQUIRES A ROOM. There is

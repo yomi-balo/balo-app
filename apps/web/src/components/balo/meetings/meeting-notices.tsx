@@ -116,12 +116,22 @@ export function MeetingPill({
 }
 
 /**
- * BAL-473 (D5) — ⚠⚠ **PLACEHOLDER COPY. LEGAL-ADJACENT, AND NOT THE BUILDER'S TO FINALISE.**
+ * BAL-473 (D5) / BAL-483 (§12) — ⚠⚠ **PLACEHOLDER COPY. LEGAL-ADJACENT, AND NOT THE BUILDER'S
+ * TO FINALISE.**
  *
- * Recording is ALWAYS-ON for v1 (D5) — no per-meeting or per-expert switch — so these two
- * strings are the entirety of the notice a participant receives. They deliberately state a
- * PLAIN FACT and nothing more: no consent language, no rights language, no retention claim.
- * Consent posture beyond notice is an open question for Yomi/MJ, not a knob.
+ * Recording is ALWAYS-ON for v1 (D5) — no per-meeting or per-expert switch — but TRANSCRIPTION
+ * (BAL-483) is NOT: it is gated on the meeting resolving to an engagement-grain context
+ * (`resolveMeetingEngagement`), so a `project_discovery` / `request_interaction` call is
+ * recorded and NOT transcribed. These two strings are the entirety of the notice a participant
+ * receives, and they say "may be transcribed" — never an unconditional "and transcribed" —
+ * because the latter would be a FALSE STATEMENT on a real, shipping surface for every meeting
+ * type without an engagement. They deliberately state a PLAIN FACT and nothing more: no
+ * consent language, no rights language, no retention claim. Consent posture beyond notice is an
+ * open question for Yomi/MJ, not a knob.
+ *
+ * ⚠ IF MJ PREFERS AN UNCONDITIONAL "and transcribed" CLAIM, the only honest way there is a
+ * server-resolved `willTranscribe` flag threaded into the lobby and the in-call pill — a real
+ * plumbing change, not a copy edit. Escalate rather than reword.
  *
  * ⚠ MJ/YOMI SIGN-OFF REQUIRED BEFORE THIS SHIPS TO PRODUCTION. Flagged in the PR body.
  * ⚠ Gender-neutral, per CLAUDE.md — no pronouns, and none are needed.
@@ -129,22 +139,24 @@ export function MeetingPill({
  * Both strings live in ONE module, exported, beside the other call-surface copy constants, so
  * there is exactly one place for MJ/Yomi to change them.
  */
-export const RECORDING_PILL_MESSAGE = 'This call is being recorded';
+export const RECORDING_PILL_MESSAGE = 'This call is being recorded and may be transcribed';
 /**
  * ⚠⚠ FIX ROUND 1 (F2), REASONING UPDATED BY BAL-440 FIX ROUND 1 (m9) — KEPT ACCURATE, NOT
  * RE-LITIGATED. F2 narrowed this copy because the ORIGINAL string promised a playback surface
  * that did not exist yet: "…is available afterwards with the meeting recap" was false at F2's
  * ship time — `signedPlaybackUrl` had no production caller, and the recap/Files card was
- * deliberately unchanged (OD-8) pending BAL-440. BAL-440 HAS NOW SHIPPED (this PR) — the
- * playback surface F2 was protecting against over-promising genuinely exists now
- * (`recording-block.tsx`; the same "the shipping ticket hasn't shipped yet" staleness was fixed
- * in this same round in `.claude/skills/mux/SKILL.md` and `packages/analytics/src/events/recap.ts`).
- * The STRING below is left EXACTLY as F2 wrote it regardless — it states a plain fact and
- * nothing more, and naming the recap, the playback mechanism, or a consent posture is copy that
- * needs MJ/Yomi sign-off (see the `RECORDING_PILL_MESSAGE` docblock above), not something this
- * fix round decides.
+ * deliberately unchanged (OD-8) pending BAL-440. BAL-440 HAS NOW SHIPPED — the playback surface
+ * F2 was protecting against over-promising genuinely exists now (`recording-block.tsx`; the
+ * same "the shipping ticket hasn't shipped yet" staleness was fixed in this same round in
+ * `.claude/skills/mux/SKILL.md` and `packages/analytics/src/events/recap.ts`). Naming the
+ * recap or the playback mechanism is STILL copy that needs MJ/Yomi sign-off, so this remains a
+ * plain fact and nothing more.
+ *
+ * BAL-483 adds "and may be transcribed" — "may", not "and", for the reason in the docblock
+ * above: transcription is gated on an engagement-grain context and recording is not, so an
+ * unconditional claim would be false on a real fraction of meetings.
  */
-export const RECORDING_LOBBY_NOTICE = 'This consultation is recorded.';
+export const RECORDING_LOBBY_NOTICE = 'This consultation is recorded and may be transcribed.';
 
 /**
  * ⚠⚠ **THE POLITE LIVE REGION (§16).** One per frame, and the ONLY thing on this surface that

@@ -34,6 +34,11 @@ export type MeetingRecordingStatus =
  *   · `failureReason` / `failedStage` — free-text vendor internals. A client learns `status`.
  *   · `sourceDeletedAt`  — an ops fact about our storage, not about their recording.
  *   · any download link  — never persisted anywhere, never in any payload, at any TTL.
+ *   · `transcriptJob*`   — BAL-483's four columns: a Daily batch-processor job id, its two
+ *                          instants and its vendor error text. The transcript itself reaches a
+ *                          client through `transcripts` (projected to `{id, status}`), never
+ *                          through the recording, and the capture's vendor plumbing never at
+ *                          all — not even the fact that it happened.
  */
 export interface MeetingRecordingView {
   readonly id: string;
@@ -64,6 +69,12 @@ export const MEETING_RECORDING_CONCEALED_KEYS = [
   'downloadLink',
   'downloadUrl',
   'accessLink',
+  // BAL-483 — the Daily batch-processor transcription job. Vendor handles and vendor error
+  // text; a client learns nothing about them, not even that transcription happened.
+  'transcriptJobId',
+  'transcriptJobSubmittedAt',
+  'transcriptJobFinishedAt',
+  'transcriptJobFailureReason',
 ] as const;
 
 /**

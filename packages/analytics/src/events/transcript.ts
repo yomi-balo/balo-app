@@ -21,7 +21,52 @@ export const TRANSCRIPT_SERVER_EVENTS = {
   TRANSCRIPT_FAILED: 'transcript_failed',
   /** The summary one-liner was dropped by the money guard (observability for tuning false positives). */
   SUMMARY_HEADLINE_SUPPRESSED: 'summary_headline_suppressed',
+  /** BAL-483 — a Daily Batch Processor transcript job was submitted for one recording segment. */
+  TRANSCRIPT_CAPTURE_SUBMITTED: 'transcript_capture_submitted',
+  /** BAL-483 — a recorded segment was deliberately NOT transcribed. The D4 gate's own metric. */
+  TRANSCRIPT_CAPTURE_SKIPPED: 'transcript_capture_skipped',
+  /** BAL-483 — the capture path failed terminally BEFORE the pipeline was ever enqueued. */
+  TRANSCRIPT_CAPTURE_FAILED: 'transcript_capture_failed',
 } as const;
+
+/**
+ * BAL-483 — why a recorded segment was not transcribed. A CLOSED SET.
+ * ⚠ `no_engagement_context` is the EXPECTED, ROUTINE one: `transcripts.engagement_id` is NOT
+ * NULL, and three of the seven `meeting_context_type` labels name no engagement at all. A
+ * rising share of the other four is a bug signal.
+ *
+ * ⚠ FIX ROUND 1 (M1) — `empty_transcript` is the D9/R3 metric: Deepgram returned ZERO
+ * utterances (an R3-fragmented segment where nobody spoke before hanging up). It is reused on
+ * `TRANSCRIPT_CAPTURE_SKIPPED` rather than growing a new event, at the INGEST stage rather than
+ * the D4 submit gate — see `jobs/transcript-capture.ts`'s `handleIngest`.
+ *
+ * ⚠ FIX ROUND 4 — `already_finished` is the SUBMIT-side guard: `transcript_job_finished_at` is
+ * already set (the `daily_recording_id` fallback in `resolveBatchRecordingRow`,
+ * `routes/daily/webhook.ts`, can stamp it on a row whose `submitted_at` never landed), so a
+ * manual re-submit must not buy a second Daily batch job — see `handleSubmit`'s own docblock.
+ * None of the other reasons describe this shape, so it is its own member.
+ */
+export type TranscriptCaptureSkipReason =
+  | 'no_engagement_context'
+  | 'ambiguous_context'
+  | 'engagement_missing'
+  | 'meeting_missing'
+  | 'no_daily_source'
+  | 'empty_transcript'
+  | 'already_finished';
+
+/** BAL-483 — where in the capture path it broke. */
+export type TranscriptCaptureFailureStage = 'batch_submit' | 'batch_job' | 'artefact_fetch';
+
+/** BAL-483 — a CLOSED SET; never Daily's raw message. The full text lives in
+ *  `meeting_recordings.transcript_job_failure_reason` and in `log.error`, both server-side. */
+export type TranscriptCaptureFailureReason =
+  | 'vendor_reported'
+  | 'daily_api_error'
+  | 'artefact_unreadable'
+  | 'artefact_too_large'
+  | 'config_error'
+  | 'unknown';
 
 /** Capture venue (`daily_deepgram` → `balo_video`; `recall` → `external`). */
 export type TranscriptVenue = 'balo_video' | 'external';
@@ -57,6 +102,31 @@ export interface TranscriptServerEventMap {
   [TRANSCRIPT_SERVER_EVENTS.SUMMARY_HEADLINE_SUPPRESSED]: {
     engagement_id: string;
     meeting_id: string;
+    distinct_id: string;
+  };
+  [TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_CAPTURE_SUBMITTED]: {
+    meeting_id: string;
+    /** ⚠ `meeting_recordings.id`. NEVER a vendor id. */
+    recording_id: string;
+    /**
+     * Daily's `recording.ready-to-download.duration` — THE BILLABLE QUANTITY. The Batch
+     * Processor bills per RECORDED minute, and the batch webhooks expose no
+     * `participant_minutes` (the real-time transcript family did; this one does not).
+     */
+    duration_seconds: number | null;
+    distinct_id: string;
+  };
+  [TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_CAPTURE_SKIPPED]: {
+    meeting_id: string;
+    recording_id: string;
+    reason: TranscriptCaptureSkipReason;
+    distinct_id: string;
+  };
+  [TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_CAPTURE_FAILED]: {
+    meeting_id: string;
+    recording_id: string;
+    stage: TranscriptCaptureFailureStage;
+    reason: TranscriptCaptureFailureReason;
     distinct_id: string;
   };
 }

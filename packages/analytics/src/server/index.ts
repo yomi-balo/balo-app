@@ -61,6 +61,13 @@ export { ACTION_ITEM_SERVER_EVENTS } from '../events/action-item';
 export type { ActionItemAssigneeRole, ActionItemActorRole } from '../events/action-item';
 export { TRANSCRIPT_SERVER_EVENTS } from '../events/transcript';
 export type { TranscriptVenue } from '../events/transcript';
+// BAL-483 — without this line `apps/api` cannot import these three closed-set types at all (it
+// imports `@balo/analytics/server` ONLY).
+export type {
+  TranscriptCaptureSkipReason,
+  TranscriptCaptureFailureStage,
+  TranscriptCaptureFailureReason,
+} from '../events/transcript';
 // BAL-473 — without this line `apps/api` cannot import `RECORDING_SERVER_EVENTS` at all
 // (it imports `@balo/analytics/server` ONLY). See the BAL-129 note above — the omission
 // lands in `apps/api`'s typecheck, not this package's own.

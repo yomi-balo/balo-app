@@ -33,13 +33,13 @@ import {
  */
 
 /**
- * BAL-473 (D5) — PIN the two recording-notice copy constants to their exact strings. This is
- * PLACEHOLDER, legal-adjacent copy pending MJ/Yomi sign-off — pinning it means an unreviewed
- * change fails a test rather than shipping silently.
+ * BAL-473 (D5) / BAL-483 (§12) — PIN the two recording-notice copy constants to their exact
+ * strings. This is PLACEHOLDER, legal-adjacent copy pending MJ/Yomi sign-off — pinning it means
+ * an unreviewed change fails a test rather than shipping silently.
  */
-describe('BAL-473 recording notice copy', () => {
+describe('BAL-473 / BAL-483 recording notice copy', () => {
   it('pins RECORDING_PILL_MESSAGE', () => {
-    expect(RECORDING_PILL_MESSAGE).toBe('This call is being recorded');
+    expect(RECORDING_PILL_MESSAGE).toBe('This call is being recorded and may be transcribed');
   });
 
   /**
@@ -47,9 +47,12 @@ describe('BAL-473 recording notice copy', () => {
    * recap", a playback surface this PR does not ship (`signedPlaybackUrl` has no production
    * caller; the recap/Files card is unchanged, OD-8). The pin now asserts the corrected,
    * fact-only copy AND that it does not smuggle the old promise back in.
+   *
+   * BAL-483 adds "and may be transcribed" — "may", not "and": transcription is gated on the
+   * meeting resolving to an engagement-grain context, unlike recording, which is always-on.
    */
   it('pins RECORDING_LOBBY_NOTICE', () => {
-    expect(RECORDING_LOBBY_NOTICE).toBe('This consultation is recorded.');
+    expect(RECORDING_LOBBY_NOTICE).toBe('This consultation is recorded and may be transcribed.');
   });
 
   it('⚠ does NOT promise a playback surface this PR does not ship', () => {
