@@ -113,7 +113,7 @@ const url = process.env.TEST_DATABASE_URL!;
 let harness: ConcurrentClientModule;
 /** Out-of-band connections: the lock holder, the `pg_blocking_pids` poller, the cleanup. */
 let adminSql: RawSql;
-/** What the API will run on: a bare `postgres(url)`, prepare ON — production's shape. */
+/** What the API will run on: `createConcurrentDb`'s default — `prepare: false`, production's shape. */
 let prodDb: unknown;
 let prodClient: RawSql;
 

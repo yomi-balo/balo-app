@@ -378,6 +378,46 @@ describe('creditWalletsRepository.applyMandate / applyMandateStatus (BAL-382)', 
     expect(pending.stripeCustomerId).toBeNull();
   });
 
+  it('REFUSES active → pending (a confirmed mandate is never stranded un-chargeable)', async () => {
+    // The race this closes: `confirmSavedCardMandate` calls setupIntents.create({confirm:true}),
+    // which can reach `succeeded` DURING the call — so Stripe may queue setup_intent.succeeded
+    // (→ applyMandate → 'active') before the caller's own `pending` write lands. Without this
+    // guard the webhook's 'active' is stomped back to 'pending' permanently, and because
+    // `isWalletMandateActive` is a conjunction including the status, auto-top-up and overdraft
+    // settlement silently stop firing for that wallet with nothing to retry them.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_r',
+      stripePaymentMethodId: 'pm_r',
+      mandateRef: 'seti_r',
+      mandateStatus: 'active',
+    });
+
+    const after = await creditWalletsRepository.applyMandateStatus(db, wallet.id, 'pending');
+
+    expect(after.mandateStatus).toBe('active');
+    // The mandate itself is untouched — this is a refused transition, not a partial write.
+    expect(after.mandateRef).toBe('seti_r');
+    expect(after.stripePaymentMethodId).toBe('pm_r');
+  });
+
+  it('still allows active → failed (a mandate that genuinely fails MUST be recorded)', async () => {
+    // The guard must be narrow: refusing every downgrade would hide a real mandate failure and
+    // leave the wallet looking chargeable when it is not.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_f',
+      stripePaymentMethodId: 'pm_f',
+      mandateRef: 'seti_f',
+      mandateStatus: 'active',
+    });
+
+    const after = await creditWalletsRepository.applyMandateStatus(db, wallet.id, 'failed');
+    expect(after.mandateStatus).toBe('failed');
+  });
+
   it('applyMandate throws for an unknown wallet id', async () => {
     await expect(
       creditWalletsRepository.applyMandate(db, {

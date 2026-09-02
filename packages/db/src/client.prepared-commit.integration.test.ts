@@ -4,8 +4,12 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { sql } from 'drizzle-orm';
 
 /**
- * Pins the single most dangerous configuration line in the codebase: `prepare: false` on the
- * production postgres-js client (`client.ts`).
+ * CHARACTERISES the driver hazard behind `prepare: false` on the production client.
+ *
+ * ⚠ This suite does NOT pin `client.ts` — it builds its own clients with explicit options,
+ * so deleting `prepare: false` from production leaves it green. The regression guard on
+ * that config line is `invariants/production-client-disables-prepared-statements.test.ts`.
+ * Both are needed: this one proves the hazard is real, that one proves we still avoid it.
  *
  * THE BUG THIS GUARDS. Drizzle sends application SQL unnamed (everything goes through
  * `client.unsafe`), but postgres-js issues its OWN transaction control as a tagged template —

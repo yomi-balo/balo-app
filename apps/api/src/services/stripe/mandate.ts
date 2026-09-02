@@ -217,8 +217,16 @@ export async function confirmSavedCardMandate(walletId: string): Promise<SavedCa
       metadata: { walletId },
     });
 
-    // Mark pending BEFORE returning so the wallet reflects an in-flight mandate attempt —
-    // identical posture to `createSetupIntent`. The webhook flips it to active/failed.
+    // Mark the attempt in flight. NOT the same posture as `createSetupIntent`, despite the
+    // shape: that one does NOT confirm, so its intent cannot succeed until the user acts, and
+    // the gap makes writing `pending` unconditionally safe. `confirm: true` above removes
+    // exactly that gap — the intent can reach `succeeded` DURING the create, so Stripe may have
+    // queued `setup_intent.succeeded` (→ `applyMandate` → `active`) before this line runs.
+    //
+    // `applyMandateStatus` refuses `active` → `pending` for that reason, so a webhook that wins
+    // the race is not stomped back and the wallet cannot be stranded un-chargeable. Relying on
+    // that guard rather than re-ordering here keeps the invariant at the data layer, where
+    // every caller gets it — see the comment on `applyMandateStatus`.
     await creditWalletsRepository.applyMandateStatus(db, walletId, 'pending');
 
     if (setupIntent.status === 'succeeded') {

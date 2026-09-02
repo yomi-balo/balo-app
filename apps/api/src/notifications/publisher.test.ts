@@ -51,7 +51,10 @@ describe('notificationEvents.publish', () => {
 
     const [, , opts] = mockAdd.mock.calls[0] as [unknown, unknown, { jobId: string }];
     expect(opts.jobId).not.toContain(':');
-    expect(opts.jobId).toBe('credit.topup.completed--manual_purchase_pi_3UB4aV2NflDPoiWN0G8yaIxz');
+    // `_` is escaped to `__` FIRST, so the mapping is injective for any future reason name.
+    expect(opts.jobId).toBe(
+      'credit.topup.completed--manual__purchase_pi__3UB4aV2NflDPoiWN0G8yaIxz'
+    );
   });
 
   it('keeps distinct correlationIds distinct after sanitising (dedup is not weakened)', async () => {
@@ -66,6 +69,21 @@ describe('notificationEvents.publish', () => {
 
     const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
     expect(new Set(ids).size).toBe(2);
+  });
+
+  it('stays injective for reason names that would collide under a naive : → _ swap', async () => {
+    // The hazard the escape closes: `manual:x` and `manual_x` both become `manual_x` if `:` is
+    // replaced without escaping `_` first, silently merging two notifications into one job.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'manual:x',
+    } as never);
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'manual_x',
+    } as never);
+
+    const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every((id) => !id.includes(':'))).toBe(true);
   });
 
   it('publishes expert.application_submitted event with correct jobId format', async () => {

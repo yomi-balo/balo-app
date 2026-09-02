@@ -12,12 +12,23 @@ import { cancelScheduledNotification, scheduleNotification } from './scheduling/
  * settlement notification has ever been delivered. It surfaced only as a best-effort
  * `log.error` next to a committed money effect, which is exactly the shape that hides.
  *
- * The substitution is one-to-one (`:` never appears in the remaining segments, which are UUIDs
- * and Stripe ids), so the id stays as unique as the correlationId it is derived from — the
- * dedup guarantee is unchanged, not merely preserved by luck.
+ * ⚠ The escape must be INJECTIVE, or two correlationIds collapse onto one job id and BullMQ
+ * dedup silently drops a notification — the same silent-loss shape this fix exists to remove.
+ * A bare `:` → `_` is NOT injective: every reason prefix already contains an underscore
+ * (`manual_purchase`, `auto_topup`, `overdraft_settlement`), so it is only collision-free by
+ * accident of the current prefix set. Adding a reason named `manual` or `auto` later would
+ * silently merge ids. Escaping `_` first makes it structural: a lone `_` decodes to `:`, a
+ * doubled `__` to `_`, so distinct inputs stay distinct for ANY future reason name.
+ *
+ * No stored ids are invalidated by this: every credit publish had been throwing, so none was
+ * ever written.
  */
 export function toJobId(event: string, correlationId: string): string {
-  return `${event}--${correlationId}`.replaceAll(':', '_');
+  // Escape ONLY the correlationId. Event names are a fixed enum that never contains `:`, and
+  // rewriting them would change the job id of notifications that already work — breaking
+  // their dedup against retained completed jobs and re-sending on the next retry.
+  const safeCorrelationId = correlationId.replaceAll('_', '__').replaceAll(':', '_');
+  return `${event}--${safeCorrelationId}`;
 }
 
 export const notificationEvents = {

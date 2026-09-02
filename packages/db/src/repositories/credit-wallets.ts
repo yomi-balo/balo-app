@@ -327,9 +327,34 @@ export const creditWalletsRepository = {
     walletId: string,
     status: MandateStatus
   ): Promise<CreditWallet> {
+    // ⚠ `active` → `pending` IS REFUSED. `pending` means "an attempt is in flight"; `active`
+    // means "a mandate is established". Writing the former over the latter loses information
+    // and silently disables every off-session path, because `isWalletMandateActive` is a
+    // conjunction including the status — auto-top-up and overdraft settlement simply stop
+    // firing, with nothing to retry them.
+    //
+    // The race that makes this reachable: `confirmSavedCardMandate` calls
+    // `setupIntents.create({ confirm: true })`, which can reach `succeeded` DURING the call, so
+    // Stripe queues `setup_intent.succeeded` before it returns. That webhook writes `active`
+    // via `applyMandate`. If it wins, the caller's subsequent `pending` write would strand the
+    // wallet at `pending` permanently. (`createSetupIntent` does NOT confirm, so its intent
+    // cannot succeed until the user acts — that gap is what makes writing `pending` safe there,
+    // and it is exactly what `confirm: true` removes.)
+    //
+    // Refusing is fail-SAFE in both directions: a genuine re-capture on an already-active
+    // wallet still completes and re-writes `active`, it just never dips through a window where
+    // charging is disabled. A card CHANGE is a different transition — `applySavedCardDisplay`
+    // nulls the status first, so this guard cannot block re-capture after one.
+    //
+    // `active` → `failed` is untouched: a mandate that genuinely fails later MUST be recorded.
+    // One statement, so no read-then-write race on the money path.
+    const nextStatus =
+      status === 'pending'
+        ? sql`CASE WHEN ${creditWallets.mandateStatus} = 'active' THEN ${creditWallets.mandateStatus} ELSE ${status}::mandate_status END`
+        : sql`${status}::mandate_status`;
     const [row] = await exec
       .update(creditWallets)
-      .set({ mandateStatus: status })
+      .set({ mandateStatus: nextStatus })
       .where(eq(creditWallets.id, walletId))
       .returning();
     if (row === undefined) {
