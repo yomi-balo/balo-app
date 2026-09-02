@@ -53,7 +53,7 @@ describe('notificationEvents.publish', () => {
     expect(opts.jobId).not.toContain(':');
     // `_` is escaped to `__` FIRST, so the mapping is injective for any future reason name.
     expect(opts.jobId).toBe(
-      'credit.topup.completed--manual__purchase_pi__3UB4aV2NflDPoiWN0G8yaIxz'
+      'credit.topup.completed--manual__purchase_cpi__3UB4aV2NflDPoiWN0G8yaIxz'
     );
   });
 
@@ -65,6 +65,21 @@ describe('notificationEvents.publish', () => {
     } as never);
     await notificationEvents.publish('credit.topup.completed', {
       correlationId: 'auto_topup:wallet-a:entry-2',
+    } as never);
+
+    const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('stays injective when _ and : appear in swapped order (the escape-collision case)', async () => {
+    // The case a two-pass `_`→`__` then `:`→`_` escape gets WRONG: both of these collapse to
+    // `a___b`, because the replacement for `:` is a single `_` that merges with the escaped
+    // pair. Only a 2-char escape whose second character disambiguates survives this.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'a_:b',
+    } as never);
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'a:_b',
     } as never);
 
     const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);

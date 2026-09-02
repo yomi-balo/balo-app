@@ -14,11 +14,19 @@ import { cancelScheduledNotification, scheduleNotification } from './scheduling/
  *
  * ⚠ The escape must be INJECTIVE, or two correlationIds collapse onto one job id and BullMQ
  * dedup silently drops a notification — the same silent-loss shape this fix exists to remove.
- * A bare `:` → `_` is NOT injective: every reason prefix already contains an underscore
- * (`manual_purchase`, `auto_topup`, `overdraft_settlement`), so it is only collision-free by
- * accident of the current prefix set. Adding a reason named `manual` or `auto` later would
- * silently merge ids. Escaping `_` first makes it structural: a lone `_` decodes to `:`, a
- * doubled `__` to `_`, so distinct inputs stay distinct for ANY future reason name.
+ *
+ * A bare `:` → `_` is not injective: every reason prefix already contains an underscore
+ * (`manual_purchase`, `auto_topup`, `overdraft_settlement`), so it is collision-free only by
+ * accident of the current prefix set.
+ *
+ * Escaping `_` → `__` first is ALSO not enough, because the replacement for `:` is then a
+ * single `_` that merges with it: `a_:b` and `a:_b` both become `a___b`. "A lone `_` is a `:`,
+ * a doubled `__` is a `_`" cannot be decoded on an odd run of three or more.
+ *
+ * So both escapes are TWO characters and the SECOND one disambiguates: `_` → `__`, `:` → `_c`.
+ * Every `_` in the output opens a 2-char sequence, so decoding is unambiguous for any run
+ * length — `a_:b` → `a___cb`, `a:_b` → `a_c__b`. This is structural, not a property of the
+ * reason names that happen to exist today.
  *
  * No stored ids are invalidated by this: every credit publish had been throwing, so none was
  * ever written.
@@ -27,7 +35,7 @@ export function toJobId(event: string, correlationId: string): string {
   // Escape ONLY the correlationId. Event names are a fixed enum that never contains `:`, and
   // rewriting them would change the job id of notifications that already work — breaking
   // their dedup against retained completed jobs and re-sending on the next retry.
-  const safeCorrelationId = correlationId.replaceAll('_', '__').replaceAll(':', '_');
+  const safeCorrelationId = correlationId.replaceAll('_', '__').replaceAll(':', '_c');
   return `${event}--${safeCorrelationId}`;
 }
 

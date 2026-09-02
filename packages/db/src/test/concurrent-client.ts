@@ -36,8 +36,15 @@ export { _setDb } from '../client';
  */
 export function createConcurrentDb(
   url: string,
-  options: Parameters<typeof postgres>[1] = { prepare: false }
+  options: Parameters<typeof postgres>[1] = {}
 ): { db: Database; client: ReturnType<typeof postgres> } {
-  const client = postgres(url, options);
+  // `prepare: false` is spread FIRST, not supplied as a default parameter. A default fires
+  // only on `undefined`, so any caller passing an options object at all — `{ max: 1 }`, say —
+  // would replace it wholesale and silently inherit postgres-js's `prepare: true`. Three of
+  // this helper's four call sites pass options, including both tests asserting the
+  // commit-durability invariant, so a default would have left them on the one driver
+  // configuration this repo declares unsafe. Spreading `options` after still lets a caller
+  // opt IN to `{ prepare: true }` deliberately, which is the only legitimate use.
+  const client = postgres(url, { prepare: false, ...options });
   return { db: drizzle(client, { schema }), client };
 }
