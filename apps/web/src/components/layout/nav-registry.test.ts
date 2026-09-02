@@ -330,6 +330,9 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/engagements/eng-1', [{ label: 'Engagements', href: '/engagements' }]],
     ['/projects/req-1', [{ label: 'Projects', href: '/projects' }]],
     ['/projects/req-1/proposal/rel-1', [{ label: 'Projects', href: '/projects' }]],
+    // BAL-441 — the session receipt/payout pages.
+    ['/sessions/session-1/receipt', [{ label: 'Consultations', href: '/consultations' }]],
+    ['/sessions/session-1/payout', [{ label: 'Consultations', href: '/consultations' }]],
   ] as const)('%s resolves to %j', (pathname, expected) => {
     expect(resolveBreadcrumbTrail(pathname)).toEqual(expected);
   });

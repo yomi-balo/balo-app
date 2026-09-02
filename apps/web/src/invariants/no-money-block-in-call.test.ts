@@ -66,4 +66,17 @@ describe('invariant: the recap money block never reaches the live call route (BA
         offenders.join('\n  ')
     ).toEqual([]);
   });
+
+  /**
+   * BAL-441 — the substring above guards the COMPONENT. This guards the COPY. `durationLine` /
+   * `finalizedAmountMinor` moved to `@balo/shared/credit` (a subpath the in-call panel already
+   * imports for `DrawdownState`), so the specifier scan above can no longer see them. The rule
+   * is unchanged: SETTLEMENT copy is a post-call fact and never renders during a live call.
+   */
+  it('⚠ no file in the live-call render tree renders finalized settlement copy', () => {
+    const offenders = scanCallRenderTree()
+      .filter((f) => f.code.includes('durationLine') || f.code.includes('finalizedAmountMinor'))
+      .map((f) => f.rel);
+    expect(offenders).toEqual([]);
+  });
 });

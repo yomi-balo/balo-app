@@ -25,6 +25,9 @@ import {
 import { isWalletMandateActive, minutesOfRunway } from '@balo/shared/credit';
 import { db, type Database } from '../client';
 import {
+  agencies,
+  caseEngagements,
+  companies,
   creditHolds,
   creditLedger,
   creditSessions,
@@ -32,6 +35,7 @@ import {
   expertPayoutRecords,
   expertProfiles,
   meetings,
+  users,
   type CreditDurationSource,
   type CreditSession,
   type CreditSessionStatus,
@@ -39,6 +43,7 @@ import {
   type CreditSettlementStatus,
   type CreditFinalizationPath,
   type CreditWallet,
+  type ExpertProfile,
   type MeetingOutcome,
   type NewCreditSession,
 } from '../schema';
@@ -828,6 +833,35 @@ async function persistMeterState(
   return updated;
 }
 
+/**
+ * BAL-441 — the RAW projected row a session STATEMENT's receipt-only context is built from.
+ * Names, not labels — `apps/api`'s `resolveSessionStatement` does the display formatting
+ * (`personDisplayName` / `personWithOrgLabel`), matching `resolve-counterparty.ts`'s split of
+ * "the fetch is not shared, the formatting is". Every optional relation (`caseTitle`,
+ * `agencyName`) is a LEFT join — `engagement_id` and `agency_id` are legitimately NULL.
+ *
+ * ⚠ NO FIGURE, RATE, FEE OR MARGIN. This is a receipt-only CONTEXT read, structurally separate
+ * from `findForClientMoneyView` / `findForExpertView` — it carries a timestamp, a title, two
+ * display strings, two ids and a status, and nothing else. `expert_profiles.rate_cents` is not
+ * projected (memory `reference_drizzle_with_hydration_leaks_secrets`).
+ */
+export interface SessionStatementContextRow {
+  // ⚠ Review F9 — `sessionId`, `expertProfileId` and `engagementId` were projected here and
+  // consumed by NOTHING. On a row whose entire justification is "explicit projection, nothing
+  // extra", carrying unused ids is the beginning of the drift this allow-list exists to prevent
+  // (the caller already HAS the session id — it passed it in). Re-add one only with a consumer.
+  status: CreditSession['status'];
+  connectedAt: Date | null;
+  endedAt: Date | null;
+  meetingId: string | null;
+  companyName: string;
+  caseTitle: string | null;
+  expertProfileType: ExpertProfile['type'];
+  expertFirstName: string | null;
+  expertLastName: string | null;
+  agencyName: string | null;
+}
+
 export const creditSessionsRepository = {
   /**
    * The pre-connect funds-or-mandate gate + hold + create-pending, in ONE wallet-locked
@@ -1142,6 +1176,62 @@ export const creditSessionsRepository = {
     return db.query.creditSessions.findFirst({
       where: and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)),
     });
+  },
+
+  /**
+   * BAL-441 — the projected STATEMENT-CONTEXT read (§4 of the plan). An explicit `db.select({…})`
+   * column map, never `with:` relational hydration (memory
+   * `reference_drizzle_with_hydration_leaks_secrets`) — `rate_cents` (the un-marked-up consultant
+   * rate) must not be in the row at all. Every optional relation (`caseEngagements`, `agencies`)
+   * is a LEFT join: `engagement_id` and `agency_id` are legitimately NULL (independent experts
+   * have no agency; a non-Case session has no case title). `companies` has NO `deleted_at`
+   * (memory `reference_companies_table_no_deleted_at`) — no guard for it, by design.
+   *
+   * Soft-delete predicate matches every sibling money view. Returns `undefined` for a missing or
+   * soft-deleted session — the caller (`resolveSessionStatement`) treats that identically to a
+   * lens-gate denial (existence hidden).
+   */
+  async findStatementContext(id: string): Promise<SessionStatementContextRow | undefined> {
+    const [row] = await db
+      .select({
+        status: creditSessions.status,
+        connectedAt: creditSessions.connectedAt,
+        endedAt: creditSessions.endedAt,
+        meetingId: creditSessions.meetingId,
+        companyName: companies.name,
+        caseTitle: caseEngagements.title,
+        expertProfileType: expertProfiles.type,
+        expertFirstName: users.firstName,
+        expertLastName: users.lastName,
+        agencyName: agencies.name,
+      })
+      .from(creditSessions)
+      .innerJoin(companies, eq(companies.id, creditSessions.companyId))
+      .innerJoin(expertProfiles, eq(expertProfiles.id, creditSessions.expertProfileId))
+      // ⚠ THE SOFT-DELETE PREDICATES BELONG IN THE `ON` CLAUSE, NOT THE `WHERE`. Moving either
+      // into `.where()` silently turns its LEFT JOIN into an INNER one and drops the whole
+      // statement row (a deleted expert would 404 an otherwise-valid receipt).
+      //
+      // `users` and `case_engagements` DO carry `deleted_at` (`schema/users.ts`,
+      // `schema/case-engagements.ts`); `companies` and `agencies` DO NOT — in those files the
+      // `...softDelete` spread belongs to the `*_members` CHILD table, not the parent — which is
+      // why the two inner joins above correctly omit it.
+      //
+      // This matters beyond tidiness: without it, a closed account's name and a soft-deleted
+      // case's title keep rendering on the receipt AND inside the downloadable PDF, so personal
+      // data survives a deletion signal in a file that can be forwarded outside the company.
+      .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
+      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(
+        caseEngagements,
+        and(
+          eq(caseEngagements.engagementId, creditSessions.engagementId),
+          isNull(caseEngagements.deletedAt)
+        )
+      )
+      .where(and(eq(creditSessions.id, id), isNull(creditSessions.deletedAt)))
+      .limit(1);
+    return row;
   },
 
   /**
