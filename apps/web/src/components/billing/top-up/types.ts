@@ -66,4 +66,14 @@ export interface PurchaseCompletion {
   promoCode: string | null;
   lowBalanceMode: LowBalanceMode;
   mandateCaptured: boolean;
+  /**
+   * The PaymentIntent this purchase charged — the receipt's ONLY way to ask the wallet whether
+   * the credit actually landed. The ledger is idempotent on exactly `manual_purchase:{piId}`, so
+   * this id (not a balance delta, which a concurrent session drawdown would mask) is the
+   * terminal condition of `use-topup-credit-poll`.
+   *
+   * ⚠ IT IS A QUESTION, NEVER A GRANT. Holding it authorises nothing: the read action scopes its
+   * answer to the actor's own wallet, and the webhook remains the sole writer of credit.
+   */
+  paymentIntentId: string;
 }

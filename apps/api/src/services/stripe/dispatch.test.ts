@@ -34,6 +34,7 @@ const {
   mockTriggerAutoTopup,
   mockApplySavedCardDisplay,
   mockRetrieveCardDisplay,
+  mockTrackServer,
 } = vi.hoisted(() => ({
   // Default: a fresh credit onto a wallet the receipt can read (companyId/balance/expiry).
   mockApplyLedgerEntry: vi.fn(async () => ({
@@ -76,10 +77,15 @@ const {
   // Default: Stripe has no card facts to give (the common case in these fixtures, whose PIs
   // carry no customer / payment_method). Individual cases override it.
   mockRetrieveCardDisplay: vi.fn(async () => null),
+  mockTrackServer: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+vi.mock('@balo/analytics/server', () => ({
+  trackServer: mockTrackServer,
+  CREDIT_SERVER_EVENTS: { MANUAL_PURCHASE_CREDITED: 'credit_manual_purchase_credited' },
 }));
 vi.mock('@balo/db', () => ({
   applyLedgerEntry: mockApplyLedgerEntry,
@@ -756,6 +762,85 @@ describe('applyStripeEffect', () => {
     expect(postCommit).toEqual([]);
     expect(mockRedeem).not.toHaveBeenCalled();
     expect(mockNotificationPublish).not.toHaveBeenCalled();
+    // The money did not move a second time, so neither does the money-in series.
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  // ── MANUAL_PURCHASE_CREDITED — the money-in truth (the "charged but never credited" alarm) ──
+
+  it('emits MANUAL_PURCHASE_CREDITED once on a FRESH manual_purchase, with the promo grant folded in', async () => {
+    mockRedeem.mockResolvedValue({ outcome: 'redeemed', grantMinor: 5000, ledgerEntryId: 'le_2' });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: 'WELCOME50',
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+
+    // POST-COMMIT ONLY — a persisted marker must always imply a committed credit.
+    expect(mockTrackServer).not.toHaveBeenCalled();
+    await postCommit[0]?.();
+
+    expect(mockTrackServer).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('credit_manual_purchase_credited', {
+      amount_minor: 7600,
+      promo_granted_minor: 5000,
+      balance_after_minor: 22_600,
+      company_id: 'company_1',
+      wallet_id: 'wallet_1',
+      distinct_id: 'company_1',
+    });
+  });
+
+  it('emits MANUAL_PURCHASE_CREDITED even when there is no purchaser to notify (the wallet still moved)', async () => {
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      // Defensive: a manual_purchase always stamps memberId, but a missing NOTIFICATION
+      // recipient must never silence the MONEY series.
+      memberId: null,
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    await postCommit[0]?.();
+
+    expect(mockNotificationPublish).not.toHaveBeenCalled();
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'credit_manual_purchase_credited',
+      expect.objectContaining({ amount_minor: 7600, promo_granted_minor: 0 })
+    );
+  });
+
+  it('does NOT let an analytics throw abort the receipt notification (money already committed)', async () => {
+    mockTrackServer.mockImplementationOnce(() => {
+      throw new Error('posthog down');
+    });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+
+    await expect(postCommit[0]?.()).resolves.toBeUndefined();
+    expect(mockNotificationPublish).toHaveBeenCalledWith(
+      'credit.topup.completed',
+      expect.objectContaining({ correlationId: 'manual_purchase:pi_1' })
+    );
   });
 
   it('applies a FRESH auto_topup credit with the entry-keyed key + surfaces the executed notice (BAL-379)', async () => {

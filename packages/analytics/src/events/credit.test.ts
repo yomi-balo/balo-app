@@ -37,6 +37,7 @@ describe('CREDIT_SERVER_EVENTS', () => {
       'FX_CACHE_STALE',
       'AUTO_TOPUP_FIRED',
       'AUTO_TOPUP_FAILED',
+      'MANUAL_PURCHASE_CREDITED',
     ]);
   });
 
@@ -46,6 +47,7 @@ describe('CREDIT_SERVER_EVENTS', () => {
     expect(CREDIT_SERVER_EVENTS.FX_CACHE_STALE).toBe('credit_fx_cache_stale');
     expect(CREDIT_SERVER_EVENTS.AUTO_TOPUP_FIRED).toBe('credit_auto_topup_fired');
     expect(CREDIT_SERVER_EVENTS.AUTO_TOPUP_FAILED).toBe('credit_auto_topup_failed');
+    expect(CREDIT_SERVER_EVENTS.MANUAL_PURCHASE_CREDITED).toBe('credit_manual_purchase_credited');
   });
 
   it('values follow the snake_case naming convention', () => {

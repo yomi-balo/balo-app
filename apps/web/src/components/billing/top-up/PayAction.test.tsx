@@ -363,6 +363,68 @@ describe('PayAction', () => {
     expect(screen.queryByRole('button', { name: /use a different card/i })).not.toBeInTheDocument();
   });
 
+  // ── paymentIntentId threading ─────────────────────────────────────────────
+
+  it.each([
+    [
+      'needs_client_confirmation',
+      {
+        ok: true,
+        outcome: 'needs_client_confirmation',
+        clientSecret: 'pi_secret',
+        paymentIntentId: 'pi_new',
+        mandate: { outcome: 'not_required' },
+        walletId: 'wallet-1',
+      },
+      'pi_new',
+      'new_card' as const,
+    ],
+    [
+      'complete',
+      {
+        ok: true,
+        outcome: 'complete',
+        paymentIntentId: 'pi_complete',
+        mandate: { outcome: 'not_required' },
+        walletId: 'wallet-1',
+      },
+      'pi_complete',
+      'saved_card' as const,
+    ],
+    [
+      'requires_action',
+      {
+        ok: true,
+        outcome: 'requires_action',
+        clientSecret: 'pi_3ds_secret',
+        paymentIntentId: 'pi_3ds',
+        mandate: { outcome: 'not_required' },
+        walletId: 'wallet-1',
+      },
+      'pi_3ds',
+      'saved_card' as const,
+    ],
+  ])(
+    'carries paymentIntentId to onComplete on the %s arm',
+    async (_label, startResult, expectedId, source) => {
+      // ⚠ THE REGRESSION THIS PINS: the id was already on all three `ok` arms and this handler
+      // threw it away, leaving the receipt with no way to ask the wallet whether the credit
+      // landed — so it asserted an arithmetic balance instead.
+      mockStartPurchaseAction.mockResolvedValue(startResult);
+      const { onComplete } = renderAction({
+        paymentMethodSource: source,
+        lowBalanceMode: 'notify_only',
+      });
+
+      await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+      await waitFor(() => expect(onComplete).toHaveBeenCalled());
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ paymentIntentId: expectedId })
+      );
+    }
+  );
+
   // ── Analytics + disabled ──────────────────────────────────────────────────
 
   it('tags the purchase-started event with the payment-method source', async () => {

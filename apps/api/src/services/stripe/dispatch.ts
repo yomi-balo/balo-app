@@ -10,6 +10,7 @@ import {
   deriveIdempotencyKey,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { trackServer, CREDIT_SERVER_EVENTS } from '@balo/analytics/server';
 import { toSettleableSession } from '@balo/shared/credit';
 import { getStripeClient } from '../../lib/stripe.js';
 import { publishSessionSettled, publishSettlementFailure } from '../credit-session/notify.js';
@@ -384,15 +385,51 @@ async function grantPromoBestEffort(
 }
 
 /**
- * BAL-377 — publish the `credit.topup.completed` receipt POST-COMMIT (a persisted marker always
- * implies a committed credit). Relocated from the webhook route so it composes as a
- * `PostCommitEffect` thunk alongside the BAL-378 session publishes (no `fastify` needed — uses
- * the module `log`). Best-effort + idempotent by `correlationId` (`manual_purchase:{piId}` →
- * BullMQ jobId dedup): a publish failure is logged, never thrown (the money is already
- * committed; re-throwing would make Stripe retry the whole webhook for a notification hiccup). A
- * receipt with no purchaser (defensive — a manual_purchase always stamps `memberId`) is skipped.
+ * The MONEY-IN TRUTH for a manual purchase — the one credit reason that had no server event at
+ * all. Same shape as `AUTO_TOPUP_FIRED` (`publishAutoTopupExecuted`): emitted from the FRESH
+ * (non-deduped) post-commit thunk, so exactly once per purchase and never on a webhook replay.
+ *
+ * ⚠ EMITTED BEFORE — AND INDEPENDENTLY OF — THE RECEIPT NOTIFICATION, deliberately. The wallet
+ * moved whether or not there is a purchaser to email, so a defensively-missing `memberId` must
+ * not also silence the money series. Best-effort: PostHog is a no-op without an API key and
+ * `capture` only enqueues, but a throw here would abort the receipt publish below for an
+ * analytics hiccup, so it is contained.
+ */
+function emitManualPurchaseCredited(receipt: CreditTopupReceipt): void {
+  try {
+    trackServer(CREDIT_SERVER_EVENTS.MANUAL_PURCHASE_CREDITED, {
+      amount_minor: receipt.creditedMinor,
+      promo_granted_minor: receipt.promoGrantedMinor,
+      balance_after_minor: receipt.balanceAfterMinor,
+      company_id: receipt.companyId,
+      wallet_id: receipt.walletId,
+      distinct_id: receipt.companyId,
+    });
+  } catch (err: unknown) {
+    log.warn(
+      {
+        op: 'emitManualPurchaseCredited',
+        correlationId: receipt.correlationId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to emit credit_manual_purchase_credited (money committed; analytics best-effort)'
+    );
+  }
+}
+
+/**
+ * BAL-377 — the FRESH `manual_purchase` POST-COMMIT effect (a persisted marker always implies a
+ * committed credit). Relocated from the webhook route so it composes as a `PostCommitEffect`
+ * thunk alongside the BAL-378 session publishes (no `fastify` needed — uses the module `log`).
+ * Two things happen here, in order: the money-in analytics (unconditional), then the
+ * `credit.topup.completed` receipt notification. Best-effort + idempotent by `correlationId`
+ * (`manual_purchase:{piId}` → BullMQ jobId dedup): a publish failure is logged, never thrown (the
+ * money is already committed; re-throwing would make Stripe retry the whole webhook for a
+ * notification hiccup). A receipt with no purchaser (defensive — a manual_purchase always stamps
+ * `memberId`) skips the NOTIFICATION only.
  */
 async function publishTopupReceipt(receipt: CreditTopupReceipt): Promise<void> {
+  emitManualPurchaseCredited(receipt);
   if (receipt.purchaserUserId === null) {
     log.warn(
       { op: 'publishTopupReceipt', correlationId: receipt.correlationId },

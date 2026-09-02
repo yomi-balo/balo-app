@@ -267,7 +267,17 @@ export function PayAction({
 
     const mandateCaptured = await captureMandate(start.mandate, charged.paymentMethodId);
 
-    onComplete({ amountMinor, promoMinor, promoCode, lowBalanceMode, mandateCaptured });
+    // ⚠ `paymentIntentId` RIDES ALONG ON EVERY `ok` ARM — it is present on all three by
+    // construction, and dropping it here is exactly what left the receipt unable to ask the
+    // wallet whether the credit landed. It is the poll's terminal key, not a credit grant.
+    onComplete({
+      amountMinor,
+      promoMinor,
+      promoCode,
+      lowBalanceMode,
+      mandateCaptured,
+      paymentIntentId: start.paymentIntentId,
+    });
   }, [
     stripe,
     elements,

@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { WalletSnapshot, SavedCard } from './types';
 
 const mockPush = vi.fn();
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush, back: vi.fn() }) }));
+const mockRefresh = vi.fn();
+vi.mock('next/navigation', () => ({
+  // `refresh` is load-bearing now: the receipt calls it on the pending → credited transition,
+  // which is what repaints the top-bar credits chip.
+  useRouter: () => ({ push: mockPush, refresh: mockRefresh, back: vi.fn() }),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/credit/actions', () => ({
   validatePromoAction: vi.fn(),
   startPurchaseAction: vi.fn(),
+  getTopUpCreditStatusAction: vi.fn(),
 }));
 
 // Stripe.js is stubbed at the module boundary so the composer's real <Elements> hoist, its
@@ -36,7 +42,7 @@ vi.mock('@stripe/react-stripe-js', () => ({
 }));
 
 import { TopUpComposer } from './TopUpComposer';
-import { startPurchaseAction } from '@/lib/credit/actions';
+import { startPurchaseAction, getTopUpCreditStatusAction } from '@/lib/credit/actions';
 
 const SAVED_CARD: SavedCard = {
   brand: 'visa',
@@ -95,6 +101,13 @@ describe('TopUpComposer', () => {
       paymentIntentId: 'pi_1',
       mandate: { outcome: 'not_required' },
       walletId: 'wallet-1',
+    });
+    // The receipt polls the wallet rather than computing a balance. Default the composer's
+    // cases to a CONFIRMED credit so they exercise the settled receipt; the pending / window-
+    // closed states are covered in TopUpReceipt.test.tsx.
+    vi.mocked(getTopUpCreditStatusAction).mockResolvedValue({
+      status: 'credited',
+      balanceMinor: 150_000,
     });
   });
 
@@ -270,6 +283,41 @@ describe('TopUpComposer', () => {
 
     expect(await screen.findByText(/You're topped up/i)).toBeInTheDocument();
     expect(screen.getByText(/couldn't finish setting up automatic charging/i)).toBeInTheDocument();
+  });
+
+  it('⚠⚠ threads the PaymentIntent id charge → receipt, and renders the WALLET balance not the sum', async () => {
+    // Crosses the entire seam the incident broke: the action's `paymentIntentId` → PayAction's
+    // `onComplete` → the receipt's poll → the wallet read that the rendered figure comes from.
+    // Each half was green in isolation; only the composer, rendering the real Pay button AND the
+    // real receipt, can prove the id survives the trip.
+    vi.mocked(startPurchaseAction).mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_threaded',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    // Deliberately NOT previous (50,000) + amount (100,000) = 150,000.
+    vi.mocked(getTopUpCreditStatusAction).mockResolvedValue({
+      status: 'credited',
+      balanceMinor: 137_500,
+    });
+    render(
+      <TopUpComposer
+        wallet={wallet({ savedCard: SAVED_CARD, lowBalanceMode: 'notify_only' })}
+        fx={null}
+      />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /^Pay A\$/i }));
+
+    await waitFor(() => expect(getTopUpCreditStatusAction).toHaveBeenCalledWith('pi_threaded'));
+    expect(await screen.findByText(/You're topped up/i)).toBeInTheDocument();
+    expect(screen.getAllByText('A$1,375.00').length).toBeGreaterThan(0);
+    // The old client arithmetic would have rendered this instead.
+    expect(screen.queryByText('A$1,500.00')).not.toBeInTheDocument();
+    // ...and the confirmation is what repaints the top-bar chip.
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
   });
 
   it('never disables a card-backed mode — every path is a card now', () => {

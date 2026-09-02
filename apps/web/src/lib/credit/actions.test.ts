@@ -3,17 +3,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 const mockEnsureForCompany = vi.fn();
+const mockFindByCompanyId = vi.fn();
 const mockUpdateConfig = vi.fn();
 const mockValidate = vi.fn();
+const mockFindByIdempotencyKey = vi.fn();
 vi.mock('@balo/db', () => ({
   db: {},
   creditWalletsRepository: {
     ensureForCompany: (...a: unknown[]) => mockEnsureForCompany(...a),
+    findByCompanyId: (...a: unknown[]) => mockFindByCompanyId(...a),
     updateConfig: (...a: unknown[]) => mockUpdateConfig(...a),
+  },
+  creditLedgerRepository: {
+    findByIdempotencyKey: (...a: unknown[]) => mockFindByIdempotencyKey(...a),
   },
   promoRedemptionsRepository: {
     validate: (...a: unknown[]) => mockValidate(...a),
   },
+  // The REAL derivation shape — a stub that returned a constant would let a key regression
+  // (`manual_purchase:{piId}`) pass unnoticed, and that key is the whole terminal condition.
+  deriveIdempotencyKey: (input: { reason: string; paymentIntentId?: string }) =>
+    `${input.reason}:${input.paymentIntentId ?? ''}`,
 }));
 
 const mockRequireUser = vi.fn();
@@ -81,6 +91,7 @@ import {
   validatePromoAction,
   saveLowBalanceConfigAction,
   nudgeBillingAdminAction,
+  getTopUpCreditStatusAction,
   type StartPurchaseInput,
 } from './actions';
 
@@ -102,6 +113,8 @@ describe('credit actions', () => {
     mockGetCompanyContext.mockResolvedValue({ companyId: 'company-1' });
     mockHasCapability.mockResolvedValue(true);
     mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
+    mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
+    mockFindByIdempotencyKey.mockResolvedValue(undefined);
     mockCreatePurchaseIntent.mockResolvedValue({
       outcome: 'needs_client_confirmation',
       clientSecret: 'pi_secret',
@@ -494,6 +507,97 @@ describe('credit actions', () => {
       });
       expect(res).toEqual({ ok: true });
       expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+  });
+
+  describe('getTopUpCreditStatusAction', () => {
+    it('gates on MANAGE_BILLING and reads nothing', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({ status: 'unauthorized' });
+      expect(mockFindByCompanyId).not.toHaveBeenCalled();
+      expect(mockFindByIdempotencyKey).not.toHaveBeenCalled();
+    });
+
+    it('asks the ledger for the PI-derived manual_purchase key', async () => {
+      await getTopUpCreditStatusAction('pi_abc');
+      expect(mockFindByIdempotencyKey).toHaveBeenCalledWith('manual_purchase:pi_abc');
+    });
+
+    it('returns credited with the ACTOR-OWN wallet balance once the entry lands', async () => {
+      // ⚠ Deliberately NOT `previous + amount + promo` — the standing guard that the answer is a
+      // READ of the wallet, never arithmetic.
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 137_500 });
+      mockFindByIdempotencyKey.mockResolvedValue({ id: 'le_1', walletId: 'wallet-1' });
+
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({
+        status: 'credited',
+        balanceMinor: 137_500,
+      });
+    });
+
+    it('returns pending while the webhook has not posted the entry', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 2_500 });
+      mockFindByIdempotencyKey.mockResolvedValue(undefined);
+
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({
+        status: 'pending',
+        balanceMinor: 2_500,
+      });
+    });
+
+    it('⚠ IDOR — an entry on ANOTHER wallet reads exactly like no entry, and leaks no balance', async () => {
+      // The key is `manual_purchase:{piId}` — derived wholly from caller input, so it is
+      // guessable. A foreign hit must be reported to nobody.
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-mine', balanceMinor: 2_500 });
+      mockFindByIdempotencyKey.mockResolvedValue({
+        id: 'le_other',
+        walletId: 'wallet-someone-else',
+        // Present precisely so the assertion below can prove it never escapes.
+        amountMinor: 999_999,
+      });
+
+      const res = await getTopUpCreditStatusAction('pi_guessed');
+
+      expect(res).toEqual({ status: 'pending', balanceMinor: 2_500 });
+      expect(JSON.stringify(res)).not.toContain('999999');
+      expect(JSON.stringify(res)).not.toContain('wallet-someone-else');
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Top-up credit status asked about a PaymentIntent from another wallet',
+        expect.objectContaining({ companyId: 'company-1', walletId: 'wallet-mine' })
+      );
+    });
+
+    it('⚠ a company with NO wallet row reads pending at 0 — and NEVER mints one', async () => {
+      // `ensureForCompany` is a WRITE, and this read runs ~13 times per receipt. A status check
+      // must not conjure a wallet for a company that never bought anything.
+      mockFindByCompanyId.mockResolvedValue(undefined);
+
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({
+        status: 'pending',
+        balanceMinor: 0,
+      });
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+      // No wallet ⇒ nothing to scope a ledger answer to, so it never asks.
+      expect(mockFindByIdempotencyKey).not.toHaveBeenCalled();
+    });
+
+    it('rejects a structurally invalid id without a DB round-trip', async () => {
+      expect(await getTopUpCreditStatusAction('x'.repeat(256))).toEqual({ status: 'error' });
+      expect(mockFindByCompanyId).not.toHaveBeenCalled();
+    });
+
+    it('logs and returns error — carrying NO balance — when the read throws', async () => {
+      mockFindByIdempotencyKey.mockRejectedValue(new Error('pool exhausted'));
+
+      const res = await getTopUpCreditStatusAction('pi_1');
+
+      // Reporting a DB blip as `balanceMinor: 0` would be the same class of lie the client
+      // arithmetic was.
+      expect(res).toEqual({ status: 'error' });
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Top-up credit status read failed',
+        expect.objectContaining({ error: 'pool exhausted' })
+      );
     });
   });
 

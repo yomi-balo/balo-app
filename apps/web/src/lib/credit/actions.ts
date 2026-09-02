@@ -4,7 +4,9 @@ import { z } from 'zod';
 import {
   db,
   creditWalletsRepository,
+  creditLedgerRepository,
   promoRedemptionsRepository,
+  deriveIdempotencyKey,
   type CreditWallet,
   type PromoValidationReason,
 } from '@balo/db';
@@ -145,6 +147,23 @@ export type StartPurchaseResult =
       /** Stripe's specific refusal reason, when it gave one (`card_declined` only). */
       declineCode?: string;
     };
+
+/**
+ * Did the webhook actually credit THIS purchase yet, and what does the actor's own wallet say?
+ *
+ *  · `unauthorized` — no MANAGE_BILLING (or no session). Terminal; the poll stops.
+ *  · `error`        — a fault we could not read through (invalid input, DB blip). Carries NO
+ *                     balance, deliberately: reporting a transport failure as `0` would be the
+ *                     same class of lie the receipt's client arithmetic was.
+ *  · `pending`      — the wallet is readable but the `manual_purchase:{piId}` ledger entry is
+ *                     not (yet) against it. `balanceMinor` is a real read of the actor's wallet.
+ *  · `credited`     — that entry exists AND belongs to the actor's own wallet.
+ */
+export type TopUpCreditStatusResult =
+  | { status: 'unauthorized' }
+  | { status: 'error' }
+  | { status: 'pending'; balanceMinor: number }
+  | { status: 'credited'; balanceMinor: number };
 
 export type ValidatePromoResult =
   | { ok: true; grantMinor: number }
@@ -394,6 +413,87 @@ export async function startPurchaseAction(
       ok: false,
       error: input.paymentMethodSource === 'saved_card' ? 'saved_card_error' : 'stripe_error',
     };
+  }
+}
+
+/**
+ * Bound the polled PaymentIntent id before it reaches the key derivation. Stripe ids are short
+ * opaque `pi_…` strings; anything outside 1..255 chars is structurally invalid and never worth
+ * a DB round-trip.
+ */
+const paymentIntentIdSchema = z.string().min(1).max(255);
+
+/**
+ * READ-ONLY: has the webhook credited this purchase to the ACTOR'S OWN wallet yet, and what is
+ * that wallet's real balance? Polled by the receipt (`use-topup-credit-poll`).
+ *
+ * ⚠ THIS EXISTS BECAUSE THE RECEIPT USED TO ASSERT A BALANCE IT NEVER READ. It computed
+ * `previous + amount + promo` client-side, so a purchase the webhook never credited rendered
+ * "Your balance is now A$1,000.00" beside a top-bar chip reading A$0.00. Nothing on the client
+ * ever asked the wallet. This is that question — and its answer is always a READ, never
+ * arithmetic. The webhook stays the only writer (BAL-382); this writes nothing.
+ *
+ * ⚠⚠ `findByCompanyId`, NEVER `ensureForCompany`. A POLLED READ MUST NOT MINT A WALLET ROW.
+ * `ensureForCompany` is a write, it runs up to ~13 times per receipt, and a company that never
+ * bought anything would end up with a wallet conjured by a status check. Absence is a legitimate
+ * answer here (`pending`, balance 0) precisely because the purchase path provisions the row.
+ *
+ * ⚠⚠ THE IDOR GUARD IS `entry.walletId === wallet.id`. The ledger key is
+ * `manual_purchase:{paymentIntentId}` — derived entirely from a value the caller supplies, so it
+ * is GUESSABLE. Answering "that key exists" for a key that resolves to somebody else's wallet
+ * would confirm another company's purchase to whoever can reach this action. The answer is
+ * scoped to the actor's own wallet, and a foreign entry is reported to nobody: it reads exactly
+ * like the entry not existing.
+ *
+ * Auth is `requireBillingActor()` → `requireOnboardedUser()` (the fail-closed sibling), so this
+ * needs no `READ_ONLY_ALLOWLIST` entry — that invariant only catches bare `requireUser()`.
+ */
+export async function getTopUpCreditStatusAction(
+  paymentIntentId: string
+): Promise<TopUpCreditStatusResult> {
+  const parsed = paymentIntentIdSchema.safeParse(paymentIntentId);
+  if (!parsed.success) {
+    return { status: 'error' };
+  }
+
+  try {
+    const actor = await requireBillingActor();
+    if (actor === null) {
+      return { status: 'unauthorized' };
+    }
+
+    const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
+    if (wallet === undefined) {
+      // No row yet ⇒ nothing has been credited to this company, and its balance genuinely is 0.
+      return { status: 'pending', balanceMinor: 0 };
+    }
+
+    const entry = await creditLedgerRepository.findByIdempotencyKey(
+      deriveIdempotencyKey({ reason: 'manual_purchase', paymentIntentId: parsed.data })
+    );
+    const credited = entry !== undefined && entry.walletId === wallet.id;
+
+    if (entry !== undefined && !credited) {
+      // Someone asked about a PaymentIntent whose credit landed on a DIFFERENT wallet. Benign
+      // in the normal flow (nothing hands the browser a foreign id), so warn rather than error —
+      // but never silent: this is the one signal that the guessable key is being guessed at.
+      log.warn('Top-up credit status asked about a PaymentIntent from another wallet', {
+        companyId: actor.companyId,
+        walletId: wallet.id,
+      });
+    }
+
+    // ⚠ ALWAYS THE WALLET'S OWN `balanceMinor`, NEVER A SUM. The promo grant commits in the SAME
+    // webhook transaction as the base credit, so once the purchase key is visible this balance
+    // already includes any bonus — and it is still right when the promo was SKIPPED at
+    // settlement, which a sum would not be.
+    return { status: credited ? 'credited' : 'pending', balanceMinor: wallet.balanceMinor };
+  } catch (error) {
+    log.error('Top-up credit status read failed', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { status: 'error' };
   }
 }
 
