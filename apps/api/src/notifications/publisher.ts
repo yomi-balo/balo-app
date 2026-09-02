@@ -28,8 +28,24 @@ import { cancelScheduledNotification, scheduleNotification } from './scheduling/
  * length — `a_:b` → `a___cb`, `a:_b` → `a_c__b`. This is structural, not a property of the
  * reason names that happen to exist today.
  *
- * No stored ids are invalidated by this: every credit publish had been throwing, so none was
- * ever written.
+ * WHOSE STORED IDS THIS CHANGES — checked, not assumed. `toJobId` runs on EVERY event, and
+ * the `_` → `__` half rewrites the id of any correlationId containing an underscore, whether
+ * or not it also contains a colon. That is the same hazard the comment below guards event
+ * names against, so it needed verifying rather than waving through.
+ *
+ * Every production correlationId is one of two shapes: a bare UUID (`randomUUID()`, `z.uuid()`,
+ * an entity id) which contains neither character and is untouched; or a colon-joined key, which
+ * `queue.add` was already REJECTING outright. There is no production correlationId with an
+ * underscore and no colon — so this changes no id that has ever successfully been written.
+ *
+ * ⚠ That also means the colon defect was never credit-only. 17 production publish sites build
+ * colon-joined correlationIds — engagement auto-accept, onboarding reminders, review nudges,
+ * wallet dormancy, all nine credit-session notices, meeting availability, booking cancelled,
+ * the transcript pipeline. None of them has ever delivered.
+ *
+ * ⚠ Do NOT "optimise" this to escape only when a `:` is present. `a_cb` has no colon and would
+ * pass through unchanged, while `a:b` would escape TO `a_cb` — a collision across the two sets.
+ * The escape has to be unconditional to stay injective.
  */
 export function toJobId(event: string, correlationId: string): string {
   // Escape ONLY the correlationId. Event names are a fixed enum that never contains `:`, and
