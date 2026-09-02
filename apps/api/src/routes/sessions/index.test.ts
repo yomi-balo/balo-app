@@ -8,6 +8,7 @@ const {
   mockNudge,
   mockResolveMoneyBlock,
   mockResolveAdminMoneyBlock,
+  mockResolveSessionStatement,
   mockFinalizeExternalDuration,
   mockUsersFindById,
   SessionNotFoundError,
@@ -40,6 +41,7 @@ const {
     mockNudge: vi.fn(),
     mockResolveMoneyBlock: vi.fn(),
     mockResolveAdminMoneyBlock: vi.fn(),
+    mockResolveSessionStatement: vi.fn(),
     mockFinalizeExternalDuration: vi.fn(),
     mockUsersFindById: vi.fn(),
     SessionNotFoundError,
@@ -87,6 +89,7 @@ vi.mock('../../services/credit-session/index.js', () => ({
   nudgeAdminForTopup: mockNudge,
   resolveSessionMoneyBlock: mockResolveMoneyBlock,
   resolveAdminMoneyBlock: mockResolveAdminMoneyBlock,
+  resolveSessionStatement: mockResolveSessionStatement,
   finalizeExternalDuration: mockFinalizeExternalDuration,
 }));
 
@@ -377,6 +380,47 @@ describe('sessions routes', () => {
       mockResolveMoneyBlock.mockRejectedValue(new Error('db down'));
       const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/money-block` });
       expect(res.statusCode).toBe(503);
+    });
+  });
+
+  describe('GET /sessions/:id/statement (BAL-441)', () => {
+    it('200s the resolved lens statement (money + context) on success', async () => {
+      const statement = {
+        lens: 'client',
+        block: { lens: 'client', state: 'finalized', sessionId: SESSION_ID },
+        context: {
+          occurredAtIso: '2026-08-12T10:00:00.000Z',
+          title: 'Static analysis walkthrough',
+          counterparty: { name: 'Priya Sharma', orgLabel: 'CloudPeak Consulting' },
+          meetingId: MEETING_ID,
+          cancelled: false,
+        },
+      };
+      mockResolveSessionStatement.mockResolvedValue({ ok: true, statement });
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(statement);
+      expect(mockResolveSessionStatement).toHaveBeenCalledWith(SESSION_ID, 'user_1');
+    });
+
+    it('400s a non-UUID id', async () => {
+      const res = await app.inject({ method: 'GET', url: `/sessions/not-a-uuid/statement` });
+      expect(res.statusCode).toBe(400);
+      expect(mockResolveSessionStatement).not.toHaveBeenCalled();
+    });
+
+    it('404s (hides existence) when neither a member nor the expert — NEVER a 403', async () => {
+      mockResolveSessionStatement.mockResolvedValue({ ok: false, code: 'not_found' });
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
+      expect(res.statusCode).toBe(404);
+      expect(res.statusCode).not.toBe(403);
+    });
+
+    it('503s (never leaks internals) when resolution throws', async () => {
+      mockResolveSessionStatement.mockRejectedValue(new Error('db down'));
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'statement_unavailable' });
     });
   });
 

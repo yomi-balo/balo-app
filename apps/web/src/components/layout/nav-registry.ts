@@ -386,6 +386,9 @@ const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
 const ENTITY_PARENTS: Readonly<Record<string, NavCrumb>> = {
   cases: { label: 'Consultations', href: '/consultations' },
   meetings: { label: 'Consultations', href: '/consultations' },
+  // BAL-441 — `/sessions/:id/receipt` and `/sessions/:id/payout`. Consistent with `cases` and
+  // `meetings` above: `/consultations` is a "Coming soon" stub, not new debt.
+  sessions: { label: 'Consultations', href: '/consultations' },
   engagements: { label: 'Engagements', href: '/engagements' },
   projects: { label: 'Projects', href: '/projects' },
 };

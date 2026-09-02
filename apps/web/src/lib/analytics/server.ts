@@ -44,6 +44,12 @@ export {
   // facts. NOT in the client `@/lib/analytics` barrel and NOT in `src/test/setup.ts`'s client
   // `vi.mock` list — those are client-only (mirrors WORKSPACE_SERVER_EVENTS above).
   REQUEST_FILE_SERVER_EVENTS,
+  // BAL-441 — the session receipt/payout pages' RSC fires `SESSION_STATEMENT_VIEWED`; their PDF
+  // Route Handlers fire `SESSION_STATEMENT_DOWNLOADED`. Both are `apps/web`-only producers, so
+  // this is the first time `CASE_BILLING_SERVER_EVENTS` joins this app's RSC allowlist. NOT in
+  // the client `@/lib/analytics` barrel and NOT in `src/test/setup.ts`'s client `vi.mock` list —
+  // this family is server-only (`events/case-billing.ts:25-26`).
+  CASE_BILLING_SERVER_EVENTS,
 } from '@balo/analytics/server';
 export type {
   RecapState,
@@ -62,6 +68,12 @@ export type {
   EndOfCallAction,
 } from '@balo/analytics/server';
 export type { EngagementWorkspaceLens, EngagementWorkspaceEntry } from '@balo/analytics/server';
+// BAL-441 — the statement pages' lens/source/state dimensions.
+export type {
+  SessionStatementLens,
+  SessionStatementSource,
+  SessionStatementState,
+} from '@balo/analytics/server';
 
 /**
  * Server-side analytics seam for the web app (RSC / Server Actions). Kept SEPARATE

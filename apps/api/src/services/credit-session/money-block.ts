@@ -21,8 +21,7 @@ import {
 import type { ClientMoneyBlock, ExpertMoneyBlock, AdminMoneyBlock } from '@balo/shared/credit';
 import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
-import { authorizeSessionActor } from './authorize-session-actor.js';
-import { authorizeSessionExpertVisibility } from './authorize-session-expert-visibility.js';
+import { resolveSessionLens } from './resolve-session-lens.js';
 
 const log = createLogger('credit-session');
 
@@ -46,9 +45,15 @@ export async function resolveSessionMoneyBlock(
   sessionId: string,
   userId: string
 ): Promise<ResolveMoneyBlockResult> {
-  // 1. Company member → CLIENT lens.
-  const actor = await authorizeSessionActor({ sessionId, userId });
-  if (actor.ok) {
+  // BAL-441 — THE lens decision, declared ONCE in `resolveSessionLens`. Extracted verbatim so
+  // this route and `GET /sessions/:id/statement` (`resolveSessionStatement`) can never disagree
+  // about who this viewer is. Behaviour/ordering/fail-closed semantics are unchanged.
+  const grant = await resolveSessionLens(sessionId, userId);
+  if (!grant.ok) {
+    return { ok: false, code: 'not_found' };
+  }
+
+  if (grant.lens === 'client') {
     const view = await creditSessionsRepository.findForClientMoneyView(sessionId);
     if (view === undefined) {
       return { ok: false, code: 'not_found' };
@@ -56,20 +61,12 @@ export async function resolveSessionMoneyBlock(
     return { ok: true, block: toClientMoneyBlock(view) };
   }
 
-  // 2. The session's expert (or their agency) → EXPERT lens. `forbidden` on the actor gate means
-  //    "not a company member" — fall through to the expert gate rather than leaking a 403.
-  const expert = await authorizeSessionExpertVisibility({ sessionId, userId });
-  if (expert.ok) {
-    const view = await creditSessionsRepository.findForExpertView(sessionId);
-    if (view === undefined) {
-      return { ok: false, code: 'not_found' };
-    }
-    const payout = await expertPayoutRecordsRepository.findBySession(sessionId);
-    return { ok: true, block: toExpertMoneyBlock(view, payout?.status) };
+  const view = await creditSessionsRepository.findForExpertView(sessionId);
+  if (view === undefined) {
+    return { ok: false, code: 'not_found' };
   }
-
-  // 3. Neither a member nor the expert → hide existence.
-  return { ok: false, code: 'not_found' };
+  const payout = await expertPayoutRecordsRepository.findBySession(sessionId);
+  return { ok: true, block: toExpertMoneyBlock(view, payout?.status) };
 }
 
 /**

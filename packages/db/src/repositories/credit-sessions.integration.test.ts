@@ -17,10 +17,13 @@ import {
   expertPayoutRecords,
   expertProfiles,
   meetings,
+  users,
+  caseEngagements,
   type AuditEvent,
   type NewCreditWallet,
 } from '../schema';
 import {
+  agencyFactory,
   caseEngagementFactory,
   creditWalletFactory,
   expertFactory,
@@ -967,6 +970,123 @@ describe('creditSessionsRepository — money-block lens projections (BAL-399)', 
     expect(view!.baloFeeBps).toBe(DEFAULT_BALO_FEE_BPS);
     expect(view).toHaveProperty('expertAccruedMinor');
     expect(view).toHaveProperty('stripePaymentIntentId');
+  });
+});
+
+// ── BAL-441: the statement-context projected read ───────────────────────────────────────────
+
+describe('creditSessionsRepository.findStatementContext (BAL-441)', () => {
+  it('returns the full context: names, org, case title, meeting/engagement ids', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const agency = await agencyFactory();
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id, type: 'agency' })
+      .where(eq(expertProfiles.id, ctx.expertProfileId));
+    const { engagement } = await caseEngagementFactory({
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      caseValues: { title: 'Static analysis walkthrough' },
+    });
+    const { meeting } = await meetingFactory();
+    const id = await openOk(ctx, 10);
+    await db
+      .update(creditSessions)
+      .set({ meetingId: meeting.id, engagementId: engagement.id })
+      .where(eq(creditSessions.id, id));
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    expect(row).toBeDefined();
+    expect(row!.companyName.length).toBeGreaterThan(0);
+    expect(row!.caseTitle).toBe('Static analysis walkthrough');
+    expect(row!.agencyName).toBe(agency.name);
+    expect(row!.expertProfileType).toBe('agency');
+    expect(row!.meetingId).toBe(meeting.id);
+    expect(row!.expertFirstName).not.toBeNull();
+  });
+
+  it('NULL engagement_id -> caseTitle: null; NULL agency_id -> agencyName: null', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    expect(row).toBeDefined();
+    expect(row!.caseTitle).toBeNull();
+    expect(row!.agencyName).toBeNull();
+    expect(row!.meetingId).toBeNull();
+  });
+
+  // ── Soft-delete on the JOINED tables (security audit). Both predicates live in the join `ON`
+  // clause, never the `WHERE` — in a `WHERE` they would turn each LEFT JOIN into an INNER one and
+  // 404 an otherwise-valid receipt. The stake is not tidiness: without them a closed account's
+  // name and a deleted case's title keep rendering on the receipt AND inside the downloadable
+  // PDF, so personal data survives a deletion signal in a forwardable file.
+  it('a soft-deleted expert USER -> name nulled, but the statement row still resolves', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    const [profile] = await db
+      .select({ userId: expertProfiles.userId })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, ctx.expertProfileId));
+    // Narrow by guard, never `profile!` — SonarCloud analyses without `noUncheckedIndexedAccess`
+    // and reports an index-position non-null assertion as "unnecessary" (a false positive that
+    // still fails the gate). CLAUDE.md: fix by destructure + guard.
+    if (profile === undefined) throw new Error('expected the expert profile row');
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, profile.userId));
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    // The ROW must survive — a deleted expert must not 404 the client's own receipt.
+    expect(row).toBeDefined();
+    expect(row!.expertFirstName).toBeNull();
+    expect(row!.expertLastName).toBeNull();
+  });
+
+  it('a soft-deleted CASE -> caseTitle nulled, but the statement row still resolves', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const { engagement } = await caseEngagementFactory({
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      caseValues: { title: 'Static analysis walkthrough' },
+    });
+    const id = await openOk(ctx, 10);
+    await db
+      .update(creditSessions)
+      .set({ engagementId: engagement.id })
+      .where(eq(creditSessions.id, id));
+
+    // Sanity: the title IS projected before the soft delete, so the assertion below is real.
+    const before = await creditSessionsRepository.findStatementContext(id);
+    expect(before!.caseTitle).toBe('Static analysis walkthrough');
+
+    await db
+      .update(caseEngagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(caseEngagements.engagementId, engagement.id));
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    expect(row).toBeDefined();
+    expect(row!.caseTitle).toBeNull();
+  });
+
+  it('a soft-deleted session -> undefined', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await db.update(creditSessions).set({ deletedAt: new Date() }).where(eq(creditSessions.id, id));
+
+    expect(await creditSessionsRepository.findStatementContext(id)).toBeUndefined();
+  });
+
+  it('the row carries NO rate, email, or workosId key (fee/PII projection boundary)', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    const row = await creditSessionsRepository.findStatementContext(id);
+    expect(row).toBeDefined();
+    const keys = Object.keys(row!);
+    for (const banned of ['rateCents', 'email', 'workosId', 'expertAccruedMinor', 'baloFeeBps']) {
+      expect(keys).not.toContain(banned);
+    }
   });
 });
 

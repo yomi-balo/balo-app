@@ -1,9 +1,12 @@
 'use client';
 
 import { useEffect } from 'react';
+import Link from 'next/link';
 import { Loader2, Receipt, ArrowUpRight } from 'lucide-react';
 import type { SessionMoneyBlock } from '@balo/shared/credit';
+import { durationLine, finalizedAmountMinor } from '@balo/shared/credit';
 import { track, CASE_BILLING_EVENTS } from '@/lib/analytics';
+import { formatAud } from '@/lib/credit/display-constants';
 
 /**
  * BAL-399 — the recap MONEY-BLOCK fragment (ADR-1043 layer split). Presentational; renders the
@@ -26,82 +29,22 @@ interface MoneyBlockProps {
   elapsedMinutes?: number;
 }
 
-/** AUD minor units → `A$150.00` (thousands-grouped, two fraction digits). */
-function formatAud(minor: number): string {
-  return `A$${(minor / 100).toLocaleString('en-AU', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
 /**
  * Lens-derived copy so the render stays branch-free (no nested ternaries).
  *
  * ⚠⚠ `finalizedLabel` IS WHAT MAKES THE FIGURE MEAN SOMETHING. Suppressing the
  * receipt/payout ANCHOR (BAL-388, D-C — no `/sessions/:id/receipt` or `/sessions/:id/payout`
- * route exists) also removed the only TEXT attached to the number: the meta line rendered an
+ * route existed) also removed the only TEXT attached to the number: the meta line rendered an
  * `aria-hidden` icon and a bare `A$150.00`, so a screen reader announced the single most
  * consequential fact on the recap with no context at all, and a sighted expert had no clue the
  * figure was earnings. D-C required dropping the LINK, not the MEANING — so the label is now
- * rendered as muted text beside the amount. The anchor stays suppressed.
+ * rendered as muted text beside the amount. BAL-441 restores the link (see
+ * {@link MoneyBlockFinalized}); the label stays exactly where BAL-388 put it.
  */
 const LENS_COPY = {
   client: { Icon: Receipt, pendingLabel: 'Charge pending', finalizedLabel: 'Charged' },
   expert: { Icon: ArrowUpRight, pendingLabel: 'Payout pending', finalizedLabel: 'Your payout' },
 } as const;
-
-/** The own-side finalized amount for the lens (client all-in vs expert earnings). */
-function finalizedAmountMinor(block: SessionMoneyBlock): number {
-  return block.lens === 'client' ? block.amountAudMinor : block.earningsAudMinor;
-}
-
-/**
- * BAL-412 (D13, plan §7.3) — the finalized duration line. `money-block.tsx` never read
- * `block.durationMinutes` before this ticket; the finalized branch had no duration slot at all.
- * Keyed on `settlementShape` FIRST (the two zero shapes have no number to attach — there is
- * nothing to floor when nobody was charged) and on `billingFloorApplied` second. `no_show_client`
- * is checked ahead of `billingFloorApplied` — that shape now ALWAYS sets the flag (the floor is
- * flatly the whole charge, owner ruling 2026-08-21), but it wants its own "min held" phrasing
- * rather than the generic short-call one, so it must be matched first.
- *
- * Quiet fact, never punitive, never scolding, gender-neutral, no absence framing — the same
- * register as the booking-flow billing line.
- *
- * ⚠ MJ COPY CHECKPOINT — all six strings below are pending MJ sign-off (flagged in the PR body).
- * ⚠ D12.3 — this stays INSIDE `money-block.tsx`, not a shared helper: extracting it would trip
- * `apps/web/src/invariants/no-money-block-in-call.test.ts`, which scans for the substring
- * `recap/money-block` across the live-call render tree.
- */
-function durationLine(block: SessionMoneyBlock): string {
-  if (block.settlementShape === 'missed_call') {
-    return block.lens === 'client'
-      ? "Not charged — your consultant didn't join this time" // pending-MJ
-      : "No earnings recorded — the call didn't take place"; // pending-MJ
-  }
-  if (block.settlementShape === 'abandoned_wait') {
-    // F12(b), UX review round 1 — `actualMinutes` (the real connected time before the
-    // session was abandoned) is deliberately NOT surfaced here: "Not charged"/"No earnings
-    // recorded" plus a partial-minute figure reads as more detail than an abandoned session
-    // warrants. Revisit if MJ copy sign-off disagrees.
-    return block.lens === 'client' ? 'Not charged' : 'No earnings recorded'; // pending-MJ
-  }
-  if (block.settlementShape === 'no_show_client') {
-    // F9, UX review round 1 — `actualMinutes`, not `durationMinutes`: `durationMinutes` is the
-    // BILLED figure, which on this shape is FLATLY the floor (owner ruling 2026-08-21), so it
-    // would state the floor twice while discarding the real time the expert held the room.
-    // "40 min held · billed at the 15-minute minimum" is now a TRUE statement — before R1 the
-    // client was actually charged 40 while this line claimed 15.
-    return block.lens === 'client'
-      ? `${block.actualMinutes} min held · billed at the ${block.billingFloorMinutes}-minute minimum` // pending-MJ
-      : `${block.actualMinutes} min held · paid the ${block.billingFloorMinutes}-minute minimum`; // pending-MJ
-  }
-  if (block.billingFloorApplied) {
-    return block.lens === 'client'
-      ? `${block.actualMinutes} min · billed at the ${block.billingFloorMinutes}-minute minimum` // pending-MJ
-      : `${block.actualMinutes} min · paid the ${block.billingFloorMinutes}-minute minimum`; // pending-MJ
-  }
-  return `${block.durationMinutes} min`; // pending-MJ
-}
 
 /** Skeleton pill (loading). */
 function MoneyBlockSkeleton() {
@@ -158,15 +101,43 @@ function MoneyBlockPending({
   );
 }
 
+/** `/sessions/{id}/receipt|payout?from=money_block` — the ONE producer of the `money_block` source. */
+function statementHref(block: SessionMoneyBlock): string {
+  const segment = block.lens === 'client' ? 'receipt' : 'payout';
+  return `/sessions/${block.sessionId}/${segment}?from=money_block`;
+}
+
 /**
- * Finalized — the own-side figure, as PLAIN TEXT.
+ * Finalized — the own-side figure.
  *
- * ⚠ NO RECEIPT/PAYOUT ANCHOR (BAL-388, D-C). See {@link LENS_COPY}: the `/sessions/:id/receipt`
- * and `/sessions/:id/payout` routes do not exist, so the anchor was a link to nowhere. The
- * FIGURE — the thing a client or expert actually came for — is unchanged.
+ * ⚠⚠ BAL-441 RESTORES THE RECEIPT/PAYOUT ANCHOR BAL-388 SUPPRESSED (D-C — the routes now
+ * exist). The label survives, OUTSIDE the link, exactly where BAL-388 put it: a sighted user
+ * reads "Charged, A$150.00" with the label as plain context; a screen reader announces
+ * "Charged, link, A$150.00" — the label precedes the link in the DOM, so it is read as context
+ * immediately before the link's own accessible name, with no `aria-label` override that would
+ * duplicate the string in a second place it could drift. THE AMOUNT ITSELF IS THE LINK — no
+ * third word is appended, so the flagged "Charged A$150.00 receipt" reading cannot occur.
+ *
+ * ⚠⚠ D-A — THE TWO ZERO-MONEY SHAPES (`missed_call` / `abandoned_wait`) RENDER THE STATEMENT
+ * ONLY, NO LABEL, NO AMOUNT, NO ANCHOR. Shipped before this ticket, `missed_call` rendered
+ * "[icon] Charged A$0.00 Not charged — your consultant didn't join this time": the label and
+ * the amount flatly contradicted the sentence beside them, and no test caught it because none
+ * asserted the amount on those fixtures. There is also nothing to link to — the receipt/payout
+ * page for these shapes has no money region to land on (plan §7.4, §9 state 8/9).
  */
 function MoneyBlockFinalized({ block }: Readonly<{ block: SessionMoneyBlock }>) {
   const { Icon, finalizedLabel } = LENS_COPY[block.lens];
+  const line = durationLine(block);
+
+  if (block.settlementShape === 'missed_call' || block.settlementShape === 'abandoned_wait') {
+    return (
+      <span className="text-muted-foreground inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
+        <Icon size={14} aria-hidden="true" />
+        <span>{line}</span>
+      </span>
+    );
+  }
+
   return (
     // F10, UX review round 1 — `flex-wrap` (was a rigid single-row `inline-flex`) so the
     // BAL-412 duration line can drop onto its own row instead of overflowing/clipping at
@@ -175,8 +146,13 @@ function MoneyBlockFinalized({ block }: Readonly<{ block: SessionMoneyBlock }>) 
     <span className="text-foreground inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
       <Icon size={14} className="text-muted-foreground" aria-hidden="true" />
       <span className="text-muted-foreground">{finalizedLabel}</span>
-      <span className="font-mono tabular-nums">{formatAud(finalizedAmountMinor(block))}</span>
-      <span className="text-muted-foreground">{durationLine(block)}</span>
+      <Link
+        href={statementHref(block)}
+        className="decoration-muted-foreground/40 hover:decoration-foreground focus-visible:ring-ring rounded-sm font-mono tabular-nums underline underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+      >
+        {formatAud(finalizedAmountMinor(block))}
+      </Link>
+      <span className="text-muted-foreground">{line}</span>
     </span>
   );
 }
@@ -199,4 +175,8 @@ export function MoneyBlock({
   return <MoneyBlockFinalized block={block} />;
 }
 
+// `formatAud` re-exported unchanged so `cases/[engagementId]/_components/case-earnings-block.tsx`
+// (and any other existing importer of this module's `formatAud`) is untouched — BAL-441 repoints
+// the IMPLEMENTATION to `@/lib/credit/display-constants` (one fewer byte-identical copy of three)
+// without moving the export itself.
 export { formatAud };

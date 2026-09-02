@@ -371,6 +371,7 @@ export {
   type MarkSettlementResultInput,
   type ClientSessionView,
   type CaseExpertEarningsAggregate,
+  type SessionStatementContextRow,
 } from './credit-sessions';
 export {
   creditReceivablesRepository,

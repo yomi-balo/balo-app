@@ -9,10 +9,15 @@ const nextConfig = {
   // BAL-385: the proposal-PDF Route Handler embeds Geist from disk at render time
   // (react-pdf can only use fonts it reads). These .ttf assets aren't statically
   // analyzable by file tracing, so include them explicitly in the function bundle.
+  // BAL-441 reuses the same font files for the session receipt/payout PDFs — same landmine,
+  // same fix: omitting a route here ships a PDF route that 500s on Vercel only (every local
+  // gate passes without this).
   outputFileTracingIncludes: {
     '/projects/[requestId]/proposal/[relationshipId]/pdf': [
       './src/lib/project-request/proposal/pdf/fonts/*.ttf',
     ],
+    '/sessions/[sessionId]/receipt/pdf': ['./src/lib/project-request/proposal/pdf/fonts/*.ttf'],
+    '/sessions/[sessionId]/payout/pdf': ['./src/lib/project-request/proposal/pdf/fonts/*.ttf'],
   },
   env: {
     NEXT_PUBLIC_APP_VERSION: process.env.npm_package_version || '0.0.0',

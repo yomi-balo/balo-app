@@ -26,6 +26,7 @@ import {
   openSession,
   resolveAdminMoneyBlock,
   resolveSessionMoneyBlock,
+  resolveSessionStatement,
   type OpenSessionServiceErrorCode,
   type SessionActorErrorCode,
 } from '../../services/credit-session/index.js';
@@ -213,6 +214,37 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
       }
     }
   );
+
+  // GET /sessions/:id/statement — BAL-441. Same fail-closed lens as /money-block (ONE resolver,
+  // `resolveSessionLens`), plus the receipt-only context (date, subject, counterparty, back-link,
+  // payout reference). NEVER serves the admin lens.
+  fastify.get('/sessions/:id/statement', { preHandler: [requireAuth] }, async (request, reply) => {
+    const userId = resolveUserId(request, reply);
+    if (userId === null) return;
+    const sessionId = parseSessionId(request, reply);
+    if (sessionId === null) return;
+
+    try {
+      const result = await resolveSessionStatement(sessionId, userId);
+      if (!result.ok) {
+        // Existence is hidden — NEVER 403. A 403 would confirm the session exists to a
+        // stranger, exactly the leak `resolveSessionLens` exists to prevent.
+        reply.code(404).send({ error: 'session_not_found' });
+        return;
+      }
+      reply.code(200).send(result.statement);
+    } catch (error) {
+      log.error(
+        {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+        'Failed to resolve session statement'
+      );
+      reply.code(503).send({ error: 'statement_unavailable' });
+    }
+  });
 
   // GET /admin/sessions/:id/money-block — BAL-399 ADMIN (margin-bearing) lens. Platform-staff
   // ONLY (hasPlatformCapability, ADR-1035). Never reachable by a company member or expert.

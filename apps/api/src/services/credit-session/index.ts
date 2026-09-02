@@ -31,6 +31,11 @@ export {
   type ResolveMoneyBlockResult,
   type ResolveAdminMoneyBlockResult,
 } from './money-block.js';
+export { resolveSessionLens, type SessionLensGrant } from './resolve-session-lens.js';
+export {
+  resolveSessionStatement,
+  type ResolveSessionStatementResult,
+} from './session-statement.js';
 export {
   settlementIdempotencyKey,
   ceilingRoomMinor,

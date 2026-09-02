@@ -191,11 +191,6 @@ describe('MoneyBlock', () => {
     expect(screen.queryByText('Charged')).not.toBeInTheDocument();
   });
 
-  it('renders NO receipt/payout anchor at all (the /sessions routes do not exist)', () => {
-    const { container } = render(<MoneyBlock block={CLIENT_FINALIZED} />);
-    expect(container.querySelectorAll('a')).toHaveLength(0);
-  });
-
   it('renders the client all-in charge when finalized', () => {
     render(<MoneyBlock block={CLIENT_FINALIZED} />);
     expect(screen.getByText(/^A\$150\.00$/)).toBeInTheDocument();
@@ -209,23 +204,68 @@ describe('MoneyBlock', () => {
     expect(screen.queryByText(/^A\$150\.00$/)).not.toBeInTheDocument();
   });
 
-  // ── BAL-388, D-C — the dead receipt/payout anchor is SUPPRESSED ────────────────────────
-  //
-  // No `/sessions` route exists anywhere under `apps/web/src/app`, and the recap page is the
-  // first surface that would put this link in front of a user. The FIGURE stays; the ANCHOR
-  // goes. These two assertions are what stop it silently coming back.
-  it('renders NO anchor at all in the finalized state (client lens)', () => {
-    const { container } = render(<MoneyBlock block={CLIENT_FINALIZED} />);
-    expect(screen.queryAllByRole('link')).toHaveLength(0);
-    expect(container.querySelectorAll('a')).toHaveLength(0);
+  // ── BAL-441 — the receipt/payout anchor is RESTORED (BAL-388 suppressed it; the routes now
+  // exist). The amount itself is the link; the label stays outside it. ─────────────────────
+  it('restores the anchor on the client lens: exact href + the amount as its accessible name', () => {
+    render(<MoneyBlock block={CLIENT_FINALIZED} />);
+    const link = screen.getByRole('link', { name: 'A$150.00' });
+    expect(link).toHaveAttribute('href', '/sessions/session_1/receipt?from=money_block');
   });
 
-  it('emits no /sessions/ href on either lens', () => {
-    const client = render(<MoneyBlock block={CLIENT_FINALIZED} />);
-    expect(client.container.innerHTML).not.toContain('/sessions/');
+  it('restores the anchor on the expert lens: exact href + the amount as its accessible name', () => {
+    render(<MoneyBlock block={EXPERT_FINALIZED} />);
+    const link = screen.getByRole('link', { name: 'A$112.50' });
+    expect(link).toHaveAttribute('href', '/sessions/session_1/payout?from=money_block');
+  });
+
+  it('restores the anchor on a floor-applied session, both lenses', () => {
+    const client = render(<MoneyBlock block={CLIENT_FLOOR_APPLIED} />);
+    expect(screen.getByRole('link', { name: 'A$50.00' })).toHaveAttribute(
+      'href',
+      '/sessions/session_1/receipt?from=money_block'
+    );
     client.unmount();
-    const expert = render(<MoneyBlock block={EXPERT_FINALIZED} />);
-    expect(expert.container.innerHTML).not.toContain('/sessions/');
+    render(<MoneyBlock block={EXPERT_FLOOR_APPLIED} />);
+    expect(screen.getByRole('link', { name: 'A$37.50' })).toHaveAttribute(
+      'href',
+      '/sessions/session_1/payout?from=money_block'
+    );
+  });
+
+  it('restores the anchor on a no_show_client session, both lenses', () => {
+    const client = render(<MoneyBlock block={CLIENT_NO_SHOW} />);
+    expect(screen.getByRole('link', { name: 'A$50.00' })).toBeInTheDocument();
+    client.unmount();
+    render(<MoneyBlock block={EXPERT_NO_SHOW} />);
+    expect(screen.getByRole('link', { name: 'A$37.50' })).toBeInTheDocument();
+  });
+
+  it('the label precedes the link in the DOM — no third word, no aria-label duplication', () => {
+    const { container } = render(<MoneyBlock block={CLIENT_FINALIZED} />);
+    expect(container.textContent).toBe('ChargedA$150.0045 min');
+    const link = screen.getByRole('link', { name: 'A$150.00' });
+    expect(link).not.toHaveAttribute('aria-label');
+  });
+
+  // ── D-A — the two ZERO-MONEY shapes render NO currency and NO anchor, on EITHER lens ────
+  it('renders NO currency string and NO anchor for missed_call, on either lens', () => {
+    const client = render(<MoneyBlock block={CLIENT_MISSED_CALL} />);
+    expect(client.container.textContent).not.toContain('A$');
+    expect(client.container.querySelectorAll('a')).toHaveLength(0);
+    client.unmount();
+    const expert = render(<MoneyBlock block={EXPERT_MISSED_CALL} />);
+    expect(expert.container.textContent).not.toContain('A$');
+    expect(expert.container.querySelectorAll('a')).toHaveLength(0);
+  });
+
+  it('renders NO currency string and NO anchor for abandoned_wait, on either lens', () => {
+    const client = render(<MoneyBlock block={CLIENT_ABANDONED_WAIT} />);
+    expect(client.container.textContent).not.toContain('A$');
+    expect(client.container.querySelectorAll('a')).toHaveLength(0);
+    client.unmount();
+    const expert = render(<MoneyBlock block={EXPERT_ABANDONED_WAIT} />);
+    expect(expert.container.textContent).not.toContain('A$');
+    expect(expert.container.querySelectorAll('a')).toHaveLength(0);
   });
 
   it('formats the currency with font-mono tabular-nums (aligned columns, both themes)', () => {

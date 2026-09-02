@@ -26,6 +26,8 @@ describe('CASE_BILLING_SERVER_EVENTS (server)', () => {
       'CASE_BILLING_FINALIZED',
       'CASE_OVERDRAFT_GRACE_USED',
       'EXPERT_PAYOUT_RECORDED',
+      'SESSION_STATEMENT_VIEWED',
+      'SESSION_STATEMENT_DOWNLOADED',
     ]);
   });
 
@@ -33,6 +35,10 @@ describe('CASE_BILLING_SERVER_EVENTS (server)', () => {
     expect(CASE_BILLING_SERVER_EVENTS.CASE_BILLING_FINALIZED).toBe('case_billing_finalized');
     expect(CASE_BILLING_SERVER_EVENTS.CASE_OVERDRAFT_GRACE_USED).toBe('case_overdraft_grace_used');
     expect(CASE_BILLING_SERVER_EVENTS.EXPERT_PAYOUT_RECORDED).toBe('expert_payout_recorded');
+    expect(CASE_BILLING_SERVER_EVENTS.SESSION_STATEMENT_VIEWED).toBe('session_statement_viewed');
+    expect(CASE_BILLING_SERVER_EVENTS.SESSION_STATEMENT_DOWNLOADED).toBe(
+      'session_statement_downloaded'
+    );
   });
 
   it('values follow the snake_case naming convention', () => {

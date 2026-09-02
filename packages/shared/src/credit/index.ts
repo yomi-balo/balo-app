@@ -49,3 +49,11 @@ export {
   type ExpertMoneyBlockInput,
   type AdminMoneyBlockInput,
 } from './money-block';
+export { durationLine, finalizedAmountMinor } from './money-block-display';
+export {
+  type SessionStatementCounterparty,
+  type ClientSessionStatementContext,
+  type ExpertPayoutReference,
+  type ExpertSessionStatementContext,
+  type SessionStatement,
+} from './session-statement';
