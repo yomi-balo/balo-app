@@ -425,7 +425,7 @@ export async function retrieveSettlement(
     // NOT the race: we asked for the expansion and got a bare id back, so re-reading returns
     // the identical response. Fail immediately and with a distinct message — polling here
     // would burn the delay budget on a condition that can never resolve itself.
-    throw new Error(
+    throw new TypeError(
       `Charge ${chargeId} returned an un-expanded balance_transaction (expand was not applied)`
     );
   }

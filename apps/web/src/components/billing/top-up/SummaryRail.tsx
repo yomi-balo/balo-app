@@ -129,7 +129,7 @@ export function SummaryRail({
           >
             Talk to us
           </a>
-          .
+          {'.'}
         </p>
       </div>
     </div>

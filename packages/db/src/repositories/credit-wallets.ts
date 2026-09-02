@@ -245,7 +245,7 @@ export const creditWalletsRepository = {
         stripePaymentMethodId: input.stripePaymentMethodId,
         mandateRef: input.mandateRef,
         mandateStatus: input.mandateStatus,
-        ...(input.card === undefined ? {} : input.card),
+        ...(input.card ?? {}),
       })
       .where(eq(creditWallets.id, input.walletId))
       .returning();

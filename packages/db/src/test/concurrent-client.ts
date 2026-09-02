@@ -1,9 +1,9 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from '../schema';
-import { _setDb, type Database } from '../client';
+import { type Database } from '../client';
 
-export { _setDb };
+export { _setDb } from '../client';
 
 /**
  * THE ESCAPE HATCH FROM `setup-integration.ts`.
