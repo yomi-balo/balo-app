@@ -993,13 +993,17 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
 
       expect(res.statusCode).toBe(200);
       expect(mockMarkTranscriptJobFinished).not.toHaveBeenCalled();
-      expect(mockWarn).toHaveBeenCalledWith(
+      // ⚠ BAL-518 (FIX ROUND 3) — `info`, not `warn`. Once a Daily webhook subscription targets
+      // `/webhooks/daily` alongside the legacy Bubble one, Bubble's own batch-processor events
+      // will ROUTINELY resolve to no row on our side — expected traffic, not an anomaly.
+      expect(mockInfoLog).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'batch-processor.job-finished' }),
         expect.stringContaining('no row')
       );
+      expect(mockWarn).not.toHaveBeenCalled();
     });
 
-    it('unresolvable to any row ⇒ log.warn + 200, no effect', async () => {
+    it('unresolvable to any row ⇒ log.info + 200, no effect (BAL-518 — routine Bubble traffic, not warn)', async () => {
       mockFindByTranscriptJobId.mockResolvedValue(undefined);
       const payload = batchPayload();
 
@@ -1012,10 +1016,11 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
 
       expect(res.statusCode).toBe(200);
       expect(mockMarkTranscriptJobFinished).not.toHaveBeenCalled();
-      expect(mockWarn).toHaveBeenCalledWith(
+      expect(mockInfoLog).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'batch-processor.job-finished' }),
         expect.stringContaining('no row')
       );
+      expect(mockWarn).not.toHaveBeenCalled();
     });
 
     it('batch-processor.error → markTranscriptJobFailed + TRANSCRIPT_CAPTURE_FAILED with reason vendor_reported — NEVER the vendor text', async () => {

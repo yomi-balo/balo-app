@@ -374,7 +374,11 @@ async function resolveEffect(event: DailyWebhookEvent): Promise<DailyWebhookEffe
   if (event.kind === 'batch-processor.job-finished' || event.kind === 'batch-processor.error') {
     const recording = await resolveBatchRecordingRow(event);
     if (recording === undefined) {
-      log.warn(
+      // ⚠ BAL-518 — `info`, NOT `warn`. There is currently no Daily webhook subscription
+      // targeting `/webhooks/daily` at all; once one exists alongside the legacy Bubble
+      // subscription, Bubble's OWN batch-processor events will routinely resolve to no row on
+      // our side — that is expected traffic on a shared vendor endpoint, not an anomaly.
+      log.info(
         { eventType: event.type, eventId: event.eventId },
         'Daily batch-processor webhook resolved to no row — acking with no effect'
       );

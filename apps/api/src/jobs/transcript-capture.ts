@@ -463,6 +463,7 @@ async function reportCaptureFailure(
   err: unknown
 ): Promise<void> {
   const row = await meetingRecordingsRepository.findById(recordingId).catch(() => undefined);
+  const reason = sanitizedErrorMessage(err);
   // ⚠⚠ FIX ROUND 1 (M8) — STAMP THE ROW, mirroring `recording-ingest.ts`'s `reportIngestFailure`
   // (`markFailed({ id: recordingId, ... })`, called on `recordingId` itself, BEFORE the row
   // lookup is even checked). Without this, a terminal capture failure left NOTHING durable on
@@ -470,19 +471,54 @@ async function reportCaptureFailure(
   // from "this segment never got that far". Sanitized (`lib/sanitize-error.ts`) — an artefact-
   // fetch or Daily error can echo a signed URL.
   //
-  // ⚠ FOR THE 'artefact_fetch' STAGE THIS CAS TYPICALLY NO-OPS, AND THAT IS CORRECT, NOT A BUG:
-  // by the time `ingest` ever runs, `transcript_job_finished_at` is already stamped by the
-  // `batch-processor.job-finished` webhook (first-terminal-wins — see `markTranscriptJobFailed`'s
-  // own docblock), so this write protects Daily's own SUCCESS stamp from being overwritten by
-  // OUR post-processing failure. It reliably closes the gap for a terminal 'batch_submit'
-  // failure, where `finished_at` is genuinely still NULL.
-  await meetingRecordingsRepository
-    .markTranscriptJobFailed({
-      id: recordingId,
-      reason: sanitizedErrorMessage(err),
-      at: new Date(),
-    })
-    .catch(() => undefined);
+  // ⚠⚠ FIX ROUND 3 — THE WRITE SPLITS ON `stage`, AND THAT SPLIT IS THE FIX. A single shared
+  // `markTranscriptJobFailed` call used to run for EVERY terminal stage, and that unconditionally
+  // stamps `transcript_job_finished_at` — correct once a vendor job genuinely exists and just
+  // failed, WRONG for `batch_submit`. At that stage no vendor job was ever created (the `POST
+  // /batch-processor` call is what just failed), or — the rare accepted-window race
+  // `handleSubmit`'s own docblock names — one WAS created but `markTranscriptJobSubmitted` never
+  // recorded it. Either way `transcript_job_submitted_at` is still NULL, so stamping
+  // `finished_at` here would CLAIM A TERMINAL VENDOR STATE THAT NEVER HAPPENED — a lie that used
+  // to poison the row permanently: the `recording-cleanup-source` withhold gate could never hold
+  // for it again, a later MANUAL re-submit would stamp `submitted_at` only for the genuine
+  // `batch-processor.job-finished` webhook to then find `finished_at` already claimed and
+  // NO-OP — `recordingTransitioned: false`, so no ingest was ever enqueued and the transcript
+  // was silently lost. See {@link meetingRecordingsRepository.markTranscriptJobSubmitFailed}'s
+  // own docblock for the full account; THIS was the defect, and this split is the fix.
+  if (stage === 'batch_submit') {
+    // Records the reason WITHOUT claiming a terminal vendor state: writes ONLY
+    // `failure_reason`, so the row stays exactly where a genuine future submit attempt or
+    // webhook expects to find it — still able to reach `finished_at` for the first time.
+    await meetingRecordingsRepository
+      .markTranscriptJobSubmitFailed({ id: recordingId, reason })
+      .catch(() => undefined);
+  } else {
+    // ⚠ FOR THE 'artefact_fetch' STAGE THIS CAS TYPICALLY NO-OPS, AND THAT IS CORRECT, NOT A BUG:
+    // by the time `ingest` ever runs, `transcript_job_finished_at` is already stamped by the
+    // `batch-processor.job-finished` webhook (first-terminal-wins — see `markTranscriptJobFailed`'s
+    // own docblock), so this write protects Daily's own SUCCESS stamp from being overwritten by
+    // OUR post-processing failure.
+    //
+    // ⚠⚠ RESIDUAL (FIX ROUND 3, stated not fixed — mirrors `recording-cleanup-source.ts`'s
+    // residuals block). BECAUSE THIS CAS NO-OPS, `failure_reason` stays NULL — an `artefact_fetch`
+    // terminal failure leaves NO durable mark on the row at all. That makes it INDISTINGUISHABLE,
+    // from this column alone, from "M1's empty-transcript skip" (also no failure_reason, also a
+    // finished row with no transcript) or "the pipeline never ran". Query shape for ops to find
+    // the CANDIDATES (still requires cross-referencing `TRANSCRIPT_CAPTURE_SKIPPED` /
+    // `empty_transcript` in PostHog to rule the legitimate skips back out):
+    //   SELECT mr.id, mr.meeting_id, mr.transcript_job_id, mr.transcript_job_finished_at
+    //     FROM meeting_recordings mr
+    //    WHERE mr.transcript_job_finished_at IS NOT NULL
+    //      AND mr.transcript_job_failure_reason IS NULL
+    //      AND mr.deleted_at IS NULL
+    //      AND NOT EXISTS (
+    //        SELECT 1 FROM transcripts t
+    //         WHERE t.capture_id = 'daily-batch:' || mr.transcript_job_id
+    //      );
+    await meetingRecordingsRepository
+      .markTranscriptJobFailed({ id: recordingId, reason, at: new Date() })
+      .catch(() => undefined);
+  }
   if (row === undefined) {
     log.error(
       { recordingId, stage },

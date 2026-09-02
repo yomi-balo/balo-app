@@ -119,6 +119,19 @@ export interface MarkTranscriptJobSubmittedInput {
 }
 
 /**
+ * {@link meetingRecordingsRepository.markTranscriptJobSubmitFailed} — BAL-483 FIX ROUND 3, B1e:
+ * a PRE-submission terminal failure of the `transcript-capture` submit job (stage
+ * `batch_submit`) — the `POST /batch-processor` call itself failed, or its synchronous
+ * response was never recorded. See the mutator's own docblock for why this is a SEPARATE
+ * write from {@link meetingRecordingsRepository.markTranscriptJobFailed}, never a shared one.
+ */
+export interface MarkTranscriptJobSubmitFailedInput {
+  id: string;
+  /** ⚠ Capped at {@link FAILURE_REASON_MAX_LENGTH} by this repository, never by the caller. */
+  reason: string;
+}
+
+/**
  * {@link meetingRecordingsRepository.markTranscriptJobFinished} — BAL-483 B2t, from the
  * `batch-processor.job-finished` webhook arm.
  */
@@ -184,15 +197,24 @@ export interface FindMeetingRecordingInput {
  * late vendor error cannot un-publish a segment BAL-440 is already rendering.
  *
  * ⚠⚠ BAL-483 ADDS A SECOND, ORTHOGONAL SUB-LIFECYCLE ON THE SAME ROW — AND IT NEVER TOUCHES
- * `status`. The three `markTranscriptJob*` mutators below move only the four
+ * `status`. The four `markTranscriptJob*` mutators below move only the four
  * `transcript_job_*` columns:
  *
- *   (none)    → submitted   markTranscriptJobSubmitted   B1   (CAS on submitted_at IS NULL)
- *   submitted → finished    markTranscriptJobFinished    B2t  (CAS on finished_at IS NULL)
- *   submitted → finished    markTranscriptJobFailed      B2e  (same CAS, + a reason)
+ *   (none)    → submitted   markTranscriptJobSubmitted     B1   (CAS on submitted_at IS NULL)
+ *   (none)    → (none)      markTranscriptJobSubmitFailed  B1e  (FIX ROUND 3 — CAS on
+ *                                                                 finished_at IS NULL; a
+ *                                                                 PRE-submission failure, so it
+ *                                                                 writes ONLY `failure_reason`
+ *                                                                 and deliberately does NOT
+ *                                                                 advance the ladder — see its
+ *                                                                 own docblock for why stamping
+ *                                                                 `finished_at` here would be a
+ *                                                                 permanent dead end)
+ *   submitted → finished    markTranscriptJobFinished      B2t  (CAS on finished_at IS NULL)
+ *   submitted → finished    markTranscriptJobFailed        B2e  (same CAS, + a reason)
  *
  * A FAILED TRANSCRIPTION IS NOT A FAILED RECORDING. The recording is still playable, so
- * `status` / `failed_stage` / `failure_reason` are deliberately left alone by all three — a
+ * `status` / `failed_stage` / `failure_reason` are deliberately left alone by all four — a
  * Deepgram error must not un-publish a segment, nor break `markSourceDeleted`'s `status =
  * 'ready'` term. Conversely nothing in T1–T10 reads or writes the transcript columns, so the
  * two ladders can interleave in any order.
@@ -778,6 +800,61 @@ export const meetingRecordingsRepository = {
           eq(meetingRecordings.id, input.id),
           isNull(meetingRecordings.deletedAt),
           isNull(meetingRecordings.transcriptJobSubmittedAt)
+        )
+      )
+      .returning();
+    return row;
+  },
+
+  /**
+   * B1e (BAL-483 FIX ROUND 3) — RECORD A PRE-SUBMISSION FAILURE WITHOUT CLAIMING A TERMINAL
+   * VENDOR STATE. Called when the `transcript-capture` submit job (`handleSubmit`) exhausts
+   * its retries at the `batch_submit` stage: no vendor job was ever created (the `POST
+   * /batch-processor` call is what failed), or — the rare accepted-window race
+   * `handleSubmit`'s own docblock names — one WAS created but `markTranscriptJobSubmitted`
+   * never recorded it before every retry also failed.
+   *
+   * CAS: `id = $ AND deleted_at IS NULL AND transcript_job_finished_at IS NULL`.
+   *
+   * ⚠⚠ WRITES `failure_reason` ONLY. IT DOES NOT TOUCH `transcript_job_finished_at` — and that
+   * omission IS the fix. {@link meetingRecordingsRepository.markTranscriptJobFailed}
+   * unconditionally stamps `finished_at`, which is correct once a vendor job genuinely exists
+   * and has reached a terminal state, but WRONG here: `transcript_job_submitted_at` is still
+   * NULL on this row, so stamping `finished_at` would assert a terminal vendor state that never
+   * happened. That lie used to poison the row permanently:
+   *   1. `recording-cleanup-source`'s withhold gate (`submitted_at IS NOT NULL AND finished_at
+   *      IS NULL`) could never hold for this row again.
+   *   2. Worse — a later MANUAL re-submit would stamp `submitted_at`, but when the real
+   *      `batch-processor.job-finished` webhook then arrived,
+   *      {@link meetingRecordingsRepository.markTranscriptJobFinished}'s CAS
+   *      (`isNull(transcriptJobFinishedAt)`) would NO-OP against the already-terminal row —
+   *      `recordingTransitioned: false` — so NO ingest was ever enqueued and the transcript
+   *      was silently lost forever. This mutator exists to close exactly that dead end.
+   *   3. It also defeated the `daily_recording_id` fallback in `resolveBatchRecordingRow`
+   *      (`routes/daily/webhook.ts`) once retries exhausted — a row already marked terminal no
+   *      longer reads as a live, in-flight submit.
+   * Leaving `finished_at` NULL keeps the row exactly where a genuine future submit attempt or
+   * webhook expects to find it — still able to reach `finished_at` for the first and only time.
+   *
+   * `undefined` means the row already reached a terminal state (a genuine `job-finished` or
+   * `.error` beat this write, or a replay) — a successful no-op, not an error. The caller
+   * logs/acks; it does not retry.
+   *
+   * ⚠ `reason` IS TRUNCATED HERE, NOT BY THE CALLER — the single-write-point discipline every
+   * sibling in this family follows.
+   */
+  async markTranscriptJobSubmitFailed(
+    input: MarkTranscriptJobSubmitFailedInput,
+    exec: DbExecutor = db
+  ): Promise<MeetingRecording | undefined> {
+    const [row] = await exec
+      .update(meetingRecordings)
+      .set({ transcriptJobFailureReason: input.reason.slice(0, FAILURE_REASON_MAX_LENGTH) })
+      .where(
+        and(
+          eq(meetingRecordings.id, input.id),
+          isNull(meetingRecordings.deletedAt),
+          isNull(meetingRecordings.transcriptJobFinishedAt)
         )
       )
       .returning();

@@ -1284,6 +1284,106 @@ describe('meetingRecordingsRepository.markTranscriptJobSubmitted', () => {
   });
 });
 
+// ── B1e (FIX ROUND 3) — a PRE-submission terminal failure, never a shared write with B2e ────
+
+describe('meetingRecordingsRepository.markTranscriptJobSubmitFailed', () => {
+  it('⚠⚠ THE FIX: sets failure_reason and leaves finished_at (and submitted_at) NULL — never claims a terminal vendor state', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+
+    const updated = await meetingRecordingsRepository.markTranscriptJobSubmitFailed(
+      { id: recording.id, reason: 'DAILY_API_KEY is not set' },
+      db
+    );
+
+    expect(updated?.transcriptJobFailureReason).toBe('DAILY_API_KEY is not set');
+    expect(updated?.transcriptJobFinishedAt).toBeNull();
+    expect(updated?.transcriptJobSubmittedAt).toBeNull();
+    expect(updated?.transcriptJobId).toBeNull();
+    // ⚠ ORTHOGONAL LADDER: the recording's own state machine must not move.
+    expect(updated?.status).toBe('source_ready');
+  });
+
+  it('caps the reason at FAILURE_REASON_MAX_LENGTH, like markFailed and markTranscriptJobFailed', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+
+    const updated = await meetingRecordingsRepository.markTranscriptJobSubmitFailed(
+      { id: recording.id, reason: 'z'.repeat(FAILURE_REASON_MAX_LENGTH * 3) },
+      db
+    );
+
+    expect(updated?.transcriptJobFailureReason).toHaveLength(FAILURE_REASON_MAX_LENGTH);
+  });
+
+  it('⚠⚠ no-ops on a row that ALREADY HAS finished_at — never overwrites a genuine terminal stamp', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date('2026-09-01T10:00:00.000Z'),
+    });
+    const finishedAt = new Date('2026-09-01T10:04:00.000Z');
+    await meetingRecordingsRepository.markTranscriptJobFinished(
+      { id: recording.id, at: finishedAt },
+      db
+    );
+
+    const refused = await meetingRecordingsRepository.markTranscriptJobSubmitFailed(
+      { id: recording.id, reason: 'a stale submit-side retry landed late' },
+      db
+    );
+    expect(refused).toBeUndefined();
+
+    // The genuine terminal stamp — and the fact that it carries no failure_reason — survives
+    // untouched.
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.transcriptJobFinishedAt?.toISOString()).toBe(finishedAt.toISOString());
+    expect(row?.transcriptJobFailureReason).toBeNull();
+  });
+
+  it('⚠⚠ THE DEAD END, CLOSED AND PINNED: a row this mutator stamped is STILL transitionable by markTranscriptJobFinished afterwards', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+
+    // A `batch_submit` terminal failure — no vendor job was ever recorded.
+    const stamped = await meetingRecordingsRepository.markTranscriptJobSubmitFailed(
+      { id: recording.id, reason: 'POST /batch-processor: 500 Internal Server Error' },
+      db
+    );
+    expect(stamped?.transcriptJobFinishedAt).toBeNull();
+
+    // A later manual re-submit succeeds (this is what the pre-fix defect made permanently
+    // impossible to ever resolve: the real `batch-processor.job-finished` webhook that follows
+    // it).
+    const jobId = vendorId('batch-resubmit');
+    const submitted = await meetingRecordingsRepository.markTranscriptJobSubmitted(
+      { id: recording.id, transcriptJobId: jobId, at: new Date('2026-09-01T11:00:00.000Z') },
+      db
+    );
+    expect(submitted?.transcriptJobSubmittedAt).not.toBeNull();
+
+    // The real terminal webhook now lands — and, unlike the pre-fix defect, it is NOT a
+    // no-op: `recordingTransitioned` is what gates `enqueueTranscriptIngest` in
+    // `routes/daily/webhook.ts`, so a defined return here IS the proof the ingest pipeline can
+    // still run.
+    const finishedAt = new Date('2026-09-01T11:04:00.000Z');
+    const finished = await meetingRecordingsRepository.markTranscriptJobFinished(
+      { id: recording.id, at: finishedAt },
+      db
+    );
+    expect(finished).toBeDefined();
+    expect(finished?.transcriptJobFinishedAt?.toISOString()).toBe(finishedAt.toISOString());
+  });
+
+  it('refuses a soft-deleted row', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+    await meetingRecordingsRepository.softDelete({ id: recording.id });
+
+    const refused = await meetingRecordingsRepository.markTranscriptJobSubmitFailed(
+      { id: recording.id, reason: 'r' },
+      db
+    );
+    expect(refused).toBeUndefined();
+  });
+});
+
 describe('meetingRecordingsRepository.markTranscriptJobFinished', () => {
   it('stamps the terminal instant — which is what RELEASES the cleanup withhold', async () => {
     const { recording } = await meetingRecordingFactory({

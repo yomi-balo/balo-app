@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const findById = vi.hoisted(() => vi.fn());
 const markTranscriptJobSubmitted = vi.hoisted(() => vi.fn());
 const markTranscriptJobFailed = vi.hoisted(() => vi.fn());
+const markTranscriptJobSubmitFailed = vi.hoisted(() => vi.fn());
 const findByCaptureId = vi.hoisted(() => vi.fn());
 const resolveMeetingEngagement = vi.hoisted(() => vi.fn());
 const submitTranscriptBatchJob = vi.hoisted(() => vi.fn());
@@ -51,7 +52,12 @@ vi.mock('../lib/queue.js', () => ({ getQueue: () => ({ add: queueAdd }) }));
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn(() => ({ conn: true })) }));
 vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecoverableError }));
 vi.mock('@balo/db', () => ({
-  meetingRecordingsRepository: { findById, markTranscriptJobSubmitted, markTranscriptJobFailed },
+  meetingRecordingsRepository: {
+    findById,
+    markTranscriptJobSubmitted,
+    markTranscriptJobFailed,
+    markTranscriptJobSubmitFailed,
+  },
   transcriptsRepository: { findByCaptureId },
 }));
 vi.mock('@balo/shared/logging', () => ({
@@ -312,7 +318,9 @@ describe('transcript-capture — submit handler', () => {
   it('⚠⚠ classifyFailureReason recovers a NON-"unknown" reason from a TranscriptCaptureUnrecoverableError (e.g. config_error)', async () => {
     findById.mockResolvedValue(row());
     submitTranscriptBatchJob.mockRejectedValue(new DailyConfigError('DAILY_API_KEY is not set'));
-    markTranscriptJobFailed.mockResolvedValue(undefined);
+    // FIX ROUND 3 — a `submit`-stage terminal failure now goes through
+    // `markTranscriptJobSubmitFailed`, not `markTranscriptJobFailed`.
+    markTranscriptJobSubmitFailed.mockResolvedValue(undefined);
 
     let thrown: unknown;
     try {
@@ -619,10 +627,13 @@ describe('transcript-capture — worker.on("failed")', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     startTranscriptCaptureWorker();
-    // M8 — `reportCaptureFailure` now stamps `markTranscriptJobFailed` on every terminal
-    // failure; default it to a benign resolve so tests that don't care about the DB write
-    // still reach their `trackServer` assertions.
+    // M8 — `reportCaptureFailure` now stamps a durable mark on every terminal failure; default
+    // BOTH writers to a benign resolve so tests that don't care about the DB write still reach
+    // their `trackServer` assertions. FIX ROUND 3 split the single write in two: `batch_submit`
+    // goes through `markTranscriptJobSubmitFailed`, every other stage keeps
+    // `markTranscriptJobFailed`.
     markTranscriptJobFailed.mockResolvedValue(undefined);
+    markTranscriptJobSubmitFailed.mockResolvedValue(undefined);
   });
 
   it('is a no-op when there is no job', () => {
@@ -666,13 +677,18 @@ describe('transcript-capture — worker.on("failed")', () => {
         })
       )
     );
-    // M8 — the row is stamped durably too, sanitized, so an ops audit can tell this segment's
-    // capture failed apart from one that never got this far.
-    expect(markTranscriptJobFailed).toHaveBeenCalledWith({
+    // ⚠⚠ FIX ROUND 3 — a `batch_submit` terminal failure is stamped through
+    // `markTranscriptJobSubmitFailed` (failure_reason ONLY, no `at` — it never touches
+    // `finished_at`), NEVER `markTranscriptJobFailed`. Calling the latter here would have
+    // stamped `finished_at` for a segment that never had a vendor job at all — the dead end
+    // this fix round closed. M8's original guarantee (a durable, sanitized mark so an ops audit
+    // can tell "this segment's capture failed" apart from "never got this far") still holds,
+    // just through the split-safe write.
+    expect(markTranscriptJobSubmitFailed).toHaveBeenCalledWith({
       id: RECORDING_ID,
       reason: 'daily down',
-      at: expect.any(Date),
     });
+    expect(markTranscriptJobFailed).not.toHaveBeenCalled();
   });
 
   it('⚠ terminal INGEST failure emits TRANSCRIPT_CAPTURE_FAILED with stage artefact_fetch, meeting_id from the ROW (never recordingId)', async () => {
@@ -698,6 +714,14 @@ describe('transcript-capture — worker.on("failed")', () => {
         })
       )
     );
+    // ⚠ FIX ROUND 3 — every stage EXCEPT `batch_submit` still goes through
+    // `markTranscriptJobFailed` (unchanged), never the new `batch_submit`-only mutator.
+    expect(markTranscriptJobFailed).toHaveBeenCalledWith({
+      id: RECORDING_ID,
+      reason: 'artefact fetch failed',
+      at: expect.any(Date),
+    });
+    expect(markTranscriptJobSubmitFailed).not.toHaveBeenCalled();
   });
 
   it('⚠⚠ M8 — the reason is SANITIZED before it is stamped on the row (a URL never reaches the DB write)', async () => {
@@ -743,11 +767,13 @@ describe('transcript-capture — worker.on("failed")', () => {
     );
     expect(trackServer).not.toHaveBeenCalledWith('transcript_capture_failed', expect.anything());
     // M8 — the stamp is attempted on `recordingId` alone, BEFORE the row lookup is even
-    // checked, mirroring `recording-ingest.ts`'s `reportIngestFailure`.
-    expect(markTranscriptJobFailed).toHaveBeenCalledWith({
+    // checked, mirroring `recording-ingest.ts`'s `reportIngestFailure`. FIX ROUND 3 — this is
+    // a `submit`-stage (`batch_submit`) failure, so the split-safe mutator runs, never the one
+    // that would stamp `finished_at`.
+    expect(markTranscriptJobSubmitFailed).toHaveBeenCalledWith({
       id: RECORDING_ID,
       reason: 'boom',
-      at: expect.any(Date),
     });
+    expect(markTranscriptJobFailed).not.toHaveBeenCalled();
   });
 });

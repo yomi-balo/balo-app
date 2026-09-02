@@ -117,20 +117,41 @@ async function handleCleanup(job: Job<RecordingCleanupSourceJobData>): Promise<v
   // (`routes/daily/webhook.ts`, `handleTranscriptCapturePostCommit`), so the wait ends the
   // moment the vendor answers at all.
   //
-  // ⚠ THE RESIDUAL, STATED NOT FIXED: a batch job that NEVER reaches a terminal webhook
-  // leaks the Daily source. It costs STORAGE, not correctness, and it is queryable:
+  // ⚠ DOOR 1 — THE RESIDUAL, STATED NOT FIXED: a batch job that NEVER reaches a terminal
+  // webhook leaks the Daily source. It costs STORAGE, not correctness, and it is queryable:
   //   SELECT id, meeting_id, transcript_job_submitted_at FROM meeting_recordings
   //    WHERE transcript_job_submitted_at IS NOT NULL AND transcript_job_finished_at IS NULL
   //      AND source_deleted_at IS NULL AND status = 'ready' AND deleted_at IS NULL;
   // The alternative — delete anyway — costs the recap, which is the whole feature.
   //
-  // ⚠⚠ A SEPARATE RESIDUAL THIS GATE DOES NOT COVER: if the SUBMIT POST to Daily succeeded but
-  // `markTranscriptJobSubmitted` then failed to stamp the row, `transcript_job_submitted_at`
-  // stays NULL, so this gate is FALSE and cleanup proceeds — deleting the Daily source out from
-  // under a batch job that is genuinely in flight. That is R2's residual reached through a
-  // different door; it costs that segment's transcript, not correctness.
+  // ⚠⚠ DOOR 2 — A SEPARATE RESIDUAL THIS GATE DOES NOT COVER: if the SUBMIT POST to Daily
+  // succeeded but `markTranscriptJobSubmitted` then failed to stamp the row,
+  // `transcript_job_submitted_at` stays NULL, so this gate is FALSE and cleanup proceeds —
+  // deleting the Daily source out from under a batch job that is genuinely in flight. That is
+  // R2's residual reached through a different door; it costs that segment's transcript, not
+  // correctness. Submit HAS RUN here — the stamp is what failed.
   //
-  // ⚠ FIX ROUND 1 (M9) — A THIRD DOOR, NOT REACHABLE TODAY BUT UNGUARDED THE MOMENT ONE SHIPS:
+  // ⚠⚠ FIX ROUND 3 — DOOR 3, EASY TO CONFLATE WITH DOOR 2 BUT THE TIMING IS THE OPPOSITE: DOOR 2
+  // is submit having ALREADY RUN and its stamp failing; this door is cleanup racing ahead of
+  // submit BEFORE submit's first attempt has run AT ALL. The submit job and this cleanup job are
+  // independently enqueued off two DIFFERENT vendor signals racing with no ordering guarantee
+  // (Mux transcode vs. Daily's `ready-to-download`) — nothing sequences "submit must run before
+  // cleanup's first attempt". If Mux's `video.asset.ready` fires first — submit is still
+  // retrying its own backoff window on a 429/5xx, or the segment is simply short enough that Mux
+  // finishes transcoding sooner — THIS gate reads `submitted_at IS NULL` not because a stamp
+  // failed but because no submission was ever ATTEMPTED yet, so it returns FALSE and cleanup
+  // proceeds. When the submit job finally runs, `handleSubmit`'s own
+  // `dailyRecordingId === null || sourceDeletedAt !== null` gate (`transcript-capture.ts`)
+  // correctly refuses to call Daily and skips with reason `no_daily_source` — a CLEAN, LOGGED
+  // no-op from THAT job's point of view, but a SILENT transcript loss for the segment: nothing
+  // on either side raises, retries, or alerts. THE CHEAPEST MITIGATION, FOR A FOLLOW-UP TICKET,
+  // NOT IMPLEMENTED HERE: a `delay` on the Mux-triggered first `enqueueRecordingCleanupSource`
+  // call (`routes/mux/webhook.ts`) at least as long as the submit job's own retry budget
+  // (`SUBMIT_ATTEMPTS` attempts, exponential backoff starting at `BACKOFF_DELAY_MS` —
+  // `transcript-capture.ts`) — giving submit a real chance to stamp `submitted_at` before
+  // cleanup ever runs its first check, without weakening the gate itself.
+  //
+  // ⚠ FIX ROUND 1 (M9) — DOOR 4, NOT REACHABLE TODAY BUT UNGUARDED THE MOMENT ONE SHIPS:
   // `routes/daily/webhook.ts`'s batch-processor arm resolves the recording row, then does
   // `meetingsRepository.findById(recording.meetingId)` and bails to `null` (no effect, no CAS)
   // when the meeting is gone. There is NO delete-meeting route in this codebase today, so that
