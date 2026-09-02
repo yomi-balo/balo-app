@@ -1249,6 +1249,167 @@ describe('creditSessionsRepository.findFinalizedMissingPayout (BAL-399 reconcili
   });
 });
 
+// ── findSettledMissingLedgerCredit — the settled-without-credit alarm ───────
+
+/**
+ * ⚠⚠ THE MONEY SHAPE THIS FINDER EXISTS FOR. A session marked `settlement_status='settled'` with
+ * NO `overdraft_settlement` ledger row is money Stripe took, a receivable cleared, dunning
+ * stopped — and nothing in the ledger to show for it. The reconcile path used to produce exactly
+ * this row whenever the `payment_intent.succeeded` webhook permanently failed while returning
+ * HTTP 200 (Stripe then never redelivers).
+ *
+ * ONLY an integration test can prove an anti-join predicate: the join terms
+ * (`session_id`, `wallet_id`, `reason`) and the `IS NULL` test are SQL, and a mocked repository
+ * would assert nothing about which rows Postgres actually returns.
+ */
+describe('creditSessionsRepository.findSettledMissingLedgerCredit (settled-without-credit alarm)', () => {
+  interface SettledSession {
+    id: string;
+    walletId: string;
+    memberId: string;
+  }
+
+  /** The overdraft on a 24-minute session against a 5000c balance at 250c/min. */
+  const OVERDRAFT_MINOR = 1000;
+  /** Generously past the sweep's 60-minute grace, in `meterAt` terms. */
+  const CUTOFF = meterAt(100);
+
+  /**
+   * Open → connect → meter past the balance → end with a real overdraft → mark `settled` at
+   * `settledAt`. This is EXACTLY the row both `settled` writers produce; whether the ledger
+   * credit exists beside it is the variable under test.
+   */
+  async function settledOverdraftSession(settledAt: Date): Promise<SettledSession> {
+    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    const ended = await creditSessionsRepository.end(id, { now: meterAt(24) });
+    expect(ended.overdraftMinor).toBe(OVERDRAFT_MINOR);
+    await creditSessionsRepository.markSettlementResult(db, {
+      sessionId: id,
+      status: 'settled',
+      stripePaymentIntentId: `pi_${id}`,
+      now: settledAt,
+    });
+    return { id, walletId: ctx.walletId, memberId: ctx.memberId };
+  }
+
+  /** The credit the `payment_intent.succeeded` webhook applies, under the one shared key. */
+  async function applyOverdraftCredit(s: SettledSession, walletId = s.walletId): Promise<void> {
+    await creditLedgerRepository.postEntry({
+      walletId,
+      entryType: 'purchase',
+      reason: 'overdraft_settlement',
+      amountMinor: OVERDRAFT_MINOR,
+      idempotencyKey: `overdraft_settlement:${s.id}`,
+      memberId: s.memberId,
+      sessionId: s.id,
+    });
+  }
+
+  it('returns the reconcile-shaped rows (settled, no credit) and NEVER the webhook-shaped one', async () => {
+    // A + B — settled with no `overdraft_settlement` credit ⇒ CORRUPT, oldest first.
+    const b = await settledOverdraftSession(meterAt(40));
+    const a = await settledOverdraftSession(meterAt(25));
+    // C — the ordinary webhook shape: settled WITH the credit committed beside it ⇒ healthy.
+    const c = await settledOverdraftSession(meterAt(30));
+    await applyOverdraftCredit(c);
+
+    const found = await creditSessionsRepository.findSettledMissingLedgerCredit(CUTOFF);
+    const foundIds = found.map((row) => row.id);
+
+    expect(foundIds).toContain(a.id);
+    expect(foundIds).toContain(b.id);
+    expect(foundIds).not.toContain(c.id);
+    // Oldest-settled first — the alarm reports the longest-standing corruption at the top.
+    expect(foundIds.indexOf(a.id)).toBeLessThan(foundIds.indexOf(b.id));
+  });
+
+  it('skips a row settled inside the cutoff — an in-flight reconcile is not a corruption', async () => {
+    const recent = await settledOverdraftSession(meterAt(200)); // AFTER the cutoff
+
+    const foundIds = (await creditSessionsRepository.findSettledMissingLedgerCredit(CUTOFF)).map(
+      (row) => row.id
+    );
+    expect(foundIds).not.toContain(recent.id);
+  });
+
+  it('excludes a soft-deleted session', async () => {
+    const s = await settledOverdraftSession(meterAt(25));
+    await db
+      .update(creditSessions)
+      .set({ deletedAt: new Date() })
+      .where(eq(creditSessions.id, s.id));
+
+    const foundIds = (await creditSessionsRepository.findSettledMissingLedgerCredit(CUTOFF)).map(
+      (row) => row.id
+    );
+    expect(foundIds).not.toContain(s.id);
+  });
+
+  /**
+   * ⚠ THE `reason` JOIN TERM IS LOAD-BEARING. A metered session ALWAYS carries `session_consume`
+   * ledger rows on the same `(session_id, wallet_id)` pair — without the `reason` term every
+   * metered session would look credited and the alarm would report nothing, ever.
+   */
+  it('a session_consume ledger row on the same session does NOT satisfy the anti-join', async () => {
+    const s = await settledOverdraftSession(meterAt(25));
+    // The metering above already wrote 24 `session_consume` rows against this exact pair.
+    const consumeRows = await db
+      .select({ id: creditLedger.id })
+      .from(creditLedger)
+      .where(and(eq(creditLedger.sessionId, s.id), eq(creditLedger.reason, 'session_consume')));
+    expect(consumeRows.length).toBeGreaterThan(0);
+
+    const foundIds = (await creditSessionsRepository.findSettledMissingLedgerCredit(CUTOFF)).map(
+      (row) => row.id
+    );
+    expect(foundIds).toContain(s.id);
+  });
+
+  /**
+   * ⚠ THE `wallet_id` JOIN TERM IS ALSO LOAD-BEARING. `credit_ledger.session_id` carries no
+   * constraint tying it to the session's own wallet, so a credit mis-attributed to ANOTHER
+   * wallet must not be accepted as evidence that THIS session's overdraft was recorded.
+   */
+  it('a credit mis-attributed to a different wallet does NOT satisfy the anti-join', async () => {
+    const s = await settledOverdraftSession(meterAt(25));
+    const { wallet: otherWallet } = await creditWalletFactory({ values: { balanceMinor: 0 } });
+    await applyOverdraftCredit(s, otherWallet.id);
+
+    const foundIds = (await creditSessionsRepository.findSettledMissingLedgerCredit(CUTOFF)).map(
+      (row) => row.id
+    );
+    expect(foundIds).toContain(s.id);
+  });
+
+  /**
+   * A legacy row predating the `settled_at` stamp has no reliable clock, so `settled_at <=
+   * cutoff` (NULL ⇒ not true) excludes it. Documented, not accidental: reporting a row whose age
+   * cannot be established would be a guess, and this alarm's whole value is that it never guesses.
+   */
+  it('excludes a legacy settled row with a NULL settled_at', async () => {
+    const s = await settledOverdraftSession(meterAt(25));
+    await db.update(creditSessions).set({ settledAt: null }).where(eq(creditSessions.id, s.id));
+
+    const foundIds = (await creditSessionsRepository.findSettledMissingLedgerCredit(CUTOFF)).map(
+      (row) => row.id
+    );
+    expect(foundIds).not.toContain(s.id);
+  });
+
+  it('bounds the batch by `limit`', async () => {
+    await settledOverdraftSession(meterAt(25));
+    await settledOverdraftSession(meterAt(30));
+
+    const found = await creditSessionsRepository.findSettledMissingLedgerCredit(CUTOFF, 1);
+    expect(found).toHaveLength(1);
+  });
+});
+
 // ── hasActiveSessionForWallet (BAL-379 auto-top-up safe-to-charge gate) ─────
 
 describe('creditSessionsRepository.hasActiveSessionForWallet', () => {

@@ -22,10 +22,12 @@
  * extraction — `end-session.test.ts`'s existing assertions are the regression guard.
  */
 import {
+  creditLedgerRepository,
   creditReceivablesRepository,
   creditSessionsRepository,
   creditWalletsRepository,
   db,
+  deriveIdempotencyKey,
   type CreditReceivableReason,
   type CreditSession,
   type CreditFinalizationPath,
@@ -35,7 +37,11 @@ import { CAPABILITIES } from '@balo/shared/authz';
 import { isWalletMandateActive, toSettleableSession } from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import { SETTLEMENT_RECONCILE_MAX_AGE_MINUTES } from '@balo/shared/pricing';
-import { createOffSessionCharge, retrievePaymentIntentStatus } from '../stripe/index.js';
+import {
+  applyOverdraftSettlementFromStripe,
+  createOffSessionCharge,
+  retrievePaymentIntentStatus,
+} from '../stripe/index.js';
 import { triggerAutoTopupBestEffort } from '../credit/auto-topup.js';
 import { authorizeSessionActor } from './authorize-session-actor.js';
 import { driveSession } from './meter-driver.js';
@@ -355,11 +361,79 @@ export async function endSession(
   return { ok: true, result };
 }
 
-/** Mark a session settled + clear any receivable when its PI is already confirmed succeeded. */
+/**
+ * Settle a session whose settlement PI this reconcile has ALREADY PROVEN `succeeded` — the exact
+ * moment the system is about to erase the debt evidence, and therefore the one place the credit
+ * must be verified rather than assumed.
+ *
+ * ⚠⚠ THE BUG THIS SHAPE EXISTS TO CLOSE. This used to mark `settled` and clear the receivable
+ * unconditionally, DEFERRING the ledger credit to the `payment_intent.succeeded` webhook. That
+ * deferral is only sound if a failed webhook is retried — and a webhook can permanently fail
+ * while still returning HTTP 200, in which case Stripe never redelivers. The row then reads
+ * `settled` (and `settlement_status` is on the CLIENT allow-list — `credit-views.ts`), dunning
+ * stops, the receivable is GONE, and NO ledger row exists for money Stripe actually took. The
+ * debt is unrecoverable from the database alone.
+ *
+ * ⚠ AND THE CLEAR WAS IRREVERSIBLE. `creditReceivablesRepository.open`'s conflict fallback and
+ * the partial unique behind it are STATUS-BLIND, so a cleared row permanently occupies the
+ * one-per-session slot: every later `open` returns `created:false` ⇒ dunning can never fire for
+ * that session again.
+ *
+ * So the clear is now conditional on the money actually being in the ledger:
+ *
+ *  · **Ledger row present** — the webhook already credited. Keep the historical idempotent
+ *    mark + clear (both are last-writer-wins no-ops on a row the webhook already marked).
+ *  · **Ledger row absent** — the REPAIR ARM. Hand the proven-succeeded PI to
+ *    `applyOverdraftSettlementFromStripe`, which applies the credit through the ordinary webhook
+ *    pipeline; `applyCredit` → `markSettlementSettled` then does the mark + clear IN THE SAME
+ *    TRANSACTION AS THE LEDGER WRITE. The clear can no longer outrun the credit, because they
+ *    commit together or not at all.
+ *
+ * ⚠ THIS IS NOT AN ALARM AND CANNOT CRY WOLF. At the 10-minute stuck cutoff a still-in-flight
+ * webhook is a RACE, not a fault — and the ledger idempotency key settles it: whoever takes the
+ * wallet lock first writes, the other dedups. No double credit either way.
+ *
+ * ⚠ NO CHARGE HAPPENS ON EITHER ARM. `retrieveSettlement` (inside the repair arm) is read-only;
+ * the only charge site in this module is `settleOverdraft`, which this function never reaches.
+ *
+ * ⚠ THE RE-CHARGE PROTECTION IS `markSettlementResult('settled')`, NOT THE CLEAR — correcting a
+ * comment that stood here and mis-attributed it. `findStuckSettling` keys ONLY on
+ * `settlement_status='processing'` and never references `credit_receivables`; `reconcileStuckSettlement`'s
+ * own `settlementStatus !== 'processing'` early return is the second, independent guard. The
+ * receivable contributes ZERO to re-charge safety, which is precisely why making its clear
+ * conditional costs nothing.
+ */
 async function markSettledFromReconcile(
   session: CreditSession,
   paymentIntentId: string
 ): Promise<void> {
+  // The one key three places agree on: the Stripe idempotency key on the original charge
+  // (`settlementIdempotencyKey`), the webhook's `ledgerKeyForCredit`, and this lookup.
+  const ledgerKey = deriveIdempotencyKey({
+    reason: 'overdraft_settlement',
+    sessionId: session.id,
+  });
+  const existingCredit = await creditLedgerRepository.findByIdempotencyKey(ledgerKey);
+
+  if (existingCredit === undefined) {
+    // REPAIR ARM — the credit never landed. Apply it (mark + clear ride the same txn inside).
+    // A throw BEFORE that txn commits leaves the row `processing` with its receivable intact and
+    // propagates to the sweep's per-row catch, which retries next tick — nothing is erased ahead
+    // of the money. A throw from a POST-commit publish loses the receipt only, exactly as it
+    // would on the webhook path (see `applyOverdraftSettlementFromStripe`'s docblock).
+    await applyOverdraftSettlementFromStripe(session, paymentIntentId);
+    log.warn(
+      {
+        sessionId: session.id,
+        stripePaymentIntentId: paymentIntentId,
+        appliedByReconcile: true,
+      },
+      'Reconcile: settlement PI succeeded but NO overdraft_settlement ledger credit existed — applied the credit here (the webhook never landed); mark + clear committed with it'
+    );
+    return;
+  }
+
+  // The webhook already credited — the mark + clear are idempotent re-statements of what it did.
   await db.transaction(async (tx) => {
     await creditSessionsRepository.markSettlementResult(tx, {
       sessionId: session.id,
@@ -368,11 +442,11 @@ async function markSettledFromReconcile(
     });
     await creditReceivablesRepository.clear({ sessionId: session.id }, tx);
   });
-  // The receipt + analytics stay with the payment_intent.succeeded webhook (which applies the
-  // ledger credit and publishes once, deduped-gated) — this only stops the reaper re-charging.
+  // The receipt + analytics stayed with the webhook that applied this credit (it publishes once,
+  // deduped-gated) — re-publishing here would double-send it.
   log.info(
-    { sessionId: session.id, stripePaymentIntentId: paymentIntentId },
-    'Reconcile: settlement PI already succeeded — marked settled + cleared any receivable'
+    { sessionId: session.id, stripePaymentIntentId: paymentIntentId, ledgerKey },
+    'Reconcile: settlement PI already succeeded AND the ledger credit exists — marked settled + cleared any receivable'
   );
 }
 
@@ -391,7 +465,8 @@ function isPastReconcileWindow(session: CreditSession, now: Date): boolean {
  * with a positive overdraft.
  *
  * FIX 6 — before ever re-charging: if a settlement PI was stamped, retrieve its REAL status
- * and short-circuit (succeeded → settle + clear; canceled / hard-declined → fail + receivable
+ * and short-circuit (succeeded → `markSettledFromReconcile`, which VERIFIES the ledger credit
+ * exists and applies it first when it does not; canceled / hard-declined → fail + receivable
  * + dun). Only a genuinely-still-actionable PI, AND only within
  * `SETTLEMENT_RECONCILE_MAX_AGE_MINUTES` of `endedAt`, is re-charged (the same session-keyed
  * idempotency key returns the same PI). Past that window — near Stripe's ~24h key expiry, where

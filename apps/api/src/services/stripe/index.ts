@@ -21,7 +21,11 @@ export {
   type PaymentIntentStatusResult,
   type SavedCardChargeResult,
 } from './charges.js';
-export { resolveStripeEffect, applyStripeEffect } from './dispatch.js';
+export {
+  resolveStripeEffect,
+  applyStripeEffect,
+  applyOverdraftSettlementFromStripe,
+} from './dispatch.js';
 export { StripeConfigError } from './errors.js';
 export type {
   SettlementFields,

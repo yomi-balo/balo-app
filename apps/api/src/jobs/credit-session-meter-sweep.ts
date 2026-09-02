@@ -18,8 +18,8 @@ import {
 
 /**
  * BAL-378 (ADR-1040 Lane 2) — the per-minute credit-session reaper. ONE repeatable BullMQ job
- * (concurrency 1, under the wallet advisory lock inside each repo method) doing four passes each
- * tick, each row isolated in its own try/catch so one failure never aborts the batch:
+ * (concurrency 1, under the wallet advisory lock inside each repo method) doing the passes below
+ * each tick, each row isolated in its own try/catch so one failure never aborts the batch:
  *
  *  1. METER — `findMeterable()` (active/grace) → `driveSession` posts the missing ticks + drives
  *     the grace/ceiling state machine + publishes transition notices. A well-funded but
@@ -44,6 +44,13 @@ import {
  *     `billing_finalized_at IS NOT NULL`, the exact opposite half of this space. BAL-466 wires
  *     `duration_source='presence'` at admission (`joinMeetingAsMember`), so this pass is now
  *     reachable for a `case` meeting whose client was admitted.
+ *  7. SETTLED-WITHOUT-CREDIT ALARM — `settlement_status='settled'` with NO `overdraft_settlement`
+ *     ledger row (`findSettledMissingLedgerCredit`). ALARM ONLY: it writes nothing, because the
+ *     repair belongs where the evidence is about to be erased (`markSettledFromReconcile`, which
+ *     now verifies the credit and applies it before marking) and not in a sweep that would have
+ *     to re-derive which PaymentIntent to trust. Post-fix this pass returns 0 forever; it exists
+ *     to surface rows ALREADY corrupted in production and to fail loudly if anyone reintroduces a
+ *     settled-without-credit write.
  *
  * Metering is deterministic + idempotent (tickSeq minute-index ledger key), so a re-meter that
  * crosses nothing publishes nothing. All money/lock logic lives in `@balo/db` — this stays thin.
@@ -77,6 +84,16 @@ const PRESENCE_SETTLEMENT_BATCH_LIMIT = 100;
  * A silent cap would read as "swept everything" on a tick that stranded the rest.
  */
 const CANCELLED_MEETING_BATCH_LIMIT = 100;
+/**
+ * Pass 7 — how far behind `now` a session's `settled_at` must be before "settled with no ledger
+ * credit" counts as a corruption rather than a race. 60 minutes is deliberately generous against
+ * the 10-minute `STUCK_SETTLEMENT_MINUTES` cutoff: the credit is applied in the SAME transaction
+ * as the mark on both writers, so any gap at all is already anomalous — the hour exists purely so
+ * a wildly-delayed webhook or a long `retrieveSettlement` retry can never page anyone.
+ */
+const SETTLED_MISSING_CREDIT_MINUTES = 60;
+/** ⚠ SAME NO-SILENT-CAPS RULE as the two batch-bounded passes above. The caller warns; it does. */
+const SETTLED_MISSING_CREDIT_BATCH_LIMIT = 100;
 
 const logger = createLogger('credit-session-meter-sweep');
 
@@ -368,6 +385,64 @@ async function runPresenceSettlementPass(
   return settled;
 }
 
+/**
+ * Pass 7 — THE SETTLED-WITHOUT-CREDIT ALARM. A session marked `settlement_status='settled'` with
+ * no `overdraft_settlement` ledger row is money Stripe took, a receivable cleared, dunning
+ * stopped, and NOTHING in the ledger to show for it — the client is even shown "settled", because
+ * `settlement_status` is on the client allow-list.
+ *
+ * ⚠ ALARM ONLY — IT WRITES NOTHING, AND THAT IS DELIBERATE. The repair lives at the moment the
+ * evidence is about to be erased (`markSettledFromReconcile` now verifies the credit and applies
+ * it through the webhook pipeline before anything is marked or cleared), where a
+ * proven-`succeeded` PaymentIntent is already in hand. A sweep firing an hour later would have to
+ * re-derive which PI to trust from a row that has already been rewritten — repair from weaker
+ * evidence than the path that caused the problem. So this pass reports and stops.
+ *
+ * ⚠ `log.error` PER ROW, ON PURPOSE — this is a Sentry/Axiom-visible money discrepancy needing a
+ * human, not a warn to be buried. The recovery for a row reported here is a Stripe Dashboard
+ * **Resend** of the original `payment_intent.succeeded`: the lost commit persisted no
+ * `stripe_webhook_events` marker, so the webhook's replay short-circuit does not swallow it.
+ *
+ * ⚠ NO PER-ROW TRY/CATCH, unlike every other pass — there is no per-row work that CAN fail: the
+ * body is a `log.error` per row. A throw from the FINDER itself fails the BullMQ job, which the
+ * per-minute repeat retries; and because this pass runs LAST, no earlier pass's (already
+ * committed) work is lost when it does. Do not move it earlier without adding one.
+ */
+async function runSettledMissingCreditPass(
+  now: Date,
+  log: (message: string) => void
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - SETTLED_MISSING_CREDIT_MINUTES * MS_PER_MINUTE);
+  const sessions = await creditSessionsRepository.findSettledMissingLedgerCredit(
+    cutoff,
+    SETTLED_MISSING_CREDIT_BATCH_LIMIT
+  );
+  if (sessions.length === SETTLED_MISSING_CREDIT_BATCH_LIMIT) {
+    // ⚠ NO SILENT CAPS — a full batch means corrupted sessions were DROPPED from this tick's
+    // report, and the count below would read as the whole of the damage.
+    const [oldest] = sessions;
+    logger.warn(
+      { limit: SETTLED_MISSING_CREDIT_BATCH_LIMIT, oldestSessionId: oldest?.id },
+      'Settled-without-credit batch FILLED — further corrupted sessions were dropped from this tick'
+    );
+  }
+  for (const session of sessions) {
+    log(`settled with NO overdraft_settlement ledger credit: session ${session.id}`);
+    logger.error(
+      {
+        sessionId: session.id,
+        walletId: session.walletId,
+        companyId: session.companyId,
+        settledAt: session.settledAt,
+        overdraftSettledMinor: session.overdraftSettledMinor,
+        stripePaymentIntentId: session.stripePaymentIntentId,
+      },
+      'Session is marked settled but has NO overdraft_settlement ledger credit — money charged, wallet never credited, receivable cleared; recover by resending the payment_intent.succeeded event from the Stripe Dashboard'
+    );
+  }
+  return sessions.length;
+}
+
 /** The sweep body (exported for unit testing without a Redis-backed Worker). */
 export async function runSessionMeterSweep(
   now: Date,
@@ -382,6 +457,9 @@ export async function runSessionMeterSweep(
   reconciled: number;
   recovered: number;
   presenceSettled: number;
+  /** Pass 7 — sessions marked `settled` with NO `overdraft_settlement` ledger credit. Non-zero ⇒
+   *  a money discrepancy needing a human; see `runSettledMissingCreditPass`. Expected 0 forever. */
+  settledMissingCredit: number;
 }> {
   const metered = await runMeterPass(now, log);
   const ended = await runWrappedIdlePass(now, log);
@@ -392,8 +470,20 @@ export async function runSessionMeterSweep(
   const reconciled = await runStuckSettlingPass(now, log);
   const recovered = await runFinalizedMissingPayoutPass(now, log);
   const presenceSettled = await runPresenceSettlementPass(now, log);
+  // Runs LAST, after the reconcile pass that repairs this shape at its source — so a row this
+  // tick's pass 4 has just healed is never also reported here as corrupt.
+  const settledMissingCredit = await runSettledMissingCreditPass(now, log);
   logger.info(
-    { metered, ended, cancelled, cancelledMeetingHolds, reconciled, recovered, presenceSettled },
+    {
+      metered,
+      ended,
+      cancelled,
+      cancelledMeetingHolds,
+      reconciled,
+      recovered,
+      presenceSettled,
+      settledMissingCredit,
+    },
     'Session meter sweep complete'
   );
   return {
@@ -404,6 +494,7 @@ export async function runSessionMeterSweep(
     reconciled,
     recovered,
     presenceSettled,
+    settledMissingCredit,
   };
 }
 
@@ -412,10 +503,17 @@ export function startCreditSessionMeterSweepWorker(): Worker {
   return new Worker(
     CREDIT_SESSION_METER_SWEEP_QUEUE,
     async (job: Job) => {
-      const { metered, ended, cancelled, reconciled, recovered, presenceSettled } =
-        await runSessionMeterSweep(new Date(), (m) => job.log(m));
+      const {
+        metered,
+        ended,
+        cancelled,
+        reconciled,
+        recovered,
+        presenceSettled,
+        settledMissingCredit,
+      } = await runSessionMeterSweep(new Date(), (m) => job.log(m));
       job.log(
-        `session meter sweep: ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled, ${recovered} recovered, ${presenceSettled} presence-settled`
+        `session meter sweep: ${metered} metered, ${ended} ended, ${cancelled} cancelled, ${reconciled} reconciled, ${recovered} recovered, ${presenceSettled} presence-settled, ${settledMissingCredit} settled-without-credit`
       );
     },
     {

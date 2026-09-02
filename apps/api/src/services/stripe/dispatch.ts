@@ -8,6 +8,7 @@ import {
   promoRedemptionsRepository,
   db,
   deriveIdempotencyKey,
+  type CreditSession,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, CREDIT_SERVER_EVENTS } from '@balo/analytics/server';
@@ -788,5 +789,74 @@ export async function applyStripeEffect(
       const exhaustive: never = effect;
       throw new Error(`Unhandled Stripe effect: ${JSON.stringify(exhaustive)}`);
     }
+  }
+}
+
+/**
+ * THE REPAIR ARM OF THE STUCK-SETTLEMENT RECONCILE — apply an `overdraft_settlement` credit for
+ * a PaymentIntent this process has ALREADY PROVEN `succeeded`, through the ordinary webhook
+ * pipeline.
+ *
+ * ⚠⚠ WHY IT LIVES HERE, IN `dispatch.ts`, AND NOT IN THE RECONCILER THAT CALLS IT. Money-in
+ * construction has exactly ONE home. This function builds no ledger row, derives no key and
+ * decides no post-commit effect of its own — it assembles the SAME `{kind:'credit', reason:
+ * 'overdraft_settlement'}` effect the `payment_intent.succeeded` resolver builds and hands it to
+ * `applyStripeEffect` verbatim. So the ledger key (`ledgerKeyForCredit`), the mark-settled +
+ * receivable-clear (`markSettlementSettled`) and the receipt / auto-top-up publishes are ONE
+ * implementation, reached from two triggers. A second copy in `end-session.ts` would be a fork of
+ * the money path, which is the one thing that must never fork.
+ *
+ * ⚠ IT NEVER CHARGES. `retrieveSettlement` is READ-ONLY (a PI retrieve + a charge retrieve with
+ * an expanded `balance_transaction`); the only caller reaches it after
+ * `retrievePaymentIntentStatus` returned `succeeded`, so the money has already moved and this is
+ * pure recording. Nothing in this file's charge-creation surface is touched.
+ *
+ * ⚠ IT CANNOT DOUBLE-CREDIT. `applyLedgerEntry` takes the per-wallet advisory lock and dedups on
+ * the unique `idempotency_key`, and the key is the same `overdraft_settlement:{sessionId}` string
+ * whether it is derived here, by the webhook, or as the Stripe idempotency key on the original
+ * charge. A webhook that arrives afterwards dedups (`deduped: true`) ⇒ `markSettlementSettled`
+ * re-marks idempotently and returns NO post-commit effects, so the receipt is never re-sent.
+ *
+ * ⚠ FAILURE BEFORE THE COMMIT IS SAFE, AND THAT IS THE POINT. If `retrieveSettlement` throws (the
+ * un-populated `balance_transaction` arm) or the transaction rolls back, NOTHING is marked and
+ * NOTHING is cleared: the session stays `settlement_status='processing'` with its receivable
+ * intact, and the sweep's pass-4 per-row catch retries on the next tick. The debt evidence is
+ * never erased ahead of the money.
+ *
+ * ⚠ FAILURE AFTER THE COMMIT LOSES THE RECEIPT ONLY, and it does so identically to the shipped
+ * webhook — stated rather than hidden. Post-commit effects run AFTER the commit, exactly as
+ * `routes/stripe/webhook.ts` runs them; a throw from one leaves the money, the mark and the clear
+ * all correctly committed, and only the `session.settled` notification unsent. The webhook has the
+ * same exposure (its event marker commits with the effect, so Stripe's retry short-circuits on
+ * `processedAt` without re-publishing), so this introduces no new failure mode. The sweep's
+ * per-row catch logs the throw with the session id.
+ */
+export async function applyOverdraftSettlementFromStripe(
+  session: CreditSession,
+  paymentIntentId: string
+): Promise<void> {
+  // Read-only — outside the transaction (it can take seconds on the balance_transaction race).
+  const settlement = await retrieveSettlement(paymentIntentId);
+  let postCommit: PostCommitEffect[] = [];
+  await db.transaction(async (tx) => {
+    postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'overdraft_settlement',
+      walletId: session.walletId,
+      // `credit_sessions.initiating_member_id` is NOT NULL, so `applyLedgerEntry`'s
+      // attribution guard (`overdraft_settlement` is in `AUDIT_ACTION_BY_REASON`) is satisfied
+      // by construction — this arm can never throw for a missing actor.
+      memberId: session.initiatingMemberId,
+      sessionId: session.id,
+      triggeringEntryId: null,
+      // Both null BY CONSTRUCTION for this reason, matching `resolvePaymentIntentSucceeded`:
+      // only a `manual_purchase` ever carries a promo code or a display card.
+      promoCode: null,
+      cardOnFile: null,
+      settlement,
+    });
+  });
+  for (const run of postCommit) {
+    await run();
   }
 }

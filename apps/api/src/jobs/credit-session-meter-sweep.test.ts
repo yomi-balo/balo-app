@@ -9,6 +9,7 @@ const {
   mockFindFinalizedMissingPayout,
   mockFindPresenceUnsettled,
   mockFindPendingForCancelledMeetings,
+  mockFindSettledMissingLedgerCredit,
   mockCancel,
   mockDriveSession,
   mockEndSession,
@@ -16,6 +17,7 @@ const {
   mockFinalizeBilling,
   mockSettleSessionFromPresence,
   mockLoggerWarn,
+  mockLoggerError,
 } = vi.hoisted(() => ({
   mockFindMeterable: vi.fn(),
   mockFindWrappedIdle: vi.fn(),
@@ -24,6 +26,7 @@ const {
   mockFindFinalizedMissingPayout: vi.fn(),
   mockFindPresenceUnsettled: vi.fn(),
   mockFindPendingForCancelledMeetings: vi.fn(),
+  mockFindSettledMissingLedgerCredit: vi.fn(),
   mockCancel: vi.fn(),
   mockDriveSession: vi.fn(),
   mockEndSession: vi.fn(),
@@ -33,10 +36,17 @@ const {
   // ⚠ HOISTED so the no-silent-caps warns are ASSERTABLE. The module calls `createLogger`
   // once at import, so a factory that mints a fresh `vi.fn()` per call is unreachable here.
   mockLoggerWarn: vi.fn(),
+  /** ⚠ HOISTED for the same reason as `mockLoggerWarn` — pass 7's per-row alarm is an `error`. */
+  mockLoggerError: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockLoggerWarn, error: vi.fn() }),
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mockLoggerWarn,
+    error: mockLoggerError,
+  }),
 }));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: {
@@ -47,6 +57,7 @@ vi.mock('@balo/db', () => ({
     findFinalizedMissingPayout: mockFindFinalizedMissingPayout,
     findPresenceUnsettled: mockFindPresenceUnsettled,
     findPendingForCancelledMeetings: mockFindPendingForCancelledMeetings,
+    findSettledMissingLedgerCredit: mockFindSettledMissingLedgerCredit,
     cancel: mockCancel,
   },
 }));
@@ -84,6 +95,7 @@ describe('runSessionMeterSweep', () => {
     mockFindFinalizedMissingPayout.mockResolvedValue([]);
     mockFindPresenceUnsettled.mockResolvedValue([]);
     mockFindPendingForCancelledMeetings.mockResolvedValue([]);
+    mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
     mockDriveSession.mockImplementation(async (id: string) => ({
       session: activeSession({ id }),
       transitions: {},
@@ -364,6 +376,95 @@ describe('runSessionMeterSweep', () => {
 
       expect(mockLoggerWarn).not.toHaveBeenCalledWith(
         expect.anything(),
+        expect.stringContaining('FILLED')
+      );
+    });
+  });
+
+  /**
+   * Pass 7 — THE SETTLED-WITHOUT-CREDIT ALARM.
+   *
+   * ⚠ A session marked `settled` with no `overdraft_settlement` ledger row is money Stripe took,
+   * a receivable cleared, dunning stopped, and NOTHING in the ledger to show for it — and the
+   * client is shown "settled" (`settlement_status` is on the client allow-list). Post-fix this
+   * pass returns 0 forever; it exists to surface rows already corrupted in production and to
+   * fail loudly if a settled-without-credit write is ever reintroduced.
+   */
+  describe('settled-without-credit alarm (pass 7)', () => {
+    function corruptSession(id: string) {
+      return {
+        id,
+        walletId: 'wallet_1',
+        companyId: 'company_1',
+        settlementStatus: 'settled',
+        settledAt: new Date(NOW.getTime() - 90 * 60_000),
+        overdraftSettledMinor: 7600,
+        stripePaymentIntentId: 'pi_lost',
+      };
+    }
+
+    it('is silent and counts 0 in the expected steady state', async () => {
+      const result = await runSessionMeterSweep(NOW);
+
+      expect(result.settledMissingCredit).toBe(0);
+      expect(mockLoggerError).not.toHaveBeenCalled();
+    });
+
+    it('raises a per-row log.error naming the session, and counts every row', async () => {
+      mockFindSettledMissingLedgerCredit.mockResolvedValue([
+        corruptSession('s1'),
+        corruptSession('s2'),
+      ]);
+
+      const result = await runSessionMeterSweep(NOW);
+
+      expect(result.settledMissingCredit).toBe(2);
+      expect(mockLoggerError).toHaveBeenCalledTimes(2);
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 's1', stripePaymentIntentId: 'pi_lost' }),
+        expect.stringContaining('NO overdraft_settlement ledger credit')
+      );
+    });
+
+    /**
+     * ⚠ ALARM ONLY. The repair belongs where the evidence is about to be erased
+     * (`markSettledFromReconcile`, which now verifies the credit and applies it before anything
+     * is marked or cleared), with a proven-succeeded PaymentIntent in hand. A sweep firing an
+     * hour later would be repairing from strictly weaker evidence.
+     */
+    it('WRITES NOTHING — it never ends, cancels, reconciles or re-finalizes a reported row', async () => {
+      mockFindSettledMissingLedgerCredit.mockResolvedValue([corruptSession('s1')]);
+
+      await runSessionMeterSweep(NOW);
+
+      expect(mockEndSession).not.toHaveBeenCalled();
+      expect(mockCancel).not.toHaveBeenCalled();
+      expect(mockReconcile).not.toHaveBeenCalled();
+      expect(mockFinalizeBilling).not.toHaveBeenCalled();
+      expect(mockSettleSessionFromPresence).not.toHaveBeenCalled();
+    });
+
+    it('⚠ bounds the batch EXPLICITLY — never a bare call on the repository default', async () => {
+      await runSessionMeterSweep(NOW);
+
+      expect(mockFindSettledMissingLedgerCredit).toHaveBeenCalledWith(expect.any(Date), 100);
+    });
+
+    it('uses a 60-minute cutoff so an in-flight reconcile is never reported as corruption', async () => {
+      await runSessionMeterSweep(NOW);
+
+      const [cutoff] = mockFindSettledMissingLedgerCredit.mock.calls[0] as [Date, number];
+      expect(cutoff).toEqual(new Date(NOW.getTime() - 60 * 60_000));
+    });
+
+    it('⚠ WARNS when the batch FILLS — further corrupted rows were dropped from this tick', async () => {
+      const full = Array.from({ length: 100 }, (_unused, index) => corruptSession(`s${index}`));
+      mockFindSettledMissingLedgerCredit.mockResolvedValue(full);
+
+      await runSessionMeterSweep(NOW);
+
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 100, oldestSessionId: 's0' }),
         expect.stringContaining('FILLED')
       );
     });

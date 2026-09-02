@@ -35,6 +35,7 @@ const {
   mockApplySavedCardDisplay,
   mockRetrieveCardDisplay,
   mockTrackServer,
+  REPAIR_TX,
 } = vi.hoisted(() => ({
   // Default: a fresh credit onto a wallet the receipt can read (companyId/balance/expiry).
   mockApplyLedgerEntry: vi.fn(async () => ({
@@ -78,6 +79,8 @@ const {
   // carry no customer / payment_method). Individual cases override it.
   mockRetrieveCardDisplay: vi.fn(async () => null),
   mockTrackServer: vi.fn(),
+  /** Identity marker for the transaction `applyOverdraftSettlementFromStripe` opens itself. */
+  REPAIR_TX: { __repairTx: true },
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -107,7 +110,10 @@ vi.mock('@balo/db', () => ({
   },
   promoRedemptionsRepository: { redeem: mockRedeem },
   deriveIdempotencyKey: mockDeriveIdempotencyKey,
-  db: {},
+  // `applyOverdraftSettlementFromStripe` opens its own transaction (every other export here is
+  // handed one by its caller). The stub runs the callback with a marker handle so the assertions
+  // below can prove the ledger write and the mark + clear share ONE transaction.
+  db: { transaction: async (fn: (t: unknown) => Promise<unknown>) => fn(REPAIR_TX) },
 }));
 vi.mock('../credit-session/notify.js', () => ({
   publishSessionSettled: mockPublishSessionSettled,
@@ -130,7 +136,11 @@ vi.mock('../credit/auto-topup.js', () => ({
   triggerAutoTopupBestEffort: mockTriggerAutoTopup,
 }));
 
-import { applyStripeEffect, resolveStripeEffect } from './dispatch.js';
+import {
+  applyOverdraftSettlementFromStripe,
+  applyStripeEffect,
+  resolveStripeEffect,
+} from './dispatch.js';
 import { StripeSettlementError } from './errors.js';
 
 /** Build a minimal Stripe.Event shell for the dispatcher's `switch (event.type)`. */
@@ -1241,5 +1251,104 @@ describe('applyStripeEffect', () => {
       })
     ).rejects.toThrow(/sessionId/);
     expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyOverdraftSettlementFromStripe (the stuck-settlement repair arm)', () => {
+  /** The already-committed session row the reconciler hands in. */
+  const SESSION = {
+    id: 'session_1',
+    companyId: 'company_1',
+    walletId: 'wallet_1',
+    expertProfileId: 'expert_1',
+    initiatingMemberId: 'member_1',
+    overdraftSettledMinor: 7600,
+  } as unknown as Parameters<typeof applyOverdraftSettlementFromStripe>[0];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRetrieveSettlement.mockResolvedValue({ ...SETTLEMENT, stripePaymentIntentId: 'pi_stuck' });
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      expertProfileId: 'expert_1',
+      overdraftSettledMinor: 7600,
+    });
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 0, expiresAt: new Date('2027-01-01') },
+    });
+  });
+
+  it('reads the settlement for the proven-succeeded PI and credits under overdraft_settlement:{sessionId}', async () => {
+    await applyOverdraftSettlementFromStripe(SESSION, 'pi_stuck');
+
+    // READ-ONLY — no charge is created anywhere on this path.
+    expect(mockRetrieveSettlement).toHaveBeenCalledWith('pi_stuck');
+    expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
+      REPAIR_TX,
+      expect.objectContaining({
+        walletId: 'wallet_1',
+        entryType: 'purchase',
+        reason: 'overdraft_settlement',
+        // The ONE key shared by the original Stripe charge, the webhook and the reconcile lookup.
+        idempotencyKey: 'overdraft_settlement:session_1',
+        // NOT NULL on the session row ⇒ `applyLedgerEntry`'s attribution guard is satisfied.
+        memberId: 'member_1',
+        sessionId: 'session_1',
+      })
+    );
+  });
+
+  it('commits the mark-settled + receivable-clear in the SAME transaction as the ledger write', async () => {
+    await applyOverdraftSettlementFromStripe(SESSION, 'pi_stuck');
+
+    // ⚠ THE WHOLE POINT OF THE FIX: the debt evidence can no longer be erased ahead of the money,
+    // because both statements ride the transaction the ledger row is written in.
+    expect(mockMarkSettlementResult).toHaveBeenCalledWith(
+      REPAIR_TX,
+      expect.objectContaining({
+        sessionId: 'session_1',
+        status: 'settled',
+        stripePaymentIntentId: 'pi_stuck',
+      })
+    );
+    expect(mockReceivableClear).toHaveBeenCalledWith({ sessionId: 'session_1' }, REPAIR_TX);
+  });
+
+  it('runs the post-commit publishes AFTER the transaction (receipt + auto-top-up trigger)', async () => {
+    await applyOverdraftSettlementFromStripe(SESSION, 'pi_stuck');
+    // The webhook never landed, so the receipt it would have sent is sent from here — exactly
+    // once, because a later webhook dedups on the ledger key and returns no effects.
+    expect(mockPublishSessionSettled).toHaveBeenCalled();
+    expect(mockTriggerAutoTopup).toHaveBeenCalledWith(
+      'wallet_1',
+      expect.objectContaining({ reason: 'auto_topup_trigger' })
+    );
+  });
+
+  it('a racing webhook that already credited dedups — mark + clear only, no re-publish', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: true,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 0, expiresAt: new Date('2027-01-01') },
+    });
+    await applyOverdraftSettlementFromStripe(SESSION, 'pi_stuck');
+    expect(mockMarkSettlementResult).toHaveBeenCalled();
+    expect(mockReceivableClear).toHaveBeenCalled();
+    expect(mockPublishSessionSettled).not.toHaveBeenCalled();
+    expect(mockTriggerAutoTopup).not.toHaveBeenCalled();
+  });
+
+  it('writes NOTHING when the settlement cannot be read (the debt stays intact)', async () => {
+    mockRetrieveSettlement.mockRejectedValue(new Error('no balance_transaction'));
+    await expect(applyOverdraftSettlementFromStripe(SESSION, 'pi_stuck')).rejects.toThrow(
+      'no balance_transaction'
+    );
+    expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
+    expect(mockMarkSettlementResult).not.toHaveBeenCalled();
+    expect(mockReceivableClear).not.toHaveBeenCalled();
   });
 });
