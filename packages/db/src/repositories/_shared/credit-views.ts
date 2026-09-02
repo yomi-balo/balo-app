@@ -29,6 +29,20 @@ import type {
  * secrets) are STRUCTURALLY excluded (memory `reference_drizzle_with_hydration_leaks_secrets`
  * — never `with:` full-row hydration). Invariant #1 asserts these secret keys are
  * absent from this set.
+ *
+ * ⚠ THE TOP-UP REDESIGN ADDED FOUR CARD COLUMNS AND NOT THE OTHER FOUR. The line runs between
+ * DISPLAY and CREDENTIAL, not between "card-related" and "not":
+ *   · ON the list — `cardBrand` / `cardLast4` / `cardExpMonth` / `cardExpYear`. These are
+ *     exactly what any checkout prints back at the cardholder about their own card
+ *     ("Visa •••• 4242, expires 08/28"). None of them can charge anything; they exist so a
+ *     returning buyer sees their card instead of an empty form.
+ *   · OFF the list — `stripePaymentMethodId`, `mandateRef`, `stripeCustomerId`,
+ *     `mandateStatus` (the `WALLET_SECRET_KEYS` of `credit-views.test.ts`) and
+ *     `pendingTopupAt` (internal operational state). The payment-method id is what actually
+ *     moves money; it never crosses to a client surface.
+ * This allow-list IS the client boundary (Decision 4: no RLS), so newly client-visible columns
+ * belong on it — the alternative, a second hand-rolled projection at the page, would mean two
+ * statements of one rule that can silently disagree.
  */
 export const CLIENT_WALLET_VIEW_COLUMNS = {
   id: true,
@@ -40,6 +54,12 @@ export const CLIENT_WALLET_VIEW_COLUMNS = {
   topupThresholdMinor: true,
   topupReloadMinor: true,
   overdraftCeilingMinor: true,
+  // Saved-card DISPLAY facts — see the docblock above for why these four and not the mandate
+  // secrets. `WALLET_SECRET_KEYS` in `credit-views.test.ts` is deliberately UNCHANGED.
+  cardBrand: true,
+  cardLast4: true,
+  cardExpMonth: true,
+  cardExpYear: true,
 } as const;
 
 /** The projected, PII-safe wallet shape a client surface may render + available balance. */
@@ -53,6 +73,17 @@ export interface ClientWalletView {
   topupThresholdMinor: number;
   topupReloadMinor: number;
   overdraftCeilingMinor: number | null;
+  /**
+   * Saved-card DISPLAY facts — all four move together (the
+   * `credit_wallets_card_display_all_or_none` CHECK), so `cardBrand === null` means "no card
+   * on file to show". A populated set does NOT by itself mean the card is chargeable: the
+   * Stripe ids that make it so are deliberately absent from this view, and the page-level
+   * projection re-checks them (mirroring `isWalletCardReusableOnSession`).
+   */
+  cardBrand: string | null;
+  cardLast4: string | null;
+  cardExpMonth: number | null;
+  cardExpYear: number | null;
   availableMinor: number;
 }
 
@@ -74,6 +105,10 @@ export function toClientWalletView(
     | 'topupThresholdMinor'
     | 'topupReloadMinor'
     | 'overdraftCeilingMinor'
+    | 'cardBrand'
+    | 'cardLast4'
+    | 'cardExpMonth'
+    | 'cardExpYear'
   >,
   availableMinor: number
 ): ClientWalletView {
@@ -87,6 +122,10 @@ export function toClientWalletView(
     topupThresholdMinor: row.topupThresholdMinor,
     topupReloadMinor: row.topupReloadMinor,
     overdraftCeilingMinor: row.overdraftCeilingMinor,
+    cardBrand: row.cardBrand,
+    cardLast4: row.cardLast4,
+    cardExpMonth: row.cardExpMonth,
+    cardExpYear: row.cardExpYear,
     availableMinor,
   };
 }

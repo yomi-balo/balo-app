@@ -38,6 +38,70 @@ describe('notificationEvents.publish', () => {
     );
   });
 
+  it('sanitises colons out of the jobId — BullMQ rejects them outright', async () => {
+    // The regression this pins: credit correlationIds ARE ledger idempotency keys, and those
+    // are colon-joined (`manual_purchase:{piId}`). BullMQ rejects a jobId whose colon count is
+    // not 0 or exactly 2 (a legacy repeatable-job carve-out — see toJobId's docblock), so the
+    // one-colon and 3+-colon shapes had never delivered a notification; it surfaced only as a
+    // best-effort log line beside an already-committed money effect, which is why it went
+    // unnoticed. The pre-existing cases above all use colon-free ids, so they could never
+    // have caught it.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'manual_purchase:pi_3UB4aV2NflDPoiWN0G8yaIxz',
+    } as never);
+
+    const [, , opts] = mockAdd.mock.calls[0] as [unknown, unknown, { jobId: string }];
+    expect(opts.jobId).not.toContain(':');
+    // `_` is escaped to `__` FIRST, so the mapping is injective for any future reason name.
+    expect(opts.jobId).toBe(
+      'credit.topup.completed--manual__purchase_cpi__3UB4aV2NflDPoiWN0G8yaIxz'
+    );
+  });
+
+  it('keeps distinct correlationIds distinct after sanitising (dedup is not weakened)', async () => {
+    // Two different auto-top-up keys must not collapse onto one job id, or the second
+    // notification would be silently deduped away as a replay of the first.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'auto_topup:wallet-a:entry-1',
+    } as never);
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'auto_topup:wallet-a:entry-2',
+    } as never);
+
+    const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('stays injective when _ and : appear in swapped order (the escape-collision case)', async () => {
+    // The case a two-pass `_`→`__` then `:`→`_` escape gets WRONG: both of these collapse to
+    // `a___b`, because the replacement for `:` is a single `_` that merges with the escaped
+    // pair. Only a 2-char escape whose second character disambiguates survives this.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'a_:b',
+    } as never);
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'a:_b',
+    } as never);
+
+    const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('stays injective for reason names that would collide under a naive : → _ swap', async () => {
+    // The hazard the escape closes: `manual:x` and `manual_x` both become `manual_x` if `:` is
+    // replaced without escaping `_` first, silently merging two notifications into one job.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'manual:x',
+    } as never);
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'manual_x',
+    } as never);
+
+    const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every((id) => !id.includes(':'))).toBe(true);
+  });
+
   it('publishes expert.application_submitted event with correct jobId format', async () => {
     const payload = {
       correlationId: 'app-456',

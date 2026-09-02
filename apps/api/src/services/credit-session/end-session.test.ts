@@ -8,6 +8,8 @@ const {
   mockReceivableClear,
   mockCreateOffSessionCharge,
   mockRetrievePaymentIntentStatus,
+  mockApplyOverdraftSettlementFromStripe,
+  mockFindLedgerByIdempotencyKey,
   mockDriveSession,
   mockPublishSessionSettled,
   mockPublishSettlementFailure,
@@ -23,6 +25,8 @@ const {
   mockReceivableClear: vi.fn(),
   mockCreateOffSessionCharge: vi.fn(),
   mockRetrievePaymentIntentStatus: vi.fn(),
+  mockApplyOverdraftSettlementFromStripe: vi.fn(),
+  mockFindLedgerByIdempotencyKey: vi.fn(),
   mockDriveSession: vi.fn(),
   mockPublishSessionSettled: vi.fn(),
   mockPublishSettlementFailure: vi.fn(),
@@ -43,6 +47,7 @@ vi.mock('@balo/db', () => ({
   },
   creditWalletsRepository: { findById: mockFindWallet },
   creditReceivablesRepository: { open: mockReceivableOpen, clear: mockReceivableClear },
+  creditLedgerRepository: { findByIdempotencyKey: mockFindLedgerByIdempotencyKey },
   deriveIdempotencyKey: (input: { sessionId?: string }) =>
     `overdraft_settlement:${input.sessionId}`,
   db: { transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({}) },
@@ -50,6 +55,7 @@ vi.mock('@balo/db', () => ({
 vi.mock('../stripe/index.js', () => ({
   createOffSessionCharge: mockCreateOffSessionCharge,
   retrievePaymentIntentStatus: mockRetrievePaymentIntentStatus,
+  applyOverdraftSettlementFromStripe: mockApplyOverdraftSettlementFromStripe,
 }));
 vi.mock('./meter-driver.js', () => ({ driveSession: mockDriveSession }));
 vi.mock('./authorize-session-actor.js', () => ({ authorizeSessionActor: mockAuthorize }));
@@ -409,6 +415,10 @@ describe('reconcileStuckSettlement', () => {
     vi.clearAllMocks();
     mockFindWallet.mockResolvedValue(MANDATE_WALLET);
     mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_1' }, created: true });
+    // Default = the ORDINARY world: the payment_intent.succeeded webhook already applied the
+    // `overdraft_settlement` credit, so reconcile is only re-stating what it did. The repair-arm
+    // cases below override this to `undefined` (no credit ⇒ the money is unrecorded).
+    mockFindLedgerByIdempotencyKey.mockResolvedValue({ id: 'ledger_1' });
   });
 
   it('does nothing when the session is no longer processing', async () => {
@@ -417,7 +427,7 @@ describe('reconcileStuckSettlement', () => {
     expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
   });
 
-  it('marks settled + clears the receivable when the stored PI already succeeded (no re-charge)', async () => {
+  it('marks settled + clears the receivable when the PI succeeded AND the ledger credit exists (no re-charge)', async () => {
     mockRetrievePaymentIntentStatus.mockResolvedValue({ status: 'succeeded', hardDeclined: false });
     await reconcileStuckSettlement(stuck({}), { now: NOW });
     expect(mockRetrievePaymentIntentStatus).toHaveBeenCalledWith('pi_stuck');
@@ -430,6 +440,73 @@ describe('reconcileStuckSettlement', () => {
       })
     );
     expect(mockReceivableClear).toHaveBeenCalledWith({ sessionId: 'session_1' }, expect.anything());
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+  });
+
+  // ── The settled-without-credit hazard (the money bug this arm exists to close) ──
+  //
+  // Reconcile used to mark `settled` + CLEAR the receivable unconditionally, deferring the ledger
+  // credit to the `payment_intent.succeeded` webhook. A webhook can permanently fail while still
+  // returning HTTP 200 — Stripe then never redelivers — and the row is left reading `settled`
+  // (client-visible), dunning stopped, receivable gone, and NO ledger row for money Stripe took.
+
+  it('never marks settled or clears the receivable without an overdraft_settlement ledger entry', async () => {
+    mockRetrievePaymentIntentStatus.mockResolvedValue({ status: 'succeeded', hardDeclined: false });
+    // The webhook never landed — there is no credit behind the "succeeded" PI.
+    mockFindLedgerByIdempotencyKey.mockResolvedValue(undefined);
+
+    await reconcileStuckSettlement(stuck({}), { now: NOW });
+
+    // It looked for the credit under the ONE key all three writers agree on.
+    expect(mockFindLedgerByIdempotencyKey).toHaveBeenCalledWith('overdraft_settlement:session_1');
+    // Finding none, it applied the credit itself through the webhook pipeline, with the PI it
+    // has already proven succeeded. (`applyOverdraftSettlementFromStripe` reads the settlement
+    // and does mark + clear INSIDE the ledger-write transaction — asserted in dispatch.test.ts.)
+    expect(mockApplyOverdraftSettlementFromStripe).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'session_1', walletId: 'wallet_1' }),
+      'pi_stuck'
+    );
+    // ⚠ THE POINT: this module marks NOTHING and clears NOTHING of its own on the repair arm —
+    // the mark + clear ride the same transaction as the ledger row, so they can never outrun it.
+    expect(mockMarkSettlementResult).not.toHaveBeenCalled();
+    expect(mockReceivableClear).not.toHaveBeenCalled();
+    // And no second charge: retrieving a settlement is read-only.
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+  });
+
+  it('does NOT re-apply the credit (or re-publish the receipt) when the webhook already landed', async () => {
+    mockRetrievePaymentIntentStatus.mockResolvedValue({ status: 'succeeded', hardDeclined: false });
+    mockFindLedgerByIdempotencyKey.mockResolvedValue({ id: 'ledger_1' });
+
+    await reconcileStuckSettlement(stuck({}), { now: NOW });
+
+    expect(mockApplyOverdraftSettlementFromStripe).not.toHaveBeenCalled();
+    // The mark + clear still run — idempotent re-statements of what the webhook already wrote.
+    expect(mockMarkSettlementResult).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sessionId: 'session_1', status: 'settled' })
+    );
+    expect(mockReceivableClear).toHaveBeenCalledWith({ sessionId: 'session_1' }, expect.anything());
+    // The receipt stayed with the webhook that applied the credit — never re-sent from here.
+    expect(mockPublishSessionSettled).not.toHaveBeenCalled();
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+  });
+
+  it('leaves the debt intact when applying the credit fails (no mark, no clear, error propagates)', async () => {
+    mockRetrievePaymentIntentStatus.mockResolvedValue({ status: 'succeeded', hardDeclined: false });
+    mockFindLedgerByIdempotencyKey.mockResolvedValue(undefined);
+    // e.g. `retrieveSettlement` throwing on an un-populated balance_transaction.
+    mockApplyOverdraftSettlementFromStripe.mockRejectedValue(new Error('no balance_transaction'));
+
+    await expect(reconcileStuckSettlement(stuck({}), { now: NOW })).rejects.toThrow(
+      'no balance_transaction'
+    );
+
+    // Nothing was marked, nothing was cleared: the session stays `processing` with its
+    // receivable, and pass 4's per-row catch retries on the next tick.
+    expect(mockMarkSettlementResult).not.toHaveBeenCalled();
+    expect(mockReceivableClear).not.toHaveBeenCalled();
+    // Still no second charge on the failure path.
     expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
   });
 

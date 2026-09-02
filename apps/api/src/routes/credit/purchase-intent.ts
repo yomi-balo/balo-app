@@ -1,8 +1,17 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { creditWalletsRepository } from '@balo/db';
+import { createLogger } from '@balo/shared/logging';
+import { isWalletCardReusableOnSession } from '@balo/shared/credit';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
-import { ensureCustomer, createOnSessionPurchaseIntent } from '../../services/stripe/index.js';
+import { resolveAppUrl } from '../../lib/app-url.js';
+import {
+  ensureCustomer,
+  createOnSessionPurchaseIntent,
+  createOnSessionSavedCardCharge,
+} from '../../services/stripe/index.js';
+
+const log = createLogger('credit');
 
 /**
  * Body for `POST /credit/purchase-intent` (BAL-377). The web Server Action has already
@@ -38,6 +47,17 @@ const purchaseIntentBodySchema = z.object({
   initiatingMemberId: z.uuid(),
   clientRequestId: z.uuid(),
   promoCode: z.string().min(1).max(64).optional(),
+  /**
+   * Which card to charge. `new_card` (default) keeps the shipped deferred flow — the browser
+   * confirms the returned client secret against its Payment Element. `saved_card` charges the
+   * wallet's stored payment method, created AND confirmed here, because there is no Element to
+   * submit and the browser must never learn the payment-method id.
+   *
+   * ⚠ The two sources build PaymentIntents with DIFFERENT params, so they must never share a
+   * Stripe idempotency key — the web composer mints a fresh `clientRequestId` on a source
+   * switch (its config signature includes `paymentMethodSource`). Reusing one would 400.
+   */
+  paymentMethodSource: z.enum(['new_card', 'saved_card']).default('new_card'),
 });
 
 export async function purchaseIntentRoute(fastify: FastifyInstance): Promise<void> {
@@ -60,11 +80,72 @@ export async function purchaseIntentRoute(fastify: FastifyInstance): Promise<voi
         initiatingMemberId,
         clientRequestId,
         promoCode,
+        paymentMethodSource,
       } = parsed.data;
 
       const wallet = await creditWalletsRepository.findById(walletId);
       if (wallet === undefined) {
         return reply.status(404).send({ error: 'wallet_not_found' });
+      }
+
+      // The SAME key format on both paths; the composer guarantees a distinct
+      // `clientRequestId` per source, so one buyer switching cards never reuses a key.
+      const idempotencyKey = `purchase:${walletId}:${clientRequestId}`;
+
+      if (paymentMethodSource === 'saved_card') {
+        const { stripeCustomerId, stripePaymentMethodId } = wallet;
+        // The predicate is the single statement of "may we charge this on-session"; the two
+        // explicit null checks alongside it are what actually NARROW the types (it returns a
+        // boolean and does not narrow — the shape `auto-topup.ts` uses).
+        if (
+          !isWalletCardReusableOnSession(wallet) ||
+          stripeCustomerId === null ||
+          stripePaymentMethodId === null
+        ) {
+          log.warn(
+            { op: 'purchaseIntent', walletId },
+            'saved_card purchase requested for a wallet with no stored card'
+          );
+          return reply.status(400).send({ error: 'no_saved_card' });
+        }
+
+        const charge = await createOnSessionSavedCardCharge({
+          walletId,
+          customerId: stripeCustomerId,
+          paymentMethodId: stripePaymentMethodId,
+          presentmentCurrency,
+          presentmentAmountMinor,
+          initiatingMemberId,
+          idempotencyKey,
+          // SERVER-derived, never client-supplied — an open redirect otherwise (R15).
+          returnUrl: resolveAppUrl('/billing/top-up'),
+          promoCode,
+        });
+
+        if (charge.outcome === 'declined') {
+          return reply.status(402).send({
+            outcome: 'declined',
+            code: charge.code,
+            paymentIntentId: charge.paymentIntentId,
+          });
+        }
+        if (charge.status === 'succeeded' || charge.status === 'processing') {
+          // The wallet is credited by the webhook, never from this return value.
+          return reply.send({ outcome: 'complete', paymentIntentId: charge.paymentIntentId });
+        }
+        if (charge.status === 'requires_action') {
+          return reply.send({
+            outcome: 'requires_action',
+            clientSecret: charge.clientSecret,
+            paymentIntentId: charge.paymentIntentId,
+          });
+        }
+        // Any other terminal status (canceled, requires_capture, …) is not something the buyer
+        // can complete here — report it as a decline with no specific code rather than
+        // pretending the top-up landed.
+        return reply
+          .status(402)
+          .send({ outcome: 'declined', code: null, paymentIntentId: charge.paymentIntentId });
       }
 
       const customerId = await ensureCustomer(wallet);
@@ -75,11 +156,11 @@ export async function purchaseIntentRoute(fastify: FastifyInstance): Promise<voi
         presentmentCurrency,
         presentmentAmountMinor,
         initiatingMemberId,
-        idempotencyKey: `purchase:${walletId}:${clientRequestId}`,
+        idempotencyKey,
         promoCode,
       });
 
-      return reply.send({ clientSecret, paymentIntentId });
+      return reply.send({ outcome: 'needs_client_confirmation', clientSecret, paymentIntentId });
     }
   );
 }

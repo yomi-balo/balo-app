@@ -22,7 +22,7 @@ const WALLET: WalletSnapshot = {
   walletId: 'wallet-1',
   balanceMinor: 50_000,
   lowBalanceMode: 'keep_going',
-  hasCard: false,
+  savedCard: null,
   topupReloadMinor: 30_000,
   topupThresholdMinor: 5_000,
 };

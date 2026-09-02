@@ -26,6 +26,7 @@ import { isWalletMandateActive, minutesOfRunway } from '@balo/shared/credit';
 import { db, type Database } from '../client';
 import {
   creditHolds,
+  creditLedger,
   creditSessions,
   creditWallets,
   expertPayoutRecords,
@@ -2109,6 +2110,69 @@ export const creditSessionsRepository = {
         )
       )
       .orderBy(asc(creditSessions.endedAt));
+  },
+
+  /**
+   * THE ALARM FINDER — sessions marked `settlement_status='settled'` for which NO
+   * `overdraft_settlement` credit exists in the ledger. Money the client was told is settled,
+   * with no ledger row to show for it.
+   *
+   * ⚠⚠ WHY IT IS SOUND TO SELECT ON `settled` ALONE, WITH NO DISCRIMINATOR COLUMN. `settled` has
+   * exactly TWO writers: `markSettlementSettled` (`apps/api/.../stripe/dispatch.ts`), which marks
+   * IN THE SAME TRANSACTION as the ledger write, and `markSettledFromReconcile`
+   * (`apps/api/.../credit-session/end-session.ts`), whose repair arm now routes through that
+   * very function. So a `settled` row WITHOUT a credit is not a normal shape with a benign
+   * explanation — it is a row written by a path that erased the debt evidence before (or
+   * instead of) recording the money. Post-fix this finder returns `[]` forever; it exists to
+   * surface rows ALREADY corrupted in production and to fail loudly if anyone reintroduces a
+   * settled-without-credit write.
+   *
+   * The predicate, term by term:
+   *   · `settlement_status = 'settled'` — the claim being audited. (A safe literal in an index
+   *     predicate too: `'settled'` shipped in the original `CREATE TYPE`, migration 0048, so the
+   *     `ADD VALUE` restriction recorded on `enums.ts` does not apply to it.)
+   *   · `settled_at <= cutoff` — the caller passes `now − 60min`, generously past the ~10-minute
+   *     stuck-settlement cutoff, so an in-flight reconcile is never reported as a corruption.
+   *     Anchored on `settled_at` because `markSettlementResult` stamps it on exactly this
+   *     transition. A legacy row with `settled_at` NULL is therefore EXCLUDED (`lte` on NULL is
+   *     NULL ⇒ not true) — deliberate: it predates the stamp and has no reliable clock.
+   *   · `credit_ledger.id IS NULL` over a LEFT JOIN on `(session_id, wallet_id, reason =
+   *     'overdraft_settlement')` — the anti-join. `wallet_id` rides the join alongside
+   *     `session_id` so a row mis-attributed to another wallet cannot satisfy the audit; the
+   *     ledger is APPEND-ONLY with NO `deleted_at`, so unlike `findFinalizedMissingPayout` there
+   *     is no soft-delete term to add here.
+   *   · `deleted_at IS NULL` — the shipped soft-delete convention.
+   *
+   * Rides `credit_sessions_settled_missing_credit_idx` (migration 0080) — `(settled_at) WHERE
+   * settlement_status = 'settled' AND deleted_at IS NULL`. Nothing served `settled` before it:
+   * `credit_sessions_settling_idx` is partial on `'processing'` only.
+   *
+   * Ordered oldest-settled first and batch-bounded via `limit`. ⚠ The CALLER must `log.warn` when
+   * the batch FILLS — a silent cap on a money alarm reads as "nothing is wrong".
+   */
+  async findSettledMissingLedgerCredit(cutoff: Date, limit = 100): Promise<CreditSession[]> {
+    const rows = await db
+      .select({ session: creditSessions })
+      .from(creditSessions)
+      .leftJoin(
+        creditLedger,
+        and(
+          eq(creditLedger.sessionId, creditSessions.id),
+          eq(creditLedger.walletId, creditSessions.walletId),
+          eq(creditLedger.reason, 'overdraft_settlement')
+        )
+      )
+      .where(
+        and(
+          eq(creditSessions.settlementStatus, 'settled'),
+          lte(creditSessions.settledAt, cutoff),
+          isNull(creditSessions.deletedAt),
+          isNull(creditLedger.id)
+        )
+      )
+      .orderBy(asc(creditSessions.settledAt))
+      .limit(limit);
+    return rows.map((row) => row.session);
   },
 
   /**

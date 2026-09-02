@@ -10,13 +10,19 @@ import {
   formatIndicative,
   timeStr,
 } from '@/lib/credit/display-constants';
-import type { DisplayFxSnapshot, FundingMethod } from './types';
+import { cn } from '@/lib/utils';
+import type { DisplayFxSnapshot } from './types';
 
 interface TopUpHeroProps {
   readonly amountMinor: number;
   readonly promoMinor: number;
-  readonly funding: FundingMethod;
   readonly fx: DisplayFxSnapshot | null;
+  /**
+   * Tighter padding + a smaller figure for the stacked layout, where the hero sits above the
+   * scrolling column rather than inside the rail. ONE hero component either way — a second
+   * "compact hero" would be near-identical markup and would trip the duplication gate.
+   */
+  readonly compact?: boolean;
 }
 
 const RATE_HINT =
@@ -29,7 +35,12 @@ const RATE_HINT =
  * presentation-only. Two slowly-floating glow orbs turn green when the A$5,000 goal is hit.
  * Reduced-motion: orbs static (CSS media query) + counters instant (the eased hook).
  */
-export function TopUpHero({ amountMinor, promoMinor, funding, fx }: Readonly<TopUpHeroProps>) {
+export function TopUpHero({
+  amountMinor,
+  promoMinor,
+  fx,
+  compact = false,
+}: Readonly<TopUpHeroProps>) {
   const creditedMinor = amountMinor + promoMinor;
   const hitGoal = amountMinor >= GOAL_AMOUNT_MINOR;
   const easedCredited = useEasedNumber(creditedMinor);
@@ -40,7 +51,12 @@ export function TopUpHero({ amountMinor, promoMinor, funding, fx }: Readonly<Top
     : 'linear-gradient(120deg,#fff 20%,#BFDBFE 60%,#DDD6FE 100%)';
 
   return (
-    <div className="relative overflow-hidden bg-gradient-to-br from-[#0F1729] to-[#1E293B] px-7 pt-6 pb-8">
+    <div
+      className={cn(
+        'relative overflow-hidden bg-gradient-to-br from-[#0F1729] to-[#1E293B]',
+        compact ? 'px-5 pt-4 pb-5' : 'px-7 pt-6 pb-8'
+      )}
+    >
       <style>{`
         @keyframes topupOrbA{0%,100%{transform:translate(0,0)}50%{transform:translate(-16px,14px)}}
         @keyframes topupOrbB{0%,100%{transform:translate(0,0)}50%{transform:translate(14px,-12px)}}
@@ -72,16 +88,20 @@ export function TopUpHero({ amountMinor, promoMinor, funding, fx }: Readonly<Top
           <Sparkles className="size-3.5" strokeWidth={2.4} aria-hidden="true" /> Your top-up buys
         </div>
 
-        <div className="mt-3 flex flex-wrap items-baseline gap-2.5">
+        <div className={cn('flex flex-wrap items-baseline gap-2.5', compact ? 'mt-2' : 'mt-3')}>
+          {/*
+            The gradient is applied by the `.topup-grad-text` class in globals.css, which gates
+            `background-clip: text` + `-webkit-text-fill-color: transparent` behind an
+            `@supports` check. Applying those inline and UNCONDITIONALLY (as this did) renders
+            the figure BLANK on any engine without background-clip support — the live bug this
+            replaces. Only the gradient VALUE is inline, as a custom property.
+          */}
           <span
-            className="text-[44px] leading-none font-bold tabular-nums"
-            style={{
-              background: heroTextGradient,
-              WebkitBackgroundClip: 'text',
-              backgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              transition: 'background .4s',
-            }}
+            className={cn(
+              'topup-grad-text leading-none font-bold tabular-nums',
+              compact ? 'text-[30px]' : 'text-[44px]'
+            )}
+            style={{ '--topup-grad': heroTextGradient } as React.CSSProperties}
           >
             ≈ {timeStr(easedCredited)}
           </span>
@@ -94,7 +114,7 @@ export function TopUpHero({ amountMinor, promoMinor, funding, fx }: Readonly<Top
           <span className="text-[15px] font-semibold text-white tabular-nums">
             {formatAud(easedAmount)}
           </span>
-          {funding === 'card' && fx && (
+          {fx && (
             <span className="text-[13px] font-medium text-white/50">
               ≈ {formatIndicative(amountMinor, fx.currency, fx.audToQuote)}
             </span>

@@ -18,23 +18,64 @@ export const CREDIT_EVENTS = {
   PROMO_REDEEMED: 'promo_redeemed',
   /** SetupIntent confirmed — a reusable off-session card mandate was captured. */
   MANDATE_CAPTURED: 'mandate_captured',
+  /** Top-up redesign — the buyer swapped between their saved card and a new one. */
+  PAYMENT_METHOD_CHANGED: 'credit_payment_method_changed',
+  /** Top-up redesign — a saved-card charge was refused (a USER outcome, not a system fault). */
+  PURCHASE_DECLINED: 'credit_purchase_declined',
 } as const;
+
+/** Which card a purchase charges. Mirrors the api/web `PaymentMethodSource` union. */
+export type PaymentMethodSourceProperty = 'new_card' | 'saved_card';
+
+/**
+ * What the RECEIPT could verify about the wallet when the event fired — the client-side half of
+ * the "charged but never credited" alarm.
+ *
+ *  · `pending`     — the charge confirmed in the browser; the webhook has not been observed to
+ *                    have credited the wallet YET. This is the honest value at receipt mount and
+ *                    the ONLY value `PURCHASE_COMPLETED` currently carries.
+ *  · `credited`    — the receipt's poll read the actor's own wallet and found the
+ *                    `manual_purchase:{piId}` ledger entry against it.
+ *  · `unconfirmed` — the poll window closed without ever seeing that entry.
+ *
+ * ⚠ `PURCHASE_COMPLETED` DELIBERATELY STAYS ON MOUNT AND KEEPS FIRING `'pending'`. Delaying it
+ * to the confirmed transition would drop the funnel step every time a tab closes, and the
+ * money truth belongs on the SERVER series (`MANUAL_PURCHASE_CREDITED` below). The gap between
+ * the two series IS the alarm; `credited` / `unconfirmed` are reserved so a later client event
+ * can carry them without churning this property's vocabulary.
+ */
+export type CreditStatusProperty = 'pending' | 'credited' | 'unconfirmed';
 
 export interface CreditEventMap {
   [CREDIT_EVENTS.PURCHASE_STARTED]: {
     amount_minor: number;
     promo_applied: boolean;
+    /**
+     * Always `'card'` since Invoice left the UI. KEPT rather than removed — dropping it would
+     * churn a live PostHog property (and every dashboard built on it) for no gain.
+     */
     funding_method: 'card' | 'invoice';
     low_balance_mode: 'auto_topup' | 'keep_going' | 'notify_only';
+    /** Top-up redesign — new card entered, or the card already on file. */
+    payment_method_source?: PaymentMethodSourceProperty;
   };
   [CREDIT_EVENTS.PURCHASE_COMPLETED]: {
     amount_minor: number;
     promo_applied: boolean;
     funding_method: 'card' | 'invoice';
     low_balance_mode: 'auto_topup' | 'keep_going' | 'notify_only';
+    payment_method_source?: PaymentMethodSourceProperty;
+    /** What the receipt could VERIFY about the wallet at fire time — see the type's docblock. */
+    credit_status?: CreditStatusProperty;
   };
   [CREDIT_EVENTS.PROMO_REDEEMED]: { code: string; bonus_minor: number };
   [CREDIT_EVENTS.MANDATE_CAPTURED]: { low_balance_mode: 'auto_topup' | 'keep_going' };
+  [CREDIT_EVENTS.PAYMENT_METHOD_CHANGED]: { to: PaymentMethodSourceProperty };
+  [CREDIT_EVENTS.PURCHASE_DECLINED]: {
+    amount_minor: number;
+    /** Stripe's specific refusal reason when it gave one; `null` otherwise. */
+    decline_code: string | null;
+  };
 }
 
 // -- Server events (fire from workers/sweeps via `trackServer`) --------------------
@@ -61,6 +102,17 @@ export const CREDIT_SERVER_EVENTS = {
    * `payment_intent.payment_failed` recovery belt is notification-only (no analytics).
    */
   AUTO_TOPUP_FAILED: 'credit_auto_topup_failed',
+  /**
+   * A MANUAL (buyer-initiated) top-up was CREDITED to the wallet — the money-in truth for the
+   * one credit reason that had no server event at all. Fires from the `payment_intent.succeeded`
+   * webhook's FRESH `manual_purchase` post-commit thunk, gated by the same `!deduped` that guards
+   * the receipt publish ⇒ exactly once per purchase, never on a replay.
+   *
+   * ⚠ THIS EXISTS BECAUSE "CHARGED BUT NEVER CREDITED" WAS INVISIBLE BY CONSTRUCTION. The client
+   * `PURCHASE_COMPLETED` proves only that the browser saw the charge confirm; nothing on the
+   * server said the wallet actually moved. The GAP between the two series is the alarm.
+   */
+  MANUAL_PURCHASE_CREDITED: 'credit_manual_purchase_credited',
 } as const;
 
 /** Display-FX quote currency (string-compatible with `@balo/db` FxDisplayQuote). */
@@ -92,6 +144,21 @@ export interface CreditServerEventMap {
     amount_minor: number;
     /** Resting balance that triggered the reload (pre-reload). */
     trigger_balance_minor: number;
+    company_id: string;
+    wallet_id: string;
+    /** = company_id (the natural subject of a wallet-level money event). */
+    distinct_id: string;
+  };
+  [CREDIT_SERVER_EVENTS.MANUAL_PURCHASE_CREDITED]: {
+    /** AUD FACE value credited (no fee/margin — fee-concealment posture, BAL-357). */
+    amount_minor: number;
+    /**
+     * Promo bonus granted in the SAME webhook transaction as the base credit; `0` when no promo
+     * applied OR when it was skipped at settlement (the grant is re-validated there).
+     */
+    promo_granted_minor: number;
+    /** Wallet balance after the credit AND any same-txn promo grant. */
+    balance_after_minor: number;
     company_id: string;
     wallet_id: string;
     /** = company_id (the natural subject of a wallet-level money event). */

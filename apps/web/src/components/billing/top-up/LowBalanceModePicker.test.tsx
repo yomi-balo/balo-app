@@ -73,4 +73,19 @@ describe('LowBalanceModePicker', () => {
     await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
     expect(onModeChange).toHaveBeenCalledWith('keep_going');
   });
+
+  it('NAMES the card in the consent note when one is on file', () => {
+    renderPicker({ mode: 'keep_going', cardLabel: 'Visa •••• 4242' });
+    expect(screen.getByText(/letting Balo charge Visa •••• 4242/i)).toBeInTheDocument();
+  });
+
+  it('falls back to "this card" when the card has no name yet (about to be entered)', () => {
+    renderPicker({ mode: 'keep_going' });
+    expect(screen.getByText(/letting Balo charge this card/i)).toBeInTheDocument();
+  });
+
+  it('shows the consent note ONLY for a card-backed mode', () => {
+    renderPicker({ mode: 'notify_only', cardLabel: 'Visa •••• 4242' });
+    expect(screen.queryByText(/letting Balo charge/i)).not.toBeInTheDocument();
+  });
 });

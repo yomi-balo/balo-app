@@ -17,6 +17,7 @@ export {
 } from './drawdown-state';
 export {
   isWalletMandateActive,
+  isWalletCardReusableOnSession,
   toSettleableSession,
   type SettleableSession,
   type MandateWalletFields,

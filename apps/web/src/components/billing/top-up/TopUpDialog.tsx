@@ -97,7 +97,12 @@ export function TopUpDialog({ trigger, wallet, fx }: Readonly<TopUpDialogProps>)
       title="Top up your balance"
       description="Add prepaid credit to your team balance."
     >
-      {(close) => <TopUpComposer wallet={wallet} fx={fx} onClose={close} />}
+      {/*
+        Always STACKED in the dialog: the content box is ≤560px (Dialog) or a bottom Sheet, so a
+        340px summary rail cannot hold its own column no matter how wide the viewport is. This is
+        the caller-known answer `useContainerLayout` exists to accept.
+      */}
+      {(close) => <TopUpComposer wallet={wallet} fx={fx} onClose={close} layoutHint="stacked" />}
     </ResponsiveModal>
   );
 }

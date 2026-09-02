@@ -217,4 +217,27 @@ describe('POST /webhooks/stripe', () => {
       expect.anything()
     );
   });
+
+  it('writes NO dedupe marker when effect resolution throws, so Stripe can retry and credit', async () => {
+    // This is the invariant the whole failure mode rests on. A real A$1,000 top-up 500'd here
+    // because the charge had no balance_transaction yet; the wallet was credited only when the
+    // event was redelivered. That recovery is possible ONLY because the marker is written
+    // after resolution (webhook.ts:49 resolves, :57-58 inserts). If anyone "optimises" the
+    // insert to before the resolve, the retry is deduped away and the customer's money is
+    // charged and never credited — permanently, with no trace.
+    mockStripe.paymentIntents.retrieve.mockRejectedValue(new Error('stripe unavailable'));
+
+    const res = await inject(app, {
+      id: 'evt_resolve_throws',
+      type: 'payment_intent.succeeded',
+      data: {
+        object: { id: 'pi_boom', metadata: { walletId: 'wallet_1', reason: 'manual_purchase' } },
+      },
+    });
+
+    expect(res.statusCode).toBe(500); // 500, not 400 — Stripe only retries server errors.
+    expect(mockInsertReceived).not.toHaveBeenCalled();
+    expect(mockMarkProcessed).not.toHaveBeenCalled();
+    expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
+  });
 });

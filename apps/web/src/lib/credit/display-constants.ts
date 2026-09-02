@@ -133,6 +133,17 @@ export function formatAudShort(minor: number): string {
   return `A$${Math.round(minor / 100).toLocaleString('en-AU')}`;
 }
 
+/**
+ * A saved card's expiry → "08/28" (zero-padded month, two-digit year). Presentation only —
+ * nothing here decides whether the card is chargeable; a card Stripe will decline is caught at
+ * charge time and offered a "use a different card" path.
+ */
+export function formatCardExpiry(month: number, year: number): string {
+  const paddedMonth = String(month).padStart(2, '0');
+  const shortYear = String(year % 100).padStart(2, '0');
+  return `${paddedMonth}/${shortYear}`;
+}
+
 /** The region-localised indicative currencies the display-FX supports (presentation only). */
 export type DisplayCurrency = 'USD' | 'GBP' | 'EUR';
 

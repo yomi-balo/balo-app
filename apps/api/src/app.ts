@@ -1,6 +1,7 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import * as Sentry from '@sentry/node';
+import { log as sharedLogger } from '@balo/shared/logging';
 import { notificationsRoutes } from './routes/notifications/index.js';
 import { payoutsRoutes } from './routes/payouts/index.js';
 import { phoneRoutes } from './routes/phone/index.js';
@@ -20,7 +21,25 @@ export async function buildApp(opts?: { logger?: boolean }) {
   // client-supplied XFF chain, letting a scraper spoof IPs and bypass the
   // per-IP rate limit on the public /experts/search endpoint. If Railway's
   // topology ever adds more proxy hops, revisit this hop count.
-  const fastify = Fastify({ logger: opts?.logger ?? true, trustProxy: 1 });
+  // Fastify's DEFAULT logger (`logger: true`) is a bare pino writing to stdout — it does NOT
+  // carry the `@axiomhq/pino` transport or the REDACT_PATHS that `@balo/shared/logging`
+  // configures. That split meant service logs (`createLogger('stripe')`, …) reached Axiom while
+  // Fastify's own request logs AND the 500s captured by the error handler below did not: a
+  // request that blew up was searchable nowhere. Passing the shared instance puts both on one
+  // pipeline, and applies the redaction to request logs too.
+  //
+  // ⚠ The instance MUST go in `loggerInstance`, not `logger`. Fastify 5 rejects a logger
+  // instance under `logger` with FST_ERR_LOG_INVALID_LOGGER_CONFIG — thrown from the Fastify()
+  // call itself, which in `index.ts` sits above the try/catch: i.e. a crash loop on boot. CI
+  // never saw it because every test passes `logger: false` and only the production entrypoint
+  // calls `buildApp()` bare; `app.test.ts` now pins that default path.
+  // ONE Fastify() call over a typed options value: calling it separately per branch
+  // instantiates two different logger generics whose union TS cannot use.
+  const serverOptions: FastifyServerOptions =
+    opts?.logger === false
+      ? { logger: false, trustProxy: 1 }
+      : { loggerInstance: sharedLogger, trustProxy: 1 };
+  const fastify = Fastify(serverOptions);
 
   await fastify.register(cors, {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',

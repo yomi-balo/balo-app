@@ -46,6 +46,13 @@ function fullWallet(overrides: Partial<CreditWallet> = {}): CreditWallet {
     mandateRef: 'mandate_secret_abc',
     stripeCustomerId: 'cus_secret_123',
     mandateStatus: 'active',
+    pendingTopupAt: null,
+    // Saved-card DISPLAY facts (top-up redesign) — these DO cross to a client lens; the four
+    // mandate columns above do not. See `CLIENT_WALLET_VIEW_COLUMNS`' docblock.
+    cardBrand: 'visa',
+    cardLast4: '4242',
+    cardExpMonth: 8,
+    cardExpYear: 2028,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-06-01T00:00:00Z'),
     ...overrides,
@@ -95,8 +102,21 @@ describe('CLIENT_WALLET_VIEW_COLUMNS (invariant #1 — no secret on a client len
         'overdraftCeilingMinor',
         'topupReloadMinor',
         'topupThresholdMinor',
+        // Top-up redesign — the saved-card DISPLAY facts were added to this list CONSCIOUSLY.
+        // They are what a checkout prints back at the cardholder and cannot charge anything;
+        // the four `WALLET_SECRET_KEYS` above stay excluded, asserted by the sibling test.
+        'cardBrand',
+        'cardLast4',
+        'cardExpMonth',
+        'cardExpYear',
       ].sort()
     );
+  });
+
+  it('excludes pendingTopupAt (internal auto-top-up operational state, not display data)', () => {
+    // Proves the card additions were a DISPLAY-vs-CREDENTIAL judgement, not "anything nullable
+    // may cross": `pending_topup_at` is neither a secret nor a display fact, and stays off.
+    expect(Object.keys(CLIENT_WALLET_VIEW_COLUMNS)).not.toContain('pendingTopupAt');
   });
 });
 
@@ -120,6 +140,29 @@ describe('toClientWalletView (invariant #1 — secrets never leak even from a fu
     expect(view.availableMinor).toBe(42_000);
     expect(view.currency).toBe('AUD');
     expect(view.companyId).toBe('co_1');
+  });
+
+  it('DOES carry the saved-card display facts (the positive side of the same boundary)', () => {
+    // Makes the negative assertions above non-vacuous: the mapper is not simply dropping
+    // everything card-shaped — it drops the CREDENTIALS and passes the DISPLAY facts.
+    const view = toClientWalletView(fullWallet(), 9000);
+    expect(view.cardBrand).toBe('visa');
+    expect(view.cardLast4).toBe('4242');
+    expect(view.cardExpMonth).toBe(8);
+    expect(view.cardExpYear).toBe(2028);
+  });
+
+  it('emits all four card fields as null for a wallet with no card on file', () => {
+    // The all-or-none CHECK means these four only ever move together; the view must reflect
+    // that, so a consumer can branch on a single `cardBrand === null`.
+    const view = toClientWalletView(
+      fullWallet({ cardBrand: null, cardLast4: null, cardExpMonth: null, cardExpYear: null }),
+      0
+    );
+    expect(view.cardBrand).toBeNull();
+    expect(view.cardLast4).toBeNull();
+    expect(view.cardExpMonth).toBeNull();
+    expect(view.cardExpYear).toBeNull();
   });
 });
 

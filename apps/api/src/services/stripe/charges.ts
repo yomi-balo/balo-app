@@ -15,6 +15,27 @@ function stripeErrorLogFields(err: unknown): { code: string | null; requestId: s
 }
 
 /**
+ * The webhook metadata a manual purchase stamps. ONE definition, shared by BOTH on-session
+ * purchase paths (new card and stored card) so `resolvePaymentIntentSucceeded` cannot tell
+ * them apart — a saved-card buy must credit, receipt and reconcile exactly like a new-card buy.
+ * Never inline a second copy of this object.
+ */
+function manualPurchaseMetadata(input: {
+  walletId: string;
+  initiatingMemberId: string;
+  promoCode?: string;
+}): Record<string, string> {
+  // Stripe metadata values must be strings — include `promoCode` only when present.
+  const metadata: Record<string, string> = {
+    walletId: input.walletId,
+    reason: 'manual_purchase',
+    memberId: input.initiatingMemberId,
+  };
+  if (input.promoCode) metadata.promoCode = input.promoCode;
+  return metadata;
+}
+
+/**
  * On-session purchase / top-up (BAL-377). Creates a PaymentIntent in the PRESENTMENT
  * currency with `setup_future_usage: 'off_session'` (asks Stripe to save the confirmed
  * payment method for later reuse) and returns the `client_secret` for frontend confirmation.
@@ -51,21 +72,13 @@ export async function createOnSessionPurchaseIntent(input: {
 }): Promise<{ clientSecret: string; paymentIntentId: string }> {
   const stripe = getStripeClient();
   try {
-    // Stripe metadata values must be strings — include `promoCode` only when present.
-    const metadata: Record<string, string> = {
-      walletId: input.walletId,
-      reason: 'manual_purchase',
-      memberId: input.initiatingMemberId,
-    };
-    if (input.promoCode) metadata.promoCode = input.promoCode;
-
     const pi = await stripe.paymentIntents.create(
       {
         amount: input.presentmentAmountMinor,
         currency: input.presentmentCurrency,
         customer: input.customerId,
         setup_future_usage: 'off_session',
-        metadata,
+        metadata: manualPurchaseMetadata(input),
       },
       { idempotencyKey: input.idempotencyKey }
     );
@@ -96,6 +109,136 @@ export async function createOnSessionPurchaseIntent(input: {
         error: err instanceof Error ? err.message : String(err),
       },
       'Failed to create on-session purchase PaymentIntent'
+    );
+    throw err;
+  }
+}
+
+/**
+ * The outcome of an on-session charge against a STORED card. `confirmed` means Stripe accepted
+ * the confirmation (the PI status then says whether the browser must still run 3DS);
+ * `declined` means the card was refused — a user outcome the route maps to a 402, never a throw.
+ */
+export type SavedCardChargeResult =
+  | {
+      outcome: 'confirmed';
+      status: Stripe.PaymentIntent.Status;
+      clientSecret: string;
+      paymentIntentId: string;
+    }
+  | { outcome: 'declined'; code: string | null; paymentIntentId: string | null };
+
+/** Narrow a Stripe error to its decline code (`decline_code` first — it is the specific one). */
+function declineCodeOf(err: unknown): string | null {
+  if (err instanceof Stripe.errors.StripeCardError) {
+    return err.decline_code ?? err.code ?? null;
+  }
+  return null;
+}
+
+/**
+ * On-session purchase against the wallet's ALREADY-STORED payment method (top-up redesign).
+ * Sibling of `createOnSessionPurchaseIntent`: identical metadata (one shared builder — the
+ * webhook must not be able to tell the two paths apart), identical idempotency-key contract,
+ * identical "the webhook credits, never this return value" rule. Differs only in that the
+ * PaymentIntent is created WITH the stored payment method and confirmed server-side, because
+ * there is no Payment Element for the browser to submit.
+ *
+ * `off_session: false` is deliberate and load-bearing — the buyer IS present. Passing `true`
+ * would claim a consent this path does not have (that consent lives behind
+ * `isWalletMandateActive`, captured by an explicit off-session SetupIntent) AND would turn a
+ * completable 3DS challenge into a hard decline.
+ *
+ * `returnUrl` is supplied by the CALLER from trusted server config (`resolveAppUrl`) — NEVER
+ * from the browser, which would be an open redirect.
+ *
+ * A card decline is CAUGHT and returned as `{ outcome: 'declined' }` rather than thrown: it is
+ * a user outcome the buyer can act on ("use a different card"), not a system fault. Every other
+ * error re-throws.
+ */
+export async function createOnSessionSavedCardCharge(input: {
+  walletId: string;
+  customerId: string;
+  paymentMethodId: string;
+  presentmentCurrency: string;
+  presentmentAmountMinor: number;
+  initiatingMemberId: string;
+  idempotencyKey: string;
+  returnUrl: string;
+  promoCode?: string;
+}): Promise<SavedCardChargeResult> {
+  const stripe = getStripeClient();
+  try {
+    const pi = await stripe.paymentIntents.create(
+      {
+        amount: input.presentmentAmountMinor,
+        currency: input.presentmentCurrency,
+        customer: input.customerId,
+        payment_method: input.paymentMethodId,
+        off_session: false,
+        confirm: true,
+        setup_future_usage: 'off_session',
+        use_stripe_sdk: true,
+        return_url: input.returnUrl,
+        metadata: manualPurchaseMetadata(input),
+      },
+      { idempotencyKey: input.idempotencyKey }
+    );
+
+    // Stripe can also report a refusal WITHOUT throwing, by returning the PI parked back in
+    // `requires_payment_method` with `last_payment_error`. Same user outcome, same 402.
+    if (pi.status === 'requires_payment_method') {
+      const code = pi.last_payment_error?.decline_code ?? pi.last_payment_error?.code ?? null;
+      log.warn(
+        { op: 'createOnSessionSavedCardCharge', walletId: input.walletId, stripeId: pi.id, code },
+        'Saved-card charge was refused (PaymentIntent returned requires_payment_method)'
+      );
+      return { outcome: 'declined', code, paymentIntentId: pi.id };
+    }
+
+    const clientSecret = pi.client_secret;
+    if (clientSecret === null) {
+      throw new Error(`PaymentIntent ${pi.id} was created without a client_secret`);
+    }
+
+    log.info(
+      {
+        op: 'createOnSessionSavedCardCharge',
+        walletId: input.walletId,
+        stripeId: pi.id,
+        status: pi.status,
+        amountMinor: input.presentmentAmountMinor,
+        currency: input.presentmentCurrency,
+      },
+      'Confirmed on-session purchase against the stored card (credit arrives via webhook)'
+    );
+
+    return { outcome: 'confirmed', status: pi.status, clientSecret, paymentIntentId: pi.id };
+  } catch (err: unknown) {
+    if (err instanceof Stripe.errors.StripeCardError) {
+      const rawPi: unknown = err.payment_intent;
+      const pi = (rawPi ?? undefined) as { id?: string } | undefined;
+      const code = declineCodeOf(err);
+      log.warn(
+        {
+          op: 'createOnSessionSavedCardCharge',
+          walletId: input.walletId,
+          code,
+          stripeId: pi?.id ?? null,
+        },
+        'Saved-card charge declined — surfacing to the buyer (no throw)'
+      );
+      return { outcome: 'declined', code, paymentIntentId: pi?.id ?? null };
+    }
+
+    log.error(
+      {
+        op: 'createOnSessionSavedCardCharge',
+        walletId: input.walletId,
+        ...stripeErrorLogFields(err),
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to create on-session saved-card PaymentIntent'
     );
     throw err;
   }
@@ -231,6 +374,26 @@ export async function retrievePaymentIntentStatus(
 }
 
 /**
+ * Stripe creates the charge and its balance transaction in SEPARATE steps, and delivers
+ * `payment_intent.succeeded` in between (the default `automatic_async` capture — no
+ * `capture_method` is set on either creation path in this file). Observed in dev: a real
+ * A$1,000 top-up whose charge had NO `balance_transaction` ~1s after the charge, and a
+ * populated one 6 minutes later, on a fully enabled AUD account. That is a RACE, not a
+ * fault — so poll briefly instead of 500-ing the first delivery and making the buyer wait
+ * a whole Stripe retry interval for credit they have already paid for.
+ *
+ * Deliberately NOT a fallback to `charge.amount`: `balance_transaction.amount` stays the
+ * single source of credited AUD (invariant #8) and its id stays on every money entry, so
+ * reconciliation never sees a credit it cannot trace. Exhausting the window still throws →
+ * 500 → Stripe's retry remains the durable backstop. This buys latency, never correctness.
+ *
+ * ~3.75s worst case, paid only on a racing delivery, and only on the `null` arm.
+ */
+export const BALANCE_TRANSACTION_RETRY_DELAYS_MS = [250, 500, 1000, 2000] as const;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
  * Retrieve the settlement fields for a succeeded PaymentIntent (Decision D). Reads the PI
  * to find its `latest_charge`, then the charge with an expanded `balance_transaction`. The
  * credit is `balance_transaction.amount` (GROSS settled AUD — the Stripe fee is Balo's cost
@@ -238,7 +401,10 @@ export async function retrievePaymentIntentStatus(
  * the fx rate (null for AUD→AUD); `charge.currency`/`charge.amount` are the presentment
  * record. No app-side rate is ever used (invariant #8). Called by the webhook dispatcher.
  */
-export async function retrieveSettlement(paymentIntentId: string): Promise<SettlementFields> {
+export async function retrieveSettlement(
+  paymentIntentId: string,
+  retryDelaysMs: readonly number[] = BALANCE_TRANSACTION_RETRY_DELAYS_MS
+): Promise<SettlementFields> {
   const stripe = getStripeClient();
 
   const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
@@ -247,10 +413,38 @@ export async function retrieveSettlement(paymentIntentId: string): Promise<Settl
     throw new Error(`PaymentIntent ${paymentIntentId} has no latest_charge to settle`);
   }
 
-  const charge = await stripe.charges.retrieve(chargeId, { expand: ['balance_transaction'] });
+  let charge = await stripe.charges.retrieve(chargeId, { expand: ['balance_transaction'] });
+  for (const delayMs of retryDelaysMs) {
+    if (charge.balance_transaction !== null) break;
+    await sleep(delayMs);
+    charge = await stripe.charges.retrieve(chargeId, { expand: ['balance_transaction'] });
+  }
+
   const balanceTransaction = charge.balance_transaction;
-  if (balanceTransaction === null || typeof balanceTransaction === 'string') {
-    throw new Error(`Charge ${chargeId} is missing an expanded balance_transaction`);
+  if (typeof balanceTransaction === 'string') {
+    // NOT the race: we asked for the expansion and got a bare id back, so re-reading returns
+    // the identical response. Fail immediately and with a distinct message — polling here
+    // would burn the delay budget on a condition that can never resolve itself.
+    throw new TypeError(
+      `Charge ${chargeId} returned an un-expanded balance_transaction (expand was not applied)`
+    );
+  }
+  if (balanceTransaction === null) {
+    // The buyer's card HAS been charged at this point. Log before throwing: the 500 → Stripe
+    // retry is the durable backstop, but nothing else in the system records that a customer's
+    // credit is currently outstanding (the webhook writes no marker before this point).
+    log.error(
+      {
+        op: 'retrieveSettlement',
+        stripeId: paymentIntentId,
+        chargeId,
+        attempts: retryDelaysMs.length + 1,
+      },
+      'Charge still has no balance_transaction after the bounded wait — money charged, credit deferred to Stripe retry'
+    );
+    throw new Error(
+      `Charge ${chargeId} has no balance_transaction yet (${retryDelaysMs.length + 1} attempts)`
+    );
   }
 
   // Money-integrity guard: the wallet is AUD-only and `creditAmountMinor` is credited AS AUD

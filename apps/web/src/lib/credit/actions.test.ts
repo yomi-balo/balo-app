@@ -2,17 +2,35 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+const mockEnsureForCompany = vi.fn();
 const mockFindByCompanyId = vi.fn();
 const mockUpdateConfig = vi.fn();
 const mockValidate = vi.fn();
+const mockFindByIdempotencyKey = vi.fn();
 vi.mock('@balo/db', () => ({
+  db: {},
   creditWalletsRepository: {
+    ensureForCompany: (...a: unknown[]) => mockEnsureForCompany(...a),
     findByCompanyId: (...a: unknown[]) => mockFindByCompanyId(...a),
     updateConfig: (...a: unknown[]) => mockUpdateConfig(...a),
+  },
+  creditLedgerRepository: {
+    findByIdempotencyKey: (...a: unknown[]) => mockFindByIdempotencyKey(...a),
   },
   promoRedemptionsRepository: {
     validate: (...a: unknown[]) => mockValidate(...a),
   },
+  // The REAL derivation shape — a stub that returned a constant would let a key regression
+  // (`manual_purchase:{piId}`) pass unnoticed, and that key is the whole terminal condition.
+  deriveIdempotencyKey: (input: {
+    reason: string;
+    paymentIntentId?: string;
+    walletId?: string;
+    promoCodeId?: string;
+  }) =>
+    input.reason === 'promo'
+      ? `promo:${input.walletId ?? ''}:${input.promoCodeId ?? ''}`
+      : `${input.reason}:${input.paymentIntentId ?? ''}`,
 }));
 
 const mockRequireUser = vi.fn();
@@ -32,8 +50,13 @@ vi.mock('@/lib/authz', () => ({
 }));
 
 const mockLogError = vi.fn();
+const mockLogWarn = vi.fn();
 vi.mock('@/lib/logging', () => ({
-  log: { error: (...a: unknown[]) => mockLogError(...a), warn: vi.fn(), info: vi.fn() },
+  log: {
+    error: (...a: unknown[]) => mockLogError(...a),
+    warn: (...a: unknown[]) => mockLogWarn(...a),
+    info: vi.fn(),
+  },
 }));
 
 const mockPublish = vi.fn();
@@ -43,9 +66,31 @@ vi.mock('@/lib/notifications/publish', () => ({
 
 const mockCreatePurchaseIntent = vi.fn();
 const mockCreateMandateSetupIntent = vi.fn();
+const mockConfirmSavedCardMandate = vi.fn();
+
+/**
+ * A stand-in for the real error class. `vi.hoisted` because the `vi.mock` factory below is
+ * hoisted above every top-level declaration — and the action's failure mapping is
+ * `instanceof`-based, so the SUT and the test must share ONE class identity.
+ */
+const { TestCreditApiError } = vi.hoisted(() => ({
+  TestCreditApiError: class TestCreditApiError extends Error {
+    constructor(
+      message: string,
+      public readonly status?: number,
+      public readonly body?: { outcome?: string; error?: string; code?: string | null }
+    ) {
+      super(message);
+      this.name = 'CreditApiError';
+    }
+  },
+}));
+
 vi.mock('./api-client', () => ({
   createPurchaseIntent: (...a: unknown[]) => mockCreatePurchaseIntent(...a),
   createMandateSetupIntent: (...a: unknown[]) => mockCreateMandateSetupIntent(...a),
+  confirmSavedCardMandate: (...a: unknown[]) => mockConfirmSavedCardMandate(...a),
+  CreditApiError: TestCreditApiError,
 }));
 
 import {
@@ -53,6 +98,7 @@ import {
   validatePromoAction,
   saveLowBalanceConfigAction,
   nudgeBillingAdminAction,
+  getTopUpCreditStatusAction,
   type StartPurchaseInput,
 } from './actions';
 
@@ -73,12 +119,16 @@ describe('credit actions', () => {
     mockRequireUser.mockResolvedValue({ id: 'user-1' });
     mockGetCompanyContext.mockResolvedValue({ companyId: 'company-1' });
     mockHasCapability.mockResolvedValue(true);
+    mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
     mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
+    mockFindByIdempotencyKey.mockResolvedValue(undefined);
     mockCreatePurchaseIntent.mockResolvedValue({
+      outcome: 'needs_client_confirmation',
       clientSecret: 'pi_secret',
       paymentIntentId: 'pi_1',
     });
     mockCreateMandateSetupIntent.mockResolvedValue({ clientSecret: 'seti_secret' });
+    mockConfirmSavedCardMandate.mockResolvedValue({ status: 'succeeded', clientSecret: null });
     mockPublish.mockResolvedValue(undefined);
   });
 
@@ -88,6 +138,8 @@ describe('credit actions', () => {
       const res = await startPurchaseAction(baseStartInput());
       expect(res).toEqual({ ok: false, error: 'unauthorized' });
       expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
+      // Provisioning is a WRITE — it must never run ahead of the capability gate.
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
     });
 
     it('rejects an out-of-range amount as invalid_input', async () => {
@@ -95,34 +147,86 @@ describe('credit actions', () => {
       expect(res).toEqual({ ok: false, error: 'invalid_input' });
     });
 
-    it('returns no_wallet when the company has no wallet', async () => {
-      mockFindByCompanyId.mockResolvedValue(undefined);
+    it('PROVISIONS the wallet when the company has never held credit', async () => {
+      // The regression this guards: a company with no `credit_wallets` row used to dead-end on
+      // `no_wallet`, and since promo redemption was the only other path that creates one, a
+      // client who never redeemed a code could never buy credit at all.
+      mockEnsureForCompany.mockResolvedValue({ id: 'wallet-new', balanceMinor: 0 });
+
       const res = await startPurchaseAction(baseStartInput());
-      expect(res).toEqual({ ok: false, error: 'no_wallet' });
+
+      expect(res).toMatchObject({ ok: true, walletId: 'wallet-new' });
+      expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
+      expect(mockCreatePurchaseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({ walletId: 'wallet-new' })
+      );
+    });
+
+    it('reports a provisioning fault as stripe_error, not as a missing balance', async () => {
+      // Absence is no longer possible here, so a throw is infrastructure. The buyer must be
+      // told no charge was made — never "we couldn't find your balance", which invites them
+      // to retry a lookup that was never the problem.
+      mockEnsureForCompany.mockRejectedValue(new Error('pool exhausted'));
+
+      const res = await startPurchaseAction(baseStartInput());
+
+      expect(res).toEqual({ ok: false, error: 'stripe_error' });
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Top-up purchase intent creation failed',
+        expect.objectContaining({ error: 'pool exhausted' })
+      );
+      // A provisioning fault must never reach Stripe — no charge is attempted.
+      expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
     });
 
     it('persists config, creates BOTH intents for a card-backed mode, and returns both secrets', async () => {
       const res = await startPurchaseAction(baseStartInput());
       expect(res).toEqual({
         ok: true,
+        outcome: 'needs_client_confirmation',
         clientSecret: 'pi_secret',
         paymentIntentId: 'pi_1',
-        setupClientSecret: 'seti_secret',
+        mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
         walletId: 'wallet-1',
       });
       expect(mockUpdateConfig).toHaveBeenCalledWith('wallet-1', { lowBalanceMode: 'keep_going' });
       expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
     });
 
-    it('skips the SetupIntent when the wallet already has an ACTIVE mandate (no downgrade)', async () => {
-      mockFindByCompanyId.mockResolvedValue({
+    it('skips the SetupIntent when the wallet already has an ACTIVE mandate on the card being charged', async () => {
+      mockEnsureForCompany.mockResolvedValue({
         id: 'wallet-1',
         balanceMinor: 0,
         mandateStatus: 'active',
       });
-      const res = await startPurchaseAction(baseStartInput());
-      expect(res).toMatchObject({ ok: true, setupClientSecret: null });
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+      // The live mandate was captured against the very card being charged, so it IS captured
+      // and a SetupIntent would be pure churn. (saved_card ONLY — see the next case.)
+      expect(res).toMatchObject({ ok: true, mandate: { outcome: 'captured' } });
       expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
+    });
+
+    it('OPENS a SetupIntent for a NEW card even when the old card holds an active mandate', async () => {
+      // The regression this guards: `new_card` + active mandate used to return `not_required`,
+      // opening no SetupIntent for the new card — while the purchase webhook revokes the OLD
+      // card's mandate (a card change). Net effect: an auto-top-up client who paid with a new
+      // card silently lost auto-top-up (`mandate_status = NULL`), and the only signal was the
+      // receipt's small warning. Safe to open now: `applyMandateStatus` refuses
+      // active → pending, so the SetupIntent's pending write cannot downgrade the live mandate,
+      // and either webhook order converges on `active` for the new card.
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        mandateStatus: 'active',
+      });
+
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
+
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+      expect(res).toMatchObject({
+        ok: true,
+        mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
+      });
     });
 
     it('omits the SetupIntent for notify_only (no mandate)', async () => {
@@ -135,7 +239,7 @@ describe('credit actions', () => {
           },
         })
       );
-      expect(res).toMatchObject({ ok: true, setupClientSecret: null });
+      expect(res).toMatchObject({ ok: true, mandate: { outcome: 'not_required' } });
       expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
     });
 
@@ -162,6 +266,187 @@ describe('credit actions', () => {
       expect(res).toEqual({ ok: false, error: 'stripe_error' });
       expect(mockLogError).toHaveBeenCalled();
     });
+
+    it('defaults paymentMethodSource to new_card when the caller omits it', async () => {
+      await startPurchaseAction(baseStartInput());
+      expect(mockCreatePurchaseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({ paymentMethodSource: 'new_card' })
+      );
+    });
+
+    // ── Saved-card branch (top-up redesign) ─────────────────────────────────
+
+    it('forwards saved_card and returns the server-confirmed complete outcome', async () => {
+      mockCreatePurchaseIntent.mockResolvedValue({
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+      });
+      const res = await startPurchaseAction(
+        baseStartInput({
+          paymentMethodSource: 'saved_card',
+          config: {
+            lowBalanceMode: 'notify_only',
+            topupReloadMinor: 30_000,
+            topupThresholdMinor: 5_000,
+          },
+        })
+      );
+
+      expect(res).toEqual({
+        ok: true,
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+        mandate: { outcome: 'not_required' },
+        walletId: 'wallet-1',
+      });
+      expect(mockCreatePurchaseIntent).toHaveBeenCalledWith(
+        expect.objectContaining({ paymentMethodSource: 'saved_card' })
+      );
+    });
+
+    it('passes a requires_action outcome through with its client secret', async () => {
+      mockCreatePurchaseIntent.mockResolvedValue({
+        outcome: 'requires_action',
+        clientSecret: 'pi_3ds',
+        paymentIntentId: 'pi_saved',
+      });
+      const res = await startPurchaseAction(
+        baseStartInput({
+          paymentMethodSource: 'saved_card',
+          config: {
+            lowBalanceMode: 'notify_only',
+            topupReloadMinor: 30_000,
+            topupThresholdMinor: 5_000,
+          },
+        })
+      );
+      expect(res).toMatchObject({ ok: true, outcome: 'requires_action', clientSecret: 'pi_3ds' });
+    });
+
+    it('confirms the mandate against the STORED card, not a fresh SetupIntent', async () => {
+      mockCreatePurchaseIntent.mockResolvedValue({
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+      });
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+
+      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith('wallet-1', CLIENT_REQUEST_ID);
+      expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
+      // `succeeded` ⇒ nothing for the browser to do; the webhook activates the mandate.
+      expect(res).toMatchObject({ ok: true, mandate: { outcome: 'captured' } });
+    });
+
+    it('returns the mandate 3DS secret only when the stored-card confirm needs action', async () => {
+      mockCreatePurchaseIntent.mockResolvedValue({
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+      });
+      mockConfirmSavedCardMandate.mockResolvedValue({
+        status: 'requires_action',
+        clientSecret: 'seti_3ds',
+      });
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+      expect(res).toMatchObject({
+        ok: true,
+        mandate: { outcome: 'requires_action', clientSecret: 'seti_3ds' },
+      });
+    });
+
+    it('reports a FAILED stored-card mandate as failed — never as captured (purchase still ok)', async () => {
+      // ⚠ The bug this pins: `failed` used to collapse to the same `null` secret as `succeeded`,
+      // and the composer read any null on the saved-card path as "captured". The buyer was told
+      // automatic charging was on while the wallet sat at `pending` forever.
+      mockCreatePurchaseIntent.mockResolvedValue({
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+      });
+      mockConfirmSavedCardMandate.mockResolvedValue({ status: 'failed', clientSecret: null });
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+      // The money is already charged — a mandate hiccup never fails the purchase.
+      expect(res).toMatchObject({ ok: true, mandate: { outcome: 'failed' } });
+    });
+
+    it('treats a requires_action WITHOUT a client secret as failed (the browser cannot act)', async () => {
+      mockCreatePurchaseIntent.mockResolvedValue({
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+      });
+      mockConfirmSavedCardMandate.mockResolvedValue({
+        status: 'requires_action',
+        clientSecret: null,
+      });
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+      expect(res).toMatchObject({ ok: true, mandate: { outcome: 'failed' } });
+    });
+
+    it('never fails a completed purchase because the mandate hop threw (UX 3)', async () => {
+      // On the saved-card path the money moved INSIDE createPurchaseIntent. A throw from the
+      // second internal hop must not discard a successful purchase as `saved_card_error`.
+      mockCreatePurchaseIntent.mockResolvedValue({
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+      });
+      mockConfirmSavedCardMandate.mockRejectedValue(new Error('api 502'));
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+
+      expect(res).toMatchObject({
+        ok: true,
+        outcome: 'complete',
+        paymentIntentId: 'pi_saved',
+        mandate: { outcome: 'failed' },
+      });
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Mandate capture failed — the top-up itself is unaffected',
+        expect.objectContaining({ error: 'api 502' })
+      );
+    });
+
+    // ── Failure mapping ─────────────────────────────────────────────────────
+
+    it('maps a 402 decline to card_declined with its code, and WARNS rather than errors', async () => {
+      mockCreatePurchaseIntent.mockRejectedValue(
+        new TestCreditApiError('declined', 402, {
+          outcome: 'declined',
+          code: 'insufficient_funds',
+        })
+      );
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+
+      expect(res).toEqual({
+        ok: false,
+        error: 'card_declined',
+        declineCode: 'insufficient_funds',
+      });
+      // A decline is a USER outcome, not a system fault.
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Top-up card declined',
+        expect.objectContaining({ declineCode: 'insufficient_funds' })
+      );
+      expect(mockLogError).not.toHaveBeenCalled();
+    });
+
+    it('maps a 400 no_saved_card body to no_saved_card', async () => {
+      mockCreatePurchaseIntent.mockRejectedValue(
+        new TestCreditApiError('no card', 400, { error: 'no_saved_card' })
+      );
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+    });
+
+    it('uses saved_card_error — NOT stripe_error — for a saved-card generic failure (R14)', async () => {
+      mockCreatePurchaseIntent.mockRejectedValue(new Error('socket hang up'));
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+
+      // On this path the charge is attempted INSIDE the api call, so the new-card copy
+      // ("no charge was made") would be a lie about the buyer's money.
+      expect(res).toEqual({ ok: false, error: 'saved_card_error' });
+    });
+
+    it('still uses stripe_error for a NEW-card generic failure (nothing was charged)', async () => {
+      mockCreatePurchaseIntent.mockRejectedValue(new Error('socket hang up'));
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
+      expect(res).toEqual({ ok: false, error: 'stripe_error' });
+    });
   });
 
   describe('validatePromoAction', () => {
@@ -172,7 +457,12 @@ describe('credit actions', () => {
 
     it('returns the grant on a valid code', async () => {
       mockValidate.mockResolvedValue({ ok: true, promoCodeId: 'p1', grantMinor: 5_000 });
-      expect(await validatePromoAction('WELCOME50')).toEqual({ ok: true, grantMinor: 5_000 });
+      // promoCodeId rides along so the receipt can later ask whether the grant landed.
+      expect(await validatePromoAction('WELCOME50')).toEqual({
+        ok: true,
+        grantMinor: 5_000,
+        promoCodeId: 'p1',
+      });
     });
 
     it('passes through the specific failure reason', async () => {
@@ -211,6 +501,23 @@ describe('credit actions', () => {
         topupThresholdMinor: 5_000,
       });
       expect(res).toEqual({ ok: false, error: 'unauthorized' });
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+    });
+
+    it('provisions the wallet when the company has never held credit', async () => {
+      mockEnsureForCompany.mockResolvedValue({ id: 'wallet-new', balanceMinor: 0 });
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'notify_only',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: true });
+      expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
+      expect(mockUpdateConfig).toHaveBeenCalledWith('wallet-new', {
+        lowBalanceMode: 'notify_only',
+      });
     });
 
     it('persists valid config', async () => {
@@ -221,6 +528,138 @@ describe('credit actions', () => {
       });
       expect(res).toEqual({ ok: true });
       expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+  });
+
+  describe('getTopUpCreditStatusAction', () => {
+    it('gates on MANAGE_BILLING and reads nothing', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({ status: 'unauthorized' });
+      expect(mockFindByCompanyId).not.toHaveBeenCalled();
+      expect(mockFindByIdempotencyKey).not.toHaveBeenCalled();
+    });
+
+    it('asks the ledger for the PI-derived manual_purchase key', async () => {
+      await getTopUpCreditStatusAction('pi_abc');
+      expect(mockFindByIdempotencyKey).toHaveBeenCalledWith('manual_purchase:pi_abc');
+    });
+
+    it('returns credited with the ACTOR-OWN wallet balance once the entry lands', async () => {
+      // ⚠ Deliberately NOT `previous + amount + promo` — the standing guard that the answer is a
+      // READ of the wallet, never arithmetic.
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 137_500 });
+      mockFindByIdempotencyKey.mockResolvedValue({ id: 'le_1', walletId: 'wallet-1' });
+
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({
+        status: 'credited',
+        balanceMinor: 137_500,
+        promoGranted: null, // no promo asked about
+      });
+    });
+
+    it('answers promoGranted TRUE only when the grant key is in the ledger', async () => {
+      // The settlement webhook re-validates the promo and can SKIP the grant while the base
+      // credit lands — so the receipt must ASK, not render the bonus off apply-time state.
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 105_000 });
+      const PROMO_ID = '550e8400-e29b-41d4-a716-446655440077';
+      mockFindByIdempotencyKey.mockImplementation((key: string) =>
+        key === 'manual_purchase:pi_1' || key === `promo:wallet-1:${PROMO_ID}`
+          ? { id: 'le', walletId: 'wallet-1' }
+          : undefined
+      );
+
+      const res = await getTopUpCreditStatusAction('pi_1', PROMO_ID);
+
+      expect(res).toEqual({ status: 'credited', balanceMinor: 105_000, promoGranted: true });
+      // The grant key is checked against the ACTOR's wallet — the wallet id is half the key.
+      expect(mockFindByIdempotencyKey).toHaveBeenCalledWith(`promo:wallet-1:${PROMO_ID}`);
+    });
+
+    it('answers promoGranted FALSE when the purchase credited but the grant was skipped', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 100_000 });
+      mockFindByIdempotencyKey.mockImplementation((key: string) =>
+        key === 'manual_purchase:pi_1' ? { id: 'le', walletId: 'wallet-1' } : undefined
+      );
+
+      const res = await getTopUpCreditStatusAction('pi_1', '550e8400-e29b-41d4-a716-446655440077');
+
+      expect(res).toEqual({ status: 'credited', balanceMinor: 100_000, promoGranted: false });
+    });
+
+    it('answers promoGranted FALSE (never an error) for a malformed promoCodeId', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 100_000 });
+      mockFindByIdempotencyKey.mockImplementation((key: string) =>
+        key === 'manual_purchase:pi_1' ? { id: 'le', walletId: 'wallet-1' } : undefined
+      );
+
+      const res = await getTopUpCreditStatusAction('pi_1', 'not-a-uuid');
+
+      expect(res).toMatchObject({ status: 'credited', promoGranted: false });
+    });
+
+    it('returns pending while the webhook has not posted the entry', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 2_500 });
+      mockFindByIdempotencyKey.mockResolvedValue(undefined);
+
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({
+        status: 'pending',
+        balanceMinor: 2_500,
+      });
+    });
+
+    it('⚠ IDOR — an entry on ANOTHER wallet reads exactly like no entry, and leaks no balance', async () => {
+      // The key is `manual_purchase:{piId}` — derived wholly from caller input, so it is
+      // guessable. A foreign hit must be reported to nobody.
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-mine', balanceMinor: 2_500 });
+      mockFindByIdempotencyKey.mockResolvedValue({
+        id: 'le_other',
+        walletId: 'wallet-someone-else',
+        // Present precisely so the assertion below can prove it never escapes.
+        amountMinor: 999_999,
+      });
+
+      const res = await getTopUpCreditStatusAction('pi_guessed');
+
+      expect(res).toEqual({ status: 'pending', balanceMinor: 2_500 });
+      expect(JSON.stringify(res)).not.toContain('999999');
+      expect(JSON.stringify(res)).not.toContain('wallet-someone-else');
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Top-up credit status asked about a PaymentIntent from another wallet',
+        expect.objectContaining({ companyId: 'company-1', walletId: 'wallet-mine' })
+      );
+    });
+
+    it('⚠ a company with NO wallet row reads pending at 0 — and NEVER mints one', async () => {
+      // `ensureForCompany` is a WRITE, and this read runs ~13 times per receipt. A status check
+      // must not conjure a wallet for a company that never bought anything.
+      mockFindByCompanyId.mockResolvedValue(undefined);
+
+      expect(await getTopUpCreditStatusAction('pi_1')).toEqual({
+        status: 'pending',
+        balanceMinor: 0,
+      });
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+      // No wallet ⇒ nothing to scope a ledger answer to, so it never asks.
+      expect(mockFindByIdempotencyKey).not.toHaveBeenCalled();
+    });
+
+    it('rejects a structurally invalid id without a DB round-trip', async () => {
+      expect(await getTopUpCreditStatusAction('x'.repeat(256))).toEqual({ status: 'error' });
+      expect(mockFindByCompanyId).not.toHaveBeenCalled();
+    });
+
+    it('logs and returns error — carrying NO balance — when the read throws', async () => {
+      mockFindByIdempotencyKey.mockRejectedValue(new Error('pool exhausted'));
+
+      const res = await getTopUpCreditStatusAction('pi_1');
+
+      // Reporting a DB blip as `balanceMinor: 0` would be the same class of lie the client
+      // arithmetic was.
+      expect(res).toEqual({ status: 'error' });
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Top-up credit status read failed',
+        expect.objectContaining({ error: 'pool exhausted' })
+      );
     });
   });
 

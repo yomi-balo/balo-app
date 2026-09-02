@@ -495,6 +495,29 @@
   }
 }
 
+/* ── Top-up hero figure (top-up redesign) ────────────────────────────────────
+   Plain white UNLESS `background-clip: text` is supported. Without this guard the figure
+   renders BLANK on unsupported engines, because `-webkit-text-fill-color: transparent`
+   applies while the gradient it is meant to reveal does not — the live bug this replaces
+   (the old hero set all four properties inline and unconditionally).
+
+   The gradient VALUE comes from the component as `--topup-grad`, so the goal-state swap
+   (blue/violet → green) stays a React concern while the capability gate stays in CSS. Lives
+   here rather than in a component `<style>` tag: with one hero instance either would work,
+   but this survives any future duplication and is the honest home for a global rule. */
+.topup-grad-text {
+  color: #fff;
+}
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .topup-grad-text {
+    background-image: var(--topup-grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    transition: background-image 0.4s;
+  }
+}
+
 /* Hide scrollbars while keeping the element scrollable (conversation tab
    strip). Tailwind 4 @utility — webkit + Firefox/IE variants. The webkit
    pseudo-element rule is kept un-nested (explicit `.scrollbar-none` scoping

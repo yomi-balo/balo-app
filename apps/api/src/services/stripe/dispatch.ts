@@ -8,8 +8,10 @@ import {
   promoRedemptionsRepository,
   db,
   deriveIdempotencyKey,
+  type CreditSession,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { trackServer, CREDIT_SERVER_EVENTS } from '@balo/analytics/server';
 import { toSettleableSession } from '@balo/shared/credit';
 import { getStripeClient } from '../../lib/stripe.js';
 import { publishSessionSettled, publishSettlementFailure } from '../credit-session/notify.js';
@@ -20,7 +22,13 @@ import {
 } from '../credit/auto-topup.js';
 import { notificationEvents } from '../../notifications/publisher.js';
 import { retrieveSettlement } from './charges.js';
-import type { CreditTopupReceipt, PostCommitEffect, StripeEffect } from './types.js';
+import { retrieveCardDisplay } from './mandate.js';
+import type {
+  CardOnFileFields,
+  CreditTopupReceipt,
+  PostCommitEffect,
+  StripeEffect,
+} from './types.js';
 
 const log = createLogger('stripe');
 
@@ -65,6 +73,27 @@ async function resolveWalletIdFromPaymentIntent(paymentIntentId: string): Promis
   return pi.metadata.walletId ?? null;
 }
 
+/**
+ * Read the card a manual purchase was paid with, off the EVENT object — `pi.payment_method` and
+ * `pi.customer` are plain string ids when unexpanded, so no extra PaymentIntent retrieve is
+ * needed. Returns `null` when either id is absent or the card read failed; the credit then
+ * applies with `cardOnFile: null` and simply records no card (fail-soft, see
+ * `retrieveCardDisplay`).
+ */
+async function resolveCardOnFile(pi: Stripe.PaymentIntent): Promise<CardOnFileFields | null> {
+  const customerId = typeof pi.customer === 'string' ? pi.customer : pi.customer?.id;
+  const paymentMethodId =
+    typeof pi.payment_method === 'string' ? pi.payment_method : pi.payment_method?.id;
+  if (!customerId || !paymentMethodId) {
+    return null;
+  }
+  const card = await retrieveCardDisplay(paymentMethodId);
+  if (card === null) {
+    return null;
+  }
+  return { customerId, paymentMethodId, ...card };
+}
+
 async function resolvePaymentIntentSucceeded(
   pi: Stripe.PaymentIntent
 ): Promise<StripeEffect | null> {
@@ -84,6 +113,10 @@ async function resolvePaymentIntentSucceeded(
     return null;
   }
   const settlement = await retrieveSettlement(pi.id);
+  // Top-up redesign — the card a buyer just used is captured for DISPLAY only, and only on a
+  // manual purchase (an auto-top-up / settlement charge already ran against a stored card, so
+  // there is nothing new to learn). Same by-construction guarantee as `promoCode` below.
+  const cardOnFile = reason === 'manual_purchase' ? await resolveCardOnFile(pi) : null;
   return {
     kind: 'credit',
     reason,
@@ -94,6 +127,7 @@ async function resolvePaymentIntentSucceeded(
     // BAL-377 — only a manual_purchase carries an (optional) promo code; auto_topup /
     // overdraft_settlement never stamp it, so they resolve to null by construction.
     promoCode: reason === 'manual_purchase' ? (pi.metadata.promoCode ?? null) : null,
+    cardOnFile,
     settlement,
   };
 }
@@ -117,7 +151,7 @@ async function resolvePaymentIntentFailed(pi: Stripe.PaymentIntent): Promise<Str
   };
 }
 
-function resolveSetupIntentSucceeded(si: Stripe.SetupIntent): StripeEffect | null {
+async function resolveSetupIntentSucceeded(si: Stripe.SetupIntent): Promise<StripeEffect | null> {
   const walletId = si.metadata?.walletId;
   const customerId = typeof si.customer === 'string' ? si.customer : si.customer?.id;
   const paymentMethodId =
@@ -129,7 +163,17 @@ function resolveSetupIntentSucceeded(si: Stripe.SetupIntent): StripeEffect | nul
     );
     return null;
   }
-  return { kind: 'mandate_active', walletId, customerId, paymentMethodId, mandateRef: si.id };
+  // Display facts of the card the mandate was just captured against. Fail-soft: a `null` here
+  // leaves the wallet's existing display columns untouched and NEVER blocks the activation.
+  const card = await retrieveCardDisplay(paymentMethodId);
+  return {
+    kind: 'mandate_active',
+    walletId,
+    customerId,
+    paymentMethodId,
+    mandateRef: si.id,
+    card,
+  };
 }
 
 function resolveSetupIntentFailed(si: Stripe.SetupIntent): StripeEffect | null {
@@ -342,15 +386,51 @@ async function grantPromoBestEffort(
 }
 
 /**
- * BAL-377 — publish the `credit.topup.completed` receipt POST-COMMIT (a persisted marker always
- * implies a committed credit). Relocated from the webhook route so it composes as a
- * `PostCommitEffect` thunk alongside the BAL-378 session publishes (no `fastify` needed — uses
- * the module `log`). Best-effort + idempotent by `correlationId` (`manual_purchase:{piId}` →
- * BullMQ jobId dedup): a publish failure is logged, never thrown (the money is already
- * committed; re-throwing would make Stripe retry the whole webhook for a notification hiccup). A
- * receipt with no purchaser (defensive — a manual_purchase always stamps `memberId`) is skipped.
+ * The MONEY-IN TRUTH for a manual purchase — the one credit reason that had no server event at
+ * all. Same shape as `AUTO_TOPUP_FIRED` (`publishAutoTopupExecuted`): emitted from the FRESH
+ * (non-deduped) post-commit thunk, so exactly once per purchase and never on a webhook replay.
+ *
+ * ⚠ EMITTED BEFORE — AND INDEPENDENTLY OF — THE RECEIPT NOTIFICATION, deliberately. The wallet
+ * moved whether or not there is a purchaser to email, so a defensively-missing `memberId` must
+ * not also silence the money series. Best-effort: PostHog is a no-op without an API key and
+ * `capture` only enqueues, but a throw here would abort the receipt publish below for an
+ * analytics hiccup, so it is contained.
+ */
+function emitManualPurchaseCredited(receipt: CreditTopupReceipt): void {
+  try {
+    trackServer(CREDIT_SERVER_EVENTS.MANUAL_PURCHASE_CREDITED, {
+      amount_minor: receipt.creditedMinor,
+      promo_granted_minor: receipt.promoGrantedMinor,
+      balance_after_minor: receipt.balanceAfterMinor,
+      company_id: receipt.companyId,
+      wallet_id: receipt.walletId,
+      distinct_id: receipt.companyId,
+    });
+  } catch (err: unknown) {
+    log.warn(
+      {
+        op: 'emitManualPurchaseCredited',
+        correlationId: receipt.correlationId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to emit credit_manual_purchase_credited (money committed; analytics best-effort)'
+    );
+  }
+}
+
+/**
+ * BAL-377 — the FRESH `manual_purchase` POST-COMMIT effect (a persisted marker always implies a
+ * committed credit). Relocated from the webhook route so it composes as a `PostCommitEffect`
+ * thunk alongside the BAL-378 session publishes (no `fastify` needed — uses the module `log`).
+ * Two things happen here, in order: the money-in analytics (unconditional), then the
+ * `credit.topup.completed` receipt notification. Best-effort + idempotent by `correlationId`
+ * (`manual_purchase:{piId}` → BullMQ jobId dedup): a publish failure is logged, never thrown (the
+ * money is already committed; re-throwing would make Stripe retry the whole webhook for a
+ * notification hiccup). A receipt with no purchaser (defensive — a manual_purchase always stamps
+ * `memberId`) skips the NOTIFICATION only.
  */
 async function publishTopupReceipt(receipt: CreditTopupReceipt): Promise<void> {
+  emitManualPurchaseCredited(receipt);
   if (receipt.purchaserUserId === null) {
     log.warn(
       { op: 'publishTopupReceipt', correlationId: receipt.correlationId },
@@ -414,6 +494,40 @@ async function applyCredit(
     },
     'Applied credit ledger effect'
   );
+
+  // Top-up redesign — persist the card the buyer just used, for DISPLAY on their next visit.
+  // FRESH events only: a replay has nothing new to record. This write can never make a wallet
+  // off-session chargeable: `applySavedCardDisplay` never sets `mandate_status = 'active'`, and
+  // when the card it is handed DIFFERS from the one on file it clears `mandate_status` /
+  // `mandate_ref` in the same statement — so a mandate can never end up pointing at a card that
+  // did not consent to it. Passing the FRESH payment-method id through is what the repository
+  // keys that decision on; never "optimise" it to a no-op when the ids look equal. `cardOnFile`
+  // is non-null only on a `manual_purchase` (by construction in the resolver), which is why this
+  // sits above the per-reason branches rather than inside one.
+  const { cardOnFile } = effect;
+  if (cardOnFile !== null && !base.deduped) {
+    await creditWalletsRepository.applySavedCardDisplay(tx, {
+      walletId: effect.walletId,
+      stripeCustomerId: cardOnFile.customerId,
+      stripePaymentMethodId: cardOnFile.paymentMethodId,
+      card: {
+        cardBrand: cardOnFile.cardBrand,
+        cardLast4: cardOnFile.cardLast4,
+        cardExpMonth: cardOnFile.cardExpMonth,
+        cardExpYear: cardOnFile.cardExpYear,
+      },
+    });
+    // Brand ONLY — never last4, expiry, the payment-method id or a mandate ref.
+    log.info(
+      {
+        op: 'applyStripeEffect',
+        kind: 'card_display',
+        walletId: effect.walletId,
+        brand: cardOnFile.cardBrand,
+      },
+      'Persisted saved-card display facts for the next visit'
+    );
+  }
 
   // BAL-378: an overdraft settlement credit ALSO marks the session settled + clears the
   // receivable (single webhook source of truth). ledgerKeyForCredit guarantees a non-null
@@ -621,6 +735,9 @@ export async function applyStripeEffect(
         stripePaymentMethodId: effect.paymentMethodId,
         mandateRef: effect.mandateRef,
         mandateStatus: 'active',
+        // Omitted (not `undefined`-spread as a key) when the card could not be read, so the
+        // display columns keep whatever the wallet already showed.
+        ...(effect.card === null ? {} : { card: effect.card }),
       });
       log.info(
         { op: 'applyStripeEffect', kind: 'mandate_active', walletId: effect.walletId },
@@ -672,5 +789,74 @@ export async function applyStripeEffect(
       const exhaustive: never = effect;
       throw new Error(`Unhandled Stripe effect: ${JSON.stringify(exhaustive)}`);
     }
+  }
+}
+
+/**
+ * THE REPAIR ARM OF THE STUCK-SETTLEMENT RECONCILE — apply an `overdraft_settlement` credit for
+ * a PaymentIntent this process has ALREADY PROVEN `succeeded`, through the ordinary webhook
+ * pipeline.
+ *
+ * ⚠⚠ WHY IT LIVES HERE, IN `dispatch.ts`, AND NOT IN THE RECONCILER THAT CALLS IT. Money-in
+ * construction has exactly ONE home. This function builds no ledger row, derives no key and
+ * decides no post-commit effect of its own — it assembles the SAME `{kind:'credit', reason:
+ * 'overdraft_settlement'}` effect the `payment_intent.succeeded` resolver builds and hands it to
+ * `applyStripeEffect` verbatim. So the ledger key (`ledgerKeyForCredit`), the mark-settled +
+ * receivable-clear (`markSettlementSettled`) and the receipt / auto-top-up publishes are ONE
+ * implementation, reached from two triggers. A second copy in `end-session.ts` would be a fork of
+ * the money path, which is the one thing that must never fork.
+ *
+ * ⚠ IT NEVER CHARGES. `retrieveSettlement` is READ-ONLY (a PI retrieve + a charge retrieve with
+ * an expanded `balance_transaction`); the only caller reaches it after
+ * `retrievePaymentIntentStatus` returned `succeeded`, so the money has already moved and this is
+ * pure recording. Nothing in this file's charge-creation surface is touched.
+ *
+ * ⚠ IT CANNOT DOUBLE-CREDIT. `applyLedgerEntry` takes the per-wallet advisory lock and dedups on
+ * the unique `idempotency_key`, and the key is the same `overdraft_settlement:{sessionId}` string
+ * whether it is derived here, by the webhook, or as the Stripe idempotency key on the original
+ * charge. A webhook that arrives afterwards dedups (`deduped: true`) ⇒ `markSettlementSettled`
+ * re-marks idempotently and returns NO post-commit effects, so the receipt is never re-sent.
+ *
+ * ⚠ FAILURE BEFORE THE COMMIT IS SAFE, AND THAT IS THE POINT. If `retrieveSettlement` throws (the
+ * un-populated `balance_transaction` arm) or the transaction rolls back, NOTHING is marked and
+ * NOTHING is cleared: the session stays `settlement_status='processing'` with its receivable
+ * intact, and the sweep's pass-4 per-row catch retries on the next tick. The debt evidence is
+ * never erased ahead of the money.
+ *
+ * ⚠ FAILURE AFTER THE COMMIT LOSES THE RECEIPT ONLY, and it does so identically to the shipped
+ * webhook — stated rather than hidden. Post-commit effects run AFTER the commit, exactly as
+ * `routes/stripe/webhook.ts` runs them; a throw from one leaves the money, the mark and the clear
+ * all correctly committed, and only the `session.settled` notification unsent. The webhook has the
+ * same exposure (its event marker commits with the effect, so Stripe's retry short-circuits on
+ * `processedAt` without re-publishing), so this introduces no new failure mode. The sweep's
+ * per-row catch logs the throw with the session id.
+ */
+export async function applyOverdraftSettlementFromStripe(
+  session: CreditSession,
+  paymentIntentId: string
+): Promise<void> {
+  // Read-only — outside the transaction (it can take seconds on the balance_transaction race).
+  const settlement = await retrieveSettlement(paymentIntentId);
+  let postCommit: PostCommitEffect[] = [];
+  await db.transaction(async (tx) => {
+    postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'overdraft_settlement',
+      walletId: session.walletId,
+      // `credit_sessions.initiating_member_id` is NOT NULL, so `applyLedgerEntry`'s
+      // attribution guard (`overdraft_settlement` is in `AUDIT_ACTION_BY_REASON`) is satisfied
+      // by construction — this arm can never throw for a missing actor.
+      memberId: session.initiatingMemberId,
+      sessionId: session.id,
+      triggeringEntryId: null,
+      // Both null BY CONSTRUCTION for this reason, matching `resolvePaymentIntentSucceeded`:
+      // only a `manual_purchase` ever carries a promo code or a display card.
+      promoCode: null,
+      cardOnFile: null,
+      settlement,
+    });
+  });
+  for (const run of postCommit) {
+    await run();
   }
 }

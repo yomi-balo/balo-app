@@ -91,6 +91,33 @@ export const creditWallets = pgTable(
     // brand-new wallet before any SetupIntent). Also off client surfaces (invariant #1).
     mandateStatus: mandateStatusEnum('mandate_status'),
 
+    // ── Saved-card DISPLAY facts (top-up redesign). ──────────────────────────
+    // These are NOT secrets and NOT credentials: brand + last4 + expiry are exactly what a
+    // checkout shows the cardholder about their own card, and none of them can be used to
+    // charge anything. They exist so a returning buyer sees "Visa •••• 4242" instead of an
+    // empty card form. DISTINCT from the mandate columns above, which ARE secrets: the id in
+    // `stripe_payment_method_id` is what charges money; these four only render. They are
+    // therefore the ONLY wallet columns added to `CLIENT_WALLET_VIEW_COLUMNS` alongside the
+    // existing safe set — see that allow-list's docblock and `WALLET_SECRET_KEYS`.
+    //
+    // Written from TWO places, both webhook-side and both LAST-WRITER-WINS:
+    //   · `setup_intent.succeeded`   → `applyMandate` (card-backed mode)
+    //   · `payment_intent.succeeded` → `applySavedCardDisplay` (ANY manual_purchase, incl.
+    //                                   `notify_only`, which never opens a SetupIntent)
+    // Neither write ever sets `mandate_status = 'active'` off the back of a display update; and
+    // `applySavedCardDisplay` CLEARS `mandate_status`/`mandate_ref` when the card it persists
+    // differs from the one on file, so the mandate columns always describe the card they were
+    // captured against. See `isWalletCardReusableOnSession` in `@balo/shared/credit` for the
+    // (weaker) predicate these display columns enable — ON-SESSION reuse only.
+    //
+    // `integer` (not `bigint`) is right: a month, a year and a 4-char string. `cardLast4` is
+    // `text`, not `varchar(4)` — the CHECK below is the contract, matching how `currency` is
+    // pinned by `credit_wallets_currency_aud` rather than by a length type.
+    cardBrand: text('card_brand'),
+    cardLast4: text('card_last4'),
+    cardExpMonth: integer('card_exp_month'),
+    cardExpYear: integer('card_exp_year'),
+
     // BAL-379 — durable per-wallet auto-top-up single-in-flight marker. NULL = no auto-top-up
     // charge in flight. Set (under the wallet advisory lock) when the engine decides to charge a
     // reload; cleared by the success/fail webhook (or on a definite sync failure). While set AND
@@ -115,6 +142,30 @@ export const creditWallets = pgTable(
     ),
     check('credit_wallets_topup_threshold_nonneg', sql`${t.topupThresholdMinor} >= 0`),
     check('credit_wallets_topup_reload_pos', sql`${t.topupReloadMinor} > 0`),
+    // ── Saved-card display CHECKs (top-up redesign) ──────────────────────────
+    // All four display fields move together — we only ever write them from one narrowing
+    // (`pm.type === 'card'` with a populated `pm.card`), so a partial row is a bug, not a
+    // state. Every constraint below has an all-NULL / `IS NULL OR …` arm, so EVERY existing
+    // wallet row satisfies all four as written: the migration needs no backfill and cannot
+    // fail on a non-empty database (the Testcontainers harness only ever migrates an empty
+    // one, so this property is argued here rather than proven there).
+    check(
+      'credit_wallets_card_display_all_or_none',
+      sql`(${t.cardBrand} IS NULL AND ${t.cardLast4} IS NULL AND ${t.cardExpMonth} IS NULL AND ${t.cardExpYear} IS NULL)
+          OR (${t.cardBrand} IS NOT NULL AND ${t.cardLast4} IS NOT NULL AND ${t.cardExpMonth} IS NOT NULL AND ${t.cardExpYear} IS NOT NULL)`
+    ),
+    check(
+      'credit_wallets_card_last4_format',
+      sql`${t.cardLast4} IS NULL OR ${t.cardLast4} ~ '^[0-9]{4}$'`
+    ),
+    check(
+      'credit_wallets_card_exp_month_range',
+      sql`${t.cardExpMonth} IS NULL OR (${t.cardExpMonth} BETWEEN 1 AND 12)`
+    ),
+    check(
+      'credit_wallets_card_exp_year_range',
+      sql`${t.cardExpYear} IS NULL OR (${t.cardExpYear} BETWEEN 2000 AND 2100)`
+    ),
   ]
 );
 

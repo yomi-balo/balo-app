@@ -306,6 +306,30 @@ export const creditSessions = pgTable(
     index('credit_sessions_settling_idx')
       .on(t.settlementStatus)
       .where(sql`${t.settlementStatus} = 'processing' AND ${t.deletedAt} IS NULL`),
+    /**
+     * The SETTLED-WITHOUT-CREDIT ALARM's finder index — `findSettledMissingLedgerCredit`:
+     * sessions claiming `settlement_status='settled'` with no `overdraft_settlement` ledger row
+     * behind the claim. Nothing served the `settled` half of this column before: the index above
+     * is partial on `'processing'` ONLY, so the alarm's per-minute sweep would otherwise scan
+     * every session ever billed — a table that only grows.
+     *
+     * `settled_at` is the KEY COLUMN because the finder both RANGES on it (`settled_at <=
+     * cutoff`) and ORDERS by it; `settlement_status` earns nothing as a key inside a predicate
+     * that already pins it to one literal, so it stays in the predicate alone.
+     *
+     * ⚠ THE `'settled'` LITERAL IS SAFE IN A PREDICATE, unlike `'presence'` on the index below.
+     * The house rule recorded on `enums.ts` bans only labels that arrive via `ALTER TYPE … ADD
+     * VALUE` (Postgres forbids USING such a label in the transaction that added it, and
+     * drizzle-kit runs the whole pending migration set in ONE transaction). `'settled'` shipped
+     * in `credit_settlement_status`'s original `CREATE TYPE` (migration 0048), so no `ADD VALUE`
+     * is involved and a from-scratch migration run is unaffected.
+     *
+     * ⚠ `deleted_at IS NULL` IS IN THE PREDICATE AND MUST STAY (the shipped soft-delete
+     * convention — memory `reference_softdelete_nonpartial_unique_recreate`).
+     */
+    index('credit_sessions_settled_missing_credit_idx')
+      .on(t.settledAt)
+      .where(sql`${t.settlementStatus} = 'settled' AND ${t.deletedAt} IS NULL`),
     check('credit_sessions_estimated_minutes_pos', sql`${t.estimatedMinutes} > 0`),
     check('credit_sessions_expert_hourly_pos', sql`${t.expertRateMinorPerHour} > 0`),
     check('credit_sessions_client_minute_pos', sql`${t.clientRateMinorPerMinute} > 0`),

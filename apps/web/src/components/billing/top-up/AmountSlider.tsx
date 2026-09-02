@@ -14,6 +14,17 @@ import {
   timeStr,
 } from '@/lib/credit/display-constants';
 
+/**
+ * How far the amount has travelled from the floor toward the A$5,000 goal, clamped to 0…1.
+ * Drives a continuous blue/violet → green warming of the slider fill, so the reward reads as
+ * approached rather than switched on. Presentation only.
+ */
+function goalProgress(amountMinor: number): number {
+  const span = GOAL_AMOUNT_MINOR - MIN_AMOUNT_MINOR;
+  if (span <= 0) return 1;
+  return Math.min(1, Math.max(0, (amountMinor - MIN_AMOUNT_MINOR) / span));
+}
+
 interface AmountSliderProps {
   readonly amountMinor: number;
   readonly promoMinor: number;
@@ -92,6 +103,15 @@ export function AmountSlider({
         step={STEP_MINOR}
         onValueChange={handleValueChange}
         aria-label="Top-up amount"
+        // Tokens mixed in OKLCH — never a hex lerp (the prototype's `lerpHex`). The two-stop
+        // `from-primary to-violet-600` gradient below stays the base declaration, so an engine
+        // without `color-mix` simply keeps today's look rather than losing the fill.
+        style={
+          {
+            '--topup-fill-from': `color-mix(in oklch, var(--primary), var(--success) ${Math.round(goalProgress(amountMinor) * 70)}%)`,
+            '--topup-fill-to': `color-mix(in oklch, var(--color-violet-600), var(--success) ${Math.round(goalProgress(amountMinor) * 100)}%)`,
+          } as React.CSSProperties
+        }
         className={cn(
           '[&_[data-slot=slider-track]]:h-2',
           // ~22px visual thumb with a ≥44px transparent hit area (a `::before` pad extends the
@@ -101,7 +121,9 @@ export function AmountSlider({
           "[&_[data-slot=slider-thumb]]:before:absolute [&_[data-slot=slider-thumb]]:before:-inset-[11px] [&_[data-slot=slider-thumb]]:before:rounded-full [&_[data-slot=slider-thumb]]:before:content-['']",
           hitGoal
             ? '[&_[data-slot=slider-range]]:bg-success [&_[data-slot=slider-thumb]]:border-success [&_[data-slot=slider-thumb]]:ring-success/30 [&_[data-slot=slider-range]]:bg-none'
-            : '[&_[data-slot=slider-range]]:from-primary [&_[data-slot=slider-range]]:bg-gradient-to-r [&_[data-slot=slider-range]]:to-violet-600'
+            : // Base: the shipped two-stop gradient. Then, where `color-mix` is supported, the
+              // same two stops warmed toward `--success` as the goal approaches.
+              '[&_[data-slot=slider-range]]:from-primary [&_[data-slot=slider-range]]:bg-gradient-to-r [&_[data-slot=slider-range]]:to-violet-600 [&_[data-slot=slider-range]]:supports-[color:color-mix(in_oklch,red,blue)]:from-(--topup-fill-from) [&_[data-slot=slider-range]]:supports-[color:color-mix(in_oklch,red,blue)]:to-(--topup-fill-to)'
         )}
       />
 

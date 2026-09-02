@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+import { isWalletMandateActive, isWalletCardReusableOnSession } from '@balo/shared/credit';
 import { creditWallets, type CreditWallet } from '../schema';
 import { db } from '../client';
 import { creditWalletFactory } from '../test/factories';
 import { companyFactory } from '../test/factories/company.factory';
 import { creditWalletsRepository } from './credit-wallets';
+import type { DbExecutor } from './_shared/db-executor';
 
 /**
  * Integration tests for `creditWalletsRepository` (BAL-376). Uses the in-harness `db`
@@ -14,6 +16,52 @@ import { creditWalletsRepository } from './credit-wallets';
 /** The wallet ids of a result list, in the returned order. */
 function ids(wallets: CreditWallet[]): string[] {
   return wallets.map((w) => w.id);
+}
+
+/** Postgres' integrity-constraint-violation code for a failed CHECK. */
+const CHECK_VIOLATION = '23514';
+
+interface PgErrorFacts {
+  code: string;
+  constraint: string;
+}
+
+/** Narrow an unknown throwable to the postgres-js error fields we assert on. */
+function pgErrorFacts(err: unknown): PgErrorFacts | null {
+  if (typeof err !== 'object' || err === null) return null;
+  const record = err as Record<string, unknown>;
+  const code = record['code'];
+  if (typeof code !== 'string') return null;
+  const constraint = record['constraint_name'];
+  return { code, constraint: typeof constraint === 'string' ? constraint : '' };
+}
+
+/**
+ * Run a statement expected to violate a constraint and return the Postgres error's facts.
+ *
+ * ⚠ THE NESTED TRANSACTION IS LOAD-BEARING, not decoration. A constraint violation puts the
+ * enclosing transaction into the aborted state, and this whole FILE shares ONE per-test
+ * transaction (`setup-integration.ts`). Without the nesting — which Drizzle emits as a
+ * SAVEPOINT on the max:1 pool — every statement after the first constraint test would fail
+ * with 25P02 ("current transaction is aborted") instead of its own reason, and the real
+ * failure would be buried in downstream noise. `ROLLBACK TO SAVEPOINT` is one of the few
+ * commands Postgres still accepts in an aborted transaction, so the outer one survives intact.
+ */
+async function expectConstraintViolation(
+  run: (exec: DbExecutor) => Promise<unknown>
+): Promise<PgErrorFacts> {
+  try {
+    await db.transaction(async (tx) => {
+      await run(tx);
+    });
+  } catch (err: unknown) {
+    const facts = pgErrorFacts(err);
+    if (facts === null) {
+      throw new Error(`expected a Postgres error, got: ${String(err)}`);
+    }
+    return facts;
+  }
+  throw new Error('expected a constraint violation, but the statement succeeded');
 }
 
 describe('creditWalletsRepository.create', () => {
@@ -35,6 +83,12 @@ describe('creditWalletsRepository.create', () => {
     // BAL-382 mandate columns default to null (no default; no mandate ever attempted).
     expect(wallet.stripeCustomerId).toBeNull();
     expect(wallet.mandateStatus).toBeNull();
+    // Top-up redesign — saved-card display columns default to null (no card on file). All four
+    // move together, so this is also the "all-null arm" of the all-or-none CHECK holding.
+    expect(wallet.cardBrand).toBeNull();
+    expect(wallet.cardLast4).toBeNull();
+    expect(wallet.cardExpMonth).toBeNull();
+    expect(wallet.cardExpYear).toBeNull();
   });
 
   it('returns balanceMinor as a JS number (bigint accumulator, mode:number)', async () => {
@@ -324,6 +378,46 @@ describe('creditWalletsRepository.applyMandate / applyMandateStatus (BAL-382)', 
     expect(pending.stripeCustomerId).toBeNull();
   });
 
+  it('REFUSES active → pending (a confirmed mandate is never stranded un-chargeable)', async () => {
+    // The race this closes: `confirmSavedCardMandate` calls setupIntents.create({confirm:true}),
+    // which can reach `succeeded` DURING the call — so Stripe may queue setup_intent.succeeded
+    // (→ applyMandate → 'active') before the caller's own `pending` write lands. Without this
+    // guard the webhook's 'active' is stomped back to 'pending' permanently, and because
+    // `isWalletMandateActive` is a conjunction including the status, auto-top-up and overdraft
+    // settlement silently stop firing for that wallet with nothing to retry them.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_r',
+      stripePaymentMethodId: 'pm_r',
+      mandateRef: 'seti_r',
+      mandateStatus: 'active',
+    });
+
+    const after = await creditWalletsRepository.applyMandateStatus(db, wallet.id, 'pending');
+
+    expect(after.mandateStatus).toBe('active');
+    // The mandate itself is untouched — this is a refused transition, not a partial write.
+    expect(after.mandateRef).toBe('seti_r');
+    expect(after.stripePaymentMethodId).toBe('pm_r');
+  });
+
+  it('still allows active → failed (a mandate that genuinely fails MUST be recorded)', async () => {
+    // The guard must be narrow: refusing every downgrade would hide a real mandate failure and
+    // leave the wallet looking chargeable when it is not.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_f',
+      stripePaymentMethodId: 'pm_f',
+      mandateRef: 'seti_f',
+      mandateStatus: 'active',
+    });
+
+    const after = await creditWalletsRepository.applyMandateStatus(db, wallet.id, 'failed');
+    expect(after.mandateStatus).toBe('failed');
+  });
+
   it('applyMandate throws for an unknown wallet id', async () => {
     await expect(
       creditWalletsRepository.applyMandate(db, {
@@ -344,6 +438,386 @@ describe('creditWalletsRepository.applyMandate / applyMandateStatus (BAL-382)', 
         'failed'
       )
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('creditWalletsRepository.applySavedCardDisplay (top-up redesign)', () => {
+  const CARD = { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 };
+
+  it('writes both Stripe ids + the four display columns and never ACTIVATES a mandate', async () => {
+    // ⚠ THIS IS THE SAFETY PROPERTY OF THE WHOLE SAVED-CARD DESIGN (plan §1.1 / R4). Every
+    // off-session charge path gates on `isWalletMandateActive`, which requires
+    // `mandate_status = 'active'`. Persisting a payment-method id here must therefore NOT be
+    // able to enable an unattended charge — so the status is asserted null BEFORE and AFTER.
+    const { wallet } = await creditWalletFactory();
+    expect(wallet.mandateStatus).toBeNull();
+
+    const updated = await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_saved_1',
+      stripePaymentMethodId: 'pm_saved_1',
+      card: CARD,
+    });
+
+    expect(updated.stripeCustomerId).toBe('cus_saved_1');
+    expect(updated.stripePaymentMethodId).toBe('pm_saved_1');
+    expect(updated.cardBrand).toBe('visa');
+    expect(updated.cardLast4).toBe('4242');
+    expect(updated.cardExpMonth).toBe(8);
+    expect(updated.cardExpYear).toBe(2028);
+    // The status did not move, and no mandate ref was invented.
+    expect(updated.mandateStatus).toBeNull();
+    expect(updated.mandateRef).toBeNull();
+
+    // Persisted — re-read from the database, not just the RETURNING row.
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.mandateStatus).toBeNull();
+    expect(persisted?.cardLast4).toBe('4242');
+    expect(persisted?.stripePaymentMethodId).toBe('pm_saved_1');
+  });
+
+  it('PRESERVES an active mandate when the SAME card is re-persisted', async () => {
+    // The legitimate case: a returning buyer pays again with the card their mandate was
+    // captured against. Nothing about the consent changed, so nothing about it may be cleared.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_m',
+      stripePaymentMethodId: 'pm_m',
+      mandateRef: 'seti_m',
+      mandateStatus: 'active',
+    });
+
+    const updated = await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_m',
+      stripePaymentMethodId: 'pm_m',
+      card: CARD,
+    });
+
+    expect(updated.stripePaymentMethodId).toBe('pm_m');
+    expect(updated.mandateStatus).toBe('active');
+    expect(updated.mandateRef).toBe('seti_m');
+    // The display columns still land.
+    expect(updated.cardLast4).toBe('4242');
+    // Still off-session chargeable — the mandate covers exactly this card.
+    expect(isWalletMandateActive(updated)).toBe(true);
+  });
+
+  it('REVOKES the mandate when a DIFFERENT card is persisted (no unconsented off-session charge)', async () => {
+    // ⚠ THE PAYMENT-MANIPULATION GUARD. `isWalletMandateActive` is a conjunction over three
+    // columns. Moving `stripe_payment_method_id` while `mandate_status` stayed 'active' would
+    // silently re-point a live off-session mandate at a card that never went through a
+    // SetupIntent — every unattended charge path (overdraft settlement, auto-top-up) re-reads
+    // the wallet at charge time and charges whatever id is stored. So a card CHANGE revokes the
+    // consent captured for the previous card, in the same statement.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_m',
+      stripePaymentMethodId: 'pm_m',
+      mandateRef: 'seti_m',
+      mandateStatus: 'active',
+    });
+
+    const updated = await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_m',
+      stripePaymentMethodId: 'pm_m2',
+      card: CARD,
+    });
+
+    // The new card is on file for DISPLAY and on-session reuse …
+    expect(updated.stripePaymentMethodId).toBe('pm_m2');
+    expect(updated.cardBrand).toBe('visa');
+    expect(updated.cardLast4).toBe('4242');
+    // … but the consent captured for pm_m is gone, and no stale ref survives to name it.
+    expect(updated.mandateStatus).toBeNull();
+    expect(updated.mandateRef).toBeNull();
+    // The property that matters, stated in the predicate the charge paths actually gate on.
+    expect(isWalletMandateActive(updated)).toBe(false);
+    expect(isWalletCardReusableOnSession(updated)).toBe(true);
+
+    // Persisted — re-read from the database, not just the RETURNING row.
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.mandateStatus).toBeNull();
+    expect(persisted?.mandateRef).toBeNull();
+    expect(persisted?.stripePaymentMethodId).toBe('pm_m2');
+  });
+
+  it('is last-writer-wins — a second card replaces the first', async () => {
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+      card: CARD,
+    });
+    const second = await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_2',
+      card: { cardBrand: 'amex', cardLast4: '0005', cardExpMonth: 12, cardExpYear: 2030 },
+    });
+
+    expect(second.cardBrand).toBe('amex');
+    expect(second.cardLast4).toBe('0005');
+    expect(second.cardExpMonth).toBe(12);
+    expect(second.cardExpYear).toBe(2030);
+    expect(second.stripePaymentMethodId).toBe('pm_2');
+  });
+
+  it('composes under a caller transaction (the webhook passes its tx)', async () => {
+    const { wallet } = await creditWalletFactory();
+    await db.transaction((tx) =>
+      creditWalletsRepository.applySavedCardDisplay(tx, {
+        walletId: wallet.id,
+        stripeCustomerId: 'cus_tx',
+        stripePaymentMethodId: 'pm_tx',
+        card: CARD,
+      })
+    );
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.cardLast4).toBe('4242');
+    expect(persisted?.mandateStatus).toBeNull();
+  });
+
+  it('throws for an unknown wallet id', async () => {
+    await expect(
+      creditWalletsRepository.applySavedCardDisplay(db, {
+        walletId: '00000000-0000-0000-0000-000000000000',
+        stripeCustomerId: 'cus_x',
+        stripePaymentMethodId: 'pm_x',
+        card: CARD,
+      })
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('creditWalletsRepository.applyMandate with card display (top-up redesign)', () => {
+  it('writes the mandate columns AND the four display columns in ONE statement', async () => {
+    // One UPDATE is what makes the all-or-none CHECK safe here: the constraint can never
+    // observe a half-written card, because there is no intermediate statement.
+    const { wallet } = await creditWalletFactory();
+    const updated = await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_both',
+      stripePaymentMethodId: 'pm_both',
+      mandateRef: 'seti_both',
+      mandateStatus: 'active',
+      card: { cardBrand: 'mastercard', cardLast4: '4444', cardExpMonth: 1, cardExpYear: 2029 },
+    });
+
+    expect(updated.mandateStatus).toBe('active');
+    expect(updated.mandateRef).toBe('seti_both');
+    expect(updated.cardBrand).toBe('mastercard');
+    expect(updated.cardLast4).toBe('4444');
+    expect(updated.cardExpMonth).toBe(1);
+    expect(updated.cardExpYear).toBe(2029);
+
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.cardBrand).toBe('mastercard');
+    expect(persisted?.mandateStatus).toBe('active');
+  });
+
+  it('WITHOUT card leaves the display columns exactly as they were (a Stripe read failure never blanks a card)', async () => {
+    // `retrieveCardDisplay` fails soft and yields no `card`. That must not wipe a card the
+    // buyer can still see — it is a cosmetic miss, and blanking would be a visible regression.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_pre',
+      stripePaymentMethodId: 'pm_pre',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+
+    const updated = await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_post',
+      stripePaymentMethodId: 'pm_post',
+      mandateRef: 'seti_post',
+      mandateStatus: 'active',
+    });
+
+    expect(updated.mandateStatus).toBe('active');
+    expect(updated.stripePaymentMethodId).toBe('pm_post');
+    // Untouched.
+    expect(updated.cardBrand).toBe('visa');
+    expect(updated.cardLast4).toBe('4242');
+    expect(updated.cardExpMonth).toBe(8);
+    expect(updated.cardExpYear).toBe(2028);
+  });
+
+  it('WITHOUT card on a wallet that never had one leaves all four null (no partial row)', async () => {
+    const { wallet } = await creditWalletFactory();
+    const updated = await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_none',
+      stripePaymentMethodId: 'pm_none',
+      mandateRef: 'seti_none',
+      mandateStatus: 'active',
+    });
+    expect(updated.cardBrand).toBeNull();
+    expect(updated.cardLast4).toBeNull();
+    expect(updated.cardExpMonth).toBeNull();
+    expect(updated.cardExpYear).toBeNull();
+  });
+});
+
+describe('credit_wallets saved-card CHECK constraints (migration 0079)', () => {
+  // These are only provable against real Postgres — the repository's typed `CardDisplayInput`
+  // makes a partial write unrepresentable in TypeScript, so the constraints are asserted with
+  // raw SQL. That is deliberate: the CHECK is the contract for ANY writer, including a future
+  // one that does not go through this repository.
+
+  it('all-or-none rejects a partial write (brand + last4 without the expiry)', async () => {
+    const { wallet } = await creditWalletFactory();
+    const facts = await expectConstraintViolation((exec) =>
+      exec.execute(sql`
+        UPDATE credit_wallets
+        SET card_brand = 'visa', card_last4 = '4242'
+        WHERE id = ${wallet.id}
+      `)
+    );
+    expect(facts.code).toBe(CHECK_VIOLATION);
+    expect(facts.constraint).toBe('credit_wallets_card_display_all_or_none');
+  });
+
+  it('all-or-none rejects clearing only ONE of the four on a fully-populated card', async () => {
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_p',
+      stripePaymentMethodId: 'pm_p',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+
+    const facts = await expectConstraintViolation((exec) =>
+      exec.execute(sql`UPDATE credit_wallets SET card_exp_year = NULL WHERE id = ${wallet.id}`)
+    );
+    expect(facts.code).toBe(CHECK_VIOLATION);
+    expect(facts.constraint).toBe('credit_wallets_card_display_all_or_none');
+
+    // The savepoint rolled back — the row is intact, which also proves the helper works.
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.cardExpYear).toBe(2028);
+  });
+
+  it('all-or-none ACCEPTS clearing all four together (the all-null arm)', async () => {
+    // The positive case, so the two rejections above are not vacuously green: an existing
+    // wallet may legitimately return to "no card on file".
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_c',
+      stripePaymentMethodId: 'pm_c',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+
+    await db.execute(sql`
+      UPDATE credit_wallets
+      SET card_brand = NULL, card_last4 = NULL, card_exp_month = NULL, card_exp_year = NULL
+      WHERE id = ${wallet.id}
+    `);
+
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.cardBrand).toBeNull();
+    expect(persisted?.cardLast4).toBeNull();
+  });
+
+  it.each([
+    ['too short', '42'],
+    ['non-numeric', 'abcd'],
+    ['too long', '42424'],
+    ['empty', ''],
+  ])('last4 format rejects %s (%s)', async (_label, last4) => {
+    const { wallet } = await creditWalletFactory();
+    const facts = await expectConstraintViolation((exec) =>
+      exec.execute(sql`
+        UPDATE credit_wallets
+        SET card_brand = 'visa', card_last4 = ${last4}, card_exp_month = 8, card_exp_year = 2028
+        WHERE id = ${wallet.id}
+      `)
+    );
+    expect(facts.code).toBe(CHECK_VIOLATION);
+    expect(facts.constraint).toBe('credit_wallets_card_last4_format');
+  });
+
+  it('last4 format ACCEPTS a leading-zero four-digit string (e.g. an Amex 0005)', async () => {
+    // `text` + a regex CHECK rather than an integer is exactly so '0005' survives; an integer
+    // column would silently store 5 and render "•••• 5".
+    const { wallet } = await creditWalletFactory();
+    const updated = await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_z',
+      stripePaymentMethodId: 'pm_z',
+      card: { cardBrand: 'amex', cardLast4: '0005', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+    expect(updated.cardLast4).toBe('0005');
+  });
+
+  it.each([
+    ['zero', 0],
+    ['thirteen', 13],
+    ['negative', -1],
+  ])('exp_month range rejects %s (%i)', async (_label, month) => {
+    const { wallet } = await creditWalletFactory();
+    const facts = await expectConstraintViolation((exec) =>
+      exec.execute(sql`
+        UPDATE credit_wallets
+        SET card_brand = 'visa', card_last4 = '4242', card_exp_month = ${month}, card_exp_year = 2028
+        WHERE id = ${wallet.id}
+      `)
+    );
+    expect(facts.code).toBe(CHECK_VIOLATION);
+    expect(facts.constraint).toBe('credit_wallets_card_exp_month_range');
+  });
+
+  it.each([
+    ['the 1 and 12 boundaries are inclusive', 1],
+    ['the 1 and 12 boundaries are inclusive', 12],
+  ])('exp_month range accepts %s: %i', async (_label, month) => {
+    const { wallet } = await creditWalletFactory();
+    const updated = await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_b',
+      stripePaymentMethodId: 'pm_b',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: month, cardExpYear: 2028 },
+    });
+    expect(updated.cardExpMonth).toBe(month);
+  });
+
+  it.each([
+    ['a two-digit year mistaken for a full one', 28],
+    ['far past', 1999],
+    ['far future', 2101],
+  ])('exp_year range rejects %s (%i)', async (_label, year) => {
+    // The `28` case is the one that matters: Stripe returns `exp_year: 2028`, and a caller that
+    // passed the DISPLAY form ("08/28") straight through would be caught here rather than
+    // silently storing a card that renders as expired.
+    const { wallet } = await creditWalletFactory();
+    const facts = await expectConstraintViolation((exec) =>
+      exec.execute(sql`
+        UPDATE credit_wallets
+        SET card_brand = 'visa', card_last4 = '4242', card_exp_month = 8, card_exp_year = ${year}
+        WHERE id = ${wallet.id}
+      `)
+    );
+    expect(facts.code).toBe(CHECK_VIOLATION);
+    expect(facts.constraint).toBe('credit_wallets_card_exp_year_range');
+  });
+
+  it('a fresh wallet row satisfies every card CHECK with no card written (migration safety)', async () => {
+    // The property migration 0079 relies on: every PRE-EXISTING wallet row passes all four
+    // constraints as written, so the ALTER TABLE needs no backfill and cannot fail on a
+    // non-empty database. The Testcontainers harness only ever migrates an EMPTY container
+    // (memory `reference_db_migrations_tested_against_empty_db`), so a wallet created BEFORE
+    // the constraints are consulted is the closest proof available here.
+    const company = await companyFactory();
+    const wallet = await creditWalletsRepository.create({ companyId: company.id });
+    const rows = await db.select().from(creditWallets).where(eq(creditWallets.id, wallet.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.cardBrand).toBeNull();
   });
 });
 
