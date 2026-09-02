@@ -535,4 +535,135 @@ describe('loadRequestFiles', () => {
 
     expect(mockWarn).not.toHaveBeenCalled();
   });
+
+  // ── Attribution of an EXPERT-side upload ──
+
+  /**
+   * ⚠ AN EXPERT UPLOAD IS ATTRIBUTED TO ITS TRACK, NOT TO A PERSON. `uploadedByUserId` on an
+   * expert-side row is the individual expert, but the client and admin lenses must show the
+   * TRACK name — the same label the picker and the audience badges use — so one file does not
+   * read one way in the list and another way in its audience. This is the arm that resolves the
+   * name from `tracks` rather than through `clientUploaderLabel`.
+   */
+  it('client arm: attributes an expert-side file to its track name, not the uploader', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      companyId: 'c1',
+      request: requestRow([narrowRel(REL_ID, EXPERT_PROFILE_ID, 'Wei')]),
+      tracks: [
+        {
+          relationshipId: REL_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        },
+      ],
+    });
+    mockListByRequest.mockResolvedValue([fullRel(REL_ID, EXPERT_PROFILE_ID)]);
+    mockListForRequest.mockResolvedValue([
+      {
+        file: fileRow({
+          fileName: 'Approach.pdf',
+          side: 'expert',
+          audience: 'own_track',
+          expertRelationshipId: REL_ID,
+        }),
+        grants: [],
+      },
+    ]);
+
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    expect(view.files[0]?.uploadedByName).toBe('Wei');
+    expect(view.files[0]?.uploadedByName).not.toContain('@');
+    // An own-track upload is scoped to that expert's conversation, never to the whole audience.
+    expect(view.files[0]?.audience.type).toBe('expert_own_track');
+  });
+
+  /** The same rule on the oversight lens — one attribution rule, two lenses. */
+  it('admin arm: attributes an expert-side file to its track name', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'admin',
+      request: requestRow([narrowRel(REL_ID, EXPERT_PROFILE_ID, 'Wei')]),
+      tracks: [
+        {
+          relationshipId: REL_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        },
+      ],
+    });
+    mockListByRequest.mockResolvedValue([fullRel(REL_ID, EXPERT_PROFILE_ID)]);
+    mockListForRequest.mockResolvedValue([
+      {
+        file: fileRow({
+          fileName: 'Approach.pdf',
+          side: 'expert',
+          audience: 'own_track',
+          expertRelationshipId: REL_ID,
+        }),
+        grants: [],
+      },
+    ]);
+
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+
+    if (view?.lens !== 'admin') throw new Error('expected the admin lens');
+    expect(view.files[0]?.uploadedByName).toBe('Wei');
+    expect(view.files[0]?.side).toBe('expert');
+  });
+
+  /**
+   * ⚠ THE GRANTS AUDIENCE IS BUILT FROM THE GRANT ROWS. A `grants`-mode file's audience must
+   * name exactly the tracks holding a live grant — reading it from the track list instead
+   * would show a sensitive, narrowly-shared document as visible to everyone.
+   */
+  it('client arm: a grants-mode file names only the tracks actually granted', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      companyId: 'c1',
+      request: requestRow([
+        narrowRel(REL_ID, EXPERT_PROFILE_ID, 'Wei'),
+        narrowRel(OTHER_REL_ID, OTHER_EXPERT_PROFILE_ID, 'Priya'),
+      ]),
+      tracks: [
+        {
+          relationshipId: REL_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        },
+        {
+          relationshipId: OTHER_REL_ID,
+          expertProfileId: OTHER_EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        },
+      ],
+    });
+    mockListByRequest.mockResolvedValue([
+      fullRel(REL_ID, EXPERT_PROFILE_ID),
+      fullRel(OTHER_REL_ID, OTHER_EXPERT_PROFILE_ID),
+    ]);
+    mockListForRequest.mockResolvedValue([
+      {
+        file: fileRow({ fileName: 'NDA.pdf', audience: 'grants' }),
+        grants: [{ relationshipId: REL_ID }],
+      },
+    ]);
+
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    const audience = view.files[0]?.audience;
+    expect(audience?.type).toBe('grants');
+    expect(audience?.type === 'grants' && audience.grants).toEqual([
+      { relationshipId: REL_ID, trackName: 'Wei' },
+    ]);
+  });
 });

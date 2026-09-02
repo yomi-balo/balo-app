@@ -205,6 +205,49 @@ describe('confirmRequestFileUploadAction', () => {
     );
   });
 
+  /**
+   * ⚠ THE GRANTS ARM RETURNS THE AUDIENCE IT ACTUALLY WROTE. The view handed back to the panel
+   * is built from `shareResult.grants` — the rows the repository committed — not from what the
+   * caller asked for. A grants share that the repository narrowed (a de-duplicated or dropped
+   * target) must therefore be reported as narrowed, so the client's badge matches the database.
+   */
+  it('returns a grants-mode view built from the grants actually written', async () => {
+    mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+    mockLoadTrackDisplays.mockResolvedValue([
+      { relationshipId: REL_ID, trackName: 'Wei', access: { kind: 'live' } },
+    ]);
+    mockShare.mockResolvedValue({
+      file: {
+        id: 'file-3',
+        fileName: 'nda.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1234,
+        side: 'client',
+        audience: 'grants',
+        expertRelationshipId: null,
+        createdAt: CREATED_AT,
+        deletedAt: null,
+        deletedByUserId: null,
+      },
+      grants: [{ relationshipId: REL_ID }],
+      resolvedLiveTracks: [
+        { relationshipId: REL_ID, expertProfileId: EXPERT_PROFILE_ID, via: 'grant' },
+      ],
+    });
+
+    const result = await confirmRequestFileUploadAction({
+      ...VALID_CLIENT_INPUT,
+      share: { mode: 'grants', relationshipIds: [REL_ID] },
+    });
+
+    expect(result.success).toBe(true);
+    const audience = result.success ? (result.view as { audience?: unknown }).audience : undefined;
+    expect(audience).toEqual({
+      type: 'grants',
+      grants: [{ relationshipId: REL_ID, trackName: 'Wei' }],
+    });
+  });
+
   it('forces audience=own_track and ignores the caller-supplied `share` field on the expert side', async () => {
     mockAuthorizeScope.mockResolvedValue(EXPERT_SCOPE);
     mockShare.mockResolvedValue({
@@ -291,5 +334,110 @@ describe('confirmRequestFileUploadAction', () => {
       error: 'That expert is no longer on this request.',
     });
     expect(result.success === false && result.error).not.toContain('You can no longer');
+  });
+
+  /**
+   * ⚠ THE HEAD-OBJECT RE-VERIFICATION. The presigned PUT is signed with a ContentLength
+   * condition, but the object's REAL content type and byte count are only knowable once it has
+   * landed — so confirm re-reads them from R2 and refuses to create a share row for anything
+   * outside the allow-list. Each refusal must ALSO destroy the orphan: leaving it costs storage
+   * forever and strands an unreferenced blob in the bucket.
+   */
+  describe('re-verifies the uploaded object before creating any share row', () => {
+    it.each([
+      {
+        name: 'a zero-byte object',
+        head: { ContentLength: 0, ContentType: 'application/pdf' },
+        error: 'The uploaded file appears to be empty.',
+      },
+      {
+        name: 'an object with no reported length',
+        head: { ContentType: 'application/pdf' },
+        error: 'The uploaded file appears to be empty.',
+      },
+      {
+        name: 'an object above the size ceiling',
+        head: { ContentLength: 10 * 1024 * 1024 + 1, ContentType: 'application/pdf' },
+        error: 'Uploaded file is too large. Please try a smaller file.',
+      },
+      {
+        name: 'an object whose real content type is not allowed',
+        head: { ContentLength: 1234, ContentType: 'application/x-msdownload' },
+        error: 'This file type is not supported.',
+      },
+    ])('refuses $name, and deletes the orphan', async ({ head, error }) => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+      mockSend.mockResolvedValue(head);
+
+      const result = await confirmRequestFileUploadAction(VALID_CLIENT_INPUT);
+
+      expect(result).toEqual({ success: false, error });
+      expect(mockShare).not.toHaveBeenCalled();
+      expect(mockDelete).toHaveBeenCalledWith(KEY);
+    });
+
+    /**
+     * ⚠ R2's REPORTED TYPE WINS OVER THE CALLER'S CLAIM. Someone who claims `application/pdf`
+     * for an executable must be refused on what actually landed, never on what they said.
+     */
+    it('trusts R2’s content type over the caller’s claim', async () => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+      mockSend.mockResolvedValue({ ContentLength: 1234, ContentType: 'application/x-msdownload' });
+
+      const result = await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        contentType: 'application/pdf',
+      });
+
+      expect(result).toEqual({ success: false, error: 'This file type is not supported.' });
+      expect(mockShare).not.toHaveBeenCalled();
+    });
+
+    /** With no type reported by R2 the caller's claim is the fallback — and is still checked. */
+    it('falls back to the claimed type when R2 reports none, and still enforces the allow-list', async () => {
+      mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+      mockSend.mockResolvedValue({ ContentLength: 1234 });
+
+      const result = await confirmRequestFileUploadAction({
+        ...VALID_CLIENT_INPUT,
+        contentType: 'application/x-msdownload',
+      });
+
+      expect(result).toEqual({ success: false, error: 'This file type is not supported.' });
+      expect(mockShare).not.toHaveBeenCalled();
+    });
+  });
+
+  it('rejects structurally invalid input before touching R2 or the repository', async () => {
+    mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+    const result = await confirmRequestFileUploadAction({
+      ...VALID_CLIENT_INPUT,
+      requestId: 'not-a-uuid',
+    });
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockShare).not.toHaveBeenCalled();
+  });
+
+  /** A denied scope reads exactly like every other denial — probing learns nothing. */
+  it('denies a caller the scope gate refused, with the neutral copy', async () => {
+    mockAuthorizeScope.mockResolvedValue({ ok: false });
+    const result = await confirmRequestFileUploadAction(VALID_CLIENT_INPUT);
+    expect(result).toEqual({ success: false, error: 'These files are no longer available.' });
+    expect(mockShare).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ AN UNEXPECTED REPOSITORY FAILURE IS NOT A SUCCESS. The generic catch must return a
+   * failure — never fall through — and must not leak the underlying error text to the caller.
+   */
+  it('maps an unexpected repository failure to generic copy, leaking no internals', async () => {
+    mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
+    mockShare.mockRejectedValue(new Error('deadlock detected on request_file_grants'));
+
+    const result = await confirmRequestFileUploadAction(VALID_CLIENT_INPUT);
+
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.error).not.toContain('deadlock');
   });
 });

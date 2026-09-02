@@ -110,4 +110,54 @@ describe('revokeRequestFileGrantAction', () => {
     const result = await revokeRequestFileGrantAction(VALID_INPUT);
     expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
   });
+
+  it('rejects structurally invalid input before authorizing anything', async () => {
+    const result = await revokeRequestFileGrantAction({
+      ...VALID_INPUT,
+      relationshipId: 'not-a-uuid',
+    });
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockAuthorizeScope).not.toHaveBeenCalled();
+    expect(mockRevokeGrant).not.toHaveBeenCalled();
+  });
+
+  it('denies a caller the scope gate refused', async () => {
+    mockAuthorizeScope.mockResolvedValue({ ok: false });
+    const result = await revokeRequestFileGrantAction(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: 'These files are no longer available.' });
+    expect(mockRevokeGrant).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ REVOKE IS CLIENT-ONLY. Granting and withdrawing an audience is the client's decision
+   * alone; an expert must never be able to close a sibling track's access — and the denial uses
+   * the same neutral copy as every other refusal.
+   */
+  it('denies the expert lens — audience is the client’s to change', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'expert',
+      request: { id: REQUEST_ID },
+      viewer: { relationshipId: REL_ID, expertProfileId: 'ep', access: { kind: 'live' } },
+    });
+    const result = await revokeRequestFileGrantAction(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: 'These files are no longer available.' });
+    expect(mockRevokeGrant).not.toHaveBeenCalled();
+  });
+
+  it('maps an unexpected repository failure to generic copy, leaking no internals', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      request: { id: REQUEST_ID },
+      companyId: 'c1',
+      tracks: [],
+    });
+    mockRevokeGrant.mockRejectedValue(new Error('deadlock detected on request_file_grants'));
+
+    const result = await revokeRequestFileGrantAction(VALID_INPUT);
+
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.error).not.toContain('deadlock');
+  });
 });

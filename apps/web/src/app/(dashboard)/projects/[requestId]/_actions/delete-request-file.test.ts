@@ -179,4 +179,71 @@ describe('deleteRequestFileAction', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(result).toEqual({ success: true });
   });
+
+  it('rejects structurally invalid input before authorizing anything', async () => {
+    const result = await deleteRequestFileAction({ ...VALID_INPUT, fileId: 'not-a-uuid' });
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockAuthorizeScope).not.toHaveBeenCalled();
+    expect(mockSoftDelete).not.toHaveBeenCalled();
+  });
+
+  it('denies a caller the scope gate refused', async () => {
+    mockAuthorizeScope.mockResolvedValue({ ok: false });
+    const result = await deleteRequestFileAction(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: 'These files are no longer available.' });
+    expect(mockSoftDelete).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ CONTAINMENT: A LOST RACE READS LIKE A MISSING FILE. Two members of the same party may
+   * press remove at once; the loser must get the same neutral "no longer available" copy as
+   * someone probing a foreign file id, so neither outcome distinguishes the two.
+   */
+  describe('a file that is already gone', () => {
+    it.each([
+      ['never existed (or belongs to another request)', () => new MockFileNotFoundError('gone')],
+      ['was tombstoned by a concurrent delete', () => new MockAlreadyDeletedError('gone')],
+    ])('reports %s as unavailable, not as an error', async (_name, makeError) => {
+      mockAuthorizeScope.mockResolvedValue({
+        ok: true,
+        side: 'client',
+        request: { id: REQUEST_ID },
+        companyId: 'c1',
+        tracks: [],
+      });
+      mockFindByIdInRequest.mockResolvedValue(CLIENT_FILE);
+      mockSoftDelete.mockRejectedValue(makeError());
+
+      const result = await deleteRequestFileAction(VALID_INPUT);
+
+      expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
+      expect(mockDeleteFromR2).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * ⚠ A FAILED TRANSACTION MUST NOT DESTROY THE BYTES. The R2 delete is deliberately sequenced
+   * AFTER the commit; if the transaction throws, the object has to survive — otherwise a
+   * rolled-back delete leaves a live row pointing at a destroyed object.
+   */
+  it('maps an unexpected failure to generic copy and leaves the R2 object intact', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      request: { id: REQUEST_ID },
+      companyId: 'c1',
+      tracks: [],
+    });
+    mockFindByIdInRequest.mockResolvedValue(CLIENT_FILE);
+    mockSoftDelete.mockRejectedValue(new Error('deadlock detected on request_shared_files'));
+
+    const result = await deleteRequestFileAction(VALID_INPUT);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not remove this file. Please try again.',
+    });
+    expect(result.success === false && result.error).not.toContain('deadlock');
+    expect(mockDeleteFromR2).not.toHaveBeenCalled();
+  });
 });

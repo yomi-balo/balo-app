@@ -210,4 +210,22 @@ describe('requestSharedFileUploadAction', () => {
     expect(mockAuthorizeScope).toHaveBeenCalledWith(USER, REQUEST_ID);
     expect(mockPresign).toHaveBeenCalledWith(REQUEST_ID, USER_ID, 'application/pdf', SIZE_BYTES);
   });
+
+  /**
+   * ⚠ A PRESIGN FAILURE MUST NOT LEAK R2 INTERNALS. This action's error string is rendered
+   * straight into a toast, so an AWS SDK message (which carries bucket names and key ids) must
+   * never reach it — the generic copy is the only thing the client may see.
+   */
+  it('maps an unexpected presign failure to generic copy, leaking no internals', async () => {
+    mockPresign.mockRejectedValue(
+      new Error('SignatureDoesNotMatch: bucket=balo-prod-files key=AKIAEXAMPLE')
+    );
+
+    const result = await requestSharedFileUploadAction(VALID_INPUT);
+
+    expect(result).toEqual({ success: false, error: "File sharing isn't available right now." });
+    const message = result.success === false ? result.error : '';
+    expect(message).not.toContain('AKIA');
+    expect(message).not.toContain('balo-prod-files');
+  });
 });

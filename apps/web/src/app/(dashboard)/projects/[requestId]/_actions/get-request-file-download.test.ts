@@ -184,4 +184,37 @@ describe('getRequestFileDownloadAction', () => {
     const [, , opts] = mockFindByIdInRequest.mock.calls[0] ?? [];
     expect(opts).toBeUndefined();
   });
+
+  it('rejects structurally invalid input before authorizing anything', async () => {
+    const result = await getRequestFileDownloadAction({ ...VALID_INPUT, fileId: 'not-a-uuid' });
+    expect(result).toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockAuthorizeScope).not.toHaveBeenCalled();
+    expect(mockPresignDownload).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ CONTAINMENT: A REFUSED SCOPE READS AS A MISSING FILE. Download is the endpoint an
+   * attacker would probe to enumerate requests, so a denial must be indistinguishable from a
+   * file that does not exist — the same copy, and no repository read at all.
+   */
+  it('reports a refused scope as a missing file, and reads nothing', async () => {
+    mockAuthorizeScope.mockResolvedValue({ ok: false });
+    const result = await getRequestFileDownloadAction(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
+    expect(mockFindByIdInRequest).not.toHaveBeenCalled();
+    expect(mockPresignDownload).not.toHaveBeenCalled();
+  });
+
+  /** An unexpected presign failure must not surface vendor internals to the caller. */
+  it('maps an unexpected failure to generic copy, leaking no internals', async () => {
+    mockAuthorizeScope.mockRejectedValue(new Error('R2 credentials rejected: AKIAEXAMPLE'));
+
+    const result = await getRequestFileDownloadAction(VALID_INPUT);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not download this file. Please try again.',
+    });
+    expect(result.success === false && result.error).not.toContain('AKIA');
+  });
 });

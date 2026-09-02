@@ -203,6 +203,56 @@ describe('requestSharedFilesRepository.share', () => {
     expect(result.grants).toHaveLength(1);
   });
 
+  /**
+   * ⚠ THE SHAPE GUARD REFUSES INCOHERENT SHARES BEFORE ANY WRITE. `side`, `audience` and the
+   * grant targets are three fields that must agree; a mismatch is a caller bug, and letting one
+   * through writes a row whose audience cannot be resolved consistently afterwards — grants
+   * attached to an all-tracks file would be invisible to the audience rule but present in the
+   * table. Each case must throw and leave NOTHING behind.
+   */
+  describe('refuses an incoherent share shape before writing anything', () => {
+    it('rejects grant targets supplied alongside a non-grants audience', async () => {
+      const seed = await seedRequest(2);
+      const [t0] = seed.tracks;
+      if (t0 === undefined) throw new Error('seed produced no tracks');
+
+      await expect(
+        requestSharedFilesRepository.share(
+          shareInput(seed, {
+            audience: 'all_live_tracks',
+            grantRelationshipIds: [t0.relationshipId],
+          })
+        )
+      ).rejects.toThrow(/grantRelationshipIds supplied for audience=all_live_tracks/);
+
+      const rows = await db
+        .select()
+        .from(requestSharedFiles)
+        .where(eq(requestSharedFiles.projectRequestId, seed.projectRequestId));
+      expect(rows).toHaveLength(0);
+    });
+
+    /**
+     * A `grants` share with no target would create a file nobody can read while presenting to
+     * the client as a successful share — the worst possible outcome for a sensitive document.
+     */
+    it('rejects a grants share naming no tracks at all', async () => {
+      const seed = await seedRequest(2);
+
+      await expect(
+        requestSharedFilesRepository.share(
+          shareInput(seed, { audience: 'grants', grantRelationshipIds: [] })
+        )
+      ).rejects.toThrow(/audience=grants requires at least one grant target/);
+
+      const rows = await db
+        .select()
+        .from(requestSharedFiles)
+        .where(eq(requestSharedFiles.projectRequestId, seed.projectRequestId));
+      expect(rows).toHaveLength(0);
+    });
+  });
+
   it('records an EXPERT upload fixed to its own track, with no grants', async () => {
     const seed = await seedRequest(2);
     const [own] = seed.tracks;
@@ -610,6 +660,38 @@ describe('requestSharedFilesRepository.findByIdInRequest', () => {
       seed.projectRequestId
     );
     expect(found?.grants.map((g) => g.relationshipId)).toEqual([t0.relationshipId]);
+  });
+
+  /**
+   * ⚠ THE GROUPING MUST ACCUMULATE, NOT OVERWRITE. Grants are read in one flat query and then
+   * bucketed per file; a bucket that replaces rather than appends would silently report a file
+   * shared with three experts as shared with ONE — under-reporting an access boundary on the
+   * exact screen the client uses to audit it. Two grants on ONE file is the smallest case that
+   * distinguishes the two implementations.
+   */
+  it('groups EVERY live grant onto its file, not just the first', async () => {
+    const seed = await seedRequest(3);
+    const [t0, t1, t2] = seed.tracks;
+    if (t0 === undefined || t1 === undefined || t2 === undefined) throw new Error('seed too small');
+
+    const { file } = await requestSharedFilesRepository.share(
+      shareInput(seed, {
+        audience: 'grants',
+        grantRelationshipIds: [t0.relationshipId, t1.relationshipId, t2.relationshipId],
+      })
+    );
+
+    const found = await requestSharedFilesRepository.findByIdInRequest(
+      file.id,
+      seed.projectRequestId
+    );
+    expect(found?.grants.map((g) => g.relationshipId).sort()).toEqual(
+      [t0.relationshipId, t1.relationshipId, t2.relationshipId].sort()
+    );
+
+    // And through the list read, which uses the same grouping helper.
+    const listed = await requestSharedFilesRepository.listForRequest(seed.projectRequestId);
+    expect(listed.find((r) => r.file.id === file.id)?.grants).toHaveLength(3);
   });
 });
 
