@@ -33,15 +33,27 @@ function joinWindowClosesAtMs(scheduledEnd: Date): number {
  *
  * ⚠ THE GRACE IS THE POINT (BAL-513 C2). Closing at the scheduled end took the Join control away from
  * an expert whose call ran over and who dropped at end + 5 min: the Daily room is still open and the
- * server's own gate (`assertMeetingJoinable`) has no early bound and a 24h upper one, so the UI was
- * strictly stricter than the system for no benefit.
+ * server's TIME gate (`assertMeetingJoinable` step 3, `MEETING_TOKEN_TTL_AFTER_END_MS`) has no early
+ * bound and a 24h upper one, so on THAT axis — and ONLY that axis — the UI was strictly stricter than
+ * the system for no benefit.
+ *
+ * ⚠⚠ THIS DOES NOT MEAN THE SERVER ALWAYS ACCEPTS A JOIN INSIDE THE GRACE (BAL-513 fix round 2, F10
+ * — an earlier draft of this comment, and the PR body, both overstated it this way).
+ * `assertMeetingJoinable` also refuses on `MEETING_CLOSED_TO_JOIN` (its step 1, ahead of the time
+ * check) — the very set this ticket moved into shared, imported below. That gate is REAL: the
+ * lifecycle sweep (`apps/api/src/jobs/meeting-lifecycle-sweep.ts`, every minute) can move a meeting to
+ * `ended` — and tear down its Daily room — a few minutes after the room empties, well inside this
+ * 30-minute window, while this calendar keeps showing a live, joinable card. See the next paragraph
+ * for how stale that status can get, and `calendar-shell.tsx`'s focus-refresh effect (F7) for the
+ * mitigation — mitigation, not elimination.
  *
  * ⚠ `status` IS A TERMINAL SET, NOT AN ALLOW-LIST, and it is imported — never hand-listed here. A
  * sixth `meeting_status` label must default to OPEN. See `@balo/shared/meetings/closed-to-join.ts`.
- * ⚠ It reflects status AS AT PAGE LOAD. The calendar's 60-second tick moves `now` and does NOT
- * refetch (`calendar-shell.tsx`), so this catches meetings already terminal when the page rendered;
- * the grace window covers everything that ends while the page is open. Client-side polling of meeting
- * status is a Non-goal.
+ * ⚠ It reflects status AS AT PAGE LOAD, refreshed only when `calendar-shell.tsx`'s focus effect
+ * re-runs the Server Component (F7). The 60-second tick alone moves `now` and does NOT refetch, so
+ * between two focus events a meeting can still read as joinable after the server has already closed
+ * it — this is what the grace window's 30 minutes is wide enough to matter for. Client-side POLLING of
+ * meeting status remains a Non-goal; the focus refresh is event-driven, not periodic.
  */
 export function calendarJoinAffordanceVisible(
   now: Date,

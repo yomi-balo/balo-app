@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { IDLE_END_EMPTY_MS } from '../meetings/timers';
 import {
   CASE_JOIN_WINDOW_MINUTES,
   MEETING_OVERRUN_GRACE_MINUTES,
@@ -220,9 +221,38 @@ describe('MEETING_OVERRUN_GRACE_MINUTES — BAL-513', () => {
     expect(MEETING_OVERRUN_GRACE_MINUTES).toBe(30);
   });
 
-  it('is strictly less than the server token ceiling (24h), so a Join at the far edge of the grace can still mint a token', () => {
+  /**
+   * BAL-513 fix round 2 (F8) — the PRIOR version of this test asserted
+   * `MEETING_OVERRUN_GRACE_MINUTES * 60_000 < 24h`, which is trivially true (1,800,000 <
+   * 86,400,000) and is NOT the constraint that actually governs whether a Join inside the grace
+   * can succeed. An external review of PR #265 found the real governing relationship: the
+   * lifecycle sweep's `idle_end` rule (`packages/shared/src/meetings/lifecycle.ts`) can end a
+   * meeting — and tear down its Daily room — after `IDLE_END_EMPTY_MS` (5 minutes) of the room
+   * sitting empty, which is SMALLER than this 30-minute grace. A naive reader could "fix" that
+   * apparent contradiction by shrinking the grace to match; this test exists so a future reader
+   * cannot do that without an assertion telling them why it would be wrong.
+   */
+  it('is DELIBERATELY LONGER than the idle-end timer — the room surviving idle_end is what makes that safe, not the reverse', () => {
+    // ⚠⚠ THE GRACE IS SUPPOSED TO BE LONGER. `idle_end` only fires while the room has been EMPTY
+    // for `IDLE_END_EMPTY_MS` (`roomEmptyPastWindow`, `lifecycle.ts`) — so for as long as ANYONE
+    // remains in the room, `idle_end` never arms, the room stays open, and every one of the 30
+    // grace minutes is real and joinable. The grace only outruns reality in the OTHER case: the
+    // room already emptied and `idle_end` already fired (as early as +5 min from empty), tearing
+    // the room down, while this calendar's frozen `status` still shows the meeting live for up to
+    // ~20 more minutes of the 30. That gap is real — it is what BAL-513 fix round 2 (F7) closes
+    // with a focus-triggered `router.refresh()` on the expert calendar, not by shrinking this
+    // grace. Do NOT "fix" a future failure of this assertion by making the grace smaller; the
+    // fix, if one is ever needed, is on the F7 side (the refresh path), or product-owned (the
+    // grace duration itself).
+    expect(MEETING_OVERRUN_GRACE_MINUTES * 60_000).toBeGreaterThan(IDLE_END_EMPTY_MS);
+  });
+
+  it('sanity bound only, NOT the governing one: the grace stays well inside the server TOKEN ceiling (24h)', () => {
     // Stated as a literal, not an import of `apps/api/src/services/meetings/meeting-liveness.ts`'s
-    // `MEETING_TOKEN_TTL_AFTER_END_MS` — `packages/shared` must not import from `apps/api`.
+    // `MEETING_TOKEN_TTL_AFTER_END_MS` — `packages/shared` must not import from `apps/api`. This
+    // bound is generous by two orders of magnitude and was never the binding constraint; the test
+    // above (`IDLE_END_EMPTY_MS`) is. Kept only so a future 24h-scale change to the grace does not
+    // silently cross the token ceiling too.
     const SERVER_TOKEN_CEILING_MS = 24 * 60 * 60 * 1000;
     expect(MEETING_OVERRUN_GRACE_MINUTES * 60_000).toBeLessThan(SERVER_TOKEN_CEILING_MS);
   });

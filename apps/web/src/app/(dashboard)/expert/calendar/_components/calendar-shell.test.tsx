@@ -45,8 +45,9 @@ vi.mock('next/link', () => ({
 let mockSearchParams = new URLSearchParams();
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const mockRefresh = vi.fn();
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace, refresh: mockRefresh }),
   useSearchParams: () => mockSearchParams,
 }));
 
@@ -117,6 +118,7 @@ beforeEach(() => {
   mockAvailabilityView = { kind: 'loading' };
   mockPush.mockClear();
   mockReplace.mockClear();
+  mockRefresh.mockClear();
   mockTrack.mockClear();
   mockUseExpertAvailability.mockClear();
   mockReload.mockClear();
@@ -876,5 +878,144 @@ describe('CalendarShell — week navigation analytics (BAL-512)', () => {
 
     expect(weekNavPayloads()).toEqual([]);
     expect(mockPush).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-513 fix round 2 (F7). The lifecycle sweep can move a meeting to `ended` — and tear down its
+ * Daily room — while the calendar's frozen `status` still shows a live, joinable card for up to
+ * ~20 more minutes of the 30-minute overrun grace. A focus-triggered `router.refresh()` is the
+ * approved mitigation: "the expert comes back to the calendar" (the ticket's own scenario) IS a
+ * focus event.
+ */
+describe('CalendarShell — focus-triggered refresh (BAL-513 fix round 2, F7)', () => {
+  it('mounting alone never calls router.refresh — the effect is event-driven, not periodic', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it('a window focus event calls router.refresh() exactly once', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('the 60-second now tick alone never calls router.refresh (never periodic)', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    act(() => {
+      vi.advanceTimersByTime(5 * 60_000);
+    });
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it('a second focus inside the 30s rate-limit window does not refresh again', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // 10s later — still inside the 30s guard.
+    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 10_000));
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a focus event once the 30s window has elapsed refreshes again', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date(FIXED_NOW.getTime() + 31_000));
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+
+    expect(mockRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('document visibilitychange → visible also refreshes, sharing the SAME rate-limit budget as focus', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // Still inside the window — a visibilitychange right after a focus must not double-spend it.
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a visibilitychange to "hidden" never refreshes', () => {
+    render(<CalendarShell view={pageView()} initialWeekStartDayKey="2026-08-24" />);
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The actual defect this round closes, end to end: an overrun meeting's server `status` moves
+   * to `ended` (the lifecycle sweep) while the calendar still shows it `in_progress`. Focus
+   * triggers `router.refresh()`; `rerender` stands in for the resulting RSC round trip exactly as
+   * the week-navigation analytics tests above already do for `router.push`/`replace`.
+   */
+  it('a meeting whose status arrives back TERMINAL after a focus refresh loses its Join affordance', () => {
+    // Started 40 minutes ago, ended 10 minutes ago — inside the 30-minute overrun grace, so Join
+    // is visible while the frozen status still reads `in_progress`.
+    const overrun = meeting({
+      meetingId: 'overrun-1',
+      scheduledStart: new Date(FIXED_NOW.getTime() - 40 * 60_000).toISOString(),
+      scheduledEnd: new Date(FIXED_NOW.getTime() - 10 * 60_000).toISOString(),
+      status: 'in_progress',
+    });
+    const { rerender } = render(
+      <CalendarShell view={pageView({ meetings: [overrun] })} initialWeekStartDayKey="2026-08-24" />
+    );
+    expect(screen.getByRole('button', { name: /Join/i })).toBeInTheDocument();
+
+    act(() => {
+      globalThis.dispatchEvent(new Event('focus'));
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // The RSC round trip `router.refresh()` triggers: the sweep tore the room down and the server
+    // now reports the meeting `ended`.
+    rerender(
+      <CalendarShell
+        view={pageView({ meetings: [{ ...overrun, status: 'ended' }] })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Join/i })).not.toBeInTheDocument();
   });
 });

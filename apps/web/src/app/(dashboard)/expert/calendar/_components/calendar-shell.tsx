@@ -33,6 +33,12 @@ interface CalendarShellProps {
 }
 
 const NOW_TICK_MS = 60_000;
+/**
+ * BAL-513 fix round 2 (F7) — the minimum gap between two focus-triggered `router.refresh()`
+ * calls. Guards against a server round trip on every alt-tab; ~30s is generous relative to how
+ * often an expert would plausibly re-focus this tab while genuinely checking on a call.
+ */
+const FOCUS_REFRESH_MIN_INTERVAL_MS = 30_000;
 const EDIT_AVAILABILITY_HREF = '/expert/settings?tab=schedule';
 const CONNECT_CALENDAR_HREF = '/expert/settings?tab=schedule&setup=calendar';
 const SET_AVAILABILITY_HREF = '/expert/settings?tab=schedule&setup=availability';
@@ -153,6 +159,55 @@ export function CalendarShell({
     const interval = setInterval(() => setNow(new Date()), NOW_TICK_MS);
     return () => clearInterval(interval);
   }, []);
+
+  /**
+   * BAL-513 fix round 2 (F7) — `status` is frozen as at this page's LAST SERVER RENDER. The
+   * lifecycle sweep (`apps/api/src/jobs/meeting-lifecycle-sweep.ts`, every minute) can move a
+   * meeting to `ended` AND delete its Daily room ~10 minutes after the room empties, while the
+   * calendar's own 30-minute overrun grace (`MEETING_OVERRUN_GRACE_MINUTES`, `join-window.ts`) is
+   * still showing a live, ping-ringing Join for another ~20 minutes — a Join that cannot succeed.
+   * The `NOW_TICK_MS` interval above only moves the clock; it never refetches, so it cannot see
+   * the status change.
+   *
+   * ⚠⚠ EVENT-DRIVEN, NEVER PERIODIC. This is deliberately NOT wired onto the tick interval —
+   * that would be exactly the "client-side polling of meeting status" `join-window.ts` names as a
+   * Non-goal: a schedule that fires whether or not anyone is looking. `window` `focus` and
+   * `document` `visibilitychange → 'visible'` are the two DOM signals for "a human just looked at
+   * this tab", and the ticket's own scenario — "an expert who drops at end + 5 min and comes back
+   * to the calendar to rejoin" — is exactly a focus event. Refreshing on it serves that scenario
+   * directly, and only when it plausibly occurs, never on a timer.
+   *
+   * `router.refresh()` re-runs the Server Component tree and hands `CalendarShell` a new `view`
+   * prop (fresh `meeting.status`, `href`s, etc.) — it never touches `now`, so
+   * `calendar-shell-tick-stability.test.tsx`'s proof that `MeetingBlock` does not re-render on the
+   * 60-second tick is unaffected by this effect entirely.
+   *
+   * ⚠ RATE-LIMITED VIA A REF, NOT STATE (`FOCUS_REFRESH_MIN_INTERVAL_MS`). A state-backed guard
+   * would itself force a re-render on every focus, which is exactly the cost this guard exists to
+   * avoid. Alt-tabbing back and forth cannot trigger more than one refresh per interval.
+   *
+   * ⚠ A MITIGATION, NOT A GUARANTEE (see `join-window.ts`'s own docblock). Status stays stale for
+   * as long as the tab remains continuously focused — this only reconciles it at the moments a
+   * human plausibly looks again, which is what the ticket asks for.
+   */
+  const lastFocusRefreshAtRef = useRef(0);
+  useEffect(() => {
+    function refreshIfDue(): void {
+      const nowMs = Date.now();
+      if (nowMs - lastFocusRefreshAtRef.current < FOCUS_REFRESH_MIN_INTERVAL_MS) return;
+      lastFocusRefreshAtRef.current = nowMs;
+      router.refresh();
+    }
+    function handleVisibilityChange(): void {
+      if (globalThis.document.visibilityState === 'visible') refreshIfDue();
+    }
+    globalThis.window.addEventListener('focus', refreshIfDue);
+    globalThis.document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      globalThis.window.removeEventListener('focus', refreshIfDue);
+      globalThis.document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [router]);
 
   /**
    * ⚠ HOISTED ABOVE THE `calendar_viewed` EFFECT ON PURPOSE (BAL-512). This used to be declared

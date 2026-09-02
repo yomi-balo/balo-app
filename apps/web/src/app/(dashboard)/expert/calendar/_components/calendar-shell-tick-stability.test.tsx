@@ -31,8 +31,9 @@ vi.mock('motion/react', async () => {
 let mockSearchParams = new URLSearchParams();
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const mockRefresh = vi.fn();
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace, refresh: mockRefresh }),
   useSearchParams: () => mockSearchParams,
 }));
 
@@ -119,6 +120,7 @@ beforeEach(() => {
   isMobile = false;
   mockPush.mockClear();
   mockReplace.mockClear();
+  mockRefresh.mockClear();
   mockTrack.mockClear();
   mockReload.mockClear();
   recorded.length = 0;

@@ -244,9 +244,20 @@ export function mergeCalendarWindows(
   // repository orders by BYTE order (`asc(meetings.id)`); `localeCompare` is locale/ICU-dependent
   // and, while equivalent in practice for lowercase-hex UUIDs, is not exact and costs more. A
   // plain relational comparison mirrors the repository's byte-order tie-break precisely.
+  //
+  // ⚠ BAL-513 fix round 2 (F9) — MUST RETURN 0 ON EQUALITY. `byId` is a `Map` keyed on
+  // `meetingId`, so two distinct entries can never carry the same id — this branch is
+  // unreachable after the de-dupe above — but `a.meetingId < b.meetingId ? -1 : 1` is not a valid
+  // total order regardless (it claims every non-`<` pair is `>`, including an equal pair), which
+  // is exactly what Sonar's S2871 ("comparators must return 0 for equal elements") flags. Equal
+  // ids ARE possible in principle for two comparators sharing this same relational shape, so this
+  // one states the real relation rather than relying on the Map to make the false case
+  // unreachable.
   return [...byId.values()].sort((a, b) => {
     const byStart = a.scheduledStart.getTime() - b.scheduledStart.getTime();
     if (byStart !== 0) return byStart;
-    return a.meetingId < b.meetingId ? -1 : 1;
+    if (a.meetingId < b.meetingId) return -1;
+    if (a.meetingId > b.meetingId) return 1;
+    return 0;
   });
 }
