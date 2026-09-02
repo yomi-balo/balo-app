@@ -45,22 +45,34 @@ interface PayActionProps {
   readonly onCardDeclined: () => void;
 }
 
+/** The two halves of the Server Action's result, named so the charge helpers can take one. */
+type StartSuccess = Extract<StartPurchaseResult, { ok: true }>;
+type StartFailure = Extract<StartPurchaseResult, { ok: false }>;
+
+/**
+ * ⚠ THE ONLY COPY THE SAVED-CARD PATH MAY SHOW ON AN AMBIGUOUS OUTCOME — and a named constant
+ * rather than a bare record entry because every arm in `confirmSavedCard` has to reach it WITHOUT
+ * a `START_ERROR_COPY[...]` lookup, which is `string | undefined` under `noUncheckedIndexedAccess`
+ * and whose `?? null` fallback renders the "no charge was made" default.
+ *
+ * On this path the api creates AND CONFIRMS the PaymentIntent (`confirm: true`), so by the time
+ * the browser sees anything the card may already have been charged. "No charge was made" is then
+ * a lie about the buyer's money — and it is the lie that invites the second Pay press.
+ */
+const SAVED_CARD_ERROR_COPY =
+  'Something went wrong finishing your top-up — check your balance before trying again.';
+
 /**
  * Copy per failure code. `stripe_error` and `saved_card_error` are DELIBERATELY different and
  * must never be merged: on the new-card path nothing was charged, but on the saved-card path
  * the charge is attempted inside the Server Action, so "no charge was made" would be a lie
  * about the buyer's money.
  */
-/** The two halves of the Server Action's result, named so the charge helpers can take one. */
-type StartSuccess = Extract<StartPurchaseResult, { ok: true }>;
-type StartFailure = Extract<StartPurchaseResult, { ok: false }>;
-
 const START_ERROR_COPY: Record<string, string> = {
   unauthorized: "You don't have permission to top up this balance.",
   invalid_input: 'Something looks off with the amount. Please adjust and try again.',
   stripe_error: "We couldn't start the payment just now — no charge was made. Give it another go?",
-  saved_card_error:
-    'Something went wrong finishing your top-up — check your balance before trying again.',
+  saved_card_error: SAVED_CARD_ERROR_COPY,
   no_saved_card: "We couldn't find your saved card. Enter a card to continue.",
   card_declined: 'Your card was declined. Try a different card?',
 };
@@ -79,7 +91,8 @@ const START_ERROR_COPY: Record<string, string> = {
  *  · SAVED CARD — no Element to submit and the browser never learns the payment-method id, so
  *    the api creates AND confirms the PaymentIntent. `complete` goes straight to the receipt;
  *    `requires_action` runs 3DS via `handleNextAction`; a decline surfaces inline with a
- *    "use a different card" escape.
+ *    "use a different card" escape. A FAILED or abandoned 3DS challenge rotates the idempotency
+ *    key too (BAL-515) — see `confirmSavedCard`.
  *
  * The wallet is credited by the shipped BAL-382 webhook — NEVER from any return value here.
  */
@@ -140,10 +153,20 @@ export function PayAction({
       if (!stripe) return false;
       if (usingSavedCard) {
         // 3DS on a mandate the api already confirmed server-side against the stored card.
-        const { error: actionError } = await stripe.handleNextAction({
-          clientSecret: mandate.clientSecret,
-        });
-        return !actionError;
+        try {
+          const { setupIntent, error: actionError } = await stripe.handleNextAction({
+            clientSecret: mandate.clientSecret,
+          });
+          // An ABANDONED challenge comes back with NO error and the intent still
+          // `requires_action`; counting that as captured tells a buyer automatic charging is on
+          // when it is not — the exact lie this function's docblock exists to prevent.
+          return !actionError && setupIntent?.status === 'succeeded';
+        } catch {
+          // `handleNextAction` REJECTS when the intent is not in `requires_action`. Nothing here
+          // may fail the purchase — the money is already charged — so the mode simply stays
+          // uncaptured and the receipt surfaces its warning.
+          return false;
+        }
       }
       if (savedPaymentMethodId === null) return false;
       const { error: setupError } = await stripe.confirmSetup({
@@ -195,21 +218,107 @@ export function PayAction({
   );
 
   /**
+   * The rejection arm of `confirmSavedCard`, resolved rather than guessed.
+   *
+   * ⚠ ROTATING BLIND HERE IS A DUPLICATE CHARGE. `handleNextAction` REJECTS whenever the intent is
+   * not in `requires_action` — and the commonest reason by far is that it ALREADY SUCCEEDED (a
+   * replay of a settled purchase). Rotating `clientRequestId` on that changes the server-side
+   * purchase idempotency key (`purchase:{walletId}:{source}:{clientRequestId}`), so one further
+   * Pay press creates a SECOND PaymentIntent — and on the saved-card path the api confirms it, so
+   * that is a second real charge, taken from a buyer who was simultaneously told "no charge was
+   * made".
+   *
+   * So ask Stripe what actually happened. `succeeded` / `processing` ⇒ the purchase is done; hand
+   * it to the normal completion path and rotate NOTHING. Only a provably-unpaid intent rotates.
+   *
+   * ⚠ AN UNREADABLE INTENT FAILS CLOSED FOR MONEY: ambiguous-outcome copy, and NO rotation. The
+   * two failure modes are not symmetric — a stale replayed key costs the buyer a repeated no-op
+   * they can retry after a refresh; a rotated key on an already-paid intent costs them real money.
+   */
+  const resolveAfterNextActionThrew = useCallback(
+    async (clientSecret: string): Promise<boolean> => {
+      if (!stripe) {
+        fail(SAVED_CARD_ERROR_COPY);
+        return false;
+      }
+      try {
+        const { paymentIntent, error: retrieveError } =
+          await stripe.retrievePaymentIntent(clientSecret);
+        if (retrieveError || !paymentIntent) {
+          fail(SAVED_CARD_ERROR_COPY);
+          return false;
+        }
+        if (paymentIntent.status === 'succeeded' || paymentIntent.status === 'processing') {
+          // Already paid. `onComplete` still fires below, so the receipt polls the wallet exactly
+          // as it does on a first-time purchase — the webhook remains the sole crediting authority.
+          return true;
+        }
+        // Provably still unpaid (`requires_payment_method` / `canceled` / a stale
+        // `requires_action`): the cached answer on this key is worthless, so rotate.
+        onCardDeclined();
+        fail(SAVED_CARD_ERROR_COPY);
+        return false;
+      } catch {
+        fail(SAVED_CARD_ERROR_COPY);
+        return false;
+      }
+    },
+    [stripe, fail, onCardDeclined]
+  );
+
+  /**
    * SAVED CARD — the api already created AND confirmed the PaymentIntent; the browser only
    * answers the 3DS challenge. `handleNextAction` never needs the payment-method id, which is
    * why the browser is never told it.
+   *
+   * ⚠ NO ARM HERE MAY SAY "no charge was made" — see `SAVED_CARD_ERROR_COPY`.
    */
   const confirmSavedCard = useCallback(
     async (clientSecret: string): Promise<boolean> => {
       if (!stripe) return false;
-      const { error: actionError } = await stripe.handleNextAction({ clientSecret });
-      if (actionError) {
-        fail(actionError.message ?? null);
-        return false;
+      try {
+        const { paymentIntent, error: actionError } = await stripe.handleNextAction({
+          clientSecret,
+        });
+        if (actionError) {
+          // ⚠ ROTATE THE KEY. A `requires_action` answer is a CACHED 200 against the purchase
+          // idempotency key exactly as a 402 decline is: failing or abandoning the challenge
+          // leaves the key holding a stale `requires_action` that the next Pay press REPLAYS for
+          // the key's 24h lifetime — the issuer is never contacted again. The decline fix below
+          // covers only the start-time 402 door; this is the 3DS door, same class of bug.
+          //
+          // Safe to rotate WITHOUT a retrieve: an `error` from `handleNextAction` is Stripe
+          // saying the authentication did not complete, which leaves the intent unpaid. Stripe's
+          // own message is kept because it is specific and true ("We are unable to authenticate
+          // your payment method"); only the message-less fallback changes, to the ambiguous-
+          // outcome copy — never the "no charge was made" default, which this path may not show.
+          onCardDeclined();
+          fail(actionError.message ?? SAVED_CARD_ERROR_COPY);
+          return false;
+        }
+        if (
+          paymentIntent &&
+          paymentIntent.status !== 'succeeded' &&
+          paymentIntent.status !== 'processing'
+        ) {
+          // Mirrors `confirmNewCard`'s guard above. An abandoned challenge can come back with NO
+          // error and the intent still in `requires_action`; reading only `error` counted that
+          // as a completed purchase. Every status reachable here is PROVABLY unpaid, so rotating
+          // is safe — but the copy still must not claim nothing was charged.
+          onCardDeclined();
+          fail(SAVED_CARD_ERROR_COPY);
+          return false;
+        }
+        return true;
+      } catch {
+        // `handleNextAction` THROWS when the intent is not in `requires_action` — which is
+        // precisely what a REPLAYED, already-succeeded intent is. Unhandled, this rejection
+        // escaped `onPay` into `handlePayClick`'s `.catch(() => undefined)` and left Pay stuck on
+        // "Processing…" with no error and no completion. Resolve the real status before deciding.
+        return resolveAfterNextActionThrew(clientSecret);
       }
-      return true;
     },
-    [stripe, fail]
+    [stripe, fail, onCardDeclined, resolveAfterNextActionThrew]
   );
 
   /** Take the Server Action's outcome to a settled charge, whichever arm it came back on. */

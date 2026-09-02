@@ -24,6 +24,9 @@ import {
   PENDING_STALE_CANCEL_MINUTES,
   publicDisplayRatePerMinute,
   sumEstimatedMinutes,
+  TOPUP_IN_FLIGHT_TTL_MS,
+  TOPUP_RECONCILE_AFTER_MS,
+  TOPUP_RECONCILE_ESCALATE_AFTER_MS,
   WALLET_EXPIRY_MONTHS,
   WRAPPED_IDLE_END_MINUTES,
 } from './index';
@@ -419,6 +422,44 @@ describe('Client Credit System platform-money constants (BAL-376)', () => {
 
   it('exposes WALLET_EXPIRY_MONTHS as 12', () => {
     expect(WALLET_EXPIRY_MONTHS).toBe(12);
+  });
+});
+
+describe('auto-top-up reconcile cadence (BAL-515)', () => {
+  it('exposes TOPUP_RECONCILE_AFTER_MS as 5 minutes', () => {
+    expect(TOPUP_RECONCILE_AFTER_MS).toBe(5 * 60 * 1000);
+  });
+
+  it('keeps TOPUP_RECONCILE_AFTER_MS STRICTLY below TOPUP_IN_FLIGHT_TTL_MS', () => {
+    // ⚠ THE INEQUALITY IS THE CONTRACT, not the two literals. Past `TOPUP_IN_FLIGHT_TTL_MS` a
+    // later balance crossing may RE-ARM `pending_topup_at`, and `armPendingTopup` overwrites
+    // `pending_topup_triggering_entry_id` and NULLs `pending_topup_payment_intent_id` — the
+    // reconcile's own evidence of which crossing it is repairing. A reconcile cutoff at or past
+    // the TTL could therefore first see a marker only after the evidence had already been
+    // erased, and the charged-but-uncredited reload this ticket exists to catch would again be
+    // untraceable. Strictly below, with real retry budget left over.
+    expect(TOPUP_RECONCILE_AFTER_MS).toBeLessThan(TOPUP_IN_FLIGHT_TTL_MS);
+  });
+
+  it('leaves at least 5 minutes of per-minute retry budget before the evidence can be erased', () => {
+    // Not merely "below": the gap must be big enough for the per-minute sweep to retry a
+    // deferred PaymentIntent read several times. 15 − 5 = 10 minutes ⇒ ~10 attempts.
+    const retryBudgetMs = TOPUP_IN_FLIGHT_TTL_MS - TOPUP_RECONCILE_AFTER_MS;
+    expect(retryBudgetMs).toBeGreaterThanOrEqual(5 * 60 * 1000);
+  });
+
+  it('exposes TOPUP_RECONCILE_ESCALATE_AFTER_MS as 1 hour', () => {
+    expect(TOPUP_RECONCILE_ESCALATE_AFTER_MS).toBe(60 * 60 * 1000);
+  });
+
+  it('sets the escalation window WELL PAST the TTL, so nothing merely slow ever alarms', () => {
+    // ⚠ THE INEQUALITY IS THE CONTRACT. This threshold only raises a deferred "still in flight"
+    // record from `info` to `error`, and an alarm that fires on ordinary latency is worse than no
+    // alarm — responders learn to ignore it. It must therefore sit far beyond both the reconcile
+    // cutoff and the in-flight TTL, i.e. past every window in which a `processing` PaymentIntent
+    // is still an ordinary race rather than a fault.
+    expect(TOPUP_RECONCILE_ESCALATE_AFTER_MS).toBeGreaterThan(TOPUP_IN_FLIGHT_TTL_MS);
+    expect(TOPUP_RECONCILE_ESCALATE_AFTER_MS).toBeGreaterThan(TOPUP_RECONCILE_AFTER_MS);
   });
 });
 

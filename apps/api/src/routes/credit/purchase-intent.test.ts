@@ -161,7 +161,7 @@ describe('POST /credit/purchase-intent', () => {
       presentmentCurrency: 'aud',
       presentmentAmountMinor: 100_000,
       initiatingMemberId: MEMBER_ID,
-      idempotencyKey: `purchase:${WALLET_ID}:${REQUEST_ID}`,
+      idempotencyKey: `purchase:${WALLET_ID}:new_card:${REQUEST_ID}`,
       promoCode: 'WELCOME50',
     });
     // The saved-card path is never touched by an unqualified (default) request.
@@ -204,13 +204,29 @@ describe('POST /credit/purchase-intent', () => {
           presentmentCurrency: 'aud',
           presentmentAmountMinor: 100_000,
           initiatingMemberId: MEMBER_ID,
-          // The SAME key format as the new-card path (the composer guarantees distinct
-          // clientRequestIds per source, so the two never collide on Stripe idempotency).
-          idempotencyKey: `purchase:${WALLET_ID}:${REQUEST_ID}`,
+          // BAL-515 — the payment-method source is folded into the key ON THE SERVER, so the
+          // two paths cannot collide even if a client reuses one request id across a switch.
+          idempotencyKey: `purchase:${WALLET_ID}:saved_card:${REQUEST_ID}`,
         })
       );
       // The stored customer is used directly — no `ensureCustomer` round trip.
       expect(mockEnsureCustomer).not.toHaveBeenCalled();
+    });
+
+    it('BAL-515: the two sources derive DIFFERENT keys for the SAME clientRequestId (structural, not a client convention)', async () => {
+      // ⚠ The two paths build PaymentIntents with DIFFERENT params (`saved_card` carries
+      // `payment_method` + `confirm: true`), and Stripe 400s on one key reused with different
+      // params. That used to hold only because the web composer re-minted `clientRequestId` on a
+      // switch — a CLIENT-side convention protecting a SERVER-side guarantee.
+      mockFindById.mockResolvedValue(savedCardWallet());
+      await inject(savedBody(), { 'x-internal-api-key': TEST_SECRET });
+      await inject(validBody(), { 'x-internal-api-key': TEST_SECRET });
+
+      const savedKey = mockCreateSavedCardCharge.mock.calls[0]?.[0]?.idempotencyKey;
+      const newKey = mockCreatePurchaseIntent.mock.calls[0]?.[0]?.idempotencyKey;
+      expect(savedKey).toBe(`purchase:${WALLET_ID}:saved_card:${REQUEST_ID}`);
+      expect(newKey).toBe(`purchase:${WALLET_ID}:new_card:${REQUEST_ID}`);
+      expect(savedKey).not.toBe(newKey);
     });
 
     it('reports complete for a `processing` PaymentIntent (the webhook still credits)', async () => {

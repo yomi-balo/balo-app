@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { CreditWallet } from '@balo/db';
 
-const { mockFindById, mockApplyMandateStatus } = vi.hoisted(() => ({
+const { mockFindById, mockApplyMandateStatus, mockFindNameById } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockApplyMandateStatus: vi.fn(),
+  mockFindNameById: vi.fn(),
 }));
 
 vi.mock('stripe', async () => (await import('../../test/mocks/stripe.js')).stripeMockModule());
@@ -12,6 +13,7 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 vi.mock('@balo/db', () => ({
   creditWalletsRepository: { findById: mockFindById, applyMandateStatus: mockApplyMandateStatus },
+  companiesRepository: { findNameById: mockFindNameById },
   db: { __brand: 'mock-db' },
 }));
 
@@ -26,7 +28,12 @@ import { mockStripe, resetStripeMock } from '../../test/mocks/stripe.js';
 
 /** Minimal wallet fixture — the mandate service only reads `id` + `stripeCustomerId`. */
 function walletFixture(overrides: Partial<CreditWallet>): CreditWallet {
-  return { id: 'wallet_1', stripeCustomerId: null, ...overrides } as unknown as CreditWallet;
+  return {
+    id: 'wallet_1',
+    companyId: 'company_1',
+    stripeCustomerId: null,
+    ...overrides,
+  } as unknown as CreditWallet;
 }
 
 describe('mandate', () => {
@@ -42,6 +49,8 @@ describe('mandate', () => {
     resetStripeMock();
     mockFindById.mockReset();
     mockApplyMandateStatus.mockReset();
+    mockFindNameById.mockReset();
+    mockFindNameById.mockResolvedValue({ id: 'company_1', name: 'Northwind Industrial' });
   });
 
   describe('ensureCustomer', () => {
@@ -51,12 +60,41 @@ describe('mandate', () => {
       expect(mockStripe.customers.create).not.toHaveBeenCalled();
     });
 
-    it('creates a customer with a stable idempotency key when none exists', async () => {
+    it('creates a customer with the COMPANY name and a stable idempotency key when none exists', async () => {
       mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
 
       const id = await ensureCustomer(walletFixture({ id: 'wallet_9', stripeCustomerId: null }));
 
       expect(id).toBe('cus_new');
+      // The wallet is COMPANY-scoped, so the Stripe customer is a company, not a person. The
+      // DISPLAY-only projection is read — never `findById`, which carries billing details,
+      // domain and join mode that have no business crossing to Stripe.
+      expect(mockFindNameById).toHaveBeenCalledWith('company_1');
+      expect(mockStripe.customers.create).toHaveBeenCalledWith(
+        { name: 'Northwind Industrial', metadata: { walletId: 'wallet_9' } },
+        { idempotencyKey: 'stripe-customer-wallet_9' }
+      );
+    });
+
+    it('creates the customer WITHOUT a name when the company read THROWS (a display read never blocks money)', async () => {
+      mockFindNameById.mockRejectedValue(new Error('db down'));
+      mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
+
+      const id = await ensureCustomer(walletFixture({ id: 'wallet_9', stripeCustomerId: null }));
+
+      expect(id).toBe('cus_new');
+      expect(mockStripe.customers.create).toHaveBeenCalledWith(
+        { metadata: { walletId: 'wallet_9' } },
+        { idempotencyKey: 'stripe-customer-wallet_9' }
+      );
+    });
+
+    it('creates the customer WITHOUT a name when the company row is missing', async () => {
+      mockFindNameById.mockResolvedValue(undefined);
+      mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
+
+      await ensureCustomer(walletFixture({ id: 'wallet_9', stripeCustomerId: null }));
+
       expect(mockStripe.customers.create).toHaveBeenCalledWith(
         { metadata: { walletId: 'wallet_9' } },
         { idempotencyKey: 'stripe-customer-wallet_9' }

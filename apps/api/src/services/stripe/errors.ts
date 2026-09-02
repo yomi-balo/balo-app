@@ -22,3 +22,26 @@ export class StripeSettlementError extends Error {
     this.name = 'StripeSettlementError';
   }
 }
+
+/**
+ * BAL-515 — the webhook's transaction did not commit, or its marker is invisible. Thrown so the
+ * route CANNOT ack 200 on work that may not exist; the app error handler (`app.ts`) captures it
+ * to Sentry and answers 500, which makes Stripe redeliver.
+ *
+ * ⚠ THERE IS DELIBERATELY NO RETRY COUNTER THAT EVENTUALLY ACKS. Acking a money effect that may
+ * not exist IS the incident this ticket closes. A repeated `StripeWebhookCommitProofError` in
+ * Sentry is the correct, human-visible end state; the route's `log.error` puts the rate in Axiom
+ * before Sentry even fires. Do not "fix" that noise by acking.
+ */
+export class StripeWebhookCommitProofError extends Error {
+  constructor(
+    eventId: string,
+    eventType: string,
+    stage: 'mark_processed' | 'post_commit_readback'
+  ) {
+    super(
+      `Stripe webhook commit proof failed at ${stage}: event ${eventId} (${eventType}) has no processed_at`
+    );
+    this.name = 'StripeWebhookCommitProofError';
+  }
+}

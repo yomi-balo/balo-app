@@ -167,6 +167,27 @@ export type StripeEffect =
       amountMinor: number;
       currency: string;
       reason: string;
+    }
+  | {
+      /**
+       * BAL-515 — the card network reissued the card behind a stored payment method
+       * (`payment_method.automatically_updated`). The payment-method id is UNCHANGED by
+       * definition; only the printed digits moved. Carries NO payment-method id and NO mandate
+       * fields, because there is no consent event here to record — see `refreshSavedCardDisplay`.
+       */
+      kind: 'card_display_refreshed';
+      walletId: string;
+      card: CardDisplayFields;
+    }
+  | {
+      /**
+       * BAL-515 — the payment method was detached at Stripe (`payment_method.detached`). Nothing
+       * is chargeable against it any more, so the applier clears the display columns, the
+       * payment-method id AND the mandate columns (fail-closed).
+       */
+      kind: 'saved_card_detached';
+      walletId: string;
+      paymentMethodId: string;
     };
 
 /**

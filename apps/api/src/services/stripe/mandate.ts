@@ -1,4 +1,4 @@
-import { creditWalletsRepository, db, type CreditWallet } from '@balo/db';
+import { companiesRepository, creditWalletsRepository, db, type CreditWallet } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { getStripeClient } from '../../lib/stripe.js';
 import { resolveAppUrl } from '../../lib/app-url.js';
@@ -15,6 +15,56 @@ const log = createLogger('stripe');
  * onto the wallet at `setup_intent.succeeded` (via `applyMandate`) alongside the payment
  * method + mandate ref — the shipped DB layer's single mandate-write seam — and it also
  * round-trips through `SetupIntent.customer`, so no eager customer-only write is needed.
+ *
+ * BAL-515 — the customer carries the WORKSPACE name. The wallet is company-scoped, so the Stripe
+ * customer is a party, not a purchase; every row previously read "Unnamed customer", which hurts
+ * dispute evidence, Radar signal, support lookup and finance reconciliation.
+ *
+ * ⚠ FOR A PERSONAL WORKSPACE THAT STRING IS A PERSON'S NAME. `companies.isPersonal` defaults
+ * true and `usersRepository` names such a workspace `{firstName}'s Workspace`, so the common
+ * solo-buyer case does send a given name to Stripe. That is ACCEPTED, on these grounds and no
+ * others: it is the company's OWN record name — the workspace label Balo already shows that
+ * account everywhere, not a fact inferred about a person; it goes to the processor that is
+ * already handling that company's card payments, for dispute evidence, Radar signal, support
+ * lookup and finance reconciliation; and the alternative, omitting it, restores the "Unnamed
+ * customer" problem for exactly the buyers this change exists to identify.
+ *
+ * ⚠ AND BE PRECISE ABOUT THE COST, BECAUSE AN EARLIER DRAFT OF THIS COMMENT WAS NOT. It waved the
+ * concern away with "Stripe already holds the cardholder's real name on every PaymentMethod's
+ * `billing_details`" — i.e. this sends nothing Stripe does not have. THAT IS NOT ESTABLISHED BY
+ * THIS CODEBASE and must not be relied on. Balo never sets `billing_details`: `<PaymentElement />`
+ * is rendered with no `options` at all in `redeem/_components/continue-to-mandate.tsx`, and with
+ * only `onReady`/`onLoadError` in `billing/top-up/PaymentMethodSection.tsx`, so no
+ * `fields.billingDetails` and no `defaultValues` are configured anywhere; `paymentMethods.create`
+ * is never called server-side either. Whether a cardholder name ever reaches Stripe on a
+ * PaymentMethod is up to Stripe's own Element and the issuer, not up to us, and this file has no
+ * business asserting vendor behaviour it has not verified. So state it plainly instead: FOR A
+ * PERSONAL WORKSPACE THIS MAY BE THE FIRST PERSON-IDENTIFYING STRING BALO SENDS TO STRIPE FOR
+ * THAT WALLET. The decision above stands on its own grounds and does not need the vendor claim.
+ * Do NOT "improve" this by sending the member's first + last name: see the attribution note below
+ * for why that is strictly worse.
+ *
+ * `email` is deliberately OUT OF SCOPE, and the reason is structural rather than squeamish:
+ * `Customer.email` is a SINGLE-VALUED field on a MULTI-MEMBER entity, so the first buyer would
+ * own the company's billing address forever — including any mail Stripe sends itself — and keep
+ * owning it after leaving. The right primitive is a company-level billing email that survives
+ * departures (a `companies` column + `customers.update`), which is a schema change this ticket
+ * cannot take and which belongs with BAL-516's billing settings. Balo sends its own receipts via
+ * the notification engine, so nothing on the buyer's receipt path depends on this field.
+ *
+ * ⚠ ATTRIBUTION: this names the PARTY, never the purchaser. One Stripe customer exists per
+ * wallet (`stripe-customer-{walletId}`) and the wallet is company-scoped, so a person's name here
+ * would not label "the buyer" — it would permanently label the COMPANY's billing record with
+ * whoever happened to buy first. Whatever per-charge human identity Stripe DOES capture belongs
+ * on the PaymentMethod's `billing_details`, where it would be accurate per charge instead of
+ * frozen at the first one — that is where such a value goes, not a claim about what is currently
+ * there (Balo sets no `billing_details`; see above).
+ *
+ * ⚠ THE NAME IS SET ONCE, AT FIRST CREATION, AND NEVER REFRESHED. The idempotency key is stable
+ * and name-independent (which is what makes a duplicate customer impossible), so a retried create
+ * inside Stripe's key window replays the ORIGINAL customer and will not apply a changed name.
+ * Customers created before this change keep "Unnamed customer" until someone backfills them
+ * out-of-band. A company rename is likewise not propagated.
  */
 export async function ensureCustomer(wallet: CreditWallet): Promise<string> {
   if (wallet.stripeCustomerId) {
@@ -22,9 +72,30 @@ export async function ensureCustomer(wallet: CreditWallet): Promise<string> {
   }
 
   const stripe = getStripeClient();
+  // FAIL-SOFT. A name is dispute-evidence / support-lookup quality, not correctness: if the
+  // company read fails or returns nothing, create the customer WITHOUT one rather than blocking a
+  // money path on a display read (the same posture as `retrieveCardDisplay` below). Read the
+  // DISPLAY-only projection — never `findById`, which returns billing details, domain and join
+  // mode that have no business crossing to Stripe.
+  let companyName: string | undefined;
+  try {
+    companyName = (await companiesRepository.findNameById(wallet.companyId))?.name;
+  } catch (err: unknown) {
+    log.warn(
+      {
+        op: 'ensureCustomer',
+        walletId: wallet.id,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Could not read the company name — creating the Stripe customer without one'
+    );
+  }
   try {
     const customer = await stripe.customers.create(
-      { metadata: { walletId: wallet.id } },
+      {
+        ...(companyName === undefined ? {} : { name: companyName }),
+        metadata: { walletId: wallet.id },
+      },
       { idempotencyKey: `stripe-customer-${wallet.id}` }
     );
     log.info(
