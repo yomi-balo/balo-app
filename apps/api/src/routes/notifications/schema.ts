@@ -628,6 +628,34 @@ const conversationAvailabilitySharedPayload = z.object({
 // publishes the same jobId and dedups. SIBLING of `booking.confirmed`, never a reuse — no
 // `engagementId`/`caseTitle` here and there never will be. Mirrors
 // packages/shared/src/notifications/index.ts.
+// BAL-431 / ADR-1048 — `request_file.shared_with_expert` / `.shared_with_client`. ⚠ NEITHER
+// PAYLOAD CARRIES AN AUDIENCE, TRACK-COUNT OR SIBLING-NAME FIELD (ADR-1048 §3 binds the
+// notification payload exactly as it binds the expert serializer) — do not widen either
+// schema with one.
+const requestFileSharedWithExpertPayload = z.object({
+  correlationId: z.string().min(1).max(200),
+  fileId: z.uuid(),
+  requestId: z.uuid(),
+  relationshipId: z.uuid(),
+  expertProfileId: z.uuid(),
+  requestTitle: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  sharedByPersonLabel: z.string().min(1).max(200),
+  fileName: z.string().min(1).max(255),
+});
+
+const requestFileSharedWithClientPayload = z.object({
+  correlationId: z.uuid(),
+  fileId: z.uuid(),
+  requestId: z.uuid(),
+  relationshipId: z.uuid(),
+  recipientId: z.uuid(),
+  requestTitle: z.string().min(1).max(200),
+  expertPartyLabel: z.string().min(1).max(200),
+  expertPersonLabel: z.string().min(1).max(200),
+  fileName: z.string().min(1).max(255),
+});
+
 const conversationIntroCallBookedPayload = z.object({
   correlationId: z.uuid(),
   meetingId: z.uuid(),
@@ -824,6 +852,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('conversation.intro_call_booked'),
     payload: conversationIntroCallBookedPayload,
+  }),
+  z.object({
+    event: z.literal('request_file.shared_with_expert'),
+    payload: requestFileSharedWithExpertPayload,
+  }),
+  z.object({
+    event: z.literal('request_file.shared_with_client'),
+    payload: requestFileSharedWithClientPayload,
   }),
 ]);
 

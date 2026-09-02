@@ -1169,3 +1169,46 @@ export const representationStatusEnum = pgEnum('representation_status', [
   'revoked',
   'expired',
 ]);
+
+// ── BAL-431 — request-stage shared files (schema/request-files.ts) ──────────────────────
+//
+// BOTH enums below are standalone `CREATE TYPE`s (never `ALTER TYPE … ADD VALUE`), so every
+// value commits atomically with the type — the same note as the transcript block above. That
+// is ALSO why naming their literals in a CHECK created in the SAME migration (0079) is safe:
+// the one-transaction hazard (memory `reference_enum_default_same_tx_migration_hazard`)
+// applies ONLY to ADD-VALUE. Neither appears in any index predicate — every partial index on
+// the two new tables predicates on `deleted_at` only (the `action-items.ts` house rule).
+
+/**
+ * BAL-431 / ADR-1048 — which SIDE of the request a shared file came from.
+ *
+ * ⚠ DERIVED FROM THE GATE'S RESOLVED SIDE, NEVER A REQUEST FIELD — the `meeting_files.party`
+ * rule (`schema/meeting-files.ts:37-44`) verbatim.
+ *
+ * TWO LABELS, NO `observer`, and no CHECK narrowing a wider enum: unlike `meeting_files`, the
+ * admin lens here is READ-ONLY by decision (design ref `request-file-audience.jsx:770-781`,
+ * "Read model only here"), so a Balo staffer never uploads and the `ALTER TYPE … ADD VALUE`
+ * hazard the `meeting_files` ruling guards against cannot arise. Precedent for a domain-local
+ * two-label party enum: `action_item_assignee_party` above.
+ */
+export const requestFileSideEnum = pgEnum('request_file_side', ['client', 'expert']);
+
+/**
+ * BAL-431 / ADR-1048 §1 — the audience a shared file carries.
+ *
+ *   all_live_tracks — DYNAMIC. Evaluated at READ time, never snapshotted: a track invited
+ *                     later inherits it; a CLOSED track keeps only what was shared before it
+ *                     closed (historical-read, ADR-1048 §2).
+ *   grants          — explicit `request_file_grants` rows, file → relationship.
+ *   own_track       — an EXPERT upload. Structurally fixed to the uploader's own track;
+ *                     there is no picker expert-side.
+ *
+ * ⚠ IMMUTABLE AFTER CREATION. There is no `updateAudience` path anywhere: narrowing a
+ * broadly-shared file is `delete + re-share as grants` (ADR-1048 §4), and per-track exclusion
+ * from an `all_live_tracks` share is deliberately unmodelled in v1.
+ */
+export const requestFileAudienceEnum = pgEnum('request_file_audience', [
+  'all_live_tracks',
+  'grants',
+  'own_track',
+]);

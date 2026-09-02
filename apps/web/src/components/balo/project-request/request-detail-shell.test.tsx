@@ -48,17 +48,8 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/mark-thread-read', () =
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/fetch-thread', () => ({
   fetchThreadAction: vi.fn(() =>
-    Promise.resolve({ success: true, messages: [], hasEarlier: false, files: [] })
+    Promise.resolve({ success: true, messages: [], hasEarlier: false })
   ),
-}));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-file-upload', () => ({
-  requestConversationFileUploadAction: vi.fn(),
-}));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-file-upload', () => ({
-  confirmConversationFileUploadAction: vi.fn(),
-}));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download', () => ({
-  getConversationFileDownloadAction: vi.fn(),
 }));
 // BAL-283 — the two real booking actions. Mocked at the MODULE level (not just their exports
 // exercised) so their `@balo/db` / auth transitive imports never load in this shell-composition

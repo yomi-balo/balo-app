@@ -1445,3 +1445,52 @@ export interface ConversationIntroCallBookedPayload {
   provisioned: boolean;
   guestCount: number;
 }
+
+/**
+ * BAL-431 / ADR-1048 — a client shared a file with ONE candidate track (one publish per
+ * track: a share-to-all fans out N publishes, a `grants` share publishes once per grant).
+ *
+ * ⚠⚠ IT CARRIES NO AUDIENCE FIELD, AND THAT IS THE WHOLE POINT. ADR-1048 §3's
+ * competitor-count concealment binds the NOTIFICATION PAYLOAD exactly as it binds the expert
+ * serializer: an email saying "shared with everyone invited" would leak the audience shape the
+ * serializer conceals. No audience type, no track count, no grant list, and no sibling's name —
+ * ever.
+ * ⚠ COUNTERPARTY CONTACT CONCEALMENT (ADR-1044 §3): names cross, addresses never.
+ * ⚠ FEE CONCEALMENT: no rate, no total. A file share moves no money.
+ */
+export interface RequestFileSharedWithExpertPayload {
+  /** `${fileId}:${relationshipId}` — one distinct dedup key per (file, track). */
+  correlationId: string;
+  fileId: string;
+  requestId: string;
+  relationshipId: string;
+  expertProfileId: string;
+  requestTitle: string;
+  /** Prospective copy names the PARTY (CLAUDE.md). */
+  clientCompanyName: string;
+  /** Retrospective — a NAME with "@ company" on first mention, never an address. */
+  sharedByPersonLabel: string;
+  fileName: string;
+}
+
+/**
+ * BAL-431 / ADR-1048 — an EXPERT uploaded a file to their own track, notifying the request's
+ * client contact. The mirror of {@link RequestFileSharedWithExpertPayload}: same concealment
+ * posture (no audience field — an own-track upload has none to leak, but the shape stays
+ * symmetric with its sibling), no money, names not addresses.
+ */
+export interface RequestFileSharedWithClientPayload {
+  /** `fileId` — one file, one client-side notification. */
+  correlationId: string;
+  fileId: string;
+  requestId: string;
+  relationshipId: string;
+  /** Resolved by the PUBLISHER: `project_requests.created_by_user_id`. */
+  recipientId: string;
+  requestTitle: string;
+  /** Prospective — the agency, or an independent expert's own name. */
+  expertPartyLabel: string;
+  /** Retrospective — the person, "@ agency" on first mention. */
+  expertPersonLabel: string;
+  fileName: string;
+}

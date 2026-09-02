@@ -193,6 +193,14 @@ export function ExpertInviteDialog({
           />
         </div>
 
+        {/* BAL-431 / ADR-1048 §1 — "the invite flow tells clients so in one line": a newly
+            invited expert inherits every prior share-to-all file the moment their track
+            exists (the dynamic `all_live_tracks` audience is evaluated at READ time). */}
+        <p className="text-muted-foreground text-xs">
+          Experts you invite now will also see the files you&apos;ve already shared with everyone
+          invited.
+        </p>
+
         {/* Results region — all four async states */}
         <div className="max-h-72 min-h-40 overflow-y-auto" aria-busy={loadState.kind === 'loading'}>
           {loadState.kind === 'loading' && (

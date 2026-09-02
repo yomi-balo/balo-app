@@ -30,6 +30,23 @@ export const PLATFORM_CAPABILITIES = {
    * client arm stays on membership `participate` and the expert arm on the engagement axis.
    */
   CANCEL_ANY_MEETING: 'cancel_any_meeting',
+  /**
+   * BAL-431 / ADR-1048 §6 — read EVERY file on ANY project request, with its resolved
+   * audience and its tombstones: the sole all-files read on the platform.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY. Neither shipped token fits —
+   * authorizing "read both parties' confidential documents" with a FEE or PROMO token would
+   * make this map lie about what it grants, the one thing a capability map must never do. The
+   * PLATFORM axis is the right axis because the admin arm holds no membership on either party
+   * by construction: the client arm stays on membership `participate`, and the expert arm is
+   * the per-track audience rule in `@balo/shared/authz/request-files`.
+   *
+   * ⚠ IT GATES A READ, WHICH IS A DELIBERATE WIDENING OF THIS AXIS'S USUAL "capability gates
+   * the MUTATION" framing (ADR-1035). The read crosses tenants, and `resolveConversationAccess`
+   * DENIES admin observers (`resolve-conversation-access.ts:120`), so the shipped thread gate
+   * cannot serve it and the lens alone is not an authorization boundary for party data.
+   */
+  VIEW_ANY_REQUEST_FILE: 'view_any_request_file',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -40,6 +57,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
   PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES,
   PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING,
+  PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE,
 ];
 
 /**

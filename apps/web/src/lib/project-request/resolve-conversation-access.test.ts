@@ -239,7 +239,8 @@ describe('resolveConversationAccess', () => {
 });
 
 /**
- * BAL-424 — the READ-ONLY sibling. `fetch-thread.ts` and `get-conversation-file-download.ts`
+ * BAL-424 — the READ-ONLY sibling. `fetch-thread.ts` (and, until BAL-431 (OSD-2) retired it,
+ * `get-conversation-file-download.ts`)
  * authenticate with bare `requireUser()` and sit on `READ_ONLY_ALLOWLIST`; once
  * `resolveConversationAccess` began get-or-creating, using it there would have made them
  * TRANSITIVE writers reachable by an un-onboarded member — invisibly, because the invariant

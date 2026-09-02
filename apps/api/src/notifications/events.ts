@@ -57,6 +57,8 @@ import type {
   RescheduleProposalDeclinedPayload,
   ConversationAvailabilitySharedPayload,
   ConversationIntroCallBookedPayload,
+  RequestFileSharedWithExpertPayload,
+  RequestFileSharedWithClientPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -470,7 +472,16 @@ export type NotificationEvent =
   // `apps/web`'s `bookIntroCallAction` AFTER `POST /meetings` returns 201 — same posture as
   // `booking.confirmed`. Publishable from apps/web — deliberately NOT in
   // `ServerOnlyNotificationEvent` below — so it needs a `publishBodySchema` arm.
-  | 'conversation.intro_call_booked';
+  | 'conversation.intro_call_booked'
+  // BAL-431 / ADR-1048 — a CLIENT shared a file with one candidate track. Published from
+  // `apps/web`'s `confirm-request-file-upload.ts` AFTER the share transaction commits, once
+  // per resolved track — deliberately NOT in `ServerOnlyNotificationEvent` below, so it needs
+  // a `publishBodySchema` arm. Revoke and delete publish NOTHING (silent by decision,
+  // ADR-1048 §4).
+  | 'request_file.shared_with_expert'
+  // BAL-431 — the mirror: an EXPERT uploaded to their own track, notifying the request's
+  // client contact. Same publisher, same posture — publishable from apps/web.
+  | 'request_file.shared_with_client';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -716,4 +727,6 @@ export interface EventPayloadMap {
   'reschedule_proposal.unanswered': RescheduleProposalUnansweredPayload;
   'conversation.availability_shared': ConversationAvailabilitySharedPayload;
   'conversation.intro_call_booked': ConversationIntroCallBookedPayload;
+  'request_file.shared_with_expert': RequestFileSharedWithExpertPayload;
+  'request_file.shared_with_client': RequestFileSharedWithClientPayload;
 }

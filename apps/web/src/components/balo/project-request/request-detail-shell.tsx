@@ -24,6 +24,8 @@ import { BillingBlockedViewTracker } from './proposal/billing-blocked-view-track
 import { ConversationStage } from './conversation/conversation-stage';
 import { MobileRequestSheet } from './conversation/mobile-request-sheet';
 import { DeliveryWorkspaceLink } from '@/components/balo/engagement/delivery-workspace-link';
+import { RequestFilesPanel } from '@/components/balo/project-request/files/request-files-panel';
+import type { RequestFilesView } from '@/lib/request-files/load-request-files';
 
 interface RequestDetailShellProps {
   view: RequestDetailView;
@@ -56,6 +58,13 @@ interface RequestDetailShellProps {
    * `ConversationStage` for the intro-call dialog's guest composer disclosure.
    */
   viewerEmailDomain?: string | null;
+  /**
+   * BAL-431 / ADR-1048 — the request-file audience panel's server-resolved view, loaded by the
+   * page via `loadRequestFiles` (which runs its own `authorizeRequestFileScope` gate). `null`
+   * ⇒ the viewer has no file lens, or the request has no relationships yet — the section is
+   * simply absent, never an error.
+   */
+  requestFilesView?: RequestFilesView | null;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -160,6 +169,7 @@ export function RequestDetailShell({
   billingCapture = null,
   deliveryEngagementId = null,
   viewerEmailDomain = null,
+  requestFilesView = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
@@ -412,6 +422,20 @@ export function RequestDetailShell({
           </div>
         )}
       </div>
+
+      {/* BAL-431 / ADR-1048 — the request-file audience panel. ONE mount point for EVERY
+          lens/phase (rendered whenever the request has at least one relationship) — it is
+          deliberately NOT nested inside the phase-2 conversation branch above: an `invited`
+          expert on a Phase-1 request must still see share-to-all files (the ticket's headline
+          scenario). `requestFilesView` is `null` when the loader found no lens or no files. */}
+      {requestFilesView && (
+        <div
+          className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mt-5 duration-500 motion-reduce:animate-none"
+          style={{ animationDelay: '210ms' }}
+        >
+          <RequestFilesPanel requestId={view.id} initialView={requestFilesView} />
+        </div>
+      )}
     </div>
   );
 }

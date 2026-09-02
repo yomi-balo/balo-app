@@ -68,8 +68,25 @@ describe('read-only Server Actions never reach the writing access resolver', () 
   it('resolves every allowlisted action on disk, and finds the conversation ones', () => {
     expect(SRC_DIR).not.toBe('');
     expect(ACTIONS.map((a) => a.rel)).toEqual([...READ_ONLY_ALLOWLIST]);
-    // All three of today's allowlist entries resolve conversation access.
-    expect(CONVERSATION_ACTIONS.length).toBeGreaterThanOrEqual(3);
+    /**
+     * ⚠ THE FLOOR IS A VACUOUS-PASS GUARD, NOT A BEHAVIOURAL ASSERTION — it exists so an
+     * emptied subject list fails loudly rather than passing every case below for free.
+     *
+     * It was 3 and is now 2 because BAL-431 (OSD-2) DELETED one of the three subjects,
+     * `get-conversation-file-download.ts` — the request surface retired its in-thread file
+     * affordance, so that action no longer exists. Lowering the floor is therefore recording
+     * a real, deliberate change in the subject set, not relaxing the invariant: the two
+     * survivors (`fetch-thread.ts` and `get-proposal-document-download.ts`) are each still
+     * asserted individually below, and any NEW allowlist entry that resolves conversation
+     * access is enrolled automatically. Do not lower this again without deleting an action.
+     *
+     * ⚠ AND DO NOT "STRENGTHEN" IT INTO A LITERAL LIST OF THE TWO. This file's whole design
+     * (see its opening docblock) is that the subject set is DERIVED from the allowlist,
+     * because the hand-maintained version already missed a subject once. A pinned list would
+     * reintroduce exactly that failure mode; the `it.each` cases below name each survivor in
+     * their own titles, which is where "which two" belongs.
+     */
+    expect(CONVERSATION_ACTIONS.length).toBeGreaterThanOrEqual(2);
   });
 
   it.each(CONVERSATION_ACTIONS.map((a) => a.rel))(

@@ -51,6 +51,25 @@ describe('platformRoleHasCapability — CANCEL_ANY_MEETING', () => {
   });
 });
 
+/**
+ * BAL-431 — the request-file all-access token. Same allow/deny table as its siblings: reading
+ * every party's confidential request file crosses tenants and is Balo-staff-only.
+ */
+describe('platformRoleHasCapability — VIEW_ANY_REQUEST_FILE', () => {
+  it.each(['admin', 'super_admin'])('grants VIEW_ANY_REQUEST_FILE to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies VIEW_ANY_REQUEST_FILE to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE)).toBe(
+        false
+      );
+    }
+  );
+});
+
 describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
   it('maps MANAGE_PLATFORM_FEES to its snake_case token', () => {
     expect(PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES).toBe('manage_platform_fees');
@@ -60,8 +79,16 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
     expect(PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING).toBe('cancel_any_meeting');
   });
 
+  it('maps VIEW_ANY_REQUEST_FILE to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE).toBe('view_any_request_file');
+  });
+
   it('gives admin and super_admin the identical staff bundle, and omits user', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toEqual(PLATFORM_ROLE_CAPABILITIES.super_admin);
     expect(PLATFORM_ROLE_CAPABILITIES.user).toBeUndefined();
+  });
+
+  it('bundle includes VIEW_ANY_REQUEST_FILE for the staff roles', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE);
   });
 });

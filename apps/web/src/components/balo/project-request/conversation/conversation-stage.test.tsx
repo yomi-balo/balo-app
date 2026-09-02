@@ -38,9 +38,6 @@ const {
   mockPostMessage,
   mockMarkRead,
   mockFetchThread,
-  mockRequestUpload,
-  mockConfirmUpload,
-  mockGetDownload,
   mockShareAvailability,
   mockBookIntroCall,
   mockRequestProposal,
@@ -48,9 +45,6 @@ const {
   mockPostMessage: vi.fn(),
   mockMarkRead: vi.fn(),
   mockFetchThread: vi.fn(),
-  mockRequestUpload: vi.fn(),
-  mockConfirmUpload: vi.fn(),
-  mockGetDownload: vi.fn(),
   mockShareAvailability: vi.fn(),
   mockBookIntroCall: vi.fn(),
   mockRequestProposal: vi.fn(),
@@ -64,15 +58,6 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/mark-thread-read', () =
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/fetch-thread', () => ({
   fetchThreadAction: (...args: unknown[]) => mockFetchThread(...args),
-}));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-file-upload', () => ({
-  requestConversationFileUploadAction: (...args: unknown[]) => mockRequestUpload(...args),
-}));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-file-upload', () => ({
-  confirmConversationFileUploadAction: (...args: unknown[]) => mockConfirmUpload(...args),
-}));
-vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download', () => ({
-  getConversationFileDownloadAction: (...args: unknown[]) => mockGetDownload(...args),
 }));
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/share-availability', () => ({
   shareAvailabilityAction: (...args: unknown[]) => mockShareAvailability(...args),
@@ -114,11 +99,11 @@ vi.mock('@/components/availability', () => ({
   ),
 }));
 
-// XHR PUT seam — no sockets in jsdom.
-const mockPutWithProgress = vi.hoisted(() => vi.fn());
+// `MessageList` (a shared leaf) still imports `formatBytes` for its file bubbles, so the module
+// stays stubbed even though this surface renders no files. `putWithProgress` is gone with the
+// composer attach pipeline (BAL-431 / OSD-2).
 vi.mock('@/components/balo/document-uploader/upload-file', () => ({
   formatBytes: (bytes: number) => `${bytes} B`,
-  putWithProgress: (...args: unknown[]) => mockPutWithProgress(...args),
 }));
 
 // Capture the realtime wiring so tests can inject incoming events + status.
@@ -216,7 +201,7 @@ beforeEach(() => {
   realtimeCapture.input = null;
   realtimeCapture.status = 'connected';
   mockMarkRead.mockResolvedValue({ success: true, lastReadAtIso: new Date().toISOString() });
-  mockFetchThread.mockResolvedValue({ success: true, messages: [], hasEarlier: false, files: [] });
+  mockFetchThread.mockResolvedValue({ success: true, messages: [], hasEarlier: false });
   mockPostMessage.mockResolvedValue({
     success: true,
     message: message('m-new', { senderUserId: VIEWER_ID }),
@@ -349,7 +334,6 @@ describe('ConversationStage — tab switching (four states)', () => {
       success: true,
       messages: [message('m-9', { relationshipId: 'rel-2' })],
       hasEarlier: false,
-      files: [],
     });
     renderStage(
       view({
@@ -361,10 +345,12 @@ describe('ConversationStage — tab switching (four states)', () => {
     );
 
     await user.click(screen.getByRole('button', { name: /Marcus/ }));
+    // `false` since BAL-431 (OSD-2): the stage renders no in-thread files, so it must not
+    // pay for a `listFiles` round trip on every tab switch.
     expect(mockFetchThread).toHaveBeenCalledWith({
       requestId: REQUEST_ID,
       relationshipId: 'rel-2',
-      includeFiles: true,
+      includeFiles: false,
     });
     expect(mockTrack).toHaveBeenCalledWith(
       CONVERSATION_EVENTS.CONVERSATION_THREAD_SELECTED,
@@ -381,7 +367,6 @@ describe('ConversationStage — tab switching (four states)', () => {
       success: true,
       messages: [message('m-2', { relationshipId: 'rel-2' })],
       hasEarlier: false,
-      files: [],
     });
     renderStage(
       view({ threads: [thread(), thread({ relationshipId: 'rel-2', expertFirstName: 'Marcus' })] })
@@ -493,19 +478,7 @@ describe('ConversationStage — realtime ingestion', () => {
   });
 });
 
-describe('ConversationStage — files + call + EOI intro', () => {
-  it('opens the files panel from the tab-strip button and tracks the surface', async () => {
-    const user = userEvent.setup();
-    renderStage(view({ threads: [thread({ fileCount: 2 })] }));
-    await user.click(screen.getByRole('button', { name: /Open shared files/ }));
-    expect(mockTrack).toHaveBeenCalledWith(
-      CONVERSATION_EVENTS.CONVERSATION_FILES_OPENED,
-      expect.objectContaining({ surface: 'tabstrip' })
-    );
-    expect(await screen.findByText('Shared in this conversation')).toBeInTheDocument();
-    expect(screen.getByText('No files shared yet')).toBeInTheDocument();
-  });
-
+describe('ConversationStage — call + EOI intro', () => {
   it('CLIENT lens: fires the call analytics, then opens the booking dialog with NO server call', async () => {
     const user = userEvent.setup();
     renderStage(view());
@@ -655,155 +628,7 @@ describe('ConversationStage — files + call + EOI intro', () => {
   });
 });
 
-describe('ConversationStage — file share (presign → PUT → confirm)', () => {
-  const KEY = 'conversation-files/rel-1/user-viewer/abc';
-
-  function pickFile(file: File): Promise<void> {
-    const user = userEvent.setup({ applyAccept: false });
-    const input = document.querySelector('input[type="file"]');
-    expect(input).not.toBeNull();
-    return user.upload(input as HTMLInputElement, file);
-  }
-
-  beforeEach(() => {
-    mockRequestUpload.mockResolvedValue({
-      success: true,
-      presignedUrl: 'https://signed.example/put',
-      key: KEY,
-    });
-    mockPutWithProgress.mockResolvedValue(undefined);
-    mockConfirmUpload.mockResolvedValue({
-      success: true,
-      file: fileView('f-new', { uploadedByUserId: VIEWER_ID, uploadedByName: 'You' }),
-    });
-  });
-
-  it('runs the full pipeline, appends the file bubble, bumps the badge, toasts + tracks', async () => {
-    renderStage(view());
-    await pickFile(new File(['x'], 'scope.pdf', { type: 'application/pdf' }));
-
-    await waitFor(() =>
-      expect(mockConfirmUpload).toHaveBeenCalledWith({
-        requestId: REQUEST_ID,
-        relationshipId: 'rel-1',
-        key: KEY,
-        fileName: 'scope.pdf',
-        contentType: 'application/pdf',
-        sizeBytes: 1,
-      })
-    );
-    expect(mockRequestUpload).toHaveBeenCalledWith({
-      requestId: REQUEST_ID,
-      relationshipId: 'rel-1',
-      contentType: 'application/pdf',
-      fileName: 'scope.pdf',
-    });
-    expect(mockPutWithProgress).toHaveBeenCalledWith(
-      expect.objectContaining({ url: 'https://signed.example/put' })
-    );
-    expect(await screen.findByText('f-new.pdf')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open shared files (1)' })).toBeInTheDocument();
-    expect(mockToast.success).toHaveBeenCalledWith('File shared');
-    expect(mockTrack).toHaveBeenCalledWith(
-      CONVERSATION_EVENTS.CONVERSATION_FILE_SHARED,
-      expect.objectContaining({ content_type: 'application/pdf', lens: 'client' })
-    );
-  });
-
-  it('rejects an unsupported type client-side without presigning', async () => {
-    renderStage(view());
-    await pickFile(new File(['x'], 'virus.exe', { type: 'application/x-msdownload' }));
-    await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith("virus.exe isn't a supported file type.")
-    );
-    expect(mockRequestUpload).not.toHaveBeenCalled();
-  });
-
-  it('rejects an oversized file client-side', async () => {
-    renderStage(view());
-    const big = new File(['x'], 'big.pdf', { type: 'application/pdf' });
-    Object.defineProperty(big, 'size', { value: 11 * 1024 * 1024 });
-    await pickFile(big);
-    await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith(
-        expect.stringContaining('files must be 10 MB or smaller')
-      )
-    );
-    expect(mockRequestUpload).not.toHaveBeenCalled();
-  });
-
-  it('surfaces presign failures (e.g. R2 unconfigured) as a toast', async () => {
-    mockRequestUpload.mockResolvedValue({
-      success: false,
-      error: "File sharing isn't available right now.",
-    });
-    renderStage(view());
-    await pickFile(new File(['x'], 'scope.pdf', { type: 'application/pdf' }));
-    await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith("File sharing isn't available right now.")
-    );
-    expect(mockConfirmUpload).not.toHaveBeenCalled();
-  });
-
-  it('surfaces confirm failures (e.g. duplicate share)', async () => {
-    mockConfirmUpload.mockResolvedValue({
-      success: false,
-      error: 'This file was already shared.',
-    });
-    renderStage(view());
-    await pickFile(new File(['x'], 'scope.pdf', { type: 'application/pdf' }));
-    await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith('This file was already shared.')
-    );
-  });
-
-  it('maps an upload transport failure to the generic copy', async () => {
-    mockPutWithProgress.mockRejectedValue(new Error('network'));
-    renderStage(view());
-    await pickFile(new File(['x'], 'scope.pdf', { type: 'application/pdf' }));
-    await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith('Could not share your file. Please try again.')
-    );
-  });
-});
-
-describe('ConversationStage — downloads + load earlier + realtime files', () => {
-  it('presigns a file download from the bubble (same-tab navigation, no error)', async () => {
-    const user = userEvent.setup();
-    mockGetDownload.mockResolvedValue({ success: true, url: 'https://signed.example/get' });
-    renderStage(
-      view({ initialFiles: [fileView('f-1') as never], threads: [thread({ fileCount: 1 })] })
-    );
-    await user.click(screen.getByRole('button', { name: /f-1\.pdf/ }));
-    await waitFor(() =>
-      expect(mockGetDownload).toHaveBeenCalledWith({
-        requestId: REQUEST_ID,
-        relationshipId: 'rel-1',
-        fileId: 'f-1',
-      })
-    );
-    // Success path navigates via window.location.assign (Safari-safe — the
-    // presigned GET forces attachment). jsdom's Location is unforgeable, so
-    // assert the observable contract instead: no error toast, row re-enables.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /f-1\.pdf/ })).not.toBeDisabled()
-    );
-    expect(mockToast.error).not.toHaveBeenCalled();
-  });
-
-  it('toasts when the download presign fails', async () => {
-    const user = userEvent.setup();
-    mockGetDownload.mockResolvedValue({
-      success: false,
-      error: 'This file is no longer available.',
-    });
-    renderStage(view({ initialFiles: [fileView('f-1') as never] }));
-    await user.click(screen.getByRole('button', { name: /f-1\.pdf/ }));
-    await waitFor(() =>
-      expect(mockToast.error).toHaveBeenCalledWith('This file is no longer available.')
-    );
-  });
-
+describe('ConversationStage — load earlier', () => {
   it('loads earlier messages with the strict keyset cursor and prepends them', async () => {
     const user = userEvent.setup();
     mockFetchThread.mockResolvedValue({
@@ -825,45 +650,58 @@ describe('ConversationStage — downloads + load earlier + realtime files', () =
       expect(screen.queryByRole('button', { name: /Load earlier/ })).not.toBeInTheDocument()
     );
   });
+});
 
-  it('appends an incoming realtime FILE, bumps the badge, and dedupes echoes', async () => {
+/**
+ * ⚠⚠ BAL-431 (OSD-2) — THE RETIREMENT GUARD, AND WHAT IT REPLACED.
+ *
+ * This surface used to have a SECOND file home: a composer attach button, a header Files pill,
+ * a mobile paperclip, a `ThreadFilesPanel` drawer, file bubbles in the timeline, and Ably file
+ * ingestion. ADR-1048 rejected two homes and the ruling retired THIS one, so the suites that
+ * covered it — `file share (presign → PUT → confirm)` (6 cases) and the download + realtime-file
+ * half of `downloads + load earlier + realtime files` (5 cases) — were DELETED because the
+ * behaviour they described is genuinely gone, not because they had started failing. The three
+ * Server Actions they drove no longer exist, so there was nothing left to assert about them.
+ *
+ * These cases stand in their place: they assert the ABSENCE positively, so re-introducing the
+ * affordance (or shipping a shared leaf that renders it unconditionally) fails here rather than
+ * quietly recreating the shape the ADR rejected. The request-level file home has its own
+ * coverage in `request-files-panel.test.tsx`, and the CASE surface keeps its in-thread files
+ * and its own suite, both untouched.
+ */
+describe('ConversationStage — the in-thread file affordance is RETIRED', () => {
+  it('renders no composer attach control and no file input at all', () => {
     renderStage(view());
-    act(() => realtimeCapture.input?.onFile(fileView('f-rt')));
-    expect(await screen.findByText('f-rt.pdf')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open shared files (1)' })).toBeInTheDocument();
-    act(() => realtimeCapture.input?.onFile(fileView('f-rt')));
-    expect(screen.getByRole('button', { name: 'Open shared files (1)' })).toBeInTheDocument();
-    expect(screen.getAllByText('f-rt.pdf')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Attach a file' })).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
-  it('never double-counts two identical echoes batched into ONE render', async () => {
-    renderStage(view());
-    // Both arrive before React flushes — the queued updaters replay together.
-    // Duplicate detection must happen BEFORE dispatch (pure updaters).
-    act(() => {
-      realtimeCapture.input?.onFile(fileView('f-batch'));
-      realtimeCapture.input?.onFile(fileView('f-batch'));
-    });
-    expect(await screen.findByText('f-batch.pdf')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open shared files (1)' })).toBeInTheDocument();
-    expect(screen.getAllByText('f-batch.pdf')).toHaveLength(1);
+  it('renders no Files pill, paperclip or drawer — on either lens', () => {
+    renderStage(view({ threads: [thread({ fileCount: 4 })] }), 'expert');
+    expect(screen.queryByRole('button', { name: /Files/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /shared files/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Shared in this conversation')).not.toBeInTheDocument();
   });
 
-  it('flags a NON-active thread unread on an incoming file (file-only activity counts)', async () => {
+  it('never renders a file bubble, even when the server view still carries files', () => {
+    // `view.initialFiles` is still BUILT by the shared conversation view-model (the case
+    // surface consumes it); this stage deliberately does not read it.
+    renderStage(view({ initialFiles: [fileView('f-legacy') as never] }));
+    expect(screen.queryByText('f-legacy.pdf')).not.toBeInTheDocument();
+  });
+
+  it('ignores a realtime FILE event instead of appending or flagging unread', () => {
     renderStage(
       view({
         threads: [
           thread(),
-          thread({
-            relationshipId: 'rel-2',
-            conversationId: 'conv-2',
-            expertFirstName: 'Marcus',
-          }),
+          thread({ relationshipId: 'rel-2', conversationId: 'conv-2', expertFirstName: 'Marcus' }),
         ],
       })
     );
-    act(() => realtimeCapture.input?.onFile(fileView('f-x', { conversationId: 'conv-2' })));
-    expect(await screen.findByText('Unread activity')).toBeInTheDocument();
+    act(() => realtimeCapture.input?.onFile(fileView('f-rt', { conversationId: 'conv-2' })));
+    expect(screen.queryByText('f-rt.pdf')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unread activity')).not.toBeInTheDocument();
   });
 });
 

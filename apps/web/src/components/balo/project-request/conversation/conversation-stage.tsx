@@ -2,15 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Ellipsis, MessageSquare, Paperclip, WifiOff } from 'lucide-react';
+import { Ellipsis, MessageSquare, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { track, CONVERSATION_EVENTS, PROJECT_EVENTS } from '@/lib/analytics';
-import { formatBytes, putWithProgress } from '@/components/balo/document-uploader/upload-file';
-import {
-  CONVERSATION_ALLOWED_CONTENT_TYPES,
-  MAX_CONVERSATION_FILE_BYTES,
-} from '@/lib/storage/conversation-file-constraints';
 import type { ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import {
   previewOfHtml,
@@ -24,9 +19,6 @@ import { RequestCard } from '../request-card';
 import { postConversationMessageAction } from '@/app/(dashboard)/projects/[requestId]/_actions/post-conversation-message';
 import { markThreadReadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/mark-thread-read';
 import { fetchThreadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/fetch-thread';
-import { requestConversationFileUploadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/request-conversation-file-upload';
-import { confirmConversationFileUploadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-conversation-file-upload';
-import { getConversationFileDownloadAction } from '@/app/(dashboard)/projects/[requestId]/_actions/get-conversation-file-download';
 import { shareAvailabilityAction } from '@/app/(dashboard)/projects/[requestId]/_actions/share-availability';
 import {
   IntroCallBookingDialog,
@@ -42,7 +34,6 @@ import { createConversationRealtimeTokenAction } from '@/app/(dashboard)/project
 import { useConversationRealtime } from '@/components/balo/conversation/use-conversation-realtime';
 import { MessageList, type ThreadDataState } from '@/components/balo/conversation/message-list';
 import { MessageComposer } from '@/components/balo/conversation/message-composer';
-import { ThreadFilesPanel } from '@/components/balo/conversation/thread-files-panel';
 import { deriveThreadActions } from './thread-actions';
 import { ThreadTabs } from './thread-tabs';
 import { ThreadHeader } from './thread-header';
@@ -69,8 +60,6 @@ interface ConversationStageProps {
 interface ThreadData {
   state: ThreadDataState;
   messages: ConversationMessageView[];
-  /** Newest first (Files panel order; the timeline re-sorts chronologically). */
-  files: ConversationFileView[];
   hasEarlier: boolean;
   loadingEarlier: boolean;
 }
@@ -78,9 +67,21 @@ interface ThreadData {
 const EMPTY_THREAD_DATA: ThreadData = {
   state: 'loading',
   messages: [],
-  files: [],
   hasEarlier: false,
   loadingEarlier: false,
+};
+
+/**
+ * ⚠⚠ BAL-431 (OSD-2) — THIS SURFACE CARRIES NO IN-THREAD FILES AT ALL, AND THE EMPTY ARRAY
+ * BELOW IS THE WHOLE MECHANISM. `MessageList` is a SHARED leaf (the case surface is its other
+ * consumer, and cases DO still share files in-thread), so its `files` / `downloadingFileId` /
+ * `onFileClick` props stay exactly as they are — the request stage simply has nothing to put
+ * in them. With no files the merged timeline degenerates to messages only and `onFileClick` is
+ * unreachable by construction, which is why the stub below can never fire.
+ */
+const NO_THREAD_FILES: ConversationFileView[] = [];
+const noopFileClick = (): void => {
+  // Unreachable: `NO_THREAD_FILES` is empty, so no file bubble is ever rendered to click.
 };
 
 /** Min interval between mark-read Server Action calls per thread (correction 8). */
@@ -89,16 +90,6 @@ const STAGE_CARD_CLASS = 'flex h-[min(78dvh,760px)] min-h-[520px] flex-col overf
 
 /** Relationship statuses at which the read-only "View proposal" surface opens. */
 const PROPOSAL_VIEW_STATUSES = new Set<string>(['proposal_submitted', 'accepted']);
-
-/** Pure list transform: bump one thread's file badge (confirm path). */
-function withBumpedFileCount(
-  threads: ConversationThreadView[],
-  threadId: string
-): ConversationThreadView[] {
-  return threads.map((t) =>
-    t.relationshipId === threadId ? { ...t, fileCount: t.fileCount + 1 } : t
-  );
-}
 
 /** Pure thread transform: prepend a deduped earlier-messages page. */
 function withEarlierMessages(
@@ -168,9 +159,6 @@ function deriveStageRender(input: {
 }
 
 const noopSend = (): Promise<boolean> => Promise.resolve(false);
-const noopAttach = (): void => {
-  // Disabled composer — nothing to attach to.
-};
 const noopDraftChange = (): void => {
   // Disabled composer — no draft to keep.
 };
@@ -304,7 +292,6 @@ function EmptyConversationStage({
         value=""
         onChange={noopDraftChange}
         onSend={noopSend}
-        onAttach={noopAttach}
       />
     </RequestCard>
   );
@@ -313,9 +300,33 @@ function EmptyConversationStage({
 /**
  * THE Phase-2 client island (BAL-271 / A4): tabbed multi-expert threads
  * (smart unread-aware default), per-thread nudges, realtime via Ably
- * (subscribe-only), thread-scoped files, plain-text composer. Tab ORDER is
- * `view.threads` verbatim — selection, never order, reacts to activity.
+ * (subscribe-only), plain-text composer. Tab ORDER is `view.threads` verbatim —
+ * selection, never order, reacts to activity.
  * BAL-212 guard: the ONLY message write path is the composer submit.
+ *
+ * ── ⚠⚠ NO FILE AFFORDANCE. RETIRED BY BAL-431 (OSD-2). ─────────────────────────────────────
+ *
+ * This stage used to be a SECOND file home on the request surface: a composer attach button, a
+ * Files pill in the header, a paperclip in the mobile tab strip, a `ThreadFilesPanel` drawer,
+ * file bubbles in the timeline, and Ably file ingestion. ADR-1048 rejected two homes, and the
+ * ruling retired THIS one — the request-level, audience-aware `RequestFilesPanel` (mounted by
+ * `request-detail-shell.tsx`) is now the single file home for a project request.
+ *
+ * What that means concretely, so none of it is rediscovered as a bug:
+ *   · `onAttach` is NOT passed to `MessageComposer`, so the composer renders no attach button
+ *     at all (the prop is optional precisely for this).
+ *   · `MessageList` receives an EMPTY `files` array — it is a SHARED leaf and the CASE surface
+ *     still shares files in-thread, so its interface is untouched.
+ *   · The realtime hook's `onFile` is a documented no-op: nothing writes a conversation file
+ *     against a relationship-anchored conversation any more, so no such event can arrive.
+ *   · `fetchThreadAction` is called with `includeFiles: false` on both legs.
+ *   · `view.initialFiles` and `thread.fileCount` are still BUILT server-side (they belong to
+ *     the shared conversation view-model, whose other consumer is the case surface) and are
+ *     deliberately not read here.
+ *
+ * Retiring the affordance, NOT the data: `conversation_files` rows written before this are
+ * untouched and stay visible on the CASE surface wherever a thread carried over at kickoff.
+ * No backfill was needed — the guard count of orphanable request-stage files was 0.
  */
 export function ConversationStage({
   requestId,
@@ -337,22 +348,18 @@ export function ConversationStage({
           [view.defaultThreadId]: {
             state: 'ready',
             messages: view.initialMessages,
-            files: view.initialFiles,
             hasEarlier: view.initialHasEarlier,
             loadingEarlier: false,
           },
         }
   );
-  const [filesOpen, setFilesOpen] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
   const [sending, setSending] = useState(false);
-  const [uploading, setUploading] = useState<{ fileName: string; progress: number } | null>(null);
   const [callPending, setCallPending] = useState(false);
   const [introCallDialogOpen, setIntroCallDialogOpen] = useState(false);
   const [introCallSurface, setIntroCallSurface] = useState<'header' | 'rail' | 'nudge'>('header');
   const [proposalDialogOpen, setProposalDialogOpen] = useState(false);
-  const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
   // Per-thread composer drafts (Slack behaviour): a reply typed for expert A
   // survives a tab switch and can never be Enter-sent to expert B.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -363,33 +370,6 @@ export function ConversationStage({
   }, [activeThreadId]);
   const lastMarkAtRef = useRef<Record<string, number>>({});
   const composerContainerRef = useRef<HTMLDivElement>(null);
-
-  // Known file ids per thread, maintained at EVERY append/seed site so
-  // duplicate detection happens BEFORE state dispatch — React updaters must
-  // stay pure (queued updaters replay in hook-declaration order, so a flag
-  // mutated inside one updater and read in another races under batching).
-  const knownFileIdsRef = useRef<Map<string, Set<string>>>(new Map());
-  const seededKnownFilesRef = useRef(false);
-  if (!seededKnownFilesRef.current) {
-    seededKnownFilesRef.current = true;
-    if (view.defaultThreadId !== null) {
-      knownFileIdsRef.current.set(
-        view.defaultThreadId,
-        new Set(view.initialFiles.map((f) => f.id))
-      );
-    }
-  }
-  /** Registers a file id; returns true when it was NOT known yet. */
-  const rememberFile = useCallback((threadId: string, fileId: string): boolean => {
-    let known = knownFileIdsRef.current.get(threadId);
-    if (known === undefined) {
-      known = new Set();
-      knownFileIdsRef.current.set(threadId, known);
-    }
-    if (known.has(fileId)) return false;
-    known.add(fileId);
-    return true;
-  }, []);
 
   /**
    * BAL-424 — Ably payloads carry a `conversationId`; the island's thread identity is still
@@ -419,8 +399,6 @@ export function ConversationStage({
   const activeThread = threads.find((t) => t.relationshipId === activeThreadId) ?? null;
   const activeData: ThreadData =
     (activeThreadId === null ? undefined : threadData[activeThreadId]) ?? EMPTY_THREAD_DATA;
-  const activeFileCount =
-    activeData.state === 'ready' ? activeData.files.length : (activeThread?.fileCount ?? 0);
 
   // ── Read-state plumbing ────────────────────────────────────────────────
   const markReadSafe = useCallback(
@@ -446,18 +424,16 @@ export function ConversationStage({
   const fetchThread = useCallback(
     (threadId: string): void => {
       setThreadData((prev) => ({ ...prev, [threadId]: { ...EMPTY_THREAD_DATA } }));
-      fetchThreadAction({ requestId, relationshipId: threadId, includeFiles: true })
+      // `includeFiles: false` (BAL-431 / OSD-2) — this surface renders no in-thread files, so
+      // asking for them would be a wasted `listFiles` round trip on every tab switch.
+      fetchThreadAction({ requestId, relationshipId: threadId, includeFiles: false })
         .then((result) => {
-          if (result.success) {
-            for (const file of result.files ?? []) rememberFile(threadId, file.id);
-          }
           setThreadData((prev) => ({
             ...prev,
             [threadId]: result.success
               ? {
                   state: 'ready',
                   messages: result.messages,
-                  files: result.files ?? [],
                   hasEarlier: result.hasEarlier,
                   loadingEarlier: false,
                 }
@@ -471,7 +447,7 @@ export function ConversationStage({
           }));
         });
     },
-    [requestId, rememberFile]
+    [requestId]
   );
 
   const selectThread = useCallback(
@@ -486,8 +462,6 @@ export function ConversationStage({
         thread_count: threads.length,
       });
       setActiveThreadId(threadId);
-      // Close the files panel on tab switch (design line 1515).
-      setFilesOpen(false);
       setOverflowOpen(false);
       clearUnread(threadId);
       markReadSafe(threadId);
@@ -539,11 +513,10 @@ export function ConversationStage({
   }, [clearUnread, markReadSafe]);
 
   // ── Realtime (subscribe-only; optimistic echoes deduped by id) ─────────
-  // Both handlers keep their state updaters PURE: any dedupe decision is made
-  // BEFORE dispatching (the message updaters are idempotent by construction;
-  // the file handler decides via `rememberFile`). Never mutate a closure
-  // variable inside one updater and read it in another — queued updaters
-  // replay per hook in declaration order under batching.
+  // The message handler keeps its state updaters PURE: the dedupe decision is made BEFORE
+  // dispatching (the updaters are idempotent by construction). Never mutate a closure variable
+  // inside one updater and read it in another — queued updaters replay per hook in declaration
+  // order under batching.
   const handleRealtimeMessage = useCallback(
     (message: ConversationMessageView): void => {
       const threadId = threadIdByConversationId.get(message.conversationId);
@@ -580,45 +553,18 @@ export function ConversationStage({
     [viewerUserId, markReadSafe, threadIdByConversationId]
   );
 
-  const handleRealtimeFile = useCallback(
-    (file: ConversationFileView): void => {
-      const threadId = threadIdByConversationId.get(file.conversationId);
-      if (threadId === undefined) return;
-      const fromViewer = file.uploadedByUserId === viewerUserId;
-      const activeVisible =
-        threadId === activeThreadIdRef.current && document.visibilityState === 'visible';
-
-      // Decide duplication BEFORE dispatching: our own confirm (or a previous
-      // echo) already registered the id. Two echoes batched into one render
-      // can therefore never double-increment the Files badge.
-      const isNew = rememberFile(threadId, file.id);
-
-      if (isNew) {
-        setThreadData((prev) => {
-          const data = prev[threadId];
-          if (data === undefined || data.state !== 'ready') return prev;
-          return { ...prev, [threadId]: { ...data, files: [file, ...data.files] } };
-        });
-      }
-      setThreads((prev) =>
-        prev.map((t) => {
-          if (t.relationshipId !== threadId) return t;
-          let unread = t.unread;
-          if (!fromViewer) unread = !activeVisible;
-          return {
-            ...t,
-            fileCount: isNew ? t.fileCount + 1 : t.fileCount,
-            latestInboundActivityAtIso: fromViewer
-              ? t.latestInboundActivityAtIso
-              : file.createdAtIso,
-            unread,
-          };
-        })
-      );
-      if (!fromViewer && activeVisible) markReadSafe(threadId);
-    },
-    [viewerUserId, markReadSafe, rememberFile, threadIdByConversationId]
-  );
+  /**
+   * ⚠ DELIBERATE NO-OP (BAL-431 / OSD-2). `useConversationRealtime` is a SHARED hook whose
+   * other consumer — the case surface — genuinely ingests file events, so `onFile` stays a
+   * required part of its input. This surface has no in-thread file home left, and after the
+   * retirement nothing writes a `conversation_files` row against a RELATIONSHIP-anchored
+   * conversation, so no such event can be published on these channels in the first place.
+   * Ignoring it is therefore the correct handling, not a dropped update — and it is a no-op
+   * rather than a deleted subscription so a stray legacy echo can never crash the island.
+   */
+  const handleRealtimeFile = useCallback((): void => {
+    // Intentionally empty — see the docblock above.
+  }, []);
 
   // BAL-424 — channels are keyed on the CONVERSATION, so a Case (which has no relationship)
   // and a thread that carries over at kickoff both keep one stable channel for life.
@@ -709,83 +655,6 @@ export function ConversationStage({
       }
     },
     [activeThreadId, requestId, lens, threads.length, threadData, conversationIdOf]
-  );
-
-  // ── Composer: attach (presign → XHR PUT → confirm) ─────────────────────
-  const handleAttach = useCallback(
-    (file: File): void => {
-      if (activeThreadId === null || uploading !== null) return;
-      const threadId = activeThreadId;
-      if (!CONVERSATION_ALLOWED_CONTENT_TYPES.has(file.type)) {
-        toast.error(`${file.name} isn't a supported file type.`);
-        return;
-      }
-      if (file.size > MAX_CONVERSATION_FILE_BYTES) {
-        toast.error(`${file.name} is ${formatBytes(file.size)} — files must be 10 MB or smaller.`);
-        return;
-      }
-      setUploading({ fileName: file.name, progress: 0 });
-
-      const run = async (): Promise<void> => {
-        const presign = await requestConversationFileUploadAction({
-          requestId,
-          relationshipId: threadId,
-          contentType: file.type,
-          fileName: file.name,
-        });
-        if (!presign.success) {
-          toast.error(presign.error);
-          return;
-        }
-        await putWithProgress({
-          url: presign.presignedUrl,
-          file,
-          onProgress: (pct) => setUploading({ fileName: file.name, progress: pct }),
-        });
-        const confirm = await confirmConversationFileUploadAction({
-          requestId,
-          relationshipId: threadId,
-          key: presign.key,
-          fileName: file.name,
-          contentType: file.type,
-          sizeBytes: file.size,
-        });
-        if (!confirm.success) {
-          toast.error(confirm.error);
-          return;
-        }
-        const shared = confirm.file;
-        // The Ably echo may have raced this confirm — only a genuinely new id
-        // appends and bumps the badge (decided BEFORE dispatch; pure updaters).
-        const isNew = rememberFile(threadId, shared.id);
-        if (isNew) {
-          setThreadData((prev) => {
-            const data = prev[threadId];
-            if (data === undefined || data.state !== 'ready') return prev;
-            return { ...prev, [threadId]: { ...data, files: [shared, ...data.files] } };
-          });
-          setThreads((prev) => withBumpedFileCount(prev, threadId));
-        }
-        lastMarkAtRef.current[threadId] = Date.now();
-        track(CONVERSATION_EVENTS.CONVERSATION_FILE_SHARED, {
-          request_id: requestId,
-          relationship_id: threadId,
-          conversation_id: conversationIdOf(threadId),
-          context_type: 'relationship',
-          lens,
-          content_type: file.type,
-          size_bytes: file.size,
-        });
-        toast.success('File shared');
-      };
-
-      run()
-        .catch(() => {
-          toast.error('Could not share your file. Please try again.');
-        })
-        .finally(() => setUploading(null));
-    },
-    [activeThreadId, uploading, requestId, lens, rememberFile, conversationIdOf]
   );
 
   // ── Call CTA (BAL-283) ───────────────────────────────────────────────────
@@ -1054,51 +923,6 @@ export function ConversationStage({
     [threads, requestId, flipThreadToProposalRequested]
   );
 
-  // ── Files panel + downloads ────────────────────────────────────────────
-  const openFiles = useCallback(
-    (surface: 'header' | 'tabstrip'): void => {
-      if (activeThreadId === null) return;
-      track(CONVERSATION_EVENTS.CONVERSATION_FILES_OPENED, {
-        request_id: requestId,
-        relationship_id: activeThreadId,
-        conversation_id: conversationIdOf(activeThreadId),
-        surface,
-        file_count: activeFileCount,
-      });
-      setFilesOpen(true);
-    },
-    [activeThreadId, requestId, activeFileCount, conversationIdOf]
-  );
-  const handleHeaderFilesToggle = useCallback((): void => {
-    if (filesOpen) setFilesOpen(false);
-    else openFiles('header');
-  }, [filesOpen, openFiles]);
-  const handleTabstripFiles = useCallback((): void => openFiles('tabstrip'), [openFiles]);
-
-  const handleDownload = useCallback(
-    (file: ConversationFileView): void => {
-      // BAL-424: `ConversationFileView` is an Ably wire payload and no longer carries a
-      // relationship id. The Files panel only ever renders the ACTIVE thread's files, so the
-      // thread the action must validate against is the active one.
-      if (activeThreadId === null) return;
-      setDownloadingFileId(file.id);
-      getConversationFileDownloadAction({
-        requestId,
-        relationshipId: activeThreadId,
-        fileId: file.id,
-      })
-        .then((result) => {
-          // Same-tab navigation: the presigned GET forces Content-Disposition
-          // attachment, and Safari/iOS block window.open after an await.
-          if (result.success) globalThis.location.assign(result.url);
-          else toast.error(result.error);
-        })
-        .catch(() => toast.error('Could not download this file. Please try again.'))
-        .finally(() => setDownloadingFileId(null));
-    },
-    [requestId, activeThreadId]
-  );
-
   // ── Load earlier (keyset) ──────────────────────────────────────────────
   const handleLoadEarlier = useCallback((): void => {
     if (activeThreadId === null) return;
@@ -1145,6 +969,8 @@ export function ConversationStage({
   const focusComposer = useCallback((): void => {
     composerContainerRef.current?.querySelector('textarea')?.focus();
   }, []);
+
+  const handleOpenOverflow = useCallback((): void => setOverflowOpen(true), []);
 
   // BAL-283 — the calendar's `emptyAction` escape ("Message {expert} instead"): closes the
   // dialog and focuses the composer, reusing the SAME `focusComposer` wiring already used by
@@ -1203,43 +1029,30 @@ export function ConversationStage({
           showYouSuffix={showYouSuffix}
           onSelect={handleTabSelect}
         />
-        <div className="flex shrink-0 items-center gap-1.5 px-2 py-1.5 lg:hidden">
-          <button
-            type="button"
-            onClick={handleTabstripFiles}
-            aria-label={`Open shared files (${activeFileCount})`}
-            className="border-border bg-card text-muted-foreground focus-visible:ring-ring relative flex h-11 w-11 items-center justify-center rounded-[9px] border focus-visible:ring-2 focus-visible:outline-none"
-          >
-            <Paperclip className="h-4 w-4" aria-hidden="true" />
-            {activeFileCount > 0 && (
-              <span className="bg-primary border-card absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full border-2 px-1 text-[10px] font-bold text-white">
-                {activeFileCount}
-              </span>
-            )}
-          </button>
-          {showOverflow && (
+        {/* Pinned mobile controls. The paperclip that used to sit here is RETIRED (BAL-431 /
+            OSD-2) — files live in the request-level panel now — so the whole rail collapses
+            when the overflow trigger has nothing to show, rather than leaving dead padding. */}
+        {showOverflow && (
+          <div className="flex shrink-0 items-center gap-1.5 px-2 py-1.5 lg:hidden">
             <button
               type="button"
-              onClick={() => setOverflowOpen(true)}
+              onClick={handleOpenOverflow}
               aria-label="More thread options"
               className="border-border bg-card text-muted-foreground focus-visible:ring-ring flex h-11 w-11 items-center justify-center rounded-[9px] border focus-visible:ring-2 focus-visible:outline-none"
             >
               <Ellipsis className="h-4 w-4" aria-hidden="true" />
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* Desktop header — identity, Files pill, call CTA, proposal slot */}
+      {/* Desktop header — identity, call CTA, proposal slot (no Files pill: BAL-431 / OSD-2) */}
       <div className="hidden lg:block">
         <ThreadHeader
           thread={activeThread}
           showYouSuffix={showYouSuffix}
-          fileCount={activeFileCount}
-          filesOpen={filesOpen}
           actions={actions}
           callPending={callPending}
-          onToggleFiles={handleHeaderFilesToggle}
           onCall={handleHeaderCall}
           onRequestProposal={onHeaderRequestProposal}
           onBuildProposal={onHeaderBuildProposal}
@@ -1276,25 +1089,25 @@ export function ConversationStage({
         viewerUserId={viewerUserId}
         state={activeData.state}
         messages={activeData.messages}
-        files={activeData.files}
+        files={NO_THREAD_FILES}
         hasEarlier={activeData.hasEarlier}
         loadingEarlier={activeData.loadingEarlier}
-        downloadingFileId={downloadingFileId}
+        downloadingFileId={null}
         onLoadEarlier={handleLoadEarlier}
         onRetry={handleRetry}
-        onFileClick={handleDownload}
+        onFileClick={noopFileClick}
       />
 
+      {/* No `onAttach` — the composer therefore renders NO attach button (BAL-431 / OSD-2). */}
       <div ref={composerContainerRef}>
         <MessageComposer
           expertFirstName={composerExpertName}
           placeholder={nudge?.composerPlaceholder}
           sending={sending}
-          uploading={uploading}
+          uploading={null}
           value={activeDraft}
           onChange={handleDraftChange}
           onSend={handleSend}
-          onAttach={handleAttach}
           onFocusChange={setComposerFocused}
         />
       </div>
@@ -1308,16 +1121,6 @@ export function ConversationStage({
         onProposal={onRailProposal}
         onBuildProposal={onRailBuildProposal}
         onViewProposal={handleRailView}
-      />
-
-      <ThreadFilesPanel
-        open={filesOpen}
-        onOpenChange={setFilesOpen}
-        state={activeData.state}
-        files={activeData.files}
-        downloadingFileId={downloadingFileId}
-        onDownload={handleDownload}
-        onRetry={handleRetry}
       />
 
       <MobileOverflowSheet

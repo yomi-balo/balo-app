@@ -108,6 +108,12 @@ import {
   availabilitySharedSubject,
   introCallBookedSubject,
 } from './intro-call-emails.js';
+import {
+  RequestFileSharedExpertEmail,
+  RequestFileSharedClientEmail,
+  requestFileSharedExpertSubject,
+  requestFileSharedClientSubject,
+} from './request-file-emails.js';
 
 interface TemplateOutput {
   component: React.ReactElement;
@@ -333,7 +339,7 @@ export function sanitizeSubjectTitle(title: string): string {
  *
  * ⚠ TODO(BAL-421) — `/engagements/[id]` CURRENTLY FILTERS `engagement_type = 'project'`, so
  * this path 404s for a case / package / retainer thread. UNREACHABLE TODAY: all producers
- * (`post-conversation-message.ts`, `confirm-conversation-file-upload.ts`, and the digest that
+ * (`post-conversation-message.ts`, `confirm-case-file-upload.ts`, and the digest that
  * rides them) hard-code `contextType: 'relationship'`, so only the `/projects/{id}` branch is
  * ever taken. BAL-421 ships the case surface and owns widening that route — the link is
  * written to the shape the plan specified rather than redesigned here.
@@ -1874,6 +1880,48 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: introCallBookedSubject('expert', clientCompany),
+    };
+  },
+
+  // BAL-431 / ADR-1048 — a CLIENT shared a file with one candidate track. `projectRequestId`
+  // here is `data.requestId` (matches the `RequestFileSharedWithExpertPayload` field name),
+  // NOT the generic `projectRequestId` alias other project.* templates use.
+  //
+  // ⚠ NO AUDIENCE, TRACK-COUNT OR SIBLING NAME MAY EVER APPEAR HERE (ADR-1048 §3).
+  'request-file-shared-expert': (data) => {
+    const clientCompanyName = (data.clientCompanyName as string) ?? 'The client';
+    const sharedByPersonLabel = (data.sharedByPersonLabel as string) ?? 'The client';
+    const requestId = (data.requestId as string) ?? '';
+    return {
+      component: React.createElement(RequestFileSharedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        clientCompanyName,
+        sharedByPersonLabel,
+        fileName: (data.fileName as string) ?? 'a file',
+        requestTitle: (data.requestTitle as string) ?? 'the request',
+        requestId,
+        baseUrl: BASE_URL,
+      }),
+      subject: requestFileSharedExpertSubject(sharedByPersonLabel),
+    };
+  },
+
+  // BAL-431 — the mirror: an EXPERT uploaded to their own track, notifying the client contact.
+  'request-file-shared-client': (data) => {
+    const expertPartyLabel = (data.expertPartyLabel as string) ?? 'Your expert';
+    const expertPersonLabel = (data.expertPersonLabel as string) ?? expertPartyLabel;
+    const requestId = (data.requestId as string) ?? '';
+    return {
+      component: React.createElement(RequestFileSharedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        expertPartyLabel,
+        expertPersonLabel,
+        fileName: (data.fileName as string) ?? 'a file',
+        requestTitle: (data.requestTitle as string) ?? 'the request',
+        requestId,
+        baseUrl: BASE_URL,
+      }),
+      subject: requestFileSharedClientSubject(expertPersonLabel),
     };
   },
 

@@ -186,9 +186,10 @@ export async function resolveConversationAccess(
  * The READ-ONLY variant — identical authorization, `findByContext` instead of
  * `ensureForContext`, and therefore NO WRITE ON ANY PATH.
  *
- * ⚠ WHY IT EXISTS. `fetch-thread.ts` and `get-conversation-file-download.ts` authenticate
- * with bare `requireUser()` and sit on `READ_ONLY_ALLOWLIST` with justifications ("pure
- * read", "no mutation"). Once `resolveConversationAccess` began get-or-creating, those two
+ * ⚠ WHY IT EXISTS. `fetch-thread.ts` — and, until BAL-431 (OSD-2) retired it,
+ * `get-conversation-file-download.ts` — authenticate with bare `requireUser()` and sit on
+ * `READ_ONLY_ALLOWLIST` with justifications ("pure read", "no mutation"). Once
+ * `resolveConversationAccess` began get-or-creating, they
  * became TRANSITIVE WRITERS and their allowlist entries became false — invisibly, because the
  * invariant test reads the action's own source and the write arrives through an import. An
  * un-onboarded member could insert rows. Keeping them genuinely read-only restores the

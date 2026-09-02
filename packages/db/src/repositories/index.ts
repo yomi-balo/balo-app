@@ -113,6 +113,9 @@ export {
   isAllowedRelationshipTransition,
   InvalidRelationshipTransitionError,
   type RelationshipStatus,
+  // BAL-431 (Ruling 2) — award closure. Exported for `materializeFromKickoff`'s transaction
+  // and for tests; there is deliberately no second write site.
+  markNotSelectedByAward,
 } from './request-expert-relationships';
 export {
   deriveRequestStatus,
@@ -562,6 +565,44 @@ export {
   type SoftDeleteMeetingFileInput,
   type FindMeetingFileInput,
 } from './meeting-files';
+// ── Request shared files (BAL-431 / ADR-1048) — the FIFTH file scope, anchored on
+//    `project_requests.id`, carrying an AUDIENCE OF TRACKS. ────────────────────────────────
+//
+// ⚠ `listForEngagement` SHIPS INERT: `/engagements/[id]` has no files surface today, so §5
+// promotion lineage lands as a read-side join with its integration tests and no UI consumer
+// (the BAL-403 / BAL-420 / BAL-313 / BAL-391 shape). Named as a follow-up in the PR body.
+export {
+  requestSharedFilesRepository,
+  REQUEST_SHARED_FILE_LIST_LIMIT,
+  RequestFileNotFoundError,
+  RequestFileTrackNotLiveError,
+  RequestFileGrantNotFoundError,
+  RequestFileAlreadyDeletedError,
+  type RequestFileWithGrants,
+  type ShareRequestFileInput,
+  type ShareRequestFileResult,
+  type RevokeRequestFileGrantInput,
+  type SoftDeleteRequestFileInput,
+  type SoftDeleteRequestFileResult,
+} from './request-shared-files';
+export type {
+  RequestSharedFile,
+  NewRequestSharedFile,
+  RequestFileGrant,
+  NewRequestFileGrant,
+  RequestFileSide,
+  RequestFileAudience,
+} from '../schema';
+// The audit vocabulary + its payload contract (Ruling 4 — APPEND-ONLY, no backfill).
+export {
+  recordRequestFileAudit,
+  type RequestFileAuditAction,
+  type RequestFileAuditEntityType,
+  type RequestFileAuditCommon,
+  type RequestFileAuditPayload,
+  type RequestFileAuditTrackRef,
+  type RequestFileAuditAudienceEntry,
+} from './_shared/request-file-audit';
 // ── Meeting recordings (BAL-473) — 1:n recording SEGMENTS anchored on `meetings.id` ──────
 export {
   meetingRecordingsRepository,

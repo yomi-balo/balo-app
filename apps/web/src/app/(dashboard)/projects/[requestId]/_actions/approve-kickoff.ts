@@ -108,25 +108,26 @@ async function loadApprovableKickoff(
 async function commitKickoff(
   loaded: ApprovableKickoff,
   approvingAdminUserId: string
-): Promise<{ engagementId: string } | { error: string }> {
+): Promise<{ engagementId: string; closedRelationshipIds: string[] } | { error: string }> {
   const { request, rel, proposal } = loaded;
   try {
-    const { engagement } = await projectEngagementsRepository.materializeFromKickoff({
-      requestId: request.id,
-      companyId: request.companyId,
-      expertProfileId: rel.expertProfileId,
-      sourceProposalId: proposal.id,
-      relationshipId: rel.id,
-      approvingAdminUserId,
-      pricingMethod: proposal.pricingMethod,
-      priceCents: proposal.priceCents,
-      baloFeeBps: proposal.baloFeeBps,
-      currency: proposal.currency,
-      depositCents: proposal.depositCents ?? undefined,
-      rateCents: proposal.rateCents ?? undefined,
-      cadence: proposal.cadence ?? undefined,
-    });
-    return { engagementId: engagement.id };
+    const { engagement, closedRelationshipIds } =
+      await projectEngagementsRepository.materializeFromKickoff({
+        requestId: request.id,
+        companyId: request.companyId,
+        expertProfileId: rel.expertProfileId,
+        sourceProposalId: proposal.id,
+        relationshipId: rel.id,
+        approvingAdminUserId,
+        pricingMethod: proposal.pricingMethod,
+        priceCents: proposal.priceCents,
+        baloFeeBps: proposal.baloFeeBps,
+        currency: proposal.currency,
+        depositCents: proposal.depositCents ?? undefined,
+        rateCents: proposal.rateCents ?? undefined,
+        cadence: proposal.cadence ?? undefined,
+      });
+    return { engagementId: engagement.id, closedRelationshipIds };
   } catch (error) {
     if (error instanceof InvalidStatusTransitionError) {
       return { error: STALE };
@@ -193,7 +194,7 @@ export async function approveKickoffAction(
     }
 
     const { request, rel } = loaded;
-    const { engagementId } = committed;
+    const { engagementId, closedRelationshipIds } = committed;
 
     // Key business event (after the commit).
     log.info('Kickoff approved', {
@@ -202,6 +203,9 @@ export async function approveKickoffAction(
       engagementId,
       expertProfileId: rel.expertProfileId,
       userId: admin.id,
+      // BAL-431 (Ruling 2) — how many OTHER live tracks this award closed for files
+      // (`not_selected_at` stamped in the same transaction). Zero on a single-track request.
+      closedTrackCount: closedRelationshipIds.length,
     });
 
     // Notify the client (and, via the resolver, the delivering expert) — AFTER

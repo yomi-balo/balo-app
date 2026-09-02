@@ -116,6 +116,9 @@ describe('approveKickoffAction', () => {
     mockMaterializeFromKickoff.mockResolvedValue({
       engagement: { id: ENGAGEMENT_ID },
       request: { id: REQUEST_ID, status: 'kickoff_approved' },
+      // BAL-431 (Ruling 2) — the losing-track closure count `commitKickoff` now destructures
+      // and logs. Empty on this single-track fixture.
+      closedRelationshipIds: [],
     });
     mockPublish.mockResolvedValue(undefined);
   });

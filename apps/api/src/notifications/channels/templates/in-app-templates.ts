@@ -109,7 +109,7 @@ function partyMemberName(data: Record<string, unknown>): string {
  *
  * ⚠ TODO(BAL-421) — `/engagements/[id]` CURRENTLY FILTERS `engagement_type = 'project'`, so
  * this path 404s for a case / package / retainer thread. UNREACHABLE TODAY: all four
- * producers (`post-conversation-message.ts`, `confirm-conversation-file-upload.ts`, and the
+ * producers (`post-conversation-message.ts`, `confirm-case-file-upload.ts`, and the
  * digest's two arms) hard-code `contextType: 'relationship'`, so only the `/projects/{id}`
  * branch is ever taken. BAL-421 ships the case surface and owns widening that route — the
  * link is written to the shape the plan specified rather than redesigned here.
@@ -374,6 +374,33 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return {
       title: 'New intro call booked',
       body: `${personWithOrgLabel(clientPerson, data.clientCompanyName as string)} booked an intro call with you.`,
+      actionUrl: requestId ? `/projects/${requestId}` : undefined,
+    };
+  },
+
+  // BAL-431 / ADR-1048 — a CLIENT shared a file with one candidate track.
+  //
+  // ⚠⚠ NO AUDIENCE, TRACK-COUNT OR SIBLING NAME MAY EVER APPEAR HERE (ADR-1048 §3) — this
+  // in-app body is exactly as audience-shaped as the expert serializer, and `getInAppTemplate`
+  // never throws on a miss, so a typo'd template name here silently ships generic copy rather
+  // than a build failure.
+  'request-file-shared-expert': (data) => {
+    const clientCompanyName = (data.clientCompanyName as string) ?? 'The client';
+    const requestId = data.requestId as string | undefined;
+    return {
+      title: 'New file shared',
+      body: `${clientCompanyName} shared a file on this request.`,
+      actionUrl: requestId ? `/projects/${requestId}` : undefined,
+    };
+  },
+
+  // BAL-431 — the mirror: an EXPERT uploaded to their own track, notifying the client contact.
+  'request-file-shared-client': (data) => {
+    const expertPartyLabel = (data.expertPartyLabel as string) ?? 'Your expert';
+    const requestId = data.requestId as string | undefined;
+    return {
+      title: `New file from ${expertPartyLabel}`,
+      body: `${expertPartyLabel} shared a file on this request.`,
       actionUrl: requestId ? `/projects/${requestId}` : undefined,
     };
   },

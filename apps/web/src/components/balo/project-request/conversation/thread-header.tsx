@@ -1,6 +1,6 @@
 'use client';
 
-import { Calendar, Clock, FileText, Loader2, Paperclip } from 'lucide-react';
+import { Calendar, Clock, FileText, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationThreadView } from '@/lib/project-request/conversation-view-types';
 import type { ThreadActions } from './thread-actions';
@@ -9,11 +9,8 @@ import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
 interface ThreadHeaderProps {
   thread: ConversationThreadView;
   showYouSuffix: boolean;
-  fileCount: number;
-  filesOpen: boolean;
   actions: ThreadActions;
   callPending: boolean;
-  onToggleFiles: () => void;
   onCall: () => void;
   /**
    * The `kind:'request'` proposal CTA handler (client lens, A5). Non-null →
@@ -35,8 +32,16 @@ interface ThreadHeaderProps {
 
 /**
  * Desktop-only thread header (`hidden lg:flex` applied by the stage): avatar,
- * expert name, Files pill (count), lens-aware call CTA (mock seam) and the
- * proposal slot per the gating matrix. The client's "Request proposal" CTA is
+ * expert name, lens-aware call CTA (mock seam) and the proposal slot per the
+ * gating matrix.
+ *
+ * ⚠ NO FILES PILL — RETIRED BY BAL-431 (OSD-2), NOT MISSING. The request surface has exactly
+ * ONE file home now, `RequestFilesPanel` (request-level, audience-aware), so the in-thread
+ * files drawer this pill toggled — and the `fileCount` / `filesOpen` / `onToggleFiles` props
+ * that fed it — are gone. Do not reinstate them here; a second file home on this surface is
+ * the shape ADR-1048 rejected. The CASE surface keeps its own in-thread files, untouched.
+ *
+ * The client's "Request proposal" CTA is
  * LIVE (BAL-272 / A5) when `onRequestProposal` is provided; the expert's "Build
  * proposal" CTA is LIVE (BAL-288 / A6.2) when `onBuildProposal` is provided; the
  * "View proposal"/"View submitted" CTA is LIVE (BAL-289 / A6.3) when
@@ -46,11 +51,8 @@ interface ThreadHeaderProps {
 export function ThreadHeader({
   thread,
   showYouSuffix,
-  fileCount,
-  filesOpen,
   actions,
   callPending,
-  onToggleFiles,
   onCall,
   onRequestProposal,
   onBuildProposal,
@@ -66,32 +68,6 @@ export function ThreadHeader({
           {showYouSuffix && <span className="text-muted-foreground ml-1.5 text-[11px]">(you)</span>}
         </p>
       </div>
-
-      <button
-        type="button"
-        onClick={onToggleFiles}
-        aria-expanded={filesOpen}
-        className={cn(
-          'inline-flex min-h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-semibold transition-colors',
-          'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-          filesOpen
-            ? 'border-primary/30 bg-primary/5 text-primary'
-            : 'border-border bg-card text-muted-foreground hover:text-foreground'
-        )}
-      >
-        <Paperclip className="h-3.5 w-3.5" aria-hidden="true" />
-        Files
-        {fileCount > 0 && (
-          <span
-            className={cn(
-              'min-w-[18px] rounded-full px-1.5 py-px text-center text-[11px] font-bold',
-              filesOpen ? 'bg-card text-primary' : 'bg-muted text-muted-foreground'
-            )}
-          >
-            {fileCount}
-          </span>
-        )}
-      </button>
 
       {(actions.callSlot.kind === 'book' || actions.callSlot.kind === 'propose') && (
         <button
