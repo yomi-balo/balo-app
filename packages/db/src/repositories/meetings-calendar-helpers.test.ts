@@ -35,6 +35,7 @@ import {
   assertCalendarRowCapNotExceeded,
   CalendarTooManyRowsError,
   MAX_CALENDAR_ROWS,
+  MAX_CALENDAR_RANGE_DAYS,
 } from './meetings';
 
 beforeEach(() => {
@@ -528,5 +529,31 @@ describe('assertCalendarRowCapNotExceeded — the default row cap throws rather 
         expertProfileId: 'expert-1',
       })
     ).not.toThrow();
+  });
+});
+
+/**
+ * BAL-513 fix round 1, F3 — closes a coverage gap: nothing previously pinned
+ * `MAX_CALENDAR_RANGE_DAYS` against the Agenda horizon it must stay wider than, so shrinking it to
+ * 29-34 would silently break the expert calendar's Agenda window while every non-Docker gate
+ * stayed green — the web suite only duplicated it as a bare `35` literal, and the failure would
+ * have surfaced solely in `meetings.integration.test.ts` or in production.
+ *
+ * ⚠ `>= 31`, NOT `>= 28`. `apps/web/src/app/(dashboard)/expert/calendar/_lib/load-expert-calendar.ts`'s
+ * `AGENDA_HORIZON_DAYS` is 28, but `meetings.integration.test.ts` shares an unnamed `RANGE`
+ * literal spanning 30 days + 1 hour (30.04 days) across 11 tenant-isolation and
+ * forged-polymorphic-context SECURITY tests — anything at or under that floor makes every one of
+ * them throw, independent of the Agenda horizon. 31 clears BOTH floors with headroom.
+ *
+ * ⚠ WHY HERE, NOT ON THE WEB SIDE. `apps/web` cannot assert against the real constant:
+ * `MAX_CALENDAR_RANGE_DAYS` is not part of `@balo/db`'s public surface
+ * (`packages/db/src/repositories/index.ts` hand-picks its re-exports from `./meetings` and
+ * omits it; `package.json`'s `exports` map exposes only `.` and `./schema`) — see
+ * `load-expert-calendar.test.ts`'s docblock for the empirical check. This is the one place the
+ * invariant is actually enforced.
+ */
+describe('MAX_CALENDAR_RANGE_DAYS', () => {
+  it('stays at least 31 — above both the web Agenda horizon (28) and the integration RANGE floor (30.04)', () => {
+    expect(MAX_CALENDAR_RANGE_DAYS).toBeGreaterThanOrEqual(31);
   });
 });

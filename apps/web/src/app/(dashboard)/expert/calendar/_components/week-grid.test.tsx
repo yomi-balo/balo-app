@@ -5,6 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { axe } from 'jest-axe';
 import { render, screen, within, fireEvent } from '@/test/utils';
+import { MEETING_OVERRUN_GRACE_MINUTES } from '@balo/shared/engagements';
 import { WeekGrid } from './week-grid';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 
@@ -18,6 +19,7 @@ function meeting(overrides: Partial<CalendarMeetingView>): CalendarMeetingView {
     meetingId: 'meeting-1',
     scheduledStart: '2026-08-25T00:00:00.000Z',
     scheduledEnd: '2026-08-25T00:30:00.000Z',
+    status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
     joinUrl: 'https://balo.expert/join/m/meeting-1',
@@ -367,6 +369,12 @@ describe('WeekGrid — AC: a meeting crossing local midnight renders TWO fragmen
  * behavioural coverage `meeting-block.test.tsx` lost ("Join appears when imminent") lands here,
  * where the derivation now actually lives.
  */
+/**
+ * BAL-513 C2 — the overrun grace and terminal-status tests below (AC4) exercise the SAME
+ * `calendarMeetingTiming` composition `agenda-list.test.tsx`'s "the overrun grace and
+ * terminal-status gate" describe block exercises via `AgendaList`'s converged path (D6). Week and
+ * Agenda must never disagree about the same meeting.
+ */
 describe('WeekGrid — the now-derived MeetingBlock inputs are computed HERE (BAL-511)', () => {
   const WG_NOW = new Date('2026-08-25T09:00:00.000Z');
 
@@ -411,6 +419,131 @@ describe('WeekGrid — the now-derived MeetingBlock inputs are computed HERE (BA
             meetingId: 'ended',
             scheduledStart: '2026-08-25T07:00:00.000Z',
             scheduledEnd: '2026-08-25T07:30:00.000Z',
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    // 90 minutes past the end at WG_NOW (09:00) — well past the 30-minute grace, so this still
+    // passes; the margin is now grace-dependent (BAL-513).
+    expect(container.innerHTML).toContain('opacity-60');
+  });
+
+  it('offers Join at scheduledEnd + grace − 1 minute (AC4)', () => {
+    const scheduledEnd = new Date(
+      WG_NOW.getTime() - (MEETING_OVERRUN_GRACE_MINUTES - 1) * 60_000
+    ).toISOString();
+    const scheduledStart = new Date(new Date(scheduledEnd).getTime() - 30 * 60_000).toISOString();
+    render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'overrun-inside-grace',
+            scheduledStart,
+            scheduledEnd,
+            status: 'in_progress',
+            counterpartyCompanyName: 'Grace Co',
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Join Grace Co/i })).toBeInTheDocument();
+  });
+
+  it('hides Join at scheduledEnd + grace (AC4)', () => {
+    const scheduledEnd = new Date(
+      WG_NOW.getTime() - MEETING_OVERRUN_GRACE_MINUTES * 60_000
+    ).toISOString();
+    const scheduledStart = new Date(new Date(scheduledEnd).getTime() - 30 * 60_000).toISOString();
+    render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'overrun-past-grace',
+            scheduledStart,
+            scheduledEnd,
+            status: 'in_progress',
+            counterpartyCompanyName: 'Elapsed Co',
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Join Elapsed Co/i })).not.toBeInTheDocument();
+  });
+
+  it('hides Join for a meeting whose status is terminal at load, even mid-slot (AC4)', () => {
+    render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'terminal-mid-slot',
+            scheduledStart: '2026-08-25T08:30:00.000Z',
+            scheduledEnd: '2026-08-25T09:30:00.000Z',
+            status: 'ended',
+            counterpartyCompanyName: 'Terminal Co',
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: /Join Terminal Co/i })).not.toBeInTheDocument();
+  });
+
+  it('does NOT mute an overrunning meeting while its Join is still live (D6)', () => {
+    const scheduledEnd = new Date(WG_NOW.getTime() - 10 * 60_000).toISOString();
+    const scheduledStart = new Date(new Date(scheduledEnd).getTime() - 30 * 60_000).toISOString();
+    const { container } = render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'overrun-live',
+            scheduledStart,
+            scheduledEnd,
+            status: 'in_progress',
+          }),
+        ]}
+        now={WG_NOW}
+        onJoinClick={NOOP}
+        isMobile={false}
+      />
+    );
+
+    expect(container.innerHTML).not.toContain('opacity-60');
+  });
+
+  it('mutes a terminal meeting immediately, even mid-slot', () => {
+    const { container } = render(
+      <WeekGrid
+        weekStartDayKey="2026-08-24"
+        timezone="UTC"
+        meetings={[
+          meeting({
+            meetingId: 'terminal-immediate',
+            scheduledStart: '2026-08-25T08:30:00.000Z',
+            scheduledEnd: '2026-08-25T09:30:00.000Z',
+            status: 'ended',
           }),
         ]}
         now={WG_NOW}

@@ -4,9 +4,10 @@ import type { MeetingLifecycleStatus } from './lifecycle';
  * BAL-409 (orchestrator D-B) — MAY THIS MEETING BE RESCHEDULED RIGHT NOW?
  *
  * ⚠⚠ AN ALLOW-LIST, NOT A TERMINAL SET, AND THAT IS THE WHOLE POINT. `MEETING_CLOSED_TO_JOIN`
- * names what is CLOSED so a sixth `meeting_status` label defaults to OPEN — correct for a join,
- * WRONG here. This names what is OPEN, so a sixth label is DENIED BY DEFAULT and somebody has to
- * decide consciously. `reschedulable.test.ts` pins that with a table over every status.
+ * (`./closed-to-join`, a sibling in this same directory since BAL-513) names what is CLOSED so a
+ * sixth `meeting_status` label defaults to OPEN — correct for a join, WRONG here. This names what
+ * is OPEN, so a sixth label is DENIED BY DEFAULT and somebody has to decide consciously.
+ * `reschedulable.test.ts` pins that with a table over every status.
  *
  * ⚠ `waiting_for_participants` IS EXCLUDED, SETTLING THE ASYMMETRY `repositories/meetings.ts:539-562`
  * assigned to this ticket — IN THE RESCHEDULE DIRECTION ONLY. ⚠ BAL-410 HAS SINCE SETTLED THE

@@ -368,7 +368,8 @@ export function WeekGrid({
                   const timing = calendarMeetingTiming(
                     now,
                     new Date(entry.meeting.scheduledStart),
-                    new Date(entry.meeting.scheduledEnd)
+                    new Date(entry.meeting.scheduledEnd),
+                    entry.meeting.status
                   );
                   return (
                     <MeetingBlock

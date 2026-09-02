@@ -8,10 +8,11 @@ import type { MeetingLifecycleStatus } from './lifecycle';
  * compare-and-set (`meetingsRepository.cancel`), so the two cannot drift.
  *
  * ⚠⚠ AN ALLOW-LIST, NOT A TERMINAL SET, AND THAT IS THE WHOLE POINT — the same argument
- * `reschedulable.ts` makes. `MEETING_CLOSED_TO_JOIN` names what is CLOSED so a sixth
- * `meeting_status` label defaults to OPEN, which is correct for a join and WRONG here. This
- * names what is OPEN, so a sixth label is DENIED BY DEFAULT and somebody has to decide
- * consciously. `cancellable.test.ts` pins that with a table over every status.
+ * `reschedulable.ts` makes. `MEETING_CLOSED_TO_JOIN` (`./closed-to-join`, a sibling in this same
+ * directory since BAL-513) names what is CLOSED so a sixth `meeting_status` label defaults to
+ * OPEN, which is correct for a join and WRONG here. This names what is OPEN, so a sixth label is
+ * DENIED BY DEFAULT and somebody has to decide consciously. `cancellable.test.ts` pins that with
+ * a table over every status.
  *
  * ⚠⚠ IT TAKES NO `now` AND NO `scheduledStart`, UNLIKE `resolveRescheduleRefusal`. That
  * asymmetry IS orchestrator decision D5, not an oversight, and it settles the "undecided"

@@ -31,8 +31,9 @@ vi.mock('motion/react', async () => {
 let mockSearchParams = new URLSearchParams();
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const mockRefresh = vi.fn();
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: mockReplace }),
+  useRouter: () => ({ push: mockPush, replace: mockReplace, refresh: mockRefresh }),
   useSearchParams: () => mockSearchParams,
 }));
 
@@ -78,6 +79,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     meetingId: 'm-1',
     scheduledStart: '2026-08-24T23:00:00.000Z',
     scheduledEnd: '2026-08-24T23:30:00.000Z',
+    status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
     joinUrl: 'https://balo.expert/join/m/m-1',
@@ -118,6 +120,7 @@ beforeEach(() => {
   isMobile = false;
   mockPush.mockClear();
   mockReplace.mockClear();
+  mockRefresh.mockClear();
   mockTrack.mockClear();
   mockReload.mockClear();
   recorded.length = 0;

@@ -425,13 +425,22 @@ const MS_PER_DAY = 86_400_000;
  * will serve. `?week=1000-01-01` passed every shape and calendar-date check the page had and
  * opened a thousand-year window on a read with no `LIMIT`.
  *
- * ⚠ SIZED AGAINST THE PAGE'S OWN CLAMP — keep the two in step. `page.tsx` bounds `?week=` to
- * ±365 days of today; `weekStartDayKey` can round back a further 6; and `load-expert-calendar.ts`
- * clamps `rangeEnd` forward to at least `today + 28` (the Agenda horizon). The widest LEGITIMATE
- * request is therefore a far-past week: `371 + 28 = 399` days, ±1h of DST. 420 leaves real
- * head-room above that without leaving the class of defect open.
+ * ⚠ SIZED AGAINST THE CALLER'S WIDEST SINGLE WINDOW — keep the two in step. Since BAL-513,
+ * `load-expert-calendar.ts` issues TWO bounded reads rather than one stretched one: the visible
+ * week (`WEEK_DAYS` = 7) and the Agenda horizon (`AGENDA_HORIZON_DAYS` = 28, anchored on today).
+ * The widest legitimate request is therefore 28 days, ±1h of DST — NOT the ~399 days the old
+ * `weekStart → max(weekStart+28, today+28)` clamp could produce, and no longer a function of the
+ * page's ±365-day `?week=` bound at all. 35 is head-room over 28.
+ *
+ * ⚠ IT MAY NOT GO BELOW ~31. `meetings.integration.test.ts` shares an unnamed `RANGE` literal
+ * spanning 30 days + 1 hour across 11 calls in the tenant-isolation and forged-polymorphic-context
+ * SECURITY tests; anything at or under 30.04 makes every one of them throw. That literal is not to
+ * be "tidied" to let a smaller constant fit.
+ *
+ * A future caller that forgets to bound still gets a thrown error — now for anything over about a
+ * month, instead of over a year.
  */
-export const MAX_CALENDAR_RANGE_DAYS = 420;
+export const MAX_CALENDAR_RANGE_DAYS = 35;
 
 /** Hard row cap for the same read. Context rows, not meetings — see the call site. */
 export const MAX_CALENDAR_ROWS = 2000;
@@ -464,11 +473,12 @@ export class CalendarTooManyRowsError extends Error {
  * because truncation here drops the WRONG END of the window.
  *
  * `.limit(n)` is applied after `orderBy(asc(scheduledStart))`, so an over-limit read discards the
- * LATEST rows. A far-past `?week=` gives a `rangeStart` up to 371 days back with `rangeEnd` clamped
- * forward to `today + 28` (`load-expert-calendar.ts`, N5), so the meetings silently lost would be
- * TODAY'S and the Agenda horizon's — quietly reintroducing, behind a `warn`, the exact "You're all
- * clear" -with-a-call-in-two-hours symptom the N5 clamp exists to prevent. An honest error (the
- * route segment's `error.tsx`, with a retry) beats a plausible-looking calendar missing today.
+ * LATEST rows. Since BAL-513, `load-expert-calendar.ts` issues this read over a single bounded
+ * window at a time — the visible week (7 days) or the Agenda horizon (28 days, anchored on
+ * today) — so reaching 2,000 context rows within a **28-day** window means a genuinely extreme
+ * calendar, not a year-wide scan. Those discarded LATEST rows are still the far end of the
+ * Agenda horizon — the days the expert most needs. An honest error (the route segment's
+ * `error.tsx`, with a retry) still beats a plausible-looking calendar missing next week.
  *
  * ⚠ AN EXPLICIT `limit` IS EXEMPT and still truncates. Passing one is opting into a narrower
  * answer — no shipped caller does; only the integration tests, which pin the
@@ -1665,10 +1675,12 @@ export const meetingsRepository = {
    * A meeting whose contexts fold to `'none'` or `'ambiguous'` (via
    * {@link selectPrimaryMeetingContext}) is OMITTED, fail-closed, and logged.
    *
-   * ⚠ BOUNDED, TWICE (BAL-498 fix round 3, S2). The only shipped caller derives its range from a
-   * `?week=` query param; the page clamps that param, and this method independently REFUSES a
-   * range wider than {@link MAX_CALENDAR_RANGE_DAYS} and caps the row count at
-   * {@link MAX_CALENDAR_ROWS}. A future caller that forgets to clamp gets a thrown error, not a
+   * ⚠ BOUNDED, TWICE (BAL-498 fix round 3, S2). Since BAL-513, the only shipped caller derives TWO
+   * ranges per request — the visible week and the Agenda horizon (`load-expert-calendar.ts`) — one
+   * from a `?week=` query param and one from today, and neither is a function of the page's
+   * ±365-day clamp any more. This method independently REFUSES a range wider than
+   * {@link MAX_CALENDAR_RANGE_DAYS} and caps the row count at {@link MAX_CALENDAR_ROWS} regardless
+   * of how a caller derived it. A future caller that forgets to clamp gets a thrown error, not a
    * full-history index scan plus an unbounded `inArray` bind list. Keep BOTH — the limit alone
    * would truncate a legitimately wide window instead of naming the mistake. BOTH bounds are
    * fail-closed for the default path: see {@link assertCalendarRowCapNotExceeded} for why reaching

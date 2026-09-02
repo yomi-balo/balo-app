@@ -9,10 +9,23 @@ import { log } from '@/lib/logging';
 import { addDaysToDayKey, todayDayKey } from '@/lib/calendar/zoned-grid';
 import type { CalendarMeetingView, CalendarPageView } from './calendar-view-types';
 
-/** The Week grid shows 7 days; the extra padding gives Agenda a reasonable forward horizon
- *  from the same single server query, without a second round trip. */
+/** Window (a): the Week grid's own range — the visible Monday through the following Monday. */
 const WEEK_DAYS = 7;
-const AGENDA_HORIZON_PADDING_DAYS = 21;
+
+/**
+ * Window (b): the Agenda list's forward horizon FROM TODAY. Fetched on every request, independently
+ * of which week is visible, because `calendar-shell.tsx` filters Agenda on `dayKey >= today` and has
+ * no idea which week the Week grid is showing.
+ *
+ * ⚠ 28, NOT 21. This replaces the retired `AGENDA_HORIZON_PADDING_DAYS`, which was 21 and was only
+ * ever used as `WEEK_DAYS + AGENDA_HORIZON_PADDING_DAYS`. Reading the old name as a horizon silently
+ * shrinks Agenda by a week (BAL-513 D5).
+ *
+ * ⚠ KEEP UNDER `MAX_CALENDAR_RANGE_DAYS` (35, `packages/db/src/repositories/meetings.ts`). That
+ * constant is now sized against THIS number; widening the horizon without widening it throws
+ * `CalendarRangeTooWideError` on every page load.
+ */
+const AGENDA_HORIZON_DAYS = 28;
 
 /**
  * Resolved server-side. `null` whenever the repository could not resolve a LIVE owning row for
@@ -88,14 +101,19 @@ export interface LoadExpertCalendarInput {
 }
 
 /**
- * Fans out the expert calendar's three independent reads and maps to the client-safe view.
+ * Fans out the expert calendar's four independent reads and maps to the client-safe view.
  * `meetingJoinLinkUrl` is `server-only` — computed here, passed down as a plain string.
  *
- * ⚠ TIMEZONE MUST RESOLVE FIRST. The query range is built from a LOCAL day key
- * (`weekStartDayKey`); converting it to the UTC instants the repository needs requires the
- * expert's OWN zone (`fromZonedTime`), never a bare `...T00:00:00.000Z` UTC-literal parse — the
- * latter silently starts the window 8-14h after local midnight for every zone east of UTC and
- * drops real meetings from the query entirely (BAL-498 fix round 1, B2).
+ * ⚠ TIMEZONE MUST RESOLVE FIRST. Both query windows are built from LOCAL day keys
+ * (`weekStartDayKey`, and today's own day key); converting them to the UTC instants the
+ * repository needs requires the expert's OWN zone (`fromZonedTime`), never a bare
+ * `...T00:00:00.000Z` UTC-literal parse — the latter silently starts the window 8-14h after
+ * local midnight for every zone east of UTC and drops real meetings from the query entirely
+ * (BAL-498 fix round 1, B2).
+ *
+ * Since BAL-513, the calendar issues TWO bounded reads rather than one stretched one: the
+ * visible week (`WEEK_DAYS`) and the Agenda horizon (`AGENDA_HORIZON_DAYS`, anchored on today),
+ * fetched together via `Promise.all` and merged — see `mergeCalendarWindows`.
  */
 export const loadExpertCalendar = cache(async function loadExpertCalendar(
   input: LoadExpertCalendarInput
@@ -105,36 +123,50 @@ export const loadExpertCalendar = cache(async function loadExpertCalendar(
     getChecklistStatus(),
   ]);
 
-  const rangeStart = fromZonedTime(`${input.weekStartDayKey} 00:00:00`, resolvedTimezone);
-  const weekRangeEndDayKey = addDaysToDayKey(
-    input.weekStartDayKey,
-    WEEK_DAYS + AGENDA_HORIZON_PADDING_DAYS
-  );
-  // Agenda filters `dayKey >= today` INDEPENDENTLY of the visible week (`calendar-shell.tsx`), so
-  // paging the Week view BACKWARDS must not also walk the fetch window off the front of Agenda's
-  // content. Clamp `rangeEnd` to at least `today + AGENDA_HORIZON` — the forward-paging case is
-  // unaffected (`weekRangeEndDayKey` already exceeds it there); a week entirely in the past no
-  // longer produces a false "You're all clear" for a call that is actually two hours away
-  // (BAL-498 fix round 2, N5). Day keys are `yyyy-MM-dd`, zero-padded — lexicographic string
-  // comparison IS calendar-date comparison.
-  const agendaHorizonEndDayKey = addDaysToDayKey(
-    todayDayKey(resolvedTimezone),
-    WEEK_DAYS + AGENDA_HORIZON_PADDING_DAYS
-  );
-  const rangeEndDayKey =
-    weekRangeEndDayKey > agendaHorizonEndDayKey ? weekRangeEndDayKey : agendaHorizonEndDayKey;
-  const rangeEnd = fromZonedTime(`${rangeEndDayKey} 00:00:00`, resolvedTimezone);
+  // ⚠ ONE zone, resolved above, for BOTH windows. `fromZonedTime` on a LOCAL day key, never a
+  // `...T00:00:00.000Z` UTC-literal parse — see this function's docblock (BAL-498 fix round 1, B2).
+  const zonedMidnight = (dayKey: string): Date =>
+    fromZonedTime(`${dayKey} 00:00:00`, resolvedTimezone);
 
-  const meetings = await meetingsRepository.listCalendarForExpert({
-    expertProfileId: input.expertProfileId,
-    rangeStart,
-    rangeEnd,
-  });
+  // Window (a) — THE VISIBLE WEEK, exactly 7 days. No `−1 day` lookback: the repository's overlap
+  // predicate is `startAt < rangeEnd AND endAt > rangeStart` (`meetings.ts`), so a meeting that
+  // starts on the preceding Sunday and crosses local midnight into Monday is already returned. That
+  // is what makes `calendar-shell.tsx`'s `previousWeekLookbackDayKey` filter work, and it keeps
+  // working unchanged.
+  const weekRangeStart = zonedMidnight(input.weekStartDayKey);
+  const weekRangeEnd = zonedMidnight(addDaysToDayKey(input.weekStartDayKey, WEEK_DAYS));
+
+  // Window (b) — THE AGENDA HORIZON, anchored on TODAY and never on the visible week. This is what
+  // the deleted N5 `rangeEnd` clamp was buying, bought properly: paging the Week view backwards used
+  // to stretch ONE query from the far-past Monday all the way forward to `today + 28`, up to a
+  // ~399-day scan that could trip the repository's 2,000-row fail-closed cap and land the expert on
+  // `error.tsx`. Two bounded reads cost one extra round trip and remove the whole class.
+  const todayKey = todayDayKey(resolvedTimezone);
+  const agendaRangeStart = zonedMidnight(todayKey);
+  const agendaRangeEnd = zonedMidnight(addDaysToDayKey(todayKey, AGENDA_HORIZON_DAYS));
+
+  // ⚠ ARGUMENT ORDER IS PART OF THE CONTRACT: week first, agenda second. `load-expert-calendar.test.ts`
+  // sequences its per-window mocks on it and pins it with its own test.
+  const [weekWindow, agendaWindow] = await Promise.all([
+    readCalendarWindow('week', {
+      expertProfileId: input.expertProfileId,
+      rangeStart: weekRangeStart,
+      rangeEnd: weekRangeEnd,
+    }),
+    readCalendarWindow('agenda', {
+      expertProfileId: input.expertProfileId,
+      rangeStart: agendaRangeStart,
+      rangeEnd: agendaRangeEnd,
+    }),
+  ]);
+
+  const meetings = mergeCalendarWindows(weekWindow, agendaWindow);
 
   const meetingViews: CalendarMeetingView[] = meetings.map((meeting) => ({
     meetingId: meeting.meetingId,
     scheduledStart: meeting.scheduledStart.toISOString(),
     scheduledEnd: meeting.scheduledEnd.toISOString(),
+    status: meeting.status, // @balo/db `MeetingStatus` → shared `MeetingLifecycleStatus`, no cast — see D2 §status
     contextType: meeting.contextType,
     href: hrefForMeeting(meeting),
     joinUrl: meetingJoinLinkUrl(meeting.meetingId),
@@ -148,3 +180,84 @@ export const loadExpertCalendar = cache(async function loadExpertCalendar(
     hasConnectedCalendar: checklist.items.calendar,
   };
 });
+
+/**
+ * ONE labelled read, so a throw names WHICH window failed and with what bounds (BAL-513 D8).
+ *
+ * ⚠ LOGS AND RE-THROWS — a deliberate, narrow exception to CLAUDE.md's "log where you HANDLE".
+ * `page.tsx:93-101` remains the boundary that renders `error.tsx`; swallowing here would show an
+ * empty calendar instead of a retry. What this adds is the one fact `page.tsx` structurally cannot
+ * know: with two `Promise.all`'d reads its `weekStartDayKey`-only log no longer identifies the
+ * failing query. Two records, one incident — the AsyncLocalStorage mixin puts the same `requestId`
+ * on both.
+ */
+async function readCalendarWindow(
+  window: 'week' | 'agenda',
+  args: { expertProfileId: string; rangeStart: Date; rangeEnd: Date }
+): Promise<ExpertCalendarMeeting[]> {
+  try {
+    return await meetingsRepository.listCalendarForExpert(args);
+  } catch (error) {
+    log.error('Expert calendar window read failed', {
+      window,
+      expertProfileId: args.expertProfileId,
+      rangeStart: args.rangeStart.toISOString(),
+      rangeEnd: args.rangeEnd.toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Merge the two bounded windows into ONE ascending, de-duplicated list.
+ *
+ * ⚠⚠ CONCATENATION ALONE DOES NOT PRESERVE ORDER (BAL-513 D7). The repository sorts WITHIN each call
+ * (`orderBy(asc(meetings.scheduledStart), asc(meetings.id))`), so `[week] ++ [agenda]` is globally
+ * ascending only by accident. Two live counter-examples:
+ *   · a FORWARD-paged week — `[October] ++ [today..today+28]` is descending at the seam;
+ *   · the CURRENT week — `[Mon, Fri] ++ [Thu, Fri, next Tue]` interleaves.
+ * Re-sorting with the repository's OWN comparator makes the merged list indistinguishable from a
+ * single `orderBy(asc(scheduledStart), asc(id))` query — that indistinguishability is the LOADER'S
+ * PUBLISHED CONTRACT, and every downstream filter was written against it. `WeekGrid`
+ * (`week-grid.tsx:181-183`) and `AgendaList` (`agenda-list.tsx:68`, day-group order; `:73-75`,
+ * within-group) both happen to re-sort defensively on their own, so this re-sort is contract-keeping,
+ * not render-fixing — no downstream consumer actually depends on the handed order.
+ *
+ * ⚠ FIRST WRITER WINS on a duplicate. The two windows overlap whenever the visible week is the
+ * current one, and both copies come from the same repository, the same `select`, and the same fold,
+ * so they are structurally identical and which one survives is immaterial.
+ */
+export function mergeCalendarWindows(
+  ...windows: readonly (readonly ExpertCalendarMeeting[])[]
+): ExpertCalendarMeeting[] {
+  const byId = new Map<string, ExpertCalendarMeeting>();
+  for (const window of windows) {
+    for (const meeting of window) {
+      if (!byId.has(meeting.meetingId)) {
+        byId.set(meeting.meetingId, meeting);
+      }
+    }
+  }
+  // ⚠ EXPLICIT COMPARATOR (SonarCloud S2871), mirroring `asc(scheduledStart), asc(id)`. The
+  // repository orders by BYTE order (`asc(meetings.id)`); `localeCompare` is locale/ICU-dependent
+  // and, while equivalent in practice for lowercase-hex UUIDs, is not exact and costs more. A
+  // plain relational comparison mirrors the repository's byte-order tie-break precisely.
+  //
+  // ⚠ BAL-513 fix round 2 (F9) — MUST RETURN 0 ON EQUALITY. `byId` is a `Map` keyed on
+  // `meetingId`, so two distinct entries can never carry the same id — this branch is
+  // unreachable after the de-dupe above — but `a.meetingId < b.meetingId ? -1 : 1` is not a valid
+  // total order regardless (it claims every non-`<` pair is `>`, including an equal pair), which
+  // is exactly what Sonar's S2871 ("comparators must return 0 for equal elements") flags. Equal
+  // ids ARE possible in principle for two comparators sharing this same relational shape, so this
+  // one states the real relation rather than relying on the Map to make the false case
+  // unreachable.
+  return [...byId.values()].sort((a, b) => {
+    const byStart = a.scheduledStart.getTime() - b.scheduledStart.getTime();
+    if (byStart !== 0) return byStart;
+    if (a.meetingId < b.meetingId) return -1;
+    if (a.meetingId > b.meetingId) return 1;
+    return 0;
+  });
+}

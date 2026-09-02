@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { cn } from '@/lib/utils';
 import { ENGAGEMENT_TYPE_INDICATOR } from '@/lib/calendar/engagement-type-indicator';
 import { formatZonedTimeRange, formatZonedTime } from '@/lib/calendar/zoned-grid';
+import { joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 import { JoinMeetingButton } from './join-meeting-button';
 
@@ -18,7 +19,8 @@ interface MeetingBlockProps {
   readonly height: number;
   readonly leftPercent: number;
   readonly widthPercent: number;
-  /** The meeting has ended, as of the shell's last 60-second tick. */
+  /** The meeting is over AND its join grace has elapsed (or its status is terminal), as of the
+   *  shell's last 60-second tick. Never true while `joinVisible` is. */
   readonly isPast: boolean;
   /** Join is inside its window, as of the shell's last 60-second tick. */
   readonly joinVisible: boolean;
@@ -77,9 +79,7 @@ export const MeetingBlock = memo(function MeetingBlock({
   const accessibleLabel = `${timeRange}, ${indicator.label} with ${partyName}${
     isContinuationFragment ? ', continued from yesterday' : ''
   }`;
-  // `joinTimingLabel` is only ever read under a `joinVisible` guard below, so the `?? ''` never
-  // surfaces — it exists only to satisfy the type without a non-null assertion.
-  const joinAriaLabel = `Join ${partyName}'s meeting, ${joinTimingLabel ?? ''}`;
+  const joinAriaLabel = joinAffordanceAriaLabel(partyName, joinTimingLabel);
   const continuationPrefix = isContinuationFragment ? '⌃ ' : '';
   const compactLabel = `${formatZonedTime(meeting.scheduledStart, timezone)} ${partyName}`;
   const fullLabel = `${continuationPrefix}${timeRange}`;
