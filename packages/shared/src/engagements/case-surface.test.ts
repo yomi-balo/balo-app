@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CASE_JOIN_WINDOW_MINUTES,
+  MEETING_OVERRUN_GRACE_MINUTES,
   caseConsultationIsUpcoming,
   deriveCaseConsultationState,
   selectCaseNudge,
@@ -211,6 +212,19 @@ describe('selectCaseNudge', () => {
     expect(
       selectCaseNudge(nudgeInput({ nextScheduled: { meetingId: 'meeting-9', scheduledStart } }))
     ).toEqual({ kind: 'upcoming', meetingId: 'meeting-9', scheduledStart, live: false });
+  });
+});
+
+describe('MEETING_OVERRUN_GRACE_MINUTES — BAL-513', () => {
+  it('is 30 minutes', () => {
+    expect(MEETING_OVERRUN_GRACE_MINUTES).toBe(30);
+  });
+
+  it('is strictly less than the server token ceiling (24h), so a Join at the far edge of the grace can still mint a token', () => {
+    // Stated as a literal, not an import of `apps/api/src/services/meetings/meeting-liveness.ts`'s
+    // `MEETING_TOKEN_TTL_AFTER_END_MS` — `packages/shared` must not import from `apps/api`.
+    const SERVER_TOKEN_CEILING_MS = 24 * 60 * 60 * 1000;
+    expect(MEETING_OVERRUN_GRACE_MINUTES * 60_000).toBeLessThan(SERVER_TOKEN_CEILING_MS);
   });
 });
 

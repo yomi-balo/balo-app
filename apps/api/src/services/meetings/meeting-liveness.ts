@@ -22,9 +22,9 @@
  * authorization at all, so it maps EVERY failure here to `meeting_not_found` rather than to
  * the `meeting_not_open_for_join` a member gets. See `join-meeting.ts`.
  */
-import { engagementsRepository, type Meeting, type MeetingStatus } from '@balo/db';
+import { engagementsRepository, type Meeting } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import type { PrimaryMeetingContext } from '@balo/shared/meetings';
+import { MEETING_CLOSED_TO_JOIN, type PrimaryMeetingContext } from '@balo/shared/meetings';
 
 const log = createLogger('meeting-liveness');
 
@@ -45,25 +45,6 @@ const log = createLogger('meeting-liveness');
  * handle that outlives the key is correct; the reverse would not be.
  */
 export const MEETING_TOKEN_TTL_AFTER_END_MS = 24 * 60 * 60 * 1000;
-
-/**
- * The meeting statuses that CLOSE a meeting to joining.
- *
- * ⚠⚠ A **TERMINAL** SET, NOT AN ALLOW-LIST — the identical ruling as
- * `MEETING_CLOSED_TO_GUESTS`, and for the identical reason. `meeting_status` has FIVE labels,
- * and an `IN ('scheduled','in_progress')` allow-list would silently exclude
- * `waiting_for_participants`, which is PRECISELY the state a call is in while people are
- * arriving — i.e. the state in which joining matters most. Naming what is CLOSED means a
- * SIXTH label added later defaults to OPEN, which is the correct direction for a join.
- *
- * ⚠ TYPED AS `MeetingStatus`, NOT `string`. A bare `string` set accepts any literal, so a
- * typo or a renamed pgEnum label would silently OPEN the gate with no typecheck failure — the
- * one direction a fail-closed check must never drift in.
- *
- * ⚠ A FUTURE `ALTER TYPE … ADD VALUE` ON `meeting_status` MUST SWEEP THIS SET, as the schema
- * docblock in `enums.ts` demands.
- */
-export const MEETING_CLOSED_TO_JOIN: ReadonlySet<MeetingStatus> = new Set(['ended', 'cancelled']);
 
 /**
  * WHY a join was refused. ⚠ A LOG FIELD, NEVER A WIRE VALUE — all four collapse into one

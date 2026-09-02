@@ -78,6 +78,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     meetingId: 'm-1',
     scheduledStart: '2026-08-24T23:00:00.000Z',
     scheduledEnd: '2026-08-24T23:30:00.000Z',
+    status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
     joinUrl: 'https://balo.expert/join/m/m-1',

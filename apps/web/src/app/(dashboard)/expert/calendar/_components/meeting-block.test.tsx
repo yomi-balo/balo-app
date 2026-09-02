@@ -56,6 +56,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     meetingId: 'm-1',
     scheduledStart: '2026-08-24T09:00:00.000Z',
     scheduledEnd: '2026-08-24T09:30:00.000Z',
+    status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
     joinUrl: 'https://balo.expert/join/m/m-1',
@@ -195,6 +196,25 @@ describe('MeetingBlock — full mode', () => {
 
     expect(screen.queryByRole('button', { name: /Join/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Join/i })).not.toBeInTheDocument();
+  });
+
+  it('renders the "in progress" timing in the Join accessible name (BAL-513 D10)', () => {
+    renderBlock({ joinVisible: true, joinTimingLabel: 'in progress' });
+
+    expect(
+      screen.getByRole('button', { name: "Join Northwind's meeting, in progress" })
+    ).toBeInTheDocument();
+  });
+
+  it('renders an un-muted card with a live Join when given isPast=false/joinVisible=true — pins MeetingBlock’s rendering for that flag combination, not the BAL-513 D6 boundary logic itself (that lives in join-window.test.ts)', () => {
+    const { container } = renderBlock({
+      isPast: false,
+      joinVisible: true,
+      joinTimingLabel: 'in progress',
+    });
+
+    expect(container.innerHTML).not.toContain('opacity-60');
+    expect(screen.getByRole('button', { name: /Join Northwind's meeting/i })).toBeInTheDocument();
   });
 
   it('has no axe violations', async () => {

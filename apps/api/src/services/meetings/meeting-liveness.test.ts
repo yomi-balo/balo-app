@@ -14,7 +14,6 @@ vi.mock('@balo/db', () => ({
 import {
   assertMeetingJoinable,
   expiresAtUnixFor,
-  MEETING_CLOSED_TO_JOIN,
   MEETING_TOKEN_TTL_AFTER_END_MS,
 } from './meeting-liveness.js';
 
@@ -45,21 +44,6 @@ const REQUEST_SUBJECT = { contextType: 'project_discovery', contextId: REQUEST_I
 beforeEach(() => {
   vi.clearAllMocks();
   mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'active' });
-});
-
-describe('MEETING_CLOSED_TO_JOIN — a TERMINAL set, never an allow-list', () => {
-  it('closes exactly `ended` and `cancelled`', () => {
-    expect([...MEETING_CLOSED_TO_JOIN].sort((a, b) => a.localeCompare(b))).toEqual([
-      'cancelled',
-      'ended',
-    ]);
-  });
-
-  it('⚠ leaves `waiting_for_participants` OPEN — the state joining matters most in', () => {
-    // An `IN ('scheduled','in_progress')` ALLOW-list would have excluded this silently. That
-    // is the whole argument for naming what is closed instead.
-    expect(MEETING_CLOSED_TO_JOIN.has('waiting_for_participants')).toBe(false);
-  });
 });
 
 describe('assertMeetingJoinable — the meeting`s own state', () => {

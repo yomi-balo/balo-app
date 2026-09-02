@@ -232,8 +232,9 @@ export function CalendarShell({
   const handleJoinClick = useCallback(
     (meeting: CalendarMeetingView) => {
       // ⚠ UNFLOORED — the analytics contract requires the sign to survive past the scheduled
-      // start (BAL-498 fix round 2, N7). `minutesUntilCalendarStart` (floored at 0) drives only
-      // the Join aria-label text; never feed it into analytics.
+      // start (BAL-498 fix round 2, N7). `joinAffordanceTimingLabel` (`@/lib/calendar/join-window`)
+      // consumes this same unfloored value to drive the Join aria-label text; never floor it
+      // before feeding it into analytics.
       const minutesToStart = signedMinutesUntilCalendarStart(
         nowRef.current,
         new Date(meeting.scheduledStart)

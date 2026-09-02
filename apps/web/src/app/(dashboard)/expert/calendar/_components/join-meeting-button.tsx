@@ -44,6 +44,12 @@ interface JoinMeetingButtonProps {
  * `joinVisible ? … : <ChevronRight/>`). If a future caller ever renders this component OUTSIDE
  * that gate, add a prop and condition the cue on it rather than deleting it — Join showing no
  * live affordance while genuinely joinable is the regression this paragraph exists to prevent.
+ *
+ * ⚠ BAL-513 EXTENDED THAT WINDOW to `scheduledEnd + MEETING_OVERRUN_GRACE_MINUTES` and moved
+ * `isPast` onto the SAME boundary (`join-window.ts`'s `calendarMeetingTiming`), precisely so this
+ * paragraph stays true: a meeting that ran over is still joinable, still ping-rings, and is NOT
+ * muted. No `showLiveCue` prop was added, and none should be — if a future caller renders this
+ * outside the gate, add the prop then rather than deleting the cue.
  */
 export function JoinMeetingButton({
   joinUrl,

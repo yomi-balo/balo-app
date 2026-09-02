@@ -35,6 +35,24 @@ import { rescheduleProposalIsLive } from '../meetings';
  */
 export const CASE_JOIN_WINDOW_MINUTES = 15;
 
+/**
+ * BAL-513 — how long PAST `scheduled_end` the product still offers Join. The closing bracket of the
+ * window `CASE_JOIN_WINDOW_MINUTES` opens, so both ends of it live in one file.
+ *
+ * ⚠ A UI CUE, NOT A CREDENTIAL. It is deliberately far inside the server's own ceiling:
+ * `MEETING_TOKEN_TTL_AFTER_END_MS` (`apps/api/src/services/meetings/meeting-liveness.ts`) is 24h, so
+ * a Join at end + 29 min still mints a token and the UI stays STRICTER than the system. Raising this
+ * to the order of hours would need re-checking against step 3 of `assertMeetingJoinable`.
+ *
+ * ⚠ NOT `GUEST_TOKEN_TTL_AFTER_END_MS` (7 days) — that is the guest ROW's durable handle, a
+ * different credential for a different job. See `meeting-liveness.ts`'s own note on the
+ * distinction.
+ *
+ * ⚠ A CONSTANT, NOT CONFIG — same ruling as `CASE_JOIN_WINDOW_MINUTES` above: `platform_config` is
+ * not on `main`.
+ */
+export const MEETING_OVERRUN_GRACE_MINUTES = 30;
+
 const MS_PER_MINUTE = 60_000;
 
 /** The next scheduled consultation, narrowed to the two fields the nudge reads. */

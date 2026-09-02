@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { axe } from 'jest-axe';
 import { render, screen } from '@/test/utils';
+import { MEETING_OVERRUN_GRACE_MINUTES } from '@balo/shared/engagements';
 import { AgendaList } from './agenda-list';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 
@@ -43,6 +44,7 @@ function meeting(overrides: Partial<CalendarMeetingView>): CalendarMeetingView {
     meetingId: 'm-1',
     scheduledStart: '2026-08-25T00:00:00.000Z',
     scheduledEnd: '2026-08-25T00:30:00.000Z',
+    status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
     joinUrl: 'https://balo.expert/join/m/m-1',
@@ -196,11 +198,12 @@ describe('AgendaList', () => {
     expect(joinButton.className).not.toContain('animate-pulse');
   });
 
-  it('Join reads "starting now" once the meeting has actually started (M1)', () => {
+  it('names an in-progress meeting "in progress" in the Join accessible name (AC5, D10)', () => {
     const started = meeting({
       meetingId: 'started-1',
       scheduledStart: '2026-08-23T23:55:00.000Z',
       scheduledEnd: '2026-08-24T00:25:00.000Z',
+      status: 'in_progress',
       counterpartyCompanyName: 'Live Co',
     });
     render(
@@ -213,8 +216,141 @@ describe('AgendaList', () => {
     );
 
     expect(
-      screen.getByRole('button', { name: /Join Live Co's meeting, starting now/i })
+      screen.getByRole('button', { name: "Join Live Co's meeting, in progress" })
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * BAL-513 C2 — the overrun grace and the terminal-status gate, converged onto ONE
+ * `calendarMeetingTiming` call (D6) shared with `WeekGrid`. See `week-grid.test.tsx`'s own
+ * "the now-derived MeetingBlock inputs are computed HERE" describe block for the same scenarios
+ * exercised through the Week surface — the two must never disagree about the same meeting.
+ */
+describe('AgendaList — the overrun grace and terminal-status gate (BAL-513 C2)', () => {
+  const AL_NOW = new Date('2026-08-24T00:00:00.000Z');
+
+  it('offers Join at scheduledEnd + grace − 1 minute (AC4)', () => {
+    const scheduledEnd = new Date(
+      AL_NOW.getTime() - (MEETING_OVERRUN_GRACE_MINUTES - 1) * 60_000
+    ).toISOString();
+    const scheduledStart = new Date(new Date(scheduledEnd).getTime() - 30 * 60_000).toISOString();
+    render(
+      <AgendaList
+        meetings={[
+          meeting({
+            meetingId: 'overrun-inside-grace',
+            scheduledStart,
+            scheduledEnd,
+            status: 'in_progress',
+            counterpartyCompanyName: 'Grace Co',
+          }),
+        ]}
+        timezone="Australia/Sydney"
+        now={AL_NOW}
+        onJoinClick={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('calendar-join')).toBeInTheDocument();
+  });
+
+  it('hides Join at scheduledEnd + grace (AC4)', () => {
+    const scheduledEnd = new Date(
+      AL_NOW.getTime() - MEETING_OVERRUN_GRACE_MINUTES * 60_000
+    ).toISOString();
+    const scheduledStart = new Date(new Date(scheduledEnd).getTime() - 30 * 60_000).toISOString();
+    render(
+      <AgendaList
+        meetings={[
+          meeting({
+            meetingId: 'overrun-past-grace',
+            scheduledStart,
+            scheduledEnd,
+            status: 'in_progress',
+            counterpartyCompanyName: 'Elapsed Co',
+          }),
+        ]}
+        timezone="Australia/Sydney"
+        now={AL_NOW}
+        onJoinClick={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('calendar-join')).not.toBeInTheDocument();
+  });
+
+  it('hides Join for a terminal status and falls back to the chevron (AC4)', () => {
+    const { container } = render(
+      <AgendaList
+        meetings={[
+          meeting({
+            meetingId: 'terminal-mid-slot',
+            scheduledStart: '2026-08-23T23:30:00.000Z',
+            scheduledEnd: '2026-08-24T00:30:00.000Z',
+            status: 'ended',
+            counterpartyCompanyName: 'Terminal Co',
+          }),
+        ]}
+        timezone="Australia/Sydney"
+        now={AL_NOW}
+        onJoinClick={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('calendar-join')).not.toBeInTheDocument();
+    // Join REPLACES the chevron on an imminent row (agenda-list.tsx docblock) — a terminal,
+    // non-joinable row genuinely falls back to it. Lucide auto-applies an icon-named class
+    // (`createLucideIcon.js`), so this actually looks for the chevron itself — the previous
+    // `getByText(...).closest('div')` was vacuously true regardless of what rendered.
+    expect(container.querySelector('.lucide-chevron-right')).not.toBeNull();
+  });
+
+  it('does not mute an overrunning row while Join is live', () => {
+    const scheduledEnd = new Date(AL_NOW.getTime() - 10 * 60_000).toISOString();
+    const scheduledStart = new Date(new Date(scheduledEnd).getTime() - 30 * 60_000).toISOString();
+    render(
+      <AgendaList
+        meetings={[
+          meeting({
+            meetingId: 'overrun-live-row',
+            scheduledStart,
+            scheduledEnd,
+            status: 'in_progress',
+          }),
+        ]}
+        timezone="Australia/Sydney"
+        now={AL_NOW}
+        onJoinClick={vi.fn()}
+      />
+    );
+
+    const row = screen.getByTestId('calendar-join').closest('.min-h-14');
+    expect(row?.className).not.toContain('opacity-60');
+  });
+
+  it('mutes the row once the grace elapses', () => {
+    const scheduledEnd = new Date(
+      AL_NOW.getTime() - MEETING_OVERRUN_GRACE_MINUTES * 60_000
+    ).toISOString();
+    const scheduledStart = new Date(new Date(scheduledEnd).getTime() - 30 * 60_000).toISOString();
+    const { container } = render(
+      <AgendaList
+        meetings={[
+          meeting({
+            meetingId: 'overrun-elapsed-row',
+            scheduledStart,
+            scheduledEnd,
+            status: 'in_progress',
+          }),
+        ]}
+        timezone="Australia/Sydney"
+        now={AL_NOW}
+        onJoinClick={vi.fn()}
+      />
+    );
+
+    expect(container.innerHTML).toContain('opacity-60');
   });
 });
 

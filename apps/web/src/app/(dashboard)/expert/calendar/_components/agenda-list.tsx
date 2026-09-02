@@ -11,10 +11,7 @@ import {
   formatZonedTimeRange,
 } from '@/lib/calendar/zoned-grid';
 import { ENGAGEMENT_TYPE_INDICATOR } from '@/lib/calendar/engagement-type-indicator';
-import {
-  calendarJoinAffordanceVisible,
-  joinAffordanceTimingLabel,
-} from '@/lib/calendar/join-window';
+import { calendarMeetingTiming, joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
 import { JoinMeetingButton } from './join-meeting-button';
 
@@ -85,6 +82,9 @@ export function AgendaList({
         // full day of calls this is the ONE orientation cue on the mobile-default surface (H8).
         // `-1` here (never equal to any valid index OR `dayMeetings.length`) suppresses the
         // divider for every non-Today group, where it has no meaning.
+        // ⚠ DELIBERATELY its OWN `scheduledEnd` comparison, NOT `timing.isPast` (BAL-513). "First
+        // row still in the future" is a different question from "is this row muted" — folding it
+        // into `isPast` would move the Now divider 30 minutes late, onto the grace boundary.
         const upcomingIndex = isTodayGroup
           ? dayMeetings.findIndex(
               (meeting) => now.getTime() < new Date(meeting.scheduledEnd).getTime()
@@ -99,17 +99,22 @@ export function AgendaList({
             </h3>
             <div className="divide-border divide-y">
               {dayMeetings.map((meeting, index) => {
-                const isPast = now.getTime() >= new Date(meeting.scheduledEnd).getTime();
                 const indicator = ENGAGEMENT_TYPE_INDICATOR[meeting.contextType];
                 const Icon = indicator.icon;
                 const start = new Date(meeting.scheduledStart);
-                const joinVisible = calendarJoinAffordanceVisible(
+                const partyName = meeting.counterpartyCompanyName ?? 'Balo';
+                // ⚠ ONE derivation of the three now-dependent values, shared with `WeekGrid`
+                // (BAL-513 D6). Agenda used to compute `isPast` inline and call the two primitives
+                // directly, which is how the two surfaces could disagree about the same meeting.
+                const timing = calendarMeetingTiming(
                   now,
                   start,
-                  new Date(meeting.scheduledEnd)
+                  new Date(meeting.scheduledEnd),
+                  meeting.status
                 );
-                const joinAriaLabel = `Join ${meeting.counterpartyCompanyName ?? 'Balo'}'s meeting, ${joinAffordanceTimingLabel(now, start)}`;
-                const partyName = meeting.counterpartyCompanyName ?? 'Balo';
+                const isPast = timing.isPast;
+                const joinVisible = timing.joinVisible;
+                const joinAriaLabel = joinAffordanceAriaLabel(partyName, timing.joinTimingLabel);
                 // ⚠ NEVER NEST INTERACTIVE ELEMENTS. The row-body link and the Join control are
                 // SIBLING click targets, not parent/child — an `<a>`/`<button>` inside an `<a>`
                 // is invalid HTML that browsers/jsdom silently reparent, breaking both the

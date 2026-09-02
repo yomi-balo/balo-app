@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@/test/utils';
+import { render, screen, within, fireEvent, act } from '@/test/utils';
 import { CalendarShell } from './calendar-shell';
 import type { CalendarPageView, CalendarMeetingView } from '../_lib/calendar-view-types';
 import { addDaysToDayKey, todayDayKey } from '@/lib/calendar/zoned-grid';
@@ -77,6 +77,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     meetingId: 'm-1',
     scheduledStart: '2026-08-24T23:00:00.000Z',
     scheduledEnd: '2026-08-24T23:30:00.000Z',
+    status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
     joinUrl: 'https://balo.expert/join/m/m-1',
@@ -456,6 +457,36 @@ describe('CalendarShell — a cross-midnight availability window paints INSIDE t
       expect(top).toBeGreaterThanOrEqual(0);
       expect(top + height).toBeLessThanOrEqual(bodyHeight + 1);
     }
+  });
+});
+
+/**
+ * BAL-513 AC3 — the SHELL half of the Sunday-crossing-midnight pin (`week-grid.test.tsx:320-361`
+ * pins the render half directly). This test exercises `previousWeekLookbackDayKey` against the
+ * TWO-WINDOW merged set the loader now produces (`load-expert-calendar.ts`'s
+ * `mergeCalendarWindows`), end to end through `CalendarShell`.
+ */
+describe('CalendarShell — a meeting starting the day before the visible Monday (BAL-513 AC3)', () => {
+  it('still renders its Monday continuation fragment', () => {
+    // Sun 2026-08-23 23:45 Sydney -> Mon 2026-08-24 00:15 Sydney.
+    const sundayCrossing = meeting({
+      meetingId: 'sunday-crossing',
+      scheduledStart: '2026-08-23T13:45:00.000Z',
+      scheduledEnd: '2026-08-23T14:15:00.000Z',
+      href: '/cases/sunday-crossing',
+      counterpartyCompanyName: 'Weekend Co',
+    });
+
+    render(
+      <CalendarShell
+        view={pageView({ meetings: [sundayCrossing] })}
+        initialWeekStartDayKey="2026-08-24"
+      />
+    );
+
+    const mondayColumn = document.querySelector('[data-day-key="2026-08-24"]') as HTMLElement;
+    expect(mondayColumn).not.toBeNull();
+    expect(within(mondayColumn).getByRole('link', { name: /Weekend Co/i })).toBeInTheDocument();
   });
 });
 

@@ -126,6 +126,10 @@ export * from './recording-view';
 // call itself stays in each app's own signer (`apps/web/src/lib/mux/playback.ts`,
 // `apps/api/src/services/mux/playback.ts`), which is what keeps this module import-free.
 export * from './mux-playback-policy';
+// BAL-513 (D2) — the JOIN gate's fail-closed TERMINAL set, moved out of `apps/api` so the expert
+// calendar's Join affordance and the server's `assertMeetingJoinable` read ONE definition. Note the
+// direction is the OPPOSITE of `cancellable`/`reschedulable` above, deliberately: see its docblock.
+export * from './closed-to-join';
 
 import type { MeetingPresenceParty } from './guest-participation';
 
