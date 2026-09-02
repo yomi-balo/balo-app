@@ -38,6 +38,36 @@ describe('notificationEvents.publish', () => {
     );
   });
 
+  it('sanitises colons out of the jobId — BullMQ rejects them outright', async () => {
+    // The regression this pins: every credit correlationId IS a ledger idempotency key, and
+    // those are colon-joined (`manual_purchase:{piId}`). BullMQ throws "Custom Id cannot
+    // contain :" on such an id, so EVERY credit publish failed — no top-up receipt, dunning
+    // notice or settlement notification was ever delivered. It surfaced only as a best-effort
+    // log line beside an already-committed money effect, which is why it went unnoticed.
+    // The existing cases above all use colon-free ids, so they could never have caught it.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'manual_purchase:pi_3UB4aV2NflDPoiWN0G8yaIxz',
+    } as never);
+
+    const [, , opts] = mockAdd.mock.calls[0] as [unknown, unknown, { jobId: string }];
+    expect(opts.jobId).not.toContain(':');
+    expect(opts.jobId).toBe('credit.topup.completed--manual_purchase_pi_3UB4aV2NflDPoiWN0G8yaIxz');
+  });
+
+  it('keeps distinct correlationIds distinct after sanitising (dedup is not weakened)', async () => {
+    // Two different auto-top-up keys must not collapse onto one job id, or the second
+    // notification would be silently deduped away as a replay of the first.
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'auto_topup:wallet-a:entry-1',
+    } as never);
+    await notificationEvents.publish('credit.topup.completed', {
+      correlationId: 'auto_topup:wallet-a:entry-2',
+    } as never);
+
+    const ids = mockAdd.mock.calls.map((c) => (c[2] as { jobId: string }).jobId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
   it('publishes expert.application_submitted event with correct jobId format', async () => {
     const payload = {
       correlationId: 'app-456',
