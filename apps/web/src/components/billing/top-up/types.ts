@@ -64,6 +64,12 @@ export interface PurchaseCompletion {
   amountMinor: number;
   promoMinor: number;
   promoCode: string | null;
+  /**
+   * The promo's UUID from apply-time validation — half of the grant's ledger key
+   * (`promo:{walletId}:{promoCodeId}`), so the receipt can ask whether the grant actually
+   * landed rather than asserting the bonus off apply-time state. A QUESTION, never a grant.
+   */
+  promoCodeId: string | null;
   lowBalanceMode: LowBalanceMode;
   mandateCaptured: boolean;
   /**

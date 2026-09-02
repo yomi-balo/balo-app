@@ -163,10 +163,21 @@ export type TopUpCreditStatusResult =
   | { status: 'unauthorized' }
   | { status: 'error' }
   | { status: 'pending'; balanceMinor: number }
-  | { status: 'credited'; balanceMinor: number };
+  | {
+      status: 'credited';
+      balanceMinor: number;
+      /**
+       * Whether THIS purchase's promo grant is in the ledger — `null` when no promo was asked
+       * about. The webhook's `grantPromoBestEffort` re-validates at settlement and can skip the
+       * grant while the base credit lands, so the receipt must ASK rather than render
+       * "Promo bonus +A$X" off the composer's apply-time state. Same class of lie this whole
+       * surface exists to remove; smaller scope.
+       */
+      promoGranted: boolean | null;
+    };
 
 export type ValidatePromoResult =
-  | { ok: true; grantMinor: number }
+  | { ok: true; grantMinor: number; promoCodeId: string }
   | { ok: false; reason: PromoValidationReason | 'unauthorized' | 'error' };
 
 export type SaveConfigResult =
@@ -235,15 +246,24 @@ async function persistLowBalanceConfig(
  * {@link MandateOutcome} — never a bare nullable secret, whose three meanings the composer
  * could not tell apart.
  *
- * GUARD (unchanged): no SetupIntent is opened when an ACTIVE mandate already exists — opening
- * one flips `mandate_status` to 'pending', so requesting it for an already-'active' wallet would
- * transiently downgrade a working mandate on a repeat card-backed purchase. What that means for
- * THIS purchase depends on which card is being charged:
- *  · `saved_card` — the live mandate was captured against the very card we are charging, so it
- *                   is genuinely `captured`.
- *  · `new_card`   — a different card is going on file, and the webhook revokes the mandate
- *                   captured for the old one (`applySavedCardDisplay`). Nothing is captured
- *                   here, so say `not_required` and let the receipt's warning surface.
+ * AN ACTIVE MANDATE SHORT-CIRCUITS ONLY THE `saved_card` ARM. There, the live mandate was
+ * captured against the very card being charged, so it is genuinely `captured` and opening a
+ * SetupIntent would be pure churn.
+ *
+ * `new_card` with an active mandate MUST still open a SetupIntent — this is the arm that
+ * previously said `not_required`, and that was a silent auto-top-up kill switch: the purchase
+ * webhook revokes the old card's mandate (`applySavedCardDisplay`, a card CHANGE), no consent
+ * was ever captured for the new card, and the wallet lands at `mandate_status = NULL` with
+ * auto-top-up and overdraft settlement dead. The buyer's only clue was the receipt's small
+ * "couldn't finish setting up automatic charging" note.
+ *
+ * The old guard's stated reason — "opening a SetupIntent flips the status to 'pending',
+ * transiently downgrading a working mandate" — no longer holds: `applyMandateStatus` now
+ * REFUSES `active` → `pending`, so the pending write is inert while the old mandate is live.
+ * Either webhook order then converges on `active` for the NEW card: if `setup_intent.succeeded`
+ * lands first, the purchase webhook sees the stored payment method already equals the charged
+ * one and preserves the mandate; if the purchase webhook lands first, it nulls the old mandate
+ * and the SetupIntent's success then writes `active` for the new card.
  *
  * Otherwise the two sources differ in WHICH card the mandate is captured against:
  *  · `new_card`   — return the secret; the browser confirms it with the PM the PaymentIntent
@@ -266,23 +286,22 @@ async function persistLowBalanceConfig(
 async function resolveMandateOutcome(
   wallet: CreditWallet,
   lowBalanceMode: z.infer<typeof lowBalanceModeSchema>,
-  paymentMethodSource: PaymentMethodSource
+  paymentMethodSource: PaymentMethodSource,
+  clientRequestId: string
 ): Promise<MandateOutcome> {
   const cardBacked = lowBalanceMode === 'auto_topup' || lowBalanceMode === 'keep_going';
   if (!cardBacked) {
     return { outcome: 'not_required' };
   }
-  if (wallet.mandateStatus === 'active') {
-    return paymentMethodSource === 'saved_card'
-      ? { outcome: 'captured' }
-      : { outcome: 'not_required' };
+  if (wallet.mandateStatus === 'active' && paymentMethodSource === 'saved_card') {
+    return { outcome: 'captured' };
   }
   try {
     if (paymentMethodSource === 'new_card') {
       const { clientSecret } = await createMandateSetupIntent(wallet.id);
       return { outcome: 'requires_action', clientSecret };
     }
-    const result = await confirmSavedCardMandate(wallet.id);
+    const result = await confirmSavedCardMandate(wallet.id, clientRequestId);
     if (result.status === 'requires_action' && result.clientSecret !== null) {
       return { outcome: 'requires_action', clientSecret: result.clientSecret };
     }
@@ -366,7 +385,8 @@ export async function startPurchaseAction(
     const mandate = await resolveMandateOutcome(
       wallet,
       input.config.lowBalanceMode,
-      input.paymentMethodSource
+      input.paymentMethodSource,
+      input.clientRequestId
     );
 
     if (purchase.outcome === 'complete') {
@@ -448,8 +468,34 @@ const paymentIntentIdSchema = z.string().min(1).max(255);
  * Auth is `requireBillingActor()` → `requireOnboardedUser()` (the fail-closed sibling), so this
  * needs no `READ_ONLY_ALLOWLIST` entry — that invariant only catches bare `requireUser()`.
  */
+const promoCodeIdSchema = z.uuid();
+
+/**
+ * Whether the promo grant is in the ledger — the same question asked of the GRANT's own key,
+ * `promo:{walletId}:{promoCodeId}`, inherently scoped to the actor's wallet because the wallet
+ * id is half the key. `null` = no promo asked about; a malformed id is answered `false`, not an
+ * error — the receipt then simply doesn't claim a bonus it cannot prove.
+ */
+async function resolvePromoGranted(
+  walletId: string,
+  promoCodeId: string | null | undefined
+): Promise<boolean | null> {
+  if (promoCodeId === null || promoCodeId === undefined) {
+    return null;
+  }
+  const parsedPromoId = promoCodeIdSchema.safeParse(promoCodeId);
+  if (!parsedPromoId.success) {
+    return false;
+  }
+  const grant = await creditLedgerRepository.findByIdempotencyKey(
+    deriveIdempotencyKey({ reason: 'promo', walletId, promoCodeId: parsedPromoId.data })
+  );
+  return grant !== undefined;
+}
+
 export async function getTopUpCreditStatusAction(
-  paymentIntentId: string
+  paymentIntentId: string,
+  promoCodeId?: string | null
 ): Promise<TopUpCreditStatusResult> {
   const parsed = paymentIntentIdSchema.safeParse(paymentIntentId);
   if (!parsed.success) {
@@ -483,11 +529,20 @@ export async function getTopUpCreditStatusAction(
       });
     }
 
+    if (!credited) {
+      return { status: 'pending', balanceMinor: wallet.balanceMinor };
+    }
+
     // ⚠ ALWAYS THE WALLET'S OWN `balanceMinor`, NEVER A SUM. The promo grant commits in the SAME
     // webhook transaction as the base credit, so once the purchase key is visible this balance
     // already includes any bonus — and it is still right when the promo was SKIPPED at
     // settlement, which a sum would not be.
-    return { status: credited ? 'credited' : 'pending', balanceMinor: wallet.balanceMinor };
+    //
+    return {
+      status: 'credited',
+      balanceMinor: wallet.balanceMinor,
+      promoGranted: await resolvePromoGranted(wallet.id, promoCodeId),
+    };
   } catch (error) {
     log.error('Top-up credit status read failed', {
       error: error instanceof Error ? error.message : String(error),
@@ -523,7 +578,13 @@ export async function validatePromoAction(code: string): Promise<ValidatePromoRe
       now: new Date(),
     });
     if (validation.ok) {
-      return { ok: true, grantMinor: validation.grantMinor };
+      // `promoCodeId` rides along so the RECEIPT can later ask whether the grant actually
+      // landed — the grant's ledger key is `promo:{walletId}:{promoCodeId}`, keyed on the
+      // promo's UUID, and the settlement webhook can legitimately SKIP the grant
+      // (re-validation fails: expired or cap-exhausted between Apply and charge). Holding the
+      // id authorises nothing; the status action still scopes every answer to the actor's
+      // own wallet.
+      return { ok: true, grantMinor: validation.grantMinor, promoCodeId: validation.promoCodeId };
     }
     return { ok: false, reason: validation.reason };
   } catch (error) {

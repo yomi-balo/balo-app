@@ -98,13 +98,21 @@ export function TopUpComposer({
   // PaymentIntents with DIFFERENT params (one carries `payment_method` + `confirm: true`), and
   // Stripe 400s on the same idempotency key with different params — so without this, Pay would
   // die permanently the moment a buyer pressed "Change".
-  const signature = `${amountMinor}:${mode}:${promo?.code ?? ''}:${reloadMinor}:${thresholdMinor}:${paymentMethodSource}`;
+  //
+  // ⚠ SO IS `declineNonce`. Stripe caches a 402 `card_declined` against the key (the endpoint
+  // DID execute), so retrying the same configuration replays the cached decline for 24h
+  // without ever contacting the issuer — `insufficient_funds` and try-again-later declines
+  // would be permanent for this amount/card. PayAction bumps the nonce on every decline, so
+  // the next Pay press is a genuinely new attempt.
+  const [declineNonce, setDeclineNonce] = useState(0);
+  const signature = `${amountMinor}:${mode}:${promo?.code ?? ''}:${reloadMinor}:${thresholdMinor}:${paymentMethodSource}:${declineNonce}`;
   const requestIdRef = useRef({ signature, id: globalThis.crypto.randomUUID() });
   if (requestIdRef.current.signature !== signature) {
     requestIdRef.current = { signature, id: globalThis.crypto.randomUUID() };
   }
   const clientRequestId = requestIdRef.current.id;
 
+  const handleCardDeclined = useCallback(() => setDeclineNonce((n) => n + 1), []);
   const handleApplied = useCallback((applied: AppliedPromo) => setPromo(applied), []);
   const handleRemoved = useCallback(() => setPromo(null), []);
 
@@ -221,6 +229,7 @@ export function TopUpComposer({
         amountMinor={amountMinor}
         promoMinor={promoMinor}
         promoCode={promo?.code ?? null}
+        promoCodeId={promo?.promoCodeId ?? null}
         lowBalanceMode={mode}
         paymentMethodSource={paymentMethodSource}
         disabled={!configValid}
@@ -228,6 +237,7 @@ export function TopUpComposer({
         buildStartInput={buildStartInput}
         onComplete={handleComplete}
         onUseDifferentCard={handleUseDifferentCard}
+        onCardDeclined={handleCardDeclined}
       />
     ) : null;
 

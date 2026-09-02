@@ -3,14 +3,14 @@ import type { NotificationEvent, EventPayloadMap } from './events.js';
 import { cancelScheduledNotification, scheduleNotification } from './scheduling/schedule.js';
 
 /**
- * BullMQ rejects a custom job id containing `:` — it reserves the colon for its own Redis key
- * namespacing, and `queue.add` throws `Custom Id cannot contain :`.
+ * BullMQ rejects most custom job ids containing `:` (`Custom Id cannot contain :` from
+ * `queue.add`) — the precise rule is in THE ACTUAL BULLMQ RULE below; do not paraphrase it
+ * from memory, that has gone wrong twice.
  *
- * Every credit correlationId is a ledger idempotency key, and `deriveIdempotencyKey` joins its
- * parts with colons (`manual_purchase:{piId}`, `auto_topup:{walletId}:{entryId}`, …). So every
- * credit-domain publish threw at `queue.add` — meaning NO top-up receipt, dunning notice or
- * settlement notification has ever been delivered. It surfaced only as a best-effort
- * `log.error` next to a committed money effect, which is exactly the shape that hides.
+ * Credit correlationIds are ledger idempotency keys, which `deriveIdempotencyKey` joins with
+ * colons (`manual_purchase:{piId}`, `auto_topup:{walletId}:{entryId}`, …), so the rejected
+ * shapes had never delivered a notification — surfacing only as a best-effort `log.error`
+ * next to a committed money effect, which is exactly the shape that hides.
  *
  * ⚠ The escape must be INJECTIVE, or two correlationIds collapse onto one job id and BullMQ
  * dedup silently drops a notification — the same silent-loss shape this fix exists to remove.
@@ -28,20 +28,24 @@ import { cancelScheduledNotification, scheduleNotification } from './scheduling/
  * length — `a_:b` → `a___cb`, `a:_b` → `a_c__b`. This is structural, not a property of the
  * reason names that happen to exist today.
  *
- * WHOSE STORED IDS THIS CHANGES — checked, not assumed. `toJobId` runs on EVERY event, and
- * the `_` → `__` half rewrites the id of any correlationId containing an underscore, whether
- * or not it also contains a colon. That is the same hazard the comment below guards event
- * names against, so it needed verifying rather than waving through.
+ * THE ACTUAL BULLMQ RULE — read from the installed 5.70.4 source, after two rounds of this
+ * comment claiming more than had been checked. `Job.addJob` throws only when
+ * `jobId.includes(':') && jobId.split(':').length !== 3` — a carve-out kept for legacy
+ * repeatable-job ids. So a jobId with EXACTLY two colons was accepted all along.
  *
- * Every production correlationId is one of two shapes: a bare UUID (`randomUUID()`, `z.uuid()`,
- * an entity id) which contains neither character and is untouched; or a colon-joined key, which
- * `queue.add` was already REJECTING outright. There is no production correlationId with an
- * underscore and no colon — so this changes no id that has ever successfully been written.
- *
- * ⚠ That also means the colon defect was never credit-only. 17 production publish sites build
- * colon-joined correlationIds — engagement auto-accept, onboarding reminders, review nudges,
- * wallet dormancy, all nine credit-session notices, meeting availability, booking cancelled,
- * the transcript pipeline. None of them has ever delivered.
+ * Consequences, honestly scoped:
+ *  · One-colon and three-plus-colon correlationIds (e.g. `manual_purchase:{pi}`,
+ *    `overdraft_settlement:{session}`, `{id}:auto_accepted`, the review-nudge and
+ *    dormancy-REMINDER ids) threw at `queue.add` — those had never been delivered. (The
+ *    dormancy-EXPIRY id, `dormancy_expiry:{wallet}:{date}`, is a two-colon shape: it was
+ *    delivering, and belongs to the rewritten set below.)
+ *  · EXACTLY-two-colon ids (e.g. `auto_topup:{wallet}:{entry}`,
+ *    `{userId}:onboarding_reminder:{step}`) were DELIVERING FINE, and this escape REWRITES
+ *    their jobIds. A post-deploy re-publish therefore will not dedup against a retained
+ *    pre-deploy job for that set: a bounded, one-time duplicate-notification window at the
+ *    deploy boundary — accepted, since the alternative (preserving two-colon ids) would keep
+ *    the escape non-injective and the dedup keys dependent on BullMQ's legacy carve-out.
+ *  · Bare-UUID correlationIds contain neither character and are untouched.
  *
  * ⚠ Do NOT "optimise" this to escape only when a `:` is present. `a_cb` has no colon and would
  * pass through unchanged, while `a:b` would escape TO `a_cb` — a collision across the two sets.

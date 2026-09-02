@@ -37,10 +37,12 @@ function renderAction(overrides: {
   paymentMethodSource?: PaymentMethodSource;
   onComplete?: (c: PurchaseCompletion) => void;
   onUseDifferentCard?: () => void;
+  onCardDeclined?: () => void;
   disabled?: boolean;
 }) {
   const onComplete = overrides.onComplete ?? vi.fn();
   const onUseDifferentCard = overrides.onUseDifferentCard ?? vi.fn();
+  const onCardDeclined = overrides.onCardDeclined ?? vi.fn();
   const source = overrides.paymentMethodSource ?? 'new_card';
   const buildStartInput = (): StartPurchaseInput => ({
     amountMinor: 100_000,
@@ -56,6 +58,7 @@ function renderAction(overrides: {
     <PayAction
       amountMinor={100_000}
       promoMinor={0}
+      promoCodeId={null}
       promoCode={null}
       lowBalanceMode={overrides.lowBalanceMode ?? 'keep_going'}
       paymentMethodSource={source}
@@ -63,9 +66,10 @@ function renderAction(overrides: {
       buildStartInput={buildStartInput}
       onComplete={onComplete}
       onUseDifferentCard={onUseDifferentCard}
+      onCardDeclined={onCardDeclined}
     />
   );
-  return { onComplete, onUseDifferentCard };
+  return { onComplete, onUseDifferentCard, onCardDeclined };
 }
 
 describe('PayAction', () => {
@@ -351,6 +355,22 @@ describe('PayAction', () => {
     // about the buyer's money.
     expect(alert).not.toHaveTextContent(/no charge was made/i);
     expect(alert).toHaveTextContent(/check your balance before trying again/i);
+  });
+
+  it('fires onCardDeclined on a decline so the idempotency key rotates (no cached-402 replay)', async () => {
+    // Stripe caches a 402 card_declined against the idempotency key for 24h — the endpoint DID
+    // execute. Without rotation, pressing Pay again on the same configuration returns the
+    // cached decline without contacting the issuer, making soft declines permanent.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: false,
+      error: 'card_declined',
+      declineCode: 'insufficient_funds',
+    });
+    const { onCardDeclined } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(onCardDeclined).toHaveBeenCalledTimes(1);
   });
 
   it('offers no "Use a different card" escape on a non-decline failure', async () => {

@@ -162,10 +162,14 @@ export async function createMandateSetupIntent(walletId: string): Promise<SetupI
  * card we already hold. `succeeded` ⇒ nothing for the browser to do (the webhook activates it);
  * `requires_action` ⇒ the returned secret runs 3DS.
  */
-export async function confirmSavedCardMandate(walletId: string): Promise<SavedCardMandateResult> {
+export async function confirmSavedCardMandate(
+  walletId: string,
+  clientRequestId: string
+): Promise<SavedCardMandateResult> {
   return postInternal<SavedCardMandateResult>('/credit/setup-intent', {
     walletId,
     paymentMethodSource: 'saved_card',
+    clientRequestId,
   });
 }
 

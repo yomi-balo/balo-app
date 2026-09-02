@@ -39,12 +39,13 @@ describe('notificationEvents.publish', () => {
   });
 
   it('sanitises colons out of the jobId — BullMQ rejects them outright', async () => {
-    // The regression this pins: every credit correlationId IS a ledger idempotency key, and
-    // those are colon-joined (`manual_purchase:{piId}`). BullMQ throws "Custom Id cannot
-    // contain :" on such an id, so EVERY credit publish failed — no top-up receipt, dunning
-    // notice or settlement notification was ever delivered. It surfaced only as a best-effort
-    // log line beside an already-committed money effect, which is why it went unnoticed.
-    // The existing cases above all use colon-free ids, so they could never have caught it.
+    // The regression this pins: credit correlationIds ARE ledger idempotency keys, and those
+    // are colon-joined (`manual_purchase:{piId}`). BullMQ rejects a jobId whose colon count is
+    // not 0 or exactly 2 (a legacy repeatable-job carve-out — see toJobId's docblock), so the
+    // one-colon and 3+-colon shapes had never delivered a notification; it surfaced only as a
+    // best-effort log line beside an already-committed money effect, which is why it went
+    // unnoticed. The pre-existing cases above all use colon-free ids, so they could never
+    // have caught it.
     await notificationEvents.publish('credit.topup.completed', {
       correlationId: 'manual_purchase:pi_3UB4aV2NflDPoiWN0G8yaIxz',
     } as never);

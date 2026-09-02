@@ -39,10 +39,10 @@ describe('useTopUpCreditPoll — cadence', () => {
 
     // ⚠ THE HONEST FIRST PAINT. The webhook is asynchronous by design, so "not confirmed yet"
     // is the normal case — and no figure is asserted before a read lands.
-    expect(result.current).toEqual({ status: 'pending', balanceMinor: null });
+    expect(result.current).toEqual({ status: 'pending', balanceMinor: null, promoGranted: null });
 
     await waitFor(() => expect(mockGetStatus).toHaveBeenCalledTimes(1));
-    expect(mockGetStatus).toHaveBeenCalledWith('pi_1');
+    expect(mockGetStatus).toHaveBeenCalledWith('pi_1', null);
   });
 
   it('re-arms on a SELF-RE-ARMING timeout at the fast cadence for the first five scheduled reads', async () => {
@@ -112,7 +112,11 @@ describe('useTopUpCreditPoll — cadence', () => {
 
 describe('useTopUpCreditPoll — terminal states', () => {
   it('stops permanently on credited, and surfaces the SERVER balance', async () => {
-    mockGetStatus.mockResolvedValue({ status: 'credited', balanceMinor: 137_500 });
+    mockGetStatus.mockResolvedValue({
+      status: 'credited',
+      balanceMinor: 137_500,
+      promoGranted: null,
+    });
     const { result } = renderHook(() => useTopUpCreditPoll('pi_1'));
 
     await waitFor(() => expect(result.current.status).toBe('credited'));
@@ -198,7 +202,7 @@ describe('useTopUpCreditPoll — failures never lie', () => {
     mockGetStatus
       .mockResolvedValueOnce({ status: 'error' })
       .mockResolvedValueOnce({ status: 'error' })
-      .mockResolvedValue({ status: 'credited', balanceMinor: 100_000 });
+      .mockResolvedValue({ status: 'credited', balanceMinor: 100_000, promoGranted: null });
     const { result } = renderHook(() => useTopUpCreditPoll('pi_1'));
 
     await waitFor(() => expect(mockGetStatus).toHaveBeenCalledTimes(1));
@@ -206,7 +210,11 @@ describe('useTopUpCreditPoll — failures never lie', () => {
       await vi.advanceTimersByTimeAsync(TOPUP_POLL_FAST_INTERVAL_MS * 2);
     });
 
-    expect(result.current).toEqual({ status: 'credited', balanceMinor: 100_000 });
+    expect(result.current).toEqual({
+      status: 'credited',
+      balanceMinor: 100_000,
+      promoGranted: null,
+    });
   });
 });
 
@@ -232,7 +240,11 @@ describe('useTopUpCreditPoll — visibility', () => {
   });
 
   it('a visibility event after a terminal answer is a no-op', async () => {
-    mockGetStatus.mockResolvedValue({ status: 'credited', balanceMinor: 100_000 });
+    mockGetStatus.mockResolvedValue({
+      status: 'credited',
+      balanceMinor: 100_000,
+      promoGranted: null,
+    });
     const { result } = renderHook(() => useTopUpCreditPoll('pi_1'));
     await waitFor(() => expect(result.current.status).toBe('credited'));
 

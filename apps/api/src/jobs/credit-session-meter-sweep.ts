@@ -426,18 +426,26 @@ async function runSettledMissingCreditPass(
       'Settled-without-credit batch FILLED — further corrupted sessions were dropped from this tick'
     );
   }
-  for (const session of sessions) {
-    log(`settled with NO overdraft_settlement ledger credit: session ${session.id}`);
+  if (sessions.length > 0) {
+    // ONE error per TICK, not per row. The sweep runs every minute forever, and each corrupted
+    // row needs a HUMAN (a Stripe Dashboard resend) — per-row errors turned one stuck row into
+    // 1,440 identical error records a day (Pino → Axiom; Sentry has no log integration here)
+    // while adding nothing a responder can act on. The per-session identifiers all ride in the
+    // single record's `sessions` array.
+    log(`settled with NO overdraft_settlement ledger credit: ${sessions.length} session(s)`);
     logger.error(
       {
-        sessionId: session.id,
-        walletId: session.walletId,
-        companyId: session.companyId,
-        settledAt: session.settledAt,
-        overdraftSettledMinor: session.overdraftSettledMinor,
-        stripePaymentIntentId: session.stripePaymentIntentId,
+        count: sessions.length,
+        sessions: sessions.map((session) => ({
+          sessionId: session.id,
+          walletId: session.walletId,
+          companyId: session.companyId,
+          settledAt: session.settledAt,
+          overdraftSettledMinor: session.overdraftSettledMinor,
+          stripePaymentIntentId: session.stripePaymentIntentId,
+        })),
       },
-      'Session is marked settled but has NO overdraft_settlement ledger credit — money charged, wallet never credited, receivable cleared; recover by resending the payment_intent.succeeded event from the Stripe Dashboard'
+      'Sessions are marked settled with NO overdraft_settlement ledger credit — money charged, wallet never credited, receivable cleared; recover by resending each payment_intent.succeeded from the Stripe Dashboard'
     );
   }
   return sessions.length;

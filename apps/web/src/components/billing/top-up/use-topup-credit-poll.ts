@@ -66,15 +66,26 @@ export interface TopUpCreditPollState {
   readonly status: TopUpCreditPollStatus;
   /** The wallet's own balance from the last SUCCESSFUL read; `null` until one lands. */
   readonly balanceMinor: number | null;
+  /**
+   * Whether THIS purchase's promo grant is in the ledger — `null` until the credited answer
+   * lands (or when no promo was expected). The webhook can SKIP the grant at settlement while
+   * the base credit lands, so the receipt renders the bonus row off this answer, never off
+   * apply-time state.
+   */
+  readonly promoGranted: boolean | null;
 }
 
 function isDocumentVisible(): boolean {
   return globalThis.document?.visibilityState !== 'hidden';
 }
 
-export function useTopUpCreditPoll(paymentIntentId: string): TopUpCreditPollState {
+export function useTopUpCreditPoll(
+  paymentIntentId: string,
+  promoCodeId: string | null = null
+): TopUpCreditPollState {
   const [status, setStatus] = useState<TopUpCreditPollStatus>('pending');
   const [balanceMinor, setBalanceMinor] = useState<number | null>(null);
+  const [promoGranted, setPromoGranted] = useState<boolean | null>(null);
 
   const isMountedRef = useRef(true);
   const stoppedRef = useRef(false);
@@ -129,6 +140,7 @@ export function useTopUpCreditPoll(paymentIntentId: string): TopUpCreditPollStat
 
       if (result.status === 'credited') {
         setBalanceMinor(result.balanceMinor);
+        setPromoGranted(result.promoGranted);
         stop('credited');
         return;
       }
@@ -151,14 +163,14 @@ export function useTopUpCreditPoll(paymentIntentId: string): TopUpCreditPollStat
   const tick = useCallback((): void => {
     // ⚠ DELIBERATELY NOT `void`-PREFIXED (SonarCloud S3735 / this repo's shipped position —
     // see `use-drawdown-poll.ts`).
-    getTopUpCreditStatusAction(paymentIntentId)
+    getTopUpCreditStatusAction(paymentIntentId, promoCodeId)
       .then(applyResult)
       .catch(() => {
         // ⚠ THE TRANSPORT ARM. A Server Action can reject before any server answers. Spend a
         // tick exactly like `{ status: 'error' }` — same reasoning, same non-claim.
         applyResult({ status: 'error' });
       });
-  }, [paymentIntentId, applyResult]);
+  }, [paymentIntentId, promoCodeId, applyResult]);
 
   useEffect(() => {
     tickRef.current = tick;
@@ -172,6 +184,7 @@ export function useTopUpCreditPoll(paymentIntentId: string): TopUpCreditPollStat
     deadlineRef.current = Date.now() + TOPUP_POLL_WINDOW_MS;
     setStatus('pending');
     setBalanceMinor(null);
+    setPromoGranted(null);
     tickRef.current();
     return () => {
       isMountedRef.current = false;
@@ -197,5 +210,5 @@ export function useTopUpCreditPoll(paymentIntentId: string): TopUpCreditPollStat
     return () => globalThis.document?.removeEventListener('visibilitychange', onVisibilityChange);
   }, [clearTimer]);
 
-  return { status, balanceMinor };
+  return { status, balanceMinor, promoGranted };
 }

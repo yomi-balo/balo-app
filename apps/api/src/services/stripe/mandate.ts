@@ -195,7 +195,10 @@ export interface SavedCardMandateResult {
  * card-backed mode". Throws when the wallet is missing or has no stored card — the caller gates
  * on `isWalletCardReusableOnSession` first.
  */
-export async function confirmSavedCardMandate(walletId: string): Promise<SavedCardMandateResult> {
+export async function confirmSavedCardMandate(
+  walletId: string,
+  clientRequestId: string
+): Promise<SavedCardMandateResult> {
   const wallet = await creditWalletsRepository.findById(walletId);
   if (wallet === undefined) {
     throw new Error(`Credit wallet not found: ${walletId}`);
@@ -207,15 +210,23 @@ export async function confirmSavedCardMandate(walletId: string): Promise<SavedCa
 
   const stripe = getStripeClient();
   try {
-    const setupIntent = await stripe.setupIntents.create({
-      customer: stripeCustomerId,
-      payment_method: stripePaymentMethodId,
-      usage: 'off_session',
-      confirm: true,
-      use_stripe_sdk: true,
-      return_url: resolveAppUrl('/billing/top-up'),
-      metadata: { walletId },
-    });
+    const setupIntent = await stripe.setupIntents.create(
+      {
+        customer: stripeCustomerId,
+        payment_method: stripePaymentMethodId,
+        usage: 'off_session',
+        confirm: true,
+        use_stripe_sdk: true,
+        return_url: resolveAppUrl('/billing/top-up'),
+        metadata: { walletId },
+      },
+      // Previously unkeyed, so a retried Server Action minted duplicate SetupIntents. Keyed on
+      // the purchase's clientRequestId so it inherits the composer's rotation (fresh per
+      // configuration AND per decline): a retry of the SAME attempt returns the same
+      // SetupIntent; a genuinely new attempt gets a new one. (`attachPaymentMethod` and
+      // `createSetupIntent` above remain unkeyed POSTs — pre-existing, out of this change.)
+      { idempotencyKey: `mandate-confirm:${walletId}:${clientRequestId}` }
+    );
 
     // Mark the attempt in flight. NOT the same posture as `createSetupIntent`, despite the
     // shape: that one does NOT confirm, so its intent cannot succeed until the user acts, and

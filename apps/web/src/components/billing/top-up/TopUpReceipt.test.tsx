@@ -25,6 +25,7 @@ function completion(overrides: Partial<PurchaseCompletion> = {}): PurchaseComple
     amountMinor: 100_000,
     promoMinor: 0,
     promoCode: null,
+    promoCodeId: null,
     lowBalanceMode: 'notify_only',
     mandateCaptured: false,
     paymentIntentId: 'pi_3QabcdefGHIJKL99',
@@ -70,7 +71,11 @@ describe('TopUpReceipt — ⚠ the defect: it must never assert a balance it did
     // 50,000 + 100,000 + 5,000 = 155,000. The server says 137,500 — e.g. a concurrent session
     // drawdown, or a promo skipped at settlement. The READ wins. This is the standing guard
     // against arithmetic creeping back in.
-    mockGetStatus.mockResolvedValue({ status: 'credited', balanceMinor: 137_500 });
+    mockGetStatus.mockResolvedValue({
+      status: 'credited',
+      balanceMinor: 137_500,
+      promoGranted: null,
+    });
     renderReceipt({ promoMinor: 5_000, promoCode: 'WELCOME50' });
 
     expect(await screen.findByText(/You're topped up/i)).toBeInTheDocument();
@@ -104,7 +109,7 @@ describe('TopUpReceipt — ⚠⚠ the chip fix: router.refresh on the confirmati
     try {
       mockGetStatus
         .mockResolvedValueOnce({ status: 'pending', balanceMinor: 50_000 })
-        .mockResolvedValue({ status: 'credited', balanceMinor: 150_000 });
+        .mockResolvedValue({ status: 'credited', balanceMinor: 150_000, promoGranted: null });
       renderReceipt();
 
       // First read lands: still pending, and still no refresh.
@@ -210,13 +215,47 @@ describe('TopUpReceipt — analytics', () => {
     await screen.findByText(/Payment received/i);
   });
 
+  it('⚠ a SKIPPED promo grant renders "didn\'t apply" and fires NO promo event', async () => {
+    // The webhook re-validates the promo at settlement and can skip the grant (expired or
+    // cap-exhausted between Apply and charge) while the base credit lands. The old receipt
+    // rendered "Promo bonus +A$X" off apply-time state regardless — the same class of
+    // assertion this screen exists to remove. `promoGranted` is the poll's read of the
+    // grant's own ledger key; only a TRUE earns the row and the analytics event.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockGetStatus.mockResolvedValue({
+        status: 'credited',
+        balanceMinor: 100_000, // base credit only — no bonus in the wallet
+        promoGranted: false,
+      });
+      renderReceipt({ promoMinor: 5_000, promoCode: 'WELCOME50', promoCodeId: 'promo-1' });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+
+      // ⚠ PINS THE THREAD ITSELF: the poll must ask WITH the promo id. Dropping the second
+      // argument compiles (the hook defaults it to null) and every other assertion stays green
+      // while the entire granted-check silently disables — this line is what makes that
+      // mutation fail.
+      expect(mockGetStatus).toHaveBeenCalledWith(expect.any(String), 'promo-1');
+      expect(screen.getByText(/didn't apply this time/i)).toBeInTheDocument();
+      expect(screen.queryByText(/\+A\$50/)).not.toBeInTheDocument();
+      expect(track).not.toHaveBeenCalledWith(CREDIT_EVENTS.PROMO_REDEEMED, expect.anything());
+      // The balance is still the server's own figure — already honest about the missing bonus.
+      expect(screen.getAllByText('A$1,000.00').length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('⚠ holds PROMO_REDEEMED until the credit is CONFIRMED (undercount beats overcount)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       mockGetStatus
         .mockResolvedValueOnce({ status: 'pending', balanceMinor: 0 })
-        .mockResolvedValue({ status: 'credited', balanceMinor: 105_000 });
-      renderReceipt({ promoMinor: 5_000, promoCode: 'WELCOME50' });
+        .mockResolvedValue({ status: 'credited', balanceMinor: 105_000, promoGranted: true });
+      renderReceipt({ promoMinor: 5_000, promoCode: 'WELCOME50', promoCodeId: 'promo-1' });
 
       // The bonus is re-validated at settlement and can be SKIPPED while the base purchase still
       // credits, so firing on mount overstated promo cost.
@@ -277,7 +316,7 @@ describe('TopUpReceipt — toasts', () => {
       mockGetStatus
         .mockResolvedValueOnce({ status: 'pending', balanceMinor: 0 })
         .mockResolvedValueOnce({ status: 'pending', balanceMinor: 0 })
-        .mockResolvedValue({ status: 'credited', balanceMinor: 100_000 });
+        .mockResolvedValue({ status: 'credited', balanceMinor: 100_000, promoGranted: null });
       renderReceipt();
 
       // Two pending ticks pass in silence — a poll must never narrate itself.

@@ -22,8 +22,15 @@ vi.mock('@balo/db', () => ({
   },
   // The REAL derivation shape — a stub that returned a constant would let a key regression
   // (`manual_purchase:{piId}`) pass unnoticed, and that key is the whole terminal condition.
-  deriveIdempotencyKey: (input: { reason: string; paymentIntentId?: string }) =>
-    `${input.reason}:${input.paymentIntentId ?? ''}`,
+  deriveIdempotencyKey: (input: {
+    reason: string;
+    paymentIntentId?: string;
+    walletId?: string;
+    promoCodeId?: string;
+  }) =>
+    input.reason === 'promo'
+      ? `promo:${input.walletId ?? ''}:${input.promoCodeId ?? ''}`
+      : `${input.reason}:${input.paymentIntentId ?? ''}`,
 }));
 
 const mockRequireUser = vi.fn();
@@ -193,24 +200,33 @@ describe('credit actions', () => {
         mandateStatus: 'active',
       });
       const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
-      // Opening a SetupIntent would flip a working mandate to 'pending'; and the live mandate
-      // was captured against the very card being charged, so it IS captured.
+      // The live mandate was captured against the very card being charged, so it IS captured
+      // and a SetupIntent would be pure churn. (saved_card ONLY — see the next case.)
       expect(res).toMatchObject({ ok: true, mandate: { outcome: 'captured' } });
       expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
     });
 
-    it('reports NOTHING captured when an active mandate belongs to a card being replaced', async () => {
-      // The webhook revokes the old card's mandate the moment a different card is persisted
-      // (`applySavedCardDisplay`). Claiming 'captured' here would tell the buyer automatic
-      // charging is on for a consent that is about to be cleared.
+    it('OPENS a SetupIntent for a NEW card even when the old card holds an active mandate', async () => {
+      // The regression this guards: `new_card` + active mandate used to return `not_required`,
+      // opening no SetupIntent for the new card — while the purchase webhook revokes the OLD
+      // card's mandate (a card change). Net effect: an auto-top-up client who paid with a new
+      // card silently lost auto-top-up (`mandate_status = NULL`), and the only signal was the
+      // receipt's small warning. Safe to open now: `applyMandateStatus` refuses
+      // active → pending, so the SetupIntent's pending write cannot downgrade the live mandate,
+      // and either webhook order converges on `active` for the new card.
       mockEnsureForCompany.mockResolvedValue({
         id: 'wallet-1',
         balanceMinor: 0,
         mandateStatus: 'active',
       });
+
       const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
-      expect(res).toMatchObject({ ok: true, mandate: { outcome: 'not_required' } });
-      expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
+
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+      expect(res).toMatchObject({
+        ok: true,
+        mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
+      });
     });
 
     it('omits the SetupIntent for notify_only (no mandate)', async () => {
@@ -314,7 +330,7 @@ describe('credit actions', () => {
       });
       const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
 
-      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith('wallet-1');
+      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith('wallet-1', CLIENT_REQUEST_ID);
       expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
       // `succeeded` ⇒ nothing for the browser to do; the webhook activates the mandate.
       expect(res).toMatchObject({ ok: true, mandate: { outcome: 'captured' } });
@@ -441,7 +457,12 @@ describe('credit actions', () => {
 
     it('returns the grant on a valid code', async () => {
       mockValidate.mockResolvedValue({ ok: true, promoCodeId: 'p1', grantMinor: 5_000 });
-      expect(await validatePromoAction('WELCOME50')).toEqual({ ok: true, grantMinor: 5_000 });
+      // promoCodeId rides along so the receipt can later ask whether the grant landed.
+      expect(await validatePromoAction('WELCOME50')).toEqual({
+        ok: true,
+        grantMinor: 5_000,
+        promoCodeId: 'p1',
+      });
     });
 
     it('passes through the specific failure reason', async () => {
@@ -532,7 +553,48 @@ describe('credit actions', () => {
       expect(await getTopUpCreditStatusAction('pi_1')).toEqual({
         status: 'credited',
         balanceMinor: 137_500,
+        promoGranted: null, // no promo asked about
       });
+    });
+
+    it('answers promoGranted TRUE only when the grant key is in the ledger', async () => {
+      // The settlement webhook re-validates the promo and can SKIP the grant while the base
+      // credit lands — so the receipt must ASK, not render the bonus off apply-time state.
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 105_000 });
+      const PROMO_ID = '550e8400-e29b-41d4-a716-446655440077';
+      mockFindByIdempotencyKey.mockImplementation((key: string) =>
+        key === 'manual_purchase:pi_1' || key === `promo:wallet-1:${PROMO_ID}`
+          ? { id: 'le', walletId: 'wallet-1' }
+          : undefined
+      );
+
+      const res = await getTopUpCreditStatusAction('pi_1', PROMO_ID);
+
+      expect(res).toEqual({ status: 'credited', balanceMinor: 105_000, promoGranted: true });
+      // The grant key is checked against the ACTOR's wallet — the wallet id is half the key.
+      expect(mockFindByIdempotencyKey).toHaveBeenCalledWith(`promo:wallet-1:${PROMO_ID}`);
+    });
+
+    it('answers promoGranted FALSE when the purchase credited but the grant was skipped', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 100_000 });
+      mockFindByIdempotencyKey.mockImplementation((key: string) =>
+        key === 'manual_purchase:pi_1' ? { id: 'le', walletId: 'wallet-1' } : undefined
+      );
+
+      const res = await getTopUpCreditStatusAction('pi_1', '550e8400-e29b-41d4-a716-446655440077');
+
+      expect(res).toEqual({ status: 'credited', balanceMinor: 100_000, promoGranted: false });
+    });
+
+    it('answers promoGranted FALSE (never an error) for a malformed promoCodeId', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 100_000 });
+      mockFindByIdempotencyKey.mockImplementation((key: string) =>
+        key === 'manual_purchase:pi_1' ? { id: 'le', walletId: 'wallet-1' } : undefined
+      );
+
+      const res = await getTopUpCreditStatusAction('pi_1', 'not-a-uuid');
+
+      expect(res).toMatchObject({ status: 'credited', promoGranted: false });
     });
 
     it('returns pending while the webhook has not posted the entry', async () => {

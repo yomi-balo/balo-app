@@ -410,7 +410,10 @@ describe('runSessionMeterSweep', () => {
       expect(mockLoggerError).not.toHaveBeenCalled();
     });
 
-    it('raises a per-row log.error naming the session, and counts every row', async () => {
+    it('raises ONE batched log.error per tick naming every session, and counts every row', async () => {
+      // Per-ROW errors turned one stuck row into 1,440 identical error records a day (the sweep
+      // is per-minute and each row needs a human resend). One record per tick carries the same
+      // identifiers without the flood.
       mockFindSettledMissingLedgerCredit.mockResolvedValue([
         corruptSession('s1'),
         corruptSession('s2'),
@@ -419,11 +422,26 @@ describe('runSessionMeterSweep', () => {
       const result = await runSessionMeterSweep(NOW);
 
       expect(result.settledMissingCredit).toBe(2);
-      expect(mockLoggerError).toHaveBeenCalledTimes(2);
+      expect(mockLoggerError).toHaveBeenCalledTimes(1);
       expect(mockLoggerError).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 's1', stripePaymentIntentId: 'pi_lost' }),
+        expect.objectContaining({
+          count: 2,
+          sessions: [
+            expect.objectContaining({ sessionId: 's1', stripePaymentIntentId: 'pi_lost' }),
+            expect.objectContaining({ sessionId: 's2', stripePaymentIntentId: 'pi_lost' }),
+          ],
+        }),
         expect.stringContaining('NO overdraft_settlement ledger credit')
       );
+    });
+
+    it('stays SILENT on a clean tick — no empty-batch error record', async () => {
+      mockFindSettledMissingLedgerCredit.mockResolvedValue([]);
+
+      const result = await runSessionMeterSweep(NOW);
+
+      expect(result.settledMissingCredit).toBe(0);
+      expect(mockLoggerError).not.toHaveBeenCalled();
     });
 
     /**

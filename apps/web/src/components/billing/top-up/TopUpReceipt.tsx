@@ -62,10 +62,17 @@ export function TopUpReceipt({
   const router = useRouter();
   const mountFired = useRef(false);
   const creditedFired = useRef(false);
-  const { amountMinor, promoMinor, promoCode, lowBalanceMode, mandateCaptured, paymentIntentId } =
-    completion;
+  const {
+    amountMinor,
+    promoMinor,
+    promoCode,
+    promoCodeId,
+    lowBalanceMode,
+    mandateCaptured,
+    paymentIntentId,
+  } = completion;
 
-  const { status, balanceMinor } = useTopUpCreditPoll(paymentIntentId);
+  const { status, balanceMinor, promoGranted } = useTopUpCreditPoll(paymentIntentId, promoCodeId);
   /** ⚠ ALWAYS THE SERVER'S FIGURE ONCE ONE EXISTS. The placeholder never becomes an addend. */
   const shownBalanceMinor = balanceMinor ?? previousBalanceMinor;
 
@@ -109,17 +116,18 @@ export function TopUpReceipt({
     if (status !== 'credited' || creditedFired.current) return;
     creditedFired.current = true;
 
-    // ⚠ MOVED OFF MOUNT DELIBERATELY. The promo is re-validated at settlement and can be SKIPPED
-    // while the base purchase still credits, so firing this on mount overstated promo cost.
-    // Undercount beats overcount for granted money.
-    if (promoMinor > 0 && promoCode) {
+    // ⚠ FIRES ONLY ON A LEDGER-CONFIRMED GRANT. The promo is re-validated at settlement and can
+    // be SKIPPED while the base purchase still credits, so `credited` alone is not enough —
+    // `promoGranted` is the poll's read of the grant's own ledger key. Undercount beats
+    // overcount for granted money.
+    if (promoMinor > 0 && promoCode && promoGranted === true) {
       track(CREDIT_EVENTS.PROMO_REDEEMED, { code: promoCode, bonus_minor: promoMinor });
     }
     toast.success(`${formatAud(amountMinor)} is in your balance.`);
     // Re-runs the `(dashboard)` layout → `CreditsChipSlot` → `loadTopBarWalletData`, so the
     // top-bar chip repaints from the same uncached read this receipt just confirmed against.
     router.refresh();
-  }, [status, amountMinor, promoMinor, promoCode, router]);
+  }, [status, amountMinor, promoMinor, promoCode, promoGranted, router]);
 
   const credited = status === 'credited';
 
@@ -148,6 +156,7 @@ export function TopUpReceipt({
           status={status}
           amountMinor={amountMinor}
           promoMinor={promoMinor}
+          promoGranted={promoGranted}
           balanceMinor={shownBalanceMinor}
         />
       </div>
@@ -255,6 +264,7 @@ interface RowsProps {
   readonly status: TopUpCreditPollStatus;
   readonly amountMinor: number;
   readonly promoMinor: number;
+  readonly promoGranted: boolean | null;
   readonly balanceMinor: number;
 }
 
@@ -287,12 +297,26 @@ function ReceiptRow({
  * READ — never `previous + amount + promo`. The other two states show "Balance right now", which
  * is a statement about the present, not a claim about this purchase.
  */
-function ReceiptRows({ status, amountMinor, promoMinor, balanceMinor }: Readonly<RowsProps>) {
+function ReceiptRows({
+  status,
+  amountMinor,
+  promoMinor,
+  promoGranted,
+  balanceMinor,
+}: Readonly<RowsProps>) {
   if (status === 'credited') {
+    // ⚠ THE PROMO ROW RENDERS ONLY OFF THE LEDGER'S ANSWER. `promoMinor > 0` is apply-time
+    // state; the grant is re-validated at settlement and can be skipped (expired or
+    // cap-exhausted between Apply and charge) while the base credit lands. Rendering
+    // "+A$X bonus" off the composer's state was the same class of lie this screen exists to
+    // remove — the New balance below is a server read and already tells the truth either way.
     return (
       <>
         <ReceiptRow label="Added to balance" value={formatAud(amountMinor)} />
-        {promoMinor > 0 && <PromoRow promoMinor={promoMinor} />}
+        {promoMinor > 0 && promoGranted === true && <PromoRow promoMinor={promoMinor} />}
+        {promoMinor > 0 && promoGranted === false && (
+          <ReceiptRow label="Promo bonus" value="didn't apply this time" />
+        )}
         <ReceiptRow label="New balance" value={formatAud(balanceMinor)} emphasis />
       </>
     );

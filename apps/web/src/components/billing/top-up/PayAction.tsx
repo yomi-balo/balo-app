@@ -20,6 +20,7 @@ interface PayActionProps {
   readonly amountMinor: number;
   readonly promoMinor: number;
   readonly promoCode: string | null;
+  readonly promoCodeId: string | null;
   readonly lowBalanceMode: StartPurchaseInput['config']['lowBalanceMode'];
   readonly paymentMethodSource: PaymentMethodSource;
   /**
@@ -34,6 +35,14 @@ interface PayActionProps {
   readonly onComplete: (completion: PurchaseCompletion) => void;
   /** Offer "Use a different card" after a decline — flips the composer to the new-card path. */
   readonly onUseDifferentCard: () => void;
+  /**
+   * Fired on `card_declined` so the OWNER of `clientRequestId` can rotate it. Without the
+   * rotation, retrying the same configuration replays Stripe's CACHED 402 against the same
+   * idempotency key for 24h — the issuer is never contacted again, so `insufficient_funds`
+   * or a soft fraud decline becomes permanent for that amount/card until the buyer happens
+   * to change something. The composer owns the key, so the composer does the rotating.
+   */
+  readonly onCardDeclined: () => void;
 }
 
 /**
@@ -78,6 +87,7 @@ export function PayAction({
   amountMinor,
   promoMinor,
   promoCode,
+  promoCodeId,
   lowBalanceMode,
   paymentMethodSource,
   disabled = false,
@@ -85,6 +95,7 @@ export function PayAction({
   buildStartInput,
   onComplete,
   onUseDifferentCard,
+  onCardDeclined,
 }: Readonly<PayActionProps>) {
   const stripe = useStripe();
   const elements = useElements();
@@ -221,6 +232,9 @@ export function PayAction({
     (start: StartFailure) => {
       if (start.error === 'card_declined') {
         setDeclined(true);
+        // Rotate the idempotency key NOW, not at retry time: the decline is already cached
+        // against the current key, so the very next Pay press must carry a fresh one.
+        onCardDeclined();
         track(CREDIT_EVENTS.PURCHASE_DECLINED, {
           amount_minor: amountMinor,
           decline_code: start.declineCode ?? null,
@@ -228,7 +242,7 @@ export function PayAction({
       }
       fail(START_ERROR_COPY[start.error] ?? START_ERROR_COPY.stripe_error ?? null);
     },
-    [amountMinor, fail]
+    [amountMinor, fail, onCardDeclined]
   );
 
   const onPay = useCallback(async () => {
@@ -274,6 +288,7 @@ export function PayAction({
       amountMinor,
       promoMinor,
       promoCode,
+      promoCodeId,
       lowBalanceMode,
       mandateCaptured,
       paymentIntentId: start.paymentIntentId,
@@ -286,6 +301,7 @@ export function PayAction({
     amountMinor,
     promoMinor,
     promoCode,
+    promoCodeId,
     lowBalanceMode,
     paymentMethodSource,
     buildStartInput,

@@ -18,7 +18,7 @@ describe('PromoField', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('applies a valid code and reports the bonus to the parent', async () => {
-    mockValidate.mockResolvedValue({ ok: true, grantMinor: 5_000 });
+    mockValidate.mockResolvedValue({ ok: true, grantMinor: 5_000, promoCodeId: 'promo-1' });
     const onApplied = vi.fn();
     render(<PromoField promo={null} onApplied={onApplied} onRemoved={vi.fn()} />);
 
@@ -27,7 +27,11 @@ describe('PromoField', () => {
     await userEvent.click(screen.getByRole('button', { name: /apply/i }));
 
     expect(mockValidate).toHaveBeenCalledWith('WELCOME50');
-    expect(onApplied).toHaveBeenCalledWith({ code: 'WELCOME50', minor: 5_000 });
+    expect(onApplied).toHaveBeenCalledWith({
+      code: 'WELCOME50',
+      minor: 5_000,
+      promoCodeId: 'promo-1',
+    });
   });
 
   it('shows a per-reason error line on a failed code without blocking', async () => {
@@ -104,7 +108,7 @@ describe('PromoField', () => {
   it('never collapses the applied green row', () => {
     render(
       <PromoField
-        promo={{ code: 'WELCOME50', minor: 5_000 }}
+        promo={{ code: 'WELCOME50', minor: 5_000, promoCodeId: 'promo-1' }}
         onApplied={vi.fn()}
         onRemoved={vi.fn()}
       />
@@ -117,7 +121,7 @@ describe('PromoField', () => {
     const onRemoved = vi.fn();
     render(
       <PromoField
-        promo={{ code: 'WELCOME50', minor: 5_000 }}
+        promo={{ code: 'WELCOME50', minor: 5_000, promoCodeId: 'promo-1' }}
         onApplied={vi.fn()}
         onRemoved={onRemoved}
       />

@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import * as Sentry from '@sentry/node';
 import { log as sharedLogger } from '@balo/shared/logging';
@@ -27,8 +27,19 @@ export async function buildApp(opts?: { logger?: boolean }) {
   // Fastify's own request logs AND the 500s captured by the error handler below did not: a
   // request that blew up was searchable nowhere. Passing the shared instance puts both on one
   // pipeline, and applies the redaction to request logs too.
-  // `??` (not `||`) so tests passing `logger: false` still get a silent app.
-  const fastify = Fastify({ logger: opts?.logger ?? sharedLogger, trustProxy: 1 });
+  //
+  // ⚠ The instance MUST go in `loggerInstance`, not `logger`. Fastify 5 rejects a logger
+  // instance under `logger` with FST_ERR_LOG_INVALID_LOGGER_CONFIG — thrown from the Fastify()
+  // call itself, which in `index.ts` sits above the try/catch: i.e. a crash loop on boot. CI
+  // never saw it because every test passes `logger: false` and only the production entrypoint
+  // calls `buildApp()` bare; `app.test.ts` now pins that default path.
+  // ONE Fastify() call over a typed options value: calling it separately per branch
+  // instantiates two different logger generics whose union TS cannot use.
+  const serverOptions: FastifyServerOptions =
+    opts?.logger === false
+      ? { logger: false, trustProxy: 1 }
+      : { loggerInstance: sharedLogger, trustProxy: 1 };
+  const fastify = Fastify(serverOptions);
 
   await fastify.register(cors, {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',

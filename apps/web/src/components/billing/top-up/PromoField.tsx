@@ -11,6 +11,8 @@ import { formatAudShort } from '@/lib/credit/display-constants';
 export interface AppliedPromo {
   code: string;
   minor: number;
+  /** The promo's UUID — later half of the grant's ledger key, for the receipt's granted check. */
+  promoCodeId: string;
 }
 
 interface PromoFieldProps {
@@ -76,7 +78,7 @@ export function PromoField({ promo, onApplied, onRemoved }: Readonly<PromoFieldP
     try {
       const result = await validatePromoAction(code);
       if (result.ok) {
-        onApplied({ code, minor: result.grantMinor });
+        onApplied({ code, minor: result.grantMinor, promoCodeId: result.promoCodeId });
         setValue('');
       } else {
         setError(REASON_COPY[result.reason]);

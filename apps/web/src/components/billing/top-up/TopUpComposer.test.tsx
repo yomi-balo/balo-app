@@ -108,6 +108,7 @@ describe('TopUpComposer', () => {
     vi.mocked(getTopUpCreditStatusAction).mockResolvedValue({
       status: 'credited',
       balanceMinor: 150_000,
+      promoGranted: null,
     });
   });
 
@@ -189,6 +190,25 @@ describe('TopUpComposer', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /keep visa •••• 4242 instead/i }));
     expect(await pressPayAndReadRequestId()).not.toBe(second);
+  });
+
+  it('REGENERATES the clientRequestId after a card DECLINE (no cached-402 replay)', async () => {
+    // Stripe caches a 402 card_declined against the idempotency key for 24h — the endpoint DID
+    // execute, so a retry under the same key returns the cached decline without contacting the
+    // issuer. insufficient_funds / try-again-later declines would be permanent for this
+    // configuration. Contrast with the stability test above: a `stripe_error` retry keeps the
+    // SAME key on purpose (Stripe should dedup a transient failure) — only a DECLINE rotates.
+    render(<TopUpComposer wallet={wallet({ savedCard: SAVED_CARD })} fx={null} />);
+    vi.mocked(startPurchaseAction).mockResolvedValue({
+      ok: false,
+      error: 'card_declined',
+      declineCode: 'insufficient_funds',
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^Pay A\$/i }));
+    const declined = vi.mocked(startPurchaseAction).mock.calls.at(-1)?.[0].clientRequestId;
+    expect(declined).toBeTruthy();
+
+    expect(await pressPayAndReadRequestId()).not.toBe(declined);
   });
 
   // ── Saved card ────────────────────────────────────────────────────────────
@@ -301,6 +321,7 @@ describe('TopUpComposer', () => {
     vi.mocked(getTopUpCreditStatusAction).mockResolvedValue({
       status: 'credited',
       balanceMinor: 137_500,
+      promoGranted: null,
     });
     render(
       <TopUpComposer
@@ -311,7 +332,9 @@ describe('TopUpComposer', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^Pay A\$/i }));
 
-    await waitFor(() => expect(getTopUpCreditStatusAction).toHaveBeenCalledWith('pi_threaded'));
+    await waitFor(() =>
+      expect(getTopUpCreditStatusAction).toHaveBeenCalledWith('pi_threaded', null)
+    );
     expect(await screen.findByText(/You're topped up/i)).toBeInTheDocument();
     expect(screen.getAllByText('A$1,375.00').length).toBeGreaterThan(0);
     // The old client arithmetic would have rendered this instead.

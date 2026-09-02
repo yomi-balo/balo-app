@@ -111,7 +111,7 @@ describe('credit api-client', () => {
   it('confirms a mandate against the STORED card on the same route', async () => {
     mockLoggedFetch.mockResolvedValue(jsonResponse({ status: 'succeeded', clientSecret: null }));
 
-    const result = await confirmSavedCardMandate('wallet-1');
+    const result = await confirmSavedCardMandate('wallet-1', 'req-1');
 
     expect(result).toEqual({ status: 'succeeded', clientSecret: null });
     const [url, init] = mockLoggedFetch.mock.calls[0] as [string, { body: string }];
@@ -119,6 +119,8 @@ describe('credit api-client', () => {
     expect(JSON.parse(init.body)).toEqual({
       walletId: 'wallet-1',
       paymentMethodSource: 'saved_card',
+      // Keys the SetupIntent's Stripe idempotency — inherits the composer's per-decline rotation.
+      clientRequestId: 'req-1',
     });
   });
 

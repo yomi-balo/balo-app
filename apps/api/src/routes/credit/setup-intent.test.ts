@@ -81,16 +81,33 @@ describe('POST /credit/setup-intent', () => {
     expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
   });
 
-  it('confirms the mandate against the STORED card when paymentMethodSource is saved_card', async () => {
-    mockConfirmSavedCardMandate.mockResolvedValue({ status: 'succeeded', clientSecret: null });
+  it('rejects saved_card WITHOUT a clientRequestId — the SetupIntent create must be keyed', async () => {
     const res = await inject(
       { walletId: WALLET_ID, paymentMethodSource: 'saved_card' },
       { 'x-internal-api-key': TEST_SECRET }
     );
 
+    expect(res.statusCode).toBe(400);
+    expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+  });
+
+  it('confirms the mandate against the STORED card when paymentMethodSource is saved_card', async () => {
+    mockConfirmSavedCardMandate.mockResolvedValue({ status: 'succeeded', clientSecret: null });
+    const res = await inject(
+      {
+        walletId: WALLET_ID,
+        paymentMethodSource: 'saved_card',
+        clientRequestId: '22222222-2222-4222-8222-222222222222',
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ status: 'succeeded', clientSecret: null });
-    expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith(WALLET_ID);
+    expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith(
+      WALLET_ID,
+      '22222222-2222-4222-8222-222222222222'
+    );
     // The buyer already gave us this card — never make them re-enter it.
     expect(mockCreateSetupIntent).not.toHaveBeenCalled();
   });
@@ -101,7 +118,11 @@ describe('POST /credit/setup-intent', () => {
       clientSecret: 'seti_3ds_secret',
     });
     const res = await inject(
-      { walletId: WALLET_ID, paymentMethodSource: 'saved_card' },
+      {
+        walletId: WALLET_ID,
+        paymentMethodSource: 'saved_card',
+        clientRequestId: '22222222-2222-4222-8222-222222222222',
+      },
       { 'x-internal-api-key': TEST_SECRET }
     );
     expect(res.json()).toEqual({ status: 'requires_action', clientSecret: 'seti_3ds_secret' });

@@ -191,7 +191,7 @@ describe('mandate', () => {
         client_secret: 'seti_1_secret',
       });
 
-      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+      await expect(confirmSavedCardMandate('wallet_1', 'req-1')).resolves.toEqual({
         status: 'succeeded',
         clientSecret: null,
       });
@@ -202,7 +202,8 @@ describe('mandate', () => {
           usage: 'off_session',
           confirm: true,
           metadata: { walletId: 'wallet_1' },
-        })
+        }),
+        { idempotencyKey: 'mandate-confirm:wallet_1:req-1' }
       );
       expect(mockApplyMandateStatus).toHaveBeenCalledWith(
         { __brand: 'mock-db' },
@@ -215,13 +216,20 @@ describe('mandate', () => {
       mockFindById.mockResolvedValue(savedCardWallet);
       mockStripe.setupIntents.create.mockResolvedValue({ id: 'seti_1', status: 'succeeded' });
 
-      await confirmSavedCardMandate('wallet_1');
+      await confirmSavedCardMandate('wallet_1', 'req-1');
 
-      const [params] = mockStripe.setupIntents.create.mock.calls[0] as [Record<string, unknown>];
+      const [params, options] = mockStripe.setupIntents.create.mock.calls[0] as [
+        Record<string, unknown>,
+        Record<string, unknown>,
+      ];
       // `usage: 'off_session'` (what the mandate is FOR) is present; `off_session` (whether the
       // buyer is here) must NOT be — it would turn a completable 3DS into a hard failure.
       expect(params).not.toHaveProperty('off_session');
       expect(params.usage).toBe('off_session');
+      // And the create is IDEMPOTENT on the purchase's clientRequestId — a retried Server
+      // Action returns the same SetupIntent instead of minting duplicates, while the
+      // composer's per-decline rotation still makes a genuinely new attempt a new intent.
+      expect(options).toEqual({ idempotencyKey: 'mandate-confirm:wallet_1:req-1' });
     });
 
     it('returns the client secret for a 3DS challenge (requires_action)', async () => {
@@ -232,7 +240,7 @@ describe('mandate', () => {
         client_secret: 'seti_2_secret',
       });
 
-      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+      await expect(confirmSavedCardMandate('wallet_1', 'req-1')).resolves.toEqual({
         status: 'requires_action',
         clientSecret: 'seti_2_secret',
       });
@@ -242,7 +250,7 @@ describe('mandate', () => {
       mockFindById.mockResolvedValue(savedCardWallet);
       mockStripe.setupIntents.create.mockRejectedValue(new Error('card declined'));
 
-      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+      await expect(confirmSavedCardMandate('wallet_1', 'req-1')).resolves.toEqual({
         status: 'failed',
         clientSecret: null,
       });
@@ -256,7 +264,7 @@ describe('mandate', () => {
         client_secret: 'seti_3_secret',
       });
 
-      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+      await expect(confirmSavedCardMandate('wallet_1', 'req-1')).resolves.toEqual({
         status: 'failed',
         clientSecret: null,
       });
@@ -266,13 +274,13 @@ describe('mandate', () => {
       mockFindById.mockResolvedValue(
         walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1', stripePaymentMethodId: null })
       );
-      await expect(confirmSavedCardMandate('wallet_1')).rejects.toThrow(/no stored card/);
+      await expect(confirmSavedCardMandate('wallet_1', 'req-1')).rejects.toThrow(/no stored card/);
       expect(mockStripe.setupIntents.create).not.toHaveBeenCalled();
     });
 
     it('throws when the wallet does not exist', async () => {
       mockFindById.mockResolvedValue(undefined);
-      await expect(confirmSavedCardMandate('missing')).rejects.toThrow(/not found/);
+      await expect(confirmSavedCardMandate('missing', 'req-1')).rejects.toThrow(/not found/);
     });
   });
 });
