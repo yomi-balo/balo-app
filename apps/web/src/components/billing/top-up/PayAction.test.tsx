@@ -1,0 +1,388 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+// ── Stripe.js mocks ──────────────────────────────────────────────────────────
+
+const mockConfirmPayment = vi.fn();
+const mockConfirmSetup = vi.fn();
+const mockHandleNextAction = vi.fn();
+const mockSubmit = vi.fn();
+const mockUpdate = vi.fn();
+
+vi.mock('@stripe/react-stripe-js', () => ({
+  useStripe: () => ({
+    confirmPayment: mockConfirmPayment,
+    confirmSetup: mockConfirmSetup,
+    handleNextAction: mockHandleNextAction,
+  }),
+  useElements: () => ({ submit: mockSubmit, update: mockUpdate }),
+}));
+
+const mockStartPurchaseAction = vi.fn();
+vi.mock('@/lib/credit/actions', () => ({
+  startPurchaseAction: (...args: unknown[]) => mockStartPurchaseAction(...args),
+}));
+
+import { PayAction } from './PayAction';
+import { track, CREDIT_EVENTS } from '@/lib/analytics';
+import type { StartPurchaseInput, LowBalanceMode } from '@/lib/credit/actions';
+import type { PaymentMethodSource } from '@/lib/credit/api-client';
+import type { PurchaseCompletion } from './types';
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+function renderAction(overrides: {
+  lowBalanceMode?: LowBalanceMode;
+  paymentMethodSource?: PaymentMethodSource;
+  onComplete?: (c: PurchaseCompletion) => void;
+  onUseDifferentCard?: () => void;
+  disabled?: boolean;
+}) {
+  const onComplete = overrides.onComplete ?? vi.fn();
+  const onUseDifferentCard = overrides.onUseDifferentCard ?? vi.fn();
+  const source = overrides.paymentMethodSource ?? 'new_card';
+  const buildStartInput = (): StartPurchaseInput => ({
+    amountMinor: 100_000,
+    clientRequestId: '550e8400-e29b-41d4-a716-446655440002',
+    config: {
+      lowBalanceMode: overrides.lowBalanceMode ?? 'keep_going',
+      topupReloadMinor: 30_000,
+      topupThresholdMinor: 5_000,
+    },
+    paymentMethodSource: source,
+  });
+  render(
+    <PayAction
+      amountMinor={100_000}
+      promoMinor={0}
+      promoCode={null}
+      lowBalanceMode={overrides.lowBalanceMode ?? 'keep_going'}
+      paymentMethodSource={source}
+      disabled={overrides.disabled}
+      buildStartInput={buildStartInput}
+      onComplete={onComplete}
+      onUseDifferentCard={onUseDifferentCard}
+    />
+  );
+  return { onComplete, onUseDifferentCard };
+}
+
+describe('PayAction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSubmit.mockResolvedValue({});
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'needs_client_confirmation',
+      clientSecret: 'pi_secret',
+      paymentIntentId: 'pi_1',
+      mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
+      walletId: 'wallet-1',
+    });
+    mockConfirmPayment.mockResolvedValue({
+      paymentIntent: { status: 'succeeded', payment_method: 'pm_123' },
+    });
+    mockConfirmSetup.mockResolvedValue({});
+    mockHandleNextAction.mockResolvedValue({});
+  });
+
+  // ── The four cases lifted from PaymentSection.test.tsx (the hoist regression net) ──
+
+  it('confirms the PaymentIntent THEN the SetupIntent with the saved payment method', async () => {
+    const { onComplete } = renderAction({ lowBalanceMode: 'keep_going' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+
+    expect(mockSubmit).toHaveBeenCalled();
+    expect(mockStartPurchaseAction).toHaveBeenCalled();
+    expect(mockConfirmPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientSecret: 'pi_secret',
+        redirect: 'if_required',
+        confirmParams: expect.objectContaining({ return_url: expect.any(String) }),
+      })
+    );
+    expect(mockConfirmSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientSecret: 'seti_secret',
+        redirect: 'if_required',
+        confirmParams: expect.objectContaining({ payment_method: 'pm_123' }),
+      })
+    );
+    const payOrder = mockConfirmPayment.mock.invocationCallOrder[0] ?? 0;
+    const setupOrder = mockConfirmSetup.mock.invocationCallOrder[0] ?? 0;
+    expect(payOrder).toBeLessThan(setupOrder);
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ mandateCaptured: true, lowBalanceMode: 'keep_going' })
+    );
+  });
+
+  it('surfaces a decline/SCA error, charges nothing, and returns to idle', async () => {
+    mockConfirmPayment.mockResolvedValue({ error: { message: 'Your card was declined.' } });
+    const { onComplete } = renderAction({ lowBalanceMode: 'notify_only' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/declined/i);
+    expect(mockConfirmSetup).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Pay/i })).toBeEnabled();
+  });
+
+  it('completes with mandateCaptured=false when the charge succeeds but the SetupIntent fails', async () => {
+    mockConfirmSetup.mockResolvedValue({ error: { message: 'setup failed' } });
+    const { onComplete } = renderAction({ lowBalanceMode: 'auto_topup' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(mockConfirmPayment).toHaveBeenCalled();
+    expect(mockConfirmSetup).toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ mandateCaptured: false, lowBalanceMode: 'auto_topup' })
+    );
+  });
+
+  it('does not attempt payment when start fails (invalid input / no charge)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'invalid_input' });
+    const { onComplete } = renderAction({ lowBalanceMode: 'notify_only' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(mockConfirmPayment).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  // ── The <Elements> hoist regression test ──────────────────────────────────
+
+  it('renders an ENABLED Pay button — i.e. useStripe() resolved from the hoisted provider', () => {
+    renderAction({});
+    // A `useStripe()` returning null (the failure mode of a bad hoist) disables Pay forever and
+    // silently. This asserts the button is live where it now lives — the summary rail.
+    expect(screen.getByRole('button', { name: /Pay A\$1,000/i })).toBeEnabled();
+  });
+
+  // ── Saved-card path ───────────────────────────────────────────────────────
+
+  it('does NOT submit an Element on the saved-card path and completes straight away', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'notify_only',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    // There is no Element to submit, and the browser never confirms a PI it did not create.
+    expect(mockSubmit).not.toHaveBeenCalled();
+    expect(mockConfirmPayment).not.toHaveBeenCalled();
+    expect(mockStartPurchaseAction).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentMethodSource: 'saved_card' })
+    );
+  });
+
+  it('runs 3DS via handleNextAction on requires_action, then completes', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'notify_only',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(mockHandleNextAction).toHaveBeenCalledWith({ clientSecret: 'pi_3ds_secret' });
+    expect(mockConfirmPayment).not.toHaveBeenCalled();
+  });
+
+  it('does not complete when the 3DS challenge fails', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({ error: { message: 'Authentication failed.' } });
+    const { onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Authentication failed/i);
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('counts a server-confirmed saved-card mandate as captured (outcome says so, nothing to do)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_saved',
+      // 'captured' = the api already confirmed it server-side; the webhook activates the wallet.
+      mandate: { outcome: 'captured' },
+      walletId: 'wallet-1',
+    });
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'keep_going',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ mandateCaptured: true }));
+    expect(mockConfirmSetup).not.toHaveBeenCalled();
+  });
+
+  it('reports a FAILED saved-card mandate as NOT captured, so the receipt warns', async () => {
+    // ⚠ The regression this pins: a failed mandate confirmation used to arrive as the same
+    // `null` secret a SUCCESSFUL one did, and any null on the saved-card path was read as
+    // "captured". The buyer was congratulated on automatic charging that was never set up.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'failed' },
+      walletId: 'wallet-1',
+    });
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'keep_going',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    // The purchase still completes — the money already moved.
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ mandateCaptured: false }));
+    expect(mockHandleNextAction).not.toHaveBeenCalled();
+    expect(mockConfirmSetup).not.toHaveBeenCalled();
+  });
+
+  it('does not count an untouched mandate (not_required) as captured', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'auto_topup',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ mandateCaptured: false }));
+  });
+
+  it('answers a saved-card mandate 3DS challenge with handleNextAction', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'requires_action', clientSecret: 'seti_3ds_secret' },
+      walletId: 'wallet-1',
+    });
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'auto_topup',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(mockHandleNextAction).toHaveBeenCalledWith({ clientSecret: 'seti_3ds_secret' });
+    expect(mockConfirmSetup).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ mandateCaptured: true }));
+  });
+
+  // ── Decline ───────────────────────────────────────────────────────────────
+
+  it('shows an inline alert AND a "Use a different card" affordance on a decline', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: false,
+      error: 'card_declined',
+      declineCode: 'insufficient_funds',
+    });
+    const { onUseDifferentCard } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/declined/i);
+    const escape = screen.getByRole('button', { name: /use a different card/i });
+    await userEvent.click(escape);
+    expect(onUseDifferentCard).toHaveBeenCalled();
+    expect(track).toHaveBeenCalledWith(CREDIT_EVENTS.PURCHASE_DECLINED, {
+      amount_minor: 100_000,
+      decline_code: 'insufficient_funds',
+    });
+  });
+
+  it('does NOT claim "no charge was made" on a saved-card generic failure (R14)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'saved_card_error' });
+    renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    const alert = await screen.findByRole('alert');
+    // On this path the charge is attempted INSIDE the action, so the new-card copy would lie
+    // about the buyer's money.
+    expect(alert).not.toHaveTextContent(/no charge was made/i);
+    expect(alert).toHaveTextContent(/check your balance before trying again/i);
+  });
+
+  it('offers no "Use a different card" escape on a non-decline failure', async () => {
+    mockStartPurchaseAction.mockResolvedValue({ ok: false, error: 'stripe_error' });
+    renderAction({});
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('button', { name: /use a different card/i })).not.toBeInTheDocument();
+  });
+
+  // ── Analytics + disabled ──────────────────────────────────────────────────
+
+  it('tags the purchase-started event with the payment-method source', async () => {
+    renderAction({ paymentMethodSource: 'new_card', lowBalanceMode: 'notify_only' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(track).toHaveBeenCalledWith(
+      CREDIT_EVENTS.PURCHASE_STARTED,
+      expect.objectContaining({ payment_method_source: 'new_card', funding_method: 'card' })
+    );
+  });
+
+  it('disables Pay when the composer reports an invalid configuration', () => {
+    renderAction({ disabled: true });
+    expect(screen.getByRole('button', { name: /Pay/i })).toBeDisabled();
+  });
+
+  it('keeps the Payment Element amount in sync as the amount changes', () => {
+    renderAction({});
+    expect(mockUpdate).toHaveBeenCalledWith({ amount: 100_000 });
+  });
+});

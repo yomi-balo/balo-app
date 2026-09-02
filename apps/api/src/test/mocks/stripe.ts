@@ -27,10 +27,18 @@ export class MockStripeError extends Error {
 
 /** Card error — the SCA path checks `instanceof StripeCardError && code === 'authentication_required'`. */
 export class MockStripeCardError extends MockStripeError {
-  constructor(init: { code?: string; message?: string; payment_intent?: unknown }) {
+  /** The SPECIFIC refusal reason ('insufficient_funds', 'do_not_honor', …) when Stripe has one. */
+  public decline_code?: string;
+  constructor(init: {
+    code?: string;
+    decline_code?: string;
+    message?: string;
+    payment_intent?: unknown;
+  }) {
     super(init.message ?? 'Your card was declined.');
     this.name = 'StripeCardError';
     this.code = init.code;
+    this.decline_code = init.decline_code;
     this.payment_intent = init.payment_intent;
   }
 }
@@ -52,6 +60,7 @@ export const mockStripe = {
   },
   paymentMethods: {
     attach: vi.fn(),
+    retrieve: vi.fn(),
   },
   webhooks: {
     constructEvent: vi.fn(),

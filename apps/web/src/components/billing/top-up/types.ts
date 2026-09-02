@@ -2,6 +2,25 @@ import type { LowBalanceMode } from '@/lib/credit/actions';
 import type { DisplayCurrency } from '@/lib/credit/display-constants';
 
 /**
+ * The card on file, projected for DISPLAY. Never carries a Stripe id — the page-level
+ * projection checks those and yields `null` when they are absent, because display columns
+ * without a payment-method id describe a card nothing can actually charge.
+ */
+export interface SavedCard {
+  /** Stripe's raw brand string, e.g. 'visa' — title-cased at render. */
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+  /**
+   * Whether an ACTIVE off-session mandate backs this card. `false` means the card is on file
+   * and chargeable ON-SESSION (the buyer is here, pressing Pay) but Balo may NOT charge it
+   * unattended — picking a card-backed low-balance mode captures that consent separately.
+   */
+  mandateActive: boolean;
+}
+
+/**
  * Serialisable wallet snapshot passed from the Server Component to the client composer.
  * Only the projected fields the UI needs — NEVER the full wallet row (no Stripe customer /
  * payment-method / mandate-ref secrets reach the client bundle).
@@ -15,8 +34,12 @@ export interface WalletSnapshot {
   walletId: string | null;
   balanceMinor: number;
   lowBalanceMode: LowBalanceMode;
-  /** Whether an ACTIVE off-session mandate already exists (a card is on file). */
-  hasCard: boolean;
+  /**
+   * The card on file, or `null` for a first-time buyer. Replaces the write-only `hasCard`
+   * boolean — ONE source of truth for "is there a card, and may Balo charge it unattended",
+   * so the two answers can never disagree.
+   */
+  savedCard: SavedCard | null;
   topupReloadMinor: number;
   topupThresholdMinor: number;
 }
@@ -32,4 +55,15 @@ export interface DisplayFxSnapshot {
   audToQuote: number;
 }
 
-export type FundingMethod = 'card' | 'invoice';
+/**
+ * Completion facts handed to the receipt (all client-observed; money lands via the webhook).
+ * Lives here rather than beside the Pay button so the receipt and the charge orchestration can
+ * import it without importing each other.
+ */
+export interface PurchaseCompletion {
+  amountMinor: number;
+  promoMinor: number;
+  promoCode: string | null;
+  lowBalanceMode: LowBalanceMode;
+  mandateCaptured: boolean;
+}

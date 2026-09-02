@@ -22,6 +22,16 @@ interface LowBalanceModePickerProps {
   readonly cardAvailable: boolean;
   /** Inline field-level validation messages for the auto-top-up "Add" / "When below" inputs. */
   readonly errors?: AutoTopupErrors;
+  /**
+   * "Visa •••• 4242" when the buyer is paying with a card already on file, so the consent note
+   * names the exact card. `null` (the default) keeps the generic "this card" wording used when
+   * the card is about to be entered and has no name yet.
+   *
+   * ⚠ THIS IS THE ONLY MANDATE DISCLOSURE IN THE COMPOSER. The prototype prints a second copy
+   * under the payment method; consent is given HERE, where the mode is chosen, and two copies
+   * would be duplication in both the UX and the Sonar sense.
+   */
+  readonly cardLabel?: string | null;
 }
 
 interface ModeOption {
@@ -183,6 +193,7 @@ export function LowBalanceModePicker({
   onThresholdChange,
   cardAvailable,
   errors,
+  cardLabel = null,
 }: Readonly<LowBalanceModePickerProps>) {
   const describe = useCallback(
     (option: ModeOption): string => {
@@ -249,8 +260,9 @@ export function LowBalanceModePicker({
             aria-hidden="true"
           />
           <span>
-            You&apos;re letting Balo charge this card for consultation time beyond your balance and
-            for automatic top-ups, per your settings above. Change or turn this off anytime.
+            You&apos;re letting Balo charge {cardLabel ?? 'this card'} for consultation time beyond
+            your balance and for automatic top-ups, per your settings above. Change or turn this off
+            anytime.
           </span>
         </p>
       )}

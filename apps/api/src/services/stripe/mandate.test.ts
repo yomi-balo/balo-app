@@ -15,7 +15,13 @@ vi.mock('@balo/db', () => ({
   db: { __brand: 'mock-db' },
 }));
 
-import { attachPaymentMethod, createSetupIntent, ensureCustomer } from './mandate.js';
+import {
+  attachPaymentMethod,
+  confirmSavedCardMandate,
+  createSetupIntent,
+  ensureCustomer,
+  retrieveCardDisplay,
+} from './mandate.js';
 import { mockStripe, resetStripeMock } from '../../test/mocks/stripe.js';
 
 /** Minimal wallet fixture — the mandate service only reads `id` + `stripeCustomerId`. */
@@ -135,6 +141,138 @@ describe('mandate', () => {
       mockStripe.setupIntents.create.mockResolvedValue({ id: 'seti_3', client_secret: null });
       await expect(createSetupIntent('wallet_1')).rejects.toThrow(/client_secret/);
       expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('retrieveCardDisplay', () => {
+    it('maps a card PaymentMethod to its four display fields', async () => {
+      mockStripe.paymentMethods.retrieve.mockResolvedValue({
+        id: 'pm_1',
+        type: 'card',
+        card: { brand: 'visa', last4: '4242', exp_month: 8, exp_year: 2028 },
+      });
+
+      await expect(retrieveCardDisplay('pm_1')).resolves.toEqual({
+        cardBrand: 'visa',
+        cardLast4: '4242',
+        cardExpMonth: 8,
+        cardExpYear: 2028,
+      });
+    });
+
+    it('returns null for a non-card payment method', async () => {
+      mockStripe.paymentMethods.retrieve.mockResolvedValue({ id: 'pm_2', type: 'au_becs_debit' });
+      await expect(retrieveCardDisplay('pm_2')).resolves.toBeNull();
+    });
+
+    it('returns null for a card PaymentMethod with no card object', async () => {
+      mockStripe.paymentMethods.retrieve.mockResolvedValue({ id: 'pm_3', type: 'card' });
+      await expect(retrieveCardDisplay('pm_3')).resolves.toBeNull();
+    });
+
+    it('returns null and does NOT throw when Stripe fails (a webhook 500 would retry a charge)', async () => {
+      mockStripe.paymentMethods.retrieve.mockRejectedValue(new Error('stripe is down'));
+      await expect(retrieveCardDisplay('pm_4')).resolves.toBeNull();
+    });
+  });
+
+  describe('confirmSavedCardMandate', () => {
+    const savedCardWallet = walletFixture({
+      id: 'wallet_1',
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+    });
+
+    it('confirms against the stored card and marks the wallet pending', async () => {
+      mockFindById.mockResolvedValue(savedCardWallet);
+      mockStripe.setupIntents.create.mockResolvedValue({
+        id: 'seti_1',
+        status: 'succeeded',
+        client_secret: 'seti_1_secret',
+      });
+
+      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+        status: 'succeeded',
+        clientSecret: null,
+      });
+      expect(mockStripe.setupIntents.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customer: 'cus_1',
+          payment_method: 'pm_1',
+          usage: 'off_session',
+          confirm: true,
+          metadata: { walletId: 'wallet_1' },
+        })
+      );
+      expect(mockApplyMandateStatus).toHaveBeenCalledWith(
+        { __brand: 'mock-db' },
+        'wallet_1',
+        'pending'
+      );
+    });
+
+    it('never claims the buyer is absent — `off_session` is not passed to confirm', async () => {
+      mockFindById.mockResolvedValue(savedCardWallet);
+      mockStripe.setupIntents.create.mockResolvedValue({ id: 'seti_1', status: 'succeeded' });
+
+      await confirmSavedCardMandate('wallet_1');
+
+      const [params] = mockStripe.setupIntents.create.mock.calls[0] as [Record<string, unknown>];
+      // `usage: 'off_session'` (what the mandate is FOR) is present; `off_session` (whether the
+      // buyer is here) must NOT be — it would turn a completable 3DS into a hard failure.
+      expect(params).not.toHaveProperty('off_session');
+      expect(params.usage).toBe('off_session');
+    });
+
+    it('returns the client secret for a 3DS challenge (requires_action)', async () => {
+      mockFindById.mockResolvedValue(savedCardWallet);
+      mockStripe.setupIntents.create.mockResolvedValue({
+        id: 'seti_2',
+        status: 'requires_action',
+        client_secret: 'seti_2_secret',
+      });
+
+      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+        status: 'requires_action',
+        clientSecret: 'seti_2_secret',
+      });
+    });
+
+    it('reports failed (never throws) when Stripe rejects the confirmation', async () => {
+      mockFindById.mockResolvedValue(savedCardWallet);
+      mockStripe.setupIntents.create.mockRejectedValue(new Error('card declined'));
+
+      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+        status: 'failed',
+        clientSecret: null,
+      });
+    });
+
+    it('reports failed for any other terminal SetupIntent status', async () => {
+      mockFindById.mockResolvedValue(savedCardWallet);
+      mockStripe.setupIntents.create.mockResolvedValue({
+        id: 'seti_3',
+        status: 'requires_payment_method',
+        client_secret: 'seti_3_secret',
+      });
+
+      await expect(confirmSavedCardMandate('wallet_1')).resolves.toEqual({
+        status: 'failed',
+        clientSecret: null,
+      });
+    });
+
+    it('throws when the wallet has no stored card to confirm against', async () => {
+      mockFindById.mockResolvedValue(
+        walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1', stripePaymentMethodId: null })
+      );
+      await expect(confirmSavedCardMandate('wallet_1')).rejects.toThrow(/no stored card/);
+      expect(mockStripe.setupIntents.create).not.toHaveBeenCalled();
+    });
+
+    it('throws when the wallet does not exist', async () => {
+      mockFindById.mockResolvedValue(undefined);
+      await expect(confirmSavedCardMandate('missing')).rejects.toThrow(/not found/);
     });
   });
 });

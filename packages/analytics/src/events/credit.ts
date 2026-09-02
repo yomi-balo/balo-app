@@ -18,23 +18,43 @@ export const CREDIT_EVENTS = {
   PROMO_REDEEMED: 'promo_redeemed',
   /** SetupIntent confirmed — a reusable off-session card mandate was captured. */
   MANDATE_CAPTURED: 'mandate_captured',
+  /** Top-up redesign — the buyer swapped between their saved card and a new one. */
+  PAYMENT_METHOD_CHANGED: 'credit_payment_method_changed',
+  /** Top-up redesign — a saved-card charge was refused (a USER outcome, not a system fault). */
+  PURCHASE_DECLINED: 'credit_purchase_declined',
 } as const;
+
+/** Which card a purchase charges. Mirrors the api/web `PaymentMethodSource` union. */
+export type PaymentMethodSourceProperty = 'new_card' | 'saved_card';
 
 export interface CreditEventMap {
   [CREDIT_EVENTS.PURCHASE_STARTED]: {
     amount_minor: number;
     promo_applied: boolean;
+    /**
+     * Always `'card'` since Invoice left the UI. KEPT rather than removed — dropping it would
+     * churn a live PostHog property (and every dashboard built on it) for no gain.
+     */
     funding_method: 'card' | 'invoice';
     low_balance_mode: 'auto_topup' | 'keep_going' | 'notify_only';
+    /** Top-up redesign — new card entered, or the card already on file. */
+    payment_method_source?: PaymentMethodSourceProperty;
   };
   [CREDIT_EVENTS.PURCHASE_COMPLETED]: {
     amount_minor: number;
     promo_applied: boolean;
     funding_method: 'card' | 'invoice';
     low_balance_mode: 'auto_topup' | 'keep_going' | 'notify_only';
+    payment_method_source?: PaymentMethodSourceProperty;
   };
   [CREDIT_EVENTS.PROMO_REDEEMED]: { code: string; bonus_minor: number };
   [CREDIT_EVENTS.MANDATE_CAPTURED]: { low_balance_mode: 'auto_topup' | 'keep_going' };
+  [CREDIT_EVENTS.PAYMENT_METHOD_CHANGED]: { to: PaymentMethodSourceProperty };
+  [CREDIT_EVENTS.PURCHASE_DECLINED]: {
+    amount_minor: number;
+    /** Stripe's specific refusal reason when it gave one; `null` otherwise. */
+    decline_code: string | null;
+  };
 }
 
 // -- Server events (fire from workers/sweeps via `trackServer`) --------------------

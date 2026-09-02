@@ -32,6 +32,8 @@ const {
   mockPublishAutoTopupExecuted,
   mockPublishAutoTopupFailed,
   mockTriggerAutoTopup,
+  mockApplySavedCardDisplay,
+  mockRetrieveCardDisplay,
 } = vi.hoisted(() => ({
   // Default: a fresh credit onto a wallet the receipt can read (companyId/balance/expiry).
   mockApplyLedgerEntry: vi.fn(async () => ({
@@ -70,6 +72,10 @@ const {
   mockPublishAutoTopupExecuted: vi.fn(),
   mockPublishAutoTopupFailed: vi.fn(),
   mockTriggerAutoTopup: vi.fn(),
+  mockApplySavedCardDisplay: vi.fn(),
+  // Default: Stripe has no card facts to give (the common case in these fixtures, whose PIs
+  // carry no customer / payment_method). Individual cases override it.
+  mockRetrieveCardDisplay: vi.fn(async () => null),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -81,6 +87,7 @@ vi.mock('@balo/db', () => ({
   creditWalletsRepository: {
     applyMandate: mockApplyMandate,
     applyMandateStatus: mockApplyMandateStatus,
+    applySavedCardDisplay: mockApplySavedCardDisplay,
     findById: mockWalletFindById,
     setPendingTopupAt: mockSetPendingTopupAt,
   },
@@ -110,6 +117,7 @@ vi.mock('../../lib/stripe.js', () => ({
   }),
 }));
 vi.mock('./charges.js', () => ({ retrieveSettlement: mockRetrieveSettlement }));
+vi.mock('./mandate.js', () => ({ retrieveCardDisplay: mockRetrieveCardDisplay }));
 vi.mock('../credit/auto-topup.js', () => ({
   publishAutoTopupExecuted: mockPublishAutoTopupExecuted,
   publishAutoTopupFailed: mockPublishAutoTopupFailed,
@@ -158,6 +166,7 @@ describe('resolveStripeEffect', () => {
       sessionId: null,
       triggeringEntryId: null,
       promoCode: null,
+      cardOnFile: null,
       settlement: SETTLEMENT,
     });
     expect(mockRetrieveSettlement).toHaveBeenCalledWith('pi_1');
@@ -261,7 +270,91 @@ describe('resolveStripeEffect', () => {
       customerId: 'cus_1',
       paymentMethodId: 'pm_1',
       mandateRef: 'seti_1',
+      card: null,
     });
+  });
+
+  it('carries the confirmed card display facts into the mandate_active effect', async () => {
+    mockRetrieveCardDisplay.mockResolvedValueOnce({
+      cardBrand: 'visa',
+      cardLast4: '4242',
+      cardExpMonth: 8,
+      cardExpYear: 2028,
+    } as never);
+    const effect = await resolveStripeEffect(
+      event('setup_intent.succeeded', {
+        id: 'seti_1',
+        customer: 'cus_1',
+        payment_method: 'pm_1',
+        metadata: { walletId: 'wallet_1' },
+      })
+    );
+    expect(mockRetrieveCardDisplay).toHaveBeenCalledWith('pm_1');
+    expect(effect).toMatchObject({
+      kind: 'mandate_active',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+  });
+
+  it('captures the card on a manual_purchase credit, off the event object (no extra PI read)', async () => {
+    mockRetrieveSettlement.mockResolvedValue(SETTLEMENT);
+    mockRetrieveCardDisplay.mockResolvedValueOnce({
+      cardBrand: 'visa',
+      cardLast4: '4242',
+      cardExpMonth: 8,
+      cardExpYear: 2028,
+    } as never);
+    const effect = await resolveStripeEffect(
+      event('payment_intent.succeeded', {
+        id: 'pi_1',
+        customer: 'cus_1',
+        payment_method: 'pm_1',
+        metadata: { walletId: 'wallet_1', reason: 'manual_purchase', memberId: 'member_1' },
+      })
+    );
+    expect(effect).toMatchObject({
+      kind: 'credit',
+      cardOnFile: {
+        customerId: 'cus_1',
+        paymentMethodId: 'pm_1',
+        cardBrand: 'visa',
+        cardLast4: '4242',
+      },
+    });
+    // The ids came off the event; the only Stripe read is the payment-method one.
+    expect(mockPaymentIntentsRetrieve).not.toHaveBeenCalled();
+  });
+
+  it('NEVER captures a card on a non-manual credit reason (auto_topup)', async () => {
+    mockRetrieveSettlement.mockResolvedValue(SETTLEMENT);
+    const effect = await resolveStripeEffect(
+      event('payment_intent.succeeded', {
+        id: 'pi_1',
+        customer: 'cus_1',
+        payment_method: 'pm_1',
+        metadata: {
+          walletId: 'wallet_1',
+          reason: 'auto_topup',
+          triggeringEntryId: 'entry_1',
+        },
+      })
+    );
+    expect(effect).toMatchObject({ kind: 'credit', reason: 'auto_topup', cardOnFile: null });
+    expect(mockRetrieveCardDisplay).not.toHaveBeenCalled();
+  });
+
+  it('still credits when the card read fails (fail-soft — a money effect never depends on it)', async () => {
+    mockRetrieveSettlement.mockResolvedValue(SETTLEMENT);
+    mockRetrieveCardDisplay.mockResolvedValueOnce(null);
+    const effect = await resolveStripeEffect(
+      event('payment_intent.succeeded', {
+        id: 'pi_1',
+        customer: 'cus_1',
+        payment_method: 'pm_1',
+        metadata: { walletId: 'wallet_1', reason: 'manual_purchase', memberId: 'member_1' },
+      })
+    );
+    expect(effect).toMatchObject({ kind: 'credit', cardOnFile: null, settlement: SETTLEMENT });
   });
 
   it('maps setup_intent.setup_failed → mandate_failed', async () => {
@@ -439,6 +532,7 @@ describe('applyStripeEffect', () => {
       sessionId: null,
       triggeringEntryId: null,
       promoCode: null,
+      cardOnFile: null,
       settlement: SETTLEMENT,
     });
     expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
@@ -486,6 +580,7 @@ describe('applyStripeEffect', () => {
       sessionId: null,
       triggeringEntryId: null,
       promoCode: 'WELCOME50',
+      cardOnFile: null,
       settlement: SETTLEMENT,
     });
     expect(mockRedeem).toHaveBeenCalledWith(
@@ -505,6 +600,119 @@ describe('applyStripeEffect', () => {
     );
   });
 
+  it('persists the saved-card display facts on a FRESH manual_purchase — and never a mandate', async () => {
+    await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: {
+        customerId: 'cus_1',
+        paymentMethodId: 'pm_1',
+        cardBrand: 'visa',
+        cardLast4: '4242',
+        cardExpMonth: 8,
+        cardExpYear: 2028,
+      },
+      settlement: SETTLEMENT,
+    });
+    expect(mockApplySavedCardDisplay).toHaveBeenCalledWith(tx, {
+      walletId: 'wallet_1',
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+    // R4 — THE safety property. Persisting a payment-method id must not activate a mandate:
+    // every off-session charge gates on `isWalletMandateActive`, which needs a status neither
+    // of these two writes ever sets. If this assertion ever fails, an unconsented off-session
+    // charge has become possible.
+    expect(mockApplyMandate).not.toHaveBeenCalled();
+    expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+  });
+
+  it('hands the FRESH payment-method id to the repository when the card changed (mandate revocation seam)', async () => {
+    // ⚠ THE PAYMENT-MANIPULATION SEAM. A wallet already holding an ACTIVE mandate on pm_A takes
+    // a manual purchase on pm_B. `applySavedCardDisplay` is what revokes the pm_A consent (one
+    // UPDATE, proven against real Postgres in `credit-wallets.integration.test.ts`); this pins
+    // the two things dispatch owns and can silently break:
+    //   1. it passes the CARD JUST CHARGED through — the value the repository keys the revoke
+    //      decision on. An "optimisation" that skipped or reused a stale id would leave pm_B
+    //      chargeable under pm_A's mandate.
+    //   2. it performs NO mandate write of its own that could put the status back to 'active'.
+    await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: {
+        customerId: 'cus_1',
+        paymentMethodId: 'pm_B',
+        cardBrand: 'amex',
+        cardLast4: '0005',
+        cardExpMonth: 12,
+        cardExpYear: 2030,
+      },
+      settlement: SETTLEMENT,
+    });
+
+    expect(mockApplySavedCardDisplay).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ walletId: 'wallet_1', stripePaymentMethodId: 'pm_B' })
+    );
+    expect(mockApplyMandate).not.toHaveBeenCalled();
+    expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+  });
+
+  it('does NOT re-write the card on a deduped (replayed) manual_purchase', async () => {
+    mockApplyLedgerEntry.mockResolvedValueOnce({
+      deduped: true,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+    await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: {
+        customerId: 'cus_1',
+        paymentMethodId: 'pm_1',
+        cardBrand: 'visa',
+        cardLast4: '4242',
+        cardExpMonth: 8,
+        cardExpYear: 2028,
+      },
+      settlement: SETTLEMENT,
+    });
+    expect(mockApplySavedCardDisplay).not.toHaveBeenCalled();
+  });
+
+  it('credits normally when the card could not be read (cardOnFile null)', async () => {
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockApplyLedgerEntry).toHaveBeenCalledTimes(1);
+    expect(mockApplySavedCardDisplay).not.toHaveBeenCalled();
+    expect(postCommit).toHaveLength(1);
+  });
+
   it('skips a promo that failed re-validation at settlement (base purchase still credits)', async () => {
     mockRedeem.mockRejectedValue(new Error('PromoExhaustedError'));
     const postCommit = await applyStripeEffect(tx, {
@@ -515,6 +723,7 @@ describe('applyStripeEffect', () => {
       sessionId: null,
       triggeringEntryId: null,
       promoCode: 'WELCOME50',
+      cardOnFile: null,
       settlement: SETTLEMENT,
     });
     // Base purchase credited; promo skipped → 0 bonus, receipt still published post-commit.
@@ -541,6 +750,7 @@ describe('applyStripeEffect', () => {
       sessionId: null,
       triggeringEntryId: null,
       promoCode: 'WELCOME50',
+      cardOnFile: null,
       settlement: SETTLEMENT,
     });
     expect(postCommit).toEqual([]);
@@ -557,6 +767,7 @@ describe('applyStripeEffect', () => {
       sessionId: null,
       triggeringEntryId: 'entry_1',
       promoCode: null,
+      cardOnFile: null,
       settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_9' },
     });
     expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
@@ -598,6 +809,7 @@ describe('applyStripeEffect', () => {
       sessionId: null,
       triggeringEntryId: 'entry_1',
       promoCode: null,
+      cardOnFile: null,
       settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_9' },
     });
     expect(postCommit).toEqual([]);
@@ -612,7 +824,10 @@ describe('applyStripeEffect', () => {
       customerId: 'cus_1',
       paymentMethodId: 'pm_1',
       mandateRef: 'seti_1',
+      card: null,
     });
+    // No `card` key at all when Stripe could not be read — the wallet keeps whatever card it
+    // was already showing rather than being blanked by a failed display read.
     expect(mockApplyMandate).toHaveBeenCalledWith(tx, {
       walletId: 'wallet_1',
       stripeCustomerId: 'cus_1',
@@ -620,6 +835,26 @@ describe('applyStripeEffect', () => {
       mandateRef: 'seti_1',
       mandateStatus: 'active',
     });
+  });
+
+  it('writes the card display facts in the SAME applyMandate call when they are present', async () => {
+    await applyStripeEffect(tx, {
+      kind: 'mandate_active',
+      walletId: 'wallet_1',
+      customerId: 'cus_1',
+      paymentMethodId: 'pm_1',
+      mandateRef: 'seti_1',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+    expect(mockApplyMandate).toHaveBeenCalledWith(tx, {
+      walletId: 'wallet_1',
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+      mandateRef: 'seti_1',
+      mandateStatus: 'active',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+    expect(mockApplySavedCardDisplay).not.toHaveBeenCalled();
   });
 
   it('flips the mandate to failed via applyMandateStatus', async () => {
@@ -733,6 +968,7 @@ describe('applyStripeEffect', () => {
       sessionId: 'session_1',
       triggeringEntryId: null,
       promoCode: null,
+      cardOnFile: null,
       settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_7' },
     });
     expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
@@ -788,6 +1024,7 @@ describe('applyStripeEffect', () => {
       sessionId: 'session_1',
       triggeringEntryId: null,
       promoCode: null,
+      cardOnFile: null,
       settlement: { ...SETTLEMENT, stripePaymentIntentId: 'pi_7' },
     });
     // The mark + clear stay (idempotent), but no post-commit receipt fires on the replay.
@@ -897,6 +1134,7 @@ describe('applyStripeEffect', () => {
         sessionId: null,
         triggeringEntryId: null,
         promoCode: null,
+        cardOnFile: null,
         settlement: SETTLEMENT,
       })
     ).rejects.toThrow(/triggeringEntryId/);
@@ -913,6 +1151,7 @@ describe('applyStripeEffect', () => {
         sessionId: null,
         triggeringEntryId: null,
         promoCode: null,
+        cardOnFile: null,
         settlement: SETTLEMENT,
       })
     ).rejects.toThrow(/sessionId/);

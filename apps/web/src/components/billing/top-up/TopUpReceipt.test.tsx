@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { track, CREDIT_EVENTS } from '@/lib/analytics';
 import { TopUpReceipt } from './TopUpReceipt';
-import type { PurchaseCompletion } from './PaymentSection';
+import type { PurchaseCompletion } from './types';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 

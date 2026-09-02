@@ -60,7 +60,7 @@ vi.mock('@/components/billing/top-up/TopUpComposer', () => ({
     <div
       data-testid="composer"
       data-balance={String(wallet.balanceMinor)}
-      data-hascard={String(wallet.hasCard)}
+      data-savedcard={wallet.savedCard === null ? 'none' : JSON.stringify(wallet.savedCard)}
       data-mode={wallet.lowBalanceMode}
       data-reload={String(wallet.topupReloadMinor)}
       data-threshold={String(wallet.topupThresholdMinor)}
@@ -90,6 +90,7 @@ vi.mock('@/components/billing/top-up/MemberWalletNudge', () => ({
 
 import TopUpPage from './page';
 
+/** A returning buyer: full card display columns AND both Stripe ids, with an active mandate. */
 const WALLET = {
   id: 'wallet-1',
   balanceMinor: 25000,
@@ -97,6 +98,24 @@ const WALLET = {
   mandateStatus: 'active',
   topupReloadMinor: 10000,
   topupThresholdMinor: 2000,
+  cardBrand: 'visa',
+  cardLast4: '4242',
+  cardExpMonth: 8,
+  cardExpYear: 2028,
+  stripeCustomerId: 'cus_1',
+  stripePaymentMethodId: 'pm_1',
+};
+
+/** A first-time buyer: no card facts and no Stripe ids. */
+const NO_CARD_WALLET = {
+  ...WALLET,
+  mandateStatus: null,
+  cardBrand: null,
+  cardLast4: null,
+  cardExpMonth: null,
+  cardExpYear: null,
+  stripeCustomerId: null,
+  stripePaymentMethodId: null,
 };
 
 async function renderPage(): Promise<void> {
@@ -165,7 +184,7 @@ describe('TopUpPage (RSC) — billing holder composer branch', () => {
 
     const composer = screen.getByTestId('composer');
     expect(composer).toHaveAttribute('data-balance', '0');
-    expect(composer).toHaveAttribute('data-hascard', 'false');
+    expect(composer).toHaveAttribute('data-savedcard', 'none');
     expect(composer).toHaveAttribute('data-mode', 'notify_only');
     expect(composer).toHaveAttribute('data-reload', String(DEFAULT_TOPUP_RELOAD_MINOR));
     expect(composer).toHaveAttribute('data-threshold', String(DEFAULT_TOPUP_THRESHOLD_MINOR));
@@ -180,18 +199,79 @@ describe('TopUpPage (RSC) — billing holder composer branch', () => {
 
     const composer = screen.getByTestId('composer');
     expect(composer).toHaveAttribute('data-balance', '25000');
-    expect(composer).toHaveAttribute('data-hascard', 'true'); // mandateStatus 'active'
     expect(composer).toHaveAttribute('data-fx', 'none');
     expect(mockGetLatestFx).not.toHaveBeenCalled(); // AUD buyer → quote null → no FX fetch
   });
 
-  it('marks hasCard false when the mandate is not active', async () => {
+  it('projects the four display columns into a savedCard object', async () => {
     mockHasCapability.mockResolvedValue(true);
-    mockFindWallet.mockResolvedValue({ ...WALLET, mandateStatus: 'none' });
+    mockFindWallet.mockResolvedValue(WALLET);
 
     await renderPage();
 
-    expect(screen.getByTestId('composer')).toHaveAttribute('data-hascard', 'false');
+    const savedCard = JSON.parse(
+      screen.getByTestId('composer').getAttribute('data-savedcard') ?? 'null'
+    );
+    expect(savedCard).toEqual({
+      brand: 'visa',
+      last4: '4242',
+      expMonth: 8,
+      expYear: 2028,
+      mandateActive: true, // mandateStatus 'active'
+    });
+  });
+
+  it('marks mandateActive FALSE for a card on file without an active mandate', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindWallet.mockResolvedValue({ ...WALLET, mandateStatus: 'pending' });
+
+    await renderPage();
+
+    const savedCard = JSON.parse(
+      screen.getByTestId('composer').getAttribute('data-savedcard') ?? 'null'
+    );
+    // The card is chargeable ON-SESSION but Balo may not charge it unattended.
+    expect(savedCard.mandateActive).toBe(false);
+    expect(savedCard.last4).toBe('4242');
+  });
+
+  it('yields savedCard: null when the payment-method id is gone (an uncharge­able card)', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    // Display columns survive, but the id that actually charges is gone (detached in Stripe).
+    mockFindWallet.mockResolvedValue({ ...WALLET, stripePaymentMethodId: null });
+
+    await renderPage();
+
+    expect(screen.getByTestId('composer')).toHaveAttribute('data-savedcard', 'none');
+  });
+
+  it('yields savedCard: null when the customer id is gone', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindWallet.mockResolvedValue({ ...WALLET, stripeCustomerId: null });
+
+    await renderPage();
+
+    expect(screen.getByTestId('composer')).toHaveAttribute('data-savedcard', 'none');
+  });
+
+  it('yields savedCard: null for a first-time buyer with no card facts', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindWallet.mockResolvedValue(NO_CARD_WALLET);
+
+    await renderPage();
+
+    expect(screen.getByTestId('composer')).toHaveAttribute('data-savedcard', 'none');
+  });
+
+  it('yields savedCard: null for an unprovisioned wallet (no row at all)', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindWallet.mockResolvedValue(undefined);
+
+    await renderPage();
+
+    const composer = screen.getByTestId('composer');
+    expect(composer).toHaveAttribute('data-savedcard', 'none');
+    expect(composer).toHaveAttribute('data-walletid', 'null');
   });
 });
 

@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNotNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, lte, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   creditWallets,
@@ -18,6 +18,22 @@ interface UpdateWalletConfigInput {
   /** Nullable: off-session mandate secrets (card-funded). */
   stripePaymentMethodId?: string | null;
   mandateRef?: string | null;
+}
+
+/**
+ * The DISPLAY facts of a saved card — never credentials. Brand, last4 and expiry are what a
+ * checkout prints back at the cardholder; none of them can charge anything (the id in
+ * `stripe_payment_method_id` is what does that). Written ONLY from webhook effects, via
+ * `applyMandate`'s optional `card` or `applySavedCardDisplay`.
+ *
+ * The schema's `credit_wallets_card_display_all_or_none` CHECK is why this is one object and
+ * not four optional fields: a partial write is a bug, not a state.
+ */
+export interface CardDisplayInput {
+  cardBrand: string;
+  cardLast4: string;
+  cardExpMonth: number;
+  cardExpYear: number;
 }
 
 export const creditWalletsRepository = {
@@ -203,6 +219,12 @@ export const creditWalletsRepository = {
    * via `DbExecutor` (pass the webhook's `tx` so it commits with the marker + effect;
    * mirrors `auditEventsRepository.record`). Written on `setup_intent.succeeded`. Throws
    * if the wallet is missing.
+   *
+   * When `card` is supplied the four DISPLAY columns land in the SAME `UPDATE` as the mandate
+   * columns — one statement, so the all-or-none CHECK can never see a half-written row. When it
+   * is absent (Stripe could not be read — `retrieveCardDisplay` fails soft) the display columns
+   * are left exactly as they were: a card read failure must never blank a card the buyer can
+   * still see.
    */
   async applyMandate(
     exec: DbExecutor,
@@ -212,6 +234,8 @@ export const creditWalletsRepository = {
       stripePaymentMethodId: string;
       mandateRef: string;
       mandateStatus: 'active';
+      /** Display facts of the just-confirmed card. Absent when Stripe could not be read. */
+      card?: CardDisplayInput;
     }
   ): Promise<CreditWallet> {
     const [row] = await exec
@@ -221,6 +245,67 @@ export const creditWalletsRepository = {
         stripePaymentMethodId: input.stripePaymentMethodId,
         mandateRef: input.mandateRef,
         mandateStatus: input.mandateStatus,
+        ...(input.card === undefined ? {} : input.card),
+      })
+      .where(eq(creditWallets.id, input.walletId))
+      .returning();
+    if (row === undefined) {
+      throw new Error(`Credit wallet not found: ${input.walletId}`);
+    }
+    return row;
+  },
+
+  /**
+   * Persist the customer + payment-method id + card DISPLAY facts. Called from
+   * `payment_intent.succeeded` for a `manual_purchase`, so a `notify_only` buyer (who never
+   * opens a SetupIntent) still sees their card next time.
+   *
+   * ⚠ THIS NEVER ACTIVATES A MANDATE, AND IT REVOKES ONE WHOSE CARD HAS CHANGED. Two rules,
+   * one statement:
+   *
+   *  1. `mandate_status` is never set to `'active'` here. Every off-session charge gates on
+   *     `isWalletMandateActive`, so persisting a payment-method id enables ON-SESSION reuse only
+   *     (the buyer is present and pressing Pay), never an unattended auto-top-up or overdraft
+   *     settlement.
+   *  2. When the incoming payment method DIFFERS from the stored one, `mandate_status` and
+   *     `mandate_ref` are both cleared to NULL. Without this, moving the id out from under a
+   *     still-`'active'` status would silently re-point a live off-session mandate at a card
+   *     that never went through a SetupIntent — `isWalletMandateActive` is a conjunction over
+   *     three columns, and rule 1 only guards one of them. Clearing the status makes the next
+   *     card-backed purchase re-open a SetupIntent (the web action short-circuits only on
+   *     `'active'`), so consent is re-captured against the card actually on file. The invariant
+   *     this buys: THE MANDATE COLUMNS ALWAYS DESCRIBE THE CARD THEY WERE CAPTURED AGAINST.
+   *
+   * ⚠ ONE STATEMENT, DELIBERATELY. Read-then-write would be a race on the money path (two
+   * concurrent webhooks could each read the old id and neither revoke), so the comparison is a
+   * SQL `CASE` over the row's own pre-UPDATE value. `IS DISTINCT FROM` rather than `<>` so a
+   * wallet with no card yet (`NULL`) compares as "changed" instead of yielding NULL.
+   *
+   * Do not "simplify" this by folding it into `applyMandate`; the two are a consent boundary,
+   * not a duplication (see `isWalletCardReusableOnSession` in `@balo/shared/credit`).
+   *
+   * Tx-composable; last-writer-wins. Throws if the wallet is missing.
+   */
+  async applySavedCardDisplay(
+    exec: DbExecutor,
+    input: {
+      walletId: string;
+      stripeCustomerId: string;
+      stripePaymentMethodId: string;
+      card: CardDisplayInput;
+    }
+  ): Promise<CreditWallet> {
+    // Evaluated against the PRE-UPDATE row (Postgres reads SET expressions from the old tuple),
+    // so this compares the card on file with the card just charged.
+    const cardChanged = sql`${creditWallets.stripePaymentMethodId} IS DISTINCT FROM ${input.stripePaymentMethodId}`;
+    const [row] = await exec
+      .update(creditWallets)
+      .set({
+        stripeCustomerId: input.stripeCustomerId,
+        stripePaymentMethodId: input.stripePaymentMethodId,
+        mandateStatus: sql`CASE WHEN ${cardChanged} THEN NULL ELSE ${creditWallets.mandateStatus} END`,
+        mandateRef: sql`CASE WHEN ${cardChanged} THEN NULL ELSE ${creditWallets.mandateRef} END`,
+        ...input.card,
       })
       .where(eq(creditWallets.id, input.walletId))
       .returning();
@@ -233,7 +318,8 @@ export const creditWalletsRepository = {
   /**
    * Flip only the mandate lifecycle status (BAL-382) — e.g. `pending` on
    * `createSetupIntent`, `failed` on `setup_intent.setup_failed`. Tx-composable via
-   * `DbExecutor`. Does NOT touch the customer / payment-method / mandate-ref columns.
+   * `DbExecutor`. Does NOT touch the customer / payment-method / mandate-ref columns, nor the
+   * card display columns.
    * Throws if the wallet is missing.
    */
   async applyMandateStatus(

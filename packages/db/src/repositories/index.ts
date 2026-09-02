@@ -342,7 +342,7 @@ export type {
 } from '../schema';
 
 // ── Client Credit System (BAL-376 / ADR-1040) ────────────────────────────
-export { creditWalletsRepository } from './credit-wallets';
+export { creditWalletsRepository, type CardDisplayInput } from './credit-wallets';
 export {
   creditLedgerRepository,
   applyLedgerEntry,

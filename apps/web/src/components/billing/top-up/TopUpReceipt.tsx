@@ -6,7 +6,7 @@ import { Check, ArrowRight, Gift, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { track, CREDIT_EVENTS } from '@/lib/analytics';
 import { formatAud, formatAudShort, timeStr } from '@/lib/credit/display-constants';
-import type { PurchaseCompletion } from './PaymentSection';
+import type { PurchaseCompletion } from './types';
 
 interface TopUpReceiptProps {
   readonly completion: PurchaseCompletion;

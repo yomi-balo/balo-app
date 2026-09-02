@@ -21,6 +21,7 @@ vi.mock('@/lib/auth/session', () => ({
 import {
   createPurchaseIntent,
   createMandateSetupIntent,
+  confirmSavedCardMandate,
   callSessionApi,
   CreditApiError,
 } from './api-client';
@@ -48,21 +49,32 @@ describe('credit api-client', () => {
     process.env.API_URL = originalApiUrl;
   });
 
-  it('POSTs the purchase-intent with the internal secret header and returns the client secret', async () => {
+  const purchaseInput = {
+    walletId: 'wallet-1',
+    presentmentCurrency: 'aud',
+    presentmentAmountMinor: 100_000,
+    initiatingMemberId: 'user-1',
+    clientRequestId: 'req-1',
+    promoCode: 'WELCOME50',
+    paymentMethodSource: 'new_card' as const,
+  };
+
+  it('POSTs the purchase-intent with the internal secret header and returns the outcome', async () => {
     mockLoggedFetch.mockResolvedValue(
-      jsonResponse({ clientSecret: 'pi_secret', paymentIntentId: 'pi_1' })
+      jsonResponse({
+        outcome: 'needs_client_confirmation',
+        clientSecret: 'pi_secret',
+        paymentIntentId: 'pi_1',
+      })
     );
 
-    const result = await createPurchaseIntent({
-      walletId: 'wallet-1',
-      presentmentCurrency: 'aud',
-      presentmentAmountMinor: 100_000,
-      initiatingMemberId: 'user-1',
-      clientRequestId: 'req-1',
-      promoCode: 'WELCOME50',
-    });
+    const result = await createPurchaseIntent(purchaseInput);
 
-    expect(result).toEqual({ clientSecret: 'pi_secret', paymentIntentId: 'pi_1' });
+    expect(result).toEqual({
+      outcome: 'needs_client_confirmation',
+      clientSecret: 'pi_secret',
+      paymentIntentId: 'pi_1',
+    });
     expect(mockLoggedFetch).toHaveBeenCalledWith(
       'http://api.test/credit/purchase-intent',
       expect.objectContaining({
@@ -72,17 +84,81 @@ describe('credit api-client', () => {
     );
   });
 
-  it('creates a mandate setup-intent', async () => {
+  it('forwards the payment-method source to the api', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse({ outcome: 'complete', paymentIntentId: 'pi_saved' })
+    );
+
+    await createPurchaseIntent({ ...purchaseInput, paymentMethodSource: 'saved_card' });
+
+    const [, init] = mockLoggedFetch.mock.calls[0] as [string, { body: string }];
+    expect(JSON.parse(init.body)).toMatchObject({ paymentMethodSource: 'saved_card' });
+  });
+
+  it('creates a mandate setup-intent for a NEW card', async () => {
     mockLoggedFetch.mockResolvedValue(
       jsonResponse({ clientSecret: 'seti_secret', setupIntentId: 'seti_1', customerId: 'cus_1' })
     );
     const result = await createMandateSetupIntent('wallet-1');
     expect(result.clientSecret).toBe('seti_secret');
+    const [, init] = mockLoggedFetch.mock.calls[0] as [string, { body: string }];
+    expect(JSON.parse(init.body)).toEqual({
+      walletId: 'wallet-1',
+      paymentMethodSource: 'new_card',
+    });
+  });
+
+  it('confirms a mandate against the STORED card on the same route', async () => {
+    mockLoggedFetch.mockResolvedValue(jsonResponse({ status: 'succeeded', clientSecret: null }));
+
+    const result = await confirmSavedCardMandate('wallet-1');
+
+    expect(result).toEqual({ status: 'succeeded', clientSecret: null });
+    const [url, init] = mockLoggedFetch.mock.calls[0] as [string, { body: string }];
+    expect(url).toBe('http://api.test/credit/setup-intent');
+    expect(JSON.parse(init.body)).toEqual({
+      walletId: 'wallet-1',
+      paymentMethodSource: 'saved_card',
+    });
   });
 
   it('throws CreditApiError on a non-2xx response', async () => {
     mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'wallet_not_found' }, false, 404));
     await expect(createMandateSetupIntent('wallet-x')).rejects.toBeInstanceOf(CreditApiError);
+  });
+
+  it('CARRIES the parsed failure body so a decline is not flattened to a generic fault', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse({ outcome: 'declined', code: 'insufficient_funds' }, false, 402)
+    );
+
+    await expect(createPurchaseIntent(purchaseInput)).rejects.toMatchObject({
+      status: 402,
+      body: { outcome: 'declined', code: 'insufficient_funds' },
+    });
+  });
+
+  it('carries a no_saved_card 400 body', async () => {
+    mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'no_saved_card' }, false, 400));
+
+    await expect(createPurchaseIntent(purchaseInput)).rejects.toMatchObject({
+      status: 400,
+      body: { error: 'no_saved_card' },
+    });
+  });
+
+  it('tolerates a non-JSON failure body (an error page must not mask the status)', async () => {
+    mockLoggedFetch.mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => ({}),
+      text: async () => '<html>Bad Gateway</html>',
+    } as unknown as Response);
+
+    await expect(createPurchaseIntent(purchaseInput)).rejects.toMatchObject({
+      status: 502,
+      body: undefined,
+    });
   });
 
   it('throws when the internal secret is missing', async () => {

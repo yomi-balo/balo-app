@@ -23,6 +23,34 @@ export interface SettlementFields {
 }
 
 /**
+ * Display-only facts of a saved card, read from a Stripe PaymentMethod (top-up redesign).
+ * NEVER credentials — brand, last4 and expiry are exactly what a checkout prints back at the
+ * cardholder, and none of them can charge anything. Structurally identical to `@balo/db`'s
+ * `CardDisplayInput`, which is what the repository writes take; this is the apps/api-side
+ * spelling so the provider layer stays free of a db import.
+ */
+export interface CardDisplayFields {
+  cardBrand: string; // pm.card.brand, e.g. 'visa'
+  cardLast4: string; // pm.card.last4
+  cardExpMonth: number; // pm.card.exp_month
+  cardExpYear: number; // pm.card.exp_year
+}
+
+/**
+ * The card a buyer just paid with, as carried on a `manual_purchase` credit effect so the
+ * webhook can persist it for DISPLAY on their next visit (`applySavedCardDisplay`).
+ *
+ * ⚠ Carrying the payment-method id here does NOT grant an off-session charge right. The
+ * applier writes it WITHOUT touching `mandate_status`, and every off-session consumer gates on
+ * `isWalletMandateActive` (which requires `mandate_status === 'active'`). The weaker
+ * `isWalletCardReusableOnSession` is what this enables: reuse while the buyer is present.
+ */
+export type CardOnFileFields = {
+  customerId: string;
+  paymentMethodId: string;
+} & CardDisplayFields;
+
+/**
  * Off-session charge input (BAL-382). A discriminated union on `reason` so the correlation
  * ids the webhook's ledger-key derivation REQUIRES are enforced at COMPILE time — an
  * `overdraft_settlement` must carry `sessionId` (+ member attribution) and an `auto_topup`
@@ -83,6 +111,14 @@ export type StripeEffect =
        * always `null` for `auto_topup` / `overdraft_settlement`).
        */
       promoCode: string | null;
+      /**
+       * The card the buyer just used, for DISPLAY on their next visit. NON-NULL ONLY for
+       * `reason === 'manual_purchase'` — by construction in the resolver, the same shape of
+       * guarantee `promoCode` carries. Also `null` whenever the PaymentIntent named no
+       * customer / payment method, or the Stripe read failed (fail-soft: a missing
+       * "Visa •••• 4242" is cosmetic, a failed credit is a money bug).
+       */
+      cardOnFile: CardOnFileFields | null;
       settlement: SettlementFields;
     }
   | {
@@ -91,6 +127,12 @@ export type StripeEffect =
       customerId: string;
       paymentMethodId: string;
       mandateRef: string;
+      /**
+       * Display facts of the just-confirmed card, or `null` when Stripe could not be read.
+       * `null` leaves the wallet's existing display columns untouched rather than blanking a
+       * card the buyer can still see.
+       */
+      card: CardDisplayFields | null;
     }
   | { kind: 'mandate_failed'; walletId: string }
   | {

@@ -4,6 +4,7 @@ import {
   formatAud,
   formatAudShort,
   formatIndicative,
+  formatCardExpiry,
   autoTopupConfigErrors,
   isAutoTopupConfigValid,
   resolveRestingState,
@@ -114,6 +115,23 @@ describe('display-constants', () => {
     it('reads a balance at or above the floor as "healthy" (strict `<` boundary)', () => {
       expect(resolveRestingState(LOW_BALANCE_MINOR)).toBe('healthy');
       expect(resolveRestingState(34_700)).toBe('healthy');
+    });
+  });
+
+  describe('formatCardExpiry', () => {
+    it('formats a two-digit month and year', () => {
+      expect(formatCardExpiry(8, 2028)).toBe('08/28');
+      expect(formatCardExpiry(12, 2030)).toBe('12/30');
+    });
+
+    it('zero-pads a single-digit month', () => {
+      expect(formatCardExpiry(1, 2031)).toBe('01/31');
+      expect(formatCardExpiry(9, 2026)).toBe('09/26');
+    });
+
+    it('zero-pads a turn-of-century year', () => {
+      expect(formatCardExpiry(6, 2100)).toBe('06/00');
+      expect(formatCardExpiry(6, 2105)).toBe('06/05');
     });
   });
 });

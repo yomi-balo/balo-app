@@ -12,7 +12,13 @@ import { requireOnboardedUser, getCompanyContext } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
-import { createPurchaseIntent, createMandateSetupIntent } from './api-client';
+import {
+  createPurchaseIntent,
+  createMandateSetupIntent,
+  confirmSavedCardMandate,
+  CreditApiError,
+  type PaymentMethodSource,
+} from './api-client';
 import {
   MIN_AMOUNT_MINOR,
   MAX_AMOUNT_MINOR,
@@ -64,26 +70,81 @@ const startPurchaseSchema = z.object({
   clientRequestId: z.uuid(),
   promoCode: promoCodeSchema.optional(),
   config: configSchema,
+  /**
+   * Which card to charge (top-up redesign). `new_card` keeps the shipped deferred flow;
+   * `saved_card` charges the wallet's stored payment method, created AND confirmed on the api
+   * side (the browser never learns the payment-method id).
+   */
+  paymentMethodSource: z.enum(['new_card', 'saved_card']).default('new_card'),
 });
 
-export type StartPurchaseInput = z.infer<typeof startPurchaseSchema>;
+export type StartPurchaseInput = z.input<typeof startPurchaseSchema>;
+
+/**
+ * What happened to the card-backed mandate on this purchase — STATED, never inferred.
+ *
+ * ⚠ THE OUTCOME IS EXPLICIT BECAUSE A NULLABLE SECRET CANNOT CARRY IT. Three very different
+ * results all produce "no client secret": the mandate confirmed server-side, the confirmation
+ * FAILED, and a `requires_action` that came back without a secret. Collapsing them meant a
+ * failed mandate was reported to the buyer as captured — the receipt suppressed its "we
+ * couldn't finish setting up automatic charging" warning and `MANDATE_CAPTURED` fired, while
+ * the wallet sat at `mandate_status: 'pending'` forever with nothing to ever tell them.
+ *
+ *  · `not_required`    — no mandate work was done for this purchase. Either the mode is not
+ *                        card-backed, or an existing mandate belongs to a card the buyer is
+ *                        replacing (the webhook revokes it), so nothing was captured here.
+ *  · `captured`        — the mandate is confirmed for the card being charged; nothing left for
+ *                        the browser (the webhook flips the wallet to `active`).
+ *  · `requires_action` — the browser must finish it: `confirmSetup` on a fresh card, or
+ *                        `handleNextAction` for 3DS on the stored card.
+ *  · `failed`          — the confirmation did not complete. The PURCHASE still succeeds; only
+ *                        the automatic-charging setup did not, and the receipt says so.
+ */
+export type MandateOutcome =
+  | { outcome: 'not_required' }
+  | { outcome: 'captured' }
+  | { outcome: 'requires_action'; clientSecret: string }
+  | { outcome: 'failed' };
 
 export type StartPurchaseResult =
   | {
       ok: true;
-      /** PaymentIntent client secret — confirmed client-side to charge the card. */
+      /** New card: the browser confirms this PaymentIntent secret against its Payment Element. */
+      outcome: 'needs_client_confirmation';
       clientSecret: string;
       paymentIntentId: string;
-      /**
-       * SetupIntent client secret — present ONLY for a card-backed mode (auto_topup /
-       * keep_going). Confirmed with the just-saved payment method to capture the reusable
-       * off-session mandate (webhook `setup_intent.succeeded` → `applyMandate`). `null`
-       * for `notify_only` (no mandate needed).
-       */
-      setupClientSecret: string | null;
+      mandate: MandateOutcome;
       walletId: string;
     }
-  | { ok: false; error: 'unauthorized' | 'invalid_input' | 'stripe_error' };
+  | {
+      ok: true;
+      /** Stored card: already confirmed server-side. The webhook credits, as always. */
+      outcome: 'complete';
+      paymentIntentId: string;
+      mandate: MandateOutcome;
+      walletId: string;
+    }
+  | {
+      ok: true;
+      /** Stored card: the browser must run 3DS with `stripe.handleNextAction`. */
+      outcome: 'requires_action';
+      clientSecret: string;
+      paymentIntentId: string;
+      mandate: MandateOutcome;
+      walletId: string;
+    }
+  | {
+      ok: false;
+      error:
+        | 'unauthorized'
+        | 'invalid_input'
+        | 'stripe_error'
+        | 'saved_card_error'
+        | 'no_saved_card'
+        | 'card_declined';
+      /** Stripe's specific refusal reason, when it gave one (`card_declined` only). */
+      declineCode?: string;
+    };
 
 export type ValidatePromoResult =
   | { ok: true; grantMinor: number }
@@ -151,11 +212,102 @@ async function persistLowBalanceConfig(
 }
 
 /**
+ * Resolve what happens to the card-backed mandate on this purchase. Returns a stated
+ * {@link MandateOutcome} — never a bare nullable secret, whose three meanings the composer
+ * could not tell apart.
+ *
+ * GUARD (unchanged): no SetupIntent is opened when an ACTIVE mandate already exists — opening
+ * one flips `mandate_status` to 'pending', so requesting it for an already-'active' wallet would
+ * transiently downgrade a working mandate on a repeat card-backed purchase. What that means for
+ * THIS purchase depends on which card is being charged:
+ *  · `saved_card` — the live mandate was captured against the very card we are charging, so it
+ *                   is genuinely `captured`.
+ *  · `new_card`   — a different card is going on file, and the webhook revokes the mandate
+ *                   captured for the old one (`applySavedCardDisplay`). Nothing is captured
+ *                   here, so say `not_required` and let the receipt's warning surface.
+ *
+ * Otherwise the two sources differ in WHICH card the mandate is captured against:
+ *  · `new_card`   — return the secret; the browser confirms it with the PM the PaymentIntent
+ *                   just saved.
+ *  · `saved_card` — the api confirms server-side against the stored card. `succeeded` ⇒
+ *                   `captured` (the webhook activates it, nothing for the browser to do);
+ *                   `requires_action` WITH a secret ⇒ `requires_action`, for `handleNextAction`;
+ *                   anything else — including a `requires_action` that came back without a
+ *                   secret, which the browser cannot act on — ⇒ `failed`. The purchase still
+ *                   completes; only the automatic-charging setup did not.
+ *
+ * ⚠ NEVER THROWS. A MANDATE HICCUP MUST NOT FAIL A COMPLETED PURCHASE — the same rule the
+ * composer's `captureMandate` already follows on the client side. This runs AFTER
+ * `createPurchaseIntent`, and on the saved-card path the money moved inside that call; letting
+ * a transient failure of the second internal hop propagate to the action's catch boundary would
+ * discard a successful purchase, report it as `saved_card_error`, and never render a receipt for
+ * a wallet the webhook is about to credit. So the network arms degrade to `failed` and the
+ * receipt's warning does the telling.
+ */
+async function resolveMandateOutcome(
+  wallet: CreditWallet,
+  lowBalanceMode: z.infer<typeof lowBalanceModeSchema>,
+  paymentMethodSource: PaymentMethodSource
+): Promise<MandateOutcome> {
+  const cardBacked = lowBalanceMode === 'auto_topup' || lowBalanceMode === 'keep_going';
+  if (!cardBacked) {
+    return { outcome: 'not_required' };
+  }
+  if (wallet.mandateStatus === 'active') {
+    return paymentMethodSource === 'saved_card'
+      ? { outcome: 'captured' }
+      : { outcome: 'not_required' };
+  }
+  try {
+    if (paymentMethodSource === 'new_card') {
+      const { clientSecret } = await createMandateSetupIntent(wallet.id);
+      return { outcome: 'requires_action', clientSecret };
+    }
+    const result = await confirmSavedCardMandate(wallet.id);
+    if (result.status === 'requires_action' && result.clientSecret !== null) {
+      return { outcome: 'requires_action', clientSecret: result.clientSecret };
+    }
+    return result.status === 'succeeded' ? { outcome: 'captured' } : { outcome: 'failed' };
+  } catch (error) {
+    log.warn('Mandate capture failed — the top-up itself is unaffected', {
+      walletId: wallet.id,
+      lowBalanceMode,
+      paymentMethodSource,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { outcome: 'failed' };
+  }
+}
+
+/**
+ * Recognise the two api failures the buyer can ACT on, and return `null` for everything else
+ * (which the catch boundary then reports as a generic fault). A card DECLINE is a user outcome,
+ * not a system fault: it gets its own arm — and its own copy — so the buyer learns their card
+ * was refused instead of being told to "try again".
+ */
+function mapPurchaseFailure(
+  error: unknown
+): Extract<StartPurchaseResult, { ok: false }> | undefined {
+  if (!(error instanceof CreditApiError)) return undefined;
+  if (error.body?.outcome === 'declined') {
+    const declineCode = error.body.code;
+    return { ok: false, error: 'card_declined', ...(declineCode ? { declineCode } : {}) };
+  }
+  if (error.body?.error === 'no_saved_card') {
+    return { ok: false, error: 'no_saved_card' };
+  }
+  return undefined;
+}
+
+/**
  * Start a card top-up: gate MANAGE_BILLING, resolve the wallet, persist low-balance config,
- * then create the on-session purchase PaymentIntent (deferred flow) and return its
- * `clientSecret` for the client to confirm with Stripe.js. The wallet is credited by the
- * shipped BAL-382 webhook — this NEVER writes the ledger. `clientRequestId` (stable per
- * configuration) keys Stripe idempotency, so a double-submit returns the same PI.
+ * then charge. `new_card` creates the on-session PaymentIntent (deferred flow) and returns its
+ * `clientSecret` for the client to confirm with Stripe.js; `saved_card` has the api create AND
+ * confirm the PaymentIntent against the wallet's stored payment method, so the browser only runs
+ * 3DS if asked. The wallet is credited by the shipped BAL-382 webhook — this NEVER writes the
+ * ledger. `clientRequestId` (stable per configuration, and REGENERATED when the payment-method
+ * source changes) keys Stripe idempotency, so a double-submit returns the same PI while a card
+ * swap never reuses a key against different PI params.
  */
 export async function startPurchaseAction(
   rawInput: StartPurchaseInput
@@ -177,7 +329,7 @@ export async function startPurchaseAction(
     // Config is a preference — persist it regardless of payment outcome.
     await persistLowBalanceConfig(wallet.id, input.config);
 
-    const { clientSecret, paymentIntentId } = await createPurchaseIntent({
+    const purchase = await createPurchaseIntent({
       walletId: wallet.id,
       // The charge is in AUD at face value — the card network converts to the local currency
       // (the "≈ US$…" honest estimate); the wallet is credited exactly the chosen AUD amount.
@@ -186,30 +338,62 @@ export async function startPurchaseAction(
       initiatingMemberId: actor.userId,
       clientRequestId: input.clientRequestId,
       promoCode: input.promoCode,
+      paymentMethodSource: input.paymentMethodSource,
     });
 
-    // Card-backed modes capture the reusable off-session mandate inline (same Pay step): a
-    // SetupIntent whose confirmation lands the wallet's mandate columns via the webhook. The
-    // client confirms it with the payment method saved by the PaymentIntent confirmation.
-    // GUARD: skip the SetupIntent when an ACTIVE mandate already exists — `createSetupIntent`
-    // flips `mandate_status` to 'pending', so requesting one for a wallet that is already
-    // 'active' would transiently downgrade a working mandate on a repeat card-backed purchase.
-    const cardBacked =
-      input.config.lowBalanceMode === 'auto_topup' || input.config.lowBalanceMode === 'keep_going';
-    const needsMandate = cardBacked && wallet.mandateStatus !== 'active';
-    const setupClientSecret = needsMandate
-      ? (await createMandateSetupIntent(wallet.id)).clientSecret
-      : null;
+    // Never throws (see its docblock): on the saved-card path the money has already moved above,
+    // so a mandate hiccup degrades to `{ outcome: 'failed' }` rather than discarding a completed
+    // purchase at the catch boundary below.
+    const mandate = await resolveMandateOutcome(
+      wallet,
+      input.config.lowBalanceMode,
+      input.paymentMethodSource
+    );
 
-    return { ok: true, clientSecret, paymentIntentId, setupClientSecret, walletId: wallet.id };
+    if (purchase.outcome === 'complete') {
+      return {
+        ok: true,
+        outcome: 'complete',
+        paymentIntentId: purchase.paymentIntentId,
+        mandate,
+        walletId: wallet.id,
+      };
+    }
+    return {
+      ok: true,
+      outcome: purchase.outcome,
+      clientSecret: purchase.clientSecret,
+      paymentIntentId: purchase.paymentIntentId,
+      mandate,
+      walletId: wallet.id,
+    };
   } catch (error) {
+    const mapped = mapPurchaseFailure(error);
+    if (mapped?.error === 'card_declined') {
+      // A decline is a USER outcome, not a system fault — warn, not error.
+      log.warn('Top-up card declined', {
+        amountMinor: input.amountMinor,
+        paymentMethodSource: input.paymentMethodSource,
+        declineCode: mapped.declineCode,
+      });
+      return mapped;
+    }
     log.error('Top-up purchase intent creation failed', {
       amountMinor: input.amountMinor,
       hasPromo: Boolean(input.promoCode),
+      paymentMethodSource: input.paymentMethodSource,
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
-    return { ok: false, error: 'stripe_error' };
+    if (mapped?.error === 'no_saved_card') {
+      return mapped;
+    }
+    // ⚠ R14: the saved-card branch must NOT reuse the new-card "no charge was made" copy —
+    // on that path the charge is attempted inside the call above.
+    return {
+      ok: false,
+      error: input.paymentMethodSource === 'saved_card' ? 'saved_card_error' : 'stripe_error',
+    };
   }
 }
 

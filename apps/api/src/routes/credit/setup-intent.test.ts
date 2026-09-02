@@ -3,8 +3,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
 const mockCreateSetupIntent = vi.fn();
+const mockConfirmSavedCardMandate = vi.fn();
 vi.mock('../../services/stripe/index.js', () => ({
   createSetupIntent: (...args: unknown[]) => mockCreateSetupIntent(...args),
+  confirmSavedCardMandate: (...args: unknown[]) => mockConfirmSavedCardMandate(...args),
 }));
 
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -76,5 +78,32 @@ describe('POST /credit/setup-intent', () => {
       customerId: 'cus_1',
     });
     expect(mockCreateSetupIntent).toHaveBeenCalledWith(WALLET_ID);
+    expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+  });
+
+  it('confirms the mandate against the STORED card when paymentMethodSource is saved_card', async () => {
+    mockConfirmSavedCardMandate.mockResolvedValue({ status: 'succeeded', clientSecret: null });
+    const res = await inject(
+      { walletId: WALLET_ID, paymentMethodSource: 'saved_card' },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: 'succeeded', clientSecret: null });
+    expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith(WALLET_ID);
+    // The buyer already gave us this card — never make them re-enter it.
+    expect(mockCreateSetupIntent).not.toHaveBeenCalled();
+  });
+
+  it('returns the client secret when the stored-card mandate needs 3DS', async () => {
+    mockConfirmSavedCardMandate.mockResolvedValue({
+      status: 'requires_action',
+      clientSecret: 'seti_3ds_secret',
+    });
+    const res = await inject(
+      { walletId: WALLET_ID, paymentMethodSource: 'saved_card' },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.json()).toEqual({ status: 'requires_action', clientSecret: 'seti_3ds_secret' });
   });
 });

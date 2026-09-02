@@ -47,3 +47,23 @@ export function isWalletMandateActive(wallet: MandateWalletFields): boolean {
     wallet.stripePaymentMethodId !== null
   );
 }
+
+/**
+ * Whether a stored card may be charged ON-SESSION — the buyer is present and has just pressed
+ * Pay. Requires a Stripe customer AND a saved payment method; deliberately does NOT require
+ * `mandate_status === 'active'`.
+ *
+ * ⚠ THE TWO PREDICATES ARE NOT INTERCHANGEABLE and the difference is a consent boundary, not an
+ * optimisation. `isWalletMandateActive` gates charges Balo initiates while nobody is watching
+ * (auto-top-up, overdraft settlement); that consent is captured by an explicit off-session
+ * SetupIntent. THIS predicate gates a charge the buyer is initiating right now against a card
+ * they already gave us. Never widen one into the other — `card-reuse.test.ts` pins both side by
+ * side over one table of wallet states so an "alignment" refactor fails loudly.
+ *
+ * Like `isWalletMandateActive` this returns a BOOLEAN and does NOT narrow the two nullable id
+ * fields; a caller that needs the ids must null-check them itself (the shape `auto-topup.ts`
+ * already uses).
+ */
+export function isWalletCardReusableOnSession(wallet: MandateWalletFields): boolean {
+  return wallet.stripeCustomerId !== null && wallet.stripePaymentMethodId !== null;
+}

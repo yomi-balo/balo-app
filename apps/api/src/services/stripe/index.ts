@@ -4,13 +4,22 @@
  * import from here + from `@balo/db` (`deriveIdempotencyKey`, `applyLedgerEntry`); none
  * re-implement charge/mandate/webhook logic.
  */
-export { ensureCustomer, attachPaymentMethod, createSetupIntent } from './mandate.js';
+export {
+  ensureCustomer,
+  attachPaymentMethod,
+  createSetupIntent,
+  retrieveCardDisplay,
+  confirmSavedCardMandate,
+  type SavedCardMandateResult,
+} from './mandate.js';
 export {
   createOnSessionPurchaseIntent,
+  createOnSessionSavedCardCharge,
   createOffSessionCharge,
   retrieveSettlement,
   retrievePaymentIntentStatus,
   type PaymentIntentStatusResult,
+  type SavedCardChargeResult,
 } from './charges.js';
 export { resolveStripeEffect, applyStripeEffect } from './dispatch.js';
 export { StripeConfigError } from './errors.js';
@@ -19,4 +28,6 @@ export type {
   OffSessionChargeResult,
   StripeEffect,
   CreditTopupReceipt,
+  CardDisplayFields,
+  CardOnFileFields,
 } from './types.js';

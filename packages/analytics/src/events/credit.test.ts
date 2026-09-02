@@ -8,6 +8,8 @@ describe('CREDIT_EVENTS (client)', () => {
       'PURCHASE_COMPLETED',
       'PROMO_REDEEMED',
       'MANDATE_CAPTURED',
+      'PAYMENT_METHOD_CHANGED',
+      'PURCHASE_DECLINED',
     ]);
   });
 
@@ -16,6 +18,8 @@ describe('CREDIT_EVENTS (client)', () => {
     expect(CREDIT_EVENTS.PURCHASE_COMPLETED).toBe('credit_purchase_completed');
     expect(CREDIT_EVENTS.PROMO_REDEEMED).toBe('promo_redeemed');
     expect(CREDIT_EVENTS.MANDATE_CAPTURED).toBe('mandate_captured');
+    expect(CREDIT_EVENTS.PAYMENT_METHOD_CHANGED).toBe('credit_payment_method_changed');
+    expect(CREDIT_EVENTS.PURCHASE_DECLINED).toBe('credit_purchase_declined');
   });
 
   it('values follow the snake_case naming convention', () => {

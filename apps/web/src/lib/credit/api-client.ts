@@ -36,14 +36,48 @@ function getApiUrl(): string {
 
 // ── BAL-377: internal-secret credit intent-creation hop ─────────────────────────────────
 
+/**
+ * A structured failure body the api returned alongside a non-2xx. Present only for the
+ * outcomes the action layer must distinguish from a generic fault — today, the saved-card
+ * `declined` (402) and `no_saved_card` (400).
+ */
+export interface CreditApiErrorBody {
+  outcome?: string;
+  error?: string;
+  code?: string | null;
+}
+
 /** Thrown when a credit intent-creation call to apps/api fails (caught at the action boundary). */
 export class CreditApiError extends Error {
   constructor(
     message: string,
-    public readonly status?: number
+    public readonly status?: number,
+    /**
+     * The PARSED failure body, when the api sent one. A card decline is a user outcome, not a
+     * system fault — without this the action could only report "something went wrong" and the
+     * buyer would never learn their card was refused or why.
+     */
+    public readonly body?: CreditApiErrorBody
   ) {
     super(message);
     this.name = 'CreditApiError';
+  }
+}
+
+/** Parse a failure body defensively — a non-JSON error page must not mask the real status. */
+function parseErrorBody(text: string): CreditApiErrorBody | undefined {
+  if (text.length === 0) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const rec = parsed as Record<string, unknown>;
+    return {
+      ...(typeof rec['outcome'] === 'string' ? { outcome: rec['outcome'] } : {}),
+      ...(typeof rec['error'] === 'string' ? { error: rec['error'] } : {}),
+      ...(typeof rec['code'] === 'string' ? { code: rec['code'] } : {}),
+    };
+  } catch {
+    return undefined;
   }
 }
 
@@ -63,10 +97,15 @@ async function postInternal<T>(path: string, body: unknown): Promise<T> {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new CreditApiError(`${path} failed: ${text}`, response.status);
+    // The body is read and CARRIED, not discarded: the caller distinguishes a card decline
+    // (402 `declined`) from a genuine fault, and the two get different user copy.
+    throw new CreditApiError(`${path} failed: ${text}`, response.status, parseErrorBody(text));
   }
   return (await response.json()) as T;
 }
+
+/** Which card a purchase charges — a NEW one entered in the Payment Element, or the stored one. */
+export type PaymentMethodSource = 'new_card' | 'saved_card';
 
 export interface PurchaseIntentInput {
   walletId: string;
@@ -75,12 +114,20 @@ export interface PurchaseIntentInput {
   initiatingMemberId: string;
   clientRequestId: string;
   promoCode?: string;
+  paymentMethodSource: PaymentMethodSource;
 }
 
-export interface PurchaseIntentResult {
-  clientSecret: string;
-  paymentIntentId: string;
-}
+/**
+ * The purchase-intent response, discriminated on `outcome`:
+ *  · `needs_client_confirmation` — new card: the browser confirms the secret against the Element
+ *  · `complete`                  — stored card: already confirmed server-side, nothing left to do
+ *  · `requires_action`           — stored card: the browser must run 3DS via `handleNextAction`
+ * A decline never appears here — it arrives as a 402 `CreditApiError` with a parsed body.
+ */
+export type PurchaseIntentResult =
+  | { outcome: 'needs_client_confirmation'; clientSecret: string; paymentIntentId: string }
+  | { outcome: 'complete'; paymentIntentId: string }
+  | { outcome: 'requires_action'; clientSecret: string; paymentIntentId: string };
 
 export interface SetupIntentResult {
   clientSecret: string;
@@ -88,7 +135,13 @@ export interface SetupIntentResult {
   customerId: string;
 }
 
-/** Create the on-session purchase PaymentIntent (deferred flow) → its `clientSecret`. */
+/** The outcome of confirming a mandate against the wallet's already-stored card. */
+export interface SavedCardMandateResult {
+  status: 'succeeded' | 'requires_action' | 'failed';
+  clientSecret: string | null;
+}
+
+/** Create the on-session purchase PaymentIntent → the outcome the composer must act on. */
 export async function createPurchaseIntent(
   input: PurchaseIntentInput
 ): Promise<PurchaseIntentResult> {
@@ -97,7 +150,23 @@ export async function createPurchaseIntent(
 
 /** Create the off-session mandate SetupIntent → its `clientSecret` (card-backed modes). */
 export async function createMandateSetupIntent(walletId: string): Promise<SetupIntentResult> {
-  return postInternal<SetupIntentResult>('/credit/setup-intent', { walletId });
+  return postInternal<SetupIntentResult>('/credit/setup-intent', {
+    walletId,
+    paymentMethodSource: 'new_card',
+  });
+}
+
+/**
+ * Confirm the mandate against the wallet's ALREADY-STORED card (top-up redesign). Used when a
+ * returning buyer paying with their saved card picks a card-backed mode — they never re-enter a
+ * card we already hold. `succeeded` ⇒ nothing for the browser to do (the webhook activates it);
+ * `requires_action` ⇒ the returned secret runs 3DS.
+ */
+export async function confirmSavedCardMandate(walletId: string): Promise<SavedCardMandateResult> {
+  return postInternal<SavedCardMandateResult>('/credit/setup-intent', {
+    walletId,
+    paymentMethodSource: 'saved_card',
+  });
 }
 
 // ── BAL-378: WorkOS-Bearer credit-session drawdown hop ──────────────────────────────────

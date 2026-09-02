@@ -8,6 +8,7 @@ vi.mock('@balo/shared/logging', () => ({
 import {
   createOffSessionCharge,
   createOnSessionPurchaseIntent,
+  createOnSessionSavedCardCharge,
   retrievePaymentIntentStatus,
   retrieveSettlement,
 } from './charges.js';
@@ -123,6 +124,139 @@ describe('charges', () => {
           idempotencyKey: 'purchase:wallet_1:req_1',
         })
       ).rejects.toThrow(/client_secret/);
+    });
+  });
+
+  describe('createOnSessionSavedCardCharge', () => {
+    const savedCardInput = {
+      walletId: 'wallet_1',
+      customerId: 'cus_1',
+      paymentMethodId: 'pm_1',
+      presentmentCurrency: 'aud',
+      presentmentAmountMinor: 100_000,
+      initiatingMemberId: 'member_1',
+      idempotencyKey: 'purchase:wallet_1:req_1',
+      returnUrl: 'https://app.balo.test/billing/top-up',
+    };
+
+    it('creates a CONFIRMED PI against the stored card with the buyer present', async () => {
+      mockStripe.paymentIntents.create.mockResolvedValue({
+        id: 'pi_s1',
+        status: 'succeeded',
+        client_secret: 'pi_s1_secret',
+      });
+
+      const result = await createOnSessionSavedCardCharge(savedCardInput);
+
+      expect(result).toEqual({
+        outcome: 'confirmed',
+        status: 'succeeded',
+        clientSecret: 'pi_s1_secret',
+        paymentIntentId: 'pi_s1',
+      });
+      expect(mockStripe.paymentIntents.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount: 100_000,
+          currency: 'aud',
+          customer: 'cus_1',
+          payment_method: 'pm_1',
+          // `false` is load-bearing: the buyer IS here, so a 3DS challenge must be answerable.
+          off_session: false,
+          confirm: true,
+          setup_future_usage: 'off_session',
+          use_stripe_sdk: true,
+          return_url: 'https://app.balo.test/billing/top-up',
+        }),
+        { idempotencyKey: 'purchase:wallet_1:req_1' }
+      );
+    });
+
+    it('stamps metadata IDENTICAL to the new-card path (the webhook cannot tell them apart)', async () => {
+      mockStripe.paymentIntents.create.mockResolvedValue({
+        id: 'pi_a',
+        status: 'succeeded',
+        client_secret: 'sec_a',
+      });
+      await createOnSessionSavedCardCharge({ ...savedCardInput, promoCode: 'WELCOME50' });
+      const [savedParams] = mockStripe.paymentIntents.create.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+
+      mockStripe.paymentIntents.create.mockClear();
+      mockStripe.paymentIntents.create.mockResolvedValue({ id: 'pi_b', client_secret: 'sec_b' });
+      await createOnSessionPurchaseIntent({
+        walletId: 'wallet_1',
+        customerId: 'cus_1',
+        presentmentCurrency: 'aud',
+        presentmentAmountMinor: 100_000,
+        initiatingMemberId: 'member_1',
+        idempotencyKey: 'purchase:wallet_1:req_1',
+        promoCode: 'WELCOME50',
+      });
+      const [newParams] = mockStripe.paymentIntents.create.mock.calls[0] as [
+        Record<string, unknown>,
+      ];
+
+      // Deep-equal, not a subset: an extra or missing metadata key on either path would change
+      // how `resolvePaymentIntentSucceeded` credits, receipts and reconciles the purchase.
+      expect(savedParams.metadata).toEqual(newParams.metadata);
+      expect(savedParams.metadata).toEqual({
+        walletId: 'wallet_1',
+        reason: 'manual_purchase',
+        memberId: 'member_1',
+        promoCode: 'WELCOME50',
+      });
+    });
+
+    it('surfaces requires_action with the client secret for 3DS', async () => {
+      mockStripe.paymentIntents.create.mockResolvedValue({
+        id: 'pi_s2',
+        status: 'requires_action',
+        client_secret: 'pi_s2_secret',
+      });
+
+      await expect(createOnSessionSavedCardCharge(savedCardInput)).resolves.toEqual({
+        outcome: 'confirmed',
+        status: 'requires_action',
+        clientSecret: 'pi_s2_secret',
+        paymentIntentId: 'pi_s2',
+      });
+    });
+
+    it('returns a typed decline (never throws) when the card is refused', async () => {
+      mockStripe.paymentIntents.create.mockRejectedValue(
+        new MockStripeCardError({
+          code: 'card_declined',
+          decline_code: 'insufficient_funds',
+          payment_intent: { id: 'pi_s3' },
+        })
+      );
+
+      await expect(createOnSessionSavedCardCharge(savedCardInput)).resolves.toEqual({
+        outcome: 'declined',
+        code: 'insufficient_funds',
+        paymentIntentId: 'pi_s3',
+      });
+    });
+
+    it('treats a PI parked back in requires_payment_method as a decline', async () => {
+      mockStripe.paymentIntents.create.mockResolvedValue({
+        id: 'pi_s4',
+        status: 'requires_payment_method',
+        client_secret: 'pi_s4_secret',
+        last_payment_error: { code: 'card_declined', decline_code: 'do_not_honor' },
+      });
+
+      await expect(createOnSessionSavedCardCharge(savedCardInput)).resolves.toEqual({
+        outcome: 'declined',
+        code: 'do_not_honor',
+        paymentIntentId: 'pi_s4',
+      });
+    });
+
+    it('re-throws a non-card Stripe failure', async () => {
+      mockStripe.paymentIntents.create.mockRejectedValue(new Error('network down'));
+      await expect(createOnSessionSavedCardCharge(savedCardInput)).rejects.toThrow(/network down/);
     });
   });
 
@@ -280,7 +414,10 @@ describe('charges', () => {
       await expect(retrieveSettlement('pi_7')).rejects.toThrow(/latest_charge/);
     });
 
-    it('throws when the charge has no expanded balance_transaction', async () => {
+    it('does NOT poll when the expansion was dropped (string arm is permanent, not a race)', async () => {
+      // A bare id back means our `expand` was not applied — re-reading returns the identical
+      // response, so retrying would only burn the delay budget. The call-count assertion is
+      // the load-bearing half: it stops a refactor from folding this into the retry arm.
       mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_8', latest_charge: 'ch_8' });
       mockStripe.charges.retrieve.mockResolvedValue({
         id: 'ch_8',
@@ -288,7 +425,60 @@ describe('charges', () => {
         amount: 2000,
         balance_transaction: 'txn_8', // un-expanded (string id)
       });
-      await expect(retrieveSettlement('pi_8')).rejects.toThrow(/balance_transaction/);
+
+      await expect(retrieveSettlement('pi_8')).rejects.toThrow(/expand was not applied/);
+      expect(mockStripe.charges.retrieve).toHaveBeenCalledTimes(1);
+    });
+
+    it('POLLS and settles when the balance transaction lands late (the observed race)', async () => {
+      // The bug this guards: `payment_intent.succeeded` arrived ~1s after a real A$1,000
+      // charge, before Stripe had created the balance transaction. The webhook 500'd and the
+      // wallet was never credited, while the buyer saw a success receipt.
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_r', latest_charge: 'ch_r' });
+      mockStripe.charges.retrieve
+        .mockResolvedValueOnce({
+          id: 'ch_r',
+          currency: 'aud',
+          amount: 100_000,
+          balance_transaction: null, // not created yet
+        })
+        .mockResolvedValueOnce({
+          id: 'ch_r',
+          currency: 'aud',
+          amount: 100_000,
+          balance_transaction: {
+            id: 'txn_r',
+            amount: 100_000,
+            currency: 'aud',
+            exchange_rate: null,
+          },
+        });
+
+      const settlement = await retrieveSettlement('pi_r', [0]);
+
+      // These two assertions are a PAIR on purpose: a `charge.amount` fallback would satisfy
+      // the amount while leaving the balance-transaction id null, so together they pin that
+      // the settled figure came from the balance transaction and stays traceable.
+      expect(settlement.creditAmountMinor).toBe(100_000);
+      expect(settlement.stripeBalanceTransactionId).toBe('txn_r');
+      expect(mockStripe.charges.retrieve).toHaveBeenCalledTimes(2);
+    });
+
+    it('still throws once the wait is exhausted, preserving the Stripe-retry backstop', async () => {
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_x', latest_charge: 'ch_x' });
+      mockStripe.charges.retrieve.mockResolvedValue({
+        id: 'ch_x',
+        currency: 'aud',
+        amount: 2000,
+        balance_transaction: null,
+      });
+
+      await expect(retrieveSettlement('pi_x', [0, 0])).rejects.toThrow(
+        /no balance_transaction yet/
+      );
+      // 1 initial read + 2 retries. The throw is deliberate: it becomes a 500, and Stripe's
+      // redelivery is what actually credits the wallet.
+      expect(mockStripe.charges.retrieve).toHaveBeenCalledTimes(3);
     });
 
     it('throws StripeSettlementError when the settlement is not AUD (money-integrity guard)', async () => {
@@ -300,6 +490,9 @@ describe('charges', () => {
         balance_transaction: { id: 'txn_9', amount: 5000, currency: 'usd', exchange_rate: null },
       });
       await expect(retrieveSettlement('pi_9')).rejects.toBeInstanceOf(StripeSettlementError);
+      // The money-integrity guard must fire on the FIRST read — a non-AUD settlement is a
+      // permanent condition, so it must never be dragged into the retry window.
+      expect(mockStripe.charges.retrieve).toHaveBeenCalledTimes(1);
     });
   });
 

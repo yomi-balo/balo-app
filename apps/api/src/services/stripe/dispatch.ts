@@ -20,7 +20,13 @@ import {
 } from '../credit/auto-topup.js';
 import { notificationEvents } from '../../notifications/publisher.js';
 import { retrieveSettlement } from './charges.js';
-import type { CreditTopupReceipt, PostCommitEffect, StripeEffect } from './types.js';
+import { retrieveCardDisplay } from './mandate.js';
+import type {
+  CardOnFileFields,
+  CreditTopupReceipt,
+  PostCommitEffect,
+  StripeEffect,
+} from './types.js';
 
 const log = createLogger('stripe');
 
@@ -65,6 +71,27 @@ async function resolveWalletIdFromPaymentIntent(paymentIntentId: string): Promis
   return pi.metadata.walletId ?? null;
 }
 
+/**
+ * Read the card a manual purchase was paid with, off the EVENT object — `pi.payment_method` and
+ * `pi.customer` are plain string ids when unexpanded, so no extra PaymentIntent retrieve is
+ * needed. Returns `null` when either id is absent or the card read failed; the credit then
+ * applies with `cardOnFile: null` and simply records no card (fail-soft, see
+ * `retrieveCardDisplay`).
+ */
+async function resolveCardOnFile(pi: Stripe.PaymentIntent): Promise<CardOnFileFields | null> {
+  const customerId = typeof pi.customer === 'string' ? pi.customer : pi.customer?.id;
+  const paymentMethodId =
+    typeof pi.payment_method === 'string' ? pi.payment_method : pi.payment_method?.id;
+  if (!customerId || !paymentMethodId) {
+    return null;
+  }
+  const card = await retrieveCardDisplay(paymentMethodId);
+  if (card === null) {
+    return null;
+  }
+  return { customerId, paymentMethodId, ...card };
+}
+
 async function resolvePaymentIntentSucceeded(
   pi: Stripe.PaymentIntent
 ): Promise<StripeEffect | null> {
@@ -84,6 +111,10 @@ async function resolvePaymentIntentSucceeded(
     return null;
   }
   const settlement = await retrieveSettlement(pi.id);
+  // Top-up redesign — the card a buyer just used is captured for DISPLAY only, and only on a
+  // manual purchase (an auto-top-up / settlement charge already ran against a stored card, so
+  // there is nothing new to learn). Same by-construction guarantee as `promoCode` below.
+  const cardOnFile = reason === 'manual_purchase' ? await resolveCardOnFile(pi) : null;
   return {
     kind: 'credit',
     reason,
@@ -94,6 +125,7 @@ async function resolvePaymentIntentSucceeded(
     // BAL-377 — only a manual_purchase carries an (optional) promo code; auto_topup /
     // overdraft_settlement never stamp it, so they resolve to null by construction.
     promoCode: reason === 'manual_purchase' ? (pi.metadata.promoCode ?? null) : null,
+    cardOnFile,
     settlement,
   };
 }
@@ -117,7 +149,7 @@ async function resolvePaymentIntentFailed(pi: Stripe.PaymentIntent): Promise<Str
   };
 }
 
-function resolveSetupIntentSucceeded(si: Stripe.SetupIntent): StripeEffect | null {
+async function resolveSetupIntentSucceeded(si: Stripe.SetupIntent): Promise<StripeEffect | null> {
   const walletId = si.metadata?.walletId;
   const customerId = typeof si.customer === 'string' ? si.customer : si.customer?.id;
   const paymentMethodId =
@@ -129,7 +161,17 @@ function resolveSetupIntentSucceeded(si: Stripe.SetupIntent): StripeEffect | nul
     );
     return null;
   }
-  return { kind: 'mandate_active', walletId, customerId, paymentMethodId, mandateRef: si.id };
+  // Display facts of the card the mandate was just captured against. Fail-soft: a `null` here
+  // leaves the wallet's existing display columns untouched and NEVER blocks the activation.
+  const card = await retrieveCardDisplay(paymentMethodId);
+  return {
+    kind: 'mandate_active',
+    walletId,
+    customerId,
+    paymentMethodId,
+    mandateRef: si.id,
+    card,
+  };
 }
 
 function resolveSetupIntentFailed(si: Stripe.SetupIntent): StripeEffect | null {
@@ -415,6 +457,40 @@ async function applyCredit(
     'Applied credit ledger effect'
   );
 
+  // Top-up redesign — persist the card the buyer just used, for DISPLAY on their next visit.
+  // FRESH events only: a replay has nothing new to record. This write can never make a wallet
+  // off-session chargeable: `applySavedCardDisplay` never sets `mandate_status = 'active'`, and
+  // when the card it is handed DIFFERS from the one on file it clears `mandate_status` /
+  // `mandate_ref` in the same statement — so a mandate can never end up pointing at a card that
+  // did not consent to it. Passing the FRESH payment-method id through is what the repository
+  // keys that decision on; never "optimise" it to a no-op when the ids look equal. `cardOnFile`
+  // is non-null only on a `manual_purchase` (by construction in the resolver), which is why this
+  // sits above the per-reason branches rather than inside one.
+  const { cardOnFile } = effect;
+  if (cardOnFile !== null && !base.deduped) {
+    await creditWalletsRepository.applySavedCardDisplay(tx, {
+      walletId: effect.walletId,
+      stripeCustomerId: cardOnFile.customerId,
+      stripePaymentMethodId: cardOnFile.paymentMethodId,
+      card: {
+        cardBrand: cardOnFile.cardBrand,
+        cardLast4: cardOnFile.cardLast4,
+        cardExpMonth: cardOnFile.cardExpMonth,
+        cardExpYear: cardOnFile.cardExpYear,
+      },
+    });
+    // Brand ONLY — never last4, expiry, the payment-method id or a mandate ref.
+    log.info(
+      {
+        op: 'applyStripeEffect',
+        kind: 'card_display',
+        walletId: effect.walletId,
+        brand: cardOnFile.cardBrand,
+      },
+      'Persisted saved-card display facts for the next visit'
+    );
+  }
+
   // BAL-378: an overdraft settlement credit ALSO marks the session settled + clears the
   // receivable (single webhook source of truth). ledgerKeyForCredit guarantees a non-null
   // sessionId for this reason. A replayed (deduped) credit still idempotently re-marks, but
@@ -621,6 +697,9 @@ export async function applyStripeEffect(
         stripePaymentMethodId: effect.paymentMethodId,
         mandateRef: effect.mandateRef,
         mandateStatus: 'active',
+        // Omitted (not `undefined`-spread as a key) when the card could not be read, so the
+        // display columns keep whatever the wallet already showed.
+        ...(effect.card === null ? {} : { card: effect.card }),
       });
       log.info(
         { op: 'applyStripeEffect', kind: 'mandate_active', walletId: effect.walletId },
