@@ -47,12 +47,18 @@ function fullWallet(overrides: Partial<CreditWallet> = {}): CreditWallet {
     stripeCustomerId: 'cus_secret_123',
     mandateStatus: 'active',
     pendingTopupAt: null,
+    // BAL-515 auto-top-up in-flight CORRELATION — internal operational state, POPULATED here so
+    // the exclusion tests below are not vacuously green on a null.
+    pendingTopupTriggeringEntryId: 'led_triggering_secret_1',
+    pendingTopupPaymentIntentId: 'pi_inflight_secret_1',
     // Saved-card DISPLAY facts (top-up redesign) — these DO cross to a client lens; the four
     // mandate columns above do not. See `CLIENT_WALLET_VIEW_COLUMNS`' docblock.
     cardBrand: 'visa',
     cardLast4: '4242',
     cardExpMonth: 8,
     cardExpYear: 2028,
+    // BAL-515 provenance of the four above — NOT itself a display fact, so it stays off the lens.
+    cardUpdatedAt: new Date('2026-06-01T00:00:00Z'),
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-06-01T00:00:00Z'),
     ...overrides,
@@ -118,6 +124,23 @@ describe('CLIENT_WALLET_VIEW_COLUMNS (invariant #1 — no secret on a client len
     // may cross": `pending_topup_at` is neither a secret nor a display fact, and stays off.
     expect(Object.keys(CLIENT_WALLET_VIEW_COLUMNS)).not.toContain('pendingTopupAt');
   });
+
+  it('excludes card_updated_at and the auto-top-up in-flight correlation columns (BAL-515)', () => {
+    // Migration 0081 added three columns to `credit_wallets` and NONE of them crosses this
+    // boundary — a client surface (Decision 4: no RLS) — so the exact-key-set test above stays
+    // byte-identical, and that it is untouched is itself the proof. Stated once more here by
+    // name, because "the list did not change" is only meaningful if someone checks the new
+    // columns against it:
+    //   · `pendingTopupTriggeringEntryId` / `pendingTopupPaymentIntentId` — internal operational
+    //     state, exactly like `pendingTopupAt` above, which is already excluded.
+    //   · `cardUpdatedAt` — PROVENANCE of the four display facts, not a display fact itself. A
+    //     future ticket that wants a "this card may be stale" hint adds it here AND updates the
+    //     exact-key-set test in the same PR; it does not arrive by accident.
+    const keys = Object.keys(CLIENT_WALLET_VIEW_COLUMNS);
+    expect(keys).not.toContain('cardUpdatedAt');
+    expect(keys).not.toContain('pendingTopupTriggeringEntryId');
+    expect(keys).not.toContain('pendingTopupPaymentIntentId');
+  });
 });
 
 describe('toClientWalletView (invariant #1 — secrets never leak even from a full row)', () => {
@@ -132,6 +155,10 @@ describe('toClientWalletView (invariant #1 — secrets never leak even from a fu
     expect(serialized).not.toContain('pm_secret_123');
     expect(serialized).not.toContain('mandate_secret_abc');
     expect(serialized).not.toContain('cus_secret_123');
+    // BAL-515 — the in-flight correlation is operational state, not display data. Asserted by
+    // VALUE as well as by key, so a mapper that renamed the field on its way out still fails.
+    expect(serialized).not.toContain('led_triggering_secret_1');
+    expect(serialized).not.toContain('pi_inflight_secret_1');
   });
 
   it('carries the available balance and the projected safe fields through', () => {

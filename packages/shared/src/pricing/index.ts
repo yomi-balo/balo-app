@@ -230,6 +230,35 @@ export const DEFAULT_TOPUP_RELOAD_MINOR = 10000;
 export const TOPUP_IN_FLIGHT_TTL_MS = 15 * 60 * 1000;
 
 /**
+ * BAL-515 — how long a `credit_wallets.pending_topup_at` marker must stand before the auto-top-up
+ * reconcile treats it as a LOST WEBHOOK rather than a live delivery. 5 minutes: normal webhook
+ * latency is < 5s, and a cutoff tighter than `STUCK_SETTLEMENT_MINUTES` (10) is affordable here
+ * because the reconcile never charges — racing a live webhook costs a deduped no-op, not a second
+ * PaymentIntent.
+ *
+ * ⚠ MUST STAY STRICTLY BELOW `TOPUP_IN_FLIGHT_TTL_MS`. Past that TTL a later crossing may re-ARM
+ * the marker, which overwrites `pending_topup_triggering_entry_id` and nulls
+ * `pending_topup_payment_intent_id` — the reconcile's own evidence. 5 min leaves a 10-minute
+ * retry budget, i.e. ~10 per-minute attempts, before anything can be erased. The inequality is
+ * pinned by a unit test, not left to the reader.
+ */
+export const TOPUP_RECONCILE_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * BAL-515 — how long an auto-top-up marker may keep DEFERRING before the reconcile escalates its
+ * "still in flight" record from `log.info` to `log.error`.
+ *
+ * A `processing` PaymentIntent is the one status the reconcile can neither repair nor fail-close,
+ * so it defers — and a defer that repeats every minute at `info` is indistinguishable from health.
+ * `reconcileStuckSettlement` escalates its equivalent dead end for exactly this reason. One hour
+ * is far past any real capture latency (`processing` normally resolves in seconds) and far past
+ * `TOPUP_IN_FLIGHT_TTL_MS`, so nothing that is merely slow ever trips it.
+ *
+ * It gates ONLY the log level. No money moves, nothing is cleared, and the row keeps retrying.
+ */
+export const TOPUP_RECONCILE_ESCALATE_AFTER_MS = 60 * 60 * 1000;
+
+/**
  * Rolling wallet expiry window, in months: expiry = last ledger-affecting interaction
  * + this many months. Feeds `make_interval(months => WALLET_EXPIRY_MONTHS)` in
  * `applyLedgerEntry`.

@@ -5,6 +5,7 @@ import {
   integer,
   text,
   timestamp,
+  index,
   uniqueIndex,
   check,
 } from 'drizzle-orm/pg-core';
@@ -118,6 +119,21 @@ export const creditWallets = pgTable(
     cardExpMonth: integer('card_exp_month'),
     cardExpYear: integer('card_exp_year'),
 
+    // BAL-515 — provenance of the saved-card DISPLAY facts above. NOT a display fact itself and
+    // NOT on `CLIENT_WALLET_VIEW_COLUMNS`. NULL means "never refreshed since the row was
+    // written", which is a legitimate state for every row migration 0080 already shipped.
+    // Stamped with the DB `now()` (transaction time, no app↔DB clock skew) by every writer that
+    // touches the four display columns: `applySavedCardDisplay`, `applyMandate` (only inside its
+    // optional `card` branch), `refreshSavedCardDisplay` and `clearSavedCard`.
+    //
+    // ⚠ DELIBERATELY OUTSIDE `credit_wallets_card_display_all_or_none`. 0080 is already applied
+    // in production, so rows exist with all four card columns populated and no timestamp. Adding
+    // this column to the all-or-none arms would need a backfill and would fail on exactly those
+    // rows — and the Testcontainers harness only ever migrates an EMPTY database, so that failure
+    // would ship green. The existing constraint's comment below argues its own safety on every
+    // arm having an all-NULL escape; a five-column version loses that property.
+    cardUpdatedAt: timestamp('card_updated_at', { withTimezone: true }),
+
     // BAL-379 — durable per-wallet auto-top-up single-in-flight marker. NULL = no auto-top-up
     // charge in flight. Set (under the wallet advisory lock) when the engine decides to charge a
     // reload; cleared by the success/fail webhook (or on a definite sync failure). While set AND
@@ -129,12 +145,47 @@ export const creditWallets = pgTable(
     // CLIENT_WALLET_VIEW_COLUMNS).
     pendingTopupAt: timestamp('pending_topup_at', { withTimezone: true }),
 
+    // BAL-515 — the auto-top-up in-flight CORRELATION, written beside `pending_topup_at` so the
+    // reconcile can name the crossing it is repairing. `pending_topup_at` alone is a bare
+    // timestamp: it says a reload is in flight but not WHICH one, so nothing could derive the
+    // ledger key `auto_topup:{walletId}:{triggeringEntryId}` and test it for absence — which is
+    // what makes a charged-but-uncredited reload invisible once the marker self-heals.
+    //
+    // `pendingTopupTriggeringEntryId` is ARMED in the engine's phase-1 advisory-locked txn (it is
+    // known there); `pendingTopupPaymentIntentId` is stamped immediately after the phase-2 charge
+    // returns `processing` (the PaymentIntent id does not exist until then). Both are cleared
+    // together with `pending_topup_at` by `clearPendingTopup`.
+    //
+    // NO FOREIGN KEY on the entry id, deliberately: `credit_ledger` is append-only and never
+    // deleted, so an FK would never fire; this is a transient operational POINTER cleared on
+    // every resolution, not a relationship; and adding an FK takes a validating lock on a
+    // non-empty production table for zero benefit. Same posture as `meeting_contexts.context_id`.
+    //
+    // INTERNAL operational state — NEVER on a client surface (both excluded from the allow-list
+    // `CLIENT_WALLET_VIEW_COLUMNS`, exactly like `pending_topup_at`).
+    pendingTopupTriggeringEntryId: uuid('pending_topup_triggering_entry_id'),
+    pendingTopupPaymentIntentId: text('pending_topup_payment_intent_id'),
+
     // Mutable projection ⇒ `updated_at` is correct. NO `...softDelete` (see header).
     ...timestamps,
   },
   (t) => [
     // One wallet per company: the by-company equality read AND the onConflict target.
     uniqueIndex('credit_wallets_company_idx').on(t.companyId),
+    // BAL-515 — the auto-top-up reconcile finder (`findStuckPendingTopups`, oldest marker
+    // first). PARTIAL on the marker so the index only carries wallets with a reload actually in
+    // flight — a tiny fraction of a table that is already one row per company.
+    index('credit_wallets_pending_topup_idx')
+      .on(t.pendingTopupAt)
+      .where(sql`${t.pendingTopupAt} IS NOT NULL`),
+    // BAL-515 — the `payment_method.*` webhook arms' wallet lookup
+    // (`listByStripePaymentMethodId`). NON-UNIQUE on purpose: no constraint forbids two wallets
+    // naming one payment method, so a UNIQUE index would abort this migration on any pre-existing
+    // duplicate — a hazard the empty-DB Testcontainers harness cannot surface. The reader returns
+    // an ARRAY and its caller refuses to act on ambiguity instead.
+    index('credit_wallets_stripe_payment_method_idx')
+      .on(t.stripePaymentMethodId)
+      .where(sql`${t.stripePaymentMethodId} IS NOT NULL`),
     check('credit_wallets_currency_aud', sql`${t.currency} = 'AUD'`),
     check(
       'credit_wallets_overdraft_ceiling_nonneg',

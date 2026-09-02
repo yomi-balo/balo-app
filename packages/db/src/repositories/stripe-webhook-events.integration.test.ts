@@ -88,9 +88,30 @@ describe('stripeWebhookEventsRepository.markProcessed', () => {
     expect(after?.processedAt).toBeInstanceOf(Date);
   });
 
-  it('is a no-op for an unknown event id (updates zero rows, does not throw)', async () => {
+  /**
+   * BAL-515 — the two tests below are the repository half of the webhook commit proof. Together
+   * they pin that the return value DISCRIMINATES: `true` only when a row was actually stamped,
+   * `false` when the UPDATE matched nothing. Against the pre-fix `Promise<void>` signature both
+   * calls resolve `undefined`, so `toBe(true)` and `toBe(false)` cannot both pass — the pair
+   * fails on reverted source rather than merely being green on fixed source.
+   *
+   * The `false` case is the one that lost money's cousin: an event id whose marker is missing or
+   * (mid-phantom-commit) invisible was previously indistinguishable from a successful stamp, so
+   * the route could ack 200 for an effect with no marker.
+   */
+  it('returns TRUE when it stamps an existing row', async () => {
+    const eventId = `evt_${randomUUID()}`;
+    await stripeWebhookEventsRepository.insertReceived(
+      { eventId, type: 'payment_intent.succeeded' },
+      db
+    );
+
+    await expect(stripeWebhookEventsRepository.markProcessed(eventId, db)).resolves.toBe(true);
+  });
+
+  it('returns FALSE for an unknown event id (updates zero rows, does not throw)', async () => {
     await expect(
       stripeWebhookEventsRepository.markProcessed(`evt_${randomUUID()}`, db)
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 });

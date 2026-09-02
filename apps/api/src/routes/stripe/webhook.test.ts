@@ -18,6 +18,7 @@ const {
   mockApplyMandateStatus,
   mockRedeem,
   mockPublish,
+  mockCaptureException,
 } = vi.hoisted(() => {
   const store = new Map<string, StoredEvent>();
   return {
@@ -29,9 +30,13 @@ const {
       store.set(input.eventId, row);
       return row;
     }),
+    // BAL-515 — `markProcessed` now reports whether a row was ACTUALLY stamped, and the route
+    // throws on `false`. The stub mirrors the repository: no row ⇒ no stamp ⇒ `false`.
     mockMarkProcessed: vi.fn(async (id: string) => {
       const row = store.get(id);
-      if (row) row.processedAt = new Date();
+      if (!row) return false;
+      row.processedAt = new Date();
+      return true;
     }),
     mockApplyLedgerEntry: vi.fn(async () => ({
       deduped: false,
@@ -43,6 +48,9 @@ const {
     mockApplyMandateStatus: vi.fn(async () => ({})),
     mockRedeem: vi.fn(),
     mockPublish: vi.fn(async () => undefined),
+    // The app error handler captures to Sentry before answering 500 — the only place the
+    // commit-proof STAGE is observable, and what distinguishes the two guards from each other.
+    mockCaptureException: vi.fn(),
   };
 });
 
@@ -50,7 +58,7 @@ vi.mock('stripe', async () => (await import('../../test/mocks/stripe.js')).strip
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('@sentry/node', () => ({ captureException: vi.fn() }));
+vi.mock('@sentry/node', () => ({ captureException: mockCaptureException }));
 vi.mock('@balo/db', () => ({
   db: { transaction: async (cb: (tx: unknown) => unknown) => cb({ __tx: true }) },
   stripeWebhookEventsRepository: {
@@ -115,12 +123,20 @@ describe('POST /webhooks/stripe', () => {
     eventStore.clear();
     resetStripeMock();
     mockFindByEventId.mockClear();
+    mockMarkProcessed.mockReset();
+    mockMarkProcessed.mockImplementation(async (id: string) => {
+      const row = eventStore.get(id);
+      if (!row) return false;
+      row.processedAt = new Date();
+      return true;
+    });
     mockInsertReceived.mockClear();
     mockMarkProcessed.mockClear();
     mockApplyLedgerEntry.mockClear();
     mockAuditRecord.mockClear();
     mockRedeem.mockClear();
     mockPublish.mockClear();
+    mockCaptureException.mockClear();
     // Default settlement retrieval for payment_intent.succeeded.
     mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_1', latest_charge: 'ch_1' });
     mockStripe.charges.retrieve.mockResolvedValue({
@@ -216,6 +232,111 @@ describe('POST /webhooks/stripe', () => {
       expect.objectContaining({ action: 'credit_wallet.dispute_opened', entityId: 'wallet_1' }),
       expect.anything()
     );
+  });
+
+  // ── BAL-515: the commit proof ───────────────────────────────────────────────
+
+  it('returns 500 (never 200) when the transaction resolved with NO committed marker', async () => {
+    // ⚠ THE PHANTOM COMMIT, REPRODUCED. `markProcessed` reports success (as the real UPDATE did —
+    // the statement worked; the COMMIT lied), but the marker is NOT visible on a fresh read
+    // afterwards. Before BAL-515 this answered 200 and Stripe never redelivered, which is exactly
+    // how a real A$300 top-up was charged and never credited.
+    mockMarkProcessed.mockImplementationOnce(async (id: string) => {
+      eventStore.delete(id);
+      return true;
+    });
+
+    const res = await inject(app, succeededEvent);
+
+    expect(res.statusCode).toBe(500);
+    expect(mockMarkProcessed).toHaveBeenCalledTimes(1);
+    // ⚠ THE STAGE IS THE ASSERTION. `markProcessed` reported success, so only the POST-COMMIT
+    // read-back can catch this; naming the stage stops the in-transaction guard from standing in
+    // for a read-back that has been deleted.
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'StripeWebhookCommitProofError',
+        message: expect.stringContaining('post_commit_readback'),
+      })
+    );
+    // ⚠ AND ITS POSITION IS THE OTHER HALF OF THE ASSERTION. The read-back must run BEFORE the
+    // post-commit drain loop, so an UNCOMMITTED effect can never publish a notification or fire
+    // analytics — neither can be undone by the 500 that follows. This event is a manual purchase,
+    // so a drain that ran first would send the buyer a `credit.topup.completed` receipt for credit
+    // that does not exist. Nothing else in this file pins the order: moving the read-back below
+    // the loop leaves every other assertion green.
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('returns 500 when the marker row exists but was never STAMPED (existence is not proof)', async () => {
+    // A concurrent delivery can legitimately have inserted the row; only `processed_at` proves
+    // THIS transaction's work landed. Asserting mere row existence would ack the incident.
+    mockMarkProcessed.mockImplementationOnce(async (id: string) => {
+      const row = eventStore.get(id);
+      if (row) row.processedAt = null;
+      return true;
+    });
+
+    const res = await inject(app, succeededEvent);
+
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('returns 500 when markProcessed stamps ZERO rows (the in-transaction row-count check)', async () => {
+    mockMarkProcessed.mockResolvedValueOnce(false);
+
+    const res = await inject(app, succeededEvent);
+
+    expect(res.statusCode).toBe(500);
+    // ⚠ THE STAGE IS THE ASSERTION. Both guards would 500 on this input; only the in-transaction
+    // row-count check throws BEFORE the commit, which is what keeps a half-applied effect from
+    // ever being committed. Without naming the stage, deleting this guard still reads as green.
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'StripeWebhookCommitProofError',
+        message: expect.stringContaining('mark_processed'),
+      })
+    );
+  });
+
+  it('still acks 200 on the concurrent-delivery short-circuit (the other delivery stamped it)', async () => {
+    // The other delivery has already committed a PROCESSED marker; `insertReceived` returns
+    // undefined and the transaction returns early WITHOUT calling markProcessed. The read-back
+    // must be satisfied by the other delivery's `processedAt` — asserting on our own stamp here
+    // would 500 a perfectly correct request.
+    eventStore.set('evt_concurrent', {
+      eventId: 'evt_concurrent',
+      type: 'invoice.paid',
+      processedAt: new Date(),
+    });
+    // Force the slow path: report "not yet processed" to the pre-transaction short-circuit only.
+    mockFindByEventId.mockImplementationOnce(async () => undefined);
+
+    const res = await inject(app, {
+      id: 'evt_concurrent',
+      type: 'invoice.paid',
+      data: { object: { id: 'in_1' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockMarkProcessed).not.toHaveBeenCalled();
+  });
+
+  it('reads the commit proof back on the BASE db, not the transaction handle', async () => {
+    // ⚠ A `.returning()` check INSIDE the transaction would NOT have caught the incident — the
+    // UPDATE succeeded; the COMMIT lied. The proof read must land on a different pooled
+    // connection, which is what passing no `exec` argument achieves.
+    const res = await inject(app, succeededEvent);
+
+    expect(res.statusCode).toBe(200);
+    const calls = mockFindByEventId.mock.calls;
+    const orders = mockFindByEventId.mock.invocationCallOrder;
+    const markOrder = mockMarkProcessed.mock.invocationCallOrder[0] ?? Infinity;
+    // The LAST read must come AFTER the stamp (post-commit) and carry NO executor argument, so it
+    // lands on the base `db` — a different pooled connection from the transaction being proved.
+    const lastIndex = calls.length - 1;
+    expect(orders[lastIndex] ?? -Infinity).toBeGreaterThan(markOrder);
+    expect(calls[lastIndex]).toEqual(['evt_pi_succeeded']);
   });
 
   it('writes NO dedupe marker when effect resolution throws, so Stripe can retry and credit', async () => {

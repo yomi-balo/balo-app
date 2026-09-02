@@ -88,9 +88,14 @@ export async function purchaseIntentRoute(fastify: FastifyInstance): Promise<voi
         return reply.status(404).send({ error: 'wallet_not_found' });
       }
 
-      // The SAME key format on both paths; the composer guarantees a distinct
-      // `clientRequestId` per source, so one buyer switching cards never reuses a key.
-      const idempotencyKey = `purchase:${walletId}:${clientRequestId}`;
+      // BAL-515 — the payment-method source is part of the key STRUCTURALLY, on the server. The
+      // two sources build PaymentIntents with DIFFERENT params (`saved_card` carries
+      // `payment_method` + `confirm: true`), and Stripe 400s on one key reused with different
+      // params. That used to hold only because the web composer includes `paymentMethodSource` in
+      // its config signature and re-mints `clientRequestId` on a switch — a CLIENT-side convention
+      // protecting a SERVER-side guarantee. Deriving it here makes it structural: a client that
+      // reuses one request id across a switch now gets two distinct keys instead of a 400.
+      const idempotencyKey = `purchase:${walletId}:${paymentMethodSource}:${clientRequestId}`;
 
       if (paymentMethodSource === 'saved_card') {
         const { stripeCustomerId, stripePaymentMethodId } = wallet;

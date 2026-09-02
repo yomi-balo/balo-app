@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { isWalletMandateActive, isWalletCardReusableOnSession } from '@balo/shared/credit';
 import { creditWallets, type CreditWallet } from '../schema';
@@ -807,6 +808,39 @@ describe('credit_wallets saved-card CHECK constraints (migration 0079)', () => {
     expect(facts.constraint).toBe('credit_wallets_card_exp_year_range');
   });
 
+  it('ACCEPTS a fully-populated card row with a NULL card_updated_at (BAL-515 — the column must NOT join the all-or-none CHECK)', async () => {
+    // ⚠ THE ONE STATEMENT IN MIGRATION 0081 THAT COULD HAVE FAILED ON PRODUCTION DATA.
+    // Migration 0080 already shipped, so `credit_wallets` rows exist RIGHT NOW with all four
+    // card display columns populated and no `card_updated_at` — the column did not exist yet.
+    // Folding `card_updated_at` into `credit_wallets_card_display_all_or_none` would make every
+    // one of those rows violate the constraint the moment 0081 validated it, and the
+    // Testcontainers harness only ever migrates an EMPTY container
+    // (memory `reference_db_migrations_tested_against_empty_db`), so that failure would ship
+    // green. This test reconstructs that exact shape by hand and asserts Postgres accepts it.
+    //
+    // Raw SQL deliberately: every repository writer STAMPS `card_updated_at`, so the hazardous
+    // combination is unreachable through the typed API — which is precisely why the constraint,
+    // not the API, has to be the thing under test.
+    const { wallet } = await creditWalletFactory();
+    await db.execute(sql`
+      UPDATE credit_wallets
+      SET card_brand = 'visa',
+          card_last4 = '4242',
+          card_exp_month = 8,
+          card_exp_year = 2028,
+          card_updated_at = NULL
+      WHERE id = ${wallet.id}
+    `);
+
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.cardBrand).toBe('visa');
+    expect(persisted?.cardLast4).toBe('4242');
+    expect(persisted?.cardExpMonth).toBe(8);
+    expect(persisted?.cardExpYear).toBe(2028);
+    // The provenance stays NULL: "never refreshed" is a legitimate state, not a partial row.
+    expect(persisted?.cardUpdatedAt).toBeNull();
+  });
+
   it('a fresh wallet row satisfies every card CHECK with no card written (migration safety)', async () => {
     // The property migration 0079 relies on: every PRE-EXISTING wallet row passes all four
     // constraints as written, so the ALTER TABLE needs no backfill and cannot fail on a
@@ -821,29 +855,480 @@ describe('credit_wallets saved-card CHECK constraints (migration 0079)', () => {
   });
 });
 
-describe('creditWalletsRepository.setPendingTopupAt (BAL-379 single-in-flight marker)', () => {
-  it('arms then clears the pending_topup_at marker (round-trip)', async () => {
+describe('creditWalletsRepository auto-top-up marker (BAL-379 / BAL-515 correlation)', () => {
+  /**
+   * BAL-515 replaced the timestamp-only `setPendingTopupAt` with three correlated methods. The
+   * point of the change is that `pending_topup_at` alone names no crossing, so nothing could
+   * derive the ledger key `auto_topup:{walletId}:{triggeringEntryId}` and test it for absence —
+   * which is how a charged-but-uncredited reload became untraceable once the marker self-healed.
+   * These tests pin the correlation, not just the timestamp.
+   */
+
+  it('armPendingTopup writes the marker AND its triggering entry id, and NULLS any stale PI id', async () => {
     const { wallet } = await creditWalletFactory();
-    // Fresh wallet — no marker.
     expect((await creditWalletsRepository.findById(wallet.id))?.pendingTopupAt).toBeNull();
 
+    // Seed a stale PaymentIntent id from a PREVIOUS crossing, so "nulled" is a real assertion
+    // and not a fresh row's default. Inheriting it would aim the reconcile at the wrong charge.
+    const firstEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-03-01T09:00:00.000Z'),
+      triggeringEntryId: firstEntryId,
+    });
+    await creditWalletsRepository.recordPendingTopupPaymentIntent({
+      walletId: wallet.id,
+      triggeringEntryId: firstEntryId,
+      paymentIntentId: 'pi_stale_previous_crossing',
+    });
+
     const at = new Date('2027-03-01T10:00:00.000Z');
-    await creditWalletsRepository.setPendingTopupAt(wallet.id, at);
+    const triggeringEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({ walletId: wallet.id, at, triggeringEntryId });
+
     const armed = await creditWalletsRepository.findById(wallet.id);
     expect(armed?.pendingTopupAt?.getTime()).toBe(at.getTime());
-
-    await creditWalletsRepository.setPendingTopupAt(wallet.id, null);
-    const cleared = await creditWalletsRepository.findById(wallet.id);
-    expect(cleared?.pendingTopupAt).toBeNull();
+    expect(armed?.pendingTopupTriggeringEntryId).toBe(triggeringEntryId);
+    expect(armed?.pendingTopupPaymentIntentId).toBeNull();
   });
 
-  it('composes under a caller transaction (exec) — the arm is visible after commit', async () => {
+  it('composes under a caller transaction (exec) — the phase-1 locked txn arms both columns', async () => {
     const { wallet } = await creditWalletFactory();
     const at = new Date('2027-03-02T12:00:00.000Z');
+    const triggeringEntryId = randomUUID();
     await db.transaction(async (tx) => {
-      await creditWalletsRepository.setPendingTopupAt(wallet.id, at, tx);
+      await creditWalletsRepository.armPendingTopup(
+        { walletId: wallet.id, at, triggeringEntryId },
+        tx
+      );
     });
     const persisted = await creditWalletsRepository.findById(wallet.id);
     expect(persisted?.pendingTopupAt?.getTime()).toBe(at.getTime());
+    expect(persisted?.pendingTopupTriggeringEntryId).toBe(triggeringEntryId);
+  });
+
+  it('recordPendingTopupPaymentIntent stamps the PI id and returns true on a MATCHING entry id', async () => {
+    const { wallet } = await creditWalletFactory();
+    const triggeringEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-03-03T10:00:00.000Z'),
+      triggeringEntryId,
+    });
+
+    const stamped = await creditWalletsRepository.recordPendingTopupPaymentIntent({
+      walletId: wallet.id,
+      triggeringEntryId,
+      paymentIntentId: 'pi_live_1',
+    });
+    expect(stamped).toBe(true);
+
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.pendingTopupPaymentIntentId).toBe('pi_live_1');
+    // The marker and its correlation are untouched by the stamp.
+    expect(persisted?.pendingTopupTriggeringEntryId).toBe(triggeringEntryId);
+  });
+
+  it('recordPendingTopupPaymentIntent returns FALSE and writes NOTHING when the marker was re-armed for another crossing', async () => {
+    // ⚠ THE GUARD IS THE POINT. Between phase 1 and the phase-2 stamp the marker can be cleared
+    // by a webhook that already landed, or re-armed for a LATER crossing. Stamping regardless
+    // would label the new crossing with the old crossing's PaymentIntent, and the reconcile
+    // would then read the WRONG charge's status to decide whether real money needs crediting.
+    const { wallet } = await creditWalletFactory();
+    const supersededEntryId = randomUUID();
+    const currentEntryId = randomUUID();
+
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-03-04T10:00:00.000Z'),
+      triggeringEntryId: currentEntryId,
+    });
+
+    const stamped = await creditWalletsRepository.recordPendingTopupPaymentIntent({
+      walletId: wallet.id,
+      triggeringEntryId: supersededEntryId,
+      paymentIntentId: 'pi_from_a_dead_crossing',
+    });
+    expect(stamped).toBe(false);
+
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.pendingTopupPaymentIntentId).toBeNull();
+    expect(persisted?.pendingTopupTriggeringEntryId).toBe(currentEntryId);
+  });
+
+  it('recordPendingTopupPaymentIntent returns FALSE when the marker was CLEARED (entry id now null)', async () => {
+    const { wallet } = await creditWalletFactory();
+    const triggeringEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-03-05T10:00:00.000Z'),
+      triggeringEntryId,
+    });
+    await creditWalletsRepository.clearPendingTopup({ walletId: wallet.id });
+
+    const stamped = await creditWalletsRepository.recordPendingTopupPaymentIntent({
+      walletId: wallet.id,
+      triggeringEntryId,
+      paymentIntentId: 'pi_too_late',
+    });
+    expect(stamped).toBe(false);
+    expect(
+      (await creditWalletsRepository.findById(wallet.id))?.pendingTopupPaymentIntentId
+    ).toBeNull();
+  });
+
+  it('clearPendingTopup nulls ALL THREE columns together', async () => {
+    const { wallet } = await creditWalletFactory();
+    const triggeringEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-03-06T10:00:00.000Z'),
+      triggeringEntryId,
+    });
+    await creditWalletsRepository.recordPendingTopupPaymentIntent({
+      walletId: wallet.id,
+      triggeringEntryId,
+      paymentIntentId: 'pi_to_be_cleared',
+    });
+
+    const clearedRow = await creditWalletsRepository.clearPendingTopup({ walletId: wallet.id });
+    expect(clearedRow).toBe(true);
+
+    const cleared = await creditWalletsRepository.findById(wallet.id);
+    // A clear that left a stale entry id or PI id behind would hand the NEXT crossing's
+    // reconcile evidence belonging to a resolved one.
+    expect(cleared?.pendingTopupAt).toBeNull();
+    expect(cleared?.pendingTopupTriggeringEntryId).toBeNull();
+    expect(cleared?.pendingTopupPaymentIntentId).toBeNull();
+  });
+
+  it('clearPendingTopup composes under a caller transaction (the webhook passes its tx)', async () => {
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-03-07T10:00:00.000Z'),
+      triggeringEntryId: randomUUID(),
+    });
+    await db.transaction(async (tx) => {
+      await creditWalletsRepository.clearPendingTopup({ walletId: wallet.id }, tx);
+    });
+    expect((await creditWalletsRepository.findById(wallet.id))?.pendingTopupAt).toBeNull();
+  });
+
+  it('clearPendingTopup GUARDED on the crossing writes NOTHING when the marker was re-armed for another one', async () => {
+    // ⚠ THE EVIDENCE ERASURE THIS GUARD EXISTS FOR. The reconcile sweep reads up to 100 wallets
+    // and then spends seconds of Stripe latency per row, so it acts on a stale snapshot; a Stripe
+    // webhook can be redelivered for days. An unguarded clear from either would null the marker of
+    // a LIVE, DIFFERENT crossing — and because the ledger idempotency key is PER CROSSING, the
+    // next evaluation would then pin a new key, which the unique index cannot dedup: a second
+    // real charge.
+    const { wallet } = await creditWalletFactory();
+    const supersededEntryId = randomUUID();
+    const currentEntryId = randomUUID();
+    const armedAt = new Date('2027-03-08T10:00:00.000Z');
+
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: armedAt,
+      triggeringEntryId: currentEntryId,
+    });
+    await creditWalletsRepository.recordPendingTopupPaymentIntent({
+      walletId: wallet.id,
+      triggeringEntryId: currentEntryId,
+      paymentIntentId: 'pi_live_crossing',
+    });
+
+    const cleared = await creditWalletsRepository.clearPendingTopup({
+      walletId: wallet.id,
+      triggeringEntryId: supersededEntryId,
+    });
+
+    expect(cleared).toBe(false);
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.pendingTopupAt?.getTime()).toBe(armedAt.getTime());
+    expect(persisted?.pendingTopupTriggeringEntryId).toBe(currentEntryId);
+    expect(persisted?.pendingTopupPaymentIntentId).toBe('pi_live_crossing');
+  });
+
+  it('clearPendingTopup GUARDED clears all three columns when the crossing MATCHES', async () => {
+    const { wallet } = await creditWalletFactory();
+    const triggeringEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-03-09T10:00:00.000Z'),
+      triggeringEntryId,
+    });
+    await creditWalletsRepository.recordPendingTopupPaymentIntent({
+      walletId: wallet.id,
+      triggeringEntryId,
+      paymentIntentId: 'pi_matching',
+    });
+
+    const cleared = await creditWalletsRepository.clearPendingTopup({
+      walletId: wallet.id,
+      triggeringEntryId,
+    });
+
+    expect(cleared).toBe(true);
+    const persisted = await creditWalletsRepository.findById(wallet.id);
+    expect(persisted?.pendingTopupAt).toBeNull();
+    expect(persisted?.pendingTopupTriggeringEntryId).toBeNull();
+    expect(persisted?.pendingTopupPaymentIntentId).toBeNull();
+  });
+});
+
+describe('creditWalletsRepository.findStuckPendingTopups (BAL-515 reconcile finder)', () => {
+  const CUTOFF = new Date('2027-04-01T12:00:00.000Z');
+
+  /** Arm a fresh wallet's marker at `at`, optionally with no correlation (a pre-BAL-515 row). */
+  async function armedWallet(at: Date, opts: { correlated?: boolean } = {}): Promise<string> {
+    const { wallet } = await creditWalletFactory();
+    if (opts.correlated === false) {
+      // A marker with no triggering entry id — the shape every row carried before 0081. Written
+      // raw because `armPendingTopup` cannot express it (and must not).
+      await db.execute(
+        sql`UPDATE credit_wallets SET pending_topup_at = ${at.toISOString()} WHERE id = ${wallet.id}`
+      );
+    } else {
+      await creditWalletsRepository.armPendingTopup({
+        walletId: wallet.id,
+        at,
+        triggeringEntryId: randomUUID(),
+      });
+    }
+    return wallet.id;
+  }
+
+  it('returns markers at or before the cutoff, OLDEST first', async () => {
+    const newest = await armedWallet(new Date('2027-04-01T11:00:00.000Z'));
+    const oldest = await armedWallet(new Date('2027-04-01T09:00:00.000Z'));
+    const middle = await armedWallet(new Date('2027-04-01T10:00:00.000Z'));
+
+    const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 10);
+    // Oldest first so a per-tick batch limit always drains the longest-stuck money first.
+    expect(ids(found)).toEqual([oldest, middle, newest]);
+  });
+
+  it('includes a marker exactly at the cutoff (inclusive `<=`) and excludes a younger one', async () => {
+    const atCutoff = await armedWallet(CUTOFF);
+    await armedWallet(new Date('2027-04-01T12:00:01.000Z')); // 1s too young
+
+    const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 10);
+    expect(ids(found)).toEqual([atCutoff]);
+  });
+
+  it('excludes wallets with NO marker and wallets whose marker carries no triggering entry id', async () => {
+    // A marker with no correlation is unreconcilable — its ledger key is underivable — so
+    // returning it would hand the sweep a row it could only skip, once a minute, forever. Such
+    // rows are pre-BAL-515 leftovers and self-heal at TOPUP_IN_FLIGHT_TTL_MS.
+    await creditWalletFactory(); // no marker at all
+    await armedWallet(new Date('2027-04-01T09:00:00.000Z'), { correlated: false });
+    const reconcilable = await armedWallet(new Date('2027-04-01T09:30:00.000Z'));
+
+    const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 10);
+    expect(ids(found)).toEqual([reconcilable]);
+  });
+
+  it('respects the limit, taking the OLDEST rows (the caller warns when the batch fills)', async () => {
+    const oldest = await armedWallet(new Date('2027-04-01T08:00:00.000Z'));
+    const second = await armedWallet(new Date('2027-04-01T09:00:00.000Z'));
+    await armedWallet(new Date('2027-04-01T10:00:00.000Z'));
+
+    const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 2);
+    expect(ids(found)).toEqual([oldest, second]);
+  });
+});
+
+describe('creditWalletsRepository.listByStripePaymentMethodId (BAL-515 payment_method.* arms)', () => {
+  it('returns the single wallet holding the payment method', async () => {
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_pm_1',
+      stripePaymentMethodId: 'pm_lookup_1',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+    });
+    await creditWalletFactory(); // a decoy wallet with no card
+
+    const found = await creditWalletsRepository.listByStripePaymentMethodId('pm_lookup_1');
+    expect(ids(found)).toEqual([wallet.id]);
+  });
+
+  it('returns an EMPTY array when no wallet holds the payment method (the arm acks 200 and does nothing)', async () => {
+    await creditWalletFactory();
+    const found = await creditWalletsRepository.listByStripePaymentMethodId('pm_nobody_holds');
+    expect(found).toEqual([]);
+  });
+
+  it('returns BOTH wallets when two hold the same payment method (ambiguity is reported, not resolved)', async () => {
+    // No constraint forbids this, which is exactly why the supporting index is NON-unique: a
+    // UNIQUE index would have aborted migration 0081 on any pre-existing duplicate, and the
+    // empty-database harness could not have surfaced that. The repository therefore surfaces the
+    // ambiguity and the caller refuses to act on a card event it cannot attribute.
+    const first = await creditWalletFactory();
+    const second = await creditWalletFactory();
+    for (const seeded of [first, second]) {
+      await creditWalletsRepository.applySavedCardDisplay(db, {
+        walletId: seeded.wallet.id,
+        stripeCustomerId: 'cus_shared',
+        stripePaymentMethodId: 'pm_shared_1',
+        card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 },
+      });
+    }
+
+    const found = await creditWalletsRepository.listByStripePaymentMethodId('pm_shared_1');
+    expect(found).toHaveLength(2);
+    expect(ids(found).sort()).toEqual([first.wallet.id, second.wallet.id].sort());
+  });
+});
+
+describe('creditWalletsRepository card provenance + refresh/clear (BAL-515)', () => {
+  const CARD = { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 8, cardExpYear: 2028 };
+
+  it('applySavedCardDisplay stamps card_updated_at alongside the four display columns', async () => {
+    const { wallet } = await creditWalletFactory();
+    expect(wallet.cardUpdatedAt).toBeNull();
+
+    const updated = await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_prov_1',
+      stripePaymentMethodId: 'pm_prov_1',
+      card: CARD,
+    });
+
+    expect(updated.cardUpdatedAt).toBeInstanceOf(Date);
+    expect(updated.cardLast4).toBe('4242');
+  });
+
+  it('applyMandate WITH a card stamps card_updated_at; WITHOUT a card leaves it untouched', async () => {
+    // The asymmetry is the contract: a card-less mandate write must not claim the displayed card
+    // was refreshed, because nothing read it (Stripe failed soft).
+    const { wallet } = await creditWalletFactory();
+
+    const withoutCard = await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_m_1',
+      stripePaymentMethodId: 'pm_m_1',
+      mandateRef: 'seti_m_1',
+      mandateStatus: 'active',
+    });
+    expect(withoutCard.cardUpdatedAt).toBeNull();
+    expect(withoutCard.cardBrand).toBeNull();
+
+    const withCard = await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_m_1',
+      stripePaymentMethodId: 'pm_m_1',
+      mandateRef: 'seti_m_2',
+      mandateStatus: 'active',
+      card: CARD,
+    });
+    expect(withCard.cardUpdatedAt).toBeInstanceOf(Date);
+  });
+
+  it('refreshSavedCardDisplay rewrites the four display columns + provenance and TOUCHES NOTHING ELSE', async () => {
+    // ⚠ The narrowness is the whole point. `payment_method.automatically_updated` carries the
+    // SAME payment-method id — the network reissued the card behind it — so there is no consent
+    // event. Routing this through `applySavedCardDisplay` would drag its mandate-revoke branch
+    // onto a pure display refresh, where an issuer reissuing a card would silently disable the
+    // buyer's auto-top-up.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_refresh',
+      stripePaymentMethodId: 'pm_refresh',
+      mandateRef: 'seti_refresh',
+      mandateStatus: 'active',
+      card: CARD,
+    });
+
+    const refreshed = await creditWalletsRepository.refreshSavedCardDisplay(db, {
+      walletId: wallet.id,
+      card: { cardBrand: 'visa', cardLast4: '1881', cardExpMonth: 11, cardExpYear: 2031 },
+    });
+
+    expect(refreshed.cardBrand).toBe('visa');
+    expect(refreshed.cardLast4).toBe('1881');
+    expect(refreshed.cardExpMonth).toBe(11);
+    expect(refreshed.cardExpYear).toBe(2031);
+    expect(refreshed.cardUpdatedAt).toBeInstanceOf(Date);
+    // Untouched: the mandate survives an issuer reissue.
+    expect(refreshed.stripePaymentMethodId).toBe('pm_refresh');
+    expect(refreshed.mandateRef).toBe('seti_refresh');
+    expect(refreshed.mandateStatus).toBe('active');
+    expect(refreshed.stripeCustomerId).toBe('cus_refresh');
+    expect(isWalletMandateActive(refreshed)).toBe(true);
+  });
+
+  it('refreshSavedCardDisplay throws for an unknown wallet id', async () => {
+    await expect(
+      creditWalletsRepository.refreshSavedCardDisplay(db, {
+        walletId: '00000000-0000-0000-0000-000000000000',
+        card: CARD,
+      })
+    ).rejects.toThrow('Credit wallet not found');
+  });
+
+  it('clearSavedCard nulls the four display columns + the payment method + the mandate, KEEPS the customer', async () => {
+    // Fail-closed: a detached payment method cannot be charged, so leaving `mandate_status`
+    // active would let auto-top-up and overdraft settlement keep firing off-session charges at a
+    // dead card. The Stripe CUSTOMER outlives the detach — blanking it would make
+    // `ensureCustomer` mint a duplicate and split the company's payment history in two.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_detach',
+      stripePaymentMethodId: 'pm_detach',
+      mandateRef: 'seti_detach',
+      mandateStatus: 'active',
+      card: CARD,
+    });
+
+    const cleared = await creditWalletsRepository.clearSavedCard(db, wallet.id);
+
+    expect(cleared.cardBrand).toBeNull();
+    expect(cleared.cardLast4).toBeNull();
+    expect(cleared.cardExpMonth).toBeNull();
+    expect(cleared.cardExpYear).toBeNull();
+    expect(cleared.stripePaymentMethodId).toBeNull();
+    expect(cleared.mandateRef).toBeNull();
+    expect(cleared.mandateStatus).toBeNull();
+    expect(cleared.stripeCustomerId).toBe('cus_detach');
+    // "We learned at this time that there is no card" is provenance too.
+    expect(cleared.cardUpdatedAt).toBeInstanceOf(Date);
+    // Both consent predicates now refuse — nothing may be charged against a detached card.
+    expect(isWalletMandateActive(cleared)).toBe(false);
+    expect(isWalletCardReusableOnSession(cleared)).toBe(false);
+  });
+
+  it('clearSavedCard satisfies the all-or-none CHECK by clearing the four TOGETHER (one statement)', async () => {
+    // If the four were cleared in separate statements the CHECK would fire on the first; that it
+    // commits is the proof they move together. Re-read from the DB, not the RETURNING row.
+    const { wallet } = await creditWalletFactory();
+    await creditWalletsRepository.applySavedCardDisplay(db, {
+      walletId: wallet.id,
+      stripeCustomerId: 'cus_check',
+      stripePaymentMethodId: 'pm_check',
+      card: CARD,
+    });
+
+    await creditWalletsRepository.clearSavedCard(db, wallet.id);
+
+    const rows = await db.select().from(creditWallets).where(eq(creditWallets.id, wallet.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.cardBrand).toBeNull();
+    expect(rows[0]?.cardExpYear).toBeNull();
+  });
+
+  it('clearSavedCard composes under a caller transaction and throws for an unknown wallet id', async () => {
+    const { wallet } = await creditWalletFactory();
+    await db.transaction(async (tx) => {
+      await creditWalletsRepository.clearSavedCard(tx, wallet.id);
+    });
+    expect((await creditWalletsRepository.findById(wallet.id))?.stripePaymentMethodId).toBeNull();
+
+    await expect(
+      creditWalletsRepository.clearSavedCard(db, '00000000-0000-0000-0000-000000000000')
+    ).rejects.toThrow('Credit wallet not found');
   });
 });

@@ -21,6 +21,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startWalletDormancySweepWorker, registerWalletDormancySweepCron },
     { startFxDisplayRateSweepWorker, registerFxDisplayRateSweepCron },
     { startCreditSessionMeterSweepWorker, registerCreditSessionMeterSweepCron },
+    { startAutoTopupReconcileSweepWorker, registerAutoTopupReconcileSweepCron },
     { startReceivableDunningSweepWorker, registerReceivableDunningSweepCron },
     { startTranscriptPipelineWorker },
     { startScheduledNotificationDispatchWorker, registerScheduledNotificationDispatchCron },
@@ -45,6 +46,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./wallet-dormancy-sweep.js'),
     import('./fx-display-rate-sweep.js'),
     import('./credit-session-meter-sweep.js'),
+    import('./auto-topup-reconcile-sweep.js'),
     import('./receivable-dunning-sweep.js'),
     import('./transcript-pipeline.js'),
     import('./scheduled-notification-dispatch.js'),
@@ -81,6 +83,13 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // BAL-378 (ADR-1040 Lane 2): per-minute credit-session meter reaper + daily receivable dunning.
   startCreditSessionMeterSweepWorker();
   await registerCreditSessionMeterSweepCron();
+  // BAL-515: the per-minute auto-top-up reconcile — repairs a reload that was charged at Stripe
+  // but whose `payment_intent.succeeded` webhook never applied the credit.
+  // ⚠ PER-MINUTE IS NOT A FREE KNOB: `TOPUP_RECONCILE_AFTER_MS` (5 min) leaves only a 10-minute
+  // budget before `TOPUP_IN_FLIGHT_TTL_MS` lets a later crossing re-arm the marker and erase the
+  // evidence this pass repairs from. See the job's docblock.
+  startAutoTopupReconcileSweepWorker();
+  await registerAutoTopupReconcileSweepCron();
   startReceivableDunningSweepWorker();
   await registerReceivableDunningSweepCron();
   // BAL-387 (ADR-1013): the transcript pipeline worker (event-triggered — no cron).

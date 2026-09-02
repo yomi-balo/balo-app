@@ -9,6 +9,7 @@ import {
   db,
   deriveIdempotencyKey,
   type CreditSession,
+  type CreditWallet,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, CREDIT_SERVER_EVENTS } from '@balo/analytics/server';
@@ -224,6 +225,94 @@ async function resolveDisputeCreated(dispute: Stripe.Dispute): Promise<StripeEff
 }
 
 /**
+ * BAL-515 — resolve the ONE wallet holding a Stripe payment method, or `null`.
+ *
+ * ⚠ THE LOOKUP MUST BE BY PAYMENT-METHOD ID, NOT BY CUSTOMER. Stripe nulls `pm.customer` on
+ * `payment_method.detached`, so the customer is unavailable on exactly the arm that needs it.
+ * `credit_wallets_stripe_payment_method_idx` (migration 0081) is what makes this an index read.
+ *
+ * TWO wallets naming one payment method is money-adjacent ambiguity, not a tie to break: the
+ * repository returns an array precisely so this refuses to guess whose card an event describes.
+ */
+async function resolveWalletForPaymentMethod(
+  pm: Stripe.PaymentMethod,
+  eventType: string
+): Promise<CreditWallet | null> {
+  const wallets = await creditWalletsRepository.listByStripePaymentMethodId(pm.id);
+  if (wallets.length === 0) {
+    // Not ours (a payment method we never stored, or one belonging to another product). Ack 200
+    // with no effect — a retry cannot make it ours.
+    log.info(
+      { op: 'resolveStripeEffect', eventType, stripeId: pm.id },
+      'payment_method event names no wallet — acking without effect'
+    );
+    return null;
+  }
+  if (wallets.length > 1) {
+    log.error(
+      {
+        op: 'resolveStripeEffect',
+        eventType,
+        stripeId: pm.id,
+        walletIds: wallets.map((wallet) => wallet.id),
+      },
+      'TWO wallets name the same Stripe payment method — refusing to apply a card event'
+    );
+    return null;
+  }
+  return wallets[0] ?? null;
+}
+
+/**
+ * BAL-515 — `payment_method.automatically_updated`: the network reissued the card behind a
+ * stored payment method. The display facts are read OFF THE EVENT OBJECT (no extra Stripe
+ * retrieve — the payload already carries the new `pm.card`), and a non-card payment method
+ * resolves to `null` because there is nothing to display.
+ */
+async function resolvePaymentMethodUpdated(pm: Stripe.PaymentMethod): Promise<StripeEffect | null> {
+  const card = pm.type === 'card' ? pm.card : undefined;
+  if (card === undefined || card === null) {
+    log.info(
+      {
+        op: 'resolveStripeEffect',
+        eventType: 'payment_method.automatically_updated',
+        stripeId: pm.id,
+      },
+      'payment_method.automatically_updated carries no card facts — acking without effect'
+    );
+    return null;
+  }
+  const wallet = await resolveWalletForPaymentMethod(pm, 'payment_method.automatically_updated');
+  if (wallet === null) {
+    return null;
+  }
+  return {
+    kind: 'card_display_refreshed',
+    walletId: wallet.id,
+    card: {
+      cardBrand: card.brand,
+      cardLast4: card.last4,
+      cardExpMonth: card.exp_month,
+      cardExpYear: card.exp_year,
+    },
+  };
+}
+
+/**
+ * BAL-515 — `payment_method.detached`: the payment method is gone at Stripe, so nothing can be
+ * charged against it any more. Carries only the ids; the applier decides the (fail-closed) write.
+ */
+async function resolvePaymentMethodDetached(
+  pm: Stripe.PaymentMethod
+): Promise<StripeEffect | null> {
+  const wallet = await resolveWalletForPaymentMethod(pm, 'payment_method.detached');
+  if (wallet === null) {
+    return null;
+  }
+  return { kind: 'saved_card_detached', walletId: wallet.id, paymentMethodId: pm.id };
+}
+
+/**
  * Resolve a webhook event into a `StripeEffect` (or null for an unhandled type → the webhook
  * acks 200 with no effect). MAY call Stripe (settlement retrieval, dispute PI lookup) but
  * performs NO DB writes — that keeps the webhook's transaction short (all network I/O happens
@@ -241,6 +330,13 @@ export async function resolveStripeEffect(event: Stripe.Event): Promise<StripeEf
       return resolveSetupIntentFailed(event.data.object);
     case 'charge.dispute.created':
       return resolveDisputeCreated(event.data.object);
+    // BAL-515 — the two saved-card hygiene arms. ⚠ BOTH SHIP DEAD UNTIL THE EVENT TYPES ARE
+    // ENABLED ON THE WEBHOOK ENDPOINT IN EACH ENVIRONMENT: there is no allow-list in this repo,
+    // the subscribed set is Stripe Dashboard configuration per endpoint, per environment.
+    case 'payment_method.automatically_updated':
+      return resolvePaymentMethodUpdated(event.data.object);
+    case 'payment_method.detached':
+      return resolvePaymentMethodDetached(event.data.object);
     default:
       return null;
   }
@@ -341,6 +437,16 @@ async function markSettlementSettled(
  * too. That is acceptable and safe — the webhook is idempotent (event-id gate + idempotency-keyed
  * ledger entries), so Stripe's automatic redelivery re-applies the base credit cleanly on retry;
  * nothing is double-credited and no paid-for credit is permanently lost.
+ *
+ * ⚠ BAL-515 — THAT LAST SENTENCE IS LOAD-BEARING ON `prepare: false`, AND WAS NOT TRUE BEFORE IT.
+ * "Redelivery re-applies the base credit" only holds because a rolled-back transaction now
+ * reliably surfaces AS AN ERROR. Over the Supabase transaction pooler `postgres-js` used to
+ * prepare COMMIT as a NAMED statement, meet a backend lacking that name (26000), retry it inside
+ * the aborted block, and RESOLVE — so the route answered 200 on work Postgres had discarded, the
+ * marker committed nothing, and Stripe never redelivered anything to re-apply. See
+ * `packages/db/src/client.ts:12-41` and `packages/db/src/client.prepared-commit.integration.test.ts`,
+ * plus the route's own post-commit proof in `routes/stripe/webhook.ts`. Do not restore prepared
+ * statements on this client, and do not weaken that proof: without them this paragraph is fiction.
  */
 async function grantPromoBestEffort(
   tx: DbTx,
@@ -552,9 +658,18 @@ async function applyCredit(
       return [];
     }
     // BAL-379: the reload landed — CLEAR the single-in-flight marker in the SAME webhook txn so
-    // future reloads can fire (at-most-one-in-flight per wallet ⇒ this marker is our own crossing's,
-    // so an unconditional clear on the fresh credit is correct).
-    await creditWalletsRepository.setPendingTopupAt(effect.walletId, null, tx);
+    // future reloads can fire.
+    //
+    // ⚠ BAL-515 — GUARDED ON THIS CROSSING, not on the wallet alone. "At most one in flight per
+    // wallet" does NOT make the marker ours unconditionally: Stripe redelivers a failed event for
+    // ~3 days, so this delivery can land long after `TOPUP_IN_FLIGHT_TTL_MS` let a LATER crossing
+    // re-arm the marker. An unguarded clear would then erase that live crossing's only reconcile
+    // evidence. On a mismatch the clear is a no-op and the later crossing keeps its own marker,
+    // which its own webhook or the reconcile resolves.
+    await creditWalletsRepository.clearPendingTopup(
+      { walletId: effect.walletId, triggeringEntryId: effect.triggeringEntryId },
+      tx
+    );
     const reloadedMinor = effect.settlement.creditAmountMinor; // = balance_transaction.amount (AUD face value)
     // `triggerBalanceMinor` reconstructs the PRE-reload resting balance from the POST-credit balance
     // (`balanceAfter − reload`). ANALYTICS-ONLY and approximate: an independent ledger entry landing
@@ -694,7 +809,9 @@ async function applyChargeFailed(
     }
     // BAL-379: the reload definitively failed — CLEAR the single-in-flight marker (in the webhook
     // txn) so a future reload can fire. Idempotent if the sync engine already cleared it.
-    await creditWalletsRepository.setPendingTopupAt(walletId, null, tx);
+    // ⚠ BAL-515 — GUARDED on this crossing for the same reason as the credit arm above: a webhook
+    // redelivered days later must never wipe a marker that now belongs to a live crossing.
+    await creditWalletsRepository.clearPendingTopup({ walletId, triggeringEntryId }, tx);
     const failed = {
       walletId,
       companyId: wallet.companyId,
@@ -753,6 +870,37 @@ export async function applyStripeEffect(
       return [];
     case 'charge_failed':
       return applyChargeFailed(tx, effect);
+    case 'card_display_refreshed':
+      // ⚠ `refreshSavedCardDisplay`, NEVER `applySavedCardDisplay`. The latter is a CONSENT
+      // boundary that revokes the mandate when the card changes — on a network reissue that
+      // would silently switch off the buyer's auto-top-up for a cosmetic digit change.
+      await creditWalletsRepository.refreshSavedCardDisplay(tx, {
+        walletId: effect.walletId,
+        card: effect.card,
+      });
+      // Brand ONLY — never last4, expiry, the payment-method id or a mandate ref.
+      log.info(
+        {
+          op: 'applyStripeEffect',
+          kind: 'card_display_refreshed',
+          walletId: effect.walletId,
+          brand: effect.card.cardBrand,
+        },
+        'Refreshed saved-card display after a network card update'
+      );
+      return [];
+    case 'saved_card_detached':
+      await creditWalletsRepository.clearSavedCard(tx, effect.walletId);
+      log.warn(
+        {
+          op: 'applyStripeEffect',
+          kind: 'saved_card_detached',
+          walletId: effect.walletId,
+          stripeId: effect.paymentMethodId,
+        },
+        'Saved card detached at Stripe — cleared the card AND the mandate (no off-session charge can run against a dead card)'
+      );
+      return [];
     case 'dispute':
       await auditEventsRepository.record(
         {
@@ -849,6 +997,64 @@ export async function applyOverdraftSettlementFromStripe(
       memberId: session.initiatingMemberId,
       sessionId: session.id,
       triggeringEntryId: null,
+      // Both null BY CONSTRUCTION for this reason, matching `resolvePaymentIntentSucceeded`:
+      // only a `manual_purchase` ever carries a promo code or a display card.
+      promoCode: null,
+      cardOnFile: null,
+      settlement,
+    });
+  });
+  for (const run of postCommit) {
+    await run();
+  }
+}
+
+/**
+ * BAL-515 — THE REPAIR ARM OF THE AUTO-TOP-UP RECONCILE: apply an `auto_topup` credit for a
+ * PaymentIntent the caller has ALREADY PROVEN `succeeded`, through the ordinary webhook pipeline.
+ *
+ * ⚠⚠ WHY IT LIVES HERE, IN `dispatch.ts`, AND NOT IN THE RECONCILER THAT CALLS IT. Money-in
+ * construction has exactly ONE home — the same argument `applyOverdraftSettlementFromStripe`
+ * above makes, and its twin. This builds no ledger row, derives no key and decides no post-commit
+ * effect of its own: it assembles the SAME `{kind:'credit', reason:'auto_topup'}` effect the
+ * `payment_intent.succeeded` resolver builds and hands it to `applyStripeEffect` verbatim. So the
+ * crossing key (`ledgerKeyForCredit`), the in-transaction `clearPendingTopup` and the
+ * `credit.auto_topup.executed` publish are ONE implementation reached from two triggers.
+ *
+ * ⚠ IT NEVER CHARGES. `retrieveSettlement` is READ-ONLY (a PI retrieve plus a charge retrieve
+ * with an expanded `balance_transaction`), and the only caller reaches it after
+ * `retrievePaymentIntentStatus` returned `succeeded` — the money has already moved and this is
+ * pure recording. `createOffSessionCharge` is not reachable from here.
+ *
+ * ⚠ IT CANNOT DOUBLE-CREDIT. `applyLedgerEntry` takes the per-wallet advisory lock and dedups on
+ * the unique `idempotency_key`, and that key is the same `auto_topup:{walletId}:{triggeringEntryId}`
+ * string whether it is derived here, by the webhook, or as the Stripe idempotency key on the
+ * original charge. A webhook arriving afterwards dedups (`deduped: true`) ⇒ the auto-top-up arm
+ * returns NO post-commit effects, so the executed notice is never sent twice.
+ *
+ * ⚠ FAILURE BEFORE THE COMMIT IS SAFE, AND THAT IS THE POINT. If `retrieveSettlement` throws or
+ * the transaction rolls back, NOTHING is cleared: the marker stands with its correlation intact
+ * and the sweep's per-row catch retries next tick. The evidence is never erased ahead of the money.
+ */
+export async function applyAutoTopupFromStripe(
+  walletId: string,
+  triggeringEntryId: string,
+  paymentIntentId: string
+): Promise<void> {
+  // Read-only — OUTSIDE the transaction (the balance_transaction race can take seconds).
+  const settlement = await retrieveSettlement(paymentIntentId);
+  let postCommit: PostCommitEffect[] = [];
+  await db.transaction(async (tx) => {
+    postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'auto_topup',
+      walletId,
+      // `auto_topup` is a SYSTEM reason: it is absent from `AUDIT_ACTION_BY_REASON`, so
+      // `applyLedgerEntry`'s attribution guard does not fire and a null actor is correct here.
+      // Inventing a member id to satisfy a guard that is not armed would falsify the audit trail.
+      memberId: null,
+      sessionId: null,
+      triggeringEntryId,
       // Both null BY CONSTRUCTION for this reason, matching `resolvePaymentIntentSucceeded`:
       // only a `manual_purchase` ever carries a promo code or a display card.
       promoCode: null,

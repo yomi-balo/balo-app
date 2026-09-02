@@ -20,6 +20,8 @@ const mockStartFxDisplayRateSweep = vi.fn();
 const mockRegisterFxDisplayRateSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartCreditSessionMeterSweep = vi.fn();
 const mockRegisterCreditSessionMeterSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartAutoTopupReconcileSweep = vi.fn();
+const mockRegisterAutoTopupReconcileSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartReceivableDunningSweep = vi.fn();
 const mockRegisterReceivableDunningSweepCron = vi.fn().mockResolvedValue(undefined);
 const mockStartTranscriptPipeline = vi.fn();
@@ -70,6 +72,15 @@ vi.mock('./fx-display-rate-sweep.js', () => ({
 vi.mock('./credit-session-meter-sweep.js', () => ({
   startCreditSessionMeterSweepWorker: () => mockStartCreditSessionMeterSweep(),
   registerCreditSessionMeterSweepCron: () => mockRegisterCreditSessionMeterSweepCron(),
+}));
+// BAL-515: mocking these is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
+// GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
+// through in every ticket named in the comments above (now ten tickets running). Must land in the
+// SAME COMMIT as the `worker.ts` registration.
+vi.mock('./auto-topup-reconcile-sweep.js', () => ({
+  startAutoTopupReconcileSweepWorker: () => mockStartAutoTopupReconcileSweep(),
+  registerAutoTopupReconcileSweepCron: () => mockRegisterAutoTopupReconcileSweepCron(),
 }));
 vi.mock('./receivable-dunning-sweep.js', () => ({
   startReceivableDunningSweepWorker: () => mockStartReceivableDunningSweep(),
@@ -181,6 +192,8 @@ describe('startWorkers', () => {
     expect(mockStartAvailabilityCache).not.toHaveBeenCalled();
     expect(mockStartScheduledNotificationDispatch).not.toHaveBeenCalled();
     expect(mockRegisterScheduledNotificationDispatchCron).not.toHaveBeenCalled();
+    expect(mockStartAutoTopupReconcileSweep).not.toHaveBeenCalled();
+    expect(mockRegisterAutoTopupReconcileSweepCron).not.toHaveBeenCalled();
     expect(mockStartCalendarHealthProbe).not.toHaveBeenCalled();
     expect(mockRegisterCalendarHealthProbeCron).not.toHaveBeenCalled();
     expect(mockStartCalendarSubscriptionReconcile).not.toHaveBeenCalled();
@@ -217,6 +230,8 @@ describe('startWorkers', () => {
     expect(mockRegisterFxDisplayRateSweepCron).toHaveBeenCalled();
     expect(mockStartCreditSessionMeterSweep).toHaveBeenCalled();
     expect(mockRegisterCreditSessionMeterSweepCron).toHaveBeenCalled();
+    expect(mockStartAutoTopupReconcileSweep).toHaveBeenCalled();
+    expect(mockRegisterAutoTopupReconcileSweepCron).toHaveBeenCalled();
     expect(mockStartReceivableDunningSweep).toHaveBeenCalled();
     expect(mockRegisterReceivableDunningSweepCron).toHaveBeenCalled();
     expect(mockStartTranscriptPipeline).toHaveBeenCalled();
