@@ -1,1 +1,0 @@
-CREATE INDEX "credit_sessions_settled_missing_credit_idx" ON "credit_sessions" USING btree ("settled_at") WHERE "credit_sessions"."settlement_status" = 'settled' AND "credit_sessions"."deleted_at" IS NULL;
