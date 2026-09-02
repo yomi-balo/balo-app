@@ -1257,6 +1257,39 @@ describe('meetingRecordingsRepository.markTranscriptJobSubmitted', () => {
     expect(row?.transcriptJobSubmittedAt?.toISOString()).toBe(at.toISOString());
   });
 
+  /**
+   * ⚠⚠ FIX ROUND 4 — a genuine re-submit must not leave the row looking BOTH successful
+   * (`submitted_at`/`transcript_job_id` freshly set) AND failed (an EARLIER `failure_reason`
+   * still on the row) — that shape is indistinguishable from a genuine `batch-processor.error`
+   * and defeats the ops queries B1e's own docblock and DOOR 1 depend on.
+   */
+  it('⚠⚠ FIX ROUND 4 — CLEARS a stale failure_reason left by an earlier markTranscriptJobSubmitFailed', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+
+    // The earlier PRE-submission failure (B1e) — `POST /batch-processor` failed the first time,
+    // no vendor job was ever created, and `failure_reason` is stamped with `submitted_at` still
+    // NULL.
+    const failed = await meetingRecordingsRepository.markTranscriptJobSubmitFailed(
+      { id: recording.id, reason: 'POST /batch-processor: 500 Internal Server Error' },
+      db
+    );
+    expect(failed?.transcriptJobFailureReason).not.toBeNull();
+
+    // A later manual re-submit succeeds.
+    const jobId = vendorId('batch-resubmit');
+    const at = new Date('2026-09-01T11:00:00.000Z');
+    const resubmitted = await meetingRecordingsRepository.markTranscriptJobSubmitted(
+      { id: recording.id, transcriptJobId: jobId, at },
+      db
+    );
+
+    // THE FIX: the stale failure_reason from the earlier give-up is gone, and the fresh submit's
+    // own columns are set.
+    expect(resubmitted?.transcriptJobFailureReason).toBeNull();
+    expect(resubmitted?.transcriptJobSubmittedAt?.toISOString()).toBe(at.toISOString());
+    expect(resubmitted?.transcriptJobId).toBe(jobId);
+  });
+
   it('is submittable from ANY recording status — transcription does not wait on Mux', async () => {
     // The trigger is `recording.ready-to-download` (status `source_ready`), but the Mux ladder
     // races ahead independently, so a row may already be `ingesting` or `ready` by the time the

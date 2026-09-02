@@ -135,18 +135,30 @@ function turnsFromWords(words: readonly BatchWord[]): DailyDeepgramUtterance[] {
     .filter((turn): turn is DailyDeepgramUtterance => turn !== null);
 }
 
+/**
+ * ⚠⚠ FIX ROUND 4 (M1 nit) — EMPTY/WHITESPACE-ONLY-TEXT ENTRIES ARE DROPPED, NOT ADAPTED. The
+ * M1 guard downstream (`transcript-capture.ts`'s `handleIngest`) refuses to enqueue the
+ * pipeline on `payload.utterances.length === 0`, but a `results.utterances[]` whose entries all
+ * carry `transcript: ''` (or whitespace) is NON-EMPTY at that check — it produced one turn per
+ * utterance, each carrying no text — so the guard passed and the pipeline ran on effectively
+ * empty input: the exact junk-recap outcome M1 exists to prevent. Filtering here, BEFORE a turn
+ * is ever built, makes the existing length guard correct by construction; no second guard is
+ * added downstream.
+ */
 function turnsFromUtterances(utterances: readonly BatchUtterance[]): DailyDeepgramUtterance[] {
-  return utterances.map((utterance) => ({
-    userId: null,
-    speakerLabel: speakerLabelFor(utterance.speaker),
-    start: utterance.start,
-    end: utterance.end,
-    transcript: utterance.transcript,
-    confidence:
-      typeof utterance.confidence === 'number' && Number.isFinite(utterance.confidence)
-        ? utterance.confidence
-        : null,
-  }));
+  return utterances
+    .filter((utterance) => utterance.transcript.trim().length > 0)
+    .map((utterance) => ({
+      userId: null,
+      speakerLabel: speakerLabelFor(utterance.speaker),
+      start: utterance.start,
+      end: utterance.end,
+      transcript: utterance.transcript,
+      confidence:
+        typeof utterance.confidence === 'number' && Number.isFinite(utterance.confidence)
+          ? utterance.confidence
+          : null,
+    }));
 }
 
 /**

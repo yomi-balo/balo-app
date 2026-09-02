@@ -39,6 +39,12 @@ export const TRANSCRIPT_SERVER_EVENTS = {
  * utterances (an R3-fragmented segment where nobody spoke before hanging up). It is reused on
  * `TRANSCRIPT_CAPTURE_SKIPPED` rather than growing a new event, at the INGEST stage rather than
  * the D4 submit gate — see `jobs/transcript-capture.ts`'s `handleIngest`.
+ *
+ * ⚠ FIX ROUND 4 — `already_finished` is the SUBMIT-side guard: `transcript_job_finished_at` is
+ * already set (the `daily_recording_id` fallback in `resolveBatchRecordingRow`,
+ * `routes/daily/webhook.ts`, can stamp it on a row whose `submitted_at` never landed), so a
+ * manual re-submit must not buy a second Daily batch job — see `handleSubmit`'s own docblock.
+ * None of the other reasons describe this shape, so it is its own member.
  */
 export type TranscriptCaptureSkipReason =
   | 'no_engagement_context'
@@ -46,7 +52,8 @@ export type TranscriptCaptureSkipReason =
   | 'engagement_missing'
   | 'meeting_missing'
   | 'no_daily_source'
-  | 'empty_transcript';
+  | 'empty_transcript'
+  | 'already_finished';
 
 /** BAL-483 — where in the capture path it broke. */
 export type TranscriptCaptureFailureStage = 'batch_submit' | 'batch_job' | 'artefact_fetch';

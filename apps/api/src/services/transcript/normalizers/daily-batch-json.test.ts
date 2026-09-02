@@ -6,6 +6,8 @@ import {
   batchJsonNoSpeaker,
   batchJsonTwoSpeakers,
   batchJsonUtterances,
+  batchJsonUtterancesAllEmptyText,
+  batchJsonUtterancesMixedEmptyText,
 } from './__fixtures__/daily-batch-json.js';
 
 describe('adaptDailyBatchTranscriptJson (BAL-483 §8.2)', () => {
@@ -72,6 +74,24 @@ describe('adaptDailyBatchTranscriptJson (BAL-483 §8.2)', () => {
     const result = adaptDailyBatchTranscriptJson(batchJsonEmptyUtterancesWithChannels);
     expect(result.utterances).toHaveLength(1);
     expect(result.utterances[0]?.transcript).toBe('Hello there.');
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 4 (M1 nit) — a `results.utterances[]` that is non-empty on the raw array (so
+   * M7's preference check still picks it over `channels`) but whose every entry carries
+   * empty/whitespace-only text must still adapt to ZERO turns. Before the fix, each entry became
+   * a textless turn, the M1 length guard downstream saw a non-empty array, and the pipeline ran
+   * on effectively-empty input.
+   */
+  it('⚠⚠ FIX ROUND 4 — an utterances[] whose entries are ALL empty/whitespace text adapts to ZERO turns', () => {
+    const result = adaptDailyBatchTranscriptJson(batchJsonUtterancesAllEmptyText);
+    expect(result.utterances).toEqual([]);
+  });
+
+  it('⚠ FIX ROUND 4 — a MIXED utterances[] drops only the empty/whitespace-only entries', () => {
+    const result = adaptDailyBatchTranscriptJson(batchJsonUtterancesMixedEmptyText);
+    expect(result.utterances).toHaveLength(1);
+    expect(result.utterances[0]?.transcript).toBe('hello there');
   });
 
   it('attribution: "diarized" and participants: [] always', () => {

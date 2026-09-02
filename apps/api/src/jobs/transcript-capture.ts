@@ -207,6 +207,13 @@ async function skipForEngagementGate(
  * orphaned-Mux-asset window (`recording-ingest.ts`). The alternative — claiming the slot BEFORE
  * the POST — trades this for a strictly worse failure: a POST that throws would leave the slot
  * claimed forever and the segment permanently untranscribed.
+ *
+ * ⚠⚠ FIX ROUND 4 — A DIFFERENT PATH TO A SECOND BATCH JOB, NOW CLOSED: this window is BullMQ's
+ * OWN automatic retry racing the DB write, still open above. A separate path existed with no
+ * bound at all — a row whose `submitted_at` never landed (the same accepted window, or the
+ * `daily_recording_id` fallback below the `already submitted` check) still reads as
+ * un-submitted, so a MANUAL re-submit any time later would buy an unbounded second job. Closed
+ * by the `transcript_job_finished_at !== null` guard, right below.
  */
 async function handleSubmit(job: Job<TranscriptCaptureSubmitJobData>): Promise<void> {
   const { recordingId } = job.data;
@@ -218,6 +225,27 @@ async function handleSubmit(job: Job<TranscriptCaptureSubmitJobData>): Promise<v
   }
   if (row.transcriptJobSubmittedAt !== null) {
     log.info({ recordingId }, 'transcript-capture submit: already submitted — no-op');
+    return;
+  }
+  // ⚠⚠ FIX ROUND 4 — A ROW CAN CARRY `finished_at` WITH `submitted_at` STILL NULL: the
+  // `daily_recording_id` fallback in `resolveBatchRecordingRow` (`routes/daily/webhook.ts`)
+  // stamps `transcript_job_finished_at` on exactly that orphan shape (the `POST
+  // /batch-processor` call succeeded, but `markTranscriptJobSubmitted` lost the race across all
+  // {@link SUBMIT_ATTEMPTS}, so nothing here ever recorded the job). Without this guard, a LATER
+  // MANUAL re-submit sails past the `submitted_at` check above and buys a SECOND Daily batch
+  // job — wasted vendor spend on a segment that already has a transcript — whose own
+  // `job-finished` webhook then CAS-no-ops against the already-`finished_at` row
+  // (`markTranscriptJobFinished`'s CAS is `finished_at IS NULL`), leaving the second job's
+  // result unreachable. A clean, logged no-op instead: never a throw, never a retry.
+  if (row.transcriptJobFinishedAt !== null) {
+    await skip({
+      recordingId: row.id,
+      meetingId: row.meetingId,
+      reason: 'already_finished',
+      level: 'info',
+      message:
+        'transcript-capture submit: skipped — transcript_job_finished_at already set (BAL-483 fix round 4)',
+    });
     return;
   }
   if (row.dailyRecordingId === null || row.sourceDeletedAt !== null) {

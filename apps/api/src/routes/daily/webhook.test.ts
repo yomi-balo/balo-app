@@ -1127,6 +1127,10 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     it('⚠⚠ BOTH terminal arms re-enqueue recording-cleanup-source when the row is already ready — the release valve, keyed on the batch job id (fix round 2)', async () => {
       mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      // ⚠⚠ FIX ROUND 4 — DOOR 5: the gate now reads the POST-COMMIT re-read, not the
+      // pre-transaction snapshot. Set both to `ready` so this test proves the ORIGINAL AC, not
+      // the re-read mechanics (those get their own test below).
+      mockFindRecordingById.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       const payload = batchPayload();
 
       await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
@@ -1143,6 +1147,7 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     it('⚠⚠ FIX ROUND 2 — a REPLAYED batch-processor.job-finished delivery re-drives under the SAME dedupeToken (same batch job id ⇒ same jobId), so BullMQ dedups it to ONE re-drive rather than firing a second job', async () => {
       mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockFindRecordingById.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       const payload = batchPayload();
 
       // Two independent deliveries of the IDENTICAL event (a vendor retry that arrives before
@@ -1168,6 +1173,7 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     it('batch-processor.error ALSO re-enqueues recording-cleanup-source when the row is already ready', async () => {
       mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       mockMarkTranscriptJobFailed.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockFindRecordingById.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       const payload = batchPayload({
         type: 'batch-processor.error',
         payload: { id: BATCH_JOB_ID, error: 'boom' },
@@ -1186,6 +1192,9 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
       mockMarkTranscriptJobFinished.mockResolvedValue(
         batchRecordingRow({ status: 'source_ready' })
       );
+      // ⚠⚠ FIX ROUND 4 — DOOR 5: the post-commit re-read is what the gate now reads, so it must
+      // agree with the pre-transaction snapshot for this negative case to be meaningful.
+      mockFindRecordingById.mockResolvedValue(batchRecordingRow({ status: 'source_ready' }));
       const payload = batchPayload();
 
       await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
@@ -1196,6 +1205,7 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     it('⚠ the cleanup re-enqueue fires even on a CAS no-op — unconditional, like the recording re-arm', async () => {
       mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       mockMarkTranscriptJobFinished.mockResolvedValue(undefined);
+      mockFindRecordingById.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
       const payload = batchPayload();
 
       await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
@@ -1218,6 +1228,61 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
       expect(mockMarkSourceReady).not.toHaveBeenCalled();
       expect(mockMarkRecordingFailed).not.toHaveBeenCalled();
       expect(mockMarkStarted).not.toHaveBeenCalled();
+    });
+
+    // ── FIX ROUND 4 — DOOR 5: the re-drive gate reads a POST-COMMIT re-read ────────────────
+
+    /**
+     * ⚠⚠ THE RACE THIS FIX CLOSES: the pre-transaction snapshot (`resolveBatchRecordingRow`,
+     * read BEFORE this webhook's own transaction opens) still says `ingesting` — Mux's
+     * `video.asset.ready` committed `status = 'ready'` in the window AFTER that read. Gating on
+     * the stale snapshot would skip the re-drive; gating on a fresh post-commit read catches it.
+     */
+    it('⚠⚠ FIX ROUND 4 — DOOR 5: re-drives when the row became `ready` AFTER the pre-transaction read (pre-read ingesting, post-commit re-read ready)', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ingesting' }));
+      mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow({ status: 'ingesting' }));
+      // The POST-COMMIT re-read sees the row AFTER Mux's own webhook has since moved it on.
+      mockFindRecordingById.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      const payload = batchPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockFindRecordingById).toHaveBeenCalledWith(RECORDING_ID);
+      expect(mockEnqueueRecordingCleanupSource).toHaveBeenCalledWith({
+        recordingId: RECORDING_ID,
+        dedupeToken: BATCH_JOB_ID,
+      });
+    });
+
+    /**
+     * ⚠ THE RE-READ IS BEST-EFFORT — post-commit work on an ALREADY-COMMITTED webhook must never
+     * fail the delivery. A transient re-read fault just means no re-drive fires THIS delivery.
+     */
+    it('⚠⚠ FIX ROUND 4 — DOOR 5: a failed post-commit re-read does NOT throw — logged, no re-drive, delivery still acks 200', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockFindRecordingById.mockRejectedValueOnce(new Error('connection reset'));
+      const payload = batchPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockEnqueueRecordingCleanupSource).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ recordingId: RECORDING_ID, error: 'connection reset' }),
+        expect.stringContaining('DOOR 5')
+      );
     });
   });
 

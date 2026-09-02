@@ -862,7 +862,48 @@ async function handleTranscriptCapturePostCommit(
   // reason the recording re-arm is unconditional). This is the release valve for §7.4's
   // withheld cleanup: the source was held back while the batch job read it, and the job is
   // now terminal.
-  if (effect.recording.status === 'ready') {
+  //
+  // ⚠⚠ FIX ROUND 4 — DOOR 5: GATED ON A POST-COMMIT RE-READ, NOT `effect.recording`.
+  // `effect.recording` is `resolveBatchRecordingRow`'s snapshot, taken BEFORE this webhook's
+  // OWN transaction ever opened (the `resolveRecordingRow` contract this function mirrors —
+  // reads only, outside the transaction). By the time this post-commit block runs, tens of
+  // milliseconds later, that snapshot can be STALE.
+  //
+  // THE RACE: Mux's `video.asset.ready` commits `status = 'ready'` AFTER our pre-transaction
+  // read but BEFORE this line runs. Gating on the stale snapshot reads `ingesting` and skips
+  // the re-drive — and the Mux-triggered cleanup job (which itself read the row BEFORE this
+  // webhook committed `transcript_job_finished_at`) already withheld under §7.4's gate. Nothing
+  // else re-drives it: the Daily source leaks PERMANENTLY, the exact outcome fix round 2 closed
+  // through a different door.
+  //
+  // ⚠ INVISIBLE TO DOOR 1's OPS QUERY (`recording-cleanup-source.ts`) — that query looks for
+  // `finished_at IS NULL`. This door's signature is the OPPOSITE: `transcript_job_finished_at IS
+  // NOT NULL AND source_deleted_at IS NULL AND status = 'ready'`, with no pending cleanup job to
+  // be found — a row that LOOKS fully terminal and simply never had its release valve pulled.
+  //
+  // ⚠ THE RE-READ IS BEST-EFFORT AND NEVER THROWS — this is post-commit work on an
+  // ALREADY-COMMITTED webhook, so a transient read fault must not fail the delivery; it only
+  // means no re-drive fires for THIS delivery (the row stays queryable by ops, and a later
+  // delivery gets another chance).
+  //
+  // ⚠ STILL GATED ON `status === 'ready'`, NOT UNCONDITIONAL — `handleCleanup`
+  // (`recording-cleanup-source.ts`) logs a non-`ready` row at `log.error`, so dropping the gate
+  // entirely (rather than re-reading it) would manufacture spurious error-level noise on every
+  // batch job that finishes before the recording itself reaches `ready`.
+  const currentRecording = await meetingRecordingsRepository
+    .findById(effect.recording.id)
+    .catch((error: unknown) => {
+      log.warn(
+        {
+          meetingId: effect.meeting.id,
+          recordingId: effect.recording.id,
+          error: sanitizedErrorMessage(error),
+        },
+        'recording-cleanup-source re-drive: the post-commit status re-read failed — no re-drive fired for this delivery (DOOR 5, fix round 4)'
+      );
+      return undefined;
+    });
+  if (currentRecording?.status === 'ready') {
     await enqueueBestEffort(
       () =>
         // ⚠ BAL-483 §7.4 — A RE-DRIVE, NOT A FIRST ENQUEUE. This cleanup job may already have

@@ -200,7 +200,10 @@ export interface FindMeetingRecordingInput {
  * `status`. The four `markTranscriptJob*` mutators below move only the four
  * `transcript_job_*` columns:
  *
- *   (none)    → submitted   markTranscriptJobSubmitted     B1   (CAS on submitted_at IS NULL)
+ *   (none)    → submitted   markTranscriptJobSubmitted     B1   (CAS on submitted_at IS NULL;
+ *                                                                 FIX ROUND 4 — also CLEARS a
+ *                                                                 stale failure_reason left by an
+ *                                                                 earlier markTranscriptJobSubmitFailed)
  *   (none)    → (none)      markTranscriptJobSubmitFailed  B1e  (FIX ROUND 3 — CAS on
  *                                                                 finished_at IS NULL; a
  *                                                                 PRE-submission failure, so it
@@ -787,6 +790,16 @@ export const meetingRecordingsRepository = {
    * is the caller's gate (`transcript-capture`'s submit handler checks `daily_recording_id` and
    * `source_deleted_at` before it ever calls Daily), and it belongs there because only the
    * caller knows whether the Daily artefact still exists.
+   *
+   * ⚠⚠ FIX ROUND 4 — ALSO CLEARS A STALE `failure_reason`. {@link markTranscriptJobSubmitFailed}
+   * (B1e) can stamp `transcript_job_failure_reason` while leaving `submitted_at` NULL — a
+   * `batch_submit`-stage terminal give-up with no vendor job ever recorded. A LATER manual
+   * re-submit that reaches this CAS is a fresh attempt that just succeeded, and without this the
+   * row would read as BOTH a success (`submitted_at`/`transcript_job_id` freshly set) AND a
+   * failure (the EARLIER `failure_reason` still sitting on the row) — indistinguishable from a
+   * genuine `batch-processor.error` on the new job, which defeats the exact ops queries B1e's own
+   * docblock and DOOR 1 (`recording-cleanup-source.ts`) depend on. A fresh submit supersedes any
+   * earlier pre-submission failure.
    */
   async markTranscriptJobSubmitted(
     input: MarkTranscriptJobSubmittedInput,
@@ -794,7 +807,11 @@ export const meetingRecordingsRepository = {
   ): Promise<MeetingRecording | undefined> {
     const [row] = await exec
       .update(meetingRecordings)
-      .set({ transcriptJobId: input.transcriptJobId, transcriptJobSubmittedAt: input.at })
+      .set({
+        transcriptJobId: input.transcriptJobId,
+        transcriptJobSubmittedAt: input.at,
+        transcriptJobFailureReason: null,
+      })
       .where(
         and(
           eq(meetingRecordings.id, input.id),

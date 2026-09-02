@@ -111,6 +111,10 @@ function row(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     dailyRecordingId: DAILY_RECORDING_ID,
     sourceDeletedAt: null,
     transcriptJobSubmittedAt: null,
+    // ⚠ FIX ROUND 4 — a real DB row is NEVER `undefined` here (the column exists and defaults
+    // to `NULL`), so the mock must default it too, or `!== null` in the new `handleSubmit` guard
+    // would fire on every test that does not explicitly override this field.
+    transcriptJobFinishedAt: null,
     durationSeconds: 1800,
     ...overrides,
   };
@@ -177,6 +181,34 @@ describe('transcript-capture — submit handler', () => {
     findById.mockResolvedValue(row({ transcriptJobSubmittedAt: new Date() }));
     await runSubmit();
     expect(submitTranscriptBatchJob).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 4 — a row can carry `finished_at` with `submitted_at` STILL NULL (the
+   * `daily_recording_id` fallback in `resolveBatchRecordingRow` stamps exactly this orphan
+   * shape). Without this guard a manual re-submit would sail past the `submitted_at` check above
+   * and buy a SECOND Daily batch job whose own `job-finished` webhook then CAS-no-ops.
+   */
+  it('⚠⚠ FIX ROUND 4 — finished_at already set, submitted_at NULL ⇒ skipped reason already_finished, no submit', async () => {
+    findById.mockResolvedValue(
+      row({ transcriptJobSubmittedAt: null, transcriptJobFinishedAt: new Date() })
+    );
+
+    await runSubmit();
+
+    expect(submitTranscriptBatchJob).not.toHaveBeenCalled();
+    expect(trackServer).toHaveBeenCalledWith(
+      'transcript_capture_skipped',
+      expect.objectContaining({
+        reason: 'already_finished',
+        meeting_id: MEETING_ID,
+        recording_id: RECORDING_ID,
+      })
+    );
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ recordingId: RECORDING_ID, reason: 'already_finished' }),
+      expect.stringContaining('transcript_job_finished_at already set')
+    );
   });
 
   it('no daily_recording_id ⇒ skipped with reason no_daily_source', async () => {
