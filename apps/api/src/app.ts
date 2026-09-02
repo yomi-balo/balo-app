@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import * as Sentry from '@sentry/node';
+import { log as sharedLogger } from '@balo/shared/logging';
 import { notificationsRoutes } from './routes/notifications/index.js';
 import { payoutsRoutes } from './routes/payouts/index.js';
 import { phoneRoutes } from './routes/phone/index.js';
@@ -20,7 +21,14 @@ export async function buildApp(opts?: { logger?: boolean }) {
   // client-supplied XFF chain, letting a scraper spoof IPs and bypass the
   // per-IP rate limit on the public /experts/search endpoint. If Railway's
   // topology ever adds more proxy hops, revisit this hop count.
-  const fastify = Fastify({ logger: opts?.logger ?? true, trustProxy: 1 });
+  // Fastify's DEFAULT logger (`logger: true`) is a bare pino writing to stdout — it does NOT
+  // carry the `@axiomhq/pino` transport or the REDACT_PATHS that `@balo/shared/logging`
+  // configures. That split meant service logs (`createLogger('stripe')`, …) reached Axiom while
+  // Fastify's own request logs AND the 500s captured by the error handler below did not: a
+  // request that blew up was searchable nowhere. Passing the shared instance puts both on one
+  // pipeline, and applies the redaction to request logs too.
+  // `??` (not `||`) so tests passing `logger: false` still get a silent app.
+  const fastify = Fastify({ logger: opts?.logger ?? sharedLogger, trustProxy: 1 });
 
   await fastify.register(cors, {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
