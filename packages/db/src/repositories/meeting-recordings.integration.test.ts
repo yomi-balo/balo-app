@@ -209,6 +209,40 @@ describe('meeting_recordings — the CHECK constraints', () => {
       tx.insert(meetingRecordings).values(rawRow(third.meeting.id, { durationSeconds: -1 }))
     );
   });
+
+  /**
+   * BAL-483 — `meeting_recording_transcript_job_submitted`. A job id implies a submission, so
+   * a row can never carry a batch-processor handle nobody can explain the provenance of.
+   * `markTranscriptJobSubmitted` writes both columns in ONE `set()` and cannot produce this
+   * state; the CHECK is the backstop against a raw writer.
+   */
+  it('meeting_recording_transcript_job_submitted rejects a job id with no submitted_at', async () => {
+    const { meeting } = await meetingFactory();
+
+    await expectConstraintViolation('23514', (tx) =>
+      tx.insert(meetingRecordings).values(
+        rawRow(meeting.id, {
+          transcriptJobId: 'batch-orphan',
+          transcriptJobSubmittedAt: null,
+        })
+      )
+    );
+  });
+
+  it('meeting_recording_transcript_job_submitted ALLOWS the other direction — a submission with no id yet', async () => {
+    const { meeting } = await meetingFactory();
+
+    // ⚠ ONE-DIRECTIONAL, DELIBERATELY: the left disjunct is `transcript_job_id IS NULL`, which
+    // is total, so a stamped `submitted_at` with a NULL id is legal. That is not a hypothetical
+    // — it is the shape a future two-phase submit (claim the slot, THEN call Daily) would use,
+    // and the CHECK must not foreclose it.
+    const [row] = await db
+      .insert(meetingRecordings)
+      .values(rawRow(meeting.id, { transcriptJobSubmittedAt: new Date() }))
+      .returning();
+    expect(row?.transcriptJobSubmittedAt).toBeInstanceOf(Date);
+    expect(row?.transcriptJobId).toBeNull();
+  });
 });
 
 // ── 3. The reads ─────────────────────────────────────────────────────────────
@@ -1098,5 +1132,346 @@ describe('meetingRecordingsRepository.softDelete', () => {
       .where(and(eq(meetingRecordings.meetingId, meeting.id), isNull(meetingRecordings.deletedAt)));
     expect(live).toHaveLength(1);
     expect(live[0]?.id).toBe(second.recording.id);
+  });
+});
+
+// ── 11. BAL-483 — the transcript batch-job sub-lifecycle (B1 / B2t / B2e) ────
+//
+// ⚠⚠ A SECOND LADDER ON THE SAME ROW, AND IT NEVER TOUCHES `status`. The recording's own
+// T1–T10 machine and this one are orthogonal: a failed TRANSCRIPTION leaves a perfectly
+// playable RECORDING, and `markSourceDeleted`'s `status = 'ready'` term has to keep matching
+// after a Deepgram error. Several assertions below exist only to pin that separation.
+
+describe('meetingRecordingsRepository.findByTranscriptJobId', () => {
+  it('resolves the segment the batch-processor webhooks key on', async () => {
+    const jobId = vendorId('batch');
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: jobId,
+      transcriptJobSubmittedAt: new Date(),
+    });
+
+    expect((await meetingRecordingsRepository.findByTranscriptJobId(jobId))?.id).toBe(recording.id);
+    expect(
+      await meetingRecordingsRepository.findByTranscriptJobId(vendorId('batch'))
+    ).toBeUndefined();
+  });
+
+  it('hides a soft-deleted segment — and FREES its job id for reuse (the partial unique)', async () => {
+    const jobId = vendorId('batch');
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: jobId,
+      transcriptJobSubmittedAt: new Date(),
+    });
+
+    await meetingRecordingsRepository.softDelete({ id: recording.id });
+    expect(await meetingRecordingsRepository.findByTranscriptJobId(jobId)).toBeUndefined();
+
+    // `meeting_recording_transcript_job_idx` carries `deleted_at IS NULL`, so a dead row does
+    // not permanently occupy a vendor id — the `meeting_recording_daily_id_idx` posture.
+    const { recording: reused } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: jobId,
+      transcriptJobSubmittedAt: new Date(),
+    });
+    expect(reused.transcriptJobId).toBe(jobId);
+  });
+
+  it('⚠ TWO LIVE ROWS CANNOT SHARE A JOB ID — the unique index is what makes the lookup exact', async () => {
+    const jobId = vendorId('batch');
+    await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: jobId,
+      transcriptJobSubmittedAt: new Date(),
+    });
+
+    // Without this, a stray or replayed submit could point two segments at one batch job and
+    // `findByTranscriptJobId` would silently return whichever the planner reached first.
+    const { meeting: other } = await meetingFactory();
+    await expectConstraintViolation('23505', (tx) =>
+      tx.insert(meetingRecordings).values(
+        rawRow(other.id, {
+          status: 'ready',
+          captureEndedAt: new Date(),
+          transcriptJobId: jobId,
+          transcriptJobSubmittedAt: new Date(),
+        })
+      )
+    );
+  });
+
+  it('but MANY rows may share a NULL job id — the index is partial on IS NOT NULL', async () => {
+    // Every segment predates its batch job, and most never get one at all (a non-engagement
+    // meeting is a clean no-op, D4). A non-partial unique would make the second such row fail.
+    const { meeting } = await meetingFactory();
+    await meetingRecordingFactory({ meetingId: meeting.id, status: 'ready' });
+    await meetingRecordingFactory({ meetingId: meeting.id, status: 'ready' });
+    await meetingRecordingFactory({ meetingId: meeting.id, status: 'failed' });
+
+    const rows = await meetingRecordingsRepository.listByMeeting(meeting.id);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.transcriptJobId === null)).toBe(true);
+  });
+});
+
+describe('meetingRecordingsRepository.markTranscriptJobSubmitted', () => {
+  it('stamps the job id AND the submit instant, and leaves the recording lifecycle alone', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+    const jobId = vendorId('batch');
+    const at = new Date('2026-09-01T10:00:00.000Z');
+
+    const updated = await meetingRecordingsRepository.markTranscriptJobSubmitted(
+      { id: recording.id, transcriptJobId: jobId, at },
+      db
+    );
+
+    expect(updated?.transcriptJobId).toBe(jobId);
+    expect(updated?.transcriptJobSubmittedAt?.toISOString()).toBe(at.toISOString());
+    expect(updated?.transcriptJobFinishedAt).toBeNull();
+    expect(updated?.transcriptJobFailureReason).toBeNull();
+    // ⚠ ORTHOGONAL LADDER: the recording's own state machine must not move.
+    expect(updated?.status).toBe('source_ready');
+  });
+
+  it('⚠⚠ THE SUBMIT GUARD: a second call returns undefined and NEVER overwrites the first job id', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+    const first = vendorId('batch-first');
+    const at = new Date('2026-09-01T10:00:00.000Z');
+    await meetingRecordingsRepository.markTranscriptJobSubmitted(
+      { id: recording.id, transcriptJobId: first, at },
+      db
+    );
+
+    // This is a retried BullMQ submit that already called Daily again. `undefined` is a
+    // SUCCESSFUL no-op — but the batch job it just created is an ORPHAN, and the caller's
+    // obligation is to log that id at `error`, never to retry.
+    const duplicate = await meetingRecordingsRepository.markTranscriptJobSubmitted(
+      { id: recording.id, transcriptJobId: vendorId('batch-second'), at: new Date() },
+      db
+    );
+    expect(duplicate).toBeUndefined();
+
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.transcriptJobId).toBe(first);
+    expect(row?.transcriptJobSubmittedAt?.toISOString()).toBe(at.toISOString());
+  });
+
+  it('is submittable from ANY recording status — transcription does not wait on Mux', async () => {
+    // The trigger is `recording.ready-to-download` (status `source_ready`), but the Mux ladder
+    // races ahead independently, so a row may already be `ingesting` or `ready` by the time the
+    // submit job runs. A `status` term here would silently drop those segments.
+    for (const status of ['source_ready', 'ingesting', 'ready'] as const) {
+      const { recording } = await meetingRecordingFactory({ status });
+      const updated = await meetingRecordingsRepository.markTranscriptJobSubmitted(
+        { id: recording.id, transcriptJobId: vendorId('batch'), at: new Date() },
+        db
+      );
+      expect(updated?.status).toBe(status);
+      expect(updated?.transcriptJobSubmittedAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it('refuses a soft-deleted row', async () => {
+    const { recording } = await meetingRecordingFactory({ status: 'source_ready' });
+    await meetingRecordingsRepository.softDelete({ id: recording.id });
+
+    const refused = await meetingRecordingsRepository.markTranscriptJobSubmitted(
+      { id: recording.id, transcriptJobId: vendorId('batch'), at: new Date() },
+      db
+    );
+    expect(refused).toBeUndefined();
+  });
+});
+
+describe('meetingRecordingsRepository.markTranscriptJobFinished', () => {
+  it('stamps the terminal instant — which is what RELEASES the cleanup withhold', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date('2026-09-01T10:00:00.000Z'),
+    });
+    const at = new Date('2026-09-01T10:04:00.000Z');
+
+    const updated = await meetingRecordingsRepository.markTranscriptJobFinished(
+      { id: recording.id, at },
+      db
+    );
+
+    // ⚠ `recording-cleanup-source` withholds for exactly `submitted_at IS NOT NULL AND
+    // finished_at IS NULL`. Deleting the Daily source inside that window costs the transcript.
+    expect(updated?.transcriptJobFinishedAt?.toISOString()).toBe(at.toISOString());
+    expect(updated?.transcriptJobFailureReason).toBeNull();
+    expect(updated?.status).toBe('ready');
+  });
+
+  it('THE REPLAY: a second job-finished returns undefined and preserves the ORIGINAL instant', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+    const at = new Date('2026-09-01T10:04:00.000Z');
+    await meetingRecordingsRepository.markTranscriptJobFinished({ id: recording.id, at }, db);
+
+    const replay = await meetingRecordingsRepository.markTranscriptJobFinished(
+      { id: recording.id, at: new Date('2026-09-01T11:00:00.000Z') },
+      db
+    );
+    expect(replay).toBeUndefined();
+
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.transcriptJobFinishedAt?.toISOString()).toBe(at.toISOString());
+  });
+
+  it('refuses a soft-deleted row', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+    await meetingRecordingsRepository.softDelete({ id: recording.id });
+
+    expect(
+      await meetingRecordingsRepository.markTranscriptJobFinished(
+        { id: recording.id, at: new Date() },
+        db
+      )
+    ).toBeUndefined();
+  });
+});
+
+describe('meetingRecordingsRepository.markTranscriptJobFailed', () => {
+  it('⚠⚠ STAMPS finished_at TOO — terminal is terminal, and that column releases the withhold', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+    const at = new Date('2026-09-01T10:06:00.000Z');
+
+    const updated = await meetingRecordingsRepository.markTranscriptJobFailed(
+      { id: recording.id, reason: 'transcript job failed: Failed to download: 403 Forbidden', at },
+      db
+    );
+
+    // A failure arm that stamped only the reason would leak the Daily source forever, for
+    // precisely the population most likely to fail.
+    expect(updated?.transcriptJobFinishedAt?.toISOString()).toBe(at.toISOString());
+    expect(updated?.transcriptJobFailureReason).toBe(
+      'transcript job failed: Failed to download: 403 Forbidden'
+    );
+  });
+
+  /**
+   * ⚠⚠ THE SEPARATION THAT MATTERS MOST IN THIS FILE. A failed TRANSCRIPTION is not a failed
+   * RECORDING: the segment is playable, BAL-440 still renders it, and `markSourceDeleted`'s
+   * `status = 'ready'` term must keep matching. Writing the recording's own failure columns
+   * here would un-publish a healthy recording over a Deepgram error.
+   */
+  it('⚠⚠ LEAVES status / failed_stage / failure_reason UNTOUCHED — and markSourceDeleted still works', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+
+    await meetingRecordingsRepository.markTranscriptJobFailed(
+      { id: recording.id, reason: 'vendor reported an error', at: new Date() },
+      db
+    );
+
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.status).toBe('ready');
+    expect(row?.failedStage).toBeNull();
+    expect(row?.failureReason).toBeNull();
+
+    // The proof that matters: the recording's OWN ladder is untouched, so cleanup — which the
+    // now-terminal batch job has just released — proceeds normally.
+    const cleaned = await meetingRecordingsRepository.markSourceDeleted(
+      { id: recording.id, at: new Date() },
+      db
+    );
+    expect(cleaned?.sourceDeletedAt).toBeInstanceOf(Date);
+    expect(cleaned?.status).toBe('ready');
+  });
+
+  it('caps the reason at FAILURE_REASON_MAX_LENGTH, like markFailed', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+
+    const updated = await meetingRecordingsRepository.markTranscriptJobFailed(
+      { id: recording.id, reason: 'y'.repeat(FAILURE_REASON_MAX_LENGTH * 3), at: new Date() },
+      db
+    );
+
+    // Truncated at the single WRITE point, so no caller can forget to do it.
+    expect(updated?.transcriptJobFailureReason).toHaveLength(FAILURE_REASON_MAX_LENGTH);
+  });
+
+  it('⚠ FIRST TERMINAL WINS: an error arriving after job-finished is refused, and writes no reason', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+    const finishedAt = new Date('2026-09-01T10:04:00.000Z');
+    await meetingRecordingsRepository.markTranscriptJobFinished(
+      { id: recording.id, at: finishedAt },
+      db
+    );
+
+    const refused = await meetingRecordingsRepository.markTranscriptJobFailed(
+      { id: recording.id, reason: 'a late error delivery', at: new Date() },
+      db
+    );
+    expect(refused).toBeUndefined();
+
+    // A successful capture must not acquire a failure reason from a straggling delivery.
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.transcriptJobFinishedAt?.toISOString()).toBe(finishedAt.toISOString());
+    expect(row?.transcriptJobFailureReason).toBeNull();
+  });
+
+  it('⚠ and the other way round: job-finished after an error is refused, preserving the reason', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+    const failedAt = new Date('2026-09-01T10:06:00.000Z');
+    await meetingRecordingsRepository.markTranscriptJobFailed(
+      { id: recording.id, reason: 'the ORIGINAL root cause', at: failedAt },
+      db
+    );
+
+    const refused = await meetingRecordingsRepository.markTranscriptJobFinished(
+      { id: recording.id, at: new Date() },
+      db
+    );
+    expect(refused).toBeUndefined();
+
+    const row = await meetingRecordingsRepository.findById(recording.id);
+    expect(row?.transcriptJobFinishedAt?.toISOString()).toBe(failedAt.toISOString());
+    expect(row?.transcriptJobFailureReason).toBe('the ORIGINAL root cause');
+  });
+
+  it('refuses a soft-deleted row', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: vendorId('batch'),
+      transcriptJobSubmittedAt: new Date(),
+    });
+    await meetingRecordingsRepository.softDelete({ id: recording.id });
+
+    expect(
+      await meetingRecordingsRepository.markTranscriptJobFailed(
+        { id: recording.id, reason: 'r', at: new Date() },
+        db
+      )
+    ).toBeUndefined();
   });
 });

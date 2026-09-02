@@ -33,6 +33,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startRecordingCaptureWorker },
     { startRecordingIngestWorker },
     { startRecordingCleanupSourceWorker },
+    { startTranscriptCaptureWorker },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -57,6 +58,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./recording-capture.js'),
     import('./recording-ingest.js'),
     import('./recording-cleanup-source.js'),
+    import('./transcript-capture.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -118,5 +120,8 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   startRecordingCaptureWorker();
   startRecordingIngestWorker();
   startRecordingCleanupSourceWorker();
+  // BAL-483: the Daily Batch Processor transcription producer (submit + ingest). Event-driven,
+  // no cron. ⚠ Its `vi.mock` in `worker.test.ts` must land in THIS commit.
+  startTranscriptCaptureWorker();
   logger?.info('BullMQ workers started');
 }

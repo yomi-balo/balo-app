@@ -89,8 +89,9 @@ import { timestamps, softDelete } from './helpers';
  * explicitly out of scope for this ticket.
  *
  * ── NOTHING HERE IS CLIENT-REACHABLE ──────────────────────────────────────────────────────
- * `daily_recording_id`, `mux_asset_id`, `failed_stage` and `failure_reason` are vendor/ops
- * columns. The client-safe projection is `toMeetingRecordingView` in
+ * `daily_recording_id`, `mux_asset_id`, `failed_stage`, `failure_reason` and BAL-483's four
+ * `transcript_job_*` columns are vendor/ops columns. The client-safe projection is
+ * `toMeetingRecordingView` in
  * `@balo/shared/meetings`, and its test asserts none of them survive the boundary.
  * ⚠ Never hydrate this table through a relational `with:` on a client-bound read — `with:`
  * returns FULL rows, vendor/ops columns included, with no way to project them away.
@@ -155,6 +156,44 @@ export const meetingRecordings = pgTable(
     readyAt: timestamp('ready_at', { withTimezone: true }),
     /** When `recording-cleanup-source` removed the Daily copy. ⚠ NEVER before `ready` (D4). */
     sourceDeletedAt: timestamp('source_deleted_at', { withTimezone: true }),
+
+    // ── BAL-483 — the Daily BATCH PROCESSOR transcription job for THIS segment ──────────
+    //
+    // ⚠ NOT A SECOND CAPTURE SLOT. A batch job is 1:1 with a recording segment by
+    // construction (`inParams` takes exactly ONE `recordingId`), and — unlike
+    // `recordings/start` — `POST /batch-processor` returns the job id SYNCHRONOUSLY. There is
+    // therefore no state before the id exists, no slot to hold, and no reaper. ADR-1045's
+    // "more than one state before insertRaw ⇒ its own table" rule does not fire here.
+    //
+    // ⚠ NEVER CLIENT-REACHABLE. `toMeetingRecordingView` (`@balo/shared/meetings`) is
+    // structural and names six fields; these four cannot survive it. They are additionally
+    // listed in `MEETING_RECORDING_CONCEALED_KEYS` so the projection test proves it.
+
+    /**
+     * Daily's batch-processor job id, stamped from the SYNCHRONOUS `POST /batch-processor`
+     * response. The PRIMARY correlation handle for `batch-processor.job-finished` /
+     * `.error`, neither of which carries a room, an instance id, or a session id.
+     * `text`, not `uuid`: the format is the vendor's to change (the `daily_recording_id`
+     * posture, verbatim). NULL until the POST returns; may stay NULL for a submitted job
+     * whose stamp lost its transaction — the `daily_recording_id` fallback covers that.
+     */
+    transcriptJobId: text('transcript_job_id'),
+    /**
+     * ⚠ THE SUBMIT GUARD, and the ONLY thing that makes "at most one batch job per segment"
+     * true. `markTranscriptJobSubmitted` CASes on `IS NULL`, so a retried submit job is a
+     * successful no-op rather than a second vendor charge and a second transcript.
+     */
+    transcriptJobSubmittedAt: timestamp('transcript_job_submitted_at', { withTimezone: true }),
+    /**
+     * Terminal instant for the batch job — stamped by BOTH webhook arms (finished AND error).
+     * ⚠ IT GATES `recording-cleanup-source`: the batch processor DOWNLOADS the Daily
+     * recording, so deleting the source while `submitted_at IS NOT NULL AND finished_at IS
+     * NULL` produces Daily's documented `"Failed to download: 403 Forbidden"` and
+     * permanently loses this segment's transcript.
+     */
+    transcriptJobFinishedAt: timestamp('transcript_job_finished_at', { withTimezone: true }),
+    /** ⚠ CAPPED at `FAILURE_REASON_MAX_LENGTH` by the repository, like `failure_reason`. */
+    transcriptJobFailureReason: text('transcript_job_failure_reason'),
 
     ...timestamps,
     ...softDelete,
@@ -223,6 +262,25 @@ export const meetingRecordings = pgTable(
     check(
       'meeting_recording_duration_non_negative',
       sql`${t.durationSeconds} IS NULL OR ${t.durationSeconds} >= 0`
+    ),
+
+    /**
+     * BAL-483 — one batch job resolves to at most ONE live row. The `batch-processor.*`
+     * PRIMARY lookup. TWO-CLAUSE partial, the `meeting_recording_daily_id_idx` shape
+     * verbatim: the column is NULLABLE (the row predates the job) and a soft-deleted row
+     * must not permanently occupy a vendor id.
+     */
+    uniqueIndex('meeting_recording_transcript_job_idx')
+      .on(t.transcriptJobId)
+      .where(sql`${t.transcriptJobId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+
+    /**
+     * A job id implies a submission. NO THREE-VALUED-LOGIC HOLE: the left disjunct is
+     * `IS NULL` (total), so the CHECK is never NULL. Enum-literal-free — the house rule.
+     */
+    check(
+      'meeting_recording_transcript_job_submitted',
+      sql`${t.transcriptJobId} IS NULL OR ${t.transcriptJobSubmittedAt} IS NOT NULL`
     ),
   ]
 );

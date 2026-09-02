@@ -181,9 +181,15 @@ with the delivery URL; the response's **`hmac` field is the signing secret** and
 - The failure reason is a **`log.warn` field**; the wire gets `400` and nothing else. A missing
   secret is a **`503`** (an outage), never a `400` — a `400` tells Daily to stop retrying.
 
-**Events Balo consumes:** `participant.joined` and `participant.left` (the presence writer), plus
-`meeting.ended`, which closes every open interval for the room when the last participant leaves.
-Any other type is acknowledged `200` and recorded, never processed.
+**Events Balo consumes:** `participant.joined` / `participant.left` (the presence writer) and
+`meeting.ended` (closes every open interval for the room); the three recording arms
+`recording.started` / `recording.ready-to-download` / `recording.error` (see **Recording**); and
+the two batch arms `batch-processor.job-finished` / `batch-processor.error` (see
+**Transcription**). Any other type is acknowledged `200` and recorded, never processed.
+
+⚠ The subscription enumerates its `eventTypes` explicitly (`POST /v1/webhooks`), so **a new arm
+in `HANDLED_DAILY_EVENT_TYPES` does nothing until the per-environment subscription is
+updated** — a silent, all-green failure.
 
 **Idempotency:** the event's **`id` attribute is the key**, persisted in `daily_webhook_events`
 (append-only, unique on `event_id`, mirroring `stripe_webhook_events`). `processed_at` is stamped
@@ -260,6 +266,123 @@ until the live smoke test shows it.
 
 ⚠ Starting a recording sits in a much tighter tier than most calls: **~1/s (5 per 5s)**, against
 20/s for room and token operations. One start per meeting is fine; a retry storm is not.
+
+## Transcription (BAL-483)
+
+Balo transcribes **post-call**, via Daily's **Batch Processor**, off the `recordingId` the
+recording ladder already produces. There is **no real-time transcription** — no
+`transcription/start`, no `transcription/stop`, no `transcript.*` webhook arm, and **no room
+property**. `enable_transcription_storage` governs REAL-TIME storage only and Balo sets it
+nowhere; **do not touch `rooms.ts` for transcription.**
+
+Why post-call: real-time stores **WebVTT only**, which cannot carry `confidence` or a
+participants map; the Batch Processor emits **Deepgram-native `json`**, which can. It is also
+~2.7× cheaper at Balo's two-party shape (per recorded minute vs per unmuted participant minute).
+
+⚠ **Transcription is NOT always-on, unlike recording.** `transcripts.engagement_id` is
+`NOT NULL`, and three of the seven `meeting_context_type` labels (`project_discovery`,
+`request_interaction`, `admin`) name no engagement. A recorded segment on such a meeting is a
+clean, logged no-op — no batch job is submitted.
+
+### The submit call
+
+`POST /batch-processor` — the ONE body Balo sends. Pin it with a deep-equal unit test.
+
+```json
+{
+  "preset": "transcript",
+  "inParams": {
+    "sourceType": "recordingId",
+    "recordingId": "<daily recording id>",
+    "language": "en"
+  },
+  "outParams": { "s3Config": { "s3KeyTemplate": "transcript" } }
+}
+```
+
+⚠ **It returns the job id SYNCHRONOUSLY** — `{ "id": "02c2508e-…" }` — unlike
+`recordings/start`, which returns `{"status":"sent"}` and no id. That id is the **entire**
+correlation model: it is stamped on `meeting_recordings.transcript_job_id` and it is how the
+completion webhook finds its way home.
+
+⚠ **`s3Config`, capital `C`.** The docs' parameter table writes `s3config`; every example, the
+`get-job` response, the access-link response and the webhook payload use `s3Config`.
+
+⚠ **There is NO caller-supplied correlation token.** No `instanceId` equivalent exists. The only
+caller-controlled string that survives is `outParams.s3Config.s3KeyTemplate`, echoed inside the
+output S3 key — Balo does not use it.
+
+⚠ **UNVERIFIABLE: whether the batch schema is `additionalProperties: false`.** The endpoint is
+documented as prose, not OpenAPI. So the standing warning in **Recording** — "a wrong body key is
+silently ignored by Daily" — is **NOT known to hold here**, and it is definitely FALSE for
+real-time `transcription/start` (whose spec IS strict, so a wrong key is _rejected_). Send only
+documented keys; never speculate a knob.
+
+⚠ **UNVERIFIABLE: whether the recording must be fully processed first.** Balo never tests it —
+the submit fires off `recording.ready-to-download`, i.e. only once the artefact exists.
+
+### ⚠⚠ The event payloads — verified against docs.daily.co on 2026-09-02
+
+| Event                          | Payload fields (verbatim)                                                                                                  |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `batch-processor.job-finished` | `id` (the **job** id), `preset`, `status`, `input`, `output` — ⚠ **NO `room_name`, NO `instance_id`, NO `mtg_session_id`** |
+| `batch-processor.error`        | `id`, `preset`, `status`, `input`, `error`, `output: {}` — same absences                                                   |
+
+Envelope on both: `version`, `type`, `id`, `payload`, `event_ts`.
+
+⚠ Both webhook **examples** use `sourceType: "uri"`, so `payload.input.recordingId` is
+**inferred from `GET /batch-processor/:id`'s documented response, not shown on the webhook**.
+Balo treats it as a FALLBACK only, and refuses it for a row already owned by a different job.
+
+### Endpoints
+
+| Call                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /batch-processor`                | ⚠ Returns `{ "id": … }` **synchronously**. `400` → `{ error, info }`.                                                                                                                                                                                                                                                                                                                                          |
+| `GET /batch-processor/:id/access-link` | → `{ id, preset, status, transcription: [{format, link}], summary? }`. The key is **`link`** (schema and example agree — unlike `/transcript/:id/access-link`, which contradicts itself). **`400` when status ≠ `finished`** (retryable); `404` unknown job (terminal). ⚠ **No TTL is documented and no `expires` field is returned** — mint inside the ingest job on every attempt, never persist, never log. |
+| `GET /batch-processor/:id`             | `{ id, preset, status, input: {sourceType, recordingId?, uri?}, output, error? }`. `status ∈ {submitted, processing, finished, error}`. The recovery path if a webhook is missed.                                                                                                                                                                                                                              |
+| `DELETE /batch-processor/:id`          | Deletes the job and its output. Balo does not call it.                                                                                                                                                                                                                                                                                                                                                         |
+
+### Output formats
+
+`txt`, `srt`, `vtt`, **`json`** — all four are produced for every `transcript` job. Balo fetches
+**`json`** and nothing else.
+
+⚠⚠ **THE JSON IS DEEPGRAM-NATIVE, AND ITS SPEAKERS ARE ORDINALS, NOT IDENTITIES.**
+`results.channels[0].alternatives[0].words[]` carries `{ word, start, end, confidence, speaker,
+speaker_confidence, punctuated_word }`. `speaker` is `0 | 1 | …`. **There is no `user_id`, no
+participant id and no session id anywhere in the artefact** — the recording is a composited
+single-channel mix, so no per-participant track exists. Balo maps ordinal _n_ to the stable ref
+`speaker-n` with `source: 'diarized'` and `userId: null`; a turn with no `speaker` maps to the
+synthetic `'unknown'` ref. **The recap therefore cannot name who said what.** The only known path
+to real attribution is raw-tracks recording, which is a BAL-473-level change.
+
+Diarization is **on by default** for this preset — Daily's own documented sample output carries
+`speaker`/`speaker_confidence` with no parameter set. Balo passes no diarization knob.
+
+### Storage
+
+⚠ **No prerequisite.** "By default, batch processor outputs are stored with Daily's
+HIPAA-compliant storage." The only knob is the optional **domain** property
+`batch_processor_bucket` (⚠ **Amazon S3 only** — unlike `recordings_bucket` /
+`transcription_bucket`, it cannot be pointed at OCI). Balo sets none.
+
+⚠ **The one config that would silently break every job:** if `recordings_bucket` was set on the
+domain or the room when a recording was made, the **domain**'s `recordings_bucket` must MATCH
+when that recording id is passed to the batch processor. Balo sets no `recordings_bucket`
+anywhere (`rooms.ts` sends only `enable_recording`), so this is inert today.
+
+### ⚠⚠ The batch job DOWNLOADS the recording — do not delete it underneath
+
+`DELETE /recordings/:id` while a batch job is in flight produces Daily's documented
+`"Failed to download: 403 Forbidden"` and permanently loses that segment's transcript.
+`recording-cleanup-source` therefore withholds deletion while
+`transcript_job_submitted_at IS NOT NULL AND transcript_job_finished_at IS NULL`, and both batch
+terminal arms re-enqueue it.
+
+### Plan tier
+
+`Paid plans only` — the same tier the recording already requires.
 
 ## Not this skill
 

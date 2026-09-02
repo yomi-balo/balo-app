@@ -24,9 +24,50 @@ export interface RecordingCleanupSourceJobData {
 
 export interface EnqueueRecordingCleanupSourceInput {
   recordingId: string;
+  /**
+   * ⚠⚠ FIX ROUND 2 — optional. Omitted by the Mux-triggered first enqueue
+   * (`routes/mux/webhook.ts`), which gets the bare, ROW-keyed jobId — correct there because
+   * `video.asset.ready` fires once per row. Supplied by `routes/daily/webhook.ts`'s §7.4
+   * re-drive as the Daily batch job id, which gives that WRITE its own, disjoint jobId. See
+   * {@link recordingCleanupSourceJobId}.
+   */
+  dedupeToken?: string;
 }
 
-/** jobId keyed on the row — one `ready` per row, one write. */
+/**
+ * FIX ROUND 1 (M5) — the ONE definition of this queue's jobId scheme. Both `routes/mux/webhook.ts`
+ * and `routes/daily/webhook.ts` go through `enqueueRecordingCleanupSource`, which calls this;
+ * neither call site hand-rolls the template.
+ *
+ * ⚠⚠ FIX ROUND 2 — TWO SHAPES, BOTH KEYED ON A WRITE, NEVER ON A TARGET STATE (the standing
+ * rule stated in `recording-capture.ts`'s module docblock and honoured across this codebase).
+ * `recordingId` alone identifies the write that first learns the Daily source is safe to
+ * delete — Mux's `video.asset.ready`, which fires at most once per row — so the bare form is
+ * correct there. `routes/daily/webhook.ts`'s §7.4 re-drive is a SEPARATE, LATER write (the
+ * Daily batch transcription job reaching a terminal state) and must NOT collide with the first
+ * one: BullMQ dedups a jobId against a job in ANY state, including `active`. Fix round 1 made
+ * the re-add unconditional, but under the SAME bare jobId that was still not enough — if the
+ * Mux-triggered job was active (withheld, mid-§7.4-wait) at the moment this fired, the
+ * unconditional re-add was silently DROPPED by that dedup, and nothing ever re-enqueued the
+ * withheld job once it completed as a stale no-op (Mux's `ready` fires once). Passing
+ * `dedupeToken` appends it, so the re-drive's jobId never collides with the bare, row-keyed one.
+ *
+ * A duplicate re-drive under this jobId (e.g. a replayed `batch-processor.job-finished`
+ * delivery, which carries the same batch job id and therefore the same jobId) is a clean no-op
+ * either way: `handleCleanup` below short-circuits on `sourceDeletedAt !== null` before it ever
+ * touches Daily.
+ */
+export function recordingCleanupSourceJobId(recordingId: string, dedupeToken?: string): string {
+  return dedupeToken === undefined
+    ? `recording-cleanup-source--${recordingId}`
+    : `recording-cleanup-source--${recordingId}--${dedupeToken}`;
+}
+
+/**
+ * jobId keyed on the row by default (the Mux-triggered first enqueue); keyed on the row PLUS
+ * `dedupeToken` when the caller supplies one (the §7.4 re-drive). See
+ * {@link recordingCleanupSourceJobId}.
+ */
 export async function enqueueRecordingCleanupSource(
   input: EnqueueRecordingCleanupSourceInput
 ): Promise<void> {
@@ -34,7 +75,7 @@ export async function enqueueRecordingCleanupSource(
     'cleanup',
     { recordingId: input.recordingId } satisfies RecordingCleanupSourceJobData,
     {
-      jobId: `recording-cleanup-source--${input.recordingId}`,
+      jobId: recordingCleanupSourceJobId(input.recordingId, input.dedupeToken),
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
     }
@@ -63,6 +104,46 @@ async function handleCleanup(job: Job<RecordingCleanupSourceJobData>): Promise<v
     log.error(
       { recordingId, status: row.status },
       'recording-cleanup-source: refused — row is not ready (D4)'
+    );
+    return;
+  }
+  // ⚠⚠ BAL-483 — WITHHELD WHILE A BATCH TRANSCRIPTION JOB IS STILL READING THIS SOURCE.
+  // `POST /batch-processor` DOWNLOADS the Daily recording; deleting it mid-job produces
+  // Daily's documented `"Failed to download: 403 Forbidden"` (`batch-processor.error`) and
+  // permanently loses this segment's transcript. Mux transcode and Deepgram batch race with
+  // no ordering guarantee, so this cannot be left to luck.
+  //
+  // ⚠ IT IS BOUNDED, NOT OPEN-ENDED: BOTH batch terminal arms re-enqueue this job
+  // (`routes/daily/webhook.ts`, `handleTranscriptCapturePostCommit`), so the wait ends the
+  // moment the vendor answers at all.
+  //
+  // ⚠ THE RESIDUAL, STATED NOT FIXED: a batch job that NEVER reaches a terminal webhook
+  // leaks the Daily source. It costs STORAGE, not correctness, and it is queryable:
+  //   SELECT id, meeting_id, transcript_job_submitted_at FROM meeting_recordings
+  //    WHERE transcript_job_submitted_at IS NOT NULL AND transcript_job_finished_at IS NULL
+  //      AND source_deleted_at IS NULL AND status = 'ready' AND deleted_at IS NULL;
+  // The alternative — delete anyway — costs the recap, which is the whole feature.
+  //
+  // ⚠⚠ A SEPARATE RESIDUAL THIS GATE DOES NOT COVER: if the SUBMIT POST to Daily succeeded but
+  // `markTranscriptJobSubmitted` then failed to stamp the row, `transcript_job_submitted_at`
+  // stays NULL, so this gate is FALSE and cleanup proceeds — deleting the Daily source out from
+  // under a batch job that is genuinely in flight. That is R2's residual reached through a
+  // different door; it costs that segment's transcript, not correctness.
+  //
+  // ⚠ FIX ROUND 1 (M9) — A THIRD DOOR, NOT REACHABLE TODAY BUT UNGUARDED THE MOMENT ONE SHIPS:
+  // `routes/daily/webhook.ts`'s batch-processor arm resolves the recording row, then does
+  // `meetingsRepository.findById(recording.meetingId)` and bails to `null` (no effect, no CAS)
+  // when the meeting is gone. There is NO delete-meeting route in this codebase today, so that
+  // branch is unreachable in practice — but if one ships, a meeting deleted while a batch job is
+  // in flight would leave `transcript_job_submitted_at` stamped and `transcript_job_finished_at`
+  // permanently NULL (the terminal webhook can never apply), and THIS gate would withhold
+  // forever — the opposite of the deleting user's intent, keeping the vendor copy alive.
+  // Deliberately unbounded here (see the plan's R2/R3/R4 "stated not fixed" precedent) rather
+  // than adding an age cutoff pre-emptively for a path that cannot fire yet.
+  if (row.transcriptJobSubmittedAt !== null && row.transcriptJobFinishedAt === null) {
+    log.info(
+      { recordingId },
+      'recording-cleanup-source: withheld — a Daily batch transcription job is still reading this source (BAL-483)'
     );
     return;
   }

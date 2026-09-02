@@ -24,6 +24,12 @@ const {
   mockEnqueueRecordingEnsure,
   mockEnqueueRecordingIngest,
   mockTrackServer,
+  mockFindByTranscriptJobId,
+  mockMarkTranscriptJobFinished,
+  mockMarkTranscriptJobFailed,
+  mockEnqueueTranscriptSubmit,
+  mockEnqueueTranscriptIngest,
+  mockEnqueueRecordingCleanupSource,
 } = vi.hoisted(() => ({
   mockCheckRateLimit: vi.fn(),
   mockFindByEventId: vi.fn(),
@@ -48,6 +54,12 @@ const {
   mockEnqueueRecordingEnsure: vi.fn(),
   mockEnqueueRecordingIngest: vi.fn(),
   mockTrackServer: vi.fn(),
+  mockFindByTranscriptJobId: vi.fn(),
+  mockMarkTranscriptJobFinished: vi.fn(),
+  mockMarkTranscriptJobFailed: vi.fn(),
+  mockEnqueueTranscriptSubmit: vi.fn(),
+  mockEnqueueTranscriptIngest: vi.fn(),
+  mockEnqueueRecordingCleanupSource: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -77,6 +89,9 @@ vi.mock('@balo/db', () => ({
     markStarted: mockMarkStarted,
     markSourceReady: mockMarkSourceReady,
     markFailed: mockMarkRecordingFailed,
+    findByTranscriptJobId: mockFindByTranscriptJobId,
+    markTranscriptJobFinished: mockMarkTranscriptJobFinished,
+    markTranscriptJobFailed: mockMarkTranscriptJobFailed,
   },
 }));
 vi.mock('@balo/analytics/server', () => ({
@@ -85,6 +100,11 @@ vi.mock('@balo/analytics/server', () => ({
     RECORDING_STARTED: 'recording_started',
     RECORDING_READY: 'recording_ready',
     RECORDING_FAILED: 'recording_failed',
+  },
+  TRANSCRIPT_SERVER_EVENTS: {
+    TRANSCRIPT_CAPTURE_SUBMITTED: 'transcript_capture_submitted',
+    TRANSCRIPT_CAPTURE_SKIPPED: 'transcript_capture_skipped',
+    TRANSCRIPT_CAPTURE_FAILED: 'transcript_capture_failed',
   },
 }));
 vi.mock('../../services/meetings/presence-writer.js', () => ({
@@ -100,6 +120,18 @@ vi.mock('../../jobs/recording-capture.js', () => ({
 }));
 vi.mock('../../jobs/recording-ingest.js', () => ({
   enqueueRecordingIngest: mockEnqueueRecordingIngest,
+}));
+// BAL-483 — MANDATORY: `webhook.ts` now imports these two job modules too.
+vi.mock('../../jobs/transcript-capture.js', () => ({
+  enqueueTranscriptSubmit: mockEnqueueTranscriptSubmit,
+  enqueueTranscriptIngest: mockEnqueueTranscriptIngest,
+}));
+// ⚠⚠ FIX ROUND 2 — `webhook.ts` no longer imports `RECORDING_CLEANUP_SOURCE_QUEUE` or
+// `recordingCleanupSourceJobId` (the `Queue.remove()` re-drive recipe that needed them is gone —
+// see the docblock at the §7.4 re-drive call site), and no longer imports `../../lib/queue.js`
+// at all — so neither is mocked here any more.
+vi.mock('../../jobs/recording-cleanup-source.js', () => ({
+  enqueueRecordingCleanupSource: mockEnqueueRecordingCleanupSource,
 }));
 // ⚠ SPREADS THE REAL MODULE — a bare factory would drop `RATE_LIMIT_DEADLINE_MS`, which this
 // route imports, and a vitest factory mock throws on any omitted export the graph touches.
@@ -204,6 +236,13 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
     mockMarkRecordingFailed.mockResolvedValue(undefined);
     mockEnqueueRecordingEnsure.mockResolvedValue(undefined);
     mockEnqueueRecordingIngest.mockResolvedValue(undefined);
+    // BAL-483 — batch-processor defaults: no row resolves unless a test says otherwise.
+    mockFindByTranscriptJobId.mockResolvedValue(undefined);
+    mockMarkTranscriptJobFinished.mockResolvedValue(undefined);
+    mockMarkTranscriptJobFailed.mockResolvedValue(undefined);
+    mockEnqueueTranscriptSubmit.mockResolvedValue(undefined);
+    mockEnqueueTranscriptIngest.mockResolvedValue(undefined);
+    mockEnqueueRecordingCleanupSource.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -480,6 +519,8 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
         expect.anything()
       );
       expect(mockEnqueueRecordingIngest).toHaveBeenCalledWith({ recordingId: RECORDING_ID });
+      // ⚠⚠ BAL-483 — the transcription producer joins the SAME `recordingTransitioned` gate.
+      expect(mockEnqueueTranscriptSubmit).toHaveBeenCalledWith({ recordingId: RECORDING_ID });
       // ⚠⚠ THE UNCONDITIONAL RE-ARM — the job gates itself, so this enqueue is free.
       expect(mockEnqueueRecordingEnsure).toHaveBeenCalledWith(
         expect.objectContaining({ meetingId: MEETING_ID, trigger: 'rejoin' })
@@ -728,6 +769,7 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
       await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
 
       expect(mockEnqueueRecordingIngest).not.toHaveBeenCalled();
+      expect(mockEnqueueTranscriptSubmit).not.toHaveBeenCalled();
       // The unconditional re-arm still fires — it is unconditional BY DESIGN.
       expect(mockEnqueueRecordingEnsure).toHaveBeenCalled();
     });
@@ -827,6 +869,350 @@ describe('POST /webhooks/daily (BAL-134 §5.1)', () => {
       expect(mockTrackServer).not.toHaveBeenCalled();
       // The re-arm still fires — unconditional by design.
       expect(mockEnqueueRecordingEnsure).toHaveBeenCalled();
+    });
+
+    it('⚠⚠ FIX ROUND 1 (M3, in passing) — a signed-URL-bearing vendor error is SANITIZED before it is persisted here too', async () => {
+      mockFindRecordingById.mockResolvedValue(RECORDING_ROW);
+      mockMarkRecordingFailed.mockResolvedValue({ ...RECORDING_ROW, status: 'failed' });
+      const leakyErrorMsg =
+        'Failed to download https://s3.amazonaws.com/daily-recordings/abc123?X-Amz-Signature=SECRET: 403 Forbidden';
+      const payload = errorPayload({
+        payload: { instance_id: INSTANCE_ID, room: ROOM, error_msg: leakyErrorMsg },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [writeInput] = mockMarkRecordingFailed.mock.calls[0] as [{ reason: string }];
+      expect(writeInput.reason).not.toContain('X-Amz-Signature=SECRET');
+      expect(writeInput.reason).toContain('[redacted-url]');
+    });
+  });
+
+  // ── BAL-483 — THE TWO BATCH-PROCESSOR ARMS ──────────────────────────────────────────────
+
+  describe('batch-processor.job-finished / .error', () => {
+    const BATCH_JOB_ID = '02c2508e-8835-4f3e-bcf2-e319d00f0eec';
+
+    function batchRecordingRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+      return {
+        id: RECORDING_ID,
+        meetingId: MEETING_ID,
+        status: 'source_ready',
+        dailyRecordingId: 'daily-rec-1',
+        transcriptJobId: BATCH_JOB_ID,
+        ...overrides,
+      };
+    }
+
+    function batchPayload(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({
+        id: 'evt_batch_1',
+        type: 'batch-processor.job-finished',
+        payload: {
+          id: BATCH_JOB_ID,
+          preset: 'transcript',
+          status: 'finished',
+          input: {},
+          output: {},
+        },
+        ...overrides,
+      });
+    }
+
+    it('job-finished resolved by transcript_job_id → markTranscriptJobFinished inside the txn, then enqueueTranscriptIngest post-commit', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow());
+      mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow());
+      const payload = batchPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockFindByTranscriptJobId).toHaveBeenCalledWith(BATCH_JOB_ID);
+      // ⚠⚠ TIGHTENED (fix round 1) — `expect.anything()` catches OMISSION of the executor but
+      // not `db` being passed instead of `tx`; assert the ACTUAL transaction object, the same
+      // one `insertReceived` got in this same request (the "stamps processed_at on the SAME
+      // executor" pattern already used elsewhere in this file, at `:1234-1242` today).
+      const [, insertExec] = mockInsertReceived.mock.calls[0] as [unknown, unknown];
+      expect(mockMarkTranscriptJobFinished).toHaveBeenCalledWith(
+        expect.objectContaining({ id: RECORDING_ID }),
+        insertExec
+      );
+      expect(insertExec).not.toBe(undefined);
+      expect(mockEnqueueTranscriptIngest).toHaveBeenCalledWith({
+        recordingId: RECORDING_ID,
+        batchJobId: BATCH_JOB_ID,
+      });
+    });
+
+    it('resolved by the input.recordingId FALLBACK when no row carries the job id', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(undefined);
+      mockFindByDailyRecordingId.mockResolvedValue(batchRecordingRow({ transcriptJobId: null }));
+      mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow());
+      const payload = batchPayload({
+        payload: { id: BATCH_JOB_ID, input: { recordingId: 'daily-rec-1' } },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockFindByDailyRecordingId).toHaveBeenCalledWith('daily-rec-1');
+      expect(mockMarkTranscriptJobFinished).toHaveBeenCalled();
+    });
+
+    it('⚠⚠ the fallback REFUSES a row whose transcript_job_id names a DIFFERENT job', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(undefined);
+      mockFindByDailyRecordingId.mockResolvedValue(
+        batchRecordingRow({ transcriptJobId: 'some-other-job-id' })
+      );
+      const payload = batchPayload({
+        payload: { id: BATCH_JOB_ID, input: { recordingId: 'daily-rec-1' } },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkTranscriptJobFinished).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'batch-processor.job-finished' }),
+        expect.stringContaining('no row')
+      );
+    });
+
+    it('unresolvable to any row ⇒ log.warn + 200, no effect', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(undefined);
+      const payload = batchPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockMarkTranscriptJobFinished).not.toHaveBeenCalled();
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'batch-processor.job-finished' }),
+        expect.stringContaining('no row')
+      );
+    });
+
+    it('batch-processor.error → markTranscriptJobFailed + TRANSCRIPT_CAPTURE_FAILED with reason vendor_reported — NEVER the vendor text', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow());
+      mockMarkTranscriptJobFailed.mockResolvedValue(batchRecordingRow());
+      const errorText = 'transcript job failed: Error: Failed to download: 403 Forbidden';
+      const payload = batchPayload({
+        type: 'batch-processor.error',
+        payload: { id: BATCH_JOB_ID, error: errorText },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      // ⚠⚠ TIGHTENED (fix round 1) — the SAME tx `insertReceived` got, not `expect.anything()`
+      // (which would also pass if the code passed `db` instead of `tx`).
+      const [, insertExec] = mockInsertReceived.mock.calls[0] as [unknown, unknown];
+      expect(mockMarkTranscriptJobFailed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: RECORDING_ID, reason: errorText }),
+        insertExec
+      );
+      expect(mockTrackServer).toHaveBeenCalledWith('transcript_capture_failed', {
+        meeting_id: MEETING_ID,
+        recording_id: RECORDING_ID,
+        stage: 'batch_job',
+        reason: 'vendor_reported',
+        distinct_id: MEETING_ID,
+      });
+      // ⚠ the raw vendor text never reaches the analytics call.
+      expect(mockTrackServer).not.toHaveBeenCalledWith(
+        'transcript_capture_failed',
+        expect.objectContaining({ reason: errorText })
+      );
+    });
+
+    it('⚠⚠ FIX ROUND 1 (M3) — a signed-URL-bearing vendor error is SANITIZED before it is persisted', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow());
+      mockMarkTranscriptJobFailed.mockResolvedValue(batchRecordingRow());
+      const leakyErrorText =
+        'transcript job failed: Error: Failed to download: https://s3.amazonaws.com/daily-recordings/abc123?X-Amz-Signature=SECRET: 403 Forbidden';
+      const payload = batchPayload({
+        type: 'batch-processor.error',
+        payload: { id: BATCH_JOB_ID, error: leakyErrorText },
+      });
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [writeInput] = mockMarkTranscriptJobFailed.mock.calls[0] as [{ reason: string }];
+      expect(writeInput.reason).not.toContain('X-Amz-Signature=SECRET');
+      expect(writeInput.reason).toContain('[redacted-url]');
+    });
+
+    it('⚠⚠ FIX ROUND 1 (M4) — batch-processor.error now logs at error too, with the SANITIZED text, never raw', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow());
+      mockMarkTranscriptJobFailed.mockResolvedValue(batchRecordingRow());
+      const leakyErrorText =
+        'transcript job failed: Error: Failed to download: https://s3.amazonaws.com/daily-recordings/abc123?X-Amz-Signature=SECRET: 403 Forbidden';
+      const payload = batchPayload({
+        type: 'batch-processor.error',
+        payload: { id: BATCH_JOB_ID, error: leakyErrorText },
+      });
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockErrorLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meetingId: MEETING_ID,
+          recordingId: RECORDING_ID,
+          error: expect.stringContaining('[redacted-url]'),
+        }),
+        expect.stringContaining('batch-processor')
+      );
+      const [errorFields] = mockErrorLog.mock.calls[0] as [{ error: string }];
+      expect(errorFields.error).not.toContain('X-Amz-Signature=SECRET');
+    });
+
+    it('a replayed batch delivery (processedAt set) short-circuits with NO transaction, no second enqueue', async () => {
+      mockFindByEventId.mockResolvedValue({ id: 'marker-1', processedAt: new Date() });
+      const payload = batchPayload();
+
+      const res = await call({
+        method: 'POST',
+        url: URL,
+        payload,
+        headers: signedHeaders(payload),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockFindByTranscriptJobId).not.toHaveBeenCalled();
+    });
+
+    it('⚠⚠ BOTH terminal arms re-enqueue recording-cleanup-source when the row is already ready — the release valve, keyed on the batch job id (fix round 2)', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      const payload = batchPayload();
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      // ⚠⚠ FIX ROUND 2 — no more remove(): the re-drive carries its OWN, write-keyed jobId
+      // (`dedupeToken` = the batch job id) instead of colliding with the Mux-triggered,
+      // row-keyed enqueue. See `recordingCleanupSourceJobId` and the docblock at this call site.
+      expect(mockEnqueueRecordingCleanupSource).toHaveBeenCalledWith({
+        recordingId: RECORDING_ID,
+        dedupeToken: BATCH_JOB_ID,
+      });
+    });
+
+    it('⚠⚠ FIX ROUND 2 — a REPLAYED batch-processor.job-finished delivery re-drives under the SAME dedupeToken (same batch job id ⇒ same jobId), so BullMQ dedups it to ONE re-drive rather than firing a second job', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      const payload = batchPayload();
+
+      // Two independent deliveries of the IDENTICAL event (a vendor retry that arrives before
+      // `markProcessed` commits, or a genuinely re-sent webhook) — neither resolves
+      // `processedAt` on the marker lookup here, so both reach the re-drive.
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockEnqueueRecordingCleanupSource).toHaveBeenCalledTimes(2);
+      const [firstArgs] = mockEnqueueRecordingCleanupSource.mock.calls[0] as [
+        { dedupeToken?: string },
+      ];
+      const [secondArgs] = mockEnqueueRecordingCleanupSource.mock.calls[1] as [
+        { dedupeToken?: string },
+      ];
+      // ⚠ recordingCleanupSourceJobId is a PURE function of recordingId + dedupeToken, so an
+      // identical dedupeToken across both deliveries is what makes them land on the identical
+      // jobId at the BullMQ layer — the replay dedups to one re-drive rather than two.
+      expect(firstArgs.dedupeToken).toBe(BATCH_JOB_ID);
+      expect(secondArgs.dedupeToken).toBe(BATCH_JOB_ID);
+    });
+
+    it('batch-processor.error ALSO re-enqueues recording-cleanup-source when the row is already ready', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockMarkTranscriptJobFailed.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      const payload = batchPayload({
+        type: 'batch-processor.error',
+        payload: { id: BATCH_JOB_ID, error: 'boom' },
+      });
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockEnqueueRecordingCleanupSource).toHaveBeenCalledWith({
+        recordingId: RECORDING_ID,
+        dedupeToken: BATCH_JOB_ID,
+      });
+    });
+
+    it('does NOT re-enqueue recording-cleanup-source when the row is not yet ready', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'source_ready' }));
+      mockMarkTranscriptJobFinished.mockResolvedValue(
+        batchRecordingRow({ status: 'source_ready' })
+      );
+      const payload = batchPayload();
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockEnqueueRecordingCleanupSource).not.toHaveBeenCalled();
+    });
+
+    it('⚠ the cleanup re-enqueue fires even on a CAS no-op — unconditional, like the recording re-arm', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow({ status: 'ready' }));
+      mockMarkTranscriptJobFinished.mockResolvedValue(undefined);
+      const payload = batchPayload();
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockEnqueueRecordingCleanupSource).toHaveBeenCalledWith({
+        recordingId: RECORDING_ID,
+        dedupeToken: BATCH_JOB_ID,
+      });
+      // ...but no ingest, since the CAS did not actually transition the row.
+      expect(mockEnqueueTranscriptIngest).not.toHaveBeenCalled();
+    });
+
+    it('⚠⚠ neither batch arm touches the RECORDING state machine (markSourceReady / markFailed / markStarted)', async () => {
+      mockFindByTranscriptJobId.mockResolvedValue(batchRecordingRow());
+      mockMarkTranscriptJobFinished.mockResolvedValue(batchRecordingRow());
+      const payload = batchPayload();
+
+      await call({ method: 'POST', url: URL, payload, headers: signedHeaders(payload) });
+
+      expect(mockMarkSourceReady).not.toHaveBeenCalled();
+      expect(mockMarkRecordingFailed).not.toHaveBeenCalled();
+      expect(mockMarkStarted).not.toHaveBeenCalled();
     });
   });
 

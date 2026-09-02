@@ -55,6 +55,7 @@ import {
   enqueueRecordingCleanupSource,
   startRecordingCleanupSourceWorker,
   RECORDING_CLEANUP_SOURCE_QUEUE,
+  recordingCleanupSourceJobId,
 } from './recording-cleanup-source.js';
 
 const RECORDING_ID = 'rec-1';
@@ -89,6 +90,72 @@ describe('recording-cleanup-source job — enqueue', () => {
 
   it('exposes the queue name', () => {
     expect(RECORDING_CLEANUP_SOURCE_QUEUE).toBe('recording-cleanup-source');
+  });
+
+  it('⚠ FIX ROUND 1 (M5) — recordingCleanupSourceJobId is the ONE definition of this jobId scheme', () => {
+    expect(recordingCleanupSourceJobId(RECORDING_ID)).toBe(
+      `recording-cleanup-source--${RECORDING_ID}`
+    );
+  });
+
+  it('⚠⚠ FIX ROUND 2 — recordingCleanupSourceJobId pins BOTH shapes: bare (row-keyed) and with a dedupeToken (write-keyed)', () => {
+    expect(recordingCleanupSourceJobId(RECORDING_ID)).toBe(
+      `recording-cleanup-source--${RECORDING_ID}`
+    );
+    expect(recordingCleanupSourceJobId(RECORDING_ID, 'batch-job-1')).toBe(
+      `recording-cleanup-source--${RECORDING_ID}--batch-job-1`
+    );
+    // ⚠ The two shapes must be genuinely DISJOINT — this is what stops the §7.4 re-drive from
+    // colliding with the Mux-triggered enqueue's jobId (fix round 2's fix).
+    expect(recordingCleanupSourceJobId(RECORDING_ID, 'batch-job-1')).not.toBe(
+      recordingCleanupSourceJobId(RECORDING_ID)
+    );
+  });
+
+  it('⚠⚠ FIX ROUND 2 — enqueueRecordingCleanupSource passes dedupeToken through to the jobId', async () => {
+    await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID, dedupeToken: 'batch-job-1' });
+
+    expect(queueAdd).toHaveBeenCalledWith(
+      'cleanup',
+      { recordingId: RECORDING_ID },
+      {
+        jobId: `recording-cleanup-source--${RECORDING_ID}--batch-job-1`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 30_000 },
+      }
+    );
+  });
+
+  it('⚠⚠ FIX ROUND 2 — the write-keyed re-drive still enqueues even while a job under the ROW-keyed jobId is ACTIVE, because the two jobIds are genuinely distinct', async () => {
+    // Simulate BullMQ's real dedup semantic: `Queue.add()` silently no-ops (does not create a
+    // new job) when a jobId already names a job in ANY state, including `active`. This is the
+    // exact mechanism that made fix round 1's remove-then-add recipe insufficient — `remove()`
+    // rejecting on an active job left the bare, row-keyed jobId "occupied", and an unconditional
+    // re-add under that SAME jobId was silently dropped (see the docblock at the `webhook.ts`
+    // §7.4 call site).
+    const jobsInFlight = new Set<string>([recordingCleanupSourceJobId(RECORDING_ID)]); // Mux-triggered job, ACTIVE
+    queueAdd.mockImplementation(async (_name: string, _data: unknown, opts: { jobId: string }) => {
+      if (jobsInFlight.has(opts.jobId)) {
+        return undefined; // BullMQ dedup: silently dropped, no new job created
+      }
+      jobsInFlight.add(opts.jobId);
+      return { id: opts.jobId };
+    });
+
+    // The §7.4 re-drive — a DIFFERENT write (the batch job reaching a terminal state), keyed
+    // with its own dedupeToken.
+    await enqueueRecordingCleanupSource({ recordingId: RECORDING_ID, dedupeToken: 'batch-job-1' });
+
+    const reDriveJobId = recordingCleanupSourceJobId(RECORDING_ID, 'batch-job-1');
+    expect(queueAdd).toHaveBeenCalledWith(
+      'cleanup',
+      { recordingId: RECORDING_ID },
+      expect.objectContaining({ jobId: reDriveJobId })
+    );
+    // Proof the two jobIds are genuinely distinct: the re-drive's jobId was NOT already in
+    // `jobsInFlight` (the Mux-triggered job's bare jobId), so the fake dedup let it through
+    // rather than silently swallowing it.
+    expect(jobsInFlight.has(reDriveJobId)).toBe(true);
   });
 });
 
@@ -125,6 +192,44 @@ describe('recording-cleanup-source job — handler', () => {
     findById.mockResolvedValue(readyRow({ dailyRecordingId: null }));
     await run();
     expect(deleteRecording).not.toHaveBeenCalled();
+  });
+
+  // ── BAL-483 §7.4 — the withhold gate ───────────────────────────────────────────────────
+
+  it('⚠⚠ BAL-483 — withheld while a batch transcription job is still reading this source: no DELETE, logged', async () => {
+    findById.mockResolvedValue(
+      readyRow({ transcriptJobSubmittedAt: new Date(), transcriptJobFinishedAt: null })
+    );
+
+    await run();
+
+    expect(deleteRecording).not.toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ recordingId: RECORDING_ID }),
+      expect.stringContaining('withheld')
+    );
+  });
+
+  it('BAL-483 — proceeds once transcriptJobFinishedAt is set (the batch job is terminal)', async () => {
+    findById.mockResolvedValue(
+      readyRow({ transcriptJobSubmittedAt: new Date(), transcriptJobFinishedAt: new Date() })
+    );
+    deleteRecording.mockResolvedValue('deleted');
+
+    await run();
+
+    expect(deleteRecording).toHaveBeenCalledWith(DAILY_RECORDING_ID);
+  });
+
+  it('BAL-483 — proceeds when transcriptJobSubmittedAt is null (a segment never submitted for transcription)', async () => {
+    findById.mockResolvedValue(
+      readyRow({ transcriptJobSubmittedAt: null, transcriptJobFinishedAt: null })
+    );
+    deleteRecording.mockResolvedValue('deleted');
+
+    await run();
+
+    expect(deleteRecording).toHaveBeenCalledWith(DAILY_RECORDING_ID);
   });
 
   it('deletes the source and stamps source_deleted_at on success', async () => {

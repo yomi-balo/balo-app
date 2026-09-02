@@ -235,8 +235,9 @@ export const meetingsRelations = relations(meetings, ({ many }) => ({
   files: many(meetingFiles),
   // BAL-473. ⚠ `reference_drizzle_with_hydration_leaks_secrets`: a bare
   // `with: { recordings: true }` hydrates `daily_recording_id`, `mux_asset_id`,
-  // `failed_stage` and `failure_reason` — all vendor/ops columns that the client-safe
-  // projection `toMeetingRecordingView` (`@balo/shared/meetings`) exists to conceal. Any
+  // `failed_stage`, `failure_reason` and BAL-483's four `transcript_job_*` columns — all
+  // vendor/ops columns that the client-safe projection `toMeetingRecordingView`
+  // (`@balo/shared/meetings`) exists to conceal. Any
   // read that can reach a route MUST pass an explicit `columns:` projection, or go through
   // `meetingRecordingsRepository.listByMeeting` and project on the way out.
   recordings: many(meetingRecordings),

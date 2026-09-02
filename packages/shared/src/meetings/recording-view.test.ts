@@ -24,6 +24,15 @@ const SENTINELS = {
   // sentinel's presence in the JSON indistinguishable from an allowed field's.
   sourceDeletedAt: new Date('2099-12-31T23:59:59Z'),
   downloadLink: 'https://SENTINEL_LINK',
+  // ── BAL-483 — the Daily batch-processor transcription job. Same rule as every field above:
+  // vendor handles and vendor error text, and a client learns nothing about them — not even
+  // that transcription happened. The two instants get their own distinct sentinel years for
+  // exactly the reason `sourceDeletedAt` names: a colliding timestamp would make a leak
+  // indistinguishable from an allowed field.
+  transcriptJobId: 'SENTINEL_BATCH_JOB',
+  transcriptJobSubmittedAt: new Date('2098-11-30T22:58:58Z'),
+  transcriptJobFinishedAt: new Date('2097-10-29T21:57:57Z'),
+  transcriptJobFailureReason: 'SENTINEL_BATCH_ERROR',
 } as const;
 
 function overWideRow(): Record<string, unknown> {
@@ -41,6 +50,10 @@ function overWideRow(): Record<string, unknown> {
     failureReason: SENTINELS.failureReason,
     sourceDeletedAt: SENTINELS.sourceDeletedAt,
     downloadLink: SENTINELS.downloadLink,
+    transcriptJobId: SENTINELS.transcriptJobId,
+    transcriptJobSubmittedAt: SENTINELS.transcriptJobSubmittedAt,
+    transcriptJobFinishedAt: SENTINELS.transcriptJobFinishedAt,
+    transcriptJobFailureReason: SENTINELS.transcriptJobFailureReason,
   };
 }
 

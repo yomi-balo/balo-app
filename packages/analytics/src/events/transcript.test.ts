@@ -2,11 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { TRANSCRIPT_SERVER_EVENTS } from './transcript';
 
 describe('TRANSCRIPT_SERVER_EVENTS', () => {
-  it('exposes exactly the BAL-387 transcript server events', () => {
+  it('exposes exactly the BAL-387 + BAL-483 transcript server events', () => {
     expect(Object.keys(TRANSCRIPT_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'BOT_JOIN_FAILED',
       'SUMMARY_HEADLINE_SUPPRESSED',
       'SUMMARY_READY',
+      'TRANSCRIPT_CAPTURE_FAILED',
+      'TRANSCRIPT_CAPTURE_SKIPPED',
+      'TRANSCRIPT_CAPTURE_SUBMITTED',
       'TRANSCRIPT_FAILED',
       'TRANSCRIPT_READY',
     ]);
@@ -20,6 +23,11 @@ describe('TRANSCRIPT_SERVER_EVENTS', () => {
     expect(TRANSCRIPT_SERVER_EVENTS.SUMMARY_HEADLINE_SUPPRESSED).toBe(
       'summary_headline_suppressed'
     );
+    expect(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_CAPTURE_SUBMITTED).toBe(
+      'transcript_capture_submitted'
+    );
+    expect(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_CAPTURE_SKIPPED).toBe('transcript_capture_skipped');
+    expect(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_CAPTURE_FAILED).toBe('transcript_capture_failed');
   });
 
   it('uses snake_case event values', () => {

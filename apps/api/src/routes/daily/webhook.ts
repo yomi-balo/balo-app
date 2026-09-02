@@ -54,13 +54,18 @@ import {
   type MeetingRecording,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import { trackServer, RECORDING_SERVER_EVENTS } from '@balo/analytics/server';
+import {
+  trackServer,
+  RECORDING_SERVER_EVENTS,
+  TRANSCRIPT_SERVER_EVENTS,
+} from '@balo/analytics/server';
 import type { FastifyInstance } from 'fastify';
 import {
   decodeJsonBody,
   enforceWebhookIpRateLimit,
   enqueueBestEffort,
 } from '../../lib/webhook-request.js';
+import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
 import { type RateLimitConfig } from '../../lib/rate-limiter.js';
 import {
   parseDailyWebhookEvent,
@@ -76,6 +81,8 @@ import {
 } from '../../services/meetings/presence-writer.js';
 import { enqueueRecordingEnsure } from '../../jobs/recording-capture.js';
 import { enqueueRecordingIngest } from '../../jobs/recording-ingest.js';
+import { enqueueRecordingCleanupSource } from '../../jobs/recording-cleanup-source.js';
+import { enqueueTranscriptIngest, enqueueTranscriptSubmit } from '../../jobs/transcript-capture.js';
 
 const log = createLogger('daily-webhook-route');
 
@@ -94,6 +101,15 @@ type RecordingWebhookEvent = Extract<
 >;
 
 /**
+ * BAL-483 — the two BATCH-PROCESSOR event kinds — the arm `resolveEffect`/`applyEffect`
+ * dispatch on BEFORE the room-name gate, the same discipline as the recording arms.
+ */
+type BatchWebhookEvent = Extract<
+  DailyWebhookEvent,
+  { readonly kind: 'batch-processor.job-finished' } | { readonly kind: 'batch-processor.error' }
+>;
+
+/**
  * The work one verified delivery implies. A DISCRIMINATED UNION (BAL-473) so `applyEffect`
  * still cannot read a field an arm does not carry — the existing type discipline, preserved.
  */
@@ -101,13 +117,14 @@ type DailyWebhookEffect =
   | {
       readonly kind: 'presence';
       /**
-       * ⚠ `unhandled` AND THE THREE RECORDING KINDS ARE EXCLUDED **BY TYPE**. `resolveEffect`
-       * answers `null` for an unhandled event and routes every recording kind to the `kind:
-       * 'recording'` arm below, and narrowing here is what makes both guarantees checkable.
+       * ⚠ `unhandled`, THE THREE RECORDING KINDS AND THE TWO BATCH KINDS ARE EXCLUDED **BY
+       * TYPE**. `resolveEffect` answers `null` for an unhandled event and routes every
+       * recording/batch kind to its own arm below, and narrowing here is what makes both
+       * guarantees checkable.
        */
       readonly event: Exclude<
         DailyWebhookEvent,
-        { readonly kind: 'unhandled' } | RecordingWebhookEvent
+        { readonly kind: 'unhandled' } | RecordingWebhookEvent | BatchWebhookEvent
       >;
       readonly meeting: Meeting;
       /**
@@ -123,6 +140,13 @@ type DailyWebhookEffect =
       readonly kind: 'recording';
       readonly event: RecordingWebhookEvent;
       /** Carried on the recording arm too — the post-commit enqueues and analytics need it. */
+      readonly meeting: Meeting;
+      readonly recording: MeetingRecording;
+    }
+  | {
+      /** BAL-483 — the Daily Batch Processor transcription arm. */
+      readonly kind: 'transcript_capture';
+      readonly event: BatchWebhookEvent;
       readonly meeting: Meeting;
       readonly recording: MeetingRecording;
     };
@@ -274,6 +298,42 @@ async function resolveRecordingByRoomFallback(
 }
 
 /**
+ * BAL-483 — resolve the live `meeting_recordings` row for a batch-processor arm. Reads only,
+ * OUTSIDE the transaction (the `resolveRecordingRow` contract).
+ *
+ * PRIMARY: `transcript_job_id` — OUR stamp of the id Daily returned SYNCHRONOUSLY from
+ * `POST /batch-processor`. Exact; no inference.
+ *
+ * FALLBACK: `input.recordingId` → `daily_recording_id`. It exists for exactly ONE window —
+ * the POST succeeded but `markTranscriptJobSubmitted` lost its transaction, leaving a
+ * submitted job with no stamp. ⚠ IT REFUSES A ROW ALREADY OWNED BY A DIFFERENT JOB, the
+ * `resolveRecordingByRoomFallback` guard restated: a row whose `transcript_job_id` names some
+ * OTHER job must not be claimed by this delivery.
+ */
+async function resolveBatchRecordingRow(
+  event: BatchWebhookEvent
+): Promise<MeetingRecording | undefined> {
+  const byJobId = await meetingRecordingsRepository.findByTranscriptJobId(event.batchJobId);
+  if (byJobId !== undefined) {
+    return byJobId;
+  }
+  if (event.dailyRecordingId === null) {
+    return undefined;
+  }
+  const byRecordingId = await meetingRecordingsRepository.findByDailyRecordingId(
+    event.dailyRecordingId
+  );
+  if (byRecordingId === undefined || byRecordingId.transcriptJobId !== null) {
+    return undefined;
+  }
+  log.info(
+    { recordingId: byRecordingId.id, eventType: event.type },
+    'Daily batch-processor delivery resolved by daily_recording_id — the submit stamp is missing for this segment (BAL-483)'
+  );
+  return byRecordingId;
+}
+
+/**
  * Resolve the delivery's effect, or `null` when there is nothing to apply.
  *
  * ⚠ `null` IS NOT A FAILURE ON ANY PATH — an unhandled event type, a recording payload that
@@ -308,6 +368,34 @@ async function resolveEffect(event: DailyWebhookEvent): Promise<DailyWebhookEffe
       return null;
     }
     return { kind: 'recording', event, meeting, recording };
+  }
+
+  // ── BAL-483 — the two batch-processor arms, BEFORE the room-name gate. Neither carries a room. ──
+  if (event.kind === 'batch-processor.job-finished' || event.kind === 'batch-processor.error') {
+    const recording = await resolveBatchRecordingRow(event);
+    if (recording === undefined) {
+      log.warn(
+        { eventType: event.type, eventId: event.eventId },
+        'Daily batch-processor webhook resolved to no row — acking with no effect'
+      );
+      return null;
+    }
+    // ⚠ FIX ROUND 1 (M9) — IF THIS EVER FIRES WHILE THE RECORDING'S BATCH JOB IS STILL IN
+    // FLIGHT (`transcript_job_submitted_at IS NOT NULL AND transcript_job_finished_at IS NULL`),
+    // this webhook's terminal effect is DROPPED — no CAS runs, `transcript_job_finished_at`
+    // never gets stamped, and `recording-cleanup-source`'s withhold gate (§7.4) then blocks that
+    // row's cleanup FOREVER (see the matching comment there). Not reachable today — there is no
+    // delete-meeting route in this codebase — but a meeting deleted mid-batch-job would trigger
+    // exactly this the moment one ships.
+    const meeting = await meetingsRepository.findById(recording.meetingId);
+    if (meeting === undefined) {
+      log.warn(
+        { recordingId: recording.id, eventType: event.type },
+        'Daily batch-processor webhook resolved to a row with no live meeting — acking with no effect'
+      );
+      return null;
+    }
+    return { kind: 'transcript_capture', event, meeting, recording };
   }
 
   if (event.roomName === null || !BALO_ROOM_NAME_PATTERN.test(event.roomName)) {
@@ -373,9 +461,64 @@ async function applyEffect(
   if (effect.kind === 'presence') {
     return applyPresenceKindEffect(exec, effect);
   }
+  if (effect.kind === 'transcript_capture') {
+    return applyTranscriptCaptureEffect(exec, effect, receivedAt);
+  }
 
   // ── BAL-473 — the recording branch. Exactly ONE CAS per arm (T2 / T3 / T4). ──────────────
   return applyRecordingKindEffect(exec, effect, receivedAt);
+}
+
+/**
+ * {@link applyEffect}'s `kind: 'transcript_capture'` arm (BAL-483) — exactly ONE CAS per arm
+ * (B2t / B2e). ⚠⚠ NEITHER ARM TOUCHES `status` / `failed_stage` / `failure_reason` — a failed
+ * TRANSCRIPTION is not a failed RECORDING; the recording is still playable and `status` must
+ * stay `ready`.
+ */
+async function applyTranscriptCaptureEffect(
+  exec: PresenceExecutor,
+  effect: Extract<DailyWebhookEffect, { kind: 'transcript_capture' }>,
+  receivedAt: Date
+): Promise<ApplyEffectResult> {
+  const { event, recording, meeting } = effect;
+
+  if (event.kind === 'batch-processor.job-finished') {
+    const updated = await meetingRecordingsRepository.markTranscriptJobFinished(
+      { id: recording.id, at: receivedAt },
+      exec
+    );
+    if (updated === undefined) {
+      log.info(
+        { meetingId: meeting.id, recordingId: recording.id },
+        'batch-processor.job-finished: no-op (replay, or already terminal)'
+      );
+    }
+    return { recordingTransitioned: updated !== undefined };
+  }
+
+  // batch-processor.error
+  // ⚠⚠ FIX ROUND 1 (M3) — SANITIZED BEFORE IT IS PERSISTED. `event.errorMessage` is Daily's raw
+  // `payload.error` — arbitrary response text — and Daily's OWN documented download failure is
+  // `Failed to download <presigned S3 URL>: 403 Forbidden` (see `recording.error`'s identical
+  // fix below), so an unsanitized write here would persist a signed URL into
+  // `transcript_job_failure_reason` indefinitely. `lib/sanitize-error.ts` names this exact sink.
+  const updated = await meetingRecordingsRepository.markTranscriptJobFailed(
+    {
+      id: recording.id,
+      reason: sanitizedErrorMessage(
+        event.errorMessage ?? 'Daily reported a batch-processor error with no message'
+      ),
+      at: receivedAt,
+    },
+    exec
+  );
+  if (updated === undefined) {
+    log.info(
+      { meetingId: meeting.id, recordingId: recording.id },
+      'batch-processor.error: no-op (replay, or already terminal)'
+    );
+  }
+  return { recordingTransitioned: updated !== undefined };
 }
 
 /** {@link applyEffect}'s `kind: 'presence'` arm — the join/leave/meeting-ended handling. */
@@ -484,11 +627,18 @@ async function applyRecordingKindEffect(
   }
 
   // recording.error
+  // ⚠⚠ FIX ROUND 1 (M3) — SANITIZED, IN PASSING. This arm shipped before BAL-483 and had the
+  // identical gap `batch-processor.error` (above) was just closed for: `event.errorMessage` is
+  // Daily's raw `payload.error_msg` text, and Daily's own documented download failure is
+  // `Failed to download <presigned S3 URL>: 403 Forbidden` — an unsanitized write would persist
+  // a signed URL into `meeting_recordings.failure_reason` indefinitely.
   const updated = await meetingRecordingsRepository.markFailed(
     {
       id: recording.id,
       stage: 'daily',
-      reason: event.errorMessage ?? 'Daily reported a recording error with no message',
+      reason: sanitizedErrorMessage(
+        event.errorMessage ?? 'Daily reported a recording error with no message'
+      ),
       at: receivedAt,
     },
     exec
@@ -594,6 +744,19 @@ async function handleRecordingPostCommit(
         log,
         'recording-ingest enqueue failed on the Daily webhook — best-effort, the delivery still acks'
       );
+      // BAL-483 — the transcription producer. SAME gate as the Mux ingest (the CAS actually
+      // moved the row to `source_ready`, so the Daily artefact exists and its id is stamped)
+      // and the same best-effort posture: a failed enqueue must not fail the delivery.
+      await enqueueBestEffort(
+        () => enqueueTranscriptSubmit({ recordingId: effect.recording.id }),
+        {
+          meetingId: effect.meeting.id,
+          recordingId: effect.recording.id,
+          eventId: event.eventId,
+        },
+        log,
+        'transcript-capture submit enqueue failed on the Daily webhook — best-effort, the delivery still acks'
+      );
     }
     // ⚠⚠ THE RE-ARM (ARCHITECT ADDITION, §5.2) — UNCONDITIONAL, EVEN WHEN THE CAS WAS A
     // NO-OP. Daily auto-stops a recording on `minIdleTimeOut`; between that stop and this
@@ -638,6 +801,109 @@ async function handleRecordingPostCommit(
     );
   }
   // `recording.started` — nothing post-commit.
+}
+
+/**
+ * BAL-483 — the route handler's post-commit work for a `kind: 'transcript_capture'` effect:
+ * the ingest enqueue on success, the failure analytics on error, and the cleanup-source
+ * release valve on BOTH arms. Extracted purely to keep the handler's own Cognitive Complexity
+ * readable.
+ */
+async function handleTranscriptCapturePostCommit(
+  effect: Extract<DailyWebhookEffect, { kind: 'transcript_capture' }>,
+  applied: ApplyEffectResult | null
+): Promise<void> {
+  if (effect.event.kind === 'batch-processor.job-finished' && applied?.recordingTransitioned) {
+    await enqueueBestEffort(
+      () =>
+        enqueueTranscriptIngest({
+          recordingId: effect.recording.id,
+          batchJobId: effect.event.batchJobId,
+        }),
+      { meetingId: effect.meeting.id, recordingId: effect.recording.id },
+      log,
+      'transcript-capture ingest enqueue failed on the Daily webhook — best-effort, the delivery still acks'
+    );
+  }
+
+  if (effect.event.kind === 'batch-processor.error' && applied?.recordingTransitioned) {
+    // ⚠ `reason` is the CLOSED label, never `event.errorMessage` — PostHog is a third party and
+    // a Daily error body is arbitrary text (the `RECORDING_FAILED` posture). The full text
+    // lives in `transcript_job_failure_reason` and — SANITIZED (M3) — in the `log.error` below.
+    //
+    // ⚠⚠ FIX ROUND 1 (M4) — THE `log.error` THE COMMENT ABOVE CLAIMED DID NOT EXIST UNTIL NOW.
+    // Genuinely useful for triage (this is a webhook-driven vendor failure with no other
+    // operator-visible signal at INFO/WARN), so added rather than just correcting the comment —
+    // but logging `event.errorMessage` sanitized, never raw, for the same reason the DB write is.
+    log.error(
+      {
+        meetingId: effect.meeting.id,
+        recordingId: effect.recording.id,
+        error: sanitizedErrorMessage(
+          effect.event.errorMessage ?? 'Daily reported a batch-processor error with no message'
+        ),
+      },
+      'Daily batch-processor transcription job failed (BAL-483)'
+    );
+    trackServer(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_CAPTURE_FAILED, {
+      meeting_id: effect.meeting.id,
+      recording_id: effect.recording.id,
+      stage: 'batch_job',
+      reason: 'vendor_reported',
+      distinct_id: effect.meeting.id,
+    });
+  }
+
+  // ⚠⚠ BOTH ARMS, UNCONDITIONALLY (even on a CAS no-op — the cleanup job gates itself, same
+  // reason the recording re-arm is unconditional). This is the release valve for §7.4's
+  // withheld cleanup: the source was held back while the batch job read it, and the job is
+  // now terminal.
+  if (effect.recording.status === 'ready') {
+    await enqueueBestEffort(
+      () =>
+        // ⚠ BAL-483 §7.4 — A RE-DRIVE, NOT A FIRST ENQUEUE. This cleanup job may already have
+        // run and COMPLETED (withheld by the very batch job this webhook answers) under the
+        // Mux-triggered, ROW-keyed jobId (`routes/mux/webhook.ts`). BullMQ retains 100
+        // completed jobs per jobId (`lib/queue.ts`), so a re-`add` under that SAME jobId would
+        // be silently dropped.
+        //
+        // ⚠⚠ FIX ROUND 2 — FIX ROUND 1 (M2) decoupled a rejecting `Queue.remove()` from the
+        // re-add so the re-add ran unconditionally, but that closed only PART of the leak.
+        // `remove()` can reject not just on a transient fault but because the job is ACTIVE —
+        // and BullMQ dedups a jobId against a job in ANY state, including `active`, so the
+        // unconditional re-add was then SILENTLY DROPPED too. Concretely: Mux reports `ready` →
+        // the cleanup job goes ACTIVE and withholds (this batch job was still in flight) → THIS
+        // webhook's batch job goes terminal and tries to re-drive → `remove()` rejects (the job
+        // is locked) → the re-add runs but dedups against the still-active job under the same
+        // jobId and is dropped → that job completes as a no-op on its stale pre-commit read →
+        // nothing ever re-drives it, because Mux's `video.asset.ready` fires ONCE. The raw
+        // Daily source would leak PERMANENTLY — the same outcome M2 existed to prevent, through
+        // a narrower door.
+        //
+        // THE FIX: key this write's jobId on ITSELF, not on the row — `dedupeToken` is the
+        // Daily batch job id, the identity of the write that makes this a re-drive at all,
+        // already in scope on `effect.event`. That jobId is disjoint from the Mux-triggered
+        // job's bare, row-keyed one, so the active-job dedup this docblock describes cannot
+        // reach it. It is also stable across a replayed `batch-processor.job-finished`
+        // delivery (same batch job id → same jobId → the SAME re-drive, deduped against
+        // itself rather than fired twice). `recordingCleanupSourceJobId`
+        // (`jobs/recording-cleanup-source.ts`) is still the ONE definition of the scheme (fix
+        // round 1's M5); this call site only supplies the token.
+        //
+        // `remove()` is gone: there is nothing retained under a jobId this call site never
+        // reuses, and a duplicate re-drive is a clean no-op regardless — `handleCleanup`
+        // (`jobs/recording-cleanup-source.ts`) short-circuits on `sourceDeletedAt !== null`
+        // before it ever touches Daily, which is what makes a write-keyed jobId safe to fire
+        // more than once.
+        enqueueRecordingCleanupSource({
+          recordingId: effect.recording.id,
+          dedupeToken: effect.event.batchJobId,
+        }),
+      { meetingId: effect.meeting.id, recordingId: effect.recording.id },
+      log,
+      'recording-cleanup-source re-enqueue failed on the Daily batch-processor webhook — best-effort, the delivery still acks'
+    );
+  }
 }
 
 export async function dailyWebhookRoutes(fastify: FastifyInstance): Promise<void> {
@@ -721,6 +987,10 @@ export async function dailyWebhookRoutes(fastify: FastifyInstance): Promise<void
 
     if (effect?.kind === 'recording') {
       await handleRecordingPostCommit(effect, applied, event);
+    }
+
+    if (effect?.kind === 'transcript_capture') {
+      await handleTranscriptCapturePostCommit(effect, applied);
     }
 
     log.info(

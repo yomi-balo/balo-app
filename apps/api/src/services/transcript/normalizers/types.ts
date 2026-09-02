@@ -19,6 +19,12 @@ export interface DailyDeepgramParticipant {
 export interface DailyDeepgramUtterance {
   /** Authenticated speaker user id; absent/empty → the synthetic `'unknown'` speaker. */
   userId: string | null;
+  /**
+   * BAL-483 — the DIARIZATION label (`'speaker-0'`, …) when `attribution === 'diarized'`.
+   * ⚠ MUTUALLY EXCLUSIVE WITH `userId`: an ordinal is not an identity, and the diarized arm
+   * writes `CanonicalSpeaker.userId = null` precisely so no Balo user is implied.
+   */
+  speakerLabel?: string | null;
   start: number; // seconds
   end: number; // seconds
   transcript: string;
@@ -30,6 +36,16 @@ export interface DailyDeepgramTranscriptPayload {
   durationSeconds: number | null;
   participants: DailyDeepgramParticipant[];
   utterances: DailyDeepgramUtterance[];
+  /**
+   * BAL-483 — which attribution model produced `utterances`.
+   * `'authenticated'` (the DEFAULT when absent — the real-time capture path, and every
+   * pre-BAL-483 fixture) rides the Daily `user_id` claim.
+   * `'diarized'` (the post-call Batch Processor path) rides an ordinal-derived
+   * `speakerLabel` and asserts NO Balo user.
+   * ⚠ OPTIONAL AND ABSENT-BY-DEFAULT SO NO EXISTING FIXTURE CHANGES BEHAVIOUR — the
+   * `normalizeVendorPayload` enum dispatch stays a single arm per vendor.
+   */
+  attribution?: 'authenticated' | 'diarized';
 }
 
 // ── Recall bot (external venues) — name-diarization attribution ──

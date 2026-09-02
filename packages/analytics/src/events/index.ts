@@ -215,6 +215,10 @@ export {
   TRANSCRIPT_SERVER_EVENTS,
   type TranscriptServerEventMap,
   type TranscriptVenue,
+  // BAL-483 — the Batch Processor capture family's three closed-set types.
+  type TranscriptCaptureSkipReason,
+  type TranscriptCaptureFailureStage,
+  type TranscriptCaptureFailureReason,
 } from './transcript';
 // BAL-473 — the meeting-recording pipeline's SERVER-ONLY family (Daily cloud recording → Mux
 // ingest → signed playback). See `./recording` for why: no vendor ids, no vendor error text.
