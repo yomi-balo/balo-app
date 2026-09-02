@@ -61,9 +61,14 @@ export async function getRequestFileDownloadAction(
 
     // Containment: a file on another request (or a foreign uuid) resolves `undefined`,
     // identically to a soft-deleted one — probing learns nothing.
-    const found = await requestSharedFilesRepository.findByIdInRequest(fileId, scope.request.id, {
-      includeDeleted: scope.side === 'admin',
-    });
+    //
+    // ⚠ NOBODY DOWNLOADS A TOMBSTONE — THE ADMIN LENS INCLUDED. Under Ruling 1 a delete removes
+    // the R2 OBJECT; the tombstone row plus the `audit_events` entry (with the audience snapshot
+    // resolved at delete time) ARE the surviving record. Presigning a deleted file would hand
+    // out a URL for bytes that no longer exist. So this read never sets `includeDeleted`, and a
+    // tombstone resolves `undefined` → the FILE_GONE copy above, byte-identical to a foreign
+    // uuid — which is exactly the containment property this comment describes.
+    const found = await requestSharedFilesRepository.findByIdInRequest(fileId, scope.request.id);
     if (found === undefined) {
       return { success: false, error: FILE_GONE };
     }
@@ -78,7 +83,9 @@ export async function getRequestFileDownloadAction(
       viaAllAudience = found.file.side === 'client' && found.file.audience === 'all_live_tracks';
     }
     // side === 'client': every live file on its own request is visible (ticket §Read rule).
-    // side === 'admin': everything, tombstones included — the read-only oversight lens.
+    // side === 'admin': every LIVE file — the read-only oversight lens reads tombstones in the
+    // list view (`loadRequestFiles` still passes `includeDeleted: true`), but cannot download
+    // one, because the bytes are gone (Ruling 1).
 
     const url = await createPresignedRequestFileDownload(found.file.r2Key, found.file.fileName);
 

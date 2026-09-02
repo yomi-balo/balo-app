@@ -316,6 +316,33 @@ describe('RequestFilesPanel', () => {
     expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument();
   });
 
+  /**
+   * ⚠ THE BADGE MUST NOT IMPLY THE FILE IS RECOVERABLE. Under Ruling 1 a delete removes the R2
+   * OBJECT; what survives is the tombstone row and the `audit_events` entry. "record retained"
+   * read as though the file itself were still there — "audit record kept" names what is
+   * actually kept. And there is deliberately NO download control on a tombstone: the bytes are
+   * gone, so nobody (the admin lens included) can fetch them.
+   */
+  it('admin lens: a tombstone is badged as an audit record and offers no download', () => {
+    const view: RequestFilesView = {
+      lens: 'admin',
+      files: [
+        {
+          ...ADMIN_FILE,
+          deleted: true,
+          deletedAtIso: '2026-08-03T00:00:00.000Z',
+          deletedByName: 'Sarah Chen',
+          visibleTo: [],
+        },
+      ],
+    };
+    render(<RequestFilesPanel requestId={REQUEST_ID} initialView={view} />);
+
+    expect(screen.getByText('Removed · audit record kept')).toBeInTheDocument();
+    expect(screen.queryByText('Removed · record retained')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Download/ })).not.toBeInTheDocument();
+  });
+
   it('admin lens: empty state is factual, kept rather than hidden', () => {
     const view: RequestFilesView = { lens: 'admin', files: [] };
     render(<RequestFilesPanel requestId={REQUEST_ID} initialView={view} />);

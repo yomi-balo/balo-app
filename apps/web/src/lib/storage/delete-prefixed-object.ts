@@ -20,7 +20,16 @@ export async function deletePrefixedObjectFromR2(
   scopeLabel: string
 ): Promise<void> {
   // Prefix guard — refuse to delete anything outside this scope's key space.
-  if (!key.startsWith(allowedPrefix)) return;
+  //
+  // ⚠ NEVER A NORMAL CASE. Every caller derives its key from a row this scope owns, so a
+  // mismatch is either a bug (a key built with the wrong prefix, a caller wired to the wrong
+  // scope's helper) or an attempt to steer a delete at another scope's key space. Silence made
+  // both indistinguishable from a successful delete. It stays a `return`, not a throw — delete
+  // is best-effort by Ruling 1, and the tombstone plus the audit event are the record.
+  if (!key.startsWith(allowedPrefix)) {
+    log.warn('Refused an R2 delete outside the allowed prefix', { key, allowedPrefix, scopeLabel });
+    return;
+  }
 
   try {
     await r2Client.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));

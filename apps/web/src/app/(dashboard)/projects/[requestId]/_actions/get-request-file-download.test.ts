@@ -61,6 +61,13 @@ const LIVE_FILE = {
   grants: [],
 };
 
+const ADMIN_SCOPE = {
+  ok: true,
+  side: 'admin',
+  request: { id: REQUEST_ID },
+  tracks: [],
+};
+
 describe('getRequestFileDownloadAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -147,21 +154,34 @@ describe('getRequestFileDownloadAction', () => {
     );
   });
 
-  it('allows the admin lens to read a tombstoned file', async () => {
-    mockAuthorizeScope.mockResolvedValue({
-      ok: true,
-      side: 'admin',
-      request: { id: REQUEST_ID },
-      tracks: [],
-    });
-    mockFindByIdInRequest.mockResolvedValue({
-      file: { ...LIVE_FILE.file, deletedAt: new Date() },
-      grants: [],
-    });
+  it('allows the admin lens to download a LIVE file', async () => {
+    mockAuthorizeScope.mockResolvedValue(ADMIN_SCOPE);
+    mockFindByIdInRequest.mockResolvedValue(LIVE_FILE);
     const result = await getRequestFileDownloadAction(VALID_INPUT);
-    expect(result.success).toBe(true);
-    expect(mockFindByIdInRequest).toHaveBeenCalledWith(FILE_ID, REQUEST_ID, {
-      includeDeleted: true,
-    });
+    expect(result).toEqual({ success: true, url: 'https://signed-download' });
+  });
+
+  /**
+   * ⚠ RULING 1 — a delete REMOVES the R2 object, so a tombstone is downloadable by NOBODY, the
+   * admin oversight lens included: a presigned URL for it would resolve to nothing. The read
+   * must therefore never opt into deleted rows, which is what makes a tombstone resolve
+   * `undefined` and surface the SAME copy as a foreign uuid (the containment property).
+   *
+   * This test fails the moment anyone reintroduces `includeDeleted` on this call site.
+   */
+  it('denies the admin lens a soft-deleted file, identically to a foreign uuid (Ruling 1)', async () => {
+    mockAuthorizeScope.mockResolvedValue(ADMIN_SCOPE);
+    // The repository is called WITHOUT `includeDeleted`, so a tombstone resolves `undefined` —
+    // exactly as `findByIdInRequest`'s default `isNull(deletedAt)` filter does in production.
+    mockFindByIdInRequest.mockResolvedValue(undefined);
+
+    const result = await getRequestFileDownloadAction(VALID_INPUT);
+
+    expect(result).toEqual({ success: false, error: 'This file is no longer available.' });
+    expect(mockPresignDownload).not.toHaveBeenCalled();
+    // The load-bearing assertion: no opt-in to deleted rows, in any form.
+    expect(mockFindByIdInRequest).toHaveBeenCalledWith(FILE_ID, REQUEST_ID);
+    const [, , opts] = mockFindByIdInRequest.mock.calls[0] ?? [];
+    expect(opts).toBeUndefined();
   });
 });

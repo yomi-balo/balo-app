@@ -131,7 +131,7 @@ export function RequestFileRow(props: Readonly<RequestFileRowProps>): React.JSX.
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {file.deleted && (
               <Badge className="bg-amber-50 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
-                Removed · record retained
+                Removed · audit record kept
               </Badge>
             )}
             <span className="text-muted-foreground text-xs">Visible now to:</span>

@@ -137,16 +137,33 @@ export async function loadTrackDisplays(
     scope.tracks.map((t) => [t.relationshipId, t.access])
   );
 
-  return relationships.map((r) => ({
-    relationshipId: r.id,
-    expertProfileId: r.expertProfileId,
-    trackName: nameByRelationship.get(r.id) ?? 'Expert',
-    // ⚠ Reused from the gate when present; falls back to a fresh resolve for a relationship
-    // the gate's own read might have missed (there is none in practice — both reads filter
-    // `deleted_at IS NULL` over the same request — but never leave this branch unreachable-only).
-    access: accessByRelationship.get(r.id) ?? resolveRequestTrackFileAccess(r),
-    closedReason: closedReasonOf(r),
-  }));
+  return relationships.map((r) => {
+    const trackName = nameByRelationship.get(r.id);
+    // ⚠ TWO SOURCES, ONE ITERATION. The names come from `scope.request.relationships` but the
+    // rows come from `listByRequest`. Both reads filter `deleted_at IS NULL` over the same
+    // request, so in practice they cannot diverge — but "cannot diverge" asserted in a comment
+    // is not the same as detectable. A miss here silently collapses the track to the generic
+    // 'Expert', and TWO such tracks become INDISTINGUISHABLE in the share picker and the
+    // audience badges — the client would be granting to a name they cannot tell apart. The
+    // fallback stays (a nameless track must still render); the silence does not.
+    if (trackName === undefined) {
+      log.warn('Request file track has no resolved display name', {
+        requestId: scope.request.id,
+        relationshipId: r.id,
+      });
+    }
+    return {
+      relationshipId: r.id,
+      expertProfileId: r.expertProfileId,
+      trackName: trackName ?? 'Expert',
+      // ⚠ Reused from the gate when present; falls back to a fresh resolve for a relationship
+      // the gate's own read might have missed (same two-source caveat as the name above, but
+      // the fallback here RE-DERIVES the true value rather than degrading it, so it is safe
+      // and silent).
+      access: accessByRelationship.get(r.id) ?? resolveRequestTrackFileAccess(r),
+      closedReason: closedReasonOf(r),
+    };
+  });
 }
 
 export async function loadRequestFiles(

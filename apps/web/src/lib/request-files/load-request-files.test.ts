@@ -380,6 +380,67 @@ describe('loadRequestFiles', () => {
         keptAccess: true,
       },
     ]);
+    // ⚠ THE HAPPY PATH IS SILENT. Both tracks resolved a REAL name, so the divergence warning
+    // below must not fire — otherwise that warning is noise and nobody will act on it.
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ THE NAME-SOURCE DIVERGENCE, DRIVEN RATHER THAN ASSERTED. `loadTrackDisplays` builds its
+   * names from `scope.request.relationships` but ITERATES `listByRequest`. A relationship
+   * present in the second and absent from the first collapses to the generic 'Expert' — and
+   * with TWO such tracks the client sees two identical rows in the share picker and the
+   * audience badges, with no way to tell which is which. The old code argued in a comment that
+   * this cannot happen; this drives it and proves it is at least DETECTABLE when it does.
+   *
+   * Delete the `log.warn` and this test fails.
+   */
+  it('client arm: warns per track whose name is missing from the request row, keeping the fallback', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ok: true,
+      side: 'client',
+      companyId: 'c1',
+      // ⚠ EMPTY on purpose — the name source knows about neither track.
+      request: requestRow([]),
+      tracks: [
+        {
+          relationshipId: REL_ID,
+          expertProfileId: EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        },
+        {
+          relationshipId: OTHER_REL_ID,
+          expertProfileId: OTHER_EXPERT_PROFILE_ID,
+          access: { kind: 'live' },
+          standing: { status: 'proposal_submitted', declinedAt: null, notSelectedAt: null },
+        },
+      ],
+    });
+    mockListByRequest.mockResolvedValue([
+      fullRel(REL_ID, EXPERT_PROFILE_ID),
+      fullRel(OTHER_REL_ID, OTHER_EXPERT_PROFILE_ID),
+    ]);
+    mockListForRequest.mockResolvedValue([{ file: fileRow(), grants: [] }]);
+
+    const view = await loadRequestFiles(USER, REQUEST_ID);
+
+    if (view?.lens !== 'client') throw new Error('expected the client lens');
+    // The fallback SURVIVES — a nameless track must still render, and still be offerable.
+    expect(view.liveTracks).toEqual([
+      { relationshipId: REL_ID, trackName: 'Expert' },
+      { relationshipId: OTHER_REL_ID, trackName: 'Expert' },
+    ]);
+    // …and this is exactly the collapse that used to be silent: two indistinguishable rows.
+    expect(mockWarn).toHaveBeenCalledTimes(2);
+    expect(mockWarn).toHaveBeenCalledWith('Request file track has no resolved display name', {
+      requestId: REQUEST_ID,
+      relationshipId: REL_ID,
+    });
+    expect(mockWarn).toHaveBeenCalledWith('Request file track has no resolved display name', {
+      requestId: REQUEST_ID,
+      relationshipId: OTHER_REL_ID,
+    });
   });
 
   // ── Admin arm ──

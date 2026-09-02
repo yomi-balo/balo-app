@@ -19,6 +19,7 @@ const mockAuthorizeScope = vi.fn();
 vi.mock('@/lib/request-files/authorize-request-file-scope', () => ({
   authorizeRequestFileScope: (...args: unknown[]) => mockAuthorizeScope(...args),
   REQUEST_FILES_UNAVAILABLE_COPY: 'These files are no longer available.',
+  REQUEST_FILE_TRACK_CLOSED_SELF_COPY: 'You can no longer share files on this request.',
 }));
 
 const mockShare = vi.fn();
@@ -252,7 +253,33 @@ describe('confirmRequestFileUploadAction', () => {
     expect(result).toEqual({ success: false, error: 'This file was already shared.' });
   });
 
-  it('maps a closed grant target to friendly copy', async () => {
+  /**
+   * ⚠ THE EXPERT ARM OF THE GATE — SECOND PERSON. `side === 'expert'` means the READER is the
+   * expert whose own track closed, so the copy addresses them directly. Paired deliberately
+   * with the client-arm test below, which pins the THIRD-person copy: the two sit on opposite
+   * sides of the same file and must never be unified into one string.
+   */
+  it('denies an expert whose own track is closed, in SECOND person', async () => {
+    mockAuthorizeScope.mockResolvedValue({
+      ...EXPERT_SCOPE,
+      viewer: { ...EXPERT_SCOPE.viewer, access: { kind: 'closed', closedAt: new Date() } },
+    });
+    const result = await confirmRequestFileUploadAction(VALID_CLIENT_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'You can no longer share files on this request.',
+    });
+    expect(result.success === false && result.error).not.toContain('That expert');
+    expect(mockShare).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ THIRD PERSON, AND IT MUST STAY THAT WAY. `RequestFileTrackNotLiveError` is raised only
+   * when a CLIENT named a closed track in a `grants` share — the reader is the client, being
+   * told about SOMEONE ELSE. This is the counterpart of the expert-arm test above; collapsing
+   * either into the other reintroduces the bug in one direction or the other.
+   */
+  it('maps a closed grant target to friendly THIRD-person copy for the client', async () => {
     mockAuthorizeScope.mockResolvedValue(CLIENT_SCOPE);
     mockShare.mockRejectedValue(new MockTrackNotLiveError(REL_ID));
     const result = await confirmRequestFileUploadAction({
@@ -263,5 +290,6 @@ describe('confirmRequestFileUploadAction', () => {
       success: false,
       error: 'That expert is no longer on this request.',
     });
+    expect(result.success === false && result.error).not.toContain('You can no longer');
   });
 });

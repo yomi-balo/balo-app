@@ -33,9 +33,24 @@ const CLIENT_DATA = {
 };
 
 describe('getEmailTemplate — request-file-shared-expert', () => {
+  /**
+   * ⚠ THE SUBJECT NAMES THE PERSON, SYMMETRICALLY WITH THE CLIENT SIDE. A file share is
+   * retrospective copy, which CLAUDE.md attributes to the PERSON — and both bodies already do.
+   * The company-named form ("Acme Corp shared a file with you") was the asymmetry.
+   */
+  it('names the SHARING PERSON in the subject, matching the client-side subject shape', () => {
+    const expertOut = getEmailTemplate('request-file-shared-expert', EXPERT_DATA);
+    const clientOut = getEmailTemplate('request-file-shared-client', CLIENT_DATA);
+    expect(expertOut.subject).toBe('Sarah Chen shared a file with you');
+    expect(expertOut.subject).not.toContain('Acme Corp');
+    // Same shape both ways: "<person> shared a file…", never "<org> shared a file…".
+    expect(expertOut.subject.startsWith(EXPERT_DATA.sharedByPersonLabel)).toBe(true);
+    expect(clientOut.subject.startsWith(CLIENT_DATA.expertPersonLabel)).toBe(true);
+  });
+
   it('names the client, the file, the request — and never an audience/count/sibling', async () => {
     const out = getEmailTemplate('request-file-shared-expert', EXPERT_DATA);
-    expect(out.subject).toBe('Acme Corp shared a file with you');
+    expect(out.subject).toBe('Sarah Chen shared a file with you');
     const html = clean(await render(out.component));
     expect(html).toContain('Hi Wei,');
     expect(html).toContain('Sarah Chen @ Acme Corp');

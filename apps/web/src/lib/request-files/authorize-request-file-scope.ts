@@ -79,6 +79,19 @@ export type RequestFileScope =
 /** The single denial copy every caller surfaces verbatim (§12). */
 export const REQUEST_FILES_UNAVAILABLE_COPY = 'These files are no longer available.';
 
+/**
+ * SECOND PERSON — surfaced ONLY on an expert arm (`side === 'expert'`), where the reader IS the
+ * expert whose track closed. Named, not inlined, because the third-person form
+ * ("That expert is no longer on this request.") is ALSO correct elsewhere in the same files: the
+ * `RequestFileTrackNotLiveError` catch in `confirm-request-file-upload.ts` runs on the CLIENT
+ * arm, where the reader is being told about SOMEONE ELSE. The two copies are not
+ * interchangeable; keeping this one named keeps them from being merged back together.
+ *
+ * Warm, non-adversarial and gender-neutral (CLAUDE.md § Copy) — it states what the reader can no
+ * longer do, without narrating a verdict about them.
+ */
+export const REQUEST_FILE_TRACK_CLOSED_SELF_COPY = 'You can no longer share files on this request.';
+
 function denied(user: SessionUser, requestId: string, reason: string): RequestFileScope {
   log.warn('Request file scope denied', { requestId, userId: user.id, reason });
   return { ok: false, code: 'request_files_not_found' };

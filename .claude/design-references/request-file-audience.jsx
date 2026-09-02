@@ -31,11 +31,21 @@
  *     (invariant test in BAL-431). Sibling candidates never appear.
  *  5. Revoke is SILENT (decided 2026-08-07): the grant row is deleted, the
  *     client sees an audit line, the expert sees nothing — no notification.
- *  6. Share-to-all posts a system message in each live conversation thread
- *     (shown here as the toast copy; wire through the notification engine).
- *  7. Audit: every grant/revoke = attribution + audit_events in the same
- *     transaction (ADR-1030). The client-side "Access history" strip and the
- *     admin lens surface it.
+ *  6. Share-to-all notifies each live track — shown here as the toast copy.
+ *     ⚠ AMENDED by OSD-1 (2026-08-31): the in-thread SYSTEM MESSAGE this
+ *     originally called for did NOT ship. `conversation_messages.sender_user_id`
+ *     is NOT NULL with a RESTRICT FK, there is no is_system discriminator, and
+ *     BAL-212's "strictly user-triggered — nothing auto-posts" contract is
+ *     pinned by a test. Awareness is carried by the notification engine alone
+ *     (request_file.shared_with_expert — in-app + email, per recipient).
+ *     Known cost: a shared file does NOT move the thread's unread badge.
+ *  7. Audit: every grant/revoke/delete = attribution + audit_events in the same
+ *     transaction (ADR-1030). The admin lens surfaces it.
+ *     ⚠ AMENDED by Ruling 4 (2026-08-31): the client-side "Access history"
+ *     strip rendered below did NOT ship — deferred to a follow-up. The audit
+ *     WRITES are complete; only the client-facing READ is deferred. The event
+ *     payload contract was fixed at implementation time because audit_events is
+ *     append-only and there is no backfill.
  *  8. Admin lens = the sole all-files read (platform capability, ADR-1035).
  *     Placement undecided — Admin Dashboard Tracker §3.8. Read model only here.
  *  9. Expert-side audience concealment (decided 2026-08-07): the expert lens
@@ -830,7 +840,7 @@ function AdminPanel({ files, audit, visibleChips }) {
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {f.deleted && (
                     <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-                      Removed · record retained
+                      Removed · audit record kept
                     </span>
                   )}
                   <span className="text-xs text-zinc-400">Visible now to:</span>

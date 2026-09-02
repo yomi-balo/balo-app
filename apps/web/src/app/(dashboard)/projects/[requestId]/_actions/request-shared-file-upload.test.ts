@@ -15,6 +15,7 @@ const mockAuthorizeScope = vi.fn();
 vi.mock('@/lib/request-files/authorize-request-file-scope', () => ({
   authorizeRequestFileScope: (...args: unknown[]) => mockAuthorizeScope(...args),
   REQUEST_FILES_UNAVAILABLE_COPY: 'These files are no longer available.',
+  REQUEST_FILE_TRACK_CLOSED_SELF_COPY: 'You can no longer share files on this request.',
 }));
 
 const mockPresign = vi.fn();
@@ -80,7 +81,14 @@ describe('requestSharedFileUploadAction', () => {
     expect(mockPresign).not.toHaveBeenCalled();
   });
 
-  it('denies an expert whose track is closed', async () => {
+  /**
+   * ⚠ SECOND PERSON — THE READER IS THE EXPERT. This arm is reached only when the gate resolved
+   * `side: 'expert'`, i.e. the person seeing this copy IS the expert whose track closed. The
+   * third-person form ("That expert is no longer on this request.") told them about themselves.
+   * That form is still correct on the CLIENT arm and is pinned separately in
+   * `confirm-request-file-upload.test.ts` — the two must not be collapsed back together.
+   */
+  it('denies an expert whose track is closed, in SECOND person', async () => {
     mockAuthorizeScope.mockResolvedValue({
       ok: true,
       side: 'expert',
@@ -94,8 +102,10 @@ describe('requestSharedFileUploadAction', () => {
     const result = await requestSharedFileUploadAction(VALID_INPUT);
     expect(result).toEqual({
       success: false,
-      error: 'That expert is no longer on this request.',
+      error: 'You can no longer share files on this request.',
     });
+    expect(result.success === false && result.error).not.toContain('That expert');
+    expect(mockPresign).not.toHaveBeenCalled();
   });
 
   it('rejects an unsupported content type', async () => {

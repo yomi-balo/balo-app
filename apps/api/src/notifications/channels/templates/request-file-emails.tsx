@@ -26,8 +26,16 @@ export interface RequestFileSharedExpertEmailProps {
   readonly baseUrl: string;
 }
 
-export function requestFileSharedExpertSubject(clientCompanyName: string): string {
-  return `${clientCompanyName} shared a file with you`;
+/**
+ * ⚠ NAMES THE PERSON, NOT THE COMPANY — symmetric with `requestFileSharedClientSubject`. A file
+ * share is RETROSPECTIVE copy (someone actually did something), and CLAUDE.md's attribution rule
+ * puts the PERSON on retrospective copy; both BODIES already do exactly that via
+ * `personWithOrgLabel`. Concealment does not argue for the company framing here: ADR-1048 §3
+ * conceals the AUDIENCE (who else can see the file), never who shared it — and the expert
+ * already knows the client party.
+ */
+export function requestFileSharedExpertSubject(sharedByPersonLabel: string): string {
+  return `${sharedByPersonLabel} shared a file with you`;
 }
 
 /** BAL-431 — `request-file-shared-expert`. */
@@ -43,7 +51,7 @@ export function RequestFileSharedExpertEmail({
   const attribution = personWithOrgLabel(sharedByPersonLabel, clientCompanyName);
   return (
     <ProjectStatusEmail
-      previewText={requestFileSharedExpertSubject(clientCompanyName)}
+      previewText={requestFileSharedExpertSubject(sharedByPersonLabel)}
       baseUrl={baseUrl}
       projectRequestId={requestId}
       firstName={firstName}

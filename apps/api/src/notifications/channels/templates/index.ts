@@ -1902,7 +1902,7 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         requestId,
         baseUrl: BASE_URL,
       }),
-      subject: requestFileSharedExpertSubject(clientCompanyName),
+      subject: requestFileSharedExpertSubject(sharedByPersonLabel),
     };
   },
 

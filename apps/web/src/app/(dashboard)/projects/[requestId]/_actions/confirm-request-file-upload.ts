@@ -19,6 +19,7 @@ import {
 import {
   authorizeRequestFileScope,
   REQUEST_FILES_UNAVAILABLE_COPY,
+  REQUEST_FILE_TRACK_CLOSED_SELF_COPY,
   type RequestFileScope,
 } from '@/lib/request-files/authorize-request-file-scope';
 import {
@@ -250,8 +251,11 @@ async function resolveConfirmGate(
   if (scope.side === 'admin') {
     return { ok: false, error: REQUEST_FILES_UNAVAILABLE_COPY };
   }
+  // ⚠ SECOND PERSON: `side === 'expert'` means the READER is the expert whose track closed.
+  // Deliberately NOT the third-person copy used in the `RequestFileTrackNotLiveError` catch
+  // below — that one runs on the CLIENT arm, telling the client about someone else.
   if (scope.side === 'expert' && scope.viewer.access.kind !== 'live') {
-    return { ok: false, error: 'That expert is no longer on this request.' };
+    return { ok: false, error: REQUEST_FILE_TRACK_CLOSED_SELF_COPY };
   }
 
   const keyError = validateRequestUploadKey(key, scope.request.id, user.id);
@@ -345,6 +349,9 @@ export async function confirmRequestFileUploadAction(
         userId: user.id,
         relationshipId: error.relationshipId,
       });
+      // ⚠ THIRD PERSON, AND CORRECTLY SO. `RequestFileTrackNotLiveError` is raised only when a
+      // CLIENT named a closed track in a `grants` share — the reader is the client, being told
+      // about someone else. Do NOT unify this with `REQUEST_FILE_TRACK_CLOSED_SELF_COPY`.
       return { success: false, error: 'That expert is no longer on this request.' };
     }
     log.error('Failed to confirm request file upload', {

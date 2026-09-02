@@ -8,6 +8,7 @@ import { log } from '@/lib/logging';
 import {
   authorizeRequestFileScope,
   REQUEST_FILES_UNAVAILABLE_COPY,
+  REQUEST_FILE_TRACK_CLOSED_SELF_COPY,
 } from '@/lib/request-files/authorize-request-file-scope';
 import {
   REQUEST_FILE_ALLOWED_CONTENT_TYPES,
@@ -67,8 +68,9 @@ export async function requestSharedFileUploadAction(
       return { success: false, error: REQUEST_FILES_UNAVAILABLE_COPY };
     }
     // Ruling 3 — upload right requires a LIVE track (delete right mirrors this exactly).
+    // ⚠ SECOND PERSON: this arm is reached only when the READER is the expert.
     if (scope.side === 'expert' && scope.viewer.access.kind !== 'live') {
-      return { success: false, error: 'That expert is no longer on this request.' };
+      return { success: false, error: REQUEST_FILE_TRACK_CLOSED_SELF_COPY };
     }
 
     if (!REQUEST_FILE_ALLOWED_CONTENT_TYPES.has(contentType)) {
