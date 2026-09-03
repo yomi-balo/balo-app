@@ -35,7 +35,17 @@ describe('CardCapturePanel', () => {
     render(<CardCapturePanel onCancel={vi.fn()} onCaptured={vi.fn()} />);
 
     expect(await screen.findByTestId('payment-element')).toBeInTheDocument();
-    expect(screen.getByText(/This card won't be charged today/i)).toBeInTheDocument();
+    // ⚠ THIS IS THE MANDATE DISCLOSURE OF RECORD — pin what it CLAIMS, not just that it renders.
+    // The consent line must NOT condition charging on the client turning a card-backed mode on:
+    // `setup_intent.succeeded` arms `mandate_status = 'active'` the moment the card is saved,
+    // and grace entry + `settleOverdraft` gate on the MANDATE ALONE (the low-balance mode is read
+    // only by the auto-top-up engine — see BAL-523). An earlier revision said "only if you turn
+    // on Auto top-up or Keep me going", which was false the instant it rendered.
+    const consent = screen.getByText(/This card won't be charged today/i);
+    expect(consent).toHaveTextContent(/settle consultation time you use beyond your balance/i);
+    expect(consent).not.toHaveTextContent(/only if you turn on/i);
+    // Top-ups ARE mode-conditional — that half of the sentence is true and must stay.
+    expect(consent).toHaveTextContent(/if you turn on Auto top-up/i);
     expect(screen.getByRole('button', { name: /save card/i })).toBeInTheDocument();
   });
 

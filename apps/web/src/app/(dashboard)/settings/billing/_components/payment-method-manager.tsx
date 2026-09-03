@@ -285,7 +285,7 @@ export function PaymentMethodManager({
     <>
       <SectionCard
         title="Payment method"
-        description="The card Balo may charge for top-ups and for consultation time beyond your balance, once you turn that on above."
+        description="The card Balo may charge to settle consultation time beyond your balance, and for automatic top-ups if you turn those on."
       >
         {!stripeConfigured && (
           <p className="text-muted-foreground mb-3 text-sm leading-relaxed">

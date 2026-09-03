@@ -585,6 +585,15 @@ export const creditWalletsRepository = {
    * effective `lowBalanceMode` only: NO card facts, NO `mandateRef`, NO Stripe ids — those never
    * belong in an audit trail. If the insert throws, it propagates like any other statement on
    * this `exec`, so the caller's transaction rolls back the clear along with it (fail-closed).
+   *
+   * ⚠ ACTION NAME AND `metadata.source` ARE A SHARED SCHEME, not local choices. The repo's
+   * convention is `<entityType>.<verb>` — see the sibling `credit_wallet.dispute_opened` — so
+   * this is `credit_wallet.saved_card_detached`, NOT `saved_card.detached`. A saved card can be
+   * detached two ways: HERE (a client pressing Remove) and by Stripe's inbound
+   * `payment_method.detached` webhook (BAL-521 §3, still to be written). Both must land on the
+   * SAME action with `metadata.source` telling them apart — `'user_initiated'` here,
+   * `'stripe_webhook'` there — so one query answers "how did this wallet lose its card?".
+   * Do not fork the action name to encode the source; that is what `source` is for.
    */
   async clearSavedCardAndReconcileMode(
     exec: DbExecutor,
@@ -611,10 +620,14 @@ export const creditWalletsRepository = {
     await auditEventsRepository.record(
       {
         actorUserId,
-        action: 'saved_card.detached',
+        action: 'credit_wallet.saved_card_detached',
         entityType: 'credit_wallet',
         entityId: walletId,
-        metadata: { modeReconciled, lowBalanceMode: wallet.lowBalanceMode },
+        metadata: {
+          source: 'user_initiated',
+          modeReconciled,
+          lowBalanceMode: wallet.lowBalanceMode,
+        },
       },
       exec
     );

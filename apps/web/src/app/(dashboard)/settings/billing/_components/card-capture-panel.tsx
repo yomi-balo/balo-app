@@ -18,8 +18,9 @@ interface CardCapturePanelProps {
  * Add and Change alike, because saving a card via this panel always arms the mandate capability.
  */
 const CONSENT_LINE =
-  "This card won't be charged today. Saving it lets Balo charge it automatically later, but " +
-  'only if you turn on Auto top-up or Keep me going above — and you can remove it anytime.';
+  "This card won't be charged today. Saving it lets Balo settle consultation time you use " +
+  'beyond your balance, and buy credit for you automatically if you turn on Auto top-up. ' +
+  'You can remove the card anytime to stop both.';
 
 const UNCONFIGURED_MESSAGE = "Card payments aren't configured right now. Please try again later.";
 const START_ERROR_MESSAGE = "We couldn't start card setup just now. Please try again in a moment.";

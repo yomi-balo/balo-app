@@ -251,7 +251,13 @@ describe('ChatPanel — ⚠ the realtime line is ORTHOGONAL to the four states',
     renderPanel(fakes(), { realtimeStatus: 'disabled' });
 
     expect(await screen.findByText(/live updates are off/i)).toBeInTheDocument();
-    expect(screen.getByLabelText('Send message')).toBeInTheDocument();
+    // ⚠ MUST be `findBy`, not `getBy`. The realtime line paints from the transport status while
+    // the thread is STILL loading (the body is `panel-skeleton` at that instant); the composer
+    // only mounts once the load settles. Awaiting only the first line and then querying the
+    // composer synchronously races two DIFFERENT async boundaries — green locally, flaky in CI,
+    // where it failed with the skeleton still on screen. The `connected` case below gets this
+    // right by awaiting a loaded-state marker first.
+    expect(await screen.findByLabelText('Send message')).toBeInTheDocument();
   });
 
   it('⚠ `failed` ⇒ what still works AND what to DO about it', async () => {

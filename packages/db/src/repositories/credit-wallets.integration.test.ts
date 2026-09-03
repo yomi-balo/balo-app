@@ -1533,11 +1533,19 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     expect(rows).toHaveLength(1);
     const [row] = rows;
     expect(row?.actorUserId).toBe(actor.id);
-    expect(row?.action).toBe('saved_card.detached');
+    // `<entityType>.<verb>`, matching the sibling `credit_wallet.dispute_opened`. BAL-521 §3's
+    // inbound webhook detach must write this SAME action with `source: 'stripe_webhook'`, so one
+    // query answers "how did this wallet lose its card?" — hence the shared name + `source`
+    // discriminator rather than two action strings.
+    expect(row?.action).toBe('credit_wallet.saved_card_detached');
     expect(row?.entityType).toBe('credit_wallet');
-    // The effective mode + whether it was reconciled — NEVER card facts, a `mandateRef`, or any
-    // Stripe id.
-    expect(row?.metadata).toEqual({ modeReconciled: true, lowBalanceMode: 'notify_only' });
+    // The source, the effective mode, and whether it was reconciled — NEVER card facts, a
+    // `mandateRef`, or any Stripe id.
+    expect(row?.metadata).toEqual({
+      source: 'user_initiated',
+      modeReconciled: true,
+      lowBalanceMode: 'notify_only',
+    });
   });
 
   it('a failed audit write rolls the clear back too — fail-closed (FIX ROUND 3 N2)', async () => {
