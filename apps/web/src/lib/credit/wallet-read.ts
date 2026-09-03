@@ -7,12 +7,21 @@ import {
   fxDisplayRatesRepository,
   partyMembershipsRepository,
   usersRepository,
+  type CreditWallet,
 } from '@balo/db';
-import { isFxRateStale } from '@balo/shared/pricing';
+import {
+  isFxRateStale,
+  DEFAULT_TOPUP_RELOAD_MINOR,
+  DEFAULT_TOPUP_THRESHOLD_MINOR,
+} from '@balo/shared/pricing';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { resolveBuyerCurrency, resolveDisplayQuote } from '@/lib/credit/display-fx';
 import type { DisplayCurrency } from '@/lib/credit/display-constants';
-import type { DisplayFxSnapshot } from '@/components/billing/top-up/types';
+import type {
+  DisplayFxSnapshot,
+  SavedCard,
+  WalletSnapshot,
+} from '@/components/billing/top-up/types';
 
 /**
  * BAL-402 — SERVER-ONLY shared wallet reads for the client-lens credit surfaces (ADR-1040).
@@ -68,17 +77,28 @@ export async function resolveBillingAdminLabel(companyId: string): Promise<strin
  * silently double the reads. (Outside a request — e.g. a plain unit test awaiting this directly
  * — `cache()` does not memoise; correctness is unaffected, only the dedupe. Precedent:
  * `session-sync.ts`, `derive-workspaces.ts`, `get-workspaces.ts`.)
+ *
+ * BAL-516 widens the return to also carry the raw `wallet` row (`undefined` when unprovisioned),
+ * so `loadBillingSettingsWallet` below shares this SAME cached call rather than issuing a second
+ * `findByCompanyId` on a `/settings/billing` request — one `hasCapability` + one `findByCompanyId`
+ * between the top-bar chip, the dashboard card, and this read. `loadDashboardWalletData` /
+ * `loadTopBarWalletData` simply destructure the two fields they already used; neither signature
+ * changes. The raw row rides only inside this server-only module — every export still projects.
  */
 const resolveWalletAudience = cache(
   async (
     actorId: string,
     companyId: string
-  ): Promise<{ readonly canManageBilling: boolean; readonly balanceMinor: number }> => {
+  ): Promise<{
+    readonly canManageBilling: boolean;
+    readonly balanceMinor: number;
+    readonly wallet: CreditWallet | undefined;
+  }> => {
     const [canManageBilling, wallet] = await Promise.all([
       hasCapability({ id: actorId }, CAPABILITIES.MANAGE_BILLING, { companyId }),
       creditWalletsRepository.findByCompanyId(companyId),
     ]);
-    return { canManageBilling, balanceMinor: wallet?.balanceMinor ?? 0 };
+    return { canManageBilling, balanceMinor: wallet?.balanceMinor ?? 0, wallet };
   }
 );
 
@@ -149,4 +169,115 @@ export async function loadTopBarWalletData(
 ): Promise<TopBarWalletData> {
   const { canManageBilling, balanceMinor } = await resolveWalletAudience(actorId, companyId);
   return { balanceMinor, canTopUp: canManageBilling };
+}
+
+// ── BAL-516: shared saved-card / wallet-snapshot projection + the settings page's read ──────
+
+/**
+ * The projection for a company that has never held credit. Its `credit_wallets` row does not
+ * exist yet, which is a normal resting state — NOT an error and NOT a transient setup step
+ * (nothing provisions on render; the row is materialised by the first money event, when
+ * `ensureWallet`/`ensureForCompany` runs). The figures below mirror the schema defaults on
+ * `credit_wallets`, so what a client configures against here is exactly what the row will be
+ * created holding.
+ *
+ * BAL-516 — moved here VERBATIM from `billing/top-up/page.tsx` (was a local `const`) so both
+ * that page and `loadBillingSettingsWallet` share ONE definition; copying it would be a second
+ * statement of the schema defaults that could silently drift from them.
+ */
+export const UNPROVISIONED_WALLET: WalletSnapshot = {
+  walletId: null,
+  balanceMinor: 0,
+  lowBalanceMode: 'notify_only',
+  savedCard: null,
+  topupReloadMinor: DEFAULT_TOPUP_RELOAD_MINOR,
+  topupThresholdMinor: DEFAULT_TOPUP_THRESHOLD_MINOR,
+};
+
+/**
+ * Project the wallet's saved card for display, or `null`.
+ *
+ * ⚠ THE STRIPE-ID CONDITIONS ARE NOT REDUNDANT. A row can carry display columns while the
+ * payment-method id is gone (detached in the Stripe dashboard, a partial state we do not
+ * create but must not render). Such a card cannot actually be charged, so it must not offer a
+ * saved-card row — this mirrors `isWalletCardReusableOnSession`, evaluated where the projection
+ * is built. The four display columns move together by CHECK constraint, so testing `cardBrand`
+ * alone would be enough for THEM; each is still narrowed because TypeScript needs it.
+ *
+ * `mandateActive` is the WEAKER/STRONGER distinction made explicit: the card being present says
+ * Balo may charge it while the buyer watches; only `mandate_status === 'active'` says Balo may
+ * charge it unattended.
+ *
+ * BAL-516 — moved here VERBATIM from `billing/top-up/page.tsx` (was a local, unexported
+ * function) so the settings read can share it rather than re-stating "is this card
+ * chargeable" a second time (a Sonar duplication hit, and a second copy of a consent-adjacent
+ * rule to keep in sync).
+ */
+export function projectSavedCard(wallet: {
+  cardBrand: string | null;
+  cardLast4: string | null;
+  cardExpMonth: number | null;
+  cardExpYear: number | null;
+  stripeCustomerId: string | null;
+  stripePaymentMethodId: string | null;
+  mandateStatus: string | null;
+}): SavedCard | null {
+  const { cardBrand, cardLast4, cardExpMonth, cardExpYear } = wallet;
+  if (
+    cardBrand === null ||
+    cardLast4 === null ||
+    cardExpMonth === null ||
+    cardExpYear === null ||
+    wallet.stripeCustomerId === null ||
+    wallet.stripePaymentMethodId === null
+  ) {
+    return null;
+  }
+  return {
+    brand: cardBrand,
+    last4: cardLast4,
+    expMonth: cardExpMonth,
+    expYear: cardExpYear,
+    mandateActive: wallet.mandateStatus === 'active',
+  };
+}
+
+/**
+ * Project a full `CreditWallet` row into the serialisable {@link WalletSnapshot} both
+ * `billing/top-up/page.tsx` and `/settings/billing` hand to their client trees. The single
+ * shared call site for "what does the client tree need to know about this wallet" — never the
+ * full row (no Stripe customer / payment-method / mandate-ref secrets reach the client bundle).
+ */
+export function projectWalletSnapshot(wallet: CreditWallet): WalletSnapshot {
+  return {
+    walletId: wallet.id,
+    balanceMinor: wallet.balanceMinor,
+    lowBalanceMode: wallet.lowBalanceMode,
+    savedCard: projectSavedCard(wallet),
+    topupReloadMinor: wallet.topupReloadMinor,
+    topupThresholdMinor: wallet.topupThresholdMinor,
+  };
+}
+
+/**
+ * BAL-516 — the settings page's snapshot read for sections 2–3 ("When your balance runs low" /
+ * "Payment method"). Same `MANAGE_BILLING` audience rule as `loadDashboardWalletData`
+ * (`hasCapability`, never role/activeMode) via the SAME request-`cache()`d
+ * `resolveWalletAudience` — a `/settings/billing` request costs one `hasCapability` + one
+ * `findByCompanyId` total across the top-bar chip, `CreditsSummary`, and this read.
+ *
+ * `null` = not a `MANAGE_BILLING` holder (the sections simply do not render — not an empty
+ * state). Holder with no wallet row yet ⇒ {@link UNPROVISIONED_WALLET} (Save/Add provisions it
+ * via `ensureWallet`, unchanged). Holder with a row ⇒ `projectWalletSnapshot(wallet)`. Returns
+ * the projected snapshot only — never the full wallet row.
+ */
+export async function loadBillingSettingsWallet(
+  actor: { id: string },
+  companyId: string
+): Promise<WalletSnapshot | null> {
+  const { canManageBilling, wallet } = await resolveWalletAudience(actor.id, companyId);
+  if (!canManageBilling) {
+    return null;
+  }
+  return wallet === undefined ? UNPROVISIONED_WALLET : projectWalletSnapshot(wallet);
 }

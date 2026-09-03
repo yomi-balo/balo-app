@@ -1,12 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useState, useTransition } from 'react';
-import { loadStripe, type Stripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { toast } from 'sonner';
 import { CheckCircle2, CreditCard, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { track, PROMO_EVENTS } from '@/lib/analytics';
+import { getStripe } from '@/lib/stripe-loader';
 import { startContinueToMandate } from '../_actions/start-continue-to-mandate';
 
 /**
@@ -44,19 +44,6 @@ const REDIRECT_RETRY_MESSAGE =
 /** Strip the Stripe redirect-return query params so a refresh doesn't re-confirm the card. */
 function clearRedirectParams(): void {
   globalThis.history.replaceState(null, '', globalThis.location.pathname);
-}
-
-// Memoise the Stripe.js loader per publishable key — calling `loadStripe` on every render
-// would re-inject the script. A Map keyed on the key keeps a single promise per key.
-const stripeLoaderCache = new Map<string, Promise<Stripe | null>>();
-function getStripe(publishableKey: string): Promise<Stripe | null> {
-  const cached = stripeLoaderCache.get(publishableKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const created = loadStripe(publishableKey);
-  stripeLoaderCache.set(publishableKey, created);
-  return created;
 }
 
 /**

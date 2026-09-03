@@ -5,6 +5,7 @@ import {
   db,
   creditWalletsRepository,
   creditLedgerRepository,
+  creditSessionsRepository,
   promoRedemptionsRepository,
   deriveIdempotencyKey,
   type CreditWallet,
@@ -18,6 +19,7 @@ import {
   createPurchaseIntent,
   createMandateSetupIntent,
   confirmSavedCardMandate,
+  detachSavedCardPaymentMethod,
   CreditApiError,
   type PaymentMethodSource,
 } from './api-client';
@@ -627,6 +629,221 @@ export async function saveLowBalanceConfigAction(
       stack: error instanceof Error ? error.stack : undefined,
     });
     return { ok: false, error: 'invalid_input' };
+  }
+}
+
+// ── BAL-516: billing-settings-only actions (Save-time mandate arm, Add/Change, Remove) ──────
+
+const armMandateSchema = z.object({ clientRequestId: z.uuid() });
+
+/** Outcome of arming the mandate against the wallet's ALREADY-STORED card, from Save. */
+export type ArmSavedCardMandateResult =
+  | { ok: true; outcome: 'captured' }
+  | { ok: true; outcome: 'requires_action'; clientSecret: string }
+  | { ok: false; error: 'unauthorized' | 'invalid_input' | 'no_saved_card' | 'failed' };
+
+/**
+ * Settings-only Save-time step (design "Arming the mandate from Save" — the invariant's home):
+ * when the picker's outgoing selection is card-backed and the stored card's mandate is not yet
+ * `active`, Save also captures the mandate against the card ALREADY on file — never a new card
+ * entry. `requireBillingActor` → `findByCompanyId` (**never `ensureWallet`** — arming needs an
+ * existing card, which needs an existing wallet). `mandateStatus === 'active'` short-circuits
+ * `captured` (same rule `resolveMandateOutcome`'s saved-card arm follows mid-purchase) so a
+ * client who already armed the mandate never re-opens a SetupIntent. `clientRequestId` is minted
+ * CLIENT-side (fresh per Save attempt, fresh per Retry) so a replayed/retried POST reuses the
+ * same Stripe idempotency key inside `confirmSavedCardMandate` instead of minting duplicates.
+ */
+export async function armSavedCardMandateAction(
+  rawInput: z.infer<typeof armMandateSchema>
+): Promise<ArmSavedCardMandateResult> {
+  const parsed = armMandateSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return { ok: false, error: 'invalid_input' };
+  }
+
+  let companyId: string | undefined;
+  try {
+    const actor = await requireBillingActor();
+    if (actor === null) {
+      return { ok: false, error: 'unauthorized' };
+    }
+    companyId = actor.companyId;
+
+    const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
+    if (
+      wallet === undefined ||
+      wallet.stripeCustomerId === null ||
+      wallet.stripePaymentMethodId === null
+    ) {
+      return { ok: false, error: 'no_saved_card' };
+    }
+
+    if (wallet.mandateStatus === 'active') {
+      return { ok: true, outcome: 'captured' };
+    }
+
+    const result = await confirmSavedCardMandate(wallet.id, parsed.data.clientRequestId);
+    if (result.status === 'succeeded') {
+      return { ok: true, outcome: 'captured' };
+    }
+    if (result.status === 'requires_action' && result.clientSecret !== null) {
+      return { ok: true, outcome: 'requires_action', clientSecret: result.clientSecret };
+    }
+    return { ok: false, error: 'failed' };
+  } catch (error) {
+    // FIX ROUND (security LOW) — `companyId` (never card facts, never a Stripe id) so the one
+    // window that genuinely needs fast forensics is namable from THIS log line alone.
+    log.error('Save-time mandate arm failed', {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { ok: false, error: 'failed' };
+  }
+}
+
+/** Outcome of starting the settings Add/Change card capture panel. */
+export type StartCardCaptureResult =
+  | { ok: true; clientSecret: string; publishableKey: string }
+  | { ok: false; error: 'unauthorized' | 'unconfigured' | 'settlement_outstanding' | 'error' };
+
+/**
+ * Start the settings Add/Change card capture panel: open a fresh off-session mandate
+ * SetupIntent for a card the client is about to enter. Zero-arg — this never carries a
+ * client-supplied wallet id. `ensureWallet` (not `findByCompanyId`) — a company that never held
+ * credit can add a card FIRST (the design's empty-state flow); `ensureForCompany` is race-safe
+ * and this is a deliberate user act, the same provisioning rule `saveLowBalanceConfigAction`
+ * follows. Deliberately NO `mandateStatus === 'active'` short-circuit: unlike the Save-time arm
+ * above, "Change" must open a fresh SetupIntent even over an already-active mandate.
+ *
+ * FIX ROUND 2 (security MEDIUM — NEW-1) — refuses a card **CHANGE** while the wallet has a live
+ * overdraft-grace session, the same `hasActiveSessionForWallet` guard `detachSavedCard` already
+ * runs (`apps/api`'s `mandate.ts`), reused rather than reinvented. Without this, F6's removal
+ * guard was symmetric only in one direction: a client on `keep_going`/`auto_topup` who burns the
+ * 30-minute overdraft grace could not REMOVE the card mid-session, but could still PRESS CHANGE
+ * in a second tab and swap in a card that passes a $0 SetupIntent verification but declines on
+ * the real off-session settlement charge — `settleOverdraft` re-reads the wallet at session end
+ * and charges whatever card is on the row THEN, so the swap has the same economics as the closed
+ * removal exploit.
+ *
+ * Two deliberate asymmetries with the removal guard, do not "fix" these:
+ *  - A first **Add** (`stripePaymentMethodId === null`) is NEVER blocked — a client with no card
+ *    on file is not evading anything, and blocking it would make the empty-state Add flow
+ *    unusable the moment a session is live.
+ *  - This is NOT gated on `hasOpenReceivable`, unlike removal. Adding or replacing a card is
+ *    exactly how a client with an open receivable REMEDIATES it (there is no other in-product
+ *    path — see `SETTLEMENT_OUTSTANDING_MESSAGE`'s docblock); blocking Change on an open
+ *    receivable would strand such a client permanently.
+ */
+export async function startCardCaptureAction(): Promise<StartCardCaptureResult> {
+  let companyId: string | undefined;
+  try {
+    const actor = await requireBillingActor();
+    if (actor === null) {
+      return { ok: false, error: 'unauthorized' };
+    }
+    companyId = actor.companyId;
+
+    const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+    if (!publishableKey) {
+      return { ok: false, error: 'unconfigured' };
+    }
+
+    const wallet = await ensureWallet(actor.companyId);
+
+    if (wallet.stripePaymentMethodId !== null) {
+      const activeSession = await creditSessionsRepository.hasActiveSessionForWallet(wallet.id);
+      if (activeSession) {
+        log.warn('Card change refused — settlement outstanding on the wallet', {
+          walletId: wallet.id,
+          companyId,
+        });
+        return { ok: false, error: 'settlement_outstanding' };
+      }
+    }
+
+    const { clientSecret } = await createMandateSetupIntent(wallet.id);
+    return { ok: true, clientSecret, publishableKey };
+  } catch (error) {
+    // FIX ROUND (security LOW) — see `armSavedCardMandateAction`'s catch for why `companyId` and
+    // nothing card-shaped belongs here.
+    log.error('Start card capture failed', {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { ok: false, error: 'error' };
+  }
+}
+
+/** Outcome of removing the wallet's saved card (BAL-516). */
+export type RemoveSavedCardResult =
+  | { ok: true; lowBalanceMode: LowBalanceMode; modeReconciled: boolean }
+  | { ok: false; error: 'unauthorized' | 'no_wallet' | 'settlement_outstanding' | 'error' };
+
+/**
+ * Remove the wallet's saved card: detach at Stripe, clear locally, and reconcile a card-backed
+ * low-balance mode to `notify_only` — all inside ONE transaction on the `apps/api` side
+ * (`detachSavedCard` → `clearSavedCardAndReconcileMode`). Zero-arg — takes NO client-supplied
+ * ids; the wallet is resolved from the SESSION's company (`requireBillingActor` →
+ * `findByCompanyId`), never from anything the browser sends. **Never `ensureWallet`** — removal
+ * must not mint a wallet. Returns the EFFECTIVE `lowBalanceMode` the transaction committed, so
+ * the settings UI repaints from server truth, not local optimism.
+ *
+ * FIX ROUND (security MEDIUM) — `detachSavedCard` now refuses (409 `settlement_outstanding`)
+ * when the wallet has a live overdraft-grace session or an open receivable, so a client cannot
+ * pull their card mid-consultation to dodge an already-incurred debt. That refusal surfaces here
+ * as its own error arm — never folded into the generic `error` case — so the dialog can render
+ * blocking copy instead of "please try again".
+ */
+export async function removeSavedCardAction(): Promise<RemoveSavedCardResult> {
+  let walletId: string | undefined;
+  let companyId: string | undefined;
+  try {
+    const actor = await requireBillingActor();
+    if (actor === null) {
+      return { ok: false, error: 'unauthorized' };
+    }
+    companyId = actor.companyId;
+
+    const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
+    if (wallet === undefined) {
+      return { ok: false, error: 'no_wallet' };
+    }
+    walletId = wallet.id;
+
+    // FIX ROUND 3 (N2) — `actor.userId` is resolved server-side by `requireBillingActor()` above,
+    // never client-supplied; threaded across the internal hop so `apps/api` can record who
+    // detached the card in the same transaction as the clear.
+    const result = await detachSavedCardPaymentMethod(wallet.id, actor.userId);
+    log.info('Saved card removed', {
+      walletId: wallet.id,
+      companyId: actor.companyId,
+      modeReconciled: result.modeReconciled,
+    });
+    return {
+      ok: true,
+      lowBalanceMode: result.lowBalanceMode,
+      modeReconciled: result.modeReconciled,
+    };
+  } catch (error) {
+    if (error instanceof CreditApiError && error.body?.error === 'settlement_outstanding') {
+      log.warn('Saved card removal refused — settlement outstanding on the wallet', {
+        walletId,
+        companyId,
+      });
+      return { ok: false, error: 'settlement_outstanding' };
+    }
+    // FIX ROUND (security LOW) — `walletId` + `companyId`, no card facts, no `mandateRef`, no
+    // Stripe ids. This is the one window that genuinely needs fast forensics (detached at
+    // Stripe, local write failed) and the web-side log previously couldn't name the wallet.
+    log.error('Saved card removal failed', {
+      walletId,
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { ok: false, error: 'error' };
   }
 }
 

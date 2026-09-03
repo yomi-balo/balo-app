@@ -10,7 +10,9 @@ export {
   createSetupIntent,
   retrieveCardDisplay,
   confirmSavedCardMandate,
+  detachSavedCard,
   type SavedCardMandateResult,
+  type DetachSavedCardResult,
 } from './mandate.js';
 export {
   createOnSessionPurchaseIntent,

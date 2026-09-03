@@ -7,6 +7,7 @@ import {
   type NewCreditWallet,
 } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
+import { auditEventsRepository } from './audit-events';
 
 /** Config fields a MANAGE_BILLING-gated action may write (gating lives at the caller). */
 interface UpdateWalletConfigInput {
@@ -548,6 +549,90 @@ export const creditWalletsRepository = {
       throw new Error(`Credit wallet not found: ${walletId}`);
     }
     return row;
+  },
+
+  /**
+   * BAL-516 — USER-INITIATED card removal: `clearSavedCard` PLUS the low-balance-mode reconcile.
+   *
+   * ⚠ TWO STATEMENTS, NOT SELF-TRANSACTING — THE CALLER MUST PASS A TRANSACTION `exec`. This is
+   * the atomicity guarantee the whole removal flow rests on: between the clear and the reconcile
+   * the wallet holds no card but still names a CARD-BACKED low-balance mode, and no reader may
+   * ever observe that state. Card-gone/mode-still-armed is what makes auto-top-up and overdraft
+   * settlement fire off-session charges at a card that no longer exists.
+   *
+   * Goes THROUGH `clearSavedCard` — the fail-closed clear is never restated here. That method
+   * owns the rule that the four display columns, `stripe_payment_method_id` and BOTH mandate
+   * columns move in ONE statement (the `credit_wallets_card_display_all_or_none` CHECK can never
+   * see a half-written row), and that `stripe_customer_id` deliberately SURVIVES the detach.
+   *
+   * The reconcile: iff the cleared row's `low_balance_mode` is card-backed (`auto_topup` /
+   * `keep_going`) it moves to `notify_only` and `modeReconciled` is `true`. A wallet already on
+   * `notify_only` is returned untouched (`false`) — there is nothing armed to disarm.
+   *
+   * ⚠ `topup_reload_minor` / `topup_threshold_minor` ARE NOT TOUCHED, deliberately. Removing a
+   * card says nothing about how much the client wants reloaded; keeping their chosen band means
+   * adding a card and re-enabling auto top-up later RESTORES it, instead of silently resetting to
+   * the schema defaults.
+   *
+   * Idempotent by construction: a repeat call re-nulls nulls and then finds a non-card-backed
+   * mode, so it returns the same row with `modeReconciled: false`. Throws if the wallet is
+   * missing (from `clearSavedCard`).
+   *
+   * FIX ROUND 3 (N2) — also appends ONE `audit_events` row, through the SAME `exec`, so the row
+   * and the change it records commit or roll back together (`auditEventsRepository.record`
+   * takes an executor for exactly this). `actorUserId` is the caller's already-resolved actor —
+   * this function never derives one itself. `metadata` carries `modeReconciled` + the resulting
+   * effective `lowBalanceMode` only: NO card facts, NO `mandateRef`, NO Stripe ids — those never
+   * belong in an audit trail. If the insert throws, it propagates like any other statement on
+   * this `exec`, so the caller's transaction rolls back the clear along with it (fail-closed).
+   *
+   * ⚠ ACTION NAME AND `metadata.source` ARE A SHARED SCHEME, not local choices. The repo's
+   * convention is `<entityType>.<verb>` — see the sibling `credit_wallet.dispute_opened` — so
+   * this is `credit_wallet.saved_card_detached`, NOT `saved_card.detached`. A saved card can be
+   * detached two ways: HERE (a client pressing Remove) and by Stripe's inbound
+   * `payment_method.detached` webhook (BAL-521 §3, still to be written). Both must land on the
+   * SAME action with `metadata.source` telling them apart — `'user_initiated'` here,
+   * `'stripe_webhook'` there — so one query answers "how did this wallet lose its card?".
+   * Do not fork the action name to encode the source; that is what `source` is for.
+   */
+  async clearSavedCardAndReconcileMode(
+    exec: DbExecutor,
+    walletId: string,
+    actorUserId: string
+  ): Promise<{ wallet: CreditWallet; modeReconciled: boolean }> {
+    const cleared = await creditWalletsRepository.clearSavedCard(exec, walletId);
+
+    let wallet = cleared;
+    let modeReconciled = false;
+    if (cleared.lowBalanceMode === 'auto_topup' || cleared.lowBalanceMode === 'keep_going') {
+      const [reconciled] = await exec
+        .update(creditWallets)
+        .set({ lowBalanceMode: 'notify_only' })
+        .where(eq(creditWallets.id, walletId))
+        .returning();
+      if (reconciled === undefined) {
+        throw new Error(`Credit wallet not found: ${walletId}`);
+      }
+      wallet = reconciled;
+      modeReconciled = true;
+    }
+
+    await auditEventsRepository.record(
+      {
+        actorUserId,
+        action: 'credit_wallet.saved_card_detached',
+        entityType: 'credit_wallet',
+        entityId: walletId,
+        metadata: {
+          source: 'user_initiated',
+          modeReconciled,
+          lowBalanceMode: wallet.lowBalanceMode,
+        },
+      },
+      exec
+    );
+
+    return { wallet, modeReconciled };
   },
 
   /**

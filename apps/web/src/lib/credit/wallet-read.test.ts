@@ -24,6 +24,8 @@ vi.mock('@balo/db', () => ({
 const mockIsFxRateStale = vi.fn();
 vi.mock('@balo/shared/pricing', () => ({
   isFxRateStale: (...a: unknown[]) => mockIsFxRateStale(...a),
+  DEFAULT_TOPUP_RELOAD_MINOR: 10_000,
+  DEFAULT_TOPUP_THRESHOLD_MINOR: 2_000,
 }));
 
 const mockResolveBuyerCurrency = vi.fn();
@@ -33,11 +35,16 @@ vi.mock('@/lib/credit/display-fx', () => ({
   resolveDisplayQuote: (...a: unknown[]) => mockResolveDisplayQuote(...a),
 }));
 
+import type { CreditWallet } from '@balo/db';
 import {
   loadDashboardWalletData,
   loadTopBarWalletData,
+  loadBillingSettingsWallet,
   resolveDisplayFx,
   resolveBillingAdminLabel,
+  projectSavedCard,
+  projectWalletSnapshot,
+  UNPROVISIONED_WALLET,
 } from './wallet-read';
 
 beforeEach(() => {
@@ -198,5 +205,161 @@ describe('loadTopBarWalletData', () => {
     expect(mockListBillingUserIds).not.toHaveBeenCalled();
     expect(mockFindById).not.toHaveBeenCalled();
     expect(mockGetLatest).not.toHaveBeenCalled();
+  });
+});
+
+describe('projectSavedCard', () => {
+  const displayFields = {
+    cardBrand: 'visa',
+    cardLast4: '4242',
+    cardExpMonth: 8,
+    cardExpYear: 2028,
+  };
+
+  it('returns null when the display columns are present but the payment-method id is gone', () => {
+    expect(
+      projectSavedCard({
+        ...displayFields,
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: null,
+        mandateStatus: 'active',
+      })
+    ).toBeNull();
+  });
+
+  it('returns null when the customer id is gone', () => {
+    expect(
+      projectSavedCard({
+        ...displayFields,
+        stripeCustomerId: null,
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'active',
+      })
+    ).toBeNull();
+  });
+
+  it('returns null when any display column is null', () => {
+    expect(
+      projectSavedCard({
+        ...displayFields,
+        cardBrand: null,
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'active',
+      })
+    ).toBeNull();
+  });
+
+  it('maps mandateStatus to mandateActive: true only for "active"', () => {
+    expect(
+      projectSavedCard({
+        ...displayFields,
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'active',
+      })
+    ).toEqual({ brand: 'visa', last4: '4242', expMonth: 8, expYear: 2028, mandateActive: true });
+  });
+
+  it('maps a pending/null mandateStatus to mandateActive: false', () => {
+    expect(
+      projectSavedCard({
+        ...displayFields,
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'pending',
+      })
+    ).toEqual(expect.objectContaining({ mandateActive: false }));
+    expect(
+      projectSavedCard({
+        ...displayFields,
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: null,
+      })
+    ).toEqual(expect.objectContaining({ mandateActive: false }));
+  });
+});
+
+describe('projectWalletSnapshot', () => {
+  it('projects the full wallet row into the serialisable snapshot', () => {
+    const wallet = {
+      id: 'wallet-1',
+      balanceMinor: 5_000,
+      lowBalanceMode: 'auto_topup',
+      topupReloadMinor: 30_000,
+      topupThresholdMinor: 5_000,
+      cardBrand: 'visa',
+      cardLast4: '4242',
+      cardExpMonth: 8,
+      cardExpYear: 2028,
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+      mandateStatus: 'active',
+    } as unknown as CreditWallet;
+
+    expect(projectWalletSnapshot(wallet)).toEqual({
+      walletId: 'wallet-1',
+      balanceMinor: 5_000,
+      lowBalanceMode: 'auto_topup',
+      savedCard: {
+        brand: 'visa',
+        last4: '4242',
+        expMonth: 8,
+        expYear: 2028,
+        mandateActive: true,
+      },
+      topupReloadMinor: 30_000,
+      topupThresholdMinor: 5_000,
+    });
+  });
+});
+
+describe('loadBillingSettingsWallet', () => {
+  it('returns null for a member (and the wallet result is unused)', async () => {
+    mockHasCapability.mockResolvedValue(false);
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
+
+    const result = await loadBillingSettingsWallet({ id: 'u-9' }, 'co-1');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns UNPROVISIONED_WALLET for a holder with no wallet row', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindByCompanyId.mockResolvedValue(undefined);
+
+    const result = await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
+
+    expect(result).toEqual(UNPROVISIONED_WALLET);
+  });
+
+  it('returns the projected snapshot for a holder with a wallet row', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindByCompanyId.mockResolvedValue({
+      id: 'wallet-1',
+      balanceMinor: 12_000,
+      lowBalanceMode: 'notify_only',
+      topupReloadMinor: 30_000,
+      topupThresholdMinor: 5_000,
+      cardBrand: null,
+      cardLast4: null,
+      cardExpMonth: null,
+      cardExpYear: null,
+      stripeCustomerId: null,
+      stripePaymentMethodId: null,
+      mandateStatus: null,
+    });
+
+    const result = await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
+
+    expect(result).toEqual({
+      walletId: 'wallet-1',
+      balanceMinor: 12_000,
+      lowBalanceMode: 'notify_only',
+      savedCard: null,
+      topupReloadMinor: 30_000,
+      topupThresholdMinor: 5_000,
+    });
   });
 });

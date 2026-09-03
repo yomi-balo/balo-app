@@ -173,6 +173,37 @@ export async function confirmSavedCardMandate(
   });
 }
 
+/** The api's response to a successful card removal (BAL-516). */
+export interface DetachSavedCardResponse {
+  removed: true;
+  lowBalanceMode: 'auto_topup' | 'keep_going' | 'notify_only';
+  /** `true` iff the wallet was on a card-backed mode that this call moved to `notify_only`. */
+  modeReconciled: boolean;
+}
+
+/**
+ * Detach the wallet's saved card at Stripe and clear it locally, reconciling a card-backed
+ * low-balance mode to `notify_only` in the SAME server-side transaction (BAL-516). A non-2xx
+ * throws `CreditApiError` (404 `wallet_not_found`, 409 `settlement_outstanding` — a live
+ * overdraft-grace session or open receivable, FIX ROUND security MEDIUM — 502
+ * `stripe_detach_failed`) — the caller maps it, never re-derives the wallet id from anything
+ * client-supplied (this always passes the wallet resolved from the actor's own session/company).
+ *
+ * FIX ROUND 3 (N2) — `actorUserId` follows the `initiatingMemberId` precedent above
+ * (`createPurchaseIntent`): the caller (`removeSavedCardAction`) resolves it SERVER-SIDE from
+ * `requireBillingActor()`, never from client input, so `apps/api` can record who detached the
+ * card in the same transaction as the clear.
+ */
+export async function detachSavedCardPaymentMethod(
+  walletId: string,
+  actorUserId: string
+): Promise<DetachSavedCardResponse> {
+  return postInternal<DetachSavedCardResponse>('/credit/payment-method/detach', {
+    walletId,
+    actorUserId,
+  });
+}
+
 // ── BAL-378: WorkOS-Bearer credit-session drawdown hop ──────────────────────────────────
 
 /** The authed principal for a credit-session api call (resolved from the iron-session). */

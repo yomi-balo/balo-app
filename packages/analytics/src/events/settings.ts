@@ -30,10 +30,38 @@ export const SETTINGS_EVENTS = {
    * nothing linked to it before), so without this the ticket's own headline win is unmeasurable.
    */
   BILLING_REDEEM_CLICKED: 'settings_billing_redeem_clicked',
+  /**
+   * BAL-516 — the low-balance mode/band Save on `/settings/billing` succeeded. `mode` is the
+   * mode JUST SAVED (the outgoing selection), not necessarily card-backed.
+   */
+  BILLING_LOW_BALANCE_SAVED: 'settings_billing_low_balance_saved',
+  /**
+   * BAL-516 — a Save-time mandate arm against the ALREADY-STORED card resolved `captured`
+   * (including after a 3DS `handleNextAction` round-trip). `mode` is always card-backed —
+   * this only ever fires for `auto_topup` / `keep_going`.
+   */
+  BILLING_MANDATE_ARMED: 'settings_billing_mandate_armed',
+  /**
+   * BAL-516 — a card was saved via the settings capture panel, either an inline `confirmSetup`
+   * success or a 3DS redirect-return resolving `succeeded`. `intent` distinguishes the
+   * empty-state "Add" flow from a "Change" over an existing card.
+   */
+  BILLING_CARD_SAVED: 'settings_billing_card_saved',
+  /**
+   * BAL-516 — `removeSavedCardAction` returned ok. `mode_reconciled` is `true` iff the wallet
+   * was on a card-backed mode that the removal transaction moved to `notify_only`.
+   */
+  BILLING_CARD_REMOVED: 'settings_billing_card_removed',
 } as const;
 
 export interface SettingsEventMap {
   [SETTINGS_EVENTS.SECTION_VIEWED]: { section: SettingsSection };
   [SETTINGS_EVENTS.BILLING_TOPUP_CLICKED]: { balance_minor: number };
   [SETTINGS_EVENTS.BILLING_REDEEM_CLICKED]: { balance_minor: number };
+  [SETTINGS_EVENTS.BILLING_LOW_BALANCE_SAVED]: {
+    mode: 'auto_topup' | 'keep_going' | 'notify_only';
+  };
+  [SETTINGS_EVENTS.BILLING_MANDATE_ARMED]: { mode: 'auto_topup' | 'keep_going' };
+  [SETTINGS_EVENTS.BILLING_CARD_SAVED]: { intent: 'add' | 'change' };
+  [SETTINGS_EVENTS.BILLING_CARD_REMOVED]: { mode_reconciled: boolean };
 }
