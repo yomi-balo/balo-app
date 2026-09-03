@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 const mockConfirmPayment = vi.fn();
 const mockConfirmSetup = vi.fn();
 const mockHandleNextAction = vi.fn();
+const mockRetrievePaymentIntent = vi.fn();
 const mockSubmit = vi.fn();
 const mockUpdate = vi.fn();
 
@@ -15,6 +16,7 @@ vi.mock('@stripe/react-stripe-js', () => ({
     confirmPayment: mockConfirmPayment,
     confirmSetup: mockConfirmSetup,
     handleNextAction: mockHandleNextAction,
+    retrievePaymentIntent: mockRetrievePaymentIntent,
   }),
   useElements: () => ({ submit: mockSubmit, update: mockUpdate }),
 }));
@@ -88,7 +90,21 @@ describe('PayAction', () => {
       paymentIntent: { status: 'succeeded', payment_method: 'pm_123' },
     });
     mockConfirmSetup.mockResolvedValue({});
-    mockHandleNextAction.mockResolvedValue({});
+    // ⚠ BAL-515 — this default USED TO BE `{}` (no error, no intent), which the pre-fix code read
+    // as success. That is precisely why the suite could not detect the 3DS replay bug: an
+    // abandoned challenge and a completed one were indistinguishable to the assertion. The
+    // default now models a genuinely COMPLETED challenge, so the failure cases have to say so.
+    mockHandleNextAction.mockResolvedValue({
+      paymentIntent: { status: 'succeeded' },
+      setupIntent: { status: 'succeeded' },
+    });
+    // ⚠ THE DEFAULT IS A PROVABLY-UNPAID INTENT. `handleNextAction` rejecting is ambiguous on its
+    // own — it rejects both for an already-SUCCEEDED intent and for a genuinely unpaid one — so
+    // every test that drives that rejection has to say which. Defaulting to unpaid keeps the
+    // pre-existing "rotate on a rejection" expectation meaningful; the replay case sets its own.
+    mockRetrievePaymentIntent.mockResolvedValue({
+      paymentIntent: { status: 'requires_payment_method' },
+    });
   });
 
   // ── The four cases lifted from PaymentSection.test.tsx (the hoist regression net) ──
@@ -218,6 +234,370 @@ describe('PayAction', () => {
     expect(mockConfirmPayment).not.toHaveBeenCalled();
   });
 
+  // ── BAL-515: a failed / abandoned / replayed 3DS must ROTATE the key ────────
+
+  it('fires onCardDeclined when the saved-card 3DS challenge FAILS with a card_error, so the key rotates', async () => {
+    // ⚠ A `requires_action` answer is a CACHED 200 against the purchase idempotency key exactly
+    // as a 402 decline is. Without the rotation the next Pay press REPLAYS the stale
+    // `requires_action` for 24h and the issuer is never contacted again. A `card_error` is the
+    // DEFINITE non-completion that rotation is for: Stripe.js is saying the issuer refused the
+    // authentication, so nothing was charged and the cached answer on this key is worthless.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({
+      error: { type: 'card_error', message: 'Authentication failed.' },
+    });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Authentication failed/i);
+    expect(onCardDeclined).toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    // A definite non-completion needs no retrieve — rotating on it is provably safe.
+    expect(mockRetrievePaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it('rotates on a client-side validation_error too (the request never left the browser)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({
+      error: { type: 'validation_error', message: 'Your card number is incomplete.' },
+    });
+    const { onCardDeclined } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/card number is incomplete/i);
+    expect(onCardDeclined).toHaveBeenCalled();
+    expect(mockRetrievePaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it('does NOT rotate on an api_connection_error whose intent ALREADY SUCCEEDED (the second-charge bug)', async () => {
+    // ⚠⚠ THE HIGH-SEVERITY DEFECT THIS PINS. The `{ error }` RETURN arm used to call
+    // `onCardDeclined()` for ANY error type. An `api_connection_error` can be raised AFTER the
+    // challenge completed — the socket dropped on the way back — and on the saved-card path the
+    // api has ALREADY confirmed the PaymentIntent, so the card IS charged. Rotating
+    // `clientRequestId` there changes the server-side purchase idempotency key, so one further
+    // Pay press mints a SECOND real PaymentIntent, taken from a buyer told nothing went through.
+    // "Stripe returned an error" is not "the card was not charged": ask Stripe which it was.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({
+      error: { type: 'api_connection_error', message: 'A network error occurred.' },
+    });
+    mockRetrievePaymentIntent.mockResolvedValue({ paymentIntent: { status: 'succeeded' } });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(mockRetrievePaymentIntent).toHaveBeenCalledWith('pi_3ds_secret');
+    expect(onCardDeclined).not.toHaveBeenCalled();
+    // And it must not have claimed a failure at all — the purchase is done.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentIntentId: 'pi_saved' })
+    );
+  });
+
+  it('does NOT rotate on an api_error whose intent is `processing` (the webhook credits it)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({
+      error: { type: 'api_error', message: 'An error occurred.' },
+    });
+    mockRetrievePaymentIntent.mockResolvedValue({ paymentIntent: { status: 'processing' } });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onCardDeclined).not.toHaveBeenCalled();
+  });
+
+  it('DOES rotate on an api_connection_error once the retrieve PROVES the intent is unpaid', async () => {
+    // The rule is "let the true status decide", not "never rotate on a connection error". A
+    // provably-unpaid intent still holds a worthless cached answer on the key.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({
+      error: { type: 'api_connection_error', message: 'A network error occurred.' },
+    });
+    mockRetrievePaymentIntent.mockResolvedValue({
+      paymentIntent: { status: 'requires_payment_method' },
+    });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/check your balance before trying again/i);
+    expect(alert).not.toHaveTextContent(/no charge was made/i);
+    expect(onCardDeclined).toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('FAILS CLOSED on an api_connection_error when the retrieve is ALSO unreadable (no rotation)', async () => {
+    // Two ambiguities do not make a certainty. An unresolvable outcome must not rotate: a stale
+    // replayed key costs a retry, a rotated key on an already-paid intent costs real money.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({
+      error: { type: 'rate_limit_error', message: 'Too many requests.' },
+    });
+    mockRetrievePaymentIntent.mockResolvedValue({ error: { message: 'unreadable' } });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/check your balance before trying again/i);
+    expect(alert).not.toHaveTextContent(/no charge was made/i);
+    expect(onCardDeclined).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('rotates and surfaces an error when handleNextAction REJECTS on a PROVABLY UNPAID intent', async () => {
+    // `handleNextAction` THROWS when the intent is not in `requires_action`. Unhandled, the
+    // rejection escaped into `handlePayClick`'s `.catch(() => undefined)` and left the button on
+    // "Processing…" forever, with no alert and no completion. When the retrieve proves the intent
+    // is still unpaid, rotating is right: the cached answer on this key is worthless.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockRejectedValue(
+      new Error('This PaymentIntent does not require any action')
+    );
+    mockRetrievePaymentIntent.mockResolvedValue({
+      paymentIntent: { status: 'requires_payment_method' },
+    });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    const alert = await screen.findByRole('alert');
+    // ⚠ THE COPY IS THE ASSERTION, not the existence of an alert. On this path the api already
+    // confirmed the PaymentIntent, so the default "no charge was made" would be a claim about the
+    // buyer's money that this component cannot make.
+    expect(alert).not.toHaveTextContent(/no charge was made/i);
+    expect(alert).toHaveTextContent(/check your balance before trying again/i);
+    expect(mockRetrievePaymentIntent).toHaveBeenCalledWith('pi_3ds_secret');
+    expect(onCardDeclined).toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    // Back to idle — the button must not be stranded on "Processing…".
+    expect(screen.getByRole('button', { name: /Pay/i })).not.toBeDisabled();
+  });
+
+  it('does NOT rotate and does NOT claim "no charge was made" when the intent ALREADY SUCCEEDED', async () => {
+    // ⚠⚠ THE DOUBLE-CHARGE THIS PREVENTS. `handleNextAction` rejects on a REPLAYED, already-paid
+    // intent. Treating that as a failure both (a) told the buyer "no charge was made" about a card
+    // that HAD been charged, and (b) rotated `clientRequestId` — which changes the server-side
+    // purchase idempotency key, so one further Pay press mints a SECOND PaymentIntent that the api
+    // confirms: a second real charge. The completion path must simply take over instead.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockRejectedValue(
+      new Error('This PaymentIntent does not require any action')
+    );
+    mockRetrievePaymentIntent.mockResolvedValue({ paymentIntent: { status: 'succeeded' } });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onCardDeclined).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentIntentId: 'pi_saved' })
+    );
+  });
+
+  it('treats a `processing` replayed intent as done too (the webhook credits it)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockRejectedValue(new Error('does not require any action'));
+    mockRetrievePaymentIntent.mockResolvedValue({ paymentIntent: { status: 'processing' } });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onCardDeclined).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the retrieve returns an error', { error: { message: 'network' } }],
+    ['the retrieve returns nothing usable', {}],
+  ])('FAILS CLOSED (no rotation) when %s', async (_label, retrieveResult) => {
+    // ⚠ THE TWO FAILURE MODES ARE NOT SYMMETRIC. A stale replayed key costs the buyer a repeated
+    // no-op they can clear with a refresh; a rotated key on an intent that may already be paid
+    // costs them a second real charge. So an unresolvable outcome shows the ambiguous copy and
+    // rotates nothing.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockRejectedValue(new Error('does not require any action'));
+    mockRetrievePaymentIntent.mockResolvedValue(retrieveResult);
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/check your balance before trying again/i);
+    expect(alert).not.toHaveTextContent(/no charge was made/i);
+    expect(onCardDeclined).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Pay/i })).not.toBeDisabled();
+  });
+
+  it('FAILS CLOSED (no rotation) when the retrieve itself REJECTS', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockRejectedValue(new Error('does not require any action'));
+    mockRetrievePaymentIntent.mockRejectedValue(new Error('offline'));
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /check your balance before trying again/i
+    );
+    expect(onCardDeclined).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('treats a non-succeeded PaymentIntent with NO error as a failure (an abandoned challenge)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({ paymentIntent: { status: 'requires_action' } });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    const alert = await screen.findByRole('alert');
+    // The status is provably unpaid, so rotating is right — but the copy still may not claim
+    // nothing was charged: the api confirmed this PaymentIntent server-side.
+    expect(alert).toHaveTextContent(/check your balance before trying again/i);
+    expect(alert).not.toHaveTextContent(/no charge was made/i);
+    expect(onCardDeclined).toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('still completes on a `processing` PaymentIntent (the webhook credits it)', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({ paymentIntent: { status: 'processing' } });
+    const { onCardDeclined, onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onCardDeclined).not.toHaveBeenCalled();
+  });
+
+  it('never falls back to "no charge was made" when the 3DS error carries NO message', async () => {
+    // ⚠ THE FALLBACK IS THE BUG SURFACE. Stripe usually supplies a message, so `?? null` here
+    // looks harmless — until it does not, and the buyer is told nothing was charged on the one
+    // path where the api has already created AND confirmed the PaymentIntent.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'requires_action',
+      clientSecret: 'pi_3ds_secret',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'not_required' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({ error: { type: 'card_error' } });
+    const { onCardDeclined } = renderAction({ paymentMethodSource: 'saved_card' });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).not.toHaveTextContent(/no charge was made/i);
+    expect(alert).toHaveTextContent(/check your balance before trying again/i);
+    // A genuine 3DS error still rotates: the authentication did not complete, so the cached
+    // `requires_action` on this key would otherwise be replayed for 24h without the issuer ever
+    // being contacted again.
+    expect(onCardDeclined).toHaveBeenCalled();
+  });
+
   it('does not complete when the 3DS challenge fails', async () => {
     mockStartPurchaseAction.mockResolvedValue({
       ok: true,
@@ -227,7 +607,9 @@ describe('PayAction', () => {
       mandate: { outcome: 'not_required' },
       walletId: 'wallet-1',
     });
-    mockHandleNextAction.mockResolvedValue({ error: { message: 'Authentication failed.' } });
+    mockHandleNextAction.mockResolvedValue({
+      error: { type: 'card_error', message: 'Authentication failed.' },
+    });
     const { onComplete } = renderAction({ paymentMethodSource: 'saved_card' });
 
     await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
@@ -320,6 +702,49 @@ describe('PayAction', () => {
     expect(mockHandleNextAction).toHaveBeenCalledWith({ clientSecret: 'seti_3ds_secret' });
     expect(mockConfirmSetup).not.toHaveBeenCalled();
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ mandateCaptured: true }));
+  });
+
+  it('does NOT count an ABANDONED mandate 3DS as captured (no error, intent still requires_action)', async () => {
+    // ⚠ Reading only `error` told a buyer whose mandate was never confirmed that automatic
+    // charging was on: the receipt's warning was suppressed and the wallet stayed `pending` with
+    // nothing to ever tell them. The purchase itself still completes — the money already moved.
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'requires_action', clientSecret: 'seti_3ds_secret' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockResolvedValue({ setupIntent: { status: 'requires_action' } });
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'auto_topup',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ mandateCaptured: false }));
+  });
+
+  it('does NOT count a REJECTED mandate 3DS as captured, and never fails the purchase', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'complete',
+      paymentIntentId: 'pi_saved',
+      mandate: { outcome: 'requires_action', clientSecret: 'seti_3ds_secret' },
+      walletId: 'wallet-1',
+    });
+    mockHandleNextAction.mockRejectedValue(new Error('does not require any action'));
+    const { onComplete } = renderAction({
+      paymentMethodSource: 'saved_card',
+      lowBalanceMode: 'auto_topup',
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ mandateCaptured: false }));
   });
 
   // ── Decline ───────────────────────────────────────────────────────────────

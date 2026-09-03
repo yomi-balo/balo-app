@@ -28,11 +28,14 @@ const {
   mockPublishSettlementFailure,
   mockNotificationPublish,
   mockWalletFindById,
-  mockSetPendingTopupAt,
+  mockClearPendingTopup,
   mockPublishAutoTopupExecuted,
   mockPublishAutoTopupFailed,
   mockTriggerAutoTopup,
   mockApplySavedCardDisplay,
+  mockListByPaymentMethodId,
+  mockRefreshSavedCardDisplay,
+  mockClearSavedCard,
   mockRetrieveCardDisplay,
   mockTrackServer,
   REPAIR_TX,
@@ -70,11 +73,15 @@ const {
   mockPublishSettlementFailure: vi.fn(),
   mockNotificationPublish: vi.fn(),
   mockWalletFindById: vi.fn(),
-  mockSetPendingTopupAt: vi.fn(),
+  mockClearPendingTopup: vi.fn(),
   mockPublishAutoTopupExecuted: vi.fn(),
   mockPublishAutoTopupFailed: vi.fn(),
   mockTriggerAutoTopup: vi.fn(),
   mockApplySavedCardDisplay: vi.fn(),
+  // BAL-515 — the `payment_method.*` arms. Default: no wallet holds the payment method.
+  mockListByPaymentMethodId: vi.fn(async (): Promise<Array<{ id: string }>> => []),
+  mockRefreshSavedCardDisplay: vi.fn(),
+  mockClearSavedCard: vi.fn(),
   // Default: Stripe has no card facts to give (the common case in these fixtures, whose PIs
   // carry no customer / payment_method). Individual cases override it.
   mockRetrieveCardDisplay: vi.fn(async () => null),
@@ -98,7 +105,10 @@ vi.mock('@balo/db', () => ({
     applyMandateStatus: mockApplyMandateStatus,
     applySavedCardDisplay: mockApplySavedCardDisplay,
     findById: mockWalletFindById,
-    setPendingTopupAt: mockSetPendingTopupAt,
+    clearPendingTopup: mockClearPendingTopup,
+    listByStripePaymentMethodId: mockListByPaymentMethodId,
+    refreshSavedCardDisplay: mockRefreshSavedCardDisplay,
+    clearSavedCard: mockClearSavedCard,
   },
   creditSessionsRepository: {
     findById: mockSessionFindById,
@@ -137,6 +147,7 @@ vi.mock('../credit/auto-topup.js', () => ({
 }));
 
 import {
+  applyAutoTopupFromStripe,
   applyOverdraftSettlementFromStripe,
   applyStripeEffect,
   resolveStripeEffect,
@@ -876,7 +887,12 @@ describe('applyStripeEffect', () => {
     // A fresh auto_topup credit CLEARS the in-flight marker in the webhook txn + DEFERS the
     // executed notice + AUTO_TOPUP_FIRED analytics post-commit. `triggerBalanceMinor` = balanceAfter
     // (17600) − reload (7600) = 10000.
-    expect(mockSetPendingTopupAt).toHaveBeenCalledWith('wallet_1', null, tx);
+    // ⚠ GUARDED ON THE CROSSING (BAL-515). A redelivery days later must not wipe a marker that
+    // now belongs to a DIFFERENT, live crossing — the wallet id alone cannot express that.
+    expect(mockClearPendingTopup).toHaveBeenCalledWith(
+      { walletId: 'wallet_1', triggeringEntryId: 'entry_1' },
+      tx
+    );
     expect(postCommit).toHaveLength(1);
     await postCommit[0]?.();
     expect(mockPublishAutoTopupExecuted).toHaveBeenCalledWith({
@@ -909,7 +925,7 @@ describe('applyStripeEffect', () => {
     });
     expect(postCommit).toEqual([]);
     expect(mockPublishAutoTopupExecuted).not.toHaveBeenCalled();
-    expect(mockSetPendingTopupAt).not.toHaveBeenCalled();
+    expect(mockClearPendingTopup).not.toHaveBeenCalled();
   });
 
   it('activates the mandate via applyMandate', async () => {
@@ -990,8 +1006,12 @@ describe('applyStripeEffect', () => {
     // NO receivable, NO settlement mark — an auto-top-up failure is not money owed.
     expect(mockReceivableOpen).not.toHaveBeenCalled();
     expect(mockMarkSettlementResult).not.toHaveBeenCalled();
-    // The reload definitively failed → CLEAR the in-flight marker in the webhook txn.
-    expect(mockSetPendingTopupAt).toHaveBeenCalledWith('wallet_1', null, tx);
+    // The reload definitively failed → CLEAR the in-flight marker in the webhook txn, GUARDED on
+    // the crossing so a late redelivery cannot erase a newer crossing's evidence (BAL-515).
+    expect(mockClearPendingTopup).toHaveBeenCalledWith(
+      { walletId: 'wallet_1', triggeringEntryId: 'entry_7' },
+      tx
+    );
     expect(postCommit).toHaveLength(1);
     await postCommit[0]?.();
     // Notification-only recovery belt: emitAnalytics false, keyed on the crossing + wallet balance.
@@ -1350,5 +1370,204 @@ describe('applyOverdraftSettlementFromStripe (the stuck-settlement repair arm)',
     expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
     expect(mockMarkSettlementResult).not.toHaveBeenCalled();
     expect(mockReceivableClear).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-515: the two saved-card hygiene arms ─────────────────────────────────
+
+/** A Stripe PaymentMethod payload as it arrives on a `payment_method.*` event. */
+function paymentMethod(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'pm_1',
+    type: 'card',
+    card: { brand: 'visa', last4: '4242', exp_month: 4, exp_year: 2030 },
+    ...overrides,
+  };
+}
+
+describe('resolveStripeEffect — payment_method.* (BAL-515)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListByPaymentMethodId.mockResolvedValue([{ id: 'wallet_1' }]);
+  });
+
+  it('maps payment_method.automatically_updated → card_display_refreshed off the EVENT object', async () => {
+    const effect = await resolveStripeEffect(
+      event('payment_method.automatically_updated', paymentMethod())
+    );
+
+    expect(effect).toEqual({
+      kind: 'card_display_refreshed',
+      walletId: 'wallet_1',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 4, cardExpYear: 2030 },
+    });
+    // No extra PaymentMethod retrieve — the payload already carries the new digits.
+    expect(mockPaymentIntentsRetrieve).not.toHaveBeenCalled();
+  });
+
+  it('maps payment_method.detached → saved_card_detached', async () => {
+    // ⚠ Stripe NULLS `pm.customer` on a detach, which is why the wallet lookup is by
+    // payment-method id and never by customer.
+    const effect = await resolveStripeEffect(
+      event('payment_method.detached', paymentMethod({ customer: null }))
+    );
+
+    expect(effect).toEqual({
+      kind: 'saved_card_detached',
+      walletId: 'wallet_1',
+      paymentMethodId: 'pm_1',
+    });
+    expect(mockListByPaymentMethodId).toHaveBeenCalledWith('pm_1');
+  });
+
+  it('acks with NO effect when no wallet holds the payment method (not ours)', async () => {
+    mockListByPaymentMethodId.mockResolvedValue([]);
+    expect(await resolveStripeEffect(event('payment_method.detached', paymentMethod()))).toBeNull();
+    expect(
+      await resolveStripeEffect(event('payment_method.automatically_updated', paymentMethod()))
+    ).toBeNull();
+  });
+
+  it('REFUSES to act when TWO wallets name the same payment method (money-adjacent ambiguity)', async () => {
+    mockListByPaymentMethodId.mockResolvedValue([{ id: 'wallet_1' }, { id: 'wallet_2' }]);
+
+    expect(
+      await resolveStripeEffect(event('payment_method.automatically_updated', paymentMethod()))
+    ).toBeNull();
+    expect(await resolveStripeEffect(event('payment_method.detached', paymentMethod()))).toBeNull();
+  });
+
+  it('acks with NO effect for a non-card payment method (nothing to display)', async () => {
+    const effect = await resolveStripeEffect(
+      event(
+        'payment_method.automatically_updated',
+        paymentMethod({ type: 'au_becs_debit', card: undefined })
+      )
+    );
+    expect(effect).toBeNull();
+    expect(mockListByPaymentMethodId).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyStripeEffect — payment_method.* (BAL-515)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('card_display_refreshed writes the display columns and NEVER touches the mandate', async () => {
+    // ⚠ `applySavedCardDisplay` is a CONSENT boundary that REVOKES the mandate when the card
+    // changes. A network reissue carries the SAME payment-method id, so routing this through the
+    // consent path would silently disable a buyer's auto-top-up for a cosmetic digit change.
+    const post = await applyStripeEffect(tx, {
+      kind: 'card_display_refreshed',
+      walletId: 'wallet_1',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 4, cardExpYear: 2030 },
+    });
+
+    expect(post).toEqual([]);
+    expect(mockRefreshSavedCardDisplay).toHaveBeenCalledWith(tx, {
+      walletId: 'wallet_1',
+      card: { cardBrand: 'visa', cardLast4: '4242', cardExpMonth: 4, cardExpYear: 2030 },
+    });
+    expect(mockApplySavedCardDisplay).not.toHaveBeenCalled();
+    expect(mockApplyMandate).not.toHaveBeenCalled();
+    expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+    expect(mockClearSavedCard).not.toHaveBeenCalled();
+  });
+
+  it('saved_card_detached clears the card AND the mandate (fail-closed)', async () => {
+    // A detached payment method cannot be charged; leaving `mandate_status = active` would let
+    // auto-top-up and overdraft settlement keep firing off-session charges at a dead card.
+    const post = await applyStripeEffect(tx, {
+      kind: 'saved_card_detached',
+      walletId: 'wallet_1',
+      paymentMethodId: 'pm_1',
+    });
+
+    expect(post).toEqual([]);
+    expect(mockClearSavedCard).toHaveBeenCalledWith(tx, 'wallet_1');
+    expect(mockRefreshSavedCardDisplay).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyAutoTopupFromStripe (the auto-top-up repair arm, BAL-515)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRetrieveSettlement.mockResolvedValue(SETTLEMENT);
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+  });
+
+  it('credits through the ORDINARY pipeline under the crossing key, in ONE transaction', async () => {
+    await applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck');
+
+    expect(mockRetrieveSettlement).toHaveBeenCalledWith('pi_stuck');
+    expect(mockApplyLedgerEntry).toHaveBeenCalledWith(
+      REPAIR_TX,
+      expect.objectContaining({
+        walletId: 'wallet_1',
+        reason: 'auto_topup',
+        entryType: 'purchase',
+        idempotencyKey: 'auto_topup:wallet_1:led_E',
+        // `auto_topup` is a SYSTEM reason — a null actor is correct, not a contrived member id.
+        memberId: null,
+        sessionId: null,
+      })
+    );
+    // The marker clear rides the SAME transaction as the ledger write, guarded on the crossing.
+    expect(mockClearPendingTopup).toHaveBeenCalledWith(
+      { walletId: 'wallet_1', triggeringEntryId: 'led_E' },
+      REPAIR_TX
+    );
+  });
+
+  it('RETURNS the executed notice UNRUN on a FRESH credit — the caller runs it after its commit proof', async () => {
+    // ⚠ THE ORDERING FIX. This function used to run its own post-commit effects, which put the
+    // notice and the `AUTO_TOPUP_FIRED` analytics BEFORE `repairOrClear`'s read-back — the inverse
+    // of `routes/stripe/webhook.ts`, whose proof deliberately precedes its post-commit drain. On a
+    // phantom commit that told a client "we added $100" about a credit that does not exist.
+    const postCommit = await applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck');
+
+    expect(postCommit).toHaveLength(1);
+    expect(mockPublishAutoTopupExecuted).not.toHaveBeenCalled();
+
+    for (const run of postCommit) await run();
+
+    expect(mockPublishAutoTopupExecuted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletId: 'wallet_1',
+        companyId: 'company_1',
+        triggeringEntryId: 'led_E',
+        reloadedMinor: 7600,
+        balanceAfterMinor: 17600,
+      })
+    );
+  });
+
+  it('a DEDUPED credit (a webhook won the race) returns NO effects and publishes NOTHING', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: true,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+
+    const postCommit = await applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck');
+
+    expect(postCommit).toEqual([]);
+    expect(mockPublishAutoTopupExecuted).not.toHaveBeenCalled();
+  });
+
+  it('writes NOTHING when the settlement cannot be read (the marker survives for the next tick)', async () => {
+    mockRetrieveSettlement.mockRejectedValue(new Error('no balance_transaction'));
+
+    await expect(applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck')).rejects.toThrow(
+      'no balance_transaction'
+    );
+
+    expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
+    expect(mockClearPendingTopup).not.toHaveBeenCalled();
   });
 });

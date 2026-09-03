@@ -18,15 +18,18 @@ export {
   createOffSessionCharge,
   retrieveSettlement,
   retrievePaymentIntentStatus,
+  findPaymentIntentByIdempotencyKey,
   type PaymentIntentStatusResult,
+  type PaymentIntentLookupResult,
   type SavedCardChargeResult,
 } from './charges.js';
 export {
   resolveStripeEffect,
   applyStripeEffect,
   applyOverdraftSettlementFromStripe,
+  applyAutoTopupFromStripe,
 } from './dispatch.js';
-export { StripeConfigError } from './errors.js';
+export { StripeConfigError, StripeWebhookCommitProofError } from './errors.js';
 export type {
   SettlementFields,
   OffSessionChargeResult,

@@ -53,11 +53,20 @@ export const stripeWebhookEventsRepository = {
    * Stamp `processed_at = now()` for an event — called atomically with the effect so a
    * persisted `processed_at` always implies a committed effect. Uses the DB `now()` so
    * the timestamp is the transaction time. Pass the webhook `tx`.
+   *
+   * ⚠ THE BOOLEAN IS THE POINT (BAL-515). This previously returned `Promise<void>`, so an UPDATE
+   * matching ZERO rows — a missing marker, or one made invisible mid-phantom-commit — was
+   * indistinguishable from success: an independent way to commit an effect with no marker, and so
+   * to ack a Stripe delivery that never recorded itself. `insertReceived` above already proves its
+   * write with `.returning()`; this now matches it. The caller decides the policy (the webhook
+   * route 500s so Stripe retries) — the repository stays policy-free.
    */
-  async markProcessed(eventId: string, exec: DbExecutor): Promise<void> {
-    await exec
+  async markProcessed(eventId: string, exec: DbExecutor): Promise<boolean> {
+    const rows = await exec
       .update(stripeWebhookEvents)
       .set({ processedAt: sql`now()` })
-      .where(eq(stripeWebhookEvents.eventId, eventId));
+      .where(eq(stripeWebhookEvents.eventId, eventId))
+      .returning({ eventId: stripeWebhookEvents.eventId });
+    return rows.length > 0;
   },
 };

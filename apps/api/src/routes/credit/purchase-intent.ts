@@ -19,9 +19,20 @@ const log = createLogger('credit');
  * trusts that across the `requireInternalAuth` secret boundary (same trust model as
  * `/notifications/publish`). `clientRequestId` is a UUID minted client-side, STABLE across
  * double-submits of the same configuration → the Stripe idempotency key
- * `purchase:{walletId}:{clientRequestId}` makes a double-click return the SAME PaymentIntent
- * (never a second charge). `promoCode` is optional (unadvertised); it rides into PI metadata
- * so the webhook grants the bonus best-effort on successful payment.
+ * `purchase:{walletId}:{paymentMethodSource}:{clientRequestId}` makes a double-click return the
+ * SAME PaymentIntent (never a second charge). `promoCode` is optional (unadvertised); it rides
+ * into PI metadata so the webhook grants the bonus best-effort on successful payment.
+ *
+ * ⚠ THE PAYMENT-METHOD SOURCE IS IN THAT KEY, AND IT IS DERIVED SERVER-SIDE (BAL-515 — see the
+ * construction in the handler). The two sources build PaymentIntents with DIFFERENT params —
+ * `saved_card` carries `payment_method` + `confirm: true` + `return_url`, `new_card` carries none
+ * of them — and Stripe 400s a key replayed with different params. Before BAL-515 the key was
+ * `purchase:{walletId}:{clientRequestId}` and the two were kept apart only by a CLIENT-side
+ * convention: the web composer includes `paymentMethodSource` in its config signature and
+ * re-mints `clientRequestId` when the buyer switches. That made a SERVER-side guarantee depend on
+ * a browser behaving, and any other caller reusing one request id across a switch got a 400 on
+ * the money path. Deriving the source here makes the separation structural: a client that reuses
+ * one request id across a switch now gets two distinct keys instead of an error.
  *
  * DEFENCE-IN-DEPTH (behind `requireInternalAuth`): the amount + currency are re-asserted here,
  * independently of the web limits, so a compromised/misused internal caller can't mint an
@@ -88,9 +99,14 @@ export async function purchaseIntentRoute(fastify: FastifyInstance): Promise<voi
         return reply.status(404).send({ error: 'wallet_not_found' });
       }
 
-      // The SAME key format on both paths; the composer guarantees a distinct
-      // `clientRequestId` per source, so one buyer switching cards never reuses a key.
-      const idempotencyKey = `purchase:${walletId}:${clientRequestId}`;
+      // BAL-515 — the payment-method source is part of the key STRUCTURALLY, on the server. The
+      // two sources build PaymentIntents with DIFFERENT params (`saved_card` carries
+      // `payment_method` + `confirm: true`), and Stripe 400s on one key reused with different
+      // params. That used to hold only because the web composer includes `paymentMethodSource` in
+      // its config signature and re-mints `clientRequestId` on a switch — a CLIENT-side convention
+      // protecting a SERVER-side guarantee. Deriving it here makes it structural: a client that
+      // reuses one request id across a switch now gets two distinct keys instead of a 400.
+      const idempotencyKey = `purchase:${walletId}:${paymentMethodSource}:${clientRequestId}`;
 
       if (paymentMethodSource === 'saved_card') {
         const { stripeCustomerId, stripePaymentMethodId } = wallet;

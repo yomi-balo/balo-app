@@ -54,6 +54,8 @@ export const mockStripe = {
   paymentIntents: {
     create: vi.fn(),
     retrieve: vi.fn(),
+    // BAL-515 — the READ-ONLY recovery scan (`findPaymentIntentByIdempotencyKey`).
+    list: vi.fn(),
   },
   charges: {
     retrieve: vi.fn(),

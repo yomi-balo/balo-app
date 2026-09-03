@@ -40,11 +40,20 @@ function manualPurchaseMetadata(input: {
  * currency with `setup_future_usage: 'off_session'` (asks Stripe to save the confirmed
  * payment method for later reuse) and returns the `client_secret` for frontend confirmation.
  *
- * `idempotencyKey` is a caller-supplied STABLE business key (e.g. `purchase:{walletId}:
- * {clientRequestId}`) passed to Stripe so a retried / double-submitted create returns the
- * SAME PaymentIntent instead of minting a second one — without it, two confirmed PIs would
- * yield two distinct PI-id ledger keys and double-credit the wallet (invariant #2). It must
+ * `idempotencyKey` is a caller-supplied STABLE business key — today
+ * `purchase:{walletId}:{paymentMethodSource}:{clientRequestId}`, built in
+ * `routes/credit/purchase-intent.ts` — passed to Stripe so a retried / double-submitted create
+ * returns the SAME PaymentIntent instead of minting a second one; without it, two confirmed PIs
+ * would yield two distinct PI-id ledger keys and double-credit the wallet (invariant #2). It must
  * NOT depend on the PI id.
+ *
+ * ⚠ THE `{paymentMethodSource}` SEGMENT IS LOAD-BEARING, WHICH IS WHY IT IS SPELLED OUT HERE.
+ * This function and its sibling `createOnSessionSavedCardCharge` create PaymentIntents with
+ * DIFFERENT params (the sibling adds `payment_method` + `confirm: true` + `return_url`), and
+ * Stripe 400s ONE idempotency key replayed with different params. BAL-515 moved that separation
+ * out of the browser — it used to rest on the web composer re-minting `clientRequestId` on a
+ * source switch — and into the server-derived key, so the two paths are structurally unable to
+ * collide however the caller behaves.
  *
  * Stamps webhook metadata `{ walletId, reason: 'manual_purchase', memberId, promoCode? }`; the
  * credit is applied on `payment_intent.succeeded`, keyed on the resulting PI id
@@ -339,6 +348,37 @@ export interface PaymentIntentStatusResult {
   status: Stripe.PaymentIntent.Status;
   /** A recorded `last_payment_error` that is NOT an SCA prompt — i.e. a hard decline. */
   hardDeclined: boolean;
+  /**
+   * BAL-515 — the latest charge was refunded IN FULL (`charge.refunded === true`). ⚠ A REFUND DOES
+   * NOT MOVE A PI OFF `succeeded`, so `status` alone cannot see it, and a reconcile that reads only
+   * the status would credit money that has already gone back to the customer. Reported here rather
+   * than inferred at a call site so there is one definition of "the money came back".
+   *
+   * ⚠⚠ FULL AND PARTIAL ARE REPORTED SEPARATELY, AND CONFLATING THEM DESTROYS MONEY. A single
+   * "any money came back" boolean made an A$300 charge with an A$25 refund indistinguishable from
+   * a complete reversal, so the reconcile's terminal drain-without-credit arm fired and the A$275
+   * the customer is still owed vanished with the marker. `refundedFully` is the ONLY terminal
+   * signal; a partial refund is an alarm the caller must escalate, never a write-off. Read
+   * `amountRefundedMinor` to tell them apart.
+   *
+   * `false` when the PI carries no expanded charge (nothing charged yet — nothing to refund).
+   */
+  refundedFully: boolean;
+  /**
+   * BAL-515 — `charge.amount_refunded` in the charge's own currency's minor units; `0` when
+   * nothing was refunded or there is no charge yet. `> 0` with `refundedFully === false` is a
+   * PARTIAL refund: some money came back and the remainder did not.
+   */
+  amountRefundedMinor: number;
+  /**
+   * BAL-515 — the amount the PI was CREATED for, in its own currency's minor units. This is the
+   * crossing-time figure pinned when the charge was made; a wallet column read at sweep time is
+   * not (the company may have changed its reload since). Callers must check `currency` before
+   * treating it as AUD.
+   */
+  amountMinor: number;
+  /** The PI's currency, lower-case (`'aud'` for every Balo off-session charge). */
+  currency: string;
 }
 
 /**
@@ -348,17 +388,42 @@ export interface PaymentIntentStatusResult {
  * must short-circuit rather than risk a second PaymentIntent once Stripe's ~24h idempotency
  * key has expired. Returns `null` when the PI cannot be retrieved (the caller then falls back
  * to its age-bounded decision rather than acting on a phantom status).
+ *
+ * BAL-515 — `latest_charge` IS EXPANDED FOR THE REFUND READ, and that expansion is load-bearing:
+ * a refund leaves the PaymentIntent `succeeded` forever, so without the charge there is no field
+ * anywhere on the response that says the money came back. The auto-top-up reconcile has no upper
+ * age bound by design, so an operator who answers its alarm by refunding the customer in the
+ * Dashboard would otherwise see the very next tick credit the wallet at full face value.
+ *
+ * ⚠ THE REFUND IS REPORTED AS TWO FIELDS, NOT ONE BOOLEAN. `charge.refunded` is Stripe's own
+ * "reversed in full" flag; `charge.amount_refunded` is how much came back. A lossy `refunded ||
+ * amount_refunded > 0` collapsed a partial refund into a full one and let the caller write off the
+ * un-refunded remainder. Deriving the distinction HERE, once, is what keeps every call site from
+ * re-inventing it.
  */
 export async function retrievePaymentIntentStatus(
   paymentIntentId: string
 ): Promise<PaymentIntentStatusResult | null> {
   const stripe = getStripeClient();
   try {
-    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ['latest_charge'],
+    });
     const lastError = pi.last_payment_error;
     const hardDeclined =
       lastError !== null && lastError !== undefined && lastError.code !== 'authentication_required';
-    return { status: pi.status, hardDeclined };
+    // An UN-expanded (string) or absent `latest_charge` means no charge to inspect ⇒ not refunded.
+    const charge = typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+    return {
+      status: pi.status,
+      hardDeclined,
+      // ONLY Stripe's own full-reversal flag is terminal. A charge with `amount_refunded > 0` and
+      // `refunded === false` still holds money the customer paid and has not got back.
+      refundedFully: charge?.refunded === true,
+      amountRefundedMinor: charge?.amount_refunded ?? 0,
+      amountMinor: pi.amount,
+      currency: pi.currency.toLowerCase(),
+    };
   } catch (err: unknown) {
     log.error(
       {
@@ -467,4 +532,86 @@ export async function retrieveSettlement(
     stripeChargeId: charge.id,
     stripeBalanceTransactionId: balanceTransaction.id,
   };
+}
+
+/**
+ * BAL-515 — the outcome of recovering a PaymentIntent whose id was never persisted.
+ *
+ * `exhaustive` on the `found: false` arm means the window was FULLY enumerated: "not found" is
+ * then a conclusion about the whole candidate set rather than about one page. Without it, "not
+ * found" is merely "not seen", and the caller must not act on it.
+ *
+ * ⚠ IT IS A CONDITIONAL CONCLUSION, NOT A FREESTANDING PROOF — see the two premises stated on
+ * `findPaymentIntentByIdempotencyKey` below. It is the ONE destructive input the auto-top-up
+ * reconcile has (it drains the marker), so read them before trusting it.
+ */
+export type PaymentIntentLookupResult =
+  | { found: true; paymentIntentId: string }
+  | { found: false; exhaustive: boolean };
+
+/**
+ * BAL-515 — READ-ONLY recovery of the PaymentIntent for a crossing whose id never reached the
+ * wallet (the auto-top-up engine threw between `paymentIntents.create` and the marker stamp).
+ *
+ * ⚠⚠ IT CREATES NOTHING, AND THAT IS THE WHOLE DESIGN. The obvious alternative — re-POSTing
+ * `paymentIntents.create` under the same idempotency key — replays the original PaymentIntent
+ * WHEN ONE EXISTS and MINTS A REAL CHARGE WHEN ONE DOES NOT. On the exact path this function
+ * serves (we do not know whether Stripe ever received the request) that is a coin-flip between
+ * a lookup and a fresh charge against a customer's card. So this is a `list`, never a `create`.
+ *
+ * The scan is bounded by `created[gte] = createdAfter − 60s` (the slack absorbs app↔Stripe clock
+ * skew), which is exactly the set of PaymentIntents that could be ours: the marker was armed at
+ * `createdAfter` and the charge followed it. Because the WINDOW is bounded rather than the page,
+ * a single page with `has_more === false` enumerates the whole candidate set.
+ *
+ * ⚠ `exhaustive: true` IS A CONCLUSION FROM TWO UNSTATED PREMISES, NOT A STANDALONE PROOF, and it
+ * is the ONE DESTRUCTIVE input the auto-top-up reconcile takes: on it the caller drains the marker
+ * and abandons a possibly-real charge behind a `log.warn`. Both premises must hold:
+ *   1. THE CHARGE CARRIES `wallet.stripeCustomerId` AS ITS CUSTOMER. The `list` filters on
+ *      `customer`, so a PaymentIntent created against a different customer id (a wallet whose
+ *      customer was re-pointed after the charge) is invisible to a fully-enumerated page.
+ *   2. APP↔STRIPE CLOCK SKEW IS ≤ 60s. `created[gte]` is computed from OUR `pendingTopupAt`; a
+ *      charge Stripe timestamps more than a minute before it falls outside the window entirely.
+ * Neither is checked here, and neither can be checked from inside this function — which is why
+ * they are written down instead of implied by the word "proof".
+ *
+ * Matching is on `metadata.idempotencyKey`, stamped on every off-session charge by
+ * `createOffSessionCharge` above.
+ *
+ * NEVER THROWS. Any Stripe fault answers `{ found: false, exhaustive: false }` — inconclusive,
+ * so the caller defers rather than draining a marker on a false negative.
+ */
+export async function findPaymentIntentByIdempotencyKey(input: {
+  customerId: string;
+  idempotencyKey: string;
+  createdAfter: Date;
+}): Promise<PaymentIntentLookupResult> {
+  const stripe = getStripeClient();
+  const createdGte = Math.floor(input.createdAfter.getTime() / 1000) - 60;
+  try {
+    const page = await stripe.paymentIntents.list({
+      customer: input.customerId,
+      created: { gte: createdGte },
+      limit: 100,
+    });
+    for (const pi of page.data) {
+      if (pi.metadata?.idempotencyKey === input.idempotencyKey) {
+        return { found: true, paymentIntentId: pi.id };
+      }
+    }
+    // `has_more` is the ONLY thing that can turn a miss into a non-proof: the window itself is
+    // already bounded, so a fully-listed page means the charge does not exist.
+    return { found: false, exhaustive: !page.has_more };
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'findPaymentIntentByIdempotencyKey',
+        customerId: input.customerId,
+        ...stripeErrorLogFields(err),
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Could not list PaymentIntents to recover a lost auto-top-up charge — reporting inconclusive'
+    );
+    return { found: false, exhaustive: false };
+  }
 }

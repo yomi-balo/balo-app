@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/node';
 import { buildApp } from './app.js';
 import { startWorkers } from './jobs/worker.js';
 import { assertNoShowFloorOverrideUnsetInProduction } from './config/billing-floor.js';
+import { assertAppUrlSetInProduction } from './lib/app-url.js';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -18,6 +19,13 @@ try {
   // degrade a feature, so crash-looping loudly is the correct trade. Run before `app.listen` so
   // a misconfigured deployment never starts serving traffic on it.
   assertNoShowFloorOverrideUnsetInProduction();
+
+  // BAL-515 (§5) — ⚠⚠ THROWS IN PRODUCTION IF `APP_URL` IS UNSET OR BLANK. Same money-side
+  // reasoning as the assert above, and deliberately unlike the vendor-secret warnings below:
+  // `APP_URL` is the Stripe `return_url` on the money path, so an unset one bounces a buyer whose
+  // card has ALREADY been charged to `localhost` — a broken checkout that is invisible
+  // server-side. Crash-looping loudly beats charging cards into a dead redirect.
+  assertAppUrlSetInProduction();
 
   await app.listen({
     port: parseInt(process.env.PORT || '3002'),

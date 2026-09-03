@@ -3,31 +3,41 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const {
   mockAcquireWalletLock,
   mockFindWallet,
-  mockSetPendingTopupAt,
+  mockArmPendingTopup,
+  mockRecordPendingTopupPaymentIntent,
+  mockClearPendingTopup,
   mockHasActiveSession,
   mockHasOpenReceivable,
   mockGetLatestEntryId,
   mockCreateOffSessionCharge,
   mockPublish,
   mockTrackServer,
+  mockLog,
 } = vi.hoisted(() => ({
   mockAcquireWalletLock: vi.fn(),
   mockFindWallet: vi.fn(),
-  mockSetPendingTopupAt: vi.fn(),
+  mockArmPendingTopup: vi.fn(),
+  mockRecordPendingTopupPaymentIntent: vi.fn(),
+  mockClearPendingTopup: vi.fn(),
   mockHasActiveSession: vi.fn(),
   mockHasOpenReceivable: vi.fn(),
   mockGetLatestEntryId: vi.fn(),
   mockCreateOffSessionCharge: vi.fn(),
   mockPublish: vi.fn(),
   mockTrackServer: vi.fn(),
+  /** Stable logger — the indeterminate-arm test asserts on its `error` context. */
+  mockLog: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
+vi.mock('@balo/shared/logging', () => ({ createLogger: () => mockLog }));
 vi.mock('@balo/db', () => ({
   acquireWalletLock: mockAcquireWalletLock,
-  creditWalletsRepository: { findById: mockFindWallet, setPendingTopupAt: mockSetPendingTopupAt },
+  creditWalletsRepository: {
+    findById: mockFindWallet,
+    armPendingTopup: mockArmPendingTopup,
+    recordPendingTopupPaymentIntent: mockRecordPendingTopupPaymentIntent,
+    clearPendingTopup: mockClearPendingTopup,
+  },
   creditSessionsRepository: { hasActiveSessionForWallet: mockHasActiveSession },
   creditReceivablesRepository: { hasOpenReceivable: mockHasOpenReceivable },
   creditLedgerRepository: { getLatestEntryId: mockGetLatestEntryId },
@@ -66,6 +76,11 @@ const WALLET = {
   topupThresholdMinor: 2000,
   topupReloadMinor: 10_000,
   pendingTopupAt: null,
+  // ⚠ BOTH MARKER CORRELATION COLUMNS ARE EXPLICIT. Guard (e) now reads
+  // `pendingTopupPaymentIntentId`, and an ABSENT key would make every derived fixture's answer an
+  // accident of `undefined` rather than a stated state.
+  pendingTopupTriggeringEntryId: null,
+  pendingTopupPaymentIntentId: null,
   expiresAt: null,
 };
 
@@ -76,7 +91,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAcquireWalletLock.mockResolvedValue(undefined);
   mockFindWallet.mockResolvedValue({ ...WALLET });
-  mockSetPendingTopupAt.mockResolvedValue(undefined);
+  mockArmPendingTopup.mockResolvedValue(undefined);
+  mockRecordPendingTopupPaymentIntent.mockResolvedValue(true);
+  mockClearPendingTopup.mockResolvedValue(undefined);
   mockHasActiveSession.mockResolvedValue(false);
   mockHasOpenReceivable.mockResolvedValue(false);
   mockGetLatestEntryId.mockResolvedValue('led_E');
@@ -159,17 +176,137 @@ describe('evaluateAutoTopup — guard sequence (does not fire)', () => {
     expect(out).toEqual({ outcome: 'skipped', reason: 'topup_in_flight' });
     expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
     // A skip must NOT (re-)arm the marker.
-    expect(mockSetPendingTopupAt).not.toHaveBeenCalled();
+    expect(mockArmPendingTopup).not.toHaveBeenCalled();
   });
 
-  it('PROCEEDS when the pending marker is STALE (older than the TTL — lost webhook, self-heals)', async () => {
+  it('PROCEEDS when a STALE marker carries NO PaymentIntent id (nothing to reconcile — self-heals)', async () => {
+    // ⚠ THE EXEMPTION IS LOAD-BEARING. A marker armed in phase 1 by an evaluation that died before
+    // phase 2 stamped anything — or a pre-BAL-515 legacy marker — has no PaymentIntent for the
+    // reconcile to resolve. If it blocked too, that wallet would never reload again.
     mockFindWallet.mockResolvedValue({
       ...WALLET,
       pendingTopupAt: new Date(Date.now() - TTL_MS - 60_000),
+      pendingTopupPaymentIntentId: null,
     });
     const out = await evaluateAutoTopup('wallet_1');
     expect(out).toMatchObject({ outcome: 'charged' });
     expect(mockCreateOffSessionCharge).toHaveBeenCalledTimes(1);
+  });
+
+  it('REFUSES to re-arm past the TTL while a PaymentIntent id is STAMPED (never charge over an unresolved PI)', async () => {
+    // ⚠⚠ THE DESIGN FIX. The TTL self-heal was written when nothing persisted the in-flight
+    // PaymentIntent id, so ageing the marker out was the only way a wallet could reload again —
+    // and this file conceded the residual double-CHARGE risk was "NOT ZERO, AND IS NOT CLOSED BY
+    // CODE". `auto-topup-reconcile.ts` now owns every marker that carries a PaymentIntent id, so
+    // ageing one out is the TTL doing the reconcile's job unsafely: a SECOND real charge under a
+    // new `triggeringEntryId`, hence a NEW ledger key, which the ledger unique does not stop.
+    // Accepted cost: reloads pause for this wallet until the reconcile or a human resolves it.
+    mockFindWallet.mockResolvedValue({
+      ...WALLET,
+      pendingTopupAt: new Date(Date.now() - TTL_MS - 60_000),
+      pendingTopupTriggeringEntryId: 'led_UNRESOLVED',
+      pendingTopupPaymentIntentId: 'pi_UNRESOLVED',
+    });
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'skipped', reason: 'topup_unresolved' });
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+    expect(mockArmPendingTopup).not.toHaveBeenCalled();
+  });
+
+  it('refuses at ANY age — a DAY-OLD stamped marker is still a block, not a stale row', async () => {
+    mockFindWallet.mockResolvedValue({
+      ...WALLET,
+      pendingTopupAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      pendingTopupTriggeringEntryId: 'led_UNRESOLVED',
+      pendingTopupPaymentIntentId: 'pi_UNRESOLVED',
+    });
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'skipped', reason: 'topup_unresolved' });
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+  });
+});
+
+describe('evaluateAutoTopup — the ABANDONED crossing is recorded before it is erased (BAL-515)', () => {
+  /**
+   * The only marker a re-arm can still destroy: STALE, correlated to a crossing, and carrying NO
+   * PaymentIntent id (phase 2 died before stamping one, or it predates BAL-515). A stale marker
+   * WITH a PaymentIntent id no longer reaches the arm at all — guard (e) skips `topup_unresolved`.
+   */
+  const STALE_MARKER = {
+    ...WALLET,
+    pendingTopupAt: new Date(Date.now() - TTL_MS - 60_000),
+    pendingTopupTriggeringEntryId: 'led_ABANDONED',
+    pendingTopupPaymentIntentId: null,
+  };
+
+  it('log.errors the abandoned triggering entry when a stale un-stamped marker is OVERWRITTEN', async () => {
+    // ⚠ THIS IS THE TICKET'S CENTRAL AC AT ITS WEAKEST POINT. `armPendingTopup` overwrites the
+    // entry id, so after it runs NOTHING in the system can name the crossing that was in flight —
+    // and it runs in PHASE 1, before the charge, so a re-fire that fails erases the evidence just
+    // the same. Without this log the crossing is charged-but-uncredited with NO trace, which is
+    // the thing BAL-515 says can no longer happen.
+    mockFindWallet.mockResolvedValue({ ...STALE_MARKER });
+
+    await evaluateAutoTopup('wallet_1');
+
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletId: 'wallet_1',
+        companyId: 'company_1',
+        abandonedTriggeringEntryId: 'led_ABANDONED',
+        abandonedPaymentIntentId: null,
+      }),
+      expect.stringContaining('OVERWRITTEN')
+    );
+  });
+
+  it('never reaches the overwrite at all when the abandoned crossing HAS a PaymentIntent id', async () => {
+    // The strongest form of "the evidence is not erased": the arm does not run, so there is
+    // nothing to log about — the crossing keeps both correlation columns until it is resolved.
+    mockFindWallet.mockResolvedValue({
+      ...STALE_MARKER,
+      pendingTopupPaymentIntentId: 'pi_ABANDONED',
+    });
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'skipped', reason: 'topup_unresolved' });
+    expect(mockArmPendingTopup).not.toHaveBeenCalled();
+    expect(mockLog.error).not.toHaveBeenCalled();
+  });
+
+  it('emits it BEFORE the arm — after `armPendingTopup` there is nothing left to name', async () => {
+    mockFindWallet.mockResolvedValue({ ...STALE_MARKER });
+
+    await evaluateAutoTopup('wallet_1');
+
+    const [errorOrder] = mockLog.error.mock.invocationCallOrder;
+    const [armOrder] = mockArmPendingTopup.mock.invocationCallOrder;
+    expect(errorOrder).toBeDefined();
+    expect(armOrder).toBeDefined();
+    expect(errorOrder).toBeLessThan(armOrder as number);
+  });
+
+  it('stays SILENT on the ordinary path — a first arm on a clean wallet erases nothing', async () => {
+    // The alarm has to mean something. A `log.error` on every auto-top-up would be noise, and
+    // noise is how the original incident stayed invisible.
+    await evaluateAutoTopup('wallet_1');
+
+    expect(mockArmPendingTopup).toHaveBeenCalledTimes(1);
+    expect(mockLog.error).not.toHaveBeenCalled();
+  });
+
+  it('stays SILENT when a FRESH marker makes the engine skip (nothing is overwritten)', async () => {
+    mockFindWallet.mockResolvedValue({ ...STALE_MARKER, pendingTopupAt: new Date() });
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'skipped', reason: 'topup_in_flight' });
+    expect(mockLog.error).not.toHaveBeenCalled();
   });
 });
 
@@ -197,13 +334,53 @@ describe('evaluateAutoTopup — charge path', () => {
     // The credit + executed notice + analytics arrive via the webhook, NOT the engine.
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockTrackServer).not.toHaveBeenCalled();
-    // Phase 1 ARMED the in-flight marker (a Date, under the tx); processing LEAVES it set —
-    // the webhook clears it, so the engine must NOT clear it here.
-    expect(mockSetPendingTopupAt).toHaveBeenCalledTimes(1);
-    const [armWallet, armAt] = mockSetPendingTopupAt.mock.calls[0] ?? [];
-    expect(armWallet).toBe('wallet_1');
-    expect(armAt).toBeInstanceOf(Date);
-    expect(mockSetPendingTopupAt).not.toHaveBeenCalledWith('wallet_1', null);
+    // Phase 1 ARMED the in-flight marker (under the tx); processing LEAVES it set — the webhook
+    // clears it, so the engine must NOT clear it here.
+    expect(mockArmPendingTopup).toHaveBeenCalledTimes(1);
+    expect(mockClearPendingTopup).not.toHaveBeenCalled();
+  });
+
+  it('BAL-515: arms the marker WITH the triggering entry id, in the phase-1 locked txn', async () => {
+    // ⚠ A BARE TIMESTAMP WAS THE HOLE. It said a reload was in flight but not WHICH one, so
+    // nothing could derive `auto_topup:{walletId}:{triggeringEntryId}` and test the ledger for
+    // its absence — which is why a charged-but-uncredited reload left nothing to reconcile from.
+    await evaluateAutoTopup('wallet_1');
+
+    expect(mockArmPendingTopup).toHaveBeenCalledTimes(1);
+    const [armInput, armExec] = mockArmPendingTopup.mock.calls[0] ?? [];
+    expect(armInput).toMatchObject({ walletId: 'wallet_1', triggeringEntryId: 'led_E' });
+    expect(armInput?.at).toBeInstanceOf(Date);
+    // The tx handle — the arm rides the SAME advisory-locked transaction as the decision, so the
+    // marker and its correlation can never diverge.
+    expect(armExec).toBeDefined();
+  });
+
+  it('BAL-515: stamps the in-flight PaymentIntent id after a `processing` charge, guarded on the crossing', async () => {
+    await evaluateAutoTopup('wallet_1');
+
+    expect(mockRecordPendingTopupPaymentIntent).toHaveBeenCalledWith({
+      walletId: 'wallet_1',
+      triggeringEntryId: 'led_E',
+      paymentIntentId: 'pi_1',
+    });
+    // AFTER the charge — the id does not exist before then.
+    const armOrder = mockArmPendingTopup.mock.invocationCallOrder[0] ?? Infinity;
+    const chargeOrder = mockCreateOffSessionCharge.mock.invocationCallOrder[0] ?? Infinity;
+    const stampOrder = mockRecordPendingTopupPaymentIntent.mock.invocationCallOrder[0] ?? -Infinity;
+    expect(armOrder).toBeLessThan(chargeOrder);
+    expect(chargeOrder).toBeLessThan(stampOrder);
+  });
+
+  it('BAL-515: warns but still reports `charged` when the marker moved on before the stamp', async () => {
+    mockRecordPendingTopupPaymentIntent.mockResolvedValue(false);
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toMatchObject({ outcome: 'charged', paymentIntentId: 'pi_1' });
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: 'wallet_1', paymentIntentId: 'pi_1' }),
+      expect.stringContaining('marker moved on')
+    );
   });
 
   it('two evaluations of the same crossing pass the IDENTICAL idempotency key (Stripe collapses to one charge)', async () => {
@@ -254,7 +431,7 @@ describe('evaluateAutoTopup — failure routing', () => {
       distinct_id: 'company_1',
     });
     // A definite non-completion → the in-flight marker is CLEARED (unblock future reloads).
-    expect(mockSetPendingTopupAt).toHaveBeenCalledWith('wallet_1', null);
+    expect(mockClearPendingTopup).toHaveBeenCalledWith({ walletId: 'wallet_1' });
   });
 
   it('hard CARD decline → clears the marker, publishes the failed notice + analytics; SWALLOWS', async () => {
@@ -269,7 +446,7 @@ describe('evaluateAutoTopup — failure routing', () => {
     const out = await evaluateAutoTopup('wallet_1');
 
     expect(out).toEqual({ outcome: 'failed', reason: 'declined', triggeringEntryId: 'led_E' });
-    expect(mockSetPendingTopupAt).toHaveBeenCalledWith('wallet_1', null);
+    expect(mockClearPendingTopup).toHaveBeenCalledWith({ walletId: 'wallet_1' });
     expect(mockPublish).toHaveBeenCalledWith('credit.auto_topup.failed', {
       correlationId: `${EXPECTED_KEY}:failed`,
       walletId: 'wallet_1',
@@ -302,8 +479,27 @@ describe('evaluateAutoTopup — failure routing', () => {
     // No customer-facing failure, no analytics.
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockTrackServer).not.toHaveBeenCalled();
-    // The marker is only ARMED in Phase 1 (a Date) and NEVER cleared — leave it for the webhook/TTL.
-    expect(mockSetPendingTopupAt).not.toHaveBeenCalledWith('wallet_1', null);
+    // The marker is only ARMED in Phase 1 and NEVER cleared — leave it for the webhook/TTL.
+    expect(mockClearPendingTopup).not.toHaveBeenCalled();
+  });
+
+  it('BAL-515: logs the PaymentIntent id on an indeterminate error raised AFTER the charge', async () => {
+    // The stamp is the one call that can throw between a successful charge and the return, and
+    // it is exactly the case where a real PaymentIntent is in flight. Without the id on the log,
+    // the only record of that charge is Stripe's dashboard.
+    mockRecordPendingTopupPaymentIntent.mockRejectedValue(new Error('db down'));
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'indeterminate', triggeringEntryId: 'led_E' });
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: 'wallet_1', paymentIntentId: 'pi_1' }),
+      expect.stringContaining('indeterminate')
+    );
+    // Still no customer-facing failure and no analytics — the webhook stays authoritative.
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockTrackServer).not.toHaveBeenCalled();
+    expect(mockClearPendingTopup).not.toHaveBeenCalled();
   });
 });
 

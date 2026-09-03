@@ -4,10 +4,18 @@
  *
  * When a session settles and the wallet's RESTING balance finalizes below the configured
  * threshold, `evaluateAutoTopup` charges the reload chunk on the company's stored off-session
- * mandate. The `payment_intent.succeeded` webhook (`dispatch.ts`) is the SOLE crediting
+ * mandate. The `payment_intent.succeeded` webhook (`dispatch.ts`) is the PRIMARY crediting
  * authority — it writes the `auto_topup` ledger entry keyed
  * `auto_topup:{walletId}:{triggeringEntryId}` and auto-rolls `expires_at`. This engine only
  * DECIDES + CHARGES; it never applies the ledger effect itself.
+ *
+ * ⚠ BAL-515 — "SOLE" IS NOW "PRIMARY", AND THE DISTINCTION IS THE POINT. There is a SECOND
+ * trigger: `auto-topup-reconcile.ts` repairs a crossing whose PaymentIntent Stripe reports
+ * `succeeded` while no `auto_topup:{walletId}:{triggeringEntryId}` ledger row exists. It reaches
+ * the SAME `applyStripeEffect` pipeline (via `applyAutoTopupFromStripe`) and the SAME ledger key,
+ * so there is still exactly ONE crediting implementation and still at most one credit per
+ * crossing — two triggers, one authority. What is no longer true is that a lost webhook means
+ * lost credit. Same qualification `end-session.ts` already carries for overdraft settlement.
  *
  * ── Two-phase locking discipline (mirrors BAL-378 `settleOverdraft`) ──
  * Phase 1 (read + guards + pin `triggeringEntryId` + derive the idempotency key + ARM the
@@ -32,21 +40,63 @@
  * CLEARS it. A marker OLDER than the TTL is a lost webhook and a later crossing may re-fire
  * (self-healing).
  *
+ * BAL-515 — the marker is now a TRIPLE: `pending_topup_at` + `pending_topup_triggering_entry_id`
+ * + `pending_topup_payment_intent_id`, written and cleared together (`armPendingTopup` /
+ * `recordPendingTopupPaymentIntent` / `clearPendingTopup`).
+ *
+ * ⚠⚠ A STAMPED PaymentIntent ID BLOCKS THE RE-ARM AT ANY AGE — the TTL self-heal applies ONLY to a
+ * marker that never got one. Guard (e) refuses to re-arm while `pending_topup_payment_intent_id`
+ * is set, so an unresolved-but-KNOWN PaymentIntent can no longer age out of the way and be charged
+ * over. The reconcile is what resolves those markers (repair / drain / fail-closed / alarm), so
+ * they have an owner; ageing one out would be the TTL doing the reconcile's job unsafely, minting
+ * a second charge under a new `triggeringEntryId` — hence a NEW ledger key, so the ledger unique
+ * does not stop it. Accepted cost: auto-top-up pauses for that wallet until the reconcile or a
+ * human resolves it. Pausing reloads is recoverable; charging a card twice is not.
+ *
+ * WHAT STILL SELF-HEALS, AND THE RESIDUAL THAT LEAVES. A marker with NO stamped PaymentIntent id
+ * still ages out past `TOPUP_IN_FLIGHT_TTL_MS` — deliberately, so a legacy marker or one armed by
+ * an evaluation that died before phase 2 can never wedge a wallet forever. Those are the same
+ * markers the reconcile cannot resolve either (no id to retrieve, and an inconclusive
+ * idempotency-key scan alarms rather than drains), so the re-arm can still overwrite an
+ * abandoned crossing. It is never SILENT: `loadAndDecide` emits a `log.error` naming
+ * `abandonedTriggeringEntryId` immediately before every overwriting arm, so the crossing is
+ * greppable and alertable in Axiom and a human can resolve it in the Stripe Dashboard.
+ *
+ * `TOPUP_RECONCILE_AFTER_MS` still stays strictly below `TOPUP_IN_FLIGHT_TTL_MS` (pinned by a unit
+ * test in `packages/shared`) so the reconcile gets its ~10 ticks at a marker before that last
+ * overwrite path can open.
+ *
  * ── Cycle-avoidance ──
  * `createOffSessionCharge` is imported DIRECTLY from `../stripe/charges.js`, NOT the
  * `../stripe/index.js` barrel — the barrel re-exports `dispatch.js`, and `dispatch.js` imports
  * THIS module, so importing the barrel here would create an import cycle.
  *
- * ── >24h Stripe idempotency-key-expiry edge — OUT OF SCOPE (bounded residual) ──
- * Stripe idempotency keys expire ~24h. The only residual: a PI is created, BOTH its success and
- * failure webhooks are NEVER delivered, the `pending_topup_at` TTL elapses (self-heals to allow a
- * re-fire), >24h passes, and the SAME crossing is re-evaluated → a second PI (expired key) → a
- * double CHARGE (still one CREDIT, guaranteed by the ledger key). Bounded: (1) the ledger key makes
- * a double-CREDIT impossible; (2) the marker + TTL prevent a concurrent in-flight re-fire within
- * the window; (3) triggering is INLINE-ONLY, and a subsequent settlement writes NEW ledger entries
- * so a re-fire targets a fresh crossing with its own key; (4) Stripe retries failed webhook
- * deliveries for ~3 days. Fully closing it would need a PI-status recheck home (like BAL-378's), an
- * accepted trade for this ticket.
+ * ── Lost-webhook recovery, and the residual that survives it (BAL-515) ──
+ * ⚠ THE ORIGINAL VERSION OF THIS PARAGRAPH PRICED THE RISK AGAINST A CLAIM THAT TURNED OUT TO BE
+ * FALSE. It leant on "Stripe retries failed webhook deliveries for ~3 days" — but the delivery
+ * that lost a real A$300 top-up DID NOT FAIL. It returned 200 on a transaction that had committed
+ * nothing (`postgres-js` retried a NAMED `COMMIT` inside an aborted block; see
+ * `packages/db/src/client.ts:12-41`). Stripe had nothing to retry, and this module's only trace —
+ * `pending_topup_at` — self-healed 15 minutes later. "The webhook will eventually land" is not a
+ * recovery mechanism when a 200 can be a lie.
+ *
+ * BAL-515 therefore BUILT the PI-status recheck home this paragraph said would be needed:
+ * `auto-topup-reconcile.ts`, driven per-minute by `jobs/auto-topup-reconcile-sweep.ts` over
+ * markers older than `TOPUP_RECONCILE_AFTER_MS` (5 min). Phase 1 arms the marker WITH its
+ * crossing correlation and phase 2 stamps the PaymentIntent id, so the reconcile can name the
+ * crossing it is repairing, ask Stripe for the PI's real status, and — on `succeeded` with no
+ * ledger row — apply the credit through the ordinary pipeline. It NEVER charges.
+ *
+ * THE RESIDUAL THAT REMAINS — AND WHAT CLOSED. The double-CHARGE path this paragraph used to
+ * describe (a PI created, both webhooks lost, the reconcile deferring past `TOPUP_IN_FLIGHT_TTL_MS`,
+ * the marker self-healing, a second PI minted after Stripe's ~24h key expiry) is CLOSED: guard (e)
+ * refuses to re-arm while a PaymentIntent id is stamped, so the self-heal can no longer reach a
+ * crossing whose charge is known. What remains is the crossing whose id was NEVER stamped —
+ * phase 2 threw between `paymentIntents.create` and `recordPendingTopupPaymentIntent`, and the
+ * reconcile's read-only `paymentIntents.list` scan came back inconclusive rather than exhaustive.
+ * That marker still ages out and can still be overwritten, so a second PI is still possible for it,
+ * still bounded to ONE CREDIT by the ledger key, and still recorded by the abandoned-crossing
+ * `log.error` above.
  */
 import {
   acquireWalletLock,
@@ -66,13 +116,21 @@ import { notificationEvents } from '../../notifications/publisher.js';
 
 const log = createLogger('credit-auto-topup');
 
-/** Why the engine declined to charge (observability + unit-test assertions). */
+/**
+ * Why the engine declined to charge (observability + unit-test assertions).
+ *
+ * `topup_in_flight` — a marker YOUNGER than `TOPUP_IN_FLIGHT_TTL_MS`; the ordinary single-in-flight
+ * skip, expected to clear itself within seconds when the webhook lands.
+ * `topup_unresolved` — a marker of ANY age carrying a stamped PaymentIntent id that nothing has
+ * resolved. NOT self-healing: see guard (e). It stays until the reconcile or a human resolves it.
+ */
 export type AutoTopupSkipReason =
   | 'mode_off'
   | 'no_mandate'
   | 'above_threshold'
   | 'active_or_held'
   | 'topup_in_flight'
+  | 'topup_unresolved'
   | 'no_ledger_entry'
   | 'wallet_missing';
 
@@ -224,13 +282,37 @@ async function loadAndDecide(walletId: string): Promise<Phase1Result> {
 
     // (e) single-in-flight: a FRESH `pending_topup_at` marker means a prior reload PI is still in
     //     flight (its success/fail webhook has not cleared it). Skip so a second session can't fire
-    //     a concurrent reload. A marker OLDER than the TTL is a lost webhook → treat as stale and
-    //     allow the re-fire (self-healing).
-    if (
-      wallet.pendingTopupAt !== null &&
-      now.getTime() - wallet.pendingTopupAt.getTime() < TOPUP_IN_FLIGHT_TTL_MS
-    ) {
-      return { kind: 'skip', reason: 'topup_in_flight' };
+    //     a concurrent reload. A marker OLDER than the TTL with NO PaymentIntent id is a lost
+    //     webhook with nothing to reconcile from → treat as stale and allow the re-fire.
+    //
+    // ⚠⚠ A KNOWN-BUT-UNRESOLVED PaymentIntent BLOCKS AT ANY AGE (BAL-515). The TTL self-heal was
+    // written when nothing persisted the in-flight PaymentIntent id: ageing the marker out of the
+    // way was the ONLY way a wallet could ever reload again, and this file conceded in its own
+    // docblock that the residual double-CHARGE risk was "NOT ZERO, AND IS NOT CLOSED BY CODE".
+    // That reasoning is obsolete. `auto-topup-reconcile.ts` now owns every marker that carries a
+    // PaymentIntent id and resolves it — repair, drain, fail-closed or alarm — so ageing one out
+    // is no longer recovery, it is the TTL doing the reconcile's job unsafely: a second real
+    // charge under a NEW `triggeringEntryId` (hence a new ledger key, so the ledger unique does
+    // NOT stop it) against a PaymentIntent nobody has established the fate of.
+    //
+    // ACCEPTED COST, STATED PLAINLY: auto-top-up PAUSES for this wallet until the reconcile or a
+    // human resolves the crossing. That is the fail-closed-on-charging posture this codebase
+    // already takes everywhere money is at stake (`isCardDeclineError`'s docblock; the reconcile's
+    // own alarm arms, which write nothing rather than guess). Pausing reloads is recoverable;
+    // charging a card twice is not.
+    //
+    // ⚠ A MARKER WITH NO STAMPED PI ID STILL AGES OUT, and that exemption is load-bearing: it is
+    // what keeps a pre-existing/legacy marker — or one armed in phase 1 by an evaluation that died
+    // before phase 2 stamped anything — from wedging a wallet forever. Those are exactly the
+    // markers the reconcile cannot resolve either, and the abandoned-crossing `log.error` below is
+    // what records them.
+    if (wallet.pendingTopupAt !== null) {
+      if (wallet.pendingTopupPaymentIntentId !== null) {
+        return { kind: 'skip', reason: 'topup_unresolved' };
+      }
+      if (now.getTime() - wallet.pendingTopupAt.getTime() < TOPUP_IN_FLIGHT_TTL_MS) {
+        return { kind: 'skip', reason: 'topup_in_flight' };
+      }
     }
 
     // Pin the entry that produced the current resting balance ⇒ the crossing's stable key.
@@ -242,7 +324,44 @@ async function loadAndDecide(walletId: string): Promise<Phase1Result> {
     // ARM the in-flight marker BEFORE the txn commits, so any concurrent/subsequent evaluation
     // serialized behind THIS advisory lock sees it set and skips (`topup_in_flight`). This is the
     // single write in the otherwise read-only Phase-1 txn; it commits with the lock release.
-    await creditWalletsRepository.setPendingTopupAt(walletId, now, tx);
+    //
+    // BAL-515 — the marker is armed WITH its crossing correlation, in this same statement and
+    // this same locked transaction, so the two can never diverge. A bare timestamp said a reload
+    // was in flight but not WHICH one, so nothing downstream could derive
+    // `auto_topup:{walletId}:{triggeringEntryId}` and test the ledger for its absence — which is
+    // exactly why a charged-but-uncredited reload left no trace to reconcile from.
+    // ⚠⚠ BAL-515 — RECORD THE CROSSING THIS RE-ARM IS ABOUT TO ERASE. Reaching this line with a
+    // marker still SET means guard (e) let a STALE one through, and the arm below is about to
+    // OVERWRITE `pending_topup_triggering_entry_id` — the reconcile's remaining handle on the
+    // crossing that was in flight. After this statement that crossing is unreconcilable by any
+    // automated path, and it is unreconcilable whether or not the new charge succeeds: this runs
+    // in PHASE 1, BEFORE the Stripe call, so even a re-fire that immediately hard-declines still
+    // erases the evidence.
+    //
+    // ⚠ SINCE THE GUARD-(e) FIX THIS IS REACHABLE ONLY WITH `pending_topup_payment_intent_id`
+    // NULL — a known PaymentIntent now blocks the re-arm outright at any age. So the crossings
+    // that reach here are precisely the ones the reconcile ALSO could not resolve: nothing ever
+    // told us a PaymentIntent id, and its idempotency-key scan was inconclusive (`alarm`) rather
+    // than exhaustive (which would have drained the marker). A charge may or may not exist. That
+    // is the residual, and this log is what remains of it: `error` (not `warn`) so it is
+    // alertable, carrying the abandoned entry id and the wallet's Stripe customer so a responder
+    // can search the Dashboard and decide between crediting it by hand and refunding it.
+    if (wallet.pendingTopupAt !== null) {
+      log.error(
+        {
+          op: 'evaluateAutoTopup',
+          walletId,
+          companyId: wallet.companyId,
+          abandonedTriggeringEntryId: wallet.pendingTopupTriggeringEntryId,
+          abandonedPaymentIntentId: wallet.pendingTopupPaymentIntentId,
+          abandonedPendingSince: wallet.pendingTopupAt,
+          replacedByTriggeringEntryId: triggeringEntryId,
+        },
+        "Auto-top-up in-flight marker is being OVERWRITTEN past its TTL — no PaymentIntent id was ever stamped on it, so the previous crossing was never resolved and its correlation is now LOST; search this wallet's Stripe customer for a charge before assuming none was made"
+      );
+    }
+
+    await creditWalletsRepository.armPendingTopup({ walletId, at: now, triggeringEntryId }, tx);
 
     return {
       kind: 'charge',
@@ -274,6 +393,10 @@ export async function evaluateAutoTopup(walletId: string): Promise<AutoTopupOutc
   }
 
   const { params } = decision;
+  // BAL-515 — hoisted so BOTH catch arms can name the PaymentIntent this evaluation created. On
+  // the indeterminate arm especially, the id is the difference between "a charge may be in
+  // flight somewhere" and an actionable log the reconcile can be checked against.
+  let inFlightPaymentIntentId: string | null = null;
   try {
     // Phase 2 — charge OUTSIDE the lock. amountMinor is the AUD reload face value.
     const result = await createOffSessionCharge({
@@ -288,6 +411,32 @@ export async function evaluateAutoTopup(walletId: string): Promise<AutoTopupOutc
     });
 
     if (result.status === 'processing') {
+      // BAL-515 — persist the in-flight PaymentIntent id NOW: it does not exist until this
+      // moment, and until it is on the wallet the reconcile has to recover it from Stripe by
+      // idempotency key. GUARDED on the crossing (`recordPendingTopupPaymentIntent` matches on
+      // `pending_topup_triggering_entry_id`), so a marker cleared by a webhook that already
+      // landed — or re-armed for a DIFFERENT crossing — is never mislabelled with this PI.
+      //
+      // No extra `try`. A throw here falls to the existing catch, is not a `card_error`, and
+      // lands on the INDETERMINATE arm: marker left set, `log.error`, nothing customer-facing.
+      // That is exactly right — the reconcile then resolves this PI from Stripe.
+      inFlightPaymentIntentId = result.paymentIntentId;
+      const stamped = await creditWalletsRepository.recordPendingTopupPaymentIntent({
+        walletId,
+        triggeringEntryId: params.triggeringEntryId,
+        paymentIntentId: result.paymentIntentId,
+      });
+      if (!stamped) {
+        log.warn(
+          {
+            op: 'evaluateAutoTopup',
+            walletId,
+            paymentIntentId: result.paymentIntentId,
+            triggeringEntryId: params.triggeringEntryId,
+          },
+          'In-flight marker moved on before the PaymentIntent id could be stamped — the reconcile will resolve this PI from Stripe'
+        );
+      }
       log.info(
         {
           op: 'evaluateAutoTopup',
@@ -318,7 +467,10 @@ export async function evaluateAutoTopup(walletId: string): Promise<AutoTopupOutc
       },
       'Auto-top-up requires authentication (SCA) — notifying billing admins'
     );
-    await creditWalletsRepository.setPendingTopupAt(walletId, null);
+    // BAL-515 — UNGUARDED deliberately, and this is the one caller that may be. Phase 1 armed
+    // this very marker one Stripe round-trip ago, far inside `TOPUP_IN_FLIGHT_TTL_MS`, so no
+    // later crossing can have re-armed it in between; there is no stale read to guard against.
+    await creditWalletsRepository.clearPendingTopup({ walletId });
     await publishAutoTopupFailed({
       walletId,
       companyId: params.companyId,
@@ -346,12 +498,15 @@ export async function evaluateAutoTopup(walletId: string): Promise<AutoTopupOutc
           op: 'evaluateAutoTopup',
           walletId,
           triggeringEntryId: params.triggeringEntryId,
+          paymentIntentId: inFlightPaymentIntentId,
           failureCode,
           ...errorFields(error),
         },
         'Auto-top-up card declined — notifying billing admins (swallowed)'
       );
-      await creditWalletsRepository.setPendingTopupAt(walletId, null);
+      // BAL-515 — UNGUARDED for the same reason as the SCA arm above: phase 1 armed this marker
+      // moments ago in this same invocation.
+      await creditWalletsRepository.clearPendingTopup({ walletId });
       await publishAutoTopupFailed({
         walletId,
         companyId: params.companyId,
@@ -375,6 +530,11 @@ export async function evaluateAutoTopup(walletId: string): Promise<AutoTopupOutc
         op: 'evaluateAutoTopup',
         walletId,
         triggeringEntryId: params.triggeringEntryId,
+        // BAL-515 — non-null when the throw came AFTER the charge (e.g. the marker stamp failed),
+        // which is the case where a real PaymentIntent is in flight and this log is the only
+        // record of it. The reconcile can also recover it from Stripe, but a responder should
+        // not have to.
+        paymentIntentId: inFlightPaymentIntentId,
         failureCode,
         ...errorFields(error),
       },

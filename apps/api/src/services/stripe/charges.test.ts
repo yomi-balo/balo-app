@@ -9,6 +9,7 @@ import {
   createOffSessionCharge,
   createOnSessionPurchaseIntent,
   createOnSessionSavedCardCharge,
+  findPaymentIntentByIdempotencyKey,
   retrievePaymentIntentStatus,
   retrieveSettlement,
 } from './charges.js';
@@ -498,36 +499,239 @@ describe('charges', () => {
 
   describe('retrievePaymentIntentStatus (reconcile pre-recharge check, FIX 6)', () => {
     it('returns the PI status with hardDeclined=false when there is no last_payment_error', async () => {
-      mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_r1', status: 'succeeded' });
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1',
+        status: 'succeeded',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: { id: 'ch_1', refunded: false, amount_refunded: 0 },
+      });
       const result = await retrievePaymentIntentStatus('pi_r1');
-      expect(result).toEqual({ status: 'succeeded', hardDeclined: false });
+      expect(result).toEqual({
+        status: 'succeeded',
+        hardDeclined: false,
+        refundedFully: false,
+        amountRefundedMinor: 0,
+        amountMinor: 10_000,
+        currency: 'aud',
+      });
       // READ-ONLY — it only retrieves; it never creates a charge.
       expect(mockStripe.paymentIntents.create).not.toHaveBeenCalled();
+    });
+
+    it('EXPANDS latest_charge — a refund is invisible without it', async () => {
+      // ⚠ A REFUND DOES NOT MOVE A PaymentIntent OFF `succeeded`. Nothing on an unexpanded
+      // response says the money came back, so the auto-top-up reconcile would credit a wallet
+      // whose charge had already been refunded by the operator answering its own alarm.
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1b',
+        status: 'succeeded',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: { id: 'ch_1', refunded: false, amount_refunded: 0 },
+      });
+
+      await retrievePaymentIntentStatus('pi_r1b');
+
+      expect(mockStripe.paymentIntents.retrieve).toHaveBeenCalledWith('pi_r1b', {
+        expand: ['latest_charge'],
+      });
+    });
+
+    it('reports refundedFully=true ONLY on Stripe`s own full-reversal flag (status is still `succeeded`)', async () => {
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1c',
+        status: 'succeeded',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: { id: 'ch_1', refunded: true, amount_refunded: 10_000 },
+      });
+
+      const result = await retrievePaymentIntentStatus('pi_r1c');
+
+      expect(result).toMatchObject({
+        status: 'succeeded',
+        refundedFully: true,
+        amountRefundedMinor: 10_000,
+      });
+    });
+
+    it('reports a PARTIAL refund as refundedFully=false WITH the refunded amount (never as a full one)', async () => {
+      // ⚠⚠ THE REGRESSION THIS REPLACES. This case used to be pinned as `refunded: true` under the
+      // reasoning "any money back is money back". It is not: on an A$300 charge with an A$25
+      // refund, A$275 is still money the customer paid and has not got back — and the auto-top-up
+      // reconcile's terminal arm reads that boolean, drains the marker and credits NOTHING. One
+      // lossy field silently destroyed A$275 of owed credit, unrecoverably. FULL and PARTIAL are
+      // different facts and must arrive as different fields.
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1d',
+        status: 'succeeded',
+        amount: 30_000,
+        currency: 'aud',
+        latest_charge: { id: 'ch_1', refunded: false, amount_refunded: 2_500 },
+      });
+
+      expect(await retrievePaymentIntentStatus('pi_r1d')).toMatchObject({
+        refundedFully: false,
+        amountRefundedMinor: 2_500,
+        amountMinor: 30_000,
+      });
+    });
+
+    it('reports no refund at all when there is no charge yet (nothing to refund)', async () => {
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1e',
+        status: 'processing',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: null,
+      });
+
+      expect(await retrievePaymentIntentStatus('pi_r1e')).toMatchObject({
+        refundedFully: false,
+        amountRefundedMinor: 0,
+      });
+    });
+
+    it('does NOT treat an unflagged full-value refund as terminal (only `charge.refunded` is)', async () => {
+      // A charge whose `amount_refunded` has reached `amount` but whose `refunded` flag is not set
+      // is not a state Stripe should produce — so it takes the PARTIAL path, where a human looks,
+      // rather than the drain-without-credit path. Fail-safe by construction, not by luck.
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1d2',
+        status: 'succeeded',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: { id: 'ch_1', refunded: false, amount_refunded: 10_000 },
+      });
+
+      expect(await retrievePaymentIntentStatus('pi_r1d2')).toMatchObject({
+        refundedFully: false,
+        amountRefundedMinor: 10_000,
+      });
+    });
+
+    it('carries the CROSSING-TIME amount + currency off the PaymentIntent itself', async () => {
+      // The failed notice must quote what was actually attempted, not a wallet column re-read at
+      // sweep time (the company can change its reload between the charge and the reconcile).
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1f',
+        status: 'canceled',
+        amount: 7_500,
+        currency: 'AUD',
+        latest_charge: null,
+      });
+
+      expect(await retrievePaymentIntentStatus('pi_r1f')).toMatchObject({
+        amountMinor: 7_500,
+        currency: 'aud',
+      });
     });
 
     it('flags a hard decline (a non-SCA last_payment_error)', async () => {
       mockStripe.paymentIntents.retrieve.mockResolvedValue({
         id: 'pi_r2',
         status: 'requires_payment_method',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: null,
         last_payment_error: { code: 'card_declined' },
       });
       const result = await retrievePaymentIntentStatus('pi_r2');
-      expect(result).toEqual({ status: 'requires_payment_method', hardDeclined: true });
+      expect(result).toMatchObject({ status: 'requires_payment_method', hardDeclined: true });
     });
 
     it('does NOT flag an SCA (authentication_required) prompt as a hard decline', async () => {
       mockStripe.paymentIntents.retrieve.mockResolvedValue({
         id: 'pi_r3',
         status: 'requires_action',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: null,
         last_payment_error: { code: 'authentication_required' },
       });
       const result = await retrievePaymentIntentStatus('pi_r3');
-      expect(result).toEqual({ status: 'requires_action', hardDeclined: false });
+      expect(result).toMatchObject({ status: 'requires_action', hardDeclined: false });
     });
 
     it('returns null when the PaymentIntent cannot be retrieved', async () => {
       mockStripe.paymentIntents.retrieve.mockRejectedValue(new Error('stripe unavailable'));
       expect(await retrievePaymentIntentStatus('pi_r4')).toBeNull();
+    });
+  });
+
+  describe('findPaymentIntentByIdempotencyKey (BAL-515 lost-charge recovery)', () => {
+    const CREATED_AFTER = new Date('2026-09-03T10:00:00.000Z');
+    const input = {
+      customerId: 'cus_1',
+      idempotencyKey: 'auto_topup:wallet_1:led_E',
+      createdAfter: CREATED_AFTER,
+    };
+
+    it('⚠ LISTS, NEVER CREATES — a create under the same key would MINT a charge when none exists', async () => {
+      mockStripe.paymentIntents.list.mockResolvedValue({ data: [], has_more: false });
+
+      await findPaymentIntentByIdempotencyKey(input);
+
+      expect(mockStripe.paymentIntents.create).not.toHaveBeenCalled();
+      expect(mockStripe.paymentIntents.list).toHaveBeenCalledTimes(1);
+    });
+
+    it('bounds the scan by created[gte] = the marker time minus 60s of clock slack', async () => {
+      mockStripe.paymentIntents.list.mockResolvedValue({ data: [], has_more: false });
+
+      await findPaymentIntentByIdempotencyKey(input);
+
+      expect(mockStripe.paymentIntents.list).toHaveBeenCalledWith({
+        customer: 'cus_1',
+        created: { gte: Math.floor(CREATED_AFTER.getTime() / 1000) - 60 },
+        limit: 100,
+      });
+    });
+
+    it('matches on metadata.idempotencyKey and returns the PaymentIntent id', async () => {
+      mockStripe.paymentIntents.list.mockResolvedValue({
+        data: [
+          { id: 'pi_other', metadata: { idempotencyKey: 'auto_topup:wallet_1:led_OTHER' } },
+          { id: 'pi_ours', metadata: { idempotencyKey: 'auto_topup:wallet_1:led_E' } },
+        ],
+        has_more: false,
+      });
+
+      expect(await findPaymentIntentByIdempotencyKey(input)).toEqual({
+        found: true,
+        paymentIntentId: 'pi_ours',
+      });
+    });
+
+    it('a miss on a FULLY-listed page is EXHAUSTIVE — proof no charge was ever created', async () => {
+      mockStripe.paymentIntents.list.mockResolvedValue({
+        data: [{ id: 'pi_other', metadata: { idempotencyKey: 'something_else' } }],
+        has_more: false,
+      });
+
+      expect(await findPaymentIntentByIdempotencyKey(input)).toEqual({
+        found: false,
+        exhaustive: true,
+      });
+    });
+
+    it('a miss with has_more is NOT proof (the caller must not drain a marker on it)', async () => {
+      mockStripe.paymentIntents.list.mockResolvedValue({ data: [], has_more: true });
+
+      expect(await findPaymentIntentByIdempotencyKey(input)).toEqual({
+        found: false,
+        exhaustive: false,
+      });
+    });
+
+    it('never throws — a Stripe fault reports INCONCLUSIVE, not "never created"', async () => {
+      mockStripe.paymentIntents.list.mockRejectedValue(new Error('stripe unavailable'));
+
+      expect(await findPaymentIntentByIdempotencyKey(input)).toEqual({
+        found: false,
+        exhaustive: false,
+      });
     });
   });
 });
