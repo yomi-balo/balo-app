@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { isWalletMandateActive, isWalletCardReusableOnSession } from '@balo/shared/credit';
-import { creditWallets, type CreditWallet } from '../schema';
+import { auditEvents, creditWallets, type CreditWallet } from '../schema';
 import { db } from '../client';
-import { creditWalletFactory } from '../test/factories';
+import { creditWalletFactory, userFactory } from '../test/factories';
 import { companyFactory } from '../test/factories/company.factory';
 import { creditWalletsRepository } from './credit-wallets';
 import type { DbExecutor } from './_shared/db-executor';
@@ -1361,9 +1361,10 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     // naming a card-backed mode, or auto-top-up keeps firing off-session charges at nothing.
     const seeded = await seedCardBackedWallet('auto_topup');
     expect(seeded.topupReloadMinor).toBe(42_500); // the seed really took (band is non-default)
+    const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
     );
 
     expect(modeReconciled).toBe(true);
@@ -1397,9 +1398,10 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
 
   it('keep_going: the other card-backed mode reconciles identically', async () => {
     const seeded = await seedCardBackedWallet('keep_going');
+    const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
     );
 
     expect(modeReconciled).toBe(true);
@@ -1414,9 +1416,10 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
   it('notify_only: clears the card and LEAVES the mode alone (modeReconciled false)', async () => {
     // Nothing is armed, so there is nothing to disarm — the UPDATE must not run at all.
     const seeded = await seedCardBackedWallet('notify_only');
+    const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
     );
 
     expect(modeReconciled).toBe(false);
@@ -1439,9 +1442,10 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     // this transaction, so it must be a clean no-op rather than an error.
     const { wallet: fresh } = await creditWalletFactory({ values: BAND });
     expect(fresh.lowBalanceMode).toBe('notify_only');
+    const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, fresh.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, fresh.id, actor.id)
     );
 
     expect(modeReconciled).toBe(false);
@@ -1459,9 +1463,10 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     // whether a card was found — that is what upholds "no card ⇒ no card-backed mode armed".
     const seeded = await seedCardBackedWallet('auto_topup');
     await creditWalletsRepository.clearSavedCard(db, seeded.id);
+    const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
     );
 
     expect(modeReconciled).toBe(true);
@@ -1469,10 +1474,11 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     expect(wallet.stripePaymentMethodId).toBeNull();
   });
 
-  it('issues BOTH writes through the CALLER-SUPPLIED executor, never the base `db`', async () => {
+  it('issues ALL writes through the CALLER-SUPPLIED executor, never the base `db`', async () => {
     // ⚠ THE ATOMICITY GUARANTEE, PROVED THE ONLY WAY THIS HARNESS CAN PROVE IT. The function
     // does not self-transact — the caller's transaction is what keeps card-gone/mode-still-armed
-    // unobservable — so a write that escaped to the base `db` would break the guarantee.
+    // (and now the audit row) unobservable — so a write that escaped to the base `db` would
+    // break the guarantee.
     //
     // A rollback proof CANNOT catch that here, and this test is written this way because the
     // rollback form was tried and mutation-tested first: every client in this harness shares ONE
@@ -1481,13 +1487,18 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     // hard-coded to `db`. Counting the statements issued through the supplied executor is what
     // actually fails on that mutation.
     const seeded = await seedCardBackedWallet('auto_topup');
+    const actor = await userFactory();
 
-    const updatesOnCallerTx = await db.transaction(async (tx) => {
+    const writesOnCallerTx = await db.transaction(async (tx) => {
       let updates = 0;
+      let inserts = 0;
       const counting: DbExecutor = new Proxy(tx, {
         get(target, prop, receiver): unknown {
           if (prop === 'update') {
             updates += 1;
+          }
+          if (prop === 'insert') {
+            inserts += 1;
           }
           const value: unknown = Reflect.get(target, prop, receiver);
           return typeof value === 'function' ? value.bind(target) : value;
@@ -1496,23 +1507,68 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
 
       const { modeReconciled } = await creditWalletsRepository.clearSavedCardAndReconcileMode(
         counting,
-        seeded.id
+        seeded.id,
+        actor.id
       );
       expect(modeReconciled).toBe(true);
-      return updates;
+      return { updates, inserts };
     });
 
-    // Exactly two: `clearSavedCard`'s one-statement clear, then the mode reconcile.
-    expect(updatesOnCallerTx).toBe(2);
+    // Exactly two updates (`clearSavedCard`'s one-statement clear, then the mode reconcile) plus
+    // ONE insert — the audit row (FIX ROUND 3 N2).
+    expect(writesOnCallerTx).toEqual({ updates: 2, inserts: 1 });
     expect((await creditWalletsRepository.findById(seeded.id))?.lowBalanceMode).toBe('notify_only');
   });
 
+  it('appends ONE audit_events row naming the actor, in the SAME transaction as the clear (FIX ROUND 3 N2)', async () => {
+    const seeded = await seedCardBackedWallet('auto_topup');
+    const actor = await userFactory();
+
+    const { modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
+    );
+    expect(modeReconciled).toBe(true);
+
+    const rows = await db.select().from(auditEvents).where(eq(auditEvents.entityId, seeded.id));
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    expect(row?.actorUserId).toBe(actor.id);
+    expect(row?.action).toBe('saved_card.detached');
+    expect(row?.entityType).toBe('credit_wallet');
+    // The effective mode + whether it was reconciled — NEVER card facts, a `mandateRef`, or any
+    // Stripe id.
+    expect(row?.metadata).toEqual({ modeReconciled: true, lowBalanceMode: 'notify_only' });
+  });
+
+  it('a failed audit write rolls the clear back too — fail-closed (FIX ROUND 3 N2)', async () => {
+    // No `userFactory()` row exists for this id, so the audit insert trips the
+    // `audit_events.actor_user_id → users.id` FK — proving the audit write is NOT best-effort:
+    // it is the LAST statement in the transaction, so its failure must undo the clear + reconcile
+    // that already ran ahead of it.
+    const seeded = await seedCardBackedWallet('auto_topup');
+    const unknownActorId = '00000000-0000-0000-0000-000000000000';
+
+    await expect(
+      db.transaction((tx) =>
+        creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, unknownActorId)
+      )
+    ).rejects.toThrow();
+
+    const persisted = await creditWalletsRepository.findById(seeded.id);
+    expect(persisted?.lowBalanceMode).toBe('auto_topup');
+    expect(persisted?.stripePaymentMethodId).toBe('pm_rm_auto_topup');
+    const rows = await db.select().from(auditEvents).where(eq(auditEvents.entityId, seeded.id));
+    expect(rows).toHaveLength(0);
+  });
+
   it('throws for an unknown wallet id', async () => {
+    const actor = await userFactory();
     await expect(
       db.transaction((tx) =>
         creditWalletsRepository.clearSavedCardAndReconcileMode(
           tx,
-          '00000000-0000-0000-0000-000000000000'
+          '00000000-0000-0000-0000-000000000000',
+          actor.id
         )
       )
     ).rejects.toThrow('Credit wallet not found');

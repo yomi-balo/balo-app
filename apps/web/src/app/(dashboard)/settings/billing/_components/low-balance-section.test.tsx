@@ -268,6 +268,92 @@ describe('LowBalanceSection', () => {
     );
   });
 
+  // ── FIX ROUND 3 (N1) — honest copy for notify_only + an active mandate ──────────────────
+
+  it('N1: Save success shows the honest notify_only+mandate-active toast, never the generic one', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    renderSection({
+      initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+    });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Automatic top-ups are off.', {
+        description: expect.stringMatching(/card stays on file/i),
+      })
+    );
+    expect(toast.success).not.toHaveBeenCalledWith('Low-balance settings updated.');
+  });
+
+  it('N1: the generic Save toast still fires for notify_only with an INACTIVE mandate', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    renderSection({
+      initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: false,
+      cardAvailable: true,
+    });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
+    );
+    expect(toast.success).not.toHaveBeenCalledWith('Automatic top-ups are off.', expect.anything());
+  });
+
+  it('N1: the inline note appears for notify_only + card + active mandate, and nowhere else', async () => {
+    renderSection({
+      initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+    });
+    expect(screen.getByText(/card stays on file/i)).toBeInTheDocument();
+  });
+
+  it('N1: the inline note is absent with no card on file', async () => {
+    renderSection({
+      initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: false,
+      cardAvailable: false,
+    });
+    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+  });
+
+  it('N1: the inline note is absent when the mandate is not active', async () => {
+    renderSection({
+      initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: false,
+      cardAvailable: true,
+    });
+    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+  });
+
+  it('N1: the inline note is absent for a card-backed mode, even with an active mandate', async () => {
+    renderSection({
+      initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+    });
+    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+  });
+
+  it('N1: the note tracks a LIVE mode switch (draft, not baseline) before Save is even pressed', async () => {
+    renderSection({
+      initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+    });
+    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
+    expect(screen.getByText(/card stays on file/i)).toBeInTheDocument();
+  });
+
   it('arm failure shows the inline warning + Retry, and Retry mints a NEW uuid', async () => {
     mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
     mockArmSavedCardMandateAction.mockResolvedValueOnce({ ok: false, error: 'failed' });

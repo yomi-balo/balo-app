@@ -188,11 +188,20 @@ export interface DetachSavedCardResponse {
  * overdraft-grace session or open receivable, FIX ROUND security MEDIUM — 502
  * `stripe_detach_failed`) — the caller maps it, never re-derives the wallet id from anything
  * client-supplied (this always passes the wallet resolved from the actor's own session/company).
+ *
+ * FIX ROUND 3 (N2) — `actorUserId` follows the `initiatingMemberId` precedent above
+ * (`createPurchaseIntent`): the caller (`removeSavedCardAction`) resolves it SERVER-SIDE from
+ * `requireBillingActor()`, never from client input, so `apps/api` can record who detached the
+ * card in the same transaction as the clear.
  */
 export async function detachSavedCardPaymentMethod(
-  walletId: string
+  walletId: string,
+  actorUserId: string
 ): Promise<DetachSavedCardResponse> {
-  return postInternal<DetachSavedCardResponse>('/credit/payment-method/detach', { walletId });
+  return postInternal<DetachSavedCardResponse>('/credit/payment-method/detach', {
+    walletId,
+    actorUserId,
+  });
 }
 
 // ── BAL-378: WorkOS-Bearer credit-session drawdown hop ──────────────────────────────────

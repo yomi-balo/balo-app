@@ -353,12 +353,13 @@ describe('mandate', () => {
 
   describe('detachSavedCard', () => {
     const cardWallet = walletFixture({ id: 'wallet_1', stripePaymentMethodId: 'pm_1' });
+    const ACTOR_USER_ID = 'user_1';
 
     it('refuses with settlement_outstanding — never touching Stripe — when the wallet has a live overdraft session (security MEDIUM)', async () => {
       mockFindById.mockResolvedValue(cardWallet);
       mockHasActiveSessionForWallet.mockResolvedValue(true);
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
         status: 'settlement_outstanding',
       });
       expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
@@ -370,7 +371,7 @@ describe('mandate', () => {
       mockFindById.mockResolvedValue(cardWallet);
       mockHasOpenReceivable.mockResolvedValue(true);
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
         status: 'settlement_outstanding',
       });
       expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
@@ -389,7 +390,7 @@ describe('mandate', () => {
         modeReconciled: false,
       });
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
         status: 'removed',
         lowBalanceMode: 'notify_only',
         modeReconciled: false,
@@ -397,7 +398,7 @@ describe('mandate', () => {
       expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalled();
     });
 
-    it('detaches at Stripe, then clears + reconciles inside one transaction', async () => {
+    it('detaches at Stripe, then clears + reconciles inside one transaction, threading the actor through', async () => {
       mockFindById.mockResolvedValue(cardWallet);
       mockStripe.paymentMethods.detach.mockResolvedValue({ id: 'pm_1', customer: null });
       mockClearSavedCardAndReconcileMode.mockResolvedValue({
@@ -405,7 +406,7 @@ describe('mandate', () => {
         modeReconciled: true,
       });
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
         status: 'removed',
         lowBalanceMode: 'notify_only',
         modeReconciled: true,
@@ -415,7 +416,8 @@ describe('mandate', () => {
       expect(mockTransaction).toHaveBeenCalledTimes(1);
       expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalledWith(
         { __brand: 'mock-tx' },
-        'wallet_1'
+        'wallet_1',
+        ACTOR_USER_ID
       );
     });
 
@@ -428,7 +430,7 @@ describe('mandate', () => {
         modeReconciled: false,
       });
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
         status: 'removed',
         lowBalanceMode: 'notify_only',
         modeReconciled: false,
@@ -442,7 +444,9 @@ describe('mandate', () => {
       mockStripe.paymentMethods.detach.mockRejectedValue(new Error('network blip'));
       mockStripe.paymentMethods.retrieve.mockResolvedValue({ id: 'pm_1', customer: 'cus_1' });
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({ status: 'stripe_error' });
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
+        status: 'stripe_error',
+      });
       expect(mockClearSavedCardAndReconcileMode).not.toHaveBeenCalled();
       expect(mockTransaction).not.toHaveBeenCalled();
     });
@@ -452,7 +456,9 @@ describe('mandate', () => {
       mockStripe.paymentMethods.detach.mockRejectedValue(new Error('network blip'));
       mockStripe.paymentMethods.retrieve.mockRejectedValue(new Error('stripe is down'));
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({ status: 'stripe_error' });
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
+        status: 'stripe_error',
+      });
       expect(mockClearSavedCardAndReconcileMode).not.toHaveBeenCalled();
     });
 
@@ -465,7 +471,7 @@ describe('mandate', () => {
         modeReconciled: false,
       });
 
-      await expect(detachSavedCard('wallet_1')).resolves.toEqual({
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
         status: 'removed',
         lowBalanceMode: 'notify_only',
         modeReconciled: false,
@@ -476,7 +482,9 @@ describe('mandate', () => {
 
     it('returns no_wallet when the wallet does not exist', async () => {
       mockFindById.mockResolvedValue(undefined);
-      await expect(detachSavedCard('missing')).resolves.toEqual({ status: 'no_wallet' });
+      await expect(detachSavedCard('missing', ACTOR_USER_ID)).resolves.toEqual({
+        status: 'no_wallet',
+      });
       expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
       expect(mockTransaction).not.toHaveBeenCalled();
     });
@@ -486,7 +494,7 @@ describe('mandate', () => {
       mockStripe.paymentMethods.detach.mockResolvedValue({ id: 'pm_1', customer: null });
       mockClearSavedCardAndReconcileMode.mockRejectedValue(new Error('db down'));
 
-      await expect(detachSavedCard('wallet_1')).rejects.toThrow(/db down/);
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).rejects.toThrow(/db down/);
     });
   });
 });

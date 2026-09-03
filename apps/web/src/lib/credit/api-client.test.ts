@@ -174,7 +174,7 @@ describe('credit api-client', () => {
       jsonResponse({ removed: true, lowBalanceMode: 'notify_only', modeReconciled: true })
     );
 
-    const result = await detachSavedCardPaymentMethod('wallet-1');
+    const result = await detachSavedCardPaymentMethod('wallet-1', 'user-1');
 
     expect(result).toEqual({ removed: true, lowBalanceMode: 'notify_only', modeReconciled: true });
     const [url, init] = mockLoggedFetch.mock.calls[0] as [
@@ -184,13 +184,15 @@ describe('credit api-client', () => {
     expect(url).toBe('http://api.test/credit/payment-method/detach');
     expect(init.method).toBe('POST');
     expect(init.headers['x-internal-api-key']).toBe('secret-123');
-    expect(JSON.parse(init.body)).toEqual({ walletId: 'wallet-1' });
+    // FIX ROUND 3 (N2) — `actorUserId` rides the same hop as `walletId`, threaded from the
+    // caller's already-session-resolved actor.
+    expect(JSON.parse(init.body)).toEqual({ walletId: 'wallet-1', actorUserId: 'user-1' });
   });
 
   it('throws CreditApiError carrying the status on a non-2xx detach response', async () => {
     mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'stripe_detach_failed' }, false, 502));
 
-    await expect(detachSavedCardPaymentMethod('wallet-1')).rejects.toMatchObject({
+    await expect(detachSavedCardPaymentMethod('wallet-1', 'user-1')).rejects.toMatchObject({
       status: 502,
       body: { error: 'stripe_detach_failed' },
     });

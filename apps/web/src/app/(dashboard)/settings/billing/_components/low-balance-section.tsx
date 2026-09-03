@@ -39,6 +39,31 @@ const SAVE_SUCCESS_MESSAGE = 'Low-balance settings updated.';
 const ARM_WARNING_MESSAGE =
   "We couldn't finish setting up automatic charging — your low-balance setting is saved. You can retry anytime from here.";
 
+/**
+ * FIX ROUND 3 (N1) — the TRUTHFUL Save-success copy for the one case the generic
+ * `SAVE_SUCCESS_MESSAGE` overstates: saving `notify_only` while the card on file STILL carries
+ * an active mandate (`savedCard?.mandateActive === true`, threaded down as the `mandateActive`
+ * prop). The generic toast reads like "you're all set", which a client could reasonably take to
+ * mean off-session charging has stopped — it has not. Only `saveLowBalanceConfigAction` ran
+ * (writes `lowBalanceMode` only); nothing on this Save path revokes the mandate or clears the
+ * card (that is `removeSavedCardAction`, a DIFFERENT control, deliberately not fired here — see
+ * the ticket's "option (b) explicitly NOT the chosen path"). So the copy states exactly what DID
+ * change (automatic top-ups) and names the one control that stops the rest (removing the card).
+ */
+const NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_TITLE = 'Automatic top-ups are off.';
+const NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_DESCRIPTION =
+  "Your card stays on file, and Balo may still settle consultation time you've used beyond your balance against it. Remove the card in Payment method to stop that too.";
+
+/**
+ * FIX ROUND 3 (N1) — the same fact, as a standing inline note rather than a one-time toast, so a
+ * client who loads the page already on `notify_only` with a live mandate (never having pressed
+ * Save this visit) still sees it. Shown whenever the CURRENT draft selection is `notify_only`
+ * AND a card with an active mandate is on file — deliberately reading `draft`, not `baseline`,
+ * so it also previews truthfully while the client is mid-edit, before they press Save.
+ */
+const NOTIFY_ONLY_MANDATE_ACTIVE_NOTE =
+  "Your card stays on file. Balo may still settle consultation time you've used beyond your balance against it — removing it in the Payment method section below stops that entirely.";
+
 const ARM_SUCCESS_TOAST: Record<'auto_topup' | 'keep_going', string> = {
   auto_topup: 'Auto top-up turned on.',
   keep_going: 'Keep me going turned on.',
@@ -117,6 +142,8 @@ export function LowBalanceSection({
   const errors = autoTopupConfigErrors(draft.mode, draft.reloadMinor, draft.thresholdMinor);
   const hasFieldErrors = errors.reload !== undefined || errors.threshold !== undefined;
   const isDirty = !sameDraft(draft, baseline);
+  // FIX ROUND 3 (N1) — see `NOTIFY_ONLY_MANDATE_ACTIVE_NOTE`'s docblock.
+  const showNotifyOnlyMandateNote = draft.mode === 'notify_only' && cardAvailable && mandateActive;
 
   const handleModeChange = useCallback((mode: LowBalanceMode) => {
     setDraft((d) => ({ ...d, mode }));
@@ -180,6 +207,17 @@ export function LowBalanceSection({
           await runArm(draft.mode);
           return;
         }
+        toast.success(SAVE_SUCCESS_MESSAGE);
+        return;
+      }
+      // FIX ROUND 3 (N1) — `notify_only` with a still-active mandate is the one case the generic
+      // toast would overstate: the card and its mandate are untouched by this Save (see the
+      // constant's docblock), so off-session settlement can still fire.
+      if (draft.mode === 'notify_only' && mandateActive) {
+        toast.success(NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_TITLE, {
+          description: NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_DESCRIPTION,
+        });
+        return;
       }
       toast.success(SAVE_SUCCESS_MESSAGE);
     } catch {
@@ -229,6 +267,19 @@ export function LowBalanceSection({
         errors={errors}
         cardLabel={cardLabel}
       />
+
+      {showNotifyOnlyMandateNote && (
+        <div className="border-border bg-muted/30 mt-3 flex items-start gap-2 rounded-xl border p-3 text-left">
+          <Info
+            className="text-muted-foreground mt-0.5 size-4 shrink-0"
+            strokeWidth={2.2}
+            aria-hidden="true"
+          />
+          <p className="text-muted-foreground text-xs leading-relaxed font-medium">
+            {NOTIFY_ONLY_MANDATE_ACTIVE_NOTE}
+          </p>
+        </div>
+      )}
 
       {armWarning && (
         <div className="border-warning/40 bg-warning/10 mt-3 flex items-start gap-2 rounded-xl border p-3 text-left">

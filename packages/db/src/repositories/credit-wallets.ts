@@ -7,6 +7,7 @@ import {
   type NewCreditWallet,
 } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
+import { auditEventsRepository } from './audit-events';
 
 /** Config fields a MANAGE_BILLING-gated action may write (gating lives at the caller). */
 interface UpdateWalletConfigInput {
@@ -576,25 +577,49 @@ export const creditWalletsRepository = {
    * Idempotent by construction: a repeat call re-nulls nulls and then finds a non-card-backed
    * mode, so it returns the same row with `modeReconciled: false`. Throws if the wallet is
    * missing (from `clearSavedCard`).
+   *
+   * FIX ROUND 3 (N2) — also appends ONE `audit_events` row, through the SAME `exec`, so the row
+   * and the change it records commit or roll back together (`auditEventsRepository.record`
+   * takes an executor for exactly this). `actorUserId` is the caller's already-resolved actor —
+   * this function never derives one itself. `metadata` carries `modeReconciled` + the resulting
+   * effective `lowBalanceMode` only: NO card facts, NO `mandateRef`, NO Stripe ids — those never
+   * belong in an audit trail. If the insert throws, it propagates like any other statement on
+   * this `exec`, so the caller's transaction rolls back the clear along with it (fail-closed).
    */
   async clearSavedCardAndReconcileMode(
     exec: DbExecutor,
-    walletId: string
+    walletId: string,
+    actorUserId: string
   ): Promise<{ wallet: CreditWallet; modeReconciled: boolean }> {
     const cleared = await creditWalletsRepository.clearSavedCard(exec, walletId);
-    if (cleared.lowBalanceMode !== 'auto_topup' && cleared.lowBalanceMode !== 'keep_going') {
-      return { wallet: cleared, modeReconciled: false };
+
+    let wallet = cleared;
+    let modeReconciled = false;
+    if (cleared.lowBalanceMode === 'auto_topup' || cleared.lowBalanceMode === 'keep_going') {
+      const [reconciled] = await exec
+        .update(creditWallets)
+        .set({ lowBalanceMode: 'notify_only' })
+        .where(eq(creditWallets.id, walletId))
+        .returning();
+      if (reconciled === undefined) {
+        throw new Error(`Credit wallet not found: ${walletId}`);
+      }
+      wallet = reconciled;
+      modeReconciled = true;
     }
 
-    const [reconciled] = await exec
-      .update(creditWallets)
-      .set({ lowBalanceMode: 'notify_only' })
-      .where(eq(creditWallets.id, walletId))
-      .returning();
-    if (reconciled === undefined) {
-      throw new Error(`Credit wallet not found: ${walletId}`);
-    }
-    return { wallet: reconciled, modeReconciled: true };
+    await auditEventsRepository.record(
+      {
+        actorUserId,
+        action: 'saved_card.detached',
+        entityType: 'credit_wallet',
+        entityId: walletId,
+        metadata: { modeReconciled, lowBalanceMode: wallet.lowBalanceMode },
+      },
+      exec
+    );
+
+    return { wallet, modeReconciled };
   },
 
   /**

@@ -812,7 +812,10 @@ export async function removeSavedCardAction(): Promise<RemoveSavedCardResult> {
     }
     walletId = wallet.id;
 
-    const result = await detachSavedCardPaymentMethod(wallet.id);
+    // FIX ROUND 3 (N2) — `actor.userId` is resolved server-side by `requireBillingActor()` above,
+    // never client-supplied; threaded across the internal hop so `apps/api` can record who
+    // detached the card in the same transaction as the clear.
+    const result = await detachSavedCardPaymentMethod(wallet.id, actor.userId);
     log.info('Saved card removed', {
       walletId: wallet.id,
       companyId: actor.companyId,

@@ -14,8 +14,14 @@ import { detachSavedCard } from '../../services/stripe/index.js';
  * A POST-with-path-verb is chosen over a `DELETE` (O1's example) because the internal hop
  * client (`postInternal`) is POST-only and every sibling internal route is POST, and because
  * DELETE request bodies are proxy-hostile. Boring wins.
+ *
+ * FIX ROUND 3 (N2) — `actorUserId` follows the `initiatingMemberId` precedent
+ * (`purchase-intent.ts`): a required `z.uuid()` in the body, so `detachSavedCard` can append an
+ * `audit_events` row naming the actor. It is derived SERVER-SIDE in the web Server Action from
+ * the session (`requireBillingActor()`), never from anything the browser supplies directly —
+ * the browser only ever triggers the zero-arg `removeSavedCardAction()`.
  */
-const paymentMethodDetachBodySchema = z.object({ walletId: z.uuid() });
+const paymentMethodDetachBodySchema = z.object({ walletId: z.uuid(), actorUserId: z.uuid() });
 
 export async function paymentMethodRoute(fastify: FastifyInstance): Promise<void> {
   fastify.post(
@@ -30,7 +36,7 @@ export async function paymentMethodRoute(fastify: FastifyInstance): Promise<void
         });
       }
 
-      const result = await detachSavedCard(parsed.data.walletId);
+      const result = await detachSavedCard(parsed.data.walletId, parsed.data.actorUserId);
 
       if (result.status === 'no_wallet') {
         return reply.status(404).send({ error: 'wallet_not_found' });

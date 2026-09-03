@@ -775,8 +775,26 @@ describe('credit actions', () => {
 
       expect(res).toEqual({ ok: true, lowBalanceMode: 'notify_only', modeReconciled: true });
       // The wallet id crossing the internal hop is the one resolved from
-      // `findByCompanyId(actor.companyId)` — never anything the client could supply.
-      expect(mockDetachSavedCardPaymentMethod).toHaveBeenCalledWith('wallet-1');
+      // `findByCompanyId(actor.companyId)` — never anything the client could supply. The actor
+      // id is the SESSION's own user id (FIX ROUND 3 N2) — also never client-supplied.
+      expect(mockDetachSavedCardPaymentMethod).toHaveBeenCalledWith('wallet-1', 'user-1');
+    });
+
+    it('threads the actor id from the SESSION, never from an argument — removeSavedCardAction takes none (FIX ROUND 3 N2)', async () => {
+      // A different session actor than the fixture default proves the id is READ from the
+      // session at call time, not hard-coded coincidence — and the action's own signature
+      // (`removeSavedCardAction(): Promise<...>`) structurally forbids a caller-supplied one.
+      mockRequireUser.mockResolvedValue({ id: 'user-42' });
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1' });
+      mockDetachSavedCardPaymentMethod.mockResolvedValue({
+        removed: true,
+        lowBalanceMode: 'notify_only',
+        modeReconciled: false,
+      });
+
+      await removeSavedCardAction();
+
+      expect(mockDetachSavedCardPaymentMethod).toHaveBeenCalledWith('wallet-1', 'user-42');
     });
 
     it('maps a CreditApiError to error, logging walletId + companyId for forensics (security LOW)', async () => {

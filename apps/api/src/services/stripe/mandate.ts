@@ -440,11 +440,12 @@ async function detachAtStripe(walletId: string, stripePaymentMethodId: string): 
 /** The local clear + mode-reconcile, inside ONE transaction. Rethrows after the loudest log. */
 async function clearLocallyAndReconcile(
   walletId: string,
-  stripePaymentMethodId: string | null
+  stripePaymentMethodId: string | null,
+  actorUserId: string
 ): Promise<DetachSavedCardResult> {
   try {
     const result = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, walletId)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, walletId, actorUserId)
     );
     log.info(
       { op: 'detachSavedCard', walletId, modeReconciled: result.modeReconciled },
@@ -500,8 +501,16 @@ async function clearLocallyAndReconcile(
  * RE-NOTIFIES — it never re-charges. The two guards are the SAME ones `auto-topup.ts`'s
  * between-session safe-to-charge gate already reads (`hasActiveSessionForWallet`,
  * `hasOpenReceivable`); reused here, not reinvented.
+ *
+ * FIX ROUND 3 (N2) — `actorUserId` is the WEB Server Action's already-session-resolved actor,
+ * threaded across the internal hop (never client-supplied — see `payment-method.ts`'s route
+ * docblock). It rides straight through to `clearSavedCardAndReconcileMode`, which appends the
+ * one `audit_events` row for this user-initiated detach, in the SAME transaction as the clear.
  */
-export async function detachSavedCard(walletId: string): Promise<DetachSavedCardResult> {
+export async function detachSavedCard(
+  walletId: string,
+  actorUserId: string
+): Promise<DetachSavedCardResult> {
   const wallet = await creditWalletsRepository.findById(walletId);
   if (wallet === undefined) {
     return { status: 'no_wallet' };
@@ -523,5 +532,5 @@ export async function detachSavedCard(walletId: string): Promise<DetachSavedCard
     }
   }
 
-  return clearLocallyAndReconcile(walletId, stripePaymentMethodId);
+  return clearLocallyAndReconcile(walletId, stripePaymentMethodId, actorUserId);
 }
