@@ -551,6 +551,53 @@ export const creditWalletsRepository = {
   },
 
   /**
+   * BAL-516 — USER-INITIATED card removal: `clearSavedCard` PLUS the low-balance-mode reconcile.
+   *
+   * ⚠ TWO STATEMENTS, NOT SELF-TRANSACTING — THE CALLER MUST PASS A TRANSACTION `exec`. This is
+   * the atomicity guarantee the whole removal flow rests on: between the clear and the reconcile
+   * the wallet holds no card but still names a CARD-BACKED low-balance mode, and no reader may
+   * ever observe that state. Card-gone/mode-still-armed is what makes auto-top-up and overdraft
+   * settlement fire off-session charges at a card that no longer exists.
+   *
+   * Goes THROUGH `clearSavedCard` — the fail-closed clear is never restated here. That method
+   * owns the rule that the four display columns, `stripe_payment_method_id` and BOTH mandate
+   * columns move in ONE statement (the `credit_wallets_card_display_all_or_none` CHECK can never
+   * see a half-written row), and that `stripe_customer_id` deliberately SURVIVES the detach.
+   *
+   * The reconcile: iff the cleared row's `low_balance_mode` is card-backed (`auto_topup` /
+   * `keep_going`) it moves to `notify_only` and `modeReconciled` is `true`. A wallet already on
+   * `notify_only` is returned untouched (`false`) — there is nothing armed to disarm.
+   *
+   * ⚠ `topup_reload_minor` / `topup_threshold_minor` ARE NOT TOUCHED, deliberately. Removing a
+   * card says nothing about how much the client wants reloaded; keeping their chosen band means
+   * adding a card and re-enabling auto top-up later RESTORES it, instead of silently resetting to
+   * the schema defaults.
+   *
+   * Idempotent by construction: a repeat call re-nulls nulls and then finds a non-card-backed
+   * mode, so it returns the same row with `modeReconciled: false`. Throws if the wallet is
+   * missing (from `clearSavedCard`).
+   */
+  async clearSavedCardAndReconcileMode(
+    exec: DbExecutor,
+    walletId: string
+  ): Promise<{ wallet: CreditWallet; modeReconciled: boolean }> {
+    const cleared = await creditWalletsRepository.clearSavedCard(exec, walletId);
+    if (cleared.lowBalanceMode !== 'auto_topup' && cleared.lowBalanceMode !== 'keep_going') {
+      return { wallet: cleared, modeReconciled: false };
+    }
+
+    const [reconciled] = await exec
+      .update(creditWallets)
+      .set({ lowBalanceMode: 'notify_only' })
+      .where(eq(creditWallets.id, walletId))
+      .returning();
+    if (reconciled === undefined) {
+      throw new Error(`Credit wallet not found: ${walletId}`);
+    }
+    return { wallet: reconciled, modeReconciled: true };
+  },
+
+  /**
    * Flip only the mandate lifecycle status (BAL-382) — e.g. `pending` on
    * `createSetupIntent`, `failed` on `setup_intent.setup_failed`. Tx-composable via
    * `DbExecutor`. Does NOT touch the customer / payment-method / mandate-ref columns, nor the

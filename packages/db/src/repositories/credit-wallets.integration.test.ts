@@ -1332,3 +1332,189 @@ describe('creditWalletsRepository card provenance + refresh/clear (BAL-515)', ()
     ).rejects.toThrow('Credit wallet not found');
   });
 });
+
+describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () => {
+  const CARD = { cardBrand: 'amex', cardLast4: '0005', cardExpMonth: 4, cardExpYear: 2030 };
+
+  /**
+   * ⚠ DELIBERATELY NOT THE SCHEMA DEFAULTS (threshold 2000 / reload 10_000). The promise under
+   * test is that the client's CHOSEN band survives a card removal, so asserting the defaults
+   * afterwards would pass whether the figures were preserved or reset — proving nothing.
+   */
+  const BAND = { topupThresholdMinor: 7_500, topupReloadMinor: 42_500 };
+
+  /** A wallet on `mode` with a live card + active mandate and the non-default band above. */
+  async function seedCardBackedWallet(mode: CreditWallet['lowBalanceMode']): Promise<CreditWallet> {
+    const { wallet } = await creditWalletFactory({ values: { lowBalanceMode: mode, ...BAND } });
+    return creditWalletsRepository.applyMandate(db, {
+      walletId: wallet.id,
+      stripeCustomerId: `cus_rm_${mode}`,
+      stripePaymentMethodId: `pm_rm_${mode}`,
+      mandateRef: `seti_rm_${mode}`,
+      mandateStatus: 'active',
+      card: CARD,
+    });
+  }
+
+  it('auto_topup: clears the card AND disarms the mode, keeping the customer and the band', async () => {
+    // The whole point of the pairing: a wallet cannot be left holding no card while still
+    // naming a card-backed mode, or auto-top-up keeps firing off-session charges at nothing.
+    const seeded = await seedCardBackedWallet('auto_topup');
+    expect(seeded.topupReloadMinor).toBe(42_500); // the seed really took (band is non-default)
+
+    const { wallet, modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+    );
+
+    expect(modeReconciled).toBe(true);
+    expect(wallet.lowBalanceMode).toBe('notify_only');
+    // The delegation to `clearSavedCard` is asserted on the COLUMNS, not taken on trust.
+    expect(wallet.cardBrand).toBeNull();
+    expect(wallet.cardLast4).toBeNull();
+    expect(wallet.cardExpMonth).toBeNull();
+    expect(wallet.cardExpYear).toBeNull();
+    expect(wallet.stripePaymentMethodId).toBeNull();
+    expect(wallet.mandateRef).toBeNull();
+    expect(wallet.mandateStatus).toBeNull();
+    expect(wallet.cardUpdatedAt).toBeInstanceOf(Date);
+    // The Stripe CUSTOMER survives — blanking it would mint a duplicate customer next time.
+    expect(wallet.stripeCustomerId).toBe('cus_rm_auto_topup');
+    expect(isWalletMandateActive(wallet)).toBe(false);
+    expect(isWalletCardReusableOnSession(wallet)).toBe(false);
+    // The band survives verbatim, so re-enabling auto top-up later restores the client's choice.
+    expect(wallet.topupThresholdMinor).toBe(7_500);
+    expect(wallet.topupReloadMinor).toBe(42_500);
+
+    // Persisted, not merely RETURNING-ed.
+    const persisted = await creditWalletsRepository.findById(seeded.id);
+    expect(persisted?.lowBalanceMode).toBe('notify_only');
+    expect(persisted?.stripePaymentMethodId).toBeNull();
+    expect(persisted?.cardLast4).toBeNull();
+    expect(persisted?.stripeCustomerId).toBe('cus_rm_auto_topup');
+    expect(persisted?.topupThresholdMinor).toBe(7_500);
+    expect(persisted?.topupReloadMinor).toBe(42_500);
+  });
+
+  it('keep_going: the other card-backed mode reconciles identically', async () => {
+    const seeded = await seedCardBackedWallet('keep_going');
+
+    const { wallet, modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+    );
+
+    expect(modeReconciled).toBe(true);
+    expect(wallet.lowBalanceMode).toBe('notify_only');
+    expect(wallet.stripePaymentMethodId).toBeNull();
+    expect(wallet.mandateStatus).toBeNull();
+    expect(wallet.stripeCustomerId).toBe('cus_rm_keep_going');
+    expect(wallet.topupThresholdMinor).toBe(7_500);
+    expect(wallet.topupReloadMinor).toBe(42_500);
+  });
+
+  it('notify_only: clears the card and LEAVES the mode alone (modeReconciled false)', async () => {
+    // Nothing is armed, so there is nothing to disarm — the UPDATE must not run at all.
+    const seeded = await seedCardBackedWallet('notify_only');
+
+    const { wallet, modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+    );
+
+    expect(modeReconciled).toBe(false);
+    expect(wallet.lowBalanceMode).toBe('notify_only');
+    // The clear still happened — this arm returns the CLEARED row, never the pre-clear one.
+    expect(wallet.cardBrand).toBeNull();
+    expect(wallet.cardLast4).toBeNull();
+    expect(wallet.cardExpMonth).toBeNull();
+    expect(wallet.cardExpYear).toBeNull();
+    expect(wallet.stripePaymentMethodId).toBeNull();
+    expect(wallet.mandateRef).toBeNull();
+    expect(wallet.mandateStatus).toBeNull();
+    expect(wallet.stripeCustomerId).toBe('cus_rm_notify_only');
+    expect(wallet.topupThresholdMinor).toBe(7_500);
+    expect(wallet.topupReloadMinor).toBe(42_500);
+  });
+
+  it('converges on a wallet that never held a card — no throw, nothing reconciled', async () => {
+    // The repeat-call / no-stored-card path: the caller skips Stripe entirely but still runs
+    // this transaction, so it must be a clean no-op rather than an error.
+    const { wallet: fresh } = await creditWalletFactory({ values: BAND });
+    expect(fresh.lowBalanceMode).toBe('notify_only');
+
+    const { wallet, modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, fresh.id)
+    );
+
+    expect(modeReconciled).toBe(false);
+    expect(wallet.lowBalanceMode).toBe('notify_only');
+    expect(wallet.stripePaymentMethodId).toBeNull();
+    expect(wallet.stripeCustomerId).toBeNull();
+    expect(wallet.topupThresholdMinor).toBe(7_500);
+    expect(wallet.topupReloadMinor).toBe(42_500);
+  });
+
+  it('disarms a card-backed mode even when the card is ALREADY gone (webhook won the race)', async () => {
+    // `payment_method.detached` can land before the user-initiated removal reaches us: the
+    // webhook's `clearSavedCard` does NOT reconcile the mode, so this call arrives at a wallet
+    // with no card but auto-top-up still armed. The reconcile is driven by the MODE, not by
+    // whether a card was found — that is what upholds "no card ⇒ no card-backed mode armed".
+    const seeded = await seedCardBackedWallet('auto_topup');
+    await creditWalletsRepository.clearSavedCard(db, seeded.id);
+
+    const { wallet, modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id)
+    );
+
+    expect(modeReconciled).toBe(true);
+    expect(wallet.lowBalanceMode).toBe('notify_only');
+    expect(wallet.stripePaymentMethodId).toBeNull();
+  });
+
+  it('issues BOTH writes through the CALLER-SUPPLIED executor, never the base `db`', async () => {
+    // ⚠ THE ATOMICITY GUARANTEE, PROVED THE ONLY WAY THIS HARNESS CAN PROVE IT. The function
+    // does not self-transact — the caller's transaction is what keeps card-gone/mode-still-armed
+    // unobservable — so a write that escaped to the base `db` would break the guarantee.
+    //
+    // A rollback proof CANNOT catch that here, and this test is written this way because the
+    // rollback form was tried and mutation-tested first: every client in this harness shares ONE
+    // connection inside ONE per-test transaction (max:1 pool), so an escaped write is undone by
+    // the very same SAVEPOINT and the caller-aborts assertion passes even when the reconcile is
+    // hard-coded to `db`. Counting the statements issued through the supplied executor is what
+    // actually fails on that mutation.
+    const seeded = await seedCardBackedWallet('auto_topup');
+
+    const updatesOnCallerTx = await db.transaction(async (tx) => {
+      let updates = 0;
+      const counting: DbExecutor = new Proxy(tx, {
+        get(target, prop, receiver): unknown {
+          if (prop === 'update') {
+            updates += 1;
+          }
+          const value: unknown = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+
+      const { modeReconciled } = await creditWalletsRepository.clearSavedCardAndReconcileMode(
+        counting,
+        seeded.id
+      );
+      expect(modeReconciled).toBe(true);
+      return updates;
+    });
+
+    // Exactly two: `clearSavedCard`'s one-statement clear, then the mode reconcile.
+    expect(updatesOnCallerTx).toBe(2);
+    expect((await creditWalletsRepository.findById(seeded.id))?.lowBalanceMode).toBe('notify_only');
+  });
+
+  it('throws for an unknown wallet id', async () => {
+    await expect(
+      db.transaction((tx) =>
+        creditWalletsRepository.clearSavedCardAndReconcileMode(
+          tx,
+          '00000000-0000-0000-0000-000000000000'
+        )
+      )
+    ).rejects.toThrow('Credit wallet not found');
+  });
+});

@@ -41,7 +41,13 @@ interface ModeOption {
   cardBacked: boolean;
 }
 
-const MODE_OPTIONS: readonly ModeOption[] = [
+/**
+ * BAL-516 FIX ROUND — exported (additive, one line) so `RemoveCardConfirm`'s removal-consequence
+ * copy can DERIVE the two card-backed mode titles from this array instead of keeping a second,
+ * hand-authored copy of the same strings (review IMPORTANT — two independent copies is how copy
+ * drifts, not how it's prevented).
+ */
+export const MODE_OPTIONS: readonly ModeOption[] = [
   { id: 'auto_topup', icon: Zap, title: 'Auto top-up', cardBacked: true },
   { id: 'keep_going', icon: Radio, title: 'Keep me going', cardBacked: true },
   { id: 'notify_only', icon: Bell, title: 'Just notify me', cardBacked: false },

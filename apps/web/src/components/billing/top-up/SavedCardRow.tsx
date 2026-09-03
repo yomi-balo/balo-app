@@ -1,5 +1,6 @@
 'use client';
 
+import { Trash2 } from 'lucide-react';
 import { CardBrandMark, formatCardBrand } from './CardBrandMark';
 import { formatCardExpiry } from '@/lib/credit/display-constants';
 import type { SavedCard } from './types';
@@ -8,6 +9,12 @@ interface SavedCardRowProps {
   readonly card: SavedCard;
   /** Swap to the Payment Element to enter a different card. */
   readonly onChange: () => void;
+  /**
+   * BAL-516 — renders a trash icon button (`aria-label="Remove card"`) inside the row when
+   * present. Absent (the default) in the composer's purchase flow, which never offers removal
+   * mid-purchase — rendering is byte-identical there.
+   */
+  readonly onRemove?: () => void;
 }
 
 /** "Visa •••• 4242" — the one string both this row and the summary rail's line use. */
@@ -23,9 +30,9 @@ export function describeSavedCard(card: SavedCard): string {
  * "Change" is a real button (44px tap target via the padded hit area), not a link: it mounts the
  * Payment Element beside this row. It never unmounts anything.
  */
-export function SavedCardRow({ card, onChange }: Readonly<SavedCardRowProps>) {
+export function SavedCardRow({ card, onChange, onRemove }: Readonly<SavedCardRowProps>) {
   return (
-    <div className="border-border bg-card flex items-center gap-3 rounded-xl border p-3.5">
+    <div className="border-border bg-card flex items-center gap-4 rounded-xl border p-3.5">
       <CardBrandMark brand={card.brand} />
       <div className="min-w-0 flex-1">
         <div className="text-foreground text-sm font-semibold">{describeSavedCard(card)}</div>
@@ -40,6 +47,21 @@ export function SavedCardRow({ card, onChange }: Readonly<SavedCardRowProps>) {
       >
         Change
       </button>
+      {onRemove !== undefined && (
+        // FIX ROUND (UX MINOR M1 + review MINOR) — sized to an ACTUAL 44×44 hit target via
+        // `min-h-11 min-w-11` on the real button box, rather than the `before:-inset` trick
+        // "Change" uses. Two adjacent expanded pseudo-element hit areas (12px + 12px) inside a
+        // 12px gap overlapped each other, so a tap meant for "Change" could land on "Remove" —
+        // a real box has no such overlap, and the row's `gap-4` gives it further clearance.
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Remove card"
+          className="text-muted-foreground hover:text-destructive focus-visible:ring-ring inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <Trash2 className="size-4" aria-hidden="true" strokeWidth={2.2} />
+        </button>
+      )}
     </div>
   );
 }

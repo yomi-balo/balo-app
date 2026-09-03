@@ -62,6 +62,7 @@ export const mockStripe = {
   },
   paymentMethods: {
     attach: vi.fn(),
+    detach: vi.fn(),
     retrieve: vi.fn(),
   },
   webhooks: {

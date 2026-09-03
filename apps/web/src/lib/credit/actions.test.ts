@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -7,12 +7,16 @@ const mockFindByCompanyId = vi.fn();
 const mockUpdateConfig = vi.fn();
 const mockValidate = vi.fn();
 const mockFindByIdempotencyKey = vi.fn();
+const mockHasActiveSessionForWallet = vi.fn();
 vi.mock('@balo/db', () => ({
   db: {},
   creditWalletsRepository: {
     ensureForCompany: (...a: unknown[]) => mockEnsureForCompany(...a),
     findByCompanyId: (...a: unknown[]) => mockFindByCompanyId(...a),
     updateConfig: (...a: unknown[]) => mockUpdateConfig(...a),
+  },
+  creditSessionsRepository: {
+    hasActiveSessionForWallet: (...a: unknown[]) => mockHasActiveSessionForWallet(...a),
   },
   creditLedgerRepository: {
     findByIdempotencyKey: (...a: unknown[]) => mockFindByIdempotencyKey(...a),
@@ -67,6 +71,7 @@ vi.mock('@/lib/notifications/publish', () => ({
 const mockCreatePurchaseIntent = vi.fn();
 const mockCreateMandateSetupIntent = vi.fn();
 const mockConfirmSavedCardMandate = vi.fn();
+const mockDetachSavedCardPaymentMethod = vi.fn();
 
 /**
  * A stand-in for the real error class. `vi.hoisted` because the `vi.mock` factory below is
@@ -90,6 +95,7 @@ vi.mock('./api-client', () => ({
   createPurchaseIntent: (...a: unknown[]) => mockCreatePurchaseIntent(...a),
   createMandateSetupIntent: (...a: unknown[]) => mockCreateMandateSetupIntent(...a),
   confirmSavedCardMandate: (...a: unknown[]) => mockConfirmSavedCardMandate(...a),
+  detachSavedCardPaymentMethod: (...a: unknown[]) => mockDetachSavedCardPaymentMethod(...a),
   CreditApiError: TestCreditApiError,
 }));
 
@@ -99,6 +105,9 @@ import {
   saveLowBalanceConfigAction,
   nudgeBillingAdminAction,
   getTopUpCreditStatusAction,
+  armSavedCardMandateAction,
+  startCardCaptureAction,
+  removeSavedCardAction,
   type StartPurchaseInput,
 } from './actions';
 
@@ -119,9 +128,18 @@ describe('credit actions', () => {
     mockRequireUser.mockResolvedValue({ id: 'user-1' });
     mockGetCompanyContext.mockResolvedValue({ companyId: 'company-1' });
     mockHasCapability.mockResolvedValue(true);
-    mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
-    mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 0 });
+    mockEnsureForCompany.mockResolvedValue({
+      id: 'wallet-1',
+      balanceMinor: 0,
+      stripePaymentMethodId: null,
+    });
+    mockFindByCompanyId.mockResolvedValue({
+      id: 'wallet-1',
+      balanceMinor: 0,
+      stripePaymentMethodId: null,
+    });
     mockFindByIdempotencyKey.mockResolvedValue(undefined);
+    mockHasActiveSessionForWallet.mockResolvedValue(false);
     mockCreatePurchaseIntent.mockResolvedValue({
       outcome: 'needs_client_confirmation',
       clientSecret: 'pi_secret',
@@ -528,6 +546,267 @@ describe('credit actions', () => {
       });
       expect(res).toEqual({ ok: true });
       expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+  });
+
+  describe('armSavedCardMandateAction', () => {
+    const CLIENT_REQUEST_ID_2 = '22222222-2222-4222-8222-222222222222';
+
+    it('gates on MANAGE_BILLING', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: false, error: 'unauthorized' });
+      expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid clientRequestId', async () => {
+      const res = await armSavedCardMandateAction({ clientRequestId: 'not-a-uuid' });
+      expect(res).toEqual({ ok: false, error: 'invalid_input' });
+      expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+    });
+
+    it('returns no_saved_card when there is no wallet', async () => {
+      mockFindByCompanyId.mockResolvedValue(undefined);
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+      expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+    });
+
+    it('returns no_saved_card when the wallet has no stored payment method', async () => {
+      mockFindByCompanyId.mockResolvedValue({
+        id: 'wallet-1',
+        stripeCustomerId: null,
+        stripePaymentMethodId: null,
+        mandateStatus: null,
+      });
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+    });
+
+    it('short-circuits captured when the mandate is already active, WITHOUT calling the api', async () => {
+      mockFindByCompanyId.mockResolvedValue({
+        id: 'wallet-1',
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'active',
+      });
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: true, outcome: 'captured' });
+      expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+    });
+
+    it('maps succeeded to captured', async () => {
+      mockFindByCompanyId.mockResolvedValue({
+        id: 'wallet-1',
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'pending',
+      });
+      mockConfirmSavedCardMandate.mockResolvedValue({ status: 'succeeded', clientSecret: null });
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: true, outcome: 'captured' });
+      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith('wallet-1', CLIENT_REQUEST_ID_2);
+    });
+
+    it('maps requires_action WITH a secret to requires_action', async () => {
+      mockFindByCompanyId.mockResolvedValue({
+        id: 'wallet-1',
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'pending',
+      });
+      mockConfirmSavedCardMandate.mockResolvedValue({
+        status: 'requires_action',
+        clientSecret: 'seti_secret',
+      });
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: true, outcome: 'requires_action', clientSecret: 'seti_secret' });
+    });
+
+    it('maps requires_action with a NULL secret to failed (the browser cannot act on it)', async () => {
+      mockFindByCompanyId.mockResolvedValue({
+        id: 'wallet-1',
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'pending',
+      });
+      mockConfirmSavedCardMandate.mockResolvedValue({
+        status: 'requires_action',
+        clientSecret: null,
+      });
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: false, error: 'failed' });
+    });
+
+    it('maps a terminal failed status to failed', async () => {
+      mockFindByCompanyId.mockResolvedValue({
+        id: 'wallet-1',
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'pending',
+      });
+      mockConfirmSavedCardMandate.mockResolvedValue({ status: 'failed', clientSecret: null });
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: false, error: 'failed' });
+    });
+
+    it('maps a thrown error to failed (never lets a network hiccup crash Save), logging companyId (security LOW)', async () => {
+      mockFindByCompanyId.mockResolvedValue({
+        id: 'wallet-1',
+        stripeCustomerId: 'cus_1',
+        stripePaymentMethodId: 'pm_1',
+        mandateStatus: 'pending',
+      });
+      mockConfirmSavedCardMandate.mockRejectedValue(new Error('network blip'));
+      const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
+      expect(res).toEqual({ ok: false, error: 'failed' });
+      const [, context] = mockLogError.mock.calls[0] as [string, Record<string, unknown>];
+      expect(context).toMatchObject({ companyId: 'company-1' });
+    });
+  });
+
+  describe('startCardCaptureAction', () => {
+    const PREV_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+
+    beforeEach(() => {
+      process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = 'pk_test_settings';
+    });
+    afterAll(() => {
+      process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = PREV_PUBLISHABLE_KEY;
+    });
+
+    it('gates on MANAGE_BILLING', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      const res = await startCardCaptureAction();
+      expect(res).toEqual({ ok: false, error: 'unauthorized' });
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+    });
+
+    it('returns unconfigured when the publishable key is missing', async () => {
+      delete process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+      const res = await startCardCaptureAction();
+      expect(res).toEqual({ ok: false, error: 'unconfigured' });
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+    });
+
+    it('provisions the wallet (a company may add a card first) and returns the secret + key — a first Add never consults the settlement guard', async () => {
+      mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', stripePaymentMethodId: null });
+      mockCreateMandateSetupIntent.mockResolvedValue({ clientSecret: 'seti_secret' });
+
+      const res = await startCardCaptureAction();
+
+      expect(res).toEqual({
+        ok: true,
+        clientSecret: 'seti_secret',
+        publishableKey: 'pk_test_settings',
+      });
+      expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+      // FIX ROUND 2 (security MEDIUM — NEW-1) asymmetry: a first Add is not an evasion surface,
+      // so it must not even query the session guard.
+      expect(mockHasActiveSessionForWallet).not.toHaveBeenCalled();
+    });
+
+    it('refuses a card CHANGE while the wallet has a live overdraft-grace session (fix round 2 G2 — closes the variant survivor of the removal exploit)', async () => {
+      mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', stripePaymentMethodId: 'pm_old' });
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+      const res = await startCardCaptureAction();
+
+      expect(res).toEqual({ ok: false, error: 'settlement_outstanding' });
+      expect(mockHasActiveSessionForWallet).toHaveBeenCalledWith('wallet-1');
+      expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Card change refused — settlement outstanding on the wallet',
+        expect.objectContaining({ walletId: 'wallet-1', companyId: 'company-1' })
+      );
+    });
+
+    it('allows a card CHANGE with no active session — the guard is session-scoped, not receivable-scoped', async () => {
+      mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', stripePaymentMethodId: 'pm_old' });
+      mockHasActiveSessionForWallet.mockResolvedValue(false);
+      mockCreateMandateSetupIntent.mockResolvedValue({ clientSecret: 'seti_secret' });
+
+      const res = await startCardCaptureAction();
+
+      expect(res).toEqual({
+        ok: true,
+        clientSecret: 'seti_secret',
+        publishableKey: 'pk_test_settings',
+      });
+      expect(mockHasActiveSessionForWallet).toHaveBeenCalledWith('wallet-1');
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+    });
+
+    it('maps a thrown error to error, logging companyId (security LOW)', async () => {
+      mockEnsureForCompany.mockRejectedValue(new Error('db down'));
+      const res = await startCardCaptureAction();
+      expect(res).toEqual({ ok: false, error: 'error' });
+      const [, context] = mockLogError.mock.calls[0] as [string, Record<string, unknown>];
+      expect(context).toMatchObject({ companyId: 'company-1' });
+    });
+  });
+
+  describe('removeSavedCardAction', () => {
+    it('gates on MANAGE_BILLING', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      const res = await removeSavedCardAction();
+      expect(res).toEqual({ ok: false, error: 'unauthorized' });
+      expect(mockDetachSavedCardPaymentMethod).not.toHaveBeenCalled();
+    });
+
+    it('returns no_wallet when the company has no wallet row, and NEVER provisions one', async () => {
+      mockFindByCompanyId.mockResolvedValue(undefined);
+      const res = await removeSavedCardAction();
+      expect(res).toEqual({ ok: false, error: 'no_wallet' });
+      expect(mockDetachSavedCardPaymentMethod).not.toHaveBeenCalled();
+      expect(mockEnsureForCompany).not.toHaveBeenCalled();
+    });
+
+    it('passes through the effective mode, using the wallet resolved from the SESSION company', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1' });
+      mockDetachSavedCardPaymentMethod.mockResolvedValue({
+        removed: true,
+        lowBalanceMode: 'notify_only',
+        modeReconciled: true,
+      });
+
+      const res = await removeSavedCardAction();
+
+      expect(res).toEqual({ ok: true, lowBalanceMode: 'notify_only', modeReconciled: true });
+      // The wallet id crossing the internal hop is the one resolved from
+      // `findByCompanyId(actor.companyId)` — never anything the client could supply.
+      expect(mockDetachSavedCardPaymentMethod).toHaveBeenCalledWith('wallet-1');
+    });
+
+    it('maps a CreditApiError to error, logging walletId + companyId for forensics (security LOW)', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1' });
+      mockDetachSavedCardPaymentMethod.mockRejectedValue(
+        new TestCreditApiError('failed', 502, { error: 'stripe_detach_failed' })
+      );
+
+      const res = await removeSavedCardAction();
+
+      expect(res).toEqual({ ok: false, error: 'error' });
+      const [, context] = mockLogError.mock.calls[0] as [string, Record<string, unknown>];
+      expect(context).toMatchObject({ walletId: 'wallet-1', companyId: 'company-1' });
+    });
+
+    it('maps the 409 settlement_outstanding refusal to its own error arm — never the generic error (security MEDIUM)', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1' });
+      mockDetachSavedCardPaymentMethod.mockRejectedValue(
+        new TestCreditApiError('conflict', 409, { error: 'settlement_outstanding' })
+      );
+
+      const res = await removeSavedCardAction();
+
+      expect(res).toEqual({ ok: false, error: 'settlement_outstanding' });
+      // A refusal is expected/user-actionable, not a fault — warn, not error.
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Saved card removal refused — settlement outstanding on the wallet',
+        { walletId: 'wallet-1', companyId: 'company-1' }
+      );
+      expect(mockLogError).not.toHaveBeenCalled();
     });
   });
 

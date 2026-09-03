@@ -57,4 +57,17 @@ describe('SavedCardRow', () => {
     const { container } = render(<SavedCardRow card={card()} onChange={vi.fn()} />);
     expect(container.innerHTML).not.toMatch(/pm_|cus_|seti_/);
   });
+
+  it('renders the trash button with an accessible name when onRemove is provided', async () => {
+    const onRemove = vi.fn();
+    render(<SavedCardRow card={card()} onChange={vi.fn()} onRemove={onRemove} />);
+    const button = screen.getByRole('button', { name: 'Remove card' });
+    await userEvent.click(button);
+    expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders no trash button when onRemove is absent (the composer keeps byte-identical rendering)', () => {
+    render(<SavedCardRow card={card()} onChange={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Remove card' })).not.toBeInTheDocument();
+  });
 });

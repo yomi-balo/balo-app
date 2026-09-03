@@ -1,5 +1,13 @@
-import { companiesRepository, creditWalletsRepository, db, type CreditWallet } from '@balo/db';
+import {
+  companiesRepository,
+  creditReceivablesRepository,
+  creditSessionsRepository,
+  creditWalletsRepository,
+  db,
+  type CreditWallet,
+} from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import type Stripe from 'stripe';
 import { getStripeClient } from '../../lib/stripe.js';
 import { resolveAppUrl } from '../../lib/app-url.js';
 import type { CardDisplayFields } from './types.js';
@@ -337,4 +345,183 @@ export async function confirmSavedCardMandate(
     );
     return { status: 'failed', clientSecret: null };
   }
+}
+
+/** The outcome of a user-initiated card removal (BAL-516). */
+export type DetachSavedCardResult =
+  | { status: 'removed'; lowBalanceMode: CreditWallet['lowBalanceMode']; modeReconciled: boolean }
+  | { status: 'no_wallet' }
+  /**
+   * FIX ROUND (security MEDIUM) — the wallet has a live overdraft-grace session or an open
+   * receivable. Refused BEFORE any Stripe call so the card stays attached and chargeable.
+   */
+  | { status: 'settlement_outstanding' }
+  | { status: 'stripe_error' };
+
+/** True for a Stripe `resource_missing` failure — the payment method genuinely no longer exists
+ * at Stripe (key rotation across environments, restored non-prod data, a manual dashboard
+ * delete), as opposed to a transient network/API fault. Duck-typed rather than
+ * `instanceof Stripe.errors.StripeInvalidRequestError` because the real Stripe SDK's error
+ * classes are NOT mocked in `detachSavedCard`'s own unit tests (only `StripeError` /
+ * `StripeCardError` are) — an `instanceof` against an undefined class throws, it doesn't just
+ * fail to match. */
+function isResourceMissing(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === 'resource_missing'
+  );
+}
+
+/**
+ * Already-detached PROBE — Stripe has no stable error code for a double-detach, so a failed
+ * `detach` asks the payment method itself whether it still names a customer. `pm.customer ===
+ * null` means a prior attempt already succeeded (or a Stripe-dashboard detach raced us), so the
+ * local write can still proceed; any other outcome is a genuine, retryable Stripe failure —
+ * EXCEPT a `resource_missing` on the retrieve itself, which means the payment method no longer
+ * exists at Stripe at all. That is, semantically, also "detached": there is no PM left to hold
+ * consent, so refusing to clear it locally would make the card permanently un-removable through
+ * this UI (BAL-516 fix round — the exact bad state "Remove card" exists to escape).
+ */
+async function probeAlreadyDetached(
+  stripe: Stripe,
+  walletId: string,
+  stripePaymentMethodId: string,
+  detachErr: unknown
+): Promise<boolean> {
+  try {
+    const pm = await stripe.paymentMethods.retrieve(stripePaymentMethodId);
+    if (pm.customer === null) {
+      return true;
+    }
+    log.error(
+      {
+        op: 'detachSavedCard',
+        walletId,
+        stripeId: stripePaymentMethodId,
+        error: detachErr instanceof Error ? detachErr.message : String(detachErr),
+      },
+      'Failed to detach payment method at Stripe — still attached'
+    );
+    return false;
+  } catch (probeErr: unknown) {
+    if (isResourceMissing(probeErr)) {
+      log.warn(
+        { op: 'detachSavedCard', walletId, stripeId: stripePaymentMethodId },
+        'Payment method no longer exists at Stripe — treating as already detached'
+      );
+      return true;
+    }
+    log.error(
+      {
+        op: 'detachSavedCard',
+        walletId,
+        stripeId: stripePaymentMethodId,
+        error: probeErr instanceof Error ? probeErr.message : String(probeErr),
+      },
+      'Failed to probe payment method after a failed detach'
+    );
+    return false;
+  }
+}
+
+/** Detach the payment method at Stripe, or confirm (via the probe) that it is already gone. */
+async function detachAtStripe(walletId: string, stripePaymentMethodId: string): Promise<boolean> {
+  const stripe = getStripeClient();
+  try {
+    await stripe.paymentMethods.detach(stripePaymentMethodId);
+    return true;
+  } catch (detachErr: unknown) {
+    return probeAlreadyDetached(stripe, walletId, stripePaymentMethodId, detachErr);
+  }
+}
+
+/** The local clear + mode-reconcile, inside ONE transaction. Rethrows after the loudest log. */
+async function clearLocallyAndReconcile(
+  walletId: string,
+  stripePaymentMethodId: string | null
+): Promise<DetachSavedCardResult> {
+  try {
+    const result = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, walletId)
+    );
+    log.info(
+      { op: 'detachSavedCard', walletId, modeReconciled: result.modeReconciled },
+      'Removed saved card and reconciled low-balance mode'
+    );
+    return {
+      status: 'removed',
+      lowBalanceMode: result.wallet.lowBalanceMode,
+      modeReconciled: result.modeReconciled,
+    };
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'detachSavedCard',
+        walletId,
+        stripeId: stripePaymentMethodId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Card detached at Stripe but the local clear failed — retry converges'
+    );
+    throw err;
+  }
+}
+
+/**
+ * BAL-516 — USER-INITIATED card removal: detach at Stripe FIRST (outside any DB transaction —
+ * network I/O never runs inside one), THEN clear locally + reconcile a card-backed low-balance
+ * mode in ONE `db.transaction` (`clearSavedCardAndReconcileMode`). See the removal-transaction
+ * decision in the BAL-516 plan for the full ordering rationale; summary below.
+ *
+ * ⚠ ORDER IS LOAD-BEARING. Clearing locally first and then failing the detach would null
+ * `stripePaymentMethodId` while Stripe still holds an attached, mandate-bearing payment method —
+ * Balo would lose the id needed to ever detach it (orphaned consent, unrecoverable). Detach-first
+ * means the failure window (detach succeeded, local write failed) is recoverable: a retry's detach
+ * errors "not attached", the already-detached PROBE below (`paymentMethods.retrieve` →
+ * `pm.customer === null`) recognises that and proceeds to the local write anyway. Stripe gives no
+ * stable error code for a double-detach, hence the probe rather than message-matching.
+ *
+ * ⚠ IDEMPOTENT BY CONSTRUCTION. No Stripe idempotency key is passed to `detach` — idempotence
+ * here is semantic ("the PM ends detached"), enforced by the probe. A repeat call with no stored
+ * PM (`stripePaymentMethodId === null`) skips Stripe entirely and still runs the transaction, so
+ * the response always upholds "no card ⇒ no card-backed mode armed".
+ *
+ * A throw from the transaction AFTER a successful detach is deliberately NOT caught here — it
+ * propagates so the route 500s. That is the recoverable failure window described above; the
+ * loudest possible log is written first so it is never silent.
+ *
+ * ⚠ FIX ROUND (security MEDIUM) — refuses BEFORE any Stripe call when the wallet has a live
+ * overdraft-grace session or the company has an open receivable. Without this, a client on
+ * `keep_going`/`auto_topup` could let a consultation run into overdraft grace and pull the card
+ * in a second tab: `settleOverdraft` then finds `mandateActive === false` and takes the
+ * `openReceivableAndDun` branch instead of charging, and the dunning sweep only ever
+ * RE-NOTIFIES — it never re-charges. The two guards are the SAME ones `auto-topup.ts`'s
+ * between-session safe-to-charge gate already reads (`hasActiveSessionForWallet`,
+ * `hasOpenReceivable`); reused here, not reinvented.
+ */
+export async function detachSavedCard(walletId: string): Promise<DetachSavedCardResult> {
+  const wallet = await creditWalletsRepository.findById(walletId);
+  if (wallet === undefined) {
+    return { status: 'no_wallet' };
+  }
+
+  const [activeSession, openReceivable] = await Promise.all([
+    creditSessionsRepository.hasActiveSessionForWallet(walletId),
+    creditReceivablesRepository.hasOpenReceivable(wallet.companyId),
+  ]);
+  if (activeSession || openReceivable) {
+    return { status: 'settlement_outstanding' };
+  }
+
+  const { stripePaymentMethodId } = wallet;
+  if (stripePaymentMethodId !== null) {
+    const detached = await detachAtStripe(walletId, stripePaymentMethodId);
+    if (!detached) {
+      return { status: 'stripe_error' };
+    }
+  }
+
+  return clearLocallyAndReconcile(walletId, stripePaymentMethodId);
 }

@@ -22,6 +22,7 @@ import {
   createPurchaseIntent,
   createMandateSetupIntent,
   confirmSavedCardMandate,
+  detachSavedCardPaymentMethod,
   callSessionApi,
   CreditApiError,
 } from './api-client';
@@ -166,6 +167,33 @@ describe('credit api-client', () => {
   it('throws when the internal secret is missing', async () => {
     delete process.env.INTERNAL_API_SECRET;
     await expect(createMandateSetupIntent('wallet-1')).rejects.toBeInstanceOf(CreditApiError);
+  });
+
+  it('detaches the saved card, posting the secret header and the effective mode', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse({ removed: true, lowBalanceMode: 'notify_only', modeReconciled: true })
+    );
+
+    const result = await detachSavedCardPaymentMethod('wallet-1');
+
+    expect(result).toEqual({ removed: true, lowBalanceMode: 'notify_only', modeReconciled: true });
+    const [url, init] = mockLoggedFetch.mock.calls[0] as [
+      string,
+      { method: string; headers: Record<string, string>; body: string },
+    ];
+    expect(url).toBe('http://api.test/credit/payment-method/detach');
+    expect(init.method).toBe('POST');
+    expect(init.headers['x-internal-api-key']).toBe('secret-123');
+    expect(JSON.parse(init.body)).toEqual({ walletId: 'wallet-1' });
+  });
+
+  it('throws CreditApiError carrying the status on a non-2xx detach response', async () => {
+    mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'stripe_detach_failed' }, false, 502));
+
+    await expect(detachSavedCardPaymentMethod('wallet-1')).rejects.toMatchObject({
+      status: 502,
+      body: { error: 'stripe_detach_failed' },
+    });
   });
 });
 
