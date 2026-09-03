@@ -1035,12 +1035,22 @@ export async function applyOverdraftSettlementFromStripe(
  * ⚠ FAILURE BEFORE THE COMMIT IS SAFE, AND THAT IS THE POINT. If `retrieveSettlement` throws or
  * the transaction rolls back, NOTHING is cleared: the marker stands with its correlation intact
  * and the sweep's per-row catch retries next tick. The evidence is never erased ahead of the money.
+ *
+ * ⚠⚠ IT RETURNS THE POST-COMMIT EFFECTS UNRUN, AND THE CALLER MUST NOT RUN THEM UNTIL ITS COMMIT
+ * PROOF PASSES. This function once ran them itself, which put the `credit.auto_topup.executed`
+ * notice and the `AUTO_TOPUP_FIRED` analytics BEFORE `repairOrClear`'s read-back — the inverse of
+ * `routes/stripe/webhook.ts`, whose read-back deliberately precedes its post-commit drain so an
+ * UNCOMMITTED effect can never notify. A resolved-but-uncommitted transaction would otherwise tell
+ * a client "we added $100" about a credit that does not exist and cannot be reconciled to. Handing
+ * the thunks back is what lets the caller mirror the webhook's ordering. (Its twin
+ * `applyOverdraftSettlementFromStripe` still runs its own: its caller has no commit proof to order
+ * against, so there is no ordering to mirror there — tracked separately, not silently diverged.)
  */
 export async function applyAutoTopupFromStripe(
   walletId: string,
   triggeringEntryId: string,
   paymentIntentId: string
-): Promise<void> {
+): Promise<PostCommitEffect[]> {
   // Read-only — OUTSIDE the transaction (the balance_transaction race can take seconds).
   const settlement = await retrieveSettlement(paymentIntentId);
   let postCommit: PostCommitEffect[] = [];
@@ -1062,7 +1072,5 @@ export async function applyAutoTopupFromStripe(
       settlement,
     });
   });
-  for (const run of postCommit) {
-    await run();
-  }
+  return postCommit;
 }

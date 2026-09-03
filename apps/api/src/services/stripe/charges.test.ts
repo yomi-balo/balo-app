@@ -510,7 +510,8 @@ describe('charges', () => {
       expect(result).toEqual({
         status: 'succeeded',
         hardDeclined: false,
-        refunded: false,
+        refundedFully: false,
+        amountRefundedMinor: 0,
         amountMinor: 10_000,
         currency: 'aud',
       });
@@ -537,7 +538,7 @@ describe('charges', () => {
       });
     });
 
-    it('reports refunded=true on a FULLY refunded charge (status is still `succeeded`)', async () => {
+    it('reports refundedFully=true ONLY on Stripe`s own full-reversal flag (status is still `succeeded`)', async () => {
       mockStripe.paymentIntents.retrieve.mockResolvedValue({
         id: 'pi_r1c',
         status: 'succeeded',
@@ -548,22 +549,36 @@ describe('charges', () => {
 
       const result = await retrievePaymentIntentStatus('pi_r1c');
 
-      expect(result).toMatchObject({ status: 'succeeded', refunded: true });
+      expect(result).toMatchObject({
+        status: 'succeeded',
+        refundedFully: true,
+        amountRefundedMinor: 10_000,
+      });
     });
 
-    it('reports refunded=true on a PARTIAL refund too (any money back is money back)', async () => {
+    it('reports a PARTIAL refund as refundedFully=false WITH the refunded amount (never as a full one)', async () => {
+      // ⚠⚠ THE REGRESSION THIS REPLACES. This case used to be pinned as `refunded: true` under the
+      // reasoning "any money back is money back". It is not: on an A$300 charge with an A$25
+      // refund, A$275 is still money the customer paid and has not got back — and the auto-top-up
+      // reconcile's terminal arm reads that boolean, drains the marker and credits NOTHING. One
+      // lossy field silently destroyed A$275 of owed credit, unrecoverably. FULL and PARTIAL are
+      // different facts and must arrive as different fields.
       mockStripe.paymentIntents.retrieve.mockResolvedValue({
         id: 'pi_r1d',
         status: 'succeeded',
-        amount: 10_000,
+        amount: 30_000,
         currency: 'aud',
         latest_charge: { id: 'ch_1', refunded: false, amount_refunded: 2_500 },
       });
 
-      expect(await retrievePaymentIntentStatus('pi_r1d')).toMatchObject({ refunded: true });
+      expect(await retrievePaymentIntentStatus('pi_r1d')).toMatchObject({
+        refundedFully: false,
+        amountRefundedMinor: 2_500,
+        amountMinor: 30_000,
+      });
     });
 
-    it('reports refunded=false when there is no charge yet (nothing to refund)', async () => {
+    it('reports no refund at all when there is no charge yet (nothing to refund)', async () => {
       mockStripe.paymentIntents.retrieve.mockResolvedValue({
         id: 'pi_r1e',
         status: 'processing',
@@ -572,7 +587,28 @@ describe('charges', () => {
         latest_charge: null,
       });
 
-      expect(await retrievePaymentIntentStatus('pi_r1e')).toMatchObject({ refunded: false });
+      expect(await retrievePaymentIntentStatus('pi_r1e')).toMatchObject({
+        refundedFully: false,
+        amountRefundedMinor: 0,
+      });
+    });
+
+    it('does NOT treat an unflagged full-value refund as terminal (only `charge.refunded` is)', async () => {
+      // A charge whose `amount_refunded` has reached `amount` but whose `refunded` flag is not set
+      // is not a state Stripe should produce — so it takes the PARTIAL path, where a human looks,
+      // rather than the drain-without-credit path. Fail-safe by construction, not by luck.
+      mockStripe.paymentIntents.retrieve.mockResolvedValue({
+        id: 'pi_r1d2',
+        status: 'succeeded',
+        amount: 10_000,
+        currency: 'aud',
+        latest_charge: { id: 'ch_1', refunded: false, amount_refunded: 10_000 },
+      });
+
+      expect(await retrievePaymentIntentStatus('pi_r1d2')).toMatchObject({
+        refundedFully: false,
+        amountRefundedMinor: 10_000,
+      });
     });
 
     it('carries the CROSSING-TIME amount + currency off the PaymentIntent itself', async () => {

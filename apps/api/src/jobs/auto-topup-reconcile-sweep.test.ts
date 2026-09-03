@@ -81,6 +81,7 @@ describe('runAutoTopupReconcileSweep', () => {
       failedClosed: 1,
       drained: 1,
       alarms: 0,
+      partialRefundAlarms: 0,
     });
   });
 
@@ -154,6 +155,30 @@ describe('runAutoTopupReconcileSweep', () => {
     const [, message] = mockLog.error.mock.calls[0] ?? [];
     expect(message).toContain('nothing will self-heal');
     expect(message).not.toMatch(/before the 15-minute TTL/);
+  });
+
+  it('batches a PARTIAL-REFUND alarm separately, with copy that does not call it unresolvable', async () => {
+    // The two alarm reasons are different jobs for the responder: one is "find this PaymentIntent",
+    // the other is "this charge was part-refunded and the remainder is still owed". One shared
+    // record would tell half the responders the wrong thing.
+    mockFindStuckPendingTopups.mockResolvedValue([wallet('w1'), wallet('w2')]);
+    mockReconcile
+      .mockResolvedValueOnce({ outcome: 'alarm', reason: 'payment_intent_unresolvable' })
+      .mockResolvedValueOnce({ outcome: 'alarm', reason: 'partial_refund' });
+
+    const result = await runAutoTopupReconcileSweep(NOW);
+
+    expect(result.alarms).toBe(2);
+    expect(result.partialRefundAlarms).toBe(1);
+    expect(mockLog.error).toHaveBeenCalledTimes(2);
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'partial_refund',
+        count: 1,
+        wallets: [expect.objectContaining({ walletId: 'w2' })],
+      }),
+      expect.stringContaining('PARTIALLY refunded')
+    );
   });
 
   it('emits no alarm record at all when nothing alarmed', async () => {

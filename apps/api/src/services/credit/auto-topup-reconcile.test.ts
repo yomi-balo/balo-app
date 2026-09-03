@@ -128,13 +128,16 @@ beforeEach(() => {
    */
   mockApplyAutoTopupFromStripe.mockImplementation(async () => {
     mockFindByIdempotencyKey.mockResolvedValue({ id: 'ledger_repaired' });
+    // The post-commit thunks now come back UNRUN for the caller to run after its commit proof.
+    return [];
   });
-  // The full shape `retrievePaymentIntentStatus` now returns. `refunded` is NOT optional in the
-  // fixture: a default of `undefined` would make the refund guard vacuously falsy everywhere.
+  // The full shape `retrievePaymentIntentStatus` now returns. Neither refund field is optional in
+  // the fixture: a default of `undefined` would make both refund guards vacuously falsy everywhere.
   mockRetrievePaymentIntentStatus.mockResolvedValue({
     status: 'succeeded',
     hardDeclined: false,
-    refunded: false,
+    refundedFully: false,
+    amountRefundedMinor: 0,
     amountMinor: 10_000,
     currency: 'aud',
   });
@@ -227,18 +230,50 @@ describe('reconcileStuckAutoTopup — the repair COMMIT PROOF', () => {
     expect(applyOrder).toBeLessThan(proofOrder);
     expect(proofOrder).toBeLessThan(clearOrder);
   });
+
+  it('does NOT run the post-commit publishes when the commit proof FAILS (nothing notifies on unproven money)', async () => {
+    // ⚠ THE ORDERING BUG THIS PINS. `applyAutoTopupFromStripe` used to run its own post-commit
+    // effects — the `credit.auto_topup.executed` notice and the `AUTO_TOPUP_FIRED` analytics —
+    // inside itself, i.e. BEFORE the read-back below. That is the inverse of
+    // `routes/stripe/webhook.ts`, whose proof deliberately precedes its post-commit drain. On a
+    // phantom commit the client was told "we added $100" about a credit that does not exist.
+    const publish = vi.fn().mockResolvedValue(undefined);
+    mockApplyAutoTopupFromStripe.mockResolvedValue([publish]); // resolves; writes NOTHING
+
+    await expect(reconcileStuckAutoTopup(wallet())).rejects.toThrow(/commit proof failed/);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(mockClearPendingTopup).not.toHaveBeenCalled();
+  });
+
+  it('runs the post-commit publishes AFTER the proof once the credit is proven committed', async () => {
+    const publish = vi.fn().mockResolvedValue(undefined);
+    mockApplyAutoTopupFromStripe.mockImplementation(async () => {
+      mockFindByIdempotencyKey.mockResolvedValue({ id: 'ledger_repaired' });
+      return [publish];
+    });
+
+    const out = await reconcileStuckAutoTopup(wallet());
+
+    expect(out).toEqual({ outcome: 'repaired', paymentIntentId: 'pi_1' });
+    expect(publish).toHaveBeenCalledTimes(1);
+    const proofOrder = mockFindByIdempotencyKey.mock.invocationCallOrder[1] ?? 0;
+    const publishOrder = publish.mock.invocationCallOrder[0] ?? 0;
+    expect(proofOrder).toBeLessThan(publishOrder);
+  });
 });
 
-describe('reconcileStuckAutoTopup — a REFUNDED charge is never credited', () => {
+describe('reconcileStuckAutoTopup — a FULLY REFUNDED charge is never credited', () => {
   const refundedStatus = {
     status: 'succeeded',
     hardDeclined: false,
-    refunded: true,
+    refundedFully: true,
+    amountRefundedMinor: 10_000,
     amountMinor: 10_000,
     currency: 'aud',
   };
 
-  it('clears the marker WITHOUT crediting when the succeeded charge was refunded', async () => {
+  it('clears the marker WITHOUT crediting when the succeeded charge was refunded IN FULL', async () => {
     // ⚠ A REFUND DOES NOT MOVE A PaymentIntent OFF `succeeded`. This pass has no upper age bound,
     // and its own alarm tells the responder to resolve each crossing in the Stripe Dashboard —
     // where refunding the customer is the obvious remedy. Reading only `status`, the very next
@@ -267,6 +302,66 @@ describe('reconcileStuckAutoTopup — a REFUNDED charge is never credited', () =
   });
 });
 
+describe('reconcileStuckAutoTopup — a PARTIAL refund never destroys the remainder', () => {
+  /** A$300 charged, A$25 refunded — A$275 of credit the customer is genuinely still owed. */
+  const partiallyRefundedStatus = {
+    status: 'succeeded',
+    hardDeclined: false,
+    refundedFully: false,
+    amountRefundedMinor: 2_500,
+    amountMinor: 30_000,
+    currency: 'aud',
+  };
+
+  it('WRITES NOTHING and does NOT drain the marker — the un-refunded A$275 is not written off', async () => {
+    // ⚠⚠ THE HIGH-SEVERITY DEFECT THIS PINS. `retrievePaymentIntentStatus` used to answer one
+    // lossy `refunded: true` for a partial refund, so this landed on the TERMINAL arm: the marker
+    // was drained, nothing was credited, and A$275 the customer had paid for vanished — silently
+    // (a `warn` claiming "the money is already back with the customer") and UNRECOVERABLY, because
+    // a drained marker never re-presents to the sweep. Nothing may be cleared here.
+    mockRetrievePaymentIntentStatus.mockResolvedValue(partiallyRefundedStatus);
+    mockFindByIdempotencyKey.mockResolvedValue(undefined);
+
+    const out = await reconcileStuckAutoTopup(wallet());
+
+    expect(out).toEqual({ outcome: 'alarm', reason: 'partial_refund' });
+    expect(mockClearPendingTopup).not.toHaveBeenCalled();
+    expect(mockApplyAutoTopupFromStripe).not.toHaveBeenCalled();
+    expect(mockPublishAutoTopupFailed).not.toHaveBeenCalled();
+  });
+
+  it('escalates with the UN-REFUNDED remainder, and never claims the money is back', async () => {
+    mockRetrievePaymentIntentStatus.mockResolvedValue(partiallyRefundedStatus);
+    mockFindByIdempotencyKey.mockResolvedValue(undefined);
+
+    await reconcileStuckAutoTopup(wallet());
+
+    expect(mockLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        walletId: 'wallet_1',
+        paymentIntentId: 'pi_1',
+        amountMinor: 30_000,
+        amountRefundedMinor: 2_500,
+        unrefundedMinor: 27_500,
+      }),
+      expect.stringContaining('PARTIALLY refunded')
+    );
+    // The old copy asserted a falsehood about the buyer's money. No arm may say it here.
+    const [, message] = mockLog.error.mock.calls[0] ?? [];
+    expect(String(message)).not.toMatch(/already back with the customer/i);
+  });
+
+  it('takes the ALREADY-CREDITED arm when the credit landed first (a later partial refund is not this pass`s business)', async () => {
+    mockRetrievePaymentIntentStatus.mockResolvedValue(partiallyRefundedStatus);
+    mockFindByIdempotencyKey.mockResolvedValue({ id: 'ledger_1' });
+
+    const out = await reconcileStuckAutoTopup(wallet());
+
+    expect(out).toEqual({ outcome: 'already_credited', paymentIntentId: 'pi_1' });
+    expect(mockApplyAutoTopupFromStripe).not.toHaveBeenCalled();
+  });
+});
+
 describe('reconcileStuckAutoTopup — the other arms', () => {
   it('already_credited: PI succeeded AND the ledger row exists ⇒ clears only, never re-applies', async () => {
     mockFindByIdempotencyKey.mockResolvedValue({ id: 'ledger_1' });
@@ -285,7 +380,8 @@ describe('reconcileStuckAutoTopup — the other arms', () => {
     mockRetrievePaymentIntentStatus.mockResolvedValue({
       status: 'canceled',
       hardDeclined: false,
-      refunded: false,
+      refundedFully: false,
+      amountRefundedMinor: 0,
       amountMinor: 7_500,
       currency: 'aud',
     });
@@ -318,7 +414,8 @@ describe('reconcileStuckAutoTopup — the other arms', () => {
     mockRetrievePaymentIntentStatus.mockResolvedValue({
       status: 'requires_payment_method',
       hardDeclined: true,
-      refunded: false,
+      refundedFully: false,
+      amountRefundedMinor: 0,
       amountMinor: 10_000,
       currency: 'aud',
     });
@@ -344,7 +441,8 @@ describe('reconcileStuckAutoTopup — the other arms', () => {
     mockRetrievePaymentIntentStatus.mockResolvedValue({
       status: 'processing',
       hardDeclined: false,
-      refunded: false,
+      refundedFully: false,
+      amountRefundedMinor: 0,
       amountMinor: 10_000,
       currency: 'aud',
     });
@@ -370,7 +468,8 @@ describe('reconcileStuckAutoTopup — the other arms', () => {
     mockRetrievePaymentIntentStatus.mockResolvedValue({
       status: 'processing',
       hardDeclined: false,
-      refunded: false,
+      refundedFully: false,
+      amountRefundedMinor: 0,
       amountMinor: 10_000,
       currency: 'aud',
     });
@@ -402,7 +501,8 @@ describe('reconcileStuckAutoTopup — statuses an off-session intent can never l
       mockRetrievePaymentIntentStatus.mockResolvedValue({
         status,
         hardDeclined: false,
-        refunded: false,
+        refundedFully: false,
+        amountRefundedMinor: 0,
         amountMinor: 8_800,
         currency: 'aud',
       });
@@ -429,7 +529,8 @@ describe('reconcileStuckAutoTopup — statuses an off-session intent can never l
     mockRetrievePaymentIntentStatus.mockResolvedValue({
       status: 'requires_payment_method',
       hardDeclined: true,
-      refunded: false,
+      refundedFully: false,
+      amountRefundedMinor: 0,
       amountMinor: 8_800,
       currency: 'aud',
     });
@@ -447,7 +548,8 @@ describe('reconcileStuckAutoTopup — statuses an off-session intent can never l
     mockRetrievePaymentIntentStatus.mockResolvedValue({
       status: 'canceled',
       hardDeclined: false,
-      refunded: false,
+      refundedFully: false,
+      amountRefundedMinor: 0,
       amountMinor: 8_800,
       currency: 'usd',
     });
@@ -530,7 +632,8 @@ describe('reconcileStuckAutoTopup — it NEVER charges', () => {
   it('makes no charge-creating call on ANY arm', async () => {
     const status = (over: Record<string, unknown>) => ({
       hardDeclined: false,
-      refunded: false,
+      refundedFully: false,
+      amountRefundedMinor: 0,
       amountMinor: 10_000,
       currency: 'aud',
       ...over,
@@ -551,7 +654,7 @@ describe('reconcileStuckAutoTopup — it NEVER charges', () => {
       },
       () => {
         mockRetrievePaymentIntentStatus.mockResolvedValue(
-          status({ status: 'succeeded', refunded: true })
+          status({ status: 'succeeded', refundedFully: true, amountRefundedMinor: 10_000 })
         );
         mockFindByIdempotencyKey.mockResolvedValue(undefined);
       },

@@ -226,6 +226,11 @@ export const DEFAULT_TOPUP_RELOAD_MINOR = 10000;
  * re-fire — self-healing. 15 min is >> normal webhook latency (< 5s), and << Stripe's ~24h
  * idempotency-key-expiry edge, so a re-fire after the TTL still reuses the crossing's stable key
  * when the entry hasn't changed (and mints a fresh key when a new session has moved the ledger).
+ *
+ * ⚠ BAL-515 — THE SELF-HEAL NOW APPLIES ONLY TO A MARKER WITH NO `pending_topup_payment_intent_id`.
+ * A marker carrying a stamped PaymentIntent id blocks the re-arm at ANY age (guard (e) in
+ * `apps/api/src/services/credit/auto-topup.ts` skips `topup_unresolved`): the reconcile owns and
+ * resolves those, so ageing one out would be charging over an unresolved PaymentIntent.
  */
 export const TOPUP_IN_FLIGHT_TTL_MS = 15 * 60 * 1000;
 
@@ -236,11 +241,12 @@ export const TOPUP_IN_FLIGHT_TTL_MS = 15 * 60 * 1000;
  * because the reconcile never charges — racing a live webhook costs a deduped no-op, not a second
  * PaymentIntent.
  *
- * ⚠ MUST STAY STRICTLY BELOW `TOPUP_IN_FLIGHT_TTL_MS`. Past that TTL a later crossing may re-ARM
- * the marker, which overwrites `pending_topup_triggering_entry_id` and nulls
- * `pending_topup_payment_intent_id` — the reconcile's own evidence. 5 min leaves a 10-minute
- * retry budget, i.e. ~10 per-minute attempts, before anything can be erased. The inequality is
- * pinned by a unit test, not left to the reader.
+ * ⚠ MUST STAY STRICTLY BELOW `TOPUP_IN_FLIGHT_TTL_MS`. Past that TTL a later crossing may re-ARM a
+ * marker that never got a PaymentIntent id stamped on it, overwriting
+ * `pending_topup_triggering_entry_id` — the reconcile's last handle on that crossing. 5 min leaves
+ * a 10-minute retry budget, i.e. ~10 per-minute attempts, before anything can be erased. The
+ * inequality is pinned by a unit test, not left to the reader. (A marker that DOES carry a
+ * PaymentIntent id is never re-armed at any age, so for those the budget is unbounded.)
  */
 export const TOPUP_RECONCILE_AFTER_MS = 5 * 60 * 1000;
 

@@ -349,14 +349,27 @@ export interface PaymentIntentStatusResult {
   /** A recorded `last_payment_error` that is NOT an SCA prompt — i.e. a hard decline. */
   hardDeclined: boolean;
   /**
-   * BAL-515 — the latest charge has been refunded in whole or in part. ⚠ A REFUND DOES NOT MOVE
-   * A PI OFF `succeeded`, so `status` alone cannot see it, and a reconcile that reads only the
-   * status would credit money that has already gone back to the customer. Reported here rather
+   * BAL-515 — the latest charge was refunded IN FULL (`charge.refunded === true`). ⚠ A REFUND DOES
+   * NOT MOVE A PI OFF `succeeded`, so `status` alone cannot see it, and a reconcile that reads only
+   * the status would credit money that has already gone back to the customer. Reported here rather
    * than inferred at a call site so there is one definition of "the money came back".
+   *
+   * ⚠⚠ FULL AND PARTIAL ARE REPORTED SEPARATELY, AND CONFLATING THEM DESTROYS MONEY. A single
+   * "any money came back" boolean made an A$300 charge with an A$25 refund indistinguishable from
+   * a complete reversal, so the reconcile's terminal drain-without-credit arm fired and the A$275
+   * the customer is still owed vanished with the marker. `refundedFully` is the ONLY terminal
+   * signal; a partial refund is an alarm the caller must escalate, never a write-off. Read
+   * `amountRefundedMinor` to tell them apart.
    *
    * `false` when the PI carries no expanded charge (nothing charged yet — nothing to refund).
    */
-  refunded: boolean;
+  refundedFully: boolean;
+  /**
+   * BAL-515 — `charge.amount_refunded` in the charge's own currency's minor units; `0` when
+   * nothing was refunded or there is no charge yet. `> 0` with `refundedFully === false` is a
+   * PARTIAL refund: some money came back and the remainder did not.
+   */
+  amountRefundedMinor: number;
   /**
    * BAL-515 — the amount the PI was CREATED for, in its own currency's minor units. This is the
    * crossing-time figure pinned when the charge was made; a wallet column read at sweep time is
@@ -381,6 +394,12 @@ export interface PaymentIntentStatusResult {
  * anywhere on the response that says the money came back. The auto-top-up reconcile has no upper
  * age bound by design, so an operator who answers its alarm by refunding the customer in the
  * Dashboard would otherwise see the very next tick credit the wallet at full face value.
+ *
+ * ⚠ THE REFUND IS REPORTED AS TWO FIELDS, NOT ONE BOOLEAN. `charge.refunded` is Stripe's own
+ * "reversed in full" flag; `charge.amount_refunded` is how much came back. A lossy `refunded ||
+ * amount_refunded > 0` collapsed a partial refund into a full one and let the caller write off the
+ * un-refunded remainder. Deriving the distinction HERE, once, is what keeps every call site from
+ * re-inventing it.
  */
 export async function retrievePaymentIntentStatus(
   paymentIntentId: string
@@ -395,11 +414,13 @@ export async function retrievePaymentIntentStatus(
       lastError !== null && lastError !== undefined && lastError.code !== 'authentication_required';
     // An UN-expanded (string) or absent `latest_charge` means no charge to inspect ⇒ not refunded.
     const charge = typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
-    const refunded = charge !== null && (charge.refunded || charge.amount_refunded > 0);
     return {
       status: pi.status,
       hardDeclined,
-      refunded,
+      // ONLY Stripe's own full-reversal flag is terminal. A charge with `amount_refunded > 0` and
+      // `refunded === false` still holds money the customer paid and has not got back.
+      refundedFully: charge?.refunded === true,
+      amountRefundedMinor: charge?.amount_refunded ?? 0,
       amountMinor: pi.amount,
       currency: pi.currency.toLowerCase(),
     };

@@ -1524,8 +1524,17 @@ describe('applyAutoTopupFromStripe (the auto-top-up repair arm, BAL-515)', () =>
     );
   });
 
-  it('publishes the executed notice POST-COMMIT on a FRESH credit', async () => {
-    await applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck');
+  it('RETURNS the executed notice UNRUN on a FRESH credit — the caller runs it after its commit proof', async () => {
+    // ⚠ THE ORDERING FIX. This function used to run its own post-commit effects, which put the
+    // notice and the `AUTO_TOPUP_FIRED` analytics BEFORE `repairOrClear`'s read-back — the inverse
+    // of `routes/stripe/webhook.ts`, whose proof deliberately precedes its post-commit drain. On a
+    // phantom commit that told a client "we added $100" about a credit that does not exist.
+    const postCommit = await applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck');
+
+    expect(postCommit).toHaveLength(1);
+    expect(mockPublishAutoTopupExecuted).not.toHaveBeenCalled();
+
+    for (const run of postCommit) await run();
 
     expect(mockPublishAutoTopupExecuted).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1538,15 +1547,16 @@ describe('applyAutoTopupFromStripe (the auto-top-up repair arm, BAL-515)', () =>
     );
   });
 
-  it('a DEDUPED credit (a webhook won the race) re-publishes NOTHING', async () => {
+  it('a DEDUPED credit (a webhook won the race) returns NO effects and publishes NOTHING', async () => {
     mockApplyLedgerEntry.mockResolvedValue({
       deduped: true,
       entry: { id: 'ledger_1' },
       wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
     });
 
-    await applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck');
+    const postCommit = await applyAutoTopupFromStripe('wallet_1', 'led_E', 'pi_stuck');
 
+    expect(postCommit).toEqual([]);
     expect(mockPublishAutoTopupExecuted).not.toHaveBeenCalled();
   });
 

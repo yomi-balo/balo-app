@@ -63,6 +63,31 @@ const SAVED_CARD_ERROR_COPY =
   'Something went wrong finishing your top-up — check your balance before trying again.';
 
 /**
+ * The ONLY Stripe.js error types that PROVE the 3DS step did not complete — the client-side twin
+ * of `isCardDeclineError` in `apps/api/src/services/credit/auto-topup.ts`, held to the same rule
+ * that docblock states: "The ONLY thrown error that is a definite non-completion … Every OTHER
+ * thrown error (connection / api / rate_limit / idempotency-in-progress / invalid_request) is
+ * INDETERMINATE: the PI may still have succeeded."
+ *
+ * ⚠⚠ WHY THE DISTINCTION IS REAL MONEY HERE. Any error at all used to call `onCardDeclined()`,
+ * which rotates `clientRequestId` and therefore the server-side purchase idempotency key
+ * (`purchase:{walletId}:{source}:{clientRequestId}`). On the saved-card path the api CONFIRMS the
+ * PaymentIntent, so an `api_connection_error` raised AFTER the challenge actually completed — the
+ * socket dropped on the way back, the charge landed — rotated the key against a card that HAD
+ * been charged, arming the next Pay press to mint a SECOND real PaymentIntent while the buyer was
+ * being told the payment had not gone through.
+ *
+ * `card_error` is the genuine issuer refusal the rotation exists for (an unrotated key replays the
+ * cached answer for its 24h lifetime and the issuer is never contacted again). `validation_error`
+ * is Stripe.js refusing the call client-side, before any request leaves the browser. Every other
+ * type routes through `resolveNextActionOutcome`, which asks Stripe what actually happened.
+ */
+const DEFINITE_NON_COMPLETION_ERROR_TYPES: ReadonlySet<string> = new Set([
+  'card_error',
+  'validation_error',
+]);
+
+/**
  * Copy per failure code. `stripe_error` and `saved_card_error` are DELIBERATELY different and
  * must never be merged: on the new-card path nothing was charged, but on the saved-card path
  * the charge is attempted inside the Server Action, so "no charge was made" would be a lie
@@ -91,8 +116,9 @@ const START_ERROR_COPY: Record<string, string> = {
  *  · SAVED CARD — no Element to submit and the browser never learns the payment-method id, so
  *    the api creates AND confirms the PaymentIntent. `complete` goes straight to the receipt;
  *    `requires_action` runs 3DS via `handleNextAction`; a decline surfaces inline with a
- *    "use a different card" escape. A FAILED or abandoned 3DS challenge rotates the idempotency
- *    key too (BAL-515) — see `confirmSavedCard`.
+ *    "use a different card" escape. A 3DS challenge that PROVABLY did not complete rotates the
+ *    idempotency key too (BAL-515); an ambiguous one asks Stripe first — see `confirmSavedCard`
+ *    and `DEFINITE_NON_COMPLETION_ERROR_TYPES`.
  *
  * The wallet is credited by the shipped BAL-382 webhook — NEVER from any return value here.
  */
@@ -218,15 +244,17 @@ export function PayAction({
   );
 
   /**
-   * The rejection arm of `confirmSavedCard`, resolved rather than guessed.
+   * The AMBIGUOUS arms of `confirmSavedCard`, resolved rather than guessed. Reached from BOTH the
+   * rejection (`catch`) and any `{ error }` return whose type is not a definite non-completion.
    *
    * ⚠ ROTATING BLIND HERE IS A DUPLICATE CHARGE. `handleNextAction` REJECTS whenever the intent is
    * not in `requires_action` — and the commonest reason by far is that it ALREADY SUCCEEDED (a
-   * replay of a settled purchase). Rotating `clientRequestId` on that changes the server-side
-   * purchase idempotency key (`purchase:{walletId}:{source}:{clientRequestId}`), so one further
-   * Pay press creates a SECOND PaymentIntent — and on the saved-card path the api confirms it, so
-   * that is a second real charge, taken from a buyer who was simultaneously told "no charge was
-   * made".
+   * replay of a settled purchase). It also RETURNS an `api_connection_error` when the challenge
+   * completed but the answer never made it back. Rotating `clientRequestId` on either changes the
+   * server-side purchase idempotency key (`purchase:{walletId}:{source}:{clientRequestId}`), so one
+   * further Pay press creates a SECOND PaymentIntent — and on the saved-card path the api confirms
+   * it, so that is a second real charge, taken from a buyer who was simultaneously told "no charge
+   * was made".
    *
    * So ask Stripe what actually happened. `succeeded` / `processing` ⇒ the purchase is done; hand
    * it to the normal completion path and rotate NOTHING. Only a provably-unpaid intent rotates.
@@ -235,7 +263,7 @@ export function PayAction({
    * two failure modes are not symmetric — a stale replayed key costs the buyer a repeated no-op
    * they can retry after a refresh; a rotated key on an already-paid intent costs them real money.
    */
-  const resolveAfterNextActionThrew = useCallback(
+  const resolveNextActionOutcome = useCallback(
     async (clientSecret: string): Promise<boolean> => {
       if (!stripe) {
         fail(SAVED_CARD_ERROR_COPY);
@@ -281,17 +309,26 @@ export function PayAction({
           clientSecret,
         });
         if (actionError) {
-          // ⚠ ROTATE THE KEY. A `requires_action` answer is a CACHED 200 against the purchase
-          // idempotency key exactly as a 402 decline is: failing or abandoning the challenge
-          // leaves the key holding a stale `requires_action` that the next Pay press REPLAYS for
-          // the key's 24h lifetime — the issuer is never contacted again. The decline fix below
-          // covers only the start-time 402 door; this is the 3DS door, same class of bug.
+          // ⚠ ROTATE THE KEY — BUT ONLY WHEN THE ERROR PROVES NOTHING WAS CHARGED. A
+          // `requires_action` answer is a CACHED 200 against the purchase idempotency key exactly
+          // as a 402 decline is: failing or abandoning the challenge leaves the key holding a
+          // stale `requires_action` that the next Pay press REPLAYS for the key's 24h lifetime —
+          // the issuer is never contacted again. That is the bug the rotation fixes, and a
+          // `card_error` (or a client-side `validation_error`) is exactly that case, so it keeps
+          // rotating. Stripe's own message is kept because it is specific and true ("We are unable
+          // to authenticate your payment method"); only the message-less fallback changes, to the
+          // ambiguous-outcome copy — never the "no charge was made" default, which this path may
+          // not show.
           //
-          // Safe to rotate WITHOUT a retrieve: an `error` from `handleNextAction` is Stripe
-          // saying the authentication did not complete, which leaves the intent unpaid. Stripe's
-          // own message is kept because it is specific and true ("We are unable to authenticate
-          // your payment method"); only the message-less fallback changes, to the ambiguous-
-          // outcome copy — never the "no charge was made" default, which this path may not show.
+          // ⚠⚠ EVERY OTHER ERROR TYPE IS INDETERMINATE, AND ROTATING ON ONE IS A SECOND REAL
+          // CHARGE. An `api_connection_error` / `api_error` / `rate_limit_error` can be raised
+          // AFTER the challenge completed and the api's `confirm: true` PaymentIntent succeeded;
+          // "Stripe returned an error" is not "the card was not charged". Those go to the
+          // resolver, which retrieves the intent and lets its REAL status decide. Same rule the
+          // `catch` below follows, and the same rule `isCardDeclineError` states server-side.
+          if (!DEFINITE_NON_COMPLETION_ERROR_TYPES.has(actionError.type)) {
+            return resolveNextActionOutcome(clientSecret);
+          }
           onCardDeclined();
           fail(actionError.message ?? SAVED_CARD_ERROR_COPY);
           return false;
@@ -315,10 +352,10 @@ export function PayAction({
         // precisely what a REPLAYED, already-succeeded intent is. Unhandled, this rejection
         // escaped `onPay` into `handlePayClick`'s `.catch(() => undefined)` and left Pay stuck on
         // "Processing…" with no error and no completion. Resolve the real status before deciding.
-        return resolveAfterNextActionThrew(clientSecret);
+        return resolveNextActionOutcome(clientSecret);
       }
     },
-    [stripe, fail, onCardDeclined, resolveAfterNextActionThrew]
+    [stripe, fail, onCardDeclined, resolveNextActionOutcome]
   );
 
   /** Take the Server Action's outcome to a settled charge, whichever arm it came back on. */

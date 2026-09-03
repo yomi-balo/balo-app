@@ -45,6 +45,7 @@ import { TOPUP_RECONCILE_ESCALATE_AFTER_MS } from '@balo/shared/pricing';
 import {
   findPaymentIntentByIdempotencyKey,
   retrievePaymentIntentStatus,
+  type PaymentIntentStatusResult,
 } from '../stripe/charges.js';
 import { applyAutoTopupFromStripe } from '../stripe/dispatch.js';
 import { publishAutoTopupFailed } from './auto-topup.js';
@@ -70,16 +71,26 @@ export class AutoTopupRepairCommitProofError extends Error {
 }
 
 /**
+ * Why a row alarmed. BOTH arms WRITE NOTHING and leave the marker exactly as it was, so the row
+ * re-presents next tick and a human still has every handle needed to resolve it by hand.
+ *
+ * `payment_intent_unresolvable` — the PaymentIntent could not be identified conclusively.
+ * `partial_refund` — the charge succeeded, PART of it was refunded, and the remainder is credit
+ * the customer is still owed. See `repairOrClear` for why that cannot be settled automatically.
+ */
+export type AutoTopupReconcileAlarmReason = 'payment_intent_unresolvable' | 'partial_refund';
+
+/**
  * The discriminated outcome, for the sweep's aggregation and the unit tests.
  *
- * `alarm` is the only arm that WRITES NOTHING while also not deferring: the PaymentIntent could
- * not be resolved conclusively, and clearing a marker on a false negative would let a later
- * crossing fire a second charge under a DIFFERENT key — the one double-charge this design must
- * not create. It needs a human, which is why the sweep aggregates it into a `log.error`.
+ * `alarm` is the only arm that WRITES NOTHING while also not deferring: the crossing cannot be
+ * settled by any rule this pass may safely apply, and clearing a marker on a false negative would
+ * let a later crossing fire a second charge under a DIFFERENT key — the one double-charge this
+ * design must not create. It needs a human, which is why the sweep aggregates it into a `log.error`.
  *
  * `refunded` is terminal and CREDITS NOTHING: the charge succeeded and the money has since gone
- * back to the customer, so the marker is drained and the crossing closed. Crediting it would hand
- * the company the face value on top of the refund.
+ * back to the customer IN FULL, so the marker is drained and the crossing closed. Crediting it
+ * would hand the company the face value on top of the refund. ⚠ A PARTIAL refund is NOT this arm.
  */
 export type AutoTopupReconcileOutcome =
   | { outcome: 'skipped'; reason: 'not_pending' | 'no_charge_found' }
@@ -88,7 +99,7 @@ export type AutoTopupReconcileOutcome =
   | { outcome: 'refunded'; paymentIntentId: string }
   | { outcome: 'failed_closed'; paymentIntentId: string }
   | { outcome: 'deferred'; reason: 'pi_unreadable' | 'still_in_flight' }
-  | { outcome: 'alarm'; reason: 'payment_intent_unresolvable' };
+  | { outcome: 'alarm'; reason: AutoTopupReconcileAlarmReason };
 
 /** The identifiers every log on this path carries (§13 — one shape, never re-spelled). */
 function walletLogFields(wallet: CreditWallet): Record<string, unknown> {
@@ -146,13 +157,45 @@ async function resolvePaymentIntentId(
   return lookup.exhaustive ? null : undefined;
 }
 
-/** `succeeded` at Stripe: credit it if the ledger has no row for the crossing, else just clear. */
+/** The refund + amount facts `repairOrClear` needs off the resolved PaymentIntent status. */
+type RefundFacts = Pick<
+  PaymentIntentStatusResult,
+  'refundedFully' | 'amountRefundedMinor' | 'amountMinor' | 'currency'
+>;
+
+/**
+ * `succeeded` at Stripe: credit it if the ledger has no row for the crossing, else just clear.
+ *
+ * ⚠⚠ FULL AND PARTIAL REFUNDS TAKE DIFFERENT ARMS, AND THE DIFFERENCE IS REAL MONEY. This function
+ * once took a single `refunded: boolean` derived as `charge.refunded || amount_refunded > 0`. On an
+ * A$300 charge with an A$25 refund that boolean was `true`, so the terminal arm fired: the marker
+ * was DRAINED, NOTHING was credited, and the A$275 the customer had genuinely paid for was gone —
+ * silently and unrecoverably, because with the marker drained the crossing never re-presents.
+ *
+ * ⚠ WHY A PARTIAL REFUND ALARMS RATHER THAN CREDITING THE REMAINDER. The obvious alternative —
+ * credit `amount − amount_refunded` — cannot be expressed on this path without FORKING THE MONEY
+ * PATH, which is the one thing this module refuses to do. The repair credits by handing
+ * `applyAutoTopupFromStripe` a PaymentIntent id; that builds the SAME `{kind:'credit',
+ * reason:'auto_topup'}` effect the webhook builds, and its amount is `retrieveSettlement`'s
+ * `balance_transaction.amount` — the GROSS settled AUD of the ORIGINAL charge, which a refund does
+ * NOT reduce (Stripe books a refund as a SEPARATE balance transaction). Writing a different figure
+ * would mean either a bespoke ledger write here (a second money path) or an entry whose
+ * `amount_minor` disagrees with the `stripe_balance_transaction_id` it carries — breaking the
+ * reconciliation invariant that every money entry ties back to its balance transaction, and
+ * feeding `credit.auto_topup.executed` a `reloadedMinor` that matches no Stripe object. A partial
+ * refund on an auto-top-up is also not a state this system can produce: only a human in the
+ * Dashboard can create one, so a human is exactly who should finish it.
+ *
+ * So: WRITE NOTHING, leave the marker and both correlation columns intact, and alarm. The row
+ * re-presents every tick with the PaymentIntent id still on it until someone resolves it — either
+ * by completing the refund (then the terminal arm takes it) or by crediting the remainder by hand.
+ */
 async function repairOrClear(
   wallet: CreditWallet,
   triggeringEntryId: string,
   crossingKey: string,
   paymentIntentId: string,
-  refunded: boolean
+  refund: RefundFacts
 ): Promise<AutoTopupReconcileOutcome> {
   const existingCredit = await creditLedgerRepository.findByIdempotencyKey(crossingKey);
   if (existingCredit !== undefined) {
@@ -160,30 +203,70 @@ async function repairOrClear(
     // so a deduped delivery returns early without clearing). Nothing to repair.
     await creditWalletsRepository.clearPendingTopup({ walletId: wallet.id, triggeringEntryId });
     log.info(
-      { ...walletLogFields(wallet), paymentIntentId, crossingKey, refunded },
+      {
+        ...walletLogFields(wallet),
+        paymentIntentId,
+        crossingKey,
+        refundedFully: refund.refundedFully,
+        amountRefundedMinor: refund.amountRefundedMinor,
+      },
       'Reconcile: auto-top-up PI succeeded AND the ledger credit exists — cleared the stale in-flight marker'
     );
     return { outcome: 'already_credited', paymentIntentId };
   }
 
-  if (refunded) {
+  if (refund.refundedFully) {
     // ⚠ A REFUND DOES NOT MOVE A PaymentIntent OFF `succeeded`, so nothing above this line can see
     // it. This pass has NO upper age bound by design, and its own alarm tells a responder to
     // "check each crossing in the Stripe Dashboard" — where refunding the customer is the obvious
     // remedy. Without this arm the very next tick would read `succeeded`, find no ledger row, and
     // credit the wallet at full face value: the company keeps the refund AND the credit.
-    // TERMINAL and CREDITS NOTHING: drain the marker so the row stops alarming, and say so loudly.
+    // TERMINAL and CREDITS NOTHING — and terminal ONLY because Stripe's own `charge.refunded` flag
+    // says the charge was reversed IN FULL, i.e. there is provably no remainder to owe anyone.
     await creditWalletsRepository.clearPendingTopup({ walletId: wallet.id, triggeringEntryId });
     log.warn(
-      { ...walletLogFields(wallet), paymentIntentId, crossingKey, refunded: true },
-      'Reconcile: auto-top-up charge was REFUNDED and never credited — cleared the marker WITHOUT crediting (the money is already back with the customer)'
+      {
+        ...walletLogFields(wallet),
+        paymentIntentId,
+        crossingKey,
+        refundedFully: true,
+        amountRefundedMinor: refund.amountRefundedMinor,
+        amountMinor: refund.amountMinor,
+      },
+      'Reconcile: auto-top-up charge was FULLY refunded and never credited — cleared the marker WITHOUT crediting (Stripe reports the charge reversed in full, so no credit is owed)'
     );
     return { outcome: 'refunded', paymentIntentId };
   }
 
+  if (refund.amountRefundedMinor > 0) {
+    // ⚠⚠ PART OF THE MONEY CAME BACK AND PART DID NOT. Neither automated answer is safe (see the
+    // docblock), so this writes NOTHING — no credit, no clear — and escalates. The message states
+    // the un-refunded remainder rather than asserting where the money is.
+    log.error(
+      {
+        ...walletLogFields(wallet),
+        paymentIntentId,
+        crossingKey,
+        amountMinor: refund.amountMinor,
+        amountRefundedMinor: refund.amountRefundedMinor,
+        unrefundedMinor: refund.amountMinor - refund.amountRefundedMinor,
+        currency: refund.currency,
+      },
+      'Reconcile: auto-top-up charge was PARTIALLY refunded and has no ledger credit — wrote NOTHING and cleared NOTHING; the un-refunded remainder is still owed to the company and needs a human (complete the refund, or credit the remainder by hand)'
+    );
+    return { outcome: 'alarm', reason: 'partial_refund' };
+  }
+
   // THE REPAIR ARM. A throw before the credit commits propagates to the sweep's per-row catch and
   // retries next tick; nothing is cleared ahead of the money.
-  await applyAutoTopupFromStripe(wallet.id, triggeringEntryId, paymentIntentId);
+  //
+  // ⚠ THE POST-COMMIT EFFECTS COME BACK UNRUN, DELIBERATELY. `applyAutoTopupFromStripe` used to run
+  // them itself — i.e. the `credit.auto_topup.executed` notice and `AUTO_TOPUP_FIRED` analytics
+  // fired BEFORE the commit proof below, the exact inverse of `routes/stripe/webhook.ts`, where the
+  // read-back deliberately precedes the post-commit drain so an UNCOMMITTED effect can never
+  // notify. A phantom commit would otherwise tell the client "we added $100" about a credit that
+  // does not exist. They run at the bottom of this function, after the proof.
+  const postCommit = await applyAutoTopupFromStripe(wallet.id, triggeringEntryId, paymentIntentId);
 
   // ⚠⚠ COMMIT PROOF — the same guard the webhook route carries (`routes/stripe/webhook.ts`), for
   // the same reason and against the same failure. A resolved `db.transaction()` is NOT proof of a
@@ -207,6 +290,13 @@ async function repairOrClear(
   // FRESH branch, but returns early (without clearing) when the ledger write deduped against a
   // webhook that won the race in between. GUARDED on the crossing — see `clearPendingTopup`.
   await creditWalletsRepository.clearPendingTopup({ walletId: wallet.id, triggeringEntryId });
+
+  // Post-commit side-effects, on PROVEN money — the webhook route's ordering, mirrored. Each
+  // publish is best-effort and idempotent by `correlationId` (BullMQ jobId dedup).
+  for (const run of postCommit) {
+    await run();
+  }
+
   log.warn(
     { ...walletLogFields(wallet), paymentIntentId, crossingKey, appliedByReconcile: true },
     'Reconcile: auto-top-up PI succeeded but NO auto_topup ledger credit existed — applied the credit here (the webhook never landed)'
@@ -366,13 +456,7 @@ export async function reconcileStuckAutoTopup(
   }
 
   if (piStatus.status === 'succeeded') {
-    return repairOrClear(
-      wallet,
-      triggeringEntryId,
-      crossingKey,
-      paymentIntentId,
-      piStatus.refunded
-    );
+    return repairOrClear(wallet, triggeringEntryId, crossingKey, paymentIntentId, piStatus);
   }
   if (piStatus.status === 'canceled' || piStatus.hardDeclined) {
     return failClosed(

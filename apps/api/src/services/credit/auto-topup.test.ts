@@ -76,6 +76,11 @@ const WALLET = {
   topupThresholdMinor: 2000,
   topupReloadMinor: 10_000,
   pendingTopupAt: null,
+  // ⚠ BOTH MARKER CORRELATION COLUMNS ARE EXPLICIT. Guard (e) now reads
+  // `pendingTopupPaymentIntentId`, and an ABSENT key would make every derived fixture's answer an
+  // accident of `undefined` rather than a stated state.
+  pendingTopupTriggeringEntryId: null,
+  pendingTopupPaymentIntentId: null,
   expiresAt: null,
 };
 
@@ -174,34 +179,76 @@ describe('evaluateAutoTopup — guard sequence (does not fire)', () => {
     expect(mockArmPendingTopup).not.toHaveBeenCalled();
   });
 
-  it('PROCEEDS when the pending marker is STALE (older than the TTL — lost webhook, self-heals)', async () => {
+  it('PROCEEDS when a STALE marker carries NO PaymentIntent id (nothing to reconcile — self-heals)', async () => {
+    // ⚠ THE EXEMPTION IS LOAD-BEARING. A marker armed in phase 1 by an evaluation that died before
+    // phase 2 stamped anything — or a pre-BAL-515 legacy marker — has no PaymentIntent for the
+    // reconcile to resolve. If it blocked too, that wallet would never reload again.
     mockFindWallet.mockResolvedValue({
       ...WALLET,
       pendingTopupAt: new Date(Date.now() - TTL_MS - 60_000),
+      pendingTopupPaymentIntentId: null,
     });
     const out = await evaluateAutoTopup('wallet_1');
     expect(out).toMatchObject({ outcome: 'charged' });
     expect(mockCreateOffSessionCharge).toHaveBeenCalledTimes(1);
   });
+
+  it('REFUSES to re-arm past the TTL while a PaymentIntent id is STAMPED (never charge over an unresolved PI)', async () => {
+    // ⚠⚠ THE DESIGN FIX. The TTL self-heal was written when nothing persisted the in-flight
+    // PaymentIntent id, so ageing the marker out was the only way a wallet could reload again —
+    // and this file conceded the residual double-CHARGE risk was "NOT ZERO, AND IS NOT CLOSED BY
+    // CODE". `auto-topup-reconcile.ts` now owns every marker that carries a PaymentIntent id, so
+    // ageing one out is the TTL doing the reconcile's job unsafely: a SECOND real charge under a
+    // new `triggeringEntryId`, hence a NEW ledger key, which the ledger unique does not stop.
+    // Accepted cost: reloads pause for this wallet until the reconcile or a human resolves it.
+    mockFindWallet.mockResolvedValue({
+      ...WALLET,
+      pendingTopupAt: new Date(Date.now() - TTL_MS - 60_000),
+      pendingTopupTriggeringEntryId: 'led_UNRESOLVED',
+      pendingTopupPaymentIntentId: 'pi_UNRESOLVED',
+    });
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'skipped', reason: 'topup_unresolved' });
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+    expect(mockArmPendingTopup).not.toHaveBeenCalled();
+  });
+
+  it('refuses at ANY age — a DAY-OLD stamped marker is still a block, not a stale row', async () => {
+    mockFindWallet.mockResolvedValue({
+      ...WALLET,
+      pendingTopupAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      pendingTopupTriggeringEntryId: 'led_UNRESOLVED',
+      pendingTopupPaymentIntentId: 'pi_UNRESOLVED',
+    });
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'skipped', reason: 'topup_unresolved' });
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+  });
 });
 
 describe('evaluateAutoTopup — the ABANDONED crossing is recorded before it is erased (BAL-515)', () => {
-  /** A stale marker carrying BOTH correlation columns — the state the re-arm destroys. */
+  /**
+   * The only marker a re-arm can still destroy: STALE, correlated to a crossing, and carrying NO
+   * PaymentIntent id (phase 2 died before stamping one, or it predates BAL-515). A stale marker
+   * WITH a PaymentIntent id no longer reaches the arm at all — guard (e) skips `topup_unresolved`.
+   */
   const STALE_MARKER = {
     ...WALLET,
     pendingTopupAt: new Date(Date.now() - TTL_MS - 60_000),
     pendingTopupTriggeringEntryId: 'led_ABANDONED',
-    pendingTopupPaymentIntentId: 'pi_ABANDONED',
+    pendingTopupPaymentIntentId: null,
   };
 
-  it('log.errors the abandoned triggering entry + PaymentIntent when a stale marker is OVERWRITTEN', async () => {
-    // ⚠ THIS IS THE TICKET'S CENTRAL AC AT ITS WEAKEST POINT. `armPendingTopup` nulls
-    // `pending_topup_payment_intent_id` and overwrites the entry id, so after it runs NOTHING in
-    // the system can name the crossing that was in flight — and it runs in PHASE 1, before the
-    // charge, so a re-fire that fails erases the evidence just the same. Ten consecutive
-    // `deferred` reconcile ticks (which write nothing) reach exactly this state. Without this
-    // log the crossing is charged-but-uncredited with NO trace, which is the thing BAL-515 says
-    // can no longer happen.
+  it('log.errors the abandoned triggering entry when a stale un-stamped marker is OVERWRITTEN', async () => {
+    // ⚠ THIS IS THE TICKET'S CENTRAL AC AT ITS WEAKEST POINT. `armPendingTopup` overwrites the
+    // entry id, so after it runs NOTHING in the system can name the crossing that was in flight —
+    // and it runs in PHASE 1, before the charge, so a re-fire that fails erases the evidence just
+    // the same. Without this log the crossing is charged-but-uncredited with NO trace, which is
+    // the thing BAL-515 says can no longer happen.
     mockFindWallet.mockResolvedValue({ ...STALE_MARKER });
 
     await evaluateAutoTopup('wallet_1');
@@ -211,10 +258,25 @@ describe('evaluateAutoTopup — the ABANDONED crossing is recorded before it is 
         walletId: 'wallet_1',
         companyId: 'company_1',
         abandonedTriggeringEntryId: 'led_ABANDONED',
-        abandonedPaymentIntentId: 'pi_ABANDONED',
+        abandonedPaymentIntentId: null,
       }),
       expect.stringContaining('OVERWRITTEN')
     );
+  });
+
+  it('never reaches the overwrite at all when the abandoned crossing HAS a PaymentIntent id', async () => {
+    // The strongest form of "the evidence is not erased": the arm does not run, so there is
+    // nothing to log about — the crossing keeps both correlation columns until it is resolved.
+    mockFindWallet.mockResolvedValue({
+      ...STALE_MARKER,
+      pendingTopupPaymentIntentId: 'pi_ABANDONED',
+    });
+
+    const out = await evaluateAutoTopup('wallet_1');
+
+    expect(out).toEqual({ outcome: 'skipped', reason: 'topup_unresolved' });
+    expect(mockArmPendingTopup).not.toHaveBeenCalled();
+    expect(mockLog.error).not.toHaveBeenCalled();
   });
 
   it('emits it BEFORE the arm — after `armPendingTopup` there is nothing left to name', async () => {
