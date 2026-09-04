@@ -205,7 +205,15 @@ describe('LowBalanceSection', () => {
     // Save is now BLOCKED — not silently reset, not left clickable to hit a refusal it could
     // have avoided entirely.
     expect(screen.getByRole('button', { name: 'Save low-balance settings' })).toBeDisabled();
-    expect(screen.getByText(/Auto top-up needs a card on file/i)).toBeInTheDocument();
+    const inlineWarning = screen.getByText(/Auto top-up needs a card on file/i);
+    expect(inlineWarning).toBeInTheDocument();
+    // R2 (external review, BAL-524) — the INLINE warning must use its OWN copy, distinct from
+    // the toast's ("...then save this again"), because nothing was submitted here: Save was
+    // blocked before it ever reached the server.
+    expect(inlineWarning).toHaveTextContent(
+      'Add a card in the Payment method section below to use this setting.'
+    );
+    expect(inlineWarning).not.toHaveTextContent('then save this again');
     // The chosen mode is preserved — a silent reset would be worse than a blocked button.
     expect(screen.getByRole('radio', { name: /Auto top-up/i })).toBeChecked();
     expect(mockSaveLowBalanceConfigAction).not.toHaveBeenCalled();

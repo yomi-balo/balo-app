@@ -615,6 +615,26 @@ describe('credit actions', () => {
       expect(mockLogError).not.toHaveBeenCalled();
     });
 
+    it('R4 (external review, BAL-524) — refuses auto_topup when stripePaymentMethodId is "" (empty string), not just null', async () => {
+      // Proves the guard now runs through `isAbsentPaymentMethodId` (shared with
+      // `updateConfig`'s write guard) rather than a bare `=== null` — a stored `''` must refuse
+      // here exactly like `null` does, never fall through to the unguarded write.
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: '',
+      });
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'auto_topup',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+
     it("refuses keep_going with no card — the D4 set is both modes, not just the AC sentence's auto_topup", async () => {
       const res = await saveLowBalanceConfigAction({
         lowBalanceMode: 'keep_going',

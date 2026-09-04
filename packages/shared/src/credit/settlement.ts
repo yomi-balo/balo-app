@@ -118,3 +118,27 @@ export function isCardBackedLowBalanceMode<T extends string>(
 export type CardBackedModeWriteGuard =
   | 'require_card_on_file'
   | 'card_is_established_by_this_same_operation';
+
+/**
+ * BAL-524 (R4, external review) — does this `stripePaymentMethodId` value mean "no usable card"?
+ * `null` is the documented explicit clear; `''` is defence-in-depth — no shipped caller sends it
+ * today (a raw string column accepts it structurally), but a caller that treated `''` as
+ * "present" would let a card-backed low-balance mode get WRITTEN while SQL's `isNotNull(...)`
+ * WHERE then vouches for that same row on every later write. ONE definition, so the two TypeScript
+ * spellings of the same fact can never disagree:
+ *  · the Server Action guard, `apps/web/src/lib/credit/actions.ts`'s `saveLowBalanceConfigAction`
+ *    — the friendly, named-control error, from the wallet already in hand; and
+ *  · the repository write guard, `packages/db/src/repositories/credit-wallets.ts`'s
+ *    `updateConfig` — the real invariant, a conditional `WHERE` that re-evaluates atomically.
+ * SQL's `IS NOT NULL` arm is the one spelling this predicate cannot reach (SQL cannot call a TS
+ * function); that gap is deliberate and already documented at its own call site — this predicate
+ * only has to keep the two TS callers from drifting apart from EACH OTHER.
+ *
+ * `undefined` is a THIRD, separate case (the field was not mentioned in the write at all) — this
+ * predicate answers only "is this a card-less VALUE", never "was this field supplied"; a caller
+ * that must tell "not mentioned" apart from "explicitly absent" checks `=== undefined` itself
+ * first (see `armsCardBackedModeGuard` in `credit-wallets.ts`).
+ */
+export function isAbsentPaymentMethodId(value: string | null | undefined): boolean {
+  return value === null || value === '';
+}

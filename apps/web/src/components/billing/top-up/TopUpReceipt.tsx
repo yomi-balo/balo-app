@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Check, Clock, ArrowRight, Gift, Info } from 'lucide-react';
+import { isCardBackedLowBalanceMode } from '@balo/shared/credit';
 import { Button } from '@/components/ui/button';
 import { track, CREDIT_EVENTS } from '@/lib/analytics';
 import { formatAud, formatAudShort, timeStr } from '@/lib/credit/display-constants';
@@ -82,7 +83,12 @@ export function TopUpReceipt({
   // silently inactive, so surface a gentle, non-blocking retry note (design principle 4). On a
   // DIFFERENT axis from the credit status above: it is about automatic charging on FUTURE
   // purchases, not about whether THIS one landed — so it renders in every state, unchanged.
-  const cardBackedIntent = lowBalanceMode === 'auto_topup' || lowBalanceMode === 'keep_going';
+  //
+  // R3 (external review, BAL-524) — `isCardBackedLowBalanceMode` (`@balo/shared/credit`), the
+  // ONE definition BAL-524 itself created, not a third hand-rolled `'auto_topup' | 'keep_going'`
+  // spelling. The mount effect below reuses this SAME const rather than re-deriving it a second
+  // time in this file.
+  const cardBackedIntent = isCardBackedLowBalanceMode(lowBalanceMode);
   const mandateIncomplete = cardBackedIntent && !mandateCaptured;
 
   useEffect(() => {
@@ -101,11 +107,11 @@ export function TopUpReceipt({
       low_balance_mode: lowBalanceMode,
       credit_status: 'pending',
     });
-    if (mandateCaptured && (lowBalanceMode === 'auto_topup' || lowBalanceMode === 'keep_going')) {
+    if (mandateCaptured && cardBackedIntent) {
       track(CREDIT_EVENTS.MANDATE_CAPTURED, { low_balance_mode: lowBalanceMode });
     }
     toast.success(`Payment confirmed — ${formatAud(amountMinor)}.`);
-  }, [amountMinor, promoMinor, lowBalanceMode, mandateCaptured]);
+  }, [amountMinor, promoMinor, lowBalanceMode, mandateCaptured, cardBackedIntent]);
 
   /**
    * ⚠⚠ THE CONFIRMATION TRANSITION — the one place the layout is refreshed, and the only place a

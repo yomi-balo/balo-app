@@ -11,7 +11,11 @@ import {
   type CreditWallet,
   type PromoValidationReason,
 } from '@balo/db';
-import { isCardBackedLowBalanceMode, type CardBackedModeWriteGuard } from '@balo/shared/credit';
+import {
+  isCardBackedLowBalanceMode,
+  isAbsentPaymentMethodId,
+  type CardBackedModeWriteGuard,
+} from '@balo/shared/credit';
 import { requireOnboardedUser, getCompanyContext } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
@@ -264,12 +268,18 @@ type PersistLowBalanceConfigOutcome = 'persisted' | 'refused_no_card_on_file';
  * WHAT ACTUALLY PROTECTS MONEY TODAY — read this guard as defence-in-depth, not as the whole
  * story. The lanes that gate a real off-session charge key off the MANDATE, not this mode guard:
  * `apps/api/src/services/credit/auto-topup.ts:259-266` skips with `no_mandate` unless
- * `isWalletMandateActive(wallet)` (plus both Stripe ids) holds, and
- * `apps/api/src/services/credit-session/drawdown.ts:61` passes
- * `mandatePresent: isWalletMandateActive(wallet)` into the same decision. Both are indifferent to
- * `low_balance_mode`. BAL-523 (Backlog) is what turns the (mode, card) pair written here into
- * something those lanes themselves consult — until it lands, a row this guard failed to prevent
- * (see the exemption's docblock below) is inert, not exploitable.
+ * `isWalletMandateActive(wallet)` (plus both Stripe ids) holds; `applyActiveTick`
+ * (`packages/db/src/repositories/credit-sessions.ts:717`) hard-stops at `:759`
+ * (`if (!params.mandateActive)`) rather than opening grace on a crossed-zero tick with no
+ * mandate; `creditSessionsRepository.open` (same file, `:958`,
+ * `if (available < estimateMinor && !mandateActive)`) refuses to connect a session that cannot
+ * fund its estimate without one; and `end-session.ts`'s `settleOverdraft` only attempts an
+ * off-session charge when a mandate is active, opening a receivable instead when it is not. All
+ * four are indifferent to `low_balance_mode`. (`drawdown.ts`'s `getSessionDrawdownState` is NOT
+ * one of these — it is a read-only in-call display projection; its own docblock says "No money
+ * moves".) BAL-523 (in progress) is what turns the (mode, card) pair written here into something
+ * those lanes themselves consult — until it lands, a row this guard failed to prevent (see the
+ * exemption's docblock below) is inert, not exploitable.
  *
  * So the requirement is the DEFAULT here and in `updateConfig` beneath it. A caller that passes
  * nothing is guarded. The single exemption is named at its call site.
@@ -706,7 +716,11 @@ export async function validatePromoAction(code: string): Promise<ValidatePromoRe
  *     can land between them.
  * The card-presence test is necessarily spelled twice (once in TypeScript, once in SQL — SQL
  * cannot call a TS predicate). The MODE half has exactly one definition,
- * `isCardBackedLowBalanceMode` in `@balo/shared/credit`, which the card-removal reconcile reads too.
+ * `isCardBackedLowBalanceMode` in `@balo/shared/credit`, which the card-removal reconcile reads
+ * too. The CARD half (R4, external review) has exactly one definition too —
+ * `isAbsentPaymentMethodId`, same module — so this guard and `updateConfig`'s conditional `WHERE`
+ * can never disagree about what "no card" means (a stored `''` could otherwise pass a bare
+ * `=== null` here while SQL's `isNotNull(...)` WHERE vouched for that same row forever after).
  *
  * The bar is CARD PRESENCE (`stripe_payment_method_id`), never `mandate_status === 'active'`:
  * `armSavedCardMandateAction` exists to move a pending mandate to active during THIS SAME Save,
@@ -735,7 +749,7 @@ export async function saveLowBalanceConfigAction(
 
     if (
       isCardBackedLowBalanceMode(parsed.data.lowBalanceMode) &&
-      wallet.stripePaymentMethodId === null
+      isAbsentPaymentMethodId(wallet.stripePaymentMethodId)
     ) {
       return refuseCardBackedModeWithoutCard({
         walletId: wallet.id,
@@ -803,6 +817,20 @@ export async function armSavedCardMandateAction(
     companyId = actor.companyId;
 
     const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
+    // R4 (external review, BAL-524) — DELIBERATELY NOT `isAbsentPaymentMethodId` here. That
+    // predicate is the WRITE-invariant's shared definition (this file's `saveLowBalanceConfigAction`
+    // above, and `creditWalletsRepository.updateConfig`'s conditional `WHERE`): it exists so a
+    // stored `''` can never pass a lenient TS guard and then be vouched for by SQL's
+    // `isNotNull(...)` on every later write. This check answers a DIFFERENT question — "is there
+    // a stored card to arm a mandate against right now" — and it never WRITES
+    // `stripe_payment_method_id`, so there is no SQL `WHERE` downstream for a bare `=== null` to
+    // fall out of step with. A stray `''` here (unreachable today — no shipped caller sends one,
+    // per `isAbsentPaymentMethodId`'s own docblock) would still fail SAFE: `confirmSavedCardMandate`
+    // below would reject it at Stripe, caught by this function's own try/catch, surfacing
+    // `error: 'failed'` instead of the friendlier `no_saved_card` — a worse message, never a
+    // wrong mandate arm or a bypassed guard. Reusing the write predicate here would couple two
+    // call sites that check the same columns for unrelated reasons, for a case that cannot
+    // currently occur; left as `=== null` on purpose, not by oversight.
     if (
       wallet === undefined ||
       wallet.stripeCustomerId === null ||

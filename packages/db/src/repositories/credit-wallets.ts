@@ -1,5 +1,9 @@
 import { and, asc, eq, gt, isNotNull, lte, or, sql, type SQL } from 'drizzle-orm';
-import { isCardBackedLowBalanceMode, type CardBackedModeWriteGuard } from '@balo/shared/credit';
+import {
+  isCardBackedLowBalanceMode,
+  isAbsentPaymentMethodId,
+  type CardBackedModeWriteGuard,
+} from '@balo/shared/credit';
 import { db } from '../client';
 import {
   creditWallets,
@@ -113,17 +117,16 @@ function armsCardBackedModeGuard(
   );
 }
 
-/**
- * FIX ROUND (F5) — does this `stripePaymentMethodId` value mean "no usable card", for arm 1's
- * purposes? `null` is the documented explicit clear; `''` is defence-in-depth — no shipped
- * caller sends it today (structurally a string is all `UpdateWalletConfigInput` requires), but
- * without this check it is neither `null` (arm 1) nor `undefined` (arm 2), so it would fall
- * through to the UNGUARDED write path and land a non-NULL, unusable `stripe_payment_method_id`
- * that arm 3's `isNotNull` `WHERE` would then vouch for on every later write.
- */
-function isAbsentPaymentMethodId(value: string | null | undefined): boolean {
-  return value === null || value === '';
-}
+// FIX ROUND (F5) / BAL-524 (R4, external review) — `isAbsentPaymentMethodId` (does this
+// `stripePaymentMethodId` value mean "no usable card", for arm 1's purposes? `null` is the
+// documented explicit clear; `''` is defence-in-depth — no shipped caller sends it today, but
+// without this check it is neither `null` (arm 1) nor `undefined` (arm 2), so it would fall
+// through to the UNGUARDED write path and land a non-NULL, unusable `stripe_payment_method_id`
+// that arm 3's `isNotNull` `WHERE` would then vouch for on every later write) moved to
+// `@balo/shared/credit` — imported above — so it and the Server Action guard it mirrors
+// (`apps/web/src/lib/credit/actions.ts`'s `saveLowBalanceConfigAction`) share ONE definition
+// instead of two hand-rolled spellings that could drift apart. See that predicate's own
+// docblock for the full invariant.
 
 export const creditWalletsRepository = {
   /**
@@ -552,9 +555,15 @@ export const creditWalletsRepository = {
    * a write that names a CARD-BACKED low-balance mode (`auto_topup` / `keep_going`,
    * `isCardBackedLowBalanceMode`) must prove the row holds a `stripe_payment_method_id`. Read
    * this as DEFENCE-IN-DEPTH, not as the whole story — it does not by itself decide whether a
-   * charge fires: `apps/api/src/services/credit/auto-topup.ts:259-266` and
-   * `apps/api/src/services/credit-session/drawdown.ts:61` gate every unattended charge on
-   * `isWalletMandateActive`, indifferent to `low_balance_mode`, and BAL-523 (Backlog) is what
+   * charge fires: `apps/api/src/services/credit/auto-topup.ts:259-266` (skips with `no_mandate`
+   * unless `isWalletMandateActive(wallet)` plus both Stripe ids hold), `applyActiveTick`'s
+   * no-mandate hard stop (`packages/db/src/repositories/credit-sessions.ts:717`, `:759`,
+   * `if (!params.mandateActive)`), `creditSessionsRepository.open`'s connect gate (same file,
+   * `:958`, `if (available < estimateMinor && !mandateActive)`), and
+   * `apps/api/src/services/credit-session/end-session.ts`'s mandate-only `settleOverdraft` all
+   * gate every unattended charge on `isWalletMandateActive`, indifferent to `low_balance_mode`.
+   * (`drawdown.ts`'s `getSessionDrawdownState` is NOT one of these — it is a read-only in-call
+   * display projection; its own docblock says "No money moves".) BAL-523 (in progress) is what
    * turns this (mode, card) pair into something those lanes themselves consult. The rule here is
    * "AFTER this UPDATE the row holds a payment method", not "before" — three arms:
    *

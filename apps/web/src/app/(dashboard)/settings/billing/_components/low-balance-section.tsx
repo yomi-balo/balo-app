@@ -43,10 +43,12 @@ const SAVE_SUCCESS_MESSAGE = 'Low-balance settings updated.';
 
 /**
  * BAL-524 — the server refused a card-backed mode because the wallet holds no card. Reachable two
- * ways, and the second is the one the copy is written for: a hand-rolled POST (the picker disables
- * these options without a card), and — the ordinary, blameless case — a SECOND TAB that removed the
- * card since this page loaded. So the copy states the requirement and names the control that meets
- * it, one section down the same page. It never says "try again": a retry cannot fix this.
+ * ways: a hand-rolled POST (the picker disables these options without a card), and — the
+ * ordinary, blameless case — a SECOND TAB that removed the card since this page loaded. Both are
+ * TOAST-only: in both, a Save attempt genuinely reached and was refused by the server, so "save
+ * this again" is literally what happened and literally what fixes it. So the copy states the
+ * requirement and names the control that meets it, one section down the same page. It never says
+ * "try again" on its own: a bare retry cannot fix this, adding the card first can.
  * Title derives the mode name from `MODE_OPTIONS` (never a fourth hand-authored copy of it).
  *
  * FIX ROUND (F3) — THERE IS A THIRD PATH, and it is an ORDINARY SAME-TAB flow, not a hand-rolled
@@ -57,11 +59,27 @@ const SAVE_SUCCESS_MESSAGE = 'Low-balance settings updated.';
  * `savedConfig.mode`, not this component's dirty draft) — a `notify_only` baseline has nothing to
  * reconcile, so no remount happens: the dirty draft survives, and `cardAvailable` simply flips to
  * `false` on the next render. THIS PATH IS NOW BLOCKED BEFORE IT EVER REACHES THE SERVER — see
- * `cardBackedDraftBlockedMode` below, which disables Save and shows an inline warning naming the
- * same lever as this toast — so the toast text here is now reached only by the other two paths.
+ * `cardBackedDraftBlockedMode` below, which disables Save and shows an INLINE warning with its
+ * OWN, distinct copy (`NO_SAVED_CARD_INLINE_DESCRIPTION`) — so this toast text is reached only by
+ * the other two paths, where a Save attempt genuinely happened.
+ *
+ * R2 (external review, BAL-524) — SCOPED TO THE TOAST, deliberately. It used to also render at
+ * the inline position below; that was wrong there (see `NO_SAVED_CARD_INLINE_DESCRIPTION`'s
+ * docblock for why) and is now fixed by giving that position its own string.
  */
-const NO_SAVED_CARD_DESCRIPTION =
+const NO_SAVED_CARD_TOAST_DESCRIPTION =
   'Add a card in the Payment method section below, then save this again.';
+
+/**
+ * R2 (external review, BAL-524) — the INLINE sibling of `NO_SAVED_CARD_TOAST_DESCRIPTION`, for the
+ * one position that string does not fit: the `cardBackedDraftBlockedMode` warning rendered below,
+ * which appears when Save is BLOCKED client-side (the F3 third path above). Nothing has been
+ * submitted there — no Save attempt has run — so "save this again" would describe an event that
+ * never happened. This copy instead tells the client what unblocks Save in the first place: add
+ * the card, then this setting becomes available to save.
+ */
+const NO_SAVED_CARD_INLINE_DESCRIPTION =
+  'Add a card in the Payment method section below to use this setting.';
 const ARM_WARNING_MESSAGE =
   "We couldn't finish setting up automatic charging — your low-balance setting is saved. You can retry anytime from here.";
 
@@ -169,7 +187,7 @@ export function LowBalanceSection({
   /**
    * FIX ROUND (F3) — the card-backed mode currently drafted while the wallet has no card, or
    * `null` when Save is not blocked for this reason. This is the THIRD reachability path
-   * `NO_SAVED_CARD_DESCRIPTION`'s docblock now names: a dirty, unsaved card-backed selection that
+   * `NO_SAVED_CARD_TOAST_DESCRIPTION`'s docblock now names: a dirty, unsaved card-backed selection that
    * survives a mid-session card removal because no remount occurred (the saved mode had nothing
    * to reconcile). Narrowed ONCE, in the `mode is CardBackedLowBalanceMode` branch of
    * `isCardBackedLowBalanceMode`, so both the disabled Save button below and the inline warning's
@@ -234,7 +252,7 @@ export function LowBalanceSection({
         // rather than indexing a Record it cannot key.
         if (result.error === 'no_saved_card' && isCardBackedLowBalanceMode(draft.mode)) {
           toast.error(`${CARD_BACKED_MODE_TITLE[draft.mode]} needs a card on file.`, {
-            description: NO_SAVED_CARD_DESCRIPTION,
+            description: NO_SAVED_CARD_TOAST_DESCRIPTION,
           });
           return;
         }
@@ -351,10 +369,14 @@ export function LowBalanceSection({
 
       {/*
        * FIX ROUND (F3) — blocks the impossible submit CLIENT-SIDE (the third reachability path
-       * documented on `NO_SAVED_CARD_DESCRIPTION` above): a card-backed draft that survives a
-       * mid-session card removal with no remount. Deliberately does NOT reset `draft.mode` back
+       * documented on `NO_SAVED_CARD_TOAST_DESCRIPTION` above): a card-backed draft that survives
+       * a mid-session card removal with no remount. Deliberately does NOT reset `draft.mode` back
        * to a non-card-backed value — a silent reset would discard the client's chosen intent,
        * which is worse than a blocked button they can see the reason for.
+       *
+       * R2 (external review, BAL-524) — renders `NO_SAVED_CARD_INLINE_DESCRIPTION`, NOT the
+       * toast's copy: nothing has been saved here, so "save this again" would be false in this
+       * position. See that constant's docblock.
        */}
       {cardBackedDraftBlockedMode !== null && (
         <div className="border-warning/40 bg-warning/10 mt-3 flex items-start gap-2 rounded-xl border p-3 text-left">
@@ -365,7 +387,7 @@ export function LowBalanceSection({
           />
           <p className="text-foreground text-xs leading-relaxed font-medium">
             {CARD_BACKED_MODE_TITLE[cardBackedDraftBlockedMode]} needs a card on file.{' '}
-            {NO_SAVED_CARD_DESCRIPTION}
+            {NO_SAVED_CARD_INLINE_DESCRIPTION}
           </p>
         </div>
       )}

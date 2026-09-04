@@ -19,6 +19,7 @@ export {
   isWalletMandateActive,
   isWalletCardReusableOnSession,
   isCardBackedLowBalanceMode,
+  isAbsentPaymentMethodId,
   toSettleableSession,
   CARD_BACKED_LOW_BALANCE_MODES,
   type SettleableSession,
