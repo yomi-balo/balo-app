@@ -23,6 +23,7 @@ import {
   createMandateSetupIntent,
   confirmSavedCardMandate,
   detachSavedCardPaymentMethod,
+  setCompanyBillingEmail,
   callSessionApi,
   CreditApiError,
 } from './api-client';
@@ -96,29 +97,31 @@ describe('credit api-client', () => {
     expect(JSON.parse(init.body)).toMatchObject({ paymentMethodSource: 'saved_card' });
   });
 
-  it('creates a mandate setup-intent for a NEW card', async () => {
+  it('creates a mandate setup-intent for a NEW card, threading the actorUserId (BAL-522 D2)', async () => {
     mockLoggedFetch.mockResolvedValue(
       jsonResponse({ clientSecret: 'seti_secret', setupIntentId: 'seti_1', customerId: 'cus_1' })
     );
-    const result = await createMandateSetupIntent('wallet-1');
+    const result = await createMandateSetupIntent('wallet-1', 'user-1');
     expect(result.clientSecret).toBe('seti_secret');
     const [, init] = mockLoggedFetch.mock.calls[0] as [string, { body: string }];
     expect(JSON.parse(init.body)).toEqual({
       walletId: 'wallet-1',
+      actorUserId: 'user-1',
       paymentMethodSource: 'new_card',
     });
   });
 
-  it('confirms a mandate against the STORED card on the same route', async () => {
+  it('confirms a mandate against the STORED card on the same route, threading the actorUserId', async () => {
     mockLoggedFetch.mockResolvedValue(jsonResponse({ status: 'succeeded', clientSecret: null }));
 
-    const result = await confirmSavedCardMandate('wallet-1', 'req-1');
+    const result = await confirmSavedCardMandate('wallet-1', 'req-1', 'user-1');
 
     expect(result).toEqual({ status: 'succeeded', clientSecret: null });
     const [url, init] = mockLoggedFetch.mock.calls[0] as [string, { body: string }];
     expect(url).toBe('http://api.test/credit/setup-intent');
     expect(JSON.parse(init.body)).toEqual({
       walletId: 'wallet-1',
+      actorUserId: 'user-1',
       paymentMethodSource: 'saved_card',
       // Keys the SetupIntent's Stripe idempotency — inherits the composer's per-decline rotation.
       clientRequestId: 'req-1',
@@ -127,7 +130,9 @@ describe('credit api-client', () => {
 
   it('throws CreditApiError on a non-2xx response', async () => {
     mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'wallet_not_found' }, false, 404));
-    await expect(createMandateSetupIntent('wallet-x')).rejects.toBeInstanceOf(CreditApiError);
+    await expect(createMandateSetupIntent('wallet-x', 'user-1')).rejects.toBeInstanceOf(
+      CreditApiError
+    );
   });
 
   it('CARRIES the parsed failure body so a decline is not flattened to a generic fault', async () => {
@@ -166,7 +171,9 @@ describe('credit api-client', () => {
 
   it('throws when the internal secret is missing', async () => {
     delete process.env.INTERNAL_API_SECRET;
-    await expect(createMandateSetupIntent('wallet-1')).rejects.toBeInstanceOf(CreditApiError);
+    await expect(createMandateSetupIntent('wallet-1', 'user-1')).rejects.toBeInstanceOf(
+      CreditApiError
+    );
   });
 
   it('detaches the saved card, posting the secret header and the effective mode', async () => {
@@ -196,6 +203,52 @@ describe('credit api-client', () => {
       status: 502,
       body: { error: 'stripe_detach_failed' },
     });
+  });
+
+  it('setCompanyBillingEmail posts to /credit/billing-email with the internal header', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse({
+        status: 'updated',
+        billingEmail: 'dana@northwind.test',
+        setAt: '2026-08-10T00:00:00.000Z',
+      })
+    );
+
+    const result = await setCompanyBillingEmail({
+      companyId: 'company-1',
+      actorUserId: 'user-1',
+      billingEmail: 'dana@northwind.test',
+    });
+
+    expect(result).toEqual({
+      status: 'updated',
+      billingEmail: 'dana@northwind.test',
+      setAt: '2026-08-10T00:00:00.000Z',
+    });
+    const [url, init] = mockLoggedFetch.mock.calls[0] as [
+      string,
+      { method: string; headers: Record<string, string>; body: string },
+    ];
+    expect(url).toBe('http://api.test/credit/billing-email');
+    expect(init.method).toBe('POST');
+    expect(init.headers['x-internal-api-key']).toBe('secret-123');
+    expect(JSON.parse(init.body)).toEqual({
+      companyId: 'company-1',
+      actorUserId: 'user-1',
+      billingEmail: 'dana@northwind.test',
+    });
+  });
+
+  it('setCompanyBillingEmail throws CreditApiError carrying the parsed body on a non-2xx', async () => {
+    mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'forbidden' }, false, 403));
+
+    await expect(
+      setCompanyBillingEmail({
+        companyId: 'company-1',
+        actorUserId: 'user-1',
+        billingEmail: 'dana@northwind.test',
+      })
+    ).rejects.toMatchObject({ status: 403, body: { error: 'forbidden' } });
   });
 });
 

@@ -589,6 +589,13 @@
       "when": 1788480825395,
       "tag": "0083_bal521_pending_topup_alarmed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1788504646108,
+      "tag": "0084_bal522_company_billing_email",
+      "breakpoints": true
     }
   ]
 }

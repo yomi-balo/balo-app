@@ -447,7 +447,7 @@ export const partyMembershipsRepository = {
 
   /**
    * BAL-400 (D1a) — the acting user's LIVE COMPANY memberships that grant `capability`,
-   * projected to the narrow `EligibleCompany` shape (id + name + logo; NO `creditBalance`,
+   * projected to the narrow `EligibleCompany` shape (id + name + logo; NO `billingEmail`,
    * NO `isPersonal`, no other company column). Reuses BAL-401's shape deliberately so
    * BAL-466 inherits a matching one when the money path attaches.
    *

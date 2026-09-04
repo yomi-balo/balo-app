@@ -83,7 +83,11 @@ export async function startContinueToMandate(): Promise<StartContinueToMandateRe
         'Content-Type': 'application/json',
         'x-internal-api-key': secret,
       },
-      body: JSON.stringify({ walletId: wallet.id }),
+      // BAL-522 (D2) — `actorUserId` is the already-resolved `SessionUser`, threaded so
+      // `createSetupIntent` → `ensureCustomer` can seed the company's billing email on this
+      // touch. Required by the api schema; an omitted actor would make the seed silently never
+      // happen on this path.
+      body: JSON.stringify({ walletId: wallet.id, actorUserId: user.id }),
     });
 
     if (!response.ok) {

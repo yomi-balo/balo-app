@@ -72,6 +72,7 @@ const mockCreatePurchaseIntent = vi.fn();
 const mockCreateMandateSetupIntent = vi.fn();
 const mockConfirmSavedCardMandate = vi.fn();
 const mockDetachSavedCardPaymentMethod = vi.fn();
+const mockSetCompanyBillingEmail = vi.fn();
 
 /**
  * A stand-in for the real error class. `vi.hoisted` because the `vi.mock` factory below is
@@ -96,6 +97,7 @@ vi.mock('./api-client', () => ({
   createMandateSetupIntent: (...a: unknown[]) => mockCreateMandateSetupIntent(...a),
   confirmSavedCardMandate: (...a: unknown[]) => mockConfirmSavedCardMandate(...a),
   detachSavedCardPaymentMethod: (...a: unknown[]) => mockDetachSavedCardPaymentMethod(...a),
+  setCompanyBillingEmail: (...a: unknown[]) => mockSetCompanyBillingEmail(...a),
   CreditApiError: TestCreditApiError,
 }));
 
@@ -108,6 +110,7 @@ import {
   armSavedCardMandateAction,
   startCardCaptureAction,
   removeSavedCardAction,
+  saveBillingEmailAction,
   type StartPurchaseInput,
 } from './actions';
 
@@ -217,7 +220,8 @@ describe('credit actions', () => {
         { lowBalanceMode: 'keep_going' },
         'card_is_established_by_this_same_operation'
       );
-      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+      // BAL-522 — the actor rides along to the mandate SetupIntent.
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1', 'user-1');
     });
 
     it('skips the SetupIntent when the wallet already has an ACTIVE mandate on the card being charged', async () => {
@@ -249,7 +253,7 @@ describe('credit actions', () => {
 
       const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
 
-      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1', 'user-1');
       expect(res).toMatchObject({
         ok: true,
         mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
@@ -361,7 +365,11 @@ describe('credit actions', () => {
       });
       const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
 
-      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith('wallet-1', CLIENT_REQUEST_ID);
+      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith(
+        'wallet-1',
+        CLIENT_REQUEST_ID,
+        'user-1'
+      );
       expect(mockCreateMandateSetupIntent).not.toHaveBeenCalled();
       // `succeeded` ⇒ nothing for the browser to do; the webhook activates the mandate.
       expect(res).toMatchObject({ ok: true, mandate: { outcome: 'captured' } });
@@ -721,7 +729,11 @@ describe('credit actions', () => {
       mockConfirmSavedCardMandate.mockResolvedValue({ status: 'succeeded', clientSecret: null });
       const res = await armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID_2 });
       expect(res).toEqual({ ok: true, outcome: 'captured' });
-      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith('wallet-1', CLIENT_REQUEST_ID_2);
+      expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith(
+        'wallet-1',
+        CLIENT_REQUEST_ID_2,
+        'user-1'
+      );
     });
 
     it('maps requires_action WITH a secret to requires_action', async () => {
@@ -817,7 +829,7 @@ describe('credit actions', () => {
         publishableKey: 'pk_test_settings',
       });
       expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
-      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1', 'user-1');
       // FIX ROUND 2 (security MEDIUM — NEW-1) asymmetry: a first Add is not an evasion surface,
       // so it must not even query the session guard.
       expect(mockHasActiveSessionForWallet).not.toHaveBeenCalled();
@@ -851,7 +863,7 @@ describe('credit actions', () => {
         publishableKey: 'pk_test_settings',
       });
       expect(mockHasActiveSessionForWallet).toHaveBeenCalledWith('wallet-1');
-      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1');
+      expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1', 'user-1');
     });
 
     it('maps a thrown error to error, logging companyId (security LOW)', async () => {
@@ -1101,6 +1113,104 @@ describe('credit actions', () => {
       mockPublish.mockRejectedValue(new Error('queue down'));
       expect(await nudgeBillingAdminAction()).toEqual({ ok: false, error: 'error' });
       expect(mockLogError).toHaveBeenCalled();
+    });
+  });
+
+  describe('saveBillingEmailAction (BAL-522)', () => {
+    it('returns invalid_input for a blank or malformed email, and never calls the api', async () => {
+      expect(await saveBillingEmailAction({ billingEmail: '   ' })).toEqual({
+        ok: false,
+        error: 'invalid_input',
+      });
+      expect(await saveBillingEmailAction({ billingEmail: 'not-an-email' })).toEqual({
+        ok: false,
+        error: 'invalid_input',
+      });
+      expect(mockSetCompanyBillingEmail).not.toHaveBeenCalled();
+    });
+
+    it('returns unauthorized when the actor lacks MANAGE_BILLING, and never calls the api', async () => {
+      mockHasCapability.mockResolvedValue(false);
+      const result = await saveBillingEmailAction({ billingEmail: 'dana@northwind.test' });
+      expect(result).toEqual({ ok: false, error: 'unauthorized' });
+      expect(mockSetCompanyBillingEmail).not.toHaveBeenCalled();
+    });
+
+    it('calls the api client with the SESSION-resolved companyId/actorUserId — never anything from the input', async () => {
+      mockSetCompanyBillingEmail.mockResolvedValue({
+        status: 'updated',
+        billingEmail: 'dana@northwind.test',
+        setAt: '2026-08-10T00:00:00.000Z',
+      });
+
+      await saveBillingEmailAction({ billingEmail: 'dana@northwind.test' });
+
+      expect(mockSetCompanyBillingEmail).toHaveBeenCalledWith({
+        companyId: 'company-1',
+        actorUserId: 'user-1',
+        billingEmail: 'dana@northwind.test',
+      });
+    });
+
+    it('resolves ok:true with the response billingEmail/setAt and the session display name', async () => {
+      mockRequireUser.mockResolvedValue({ id: 'user-1', firstName: 'Dana', lastName: 'Okoro' });
+      mockSetCompanyBillingEmail.mockResolvedValue({
+        status: 'updated',
+        billingEmail: 'dana@northwind.test',
+        setAt: '2026-08-10T00:00:00.000Z',
+      });
+
+      const result = await saveBillingEmailAction({ billingEmail: 'dana@northwind.test' });
+
+      expect(result).toEqual({
+        ok: true,
+        status: 'updated',
+        billingEmail: 'dana@northwind.test',
+        source: 'set',
+        setAt: '2026-08-10T00:00:00.000Z',
+        setByName: 'Dana Okoro',
+      });
+    });
+
+    // REVIEW FIX — an `unchanged` reply wrote NOTHING, so the row still says whatever it said
+    // before (possibly `seeded`, possibly attributed to someone else, on a date this actor had
+    // nothing to do with). Claiming `source: 'set'` + this actor's name there would repaint a
+    // provenance screen with a claim the database contradicts.
+    it('an unchanged reply carries NO provenance — no source, no setAt, no setByName', async () => {
+      mockRequireUser.mockResolvedValue({ id: 'user-1', firstName: 'Dana', lastName: 'Okoro' });
+      mockSetCompanyBillingEmail.mockResolvedValue({
+        status: 'unchanged',
+        billingEmail: 'dana@northwind.test',
+        setAt: '2026-07-01T00:00:00.000Z',
+      });
+
+      const result = await saveBillingEmailAction({ billingEmail: 'dana@northwind.test' });
+
+      expect(result).toEqual({
+        ok: true,
+        status: 'unchanged',
+        billingEmail: 'dana@northwind.test',
+      });
+    });
+
+    it('maps a 403 forbidden CreditApiError to unauthorized', async () => {
+      mockSetCompanyBillingEmail.mockRejectedValue(
+        new TestCreditApiError('forbidden', 403, { error: 'forbidden' })
+      );
+      const result = await saveBillingEmailAction({ billingEmail: 'dana@northwind.test' });
+      expect(result).toEqual({ ok: false, error: 'unauthorized' });
+    });
+
+    it('logs (never the address) and returns error on a generic failure', async () => {
+      mockSetCompanyBillingEmail.mockRejectedValue(new Error('network blip'));
+      const result = await saveBillingEmailAction({ billingEmail: 'dana@northwind.test' });
+      expect(result).toEqual({ ok: false, error: 'error' });
+      expect(mockLogError).toHaveBeenCalledWith(
+        'Billing email save failed',
+        expect.objectContaining({ companyId: 'company-1' })
+      );
+      const [, meta] = mockLogError.mock.calls[0] as [string, Record<string, unknown>];
+      expect(JSON.stringify(meta)).not.toContain('dana@northwind.test');
     });
   });
 });

@@ -1212,3 +1212,12 @@ export const requestFileAudienceEnum = pgEnum('request_file_audience', [
   'grants',
   'own_track',
 ]);
+
+/**
+ * BAL-522 — how the company's billing email got there. `seeded` = captured from the first
+ * purchaser at `ensureCustomer`; `set` = an explicit change from /settings/billing. NULL until
+ * seeded. Deliberately NO column default: `reference_enum_default_same_tx_migration_hazard` —
+ * a default referencing a just-added enum value fails a from-scratch (single-transaction)
+ * migration. Null-until-seeded avoids it structurally.
+ */
+export const billingEmailSourceEnum = pgEnum('billing_email_source', ['seeded', 'set']);

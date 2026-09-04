@@ -540,4 +540,72 @@ describe('resolveContext', () => {
       expect(context.data.user).toBeUndefined();
     });
   });
+
+  describe('billing.email_changed hydration (BAL-522)', () => {
+    it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry) — the silent-failure guard', async () => {
+      mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+      const context = await resolveContext('billing.email_changed', {
+        correlationId: 'billing-email-changed.company-1.audit-1',
+        companyId: 'company-1',
+        newEmail: 'dana@northwind.test',
+        changedByUserId: 'user-1',
+      });
+
+      expect(mockListBillingUserIds).toHaveBeenCalledWith('company-1');
+      expect(context.data.billingUserIds).toEqual(['owner-1', 'admin-1']);
+    });
+
+    it('hydrates data.changedByName (bare) and data.changedByLabel ("Name @ Company") from changedByUserId', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana', lastName: 'Okoro' });
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue([]);
+
+      const context = await resolveContext('billing.email_changed', {
+        correlationId: 'billing-email-changed.company-1.audit-2',
+        companyId: 'company-1',
+        newEmail: 'dana@northwind.test',
+        changedByUserId: 'user-1',
+      });
+
+      expect(mockFindById).toHaveBeenCalledWith('user-1');
+      expect(context.data.changedByName).toBe('Dana Okoro');
+      expect(context.data.changedByLabel).toBe('Dana Okoro @ Northwind Industrial');
+    });
+
+    it('degrades to "A teammate" (no org clause) when the actor has no resolvable name', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', firstName: null, lastName: null });
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue([]);
+
+      const context = await resolveContext('billing.email_changed', {
+        correlationId: 'billing-email-changed.company-1.audit-3',
+        companyId: 'company-1',
+        newEmail: 'dana@northwind.test',
+        changedByUserId: 'user-1',
+      });
+
+      expect(context.data.changedByName).toBe('A teammate');
+      expect(context.data.changedByLabel).toBe('A teammate');
+    });
+
+    // (D12) — the payload's actor key is `changedByUserId`, NOT `userId`: the generic
+    // `payload.userId → data.user` hydration must never fire for this event, or the actor would
+    // be mailed twice (once via the fan-out, once as a `self` recipient).
+    it('never hydrates data.user — the actor key is changedByUserId, not userId', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana' });
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue([]);
+
+      const context = await resolveContext('billing.email_changed', {
+        correlationId: 'billing-email-changed.company-1.audit-4',
+        companyId: 'company-1',
+        newEmail: 'dana@northwind.test',
+        changedByUserId: 'user-1',
+      });
+
+      expect(context.data.user).toBeUndefined();
+    });
+  });
 });

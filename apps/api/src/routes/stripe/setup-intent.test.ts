@@ -42,6 +42,7 @@ import { buildApp } from '../../app.js';
 
 const TEST_SECRET = 'test-internal-secret';
 const WALLET_ID = '550e8400-e29b-41d4-a716-446655440000';
+const ACTOR_USER_ID = '550e8400-e29b-41d4-a716-446655440099';
 
 describe('POST /stripe/setup-intent', () => {
   let app: FastifyInstance;
@@ -87,7 +88,10 @@ describe('POST /stripe/setup-intent', () => {
   });
 
   it('returns 400 (and does not call the service) when walletId is not a uuid', async () => {
-    const res = await inject({ walletId: 'not-a-uuid' }, { 'x-internal-api-key': TEST_SECRET });
+    const res = await inject(
+      { walletId: 'not-a-uuid', actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_payload');
     expect(mockCreateSetupIntent).not.toHaveBeenCalled();
@@ -99,10 +103,22 @@ describe('POST /stripe/setup-intent', () => {
     expect(mockCreateSetupIntent).not.toHaveBeenCalled();
   });
 
-  it('returns 200 with only clientSecret + setupIntentId (never the customerId)', async () => {
+  // BAL-522 (D2) — `actorUserId` is REQUIRED, not optional: an omitted actor would make the
+  // billing-email seed silently never happen on this path.
+  it('returns 400 when actorUserId is missing', async () => {
     const res = await inject({ walletId: WALLET_ID }, { 'x-internal-api-key': TEST_SECRET });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_payload');
+    expect(mockCreateSetupIntent).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 with only clientSecret + setupIntentId (never the customerId)', async () => {
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ clientSecret: 'seti_123_secret_abc', setupIntentId: 'seti_123' });
-    expect(mockCreateSetupIntent).toHaveBeenCalledWith(WALLET_ID);
+    expect(mockCreateSetupIntent).toHaveBeenCalledWith(WALLET_ID, ACTOR_USER_ID);
   });
 });

@@ -104,6 +104,15 @@ const availabilityReshareWindowElapsed: NonNullable<NotificationRule['condition'
   return sharedAt - previousAt >= AVAILABILITY_RESHARE_MIN_INTERVAL_MS;
 };
 
+/**
+ * BAL-522 — the `billing.email_changed` previous-address rule fires only when there IS a
+ * previous address (never on a first-ever explicit set — there is nobody to notify). Gates on
+ * `payload.recipientEmail`, exactly the field `dispatchExternalEmail` hard-reads, so a first-ever
+ * set never trips the dispatcher's "missing payload.recipientEmail" warn.
+ */
+const hasPreviousAddress: NonNullable<NotificationRule['condition']> = (ctx) =>
+  typeof ctx.payload.recipientEmail === 'string' && ctx.payload.recipientEmail.length > 0;
+
 export const notificationRules: Record<string, NotificationRule[]> = {
   'user.welcome': [
     {
@@ -915,6 +924,24 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     'company_billing_admins',
     'credit-saved-card-detached'
   ),
+  // BAL-522. An EXPLICIT billing-email change from /settings/billing. Fans out to the company's
+  // MANAGE_BILLING holders (recipient 'company_billing_admins' → data.billingUserIds) via email
+  // + in-app — includes the ACTOR, as confirmation. A THIRD rule notifies the PREVIOUS address
+  // (email only — no in-app surface for a non-user, the `meeting.guest_removed` /
+  // `meeting.guest_link_resent` shape), gated on `hasPreviousAddress` so a first-ever set never
+  // trips the dispatcher's missing-payload warn. No SMS (routine). The SEED gets no notification
+  // at all (decision 2 — a separate, unlisted event).
+  'billing.email_changed': [
+    ...emailAndInApp('company_billing_admins', 'billing-email-changed'),
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'billing-email-changed-previous',
+      timing: 'immediate',
+      priority: 'normal',
+      condition: hasPreviousAddress,
+    },
+  ],
   // BAL-383 (ADR-1040): promo code redeemed — a warm, retrospective milestone
   // confirmation to the ACTOR who redeemed (recipient 'self' via payload.userId; the
   // resolver hydrates data.user, the delivery worker greets by name). NOT a wallet-state

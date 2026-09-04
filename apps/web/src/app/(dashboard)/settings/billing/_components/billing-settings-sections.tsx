@@ -6,12 +6,15 @@ import { toast } from 'sonner';
 import { describeSavedCard } from '@/components/billing/top-up/SavedCardRow';
 import type { WalletSnapshot } from '@/components/billing/top-up/types';
 import type { LowBalanceMode } from '@/lib/credit/actions';
+import type { BillingEmailSnapshot } from '@/lib/credit/wallet-read';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 import { LowBalanceSection, type LowBalanceDraft } from './low-balance-section';
 import { PaymentMethodManager } from './payment-method-manager';
+import { BillingEmailSection } from './billing-email-section';
 
 interface BillingSettingsSectionsProps {
   readonly wallet: WalletSnapshot;
+  readonly billingEmail: BillingEmailSnapshot;
 }
 
 const RECONCILED_REMOVE_TOAST = "Card removed — you're now on Just notify me.";
@@ -81,6 +84,7 @@ const PLAIN_REMOVE_TOAST = 'Card removed.';
  */
 export function BillingSettingsSections({
   wallet,
+  billingEmail,
 }: Readonly<BillingSettingsSectionsProps>): React.JSX.Element {
   const router = useRouter();
   const [cardRemoved, setCardRemoved] = useState(false);
@@ -147,6 +151,10 @@ export function BillingSettingsSections({
         currentMode={savedConfig.mode}
         onRemoved={handleRemoved}
       />
+      {/* BAL-522 — needs no coordination with its siblings, but lives here so it inherits the
+          `key={user.companyId}` remount guarantee above: its `useState` is seeded from `initial`
+          once and must not survive a workspace switch. */}
+      <BillingEmailSection initial={billingEmail} />
     </>
   );
 }

@@ -98,7 +98,9 @@ describe('startContinueToMandate', () => {
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ 'x-internal-api-key': 'internal-secret' }),
-        body: JSON.stringify({ walletId: 'wallet-1' }),
+        // BAL-522 (D2) — `actorUserId` threaded so `ensureCustomer` can seed the company's
+        // billing email on this touch.
+        body: JSON.stringify({ walletId: 'wallet-1', actorUserId: 'user-1' }),
       })
     );
   });

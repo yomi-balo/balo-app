@@ -164,7 +164,10 @@ export async function purchaseIntentRoute(fastify: FastifyInstance): Promise<voi
           .send({ outcome: 'declined', code: null, paymentIntentId: charge.paymentIntentId });
       }
 
-      const customerId = await ensureCustomer(wallet);
+      // BAL-522 — `initiatingMemberId` is a legacy misnomer: despite the name it is already a
+      // USER id (`apps/web`'s `startPurchaseAction` passes `actor.userId`), so it doubles as the
+      // `ensureCustomer` actor with no schema change.
+      const customerId = await ensureCustomer(wallet, { userId: initiatingMemberId });
       const { clientSecret, paymentIntentId } = await createOnSessionPurchaseIntent({
         walletId,
         customerId,

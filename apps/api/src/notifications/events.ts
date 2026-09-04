@@ -376,6 +376,46 @@ export interface CreditSavedCardDetachedPayload {
   detachedByUserId?: string;
 }
 
+/**
+ * BAL-522 — an EXPLICIT change to the company's billing email from `/settings/billing`
+ * (`companiesRepository.setBillingEmail`'s `'changed'` outcome). The SEED (the first-purchaser
+ * capture inside `ensureCustomer`) gets NO notification — decision 2: the value is visible in
+ * settings with provenance, and a notice on every first purchase would be pure noise.
+ *
+ * Declared INLINE (the `CalendarAuthErrorPayload` / `CreditSavedCardDetachedPayload` precedent
+ * above), NOT in `@balo/shared/notifications`: that shared home exists to avoid the api↔web
+ * lockstep DUPLICATION that trips SonarCloud's new-code duplication gate. This event is
+ * SERVER-ONLY with no web mirror (D1: the mutation and its publish both live in `apps/api`'s
+ * `services/billing/set-billing-email.ts`), so there is no second copy to duplicate into.
+ *
+ * ⚠ THE ACTOR KEY IS `changedByUserId`, NOT `userId` — deliberately, the same reason as
+ * `CreditSavedCardDetachedPayload`'s `detachedByUserId`. `payload.userId` triggers BOTH the
+ * generic `data.user` hydration (`resolver.ts`) AND the `self` recipient path
+ * (`engine/dispatcher.ts`), which would mail the actor SEPARATELY on top of the
+ * `company_billing_admins` fan-out (they are already included in it).
+ *
+ * ⚠ `recipientEmail` carries the PREVIOUS address and is named that way only because
+ * `engine/dispatcher.ts`'s `dispatchExternalEmail` hard-reads exactly that field off the payload
+ * for the `email_address` recipient. `previousEmail` carries the SAME value for template copy, so
+ * no template has to read a field called "recipient" and mean "previous". BOTH are set together,
+ * or neither (absent on a first-ever set — there is no previous address to notify).
+ *
+ * `correlationId` is `billing-email-changed.{companyId}.{auditEventId}` — COLON-FREE by
+ * construction (a `.`-joined UUID pair never contains a `:`).
+ */
+export interface BillingEmailChangedPayload {
+  correlationId: string;
+  /** → resolver hydrates `data.billingUserIds` (the fan-out) AND `data.company` (context). */
+  companyId: string;
+  newEmail: string;
+  /** Absent on a first-ever set. */
+  previousEmail?: string;
+  /** The dispatcher's literal external-email target — same value as `previousEmail`. */
+  recipientEmail?: string;
+  /** ⚠ NOT `userId` — see the docblock above. */
+  changedByUserId: string;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -531,7 +571,10 @@ export type NotificationEvent =
   // action). SERVER-ONLY (see ServerOnlyNotificationEvent below): BOTH doors publish from
   // apps/api (`services/stripe/dispatch.ts` post-commit, `services/stripe/mandate.ts`
   // post-commit) — never from apps/web.
-  | 'credit.saved_card.detached';
+  | 'credit.saved_card.detached'
+  // BAL-522 — an explicit billing-email change from /settings/billing. Published from
+  // `apps/api`'s `services/billing/set-billing-email.ts` — never from apps/web.
+  | 'billing.email_changed';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -633,7 +676,11 @@ export type ServerOnlyNotificationEvent =
   // (`services/stripe/dispatch.ts`) and `detachSavedCard` (`services/stripe/mandate.ts`) —
   // never from apps/web, so it has NO `publishBodySchema` arm; adding one would be a
   // `StraySchemaArm` and fail `tsc`.
-  | 'credit.saved_card.detached';
+  | 'credit.saved_card.detached'
+  // BAL-522: published from `apps/api`'s `services/billing/set-billing-email.ts` — never from
+  // apps/web, so it has NO `publishBodySchema` arm; adding one would be a `StraySchemaArm` and
+  // fail `tsc`.
+  | 'billing.email_changed';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -785,4 +832,5 @@ export interface EventPayloadMap {
   'request_file.shared_with_expert': RequestFileSharedWithExpertPayload;
   'request_file.shared_with_client': RequestFileSharedWithClientPayload;
   'credit.saved_card.detached': CreditSavedCardDetachedPayload;
+  'billing.email_changed': BillingEmailChangedPayload;
 }

@@ -60,6 +60,10 @@ const BILLING_FANOUT_EVENTS = new Set<string>([
   // finds no `data.billingUserIds` and the fan-out delivers to nobody. See this file's own
   // docblock warning above.
   'credit.saved_card.detached',
+  // BAL-522: an explicit billing-email change → the company's MANAGE_BILLING holders (includes
+  // the actor, as confirmation). Omitting this entry fails SILENTLY the same way — see the
+  // warning above.
+  'billing.email_changed',
   // ⚠⚠ BAL-412's `session.missed_call` is DELIBERATELY NOT LISTED HERE, and the omission is a
   // DECISION, not a gap (omitting an entry for a genuine fan-out event would silently drop the
   // alert — see the file docblock's warning). This event has NO `company_billing_admins`
@@ -156,6 +160,33 @@ async function hydrateSavedCardDetachActor(
   }
 }
 
+/**
+ * BAL-522 — name the member who changed the billing email, for the `company_billing_admins`
+ * fan-out. The payload carries `changedByUserId` (NOT `userId` — see the payload's own
+ * docblock), so the shared `payload.userId → data.user` hydration never fires and the actor is
+ * never mailed as a `self` recipient on top of the fan-out.
+ *
+ * Hydrates TWO fields from ONE lookup, mirroring `hydrateSavedCardDetachActor`:
+ * `changedByName` (bare) and `changedByLabel` ("Dana @ Northwind Industrial" via
+ * `personWithOrgLabel`, staple-on only when a real name resolved). Reads `data.company` for the
+ * org label — already hydrated above from `payload.companyId` (context only), i.e. BEFORE this
+ * hydrator runs.
+ */
+async function hydrateBillingEmailChangeActor(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (event === 'billing.email_changed' && typeof payload.changedByUserId === 'string') {
+    const user = await usersRepository.findById(payload.changedByUserId);
+    const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+    const bareName = name.length > 0 ? name : 'A teammate';
+    data.changedByName = bareName;
+    const company = data.company as { name?: string } | undefined;
+    data.changedByLabel = name.length > 0 ? personWithOrgLabel(bareName, company?.name) : bareName;
+  }
+}
+
 export async function resolveContext(
   event: string,
   payload: Record<string, unknown>
@@ -212,6 +243,9 @@ export async function resolveContext(
   // BAL-521 §3: name the member who removed the saved card, for the user_initiated copy arm
   // (extracted — see hydrateSavedCardDetachActor).
   await hydrateSavedCardDetachActor(event, payload, data);
+
+  // BAL-522: name the member who changed the billing email, for the fan-out copy.
+  await hydrateBillingEmailChangeActor(event, payload, data);
 
   // BAL-348: agency.provisioned hydration (extracted — see hydrateAgencyProvisioned).
   await hydrateAgencyProvisioned(event, payload, data);

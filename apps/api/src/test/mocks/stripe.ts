@@ -47,6 +47,8 @@ export const mockStripe = {
   customers: {
     create: vi.fn(),
     retrieve: vi.fn(),
+    // BAL-522 — `syncStripeCustomerIdentity` is the only writer of `customers.update`.
+    update: vi.fn(),
   },
   setupIntents: {
     create: vi.fn(),

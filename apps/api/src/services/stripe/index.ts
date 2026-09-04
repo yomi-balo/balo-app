@@ -6,11 +6,13 @@
  */
 export {
   ensureCustomer,
+  syncStripeCustomerIdentity,
   attachPaymentMethod,
   createSetupIntent,
   retrieveCardDisplay,
   confirmSavedCardMandate,
   detachSavedCard,
+  type EnsureCustomerActor,
   type SavedCardMandateResult,
   type DetachSavedCardResult,
 } from './mandate.js';

@@ -1376,4 +1376,51 @@ describe('notificationRules', () => {
       expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
     });
   });
+
+  describe('billing.email_changed (BAL-522)', () => {
+    it('has exactly 3 rules: two company_billing_admins (email + in-app) and one email_address (email only, with a condition)', () => {
+      const rules = notificationRules['billing.email_changed'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(3);
+
+      const fanOut = rules!.filter((r) => r.recipient === 'company_billing_admins');
+      expect(fanOut).toHaveLength(2);
+      for (const rule of fanOut) {
+        expect(rule.template).toBe('billing-email-changed');
+        expect(rule.timing).toBe('immediate');
+      }
+      expect(fanOut.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+
+      const previous = rules!.filter((r) => r.recipient === 'email_address');
+      expect(previous).toHaveLength(1);
+      expect(previous[0]?.channel).toBe('email');
+      expect(previous[0]?.template).toBe('billing-email-changed-previous');
+      expect(previous[0]?.condition).toBeDefined();
+
+      expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
+      expect(rules!.some((r) => r.recipient === 'admin_users')).toBe(false);
+    });
+
+    it("the previous-address rule's condition fires only when payload.recipientEmail is a non-empty string", () => {
+      const rules = notificationRules['billing.email_changed'];
+      const previousRule = rules!.find((r) => r.recipient === 'email_address');
+      expect(previousRule?.condition).toBeDefined();
+      const condition = previousRule!.condition!;
+
+      expect(
+        condition({
+          payload: { recipientEmail: 'old@northwind.test' },
+        } as unknown as Parameters<typeof condition>[0])
+      ).toBe(true);
+      expect(condition({ payload: {} } as unknown as Parameters<typeof condition>[0])).toBe(false);
+      expect(
+        condition({
+          payload: { recipientEmail: '' },
+        } as unknown as Parameters<typeof condition>[0])
+      ).toBe(false);
+    });
+  });
 });

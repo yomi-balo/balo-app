@@ -3,11 +3,13 @@ import 'server-only';
 import { cache } from 'react';
 
 import {
+  companiesRepository,
   creditWalletsRepository,
   fxDisplayRatesRepository,
   partyMembershipsRepository,
   usersRepository,
   type CreditWallet,
+  type CompanyBillingIdentity,
 } from '@balo/db';
 import {
   isFxRateStale,
@@ -259,6 +261,69 @@ export function projectWalletSnapshot(wallet: CreditWallet): WalletSnapshot {
   };
 }
 
+// ── BAL-522: the billing-email projection ────────────────────────────────────────────────
+
+/** BAL-522 — the settings surface's billing-email projection. Serialisable; no Date, no row. */
+export interface BillingEmailSnapshot {
+  /** `null` ⇒ never seeded — the pre-seed empty state. */
+  readonly email: string | null;
+  readonly source: 'seeded' | 'set' | null;
+  /** ISO — the client formats. `null` iff `email` is null. */
+  readonly setAt: string | null;
+  /** The attributed person's display name, or `null` when it cannot be resolved. */
+  readonly setByName: string | null;
+  /** True ⇒ the provenance line appends "(no longer a member)". */
+  readonly setByIsFormerMember: boolean;
+}
+
+/** BAL-516's snapshot + BAL-522's billing-email projection, behind ONE MANAGE_BILLING gate. */
+export interface BillingSettingsData {
+  readonly wallet: WalletSnapshot;
+  readonly billingEmail: BillingEmailSnapshot;
+}
+
+/**
+ * Project the billing-identity row + its resolved attribution into the serialisable
+ * {@link BillingEmailSnapshot}. Pure — no reads.
+ */
+export function projectBillingEmail(
+  company: CompanyBillingIdentity | undefined,
+  setBy: { name: string | null; isFormerMember: boolean }
+): BillingEmailSnapshot {
+  if (company === undefined || company.billingEmail === null) {
+    return { email: null, source: null, setAt: null, setByName: null, setByIsFormerMember: false };
+  }
+  return {
+    email: company.billingEmail,
+    source: company.billingEmailSource,
+    setAt: company.billingEmailSetAt === null ? null : company.billingEmailSetAt.toISOString(),
+    setByName: setBy.name,
+    setByIsFormerMember: setBy.isFormerMember,
+  };
+}
+
+/**
+ * Resolve the display name + current-membership liveness of the user who last set the billing
+ * email. `setByUserId === null` ⇒ never set ⇒ no reads. Otherwise reuses `getMemberRole` (which
+ * already filters `deleted_at IS NULL`) rather than adding a membership-liveness method — the
+ * attributed user always WAS a member (they held MANAGE_BILLING at write time), so `undefined`
+ * means departed.
+ */
+async function resolveBillingEmailAttribution(
+  companyId: string,
+  setByUserId: string | null
+): Promise<{ name: string | null; isFormerMember: boolean }> {
+  if (setByUserId === null) {
+    return { name: null, isFormerMember: false };
+  }
+  const [display, role] = await Promise.all([
+    usersRepository.findDisplayById(setByUserId),
+    partyMembershipsRepository.getMemberRole('company', companyId, setByUserId),
+  ]);
+  const name = [display?.firstName, display?.lastName].filter(Boolean).join(' ').trim();
+  return { name: name.length > 0 ? name : null, isFormerMember: role === undefined };
+}
+
 /**
  * BAL-516 — the settings page's snapshot read for sections 2–3 ("When your balance runs low" /
  * "Payment method"). Same `MANAGE_BILLING` audience rule as `loadDashboardWalletData`
@@ -268,16 +333,29 @@ export function projectWalletSnapshot(wallet: CreditWallet): WalletSnapshot {
  *
  * `null` = not a `MANAGE_BILLING` holder (the sections simply do not render — not an empty
  * state). Holder with no wallet row yet ⇒ {@link UNPROVISIONED_WALLET} (Save/Add provisions it
- * via `ensureWallet`, unchanged). Holder with a row ⇒ `projectWalletSnapshot(wallet)`. Returns
- * the projected snapshot only — never the full wallet row.
+ * via `ensureWallet`, unchanged). Holder with a row ⇒ `projectWalletSnapshot(wallet)`.
+ *
+ * BAL-522 EXTENSION — widens the return to also carry the billing-email projection (§7.1). At
+ * most three extra queries, holder-only, on a settings page. Returns the projected snapshots
+ * only — never the full wallet row or the full company row.
  */
 export async function loadBillingSettingsWallet(
   actor: { id: string },
   companyId: string
-): Promise<WalletSnapshot | null> {
+): Promise<BillingSettingsData | null> {
   const { canManageBilling, wallet } = await resolveWalletAudience(actor.id, companyId);
   if (!canManageBilling) {
     return null;
   }
-  return wallet === undefined ? UNPROVISIONED_WALLET : projectWalletSnapshot(wallet);
+
+  const company = await companiesRepository.findBillingIdentityById(companyId);
+  const setBy = await resolveBillingEmailAttribution(
+    companyId,
+    company?.billingEmailSetByUserId ?? null
+  );
+
+  return {
+    wallet: wallet === undefined ? UNPROVISIONED_WALLET : projectWalletSnapshot(wallet),
+    billingEmail: projectBillingEmail(company, setBy),
+  };
 }
