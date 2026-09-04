@@ -13,9 +13,10 @@ import {
 } from '@/components/ui/alert-dialog';
 import { buttonVariants } from '@/components/ui/button';
 import { describeSavedCard } from '@/components/billing/top-up/SavedCardRow';
-import { MODE_OPTIONS } from '@/components/billing/top-up/LowBalanceModePicker';
+import { CARD_BACKED_MODE_TITLE } from '@/components/billing/top-up/LowBalanceModePicker';
 import type { SavedCard } from '@/components/billing/top-up/types';
 import type { LowBalanceMode } from '@/lib/credit/actions';
+import { isCardBackedLowBalanceMode } from '@balo/shared/credit';
 import { cn } from '@/lib/utils';
 
 interface RemoveCardConfirmProps {
@@ -32,21 +33,6 @@ interface RemoveCardConfirmProps {
    */
   readonly blockedReason?: string | null;
 }
-
-/**
- * BAL-516 FIX ROUND — the two card-backed mode titles, DERIVED from `LowBalanceModePicker`'s
- * exported `MODE_OPTIONS` rather than a second hand-authored copy of the same strings. The
- * original comment here claimed pinning them as local literals "never drifts" from the picker —
- * that is backwards: two independent copies is HOW copy drifts, and nothing coupled them. The
- * `?? mode` fallback only matters if `MODE_OPTIONS` ever drops one of these two ids entirely
- * (never expected — both are shipped, permanent modes); it is a defensive guard against an
- * indexed lookup returning `undefined` (`noUncheckedIndexedAccess` posture), not a real fallback
- * path.
- */
-const CARD_BACKED_MODE_TITLE: Record<'auto_topup' | 'keep_going', string> = {
-  auto_topup: MODE_OPTIONS.find((option) => option.id === 'auto_topup')?.title ?? 'auto_topup',
-  keep_going: MODE_OPTIONS.find((option) => option.id === 'keep_going')?.title ?? 'keep_going',
-};
 
 /**
  * The removal-confirmation dialog — the centre of the BAL-516 design (see
@@ -68,7 +54,7 @@ export function RemoveCardConfirm({
   onConfirm,
   blockedReason = null,
 }: Readonly<RemoveCardConfirmProps>): React.JSX.Element {
-  const cardBacked = mode === 'auto_topup' || mode === 'keep_going';
+  const cardBacked = isCardBackedLowBalanceMode(mode);
   const cardLabel = describeSavedCard(card);
   const fullConfirmLabel = cardBacked ? 'Remove card & switch to Just notify me' : 'Remove card';
 

@@ -3,6 +3,9 @@
  * (`endSession` + the settlement webhook), apps/web (the drawdown read), and `@balo/db`
  * (the sessions repo). Extracted here as the single home so the mandate predicate + the
  * settleable-session narrowing never drift across surfaces (Sonar new-code duplication gate).
+ * BAL-524 widens this file's scope by one clause: it is also the single home for "which
+ * low-balance MODE needs a card" — consulted by the write guard (apps/web), the repository
+ * write (`@balo/db`), and the card-removal reconcile, so that predicate cannot drift either.
  *
  * NO `@balo/db`, NO postgres, NO I/O — behind the `@balo/shared/credit` subpath so it is
  * safe wherever the pure drawdown projection is (never drags the postgres driver into a
@@ -67,3 +70,51 @@ export function isWalletMandateActive(wallet: MandateWalletFields): boolean {
 export function isWalletCardReusableOnSession(wallet: MandateWalletFields): boolean {
   return wallet.stripeCustomerId !== null && wallet.stripePaymentMethodId !== null;
 }
+
+/**
+ * BAL-524 — which low-balance MODE needs a card, as opposed to which WALLET has one
+ * ({@link isWalletCardReusableOnSession} above). Deliberately NOT folded into that predicate:
+ * they answer different questions, and the `card-reuse.test.ts` anti-alignment posture applies
+ * here too.
+ *
+ * The two card-backed modes: `auto_topup` reloads the wallet automatically, and `keep_going`
+ * settles overdraft consultation time — both charge a card with nobody watching, so both
+ * require one on file. `notify_only` charges nothing and is exempt.
+ */
+
+/** The two low-balance modes that CANNOT work without a card on file. */
+export type CardBackedLowBalanceMode = 'auto_topup' | 'keep_going';
+
+/** The set, as data — so a test can assert against it instead of restating it. */
+export const CARD_BACKED_LOW_BALANCE_MODES: readonly CardBackedLowBalanceMode[] = [
+  'auto_topup',
+  'keep_going',
+];
+
+/**
+ * Is this low-balance mode one that charges a card? ONE definition, consulted by the settings
+ * write guard (apps/web), the repository write (@balo/db), and the card-removal reconcile — so
+ * "card-backed" can never mean two different things at two ends of the same invariant.
+ *
+ * Generic in the input so it BOTH narrows a caller's own union (the settings section needs
+ * `'auto_topup' | 'keep_going'` to index its mode-keyed copy) AND accepts
+ * `CreditWallet['lowBalanceMode']` and the zod-inferred union without either package importing
+ * the other's type. Structural, the same posture `MandateWalletFields` takes with
+ * `mandateStatus: string | null`.
+ */
+export function isCardBackedLowBalanceMode<T extends string>(
+  mode: T
+): mode is T & CardBackedLowBalanceMode {
+  return mode === 'auto_topup' || mode === 'keep_going';
+}
+
+/**
+ * Whether a write that names a CARD-BACKED low-balance mode must prove a card is on file.
+ * `'require_card_on_file'` is the DEFAULT at every seam that carries it — a caller that says
+ * nothing is guarded. The exemption is spelled out, once, for the one operation that ESTABLISHES
+ * the card in the same breath as the mode (a first purchase: the config is persisted before the
+ * PaymentIntent, and the card lands later via the Stripe webhook).
+ */
+export type CardBackedModeWriteGuard =
+  | 'require_card_on_file'
+  | 'card_is_established_by_this_same_operation';

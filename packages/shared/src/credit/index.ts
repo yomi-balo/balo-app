@@ -18,9 +18,13 @@ export {
 export {
   isWalletMandateActive,
   isWalletCardReusableOnSession,
+  isCardBackedLowBalanceMode,
   toSettleableSession,
+  CARD_BACKED_LOW_BALANCE_MODES,
   type SettleableSession,
   type MandateWalletFields,
+  type CardBackedLowBalanceMode,
+  type CardBackedModeWriteGuard,
 } from './settlement';
 export {
   resolveMeetingSettlement,

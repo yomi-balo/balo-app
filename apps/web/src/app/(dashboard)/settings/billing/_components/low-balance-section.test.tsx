@@ -25,14 +25,14 @@ import { LowBalanceSection } from './low-balance-section';
 
 const PREV_PK = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
 
-function renderSection(
-  overrides: {
-    initialConfig?: LowBalanceDraft;
-    cardAvailable?: boolean;
-    cardLabel?: string | null;
-    mandateActive?: boolean;
-  } = {}
-) {
+interface RenderSectionOverrides {
+  initialConfig?: LowBalanceDraft;
+  cardAvailable?: boolean;
+  cardLabel?: string | null;
+  mandateActive?: boolean;
+}
+
+function renderSection(overrides: RenderSectionOverrides = {}) {
   const props = {
     initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 } as const,
     cardAvailable: true,
@@ -40,7 +40,7 @@ function renderSection(
     mandateActive: true,
     ...overrides,
   };
-  render(
+  const view = render(
     <LowBalanceSection
       initialConfig={props.initialConfig}
       cardAvailable={props.cardAvailable}
@@ -48,7 +48,27 @@ function renderSection(
       mandateActive={props.mandateActive}
     />
   );
-  return props;
+  return {
+    ...props,
+    /**
+     * FIX ROUND (F3) — re-render the SAME mounted instance with a prop change, never a fresh
+     * `render()`. `LowBalanceSection` is re-mounted by its parent's `key={reconcileNonce}` only
+     * on a reconciled removal; a `cardAvailable` flip alone (the ordinary same-tab path this
+     * component's F3 test pins) is an in-place prop update, so the test harness must exercise
+     * exactly that — not a remount, which would trivially reset any dirty local state.
+     */
+    rerender: (nextOverrides: RenderSectionOverrides = {}) => {
+      const nextProps = { ...props, ...nextOverrides };
+      view.rerender(
+        <LowBalanceSection
+          initialConfig={nextProps.initialConfig}
+          cardAvailable={nextProps.cardAvailable}
+          cardLabel={nextProps.cardLabel}
+          mandateActive={nextProps.mandateActive}
+        />
+      );
+    },
+  };
 }
 
 beforeEach(() => {
@@ -112,6 +132,83 @@ describe('LowBalanceSection', () => {
     );
     expect(screen.getByRole('button', { name: /save changes/i })).not.toBeDisabled();
     expect(screen.getByRole('radio', { name: /Keep me going/i })).toBeChecked();
+  });
+
+  // ── BAL-524 — the no_saved_card refusal ──────────────────────────────────────────────────
+
+  it('no_saved_card renders the specific copy for keep_going, not "please try again"', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: false, error: 'no_saved_card' });
+    // cardAvailable: true — the stale-tab shape: the page loaded with a card, the server no
+    // longer sees one (removed in another tab between load and Save).
+    renderSection({ cardAvailable: true, mandateActive: false });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Keep me going needs a card on file.', {
+        description: 'Add a card in the Payment method section below, then save this again.',
+      })
+    );
+  });
+
+  it('no_saved_card renders the specific copy for auto_topup', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: false, error: 'no_saved_card' });
+    renderSection({ cardAvailable: true, mandateActive: false });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Auto top-up needs a card on file.', {
+        description: 'Add a card in the Payment method section below, then save this again.',
+      })
+    );
+  });
+
+  it('a no_saved_card refusal does not fire the saved-analytics event, does not re-baseline, and never arms the mandate', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: false, error: 'no_saved_card' });
+    renderSection({ cardAvailable: true, mandateActive: false });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+
+    expect(mockTrack).not.toHaveBeenCalledWith(
+      SETTINGS_EVENTS.BILLING_LOW_BALANCE_SAVED,
+      expect.anything()
+    );
+    expect(mockArmSavedCardMandateAction).not.toHaveBeenCalled();
+    // The draft is never reverted — the shipped no-revert-on-failure posture.
+    expect(screen.getByRole('radio', { name: /Keep me going/i })).toBeChecked();
+    expect(screen.getByRole('button', { name: /save changes/i })).not.toBeDisabled();
+  });
+
+  it('F3 — a mid-session card removal (cardAvailable flips true→false under a dirty card-backed draft) blocks Save client-side instead of letting it reach the server', async () => {
+    const section = renderSection({
+      initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      cardAvailable: true,
+      mandateActive: false,
+    });
+
+    // An ordinary, unsaved edit — the saved mode is still notify_only.
+    await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
+    expect(screen.getByRole('button', { name: /save changes/i })).not.toBeDisabled();
+
+    // The card is removed in the SAME session (Payment method, below) — a RE-RENDER, not a
+    // remount: the saved mode was notify_only, so nothing reconciles and `key={reconcileNonce}`
+    // (the parent's remount trigger) never bumps. The dirty draft survives; only `cardAvailable`
+    // changes, exactly as it would if the real parent re-rendered this same mounted instance.
+    section.rerender({ cardAvailable: false });
+
+    // Save is now BLOCKED — not silently reset, not left clickable to hit a refusal it could
+    // have avoided entirely.
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
+    expect(screen.getByText(/Auto top-up needs a card on file/i)).toBeInTheDocument();
+    // The chosen mode is preserved — a silent reset would be worse than a blocked button.
+    expect(screen.getByRole('radio', { name: /Auto top-up/i })).toBeChecked();
+    expect(mockSaveLowBalanceConfigAction).not.toHaveBeenCalled();
   });
 
   it('a THROWN Save toasts the failure message (review MINOR) — previously silent', async () => {

@@ -1,12 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
-import { isWalletMandateActive, isWalletCardReusableOnSession } from '@balo/shared/credit';
+import {
+  isWalletMandateActive,
+  isWalletCardReusableOnSession,
+  CARD_BACKED_LOW_BALANCE_MODES,
+} from '@balo/shared/credit';
 import { auditEvents, companies, creditWallets, type CreditWallet } from '../schema';
 import { db } from '../client';
 import { creditWalletFactory, userFactory } from '../test/factories';
 import { companyFactory } from '../test/factories/company.factory';
-import { creditWalletsRepository } from './credit-wallets';
+import { creditWalletsRepository, type UpdateWalletConfigResult } from './credit-wallets';
 import type { DbExecutor } from './_shared/db-executor';
 
 /**
@@ -179,10 +183,33 @@ describe('creditWalletsRepository reads', () => {
   });
 });
 
+/**
+ * FIX ROUND (F9) — the `expect(result.outcome).toBe('written'); if (result.outcome !== 'written')
+ * throw …` narrowing shape repeated 8× across this describe block. `UpdateWalletConfigResult` is a
+ * discriminated union with no other outcome a passing assertion could leave `result` as, so this
+ * is the ONE place that narrows it; every case below reads `expectWritten(result)` instead of
+ * restating the guard. Kept as a genuine `expect` + throw (not a bare type assertion) so a
+ * regression that starts returning `refused_no_card_on_file` from a case that must not still fails
+ * LOUDLY, with Vitest's own assertion message, rather than a generic property-of-undefined crash.
+ */
+function expectWritten(result: UpdateWalletConfigResult): CreditWallet {
+  expect(result.outcome).toBe('written');
+  if (result.outcome !== 'written') {
+    throw new Error(`expected outcome "written", got "${result.outcome}"`);
+  }
+  return result.wallet;
+}
+
 describe('creditWalletsRepository.updateConfig', () => {
   it('writes each config field and leaves the rest untouched', async () => {
     const { wallet } = await creditWalletFactory();
-    const updated = await creditWalletsRepository.updateConfig(wallet.id, {
+    // BAL-524 arm 2 (§2.4 of the plan): this write names a CARD-BACKED mode (`auto_topup`) AND
+    // establishes `stripePaymentMethodId` in the SAME call, on a wallet that started cardless.
+    // That is deliberate — it is exactly the same-write-establishes-the-card shape the guard
+    // must allow (the purchase path's config-then-charge ordering), so DO NOT "simplify" this
+    // to a bare `isNotNull` precondition without re-reading BAL-524's plan §2.4 — that would
+    // red this test for the wrong reason.
+    const result = await creditWalletsRepository.updateConfig(wallet.id, {
       lowBalanceMode: 'auto_topup',
       topupThresholdMinor: 5000,
       topupReloadMinor: 25_000,
@@ -190,6 +217,8 @@ describe('creditWalletsRepository.updateConfig', () => {
       stripePaymentMethodId: 'pm_123',
       mandateRef: 'mandate_xyz',
     });
+
+    const updated = expectWritten(result);
 
     expect(updated.lowBalanceMode).toBe('auto_topup');
     expect(updated.topupThresholdMinor).toBe(5000);
@@ -204,24 +233,183 @@ describe('creditWalletsRepository.updateConfig', () => {
 
   it('clears a nullable field back to null (overdraft ceiling → platform default at the caller)', async () => {
     const { wallet } = await creditWalletFactory({ values: { overdraftCeilingMinor: 20_000 } });
-    const cleared = await creditWalletsRepository.updateConfig(wallet.id, {
+    const result = await creditWalletsRepository.updateConfig(wallet.id, {
       overdraftCeilingMinor: null,
     });
-    expect(cleared.overdraftCeilingMinor).toBeNull();
+    expect(expectWritten(result).overdraftCeilingMinor).toBeNull();
   });
 
   it('is a no-op passthrough when given no fields (returns the current row)', async () => {
     const { wallet } = await creditWalletFactory();
-    const same = await creditWalletsRepository.updateConfig(wallet.id, {});
-    expect(same.id).toBe(wallet.id);
+    const result = await creditWalletsRepository.updateConfig(wallet.id, {});
+    expect(expectWritten(result).id).toBe(wallet.id);
   });
 
   it('throws for an unknown wallet id', async () => {
+    // Also exercises the new 0-row disambiguation (BAL-524): with no `WHERE` guard active
+    // (`keep_going` on a wallet id that does not exist at all), 0 rows can only mean "missing
+    // wallet" — the follow-up `findById` on the guarded path is not even reached. Must keep
+    // throwing; do NOT weaken this into a `refused_no_card_on_file` result.
     await expect(
       creditWalletsRepository.updateConfig('00000000-0000-0000-0000-000000000000', {
         lowBalanceMode: 'keep_going',
       })
     ).rejects.toThrow(/not found/i);
+  });
+
+  describe('BAL-524 — card-backed mode write guard', () => {
+    it.each(CARD_BACKED_LOW_BALANCE_MODES)(
+      'refuses %s on a cardless wallet — 0 rows affected, nothing written',
+      async (mode) => {
+        const { wallet } = await creditWalletFactory();
+        expect(wallet.stripePaymentMethodId).toBeNull();
+
+        const result = await creditWalletsRepository.updateConfig(wallet.id, {
+          lowBalanceMode: mode,
+        });
+
+        expect(result).toEqual({ outcome: 'refused_no_card_on_file' });
+
+        const persisted = await creditWalletsRepository.findById(wallet.id);
+        expect(persisted?.lowBalanceMode).toBe('notify_only');
+      }
+    );
+
+    it('allows a card-backed mode on a wallet that already HAS a card — the guard is not a blanket ban', async () => {
+      const { wallet } = await creditWalletFactory({
+        values: { stripePaymentMethodId: 'pm_existing' },
+      });
+
+      const result = await creditWalletsRepository.updateConfig(wallet.id, {
+        lowBalanceMode: 'auto_topup',
+      });
+
+      expect(expectWritten(result).lowBalanceMode).toBe('auto_topup');
+    });
+
+    it('writes notify_only on a cardless wallet normally — the guard is card-backed-only', async () => {
+      const { wallet } = await creditWalletFactory();
+
+      const result = await creditWalletsRepository.updateConfig(wallet.id, {
+        lowBalanceMode: 'notify_only',
+      });
+
+      expect(expectWritten(result).lowBalanceMode).toBe('notify_only');
+    });
+
+    it('writes a non-mode field on a cardless wallet with no collateral damage', async () => {
+      const { wallet } = await creditWalletFactory();
+
+      const result = await creditWalletsRepository.updateConfig(wallet.id, {
+        overdraftCeilingMinor: 12_000,
+      });
+
+      const updated = expectWritten(result);
+      expect(updated.overdraftCeilingMinor).toBe(12_000);
+      expect(updated.lowBalanceMode).toBe('notify_only');
+    });
+
+    it('D3 — the exemption allows a card-backed mode on a CARDLESS wallet: the purchase path still works', async () => {
+      const { wallet } = await creditWalletFactory();
+      expect(wallet.stripePaymentMethodId).toBeNull();
+
+      const result = await creditWalletsRepository.updateConfig(
+        wallet.id,
+        { lowBalanceMode: 'auto_topup' },
+        'card_is_established_by_this_same_operation'
+      );
+
+      expect(expectWritten(result).lowBalanceMode).toBe('auto_topup');
+    });
+
+    it('F5 — an empty-string stripePaymentMethodId is treated as ABSENT, not as an established card (defence-in-depth)', async () => {
+      const { wallet } = await creditWalletFactory();
+      expect(wallet.stripePaymentMethodId).toBeNull();
+
+      const result = await creditWalletsRepository.updateConfig(wallet.id, {
+        lowBalanceMode: 'auto_topup',
+        stripePaymentMethodId: '',
+      });
+
+      expect(result).toEqual({ outcome: 'refused_no_card_on_file' });
+
+      // Nothing written — in particular NOT `stripe_payment_method_id: ''`, which arm 3's
+      // `isNotNull` WHERE would otherwise vouch for on every later write.
+      const persisted = await creditWalletsRepository.findById(wallet.id);
+      expect(persisted?.lowBalanceMode).toBe('notify_only');
+      expect(persisted?.stripePaymentMethodId).toBeNull();
+    });
+
+    it('arm 1 — a card-backed mode + an explicit payment-method clear is refused even though the row HAS a card', async () => {
+      const { wallet } = await creditWalletFactory({
+        values: { stripePaymentMethodId: 'pm_existing', lowBalanceMode: 'keep_going' },
+      });
+
+      const result = await creditWalletsRepository.updateConfig(wallet.id, {
+        lowBalanceMode: 'auto_topup',
+        stripePaymentMethodId: null,
+      });
+
+      expect(result).toEqual({ outcome: 'refused_no_card_on_file' });
+
+      // Nothing written: the card AND the old mode are both intact.
+      const persisted = await creditWalletsRepository.findById(wallet.id);
+      expect(persisted?.stripePaymentMethodId).toBe('pm_existing');
+      expect(persisted?.lowBalanceMode).toBe('keep_going');
+    });
+
+    it('arm 2 — a card-backed mode + the SAME-write payment method lands together on a cardless wallet', async () => {
+      const { wallet } = await creditWalletFactory();
+
+      const result = await creditWalletsRepository.updateConfig(wallet.id, {
+        lowBalanceMode: 'keep_going',
+        stripePaymentMethodId: 'pm_new',
+      });
+
+      const updated = expectWritten(result);
+      expect(updated.lowBalanceMode).toBe('keep_going');
+      expect(updated.stripePaymentMethodId).toBe('pm_new');
+    });
+
+    /**
+     * BAL-524 — the race, expressed SEQUENTIALLY. The integration harness runs a `max:1` pool
+     * inside one per-test transaction (memory `db_integration_harness_no_concurrency`), so
+     * genuine concurrency is not expressible here — two "simultaneous" statements would
+     * serialise on the same connection inside the same transaction. This pins the END STATE the
+     * race produces: a concurrent card removal commits first, then the stale web write (default
+     * guard) is refused, never landing the forbidden state.
+     *
+     * This does NOT prove statement-level isolation — this harness cannot. The isolation claim
+     * rests on the write being a single `UPDATE … WHERE` (Postgres re-checks the predicate under
+     * the row lock), not a read followed by a write — which is why the invariant is in SQL, not
+     * `apps/web`. Do not "fix" this with `Promise.all` — on a max:1 pool that is sequential
+     * execution wearing a costume.
+     */
+    it('the TOCTOU race: a concurrent card removal wins, and the stale write is refused', async () => {
+      const { wallet } = await creditWalletFactory({
+        values: { lowBalanceMode: 'auto_topup', stripePaymentMethodId: 'pm_going_away' },
+      });
+      const actor = await userFactory();
+
+      // The concurrent removal, committed first.
+      await db.transaction((tx) =>
+        creditWalletsRepository.clearSavedCardAndReconcileMode(tx, wallet.id, {
+          actorUserId: actor.id,
+          source: 'user_initiated',
+        })
+      );
+
+      // The stale web write — read the wallet before the removal, writes after. Default guard.
+      const result = await creditWalletsRepository.updateConfig(wallet.id, {
+        lowBalanceMode: 'auto_topup',
+      });
+
+      expect(result).toEqual({ outcome: 'refused_no_card_on_file' });
+
+      const persisted = await creditWalletsRepository.findById(wallet.id);
+      expect(persisted?.lowBalanceMode).toBe('notify_only');
+      expect(persisted?.stripePaymentMethodId).toBeNull();
+    });
   });
 });
 

@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import { Zap, Radio, Bell, Info, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatAudShort, type AutoTopupErrors } from '@/lib/credit/display-constants';
+import { isCardBackedLowBalanceMode, type CardBackedLowBalanceMode } from '@balo/shared/credit';
 import type { LowBalanceMode } from '@/lib/credit/actions';
 
 interface LowBalanceModePickerProps {
@@ -46,12 +47,34 @@ interface ModeOption {
  * copy can DERIVE the two card-backed mode titles from this array instead of keeping a second,
  * hand-authored copy of the same strings (review IMPORTANT — two independent copies is how copy
  * drifts, not how it's prevented).
+ *
+ * `cardBacked` here stays a literal display flag (which radio to disable) — it is per-option
+ * render data, not an invariant branch, so it is NOT derived from `isCardBackedLowBalanceMode`.
+ * It is instead pinned against the shared `CARD_BACKED_LOW_BALANCE_MODES` set by a test
+ * (`LowBalanceModePicker.test.tsx`), because a drift here would offer the client a mode the
+ * server (BAL-524) now refuses.
  */
 export const MODE_OPTIONS: readonly ModeOption[] = [
   { id: 'auto_topup', icon: Zap, title: 'Auto top-up', cardBacked: true },
   { id: 'keep_going', icon: Radio, title: 'Keep me going', cardBacked: true },
   { id: 'notify_only', icon: Bell, title: 'Just notify me', cardBacked: false },
 ];
+
+/**
+ * BAL-516 FIX ROUND — the two card-backed mode titles, DERIVED from `MODE_OPTIONS` rather than a
+ * second hand-authored copy of the same strings. Originally lived in `remove-card-confirm.tsx`;
+ * MOVED here for BAL-524 (its second consumer, `low-balance-section.tsx`'s refusal toast) because
+ * this is the file where `MODE_OPTIONS` lives, so it is where a constant derived from it belongs
+ * — a second hand-rolled derivation is exactly the drift the BAL-516 fix round called out. The
+ * `?? mode` fallback only matters if `MODE_OPTIONS` ever drops one of these two ids entirely
+ * (never expected — both are shipped, permanent modes); it is a defensive guard against an
+ * indexed lookup returning `undefined` (`noUncheckedIndexedAccess` posture), not a real fallback
+ * path.
+ */
+export const CARD_BACKED_MODE_TITLE: Record<CardBackedLowBalanceMode, string> = {
+  auto_topup: MODE_OPTIONS.find((option) => option.id === 'auto_topup')?.title ?? 'auto_topup',
+  keep_going: MODE_OPTIONS.find((option) => option.id === 'keep_going')?.title ?? 'keep_going',
+};
 
 function RadioDot({ on }: Readonly<{ on: boolean }>) {
   return (
@@ -215,7 +238,7 @@ export function LowBalanceModePicker({
     [reloadMinor, thresholdMinor]
   );
 
-  const cardBackedSelected = mode === 'auto_topup' || mode === 'keep_going';
+  const cardBackedSelected = isCardBackedLowBalanceMode(mode);
 
   return (
     <div>
