@@ -21,6 +21,10 @@ export const BILLING_SERVER_EVENTS = {
   // The company's billing details were submitted (first-time or edit). Props are
   // computed server-side, so this fires from the submit action, not the browser.
   DETAILS_SUBMITTED: 'billing_details_submitted',
+  /** BAL-522 — the company's billing email was captured from the first purchaser. */
+  EMAIL_SEEDED: 'billing_email_seeded',
+  /** BAL-522 — an explicit change from /settings/billing (never the seed). */
+  EMAIL_UPDATED: 'billing_email_updated',
 } as const;
 
 export interface BillingServerEventMap {
@@ -32,6 +36,21 @@ export interface BillingServerEventMap {
     is_first_time: boolean;
     /** Whole hours between proposal acceptance and this submission. */
     hours_since_acceptance: number;
+    distinct_id: string;
+  };
+  [BILLING_SERVER_EVENTS.EMAIL_SEEDED]: {
+    company_id: string;
+    /** Answers business question (b): the personal-vs-company split of seeds. */
+    company_is_personal: boolean;
+    distinct_id: string;
+  };
+  [BILLING_SERVER_EVENTS.EMAIL_UPDATED]: {
+    company_id: string;
+    company_is_personal: boolean;
+    /** `null` when the company had no billing email at all (set before any Stripe touch). */
+    previous_source: 'seeded' | 'set' | null;
+    /** Whole days between the previous write and this one; `null` when there was none. */
+    days_since_set: number | null;
     distinct_id: string;
   };
 }

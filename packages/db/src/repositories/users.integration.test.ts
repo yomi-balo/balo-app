@@ -616,6 +616,34 @@ describe('usersRepository.findDisplayById — the PROJECTED counterparty read (B
   });
 });
 
+describe('usersRepository.findEmailById — the PROJECTED actor-address read (BAL-522)', () => {
+  it('returns exactly id + email, and NOT workosId / phone / firstName', async () => {
+    const user = await userFactory({ phone: '+61412345678' });
+
+    const row = await usersRepository.findEmailById(user.id);
+
+    if (row === undefined) throw new Error('expected an email row');
+    // The key SET is the invariant: this value crosses into a Stripe Customer payload, so a
+    // widened projection must fail here rather than carry `workosId` off-platform.
+    expect(Object.keys(row).sort()).toEqual(['email', 'id']);
+    expect(row.email).toBe(user.email);
+    expect(row).not.toHaveProperty('workosId');
+    expect(row).not.toHaveProperty('phone');
+    expect(row).not.toHaveProperty('firstName');
+  });
+
+  it('excludes a soft-deleted user — the seed is skipped rather than seeded with a dead address', async () => {
+    const user = await userFactory();
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+    await expect(usersRepository.findEmailById(user.id)).resolves.toBeUndefined();
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    await expect(usersRepository.findEmailById(randomUUID())).resolves.toBeUndefined();
+  });
+});
+
 // ── BAL-494: the workspace column + the widened session-sync projection ───────
 
 describe('usersRepository.findForSessionSync — widened projection (BAL-494)', () => {

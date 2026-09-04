@@ -56,6 +56,11 @@ import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
 import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
 import { CreditSavedCardDetachedEmail } from './credit-saved-card-detached.js';
 import {
+  BillingEmailChangedEmail,
+  BillingEmailChangedPreviousEmail,
+  buildBillingEmailChangedCopy,
+} from './billing-email-changed.js';
+import {
   formatAudMinor,
   formatExpiryDateLong,
   formatPresentmentMinor,
@@ -1981,6 +1986,41 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     }),
     subject: 'This call has moved',
   }),
+
+  // BAL-522 — an explicit billing-email change, to the company's MANAGE_BILLING holders
+  // (includes the actor, as confirmation). Copy comes from the ONE shared derivation
+  // (`buildBillingEmailChangedCopy`) the in-app factory also calls. SUBJECT uses the LABELLED
+  // "@ company" form, same as the body's first mention (CLAUDE.md's retrospective-attribution
+  // rule — the `credit-saved-card-detached` F4 precedent).
+  'billing-email-changed': (data) => {
+    const copy = buildBillingEmailChangedCopy(data);
+    return {
+      component: React.createElement(BillingEmailChangedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        label: copy.label,
+        companyName: copy.companyName,
+        newEmail: copy.newEmail,
+        previousEmail: copy.previousEmail,
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject: `${sanitizeSubjectTitle(copy.label)} updated your team's billing email`,
+    };
+  },
+
+  // BAL-522 — the PREVIOUS billing-email address, told it is no longer the contact. Email
+  // only — no in-app surface for a possibly-non-user recipient. Never prints the new address.
+  'billing-email-changed-previous': (data) => {
+    const copy = buildBillingEmailChangedCopy(data);
+    return {
+      component: React.createElement(BillingEmailChangedPreviousEmail, {
+        label: copy.label,
+        companyName: copy.companyName,
+        baseUrl: BASE_URL,
+      }),
+      subject: `Your address is no longer ${sanitizeSubjectTitle(copy.companyName)}'s billing contact`,
+    };
+  },
 };
 
 export function getEmailTemplate(

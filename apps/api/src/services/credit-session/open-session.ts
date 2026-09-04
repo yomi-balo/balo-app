@@ -27,7 +27,7 @@ const log = createLogger('credit-session');
  * ({id,name,logoUrl}) from their LIVE company memberships. Reuses `findWithCompany`
  * (deterministic, soft-delete filtered) — NO new repo method, and NO per-company wallet
  * lookup (wallet resolution stays keyed off the single chosen companyId). The narrow
- * projection is load-bearing: it stops company internals (creditBalance / isPersonal)
+ * projection is load-bearing: it stops company internals (billingEmail / isPersonal)
  * reaching the client.
  */
 async function resolveEligibleCompanies(userId: string): Promise<EligibleCompany[]> {

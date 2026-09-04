@@ -71,9 +71,9 @@ export const loadWorkspaceDerivationMaterials = cache(
       ]);
 
     // ⚠ EXPLICIT PROJECTION ONLY — `findWithCompany` is a relational `with:` hydration that
-    // materialises whole `companies` rows (stripeCustomerId, creditBalance included). Never
-    // spread a row; project exactly what a workspace needs (memory
-    // `reference_drizzle_with_hydration_leaks_secrets`).
+    // materialises whole `companies` rows (billingEmail, domain, and the join-mode governance
+    // columns included, BAL-522). Never spread a row; project exactly what a workspace needs
+    // (memory `reference_drizzle_with_hydration_leaks_secrets`).
     const memberships: MembershipCompanyInput[] = (userWithCompany?.companyMemberships ?? []).map(
       (m) => ({
         companyId: m.company.id,

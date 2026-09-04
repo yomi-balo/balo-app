@@ -139,12 +139,21 @@ describe('CreditsBillingPage', () => {
       fx: null,
     });
     mockLoadBillingSettingsWallet.mockResolvedValue({
-      walletId: 'wallet-1',
-      balanceMinor: 25_000,
-      lowBalanceMode: 'notify_only',
-      savedCard: null,
-      topupReloadMinor: 10_000,
-      topupThresholdMinor: 2_000,
+      wallet: {
+        walletId: 'wallet-1',
+        balanceMinor: 25_000,
+        lowBalanceMode: 'notify_only',
+        savedCard: null,
+        topupReloadMinor: 10_000,
+        topupThresholdMinor: 2_000,
+      },
+      billingEmail: {
+        email: null,
+        source: null,
+        setAt: null,
+        setByName: null,
+        setByIsFormerMember: false,
+      },
     });
 
     const ui = await CreditsBillingPage();
@@ -164,12 +173,21 @@ describe('CreditsBillingPage', () => {
       fx: null,
     });
     mockLoadBillingSettingsWallet.mockResolvedValue({
-      walletId: 'wallet-1',
-      balanceMinor: 25_000,
-      lowBalanceMode: 'notify_only',
-      savedCard: null,
-      topupReloadMinor: 10_000,
-      topupThresholdMinor: 2_000,
+      wallet: {
+        walletId: 'wallet-1',
+        balanceMinor: 25_000,
+        lowBalanceMode: 'notify_only',
+        savedCard: null,
+        topupReloadMinor: 10_000,
+        topupThresholdMinor: 2_000,
+      },
+      billingEmail: {
+        email: null,
+        source: null,
+        setAt: null,
+        setByName: null,
+        setByIsFormerMember: false,
+      },
     });
 
     const ui = await CreditsBillingPage();

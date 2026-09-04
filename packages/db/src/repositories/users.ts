@@ -188,7 +188,6 @@ export const usersRepository = {
         .values({
           name: workspaceName,
           isPersonal: true,
-          creditBalance: 0,
         })
         .returning();
       if (company === undefined) throw new Error('companies insert returned no row');
@@ -382,6 +381,29 @@ export const usersRepository = {
         lastName: users.lastName,
         avatarUrl: users.avatarUrl,
       })
+      .from(users)
+      .where(and(eq(users.id, id), isNull(users.deletedAt)))
+      .limit(1);
+    return row;
+  },
+
+  /**
+   * BAL-522 — `id` + `email` ONLY, for the ONE server-side path that legitimately needs an
+   * actor's address: seeding a company's billing email from the first purchaser
+   * (`ensureCustomer`).
+   *
+   * ⚠ NEVER `findById` HERE. That returns the whole `User` — `workosId`, `phone` and the
+   * rest — and the value crosses into a Stripe Customer payload; the over-hydration shape of
+   * memory `reference_drizzle_with_hydration_leaks_secrets`. Same projected posture as
+   * {@link usersRepository.findNamesByIds} / {@link usersRepository.findDisplayById}; the
+   * `{ id, email }` shape already exists on `findIncompleteOnboardingCreatedBetween`.
+   *
+   * Excludes soft-deleted users: a soft-deleted actor cannot be the live purchaser on a
+   * money path, so `undefined` correctly SKIPS the seed (fail-soft, never a wrong address).
+   */
+  findEmailById: async (id: string): Promise<{ id: string; email: string } | undefined> => {
+    const [row] = await db
+      .select({ id: users.id, email: users.email })
       .from(users)
       .where(and(eq(users.id, id), isNull(users.deletedAt)))
       .limit(1);

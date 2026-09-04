@@ -20,6 +20,7 @@ import {
   createMandateSetupIntent,
   confirmSavedCardMandate,
   detachSavedCardPaymentMethod,
+  setCompanyBillingEmail,
   CreditApiError,
   type PaymentMethodSource,
 } from './api-client';
@@ -197,18 +198,27 @@ export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
  */
 /**
  * Resolve the acting MANAGE_BILLING holder + their company scope, or `null` when the actor
- * lacks the capability. Shared by the three billing-gated actions (capability-based, ADR-1029
- * — never role/activeMode). Fail-closed on onboarding (requireOnboardedUser, BAL-365): these
+ * lacks the capability. Shared by the billing-gated actions (capability-based, ADR-1029 —
+ * never role/activeMode). Fail-closed on onboarding (requireOnboardedUser, BAL-365): these
  * are privileged mutations, so an un-onboarded session must not pass. Throws propagate to each
  * action's own catch boundary.
+ *
+ * BAL-522 — widened to also return the session's own display `name` (`null` when empty), so
+ * `saveBillingEmailAction` can attribute a just-saved provenance line WITHOUT a second session
+ * read — the session is already in hand here.
  */
-async function requireBillingActor(): Promise<{ userId: string; companyId: string } | null> {
+async function requireBillingActor(): Promise<{
+  userId: string;
+  companyId: string;
+  name: string | null;
+} | null> {
   const user = await requireOnboardedUser();
   const { companyId } = await getCompanyContext();
   if (!(await hasCapability(user, CAPABILITIES.MANAGE_BILLING, { companyId }))) {
     return null;
   }
-  return { userId: user.id, companyId };
+  const name = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+  return { userId: user.id, companyId, name: name.length > 0 ? name : null };
 }
 
 /**
@@ -289,7 +299,8 @@ async function resolveMandateOutcome(
   wallet: CreditWallet,
   lowBalanceMode: z.infer<typeof lowBalanceModeSchema>,
   paymentMethodSource: PaymentMethodSource,
-  clientRequestId: string
+  clientRequestId: string,
+  actorUserId: string
 ): Promise<MandateOutcome> {
   const cardBacked = lowBalanceMode === 'auto_topup' || lowBalanceMode === 'keep_going';
   if (!cardBacked) {
@@ -300,10 +311,10 @@ async function resolveMandateOutcome(
   }
   try {
     if (paymentMethodSource === 'new_card') {
-      const { clientSecret } = await createMandateSetupIntent(wallet.id);
+      const { clientSecret } = await createMandateSetupIntent(wallet.id, actorUserId);
       return { outcome: 'requires_action', clientSecret };
     }
-    const result = await confirmSavedCardMandate(wallet.id, clientRequestId);
+    const result = await confirmSavedCardMandate(wallet.id, clientRequestId, actorUserId);
     if (result.status === 'requires_action' && result.clientSecret !== null) {
       return { outcome: 'requires_action', clientSecret: result.clientSecret };
     }
@@ -388,7 +399,8 @@ export async function startPurchaseAction(
       wallet,
       input.config.lowBalanceMode,
       input.paymentMethodSource,
-      input.clientRequestId
+      input.clientRequestId,
+      actor.userId
     );
 
     if (purchase.outcome === 'complete') {
@@ -682,7 +694,11 @@ export async function armSavedCardMandateAction(
       return { ok: true, outcome: 'captured' };
     }
 
-    const result = await confirmSavedCardMandate(wallet.id, parsed.data.clientRequestId);
+    const result = await confirmSavedCardMandate(
+      wallet.id,
+      parsed.data.clientRequestId,
+      actor.userId
+    );
     if (result.status === 'succeeded') {
       return { ok: true, outcome: 'captured' };
     }
@@ -762,7 +778,7 @@ export async function startCardCaptureAction(): Promise<StartCardCaptureResult> 
       }
     }
 
-    const { clientSecret } = await createMandateSetupIntent(wallet.id);
+    const { clientSecret } = await createMandateSetupIntent(wallet.id, actor.userId);
     return { ok: true, clientSecret, publishableKey };
   } catch (error) {
     // FIX ROUND (security LOW) — see `armSavedCardMandateAction`'s catch for why `companyId` and
@@ -884,6 +900,98 @@ export async function nudgeBillingAdminAction(): Promise<NudgeResult> {
     return { ok: true };
   } catch (error) {
     log.error('Top-up nudge failed', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return { ok: false, error: 'error' };
+  }
+}
+
+// ── BAL-522: the company billing-email field ──────────────────────────────────────────────
+
+const billingEmailSchema = z.object({ billingEmail: z.string().trim().min(1).email().max(254) });
+
+/**
+ * Outcome of an explicit billing-email change from `/settings/billing`.
+ *
+ * ⚠ `status` DISCRIMINATES THE PROVENANCE FIELDS, and only the `updated` arm carries them. On an
+ * `unchanged` reply nothing was written: the stored row still says whatever it said before —
+ * possibly `seeded`, possibly attributed to somebody else, on a date this actor had nothing to do
+ * with. Reporting `source: 'set'` + this actor's name there would repaint a provenance screen
+ * with a claim the database contradicts.
+ */
+export type SaveBillingEmailResult =
+  | {
+      ok: true;
+      status: 'updated';
+      billingEmail: string;
+      source: 'set';
+      setAt: string;
+      setByName: string | null;
+    }
+  | { ok: true; status: 'unchanged'; billingEmail: string }
+  | { ok: false; error: 'unauthorized' | 'invalid_input' | 'error' };
+
+/**
+ * BAL-522 (D1) — the WEB half of the billing-email mutation: a thin, session-gated client over
+ * `POST /credit/billing-email` (`apps/api` owns the whole write — value, attribution, audit,
+ * Stripe sync, notification, analytics; see `set-billing-email.ts`). `companyId` / `actorUserId`
+ * are resolved SERVER-SIDE by `requireBillingActor()` and NEVER taken from `rawInput` — the same
+ * trust model as every other credit action in this file.
+ *
+ * Auth is `requireBillingActor()` (→ `requireOnboardedUser()`, the fail-closed sibling): this is
+ * a privileged mutation, so `apps/web/src/invariants/onboarding-mutation-gate.test.ts` requires
+ * exactly this gate, never a bare `requireUser()`.
+ *
+ * The success provenance (`setByName`) is the SESSION's own display name — `requireBillingActor`
+ * already resolved it, so this needs no second read and no round trip back through the api for a
+ * value already in hand. `setAt` prefers the api's own timestamp; a same-instant fallback covers
+ * only the theoretical case of a malformed/absent response field, never a normal path. It is
+ * carried on the `updated` arm ONLY — see `SaveBillingEmailResult`.
+ */
+export async function saveBillingEmailAction(
+  rawInput: z.infer<typeof billingEmailSchema>
+): Promise<SaveBillingEmailResult> {
+  const parsed = billingEmailSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return { ok: false, error: 'invalid_input' };
+  }
+
+  let companyId: string | undefined;
+  try {
+    const actor = await requireBillingActor();
+    if (actor === null) {
+      return { ok: false, error: 'unauthorized' };
+    }
+    companyId = actor.companyId;
+
+    const response = await setCompanyBillingEmail({
+      companyId: actor.companyId,
+      actorUserId: actor.userId,
+      billingEmail: parsed.data.billingEmail,
+    });
+
+    if (response.status === 'unchanged') {
+      // Nothing was written, so this actor authored nothing — say so and let the caller keep the
+      // provenance it already has (its `router.refresh()` re-reads server truth).
+      return { ok: true, status: 'unchanged', billingEmail: response.billingEmail };
+    }
+
+    return {
+      ok: true,
+      status: 'updated',
+      billingEmail: response.billingEmail,
+      source: 'set',
+      setAt: response.setAt ?? new Date().toISOString(),
+      setByName: actor.name,
+    };
+  } catch (error) {
+    if (error instanceof CreditApiError && error.body?.error === 'forbidden') {
+      return { ok: false, error: 'unauthorized' };
+    }
+    // ⚠ Never the address — companyId only (CLAUDE.md: the billing address is never a log field).
+    log.error('Billing email save failed', {
+      companyId,
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });

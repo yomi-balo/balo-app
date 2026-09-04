@@ -64,7 +64,7 @@ afterEach(() => {
 describe('LowBalanceSection', () => {
   it('disables Save until the form is dirty, then enables it on a mode change', async () => {
     renderSection({ mandateActive: true });
-    const save = screen.getByRole('button', { name: /save changes/i });
+    const save = screen.getByRole('button', { name: 'Save low-balance settings' });
     expect(save).toBeDisabled();
 
     await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
@@ -79,7 +79,7 @@ describe('LowBalanceSection', () => {
 
     await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
     expect(screen.getByText(/Minimum top-up is/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save low-balance settings' })).toBeDisabled();
     expect(mockSaveLowBalanceConfigAction).not.toHaveBeenCalled();
   });
 
@@ -88,7 +88,7 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: true, cardAvailable: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
@@ -97,7 +97,7 @@ describe('LowBalanceSection', () => {
     expect(mockTrack).toHaveBeenCalledWith(SETTINGS_EVENTS.BILLING_LOW_BALANCE_SAVED, {
       mode: 'auto_topup',
     });
-    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save low-balance settings' })).toBeDisabled();
   });
 
   it('on failure, toasts the error and leaves the draft dirty (nothing reverts)', async () => {
@@ -105,12 +105,12 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("We couldn't save that — please try again.")
     );
-    expect(screen.getByRole('button', { name: /save changes/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save low-balance settings' })).not.toBeDisabled();
     expect(screen.getByRole('radio', { name: /Keep me going/i })).toBeChecked();
   });
 
@@ -119,12 +119,12 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("We couldn't save that — please try again.")
     );
-    expect(screen.getByRole('button', { name: /save changes/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save low-balance settings' })).not.toBeDisabled();
   });
 
   it('a Save that does not need to arm clears an earlier arm warning, and Retry becomes unreachable (review IMPORTANT)', async () => {
@@ -133,12 +133,12 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: false, cardAvailable: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
     await screen.findByText(/couldn't finish setting up automatic charging/i);
 
     // Switch away to a mode that does not need arming and save again.
     await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
@@ -165,7 +165,7 @@ describe('LowBalanceSection', () => {
     );
 
     await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(onSaved).toHaveBeenCalledWith({
@@ -185,7 +185,7 @@ describe('LowBalanceSection', () => {
     });
 
     await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
@@ -199,7 +199,7 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: false, cardAvailable: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() => expect(mockArmSavedCardMandateAction).toHaveBeenCalledTimes(1));
     const [armCall] = mockArmSavedCardMandateAction.mock.calls;
@@ -220,7 +220,7 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: true, cardAvailable: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
@@ -239,7 +239,7 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: false, cardAvailable: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Auto top-up turned on.'));
     expect(
@@ -258,7 +258,7 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: false, cardAvailable: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await screen.findByText(/couldn't finish setting up automatic charging/i);
     expect(toast.success).not.toHaveBeenCalledWith('Auto top-up turned on.');
@@ -279,7 +279,7 @@ describe('LowBalanceSection', () => {
     });
 
     await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Automatic top-ups are off.', {
@@ -298,7 +298,7 @@ describe('LowBalanceSection', () => {
     });
 
     await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
@@ -360,7 +360,7 @@ describe('LowBalanceSection', () => {
     renderSection({ mandateActive: false, cardAvailable: true });
 
     await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
 
     await screen.findByText(/couldn't finish setting up automatic charging/i);
     expect(mockArmSavedCardMandateAction).toHaveBeenCalledTimes(1);
