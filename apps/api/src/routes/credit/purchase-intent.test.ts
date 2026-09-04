@@ -150,11 +150,16 @@ describe('POST /credit/purchase-intent', () => {
       clientSecret: 'pi_secret',
       paymentIntentId: 'pi_1',
     });
-    expect(mockEnsureCustomer).toHaveBeenCalledWith({
-      id: WALLET_ID,
-      stripeCustomerId: null,
-      stripePaymentMethodId: null,
-    });
+    // BAL-522 (D2) — `initiatingMemberId` is, despite the name, already a user id; it is now
+    // also threaded to `ensureCustomer` as the seed actor.
+    expect(mockEnsureCustomer).toHaveBeenCalledWith(
+      {
+        id: WALLET_ID,
+        stripeCustomerId: null,
+        stripePaymentMethodId: null,
+      },
+      { userId: MEMBER_ID }
+    );
     expect(mockCreatePurchaseIntent).toHaveBeenCalledWith({
       walletId: WALLET_ID,
       customerId: 'cus_1',

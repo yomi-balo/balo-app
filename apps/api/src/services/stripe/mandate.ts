@@ -3,10 +3,13 @@ import {
   creditReceivablesRepository,
   creditSessionsRepository,
   creditWalletsRepository,
+  usersRepository,
   db,
   type CreditWallet,
+  type CompanyBillingIdentity,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
+import { trackServer, BILLING_SERVER_EVENTS } from '@balo/analytics/server';
 import type Stripe from 'stripe';
 import { getStripeClient } from '../../lib/stripe.js';
 import { resolveAppUrl } from '../../lib/app-url.js';
@@ -15,15 +18,72 @@ import type { CardDisplayFields } from './types.js';
 
 const log = createLogger('stripe');
 
+/** The acting member on this `ensureCustomer` touch — an id only (D2: the address is resolved
+ *  server-side from `usersRepository.findEmailById`, never carried on the internal seam). */
+export interface EnsureCustomerActor {
+  userId: string;
+}
+
 /**
- * Ensure a Stripe Customer for the wallet and return its id (skill Mandate step 1).
+ * Ensure a Stripe Customer for the wallet and return its id (skill Mandate step 1), keeping the
+ * Customer's NAME and EMAIL in sync with the company's billing identity on every `ensureCustomer`
+ * touch — not just at creation.
  *
- * If the wallet already has `stripeCustomerId`, that is returned unchanged. Otherwise a
- * Customer is created with a STABLE Stripe idempotency key (`stripe-customer-{walletId}`),
- * so a retry of the same wallet never creates a duplicate Customer. The id is persisted
- * onto the wallet at `setup_intent.succeeded` (via `applyMandate`) alongside the payment
- * method + mandate ref — the shipped DB layer's single mandate-write seam — and it also
- * round-trips through `SetupIntent.customer`, so no eager customer-only write is needed.
+ * ⚠ BE PRECISE ABOUT WHAT "EVERY TOUCH" MEANS — IT IS NOT EVERY MONEY PATH. Two paths reach
+ * Stripe WITHOUT coming through here: the `saved_card` arm of `POST /credit/purchase-intent`
+ * returns from `createOnSessionSavedCardCharge` before this function is called, and off-session
+ * auto-top-up charges an already-stored customer/PM directly. Neither seeds and neither syncs.
+ * THE SEED IS STILL GUARANTEED, THOUGH: a saved card can only arrive via a SetupIntent, and
+ * `createSetupIntent` DOES call this function — so by the time either of those paths can run, the
+ * seed has already had its chance. What those paths cost is only sync FRESHNESS, and the next
+ * `ensureCustomer` touch (a new-card SetupIntent, a fresh-card purchase) heals it — as does the
+ * settings mutation's own post-commit sync (`services/billing/set-billing-email.ts`), which is
+ * the path that matters for an EXPLICIT change and does not depend on this one at all.
+ *
+ * FIVE STEPS, IN ORDER — 1, 2 AND 4 RUN BEFORE THE CUSTOMER LOOKUP. An existing
+ * `stripeCustomerId` skips only the CREATE inside step 3; it does NOT skip the read, the seed, or
+ * the sync. ⚠ RESTORING AN EARLY RETURN AT THE TOP OF THIS FUNCTION (`if (wallet.stripeCustomerId)
+ * return wallet.stripeCustomerId;`) SILENTLY DISABLES THE SEED FOR EVERY COMPANY THAT ALREADY HAS
+ * A CUSTOMER — which, after the first purchase, is every company. Do not reintroduce it.
+ *
+ *   1. READ  — the billing-identity projection (`companiesRepository.findBillingIdentityById`,
+ *      never `findById`). FAIL-SOFT.
+ *   2. SEED  — iff the read succeeded AND `billingEmail` is still null: resolve the actor's own
+ *      account address (`usersRepository.findEmailById`) and attempt
+ *      `companiesRepository.seedBillingEmail`. FAIL-SOFT.
+ *   3. ENSURE — the wallet's `stripeCustomerId`, or `stripe.customers.create` under the stable
+ *      key `stripe-customer-{walletId}`. THE ONLY HARD FAILURE.
+ *   4. SYNC  — `syncStripeCustomerIdentity(customerId, { name, email })`, run on BOTH the
+ *      existing-customer path and the just-created path. FAIL-SOFT.
+ *   5. return the customer id.
+ *
+ * WHY 1/2/4 ARE FAIL-SOFT AND 3 IS NOT: a display/identity read or write must never block a money
+ * path — the same posture `retrieveCardDisplay` below already uses. A failed company read simply
+ * means this touch creates/uses the Customer with no name/email sync; a failed seed or sync heals
+ * on the next touch, because the value (or its absence) is already durable in `companies`.
+ *
+ * `customers.create` PARAMS ARE DELIBERATELY IDENTITY-FREE — exactly `{ metadata: { walletId } }`
+ * under the stable key. Inside Stripe's 24 h idempotency window, a reused key with DIFFERENT
+ * params 400s (`idempotency_error`); if the create carried `name`/`email`, a benign retry with a
+ * since-changed value would turn into a hard failure on the money path. Deterministic create
+ * params make the stable key collision-proof BY CONSTRUCTION. This SUPERSEDES BAL-515's
+ * name-at-create: the end state is identical (the Customer ends up named), and a failed
+ * post-create sync leaves "Unnamed customer" only until the next touch, not forever.
+ *
+ * THE SEED CONDITION is exactly "`billing_email` is null AND the actor holds `MANAGE_BILLING` on
+ * the wallet's company", resolved INSIDE `seedBillingEmail`'s own transaction (D4) — atomic with
+ * the conditional write, so there is no TOCTOU gap on a permanent, audited value. A platform-role
+ * actor holds no company membership and fails closed. Members cannot top up
+ * (`REPRESENTABLE_CAPABILITIES` excludes `MANAGE_BILLING`), so the seeded address is never a Balo
+ * AE's. The actor's address is resolved SERVER-SIDE from `usersRepository.findEmailById` — the
+ * internal seam carries ids, never an address (D2).
+ *
+ * PERSONAL WORKSPACES FOLLOW THE SAME RULE WITH NO BRANCH (decision 9, extended to email): for a
+ * personal workspace the first purchaser IS the person, and the seeded address is that
+ * workspace's own billing identity going to the processor already handling its card.
+ *
+ * `syncStripeCustomerIdentity` TAKES NO IDEMPOTENCY KEY — it is idempotent BY VALUE, not by key
+ * (see its own docblock).
  *
  * BAL-515 — the customer carries the WORKSPACE name. The wallet is company-scoped, so the Stripe
  * customer is a party, not a purchase; every row previously read "Unnamed customer", which hurts
@@ -53,58 +113,63 @@ const log = createLogger('stripe');
  * Do NOT "improve" this by sending the member's first + last name: see the attribution note below
  * for why that is strictly worse.
  *
- * `email` is deliberately OUT OF SCOPE, and the reason is structural rather than squeamish:
- * `Customer.email` is a SINGLE-VALUED field on a MULTI-MEMBER entity, so the first buyer would
- * own the company's billing address forever — including any mail Stripe sends itself — and keep
- * owning it after leaving. The right primitive is a company-level billing email that survives
- * departures (a `companies` column + `customers.update`), which is a schema change this ticket
- * cannot take and which belongs with BAL-516's billing settings. Balo sends its own receipts via
- * the notification engine, so nothing on the buyer's receipt path depends on this field.
- *
- * ⚠ ATTRIBUTION: this names the PARTY, never the purchaser. One Stripe customer exists per
- * wallet (`stripe-customer-{walletId}`) and the wallet is company-scoped, so a person's name here
- * would not label "the buyer" — it would permanently label the COMPANY's billing record with
- * whoever happened to buy first. Whatever per-charge human identity Stripe DOES capture belongs
+ * ⚠ ATTRIBUTION: the Customer's NAME still names the PARTY, never the purchaser — one Stripe
+ * customer exists per wallet (`stripe-customer-{walletId}`) and the wallet is company-scoped, so a
+ * person's name here would not label "the buyer", it would permanently label the COMPANY's
+ * billing record with whoever happened to buy first. The EMAIL is different: it is now an
+ * explicit, visible, editable company-level value with provenance (`/settings/billing`), captured
+ * from the first purchaser only as a SEED, not frozen there invisibly and permanently — any
+ * MANAGE_BILLING holder can change it, and the change is attributed to them, not silently absorbed
+ * back into "whoever bought first". Whatever per-charge human identity Stripe DOES capture belongs
  * on the PaymentMethod's `billing_details`, where it would be accurate per charge instead of
  * frozen at the first one — that is where such a value goes, not a claim about what is currently
  * there (Balo sets no `billing_details`; see above).
- *
- * ⚠ THE NAME IS SET ONCE, AT FIRST CREATION, AND NEVER REFRESHED. The idempotency key is stable
- * and name-independent (which is what makes a duplicate customer impossible), so a retried create
- * inside Stripe's key window replays the ORIGINAL customer and will not apply a changed name.
- * Customers created before this change keep "Unnamed customer" until someone backfills them
- * out-of-band. A company rename is likewise not propagated.
  */
-export async function ensureCustomer(wallet: CreditWallet): Promise<string> {
-  if (wallet.stripeCustomerId) {
-    return wallet.stripeCustomerId;
-  }
-
-  const stripe = getStripeClient();
-  // FAIL-SOFT. A name is dispute-evidence / support-lookup quality, not correctness: if the
-  // company read fails or returns nothing, create the customer WITHOUT one rather than blocking a
-  // money path on a display read (the same posture as `retrieveCardDisplay` below). Read the
-  // DISPLAY-only projection — never `findById`, which returns billing details, domain and join
-  // mode that have no business crossing to Stripe.
-  let companyName: string | undefined;
+export async function ensureCustomer(
+  wallet: CreditWallet,
+  actor: EnsureCustomerActor
+): Promise<string> {
+  // 1. READ (fail-soft) — the billing-identity projection, never `findById`.
+  let company: CompanyBillingIdentity | undefined;
   try {
-    companyName = (await companiesRepository.findNameById(wallet.companyId))?.name;
+    company = await companiesRepository.findBillingIdentityById(wallet.companyId);
   } catch (err: unknown) {
     log.warn(
       {
         op: 'ensureCustomer',
         walletId: wallet.id,
+        companyId: wallet.companyId,
         error: err instanceof Error ? err.message : String(err),
       },
-      'Could not read the company name — creating the Stripe customer without one'
+      'Could not read the company billing identity — skipping the seed and the identity sync for this touch'
     );
   }
+
+  // 2. SEED (fail-soft) — only when the company read succeeded AND the address is still null.
+  let emailForSync: string | null = company?.billingEmail ?? null;
+  if (company !== undefined && company.billingEmail === null) {
+    emailForSync = await seedCompanyBillingEmail(wallet, actor, company);
+  }
+
+  // 3. ENSURE — the ONLY hard failure on this path (unchanged posture).
+  const customerId = wallet.stripeCustomerId ?? (await createStripeCustomer(wallet));
+
+  // 4. SYNC (fail-soft, no idempotency key) — runs on the existing-customer path too.
+  if (company !== undefined) {
+    await syncStripeCustomerIdentity(customerId, { name: company.name, email: emailForSync });
+  }
+
+  // 5.
+  return customerId;
+}
+
+/** Step 3's create, extracted so `ensureCustomer`'s body reads as one line per step. Params are
+ *  DELIBERATELY IDENTITY-FREE (decision 8) — see `ensureCustomer`'s docblock. */
+async function createStripeCustomer(wallet: CreditWallet): Promise<string> {
+  const stripe = getStripeClient();
   try {
     const customer = await stripe.customers.create(
-      {
-        ...(companyName === undefined ? {} : { name: companyName }),
-        metadata: { walletId: wallet.id },
-      },
+      { metadata: { walletId: wallet.id } },
       { idempotencyKey: `stripe-customer-${wallet.id}` }
     );
     log.info(
@@ -122,6 +187,140 @@ export async function ensureCustomer(wallet: CreditWallet): Promise<string> {
       'Failed to create Stripe customer'
     );
     throw err;
+  }
+}
+
+/**
+ * Step 2's seed attempt — NEVER THROWS, always resolves the address this touch's sync should
+ * carry (or `null`). Resolves the actor's own account address server-side (D2), then attempts
+ * `companiesRepository.seedBillingEmail` (D4: the capability gate lives INSIDE that transaction).
+ *
+ * ⚠ NEVER LOG THE ADDRESS. `companyId` / `walletId` / `actorUserId` only — the posture
+ * `armSavedCardMandateAction` / `removeSavedCardAction` already use for their forensics logs.
+ */
+async function seedCompanyBillingEmail(
+  wallet: CreditWallet,
+  actor: EnsureCustomerActor,
+  company: CompanyBillingIdentity
+): Promise<string | null> {
+  const { id: walletId, companyId } = wallet;
+  const actorUserId = actor.userId;
+
+  let actorEmail: string | undefined;
+  try {
+    actorEmail = (await usersRepository.findEmailById(actorUserId))?.email;
+  } catch (err: unknown) {
+    log.warn(
+      {
+        op: 'ensureCustomer.seed',
+        walletId,
+        companyId,
+        actorUserId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Could not read the acting member — skipping the billing-email seed for this touch'
+    );
+    return null;
+  }
+  if (actorEmail === undefined) {
+    log.warn(
+      { op: 'ensureCustomer.seed', walletId, companyId, actorUserId },
+      'The acting member has no live account — skipping the billing-email seed'
+    );
+    return null;
+  }
+
+  try {
+    const result = await companiesRepository.seedBillingEmail({
+      companyId,
+      email: actorEmail,
+      actorUserId,
+    });
+    if (result.seeded) {
+      log.info(
+        { op: 'ensureCustomer.seed', walletId, companyId, actorUserId },
+        'Seeded the company billing email from the first purchaser'
+      );
+      trackServer(BILLING_SERVER_EVENTS.EMAIL_SEEDED, {
+        company_id: companyId,
+        company_is_personal: company.isPersonal,
+        distinct_id: companyId,
+      });
+      return result.billingEmail;
+    }
+    // 'already_set' → a concurrent first purchase won; sync THIS touch with the WINNER's value.
+    // 'no_capability' / 'company_not_found' → never seeds; this touch syncs with no email.
+    return result.billingEmail;
+  } catch (err: unknown) {
+    log.warn(
+      {
+        op: 'ensureCustomer.seed',
+        walletId,
+        companyId,
+        actorUserId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Could not seed the company billing email — skipping the identity sync address for this touch'
+    );
+    // ⚠ FIX ROUND (security) — RETURN `null`, NEVER `actorEmail`. The MANAGE_BILLING gate lives
+    // INSIDE `seedBillingEmail`'s transaction (D4), so a throw means the gate never resolved:
+    // returning the actor's address here would put an UNAUTHORIZED member's address on step 4's
+    // `customers.update`, writing to Stripe a value the capability check never approved. The seed
+    // is conditional and durable — the next `ensureCustomer` touch re-attempts it — so the only
+    // cost of failing closed is that this one touch syncs the name alone.
+    return null;
+  }
+}
+
+/** ⚠ FIX ROUND (security) — PER-REQUEST OPTIONS, DELIBERATE, DO NOT DROP. `getStripeClient` sets
+ *  no `timeout`, so this call would otherwise inherit stripe-node's 80 s default and, with the
+ *  client's `maxNetworkRetries: 2`, could stall an `ensureCustomer` touch — i.e. a PURCHASE — for
+ *  ~240 s over a DISPLAY-ONLY field. The sync is best-effort and the next `ensureCustomer` touch
+ *  re-syncs, so a fast failure is strictly better than a slow success: 5 s, no retries. */
+const SYNC_REQUEST_OPTIONS: Stripe.RequestOptions = { timeout: 5000, maxNetworkRetries: 0 };
+
+/**
+ * BAL-522 — mirror the company's identity onto its Stripe Customer. The ONLY writer of
+ * `customers.update` in this codebase.
+ *
+ * ⚠ BEST-EFFORT, NEVER THROWS. Two callers: `ensureCustomer` step 4 (on the money path) and the
+ * settings mutation's post-commit sync (`services/billing/set-billing-email.ts`). A throw would
+ * either fail a purchase over a display field or turn a committed settings change into a 500.
+ * Warn and continue — the value is already durable in `companies` and the next touch re-syncs.
+ * Same posture as `retrieveCardDisplay` below. It is also BOUNDED — see `SYNC_REQUEST_OPTIONS`:
+ * "never throws" is not enough on a money path if it can instead hang there.
+ *
+ * ⚠ NO IDEMPOTENCY KEY, DELIBERATELY. `customers.update` is idempotent BY VALUE; a stable key
+ * would 400 the moment the value legitimately changes (decision 8's whole point).
+ *
+ * `email: null` ⇒ the key is OMITTED, never sent as `null` — a company with no billing email yet
+ * must not have an existing Stripe address blanked by a sync.
+ *
+ * ⚠ Log `customerId` only — never the name or the address.
+ */
+export async function syncStripeCustomerIdentity(
+  customerId: string,
+  identity: { name: string; email: string | null }
+): Promise<void> {
+  try {
+    const stripe = getStripeClient();
+    await stripe.customers.update(
+      customerId,
+      {
+        name: identity.name,
+        ...(identity.email === null ? {} : { email: identity.email }),
+      },
+      SYNC_REQUEST_OPTIONS
+    );
+  } catch (err: unknown) {
+    log.warn(
+      {
+        op: 'syncStripeCustomerIdentity',
+        stripeId: customerId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Could not sync the Stripe customer identity — continuing (heals on the next touch)'
+    );
   }
 }
 
@@ -162,16 +361,21 @@ export async function attachPaymentMethod(
  * the `client_secret` for the frontend to confirm the card. On `setup_intent.succeeded`
  * the webhook persists the customer + payment method + mandate ref and flips the status to
  * `'active'`. Never sets `payment_method_types` (dynamic payment methods — best practice).
+ *
+ * BAL-522 (D2) — `actorUserId` is the SESSION-resolved actor, threaded so `ensureCustomer` can
+ * seed the company's billing email on this touch. Required, not optional: an omitted actor would
+ * make the seed silently never happen on this path.
  */
 export async function createSetupIntent(
-  walletId: string
+  walletId: string,
+  actorUserId: string
 ): Promise<{ clientSecret: string; setupIntentId: string; customerId: string }> {
   const wallet = await creditWalletsRepository.findById(walletId);
   if (wallet === undefined) {
     throw new Error(`Credit wallet not found: ${walletId}`);
   }
 
-  const customerId = await ensureCustomer(wallet);
+  const customerId = await ensureCustomer(wallet, { userId: actorUserId });
   const stripe = getStripeClient();
 
   try {

@@ -309,6 +309,10 @@ export function LowBalanceSection({
           type="button"
           onClick={handleSaveClick}
           disabled={!isDirty || hasFieldErrors || pending}
+          // The VISIBLE label stays "Save changes". `billing-email-section.tsx` renders an
+          // identical one on this same route, so out of context — a screen reader's button list —
+          // the two were indistinguishable. Only the accessible name is disambiguated.
+          aria-label="Save low-balance settings"
           className="active:scale-[0.98] motion-reduce:active:scale-100"
         >
           {pending ? (

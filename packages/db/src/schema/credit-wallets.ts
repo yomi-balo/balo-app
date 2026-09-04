@@ -72,15 +72,16 @@ export const creditWallets = pgTable(
     topupThresholdMinor: integer('topup_threshold_minor').notNull().default(2000),
     topupReloadMinor: integer('topup_reload_minor').notNull().default(10000),
 
-    // Off-session mandate (card-funded). DISTINCT from `companies.stripe_customer_id`.
-    // NEVER on a client-bound view — `CLIENT_WALLET_VIEW_COLUMNS` (credit-views.ts)
-    // excludes both, and invariant #1 asserts it. Nullable (no card yet).
+    // Off-session mandate (card-funded). NEVER on a client-bound view —
+    // `CLIENT_WALLET_VIEW_COLUMNS` (credit-views.ts) excludes both, and invariant #1
+    // asserts it. Nullable (no card yet).
     stripePaymentMethodId: text('stripe_payment_method_id'),
     mandateRef: text('mandate_ref'),
 
-    // Off-session mandate CUSTOMER (BAL-382 / Decision B) — DISTINCT from the legacy,
-    // unused `companies.stripe_customer_id` column. The wallet mandate customer is
-    // deliberately separate (see the mandate header note above). Nullable (no customer
+    // Off-session mandate CUSTOMER (BAL-382 / Decision B). BAL-522 DROPPED the legacy,
+    // unused `companies.stripe_customer_id` column, so THIS is now the only Stripe customer
+    // id in the schema — nothing to be confused with any more (the mandate header note above
+    // still explains why the wallet owns it). Nullable (no customer
     // until the first SetupIntent); persisted on `setup_intent.succeeded` via `applyMandate`
     // (alongside the payment method + mandate ref). `ensureCustomer` does NOT write it — it
     // only prevents duplicate Stripe customers on retry via a stable idempotency key. Kept

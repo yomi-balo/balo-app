@@ -1,8 +1,10 @@
-import { eq, and, asc, inArray, isNull, sql } from 'drizzle-orm';
+import { eq, and, asc, inArray, isNull } from 'drizzle-orm';
+import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import { db } from '../client';
 import { companies, companyMembers, type Company, type User } from '../schema';
 import { auditEventsRepository } from './audit-events';
 import { partyDomainsRepository } from './party-domains';
+import { partyMembershipsRepository } from './party-memberships';
 
 /**
  * Outcome of a join-mode write (BAL-347). `changed` is false when the requested mode
@@ -38,6 +40,78 @@ export interface CompanySummary {
   name: string;
   isPersonal: boolean;
 }
+
+/**
+ * BAL-522 — the BILLING-IDENTITY projection of ONE company. See
+ * {@link companiesRepository.findBillingIdentityById} for why it is a third projection on this
+ * table rather than a widening of either existing one.
+ */
+export interface CompanyBillingIdentity {
+  id: string;
+  /** → `customers.update({ name })`. */
+  name: string;
+  /** → the `company_is_personal` property on both analytics events. */
+  isPersonal: boolean;
+  /** NULL ⇒ the seed condition is met. → `customers.update({ email })`. */
+  billingEmail: string | null;
+  /** → the provenance line's verb, and `previous_source` on `billing_email_updated`. */
+  billingEmailSource: 'seeded' | 'set' | null;
+  /** → the provenance line's attributed person + their membership-liveness lookup. */
+  billingEmailSetByUserId: string | null;
+  /** → the provenance line's date, and `days_since_set` on `billing_email_updated`. */
+  billingEmailSetAt: Date | null;
+}
+
+/** BAL-522 — input for the first-purchase seed of `companies.billing_email`. */
+export interface SeedBillingEmailInput {
+  companyId: string;
+  /** The actor's own account email, already resolved by the caller. */
+  email: string;
+  actorUserId: string;
+}
+
+/**
+ * BAL-522 — total and explicit: every non-throwing outcome names the EFFECTIVE billing email,
+ * so the caller's Stripe identity sync always knows what address (if any) to carry.
+ */
+export type SeedBillingEmailResult =
+  | { seeded: true; billingEmail: string; auditEventId: string }
+  | { seeded: false; reason: 'already_set'; billingEmail: string }
+  | { seeded: false; reason: 'no_capability'; billingEmail: null }
+  | { seeded: false; reason: 'company_not_found'; billingEmail: null };
+
+/** BAL-522 — input for an explicit billing-email change from /settings/billing. */
+export interface SetBillingEmailInput {
+  companyId: string;
+  /** Pre-validated by the route's zod schema (trimmed, non-empty, RFC-shaped, ≤254). */
+  billingEmail: string;
+  actorUserId: string;
+}
+
+/**
+ * BAL-522 — the outcome of an explicit billing-email change. `unchanged` is the
+ * `setDomainJoinMode` no-op posture (no write, no audit, no notification, no analytics);
+ * `forbidden` is the TRANSACTIONAL capability gate, distinct from the route's own 403.
+ */
+export type SetBillingEmailResult =
+  | {
+      outcome: 'changed';
+      company: { name: string; isPersonal: boolean };
+      billingEmail: string;
+      setAt: Date;
+      previousEmail: string | null;
+      previousSource: 'seeded' | 'set' | null;
+      previousSetAt: Date | null;
+      auditEventId: string;
+    }
+  | {
+      outcome: 'unchanged';
+      company: { name: string; isPersonal: boolean };
+      billingEmail: string;
+      setAt: Date | null;
+    }
+  | { outcome: 'forbidden' }
+  | { outcome: 'not_found' };
 
 /**
  * Discriminated result — no thrown control-flow error (deviates deliberately from the
@@ -86,8 +160,8 @@ export const companiesRepository = {
    * representation arm, which knows only company ids.
    *
    * ⚠ EXPLICIT PROJECTION ONLY — never a full row. The result is destined for the
-   * `balo_session` cookie, and `findById` would carry `stripeCustomerId`, `creditBalance`,
-   * `domain` and the join-mode governance columns with it (the shape of memory
+   * `balo_session` cookie, and `findById` would carry `billingEmail`, `domain` and the
+   * join-mode governance columns with it (the shape of memory
    * `reference_drizzle_with_hydration_leaks_secrets`). Concealment is enforced by what the
    * row CAN hold, not by remembering to omit downstream.
    *
@@ -109,6 +183,37 @@ export const companiesRepository = {
       .from(companies)
       .where(inArray(companies.id, [...ids]))
       .orderBy(asc(companies.name), asc(companies.id));
+  },
+
+  /**
+   * BAL-522 — the BILLING-IDENTITY projection of ONE company. The THIRD projection on this
+   * table (alongside `findNameById`'s display pair and `findSummariesByIds`' batch triple),
+   * deliberately NOT a widening of either: `findNameById` is a counterparty-facing DISPLAY
+   * read with 11 callers and a pinned two-key shape, and a billing address has no business
+   * on it (`project-engagements.integration.test.ts` pins that shape).
+   *
+   * Two consumers, one projection: `ensureCustomer` (apps/api — the Stripe identity sync +
+   * the seed condition) and `loadBillingSettingsWallet` (apps/web — the settings read).
+   *
+   * NOTE: no `deleted_at` guard — `companies` has NO such column (see schema/companies.ts,
+   * same note as `findSummariesByIds` / `updateName`). A not-found returns `undefined`; that
+   * is the only liveness check this table admits.
+   */
+  findBillingIdentityById: async (id: string): Promise<CompanyBillingIdentity | undefined> => {
+    const [row] = await db
+      .select({
+        id: companies.id,
+        name: companies.name,
+        isPersonal: companies.isPersonal,
+        billingEmail: companies.billingEmail,
+        billingEmailSource: companies.billingEmailSource,
+        billingEmailSetByUserId: companies.billingEmailSetByUserId,
+        billingEmailSetAt: companies.billingEmailSetAt,
+      })
+      .from(companies)
+      .where(eq(companies.id, id))
+      .limit(1);
+    return row;
   },
 
   findBySlug: async (slug: string): Promise<Company | undefined> => {
@@ -195,21 +300,6 @@ export const companiesRepository = {
   },
 
   /**
-   * Atomically increment/decrement credit balance
-   */
-  updateCredits: async (id: string, delta: number): Promise<Company> => {
-    const [company] = await db
-      .update(companies)
-      .set({
-        creditBalance: sql`${companies.creditBalance} + ${delta}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(companies.id, id))
-      .returning();
-    return company!;
-  },
-
-  /**
    * Rename a company (BAL-350 onboarding workspace naming). Bumps `updatedAt`
    * and returns the updated row. Throws if no row matches `id` so the caller
    * surfaces a retryable error instead of a silent no-op.
@@ -217,7 +307,7 @@ export const companiesRepository = {
    * NOTE: the `companies` table has no `deleted_at` column (only
    * `company_members` is soft-deletable — see schema/companies.ts), so there is
    * no soft-delete predicate to apply here; the not-found guard is the only
-   * liveness check this table admits. Matches the `updateCredits` mutation
+   * liveness check this table admits. Matches the `setDomainJoinMode` mutation
    * pattern (explicit `updatedAt` bump + `.returning()`).
    *
    * The caller (the onboarding Server Action) owns zod validation of `name`
@@ -281,6 +371,194 @@ export const companiesRepository = {
       );
 
       return { previous: current.mode, next, changed: true };
+    });
+  },
+
+  /**
+   * BAL-522 — seed `companies.billing_email` from the FIRST purchaser, at `ensureCustomer`.
+   * ONE tx: lock the row `FOR UPDATE`, resolve the actor's capability ON THAT TX, write iff
+   * still null, and append the `company.billing_email_seeded` audit row in the SAME tx.
+   *
+   * ⚠ THE CAPABILITY GATE LIVES HERE, INSIDE THE TRANSACTION (plan D4). It must be atomic
+   * with the conditional write — "write iff still null AND the actor still holds
+   * MANAGE_BILLING" — and resolved outside the tx it is a TOCTOU gap on a permanent, audited
+   * value. `hasCapability` is `apps/web`-only (`import 'server-only'`), so the spelling here
+   * is the documented api-side one: `getMemberRole(...)` + `roleHasCapability(...)`. NO ROLE
+   * STRING IS INTERPRETED HERE (ADR-1029) — `@balo/shared/authz` stays the single place a
+   * role becomes a capability; this method only calls the predicate. A platform-role actor
+   * holds no company membership ⇒ `undefined` ⇒ fails CLOSED, never seeds.
+   *
+   * The row lock is what makes two concurrent first purchases converge on one seed: the
+   * loser sees `already_set` and gets the WINNER'S address back, so its Stripe sync still
+   * carries the right value.
+   *
+   * Never throws for a business outcome — the caller is a fail-soft step on the money path
+   * and branches on the discriminant. A genuine DB fault still throws and rolls the tx back.
+   *
+   * NOTE: no `deleted_at` guard on the company — `companies` has no such column; the
+   * not-found guard is the only liveness check this table admits. (The MEMBERSHIP liveness
+   * check IS real: `getMemberRole` filters `deleted_at IS NULL`.)
+   */
+  seedBillingEmail: async (input: SeedBillingEmailInput): Promise<SeedBillingEmailResult> => {
+    return db.transaction(async (tx) => {
+      // 1. Lock the row. FOR UPDATE serialises concurrent first purchases.
+      const [current] = await tx
+        .select({ id: companies.id, billingEmail: companies.billingEmail })
+        .from(companies)
+        .where(eq(companies.id, input.companyId))
+        .for('update');
+
+      if (current === undefined) {
+        return { seeded: false, reason: 'company_not_found', billingEmail: null };
+      }
+
+      // 2. The transactional MANAGE_BILLING gate (D4).
+      const role = await partyMembershipsRepository.getMemberRole(
+        'company',
+        input.companyId,
+        input.actorUserId,
+        tx
+      );
+      if (role === undefined || !roleHasCapability(role, CAPABILITIES.MANAGE_BILLING)) {
+        return { seeded: false, reason: 'no_capability', billingEmail: null };
+      }
+
+      // 3. Already seeded (or explicitly set) — never overwrite. Hand the caller the
+      //    effective address so this touch's Stripe sync still carries one.
+      if (current.billingEmail !== null) {
+        return { seeded: false, reason: 'already_set', billingEmail: current.billingEmail };
+      }
+
+      // 4. Write value + attribution + `updatedAt` in one statement.
+      const now = new Date();
+      await tx
+        .update(companies)
+        .set({
+          billingEmail: input.email,
+          billingEmailSource: 'seeded',
+          billingEmailSetByUserId: input.actorUserId,
+          billingEmailSetAt: now,
+          updatedAt: now,
+        })
+        .where(eq(companies.id, input.companyId));
+
+      // 5. Audit, same tx (the row and the record it describes commit together).
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'company.billing_email_seeded',
+          entityType: 'company',
+          entityId: input.companyId,
+          metadata: { email: input.email, source: 'seeded' },
+        },
+        tx
+      );
+
+      return { seeded: true, billingEmail: input.email, auditEventId: auditRow.id };
+    });
+  },
+
+  /**
+   * BAL-522 — an EXPLICIT billing-email change from /settings/billing. ONE tx, modelled on
+   * `setDomainJoinMode`: lock `FOR UPDATE`, gate, no-op when unchanged, otherwise UPDATE +
+   * the `company.billing_email_changed` audit row in the SAME tx.
+   *
+   * ⚠ The MANAGE_BILLING gate runs HERE, on the transaction, BEFORE any write — the
+   * TOCTOU-safe half of "at the route AND the repository layer". A membership revoked
+   * between the route's gate and this transaction is caught here. Same ADR-1029 posture as
+   * {@link companiesRepository.seedBillingEmail}: the role is never interpreted locally.
+   *
+   * ⚠ NEVER ACCEPTS AN EMPTY VALUE. Zod at the route is the real validator (this method
+   * assumes a pre-validated address, exactly as `updateName` does), but "never blankable"
+   * must not depend on one caller's schema — hence the structural backstop below. There is
+   * no path back to NULL once seeded.
+   *
+   * NOTE: no `deleted_at` guard on the company (it has no such column); the not-found guard
+   * is the only liveness check this table admits.
+   */
+  setBillingEmail: async (input: SetBillingEmailInput): Promise<SetBillingEmailResult> => {
+    if (input.billingEmail.trim().length === 0) {
+      throw new Error('billingEmail must be non-empty');
+    }
+
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          id: companies.id,
+          name: companies.name,
+          isPersonal: companies.isPersonal,
+          billingEmail: companies.billingEmail,
+          billingEmailSource: companies.billingEmailSource,
+          billingEmailSetAt: companies.billingEmailSetAt,
+        })
+        .from(companies)
+        .where(eq(companies.id, input.companyId))
+        .for('update');
+
+      if (current === undefined) {
+        return { outcome: 'not_found' };
+      }
+
+      const role = await partyMembershipsRepository.getMemberRole(
+        'company',
+        input.companyId,
+        input.actorUserId,
+        tx
+      );
+      if (role === undefined || !roleHasCapability(role, CAPABILITIES.MANAGE_BILLING)) {
+        return { outcome: 'forbidden' };
+      }
+
+      const company = { name: current.name, isPersonal: current.isPersonal };
+
+      // The `setDomainJoinMode` no-op posture: no write, no audit, no notification, no
+      // analytics. The caller still syncs Stripe (the identity may have drifted there).
+      if (current.billingEmail === input.billingEmail) {
+        return {
+          outcome: 'unchanged',
+          company,
+          billingEmail: current.billingEmail,
+          setAt: current.billingEmailSetAt,
+        };
+      }
+
+      const now = new Date();
+      await tx
+        .update(companies)
+        .set({
+          billingEmail: input.billingEmail,
+          billingEmailSource: 'set',
+          billingEmailSetByUserId: input.actorUserId,
+          billingEmailSetAt: now,
+          updatedAt: now,
+        })
+        .where(eq(companies.id, input.companyId));
+
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'company.billing_email_changed',
+          entityType: 'company',
+          entityId: input.companyId,
+          metadata: {
+            previous_email: current.billingEmail,
+            new_email: input.billingEmail,
+            previous_source: current.billingEmailSource,
+          },
+        },
+        tx
+      );
+
+      return {
+        outcome: 'changed',
+        company,
+        billingEmail: input.billingEmail,
+        setAt: now,
+        previousEmail: current.billingEmail,
+        previousSource: current.billingEmailSource,
+        previousSetAt: current.billingEmailSetAt,
+        auditEventId: auditRow.id,
+      };
     });
   },
 

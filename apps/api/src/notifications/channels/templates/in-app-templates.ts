@@ -3,6 +3,7 @@ import {
   formatExpiryDateShort,
   buildSavedCardDetachedCopy,
 } from './credit-format.js';
+import { buildBillingEmailChangedCopy } from './billing-email-changed.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
@@ -1114,6 +1115,20 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     return {
       title: copy.headline,
       body: `${copy.leadSentence} ${copy.consequence}`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
+  // BAL-522 — an explicit billing-email change, company billing admins (includes the actor, as
+  // confirmation). Copy comes from the ONE shared derivation (`buildBillingEmailChangedCopy`)
+  // the email factory in `index.ts` also calls. NO entry for `billing-email-changed-previous` —
+  // that rule is email-only (no in-app surface for a possibly-non-user recipient).
+  'billing-email-changed': (data) => {
+    const copy = buildBillingEmailChangedCopy(data);
+    const replaces = copy.previousEmail === null ? '' : ` It replaces ${copy.previousEmail}.`;
+    return {
+      title: 'Billing email updated',
+      body: `${copy.label} set ${copy.companyName}'s billing email to ${copy.newEmail}.${replaces}`,
       actionUrl: '/settings/billing',
     };
   },

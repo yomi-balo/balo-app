@@ -28,6 +28,13 @@ const setupIntentBodySchema = z.object({
    * (new id per configuration AND per decline). Required exactly when it is used.
    */
   clientRequestId: z.uuid().optional(),
+  /**
+   * BAL-522 (D2) — the session-resolved actor, threaded to `ensureCustomer` so it can seed the
+   * company's billing email on this touch. REQUIRED (not optional) so the seam is fail-closed:
+   * an omitted actor would make the seed silently never happen. The `saved_card` arm does not
+   * reach `ensureCustomer` today, but the field stays required so a future arm inherits it.
+   */
+  actorUserId: z.uuid(),
 });
 
 export async function setupIntentRoute(fastify: FastifyInstance): Promise<void> {
@@ -60,7 +67,8 @@ export async function setupIntentRoute(fastify: FastifyInstance): Promise<void> 
       }
 
       const { clientSecret, setupIntentId, customerId } = await createSetupIntent(
-        parsed.data.walletId
+        parsed.data.walletId,
+        parsed.data.actorUserId
       );
 
       return reply.send({ clientSecret, setupIntentId, customerId });

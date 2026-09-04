@@ -168,7 +168,6 @@ export async function signUp(input: z.infer<typeof signUpSchema>) {
       .values({
         name: workspaceName,
         isPersonal: true,
-        creditBalance: 0,
       })
       .returning();
 
@@ -371,7 +370,6 @@ export async function GET(req: NextRequest) {
           .values({
             name: `${workosUser.firstName || 'My'}'s Workspace`,
             isPersonal: true,
-            creditBalance: 0,
           })
           .returning();
 

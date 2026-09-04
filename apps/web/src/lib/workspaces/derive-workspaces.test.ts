@@ -65,8 +65,7 @@ function membershipRow(overrides: Record<string, unknown> = {}) {
       isPersonal: true,
       // A real row carries far more — this simulates the hydration danger the
       // wrapper must project away from.
-      stripeCustomerId: 'cus_super_secret_123',
-      creditBalance: 500000,
+      billingEmail: 'billing@secret.test',
     },
     ...overrides,
   };
@@ -157,13 +156,11 @@ describe('deriveWorkspacesForUser', () => {
     expect(now.getTime()).toBeLessThanOrEqual(after);
   });
 
-  it('explicit projection: no stripeCustomerId or creditBalance reaches the derived output', async () => {
+  it('explicit projection: no billingEmail reaches the derived output', async () => {
     const result = await deriveWorkspacesForUser(USER_ID);
     const serialized = JSON.stringify(result);
-    expect(serialized).not.toContain('stripeCustomerId');
-    expect(serialized).not.toContain('cus_super_secret_123');
-    expect(serialized).not.toContain('creditBalance');
-    expect(serialized).not.toContain('500000');
+    expect(serialized).not.toContain('billingEmail');
+    expect(serialized).not.toContain('billing@secret.test');
   });
 
   it('hasApprovedExpertProfile is true only when BOTH expertProfileId and expertApprovedAt are set', async () => {

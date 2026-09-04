@@ -148,10 +148,20 @@ export async function createPurchaseIntent(
   return postInternal<PurchaseIntentResult>('/credit/purchase-intent', input);
 }
 
-/** Create the off-session mandate SetupIntent → its `clientSecret` (card-backed modes). */
-export async function createMandateSetupIntent(walletId: string): Promise<SetupIntentResult> {
+/**
+ * Create the off-session mandate SetupIntent → its `clientSecret` (card-backed modes).
+ *
+ * BAL-522 (D2) — `actorUserId` is the caller's SESSION-resolved actor (`requireBillingActor()`
+ * → `actor.userId`), threaded so `apps/api`'s `ensureCustomer` can seed the company's billing
+ * email on this touch. Required, not optional — the api schema fails closed on an omitted actor.
+ */
+export async function createMandateSetupIntent(
+  walletId: string,
+  actorUserId: string
+): Promise<SetupIntentResult> {
   return postInternal<SetupIntentResult>('/credit/setup-intent', {
     walletId,
+    actorUserId,
     paymentMethodSource: 'new_card',
   });
 }
@@ -161,13 +171,19 @@ export async function createMandateSetupIntent(walletId: string): Promise<SetupI
  * returning buyer paying with their saved card picks a card-backed mode — they never re-enter a
  * card we already hold. `succeeded` ⇒ nothing for the browser to do (the webhook activates it);
  * `requires_action` ⇒ the returned secret runs 3DS.
+ *
+ * BAL-522 (D2) — `actorUserId` follows the `createMandateSetupIntent` precedent above. This arm
+ * does not reach `ensureCustomer` today, but the api schema keeps the field required for every
+ * arm so the seam stays fail-closed as a future arm inherits it.
  */
 export async function confirmSavedCardMandate(
   walletId: string,
-  clientRequestId: string
+  clientRequestId: string,
+  actorUserId: string
 ): Promise<SavedCardMandateResult> {
   return postInternal<SavedCardMandateResult>('/credit/setup-intent', {
     walletId,
+    actorUserId,
     paymentMethodSource: 'saved_card',
     clientRequestId,
   });
@@ -202,6 +218,28 @@ export async function detachSavedCardPaymentMethod(
     walletId,
     actorUserId,
   });
+}
+
+/** The api's response to a billing-email set (BAL-522). `setAt` is `null` only on `unchanged`
+ *  with no prior write (never on `updated`). */
+export interface SetBillingEmailResponse {
+  status: 'updated' | 'unchanged';
+  billingEmail: string;
+  setAt: string | null;
+}
+
+/**
+ * BAL-522 — set the company's billing email. `companyId` / `actorUserId` are resolved
+ * SERVER-SIDE by `requireBillingActor()`, never from client input (the `initiatingMemberId` /
+ * `actorUserId` precedent above). A non-2xx throws `CreditApiError` (400 `invalid_payload`,
+ * 403 `forbidden`, 404 `company_not_found`).
+ */
+export async function setCompanyBillingEmail(input: {
+  companyId: string;
+  actorUserId: string;
+  billingEmail: string;
+}): Promise<SetBillingEmailResponse> {
+  return postInternal<SetBillingEmailResponse>('/credit/billing-email', input);
 }
 
 // ── BAL-378: WorkOS-Bearer credit-session drawdown hop ──────────────────────────────────

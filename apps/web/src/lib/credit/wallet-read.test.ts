@@ -12,13 +12,23 @@ const mockFindByCompanyId = vi.fn();
 const mockGetLatest = vi.fn();
 const mockListBillingUserIds = vi.fn();
 const mockFindById = vi.fn();
+const mockFindBillingIdentityById = vi.fn();
+const mockGetMemberRole = vi.fn();
+const mockFindDisplayById = vi.fn();
 vi.mock('@balo/db', () => ({
   creditWalletsRepository: { findByCompanyId: (...a: unknown[]) => mockFindByCompanyId(...a) },
   fxDisplayRatesRepository: { getLatest: (...a: unknown[]) => mockGetLatest(...a) },
   partyMembershipsRepository: {
     listBillingUserIds: (...a: unknown[]) => mockListBillingUserIds(...a),
+    getMemberRole: (...a: unknown[]) => mockGetMemberRole(...a),
   },
-  usersRepository: { findById: (...a: unknown[]) => mockFindById(...a) },
+  usersRepository: {
+    findById: (...a: unknown[]) => mockFindById(...a),
+    findDisplayById: (...a: unknown[]) => mockFindDisplayById(...a),
+  },
+  companiesRepository: {
+    findBillingIdentityById: (...a: unknown[]) => mockFindBillingIdentityById(...a),
+  },
 }));
 
 const mockIsFxRateStale = vi.fn();
@@ -44,6 +54,7 @@ import {
   resolveBillingAdminLabel,
   projectSavedCard,
   projectWalletSnapshot,
+  projectBillingEmail,
   UNPROVISIONED_WALLET,
 } from './wallet-read';
 
@@ -55,6 +66,9 @@ beforeEach(() => {
   mockHasCapability.mockResolvedValue(false);
   mockFindByCompanyId.mockResolvedValue(undefined);
   mockListBillingUserIds.mockResolvedValue([]);
+  mockFindBillingIdentityById.mockResolvedValue(undefined);
+  mockGetMemberRole.mockResolvedValue('owner');
+  mockFindDisplayById.mockResolvedValue(undefined);
 });
 
 describe('resolveDisplayFx', () => {
@@ -315,26 +329,96 @@ describe('projectWalletSnapshot', () => {
   });
 });
 
+describe('projectBillingEmail', () => {
+  it('returns the pre-seed empty state when the company is undefined', () => {
+    expect(projectBillingEmail(undefined, { name: null, isFormerMember: false })).toEqual({
+      email: null,
+      source: null,
+      setAt: null,
+      setByName: null,
+      setByIsFormerMember: false,
+    });
+  });
+
+  it('returns the pre-seed empty state when billingEmail is null', () => {
+    expect(
+      projectBillingEmail(
+        {
+          id: 'co-1',
+          name: 'Northwind Industrial',
+          isPersonal: false,
+          billingEmail: null,
+          billingEmailSource: null,
+          billingEmailSetByUserId: null,
+          billingEmailSetAt: null,
+        },
+        { name: null, isFormerMember: false }
+      )
+    ).toEqual({
+      email: null,
+      source: null,
+      setAt: null,
+      setByName: null,
+      setByIsFormerMember: false,
+    });
+  });
+
+  it('projects a seeded/set row with its resolved attribution', () => {
+    const setAt = new Date('2026-08-01T00:00:00.000Z');
+    expect(
+      projectBillingEmail(
+        {
+          id: 'co-1',
+          name: 'Northwind Industrial',
+          isPersonal: false,
+          billingEmail: 'dana@northwind.test',
+          billingEmailSource: 'seeded',
+          billingEmailSetByUserId: 'user-1',
+          billingEmailSetAt: setAt,
+        },
+        { name: 'Dana Okoro', isFormerMember: true }
+      )
+    ).toEqual({
+      email: 'dana@northwind.test',
+      source: 'seeded',
+      setAt: setAt.toISOString(),
+      setByName: 'Dana Okoro',
+      setByIsFormerMember: true,
+    });
+  });
+});
+
 describe('loadBillingSettingsWallet', () => {
-  it('returns null for a member (and the wallet result is unused)', async () => {
+  it('returns null for a member — no company read is issued', async () => {
     mockHasCapability.mockResolvedValue(false);
     mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
 
     const result = await loadBillingSettingsWallet({ id: 'u-9' }, 'co-1');
 
     expect(result).toBeNull();
+    expect(mockFindBillingIdentityById).not.toHaveBeenCalled();
   });
 
-  it('returns UNPROVISIONED_WALLET for a holder with no wallet row', async () => {
+  it('returns UNPROVISIONED_WALLET + the pre-seed billingEmail for a holder with no wallet row', async () => {
     mockHasCapability.mockResolvedValue(true);
     mockFindByCompanyId.mockResolvedValue(undefined);
+    mockFindBillingIdentityById.mockResolvedValue(undefined);
 
     const result = await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
 
-    expect(result).toEqual(UNPROVISIONED_WALLET);
+    expect(result).toEqual({
+      wallet: UNPROVISIONED_WALLET,
+      billingEmail: {
+        email: null,
+        source: null,
+        setAt: null,
+        setByName: null,
+        setByIsFormerMember: false,
+      },
+    });
   });
 
-  it('returns the projected snapshot for a holder with a wallet row', async () => {
+  it('returns the projected wallet snapshot + billingEmail for a holder with a wallet row', async () => {
     mockHasCapability.mockResolvedValue(true);
     mockFindByCompanyId.mockResolvedValue({
       id: 'wallet-1',
@@ -350,16 +434,88 @@ describe('loadBillingSettingsWallet', () => {
       stripePaymentMethodId: null,
       mandateStatus: null,
     });
+    const setAt = new Date('2026-08-05T00:00:00.000Z');
+    mockFindBillingIdentityById.mockResolvedValue({
+      id: 'co-1',
+      name: 'Northwind Industrial',
+      isPersonal: false,
+      billingEmail: 'billing@northwind.test',
+      billingEmailSource: 'set',
+      billingEmailSetByUserId: 'user-1',
+      billingEmailSetAt: setAt,
+    });
+    mockGetMemberRole.mockResolvedValue('owner');
+    mockFindDisplayById.mockResolvedValue({ firstName: 'Dana', lastName: 'Okoro' });
 
     const result = await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
 
     expect(result).toEqual({
-      walletId: 'wallet-1',
-      balanceMinor: 12_000,
-      lowBalanceMode: 'notify_only',
-      savedCard: null,
-      topupReloadMinor: 30_000,
-      topupThresholdMinor: 5_000,
+      wallet: {
+        walletId: 'wallet-1',
+        balanceMinor: 12_000,
+        lowBalanceMode: 'notify_only',
+        savedCard: null,
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      },
+      billingEmail: {
+        email: 'billing@northwind.test',
+        source: 'set',
+        setAt: setAt.toISOString(),
+        setByName: 'Dana Okoro',
+        setByIsFormerMember: false,
+      },
     });
+  });
+
+  it('setByIsFormerMember is true when getMemberRole resolves undefined (departed)', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindByCompanyId.mockResolvedValue(undefined);
+    mockFindBillingIdentityById.mockResolvedValue({
+      id: 'co-1',
+      name: 'Northwind Industrial',
+      isPersonal: false,
+      billingEmail: 'billing@northwind.test',
+      billingEmailSource: 'set',
+      billingEmailSetByUserId: 'user-1',
+      billingEmailSetAt: new Date('2026-08-05T00:00:00.000Z'),
+    });
+    mockGetMemberRole.mockResolvedValue(undefined);
+    mockFindDisplayById.mockResolvedValue({ firstName: 'Dana', lastName: 'Okoro' });
+
+    const result = await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
+
+    expect(result?.billingEmail.setByIsFormerMember).toBe(true);
+  });
+
+  it('setByName is null when findDisplayById resolves undefined', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindByCompanyId.mockResolvedValue(undefined);
+    mockFindBillingIdentityById.mockResolvedValue({
+      id: 'co-1',
+      name: 'Northwind Industrial',
+      isPersonal: false,
+      billingEmail: 'billing@northwind.test',
+      billingEmailSource: 'set',
+      billingEmailSetByUserId: 'user-1',
+      billingEmailSetAt: new Date('2026-08-05T00:00:00.000Z'),
+    });
+    mockGetMemberRole.mockResolvedValue('owner');
+    mockFindDisplayById.mockResolvedValue(undefined);
+
+    const result = await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
+
+    expect(result?.billingEmail.setByName).toBeNull();
+  });
+
+  it('issues no attribution reads at all when billingEmailSetByUserId is null', async () => {
+    mockHasCapability.mockResolvedValue(true);
+    mockFindByCompanyId.mockResolvedValue(undefined);
+    mockFindBillingIdentityById.mockResolvedValue(undefined);
+
+    await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
+
+    expect(mockGetMemberRole).not.toHaveBeenCalled();
+    expect(mockFindDisplayById).not.toHaveBeenCalled();
   });
 });

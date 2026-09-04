@@ -5,6 +5,11 @@ import { createSetupIntent } from '../../services/stripe/mandate.js';
 
 const setupIntentBodySchema = z.object({
   walletId: z.uuid(),
+  /**
+   * BAL-522 (D2) — the session-resolved actor, threaded to `ensureCustomer` so it can seed the
+   * company's billing email on this touch. REQUIRED, so the seam is fail-closed.
+   */
+  actorUserId: z.uuid(),
 });
 
 /**
@@ -34,7 +39,10 @@ export async function stripeSetupIntentRoutes(fastify: FastifyInstance): Promise
         });
       }
 
-      const { clientSecret, setupIntentId } = await createSetupIntent(parsed.data.walletId);
+      const { clientSecret, setupIntentId } = await createSetupIntent(
+        parsed.data.walletId,
+        parsed.data.actorUserId
+      );
       return reply.send({ clientSecret, setupIntentId });
     }
   );

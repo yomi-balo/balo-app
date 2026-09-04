@@ -5,6 +5,11 @@ export type {
   SetJoinModeResult,
   PromoteToOrganizationInput,
   PromoteToOrganizationResult,
+  CompanyBillingIdentity,
+  SeedBillingEmailInput,
+  SeedBillingEmailResult,
+  SetBillingEmailInput,
+  SetBillingEmailResult,
 } from './companies';
 export { agenciesRepository, AgencyDomainCaptureConflictError } from './agencies';
 export type {

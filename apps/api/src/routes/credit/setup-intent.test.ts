@@ -16,6 +16,7 @@ import { setupIntentRoute } from './setup-intent.js';
 
 const TEST_SECRET = 'test-internal-secret';
 const WALLET_ID = '550e8400-e29b-41d4-a716-446655440000';
+const ACTOR_USER_ID = '550e8400-e29b-41d4-a716-446655440099';
 
 describe('POST /credit/setup-intent', () => {
   let app: FastifyInstance;
@@ -63,27 +64,56 @@ describe('POST /credit/setup-intent', () => {
   });
 
   it('returns 400 when walletId is not a uuid', async () => {
-    const res = await inject({ walletId: 'not-a-uuid' }, { 'x-internal-api-key': TEST_SECRET });
+    const res = await inject(
+      { walletId: 'not-a-uuid', actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('invalid_payload');
+    expect(mockCreateSetupIntent).not.toHaveBeenCalled();
+  });
+
+  // BAL-522 (D2) — `actorUserId` is REQUIRED, not optional: an omitted actor would make the
+  // billing-email seed silently never happen on this path.
+  it('returns 400 when actorUserId is missing', async () => {
+    const res = await inject({ walletId: WALLET_ID }, { 'x-internal-api-key': TEST_SECRET });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_payload');
     expect(mockCreateSetupIntent).not.toHaveBeenCalled();
   });
 
   it('creates the SetupIntent and returns the client secret + ids', async () => {
-    const res = await inject({ walletId: WALLET_ID }, { 'x-internal-api-key': TEST_SECRET });
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       clientSecret: 'seti_secret',
       setupIntentId: 'seti_1',
       customerId: 'cus_1',
     });
-    expect(mockCreateSetupIntent).toHaveBeenCalledWith(WALLET_ID);
+    expect(mockCreateSetupIntent).toHaveBeenCalledWith(WALLET_ID, ACTOR_USER_ID);
     expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
   });
 
   it('rejects saved_card WITHOUT a clientRequestId — the SetupIntent create must be keyed', async () => {
     const res = await inject(
-      { walletId: WALLET_ID, paymentMethodSource: 'saved_card' },
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID, paymentMethodSource: 'saved_card' },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+  });
+
+  it('rejects saved_card WITHOUT an actorUserId — the field stays required for every arm', async () => {
+    const res = await inject(
+      {
+        walletId: WALLET_ID,
+        paymentMethodSource: 'saved_card',
+        clientRequestId: '22222222-2222-4222-8222-222222222222',
+      },
       { 'x-internal-api-key': TEST_SECRET }
     );
 
@@ -96,6 +126,7 @@ describe('POST /credit/setup-intent', () => {
     const res = await inject(
       {
         walletId: WALLET_ID,
+        actorUserId: ACTOR_USER_ID,
         paymentMethodSource: 'saved_card',
         clientRequestId: '22222222-2222-4222-8222-222222222222',
       },
@@ -104,6 +135,8 @@ describe('POST /credit/setup-intent', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ status: 'succeeded', clientSecret: null });
+    // The `saved_card` arm does not reach `ensureCustomer` today, so `confirmSavedCardMandate`
+    // itself takes no actor — the field stays required on the SCHEMA only, for a future arm.
     expect(mockConfirmSavedCardMandate).toHaveBeenCalledWith(
       WALLET_ID,
       '22222222-2222-4222-8222-222222222222'
@@ -120,6 +153,7 @@ describe('POST /credit/setup-intent', () => {
     const res = await inject(
       {
         walletId: WALLET_ID,
+        actorUserId: ACTOR_USER_ID,
         paymentMethodSource: 'saved_card',
         clientRequestId: '22222222-2222-4222-8222-222222222222',
       },

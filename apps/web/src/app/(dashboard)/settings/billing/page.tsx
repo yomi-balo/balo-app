@@ -43,14 +43,14 @@ export default async function CreditsBillingPage(): Promise<React.JSX.Element> {
   }
 
   try {
-    const [data, billingSettingsWallet] = await Promise.all([
+    const [data, billingSettings] = await Promise.all([
       loadDashboardWalletData({ id: user.id }, user.companyId),
       loadBillingSettingsWallet({ id: user.id }, user.companyId),
     ]);
     return (
       <div className="mx-auto flex max-w-3xl flex-col gap-6">
         <CreditsSummary data={data} />
-        {billingSettingsWallet !== null && (
+        {billingSettings !== null && (
           // FIX ROUND 2 (review NEW-1 — REGRESSION) — keyed to the owning COMPANY, not the
           // wallet id: `wallet.walletId` is `null` for an unprovisioned wallet, so two
           // unprovisioned companies would otherwise share a key. `BillingSettingsSections` seeds
@@ -63,7 +63,11 @@ export default async function CreditsBillingPage(): Promise<React.JSX.Element> {
           // reintroducing the stale-consent defect F1 closed (a different company's remove
           // dialog could render the wrong mode-consequence branch). Keying forces a remount,
           // which reseeds every one of those from the fresh `wallet` prop.
-          <BillingSettingsSections key={user.companyId} wallet={billingSettingsWallet} />
+          <BillingSettingsSections
+            key={user.companyId}
+            wallet={billingSettings.wallet}
+            billingEmail={billingSettings.billingEmail}
+          />
         )}
       </div>
     );

@@ -351,7 +351,7 @@ describe('partyMembershipsRepository.listCapabilityEligibleCompanies (BAL-400 D1
     expect(eligible.map((c) => c.id)).toEqual([owned.id, administered.id, joined.id]);
   });
 
-  it('projects NAMES ONLY — no creditBalance, no isPersonal, no other company column', async () => {
+  it('projects NAMES ONLY — no billingEmail, no isPersonal, no other company column', async () => {
     const user = await userFactory();
     const company = await companyFactory({ name: 'Narrow Co', logoUrl: 'https://cdn/x.png' });
     await companyMemberFactory({ companyId: company.id, userId: user.id, role: 'owner' });

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { companies, companyMembers, auditEvents, partyDomains } from '../schema';
+import { companies, companyMembers, users, auditEvents, partyDomains } from '../schema';
 import {
   userFactory,
   companyFactory,
@@ -646,8 +646,11 @@ describe('companiesRepository.findSummariesByIds — the PROJECTED batch read (B
     const [firstRow] = rows;
     if (firstRow === undefined) throw new Error('expected a summary row');
     expect(Object.keys(firstRow).sort()).toEqual(['id', 'isPersonal', 'name']);
-    expect(firstRow).not.toHaveProperty('stripeCustomerId');
-    expect(firstRow).not.toHaveProperty('creditBalance');
+    // BAL-522: `billingEmail` replaced `stripeCustomerId` / `creditBalance` here when those
+    // two were dropped — a negative assertion on a column that no longer exists is
+    // vacuously green and pins nothing, so the leak guard is retargeted at the LIVE billing
+    // column that a widened `select()` would now carry.
+    expect(firstRow).not.toHaveProperty('billingEmail');
     expect(firstRow).not.toHaveProperty('domain');
     expect(firstRow).not.toHaveProperty('logoUrl');
   });
@@ -692,5 +695,504 @@ describe('companiesRepository.findSummariesByIds — the PROJECTED batch read (B
     await expect(companiesRepository.findSummariesByIds(ids)).resolves.toEqual([
       { id: company.id, name: 'Readonly Co', isPersonal: false },
     ]);
+  });
+});
+
+// ── BAL-522: the company billing email ──────────────────────────────────
+
+/** audit_events rows for one company + action (test-local helper). */
+async function billingAuditsFor(
+  companyId: string,
+  action: string
+): Promise<(typeof auditEvents.$inferSelect)[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'company'),
+        eq(auditEvents.entityId, companyId),
+        eq(auditEvents.action, action)
+      )
+    );
+}
+
+/** The raw billing columns of one company, straight from the row. */
+async function billingColumnsOf(companyId: string): Promise<{
+  billingEmail: string | null;
+  billingEmailSource: 'seeded' | 'set' | null;
+  billingEmailSetByUserId: string | null;
+  billingEmailSetAt: Date | null;
+}> {
+  const [row] = await db
+    .select({
+      billingEmail: companies.billingEmail,
+      billingEmailSource: companies.billingEmailSource,
+      billingEmailSetByUserId: companies.billingEmailSetByUserId,
+      billingEmailSetAt: companies.billingEmailSetAt,
+    })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
+  if (row === undefined) throw new Error('expected a company row');
+  return row;
+}
+
+/** A company plus one member of `role`, the standard fixture for the gate tests. */
+async function companyWithMember(
+  role: 'owner' | 'admin' | 'member',
+  overrides: Parameters<typeof companyFactory>[0] = {}
+): Promise<{ companyId: string; userId: string }> {
+  const company = await companyFactory({ name: 'Northwind Industrial', ...overrides });
+  const user = await userFactory();
+  await companyMemberFactory({ companyId: company.id, userId: user.id, role });
+  return { companyId: company.id, userId: user.id };
+}
+
+describe('companiesRepository.findBillingIdentityById — the PROJECTED billing read (BAL-522)', () => {
+  it('projects exactly the seven billing-identity columns, and nothing else from the row', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial', isPersonal: false });
+
+    const row = await companiesRepository.findBillingIdentityById(company.id);
+
+    if (row === undefined) throw new Error('expected a billing-identity row');
+    // The key SET is the invariant: this projection feeds a Stripe Customer payload and the
+    // billing-settings read, so a widening regression must fail loudly here.
+    expect(Object.keys(row).sort()).toEqual([
+      'billingEmail',
+      'billingEmailSetAt',
+      'billingEmailSetByUserId',
+      'billingEmailSource',
+      'id',
+      'isPersonal',
+      'name',
+    ]);
+    expect(row).not.toHaveProperty('domain');
+    expect(row).not.toHaveProperty('domainJoinMode');
+    expect(row.name).toBe('Northwind Industrial');
+    expect(row.isPersonal).toBe(false);
+    // Null until seeded — the seed condition.
+    expect(row.billingEmail).toBeNull();
+    expect(row.billingEmailSource).toBeNull();
+    expect(row.billingEmailSetByUserId).toBeNull();
+    expect(row.billingEmailSetAt).toBeNull();
+  });
+
+  it('returns the seeded value, source and attribution once set', async () => {
+    const { companyId, userId } = await companyWithMember('owner');
+    await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'dana@northwind.test',
+      actorUserId: userId,
+    });
+
+    const row = await companiesRepository.findBillingIdentityById(companyId);
+
+    expect(row?.billingEmail).toBe('dana@northwind.test');
+    expect(row?.billingEmailSource).toBe('seeded');
+    expect(row?.billingEmailSetByUserId).toBe(userId);
+    expect(row?.billingEmailSetAt).toBeInstanceOf(Date);
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    await expect(
+      companiesRepository.findBillingIdentityById(randomUUID())
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('companiesRepository.seedBillingEmail (BAL-522)', () => {
+  it('seeds value + source + attribution and writes exactly one audit row, in one transaction', async () => {
+    const { companyId, userId } = await companyWithMember('owner');
+
+    const result = await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'dana@northwind.test',
+      actorUserId: userId,
+    });
+
+    expect(result.seeded).toBe(true);
+    expect(result.billingEmail).toBe('dana@northwind.test');
+
+    const row = await billingColumnsOf(companyId);
+    expect(row.billingEmail).toBe('dana@northwind.test');
+    expect(row.billingEmailSource).toBe('seeded');
+    expect(row.billingEmailSetByUserId).toBe(userId);
+    expect(row.billingEmailSetAt).toBeInstanceOf(Date);
+
+    const audits = await billingAuditsFor(companyId, 'company.billing_email_seeded');
+    expect(audits).toHaveLength(1);
+    const [audit] = audits;
+    expect(audit?.actorUserId).toBe(userId);
+    expect(audit?.metadata).toEqual({ email: 'dana@northwind.test', source: 'seeded' });
+    // The result's audit id names the row that was actually written (same tx).
+    if (!result.seeded) throw new Error('expected a seed');
+    expect(result.auditEventId).toBe(audit?.id);
+  });
+
+  it('seeds for an admin too — the gate is the capability, not the literal owner role', async () => {
+    const { companyId, userId } = await companyWithMember('admin');
+
+    const result = await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'admin@northwind.test',
+      actorUserId: userId,
+    });
+
+    expect(result.seeded).toBe(true);
+    await expect(billingColumnsOf(companyId)).resolves.toMatchObject({
+      billingEmail: 'admin@northwind.test',
+    });
+  });
+
+  it('fails closed for a `member`-role actor — no write, no audit', async () => {
+    const { companyId, userId } = await companyWithMember('member');
+
+    const result = await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'member@northwind.test',
+      actorUserId: userId,
+    });
+
+    expect(result).toEqual({ seeded: false, reason: 'no_capability', billingEmail: null });
+    await expect(billingColumnsOf(companyId)).resolves.toEqual({
+      billingEmail: null,
+      billingEmailSource: null,
+      billingEmailSetByUserId: null,
+      billingEmailSetAt: null,
+    });
+    await expect(billingAuditsFor(companyId, 'company.billing_email_seeded')).resolves.toHaveLength(
+      0
+    );
+  });
+
+  it('fails closed for a SOFT-REMOVED owner membership (getMemberRole filters deleted_at)', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const user = await userFactory();
+    await companyMemberFactory({
+      companyId: company.id,
+      userId: user.id,
+      role: 'owner',
+      deletedAt: new Date(),
+    });
+
+    const result = await companiesRepository.seedBillingEmail({
+      companyId: company.id,
+      email: 'ghost@northwind.test',
+      actorUserId: user.id,
+    });
+
+    expect(result).toEqual({ seeded: false, reason: 'no_capability', billingEmail: null });
+    await expect(billingColumnsOf(company.id)).resolves.toMatchObject({ billingEmail: null });
+  });
+
+  it('fails closed for a NON-MEMBER actor — the platform-role case holds no membership', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const staffer = await userFactory({ platformRole: 'super_admin' });
+
+    const result = await companiesRepository.seedBillingEmail({
+      companyId: company.id,
+      email: 'staff@balo.test',
+      actorUserId: staffer.id,
+    });
+
+    expect(result).toEqual({ seeded: false, reason: 'no_capability', billingEmail: null });
+    await expect(billingColumnsOf(company.id)).resolves.toMatchObject({ billingEmail: null });
+    await expect(
+      billingAuditsFor(company.id, 'company.billing_email_seeded')
+    ).resolves.toHaveLength(0);
+  });
+
+  it('never overwrites an address that is already set — returns the WINNER value, no audit', async () => {
+    const { companyId, userId } = await companyWithMember('owner');
+    await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'first@northwind.test',
+      actorUserId: userId,
+    });
+
+    const second = await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'second@northwind.test',
+      actorUserId: userId,
+    });
+
+    // The concurrent-seed loser's path: it gets the winner's address so its Stripe sync
+    // still carries one.
+    expect(second).toEqual({
+      seeded: false,
+      reason: 'already_set',
+      billingEmail: 'first@northwind.test',
+    });
+    await expect(billingColumnsOf(companyId)).resolves.toMatchObject({
+      billingEmail: 'first@northwind.test',
+    });
+    // Still exactly the ONE audit row from the winning seed.
+    await expect(billingAuditsFor(companyId, 'company.billing_email_seeded')).resolves.toHaveLength(
+      1
+    );
+  });
+
+  it('returns company_not_found for an unknown company id (no throw — the caller is fail-soft)', async () => {
+    const user = await userFactory();
+
+    await expect(
+      companiesRepository.seedBillingEmail({
+        companyId: randomUUID(),
+        email: 'nobody@nowhere.test',
+        actorUserId: user.id,
+      })
+    ).resolves.toEqual({ seeded: false, reason: 'company_not_found', billingEmail: null });
+  });
+});
+
+describe('companiesRepository.setBillingEmail (BAL-522)', () => {
+  it('writes value + attribution + audit in ONE transaction and returns the previous state', async () => {
+    const { companyId, userId } = await companyWithMember('owner');
+    await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'seeded@northwind.test',
+      actorUserId: userId,
+    });
+    const seededRow = await billingColumnsOf(companyId);
+
+    const result = await companiesRepository.setBillingEmail({
+      companyId,
+      billingEmail: 'accounts@northwind.test',
+      actorUserId: userId,
+    });
+
+    if (result.outcome !== 'changed') throw new Error(`expected changed, got ${result.outcome}`);
+    expect(result.billingEmail).toBe('accounts@northwind.test');
+    expect(result.previousEmail).toBe('seeded@northwind.test');
+    expect(result.previousSource).toBe('seeded');
+    expect(result.previousSetAt).toEqual(seededRow.billingEmailSetAt);
+    expect(result.company).toEqual({ name: 'Northwind Industrial', isPersonal: false });
+
+    const row = await billingColumnsOf(companyId);
+    expect(row.billingEmail).toBe('accounts@northwind.test');
+    expect(row.billingEmailSource).toBe('set');
+    expect(row.billingEmailSetByUserId).toBe(userId);
+    expect(row.billingEmailSetAt).toEqual(result.setAt);
+
+    const audits = await billingAuditsFor(companyId, 'company.billing_email_changed');
+    expect(audits).toHaveLength(1);
+    const [audit] = audits;
+    expect(audit?.actorUserId).toBe(userId);
+    expect(audit?.metadata).toEqual({
+      previous_email: 'seeded@northwind.test',
+      new_email: 'accounts@northwind.test',
+      previous_source: 'seeded',
+    });
+    expect(result.auditEventId).toBe(audit?.id);
+  });
+
+  it('sets a NEVER-seeded company, recording a null previous state', async () => {
+    const { companyId, userId } = await companyWithMember('admin');
+
+    const result = await companiesRepository.setBillingEmail({
+      companyId,
+      billingEmail: 'accounts@northwind.test',
+      actorUserId: userId,
+    });
+
+    if (result.outcome !== 'changed') throw new Error(`expected changed, got ${result.outcome}`);
+    expect(result.previousEmail).toBeNull();
+    expect(result.previousSource).toBeNull();
+    expect(result.previousSetAt).toBeNull();
+    await expect(billingColumnsOf(companyId)).resolves.toMatchObject({
+      billingEmail: 'accounts@northwind.test',
+      billingEmailSource: 'set',
+    });
+  });
+
+  it('is forbidden for a `member`-role actor — ZERO writes of either kind', async () => {
+    const { companyId, userId } = await companyWithMember('member');
+
+    const result = await companiesRepository.setBillingEmail({
+      companyId,
+      billingEmail: 'member@northwind.test',
+      actorUserId: userId,
+    });
+
+    // The gate runs BEFORE any write: the row and the audit log are both untouched.
+    expect(result).toEqual({ outcome: 'forbidden' });
+    await expect(billingColumnsOf(companyId)).resolves.toEqual({
+      billingEmail: null,
+      billingEmailSource: null,
+      billingEmailSetByUserId: null,
+      billingEmailSetAt: null,
+    });
+    await expect(
+      billingAuditsFor(companyId, 'company.billing_email_changed')
+    ).resolves.toHaveLength(0);
+  });
+
+  it('is forbidden for a SOFT-REMOVED owner — the revoked-membership TOCTOU case', async () => {
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const user = await userFactory();
+    await companyMemberFactory({
+      companyId: company.id,
+      userId: user.id,
+      role: 'owner',
+      deletedAt: new Date(),
+    });
+
+    await expect(
+      companiesRepository.setBillingEmail({
+        companyId: company.id,
+        billingEmail: 'ghost@northwind.test',
+        actorUserId: user.id,
+      })
+    ).resolves.toEqual({ outcome: 'forbidden' });
+  });
+
+  it('is a no-op when the value is identical — no write, no audit', async () => {
+    const { companyId, userId } = await companyWithMember('owner');
+    await companiesRepository.seedBillingEmail({
+      companyId,
+      email: 'accounts@northwind.test',
+      actorUserId: userId,
+    });
+    const before = await billingColumnsOf(companyId);
+
+    const result = await companiesRepository.setBillingEmail({
+      companyId,
+      billingEmail: 'accounts@northwind.test',
+      actorUserId: userId,
+    });
+
+    expect(result).toEqual({
+      outcome: 'unchanged',
+      company: { name: 'Northwind Industrial', isPersonal: false },
+      billingEmail: 'accounts@northwind.test',
+      setAt: before.billingEmailSetAt,
+    });
+    // Source stays `seeded` — an unchanged value must not silently re-attribute the row.
+    await expect(billingColumnsOf(companyId)).resolves.toEqual(before);
+    await expect(
+      billingAuditsFor(companyId, 'company.billing_email_changed')
+    ).resolves.toHaveLength(0);
+  });
+
+  it('returns not_found for an unknown company id', async () => {
+    const user = await userFactory();
+
+    await expect(
+      companiesRepository.setBillingEmail({
+        companyId: randomUUID(),
+        billingEmail: 'nobody@nowhere.test',
+        actorUserId: user.id,
+      })
+    ).resolves.toEqual({ outcome: 'not_found' });
+  });
+
+  it('throws on a whitespace-only value — the structural "never blankable" backstop', async () => {
+    const { companyId, userId } = await companyWithMember('owner');
+
+    await expect(
+      companiesRepository.setBillingEmail({
+        companyId,
+        billingEmail: '   ',
+        actorUserId: userId,
+      })
+    ).rejects.toThrow(/non-empty/);
+    // It throws BEFORE the transaction — nothing was written.
+    await expect(billingColumnsOf(companyId)).resolves.toMatchObject({ billingEmail: null });
+  });
+});
+
+describe('migration 0084 — the billing-email columns and the two drops (BAL-522)', () => {
+  /** Column metadata for `companies`, keyed by column name. */
+  async function companyColumns(): Promise<Map<string, Record<string, unknown>>> {
+    const rows = await db.execute(sql`
+      SELECT column_name, data_type, udt_name, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'companies'
+    `);
+    return new Map(rows.map((r) => [String(r.column_name), r]));
+  }
+
+  it('creates the billing_email_source enum with exactly {seeded, set}', async () => {
+    const rows = await db.execute(sql`
+      SELECT e.enumlabel
+      FROM pg_enum e
+      JOIN pg_type t ON t.oid = e.enumtypid
+      WHERE t.typname = 'billing_email_source'
+      ORDER BY e.enumsortorder
+    `);
+
+    expect(rows.map((r) => String(r.enumlabel))).toEqual(['seeded', 'set']);
+  });
+
+  it('adds the four billing columns, all nullable and all WITHOUT a default', async () => {
+    const columns = await companyColumns();
+
+    expect(columns.get('billing_email')).toMatchObject({
+      data_type: 'text',
+      is_nullable: 'YES',
+      column_default: null,
+    });
+    // The enum column carries NO default — `reference_enum_default_same_tx_migration_hazard`:
+    // a default referencing a just-created enum breaks a from-scratch single-tx migration.
+    expect(columns.get('billing_email_source')).toMatchObject({
+      data_type: 'USER-DEFINED',
+      udt_name: 'billing_email_source',
+      is_nullable: 'YES',
+      column_default: null,
+    });
+    expect(columns.get('billing_email_set_by_user_id')).toMatchObject({
+      data_type: 'uuid',
+      is_nullable: 'YES',
+    });
+    // TIMESTAMPTZ, never a bare timestamp (CLAUDE.md / drizzle-schema).
+    expect(columns.get('billing_email_set_at')).toMatchObject({
+      data_type: 'timestamp with time zone',
+      is_nullable: 'YES',
+    });
+  });
+
+  it('DROPS credit_balance and stripe_customer_id from companies', async () => {
+    const columns = await companyColumns();
+
+    expect(columns.has('credit_balance')).toBe(false);
+    expect(columns.has('stripe_customer_id')).toBe(false);
+    // Non-vacuity floor: the read really is looking at the companies table.
+    expect(columns.has('is_personal')).toBe(true);
+  });
+
+  it('indexes the attribution FK column', async () => {
+    const rows = await db.execute(sql`
+      SELECT indexname FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'companies'
+        AND indexname = 'companies_billing_email_set_by_user_id_idx'
+    `);
+
+    expect(rows).toHaveLength(1);
+  });
+
+  it('degrades the attribution to NULL when the attributed user is hard-deleted (ON DELETE SET NULL)', async () => {
+    // SET NULL, not RESTRICT: any MANAGE_BILLING holder may set the address, so a user
+    // hard-delete must never be blocked by a billing-email attribution. The ADDRESS
+    // survives — only the provenance name degrades (to the date-only form).
+    const company = await companyFactory({ name: 'Northwind Industrial' });
+    const user = await userFactory();
+    await db
+      .update(companies)
+      .set({
+        billingEmail: 'accounts@northwind.test',
+        billingEmailSource: 'set',
+        billingEmailSetByUserId: user.id,
+        billingEmailSetAt: new Date(),
+      })
+      .where(eq(companies.id, company.id));
+
+    await db.delete(users).where(eq(users.id, user.id));
+
+    const row = await billingColumnsOf(company.id);
+    expect(row.billingEmail).toBe('accounts@northwind.test');
+    expect(row.billingEmailSource).toBe('set');
+    expect(row.billingEmailSetByUserId).toBeNull();
+    expect(row.billingEmailSetAt).toBeInstanceOf(Date);
   });
 });

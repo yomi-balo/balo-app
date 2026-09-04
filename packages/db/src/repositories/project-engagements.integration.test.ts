@@ -1497,9 +1497,10 @@ describe('projectEngagementsRepository.findWithMilestones — BAL-331 additive p
     expect(hydrated?.projectRequest?.title).toBe('Salesforce CPQ rollout');
 
     // SECURITY: company is projected to {id, name} only — never the client's
-    // billing secrets/PII (stripe_customer_id, credit_balance, domain, …).
-    expect(hydrated?.company).not.toHaveProperty('stripeCustomerId');
-    expect(hydrated?.company).not.toHaveProperty('creditBalance');
+    // billing details/PII (billing_email, domain, …). BAL-522 retargeted this guard from
+    // the dropped stripe_customer_id / credit_balance onto the live billing column: a
+    // negative assertion on a nonexistent column is vacuously green and pins nothing.
+    expect(hydrated?.company).not.toHaveProperty('billingEmail');
     expect(Object.keys(hydrated?.company ?? {}).sort()).toEqual(['id', 'name']);
     // projectRequest carries only {id, title} — not description/budget/timeline.
     expect(hydrated?.projectRequest).not.toHaveProperty('description');
