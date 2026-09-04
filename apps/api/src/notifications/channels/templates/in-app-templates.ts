@@ -1,4 +1,8 @@
-import { formatAudMinor, formatExpiryDateShort } from './credit-format.js';
+import {
+  formatAudMinor,
+  formatExpiryDateShort,
+  buildSavedCardDetachedCopy,
+} from './credit-format.js';
 import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
@@ -1098,6 +1102,19 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       title: 'Top-up requested',
       body: `${memberName} asked you to top up your team's balance.`,
       actionUrl: '/billing/top-up',
+    };
+  },
+
+  // BAL-521 §3 saved card removed — company billing admins, from EITHER door. Copy comes from
+  // the ONE shared derivation (`buildSavedCardDetachedCopy`, F3) the email factory in `index.ts`
+  // also calls, so the two channels cannot drift. Deep-links to billing settings (NOT
+  // `/billing/top-up` — that route resolves to nothing for this destination).
+  'credit-saved-card-detached': (data) => {
+    const copy = buildSavedCardDetachedCopy(data);
+    return {
+      title: copy.headline,
+      body: `${copy.leadSentence} ${copy.consequence}`,
+      actionUrl: '/settings/billing',
     };
   },
 

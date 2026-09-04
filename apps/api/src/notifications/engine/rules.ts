@@ -907,6 +907,14 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // fans out to the company's MANAGE_BILLING holders (recipient 'company_billing_admins',
   // resolved from data.billingUserIds) via email + in-app. Publishable from apps/web.
   'credit.topup.requested': emailAndInApp('company_billing_admins', 'credit-topup-requested'),
+  // BAL-521 §3. A saved card left the wallet — by the client pressing Remove, or by the bank /
+  // card provider detaching it at Stripe. Fans out to the company's MANAGE_BILLING holders
+  // (recipient 'company_billing_admins' → data.billingUserIds) via email + in-app. NO SMS:
+  // nothing is lost by seeing it later. Server-published from BOTH doors.
+  'credit.saved_card.detached': emailAndInApp(
+    'company_billing_admins',
+    'credit-saved-card-detached'
+  ),
   // BAL-383 (ADR-1040): promo code redeemed — a warm, retrospective milestone
   // confirmation to the ACTOR who redeemed (recipient 'self' via payload.userId; the
   // resolver hydrates data.user, the delivery worker greets by name). NOT a wallet-state

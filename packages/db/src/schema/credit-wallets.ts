@@ -166,15 +166,75 @@ export const creditWallets = pgTable(
     pendingTopupTriggeringEntryId: uuid('pending_topup_triggering_entry_id'),
     pendingTopupPaymentIntentId: text('pending_topup_payment_intent_id'),
 
+    // BAL-521 §2 — the reconcile sweep's ROTATION CURSOR: when this wallet's in-flight marker
+    // LAST alarmed. Not a money column and not a state machine — it affects BATCH ORDER only.
+    //
+    // Why it exists: an alarming row writes nothing and clears nothing (by design), so under the
+    // old `ORDER BY pending_topup_at ASC` with `LIMIT 100` a permanently-alarmed row held the head
+    // of the batch forever and starved every newer stuck reload — silently. `findStuckPendingTopups`
+    // now orders `pending_topup_alarmed_at ASC NULLS FIRST, pending_topup_at ASC`: never-alarmed
+    // rows always lead, alarmed rows follow least-recently-alarmed first, so the alarmed set
+    // rotates across consecutive ticks instead of one slice of it monopolising every tick.
+    // De-prioritised, NEVER excluded — exclusion would foreclose the `partial_refund` self-heal
+    // (`auto-topup-reconcile.ts`'s terminal `refunded` arm only fires while the finder still
+    // returns the row).
+    //
+    // NULLABLE, NO DEFAULT — two independent reasons, both load-bearing:
+    //  1. SEMANTIC. `NULL` *means* "never alarmed", and it is the value the finder's `NULLS FIRST`
+    //     ordering depends on. A default would put every existing row into the alarmed set on day
+    //     one and re-create the very starvation this column exists to fix, inverted.
+    //  2. MIGRATION SAFETY. A nullable, defaultless `ADD COLUMN` is a catalog-only change in
+    //     PG 11+ — no table rewrite, no backfill, no lock beyond a brief ACCESS EXCLUSIVE. This
+    //     matters because the Testcontainers harness only ever migrates an EMPTY database, so it
+    //     cannot surface a NOT-NULL/backfill hazard on a non-empty production table: that property
+    //     has to be argued here rather than proven there. Same posture as `card_updated_at` above.
+    //
+    // NO CHECK CONSTRAINT — there is no invariant to express. The column is legal as NULL and
+    // legal as any timestamp; a `<= now()` style check would be false under clock skew and would
+    // buy nothing.
+    //
+    // ⚠ NEVER STAMPED ON AN ESCALATED `still_in_flight` ROW. That row is `deferred`, not `alarm`:
+    // its PaymentIntent is still `processing` and CAN STILL SETTLE. De-prioritising it would
+    // strand real money — the exact inverse of what this column exists for. §1 (escalation) and
+    // §2 (rotation) are disjoint by construction, and the sweep only ever stamps rows it collected
+    // on the `alarm` arm.
+    //
+    // Nulled again — in the SAME statement — by `armPendingTopup` and `clearPendingTopup`, so a
+    // legitimate TTL re-arm can never inherit a stale stamp and silently de-prioritise a NEW,
+    // LIVE, in-flight reload.
+    //
+    // INTERNAL operational state, like `pending_topup_at` and its two correlation columns:
+    // structurally off every client surface, because `CLIENT_WALLET_VIEW_COLUMNS`
+    // (`repositories/_shared/credit-views.ts`) is an ALLOW-LIST — a new column is excluded by
+    // construction and there is nothing to add there. Said here so a reader does not go looking.
+    //
+    // The existing `credit_wallets_pending_topup_idx` is DELIBERATELY UNCHANGED (neither widened
+    // nor made composite): it still serves the finder's PREDICATE exactly. See that index's note
+    // below and `findStuckPendingTopups`' docblock for why the new ORDER BY is left to a sort.
+    pendingTopupAlarmedAt: timestamp('pending_topup_alarmed_at', { withTimezone: true }),
+
     // Mutable projection ⇒ `updated_at` is correct. NO `...softDelete` (see header).
     ...timestamps,
   },
   (t) => [
     // One wallet per company: the by-company equality read AND the onConflict target.
     uniqueIndex('credit_wallets_company_idx').on(t.companyId),
-    // BAL-515 — the auto-top-up reconcile finder (`findStuckPendingTopups`, oldest marker
-    // first). PARTIAL on the marker so the index only carries wallets with a reload actually in
-    // flight — a tiny fraction of a table that is already one row per company.
+    // BAL-515 — the auto-top-up reconcile finder (`findStuckPendingTopups`). PARTIAL on the
+    // marker so the index only carries wallets with a reload actually in flight — a tiny
+    // fraction of a table that is already one row per company.
+    //
+    // ⚠ BAL-521 — THIS INDEX SERVES THE FINDER'S PREDICATE, NOT ITS ORDERING, and is deliberately
+    // left exactly as it was. The finder's mandatory arm is still
+    // `pending_topup_at IS NOT NULL AND pending_topup_at <= cutoff`, which this partial index
+    // matches exactly; widening the partial `WHERE` to mention `pending_topup_alarmed_at` would
+    // make it carry MORE rows, not fewer. The new two-key ordering
+    // (`pending_topup_alarmed_at ASC NULLS FIRST, pending_topup_at ASC`) has a leading key that is
+    // not in this index, so Postgres scans and then SORTS. That is accepted, not overlooked: the
+    // sort input is restricted to wallets with a reload ACTUALLY IN FLIGHT, and the sweep spends
+    // seconds of Stripe latency per row — a sort over a handful of rows is not the cost centre. A
+    // composite `(pending_topup_alarmed_at, pending_topup_at)` index WOULD serve the ordering, but
+    // it is a new index on the money path bought against no measured problem and would need
+    // re-deciding the moment either sort key changed.
     index('credit_wallets_pending_topup_idx')
       .on(t.pendingTopupAt)
       .where(sql`${t.pendingTopupAt} IS NOT NULL`),

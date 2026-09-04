@@ -1358,4 +1358,22 @@ describe('notificationRules', () => {
       expect(fired).toEqual([false, false, false, false, false]);
     });
   });
+
+  describe('credit.saved_card.detached (BAL-521 §3)', () => {
+    it('resolves to email + in-app on company_billing_admins with template credit-saved-card-detached, no SMS', () => {
+      const rules = notificationRules['credit.saved_card.detached'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('company_billing_admins');
+        expect(rule.template).toBe('credit-saved-card-detached');
+        expect(rule.timing).toBe('immediate');
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+      expect(rules!.some((r) => r.channel === 'sms')).toBe(false);
+    });
+  });
 });

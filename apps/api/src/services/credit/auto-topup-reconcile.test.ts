@@ -458,13 +458,14 @@ describe('reconcileStuckAutoTopup — the other arms', () => {
     expect(mockLog.error).not.toHaveBeenCalled();
   });
 
-  it('ESCALATES a `processing` PaymentIntent to log.error once it is past the escalation window', async () => {
-    // ⚠ NOTHING MAY DEFER SILENTLY FOREVER. Before this, a genuinely-`processing` PI wrote
-    // nothing, logged at INFO, and repeated every minute for as long as it stayed that way —
-    // 1,440 identical `info` records a day, indistinguishable from health, with no human ever
-    // told. `reconcileStuckSettlement` escalates its equivalent dead end for exactly this reason
-    // and this twin dropped it. The row still writes nothing and still retries; only the level
-    // changes, because only an `error` reaches a responder.
+  it('(BAL-521 D4/D5) returns its OWN discriminator once past the escalation window, and no longer calls log.error itself', async () => {
+    // ⚠ NOTHING MAY DEFER SILENTLY FOREVER — but AS OF BAL-521 §1 the escalation RECORD moved to
+    // the SWEEP, which batches ONE `log.error` per tick (see `auto-topup-reconcile-sweep.test.ts`
+    // for that half). This test proves only the SERVICE's half: past the window it returns a
+    // DISTINCT `still_in_flight_escalated` reason carrying its own identifiers, and it does NOT
+    // itself call `log.error` any more — the row still writes nothing and still retries; only the
+    // discriminator changed, so the sweep can tell this row apart from an ordinary in-window
+    // `still_in_flight` and batch it.
     mockRetrievePaymentIntentStatus.mockResolvedValue({
       status: 'processing',
       hardDeclined: false,
@@ -474,12 +475,17 @@ describe('reconcileStuckAutoTopup — the other arms', () => {
       currency: 'aud',
     });
 
-    const out = await reconcileStuckAutoTopup(wallet(), {
-      now: new Date(PENDING_SINCE.getTime() + TOPUP_RECONCILE_ESCALATE_AFTER_MS + 1),
-    });
+    const now = new Date(PENDING_SINCE.getTime() + TOPUP_RECONCILE_ESCALATE_AFTER_MS + 1);
+    const out = await reconcileStuckAutoTopup(wallet(), { now });
 
-    expect(out).toEqual({ outcome: 'deferred', reason: 'still_in_flight' });
-    expect(mockLog.error).toHaveBeenCalledTimes(1);
+    expect(out).toEqual({
+      outcome: 'deferred',
+      reason: 'still_in_flight_escalated',
+      paymentIntentId: 'pi_1',
+      piStatus: 'processing',
+      stuckForMs: now.getTime() - PENDING_SINCE.getTime(),
+    });
+    expect(mockLog.error).not.toHaveBeenCalled();
     expect(mockClearPendingTopup).not.toHaveBeenCalled();
     expect(mockApplyAutoTopupFromStripe).not.toHaveBeenCalled();
     expect(mockPublishAutoTopupFailed).not.toHaveBeenCalled();

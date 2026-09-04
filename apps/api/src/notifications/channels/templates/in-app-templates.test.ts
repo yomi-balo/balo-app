@@ -560,6 +560,64 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  describe('credit-saved-card-detached (BAL-521 §3)', () => {
+    it('stripe_webhook + known card: names the bank/card provider, deep-links to billing settings', () => {
+      const result = getInAppTemplate('credit-saved-card-detached', {
+        source: 'stripe_webhook',
+        cardBrand: 'visa',
+        cardLast4: '4242',
+        modeReconciled: false,
+        previousLowBalanceMode: 'notify_only',
+      });
+      expect(result).toEqual({
+        title: 'Your saved card was removed',
+        body: 'Your saved Visa ending 4242 was removed by your bank or card provider. You were already on Just notify me, so nothing else changed.',
+        actionUrl: '/settings/billing',
+      });
+    });
+
+    it('stripe_webhook + unknown card degrades to the card-less lead sentence', () => {
+      const result = getInAppTemplate('credit-saved-card-detached', {
+        source: 'stripe_webhook',
+        modeReconciled: false,
+      });
+      expect(result.body).toContain('Your saved card was removed by your bank or card provider.');
+    });
+
+    it('user_initiated names the actor "@ company" and reconciles a card-backed mode off', () => {
+      const result = getInAppTemplate('credit-saved-card-detached', {
+        source: 'user_initiated',
+        detachedByLabel: 'Dana @ Northwind Industrial',
+        cardBrand: 'mastercard',
+        cardLast4: '0005',
+        modeReconciled: true,
+        previousLowBalanceMode: 'auto_topup',
+      });
+      expect(result).toEqual({
+        title: 'Saved card removed',
+        body: "Dana @ Northwind Industrial removed the saved card — the Mastercard ending 0005. Auto top-up is now off — you're on Just notify me. Add a card in Billing settings to turn it back on.",
+        actionUrl: '/settings/billing',
+      });
+    });
+
+    it('user_initiated falls back to "A teammate" when no actor name resolved', () => {
+      const result = getInAppTemplate('credit-saved-card-detached', {
+        source: 'user_initiated',
+        modeReconciled: false,
+      });
+      expect(result.body).toContain('A teammate removed the saved card.');
+    });
+
+    it('names WHICH card-backed mode went off — keep_going, not auto_topup', () => {
+      const result = getInAppTemplate('credit-saved-card-detached', {
+        source: 'stripe_webhook',
+        modeReconciled: true,
+        previousLowBalanceMode: 'keep_going',
+      });
+      expect(result.body).toContain('Keep me going is now off');
+    });
+  });
+
   describe('engagement-case-closed-client (BAL-390)', () => {
     it('renders the resolved-close record, deep-linked to the MEETING RECAP', () => {
       const result = getInAppTemplate('engagement-case-closed-client', {

@@ -54,7 +54,13 @@ import { SessionSettledEmail } from './session-settled.js';
 import { SessionSettlementFailedEmail } from './session-settlement-failed.js';
 import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
 import { CreditTopupRequestedEmail } from './credit-topup-requested.js';
-import { formatAudMinor, formatExpiryDateLong, formatPresentmentMinor } from './credit-format.js';
+import { CreditSavedCardDetachedEmail } from './credit-saved-card-detached.js';
+import {
+  formatAudMinor,
+  formatExpiryDateLong,
+  formatPresentmentMinor,
+  buildSavedCardDetachedCopy,
+} from './credit-format.js';
 import { PromoRedeemedEmail } from './promo-redeemed.js';
 import { ProposalSharedEmail } from './proposal-shared.js';
 import {
@@ -1240,6 +1246,41 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `${sanitizeSubjectTitle(memberName)} asked you to top up your team's balance`,
+    };
+  },
+
+  // BAL-521 §3 top-up card removed — EMAIL to each fanned-out MANAGE_BILLING holder, from
+  // EITHER door (a teammate pressed Remove, or the bank/card provider detached it at Stripe).
+  // Copy comes from the ONE shared derivation (`buildSavedCardDetachedCopy`, F3) the in-app
+  // factory also calls, so the two channels cannot drift. NO money figure anywhere (DEC-8). CTA
+  // lands on billing settings.
+  'credit-saved-card-detached': (data) => {
+    const copy = buildSavedCardDetachedCopy(data);
+
+    // ⚠ BAL-521 (F4) — SUBJECT uses the LABELLED "@ company" form, same as the BODY's first
+    // mention. `credit-topup-requested`'s bare-subject shape is NOT a comparable precedent — that
+    // template never carries an "@ company" clause at all, so it establishes no such pattern. The
+    // real comparable siblings are `engagement-accepted-expert` / `engagement-changes-requested-
+    // expert` above, which put the labelled form in subject AND body identically — matching
+    // CLAUDE.md's "names the person with '@ company/agency' on first mention" rule, where the
+    // SUBJECT (read first) is the first mention.
+    const subject =
+      copy.source === 'user_initiated'
+        ? `${sanitizeSubjectTitle(copy.label)} removed your team's saved card`
+        : // BAL-521 (F9) — matches the body's leadSentence wording verbatim ("bank or card
+          // provider"), not the narrower "card provider" this used to say.
+          'Your saved card was removed by your bank or card provider';
+
+    return {
+      component: React.createElement(CreditSavedCardDetachedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        headline: copy.headline,
+        leadSentence: copy.leadSentence,
+        consequence: copy.consequence,
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject,
     };
   },
 
