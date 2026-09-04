@@ -36,6 +36,7 @@ const {
   mockListByPaymentMethodId,
   mockRefreshSavedCardDisplay,
   mockClearSavedCard,
+  mockClearSavedCardAndReconcileMode,
   mockRetrieveCardDisplay,
   mockTrackServer,
   REPAIR_TX,
@@ -82,6 +83,13 @@ const {
   mockListByPaymentMethodId: vi.fn(async (): Promise<Array<{ id: string }>> => []),
   mockRefreshSavedCardDisplay: vi.fn(),
   mockClearSavedCard: vi.fn(),
+  // BAL-521 §3 — default: not card-backed, nothing reconciled. Individual cases override.
+  mockClearSavedCardAndReconcileMode: vi.fn(async () => ({
+    wallet: { id: 'wallet_1', companyId: 'company_1', lowBalanceMode: 'notify_only' },
+    modeReconciled: false,
+    auditEventId: 'audit_1',
+    previousLowBalanceMode: 'notify_only',
+  })),
   // Default: Stripe has no card facts to give (the common case in these fixtures, whose PIs
   // carry no customer / payment_method). Individual cases override it.
   mockRetrieveCardDisplay: vi.fn(async () => null),
@@ -109,6 +117,7 @@ vi.mock('@balo/db', () => ({
     listByStripePaymentMethodId: mockListByPaymentMethodId,
     refreshSavedCardDisplay: mockRefreshSavedCardDisplay,
     clearSavedCard: mockClearSavedCard,
+    clearSavedCardAndReconcileMode: mockClearSavedCardAndReconcileMode,
   },
   creditSessionsRepository: {
     findById: mockSessionFindById,
@@ -1405,7 +1414,7 @@ describe('resolveStripeEffect — payment_method.* (BAL-515)', () => {
     expect(mockPaymentIntentsRetrieve).not.toHaveBeenCalled();
   });
 
-  it('maps payment_method.detached → saved_card_detached', async () => {
+  it('maps payment_method.detached → saved_card_detached, carrying the EVENT id and the card label off the EVENT (B12/D7/D9)', async () => {
     // ⚠ Stripe NULLS `pm.customer` on a detach, which is why the wallet lookup is by
     // payment-method id and never by customer.
     const effect = await resolveStripeEffect(
@@ -1416,8 +1425,27 @@ describe('resolveStripeEffect — payment_method.* (BAL-515)', () => {
       kind: 'saved_card_detached',
       walletId: 'wallet_1',
       paymentMethodId: 'pm_1',
+      stripeEventId: 'evt_payment_method.detached',
+      cardLabel: { cardBrand: 'visa', cardLast4: '4242' },
     });
     expect(mockListByPaymentMethodId).toHaveBeenCalledWith('pm_1');
+  });
+
+  it('(B12) a NON-CARD payment method still resolves an effect (the mandate must still clear) — only the label degrades to null', async () => {
+    const effect = await resolveStripeEffect(
+      event(
+        'payment_method.detached',
+        paymentMethod({ type: 'au_becs_debit', card: undefined, customer: null })
+      )
+    );
+
+    expect(effect).toEqual({
+      kind: 'saved_card_detached',
+      walletId: 'wallet_1',
+      paymentMethodId: 'pm_1',
+      stripeEventId: 'evt_payment_method.detached',
+      cardLabel: null,
+    });
   });
 
   it('acks with NO effect when no wallet holds the payment method (not ours)', async () => {
@@ -1475,18 +1503,121 @@ describe('applyStripeEffect — payment_method.* (BAL-515)', () => {
     expect(mockClearSavedCard).not.toHaveBeenCalled();
   });
 
-  it('saved_card_detached clears the card AND the mandate (fail-closed)', async () => {
+  it('(B9, acceptance-mandated) saved_card_detached goes THROUGH clearSavedCardAndReconcileMode with EXACTLY {actorUserId: null, source: "stripe_webhook"} — NEVER the bare clearSavedCard', async () => {
     // A detached payment method cannot be charged; leaving `mandate_status = active` would let
     // auto-top-up and overdraft settlement keep firing off-session charges at a dead card.
     const post = await applyStripeEffect(tx, {
       kind: 'saved_card_detached',
       walletId: 'wallet_1',
       paymentMethodId: 'pm_1',
+      stripeEventId: 'evt_1',
+      cardLabel: { cardBrand: 'visa', cardLast4: '4242' },
     });
 
-    expect(post).toEqual([]);
-    expect(mockClearSavedCard).toHaveBeenCalledWith(tx, 'wallet_1');
+    expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalledWith(tx, 'wallet_1', {
+      actorUserId: null,
+      source: 'stripe_webhook',
+    });
+    expect(mockClearSavedCard).not.toHaveBeenCalled();
     expect(mockRefreshSavedCardDisplay).not.toHaveBeenCalled();
+    expect(post).toHaveLength(1);
+  });
+
+  it('(B11) the audit row carries NO Stripe id and NO card facts — the primitive is called with EXACTLY {actorUserId, source}', async () => {
+    await applyStripeEffect(tx, {
+      kind: 'saved_card_detached',
+      walletId: 'wallet_1',
+      paymentMethodId: 'pm_1',
+      stripeEventId: 'evt_1',
+      cardLabel: { cardBrand: 'visa', cardLast4: '4242' },
+    });
+
+    expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalledTimes(1);
+    const call = mockClearSavedCardAndReconcileMode.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      Record<string, unknown>,
+    ];
+    const actor = call[2];
+    expect(Object.keys(actor).sort()).toEqual(['actorUserId', 'source']);
+  });
+
+  it('(B10) the ONE post-commit thunk publishes credit.saved_card.detached with source, modeReconciled, previousLowBalanceMode, the card label, companyId off the returned wallet (M5), and the event-id correlationId', async () => {
+    mockClearSavedCardAndReconcileMode.mockResolvedValueOnce({
+      wallet: { id: 'wallet_1', companyId: 'company_9', lowBalanceMode: 'notify_only' },
+      modeReconciled: true,
+      auditEventId: 'audit_ignored_on_webhook_door',
+      previousLowBalanceMode: 'auto_topup',
+    });
+
+    const post = await applyStripeEffect(tx, {
+      kind: 'saved_card_detached',
+      walletId: 'wallet_1',
+      paymentMethodId: 'pm_1',
+      stripeEventId: 'evt_detach_1',
+      cardLabel: { cardBrand: 'visa', cardLast4: '4242' },
+    });
+
+    expect(post).toHaveLength(1);
+    expect(mockNotificationPublish).not.toHaveBeenCalled(); // not yet — the thunk hasn't run
+    await post[0]!();
+
+    expect(mockNotificationPublish).toHaveBeenCalledTimes(1);
+    const [event_, payload] = mockNotificationPublish.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(event_).toBe('credit.saved_card.detached');
+    expect(payload).toMatchObject({
+      correlationId: 'saved-card-detached.wallet_1.evt_detach_1',
+      companyId: 'company_9', // off the returned wallet (M5), NOT the effect (which carries none)
+      walletId: 'wallet_1',
+      source: 'stripe_webhook',
+      modeReconciled: true,
+      previousLowBalanceMode: 'auto_topup',
+      cardBrand: 'visa',
+      cardLast4: '4242',
+    });
+    expect(payload.detachedByUserId).toBeUndefined();
+    expect(payload.userId).toBeUndefined();
+  });
+
+  it('(B12) a non-card payment method (cardLabel: null) publishes the notice with NO cardBrand/cardLast4 keys', async () => {
+    const post = await applyStripeEffect(tx, {
+      kind: 'saved_card_detached',
+      walletId: 'wallet_1',
+      paymentMethodId: 'pm_1',
+      stripeEventId: 'evt_detach_2',
+      cardLabel: null,
+    });
+    await post[0]!();
+
+    const [, payload] = mockNotificationPublish.mock.calls[0] as [string, Record<string, unknown>];
+    expect('cardBrand' in payload).toBe(false);
+    expect('cardLast4' in payload).toBe(false);
+  });
+
+  it('(B13, PIN) a detach naming a payment method NO WALLET HOLDS acks with no effect and NO audit row', async () => {
+    mockListByPaymentMethodId.mockResolvedValue([]);
+    const effect = await resolveStripeEffect(event('payment_method.detached', paymentMethod()));
+
+    expect(effect).toBeNull();
+    expect(mockClearSavedCardAndReconcileMode).not.toHaveBeenCalled();
+    expect(mockAuditRecord).not.toHaveBeenCalled();
+  });
+
+  it('(B14) a publish failure inside the post-commit thunk is logged and NEVER thrown', async () => {
+    mockNotificationPublish.mockRejectedValueOnce(new Error('queue unavailable'));
+
+    const post = await applyStripeEffect(tx, {
+      kind: 'saved_card_detached',
+      walletId: 'wallet_1',
+      paymentMethodId: 'pm_1',
+      stripeEventId: 'evt_detach_3',
+      cardLabel: null,
+    });
+
+    await expect(post[0]!()).resolves.toBeUndefined();
   });
 });
 

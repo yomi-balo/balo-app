@@ -6,6 +6,7 @@ import {
   partyMembershipsRepository,
   agenciesRepository,
 } from '@balo/db';
+import { personWithOrgLabel } from '@balo/shared/parties';
 import type { RuleContext } from './rules.js';
 
 /**
@@ -54,6 +55,11 @@ const BILLING_FANOUT_EVENTS = new Set<string>([
   // BAL-377 / BAL-381: a member's "nudge {Admin} to top up" fans out to the company's
   // MANAGE_BILLING holders (the nudging member lacks MANAGE_BILLING → naturally excluded).
   'credit.topup.requested',
+  // BAL-521 §3: a saved card left the wallet (either door) → the company's MANAGE_BILLING
+  // holders. Omitting this entry fails SILENTLY — the rule still resolves, the dispatcher just
+  // finds no `data.billingUserIds` and the fan-out delivers to nobody. See this file's own
+  // docblock warning above.
+  'credit.saved_card.detached',
   // ⚠⚠ BAL-412's `session.missed_call` is DELIBERATELY NOT LISTED HERE, and the omission is a
   // DECISION, not a gap (omitting an entry for a genuine fan-out event would silently drop the
   // alert — see the file docblock's warning). This event has NO `company_billing_admins`
@@ -118,6 +124,38 @@ async function hydrateTopupRequester(
   }
 }
 
+/**
+ * BAL-521 §3 — name the member who removed the card, for the `user_initiated` copy arm. The
+ * payload carries `detachedByUserId` (NOT `userId` — see the payload's own docblock), so the
+ * shared `payload.userId → data.user` hydration never fires and the actor is never mailed as a
+ * `self` recipient on top of the billing fan-out.
+ *
+ * Hydrates TWO fields from ONE lookup: `detachedByName` (bare — the actor's name alone, kept for
+ * any caller that wants it unlabelled) and `detachedByLabel` ("Dana @ Northwind Industrial" via
+ * the shared `personWithOrgLabel`, used in BOTH the subject and the body's first mention per
+ * CLAUDE.md's retrospective-attribution rule — F4). Degrades to 'A teammate' when the name is
+ * empty — and (F5) the org clause is staple-on ONLY when a real name resolved: 'A teammate'
+ * already implies the recipient's own company, so `detachedByLabel` stays the bare 'A teammate'
+ * rather than gaining a company clause that would read as if an outsider acted. Reads
+ * `data.company` for the org label — already hydrated above from `payload.companyId` (context
+ * only), i.e. BEFORE this hydrator runs. The `stripe_webhook` door has no actor, so neither
+ * field is set and the templates never read them on that arm.
+ */
+async function hydrateSavedCardDetachActor(
+  event: string,
+  payload: Record<string, unknown>,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (event === 'credit.saved_card.detached' && typeof payload.detachedByUserId === 'string') {
+    const user = await usersRepository.findById(payload.detachedByUserId);
+    const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+    const bareName = name.length > 0 ? name : 'A teammate';
+    data.detachedByName = bareName;
+    const company = data.company as { name?: string } | undefined;
+    data.detachedByLabel = name.length > 0 ? personWithOrgLabel(bareName, company?.name) : bareName;
+  }
+}
+
 export async function resolveContext(
   event: string,
   payload: Record<string, unknown>
@@ -170,6 +208,10 @@ export async function resolveContext(
 
   // BAL-377/BAL-381: name the nudging member for the credit.topup.requested templates.
   await hydrateTopupRequester(event, payload, data);
+
+  // BAL-521 §3: name the member who removed the saved card, for the user_initiated copy arm
+  // (extracted — see hydrateSavedCardDetachActor).
+  await hydrateSavedCardDetachActor(event, payload, data);
 
   // BAL-348: agency.provisioned hydration (extracted — see hydrateAgencyProvisioned).
   await hydrateAgencyProvisioned(event, payload, data);

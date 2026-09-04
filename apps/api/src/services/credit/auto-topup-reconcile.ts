@@ -88,6 +88,14 @@ export type AutoTopupReconcileAlarmReason = 'payment_intent_unresolvable' | 'par
  * let a later crossing fire a second charge under a DIFFERENT key — the one double-charge this
  * design must not create. It needs a human, which is why the sweep aggregates it into a `log.error`.
  *
+ * ⚠ BAL-521 (D1/AMEND-1) — "writes nothing" is QUALIFIED here, not overturned. An `alarm`
+ * outcome still moves no money, credits nothing, and clears no marker — every piece of crossing
+ * evidence stays intact. But the SWEEP (never this function) now stamps `pending_topup_alarmed_at`
+ * on these rows, off the very `alarmed` array it already batches the `log.error` from — a pure
+ * observability/fairness column that affects BATCH ORDER only (`findStuckPendingTopups`'s
+ * rotation, BAL-521 §2) and is nulled again by `armPendingTopup` / `clearPendingTopup` the moment
+ * the row's marker legitimately moves (D3).
+ *
  * `refunded` is terminal and CREDITS NOTHING: the charge succeeded and the money has since gone
  * back to the customer IN FULL, so the marker is drained and the crossing closed. Crediting it
  * would hand the company the face value on top of the refund. ⚠ A PARTIAL refund is NOT this arm.
@@ -99,6 +107,21 @@ export type AutoTopupReconcileOutcome =
   | { outcome: 'refunded'; paymentIntentId: string }
   | { outcome: 'failed_closed'; paymentIntentId: string }
   | { outcome: 'deferred'; reason: 'pi_unreadable' | 'still_in_flight' }
+  | {
+      /**
+       * BAL-521 §1 — STILL `deferred`: nothing is written, nothing is cleared, no money tally.
+       * The only difference from `still_in_flight` is that this row is past
+       * `TOPUP_RECONCILE_ESCALATE_AFTER_MS` and needs a HUMAN. It carries its own identifiers
+       * because the sweep — not this function — now emits the single batched `log.error`.
+       * ⚠ It is NEVER an `alarm`, and the sweep must NEVER stamp it (D6) — its PaymentIntent is
+       * still `processing` and can still settle; de-prioritising it would strand real money.
+       */
+      outcome: 'deferred';
+      reason: 'still_in_flight_escalated';
+      paymentIntentId: string;
+      piStatus: string;
+      stuckForMs: number;
+    }
   | { outcome: 'alarm'; reason: AutoTopupReconcileAlarmReason };
 
 /** The identifiers every log on this path carries (§13 — one shape, never re-spelled). */
@@ -242,6 +265,13 @@ async function repairOrClear(
     // ⚠⚠ PART OF THE MONEY CAME BACK AND PART DID NOT. Neither automated answer is safe (see the
     // docblock), so this writes NOTHING — no credit, no clear — and escalates. The message states
     // the un-refunded remainder rather than asserting where the money is.
+    //
+    // BAL-521 (D1/AMEND-2) — the SWEEP now stamps `pending_topup_alarmed_at` on this row, off the
+    // `alarm` outcome below — a pure observability/fairness column. The row is DE-PRIORITISED,
+    // never EXCLUDED, precisely so the terminal `refunded` arm ABOVE still fires — and drains the
+    // marker — the moment a human completes the refund in the Stripe Dashboard; permanent
+    // exclusion would foreclose that self-heal and turn it into a second manual step (BAL-521 §2,
+    // D2).
     log.error(
       {
         ...walletLogFields(wallet),
@@ -490,16 +520,25 @@ export async function reconcileStuckAutoTopup(
   // `processing` (or the unreachable `requires_capture`) — genuinely still in flight.
   const stuckForMs = now.getTime() - pendingSince.getTime();
   if (stuckForMs >= TOPUP_RECONCILE_ESCALATE_AFTER_MS) {
-    // ⚠ NOTHING MAY DEFER SILENTLY FOREVER. `reconcileStuckSettlement` escalates its equivalent
-    // dead end to `log.error` for exactly this reason and this twin dropped it: an `info` repeated
-    // every minute is indistinguishable from health. A PaymentIntent that has been `processing`
-    // for hours is not a race any more — it needs a human, and only an `error` reaches one.
-    log.error(
-      { ...walletLogFields(wallet), paymentIntentId, piStatus: piStatus.status, stuckForMs },
-      'Reconcile: auto-top-up PaymentIntent has been in flight far past the escalation window — nothing was written; manual handling required'
-    );
-    return { outcome: 'deferred', reason: 'still_in_flight' };
+    // BAL-521 §1 — the escalation RECORD moved to the sweep, which batches ONE `log.error` per
+    // TICK (beside the existing alarm reasons) instead of one per ROW per tick — a stuck wallet
+    // used to mean 1,440 identical `error` records a day (Pino → Axiom), which is exactly the
+    // noise the sweep's own alarm-batching block already exists to prevent for the `alarm` arm.
+    // Nothing about the DECISION changed: this arm still writes NOTHING and still returns
+    // `deferred`; only the discriminator changed, so the sweep can tell this row apart from an
+    // ordinary in-window `still_in_flight` and batch it. See `jobs/auto-topup-reconcile-sweep.ts`.
+    return {
+      outcome: 'deferred',
+      reason: 'still_in_flight_escalated',
+      paymentIntentId,
+      piStatus: piStatus.status,
+      stuckForMs,
+    };
   }
+  // BAL-521 §1 — this branch STAYS at `log.info`, UNCHANGED, and deliberately does not move to
+  // the sweep: it only fires INSIDE the escalation window, so at a 1-minute cadence it is bounded
+  // at ~60 records per crossing, ever. Removing it would lose the trace the escalation window
+  // above is measured against.
   log.info(
     { ...walletLogFields(wallet), paymentIntentId, piStatus: piStatus.status, stuckForMs },
     'Reconcile: auto-top-up PaymentIntent is still in flight — writing nothing'

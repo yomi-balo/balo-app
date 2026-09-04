@@ -9,6 +9,7 @@ const {
   mockTransaction,
   mockHasActiveSessionForWallet,
   mockHasOpenReceivable,
+  mockNotificationPublish,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockApplyMandateStatus: vi.fn(),
@@ -17,6 +18,11 @@ const {
   mockTransaction: vi.fn((cb: (tx: unknown) => unknown) => cb({ __brand: 'mock-tx' })),
   mockHasActiveSessionForWallet: vi.fn(),
   mockHasOpenReceivable: vi.fn(),
+  // BAL-521 §3 — `publishSavedCardDetached` (services/credit/saved-card-notify.ts) is NOT
+  // mocked directly; it is a thin real wrapper over `notificationEvents.publish`, so mocking
+  // THAT (the same module dispatch.test.ts mocks) exercises the real correlationId/mapping
+  // logic while never touching a real BullMQ queue.
+  mockNotificationPublish: vi.fn(),
 }));
 
 vi.mock('stripe', async () => (await import('../../test/mocks/stripe.js')).stripeMockModule());
@@ -35,6 +41,9 @@ vi.mock('@balo/db', () => ({
   companiesRepository: { findNameById: mockFindNameById },
   db: { __brand: 'mock-db', transaction: mockTransaction },
 }));
+vi.mock('../../notifications/publisher.js', () => ({
+  notificationEvents: { publish: mockNotificationPublish },
+}));
 
 import {
   attachPaymentMethod,
@@ -46,12 +55,20 @@ import {
 } from './mandate.js';
 import { mockStripe, MockStripeError, resetStripeMock } from '../../test/mocks/stripe.js';
 
-/** Minimal wallet fixture — the mandate service only reads `id` + `stripeCustomerId`. */
+/**
+ * Minimal wallet fixture — the mandate service only reads `id` + `stripeCustomerId` (plus, as of
+ * BAL-521, `stripePaymentMethodId` / `cardBrand` / `cardLast4` for the post-commit notice's
+ * `hadCard` gate). `cardBrand`/`cardLast4` default to `null` (never `undefined`) to match the
+ * real DB row shape — Drizzle never omits a nullable column, and `undefined !== null` would
+ * silently make every fixture "have a card".
+ */
 function walletFixture(overrides: Partial<CreditWallet>): CreditWallet {
   return {
     id: 'wallet_1',
     companyId: 'company_1',
     stripeCustomerId: null,
+    cardBrand: null,
+    cardLast4: null,
     ...overrides,
   } as unknown as CreditWallet;
 }
@@ -80,6 +97,7 @@ describe('mandate', () => {
     mockHasActiveSessionForWallet.mockResolvedValue(false);
     mockHasOpenReceivable.mockReset();
     mockHasOpenReceivable.mockResolvedValue(false);
+    mockNotificationPublish.mockReset();
   });
 
   describe('ensureCustomer', () => {
@@ -352,7 +370,12 @@ describe('mandate', () => {
   });
 
   describe('detachSavedCard', () => {
-    const cardWallet = walletFixture({ id: 'wallet_1', stripePaymentMethodId: 'pm_1' });
+    const cardWallet = walletFixture({
+      id: 'wallet_1',
+      stripePaymentMethodId: 'pm_1',
+      cardBrand: 'visa',
+      cardLast4: '4242',
+    });
     const ACTOR_USER_ID = 'user_1';
 
     it('refuses with settlement_outstanding — never touching Stripe — when the wallet has a live overdraft session (security MEDIUM)', async () => {
@@ -388,6 +411,8 @@ describe('mandate', () => {
       mockClearSavedCardAndReconcileMode.mockResolvedValue({
         wallet: { ...cardWallet, lowBalanceMode: 'notify_only' },
         modeReconciled: false,
+        auditEventId: 'audit_1',
+        previousLowBalanceMode: 'notify_only',
       });
 
       await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
@@ -398,12 +423,14 @@ describe('mandate', () => {
       expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalled();
     });
 
-    it('detaches at Stripe, then clears + reconciles inside one transaction, threading the actor through', async () => {
+    it('(B15) detaches at Stripe, then clears + reconciles inside one transaction, calling the primitive with EXACTLY {actorUserId, source: "user_initiated"}', async () => {
       mockFindById.mockResolvedValue(cardWallet);
       mockStripe.paymentMethods.detach.mockResolvedValue({ id: 'pm_1', customer: null });
       mockClearSavedCardAndReconcileMode.mockResolvedValue({
         wallet: { ...cardWallet, lowBalanceMode: 'notify_only' },
         modeReconciled: true,
+        auditEventId: 'audit_1',
+        previousLowBalanceMode: 'auto_topup',
       });
 
       await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
@@ -417,8 +444,76 @@ describe('mandate', () => {
       expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalledWith(
         { __brand: 'mock-tx' },
         'wallet_1',
-        ACTOR_USER_ID
+        { actorUserId: ACTOR_USER_ID, source: 'user_initiated' }
       );
+    });
+
+    it('(B16) publishes credit.saved_card.detached with source, detachedByUserId, the PRE-CLEAR card label, and the audit-row-id correlationId', async () => {
+      mockFindById.mockResolvedValue(cardWallet);
+      mockStripe.paymentMethods.detach.mockResolvedValue({ id: 'pm_1', customer: null });
+      mockClearSavedCardAndReconcileMode.mockResolvedValue({
+        wallet: { ...cardWallet, lowBalanceMode: 'notify_only' },
+        modeReconciled: true,
+        auditEventId: 'audit_42',
+        previousLowBalanceMode: 'keep_going',
+      });
+
+      await detachSavedCard('wallet_1', ACTOR_USER_ID);
+
+      expect(mockNotificationPublish).toHaveBeenCalledTimes(1);
+      const [event, payload] = mockNotificationPublish.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(event).toBe('credit.saved_card.detached');
+      expect(payload).toMatchObject({
+        correlationId: 'saved-card-detached.wallet_1.audit_42',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        source: 'user_initiated',
+        modeReconciled: true,
+        previousLowBalanceMode: 'keep_going',
+        // The PRE-CLEAR label — cardWallet's cardBrand/cardLast4, not anything the (already
+        // nulled) returned row could supply.
+        cardBrand: 'visa',
+        cardLast4: '4242',
+        detachedByUserId: ACTOR_USER_ID,
+      });
+      expect(payload.userId).toBeUndefined();
+    });
+
+    it('(B17, PIN) a wallet that held NO card publishes NOTHING — the audit row is still written (a record, not a claim)', async () => {
+      const cardlessWallet = walletFixture({ id: 'wallet_1', stripePaymentMethodId: null });
+      mockFindById.mockResolvedValue(cardlessWallet);
+      mockClearSavedCardAndReconcileMode.mockResolvedValue({
+        wallet: { ...cardlessWallet, lowBalanceMode: 'notify_only' },
+        modeReconciled: false,
+        auditEventId: 'audit_repeat',
+        previousLowBalanceMode: 'notify_only',
+      });
+
+      await detachSavedCard('wallet_1', ACTOR_USER_ID);
+
+      expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalled();
+      expect(mockNotificationPublish).not.toHaveBeenCalled();
+    });
+
+    it('(B18) a publish failure does NOT fail the removal — detachSavedCard still resolves', async () => {
+      mockFindById.mockResolvedValue(cardWallet);
+      mockStripe.paymentMethods.detach.mockResolvedValue({ id: 'pm_1', customer: null });
+      mockClearSavedCardAndReconcileMode.mockResolvedValue({
+        wallet: { ...cardWallet, lowBalanceMode: 'notify_only' },
+        modeReconciled: true,
+        auditEventId: 'audit_1',
+        previousLowBalanceMode: 'auto_topup',
+      });
+      mockNotificationPublish.mockRejectedValueOnce(new Error('queue unavailable'));
+
+      await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
+        status: 'removed',
+        lowBalanceMode: 'notify_only',
+        modeReconciled: true,
+      });
     });
 
     it('treats a failed detach as already-done when the probe shows no customer', async () => {
@@ -428,6 +523,8 @@ describe('mandate', () => {
       mockClearSavedCardAndReconcileMode.mockResolvedValue({
         wallet: { ...cardWallet, lowBalanceMode: 'notify_only' },
         modeReconciled: false,
+        auditEventId: 'audit_1',
+        previousLowBalanceMode: 'notify_only',
       });
 
       await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
@@ -469,6 +566,8 @@ describe('mandate', () => {
       mockClearSavedCardAndReconcileMode.mockResolvedValue({
         wallet: { ...cardWallet, lowBalanceMode: 'notify_only' },
         modeReconciled: false,
+        auditEventId: 'audit_1',
+        previousLowBalanceMode: 'notify_only',
       });
 
       await expect(detachSavedCard('wallet_1', ACTOR_USER_ID)).resolves.toEqual({
@@ -478,6 +577,8 @@ describe('mandate', () => {
       });
       expect(mockStripe.paymentMethods.detach).not.toHaveBeenCalled();
       expect(mockClearSavedCardAndReconcileMode).toHaveBeenCalled();
+      // The FINDBY'd wallet has no card — no notice, even though the primitive was called.
+      expect(mockNotificationPublish).not.toHaveBeenCalled();
     });
 
     it('returns no_wallet when the wallet does not exist', async () => {

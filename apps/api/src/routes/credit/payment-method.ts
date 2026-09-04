@@ -7,9 +7,13 @@ import { detachSavedCard } from '../../services/stripe/index.js';
  * Body for `POST /credit/payment-method/detach` (BAL-516). O1 — BAL-515 shipped only the
  * INBOUND webhook half of card removal (`payment_method.detached` → `saved_card_detached` →
  * `clearSavedCard`); there was no outbound way to actually detach a payment method at Stripe.
- * This route is that outbound half: the web Server Action (`removeSavedCardAction`) resolves
- * the wallet from the SESSION's company — the `walletId` crossing this internal hop is never
- * client-supplied, matching the trust model documented in `routes/credit/index.ts`.
+ * AMEND-10 (BAL-521) — that inbound arrow is now STALE: the webhook applier converged on
+ * `clearSavedCardAndReconcileMode` (the same primitive this OUTBOUND door calls below), so both
+ * doors write the shared `credit_wallet.saved_card_detached` audit row and publish the shared
+ * `credit.saved_card.detached` notice. This route is the outbound half: the web Server Action
+ * (`removeSavedCardAction`) resolves the wallet from the SESSION's company — the `walletId`
+ * crossing this internal hop is never client-supplied, matching the trust model documented in
+ * `routes/credit/index.ts`.
  *
  * A POST-with-path-verb is chosen over a `DELETE` (O1's example) because the internal hop
  * client (`postInternal`) is POST-only and every sibling internal route is POST, and because

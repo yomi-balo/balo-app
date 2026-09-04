@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import {
   creditWallets,
@@ -35,6 +35,35 @@ export interface CardDisplayInput {
   cardLast4: string;
   cardExpMonth: number;
   cardExpYear: number;
+}
+
+/**
+ * BAL-521 — WHICH DOOR removed the saved card. A card can leave a wallet two ways: a client
+ * pressing Remove (`user_initiated`, `detachSavedCard`) or Stripe's inbound
+ * `payment_method.detached` webhook (`stripe_webhook` — the bank, the card provider, or a
+ * Dashboard action). Both land on the SAME audit `action`
+ * (`credit_wallet.saved_card_detached`); the audit `action` NEVER encodes the door, `source`
+ * does. That is what lets ONE query answer "how did this wallet lose its card?".
+ */
+export type SavedCardDetachSource = 'user_initiated' | 'stripe_webhook';
+
+/**
+ * BAL-515/BAL-521 — the RECONCILABLE-STUCK predicate, defined ONCE so the finder
+ * (`findStuckPendingTopups`) and the backlog count (`countAlarmedPendingTopups`) can never
+ * describe different row sets. The count exists to size the backlog the finder's `LIMIT` only
+ * reaches a slice of; two hand-written copies of these three arms would make that figure a lie
+ * the moment one copy changed.
+ *
+ * Three arms, all mandatory: a marker exists, it has stood since at or before `cutoff`, and it
+ * carries the crossing correlation without which nothing can derive the ledger key
+ * `auto_topup:{walletId}:{triggeringEntryId}`.
+ */
+function stuckPendingTopupWhere(cutoff: Date): SQL | undefined {
+  return and(
+    isNotNull(creditWallets.pendingTopupAt),
+    lte(creditWallets.pendingTopupAt, cutoff),
+    isNotNull(creditWallets.pendingTopupTriggeringEntryId)
+  );
 }
 
 export const creditWalletsRepository = {
@@ -125,6 +154,13 @@ export const creditWalletsRepository = {
    * PaymentIntent yet (phase 2 has not run), and inheriting the previous crossing's id would
    * point the reconcile at the wrong charge.
    *
+   * ⚠ BAL-521 (AMEND-9) — `pending_topup_alarmed_at` IS NULLED IN THE SAME STATEMENT, and that is
+   * a money guard, not tidiness. The column is the reconcile sweep's rotation cursor: a stamped
+   * row is de-prioritised behind every never-alarmed one. A legitimate TTL re-arm inheriting the
+   * PREVIOUS crossing's stamp would therefore push a NEW, LIVE, in-flight reload to the back of
+   * the batch — silently, and in exactly the way the rotation exists to prevent. A fresh crossing
+   * has never alarmed, so its cursor must read `NULL`.
+   *
    * TX-COMPOSABLE (`exec`): the arm runs INSIDE the engine's Phase-1 advisory-locked txn, so the
    * marker and its correlation can never diverge and a concurrent evaluation serialized behind
    * the lock sees both. `updated_at` bumps via the column's `$onUpdateFn`.
@@ -139,6 +175,9 @@ export const creditWalletsRepository = {
         pendingTopupAt: input.at,
         pendingTopupTriggeringEntryId: input.triggeringEntryId,
         pendingTopupPaymentIntentId: null,
+        // BAL-521 — a fresh crossing has never alarmed. See the docblock: inheriting a stale
+        // stamp de-prioritises a live reload.
+        pendingTopupAlarmedAt: null,
       })
       .where(eq(creditWallets.id, input.walletId));
   },
@@ -180,6 +219,12 @@ export const creditWalletsRepository = {
    * All three columns null in one statement, so a cleared marker can never leave a stale entry
    * id or PaymentIntent id behind for the next crossing's reconcile to trip over.
    *
+   * ⚠ BAL-521 (AMEND-9) — `pending_topup_alarmed_at` NULLS WITH THEM, in that same statement. A
+   * drained marker has nothing left to be alarmed about, and this wallet is no longer a finder
+   * candidate at all, so leaving the stamp would make the rotation cursor describe a crossing
+   * that no longer exists. It also means the next crossing starts from `NULL` (the head of the
+   * batch) even if it arms through a path that somehow bypassed `armPendingTopup`.
+   *
    * ⚠ PASS `triggeringEntryId` UNLESS THE CALLER PROVABLY OWNS THE CURRENT MARKER. With it the
    * `WHERE` carries `pending_topup_triggering_entry_id = triggeringEntryId` — the same predicate
    * `recordPendingTopupPaymentIntent` already carries — so a clear whose crossing has been
@@ -215,6 +260,8 @@ export const creditWalletsRepository = {
         pendingTopupAt: null,
         pendingTopupTriggeringEntryId: null,
         pendingTopupPaymentIntentId: null,
+        // BAL-521 — the rotation cursor drains with the marker it describes.
+        pendingTopupAlarmedAt: null,
       })
       .where(
         triggeringEntryId === undefined
@@ -230,15 +277,48 @@ export const creditWalletsRepository = {
 
   /**
    * BAL-515 — the auto-top-up reconcile finder: wallets whose in-flight marker has stood since
-   * at or before `cutoff` (`now − TOPUP_RECONCILE_AFTER_MS` at the caller), oldest first.
+   * at or before `cutoff` (`now − TOPUP_RECONCILE_AFTER_MS` at the caller).
    *
    * `pending_topup_triggering_entry_id IS NOT NULL` is a REQUIRED arm, not belt-and-braces: a
    * marker with no correlation cannot be reconciled (its ledger key is underivable), so
    * returning it would hand the sweep a row it can only skip. Any such row is a pre-BAL-515
    * leftover and self-heals at `TOPUP_IN_FLIGHT_TTL_MS`.
    *
-   * BOUNDED by `limit` — the caller MUST warn when the batch fills (no silent caps). Rides
-   * `credit_wallets_pending_topup_idx` (partial on `pending_topup_at IS NOT NULL`). Returns FULL
+   * ⚠ BAL-521 §2 (AMEND-7) — THE ORDER IS NO LONGER "OLDEST FIRST". It is a two-key ROTATION:
+   * `pending_topup_alarmed_at ASC NULLS FIRST, pending_topup_at ASC`. Never-alarmed rows (NULL
+   * cursor) always lead the batch; alarmed rows follow, least-recently-alarmed first. An alarming
+   * row writes nothing and clears nothing by design, so under the old single-key `pending_topup_at
+   * ASC` a permanently-alarmed row owned the head of a `LIMIT`-ed batch forever and starved every
+   * newer stuck reload — silently. Rotation makes a fresh row unstarvable BEHIND ALARMED ROWS (its
+   * NULL cursor always sorts ahead of any stamped one) AND covers the whole alarmed set across
+   * consecutive ticks instead of re-checking one slice of it. Alarmed rows are DE-PRIORITISED,
+   * never excluded: exclusion would foreclose the `partial_refund` self-heal, whose terminal
+   * `refunded` arm only fires while this finder still returns the row.
+   *
+   * ⚠ NAMED RESIDUAL — "unstarvable" does NOT extend to ordering WITHIN the NULL group itself. An
+   * escalated `still_in_flight` row (BAL-521 §1) is `deferred`, never `alarm`, so D6 forbids
+   * stamping it — its cursor stays permanently NULL, in the SAME group as genuinely fresh rows,
+   * and (being old) sorts AHEAD of a fresh row there by the `pending_topup_at ASC` tie-break. A
+   * long-stuck-but-still-processing PaymentIntent can therefore occupy a batch slot a fresh row
+   * would otherwise get. Accepted: it is still `deferred` (writes nothing, strands no money), it
+   * is reported once per tick via the escalated-set record, and D6's ban on stamping it is
+   * unchanged by this note — do NOT stamp it to "fix" this.
+   *
+   * `NULLS FIRST` is written EXPLICITLY because Postgres' default for `ASC` is `NULLS LAST`, which
+   * would put every never-alarmed row at the BACK and make the starvation strictly worse than it
+   * was. Drizzle's `asc()` cannot express nulls ordering, hence the `sql` fragment for that key
+   * only (no bound values in the template).
+   *
+   * ⚠ THE INDEX SERVES THE PREDICATE, NOT THE ORDERING — correcting a claim that stood here.
+   * `credit_wallets_pending_topup_idx` (partial on `pending_topup_at IS NOT NULL`) still matches
+   * this `WHERE` exactly, but the sort's LEADING key is not in it, so Postgres scans and then
+   * SORTS. Accepted deliberately: the partial index restricts the sort input to wallets with a
+   * reload ACTUALLY IN FLIGHT — a tiny fraction of a table that is already one row per company —
+   * while the sweep spends seconds of Stripe latency per returned row. A composite index would
+   * serve the ordering, but it is a new index on the money path bought against no measured
+   * problem. See the index's own note in `schema/credit-wallets.ts`.
+   *
+   * BOUNDED by `limit` — the caller MUST warn when the batch fills (no silent caps). Returns FULL
    * rows: the reconcile needs the customer id, the correlation columns and the mandate status.
    * `credit_wallets` has no `deleted_at`, so there is no soft-delete filter.
    */
@@ -246,15 +326,87 @@ export const creditWalletsRepository = {
     return db
       .select()
       .from(creditWallets)
-      .where(
+      .where(stuckPendingTopupWhere(cutoff))
+      .orderBy(
+        sql`${creditWallets.pendingTopupAlarmedAt} asc nulls first`,
+        asc(creditWallets.pendingTopupAt)
+      )
+      .limit(limit);
+  },
+
+  /**
+   * BAL-521 §2 — stamp the rotation cursor on the wallets that ALARMED on this tick, in ONE
+   * statement for the whole tick (never one per row). The sweep calls it once, after its reconcile
+   * loop, off the `alarmed` array it already builds.
+   *
+   * ⚠ GUARDED ON THE CROSSING — `(walletId, triggeringEntryId)` pair equality, never a bare
+   * `id IN (…)`. The sweep reads up to 100 wallets and then spends seconds of Stripe latency PER
+   * ROW before it stamps; in that window a marker can be cleared, or re-armed for a DIFFERENT,
+   * LIVE crossing (the same window `clearPendingTopup`'s docblock warns about). An unguarded stamp
+   * would de-prioritise a FRESH, in-flight reload — the identical money hazard the `armPendingTopup`
+   * un-alarm closes, arriving by a second route. Pair equality makes that unreachable: a superseded
+   * row simply does not match, and is not stamped.
+   *
+   * ⚠ NEVER CALL THIS WITH AN ESCALATED `still_in_flight` ROW. That row is `deferred`, not
+   * `alarm`: its PaymentIntent is still `processing` and can still settle, so de-prioritising it
+   * would strand real money. The sweep keeps the two arrays disjoint by construction.
+   *
+   * An EMPTY `rows` returns `0` having issued NO statement — `or()` over an empty list is
+   * `undefined`, and `.where(undefined)` is no predicate at all, i.e. it would stamp every wallet
+   * in the table. The predicate is therefore built first and refused when absent.
+   *
+   * Returns the number of rows ACTUALLY stamped, so the caller can warn on a shortfall (some
+   * markers moved on between the read and the stamp) rather than assume it landed — the same
+   * posture as `clearPendingTopup`'s boolean return. `exec` defaults to the base `db`: the sweep
+   * holds no transaction. Tx-composable for symmetry with every sibling.
+   */
+  async markPendingTopupAlarmed(
+    rows: ReadonlyArray<{ walletId: string; triggeringEntryId: string }>,
+    at: Date,
+    exec: DbExecutor = db
+  ): Promise<number> {
+    const crossings = or(
+      ...rows.map((row) =>
         and(
-          isNotNull(creditWallets.pendingTopupAt),
-          lte(creditWallets.pendingTopupAt, cutoff),
-          isNotNull(creditWallets.pendingTopupTriggeringEntryId)
+          eq(creditWallets.id, row.walletId),
+          eq(creditWallets.pendingTopupTriggeringEntryId, row.triggeringEntryId)
         )
       )
-      .orderBy(asc(creditWallets.pendingTopupAt))
-      .limit(limit);
+    );
+    // Empty batch ⇒ no predicate ⇒ NO STATEMENT. See the docblock: a bare `.set()` would stamp
+    // every wallet in the table.
+    if (crossings === undefined) {
+      return 0;
+    }
+
+    const stamped = await exec
+      .update(creditWallets)
+      .set({ pendingTopupAlarmedAt: at })
+      .where(crossings)
+      .returning({ id: creditWallets.id });
+    return stamped.length;
+  },
+
+  /**
+   * BAL-521 §2 — how many stuck-and-ALARMED wallets stand past `cutoff`, in total.
+   *
+   * ⚠ NOT DERIVABLE FROM WHAT A TICK REPORTS. Alarmed rows are de-prioritised and rotate, so one
+   * tick only ever reaches a SLICE of the alarmed backlog; without this figure a filled batch of
+   * 100 is indistinguishable from a backlog of 10,000, which is precisely the silent cap §2 exists
+   * to remove. Emitted on every escalation record beside the slice the tick did reach.
+   *
+   * Shares `stuckPendingTopupWhere` with `findStuckPendingTopups` — same three arms, so the two can
+   * never describe different row sets — plus `pending_topup_alarmed_at IS NOT NULL`. Counts BOTH
+   * alarm reasons: the column records that a row alarmed, not why. Standalone read on the base
+   * `db`, like `findExpirableWallets`.
+   */
+  async countAlarmedPendingTopups(cutoff: Date): Promise<number> {
+    const [row] = await db
+      .select({ count: sql<number>`cast(count(*) as int)` })
+      .from(creditWallets)
+      .where(and(stuckPendingTopupWhere(cutoff), isNotNull(creditWallets.pendingTopupAlarmedAt)));
+    // `count(*)` always yields exactly one row; the fallback satisfies `noUncheckedIndexedAccess`.
+    return row?.count ?? 0;
   },
 
   /**
@@ -552,7 +704,9 @@ export const creditWalletsRepository = {
   },
 
   /**
-   * BAL-516 — USER-INITIATED card removal: `clearSavedCard` PLUS the low-balance-mode reconcile.
+   * BAL-516 / BAL-521 — card removal BY EITHER DOOR: `clearSavedCard` PLUS the low-balance-mode
+   * reconcile PLUS one audit row. `source` says which door; nothing else about the behaviour
+   * differs between them, which is the point of having ONE primitive.
    *
    * ⚠ TWO STATEMENTS, NOT SELF-TRANSACTING — THE CALLER MUST PASS A TRANSACTION `exec`. This is
    * the atomicity guarantee the whole removal flow rests on: between the clear and the reconcile
@@ -580,27 +734,60 @@ export const creditWalletsRepository = {
    *
    * FIX ROUND 3 (N2) — also appends ONE `audit_events` row, through the SAME `exec`, so the row
    * and the change it records commit or roll back together (`auditEventsRepository.record`
-   * takes an executor for exactly this). `actorUserId` is the caller's already-resolved actor —
-   * this function never derives one itself. `metadata` carries `modeReconciled` + the resulting
-   * effective `lowBalanceMode` only: NO card facts, NO `mandateRef`, NO Stripe ids — those never
-   * belong in an audit trail. If the insert throws, it propagates like any other statement on
-   * this `exec`, so the caller's transaction rolls back the clear along with it (fail-closed).
+   * takes an executor for exactly this). `metadata` carries `source` + `modeReconciled` + the
+   * resulting effective `lowBalanceMode` only: NO card facts, NO `mandateRef`, NO Stripe ids (not
+   * even the Stripe EVENT id the webhook door holds) — those never belong in an audit trail, and
+   * the `actor` parameter is deliberately narrow enough that this arm has no way to pass one. If
+   * the insert throws, it propagates like any other statement on this `exec`, so the caller's
+   * transaction rolls back the clear along with it (fail-closed).
    *
    * ⚠ ACTION NAME AND `metadata.source` ARE A SHARED SCHEME, not local choices. The repo's
    * convention is `<entityType>.<verb>` — see the sibling `credit_wallet.dispute_opened` — so
    * this is `credit_wallet.saved_card_detached`, NOT `saved_card.detached`. A saved card can be
-   * detached two ways: HERE (a client pressing Remove) and by Stripe's inbound
-   * `payment_method.detached` webhook (BAL-521 §3, still to be written). Both must land on the
-   * SAME action with `metadata.source` telling them apart — `'user_initiated'` here,
-   * `'stripe_webhook'` there — so one query answers "how did this wallet lose its card?".
-   * Do not fork the action name to encode the source; that is what `source` is for.
+   * detached two ways, and AS OF BAL-521 BOTH ARE WIRED THROUGH HERE:
+   *   · `user_initiated` — a client pressing Remove (`detachSavedCard`, `services/stripe/mandate.ts`)
+   *   · `stripe_webhook` — Stripe's inbound `payment_method.detached` (the bank, the card provider
+   *     or a Dashboard action), whose applier passes `actorUserId: null`
+   * Both land on the SAME action with `metadata.source` telling them apart, so one query answers
+   * "how did this wallet lose its card?". DO NOT fork the action name to encode the door; that is
+   * what `source` is for, and it is why the parameter is `{ actorUserId, source }` rather than two
+   * near-identical methods.
+   *
+   * ⚠ `actorUserId: null` IS THE SYSTEM ACTOR, not a missing value. It is the repo's shipped
+   * convention (`RecordAuditInput.actorUserId: string | null`; the sibling `dispute` arm already
+   * inserts `null`) — no sentinel user row, no migration. The webhook door genuinely has no human
+   * actor: Stripe did this. Either way the actor is the CALLER'S already-resolved one; this
+   * function never derives an actor itself.
+   *
+   * ⚠ TWO AUDIT ROWS FOR ONE PHYSICAL DETACH IS CORRECT, not a bug to fix. If the webhook commits
+   * first, the user door then re-nulls nulls, finds a non-card-backed mode, and writes its own
+   * `user_initiated` row. Both statements are true: Stripe detached the card, AND a member pressed
+   * Remove. Idempotence here is about the WALLET STATE, never about suppressing a record.
+   *
+   * Returns, beyond the row and the flag:
+   *   · `auditEventId` — the id `auditEventsRepository.record` already returns and this primitive
+   *     used to discard. The user door's notification correlationId is built from it, so it must
+   *     be surfaced; it is also the stable trace key between the audit trail and the notice.
+   *   · `previousLowBalanceMode` — the mode BEFORE the reconcile, which the returned `wallet`
+   *     can no longer tell you (it is always `notify_only` once reconciled) and which the copy
+   *     needs to name WHICH card-backed mode went off. Safe to read off `cleared`: `clearSavedCard`
+   *     provably does not write `low_balance_mode` — its single `.set()` names eight columns and
+   *     the mode is not among them — so the cleared row still carries the pre-reconcile value.
    */
   async clearSavedCardAndReconcileMode(
     exec: DbExecutor,
     walletId: string,
-    actorUserId: string
-  ): Promise<{ wallet: CreditWallet; modeReconciled: boolean }> {
+    actor: { actorUserId: string | null; source: SavedCardDetachSource }
+  ): Promise<{
+    wallet: CreditWallet;
+    modeReconciled: boolean;
+    auditEventId: string;
+    previousLowBalanceMode: CreditWallet['lowBalanceMode'];
+  }> {
     const cleared = await creditWalletsRepository.clearSavedCard(exec, walletId);
+    // The pre-reconcile mode. See the docblock: `clearSavedCard` never writes `low_balance_mode`,
+    // so this IS the value the wallet held before this call.
+    const previousLowBalanceMode = cleared.lowBalanceMode;
 
     let wallet = cleared;
     let modeReconciled = false;
@@ -617,22 +804,24 @@ export const creditWalletsRepository = {
       modeReconciled = true;
     }
 
-    await auditEventsRepository.record(
+    const auditEvent = await auditEventsRepository.record(
       {
-        actorUserId,
+        actorUserId: actor.actorUserId,
         action: 'credit_wallet.saved_card_detached',
         entityType: 'credit_wallet',
         entityId: walletId,
         metadata: {
-          source: 'user_initiated',
+          source: actor.source,
           modeReconciled,
+          // The EFFECTIVE (post-reconcile) mode — the shipped scheme, unchanged by BAL-521.
+          // `previousLowBalanceMode` is returned to the caller, never written here.
           lowBalanceMode: wallet.lowBalanceMode,
         },
       },
       exec
     );
 
-    return { wallet, modeReconciled };
+    return { wallet, modeReconciled, auditEventId: auditEvent.id, previousLowBalanceMode };
   },
 
   /**

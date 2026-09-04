@@ -51,6 +51,9 @@ function fullWallet(overrides: Partial<CreditWallet> = {}): CreditWallet {
     // the exclusion tests below are not vacuously green on a null.
     pendingTopupTriggeringEntryId: 'led_triggering_secret_1',
     pendingTopupPaymentIntentId: 'pi_inflight_secret_1',
+    // BAL-521 rotation cursor — internal operational state, POPULATED for the same reason as the
+    // two above: a null would make its exclusion test vacuously green.
+    pendingTopupAlarmedAt: new Date('2026-06-02T00:00:00Z'),
     // Saved-card DISPLAY facts (top-up redesign) — these DO cross to a client lens; the four
     // mandate columns above do not. See `CLIENT_WALLET_VIEW_COLUMNS`' docblock.
     cardBrand: 'visa',
@@ -140,6 +143,20 @@ describe('CLIENT_WALLET_VIEW_COLUMNS (invariant #1 — no secret on a client len
     expect(keys).not.toContain('cardUpdatedAt');
     expect(keys).not.toContain('pendingTopupTriggeringEntryId');
     expect(keys).not.toContain('pendingTopupPaymentIntentId');
+  });
+
+  // ⚠ (PIN, F8) — a structural guard, not a regression test: `CLIENT_WALLET_VIEW_COLUMNS` is an
+  // allow-list, so this cannot fail unless someone actively ADDS the column — it cannot fail on
+  // pre-fix source either. Kept as documentation that "the list did not change" is a checked
+  // claim rather than an assumption.
+  it('(PIN) excludes the BAL-521 alarm rotation cursor (migration 0083)', () => {
+    // `pending_topup_alarmed_at` is the reconcile sweep's batch-ORDER cursor — internal
+    // operational state in the same family as `pendingTopupAt`, and never anything a client
+    // renders. It is off this list BY CONSTRUCTION (the list is an allow-list, so a new column
+    // is excluded until someone adds it), and the exact-key-set test above staying byte-identical
+    // is the structural proof. Named here so "the list did not change" is a checked claim rather
+    // than an assumption.
+    expect(Object.keys(CLIENT_WALLET_VIEW_COLUMNS)).not.toContain('pendingTopupAlarmedAt');
   });
 });
 

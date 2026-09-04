@@ -10,6 +10,7 @@ import { createLogger } from '@balo/shared/logging';
 import type Stripe from 'stripe';
 import { getStripeClient } from '../../lib/stripe.js';
 import { resolveAppUrl } from '../../lib/app-url.js';
+import { publishSavedCardDetached } from '../credit/saved-card-notify.js';
 import type { CardDisplayFields } from './types.js';
 
 const log = createLogger('stripe');
@@ -437,37 +438,74 @@ async function detachAtStripe(walletId: string, stripePaymentMethodId: string): 
   }
 }
 
-/** The local clear + mode-reconcile, inside ONE transaction. Rethrows after the loudest log. */
-async function clearLocallyAndReconcile(
-  walletId: string,
-  stripePaymentMethodId: string | null,
-  actorUserId: string
-): Promise<DetachSavedCardResult> {
+/**
+ * The local clear + mode-reconcile, inside ONE transaction, THEN — post-commit — the BAL-521
+ * notice. Rethrows after the loudest log; the transaction's throw-propagation contract is
+ * preserved VERBATIM (a failure still surfaces exactly as it did before this change).
+ *
+ * Takes the PRE-CLEAR wallet (`detachSavedCard` already holds it from `findById`) rather than a
+ * bare `walletId` — it is the ONLY place the card label (`cardBrand`/`cardLast4`) still exists
+ * once the primitive nulls those columns, and it is what lets the post-commit notice fire with NO
+ * extra read.
+ */
+async function clearLocallyAndReconcile(input: {
+  wallet: CreditWallet;
+  actorUserId: string;
+}): Promise<DetachSavedCardResult> {
+  const { wallet, actorUserId } = input;
+  let result: Awaited<ReturnType<typeof creditWalletsRepository.clearSavedCardAndReconcileMode>>;
   try {
-    const result = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, walletId, actorUserId)
+    result = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, wallet.id, {
+        actorUserId,
+        source: 'user_initiated',
+      })
     );
     log.info(
-      { op: 'detachSavedCard', walletId, modeReconciled: result.modeReconciled },
+      { op: 'detachSavedCard', walletId: wallet.id, modeReconciled: result.modeReconciled },
       'Removed saved card and reconciled low-balance mode'
     );
-    return {
-      status: 'removed',
-      lowBalanceMode: result.wallet.lowBalanceMode,
-      modeReconciled: result.modeReconciled,
-    };
   } catch (err: unknown) {
     log.error(
       {
         op: 'detachSavedCard',
-        walletId,
-        stripeId: stripePaymentMethodId,
+        walletId: wallet.id,
+        stripeId: wallet.stripePaymentMethodId,
         error: err instanceof Error ? err.message : String(err),
       },
       'Card detached at Stripe but the local clear failed — retry converges'
     );
     throw err;
   }
+
+  // BAL-521 §3 — POST-COMMIT, outside the transaction, and ONLY when a card was actually there.
+  // `detachSavedCard` deliberately runs this transaction even with NO stored payment method, so
+  // the response always upholds "no card ⇒ no card-backed mode armed" — and that repeat call
+  // correctly writes its own idempotent audit row. But telling the billing holders "someone
+  // removed the saved card" when NO CARD EXISTED is false and pure noise: the audit row is a
+  // RECORD, the notice is a CLAIM. `publishSavedCardDetached` never throws, so a notification
+  // hiccup can never turn a completed removal into a 500 (the same posture as the webhook door's
+  // post-commit thunk in `dispatch.ts`).
+  const hadCard = wallet.stripePaymentMethodId !== null || wallet.cardBrand !== null;
+  if (hadCard) {
+    await publishSavedCardDetached({
+      walletId: wallet.id,
+      companyId: wallet.companyId,
+      source: 'user_initiated',
+      modeReconciled: result.modeReconciled,
+      previousLowBalanceMode: result.previousLowBalanceMode,
+      cardBrand: wallet.cardBrand,
+      cardLast4: wallet.cardLast4,
+      dedupKey: result.auditEventId,
+      detachedByUserId: actorUserId,
+    });
+  }
+
+  return {
+    status: 'removed',
+    lowBalanceMode: result.wallet.lowBalanceMode,
+    modeReconciled: result.modeReconciled,
+  };
 }
 
 /**
@@ -504,8 +542,11 @@ async function clearLocallyAndReconcile(
  *
  * FIX ROUND 3 (N2) — `actorUserId` is the WEB Server Action's already-session-resolved actor,
  * threaded across the internal hop (never client-supplied — see `payment-method.ts`'s route
- * docblock). It rides straight through to `clearSavedCardAndReconcileMode`, which appends the
- * one `audit_events` row for this user-initiated detach, in the SAME transaction as the clear.
+ * docblock). It still rides straight through to `clearSavedCardAndReconcileMode` (AMEND-10 — the
+ * shape changed under BAL-521: `{ actorUserId, source: 'user_initiated' }`, not a bare string),
+ * which appends the one `audit_events` row for this user-initiated detach, in the SAME
+ * transaction as the clear, and (BAL-521 §3) POST-COMMIT publishes `credit.saved_card.detached`
+ * to the company's billing holders — see `clearLocallyAndReconcile` below.
  */
 export async function detachSavedCard(
   walletId: string,
@@ -532,5 +573,5 @@ export async function detachSavedCard(
     }
   }
 
-  return clearLocallyAndReconcile(walletId, stripePaymentMethodId, actorUserId);
+  return clearLocallyAndReconcile({ wallet, actorUserId });
 }

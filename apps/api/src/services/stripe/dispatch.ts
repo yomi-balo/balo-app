@@ -21,6 +21,7 @@ import {
   publishAutoTopupFailed,
   triggerAutoTopupBestEffort,
 } from '../credit/auto-topup.js';
+import { publishSavedCardDetached } from '../credit/saved-card-notify.js';
 import { notificationEvents } from '../../notifications/publisher.js';
 import { retrieveSettlement } from './charges.js';
 import { retrieveCardDisplay } from './mandate.js';
@@ -301,15 +302,30 @@ async function resolvePaymentMethodUpdated(pm: Stripe.PaymentMethod): Promise<St
 /**
  * BAL-515 — `payment_method.detached`: the payment method is gone at Stripe, so nothing can be
  * charged against it any more. Carries only the ids; the applier decides the (fail-closed) write.
+ *
+ * BAL-521 (D7/D9) — also lifts the Stripe EVENT id (for the notification correlationId and logs
+ * ONLY — never the audit row) and the card label straight off the EVENT's PaymentMethod, exactly
+ * as the sibling `resolvePaymentMethodUpdated` above. ⚠ Unlike that sibling, a NON-CARD payment
+ * method still resolves to an effect here — the wallet's mandate must be cleared whatever the
+ * instrument was; only the LABEL degrades to `null`.
  */
 async function resolvePaymentMethodDetached(
-  pm: Stripe.PaymentMethod
+  pm: Stripe.PaymentMethod,
+  eventId: string
 ): Promise<StripeEffect | null> {
   const wallet = await resolveWalletForPaymentMethod(pm, 'payment_method.detached');
   if (wallet === null) {
     return null;
   }
-  return { kind: 'saved_card_detached', walletId: wallet.id, paymentMethodId: pm.id };
+  const cardLabel =
+    pm.type === 'card' && pm.card ? { cardBrand: pm.card.brand, cardLast4: pm.card.last4 } : null;
+  return {
+    kind: 'saved_card_detached',
+    walletId: wallet.id,
+    paymentMethodId: pm.id,
+    stripeEventId: eventId,
+    cardLabel,
+  };
 }
 
 /**
@@ -336,7 +352,7 @@ export async function resolveStripeEffect(event: Stripe.Event): Promise<StripeEf
     case 'payment_method.automatically_updated':
       return resolvePaymentMethodUpdated(event.data.object);
     case 'payment_method.detached':
-      return resolvePaymentMethodDetached(event.data.object);
+      return resolvePaymentMethodDetached(event.data.object, event.id);
     default:
       return null;
   }
@@ -889,18 +905,69 @@ export async function applyStripeEffect(
         'Refreshed saved-card display after a network card update'
       );
       return [];
-    case 'saved_card_detached':
-      await creditWalletsRepository.clearSavedCard(tx, effect.walletId);
+    case 'saved_card_detached': {
+      // BAL-521 §3 — THIS ARM GOES THROUGH `clearSavedCardAndReconcileMode`, NEVER THE BARE
+      // `clearSavedCard`, for four reasons a future reader would otherwise "simplify" away:
+      //
+      // 1. WHY THE PRIMITIVE, NOT THE BARE CLEAR. Revoking a company's standing off-session
+      //    charge authority is exactly the class of change ADR-1030 requires an `audit_events`
+      //    row for, and `no card ⇒ no card-backed mode armed` must hold for THIS inbound door
+      //    too — otherwise a card that leaves via the Stripe Dashboard or an issuer revocation
+      //    leaves `keep_going` / `auto_topup` armed against a card that no longer exists.
+      // 2. WHY THE CARD LABEL COMES OFF THE EVENT, NOT A WALLET PRE-READ (D9). `effect.cardLabel`
+      //    was lifted straight off the Stripe PaymentMethod in `resolvePaymentMethodDetached`,
+      //    mirroring the sibling `card_display_refreshed` arm above. The USER door
+      //    (`services/stripe/mandate.ts`) captures the SAME facts differently — from its
+      //    already-held PRE-CLEAR wallet row — ON PURPOSE, not by oversight: forcing a wallet
+      //    re-read inside THIS webhook transaction to "share one mechanism" would be strictly
+      //    worse (an extra query on the money path for no benefit).
+      // 3. TWO AUDIT ROWS FOR ONE PHYSICAL DETACH IS CORRECT, NOT A BUG. If this webhook commits
+      //    FIRST, the user door then re-nulls nulls, finds a non-card-backed mode, and writes its
+      //    OWN `user_initiated` row. Both statements are true — Stripe detached the card, AND a
+      //    member (separately) pressed Remove. In the same narrow race window (between the user
+      //    door's pre-clear wallet read at `mandate.ts` and its own transaction) BOTH doors also
+      //    NOTIFY. Accepted for the same reason: suppressing one publish would risk suppressing
+      //    the wrong one. Do not "fix" either.
+      // 4. THIS ARM CANNOT REFUSE, AND THE EXPOSURE IS BAL-525's (D13). The user door refuses
+      //    with `settlement_outstanding` during a live overdraft-grace session
+      //    (`mandate.ts`'s `detachSavedCard`) — but that refusal lives in the SERVICE, not the
+      //    primitive, so this arm inherits none of it, correctly: Stripe has ALREADY detached by
+      //    the time this event arrives, so there is nothing left here to refuse. Mid-grace,
+      //    `settleOverdraft` will then find no mandate and fall to `openReceivableAndDun`. That
+      //    exposure is real and is exactly what BAL-525 (pin the collection instrument at
+      //    grace-grant) closes — cross-referenced here, NOT solved here.
+      const { wallet, modeReconciled, previousLowBalanceMode } =
+        await creditWalletsRepository.clearSavedCardAndReconcileMode(tx, effect.walletId, {
+          actorUserId: null,
+          source: 'stripe_webhook',
+        });
       log.warn(
         {
           op: 'applyStripeEffect',
           kind: 'saved_card_detached',
           walletId: effect.walletId,
           stripeId: effect.paymentMethodId,
+          modeReconciled,
         },
         'Saved card detached at Stripe — cleared the card AND the mandate (no off-session charge can run against a dead card)'
       );
-      return [];
+      return [
+        () =>
+          publishSavedCardDetached({
+            walletId: effect.walletId,
+            // M5 — the effect carries no companyId, but the primitive's returned wallet does; no
+            // extra read needed.
+            companyId: wallet.companyId,
+            source: 'stripe_webhook',
+            modeReconciled,
+            previousLowBalanceMode,
+            cardBrand: effect.cardLabel?.cardBrand ?? null,
+            cardLast4: effect.cardLabel?.cardLast4 ?? null,
+            dedupKey: effect.stripeEventId,
+            detachedByUserId: null,
+          }),
+      ];
+    }
     case 'dispute':
       await auditEventsRepository.record(
         {

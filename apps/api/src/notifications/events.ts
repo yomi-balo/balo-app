@@ -332,6 +332,50 @@ export interface RescheduleProposalUnansweredPayload {
   optionCount: number;
 }
 
+/**
+ * BAL-521 §3 — a company's SAVED CARD left the wallet, by either door. Fans out to the
+ * company's MANAGE_BILLING holders (recipient `company_billing_admins` → the resolver hydrates
+ * `data.billingUserIds` from `companyId`). Email + in-app; NO SMS.
+ *
+ * Declared INLINE (the `CalendarAuthErrorPayload` / `RescheduleProposalUnansweredPayload`
+ * precedent above), NOT in `@balo/shared/notifications`: that shared home exists to avoid the
+ * api↔web lockstep DUPLICATION that trips SonarCloud's new-code duplication gate. This event is
+ * SERVER-ONLY and has no web mirror (D10 / M6 — the user door's publish lives in `apps/api`'s
+ * `services/stripe/mandate.ts`, not a web Server Action), so there is no second copy to
+ * duplicate into.
+ *
+ * ⚠ NO MONEY FIGURE, NO `mandateRef`, NO `stripePaymentMethodId`, NO Stripe event id in the
+ * body. `cardBrand`/`cardLast4` are DISPLAY facts (what a checkout prints back at the
+ * cardholder) captured BEFORE the clear — the primitive nulls those columns in the same
+ * transaction, so its returned row cannot supply them.
+ *
+ * ⚠ THE ACTOR KEY IS `detachedByUserId`, NOT `userId` — deliberately (D12 / M7).
+ * `payload.userId` triggers BOTH the generic `data.user` hydration (`resolver.ts`) AND the
+ * `self` recipient path (`engine/dispatcher.ts`), which would mail the acting member SEPARATELY
+ * on top of the billing fan-out. The webhook door has no actor at all, so the field is OPTIONAL
+ * and the templates branch on `source` regardless.
+ */
+export interface CreditSavedCardDetachedPayload {
+  /** `saved-card-detached.{walletId}.{doorKey}` — COLON-FREE by construction (DEC-7): a
+   *  colon-joined correlationId dies at `engine/dispatcher.ts`'s unescaped per-channel jobId. */
+  correlationId: string;
+  /** → resolver hydrates `data.billingUserIds` (the fan-out) AND `data.company` (context). */
+  companyId: string;
+  walletId: string;
+  source: 'user_initiated' | 'stripe_webhook';
+  /** True ⇒ a card-backed mode was disarmed to `notify_only` by this detach. */
+  modeReconciled: boolean;
+  /** The mode armed BEFORE the reconcile — what the copy names as "now off". */
+  previousLowBalanceMode: 'auto_topup' | 'keep_going' | 'notify_only';
+  /** Display-only label captured pre-clear. BOTH absent when unknown (a non-card payment
+   *  method, or a wallet whose display columns were already null) — the copy has a card-less
+   *  arm. */
+  cardBrand?: string;
+  cardLast4?: string;
+  /** The acting member — USER door only. ⚠ NOT `userId`, see the docblock above. */
+  detachedByUserId?: string;
+}
+
 export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
@@ -481,7 +525,13 @@ export type NotificationEvent =
   | 'request_file.shared_with_expert'
   // BAL-431 — the mirror: an EXPERT uploaded to their own track, notifying the request's
   // client contact. Same publisher, same posture — publishable from apps/web.
-  | 'request_file.shared_with_client';
+  | 'request_file.shared_with_client'
+  // BAL-521 §3 — a company's saved card left the wallet, by the client pressing Remove or by
+  // Stripe's inbound `payment_method.detached` (the bank, the card provider, or a Dashboard
+  // action). SERVER-ONLY (see ServerOnlyNotificationEvent below): BOTH doors publish from
+  // apps/api (`services/stripe/dispatch.ts` post-commit, `services/stripe/mandate.ts`
+  // post-commit) — never from apps/web.
+  | 'credit.saved_card.detached';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -578,7 +628,12 @@ export type ServerOnlyNotificationEvent =
   // HTTP entirely. So it has no `publishBodySchema` arm; adding one would be a `StraySchemaArm`
   // and fail `tsc`. ⚠ `reschedule_proposal.sent` / `reschedule_proposal.declined` are
   // deliberately NOT listed: both are published by web Server Actions and need their arms.
-  | 'reschedule_proposal.unanswered';
+  | 'reschedule_proposal.unanswered'
+  // BAL-521 §3: published from BOTH doors in apps/api — the Stripe webhook applier
+  // (`services/stripe/dispatch.ts`) and `detachSavedCard` (`services/stripe/mandate.ts`) —
+  // never from apps/web, so it has NO `publishBodySchema` arm; adding one would be a
+  // `StraySchemaArm` and fail `tsc`.
+  | 'credit.saved_card.detached';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -729,4 +784,5 @@ export interface EventPayloadMap {
   'conversation.intro_call_booked': ConversationIntroCallBookedPayload;
   'request_file.shared_with_expert': RequestFileSharedWithExpertPayload;
   'request_file.shared_with_client': RequestFileSharedWithClientPayload;
+  'credit.saved_card.detached': CreditSavedCardDetachedPayload;
 }

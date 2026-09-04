@@ -188,6 +188,24 @@ export type StripeEffect =
       kind: 'saved_card_detached';
       walletId: string;
       paymentMethodId: string;
+      /**
+       * BAL-521 (D7) — the Stripe event id, carried for the notification correlationId and the
+       * logs ONLY. ⚠ IT MUST NEVER REACH THE AUDIT ROW: `clearSavedCardAndReconcileMode`'s
+       * `metadata` is `{ source, modeReconciled, lowBalanceMode }` and nothing else — the Stripe
+       * event id already lives in the webhook receipt, and the audit trail correlates by wallet +
+       * time, not by Stripe id.
+       */
+      stripeEventId: string;
+      /**
+       * BAL-521 (D9) — brand + last4 lifted straight off the EVENT's PaymentMethod, exactly as
+       * the sibling `resolvePaymentMethodUpdated` already does above. `null` for a non-card
+       * payment method (the mandate still clears; only the display label degrades).
+       * ⚠ DELIBERATELY NOT `CardDisplayFields`: this arm WRITES no display columns (it NULLS
+       * them), so carrying a write-shaped object here would invite someone to feed it to
+       * `applySavedCardDisplay` / `refreshSavedCardDisplay`. A narrower type makes that
+       * impossible.
+       */
+      cardLabel: { cardBrand: string; cardLast4: string } | null;
     };
 
 /**

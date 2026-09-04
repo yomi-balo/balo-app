@@ -342,7 +342,12 @@ export type {
 } from '../schema';
 
 // ── Client Credit System (BAL-376 / ADR-1040) ────────────────────────────
-export { creditWalletsRepository, type CardDisplayInput } from './credit-wallets';
+export {
+  creditWalletsRepository,
+  type CardDisplayInput,
+  // BAL-521 — which door detached the saved card; `apps/api` passes it to the shared primitive.
+  type SavedCardDetachSource,
+} from './credit-wallets';
 export {
   creditLedgerRepository,
   applyLedgerEntry,

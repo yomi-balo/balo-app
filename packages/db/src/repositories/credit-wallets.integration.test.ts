@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { isWalletMandateActive, isWalletCardReusableOnSession } from '@balo/shared/credit';
-import { auditEvents, creditWallets, type CreditWallet } from '../schema';
+import { auditEvents, companies, creditWallets, type CreditWallet } from '../schema';
 import { db } from '../client';
 import { creditWalletFactory, userFactory } from '../test/factories';
 import { companyFactory } from '../test/factories/company.factory';
@@ -1075,6 +1075,65 @@ describe('creditWalletsRepository auto-top-up marker (BAL-379 / BAL-515 correlat
     expect(persisted?.pendingTopupTriggeringEntryId).toBeNull();
     expect(persisted?.pendingTopupPaymentIntentId).toBeNull();
   });
+
+  it('armPendingTopup NULLS a stale alarm stamp — a TTL re-arm is a NEW crossing (BAL-521 D3)', async () => {
+    // ⚠ THE MONEY BUG THE ROTATION WOULD OTHERWISE INTRODUCE. `pending_topup_alarmed_at` is the
+    // finder's cursor: a stamped row sits behind every never-alarmed one. A legitimate TTL re-arm
+    // that inherited the PREVIOUS crossing's stamp would push a NEW, LIVE, in-flight reload to
+    // the back of every batch — silently, and for as long as it kept alarming, which is exactly
+    // the starvation the rotation exists to end. A fresh crossing has never alarmed.
+    const { wallet } = await creditWalletFactory();
+    const firstEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-05-01T10:00:00.000Z'),
+      triggeringEntryId: firstEntryId,
+    });
+
+    const stamped = await creditWalletsRepository.markPendingTopupAlarmed(
+      [{ walletId: wallet.id, triggeringEntryId: firstEntryId }],
+      new Date('2027-05-01T10:30:00.000Z')
+    );
+    expect(stamped).toBe(1);
+    expect(
+      (await creditWalletsRepository.findById(wallet.id))?.pendingTopupAlarmedAt
+    ).toBeInstanceOf(Date);
+
+    // The in-flight TTL lapses (a service decision — the repository's contract is simply "an arm
+    // clears the stamp") and a LATER crossing re-arms the same wallet.
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-05-01T11:00:00.000Z'),
+      triggeringEntryId: randomUUID(),
+    });
+
+    expect((await creditWalletsRepository.findById(wallet.id))?.pendingTopupAlarmedAt).toBeNull();
+  });
+
+  it('clearPendingTopup nulls the alarm stamp along with the marker (BAL-521 D3)', async () => {
+    // A drained marker has nothing left to be alarmed about, and the wallet is not a finder
+    // candidate at all — leaving the stamp would make the cursor describe a crossing that no
+    // longer exists.
+    const { wallet } = await creditWalletFactory();
+    const triggeringEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId: wallet.id,
+      at: new Date('2027-05-02T10:00:00.000Z'),
+      triggeringEntryId,
+    });
+    await creditWalletsRepository.markPendingTopupAlarmed(
+      [{ walletId: wallet.id, triggeringEntryId }],
+      new Date('2027-05-02T10:30:00.000Z')
+    );
+
+    expect(await creditWalletsRepository.clearPendingTopup({ walletId: wallet.id })).toBe(true);
+
+    const cleared = await creditWalletsRepository.findById(wallet.id);
+    expect(cleared?.pendingTopupAt).toBeNull();
+    expect(cleared?.pendingTopupTriggeringEntryId).toBeNull();
+    expect(cleared?.pendingTopupPaymentIntentId).toBeNull();
+    expect(cleared?.pendingTopupAlarmedAt).toBeNull();
+  });
 });
 
 describe('creditWalletsRepository.findStuckPendingTopups (BAL-515 reconcile finder)', () => {
@@ -1099,13 +1158,15 @@ describe('creditWalletsRepository.findStuckPendingTopups (BAL-515 reconcile find
     return wallet.id;
   }
 
-  it('returns markers at or before the cutoff, OLDEST first', async () => {
+  it('returns markers at or before the cutoff, OLDEST first (within the never-alarmed group)', async () => {
     const newest = await armedWallet(new Date('2027-04-01T11:00:00.000Z'));
     const oldest = await armedWallet(new Date('2027-04-01T09:00:00.000Z'));
     const middle = await armedWallet(new Date('2027-04-01T10:00:00.000Z'));
 
     const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 10);
-    // Oldest first so a per-tick batch limit always drains the longest-stuck money first.
+    // BAL-521: `pending_topup_at` is now the SECOND sort key, not the only one. No row here has
+    // ever alarmed, so all three share a NULL cursor and this asserts the tie-break — the longest
+    // -stuck money still drains first among rows of equal alarm standing.
     expect(ids(found)).toEqual([oldest, middle, newest]);
   });
 
@@ -1136,6 +1197,320 @@ describe('creditWalletsRepository.findStuckPendingTopups (BAL-515 reconcile find
 
     const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 2);
     expect(ids(found)).toEqual([oldest, second]);
+  });
+
+  /**
+   * BAL-521 §2 — the rotation. Seeds N stuck wallets in TWO statements (N companies, then N
+   * wallets) instead of 2N factory round-trips: the starvation proof needs 102 rows and every
+   * statement is paid for inside the per-test transaction. Each wallet is inserted already
+   * carrying its marker, correlation and alarm stamp, so no follow-up UPDATE is needed.
+   * `.returning()` preserves insert order, which is what makes the index zip valid.
+   */
+  async function seedStuckWallets(
+    rows: ReadonlyArray<{ at: Date; alarmedAt: Date | null }>
+  ): Promise<string[]> {
+    const seededCompanies = await db
+      .insert(companies)
+      .values(rows.map((_, i) => ({ name: `Rotation Co ${i}`, isPersonal: false })))
+      .returning({ id: companies.id });
+
+    const walletValues = rows.map((row, i) => {
+      const company = seededCompanies[i];
+      // Guard, never `!` — `noUncheckedIndexedAccess` is on.
+      if (company === undefined) {
+        throw new Error('company bulk insert returned fewer rows than requested');
+      }
+      return {
+        companyId: company.id,
+        pendingTopupAt: row.at,
+        pendingTopupTriggeringEntryId: randomUUID(),
+        pendingTopupAlarmedAt: row.alarmedAt,
+      };
+    });
+
+    const seededWallets = await db
+      .insert(creditWallets)
+      .values(walletValues)
+      .returning({ id: creditWallets.id });
+    return seededWallets.map((wallet) => wallet.id);
+  }
+
+  it('returns a NEVER-ALARMED row even behind 101 permanently-alarmed ones (BAL-521 §2)', async () => {
+    // ⚠ THE STARVATION THIS WHOLE COLUMN EXISTS TO END. An alarming row writes nothing and clears
+    // nothing BY DESIGN, so under the old single-key `pending_topup_at ASC` the same oldest
+    // alarmed rows filled every 100-row batch forever and no newer stuck reload was ever
+    // reconciled — silently, with no signal anywhere that it was happening. Here every alarmed
+    // row is OLDER than the one fresh crossing, so by pending-age the fresh row is 102nd and a
+    // batch of 100 would never reach it. A NULL cursor puts it first instead.
+    const alarmedIds = await seedStuckWallets(
+      Array.from({ length: 101 }, (_, i) => ({
+        at: new Date(Date.UTC(2027, 3, 1, 0, 0, i)), // 00:00:00 … 00:01:40 — all long past
+        alarmedAt: new Date(Date.UTC(2027, 3, 1, 6, 0, i)), // stamped in the same order
+      }))
+    );
+    const [fresh] = await seedStuckWallets([
+      { at: new Date('2027-04-01T11:59:00.000Z'), alarmedAt: null },
+    ]);
+    if (fresh === undefined) {
+      throw new Error('fresh wallet seed failed');
+    }
+
+    const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 100);
+
+    expect(found).toHaveLength(100);
+    // The unstarvable head: never-alarmed leads, no matter how big the alarmed backlog is.
+    expect(found[0]?.id).toBe(fresh);
+    // …and the rest of the batch is the alarmed set, LEAST-RECENTLY-alarmed first.
+    expect(ids(found).slice(1)).toEqual(alarmedIds.slice(0, 99));
+  });
+
+  it('rotates WITHIN the alarmed set — least-recently-alarmed first, not oldest-pending first', async () => {
+    // A static "alarmed last, oldest-pending first" sort would re-check the same slice of the
+    // alarmed set every tick and never reach the rest. Alarm order here is the REVERSE of pending
+    // order, so only a cursor-led sort can produce the expected pair.
+    const [alarmedFirst, alarmedSecond] = await seedStuckWallets([
+      { at: new Date('2027-04-01T11:00:00.000Z'), alarmedAt: new Date('2027-04-01T08:00:00.000Z') },
+      { at: new Date('2027-04-01T10:00:00.000Z'), alarmedAt: new Date('2027-04-01T09:00:00.000Z') },
+      { at: new Date('2027-04-01T09:00:00.000Z'), alarmedAt: new Date('2027-04-01T10:00:00.000Z') },
+    ]);
+
+    const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 2);
+
+    expect(ids(found)).toEqual([alarmedFirst, alarmedSecond]);
+  });
+
+  it('orders NULL cursors first, then alarmed rows, oldest-pending within each group', async () => {
+    // The whole contract in one assertion: `pending_topup_alarmed_at ASC NULLS FIRST,
+    // pending_topup_at ASC`. ⚠ `NULLS FIRST` is written explicitly in the query because
+    // Postgres' ASC default is NULLS LAST — which would put every never-alarmed row at the BACK
+    // and make the starvation strictly worse than it was before this change.
+    const [neverB, neverA, alarmedEarly, alarmedLate] = await seedStuckWallets([
+      { at: new Date('2027-04-01T10:30:00.000Z'), alarmedAt: null },
+      { at: new Date('2027-04-01T09:30:00.000Z'), alarmedAt: null },
+      { at: new Date('2027-04-01T08:00:00.000Z'), alarmedAt: new Date('2027-04-01T09:00:00.000Z') },
+      { at: new Date('2027-04-01T07:00:00.000Z'), alarmedAt: new Date('2027-04-01T10:00:00.000Z') },
+    ]);
+
+    const found = await creditWalletsRepository.findStuckPendingTopups(CUTOFF, 10);
+
+    expect(ids(found)).toEqual([neverA, neverB, alarmedEarly, alarmedLate]);
+  });
+});
+
+describe('creditWalletsRepository.markPendingTopupAlarmed (BAL-521 §2 rotation stamp)', () => {
+  /** A wallet with a live marker, returning the crossing the stamp must be guarded on. */
+  async function armedCrossing(at: Date): Promise<{ walletId: string; triggeringEntryId: string }> {
+    const { wallet } = await creditWalletFactory();
+    const triggeringEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({ walletId: wallet.id, at, triggeringEntryId });
+    return { walletId: wallet.id, triggeringEntryId };
+  }
+
+  /** Count the write statements a call issues through the executor it was handed. */
+  async function countingRun<T>(
+    run: (exec: DbExecutor) => Promise<T>
+  ): Promise<{ result: T; updates: number }> {
+    return db.transaction(async (tx) => {
+      let updates = 0;
+      const counting: DbExecutor = new Proxy(tx, {
+        get(target, prop, receiver): unknown {
+          if (prop === 'update') {
+            updates += 1;
+          }
+          const value: unknown = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const result = await run(counting);
+      return { result, updates };
+    });
+  }
+
+  it('stamps EVERY row of the batch through ONE update statement (never one per row)', async () => {
+    // The sweep can carry up to 100 rows per tick; one statement per row would be 100 extra
+    // round-trips a minute on the money path. Counting statements through the supplied executor
+    // is the only way this harness can prove "one", so the assertion is on the count, not on the
+    // effect (which a per-row loop would also produce).
+    const first = await armedCrossing(new Date('2027-06-01T09:00:00.000Z'));
+    const second = await armedCrossing(new Date('2027-06-01T09:30:00.000Z'));
+    const third = await armedCrossing(new Date('2027-06-01T10:00:00.000Z'));
+    const at = new Date('2027-06-01T12:00:00.000Z');
+
+    const { result: stamped, updates } = await countingRun((exec) =>
+      creditWalletsRepository.markPendingTopupAlarmed([first, second, third], at, exec)
+    );
+
+    expect(stamped).toBe(3);
+    expect(updates).toBe(1);
+    for (const row of [first, second, third]) {
+      const persisted = await creditWalletsRepository.findById(row.walletId);
+      expect(persisted?.pendingTopupAlarmedAt?.getTime()).toBe(at.getTime());
+    }
+  });
+
+  it('writes NOTHING for a crossing that was SUPERSEDED between the read and the stamp', async () => {
+    // ⚠ THE GUARD IS THE POINT, and it is the SAME money hazard the `armPendingTopup` un-alarm
+    // closes, arriving by a second route. The sweep reads up to 100 wallets and then spends
+    // seconds of Stripe latency PER ROW before it stamps; in that window a marker can be re-armed
+    // for a DIFFERENT, LIVE crossing. A bare `id IN (…)` stamp would de-prioritise that fresh
+    // in-flight reload — permanently, and silently.
+    const { walletId, triggeringEntryId: superseded } = await armedCrossing(
+      new Date('2027-06-02T09:00:00.000Z')
+    );
+    const liveEntryId = randomUUID();
+    await creditWalletsRepository.armPendingTopup({
+      walletId,
+      at: new Date('2027-06-02T09:45:00.000Z'),
+      triggeringEntryId: liveEntryId,
+    });
+
+    const stamped = await creditWalletsRepository.markPendingTopupAlarmed(
+      [{ walletId, triggeringEntryId: superseded }],
+      new Date('2027-06-02T10:00:00.000Z')
+    );
+
+    expect(stamped).toBe(0);
+    const persisted = await creditWalletsRepository.findById(walletId);
+    expect(persisted?.pendingTopupAlarmedAt).toBeNull();
+    expect(persisted?.pendingTopupTriggeringEntryId).toBe(liveEntryId);
+  });
+
+  it('stamps the still-current rows of a batch and skips the superseded one (partial landing)', async () => {
+    // The shortfall is not an error — the caller warns on `stamped < batch.length` rather than
+    // assuming the whole tick landed, which is only possible because the count is honest.
+    const live = await armedCrossing(new Date('2027-06-03T09:00:00.000Z'));
+    const { walletId: movedOn, triggeringEntryId: staleEntryId } = await armedCrossing(
+      new Date('2027-06-03T09:10:00.000Z')
+    );
+    await creditWalletsRepository.armPendingTopup({
+      walletId: movedOn,
+      at: new Date('2027-06-03T09:50:00.000Z'),
+      triggeringEntryId: randomUUID(),
+    });
+    const at = new Date('2027-06-03T10:00:00.000Z');
+
+    const stamped = await creditWalletsRepository.markPendingTopupAlarmed(
+      [live, { walletId: movedOn, triggeringEntryId: staleEntryId }],
+      at
+    );
+
+    expect(stamped).toBe(1);
+    expect((await creditWalletsRepository.findById(live.walletId))?.pendingTopupAlarmedAt).toEqual(
+      at
+    );
+    expect((await creditWalletsRepository.findById(movedOn))?.pendingTopupAlarmedAt).toBeNull();
+  });
+
+  it('returns 0 and issues NO statement for an empty batch (an empty OR would stamp the world)', async () => {
+    // `or()` over an empty list is `undefined`, and `.where(undefined)` is NO predicate — a bare
+    // `.set()` across the whole table. The bystander below is what makes "the world" a real
+    // assertion rather than a claim about the return value.
+    const bystander = await armedCrossing(new Date('2027-06-04T09:00:00.000Z'));
+
+    const { result: stamped, updates } = await countingRun((exec) =>
+      creditWalletsRepository.markPendingTopupAlarmed(
+        [],
+        new Date('2027-06-04T10:00:00.000Z'),
+        exec
+      )
+    );
+
+    expect(stamped).toBe(0);
+    expect(updates).toBe(0);
+    expect(
+      (await creditWalletsRepository.findById(bystander.walletId))?.pendingTopupAlarmedAt
+    ).toBeNull();
+  });
+
+  it('RE-STAMPS an already-alarmed row — the column is LAST-alarmed-at, the rotation cursor', async () => {
+    // If the stamp were written only once, the alarmed set would order by FIRST alarm forever and
+    // the same rows would lead it every tick — starvation inside the alarmed set instead of
+    // across it.
+    const crossing = await armedCrossing(new Date('2027-06-05T09:00:00.000Z'));
+    const firstAlarm = new Date('2027-06-05T10:00:00.000Z');
+    const secondAlarm = new Date('2027-06-05T11:00:00.000Z');
+
+    expect(await creditWalletsRepository.markPendingTopupAlarmed([crossing], firstAlarm)).toBe(1);
+    expect(await creditWalletsRepository.markPendingTopupAlarmed([crossing], secondAlarm)).toBe(1);
+
+    expect(
+      (await creditWalletsRepository.findById(crossing.walletId))?.pendingTopupAlarmedAt?.getTime()
+    ).toBe(secondAlarm.getTime());
+  });
+});
+
+describe('creditWalletsRepository.countAlarmedPendingTopups (BAL-521 §2 backlog size)', () => {
+  const CUTOFF = new Date('2027-07-01T12:00:00.000Z');
+
+  /** A wallet whose marker columns are written directly — the count is a pure read. */
+  async function walletWith(values: {
+    pendingTopupAt: Date | null;
+    pendingTopupTriggeringEntryId: string | null;
+    pendingTopupAlarmedAt: Date | null;
+  }): Promise<string> {
+    const { wallet } = await creditWalletFactory({ values });
+    return wallet.id;
+  }
+
+  it('counts stuck AND alarmed rows past the cutoff — and nothing else', async () => {
+    // ⚠ NOT DERIVABLE FROM WHAT A TICK REPORTS. Alarmed rows rotate, so one tick reaches only a
+    // slice of the backlog; without this figure a filled batch of 100 is indistinguishable from a
+    // backlog of 10,000. It shares its three stuck arms with the finder, so the count can never
+    // describe a different row set than the thing it is sizing.
+    const stuckAt = new Date('2027-07-01T09:00:00.000Z');
+    await walletWith({
+      pendingTopupAt: stuckAt,
+      pendingTopupTriggeringEntryId: randomUUID(),
+      pendingTopupAlarmedAt: new Date('2027-07-01T10:00:00.000Z'),
+    });
+    await walletWith({
+      pendingTopupAt: stuckAt,
+      pendingTopupTriggeringEntryId: randomUUID(),
+      pendingTopupAlarmedAt: new Date('2027-07-01T11:00:00.000Z'),
+    });
+    // Stuck, but never alarmed — a candidate, not a backlog item.
+    await walletWith({
+      pendingTopupAt: stuckAt,
+      pendingTopupTriggeringEntryId: randomUUID(),
+      pendingTopupAlarmedAt: null,
+    });
+    // Alarmed once, but its CURRENT marker is younger than the cutoff — not yet stuck again.
+    await walletWith({
+      pendingTopupAt: new Date('2027-07-01T12:00:01.000Z'),
+      pendingTopupTriggeringEntryId: randomUUID(),
+      pendingTopupAlarmedAt: new Date('2027-07-01T11:30:00.000Z'),
+    });
+    // Alarmed, stuck, but UNCORRELATED — unreconcilable, so the finder never returns it and the
+    // backlog must not claim it either.
+    await walletWith({
+      pendingTopupAt: stuckAt,
+      pendingTopupTriggeringEntryId: null,
+      pendingTopupAlarmedAt: new Date('2027-07-01T11:00:00.000Z'),
+    });
+    // No marker at all.
+    await creditWalletFactory();
+
+    expect(await creditWalletsRepository.countAlarmedPendingTopups(CUTOFF)).toBe(2);
+  });
+
+  it('counts a marker exactly AT the cutoff (the same inclusive `<=` the finder uses)', async () => {
+    await walletWith({
+      pendingTopupAt: CUTOFF,
+      pendingTopupTriggeringEntryId: randomUUID(),
+      pendingTopupAlarmedAt: new Date('2027-07-01T12:30:00.000Z'),
+    });
+
+    expect(await creditWalletsRepository.countAlarmedPendingTopups(CUTOFF)).toBe(1);
+  });
+
+  it('returns 0 when nothing has alarmed (a tick with an empty backlog reports a real zero)', async () => {
+    await walletWith({
+      pendingTopupAt: new Date('2027-07-01T09:00:00.000Z'),
+      pendingTopupTriggeringEntryId: randomUUID(),
+      pendingTopupAlarmedAt: null,
+    });
+
+    expect(await creditWalletsRepository.countAlarmedPendingTopups(CUTOFF)).toBe(0);
   });
 });
 
@@ -1333,8 +1708,20 @@ describe('creditWalletsRepository card provenance + refresh/clear (BAL-515)', ()
   });
 });
 
-describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () => {
+describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516 / BAL-521)', () => {
   const CARD = { cardBrand: 'amex', cardLast4: '0005', cardExpMonth: 4, cardExpYear: 2030 };
+
+  /**
+   * BAL-521 generalised the primitive from a bare `actorUserId: string` to
+   * `{ actorUserId, source }`, so BOTH doors write one shared `credit_wallet.saved_card_detached`
+   * row. Every pre-existing case below moved to this helper with its INTENT UNCHANGED — the user
+   * door is still a real member acting, and the audit metadata it produces is still
+   * `source: 'user_initiated'`. The webhook door is exercised separately.
+   */
+  const USER_DOOR = (actorUserId: string): { actorUserId: string; source: 'user_initiated' } => ({
+    actorUserId,
+    source: 'user_initiated',
+  });
 
   /**
    * ⚠ DELIBERATELY NOT THE SCHEMA DEFAULTS (threshold 2000 / reload 10_000). The promise under
@@ -1364,7 +1751,7 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, USER_DOOR(actor.id))
     );
 
     expect(modeReconciled).toBe(true);
@@ -1401,7 +1788,7 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, USER_DOOR(actor.id))
     );
 
     expect(modeReconciled).toBe(true);
@@ -1419,7 +1806,7 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, USER_DOOR(actor.id))
     );
 
     expect(modeReconciled).toBe(false);
@@ -1445,7 +1832,7 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, fresh.id, actor.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, fresh.id, USER_DOOR(actor.id))
     );
 
     expect(modeReconciled).toBe(false);
@@ -1466,7 +1853,7 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     const actor = await userFactory();
 
     const { wallet, modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, USER_DOOR(actor.id))
     );
 
     expect(modeReconciled).toBe(true);
@@ -1508,7 +1895,7 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
       const { modeReconciled } = await creditWalletsRepository.clearSavedCardAndReconcileMode(
         counting,
         seeded.id,
-        actor.id
+        USER_DOOR(actor.id)
       );
       expect(modeReconciled).toBe(true);
       return { updates, inserts };
@@ -1525,7 +1912,7 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     const actor = await userFactory();
 
     const { modeReconciled } = await db.transaction((tx) =>
-      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, actor.id)
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, USER_DOOR(actor.id))
     );
     expect(modeReconciled).toBe(true);
 
@@ -1553,12 +1940,20 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
     // `audit_events.actor_user_id → users.id` FK — proving the audit write is NOT best-effort:
     // it is the LAST statement in the transaction, so its failure must undo the clear + reconcile
     // that already ran ahead of it.
+    //
+    // ⚠ BAL-521: DO NOT "MODERNISE" THIS TO `actorUserId: null`. `null` is the legal system-actor
+    // value the webhook door uses; it inserts cleanly, the FK never fires, and this test would go
+    // silently green while testing nothing. A BOGUS NON-NULL actor is what makes it a test.
     const seeded = await seedCardBackedWallet('auto_topup');
     const unknownActorId = '00000000-0000-0000-0000-000000000000';
 
     await expect(
       db.transaction((tx) =>
-        creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, unknownActorId)
+        creditWalletsRepository.clearSavedCardAndReconcileMode(
+          tx,
+          seeded.id,
+          USER_DOOR(unknownActorId)
+        )
       )
     ).rejects.toThrow();
 
@@ -1576,9 +1971,82 @@ describe('creditWalletsRepository.clearSavedCardAndReconcileMode (BAL-516)', () 
         creditWalletsRepository.clearSavedCardAndReconcileMode(
           tx,
           '00000000-0000-0000-0000-000000000000',
-          actor.id
+          USER_DOOR(actor.id)
         )
       )
     ).rejects.toThrow('Credit wallet not found');
+  });
+
+  it('the WEBHOOK door writes the SAME action with a NULL actor and source stripe_webhook (BAL-521 §3)', async () => {
+    // ⚠ ONE ACTION, TWO DOORS. `payment_method.detached` (the bank, the card provider, or a
+    // Dashboard action) has no human actor at all, so `actorUserId: null` — the repo's shipped
+    // system-actor convention, which inserts cleanly against the nullable
+    // `audit_events.actor_user_id` and needs no sentinel user. What tells the doors apart is
+    // `metadata.source`, NEVER a forked action name, so ONE query answers "how did this wallet
+    // lose its card?".
+    const seeded = await seedCardBackedWallet('keep_going');
+
+    const { modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, {
+        actorUserId: null,
+        source: 'stripe_webhook',
+      })
+    );
+
+    // The webhook door reconciles the mode exactly like the user door: no card ⇒ no card-backed
+    // mode armed, whichever way the card left.
+    expect(modeReconciled).toBe(true);
+    expect((await creditWalletsRepository.findById(seeded.id))?.lowBalanceMode).toBe('notify_only');
+
+    const rows = await db.select().from(auditEvents).where(eq(auditEvents.entityId, seeded.id));
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    expect(row?.actorUserId).toBeNull();
+    expect(row?.action).toBe('credit_wallet.saved_card_detached');
+    expect(row?.entityType).toBe('credit_wallet');
+    expect(row?.metadata).toEqual({
+      source: 'stripe_webhook',
+      modeReconciled: true,
+      lowBalanceMode: 'notify_only',
+    });
+  });
+
+  it('returns the audit row id and the PRE-reconcile mode (BAL-521 D8)', async () => {
+    // `auditEventId` — the id the primitive used to discard. The user door's notification
+    // correlationId is built from it, so it has to come back out.
+    // `previousLowBalanceMode` — the returned wallet is ALWAYS `notify_only` once reconciled, so
+    // the row can no longer say WHICH card-backed mode went off, and the copy has to name it.
+    const seeded = await seedCardBackedWallet('auto_topup');
+    const actor = await userFactory();
+
+    const { auditEventId, previousLowBalanceMode, wallet, modeReconciled } = await db.transaction(
+      (tx) =>
+        creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, USER_DOOR(actor.id))
+    );
+
+    expect(modeReconciled).toBe(true);
+    expect(previousLowBalanceMode).toBe('auto_topup');
+    // Not merely "a truthy string" — it is the id of the row that was actually inserted.
+    const rows = await db.select().from(auditEvents).where(eq(auditEvents.entityId, seeded.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(auditEventId);
+    // The effective mode on the returned row is the RECONCILED one — the two are different facts,
+    // which is exactly why both are surfaced.
+    expect(wallet.lowBalanceMode).toBe('notify_only');
+  });
+
+  it('previousLowBalanceMode reports notify_only when nothing was armed (no false claim to make)', async () => {
+    // The consequence copy branches on `modeReconciled`; this arm has nothing to name as "now
+    // off". Pinning it stops a future reader inferring that the field only ever carries a
+    // card-backed mode.
+    const seeded = await seedCardBackedWallet('notify_only');
+    const actor = await userFactory();
+
+    const { previousLowBalanceMode, modeReconciled } = await db.transaction((tx) =>
+      creditWalletsRepository.clearSavedCardAndReconcileMode(tx, seeded.id, USER_DOOR(actor.id))
+    );
+
+    expect(modeReconciled).toBe(false);
+    expect(previousLowBalanceMode).toBe('notify_only');
   });
 });

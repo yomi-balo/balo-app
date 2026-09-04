@@ -441,4 +441,103 @@ describe('resolveContext', () => {
       expect(mockListBillingUserIds).not.toHaveBeenCalled();
     });
   });
+
+  describe('credit.saved_card.detached hydration (BAL-521 §3)', () => {
+    it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry)', async () => {
+      mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+      const context = await resolveContext('credit.saved_card.detached', {
+        correlationId: 'saved-card-detached.wallet-1.evt_1',
+        companyId: 'company-1',
+        walletId: 'wallet-1',
+        source: 'stripe_webhook',
+        modeReconciled: false,
+        previousLowBalanceMode: 'notify_only',
+      });
+
+      expect(mockListBillingUserIds).toHaveBeenCalledWith('company-1');
+      expect(context.data.billingUserIds).toEqual(['owner-1', 'admin-1']);
+    });
+
+    it('hydrates data.detachedByName (bare) and data.detachedByLabel ("Name @ Company") from detachedByUserId', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana', lastName: 'Okoro' });
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue([]);
+
+      const context = await resolveContext('credit.saved_card.detached', {
+        correlationId: 'saved-card-detached.wallet-1.audit-1',
+        companyId: 'company-1',
+        walletId: 'wallet-1',
+        source: 'user_initiated',
+        modeReconciled: true,
+        previousLowBalanceMode: 'auto_topup',
+        detachedByUserId: 'user-1',
+      });
+
+      expect(mockFindById).toHaveBeenCalledWith('user-1');
+      expect(context.data.detachedByName).toBe('Dana Okoro');
+      expect(context.data.detachedByLabel).toBe('Dana Okoro @ Northwind Industrial');
+    });
+
+    it('degrades to "A teammate" when the actor has no resolvable name', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', firstName: null, lastName: null });
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue([]);
+
+      const context = await resolveContext('credit.saved_card.detached', {
+        correlationId: 'saved-card-detached.wallet-1.audit-2',
+        companyId: 'company-1',
+        walletId: 'wallet-1',
+        source: 'user_initiated',
+        modeReconciled: false,
+        previousLowBalanceMode: 'notify_only',
+        detachedByUserId: 'user-1',
+      });
+
+      expect(context.data.detachedByName).toBe('A teammate');
+      // BAL-521 (F5) — no org clause on the placeholder name: 'A teammate' already implies the
+      // recipient's own company, so staying bare avoids reading as if an outsider acted.
+      expect(context.data.detachedByLabel).toBe('A teammate');
+    });
+
+    it('the stripe_webhook door has no actor: neither detachedByName nor detachedByLabel is set', async () => {
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue([]);
+
+      const context = await resolveContext('credit.saved_card.detached', {
+        correlationId: 'saved-card-detached.wallet-1.evt_2',
+        companyId: 'company-1',
+        walletId: 'wallet-1',
+        source: 'stripe_webhook',
+        modeReconciled: false,
+        previousLowBalanceMode: 'notify_only',
+      });
+
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(context.data.detachedByName).toBeUndefined();
+      expect(context.data.detachedByLabel).toBeUndefined();
+    });
+
+    it('(D12) never hydrates data.user and never reads a userId key — the actor key is detachedByUserId, not userId', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana' });
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockListBillingUserIds.mockResolvedValue([]);
+
+      const context = await resolveContext('credit.saved_card.detached', {
+        correlationId: 'saved-card-detached.wallet-1.audit-3',
+        companyId: 'company-1',
+        walletId: 'wallet-1',
+        source: 'user_initiated',
+        modeReconciled: false,
+        previousLowBalanceMode: 'notify_only',
+        detachedByUserId: 'user-1',
+      });
+
+      // findById IS called (for detachedByName), but data.user (the generic self-recipient
+      // hydration keyed on payload.userId) must stay undefined — this payload carries no
+      // `userId` field at all.
+      expect(context.data.user).toBeUndefined();
+    });
+  });
 });
