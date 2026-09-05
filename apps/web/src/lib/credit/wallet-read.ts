@@ -4,6 +4,7 @@ import { cache } from 'react';
 
 import {
   companiesRepository,
+  creditSessionsRepository,
   creditWalletsRepository,
   fxDisplayRatesRepository,
   partyMembershipsRepository,
@@ -280,6 +281,15 @@ export interface BillingEmailSnapshot {
 export interface BillingSettingsData {
   readonly wallet: WalletSnapshot;
   readonly billingEmail: BillingEmailSnapshot;
+  /**
+   * BAL-523 — TRUE when this wallet carries consultation time already used beyond the balance
+   * that MAY STILL BE CHARGED to the card on file (`hasUnsettledOverdraftForWallet` — a negative
+   * balance, a live session already past zero, or an ended session whose overdraft settlement is
+   * still outstanding). Narrows the settings page's residual-settlement note from "every
+   * `notify_only` client with a card" to "a client who actually has exposure". An unprovisioned
+   * wallet is always `false` — no wallet row means no session could ever have drawn it negative.
+   */
+  readonly hasUnsettledOverdraft: boolean;
 }
 
 /**
@@ -348,7 +358,14 @@ export async function loadBillingSettingsWallet(
     return null;
   }
 
-  const company = await companiesRepository.findBillingIdentityById(companyId);
+  const [company, hasUnsettledOverdraft] = await Promise.all([
+    companiesRepository.findBillingIdentityById(companyId),
+    // BAL-523 — an unprovisioned wallet runs no query: no wallet row means no session could
+    // ever have drawn it negative.
+    wallet === undefined
+      ? Promise.resolve(false)
+      : creditSessionsRepository.hasUnsettledOverdraftForWallet(wallet.id),
+  ]);
   const setBy = await resolveBillingEmailAttribution(
     companyId,
     company?.billingEmailSetByUserId ?? null
@@ -357,5 +374,6 @@ export async function loadBillingSettingsWallet(
   return {
     wallet: wallet === undefined ? UNPROVISIONED_WALLET : projectWalletSnapshot(wallet),
     billingEmail: projectBillingEmail(company, setBy),
+    hasUnsettledOverdraft,
   };
 }

@@ -30,6 +30,7 @@ interface RenderSectionOverrides {
   cardAvailable?: boolean;
   cardLabel?: string | null;
   mandateActive?: boolean;
+  hasUnsettledOverdraft?: boolean;
 }
 
 function renderSection(overrides: RenderSectionOverrides = {}) {
@@ -38,6 +39,9 @@ function renderSection(overrides: RenderSectionOverrides = {}) {
     cardAvailable: true,
     cardLabel: 'Visa •••• 4242',
     mandateActive: true,
+    // BAL-523 — defaults to false so every pre-existing (unrelated) case in this file takes the
+    // no-note / generic-toast path unchanged; only the R1 block below opts in.
+    hasUnsettledOverdraft: false,
     ...overrides,
   };
   const view = render(
@@ -46,6 +50,7 @@ function renderSection(overrides: RenderSectionOverrides = {}) {
       cardAvailable={props.cardAvailable}
       cardLabel={props.cardLabel}
       mandateActive={props.mandateActive}
+      hasUnsettledOverdraft={props.hasUnsettledOverdraft}
     />
   );
   return {
@@ -65,6 +70,7 @@ function renderSection(overrides: RenderSectionOverrides = {}) {
           cardAvailable={nextProps.cardAvailable}
           cardLabel={nextProps.cardLabel}
           mandateActive={nextProps.mandateActive}
+          hasUnsettledOverdraft={nextProps.hasUnsettledOverdraft}
         />
       );
     },
@@ -265,6 +271,7 @@ describe('LowBalanceSection', () => {
         cardAvailable={true}
         cardLabel="Visa •••• 4242"
         mandateActive={true}
+        hasUnsettledOverdraft={false}
         onSaved={onSaved}
       />
     );
@@ -373,28 +380,147 @@ describe('LowBalanceSection', () => {
     );
   });
 
-  // ── FIX ROUND 3 (N1) — honest copy for notify_only + an active mandate ──────────────────
+  // ── R1 + R2 (BAL-523 FIX ROUND 2) — TRUTHFUL residual-settlement copy, re-gated ──────────
+  //
+  // ⚠ Round 1 shipped two FALSE strings here ("From here we'll pause instead of charging your
+  // card" / "Just notify me means we'll pause rather than charge") and narrowed the gate onto
+  // `hasUnsettledOverdraft` on the same false premise. Selecting Just notify me does NOT stop the
+  // card being charged: the gate is in the live meter, every production Case session is
+  // `durationSource: 'presence'`, and the presence finalizer posts every billable minute at
+  // meeting end with no mode check and settles off-session (BAL-535).
+  //
+  // Every case below asserts the EXACT body text. A test that would pass on the false string is
+  // not a test, and that is precisely how the false strings shipped.
 
-  it('N1: Save success shows the honest notify_only+mandate-active toast, never the generic one', async () => {
+  const RESIDUAL_TOAST_TITLE = 'Just notify me is on.';
+  const TOAST_FACT =
+    'Automatic top-ups are off. Time you use beyond your balance during a consultation is still settled to the card on file when it wraps up.';
+  const NOTE_FACT =
+    'Just notify me turns off automatic top-ups. Time you use beyond your balance during a consultation is still settled to the card on file when it wraps up.';
+  const LEVER_REMOVE_CARD = ' Removing the card in Payment method below stops that.';
+  const LEVER_REACH_OUT =
+    " There's consultation time on your account still to settle — email support@balo.expert and we'll square it up with you.";
+
+  const NOTE_REMOVABLE = NOTE_FACT + LEVER_REMOVE_CARD;
+  const NOTE_EXPOSURE = NOTE_FACT + LEVER_REACH_OUT;
+
+  async function switchToNotifyOnlyAndSave(): Promise<void> {
+    await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
+  }
+
+  it('⚠ R2: Save success on notify_only + card + live mandate shows the residual-settlement toast even with NO exposure — the re-gate this round restores', async () => {
     mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
     renderSection({
       initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
       mandateActive: true,
       cardAvailable: true,
+      hasUnsettledOverdraft: false,
     });
 
-    await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
-    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
+    await switchToNotifyOnlyAndSave();
 
     await waitFor(() =>
-      expect(toast.success).toHaveBeenCalledWith('Automatic top-ups are off.', {
-        description: expect.stringMatching(/card stays on file/i),
+      expect(toast.success).toHaveBeenCalledWith(RESIDUAL_TOAST_TITLE, {
+        description: TOAST_FACT + LEVER_REMOVE_CARD,
       })
     );
     expect(toast.success).not.toHaveBeenCalledWith('Low-balance settings updated.');
   });
 
-  it('N1: the generic Save toast still fires for notify_only with an INACTIVE mandate', async () => {
+  it('⚠ R2: with unsettled exposure the SAME toast names a channel instead of card removal', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    renderSection({
+      initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+      hasUnsettledOverdraft: true,
+    });
+
+    await switchToNotifyOnlyAndSave();
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(RESIDUAL_TOAST_TITLE, {
+        description: TOAST_FACT + LEVER_REACH_OUT,
+      })
+    );
+    // Removal is the case most likely to be refused here, so it must NOT be pointed at.
+    expect(toast.success).not.toHaveBeenCalledWith(RESIDUAL_TOAST_TITLE, {
+      description: TOAST_FACT + LEVER_REMOVE_CARD,
+    });
+  });
+
+  it('⚠⚠ R1: NO surface claims a pause or a no-charge — the exact false strings this round removed', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    renderSection({
+      initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+      hasUnsettledOverdraft: true,
+    });
+
+    await switchToNotifyOnlyAndSave();
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+
+    // ⚠ JSON.stringify, NOT `.map(String)` — the description rides in the second argument's
+    // `{ description }` object, which `String()` flattens to "[object Object]" and would let the
+    // false string through untouched. That near-miss is exactly this round's failure mode.
+    const toastCopy = JSON.stringify(vi.mocked(toast.success).mock.calls);
+    const screenCopy = document.body.textContent ?? '';
+    for (const claim of [
+      'pause instead of charging',
+      "we'll pause rather than charge",
+      'pause rather than charge',
+    ]) {
+      expect(toastCopy).not.toContain(claim);
+      expect(screenCopy).not.toContain(claim);
+    }
+  });
+
+  it('⚠ F3/R5: a settlement_outstanding refusal gets its OWN copy, never the generic "please try again"', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({
+      ok: false,
+      error: 'settlement_outstanding',
+    });
+    renderSection({
+      initialConfig: { mode: 'keep_going', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+    });
+
+    await switchToNotifyOnlyAndSave();
+
+    // ⚠ R5 — NEUTRAL. `hasActiveSessionForWallet` also matches a `pending` session that never
+    // connected and an ENDED session still settling, so "A consultation is still running." and
+    // "the expert is paid for the time they're delivering" were false on two of three arms.
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("We're still finalising a consultation.", {
+        description:
+          "We'll keep your current setting until that's wrapped up. You can switch to Just notify me once it's done.",
+      })
+    );
+    // A retry cannot fix this, so the retry copy must NOT fire.
+    expect(toast.error).not.toHaveBeenCalledWith("We couldn't save that — please try again.");
+  });
+
+  it('F3: any OTHER save failure still shows the generic retry toast', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: false, error: 'invalid_input' });
+    renderSection({
+      initialConfig: { mode: 'keep_going', reloadMinor: 10_000, thresholdMinor: 2_000 },
+    });
+
+    await switchToNotifyOnlyAndSave();
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("We couldn't save that — please try again.")
+    );
+    expect(toast.error).not.toHaveBeenCalledWith(
+      "We're still finalising a consultation.",
+      expect.anything()
+    );
+  });
+
+  it('R2: the generic Save toast still fires for notify_only with an INACTIVE mandate', async () => {
     mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
     renderSection({
       initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
@@ -402,61 +528,92 @@ describe('LowBalanceSection', () => {
       cardAvailable: true,
     });
 
-    await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
-    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
+    await switchToNotifyOnlyAndSave();
 
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
     );
-    expect(toast.success).not.toHaveBeenCalledWith('Automatic top-ups are off.', expect.anything());
+    expect(toast.success).not.toHaveBeenCalledWith(RESIDUAL_TOAST_TITLE, expect.anything());
   });
 
-  it('N1: the inline note appears for notify_only + card + active mandate, and nowhere else', async () => {
+  it('R2: the generic Save toast still fires for notify_only with NO card on file', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    renderSection({
+      initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: false,
+      cardAvailable: false,
+    });
+
+    await switchToNotifyOnlyAndSave();
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Low-balance settings updated.')
+    );
+    expect(toast.success).not.toHaveBeenCalledWith(RESIDUAL_TOAST_TITLE, expect.anything());
+  });
+
+  it('⚠ R2: the inline note appears for notify_only + card + active mandate with NO exposure, and names card removal — VERBATIM', async () => {
     renderSection({
       initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
       mandateActive: true,
       cardAvailable: true,
+      hasUnsettledOverdraft: false,
     });
-    expect(screen.getByText(/card stays on file/i)).toBeInTheDocument();
+    expect(screen.getByText(NOTE_REMOVABLE)).toBeInTheDocument();
   });
 
-  it('N1: the inline note is absent with no card on file', async () => {
+  it('⚠ R2: with exposure the inline note names a channel instead of card removal — VERBATIM', async () => {
+    renderSection({
+      initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      mandateActive: true,
+      cardAvailable: true,
+      hasUnsettledOverdraft: true,
+    });
+    expect(screen.getByText(NOTE_EXPOSURE)).toBeInTheDocument();
+    expect(screen.queryByText(NOTE_REMOVABLE)).not.toBeInTheDocument();
+  });
+
+  it('R2: the inline note is absent with no card on file', async () => {
     renderSection({
       initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
       mandateActive: false,
       cardAvailable: false,
+      hasUnsettledOverdraft: true,
     });
-    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/still settled to the card on file/i)).not.toBeInTheDocument();
   });
 
-  it('N1: the inline note is absent when the mandate is not active', async () => {
+  it('R2: the inline note is absent when the mandate is not active', async () => {
     renderSection({
       initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
       mandateActive: false,
       cardAvailable: true,
+      hasUnsettledOverdraft: true,
     });
-    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/still settled to the card on file/i)).not.toBeInTheDocument();
   });
 
-  it('N1: the inline note is absent for a card-backed mode, even with an active mandate', async () => {
+  it('R2: the inline note is absent for a card-backed mode, even with an active mandate + unsettled exposure', async () => {
     renderSection({
       initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
       mandateActive: true,
       cardAvailable: true,
+      hasUnsettledOverdraft: true,
     });
-    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/still settled to the card on file/i)).not.toBeInTheDocument();
   });
 
-  it('N1: the note tracks a LIVE mode switch (draft, not baseline) before Save is even pressed', async () => {
+  it('R2: the note tracks a LIVE mode switch (draft, not baseline) before Save is even pressed', async () => {
     renderSection({
       initialConfig: { mode: 'auto_topup', reloadMinor: 10_000, thresholdMinor: 2_000 },
       mandateActive: true,
       cardAvailable: true,
+      hasUnsettledOverdraft: false,
     });
-    expect(screen.queryByText(/card stays on file/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(NOTE_REMOVABLE)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
-    expect(screen.getByText(/card stays on file/i)).toBeInTheDocument();
+    expect(screen.getByText(NOTE_REMOVABLE)).toBeInTheDocument();
   });
 
   it('arm failure shows the inline warning + Retry, and Retry mints a NEW uuid', async () => {

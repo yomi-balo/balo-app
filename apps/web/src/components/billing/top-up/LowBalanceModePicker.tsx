@@ -228,7 +228,7 @@ export function LowBalanceModePicker({
     (option: ModeOption): string => {
       switch (option.id) {
         case 'auto_topup':
-          return `Add ${formatAudShort(reloadMinor)} whenever your balance drops below ${formatAudShort(thresholdMinor)}.`;
+          return `Add ${formatAudShort(reloadMinor)} whenever your balance drops below ${formatAudShort(thresholdMinor)}, and keep sessions going if it still runs out.`;
         case 'keep_going':
           return "Don't interrupt sessions — settle any extra time to your card afterward.";
         default:

@@ -67,6 +67,7 @@ export default async function CreditsBillingPage(): Promise<React.JSX.Element> {
             key={user.companyId}
             wallet={billingSettings.wallet}
             billingEmail={billingSettings.billingEmail}
+            hasUnsettledOverdraft={billingSettings.hasUnsettledOverdraft}
           />
         )}
       </div>

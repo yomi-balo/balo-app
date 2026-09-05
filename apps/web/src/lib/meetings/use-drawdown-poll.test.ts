@@ -19,7 +19,7 @@ function stateFor(overrides: Partial<DrawdownState> = {}): DrawdownState {
     tone: 'none',
     channels: [],
     balanceMinor: 45000,
-    mandatePresent: true,
+    graceAvailable: true,
     lens: 'client',
     ratePerMinuteMinor: 450,
     ...overrides,

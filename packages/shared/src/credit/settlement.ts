@@ -142,3 +142,56 @@ export type CardBackedModeWriteGuard =
 export function isAbsentPaymentMethodId(value: string | null | undefined): boolean {
   return value === null || value === '';
 }
+
+/**
+ * The mandate fields PLUS the client's standing low-balance preference. Widened structurally
+ * (`lowBalanceMode: string`, matching `mandateStatus: string | null`'s convention) so this
+ * package stays db-free; a full `@balo/db` `CreditWallet` is assignable.
+ */
+export interface OverdraftGraceWalletFields extends MandateWalletFields {
+  lowBalanceMode: string;
+}
+
+/**
+ * BAL-523 (ADR-1040 Amendment 4) — may Balo carry THIS session past zero on the stored card?
+ *
+ * ⚠ A THIRD PREDICATE, NOT A WIDENING. It CALLS `isWalletMandateActive`; it never edits it and
+ * `lowBalanceMode` is never folded into `MandateWalletFields` (ADR-1040 Amendment 3A's whole
+ * point — see the ban at the top of `isWalletCardReusableOnSession`).
+ *
+ * TWO INDEPENDENT CONSENT AXES, CONJOINED:
+ *  · the mandate — consent to unattended charging, captured by an explicit off-session
+ *    SetupIntent (`isWalletMandateActive`);
+ *  · the MODE — the client's CURRENT standing preference. `lowBalanceModeEnum`'s docblock says
+ *    "`auto_topup` = reload …, AND allow overdraft grace; `keep_going` = allow overdraft grace,
+ *    no reload; `notify_only` = neither" — exactly the two values
+ *    {@link isCardBackedLowBalanceMode} names. This predicate is the code finally honouring its
+ *    own schema's stated semantics.
+ *
+ * ⚠ THE MODE HALF IS BAL-524's SINGLE DEFINITION, NOT A SECOND ONE. BAL-523 originally carried a
+ * module-private `Set` of the same two values; it was deleted on the rebase onto BAL-524 rather
+ * than kept beside it, because two spellings of "card-backed" in one file is precisely what that
+ * predicate's docblock forbids. The property this predicate depends on is unchanged by the swap:
+ * `isCardBackedLowBalanceMode` is an ALLOW-LIST (`=== 'auto_topup' || === 'keep_going'`), NEVER
+ * `!== 'notify_only'` — an unknown future mode value must FAIL CLOSED (no grace), not inherit
+ * permission by not being the one value we thought to exclude. Pinned from this end too, by the
+ * invariant suite's unknown-mode case.
+ *
+ * ⚠⚠ THE ASYMMETRY IS DELIBERATE AND MUST NOT BE "TIDIED UP". This gates GRACE ENTRY ONLY
+ * (`applyActiveTick`). SETTLEMENT (`settleOverdraft`, `reconcileStuckSettlement`) stays
+ * `isWalletMandateActive`-only, forever: entry is the moment Balo takes on NEW collection risk,
+ * so it follows the client's current preference; settlement honours a debt already incurred
+ * under consent that was live at the time. Gating settlement on the mode too would open a
+ * payment-evasion window (enter grace on `keep_going`, flip to `notify_only`, walk away from
+ * consumed time) and break ADR-1040's "expert always gets paid, with no asterisk".
+ *
+ * ⚠ The `open()` CONNECT GATE is NOT on this predicate either, and that is also deliberate
+ * (Yomi, 2026-09-04, reversing an earlier BAL-523 revision). `open()` refusing does not refuse
+ * the client at the door: `openCaseSessionBestEffort` on the BAL-466 admission seam may never
+ * fail a join, so a refusal creates NO session row — the consultation happens free and the
+ * expert is unpaid. A `notify_only` client therefore OPENS and METERS normally and is simply not
+ * carried past zero. See `creditSessionsRepository.open`'s ⚠ BAL-523 note.
+ */
+export function walletAllowsOverdraftGrace(wallet: OverdraftGraceWalletFields): boolean {
+  return isWalletMandateActive(wallet) && isCardBackedLowBalanceMode(wallet.lowBalanceMode);
+}

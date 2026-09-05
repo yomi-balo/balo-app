@@ -100,6 +100,12 @@ const START_ERROR_COPY: Record<string, string> = {
   saved_card_error: SAVED_CARD_ERROR_COPY,
   no_saved_card: "We couldn't find your saved card. Enter a card to continue.",
   card_declined: 'Your card was declined. Try a different card?',
+  // BAL-523 FIX ROUND 2 (R4) — the low-balance picker in this composer tried to move the wallet
+  // out of a card-backed mode while a consultation is live, and the server refused. The action
+  // returns before the PaymentIntent is created, so "no charge was made" is literally true, and
+  // the top-up itself is never what was blocked — the buyer just has to leave the setting alone.
+  settlement_outstanding:
+    "We can't change your low-balance setting while a consultation is running — no charge was made. Leave it as it is and your top-up will go through.",
 };
 
 /**

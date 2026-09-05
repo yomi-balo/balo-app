@@ -9,7 +9,7 @@ import { creditWalletsRepository, partyMembershipsRepository } from '@balo/db';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import {
   deriveDrawdownState,
-  isWalletMandateActive,
+  walletAllowsOverdraftGrace,
   type DrawdownState,
 } from '@balo/shared/credit';
 import { authorizeSessionActor } from './authorize-session-actor.js';
@@ -58,7 +58,7 @@ export async function getSessionDrawdownState(
     // the balance has already been drawn down by (drawn, not elapsed).
     billingFloorMinutes: resolveBillingFloorMinutes(),
     minutesAlreadyDrawn: session.connectedMinutes,
-    mandatePresent: isWalletMandateActive(wallet),
+    graceAvailable: walletAllowsOverdraftGrace(wallet),
     lens,
     ...(adminName === undefined ? {} : { adminName }),
     now,

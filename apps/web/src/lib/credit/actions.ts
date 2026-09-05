@@ -158,7 +158,15 @@ export type StartPurchaseResult =
         | 'stripe_error'
         | 'saved_card_error'
         | 'no_saved_card'
-        | 'card_declined';
+        | 'card_declined'
+        /**
+         * FIX ROUND 2 (R4, security) — the composer asked to move the wallet OUT of a card-backed
+         * `low_balance_mode` while a consultation is live, and `persistLowBalanceConfig` refused.
+         * Returned BEFORE `createPurchaseIntent`, so NO CHARGE WAS MADE and the copy may say so.
+         * The buyer's recovery is to leave the low-balance setting alone and press Pay again —
+         * topping up mid-call is never itself blocked.
+         */
+        | 'settlement_outstanding';
       /** Stripe's specific refusal reason, when it gave one (`card_declined` only). */
       declineCode?: string;
     };
@@ -195,15 +203,30 @@ export type ValidatePromoResult =
   | { ok: true; grantMinor: number; promoCodeId: string }
   | { ok: false; reason: PromoValidationReason | 'unauthorized' | 'error' };
 
+/**
+ * TWO refusal arms, from two different tickets, and NEITHER may collapse into `invalid_input` or
+ * into the UI's generic "please try again" toast — a retry fixes neither, and each names a
+ * different next move. Same name and same shape as the two economic siblings
+ * (`StartCardCaptureResult`, `RemoveSavedCardResult`).
+ */
 export type SaveConfigResult =
   | { ok: true }
   /**
-   * `no_saved_card` — the selection is a CARD-BACKED mode (`auto_topup` / `keep_going`) and the
-   * wallet holds no `stripe_payment_method_id`. Its own arm, never folded into `invalid_input`:
-   * the client's next move is a specific control one section down the page, and "please try
-   * again" is copy a retry cannot fix.
+   * `no_saved_card` (BAL-524) — the selection is a CARD-BACKED mode (`auto_topup` / `keep_going`)
+   * and the wallet holds no `stripe_payment_method_id`. The client's next move is a specific
+   * control one section down the page.
+   *
+   * `settlement_outstanding` (BAL-523) — the save moves the wallet OUT of a card-backed mode
+   * while a session is live on the wallet. The client's next move is to wait: the session ends
+   * on its own.
+   *
+   * The two are disjoint in practice but NOT mutually exclusive as states (a wallet can have no
+   * card AND a live session). `saveLowBalanceConfigAction` states its ordering explicitly.
    */
-  | { ok: false; error: 'unauthorized' | 'invalid_input' | 'no_saved_card' };
+  | {
+      ok: false;
+      error: 'unauthorized' | 'invalid_input' | 'no_saved_card' | 'settlement_outstanding';
+    };
 
 export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
 
@@ -249,8 +272,20 @@ async function ensureWallet(companyId: string): Promise<CreditWallet> {
   return creditWalletsRepository.ensureForCompany(db, companyId);
 }
 
-/** Whether the mode was written, or refused because the wallet holds no card. */
-type PersistLowBalanceConfigOutcome = 'persisted' | 'refused_no_card_on_file';
+/**
+ * What `persistLowBalanceConfig` did. A STATED outcome rather than a thrown error or a bare
+ * boolean, because both callers have to map it onto their OWN result union and a silent no-op
+ * would tell the client their preference was saved when it was not.
+ *
+ * THREE outcomes, from TWO tickets' guards — and the two refusals are provably disjoint on the
+ * TARGET mode, so neither shadows the other: `refused_no_card_on_file` (BAL-524) can only arise
+ * when the write NAMES a card-backed mode, and `refused_live_session` (BAL-523) only when it
+ * names `notify_only`. `notify_only` is not card-backed, so no single write can trip both.
+ */
+type PersistLowBalanceConfigOutcome =
+  | 'persisted'
+  | 'refused_live_session'
+  | 'refused_no_card_on_file';
 
 /**
  * Persist the low-balance mode (+ auto-top-up reload/threshold). NO capability gating here — the
@@ -269,28 +304,88 @@ type PersistLowBalanceConfigOutcome = 'persisted' | 'refused_no_card_on_file';
  * story. The lanes that gate a real off-session charge key off the MANDATE, not this mode guard:
  * `apps/api/src/services/credit/auto-topup.ts:259-266` skips with `no_mandate` unless
  * `isWalletMandateActive(wallet)` (plus both Stripe ids) holds; `applyActiveTick`
- * (`packages/db/src/repositories/credit-sessions.ts:717`) hard-stops at `:759`
- * (`if (!params.mandateActive)`) rather than opening grace on a crossed-zero tick with no
- * mandate; `creditSessionsRepository.open` (same file, `:958`,
+ * (`packages/db/src/repositories/credit-sessions.ts:737`) hard-stops at `:780` rather than
+ * opening grace on a crossed-zero tick; `creditSessionsRepository.open` (same file, `:991`,
  * `if (available < estimateMinor && !mandateActive)`) refuses to connect a session that cannot
  * fund its estimate without one; and `end-session.ts`'s `settleOverdraft` only attempts an
- * off-session charge when a mandate is active, opening a receivable instead when it is not. All
- * four are indifferent to `low_balance_mode`. (`drawdown.ts`'s `getSessionDrawdownState` is NOT
- * one of these — it is a read-only in-call display projection; its own docblock says "No money
- * moves".) BAL-523 (in progress) is what turns the (mode, card) pair written here into something
- * those lanes themselves consult — until it lands, a row this guard failed to prevent (see the
- * exemption's docblock below) is inert, not exploitable.
+ * off-session charge when a mandate is active, opening a receivable instead when it is not.
+ * (`drawdown.ts`'s `getSessionDrawdownState` is NOT one of these — it is a read-only in-call
+ * display projection; its own docblock says "No money moves".)
+ *
+ * ⚠ REBASE, BAL-523 HAS NOW LANDED — three of those four stay indifferent to `low_balance_mode`,
+ * but `applyActiveTick` no longer is. Its hard stop is `if (!params.overdraftGraceAllowed)`, and
+ * `meterSessionToNow` feeds that flag from `walletAllowsOverdraftGrace(wallet)` — a CONJUNCTION
+ * of `isWalletMandateActive` AND a card-backed mode. So the (mode, card) pair written here is now
+ * genuinely read by a money path. A row this guard failed to prevent — a card-backed mode with no
+ * card, via the exemption documented below — is STILL inert, and now for a stronger reason than
+ * before: the conjunction's mandate half already requires `stripePaymentMethodId !== null`, so a
+ * cardless card-backed row cannot open grace no matter what the mode says.
  *
  * So the requirement is the DEFAULT here and in `updateConfig` beneath it. A caller that passes
  * nothing is guarded. The single exemption is named at its call site.
+ *
+ * ⚠⚠ BAL-523 (FIX ROUND 2, R4, security) — THE LIVE-SESSION DISARM GUARD ALSO LIVES HERE, AT THE
+ * CHOKEPOINT, NOT IN ONE CALLER. Fix round 1 (F3) put it in `saveLowBalanceConfigAction` only, and
+ * `startPurchaseAction` — the OTHER caller — bypassed it completely: the shipped in-call
+ * low-balance CTA opens the top-up composer, which renders `LowBalanceModePicker`, so a client
+ * mid-consultation could flip to `notify_only` there (or call the Server Action directly, start a
+ * purchase and never confirm the `clientSecret`) and the mode flip landed permanently with the
+ * guard never running. Both callers now inherit it.
+ *
+ * ⚠ It is INDEPENDENT of the card guard above, not a variant of it, and the two cannot collide:
+ * this one fires only on a write NAMING `notify_only`, that one only on a write naming a
+ * card-backed mode. `startPurchaseAction`'s exemption is from the CARD guard alone — it stays
+ * subject to this one (see {@link PersistLowBalanceConfigOutcome}).
+ *
+ * WHY IT MATTERS: BAL-523 is what creates this exposure. Before it, the mode was not read by the
+ * money path, so flipping it mid-call did nothing. Now it stops the LIVE METER — on a
+ * `live_capture` session `applyActiveTick` hard-stops WITHOUT posting the crossing tick, and
+ * `end()` derives `expertAccruedMinor` from posted ticks only, so every minute from the flip to
+ * the end of the call is unbilled AND unaccrued and the expert delivers free.
+ *
+ * ⚠⚠ WHAT IT MUST NEVER REFUSE — read before touching the predicate:
+ *  · a TOP-UP. Buying credit mid-consultation is the in-call CTA's whole purpose; the guard is on
+ *    the MODE TRANSITION only, and the composer seeds its picker from `wallet.lowBalanceMode`
+ *    (`TopUpComposer`), so an untouched picker sends the mode back unchanged and never trips it.
+ *  · a FIRST purchase. A brand-new wallet defaults to `notify_only`, so `notify_only` in ⇒ no
+ *    transition. Deliberately NOT a card-PRESENCE guard, which is what BAL-524's pre-flight
+ *    showed WOULD break this path (the wallet has no card yet) — and precisely why BAL-524's own
+ *    card guard carries the `card_is_established_by_this_same_operation` exemption instead.
+ *  · a mode change that is not a DISARM (`keep_going` → `auto_topup`, or anything → card-backed).
+ *
+ * The predicate is `hasActiveSessionForWallet`, reused verbatim from the two economic siblings
+ * that already refuse the same class of mid-session move — card CHANGE (`startCardCaptureAction`)
+ * and card REMOVE (`apps/api`'s `detachSavedCard`) — rather than a new rule. It is deliberately
+ * the WIDER "a session is live or a settlement is in flight" predicate, not
+ * `hasUnsettledOverdraftForWallet`: the harm starts the moment a session can still meter, well
+ * before it crosses zero.
+ *
+ * ⚠ Polarity: the OUTGOING check is `!== 'notify_only'`, not an allow-list — deliberately the
+ * opposite convention from `walletAllowsOverdraftGrace` (and from `isCardBackedLowBalanceMode`,
+ * which that predicate now calls), and for the same fail-closed reason. An unknown future mode is
+ * treated as card-backed here, so the save is REFUSED rather than silently permitted.
  */
 async function persistLowBalanceConfig(
-  walletId: string,
+  wallet: Pick<CreditWallet, 'id' | 'lowBalanceMode'>,
   config: z.infer<typeof configSchema>,
+  companyId: string,
   cardBackedModeGuard: CardBackedModeWriteGuard = 'require_card_on_file'
 ): Promise<PersistLowBalanceConfigOutcome> {
+  const disarmsCardBackedMode =
+    config.lowBalanceMode === 'notify_only' && wallet.lowBalanceMode !== 'notify_only';
+  if (
+    disarmsCardBackedMode &&
+    (await creditSessionsRepository.hasActiveSessionForWallet(wallet.id))
+  ) {
+    log.warn('Low-balance disarm refused — a session is live on the wallet', {
+      walletId: wallet.id,
+      companyId,
+    });
+    return 'refused_live_session';
+  }
+
   const result = await creditWalletsRepository.updateConfig(
-    walletId,
+    wallet.id,
     config.lowBalanceMode === 'auto_topup'
       ? {
           lowBalanceMode: config.lowBalanceMode,
@@ -445,7 +540,19 @@ export async function startPurchaseAction(
     const wallet = await ensureWallet(actor.companyId);
 
     // Config is a preference — persist it regardless of payment outcome.
-    // D3 EXEMPTION — the ONLY one. FIX ROUND (security MEDIUM-1 / review WARNING) — stated
+    //
+    // ⚠ TWO GUARDS, ONE CALL. This call site is EXEMPT from BAL-524's card-presence guard (the
+    // third argument, below) and SUBJECT to BAL-523's live-session disarm guard (the
+    // `refused_live_session` arm, below that). They are different predicates on different halves
+    // of the write, and the exemption is deliberately not a blanket one — see
+    // `persistLowBalanceConfig`'s docblock. BAL-523's guard is safe here for the reason BAL-524's
+    // was not: a brand-new wallet defaults to `notify_only`, so a FIRST purchase performs no
+    // disarm transition and is never refused; only a mid-consultation flip OUT of a card-backed
+    // mode is, and that returns BEFORE `createPurchaseIntent`, so no charge is made and the buyer
+    // can leave the picker alone and press Pay again.
+    //
+    // D3 EXEMPTION — the ONLY one, and from the CARD guard only. FIX ROUND (security MEDIUM-1 /
+    // review WARNING) — stated
     // honestly: this is an INTENT to establish the card, not a guarantee that it will exist.
     // The config write below commits UNCONDITIONALLY, before `createPurchaseIntent` even runs
     // and regardless of its outcome. If the buyer abandons the Payment Element, closes the tab
@@ -466,11 +573,15 @@ export async function startPurchaseAction(
     // So BAL-524 constrains one DIRECTION OF WRITE (a mode write must prove a card, unless
     // exempted), never the CONTENTS OF THE TABLE — this exemption is exactly why a card-backed
     // mode with no card can still exist after BAL-524, deliberately, on the purchase path.
-    await persistLowBalanceConfig(
-      wallet.id,
+    const configOutcome = await persistLowBalanceConfig(
+      wallet,
       input.config,
+      actor.companyId,
       'card_is_established_by_this_same_operation'
     );
+    if (configOutcome === 'refused_live_session') {
+      return { ok: false, error: 'settlement_outstanding' };
+    }
 
     const purchase = await createPurchaseIntent({
       walletId: wallet.id,
@@ -726,6 +837,21 @@ export async function validatePromoAction(code: string): Promise<ValidatePromoRe
  * `armSavedCardMandateAction` exists to move a pending mandate to active during THIS SAME Save,
  * so refusing the mode for a not-yet-active mandate would refuse the thing being armed. And never
  * `stripe_customer_id`, which deliberately SURVIVES a card clear (`clearSavedCard`).
+ *
+ * ⚠ BAL-523 (FIX ROUND 1 F3 / FIX ROUND 2 R4) — A SECOND, INDEPENDENT REFUSAL lives on this same
+ * Save: a save that moves the mode OUT of a card-backed value while a session is live on the
+ * wallet is refused as `settlement_outstanding`. The guard itself is in `persistLowBalanceConfig`
+ * (R4 moved it to the chokepoint, because `startPurchaseAction` is a second caller and bypassed
+ * it entirely); this function only MAPS its refusal onto `SaveConfigResult`. See that helper's
+ * docblock for the reasoning and for the three things the guard must never refuse.
+ *
+ * ⚠ THE TWO REFUSALS CANNOT BOTH FIRE ON ONE SAVE, so the order they are written in below is not
+ * a policy choice: BAL-524's arm needs a CARD-BACKED target mode, BAL-523's needs a `notify_only`
+ * target mode, and `notify_only` is not card-backed. (A wallet can certainly be in both hazardous
+ * STATES at once — no card AND a live session — but a single Save names exactly one target mode,
+ * and that mode selects which arm is even reachable.) The card guard is written first only
+ * because it is the cheaper check: it reads the wallet already in hand, while the disarm guard
+ * costs a `hasActiveSessionForWallet` round trip.
  */
 export async function saveLowBalanceConfigAction(
   rawInput: z.infer<typeof configSchema>
@@ -759,7 +885,15 @@ export async function saveLowBalanceConfigAction(
       });
     }
 
-    if ((await persistLowBalanceConfig(wallet.id, parsed.data)) === 'refused_no_card_on_file') {
+    // Both remaining refusals come back through the ONE chokepoint (BAL-523's R4 moved the
+    // live-session disarm guard into it, so `startPurchaseAction` — the in-call top-up composer,
+    // which renders the same mode picker — cannot bypass it). These arms MAP the shared outcome;
+    // neither is the guard itself.
+    const outcome = await persistLowBalanceConfig(wallet, parsed.data, actor.companyId);
+    if (outcome === 'refused_live_session') {
+      return { ok: false, error: 'settlement_outstanding' };
+    }
+    if (outcome === 'refused_no_card_on_file') {
       // The write's own guard refused: the card went away between the read above and this
       // statement. 0 rows affected — surfaced, never reported as a successful save.
       return refuseCardBackedModeWithoutCard({
