@@ -230,6 +230,60 @@ export const creditSessions = pgTable(
     // Settlement PaymentIntent (reconciliation; NEVER client-facing).
     stripePaymentIntentId: text('stripe_payment_intent_id'),
 
+    /**
+     * BAL-525 (ADR-1040 Amendment 5) — THE COLLECTION INSTRUMENT THE SESSION'S DEBT WAS INCURRED
+     * AGAINST. A snapshot of the wallet's Stripe pair, taken at `open()` and topped up WRITE-ONCE
+     * by the two terminal wallet-locked settlements (`end`, `settleFromPresence`) when the wallet
+     * was card-less at open. NEVER rewritten once set.
+     *
+     * WHY IT EXISTS: `settleOverdraft` re-reads the wallet at settlement time, so before this the
+     * instrument that collected a debt was not necessarily the instrument the debt was incurred
+     * against, and the database held no record of which one it had been (`stripe_payment_intent_id`
+     * above records the CHARGE, not the CARD).
+     *
+     * ⚠ EVIDENCE AND PREFERENCE, NEVER AUTHORITY — AND, IN THIS SLICE, BY CONSTRUCTION NEVER
+     * CHANGES WHAT GETS CHARGED. `resolveSettlementInstrument` returns the wallet's LIVE pair
+     * whenever this column is NULL or disagrees with it, and a VALUE-IDENTICAL pair when it
+     * agrees — so the Stripe ids `settleOverdraft` actually charges are always the live ones;
+     * this column only selects the `source` label (`'pinned'` vs `'wallet'`) and arms the
+     * disagreement warn. It never refuses to charge because the pin is gone, and it never
+     * redirects a charge away from the live pair. Making the pin authoritative — charging IT
+     * instead of the live pair when they disagree — decides who eats the loss when the pinned
+     * card is gone; the dunning sweep never re-charges — and that is BAL-535's ruling, not this
+     * column's.
+     *
+     * ⚠⚠ NEVER PIN THE MANDATE. The wallet's `mandate_status` / `mandate_ref` columns are
+     * DELIBERATELY ABSENT here and must stay absent — do NOT "complete the set". A pinned
+     * `'active'` consent record would let a client who revoked consent (or whose card Stripe
+     * detached) still be charged off-session on a stale snapshot. Pin the INSTRUMENT (a fact about
+     * the past); read the PERMISSION live at settlement time (a fact about now) —
+     * `end-session.ts`'s `settleOverdraft`, ADR-1040 Amendment 5 §C. The invariant suite
+     * (`session-debt-carries-its-collection-instrument.test.ts`) asserts by NAME that no
+     * `settlement_mandate_*` column exists here.
+     *
+     * ⚠ FEE/PII BOUNDARY: these are Stripe references, i.e. reconciliation data. They are absent
+     * from every projection allow-list above by construction (allow-lists, not deny-lists) and the
+     * credit-views negative assertions name them explicitly. Never add them to a client- or
+     * expert-bound view.
+     *
+     * NULL is a legitimate answer, not a defect: every pre-0085 row, and every session opened by a
+     * wallet with no card on file. All three are NULLABLE WITH NO DEFAULT for exactly that reason —
+     * a NOT NULL column is unshippable here, and the two zero settlement shapes (`missed_call` /
+     * `abandoned_wait`) never incur a debt at all. ⚠ THAT DOES NOT MEAN THOSE ROWS ARE ALWAYS
+     * UNPINNED, THOUGH: the BASE pin at `open()` runs unconditionally, before the outcome is
+     * known, so a `missed_call` / `abandoned_wait` row from a card-holding wallet still carries a
+     * pin — a debt-free row with a non-NULL pin is expected, not an anomaly to chase.
+     *
+     * NO INDEX, deliberately: nothing reads these in a WHERE / JOIN / ORDER BY, and this is the
+     * hottest write table in the credit domain (one UPDATE per metered minute). Add one when a
+     * named reader exists — the shape would mirror `credit_wallets`' own.
+     */
+    settlementStripeCustomerId: text('settlement_stripe_customer_id'),
+    settlementStripePaymentMethodId: text('settlement_stripe_payment_method_id'),
+    settlementInstrumentPinnedAt: timestamp('settlement_instrument_pinned_at', {
+      withTimezone: true,
+    }),
+
     // ── BAL-418 / ADR-1045 §3 — the meeting link + the denormalised engagement ──
     //
     // THEIR NULLABILITY IS INDEPENDENT — all four combinations are legal, which is why
@@ -394,6 +448,32 @@ export const creditSessions = pgTable(
     index('credit_sessions_presence_unsettled_idx')
       .on(t.durationSource, t.meetingId)
       .where(sql`${t.billingFinalizedAt} IS NULL AND ${t.deletedAt} IS NULL`),
+
+    // ── BAL-525 (ADR-1040 Amendment 5) — the settlement instrument pin ───────
+    //
+    // BOTH-OR-NEITHER, on two separate constraints so Postgres names the one that was violated.
+    // A HALF-SET PAIR IS UNCHARGEABLE: `createOffSessionCharge` requires BOTH `customer` and
+    // `payment_method`, so of the four combinations only both-NULL and both-set are meaningful.
+    // ⚠ This is the OPPOSITE ruling to `meeting_id`/`engagement_id` above, where all four
+    // combinations are legal and a pair CHECK is therefore deliberately refused — the difference
+    // is that two of these four are meaningless, not merely unused.
+    //
+    // ⚠ SAFE TO ADD TO A NON-EMPTY TABLE (the harness migrates an EMPTY database and so cannot
+    // prove this — memory `reference_db_migrations_tested_against_empty_db`): the three columns
+    // and both constraints ship in the SAME migration (0085), so every pre-existing row has all
+    // three NULL and satisfies both predicates by construction. No `NOT VALID` escape hatch is
+    // needed. No enum label appears in either predicate, so the `ALTER TYPE … ADD VALUE`
+    // in-one-transaction hazard recorded on `enums.ts` does not apply either.
+    check(
+      'credit_sessions_settlement_instrument_pair',
+      sql`(${t.settlementStripePaymentMethodId} IS NULL) = (${t.settlementStripeCustomerId} IS NULL)`
+    ),
+    // `pinned_at` with no instrument, or an instrument with no `pinned_at`, is equally
+    // meaningless — and would silently break the invariant suite's "pinned ⇒ dated" reading.
+    check(
+      'credit_sessions_settlement_instrument_pinned_at_pair',
+      sql`(${t.settlementStripePaymentMethodId} IS NULL) = (${t.settlementInstrumentPinnedAt} IS NULL)`
+    ),
   ]
 );
 

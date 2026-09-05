@@ -928,14 +928,16 @@ export async function applyStripeEffect(
       //    door's pre-clear wallet read at `mandate.ts` and its own transaction) BOTH doors also
       //    NOTIFY. Accepted for the same reason: suppressing one publish would risk suppressing
       //    the wrong one. Do not "fix" either.
-      // 4. THIS ARM CANNOT REFUSE, AND THE EXPOSURE IS BAL-525's (D13). The user door refuses
+      // 4. THIS ARM CANNOT REFUSE, AND THE EXPOSURE IS NOT CLOSED HERE. The user door refuses
       //    with `settlement_outstanding` during a live overdraft-grace session
       //    (`mandate.ts`'s `detachSavedCard`) — but that refusal lives in the SERVICE, not the
       //    primitive, so this arm inherits none of it, correctly: Stripe has ALREADY detached by
       //    the time this event arrives, so there is nothing left here to refuse. Mid-grace,
-      //    `settleOverdraft` will then find no mandate and fall to `openReceivableAndDun`. That
-      //    exposure is real and is exactly what BAL-525 (pin the collection instrument at
-      //    grace-grant) closes — cross-referenced here, NOT solved here.
+      //    `settleOverdraft` will then find no live mandate and fall to `openReceivableAndDun`.
+      //    ⚠ BAL-525 does NOT close that: it records on the session the instrument the debt was
+      //    incurred against and warns when that record and the wallet disagree, but consent is
+      //    read live and a detached card is dead at Stripe either way. Who absorbs a debt whose
+      //    instrument is gone is **BAL-535**'s ruling — cross-referenced here, solved nowhere yet.
       const { wallet, modeReconciled, previousLowBalanceMode } =
         await creditWalletsRepository.clearSavedCardAndReconcileMode(tx, effect.walletId, {
           actorUserId: null,

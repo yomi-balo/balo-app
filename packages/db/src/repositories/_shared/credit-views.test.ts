@@ -315,6 +315,10 @@ const FEE_BPS_SENTINEL = 6789; // markup bps — must never reach a client or ex
 const EXPERT_ACCRUED_SENTINEL = 93_195; // finalized expert pay (45 × 2071) — must never reach a client
 const STRIPE_PI_SENTINEL = 'pi_secret_settle_1'; // reconciliation ref — must never reach either lens
 const CLIENT_MINUTE_SENTINEL = 3040; // client rate/min — must never reach an expert
+// BAL-525 — the settlement instrument pin. Reconciliation references exactly like the PI above,
+// and absent from every allow-list by construction, so neither may reach a client OR expert lens.
+const SETTLEMENT_CUSTOMER_SENTINEL = 'cus_secret_pin_1';
+const SETTLEMENT_PM_SENTINEL = 'pm_secret_pin_1';
 
 function fullSession(overrides: Partial<CreditSession> = {}): CreditSession {
   return {
@@ -359,6 +363,12 @@ function fullSession(overrides: Partial<CreditSession> = {}): CreditSession {
     // a figure, and the recap must read this snapshot rather than re-derive `billable > actual`.
     floorApplied: null,
     stripePaymentIntentId: STRIPE_PI_SENTINEL,
+    // BAL-525 — the settlement instrument pin, POPULATED here for the same reason the PI above
+    // is: the allow-lists exclude it structurally, and a NULL would make the "never surfaces"
+    // assertions vacuous.
+    settlementStripeCustomerId: SETTLEMENT_CUSTOMER_SENTINEL,
+    settlementStripePaymentMethodId: SETTLEMENT_PM_SENTINEL,
+    settlementInstrumentPinnedAt: new Date('2026-07-20T11:00:00Z'),
     // BAL-418 — the meeting link + the denormalised engagement. Deliberately NOT added to
     // CLIENT_SESSION_MONEY_COLUMNS or the expert projection: neither is fee-bearing, but
     // those allow-lists are opt-in by design (BAL-399), so both stay off every lens.
@@ -381,6 +391,10 @@ describe('money-block projection allow-lists (invariant #4)', () => {
       'expertAccruedMinor',
       'baloFeeBps',
       'stripePaymentIntentId',
+      // BAL-525 — the settlement instrument pin. Reconciliation data exactly like the PI above;
+      // never on a client lens.
+      'settlementStripeCustomerId',
+      'settlementStripePaymentMethodId',
     ]) {
       expect(keys).not.toContain(excluded);
     }
@@ -393,6 +407,10 @@ describe('money-block projection allow-lists (invariant #4)', () => {
       'baloFeeBps',
       'overdraftSettledMinor',
       'stripePaymentIntentId',
+      // BAL-525 — the settlement instrument pin. Reconciliation data exactly like the PI above;
+      // never on an expert lens.
+      'settlementStripeCustomerId',
+      'settlementStripePaymentMethodId',
     ]) {
       expect(keys).not.toContain(excluded);
     }
@@ -411,6 +429,10 @@ describe('toClientMoneyBlock (invariant #1 — no expert economics / fee / margi
       'baloFeeBps',
       'marginAudMinor',
       'stripePaymentIntentId',
+      // BAL-525 — the settlement instrument pin. Reconciliation data exactly like the PI above;
+      // never on a client lens.
+      'settlementStripeCustomerId',
+      'settlementStripePaymentMethodId',
     ]) {
       expect(keys).not.toContain(forbidden);
     }
@@ -418,6 +440,8 @@ describe('toClientMoneyBlock (invariant #1 — no expert economics / fee / margi
     expect(serialized).not.toContain(String(EXPERT_MINUTE_SENTINEL));
     expect(serialized).not.toContain(String(EXPERT_ACCRUED_SENTINEL));
     expect(serialized).not.toContain(STRIPE_PI_SENTINEL);
+    expect(serialized).not.toContain(SETTLEMENT_CUSTOMER_SENTINEL);
+    expect(serialized).not.toContain(SETTLEMENT_PM_SENTINEL);
     // The all-in charge IS surfaced (client-safe) and equals connectedMinutes × client rate.
     expect(block.amountAudMinor).toBe(45 * CLIENT_MINUTE_SENTINEL);
   });
@@ -436,6 +460,10 @@ describe('toExpertMoneyBlock (invariant #2 — own earnings only)', () => {
       'marginAudMinor',
       'overdraftSettledMinor',
       'stripePaymentIntentId',
+      // BAL-525 — the settlement instrument pin. Reconciliation data exactly like the PI above;
+      // never on an expert lens.
+      'settlementStripeCustomerId',
+      'settlementStripePaymentMethodId',
     ]) {
       expect(keys).not.toContain(forbidden);
     }
@@ -443,6 +471,8 @@ describe('toExpertMoneyBlock (invariant #2 — own earnings only)', () => {
     expect(serialized).not.toContain(String(CLIENT_MINUTE_SENTINEL));
     expect(serialized).not.toContain(String(FEE_BPS_SENTINEL));
     expect(serialized).not.toContain(STRIPE_PI_SENTINEL);
+    expect(serialized).not.toContain(SETTLEMENT_CUSTOMER_SENTINEL);
+    expect(serialized).not.toContain(SETTLEMENT_PM_SENTINEL);
     // Own earnings ARE surfaced.
     expect(block.earningsAudMinor).toBe(EXPERT_ACCRUED_SENTINEL);
     expect(block.payoutStatus).toBe('recorded');

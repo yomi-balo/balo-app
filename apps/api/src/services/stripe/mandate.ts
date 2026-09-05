@@ -738,11 +738,12 @@ async function clearLocallyAndReconcile(input: {
  * ⚠ FIX ROUND (security MEDIUM) — refuses BEFORE any Stripe call when the wallet has a live
  * overdraft-grace session or the company has an open receivable. Without this, a client on
  * `keep_going`/`auto_topup` could let a consultation run into overdraft grace and pull the card
- * in a second tab: `settleOverdraft` then finds `mandateActive === false` and takes the
- * `openReceivableAndDun` branch instead of charging, and the dunning sweep only ever
- * RE-NOTIFIES — it never re-charges. The two guards are the SAME ones `auto-topup.ts`'s
- * between-session safe-to-charge gate already reads (`hasActiveSessionForWallet`,
- * `hasOpenReceivable`); reused here, not reinvented.
+ * in a second tab: `settleOverdraft` then re-checks `isWalletMandateActive(wallet)` against its
+ * OWN fresh wallet read (`end-session.ts:158`, BAL-525/O3 — no threaded boolean anymore), finds
+ * no live mandate, and takes the `openReceivableAndDun` branch instead of charging, and the
+ * dunning sweep only ever RE-NOTIFIES — it never re-charges. The two guards are the SAME ones
+ * `auto-topup.ts`'s between-session safe-to-charge gate already reads
+ * (`hasActiveSessionForWallet`, `hasOpenReceivable`); reused here, not reinvented.
  *
  * FIX ROUND 3 (N2) — `actorUserId` is the WEB Server Action's already-session-resolved actor,
  * threaded across the internal hop (never client-supplied — see `payment-method.ts`'s route

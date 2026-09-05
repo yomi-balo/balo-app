@@ -17,6 +17,7 @@ const {
   mockFinalizeBilling,
   mockPark,
   mockTriggerAutoTopup,
+  mockWarn,
 } = vi.hoisted(() => ({
   mockEnd: vi.fn(),
   mockMarkSettlementResult: vi.fn(),
@@ -34,10 +35,13 @@ const {
   mockFinalizeBilling: vi.fn(),
   mockPark: vi.fn(),
   mockTriggerAutoTopup: vi.fn(),
+  // BAL-525 — exposed (not an anonymous vi.fn() per call) so the O2/O3 warn lines are
+  // assertable, matching the sibling `settle-from-presence.test.ts` pattern.
+  mockWarn: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: {
@@ -80,6 +84,11 @@ const SESSION = {
   overdraftSettledMinor: 0,
   expertAccruedMinor: 500,
   settlementStatus: 'not_required',
+  // BAL-525 — the settlement instrument pin, matching MANDATE_WALLET below so every EXISTING
+  // test (which never mentions the pin) keeps its current charge-the-wallet-pair behaviour.
+  settlementStripeCustomerId: 'cus_1',
+  settlementStripePaymentMethodId: 'pm_1',
+  settlementInstrumentPinnedAt: new Date('2026-07-20T11:00:00Z'),
 };
 
 const MANDATE_WALLET = {
@@ -364,8 +373,17 @@ describe('endSession', () => {
     );
   });
 
-  it('opens a declined receivable when an overdraft has no usable mandate', async () => {
+  it('opens a declined receivable when the FRESH wallet read returns no wallet row at all', async () => {
+    // BAL-525 (O3): `settleOverdraft` ALWAYS reads the wallet now — the stale `mandateActive`
+    // boolean threaded from the committed terminal transaction no longer gates the read (it used
+    // to, via `mandateActive ? await creditWalletsRepository.findById(...) : undefined`, so this
+    // case previously never even reached the wallet). `beforeEach` defaults `mockFindWallet` to
+    // an ACTIVE-mandate wallet, so this test overrides it to `undefined` — no wallet row at all
+    // (e.g. a deleted wallet) — to prove the receivable path still works on that shape. This is
+    // the `wallet === undefined` arm of the guard, distinct from the sibling headline test below
+    // that pins the "wallet exists but its mandate is not live" arm.
     mockEnd.mockResolvedValue(endResult({ overdraftMinor: 700, mandateActive: false }));
+    mockFindWallet.mockResolvedValueOnce(undefined);
     const result = await endSession('session_1', 'user_1');
     expect(result).toEqual({
       ok: true,
@@ -377,6 +395,180 @@ describe('endSession', () => {
       {}
     );
   });
+
+  // ── BAL-525 (ADR-1040 Amendment 5) — the settlement instrument pin + the O3 consent fix ──
+
+  it('BAL-525 (O3, the headline): a stale committed mandateActive=true does NOT authorize a charge once the FRESH wallet has no live mandate', async () => {
+    // Simulates the real race this PR closes: `applySavedCardDisplay` swaps the card AND nulls
+    // `mandate_status` in one statement, landing in the window between the `end()` commit (which
+    // computed `mandateActive: true`) and settlement's own fresh read.
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 900, mandateActive: true }));
+    mockFindWallet.mockResolvedValueOnce({
+      mandateStatus: null,
+      stripeCustomerId: 'cus_new',
+      stripePaymentMethodId: 'pm_new',
+    });
+    const result = await endSession('session_1', 'user_1');
+    expect(result).toEqual({
+      ok: true,
+      result: { settlementStatus: 'failed', overdraftSettledMinor: 900 },
+    });
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+    expect(mockReceivableOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'settlement_declined', amountMinor: 900 }),
+      {}
+    );
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'settleOverdraft',
+        sessionId: 'session_1',
+        walletId: 'wallet_1',
+        mandateActiveAtCommit: true,
+        mandateActiveNow: false,
+      }),
+      expect.stringContaining('AT SETTLEMENT TIME')
+    );
+  });
+
+  it('BAL-525 (O3, the other half): a stale committed mandateActive=false does NOT block a charge once the FRESH wallet HAS a live mandate', async () => {
+    // The mirror of the headline test above — proves the fresh read authorizes in BOTH
+    // directions, not merely that it can deny. The committed-time observation said no mandate
+    // (e.g. the mandate was still `pending` when `end()` ran), but the mandate has since gone
+    // live (the SetupIntent confirmed between commit and settlement). `mockFindWallet` keeps its
+    // `beforeEach` default (`MANDATE_WALLET`, an active mandate), so nothing needs overriding
+    // here — that IS the point: the stale `false` must not carry forward and refuse the charge.
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 900, mandateActive: false }));
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    const result = await endSession('session_1', 'user_1');
+    expect(mockCreateOffSessionCharge).toHaveBeenCalledWith(
+      expect.objectContaining({ customerId: 'cus_1', paymentMethodId: 'pm_1' })
+    );
+    expect(result).toEqual({
+      ok: true,
+      result: { settlementStatus: 'processing', overdraftSettledMinor: 900 },
+    });
+  });
+
+  it('BAL-525 (O2): pin matches the live wallet — charges the pinned pair, no disagreement warn', async () => {
+    // SESSION's pin (cus_1/pm_1) already matches MANDATE_WALLET — the ordinary, unremarkable case.
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1200, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    await endSession('session_1', 'user_1');
+    expect(mockCreateOffSessionCharge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerId: 'cus_1',
+        paymentMethodId: 'pm_1',
+        idempotencyKey: 'overdraft_settlement:session_1',
+      })
+    );
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  it('BAL-525 (O2): pin disagrees with the live wallet — charges the LIVE pair and warns with both ids', async () => {
+    mockEnd.mockResolvedValue(
+      endResult({
+        overdraftMinor: 1200,
+        mandateActive: true,
+        session: {
+          ...SESSION,
+          settlementStripeCustomerId: 'cus_old',
+          settlementStripePaymentMethodId: 'pm_old',
+        },
+      })
+    );
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    await endSession('session_1', 'user_1');
+    // The LIVE pair is charged, never the stale pin (O2 — evidence and preference, not authority).
+    expect(mockCreateOffSessionCharge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerId: 'cus_1',
+        paymentMethodId: 'pm_1',
+        idempotencyKey: 'overdraft_settlement:session_1',
+      })
+    );
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'settleOverdraft',
+        sessionId: 'session_1',
+        walletId: 'wallet_1',
+        pinnedCustomerId: 'cus_old',
+        pinnedPaymentMethodId: 'pm_old',
+        livePaymentMethodId: 'pm_1',
+      }),
+      expect.stringContaining('pin disagrees with the wallet')
+    );
+  });
+
+  it('BAL-525 (O2): pin absent (legacy row) — charges the wallet pair, no disagreement warn', async () => {
+    mockEnd.mockResolvedValue(
+      endResult({
+        overdraftMinor: 1200,
+        mandateActive: true,
+        session: {
+          ...SESSION,
+          settlementStripeCustomerId: null,
+          settlementStripePaymentMethodId: null,
+          settlementInstrumentPinnedAt: null,
+        },
+      })
+    );
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    await endSession('session_1', 'user_1');
+    expect(mockCreateOffSessionCharge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerId: 'cus_1',
+        paymentMethodId: 'pm_1',
+        idempotencyKey: 'overdraft_settlement:session_1',
+      })
+    );
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  interface PinScenario {
+    label: string;
+    overrides: Partial<CreditSession>;
+  }
+
+  const PIN_SCENARIOS: readonly PinScenario[] = [
+    { label: 'pin agrees with the live wallet', overrides: {} },
+    {
+      label: 'pin disagrees with the live wallet',
+      overrides: {
+        settlementStripeCustomerId: 'cus_old',
+        settlementStripePaymentMethodId: 'pm_old',
+      },
+    },
+    {
+      label: 'pin absent (legacy row)',
+      overrides: {
+        settlementStripeCustomerId: null,
+        settlementStripePaymentMethodId: null,
+        settlementInstrumentPinnedAt: null,
+      },
+    },
+  ];
+
+  it.each(PIN_SCENARIOS)(
+    'BAL-525 (§6.5): the Stripe idempotency key does not vary by instrument — $label',
+    async ({ overrides }) => {
+      mockCreateOffSessionCharge.mockClear();
+      mockEnd.mockResolvedValue(
+        endResult({
+          overdraftMinor: 1200,
+          mandateActive: true,
+          session: { ...SESSION, ...overrides },
+        })
+      );
+      mockCreateOffSessionCharge.mockResolvedValue({
+        status: 'processing',
+        paymentIntentId: 'pi_1',
+      });
+      await endSession('session_1', 'user_1');
+      expect(mockCreateOffSessionCharge).toHaveBeenCalledWith(
+        expect.objectContaining({ idempotencyKey: 'overdraft_settlement:session_1' })
+      );
+    }
+  );
 
   it('is a no-op re-end for an already-ended session', async () => {
     mockEnd.mockResolvedValue(
@@ -542,6 +734,28 @@ describe('reconcileStuckSettlement', () => {
     });
     await reconcileStuckSettlement(stuck({}), { now: NOW });
     expect(mockCreateOffSessionCharge).toHaveBeenCalled();
+  });
+
+  it('BAL-525: threads mandateActiveAtCommit: null into settleOverdraft — there is no in-lock observation this many hours later', async () => {
+    mockRetrievePaymentIntentStatus.mockResolvedValue({
+      status: 'processing',
+      hardDeclined: false,
+    });
+    // Override the describe's default MANDATE_WALLET so the fresh read has no usable mandate —
+    // observable only via the warn log's `mandateActiveAtCommit` field, since
+    // `reconcileStuckSettlement` never computed an in-lock boolean of its own to assert on.
+    mockFindWallet.mockResolvedValueOnce(undefined);
+    await reconcileStuckSettlement(stuck({}), { now: NOW });
+    expect(mockCreateOffSessionCharge).not.toHaveBeenCalled();
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'settleOverdraft',
+        sessionId: 'session_1',
+        mandateActiveAtCommit: null,
+        mandateActiveNow: false,
+      }),
+      expect.stringContaining('AT SETTLEMENT TIME')
+    );
   });
 
   it('does NOT re-charge past the safe reconcile window (avoids a duplicate PaymentIntent)', async () => {

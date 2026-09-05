@@ -1,0 +1,5 @@
+ALTER TABLE "credit_sessions" ADD COLUMN "settlement_stripe_customer_id" text;--> statement-breakpoint
+ALTER TABLE "credit_sessions" ADD COLUMN "settlement_stripe_payment_method_id" text;--> statement-breakpoint
+ALTER TABLE "credit_sessions" ADD COLUMN "settlement_instrument_pinned_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "credit_sessions" ADD CONSTRAINT "credit_sessions_settlement_instrument_pair" CHECK (("credit_sessions"."settlement_stripe_payment_method_id" IS NULL) = ("credit_sessions"."settlement_stripe_customer_id" IS NULL));--> statement-breakpoint
+ALTER TABLE "credit_sessions" ADD CONSTRAINT "credit_sessions_settlement_instrument_pinned_at_pair" CHECK (("credit_sessions"."settlement_stripe_payment_method_id" IS NULL) = ("credit_sessions"."settlement_instrument_pinned_at" IS NULL));
