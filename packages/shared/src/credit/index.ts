@@ -30,6 +30,13 @@ export {
   type OverdraftGraceWalletFields,
 } from './settlement';
 export {
+  resolveSettlementInstrument,
+  type SettlementInstrument,
+  type SettlementInstrumentSource,
+  type ResolvedSettlementInstrument,
+  type SettlementInstrumentCandidates,
+} from './settlement-instrument';
+export {
   resolveMeetingSettlement,
   clampedExpertPresentMs,
   type MeetingSettlementShape,

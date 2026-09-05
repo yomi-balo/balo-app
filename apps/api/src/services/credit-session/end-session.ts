@@ -34,7 +34,11 @@ import {
   type CreditSettlementStatus,
 } from '@balo/db';
 import { CAPABILITIES } from '@balo/shared/authz';
-import { isWalletMandateActive, toSettleableSession } from '@balo/shared/credit';
+import {
+  isWalletMandateActive,
+  resolveSettlementInstrument,
+  toSettleableSession,
+} from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import { SETTLEMENT_RECONCILE_MAX_AGE_MINUTES } from '@balo/shared/pricing';
 import {
@@ -123,7 +127,14 @@ async function openReceivableAndDun(
 async function settleOverdraft(
   session: CreditSession,
   overdraftMinor: number,
-  mandateActive: boolean
+  /**
+   * ⚠⚠ OBSERVATION ONLY — NEVER A GATE. The mandate verdict computed inside the terminal
+   * wallet-locked transaction (`end`/`settleFromPresence`), which has since COMMITTED and
+   * dropped its lock. BAL-525 (O3): this value is logged so a flip between commit and
+   * settlement is greppable, and is NEVER used to decide whether to charge. `null` ⇒ no
+   * in-lock observation (the reconcile path, where the commit was hours ago).
+   */
+  observed: { mandateActiveAtCommit: boolean | null }
 ): Promise<EndSessionServiceResult> {
   const failed = (status: CreditSettlementStatus): EndSessionServiceResult => ({
     settlementStatus: status,
@@ -136,28 +147,79 @@ async function settleOverdraft(
   // a session is already in grace is still charged for that session — the grace opened under
   // consent that was live at the time, and gating settlement on the current mode would open a
   // payment-evasion window that breaks ADR-1040's "expert always gets paid, with no asterisk".
-  const wallet = mandateActive
-    ? await creditWalletsRepository.findById(session.walletId)
-    : undefined;
+  //
+  // ⚠ BAL-525: the mandate is now re-read on settlement's OWN fresh wallet row, not inherited
+  // from the committed terminal transaction — a stale `true` no longer authorizes a charge. The
+  // instrument is resolved through the session's pin (evidence and preference, never authority —
+  // ADR-1040 Amendment 5).
+  const wallet = await creditWalletsRepository.findById(session.walletId);
+  // ⚠ THE TWO NULL CHECKS BELOW ARE DELIBERATE, NOT REDUNDANT WITH `isWalletMandateActive`. That
+  // predicate already implies both ids are non-null when it returns `true` (`settlement.ts`'s
+  // docblock), but it returns a plain `boolean`, not a type guard — TypeScript cannot narrow
+  // `wallet.stripeCustomerId` / `wallet.stripePaymentMethodId` from it alone. Removing these two
+  // checks as an "obvious" simplification breaks the build below, where both are read as
+  // non-nullable (`resolveSettlementInstrument`'s `live` field, `createOffSessionCharge`'s args).
   if (
     wallet === undefined ||
+    !isWalletMandateActive(wallet) ||
     wallet.stripeCustomerId === null ||
     wallet.stripePaymentMethodId === null
   ) {
     log.warn(
-      { sessionId: session.id, overdraftMinor },
-      'Overdraft with no usable mandate — opening receivable + dunning'
+      {
+        op: 'settleOverdraft',
+        sessionId: session.id,
+        walletId: session.walletId,
+        overdraftMinor,
+        mandateActiveAtCommit: observed.mandateActiveAtCommit,
+        mandateActiveNow: false,
+      },
+      'Overdraft with no usable mandate AT SETTLEMENT TIME — opening receivable + dunning'
     );
     await openReceivableAndDun(session, overdraftMinor, 'declined', null);
     return failed('failed');
+  }
+
+  // BAL-525 (O2) — resolve the settlement instrument. By construction the pair actually charged
+  // below is ALWAYS the wallet's LIVE pair in this slice: the absent-pin and disagree branches of
+  // `resolveSettlementInstrument` return `live` directly, and the agree branch returns a
+  // value-identical pair. The pin only selects the `source` label (for the log line below) and
+  // arms the disagreement warn — it never redirects a charge away from the live pair. Making the
+  // pin authoritative instead is BAL-535's ruling, not this one's — see
+  // `resolveSettlementInstrument`'s docblock and the invariant suite's anti-collapse assertions.
+  const instrument = resolveSettlementInstrument({
+    pinned: {
+      customerId: session.settlementStripeCustomerId,
+      paymentMethodId: session.settlementStripePaymentMethodId,
+    },
+    live: { customerId: wallet.stripeCustomerId, paymentMethodId: wallet.stripePaymentMethodId },
+  });
+
+  if (instrument.pinDisagrees) {
+    // The detection surface (O2) — the first alarm this class of event has ever had.
+    log.warn(
+      {
+        op: 'settleOverdraft',
+        sessionId: session.id,
+        walletId: session.walletId,
+        overdraftMinor,
+        pinnedCustomerId: session.settlementStripeCustomerId,
+        pinnedPaymentMethodId: session.settlementStripePaymentMethodId,
+        livePaymentMethodId: wallet.stripePaymentMethodId,
+        pinnedAt: session.settlementInstrumentPinnedAt,
+        mandateActiveAtCommit: observed.mandateActiveAtCommit,
+      },
+      'Settlement instrument pin disagrees with the wallet — charging the live instrument ' +
+        '(BAL-525: the pin is evidence and preference, never authority)'
+    );
   }
 
   try {
     const result = await createOffSessionCharge({
       reason: 'overdraft_settlement',
       walletId: session.walletId,
-      customerId: wallet.stripeCustomerId,
-      paymentMethodId: wallet.stripePaymentMethodId,
+      customerId: instrument.customerId,
+      paymentMethodId: instrument.paymentMethodId,
       currency: 'aud',
       amountMinor: overdraftMinor,
       idempotencyKey: settlementIdempotencyKey(session.id),
@@ -175,7 +237,12 @@ async function settleOverdraft(
         stripePaymentIntentId: result.paymentIntentId,
       });
       log.info(
-        { sessionId: session.id, paymentIntentId: result.paymentIntentId, overdraftMinor },
+        {
+          sessionId: session.id,
+          paymentIntentId: result.paymentIntentId,
+          overdraftMinor,
+          instrumentSource: instrument.source,
+        },
         'Overdraft settlement processing — awaiting webhook'
       );
       return failed('processing');
@@ -216,14 +283,19 @@ async function settleOverdraft(
  * `settleSessionFromPresence` (`./settle-from-presence.ts`) — see the module docblock for why
  * this is ONE implementation rather than two.
  *
- * ⚠ Takes the ALREADY-COMMITTED `session` + its terminal `overdraftMinor` / `mandateActive` —
- * it does NO money arithmetic of its own and writes NO further row beyond what `finalizeBilling`
- * / `settleOverdraft` already do.
+ * ⚠ Takes the ALREADY-COMMITTED `session` + its terminal `overdraftMinor` / `mandateActiveAtCommit`
+ * — it does NO money arithmetic of its own and writes NO further row beyond what
+ * `finalizeBilling` / `settleOverdraft` already do.
+ *
+ * ⚠ BAL-525: `mandateActiveAtCommit` is OBSERVATION ONLY past this point — it is threaded into
+ * `settleOverdraft` purely so a flip between commit and settlement is greppable in the logs.
+ * `settleOverdraft` re-verifies the mandate itself on its own fresh wallet read and never trusts
+ * this value to decide whether to charge.
  */
 export async function finalizeAndSettle(
   session: CreditSession,
   overdraftMinor: number,
-  mandateActive: boolean,
+  mandateActiveAtCommit: boolean,
   finalizationPath: CreditFinalizationPath,
   now: Date
 ): Promise<EndSessionServiceResult> {
@@ -260,7 +332,7 @@ export async function finalizeAndSettle(
   }
 
   // 3b. Overdraft — settle off-session against the company mandate.
-  return settleOverdraft(session, overdraftMinor, mandateActive);
+  return settleOverdraft(session, overdraftMinor, { mandateActiveAtCommit });
 }
 
 /**
@@ -523,9 +595,10 @@ export async function reconcileStuckSettlement(
   }
 
   // 3. Within the window + actionable → re-invoke the session-keyed charge (same PI, no double-charge).
-  const wallet = await creditWalletsRepository.findById(session.walletId);
-  const mandateActive = wallet !== undefined && isWalletMandateActive(wallet);
-  await settleOverdraft(session, overdraftMinor, mandateActive);
+  // BAL-525 — `settleOverdraft` reads the wallet and re-verifies the mandate itself. There is no
+  // in-lock observation to pass here: this session committed up to
+  // SETTLEMENT_RECONCILE_MAX_AGE_MINUTES ago.
+  await settleOverdraft(session, overdraftMinor, { mandateActiveAtCommit: null });
   log.info(
     { sessionId: session.id, overdraftMinor },
     'Reconciled stuck settlement (re-charged within window)'

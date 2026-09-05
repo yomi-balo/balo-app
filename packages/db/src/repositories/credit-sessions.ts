@@ -13,6 +13,11 @@ import {
   or,
   sql,
 } from 'drizzle-orm';
+// BAL-525 — the two pin helpers return partial column assignments containing raw `sql` fragments
+// (`now()`, `COALESCE(...)`), which `Partial<NewCreditSession>` cannot express: `$inferInsert`
+// types the columns as `Date`/`string`, and only Drizzle's own insert/update value types admit an
+// `SQL` in a column position. Write-once must be enforced in SQL, so these are the correct types.
+import type { PgInsertValue, PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import {
   applyBaloFee,
   deriveMinuteRateCents,
@@ -884,6 +889,80 @@ export interface SessionStatementContextRow {
   agencyName: string | null;
 }
 
+/**
+ * BAL-525 — the wallet fields the settlement-instrument pin is taken from. STRUCTURAL on purpose,
+ * so any wallet-shaped row is assignable without a `CreditWallet` import (the house posture in
+ * `@balo/shared/credit`).
+ */
+interface PinnableWallet {
+  stripeCustomerId: string | null;
+  stripePaymentMethodId: string | null;
+}
+
+/**
+ * BAL-525 (ADR-1040 Amendment 5) — the BASE pin: the Stripe instrument on file BEFORE this
+ * session's debt could exist, taken at `open()` from the wallet already read under the advisory
+ * lock. `open()` refuses to open onto a negative balance or a `processing` settlement, so the pin
+ * is bound to a clean baseline.
+ *
+ * Empty when the wallet holds no card — the pair CHECK requires both-or-neither, so a half-set
+ * write is structurally impossible from here, and NULL is a legitimate answer (see the schema
+ * docblock).
+ *
+ * ⚠ `now()` IS THE DB'S TRANSACTION TIME, never a JS `Date`: DB time removes app↔DB clock skew
+ * (the `cardUpdatedAt` precedent in `credit-wallets.ts`).
+ *
+ * EXACTLY ONE CALLER (`open` — the only production INSERT into `credit_sessions`). The count is
+ * asserted by `packages/db/src/invariants/session-debt-carries-its-collection-instrument.test.ts`.
+ */
+function settlementInstrumentBasePin(
+  wallet: PinnableWallet
+): Partial<PgInsertValue<typeof creditSessions>> {
+  const { stripeCustomerId, stripePaymentMethodId } = wallet;
+  if (stripeCustomerId === null || stripePaymentMethodId === null) {
+    return {};
+  }
+  return {
+    settlementStripeCustomerId: stripeCustomerId,
+    settlementStripePaymentMethodId: stripePaymentMethodId,
+    settlementInstrumentPinnedAt: sql`now()`,
+  };
+}
+
+/**
+ * BAL-525 (ADR-1040 Amendment 5) — the WRITE-ONCE TOP-UP pin, for the two TERMINAL wallet-locked
+ * settlements. Rescues the "opened card-less, then a card was added, then the balance went
+ * negative" shape without letting a SWAP through: `COALESCE` means an already-pinned session keeps
+ * its original instrument, and the wallet it reads from was read under the same lock that posted
+ * the debt.
+ *
+ * ⚠ WRITE-ONCE IS ENFORCED IN SQL, NOT BY THE CALLER'S GUARD. `COALESCE` over the row's own
+ * pre-UPDATE value (Postgres evaluates SET expressions against the old tuple) is the same
+ * technique `applySavedCardDisplay` uses (`credit-wallets.ts`) and for the same reason: a guard a
+ * later editor can drop is not an invariant. Both callers hold the session's `FOR UPDATE` row lock
+ * as well, so this is belt AND braces.
+ *
+ * ⚠ `now()` IS THE DB'S TRANSACTION TIME, never a JS `Date` — a `Date` inside a raw `sql` template
+ * throws at bind time (memory `reference_date_in_raw_sql_template_throws`), and DB time removes
+ * app↔DB clock skew.
+ *
+ * EXACTLY TWO CALLERS (`end`, `settleFromPresence`). A third would mean someone pinned somewhere
+ * that is not a terminal settlement, and the invariant suite's drift alarm fails on the count.
+ */
+function settlementInstrumentTopUpPin(
+  wallet: PinnableWallet
+): PgUpdateSetSource<typeof creditSessions> {
+  const { stripeCustomerId, stripePaymentMethodId } = wallet;
+  if (stripeCustomerId === null || stripePaymentMethodId === null) {
+    return {};
+  }
+  return {
+    settlementStripeCustomerId: sql`COALESCE(${creditSessions.settlementStripeCustomerId}, ${stripeCustomerId})`,
+    settlementStripePaymentMethodId: sql`COALESCE(${creditSessions.settlementStripePaymentMethodId}, ${stripePaymentMethodId})`,
+    settlementInstrumentPinnedAt: sql`COALESCE(${creditSessions.settlementInstrumentPinnedAt}, now())`,
+  };
+}
+
 export const creditSessionsRepository = {
   /**
    * The pre-connect funds-or-mandate gate + hold + create-pending, in ONE wallet-locked
@@ -1030,6 +1109,10 @@ export const creditSessionsRepository = {
           // of BAL-466, `openSession` passes it for every session `joinMeetingAsMember` opens
           // at admission — see the coherence guard's docblock (`open-session.ts`, D4/G1).
           durationSource: input.durationSource ?? 'live_capture',
+          // BAL-525 — the base pin, from the wallet read at step 2 under the SAME advisory lock,
+          // so no card write can land between that read and this INSERT. Absent (all three NULL)
+          // when the wallet holds no card. See `settlementInstrumentBasePin`.
+          ...settlementInstrumentBasePin(wallet),
         })
         .returning();
       if (session === undefined) {
@@ -1650,8 +1733,12 @@ export const creditSessionsRepository = {
    * the `credit_session.expert_accrued` audit row (the expert-always-paid record, committed
    * BEFORE any charge) → set `status='ended'`, `endedAt`, `overdraftSettledMinor`, and
    * `settlementStatus` (`not_required` when in credit, else `processing`). This method is
-   * PURE DB — it never calls Stripe; it returns `overdraftMinor` + `mandateActive` for the
-   * service to drive the off-session charge. Idempotent on an already-`ended` session.
+   * PURE DB — it never calls Stripe; it returns `overdraftMinor` + `mandateActive`. ⚠ BAL-525
+   * (O3): `mandateActive` is OBSERVATION ONLY as of this PR — it drives NOTHING. It is threaded
+   * through to `settleOverdraft` purely so a flip between this commit and settlement time is
+   * greppable in the logs; the service re-checks `isWalletMandateActive` on its OWN fresh wallet
+   * read before ever charging (`end-session.ts`'s `settleOverdraft`). Idempotent on an
+   * already-`ended` session.
    *
    * BAL-399: the terminal UPDATE also stamps `billingFinalizedAt = now` + `finalizationPath`
    * (default `'live_capture'`) — the single "money block is finalized" marker the recap reads.
@@ -1736,6 +1823,13 @@ export const creditSessionsRepository = {
           // BAL-399: finalize the money block in the same terminal UPDATE.
           billingFinalizedAt: now,
           finalizationPath,
+          // BAL-525 — write-once top-up, from the terminal wallet read above (the same read whose
+          // `balanceMinor` produced `overdraftMinor`), under the wallet lock. NO-OP when the
+          // session is already pinned — the COALESCE is in SQL, not in a caller guard. This is
+          // ALSO shape E's (`external` / BAL-133) pin: `applyExternalDuration` posts the debt in
+          // an earlier transaction and reads no wallet, so this is the first wallet read after
+          // that debt, under the lock, in the transaction that computes the settled figure.
+          ...settlementInstrumentTopUpPin(wallet),
         })
         .where(eq(creditSessions.id, session.id))
         .returning();
@@ -1806,7 +1900,10 @@ export const creditSessionsRepository = {
    * bypasses `settleSessionFromPresence`.
    *
    * ⚠ IT DOES NOT CALL STRIPE. Pure DB, like `end()`: it returns `overdraftMinor` +
-   * `mandateActive` for the service to drive the off-session charge.
+   * `mandateActive`. ⚠ BAL-525 (O3): `mandateActive` is OBSERVATION ONLY as of this PR — it
+   * drives NOTHING. It rides through to `settleOverdraft` purely so a flip between this commit
+   * and settlement time is greppable in the logs; the service re-checks `isWalletMandateActive`
+   * on its OWN fresh wallet read before ever charging (`end-session.ts`'s `settleOverdraft`).
    *
    * ⚠ BAL-466 wires the enabling condition — reachable from a `duration_source='presence'`
    * session, which `joinMeetingAsMember` now opens at admission to a `case` meeting.
@@ -2017,6 +2114,11 @@ export const creditSessionsRepository = {
           settlementStatus: overdraftMinor === 0 ? 'not_required' : 'processing',
           billingFinalizedAt: input.now,
           finalizationPath: 'presence',
+          // BAL-525 — write-once top-up, from the terminal wallet read at step 6 (the same read
+          // whose `balanceMinor` produced `overdraftMinor`). The ticks at step 5 and this pin are
+          // one transaction under one wallet lock, so no card write can interleave between the
+          // debt and the pin. NO-OP when already pinned — the COALESCE is in SQL.
+          ...settlementInstrumentTopUpPin(wallet),
         })
         .where(eq(creditSessions.id, session.id))
         .returning();
