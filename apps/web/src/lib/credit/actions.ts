@@ -1003,7 +1003,7 @@ export async function armSavedCardMandateAction(
 
 /** Outcome of starting the settings Add/Change card capture panel. */
 export type StartCardCaptureResult =
-  | { ok: true; clientSecret: string; publishableKey: string }
+  | { ok: true; clientSecret: string; setupIntentId: string; publishableKey: string }
   | { ok: false; error: 'unauthorized' | 'unconfigured' | 'settlement_outstanding' | 'error' };
 
 /**
@@ -1061,8 +1061,23 @@ export async function startCardCaptureAction(): Promise<StartCardCaptureResult> 
       }
     }
 
-    const { clientSecret } = await createMandateSetupIntent(wallet.id, actor.userId);
-    return { ok: true, clientSecret, publishableKey };
+    // FIX ROUND 2 (F-F) — unlike `startContinueToMandate` (redeem), this does NOT fail closed
+    // when `setupIntentId` is missing from this (unvalidated `as T`-cast) response. A deliberate
+    // divergence, not an oversight.
+    //
+    // What actually happens in that degraded case: `rememberSetupIntent` no-ops on a non-string,
+    // so no binding is written; the 3DS return then arrives UNBOUND and the redirect hook is
+    // correctly inert. The card IS still saved — `setup_intent.succeeded` remains the sole writer
+    // of mandate state — but the client sees no acknowledgement until the next server render.
+    //
+    // ⚠ Do NOT justify this with the `syncing` sync-poll fallback: that path is unreachable here.
+    // Without a binding the hook never calls `enterSyncing()`, so `phase` never becomes
+    // `'syncing'` and the poll effect returns at its first line. The real trade is: a silently
+    // unacknowledged capture (recoverable — the card is on file) beats refusing a capture the
+    // client can otherwise complete. Redeem refuses instead because it has no equivalent
+    // next-render surface to recover on.
+    const { clientSecret, setupIntentId } = await createMandateSetupIntent(wallet.id, actor.userId);
+    return { ok: true, clientSecret, setupIntentId, publishableKey };
   } catch (error) {
     // FIX ROUND (security LOW) — see `armSavedCardMandateAction`'s catch for why `companyId` and
     // nothing card-shaped belongs here.

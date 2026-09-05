@@ -7,6 +7,12 @@ import { CheckCircle2, CreditCard, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { track, PROMO_EVENTS } from '@/lib/analytics';
 import { getStripe } from '@/lib/stripe-loader';
+import { useSetupIntentRedirectReturn } from '@/lib/stripe/use-setup-intent-redirect-return';
+import {
+  forgetSetupIntent,
+  isSetupIntentReturnBound,
+  rememberSetupIntent,
+} from '@/lib/stripe/setup-intent-return';
 import { startContinueToMandate } from '../_actions/start-continue-to-mandate';
 
 /**
@@ -41,11 +47,6 @@ const FORBIDDEN_MESSAGE = 'Ask an owner or admin to add a card for your team.';
 const REDIRECT_RETRY_MESSAGE =
   "That card couldn't be confirmed. You can add another to keep going.";
 
-/** Strip the Stripe redirect-return query params so a refresh doesn't re-confirm the card. */
-function clearRedirectParams(): void {
-  globalThis.history.replaceState(null, '', globalThis.location.pathname);
-}
-
 /**
  * The card-capture form, mounted inside <Elements>. Confirms the SetupIntent and calls
  * `onCaptured` on success. `useStripe`/`useElements` are null until Elements is ready.
@@ -65,7 +66,15 @@ function MandateCardForm({ onCaptured }: Readonly<{ onCaptured: () => void }>): 
     try {
       const { error: confirmError } = await stripe.confirmSetup({
         elements,
-        confirmParams: { return_url: globalThis.location.href },
+        // A2 (security) — NEVER `location.href`. An unbound return is now deliberately LEFT in
+        // the URL (correct for the griefing threat this ticket closes), so `location.href` would
+        // bake any crafted `?setup_intent=…` already present into `return_url`, and Stripe would
+        // append a SECOND, genuine pair after it. `URLSearchParams.get` reads the FIRST
+        // (attacker's) pair, so the real return would go unmatched — the user's own capture would
+        // silently vanish. Origin + pathname only, never the query string.
+        confirmParams: {
+          return_url: `${globalThis.location.origin}${globalThis.location.pathname}`,
+        },
         redirect: 'if_required',
       });
       if (confirmError) {
@@ -120,11 +129,15 @@ export function ContinueToMandate({
   // Locked decision #3: fire when the continue prompt renders (BAL-378 owns the true
   // consume-time "balance exhausted" trigger).
   useEffect(() => {
-    // A 3DS/SCA redirect return re-mounts this component with `setup_intent_client_secret`
-    // in the URL — that is a card confirmation, not a fresh prompt render, so the
-    // prompt-shown event must not fire again for it.
-    const params = new URLSearchParams(globalThis.location.search);
-    if (params.get('setup_intent_client_secret') !== null) {
+    // A 3DS/SCA redirect return re-mounts this component with the SetupIntent params in the
+    // URL — that is a card confirmation, not a fresh prompt render, so the prompt-shown event
+    // must not fire again for it. BAL-526 — this is now BOUND, not a raw params check: a
+    // crafted `/redeem` link is no longer treated as a confirmation return, so the component
+    // really is rendering a fresh prompt and PROMO_CONTINUE_PROMPT_SHOWN correctly fires for it.
+    // Genuine returns are still suppressed. Declared before the redirect hook — both read the
+    // binding synchronously on mount, before any `await` resolves, so ordering is safe either
+    // way, but this makes the read-then-clear sequence obvious.
+    if (isSetupIntentReturnBound()) {
       return;
     }
     track(PROMO_EVENTS.PROMO_CONTINUE_PROMPT_SHOWN, { company_id: companyId });
@@ -134,6 +147,9 @@ export function ContinueToMandate({
     startTransition(async () => {
       const result = await startContinueToMandate();
       if (result.status === 'ready') {
+        // BAL-526 — bind the SetupIntent BEFORE `<Elements>` can mount, so the binding always
+        // exists before any `confirmSetup` can redirect.
+        rememberSetupIntent(result.setupIntentId);
         setPhase({
           kind: 'form',
           clientSecret: result.clientSecret,
@@ -154,56 +170,44 @@ export function ContinueToMandate({
   }, []);
 
   const handleCaptured = useCallback(() => {
-    track(PROMO_EVENTS.PROMO_CONTINUE_CARD_CAPTURED, { company_id: companyId });
-    toast.success("Card added — you're set to keep going.");
+    // BAL-526 — the writer is the clearer for the non-redirect path; idempotent, so the
+    // double-clear on the redirect path (the hook already cleared it) is harmless. Guarded —
+    // cannot throw — so it stays ahead of the phase update.
+    forgetSetupIntent();
+    // F-B — `setPhase` MUST run before anything that can throw. `track()` → `posthog.capture` is
+    // unguarded (no try/catch anywhere on that path), and this is also the hook's `onSucceeded`:
+    // a throw here used to run BEFORE the phase update, so a posthog failure left the redirect
+    // path stuck on "Finishing up…" forever even though the card was already saved server-side.
+    // The hook's own docblock (see B3/F-E) deliberately lets that throw escape as an unhandled
+    // rejection rather than swallowing it — Sentry still sees it — but only because callers are
+    // expected to set their state first, which is what this ordering now guarantees.
     setPhase({ kind: 'captured' });
+    // REVIEW (PR #277) — `track()` goes LAST, after the toast. It is the only call here that can
+    // throw, so anything sequenced after it is skipped on a posthog failure. Hoisting `setPhase`
+    // alone protected the phase but still let a throw swallow the success toast; ordering every
+    // user-visible effect ahead of analytics closes that remainder.
+    toast.success("Card added — you're set to keep going.");
+    track(PROMO_EVENTS.PROMO_CONTINUE_CARD_CAPTURED, { company_id: companyId });
   }, [companyId]);
 
-  // 3DS/SCA return (BAL-383). A card that needs authentication on mandate setup redirects the
-  // browser away and back to /redeem with `setup_intent_client_secret` + `redirect_status`; the
-  // inline confirm path never runs on that return. Retrieve the SetupIntent and mirror the same
-  // success side-effects. The BAL-382 `setup_intent.succeeded` webhook stays the source of truth
-  // for the mandate — this only confirms in the UI a card the webhook persists.
-  useEffect(() => {
-    const params = new URLSearchParams(globalThis.location.search);
-    const clientSecret = params.get('setup_intent_client_secret');
-    if (clientSecret === null) {
-      return;
-    }
-    const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      // Unconfigured (e.g. a preview env): skip the retrieve rather than crash the page.
-      return;
-    }
-    let cancelled = false;
-    setPhase({ kind: 'finishing' });
-    getStripe(publishableKey)
-      .then(async (stripe): Promise<void> => {
-        if (stripe === null || cancelled) {
-          return;
-        }
-        const { setupIntent } = await stripe.retrieveSetupIntent(clientSecret);
-        if (cancelled) {
-          return;
-        }
-        if (setupIntent?.status === 'succeeded') {
-          clearRedirectParams();
-          handleCaptured();
-          return;
-        }
-        if (setupIntent?.status === 'processing') {
-          // Leave the params in place so a refresh re-checks; the webhook finalises it.
-          setPhase({ kind: 'finishing' });
-          return;
-        }
-        clearRedirectParams();
-        setPhase({ kind: 'error', message: REDIRECT_RETRY_MESSAGE });
-      })
-      .catch(() => undefined);
-    return (): void => {
-      cancelled = true;
-    };
-  }, [handleCaptured]);
+  // BAL-526 — the shared 3DS/SCA redirect-return hook, bound to the SetupIntent this tab
+  // actually started. An unbound/crafted return is completely inert (see the hook's docblock).
+  // `handleCaptured` is both the inline (non-redirect) success handler AND the hook's
+  // `onSucceeded`.
+  const handleRedirectStarted = useCallback(() => setPhase({ kind: 'finishing' }), []);
+  const handleRedirectProcessing = useCallback(() => setPhase({ kind: 'finishing' }), []);
+  const handleRedirectFailed = useCallback(
+    (message: string) => setPhase({ kind: 'error', message }),
+    []
+  );
+
+  useSetupIntentRedirectReturn({
+    retryMessage: REDIRECT_RETRY_MESSAGE,
+    onStarted: handleRedirectStarted,
+    onSucceeded: handleCaptured,
+    onProcessing: handleRedirectProcessing,
+    onFailed: handleRedirectFailed,
+  });
 
   if (phase.kind === 'captured' || phase.kind === 'active') {
     const message =

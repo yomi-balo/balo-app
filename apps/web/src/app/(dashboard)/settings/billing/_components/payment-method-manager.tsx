@@ -9,10 +9,11 @@ import { SavedCardRow } from '@/components/billing/top-up/SavedCardRow';
 import type { SavedCard } from '@/components/billing/top-up/types';
 import type { LowBalanceMode } from '@/lib/credit/actions';
 import { removeSavedCardAction } from '@/lib/credit/actions';
-import { getStripe } from '@/lib/stripe-loader';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
+import { useSetupIntentRedirectReturn } from '@/lib/stripe/use-setup-intent-redirect-return';
 import { CardCapturePanel } from './card-capture-panel';
 import { RemoveCardConfirm } from './remove-card-confirm';
+import { STRIPE_UNCONFIGURED_MESSAGE } from './messages';
 
 interface PaymentMethodManagerProps {
   /** The EFFECTIVE saved card (coordinator's `cardRemoved` local-optimism already applied). */
@@ -25,7 +26,6 @@ interface PaymentMethodManagerProps {
 
 type Phase = 'idle' | 'capturing' | 'finishing' | 'syncing';
 
-const UNCONFIGURED_MESSAGE = "Card payments aren't configured right now. Please try again later.";
 const REMOVE_FAILURE_MESSAGE = "We couldn't remove that card — please try again.";
 const REDIRECT_RETRY_MESSAGE = "That card couldn't be confirmed. You can try again.";
 const SYNC_FALLBACK_MESSAGE = "Your card was saved — refresh if you don't see it in a moment.";
@@ -48,11 +48,6 @@ const SETTLEMENT_OUTSTANDING_MESSAGE =
 /** Bounded refresh-poll budget for the post-capture sync (design: "a few seconds total"). */
 const SYNC_MAX_RETRIES = 2;
 const SYNC_RETRY_DELAY_MS = 1500;
-
-/** Strip the Stripe redirect-return query params so a refresh doesn't re-confirm the card. */
-function clearRedirectParams(): void {
-  globalThis.history.replaceState(null, '', globalThis.location.pathname);
-}
 
 /**
  * Compare the display-relevant fields only — enough to detect "the refreshed prop is the new
@@ -85,13 +80,17 @@ function sameSavedCard(a: SavedCard | null, b: SavedCard | null): boolean {
  * dialog, as one phase machine (`idle | capturing | finishing | syncing`, plus the remove
  * dialog's own open/pending flags — a removal overlays `idle`, it does not replace it).
  *
- * `finishing` and `syncing` mirror `continue-to-mandate.tsx`'s redirect-return handling, adapted
- * for TWO capture entry points (Add empty-state, Change over an existing row) and for refreshing
- * the settings data afterward instead of just showing a static checkmark:
- *  - `finishing` — a mount effect (this component is ALWAYS mounted, unlike the capture panel)
- *    checks `?setup_intent_client_secret=` on mount; `succeeded` moves to `syncing`, `processing`
- *    stays `finishing` (params kept so a refresh re-checks), anything else clears the params and
- *    shows a transient inline retry message.
+ * `finishing` and `syncing` mirror `continue-to-mandate.tsx`'s redirect-return handling — both
+ * consume the shared `useSetupIntentRedirectReturn` hook (BAL-526), which is bound to the
+ * SetupIntent this tab actually started (`@/lib/stripe/setup-intent-return`) so a crafted
+ * `?setup_intent=` link cannot paint a false "Card saved" here — adapted for TWO capture entry
+ * points (Add empty-state, Change over an existing row) and for refreshing the settings data
+ * afterward instead of just showing a static checkmark:
+ *  - `finishing` — entered when the hook's `onStarted` fires for a BOUND return (this component
+ *    is ALWAYS mounted, unlike the capture panel); `onSucceeded` moves to `syncing`,
+ *    `onProcessing` stays `finishing` (params + binding kept so a refresh re-checks), `onFailed`
+ *    shows a transient inline retry message. An unbound/crafted return is completely inert — no
+ *    phase change at all.
  *  - `syncing` — `router.refresh()` was just called; if the incoming `card` prop still equals the
  *    PRE-capture snapshot after up to two more refreshes (1500ms apart), fall back to an honest
  *    "refresh if you don't see it" line rather than spinning forever.
@@ -121,7 +120,30 @@ export function PaymentMethodManager({
   const preCaptureSnapshotRef = useRef<SavedCard | null>(null);
   const syncRetriesRef = useRef(0);
   const cardRef = useRef(card);
-  cardRef.current = card;
+  // BAL-526 (bundled (b)) — AN EFFECT, NOT A RENDER-PHASE WRITE. Declared before the redirect
+  // hook so the ref is current before `handleRedirectStarted` reads it. `useRef(card)` above
+  // already seeds it on the first render, so mount ordering is safe either way — this effect
+  // exists for every render after.
+  //
+  // ⚠ HONESTY NOTE (FIX ROUND 1, B2) — this is the CORRECT React pattern (a render pass must not
+  // have side effects; a bare `cardRef.current = card` statement in the render body is one), but
+  // no test in this file actually PINS it. The two candidate pins were tried and rejected:
+  //   · a React "Cannot update … during render" warning — that warning fires only for a
+  //     `setState` call during a DIFFERENT component's render, never for a ref mutation;
+  //   · a rerender-before-the-retrieve-resolves race (mount with `card={null}`, rerender to a
+  //     real card while `retrieveSetupIntent` is still pending, then resolve `succeeded`) —
+  //     verified EMPIRICALLY to behave IDENTICALLY whether this write is a render-phase
+  //     statement or this effect: `enterSyncing()`'s snapshot always runs strictly after the
+  //     rerender's synchronous commit+effects have already landed, in both versions, so
+  //     `cardRef.current` is already the new prop either way by the time it is read.
+  // No claim of "verified by a test that bites" is made here. FIX ROUND 2 (F-D) — nothing
+  // catches a regression here: not this suite, and not `pnpm lint` — verified clean with the
+  // render-phase write restored (`eslint-plugin-react-hooks`'s recommended config here is
+  // rules-of-hooks + exhaustive-deps only, no compiler rule that flags this), and
+  // `pnpm lint:sonar:diff` was clean over the same restoration too. This rests on review.
+  useEffect(() => {
+    cardRef.current = card;
+  }, [card]);
 
   const enterSyncing = useCallback((): void => {
     preCaptureSnapshotRef.current = cardRef.current;
@@ -191,76 +213,51 @@ export function PaymentMethodManager({
       });
   }, [onRemoved]);
 
-  // 3DS/SCA redirect return — mirrors `continue-to-mandate.tsx`'s mount effect. Runs once; this
-  // component (unlike the capture panel) is always mounted, so it survives the round trip.
-  useEffect(() => {
-    const params = new URLSearchParams(globalThis.location.search);
-    const clientSecret = params.get('setup_intent_client_secret');
-    if (clientSecret === null) {
-      return;
-    }
-    const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-    if (!publishableKey) {
-      return;
-    }
-    // No card shown at the moment the redirect returns ⇒ this was an Add attempt in flight.
-    const inferredIntent: 'add' | 'change' = cardRef.current === null ? 'add' : 'change';
-    let cancelled = false;
-
-    // FIX ROUND (review MINOR) — every exit from `finishing` that is NOT a success must recover
-    // to `idle`, or the whole Payment method section is a permanent spinner (a refresh re-enters
-    // the same URL, hence the same stuck state). Guarded on `cancelled` so an unmounted/re-run
-    // effect never fires a state update after the fact.
-    const recoverToRetry = (): void => {
-      if (cancelled) return;
-      clearRedirectParams();
-      setPhase('idle');
-      setRedirectError(REDIRECT_RETRY_MESSAGE);
-    };
-
+  // BAL-526 — the shared 3DS/SCA redirect-return hook, bound to the SetupIntent this tab
+  // actually started. An unbound/crafted return is completely inert (see the hook's docblock);
+  // these callbacks only ever run for a genuine return.
+  const handleRedirectStarted = useCallback((): void => {
+    // ⚠ THE INFERENCE SNAPSHOT INSTANT IS PRESERVED. The shipped code computed add-vs-change at
+    // MOUNT (before any `router.refresh()` could land a new card and flip the label). `onStarted`
+    // fires synchronously inside the same mount effect, so this is the same instant. Reading it
+    // in `onSucceeded` instead would be a behaviour change (a webhook that lands mid-retrieve
+    // could relabel 'add' as 'change').
+    setCaptureIntent(cardRef.current === null ? 'add' : 'change');
     setPhase('finishing');
-    getStripe(publishableKey)
-      .then(async (stripe): Promise<void> => {
-        if (stripe === null) {
-          recoverToRetry();
-          return;
-        }
-        if (cancelled) {
-          return;
-        }
-        const { setupIntent } = await stripe.retrieveSetupIntent(clientSecret);
-        if (cancelled) {
-          return;
-        }
-        if (setupIntent?.status === 'succeeded') {
-          clearRedirectParams();
-          setCaptureIntent(inferredIntent);
-          enterSyncing();
-          return;
-        }
-        if (setupIntent?.status === 'processing') {
-          // Leave the params in place so a refresh re-checks; the webhook finalises it.
-          return;
-        }
-        recoverToRetry();
-      })
-      .catch(() => {
-        recoverToRetry();
-      });
-    return (): void => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleRedirectSucceeded = useCallback((): void => {
+    enterSyncing();
+  }, [enterSyncing]);
+
+  const handleRedirectProcessing = useCallback((): void => {
+    setPhase('finishing'); // stay put; params + binding kept so a refresh re-checks
+  }, []);
+
+  const handleRedirectFailed = useCallback((message: string): void => {
+    setPhase('idle');
+    setRedirectError(message);
+  }, []);
+
+  useSetupIntentRedirectReturn({
+    retryMessage: REDIRECT_RETRY_MESSAGE,
+    onStarted: handleRedirectStarted,
+    onSucceeded: handleRedirectSucceeded,
+    onProcessing: handleRedirectProcessing,
+    onFailed: handleRedirectFailed,
+  });
 
   // Bounded post-capture sync poll — see the docblock.
   //
   // ⚠ FIX ROUND (security LOW) — `BILLING_CARD_SAVED` fires HERE, once the refreshed `card` prop
   // has ACTUALLY changed from the pre-capture snapshot, never from the redirect-return mount
-  // effect alone. That effect trusts `?setup_intent_client_secret=` straight off the URL with no
-  // binding to a SetupIntent this session started, so firing analytics there let a crafted link
-  // make a victim's page report a card save that never happened. Gating on a real prop change —
-  // server truth this component did not choose — closes that off cheaply without adding a nonce.
+  // effect alone. BEFORE BAL-526, that effect trusted `?setup_intent_client_secret=` straight off
+  // the URL with no binding to a SetupIntent this session started, so firing analytics there let a
+  // crafted link make a victim's page report a card save that never happened. BAL-526 now binds
+  // every redirect return to a SetupIntent this tab actually started (see
+  // `@/lib/stripe/setup-intent-return`) — but the gate below stays regardless: it is a second,
+  // independent check on server truth this component did not choose, and dropping it would leave
+  // `BILLING_CARD_SAVED` trusting the redirect-return path alone again.
   useEffect(() => {
     if (phase !== 'syncing') {
       return;
@@ -289,7 +286,7 @@ export function PaymentMethodManager({
       >
         {!stripeConfigured && (
           <p className="text-muted-foreground mb-3 text-sm leading-relaxed">
-            {UNCONFIGURED_MESSAGE}
+            {STRIPE_UNCONFIGURED_MESSAGE}
           </p>
         )}
 

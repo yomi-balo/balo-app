@@ -1073,13 +1073,17 @@ describe('credit actions', () => {
 
     it('provisions the wallet (a company may add a card first) and returns the secret + key — a first Add never consults the settlement guard', async () => {
       mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', stripePaymentMethodId: null });
-      mockCreateMandateSetupIntent.mockResolvedValue({ clientSecret: 'seti_secret' });
+      mockCreateMandateSetupIntent.mockResolvedValue({
+        clientSecret: 'seti_secret',
+        setupIntentId: 'seti_1',
+      });
 
       const res = await startCardCaptureAction();
 
       expect(res).toEqual({
         ok: true,
         clientSecret: 'seti_secret',
+        setupIntentId: 'seti_1',
         publishableKey: 'pk_test_settings',
       });
       expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
@@ -1107,13 +1111,17 @@ describe('credit actions', () => {
     it('allows a card CHANGE with no active session — the guard is session-scoped, not receivable-scoped', async () => {
       mockEnsureForCompany.mockResolvedValue({ id: 'wallet-1', stripePaymentMethodId: 'pm_old' });
       mockHasActiveSessionForWallet.mockResolvedValue(false);
-      mockCreateMandateSetupIntent.mockResolvedValue({ clientSecret: 'seti_secret' });
+      mockCreateMandateSetupIntent.mockResolvedValue({
+        clientSecret: 'seti_secret',
+        setupIntentId: 'seti_1',
+      });
 
       const res = await startCardCaptureAction();
 
       expect(res).toEqual({
         ok: true,
         clientSecret: 'seti_secret',
+        setupIntentId: 'seti_1',
         publishableKey: 'pk_test_settings',
       });
       expect(mockHasActiveSessionForWallet).toHaveBeenCalledWith('wallet-1');
