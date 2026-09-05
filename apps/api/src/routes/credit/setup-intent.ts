@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
+import { enforceMandateSetupRateLimit } from '../../lib/setup-intent-rate-limit.js';
 import { createSetupIntent, confirmSavedCardMandate } from '../../services/stripe/index.js';
 
 /**
@@ -50,25 +51,39 @@ export async function setupIntentRoute(fastify: FastifyInstance): Promise<void> 
         });
       }
 
-      if (parsed.data.paymentMethodSource === 'saved_card') {
-        if (parsed.data.clientRequestId === undefined) {
-          return reply.status(400).send({
-            error: 'invalid_payload',
-            details: ['clientRequestId is required for saved_card'],
-          });
-        }
+      const { walletId, paymentMethodSource, clientRequestId, actorUserId } = parsed.data;
+
+      // The `saved_card` arm's extra requirement, resolved BEFORE the arm dispatch so the rate
+      // limit below has exactly ONE call site (fix round: it was duplicated into both arms).
+      // `null` ⇒ this is the `new_card` arm; `undefined` ⇒ `saved_card` with no id, a 400.
+      // Carrying it as a value rather than re-testing `paymentMethodSource` inside the arm is
+      // what lets TypeScript narrow it to `string` there without an assertion.
+      const savedCardRequestId = paymentMethodSource === 'saved_card' ? clientRequestId : null;
+      if (savedCardRequestId === undefined) {
+        return reply.status(400).send({
+          error: 'invalid_payload',
+          details: ['clientRequestId is required for saved_card'],
+        });
+      }
+
+      // ⚠ AFTER the cheap validation, BEFORE any Stripe or database work — a malformed request
+      // must not burn a wallet's window, and a limited request must cost no vendor call at all
+      // (`routes/meetings/end.ts` states this ordering rule). BAL-527 Round 2 Q2: BOTH arms share
+      // the SAME bucket — `confirmSavedCardMandate`'s own idempotency key is CLIENT-MINTED and
+      // therefore rotatable by the caller, so it carries the identical unbounded-mint shape this
+      // ticket exists to bound.
+      if (await enforceMandateSetupRateLimit(walletId, reply)) return;
+
+      if (savedCardRequestId !== null) {
         // `succeeded` ⇒ nothing for the browser to do (the webhook activates the mandate);
         // `requires_action` ⇒ the client secret comes back for `stripe.handleNextAction`.
-        const result = await confirmSavedCardMandate(
-          parsed.data.walletId,
-          parsed.data.clientRequestId
-        );
+        const result = await confirmSavedCardMandate(walletId, savedCardRequestId);
         return reply.send(result);
       }
 
       const { clientSecret, setupIntentId, customerId } = await createSetupIntent(
-        parsed.data.walletId,
-        parsed.data.actorUserId
+        walletId,
+        actorUserId
       );
 
       return reply.send({ clientSecret, setupIntentId, customerId });
