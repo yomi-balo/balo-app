@@ -3,6 +3,7 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   isNotNull,
   isNull,
@@ -22,7 +23,11 @@ import {
   NEAR_WRAP_MINUTES,
   OVERDRAFT_GRACE_MINUTES,
 } from '@balo/shared/pricing';
-import { isWalletMandateActive, minutesOfRunway } from '@balo/shared/credit';
+import {
+  isWalletMandateActive,
+  minutesOfRunway,
+  walletAllowsOverdraftGrace,
+} from '@balo/shared/credit';
 import { db, type Database } from '../client';
 import {
   agencies,
@@ -286,6 +291,10 @@ export interface OpenSessionInput {
  * defensively, while the wallet balance is still negative. Opening now would let that prior
  * overdraft be folded into the next session's terminal `end` and charged a SECOND time (the
  * sequential co-charge).
+ *
+ * `insufficient_no_mandate` means exactly what it says — the estimate is unfunded and the wallet
+ * carries no active mandate. BAL-523 deliberately did NOT widen it to cover `low_balance_mode`
+ * (see the ⚠ note on `open` itself).
  */
 export type OpenSessionResult =
   | { ok: true; session: CreditSession }
@@ -619,7 +628,18 @@ interface MeterParams {
   ceiling: number;
   graceBoundMs: number;
   nearWrapMs: number;
-  mandateActive: boolean;
+  /**
+   * BAL-523 — an active mandate AND a card-backed `low_balance_mode`. ⚠ RENAMED from
+   * `mandateActive`, deliberately, not a second field added beside it — see
+   * `credit-sessions.ts`'s BAL-523 history / the plan §2.1. A live mandate ALONE is no longer
+   * sufficient to enter grace; a client on "Just notify me" is not carried past zero even with
+   * an active mandate on file.
+   *
+   * ⚠ R9 — SNAPSHOTTED BY THE CALLER, not derived here. `meterSessionToNow` calls
+   * `walletAllowsOverdraftGrace` once per metering pass when it builds this object;
+   * `applyActiveTick` only reads `params.overdraftGraceAllowed`.
+   */
+  overdraftGraceAllowed: boolean;
   /**
    * BAL-412 (F13/D6) — ADR-1044 §7's billing floor in WHOLE MINUTES, feeding `minutesOfRunway`
    * for the one-shot `low` marker.
@@ -755,13 +775,15 @@ async function applyActiveTick(
     return;
   }
 
-  // Would cross zero WITHOUT a mandate → hard stop, no post (no overdraft without a card).
-  if (!params.mandateActive) {
+  // Would cross zero without card-backed overdraft consent → hard stop, no post (no mandate, or
+  // the client is on "Just notify me").
+  if (!params.overdraftGraceAllowed) {
     wrapSession(state, tickTimeMs, transitions, false);
     return;
   }
 
-  // Would cross zero WITH a mandate → enter grace and post the crossing minute (balance negative).
+  // Would cross zero WITH card-backed overdraft consent (mandate + card-backed mode) → enter
+  // grace and post the crossing minute (balance negative).
   state.graceEnteredAtMs = tickTimeMs;
   state.status = 'grace';
   transitions.graceEntered = true;
@@ -873,6 +895,17 @@ export const creditSessionsRepository = {
    * `getAvailableBalance`) → connect gate (`available ≥ estimate OR mandate active`) → place the
    * hold in-txn → insert the pending session → link the hold back to it. Rejections are
    * returned, not thrown.
+   *
+   * ⚠ BAL-523 — THE CONNECT GATE IS DELIBERATELY MANDATE-ONLY, and stays that way. An earlier
+   * revision of BAL-523 additionally required a card-backed `low_balance_mode` here; that was
+   * REVERTED (Yomi, 2026-09-04) after the security audit disproved its premise. On the BAL-466
+   * admission seam `openCaseSessionBestEffort` MAY NEVER FAIL A JOIN, so a refusal here does not
+   * refuse the client at the door — it creates NO session row at all, the consultation happens,
+   * nothing meters, and the expert is unpaid. Tightening this gate would have widened that
+   * free-consultation population from "card-less" to "any client who picks Just notify me while
+   * underfunded". BAL-523's promise lives entirely in GRACE ENTRY (`applyActiveTick` →
+   * `walletAllowsOverdraftGrace`): a `notify_only` client opens and meters normally, and is
+   * simply not carried PAST zero.
    */
   async open(input: OpenSessionInput): Promise<OpenSessionResult> {
     return db.transaction(async (tx) => {
@@ -1123,6 +1156,87 @@ export const creditSessionsRepository = {
           or(
             inArray(creditSessions.status, ['pending', 'active', 'grace', 'wrapped']),
             eq(creditSessions.settlementStatus, 'processing')
+          )
+        )
+      )
+      .limit(1);
+    return row !== undefined;
+  },
+
+  /**
+   * BAL-523 — TRUE when this wallet carries consultation time already used beyond the balance
+   * that MAY STILL BE CHARGED to the card on file. THREE arms, any of which is sufficient:
+   *
+   *  (0) THE BALANCE ITSELF IS NEGATIVE (`credit_wallets.balance_minor < 0`). This is the note's
+   *      own claim, read literally — "time you've already used beyond your balance" — and it does
+   *      not care HOW the balance got there. It is what catches the paths arm (a) structurally
+   *      cannot: `settleFromPresence` posts `session_consume` ticks up to `billableMinutes` with
+   *      NO ceiling clamp (Owner Decision 3 — "the live ceiling is a UX pause, never a billing
+   *      cap") and `applyExternalDuration` flips a session to `active` with the wallet already
+   *      negative — both with `grace_entered_at` never set. A settled overdraft is credited back
+   *      to ≥ 0 by the `payment_intent.succeeded` webhook, so a still-negative balance is
+   *      exposure, not history. ⚠ Deliberately NOT "any non-terminal presence session": that
+   *      would warn every in-flight presence session on a FULLY FUNDED wallet, trading an
+   *      under-warn for an over-warn.
+   *  (a) LIVE, ALREADY PAST ZERO — `grace_entered_at IS NOT NULL` on a non-terminal session
+   *      (`status ∈ {active, grace, wrapped}`). `applyGraceTick` consults NEITHER the mandate NOR
+   *      the mode, so a session that entered grace before the client switched to `notify_only`
+   *      keeps accruing warm minutes and WILL settle at `end`.
+   *      ⚠ R9/R7.2 — WHY IT IS NOT REDUNDANT WITH ARM (0), stated correctly. NOT because the
+   *      stamp can lead the balance: `applyActiveTick` stamps `grace_entered_at` and posts the
+   *      crossing tick in the SAME transaction, so the balance is already negative by commit.
+   *      The real reason is an INDEPENDENT CREDIT: a top-up (or a promo grant) landing mid-grace
+   *      lifts `balance_minor` back to ≥ 0 while the session keeps drawing under a grace that is
+   *      still open and still settles at `end`. Arm (0) goes quiet there; this arm does not.
+   *  (b) ENDED, DEBT OUTSTANDING — `overdraft_settled_minor > 0` with
+   *      `settlement_status ∈ {processing, failed, requires_action}`. ⚠ `failed` and
+   *      `requires_action` are NOT optional, on the ONE ground that is verified in-repo: BOTH
+   *      open a `credit_receivable` (`openReceivableAndDun`) that the daily dunning sweep keeps
+   *      chasing until a settlement webhook clears it. Omitting them would hide the warning
+   *      precisely while collection is still being pursued.
+   *      ⚠ R7.3 — deliberately NOT justified on "the client can still complete the SCA
+   *      challenge". There is no in-repo completion path for a SETTLEMENT PaymentIntent: nothing
+   *      hands that `client_secret` to a browser. Stripe may still recover such a PI out of band,
+   *      but this codebase does not, so the receivable is the half that carries the arm.
+   *      ⚠ NOT because `reconcileStuckSettlement` retries them — IT DOES NOT. It early-returns on
+   *      `settlementStatus !== 'processing'` (`end-session.ts`), `findStuckSettling` selects
+   *      `processing` only, and the dunning sweep moves no money. A comment in `end-session.ts`
+   *      exists specifically to correct that mis-attribution; do not re-introduce it here.
+   *
+   * ⚠ NOT `hasActiveSessionForWallet`. That answers "a session is live or a settlement is in
+   * flight" — simultaneously too wide (a funded `pending` session) and too narrow (a `failed`
+   * settlement). The two are neighbours, not synonyms; do not collapse them.
+   *
+   * The session read rides `credit_sessions_wallet_idx`; arm (0) is a PK lookup. Advisory only —
+   * the settings surface reads it once per page load and may be one transition stale.
+   */
+  async hasUnsettledOverdraftForWallet(walletId: string, exec: DbExecutor = db): Promise<boolean> {
+    // Arm (0) first: a PK lookup, and the common negative-balance case then skips the scan.
+    const [wallet] = await exec
+      .select({ balanceMinor: creditWallets.balanceMinor })
+      .from(creditWallets)
+      .where(eq(creditWallets.id, walletId))
+      .limit(1);
+    if (wallet !== undefined && wallet.balanceMinor < 0) {
+      return true;
+    }
+
+    const [row] = await exec
+      .select({ id: creditSessions.id })
+      .from(creditSessions)
+      .where(
+        and(
+          eq(creditSessions.walletId, walletId),
+          isNull(creditSessions.deletedAt),
+          or(
+            and(
+              isNotNull(creditSessions.graceEnteredAt),
+              inArray(creditSessions.status, ['active', 'grace', 'wrapped'])
+            ),
+            and(
+              gt(creditSessions.overdraftSettledMinor, 0),
+              inArray(creditSessions.settlementStatus, ['processing', 'failed', 'requires_action'])
+            )
           )
         )
       )
@@ -1425,8 +1539,17 @@ export const creditSessionsRepository = {
    * ledger UNIQUE (balance mirrors DB truth), so re-metering crosses nothing new.
    *
    * Transition rules (evaluated per tick):
-   *  - active, would cross zero, mandate active  → enter grace, POST (balance goes negative).
-   *  - active, would cross zero, NO mandate       → STOP: do not post, `wrapped` (key `end`).
+   *  - active, would cross zero, overdraft grace allowed → enter grace, POST (balance goes negative).
+   *  - active, would cross zero, grace NOT allowed        → STOP: do not post, `wrapped` (key `end`).
+   *    ⚠ BAL-523: "allowed" is `params.overdraftGraceAllowed` — an active mandate AND a
+   *    card-backed `low_balance_mode`. A live mandate alone is NOT enough; a client on "Just
+   *    notify me" is not carried past zero. ⚠ R9: `applyActiveTick` READS the flag, it does not
+   *    compute it — `walletAllowsOverdraftGrace` is invoked ONCE per metering pass at the
+   *    `MeterParams` construction site below, and that is the ONLY site on the predicate.
+   *    ⚠ The invariant suite counts `walletAllowsOverdraftGrace` CALLS in this file by regex and
+   *    asserts exactly one, so keep prose mentions free of a trailing `(`.
+   *    SETTLEMENT and the `open()` CONNECT GATE both stay mandate-only, deliberately (see
+   *    `open`'s ⚠ BAL-523 note and `walletAllowsOverdraftGrace`'s docblock).
    *  - grace, 30-min bound OR |balanceAfter| ≥ ceiling → POST the completing minute (warm,
    *    ≤1-min overshoot, Q6), then `wrapped`.
    *  - otherwise POST normally.
@@ -1486,7 +1609,7 @@ export const creditSessionsRepository = {
         ceiling: session.effectiveCeilingMinor,
         graceBoundMs: session.graceBoundMinutes * 60_000,
         nearWrapMs: NEAR_WRAP_MINUTES * 60_000,
-        mandateActive: isWalletMandateActive(wallet),
+        overdraftGraceAllowed: walletAllowsOverdraftGrace(wallet),
         floorMinutes: params.floorMinutes,
       };
       const state: MeterLoopState = {

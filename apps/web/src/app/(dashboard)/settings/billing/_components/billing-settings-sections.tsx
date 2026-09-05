@@ -15,6 +15,14 @@ import { BillingEmailSection } from './billing-email-section';
 interface BillingSettingsSectionsProps {
   readonly wallet: WalletSnapshot;
   readonly billingEmail: BillingEmailSnapshot;
+  /**
+   * BAL-523 — server truth, read fresh on every render (`loadBillingSettingsWallet` →
+   * `hasUnsettledOverdraftForWallet`). Deliberately NOT lifted into `useState` alongside
+   * `savedConfig` — unlike the low-balance mode/band, there is no in-session mutation on this
+   * page that could change it, so latching it would only risk it going stale across a
+   * `router.refresh()`.
+   */
+  readonly hasUnsettledOverdraft: boolean;
 }
 
 const RECONCILED_REMOVE_TOAST = "Card removed — you're now on Just notify me.";
@@ -85,6 +93,7 @@ const PLAIN_REMOVE_TOAST = 'Card removed.';
 export function BillingSettingsSections({
   wallet,
   billingEmail,
+  hasUnsettledOverdraft,
 }: Readonly<BillingSettingsSectionsProps>): React.JSX.Element {
   const router = useRouter();
   const [cardRemoved, setCardRemoved] = useState(false);
@@ -144,6 +153,7 @@ export function BillingSettingsSections({
         cardAvailable={effectiveCard !== null}
         cardLabel={effectiveCard ? describeSavedCard(effectiveCard) : null}
         mandateActive={effectiveCard?.mandateActive === true}
+        hasUnsettledOverdraft={hasUnsettledOverdraft}
         onSaved={handleSaved}
       />
       <PaymentMethodManager

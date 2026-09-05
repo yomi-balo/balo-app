@@ -277,9 +277,24 @@ export const partyJoinRequestStatusEnum = pgEnum('party_join_request_status', [
 
 /**
  * A wallet's behaviour when its balance crosses the low-balance threshold.
- * `auto_topup` = reload off the stored mandate; `keep_going` = allow overdraft
- * grace, no reload; `notify_only` = neither (the safe default — a brand-new wallet
- * has no card/mandate and therefore cannot auto-top-up).
+ * `auto_topup` = reload off the stored mandate, AND allow overdraft grace (a
+ * client who has consented to unattended reloads has consented to being carried
+ * past zero on the same card); `keep_going` = allow overdraft grace, no reload;
+ * `notify_only` = neither (the safe default — a brand-new wallet has no
+ * card/mandate and therefore cannot auto-top-up).
+ *
+ * ⚠ BAL-523 — THE GRACE HALF OF THAT RULE IS NOW ENFORCED, not aspirational. Until BAL-523 the
+ * money path read the mandate alone and this docblock was the only place the rule existed. Grace
+ * ENTRY is now decided by walletAllowsOverdraftGrace (@balo/shared/credit), whose card-backed
+ * allow-list is exactly {`auto_topup`, `keep_going`} — the two values this docblock grants grace
+ * to. ⚠ R9: the predicate is CALLED once per metering pass in `meterSessionToNow`, which
+ * snapshots the answer into `MeterParams.overdraftGraceAllowed`; `applyActiveTick` reads that
+ * flag rather than calling it. The invariant lives in
+ * packages/db/src/invariants/overdraft-grace-requires-card-backed-mode.test.ts.
+ *
+ * ⚠ The `open()` connect gate is NOT gated on this enum — deliberately, see the ⚠ BAL-523 note
+ * on `creditSessionsRepository.open`. SETTLEMENT is not gated on it either (the asymmetry, see
+ * `walletAllowsOverdraftGrace`'s docblock).
  */
 export const lowBalanceModeEnum = pgEnum('low_balance_mode', [
   'auto_topup',

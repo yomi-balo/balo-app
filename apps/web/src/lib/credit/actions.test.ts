@@ -112,6 +112,7 @@ import {
   removeSavedCardAction,
   saveBillingEmailAction,
   type StartPurchaseInput,
+  type SaveConfigResult,
 } from './actions';
 
 const CLIENT_REQUEST_ID = '11111111-1111-4111-8111-111111111111';
@@ -135,11 +136,15 @@ describe('credit actions', () => {
       id: 'wallet-1',
       balanceMinor: 0,
       stripePaymentMethodId: null,
+      // BAL-523/F3 — the schema default. Stated explicitly so the live-session disarm guard is
+      // exercised against a REAL current mode, not `undefined`.
+      lowBalanceMode: 'notify_only',
     });
     mockFindByCompanyId.mockResolvedValue({
       id: 'wallet-1',
       balanceMinor: 0,
       stripePaymentMethodId: null,
+      lowBalanceMode: 'notify_only',
     });
     // BAL-524 — `persistLowBalanceConfig` now reads `.outcome` off `updateConfig`'s result.
     // Without this, mockUpdateConfig resolves `undefined` and every test in this suite reds
@@ -501,6 +506,138 @@ describe('credit actions', () => {
       );
       expect(mockCreatePurchaseIntent).toHaveBeenCalled();
     });
+
+    // ── FIX ROUND 2 (R4, security) — the guard bypass this action WAS ────────────────────
+    //
+    // Fix round 1 put the live-session disarm guard in `saveLowBalanceConfigAction` only. This
+    // action is the OTHER caller of `persistLowBalanceConfig` and ran completely unguarded: the
+    // shipped in-call low-balance CTA opens this very composer, which renders
+    // `LowBalanceModePicker`, so a client mid-consultation could flip to `notify_only` here (or
+    // call the Server Action directly, start a purchase and never confirm the `clientSecret`) and
+    // the flip landed permanently. The guard now lives at the shared chokepoint.
+
+    function cardBackedWalletMidSession(): void {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+        lowBalanceMode: 'keep_going',
+      });
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+    }
+
+    function notifyOnlyConfig(): StartPurchaseInput['config'] {
+      return {
+        lowBalanceMode: 'notify_only',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      };
+    }
+
+    it('⚠⚠ R4: REFUSES the card-backed → notify_only flip mid-session, and charges NOTHING', async () => {
+      cardBackedWalletMidSession();
+
+      const res = await startPurchaseAction(baseStartInput({ config: notifyOnlyConfig() }));
+
+      expect(res).toEqual({ ok: false, error: 'settlement_outstanding' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+      // The refusal is BEFORE the PaymentIntent, so the composer's "no charge was made" is true.
+      expect(mockCreatePurchaseIntent).not.toHaveBeenCalled();
+    });
+
+    it('⚠⚠ R4: a TOP-UP mid-session that does NOT change the mode still goes through — the in-call CTA must never be blocked', async () => {
+      cardBackedWalletMidSession();
+
+      // The composer seeds its picker from `wallet.lowBalanceMode`, so an untouched picker sends
+      // the current mode straight back. This is the ordinary in-call top-up.
+      const res = await startPurchaseAction(
+        baseStartInput({
+          config: {
+            lowBalanceMode: 'keep_going',
+            topupReloadMinor: 30_000,
+            topupThresholdMinor: 5_000,
+          },
+        })
+      );
+
+      expect(res).toMatchObject({ ok: true });
+      // REBASE (BAL-524) — the third argument is BAL-524's D3 exemption, asserted here too so
+      // this case also pins that `startPurchaseAction` keeps it while gaining BAL-523's guard.
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'keep_going' },
+        'card_is_established_by_this_same_operation'
+      );
+      expect(mockCreatePurchaseIntent).toHaveBeenCalled();
+    });
+
+    it('⚠⚠ R4: a FIRST purchase on a brand-new wallet is never refused — notify_only in, notify_only already stored, no card at all', async () => {
+      // The regression the guard must not create: BAL-524's pre-flight showed a card-PRESENCE
+      // guard on this shared helper WOULD break this path. A live-SESSION guard does not, and a
+      // fresh wallet's schema default is `notify_only`, so there is no transition to refuse.
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-new',
+        balanceMinor: 0,
+        stripePaymentMethodId: null,
+        lowBalanceMode: 'notify_only',
+      });
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+      const res = await startPurchaseAction(baseStartInput({ config: notifyOnlyConfig() }));
+
+      expect(res).toMatchObject({ ok: true, walletId: 'wallet-new' });
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-new',
+        { lowBalanceMode: 'notify_only' },
+        'card_is_established_by_this_same_operation'
+      );
+      // A no-op mode means the guard is never even consulted.
+      expect(mockHasActiveSessionForWallet).not.toHaveBeenCalled();
+    });
+
+    it('R4: ARMING a card-backed mode mid-session is never refused', async () => {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+        lowBalanceMode: 'notify_only',
+      });
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+      const res = await startPurchaseAction(baseStartInput());
+
+      expect(res).toMatchObject({ ok: true });
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'keep_going' },
+        'card_is_established_by_this_same_operation'
+      );
+    });
+
+    it('R4: the SAME flip is allowed once no session is live', async () => {
+      cardBackedWalletMidSession();
+      mockHasActiveSessionForWallet.mockResolvedValue(false);
+
+      const res = await startPurchaseAction(baseStartInput({ config: notifyOnlyConfig() }));
+
+      expect(res).toMatchObject({ ok: true });
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'notify_only' },
+        'card_is_established_by_this_same_operation'
+      );
+    });
+
+    it('R4: the refusal is WARNED with the wallet + company, never silently swallowed', async () => {
+      cardBackedWalletMidSession();
+
+      await startPurchaseAction(baseStartInput({ config: notifyOnlyConfig() }));
+
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Low-balance disarm refused — a session is live on the wallet',
+        { walletId: 'wallet-1', companyId: 'company-1' }
+      );
+    });
   });
 
   describe('validatePromoAction', () => {
@@ -689,6 +826,103 @@ describe('credit actions', () => {
       expect(mockLogWarn).toHaveBeenCalledWith(
         'Card-backed low-balance mode refused — no card on file',
         expect.objectContaining({ refusedBy: 'atomic_write' })
+      );
+    });
+
+    // ── FIX ROUND 1 (F3, security) — the mid-session disarm guard ─────────────────────────
+    //
+    // BAL-523 is what creates this exposure: the mode now STOPS the meter, so a flip from a
+    // second tab mid-call leaves the crossing minute unposted and the expert unpaid for the
+    // rest of the call. Same `hasActiveSessionForWallet` guard as card CHANGE and card REMOVE.
+    function disarmSave(): Promise<SaveConfigResult> {
+      return saveLowBalanceConfigAction({
+        lowBalanceMode: 'notify_only',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+    }
+
+    it('⚠ F3: REFUSES a move out of a card-backed mode while a session is live on the wallet', async () => {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+        lowBalanceMode: 'keep_going',
+      });
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+      expect(await disarmSave()).toEqual({ ok: false, error: 'settlement_outstanding' });
+      expect(mockHasActiveSessionForWallet).toHaveBeenCalledWith('wallet-1');
+      expect(mockUpdateConfig).not.toHaveBeenCalled(); // nothing persisted
+    });
+
+    it('F3: the SAME disarm is allowed once no session is live', async () => {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+        lowBalanceMode: 'keep_going',
+      });
+      mockHasActiveSessionForWallet.mockResolvedValue(false);
+
+      expect(await disarmSave()).toEqual({ ok: true });
+      expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+
+    it('F3: a save INTO a card-backed mode is never blocked, even mid-session', async () => {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+        lowBalanceMode: 'notify_only',
+      });
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'keep_going',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+      expect(res).toEqual({ ok: true });
+      expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+
+    it('F3: a no-op re-save of notify_only does not even consult the guard', async () => {
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+      expect(await disarmSave()).toEqual({ ok: true }); // wallet is already notify_only
+      expect(mockHasActiveSessionForWallet).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠ FIX ROUND 2 (R6) — THE ONE SURVIVING MUTATION the technical re-review found (X4).
+     * Dropping the `lowBalanceMode === 'notify_only'` conjunct from the disarm predicate passed
+     * ALL 78 tests: every existing case either has an INCOMING `notify_only` or an OUTGOING
+     * `notify_only`, so the surviving `wallet.lowBalanceMode !== 'notify_only'` half answered
+     * identically in each. This case has NEITHER: card-backed → card-backed, mid-session.
+     * The guard exists to stop a DISARM, not to freeze the setting.
+     */
+    it('⚠ R6: a card-backed → card-backed mode change is NOT a disarm and is allowed mid-session', async () => {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+        lowBalanceMode: 'keep_going',
+      });
+      mockHasActiveSessionForWallet.mockResolvedValue(true);
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'auto_topup',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: true });
+      // REBASE (BAL-524) — the Save path is NOT exempt from the card guard; it passes the
+      // default. Asserted so this case cannot silently start exercising the exemption.
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'auto_topup', topupReloadMinor: 30_000, topupThresholdMinor: 5_000 },
+        'require_card_on_file'
       );
     });
   });

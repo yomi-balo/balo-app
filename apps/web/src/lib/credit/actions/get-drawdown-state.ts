@@ -16,7 +16,7 @@ import {
 } from '@balo/db';
 import {
   deriveDrawdownState,
-  isWalletMandateActive,
+  walletAllowsOverdraftGrace,
   type DrawdownState,
 } from '@balo/shared/credit';
 import { MIN_MEETING_MINUTES } from '@balo/shared/meetings';
@@ -34,8 +34,9 @@ import { log } from '@/lib/logging';
  *  - the session comes through the CLIENT projection (`findForClientView`), so
  *    `expertRate*` / `baloFeeBps` / `expertAccruedMinor` / `stripePaymentIntentId`
  *    are structurally absent (the fee/PII boundary — these credit tables carry no RLS);
- *  - the full wallet row is read SERVER-SIDE only to compute the `mandatePresent`
- *    boolean; no mandate secret ever enters the returned `DrawdownState`;
+ *  - the full wallet row is read SERVER-SIDE only to compute the `graceAvailable`
+ *    boolean (BAL-523: `walletAllowsOverdraftGrace`); no mandate secret ever enters the
+ *    returned `DrawdownState`;
  *  - MEMBERSHIP gates the read — a viewer who is NOT a live member of the session's
  *    company gets `null` (deny), never a leaked wallet balance / billing-admin name;
  *  - `lens = MANAGE_BILLING ? 'client' : 'member'`, chosen ONLY after membership holds.
@@ -136,7 +137,7 @@ export async function getSessionDrawdownState(
     // to prevent.
     billingFloorMinutes: MIN_MEETING_MINUTES,
     minutesAlreadyDrawn: session.connectedMinutes,
-    mandatePresent: isWalletMandateActive(wallet),
+    graceAvailable: walletAllowsOverdraftGrace(wallet),
     lens,
     ...(adminName === undefined ? {} : { adminName }),
     now,

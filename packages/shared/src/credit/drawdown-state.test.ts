@@ -23,7 +23,7 @@ function base(overrides: Partial<DrawdownInputs> = {}): DrawdownInputs {
     // existing scenario below. This is what keeps "past minute 15 is byte-identical" true.
     billingFloorMinutes: 15,
     minutesAlreadyDrawn: 42,
-    mandatePresent: true,
+    graceAvailable: true,
     lens: 'client',
     now: NOW,
     ...overrides,
@@ -86,9 +86,9 @@ describe('deriveDrawdownState — elapsed is session time, never a countdown', (
 });
 
 describe('deriveDrawdownState — client lens copy', () => {
-  it('low (mandate) offers Top up + Keep going', () => {
+  it('low (graceAvailable true) offers Top up + Keep going', () => {
     const state = deriveDrawdownState(
-      base({ ...KEY_INPUTS.low, lens: 'client', mandatePresent: true })
+      base({ ...KEY_INPUTS.low, lens: 'client', graceAvailable: true })
     );
     expect(state.title).toBe('About 5 minutes of balance left');
     expect(state.cta).toEqual({
@@ -100,12 +100,22 @@ describe('deriveDrawdownState — client lens copy', () => {
     expect(state.channels).toEqual(['in-app']);
   });
 
-  it('low (no mandate) drops the Keep going secondary', () => {
+  /**
+   * ⚠ FIX ROUND 2 (R3) — asserts the EXACT body, not a substring. The old copy leaned on
+   * "so nothing interrupts your session", and nothing interrupts the session either way on the
+   * presence path (the presence finalizer is mode-blind — BAL-535), so the promise was built on
+   * a mechanism that does not fire. The truthful nudge is the runway.
+   */
+  it('⚠ low (graceAvailable false) drops the Keep going secondary and promises NO pause and NO no-charge', () => {
     const state = deriveDrawdownState(
-      base({ ...KEY_INPUTS.low, lens: 'client', mandatePresent: false })
+      base({ ...KEY_INPUTS.low, lens: 'client', graceAvailable: false })
     );
     expect(state.cta).toEqual({ kind: 'client_topup', label: 'Top up' });
-    expect(state.body).toContain('near the end of your balance');
+    expect(state.body).toBe(
+      "You're near the end of your balance — top up whenever you like to stay ahead of it."
+    );
+    expect(state.body).not.toContain('pause');
+    expect(state.body).not.toContain('interrupt');
   });
 
   it('grace leads with reassurance + settles-afterward, SMS present', () => {
@@ -135,7 +145,7 @@ describe('deriveDrawdownState — client lens copy', () => {
 
   it('end (no card) is the balance-used pause', () => {
     const state = deriveDrawdownState(
-      base({ ...KEY_INPUTS.end, lens: 'client', mandatePresent: false })
+      base({ ...KEY_INPUTS.end, lens: 'client', graceAvailable: false })
     );
     expect(state.title).toBe("You're at the end of your balance");
     expect(state.meter).toMatchObject({ mode: 'empty', pct: 0, tone: 'faint' });
@@ -143,13 +153,39 @@ describe('deriveDrawdownState — client lens copy', () => {
 });
 
 describe('deriveDrawdownState — member lens copy', () => {
-  it('low nudges the admin (team-framed, no top-up button)', () => {
+  it('low (graceAvailable true) nudges the admin and promises the continuation', () => {
     const state = deriveDrawdownState(
-      base({ ...KEY_INPUTS.low, lens: 'member', adminName: 'Sam' })
+      base({ ...KEY_INPUTS.low, lens: 'member', adminName: 'Sam', graceAvailable: true })
     );
     expect(state.title).toBe("Your team's balance is running low");
     expect(state.cta).toEqual({ kind: 'member_nudge', label: 'Let Sam know' });
     expect(state.adminName).toBe('Sam');
+    expect(state.body).toContain("Your session won't be interrupted");
+    expect(state.body).toContain("settles to your team's card");
+  });
+
+  /**
+   * ⚠ FIX ROUND 1 (F2) — the member twin of the client-lens pair above. Before this, the ONLY
+   * test touching `graceAvailable: false` on the member lens was the "overdraft never appears"
+   * sweep, which passes whether or not the copy is TRUTHFUL. `notify_only` is the schema default
+   * for every new wallet, so this branch is the common case for a non-admin member — and a
+   * promise of "won't be interrupted" is one the meter refuses to keep at zero.
+   */
+  it('⚠ low (graceAvailable false) does NOT promise a continuation, a pause, or a no-charge — and keeps the nudge', () => {
+    const state = deriveDrawdownState(
+      base({ ...KEY_INPUTS.low, lens: 'member', adminName: 'Sam', graceAvailable: false })
+    );
+    expect(state.title).toBe("Your team's balance is running low");
+    // ⚠ FIX ROUND 2 (R3) — round 1 said "and then we'll pause to settle up". Only the METER
+    // pauses; the call does not stop and the billing does not stop (the presence finalizer posts
+    // every billable minute at meeting end regardless of the mode — BAL-535). So the branch flags
+    // the runway and nudges, and claims neither outcome.
+    expect(state.body).toBe("About 5 minutes left on your team's balance. Want to let Sam know?");
+    expect(state.body).not.toContain('interrupted');
+    expect(state.body).not.toContain('card');
+    expect(state.body).not.toContain('pause');
+    // The nudge survives on BOTH branches — a member with no grace can still act.
+    expect(state.cta).toEqual({ kind: 'member_nudge', label: 'Let Sam know' });
   });
 
   it('falls back to "your admin" when no adminName is provided', () => {
@@ -191,9 +227,9 @@ describe('deriveDrawdownState — the word "overdraft" never appears', () => {
     const strings: string[] = [];
     for (const key of Object.keys(KEY_INPUTS) as DrawdownKey[]) {
       for (const lens of ['client', 'member'] as const) {
-        for (const mandatePresent of [true, false]) {
+        for (const graceAvailable of [true, false]) {
           const state = deriveDrawdownState(
-            base({ ...KEY_INPUTS[key], lens, mandatePresent, adminName: 'Sam' })
+            base({ ...KEY_INPUTS[key], lens, graceAvailable, adminName: 'Sam' })
           );
           strings.push(
             state.title ?? '',

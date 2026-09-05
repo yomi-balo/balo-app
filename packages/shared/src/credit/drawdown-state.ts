@@ -68,7 +68,12 @@ export interface DrawdownState {
   minutesRemaining?: number;
   graceRemainingMinutes?: number;
   ceilingRoomMinor?: number;
-  mandatePresent: boolean;
+  /**
+   * BAL-523 — = the money path's `walletAllowsOverdraftGrace(wallet)`. Spelled without the word
+   * "overdraft" because this object is serialised to the client. It is the SAME predicate —
+   * never re-derive it here.
+   */
+  graceAvailable: boolean;
   lens: 'client' | 'member';
   /** Widget Gift chip (display only). */
   promoRemainingMinor?: number;
@@ -102,7 +107,12 @@ export interface DrawdownInputs {
   /** Reserved (pre-connect hold) — carried for widget availability context. */
   activeHoldsMinor?: number;
   promoRemainingMinor?: number;
-  mandatePresent: boolean;
+  /**
+   * BAL-523 — = the money path's `walletAllowsOverdraftGrace(wallet)`. Spelled without the word
+   * "overdraft" because this object is serialised to the client. It is the SAME predicate —
+   * never re-derive it here.
+   */
+  graceAvailable: boolean;
   lens: 'client' | 'member';
   adminName?: string;
   now: Date;
@@ -173,7 +183,9 @@ function deriveKey(inputs: DrawdownInputs, minutesRemaining: number): DrawdownKe
     case 'grace':
       return isNearWrap(inputs) ? 'near' : 'grace';
     case 'wrapped':
-      // Grace history ⇒ the ceiling/30-min pause (`wrap`); none ⇒ no-mandate balance-used (`end`).
+      // Grace history ⇒ the ceiling/30-min pause (`wrap`); none ⇒ balance-used (`end`). ⚠ R9:
+      // "no-mandate" is stale — since BAL-523 grace is withheld for a card-backed-MODE failure
+      // too, so `end` is now reached by either an absent mandate or "Just notify me".
       return inputs.graceEnteredAt === null ? 'end' : 'wrap';
     default:
       return 'healthy';
@@ -256,7 +268,7 @@ interface CopyCtx {
   minutesRemaining: number;
   /** min(grace time left, ceiling room in minutes) — the "N more minutes" figure. */
   remainingBeforeWrap: number;
-  mandatePresent: boolean;
+  graceAvailable: boolean;
   adminName: string;
 }
 
@@ -274,10 +286,15 @@ const CLIENT_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
   low: (ctx) => ({
     meterLabel: 'Running low',
     title: `About ${ctx.minutesRemaining} minutes of balance left`,
-    body: ctx.mandatePresent
+    // ⚠ FIX ROUND 2 (R3) — the `false` branch no longer builds its nudge on "interruption".
+    // Nothing interrupts the session on the presence path either way (the presence finalizer is
+    // mode-blind — BAL-535), so a promise phrased around being interrupted was shaky in both
+    // directions. What IS true is the runway: the balance is nearly out, and topping up keeps you
+    // ahead of it. No pause promised, no no-charge promised.
+    body: ctx.graceAvailable
       ? 'Want to top up so nothing interrupts you? You can also keep going — any extra time settles to your card when you wrap up.'
-      : "Top up so nothing interrupts your session — you're near the end of your balance.",
-    cta: ctx.mandatePresent
+      : "You're near the end of your balance — top up whenever you like to stay ahead of it.",
+    cta: ctx.graceAvailable
       ? { kind: 'client_topup', label: 'Top up', secondaryLabel: 'Keep going' }
       : { kind: 'client_topup', label: 'Top up' },
   }),
@@ -315,7 +332,20 @@ const MEMBER_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
   low: (ctx) => ({
     meterLabel: 'Team balance running low',
     title: "Your team's balance is running low",
-    body: `About ${ctx.minutesRemaining} minutes left. Your session won't be interrupted — extra time settles to your team's card afterward. Want to let ${ctx.adminName} know?`,
+    // ⚠ BAL-523 — the member twin of `CLIENT_COPY.low`'s gate. `notify_only` is the schema
+    // DEFAULT for every new wallet, so the un-gated branch is the COMMON case here, not an edge
+    // one: promising "won't be interrupted" to a member whose team is on "Just notify me" is a
+    // promise the meter refuses at zero. Both branches keep the nudge CTA — the member can act
+    // either way.
+    //
+    // ⚠ FIX ROUND 2 (R3) — the `false` branch said "and then we'll pause to settle up". Only the
+    // METER pauses. The call does not stop, and the billing does not stop either: on the presence
+    // path the finalizer posts every billable minute at meeting end regardless of the mode and
+    // settles off-session (BAL-535). So the branch now flags the runway and nudges, and promises
+    // neither a pause nor a no-charge.
+    body: ctx.graceAvailable
+      ? `About ${ctx.minutesRemaining} minutes left. Your session won't be interrupted — extra time settles to your team's card afterward. Want to let ${ctx.adminName} know?`
+      : `About ${ctx.minutesRemaining} minutes left on your team's balance. Want to let ${ctx.adminName} know?`,
     cta: { kind: 'member_nudge', label: `Let ${ctx.adminName} know` },
   }),
   grace: () => ({
@@ -370,7 +400,7 @@ export function deriveDrawdownState(inputs: DrawdownInputs): DrawdownState {
   const ctx: CopyCtx = {
     minutesRemaining,
     remainingBeforeWrap,
-    mandatePresent: inputs.mandatePresent,
+    graceAvailable: inputs.graceAvailable,
     adminName,
   };
   const copy = (inputs.lens === 'client' ? CLIENT_COPY : MEMBER_COPY)[key](ctx);
@@ -389,7 +419,7 @@ export function deriveDrawdownState(inputs: DrawdownInputs): DrawdownState {
     tone: base.tone,
     channels: [...base.channels],
     balanceMinor: inputs.balanceMinor,
-    mandatePresent: inputs.mandatePresent,
+    graceAvailable: inputs.graceAvailable,
     lens: inputs.lens,
     ratePerMinuteMinor: rate,
   };

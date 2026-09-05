@@ -152,7 +152,7 @@ function drawdownStateFor(
     graceBoundMinutes: 30,
     graceEnteredAt: null,
     balanceMinor: 45000,
-    mandatePresent: true,
+    graceAvailable: true,
     lens: 'client',
     // BAL-412 — the billing floor in force + nothing drawn yet; unrelated to this panel's own
     // assertions.
@@ -1152,7 +1152,7 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R5 — the badg
       state: drawdownStateFor({
         status: 'wrapped',
         graceEnteredAt: null,
-        mandatePresent: false,
+        graceAvailable: false,
         balanceMinor: 0,
       }),
       sessionId: 'sess-1',

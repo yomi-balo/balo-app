@@ -20,12 +20,14 @@ export {
   isWalletCardReusableOnSession,
   isCardBackedLowBalanceMode,
   isAbsentPaymentMethodId,
+  walletAllowsOverdraftGrace,
   toSettleableSession,
   CARD_BACKED_LOW_BALANCE_MODES,
   type SettleableSession,
   type MandateWalletFields,
   type CardBackedLowBalanceMode,
   type CardBackedModeWriteGuard,
+  type OverdraftGraceWalletFields,
 } from './settlement';
 export {
   resolveMeetingSettlement,

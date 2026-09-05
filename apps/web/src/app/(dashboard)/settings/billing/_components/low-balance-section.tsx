@@ -30,6 +30,18 @@ interface LowBalanceSectionProps {
   /** Whether the card ALREADY has an active off-session mandate. */
   readonly mandateActive: boolean;
   /**
+   * BAL-523 — whether this wallet already carries consultation time used beyond the balance that
+   * MAY STILL BE CHARGED to the card on file even after switching to "Just notify me"
+   * (`hasUnsettledOverdraftForWallet` — a negative balance, a live session already past zero, or
+   * an ended session whose overdraft settlement is still outstanding; read once per page load,
+   * server truth, not draft state).
+   *
+   * ⚠ FIX ROUND 2 (R2) — it does NOT gate the residual-settlement note/toast any more; it chooses
+   * WHICH LEVER that copy names (remove the card, or reach out). See
+   * `residualSettlementLever`.
+   */
+  readonly hasUnsettledOverdraft: boolean;
+  /**
    * FIX ROUND (review CRITICAL) — fired with the just-persisted config right after a successful
    * Save. `BillingSettingsSections` lifts this into its own `savedConfig` state so the remove
    * dialog's mode-consequence copy tracks an IN-SESSION Save instead of the stale page-load
@@ -80,33 +92,89 @@ const NO_SAVED_CARD_TOAST_DESCRIPTION =
  */
 const NO_SAVED_CARD_INLINE_DESCRIPTION =
   'Add a card in the Payment method section below to use this setting.';
+
+/**
+ * BAL-523, FIX ROUND 1 (F3, security) — the SECOND refusal this Save can hear, and it is not a
+ * variant of `no_saved_card` above: the server refused a move OUT of a card-backed mode because a
+ * session is live on the wallet (`persistLowBalanceConfig`'s `settlement_outstanding` refusal,
+ * the same guard the card CHANGE and REMOVE controls already run). Deliberately NOT the generic
+ * `SAVE_FAILURE_MESSAGE`: a retry cannot fix this, so telling the client to try again would be
+ * false. Warm and factual — this is a wait, not a dead end; the session ends on its own.
+ *
+ * ⚠ FIX ROUND 2 (R5) — NEUTRAL WORDING, because the guard (`hasActiveSessionForWallet`) matches
+ * THREE states and the old copy was true of only one. It also matches a `pending` session that
+ * never connected (no consultation happened, nobody is delivering) and an ENDED session whose
+ * `settlement_status` is still `processing` (it is over). "A consultation is still running." and
+ * "the expert is paid for the time they're delivering" were false on two of the three.
+ */
+const SAVE_BLOCKED_LIVE_SESSION_TITLE = "We're still finalising a consultation.";
+const SAVE_BLOCKED_LIVE_SESSION_DESCRIPTION =
+  "We'll keep your current setting until that's wrapped up. You can switch to Just notify me once it's done.";
 const ARM_WARNING_MESSAGE =
   "We couldn't finish setting up automatic charging — your low-balance setting is saved. You can retry anytime from here.";
 
 /**
- * FIX ROUND 3 (N1) — the TRUTHFUL Save-success copy for the one case the generic
- * `SAVE_SUCCESS_MESSAGE` overstates: saving `notify_only` while the card on file STILL carries
- * an active mandate (`savedCard?.mandateActive === true`, threaded down as the `mandateActive`
- * prop). The generic toast reads like "you're all set", which a client could reasonably take to
- * mean off-session charging has stopped — it has not. Only `saveLowBalanceConfigAction` ran
- * (writes `lowBalanceMode` only); nothing on this Save path revokes the mandate or clears the
- * card (that is `removeSavedCardAction`, a DIFFERENT control, deliberately not fired here — see
- * the ticket's "option (b) explicitly NOT the chosen path"). So the copy states exactly what DID
- * change (automatic top-ups) and names the one control that stops the rest (removing the card).
+ * BAL-523 — REPLACES BAL-516's `NOTIFY_ONLY_MANDATE_ACTIVE_*` pair (that reasoning is gone from
+ * this file, not sitting below).
+ *
+ * ⚠⚠ FIX ROUND 2 (R1 + R2) — THIS COPY WAS SHIPPED FALSE AND IS NOW TRUE. The previous round
+ * claimed "From here we'll pause instead of charging your card" / "Just notify me means we'll
+ * pause rather than charge". **Selecting Just notify me does NOT stop the card being charged.**
+ * BAL-523's gate is in the LIVE METER (`applyActiveTick`), and every production Case session is
+ * `durationSource: 'presence'` — at meeting end the presence finalizer (`settleFromPresence`)
+ * posts every billable minute with no mode check and settles off-session, topping the meter's
+ * refusal straight back up. Net charge is unchanged by this setting. That mode-blind finalizer is
+ * ALSO what guarantees the expert is paid, so it is not fixed here: tracked as **BAL-535**, which
+ * needs an ADR ruling first.
+ *
+ * ⚠ R2 also REVERSED the round-1 `hasUnsettledOverdraft` RE-GATE. That re-gate assumed FUTURE
+ * sessions would be disarmed; they are not. So the truthful trigger is BAL-516's again — a
+ * card-backed → `notify_only` save with a live mandate means overruns are still charged, whether
+ * or not exposure exists right now. `hasUnsettledOverdraft` survives, but as the choice of WHICH
+ * LEVER to name, not as the gate.
+ *
+ * The shared fact both surfaces state: automatic top-ups are off, AND time used beyond the
+ * balance is still settled to the card on file at the end of a consultation.
  */
-const NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_TITLE = 'Automatic top-ups are off.';
-const NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_DESCRIPTION =
-  "Your card stays on file, and Balo may still settle consultation time you've used beyond your balance against it. Remove the card in Payment method to stop that too.";
+const RESIDUAL_SETTLEMENT_TOAST_TITLE = 'Just notify me is on.';
+
+/** Post-Save lead — the mode IS saved by the time this toast renders, so it states the state. */
+const RESIDUAL_SETTLEMENT_TOAST_FACT =
+  'Automatic top-ups are off. Time you use beyond your balance during a consultation is still settled to the card on file when it wraps up.';
 
 /**
- * FIX ROUND 3 (N1) — the same fact, as a standing inline note rather than a one-time toast, so a
- * client who loads the page already on `notify_only` with a live mandate (never having pressed
- * Save this visit) still sees it. Shown whenever the CURRENT draft selection is `notify_only`
- * AND a card with an active mandate is on file — deliberately reading `draft`, not `baseline`,
- * so it also previews truthfully while the client is mid-edit, before they press Save.
+ * Standing-note lead. Phrased as what the OPTION does rather than what is already saved, because
+ * this note reads off `draft` (not `baseline`) and must be true mid-edit, before Save is pressed.
  */
-const NOTIFY_ONLY_MANDATE_ACTIVE_NOTE =
-  "Your card stays on file. Balo may still settle consultation time you've used beyond your balance against it — removing it in the Payment method section below stops that entirely.";
+const RESIDUAL_SETTLEMENT_NOTE_FACT =
+  'Just notify me turns off automatic top-ups. Time you use beyond your balance during a consultation is still settled to the card on file when it wraps up.';
+
+/**
+ * WHICH LEVER TO NAME — this is what `hasUnsettledOverdraft` now decides (R2), and it is the one
+ * job that read is genuinely right for. `detachSavedCard` refuses card removal (409
+ * `settlement_outstanding`) while the wallet has a live session or an open receivable, so:
+ *
+ *  · NO unsettled exposure ⇒ removal is the real lever, and it is named.
+ *  · unsettled exposure ⇒ do NOT point at removal (it is the case most likely to be refused, and
+ *    `payment-method-manager.tsx` was corrected once already for naming an exit the product
+ *    refuses). Name a channel that always exists instead.
+ *
+ * ⚠ NOT A UNIVERSAL, in either direction, and the previous round's comment wrongly claimed one
+ * (R7.1). `hasUnsettledOverdraft`'s arm (0) — `balance_minor < 0` — can fire with no live session
+ * and no receivable (the `findSettledMissingLedgerCredit` state), where removal WOULD be allowed;
+ * and a funded live session refuses removal while this read is false. The mapping is the best
+ * available signal for which lever to LEAD with, not a proof about either one.
+ */
+const RESIDUAL_SETTLEMENT_LEVER_REMOVE_CARD =
+  ' Removing the card in Payment method below stops that.';
+const RESIDUAL_SETTLEMENT_LEVER_REACH_OUT =
+  " There's consultation time on your account still to settle — email support@balo.expert and we'll square it up with you.";
+
+function residualSettlementLever(hasUnsettledOverdraft: boolean): string {
+  return hasUnsettledOverdraft
+    ? RESIDUAL_SETTLEMENT_LEVER_REACH_OUT
+    : RESIDUAL_SETTLEMENT_LEVER_REMOVE_CARD;
+}
 
 const ARM_SUCCESS_TOAST: Record<CardBackedLowBalanceMode, string> = {
   auto_topup: 'Auto top-up turned on.',
@@ -171,6 +239,7 @@ export function LowBalanceSection({
   cardAvailable,
   cardLabel,
   mandateActive,
+  hasUnsettledOverdraft,
   onSaved,
 }: Readonly<LowBalanceSectionProps>): React.JSX.Element {
   const [draft, setDraft] = useState<LowBalanceDraft>(initialConfig);
@@ -182,8 +251,13 @@ export function LowBalanceSection({
   const errors = autoTopupConfigErrors(draft.mode, draft.reloadMinor, draft.thresholdMinor);
   const hasFieldErrors = errors.reload !== undefined || errors.threshold !== undefined;
   const isDirty = !sameDraft(draft, baseline);
-  // FIX ROUND 3 (N1) — see `NOTIFY_ONLY_MANDATE_ACTIVE_NOTE`'s docblock.
-  const showNotifyOnlyMandateNote = draft.mode === 'notify_only' && cardAvailable && mandateActive;
+  // ⚠ FIX ROUND 2 (R2) — BACK TO THE THREE PRE-BAL-523 CONJUNCTS. Round 1 added a fourth
+  // (`hasUnsettledOverdraft`) on the premise that FUTURE sessions would be disarmed by this save.
+  // They are not (see the toast constants' ⚠⚠ note — the presence finalizer is mode-blind), so
+  // narrowing to "a client who has exposure right now" under-warned everyone else. Every
+  // `notify_only` client with a live mandate on a card still has overruns settled to it.
+  // `hasUnsettledOverdraft` still runs — it picks the LEVER, not the gate.
+  const showResidualSettlementNote = draft.mode === 'notify_only' && cardAvailable && mandateActive;
   /**
    * FIX ROUND (F3) — the card-backed mode currently drafted while the wallet has no card, or
    * `null` when Save is not blocked for this reason. This is the THIRD reachability path
@@ -245,14 +319,25 @@ export function LowBalanceSection({
         topupThresholdMinor: draft.thresholdMinor,
       });
       if (!result.ok) {
-        // BAL-524 — the ONE refusal a retry cannot fix. Everything else keeps the generic copy.
-        // `isCardBackedLowBalanceMode(draft.mode)` is a narrowing guard, not a second policy:
-        // the server only ever refuses a card-backed write, so a `no_saved_card` beside a
+        // TWO refusals a retry cannot fix, from two tickets. Each gets its own copy; only the
+        // remaining errors fall through to the generic toast.
+        //
+        // BAL-524. `isCardBackedLowBalanceMode(draft.mode)` is a narrowing guard, not a second
+        // policy: the server only ever refuses a card-backed write, so a `no_saved_card` beside a
         // `notify_only` draft is structurally impossible and falls back to the generic copy
         // rather than indexing a Record it cannot key.
         if (result.error === 'no_saved_card' && isCardBackedLowBalanceMode(draft.mode)) {
           toast.error(`${CARD_BACKED_MODE_TITLE[draft.mode]} needs a card on file.`, {
             description: NO_SAVED_CARD_TOAST_DESCRIPTION,
+          });
+          return;
+        }
+        // BAL-523, FIX ROUND 1 (F3) — the live-session disarm refusal. Mutually exclusive with
+        // the arm above (that one needs a card-backed draft, this one a `notify_only` one), so
+        // the order between them is not a precedence decision.
+        if (result.error === 'settlement_outstanding') {
+          toast.error(SAVE_BLOCKED_LIVE_SESSION_TITLE, {
+            description: SAVE_BLOCKED_LIVE_SESSION_DESCRIPTION,
           });
           return;
         }
@@ -273,12 +358,14 @@ export function LowBalanceSection({
         toast.success(SAVE_SUCCESS_MESSAGE);
         return;
       }
-      // FIX ROUND 3 (N1) — `notify_only` with a still-active mandate is the one case the generic
-      // toast would overstate: the card and its mandate are untouched by this Save (see the
-      // constant's docblock), so off-session settlement can still fire.
-      if (draft.mode === 'notify_only' && mandateActive) {
-        toast.success(NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_TITLE, {
-          description: NOTIFY_ONLY_MANDATE_ACTIVE_TOAST_DESCRIPTION,
+      // ⚠ FIX ROUND 2 (R1 + R2) — the generic "Low-balance settings updated." toast reads like
+      // "you're all set", which a client would reasonably take to mean off-session charging has
+      // stopped. It has not: overruns still settle to the card on file. Same three conjuncts as
+      // the standing note, so the two surfaces cannot disagree.
+      if (draft.mode === 'notify_only' && cardAvailable && mandateActive) {
+        toast.success(RESIDUAL_SETTLEMENT_TOAST_TITLE, {
+          description:
+            RESIDUAL_SETTLEMENT_TOAST_FACT + residualSettlementLever(hasUnsettledOverdraft),
         });
         return;
       }
@@ -291,7 +378,7 @@ export function LowBalanceSection({
     } finally {
       setPending(false);
     }
-  }, [draft, cardAvailable, mandateActive, armedLocally, runArm, onSaved]);
+  }, [draft, cardAvailable, mandateActive, hasUnsettledOverdraft, armedLocally, runArm, onSaved]);
 
   const handleSaveClick = useCallback(() => {
     runSave().catch(() => undefined);
@@ -331,7 +418,7 @@ export function LowBalanceSection({
         cardLabel={cardLabel}
       />
 
-      {showNotifyOnlyMandateNote && (
+      {showResidualSettlementNote && (
         <div className="border-border bg-muted/30 mt-3 flex items-start gap-2 rounded-xl border p-3 text-left">
           <Info
             className="text-muted-foreground mt-0.5 size-4 shrink-0"
@@ -339,7 +426,7 @@ export function LowBalanceSection({
             aria-hidden="true"
           />
           <p className="text-muted-foreground text-xs leading-relaxed font-medium">
-            {NOTIFY_ONLY_MANDATE_ACTIVE_NOTE}
+            {RESIDUAL_SETTLEMENT_NOTE_FACT + residualSettlementLever(hasUnsettledOverdraft)}
           </p>
         </div>
       )}

@@ -38,6 +38,7 @@ const HEALTHY_WALLET = {
   mandateStatus: 'active',
   stripeCustomerId: 'cus_1',
   stripePaymentMethodId: 'pm_1',
+  lowBalanceMode: 'keep_going',
 };
 
 describe('getSessionDrawdownState', () => {
@@ -74,7 +75,7 @@ describe('getSessionDrawdownState', () => {
     const state = await getSessionDrawdownState('session_1', 'owner_user', NOW);
     expect(state?.lens).toBe('client');
     expect(state?.key).toBe('healthy');
-    expect(state?.mandatePresent).toBe(true);
+    expect(state?.graceAvailable).toBe(true);
     expect(mockResolveBillingAdminName).not.toHaveBeenCalled();
   });
 
@@ -95,16 +96,32 @@ describe('getSessionDrawdownState', () => {
     expect(state?.adminName).toBeUndefined();
   });
 
-  it('reflects a no-mandate wallet as mandatePresent false', async () => {
+  it('reflects a no-mandate wallet as graceAvailable false', async () => {
     mockFindWallet.mockResolvedValue({
       balanceMinor: 500,
       mandateStatus: 'none',
       stripeCustomerId: null,
       stripePaymentMethodId: null,
+      lowBalanceMode: 'keep_going',
     });
     const state = await getSessionDrawdownState('session_1', 'owner_user', NOW);
-    expect(state?.mandatePresent).toBe(false);
+    expect(state?.graceAvailable).toBe(false);
     expect(state?.key).toBe('low');
+  });
+
+  it('⚠ BAL-523: a live mandate on a notify_only wallet is graceAvailable FALSE — the panel must not promise a continuation the meter refuses', async () => {
+    mockFindWallet.mockResolvedValue({
+      balanceMinor: 500, // drives the session to the `low` key, same shape as the no-mandate case
+      mandateStatus: 'active',
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+      lowBalanceMode: 'notify_only',
+    });
+    const state = await getSessionDrawdownState('session_1', 'owner_user', NOW);
+    expect(state?.key).toBe('low');
+    expect(state?.graceAvailable).toBe(false);
+    expect(state?.cta?.secondaryLabel).toBeUndefined();
+    expect(state?.body).not.toMatch(/keep going/i);
   });
 
   it('BAL-412 (D5/D6) — threads the floor + minutesAlreadyDrawn early in a session', async () => {

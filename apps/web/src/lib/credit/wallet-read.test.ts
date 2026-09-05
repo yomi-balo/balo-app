@@ -15,8 +15,12 @@ const mockFindById = vi.fn();
 const mockFindBillingIdentityById = vi.fn();
 const mockGetMemberRole = vi.fn();
 const mockFindDisplayById = vi.fn();
+const mockHasUnsettledOverdraftForWallet = vi.fn();
 vi.mock('@balo/db', () => ({
   creditWalletsRepository: { findByCompanyId: (...a: unknown[]) => mockFindByCompanyId(...a) },
+  creditSessionsRepository: {
+    hasUnsettledOverdraftForWallet: (...a: unknown[]) => mockHasUnsettledOverdraftForWallet(...a),
+  },
   fxDisplayRatesRepository: { getLatest: (...a: unknown[]) => mockGetLatest(...a) },
   partyMembershipsRepository: {
     listBillingUserIds: (...a: unknown[]) => mockListBillingUserIds(...a),
@@ -69,6 +73,7 @@ beforeEach(() => {
   mockFindBillingIdentityById.mockResolvedValue(undefined);
   mockGetMemberRole.mockResolvedValue('owner');
   mockFindDisplayById.mockResolvedValue(undefined);
+  mockHasUnsettledOverdraftForWallet.mockResolvedValue(false);
 });
 
 describe('resolveDisplayFx', () => {
@@ -415,7 +420,11 @@ describe('loadBillingSettingsWallet', () => {
         setByName: null,
         setByIsFormerMember: false,
       },
+      hasUnsettledOverdraft: false,
     });
+    // BAL-523 — an unprovisioned wallet runs no query: no wallet row means no session could
+    // ever have drawn it negative.
+    expect(mockHasUnsettledOverdraftForWallet).not.toHaveBeenCalled();
   });
 
   it('returns the projected wallet snapshot + billingEmail for a holder with a wallet row', async () => {
@@ -446,6 +455,7 @@ describe('loadBillingSettingsWallet', () => {
     });
     mockGetMemberRole.mockResolvedValue('owner');
     mockFindDisplayById.mockResolvedValue({ firstName: 'Dana', lastName: 'Okoro' });
+    mockHasUnsettledOverdraftForWallet.mockResolvedValue(true);
 
     const result = await loadBillingSettingsWallet({ id: 'u-1' }, 'co-1');
 
@@ -465,7 +475,9 @@ describe('loadBillingSettingsWallet', () => {
         setByName: 'Dana Okoro',
         setByIsFormerMember: false,
       },
+      hasUnsettledOverdraft: true,
     });
+    expect(mockHasUnsettledOverdraftForWallet).toHaveBeenCalledWith('wallet-1');
   });
 
   it('setByIsFormerMember is true when getMemberRole resolves undefined (departed)', async () => {

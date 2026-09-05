@@ -76,6 +76,7 @@ function walletRow(overrides: Record<string, unknown> = {}): Record<string, unkn
     mandateStatus: 'active',
     stripeCustomerId: 'cus_1',
     stripePaymentMethodId: 'pm_1',
+    lowBalanceMode: 'keep_going',
     ...overrides,
   };
 }
@@ -170,7 +171,15 @@ describe('getSessionDrawdownState', () => {
 
     const state = await getSessionDrawdownState(SESSION_ID, USER_ID, NOW);
 
-    expect(state?.mandatePresent).toBe(false);
+    expect(state?.graceAvailable).toBe(false);
+  });
+
+  it('⚠ BAL-523: a live mandate on a notify_only wallet is graceAvailable false', async () => {
+    mockFindWalletById.mockResolvedValue(walletRow({ lowBalanceMode: 'notify_only' }));
+
+    const state = await getSessionDrawdownState(SESSION_ID, USER_ID, NOW);
+
+    expect(state?.graceAvailable).toBe(false);
   });
 
   it('BAL-412 (D5/D6) — threads the shipped MIN_MEETING_MINUTES floor + minutesAlreadyDrawn', async () => {

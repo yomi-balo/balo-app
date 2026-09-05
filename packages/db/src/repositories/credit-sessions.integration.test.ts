@@ -7,6 +7,7 @@ import {
   DEFAULT_BALO_FEE_BPS,
   DEFAULT_OVERDRAFT_CEILING_MINOR,
 } from '@balo/shared/pricing';
+import { isWalletMandateActive, walletAllowsOverdraftGrace } from '@balo/shared/credit';
 import { db, type Database } from '../client';
 import {
   auditEvents,
@@ -81,6 +82,14 @@ function meterAt(minutes: number): Date {
 interface SetupOpts {
   balanceMinor?: number;
   mandate?: boolean;
+  /**
+   * ⚠⚠ BAL-523 — DELIBERATELY INDEPENDENT OF `mandate`. Never derive one from the other here:
+   * "an active mandate implies a card-backed mode" is EXACTLY the coupling BAL-523 removed from
+   * production, and re-introducing it in the fixture would make every `mandate: true` wallet
+   * grace-capable again, silently un-testing the fix. Omitted ⇒ the schema default
+   * `'notify_only'`. See the FIXTURE GUARD test below.
+   */
+  lowBalanceMode?: 'auto_topup' | 'keep_going' | 'notify_only';
   overdraftCeilingMinor?: number | null;
   estimatedMinutes?: number;
   expertHourlyCents?: number | null;
@@ -98,6 +107,9 @@ async function setup(opts: SetupOpts = {}): Promise<{
     walletValues.mandateStatus = 'active';
     walletValues.stripeCustomerId = 'cus_test';
     walletValues.stripePaymentMethodId = 'pm_test';
+  }
+  if (opts.lowBalanceMode !== undefined) {
+    walletValues.lowBalanceMode = opts.lowBalanceMode;
   }
   if (opts.overdraftCeilingMinor !== undefined) {
     walletValues.overdraftCeilingMinor = opts.overdraftCeilingMinor;
@@ -119,6 +131,20 @@ async function setup(opts: SetupOpts = {}): Promise<{
     memberId: member.id,
   };
 }
+
+/** A wallet that may enter overdraft grace — states BOTH facts, at the call site, every time. */
+const GRACE_CAPABLE = { mandate: true, lowBalanceMode: 'keep_going' } as const;
+
+describe('setup() fixture contract — BAL-523', () => {
+  it('⚠ FIXTURE GUARD: setup({ mandate: true }) alone must NOT produce a grace-capable wallet', async () => {
+    const ctx = await setup({ balanceMinor: 500, mandate: true }); // no lowBalanceMode option
+    const wallet = await creditWalletsRepository.findById(ctx.walletId);
+    if (wallet === undefined) throw new Error('seed failed');
+    expect(wallet.lowBalanceMode).toBe('notify_only'); // the schema default
+    expect(isWalletMandateActive(wallet)).toBe(true); // …with a live mandate
+    expect(walletAllowsOverdraftGrace(wallet)).toBe(false); // …and STILL no grace
+  });
+});
 
 /** `open` a session, asserting acceptance, and return the created session id. */
 async function openOk(
@@ -201,7 +227,11 @@ describe('creditSessionsRepository.open — gate', () => {
     expect(await creditHoldsRepository.sumActiveByWallet(ctx.walletId)).toBe(0);
   });
 
-  it('accepts a zero-balance wallet WITH an active mandate (the grace path)', async () => {
+  // ⚠ R9 — the title used to say "(the grace path)". `setup()` leaves `lowBalanceMode` at its
+  // `notify_only` schema default, so post-BAL-523 this wallet is precisely one that will NOT
+  // enter grace. What it proves is the CONNECT GATE, which is mandate-only by the 2026-09-04
+  // ruling — the grace path is pinned by the ⚠ BAL-523 test just below.
+  it('accepts a zero-balance wallet WITH an active mandate (the connect gate is mandate-only)', async () => {
     const ctx = await setup({ balanceMinor: 0, mandate: true });
     const res = await creditSessionsRepository.open({
       walletId: ctx.walletId,
@@ -211,6 +241,41 @@ describe('creditSessionsRepository.open — gate', () => {
       estimatedMinutes: 10,
     });
     expect(res.ok).toBe(true);
+  });
+
+  /**
+   * ⚠⚠ BAL-523, THE EXECUTABLE STATEMENT OF THE 2026-09-04 RULING. The connect gate is
+   * MANDATE-ONLY and must stay that way: `openCaseSessionBestEffort` may never fail a join, so a
+   * refusal here creates NO session row — the consultation happens, nothing meters and the expert
+   * is unpaid. So a `notify_only` client with a live mandate and an UNFUNDED estimate OPENS and
+   * METERS normally, and BAL-523's promise is delivered entirely at the far end: the meter
+   * refuses grace at zero and warm-wraps instead of carrying them onto the card.
+   *
+   * If anyone re-tightens `open()` on `walletAllowsOverdraftGrace`, the first half of this test
+   * fails. If anyone loosens grace entry back to the mandate alone, the second half fails.
+   */
+  it('⚠ BAL-523: a notify_only wallet with a LIVE mandate and an UNFUNDED estimate OPENS, then warm-wraps at zero without entering grace', async () => {
+    // balance 500, estimate 10×250 = 2500 ⇒ unfunded; mandate live, mode `notify_only`.
+    const ctx = await setup({ balanceMinor: 500, mandate: true, lowBalanceMode: 'notify_only' });
+    const res = await creditSessionsRepository.open({
+      walletId: ctx.walletId,
+      companyId: ctx.companyId,
+      expertProfileId: ctx.expertProfileId,
+      initiatingMemberId: ctx.memberId,
+      estimatedMinutes: 10,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    await creditSessionsRepository.connect(res.session.id, { now: BASE });
+    // min1 250, min2 0, min3 would cross to −250 → refused, wrapped, nothing posted.
+    const metered = await creditSessionsRepository.meterSessionToNow(res.session.id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    expect(metered.session.status).toBe('wrapped');
+    expect(metered.transitions.graceEntered).toBeUndefined();
+    expect(metered.session.graceEnteredAt).toBeNull();
+    expect(await walletBalance(ctx.walletId)).toBe(0); // never carried past zero
   });
 
   it('rejects account_hold when the company has an open receivable', async () => {
@@ -355,7 +420,11 @@ describe('creditSessionsRepository.open — settlement-pending gate', () => {
   }
 
   it('rejects settlement_pending while a prior overdraft is unsettled (balance < 0, no receivable)', async () => {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     await endWithProcessingOverdraft(ctx);
 
     // The prior session is ENDED (no session_in_progress) and there is NO open receivable — the
@@ -371,7 +440,11 @@ describe('creditSessionsRepository.open — settlement-pending gate', () => {
   });
 
   it('rejects settlement_pending on the processing predicate even when a positive credit masks the negative balance', async () => {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const { sessionId, overdraftMinor } = await endWithProcessingOverdraft(ctx); // −1000, processing
 
     // An INDEPENDENT positive credit (manual_purchase / auto_topup — handlers built this lane)
@@ -394,7 +467,11 @@ describe('creditSessionsRepository.open — settlement-pending gate', () => {
   });
 
   it('allows a new session once the settlement credit lands (balance back to exactly 0)', async () => {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const { sessionId, overdraftMinor } = await endWithProcessingOverdraft(ctx);
 
     // Simulate the payment_intent.succeeded webhook: the overdraft_settlement credit (== overdraft
@@ -427,7 +504,11 @@ describe('creditSessionsRepository.open — settlement-pending gate', () => {
   });
 
   it('account_hold WINS over settlement_pending when a failed settlement left a receivable', async () => {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const { sessionId, overdraftMinor } = await endWithProcessingOverdraft(ctx);
 
     // The settlement FAILED → a receivable is opened while the balance is still negative, so BOTH
@@ -608,9 +689,13 @@ describe('creditSessionsRepository.meterSessionToNow — tick posting + idempote
 });
 
 describe('creditSessionsRepository.meterSessionToNow — grace / wrap state machine', () => {
-  it('enters grace at zero-with-mandate and posts the crossing (negative) tick', async () => {
+  it('enters grace with an active mandate AND a card-backed mode, posting the crossing (negative) tick', async () => {
     // balance 500 → min1 250, min2 0, min3 crosses to −250 → grace.
-    const ctx = await setup({ balanceMinor: 500, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 500,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const id = await openOk(ctx, 2);
     await creditSessionsRepository.connect(id, { now: BASE });
 
@@ -643,9 +728,27 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
     expect(wallet?.balanceMinor).toBe(0); // never went negative
   });
 
+  it('⚠ BAL-523: stops WITHOUT overdraft at zero when the mandate is LIVE but the mode is notify_only', async () => {
+    // balance 500, mandate live but notify_only → min1 250, min2 0, min3 would cross → STOP.
+    const ctx = await setup({ balanceMinor: 500, mandate: true, lowBalanceMode: 'notify_only' });
+    const id = await openOk(ctx, 2);
+    await creditSessionsRepository.connect(id, { now: BASE });
+
+    const res = await creditSessionsRepository.meterSessionToNow(id, meterAt(3), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    expect(res.session.status).toBe('wrapped');
+    expect(res.transitions.wrapped).toBe(true);
+    expect(res.transitions.graceEntered).toBeUndefined();
+    expect(res.session.graceEnteredAt).toBeNull();
+    expect(res.session.lastTickSeq).toBe(2); // the crossing minute was NOT posted
+    const wallet = await creditWalletsRepository.findById(ctx.walletId);
+    expect(wallet?.balanceMinor).toBe(0); // never went negative
+  });
+
   it('wraps at the overdraft ceiling (ceilingHit), charging the completing minute (≤1-min overshoot)', async () => {
     // ceiling 500: min1 250, min2 0, min3 grace −250, min4 −500 (|−500| ≥ 500) → wrap.
-    const ctx = await setup({ balanceMinor: 500, mandate: true, overdraftCeilingMinor: 500 });
+    const ctx = await setup({ balanceMinor: 500, ...GRACE_CAPABLE, overdraftCeilingMinor: 500 });
     const id = await openOk(ctx, 2);
     await creditSessionsRepository.connect(id, { now: BASE });
 
@@ -661,7 +764,11 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
   });
 
   it('wraps on the 30-min (grace-bound) timeout when the ceiling is not reached', async () => {
-    const ctx = await setup({ balanceMinor: 250, mandate: true, overdraftCeilingMinor: 1_000_000 });
+    const ctx = await setup({
+      balanceMinor: 250,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 1_000_000,
+    });
     const id = await openOk(ctx, 1);
     await creditSessionsRepository.connect(id, { now: BASE });
     // Shrink the grace bound snapshot to 3 min for a fast, deterministic time-bound wrap.
@@ -682,7 +789,7 @@ describe('creditSessionsRepository.meterSessionToNow — grace / wrap state mach
 
 describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion', () => {
   it('promo is EXCLUDED from the settlement basis (overdraftSettledMinor = |terminal negative|)', async () => {
-    const ctx = await setup({ mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({ ...GRACE_CAPABLE, overdraftCeilingMinor: 100_000 });
     // Single fungible balance = 3000 promo + 2000 paid = 5000; drain to a terminal −1000.
     await credit(ctx.walletId, 'promo', 3000);
     await credit(ctx.walletId, 'manual_purchase', 2000, ctx.memberId);
@@ -703,7 +810,11 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
   });
 
   it('finalizes the expert accrual + writes the expert_accrued audit row EVEN WITH overdraft', async () => {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
@@ -777,7 +888,11 @@ describe('creditSessionsRepository.end — accrual, overdraft, promo exclusion',
 
 describe('creditSessionsRepository.markSettlementResult', () => {
   it('marks settled, stamping settledAt + the PaymentIntent', async () => {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
@@ -797,7 +912,11 @@ describe('creditSessionsRepository.markSettlementResult', () => {
   });
 
   it('marks failed without stamping settledAt', async () => {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
@@ -914,7 +1033,11 @@ describe('creditSessionsRepository — reads + fee/PII projection', () => {
     expect(idle.map((s) => s.id)).toContain(wrappedId);
 
     // Stuck settling — end with overdraft (processing), backdate endedAt.
-    const ctx2 = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx2 = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const settleId = await openOk(ctx2, 10);
     await creditSessionsRepository.connect(settleId, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(settleId, meterAt(24), {
@@ -1170,6 +1293,9 @@ describe('creditSessionsRepository — external duration lifecycle (BAL-399)', (
 
   it('draws the FULL confirmed minutes with no ceiling clamp (Owner Decision 3 → overdraft)', async () => {
     // Small balance + mandate: 30 min × 250 = 7500 vs 5000 balance → −2500 overdraft, no clamp.
+    // ⚠ BAL-523 — deliberately NOT card-backed. The BAL-133 external finalizer draws the
+    // confirmed minutes regardless of mode; only LIVE grace entry gained the mode conjunct. If
+    // this ever starts failing, the mode conjunct has leaked into a settlement path.
     const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100 });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
@@ -1183,6 +1309,11 @@ describe('creditSessionsRepository — external duration lifecycle (BAL-399)', (
     const end = await creditSessionsRepository.end(id, { now: meterAt(30) });
     expect(end.overdraftMinor).toBe(30 * CLIENT_RATE_PER_MIN - 5000); // 2500
     expect(end.expertAccruedMinor).toBe(30 * EXPERT_RATE_PER_MIN); // full minutes accrued
+    // ⚠ BAL-523 ASYMMETRY, AT `end()` — the return that actually drives the live
+    // `settleOverdraft`. This wallet is `notify_only` (the fixture default) with a live mandate
+    // and a real 2500 overdraft, so a "consistency" sweep of `end()`'s `mandateActive` onto
+    // `walletAllowsOverdraftGrace` would flip this to false and strand a collectable debt.
+    expect(end.mandateActive).toBe(true);
   });
 
   it('bounds tick posting to ONCE — a second finalize with DIFFERENT minutes conflicts (TOCTOU)', async () => {
@@ -1245,7 +1376,11 @@ describe('creditSessionsRepository — displayed client charge == ledger-settled
     // 2 funded minutes (balance 500) then a mandate-backed grace/overdraft run — so at least one
     // metered minute is a grace/overdraft minute (balance driven negative), the case that would
     // expose any divergence between the DISPLAYED figure and the actual ledger draw.
-    const ctx = await setup({ balanceMinor: 500, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 500,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(5), {
@@ -1400,7 +1535,11 @@ describe('creditSessionsRepository.findSettledMissingLedgerCredit (settled-witho
    * credit exists beside it is the variable under test.
    */
   async function settledOverdraftSession(settledAt: Date): Promise<SettledSession> {
-    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100_000 });
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
     const id = await openOk(ctx, 10);
     await creditSessionsRepository.connect(id, { now: BASE });
     await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
@@ -1575,6 +1714,173 @@ describe('creditSessionsRepository.hasActiveSessionForWallet', () => {
     const id = await openOk(ctx);
     await db.update(creditSessions).set({ deletedAt: new Date() }).where(eq(creditSessions.id, id));
     expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
+  });
+});
+
+// ── hasUnsettledOverdraftForWallet (BAL-523 settings re-gate) ───────────────────────────────
+
+describe('creditSessionsRepository.hasUnsettledOverdraftForWallet', () => {
+  it('is false for a wallet with no sessions', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      false
+    );
+  });
+
+  it('is false for a LIVE active session that has never entered grace', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db.update(creditSessions).set({ status: 'active' }).where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      false
+    );
+  });
+
+  it('is true for a session currently IN grace', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'grace', graceEnteredAt: new Date() })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      true
+    );
+  });
+
+  it('is true for a session WRAPPED after having entered grace', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'wrapped', graceEnteredAt: new Date() })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      true
+    );
+  });
+
+  it('is true for an ENDED session whose settlement is still `processing` with a real overdraft', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'ended', settlementStatus: 'processing', overdraftSettledMinor: 1000 })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      true
+    );
+  });
+
+  it('⚠ is true for an ENDED session whose settlement `failed` — the arm hasActiveSessionForWallet MISSES', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'ended', settlementStatus: 'failed', overdraftSettledMinor: 1000 })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      true
+    );
+  });
+
+  it('is false for an ENDED session that has SETTLED', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'ended', settlementStatus: 'settled', overdraftSettledMinor: 1000 })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      false
+    );
+  });
+
+  // ⚠ FIX ROUND 1 (F8) — arm (b)'s status list was unpinned beyond `failed`: narrowing it to
+  // `['processing']` failed exactly one test, and removing ONLY `requires_action` failed none.
+  // The `overdraft_settled_minor > 0` conjunct was likewise unpinned. These two close both holes.
+  it('⚠ is true for an ENDED session whose settlement is `requires_action` — an SCA challenge the client can still complete', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'ended', settlementStatus: 'requires_action', overdraftSettledMinor: 1000 })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasActiveSessionForWallet(ctx.walletId, db)).toBe(false);
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      true
+    );
+  });
+
+  it('⚠ is false for a `processing` settlement with NO overdraft — the amount conjunct, not just the status', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({ status: 'ended', settlementStatus: 'processing', overdraftSettledMinor: 0 })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      false
+    );
+  });
+
+  it('is false when the only session with an unsettled overdraft is soft-deleted', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx);
+    await db
+      .update(creditSessions)
+      .set({
+        status: 'grace',
+        graceEnteredAt: new Date(),
+        deletedAt: new Date(),
+      })
+      .where(eq(creditSessions.id, id));
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      false
+    );
+  });
+
+  // ── arm (0): the balance itself is negative (FIX ROUND 1, F4) ──────────────────────────
+  //
+  // The grace-keyed arm (a) is blind to every path that draws the wallet negative WITHOUT
+  // stamping `grace_entered_at` — the BAL-133 external finalizer and `settleFromPresence`, both
+  // of which post unclamped ticks by design (Owner Decision 3). Driven here through the REAL
+  // repository call, not a hand-set row, so the gap is proved rather than posited.
+  it('⚠ is true while the BAL-133 external finalizer holds the wallet NEGATIVE with grace never entered', async () => {
+    const ctx = await setup({ balanceMinor: 5000, mandate: true, overdraftCeilingMinor: 100 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+    await creditSessionsRepository.parkAwaitingDuration(id);
+
+    // 30 min × 250 = 7500 vs 5000 → −2500, unclamped, and `active` again.
+    const applied = await creditSessionsRepository.applyExternalDuration(id, 30);
+    expect(applied.status).toBe('active');
+    expect(applied.graceEnteredAt).toBeNull(); // ⚠ arm (a) cannot see this session
+    // ⚠ nor can arm (b): the column is still NULL pre-finalization, and `gt(col, 0)` is NULL
+    // (not TRUE) on a NULL — so neither of the two original arms matches this row.
+    expect(applied.overdraftSettledMinor).toBeNull();
+    expect(await walletBalance(ctx.walletId)).toBe(-2500);
+
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      true
+    );
+  });
+
+  it('⚠ arm (0) does NOT fire on a funded wallet — a live, unfinalized session on a positive balance stays quiet', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await markExternal(id);
+    await creditSessionsRepository.parkAwaitingDuration(id);
+
+    const applied = await creditSessionsRepository.applyExternalDuration(id, 30);
+    expect(applied.status).toBe('active');
+    expect(await walletBalance(ctx.walletId)).toBe(50_000 - 30 * CLIENT_RATE_PER_MIN); // still positive
+    expect(await creditSessionsRepository.hasUnsettledOverdraftForWallet(ctx.walletId, db)).toBe(
+      false
+    );
   });
 });
 
@@ -2952,6 +3258,9 @@ describe('creditSessionsRepository.settleFromPresence — overdraft', () => {
     // Owner Decision 3, applied to the floor: the live ceiling is a UX pause, never a billing
     // cap. Five minutes of balance, a fifteen-minute floor — the overflow becomes an
     // off-session settlement, not a discount.
+    // ⚠ BAL-523 — deliberately NOT card-backed (`mandate: true` alone ⇒ the `notify_only`
+    // default). `openPresence` estimates FLOOR_MINUTES (3750) against a 1250 balance, so this
+    // ALSO pins that the `open()` connect gate stayed mandate-only through BAL-523.
     const ctx = await setup({
       balanceMinor: 5 * CLIENT_RATE_PER_MIN,
       mandate: true,
@@ -2973,6 +3282,30 @@ describe('creditSessionsRepository.settleFromPresence — overdraft', () => {
     // The expert is paid the SAME floored figure regardless of whether the client's card ever
     // settles — the expert-always-paid guarantee, unchanged by ADR-1044 §7.
     expect(res.session.expertAccruedMinor).toBe(15 * EXPERT_RATE_PER_MIN);
+  });
+
+  it('⚠ BAL-523 ASYMMETRY: settlement is STILL mandate-only — a wallet the grace predicate REFUSES settles anyway', async () => {
+    const ctx = await setup({
+      balanceMinor: 5 * CLIENT_RATE_PER_MIN, // 1250
+      mandate: true,
+      lowBalanceMode: 'notify_only',
+      overdraftCeilingMinor: 100_000,
+    });
+    // ⚠ Read the two predicates on the ACTUAL seeded row, so the asymmetry is executable here and
+    // not merely implied by the fixture options: grace entry would refuse this wallet…
+    const seeded = await creditWalletsRepository.findById(ctx.walletId);
+    if (seeded === undefined) throw new Error('seed failed');
+    expect(walletAllowsOverdraftGrace(seeded)).toBe(false);
+    expect(isWalletMandateActive(seeded)).toBe(true);
+
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId, 5);
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { actualMinutes: 15, shape: 'held', outcome: 'completed' })
+    );
+    expect(res.overdraftMinor).toBe(10 * CLIENT_RATE_PER_MIN);
+    expect(res.mandateActive).toBe(true); // …but the DEBT is still collectable
+    expect(res.session.settlementStatus).toBe('processing');
   });
 });
 

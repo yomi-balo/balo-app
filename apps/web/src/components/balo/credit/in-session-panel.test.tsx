@@ -25,7 +25,7 @@ function build(partial: Partial<DrawdownInputs>): DrawdownState {
     graceBoundMinutes: 30,
     graceEnteredAt: null,
     balanceMinor: 45000,
-    mandatePresent: true,
+    graceAvailable: true,
     lens: 'client',
     // BAL-412 — the floor (15) is already fully drawn by CONNECTED_AT (42min elapsed), so
     // `minutesOfRunway` reduces to the pre-BAL-412 `floor(balance/rate)` bit-for-bit — this
@@ -55,10 +55,10 @@ const STATES = {
     graceEnteredAt: new Date('2026-07-16T11:30:00.000Z'),
     balanceMinor: -15000,
   }),
-  endNoMandate: build({
+  endNoGrace: build({
     status: 'wrapped',
     graceEnteredAt: null,
-    mandatePresent: false,
+    graceAvailable: false,
     balanceMinor: 0,
   }),
   lowMember: build({ balanceMinor: 3600, lens: 'member', adminName: 'Sam' }),
@@ -129,8 +129,10 @@ describe('InSessionPanel — client lens', () => {
     expect(screen.getByRole('button', { name: 'Top up to continue' })).toBeInTheDocument();
   });
 
-  it('end (no mandate): warm balance-used wrap', () => {
-    renderPanel(STATES.endNoMandate);
+  // ⚠ R9 — renamed from `endNoMandate`. Since BAL-523 `graceAvailable: false` is reached by an
+  // absent mandate OR a `notify_only` mode, so the old name named only half its own fixture.
+  it('end (no grace): warm balance-used wrap', () => {
+    renderPanel(STATES.endNoGrace);
     expect(screen.getByText("You're at the end of your balance")).toBeInTheDocument();
   });
 });

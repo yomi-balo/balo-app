@@ -130,7 +130,12 @@ async function settleOverdraft(
     overdraftSettledMinor: overdraftMinor,
   });
 
-  // Grace only opens WITH a mandate, so this holds — but a mandate revoked mid-grace is possible.
+  // Grace only opens with a mandate AND a card-backed mode (BAL-523), so this holds — but a
+  // mandate revoked mid-grace is possible. ⚠ THE ASYMMETRY IS DELIBERATE: settlement gates on
+  // the MANDATE ALONE and must stay that way. A client who switches to "Just notify me" while
+  // a session is already in grace is still charged for that session — the grace opened under
+  // consent that was live at the time, and gating settlement on the current mode would open a
+  // payment-evasion window that breaks ADR-1040's "expert always gets paid, with no asterisk".
   const wallet = mandateActive
     ? await creditWalletsRepository.findById(session.walletId)
     : undefined;

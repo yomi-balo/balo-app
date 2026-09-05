@@ -62,7 +62,13 @@ describe('BillingSettingsSections', () => {
       modeReconciled: true,
     });
 
-    render(<BillingSettingsSections wallet={WALLET} billingEmail={BILLING_EMAIL} />);
+    render(
+      <BillingSettingsSections
+        wallet={WALLET}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
 
     // Before removal: Auto top-up selected (the wallet's real mode), card present.
     expect(screen.getByRole('radio', { name: /Auto top-up/i })).toBeChecked();
@@ -98,7 +104,13 @@ describe('BillingSettingsSections', () => {
       modeReconciled: true,
     });
 
-    render(<BillingSettingsSections wallet={WALLET} billingEmail={BILLING_EMAIL} />);
+    render(
+      <BillingSettingsSections
+        wallet={WALLET}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove card' }));
     await userEvent.click(
@@ -115,7 +127,13 @@ describe('BillingSettingsSections', () => {
     mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
     const wallet: WalletSnapshot = { ...WALLET, lowBalanceMode: 'notify_only' };
 
-    render(<BillingSettingsSections wallet={wallet} billingEmail={BILLING_EMAIL} />);
+    render(
+      <BillingSettingsSections
+        wallet={wallet}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
 
     expect(screen.getByRole('radio', { name: /Just notify me/i })).toBeChecked();
 
@@ -145,7 +163,11 @@ describe('BillingSettingsSections', () => {
     });
 
     const { rerender } = render(
-      <BillingSettingsSections wallet={WALLET} billingEmail={BILLING_EMAIL} />
+      <BillingSettingsSections
+        wallet={WALLET}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove card' }));
@@ -165,7 +187,13 @@ describe('BillingSettingsSections', () => {
       lowBalanceMode: 'notify_only',
       savedCard: null,
     };
-    rerender(<BillingSettingsSections wallet={walletAfterRemoval} billingEmail={BILLING_EMAIL} />);
+    rerender(
+      <BillingSettingsSections
+        wallet={walletAfterRemoval}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
     expect(screen.getByRole('button', { name: /add a card/i })).toBeInTheDocument();
 
     // A LATER Add flow completes — even a card that happens to share the exact same brand/last4
@@ -181,7 +209,13 @@ describe('BillingSettingsSections', () => {
         mandateActive: false,
       },
     };
-    rerender(<BillingSettingsSections wallet={walletWithNewCard} billingEmail={BILLING_EMAIL} />);
+    rerender(
+      <BillingSettingsSections
+        wallet={walletWithNewCard}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
 
     expect(await screen.findByText('Mastercard •••• 1111')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add a card/i })).not.toBeInTheDocument();
@@ -195,7 +229,13 @@ describe('BillingSettingsSections', () => {
     });
     const wallet: WalletSnapshot = { ...WALLET, lowBalanceMode: 'notify_only' };
 
-    render(<BillingSettingsSections wallet={wallet} billingEmail={BILLING_EMAIL} />);
+    render(
+      <BillingSettingsSections
+        wallet={wallet}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove card' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Remove card' }));
@@ -211,7 +251,13 @@ describe('BillingSettingsSections', () => {
   it('a removal failure leaves both sections untouched — nothing local changes', async () => {
     mockRemoveSavedCardAction.mockResolvedValue({ ok: false, error: 'error' });
 
-    render(<BillingSettingsSections wallet={WALLET} billingEmail={BILLING_EMAIL} />);
+    render(
+      <BillingSettingsSections
+        wallet={WALLET}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove card' }));
     await userEvent.click(
@@ -249,7 +295,11 @@ describe('BillingSettingsSections', () => {
     });
 
     const { rerender } = render(
-      <BillingSettingsSections wallet={WALLET} billingEmail={BILLING_EMAIL} />
+      <BillingSettingsSections
+        wallet={WALLET}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Remove card' }));
@@ -263,7 +313,13 @@ describe('BillingSettingsSections', () => {
     // The FIRST post-removal refresh — attributed to removal's own `router.refresh()` — still
     // names the OLD card (an edge case: e.g. a stale read). The ref must skip it regardless.
     const staleFirstRefresh: WalletSnapshot = { ...WALLET, lowBalanceMode: 'notify_only' };
-    rerender(<BillingSettingsSections wallet={staleFirstRefresh} billingEmail={BILLING_EMAIL} />);
+    rerender(
+      <BillingSettingsSections
+        wallet={staleFirstRefresh}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
     expect(screen.getByRole('button', { name: /add a card/i })).toBeInTheDocument();
     expect(screen.queryByText('Visa •••• 4242')).not.toBeInTheDocument();
 
@@ -279,7 +335,13 @@ describe('BillingSettingsSections', () => {
         mandateActive: false,
       },
     };
-    rerender(<BillingSettingsSections wallet={genuinelyNewCard} billingEmail={BILLING_EMAIL} />);
+    rerender(
+      <BillingSettingsSections
+        wallet={genuinelyNewCard}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
     expect(await screen.findByText('Mastercard •••• 1111')).toBeInTheDocument();
   });
 
@@ -297,7 +359,12 @@ describe('BillingSettingsSections', () => {
       wallet,
     }: Readonly<{ companyId: string; wallet: WalletSnapshot }>): React.JSX.Element {
       return (
-        <BillingSettingsSections key={companyId} wallet={wallet} billingEmail={BILLING_EMAIL} />
+        <BillingSettingsSections
+          key={companyId}
+          wallet={wallet}
+          billingEmail={BILLING_EMAIL}
+          hasUnsettledOverdraft={false}
+        />
       );
     }
 
@@ -335,5 +402,40 @@ describe('BillingSettingsSections', () => {
     expect(
       await screen.findByRole('button', { name: 'Remove card & switch to Just notify me' })
     ).toBeInTheDocument();
+  });
+
+  it('forwards hasUnsettledOverdraft to LowBalanceSection on every render — never latched into local state (BAL-523)', async () => {
+    const wallet: WalletSnapshot = { ...WALLET, lowBalanceMode: 'notify_only' };
+
+    // ⚠ FIX ROUND 2 (R2) — the prop no longer gates the residual-settlement note's PRESENCE (the
+    // note is shown to every `notify_only` client with a live mandate on a card, because overruns
+    // are still settled to it); it chooses which LEVER the note names. So this test flips the
+    // LEVER rather than the note, and still proves the prop is read fresh on every render.
+    const { rerender } = render(
+      <BillingSettingsSections
+        wallet={wallet}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={false}
+      />
+    );
+    expect(
+      screen.getByText(/Removing the card in Payment method below stops that\./)
+    ).toBeInTheDocument();
+
+    // Same `wallet` object, only `hasUnsettledOverdraft` changes — must repaint immediately.
+    // Proves the prop is read fresh every render (server truth per render), not captured into
+    // `useState` at mount the way `savedConfig` deliberately IS — see this component's docblock
+    // for why `hasUnsettledOverdraft` must NOT get the same treatment.
+    rerender(
+      <BillingSettingsSections
+        wallet={wallet}
+        billingEmail={BILLING_EMAIL}
+        hasUnsettledOverdraft={true}
+      />
+    );
+    expect(screen.getByText(/email support@balo\.expert/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Removing the card in Payment method below stops that\./)
+    ).not.toBeInTheDocument();
   });
 });
