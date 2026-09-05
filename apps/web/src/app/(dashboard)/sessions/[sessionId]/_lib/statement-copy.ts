@@ -89,6 +89,12 @@ export const STATEMENT_SHARED_COPY = {
   // same fact differently.
   datePending: 'Date pending', // pending-MJ
   counterpartyPrefix: 'with', // pending-MJ
+  // BAL-519 — the rate-limited inline state. SHARED by both lenses (D4). Calm, not scolding, and
+  // deliberately NO countdown: the api's cooldown is carried on the error for the PDF route's
+  // `Retry-After` header, never rendered.
+  rateLimitedHeading: 'Hold tight', // pending-MJ
+  rateLimitedBody: "You're loading this a little quickly — try again in a minute.", // pending-MJ
+  rateLimitedAction: 'Try again', // pending-MJ
 } as const;
 
 /** PDF footer pagination. A function, not a fragment, so the sentence stays reviewable whole. */

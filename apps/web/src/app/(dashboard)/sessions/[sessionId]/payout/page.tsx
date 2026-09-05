@@ -4,10 +4,14 @@ import { getCurrentUser } from '@/lib/auth/session';
 import { errorMessage, log } from '@/lib/logging';
 import { trackServerAndFlush, CASE_BILLING_SERVER_EVENTS } from '@/lib/analytics/server';
 import { EntityCrumb } from '@/components/layout/breadcrumb-context';
-import { loadSessionStatement } from '../_lib/load-session-statement';
+import {
+  loadSessionStatement,
+  SessionStatementRateLimitedError,
+} from '../_lib/load-session-statement';
 import { resolveStatementEntrySource } from '../_lib/resolve-statement-source';
 import { STATEMENT_COPY } from '../_lib/statement-copy';
 import { StatementShell } from '../_components/statement-shell';
+import { StatementRateLimited } from '../_components/statement-rate-limited';
 
 interface PayoutPageProps {
   /** ⚠ NEXT 16 — `params` AND `searchParams` are Promises. They MUST be awaited. */
@@ -62,6 +66,18 @@ export default async function PayoutPage({
   try {
     view = await loadSessionStatement(sessionId, user.id, 'expert');
   } catch (error) {
+    // BAL-519 — the api's per-user limiter refused this read. A calm INLINE state, never
+    // `error.tsx` (whose copy says "this is on our side" — untrue here) and never `notFound()`
+    // (which would say the payout does not exist). NO `SESSION_STATEMENT_VIEWED` event: we return
+    // before the tracking call, the same structural rule as the `notFound()` path.
+    if (error instanceof SessionStatementRateLimitedError) {
+      log.warn('Session statement page rate-limited', {
+        sessionId,
+        userId: user.id,
+        lens: 'expert',
+      });
+      return <StatementRateLimited lens="expert" sessionId={sessionId} />;
+    }
     log.error('Failed to load session statement', {
       sessionId,
       userId: user.id,

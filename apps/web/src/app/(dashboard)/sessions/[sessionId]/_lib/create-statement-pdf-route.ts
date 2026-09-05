@@ -6,7 +6,11 @@ import { log } from '@/lib/logging';
 import { trackServerAndFlush, CASE_BILLING_SERVER_EVENTS } from '@/lib/analytics/server';
 import { renderSessionStatementPdfToBuffer } from '@/lib/credit/statement/pdf/session-statement-pdf-document';
 import { statementPdfFileName } from '@/lib/credit/statement/pdf/statement-pdf-file-name';
-import { loadSessionStatement, SessionStatementUnavailableError } from './load-session-statement';
+import {
+  loadSessionStatement,
+  SessionStatementRateLimitedError,
+  SessionStatementUnavailableError,
+} from './load-session-statement';
 import { isStatementDownloadable } from './session-statement-view';
 
 /** The two lens literals, matching `loadSessionStatement` and `statementPdfFileName`. */
@@ -62,6 +66,26 @@ export function createStatementPdfRoute(lens: StatementLens): StatementPdfHandle
     try {
       view = await loadSessionStatement(sessionId, user.id, lens);
     } catch (error) {
+      // BAL-519 — the api's per-user limiter refused the gate read. Answer 429 and STOP: no render
+      // (the whole point — a `@react-pdf/renderer` pass on Vercel is the expensive half of this
+      // loop), and no `SESSION_STATEMENT_DOWNLOADED` event, which fires further down only after a
+      // successful render. `null` body, matching this handler's 401/404/500 shape.
+      if (error instanceof SessionStatementRateLimitedError) {
+        log.warn('Session statement PDF rate-limited', {
+          sessionId,
+          userId: user.id,
+          lens,
+          retryAfterSeconds: error.retryAfterSeconds,
+        });
+        return new Response(null, {
+          status: 429,
+          // ⚠ ONLY when the api supplied a number. A `Retry-After` synthesised from a missing
+          // cooldown would be a fabricated promise, and `Retry-After: null` is not a valid header.
+          ...(error.retryAfterSeconds === null
+            ? {}
+            : { headers: { 'Retry-After': String(error.retryAfterSeconds) } }),
+        });
+      }
       if (error instanceof SessionStatementUnavailableError) {
         log.error('Session statement PDF gate resolution failed', {
           sessionId,

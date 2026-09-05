@@ -5,6 +5,7 @@ import { render, screen } from '@/test/utils';
 import ReceiptLoading from './loading';
 import ReceiptError from './error';
 import ReceiptNotFound from './not-found';
+import { StatementRateLimited } from '../_components/statement-rate-limited';
 
 describe('ReceiptLoading', () => {
   it('announces itself as the client-lens labelled loading region', () => {
@@ -47,6 +48,13 @@ describe('Receipt route states — accessibility', () => {
 
   it('ReceiptNotFound has no accessibility violations', async () => {
     const { container } = render(<ReceiptNotFound />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('StatementRateLimited has no accessibility violations', async () => {
+    const { container } = render(
+      <StatementRateLimited lens="client" sessionId="a0000000-0000-4000-8000-000000000001" />
+    );
     expect(await axe(container)).toHaveNoViolations();
   });
 });
