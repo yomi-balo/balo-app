@@ -27,9 +27,13 @@ import { RedeemPromoPanel } from './redeem-promo-panel';
 
 const COMPANY = { companyName: 'Northwind Industrial', companyId: 'company-1' };
 
+const SETUP_INTENT_KEY = 'balo.stripe.setup-intent.v1';
+
 beforeEach(() => {
   vi.clearAllMocks();
   globalThis.history.replaceState({}, '', '/');
+  // BAL-526 — jsdom persists sessionStorage across tests in a file.
+  globalThis.sessionStorage.clear();
 });
 
 async function submitCode(user: ReturnType<typeof userEvent.setup>, code = 'WELCOME50') {
@@ -106,6 +110,8 @@ describe('RedeemPromoPanel', () => {
   });
 
   it('surfaces the continue confirmation when returning from a 3DS redirect', async () => {
+    // BAL-526 — the panel only reacts to a return this tab is BOUND to.
+    globalThis.sessionStorage.setItem(SETUP_INTENT_KEY, 'seti_x');
     globalThis.history.replaceState(
       {},
       '',
@@ -114,6 +120,18 @@ describe('RedeemPromoPanel', () => {
     render(<RedeemPromoPanel {...COMPANY} />);
     expect(await screen.findByTestId('continue-to-mandate')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /redeem a promo code/i })).not.toBeInTheDocument();
+  });
+
+  it('a crafted redirect link does not flip the panel out of the redeem form (security LOW)', () => {
+    // Same URL, nothing stored.
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/redeem?setup_intent=seti_x&setup_intent_client_secret=seti_x_secret&redirect_status=succeeded'
+    );
+    render(<RedeemPromoPanel {...COMPANY} />);
+    expect(screen.getByRole('heading', { name: /redeem a promo code/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('continue-to-mandate')).not.toBeInTheDocument();
   });
 
   it('lets the user redeem another code from the success screen', async () => {

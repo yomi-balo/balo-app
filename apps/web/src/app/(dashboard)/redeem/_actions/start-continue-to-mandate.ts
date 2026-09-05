@@ -16,7 +16,7 @@ import { log } from '@/lib/logging';
  * the panel renders without leaking detail.
  */
 export type StartContinueToMandateResult =
-  | { status: 'ready'; clientSecret: string; publishableKey: string }
+  | { status: 'ready'; clientSecret: string; setupIntentId: string; publishableKey: string }
   | { status: 'already_active' }
   | { status: 'forbidden' }
   | { status: 'unconfigured' }
@@ -98,15 +98,30 @@ export async function startContinueToMandate(): Promise<StartContinueToMandateRe
       return { status: 'error' };
     }
 
-    const body = (await response.json()) as { clientSecret?: unknown };
+    const body = (await response.json()) as { clientSecret?: unknown; setupIntentId?: unknown };
     if (typeof body.clientSecret !== 'string' || body.clientSecret.length === 0) {
       log.error('Continue-to-mandate setup-intent returned no clientSecret', {
         companyId: user.companyId,
       });
       return { status: 'error' };
     }
+    // ⚠ FAIL CLOSED, not "start anyway". Without the id the browser cannot record a binding, so
+    // a 3DS-requiring card would redirect back to a return `useSetupIntentRedirectReturn` is now
+    // obliged to IGNORE — a silently uncompletable capture. Refusing to start is the honest
+    // failure (BAL-526).
+    if (typeof body.setupIntentId !== 'string' || body.setupIntentId.length === 0) {
+      log.error('Continue-to-mandate setup-intent returned no setupIntentId', {
+        companyId: user.companyId,
+      });
+      return { status: 'error' };
+    }
 
-    return { status: 'ready', clientSecret: body.clientSecret, publishableKey };
+    return {
+      status: 'ready',
+      clientSecret: body.clientSecret,
+      setupIntentId: body.setupIntentId,
+      publishableKey,
+    };
   } catch (error) {
     log.error('Continue-to-mandate failed', {
       companyId: user.companyId,

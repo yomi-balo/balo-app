@@ -20,8 +20,12 @@ vi.mock('@stripe/react-stripe-js', () => ({
 
 import { CardCapturePanel } from './card-capture-panel';
 
+const SETUP_INTENT_KEY = 'balo.stripe.setup-intent.v1';
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // BAL-526 — jsdom persists sessionStorage across tests in a file.
+  globalThis.sessionStorage.clear();
 });
 
 describe('CardCapturePanel', () => {
@@ -29,6 +33,7 @@ describe('CardCapturePanel', () => {
     mockStartCardCaptureAction.mockResolvedValue({
       ok: true,
       clientSecret: 'seti_secret',
+      setupIntentId: 'seti_settings',
       publishableKey: 'pk_test_abc',
     });
 
@@ -47,6 +52,20 @@ describe('CardCapturePanel', () => {
     // Top-ups ARE mode-conditional — that half of the sentence is true and must stay.
     expect(consent).toHaveTextContent(/if you turn on Auto top-up/i);
     expect(screen.getByRole('button', { name: /save card/i })).toBeInTheDocument();
+  });
+
+  it('BAL-526: the ok start path binds the SetupIntent BEFORE Elements can mount', async () => {
+    mockStartCardCaptureAction.mockResolvedValue({
+      ok: true,
+      clientSecret: 'seti_secret',
+      setupIntentId: 'seti_settings_bound',
+      publishableKey: 'pk_test_abc',
+    });
+
+    render(<CardCapturePanel onCancel={vi.fn()} onCaptured={vi.fn()} />);
+
+    await screen.findByTestId('payment-element');
+    expect(globalThis.sessionStorage.getItem(SETUP_INTENT_KEY)).toBe('seti_settings_bound');
   });
 
   it('maps unconfigured to the fallback line and offers Cancel, never mounting Elements', async () => {
@@ -90,6 +109,7 @@ describe('CardCapturePanel', () => {
     mockStartCardCaptureAction.mockResolvedValue({
       ok: true,
       clientSecret: 'seti_secret',
+      setupIntentId: 'seti_settings',
       publishableKey: 'pk_test_abc',
     });
     mockConfirmSetup.mockResolvedValue({ error: { message: 'Your card was declined.' } });
@@ -100,12 +120,39 @@ describe('CardCapturePanel', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Your card was declined.');
     expect(onCaptured).not.toHaveBeenCalled();
+    // BAL-526 — a decline retries against the SAME SetupIntent; the binding must be kept.
+    expect(globalThis.sessionStorage.getItem(SETUP_INTENT_KEY)).toBe('seti_settings');
+  });
+
+  it('A2 — confirmSetup return_url is origin+pathname ONLY, never the full URL, even when the address bar already carries a (crafted) setup_intent query string', async () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/settings/billing?setup_intent=seti_evil&setup_intent_client_secret=seti_evil_secret'
+    );
+    mockStartCardCaptureAction.mockResolvedValue({
+      ok: true,
+      clientSecret: 'seti_secret',
+      setupIntentId: 'seti_settings',
+      publishableKey: 'pk_test_abc',
+    });
+    mockConfirmSetup.mockResolvedValue({});
+
+    render(<CardCapturePanel onCancel={vi.fn()} onCaptured={vi.fn()} />);
+    await userEvent.click(await screen.findByRole('button', { name: /save card/i }));
+
+    expect(mockConfirmSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confirmParams: { return_url: 'http://localhost:3000/settings/billing' },
+      })
+    );
   });
 
   it('calls onCaptured on a successful confirmSetup with no error', async () => {
     mockStartCardCaptureAction.mockResolvedValue({
       ok: true,
       clientSecret: 'seti_secret',
+      setupIntentId: 'seti_settings',
       publishableKey: 'pk_test_abc',
     });
     mockConfirmSetup.mockResolvedValue({});
@@ -115,12 +162,16 @@ describe('CardCapturePanel', () => {
     await userEvent.click(await screen.findByRole('button', { name: /save card/i }));
 
     expect(onCaptured).toHaveBeenCalledTimes(1);
+    // BAL-526 — `redirect: 'if_required'` took the non-redirect path: the writer clears its own
+    // binding rather than leaving an orphan.
+    expect(globalThis.sessionStorage.getItem(SETUP_INTENT_KEY)).toBeNull();
   });
 
   it('Cancel from the ready form calls onCancel with zero server calls beyond the initial start', async () => {
     mockStartCardCaptureAction.mockResolvedValue({
       ok: true,
       clientSecret: 'seti_secret',
+      setupIntentId: 'seti_settings',
       publishableKey: 'pk_test_abc',
     });
     const onCancel = vi.fn();

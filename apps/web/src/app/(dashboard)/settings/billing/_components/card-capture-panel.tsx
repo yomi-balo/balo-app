@@ -6,6 +6,8 @@ import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getStripe } from '@/lib/stripe-loader';
 import { startCardCaptureAction } from '@/lib/credit/actions';
+import { forgetSetupIntent, rememberSetupIntent } from '@/lib/stripe/setup-intent-return';
+import { STRIPE_UNCONFIGURED_MESSAGE } from './messages';
 
 interface CardCapturePanelProps {
   readonly onCancel: () => void;
@@ -22,7 +24,6 @@ const CONSENT_LINE =
   'beyond your balance, and buy credit for you automatically if you turn on Auto top-up. ' +
   'You can remove the card anytime to stop both.';
 
-const UNCONFIGURED_MESSAGE = "Card payments aren't configured right now. Please try again later.";
 const START_ERROR_MESSAGE = "We couldn't start card setup just now. Please try again in a moment.";
 const CONFIRM_FAILURE_MESSAGE = "We couldn't save that card. Please try again.";
 /**
@@ -58,7 +59,15 @@ function CaptureForm({
     try {
       const { error: confirmError } = await stripe.confirmSetup({
         elements,
-        confirmParams: { return_url: globalThis.location.href },
+        // A2 (security) — NEVER `location.href`. An unbound return is now deliberately LEFT in
+        // the URL (correct for the griefing threat this ticket closes), so `location.href` would
+        // bake any crafted `?setup_intent=…` already present into `return_url`, and Stripe would
+        // append a SECOND, genuine pair after it. `URLSearchParams.get` reads the FIRST
+        // (attacker's) pair, so the real return would go unmatched — the user's own capture would
+        // silently vanish. Origin + pathname only, never the query string.
+        confirmParams: {
+          return_url: `${globalThis.location.origin}${globalThis.location.pathname}`,
+        },
         redirect: 'if_required',
       });
       if (confirmError) {
@@ -138,6 +147,9 @@ export function CardCapturePanel({
       .then((result) => {
         if (cancelled) return;
         if (result.ok) {
+          // BAL-526 — bind the SetupIntent BEFORE `<Elements>` can mount, so the binding always
+          // exists before any `confirmSetup` can redirect.
+          rememberSetupIntent(result.setupIntentId);
           setPhase({
             kind: 'ready',
             clientSecret: result.clientSecret,
@@ -147,7 +159,7 @@ export function CardCapturePanel({
         }
         let message = START_ERROR_MESSAGE;
         if (result.error === 'unconfigured') {
-          message = UNCONFIGURED_MESSAGE;
+          message = STRIPE_UNCONFIGURED_MESSAGE;
         } else if (result.error === 'settlement_outstanding') {
           message = SETTLEMENT_OUTSTANDING_MESSAGE;
         }
@@ -161,6 +173,15 @@ export function CardCapturePanel({
     };
     // A fresh panel mount is a fresh capture attempt — deliberately run once per mount.
   }, []);
+
+  // BAL-526 — the writer is the clearer: `redirect: 'if_required'` resolving inline (no 3DS
+  // redirect) means the binding written above will never see a redirect-return hook, so this
+  // path must clear it itself or it becomes an inert orphan (harmless, but hygiene per the
+  // lifecycle table). The redirect-return path clears via the shared hook instead.
+  const handleCaptured = useCallback((): void => {
+    forgetSetupIntent();
+    onCaptured();
+  }, [onCaptured]);
 
   if (phase.kind === 'starting') {
     return (
@@ -189,7 +210,7 @@ export function CardCapturePanel({
       stripe={getStripe(phase.publishableKey)}
       options={{ clientSecret: phase.clientSecret }}
     >
-      <CaptureForm onCancel={onCancel} onCaptured={onCaptured} />
+      <CaptureForm onCancel={onCancel} onCaptured={handleCaptured} />
     </Elements>
   );
 }

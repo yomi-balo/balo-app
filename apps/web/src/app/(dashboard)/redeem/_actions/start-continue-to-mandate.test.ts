@@ -86,11 +86,12 @@ describe('startContinueToMandate', () => {
     expect(mockLoggedFetch).not.toHaveBeenCalled();
   });
 
-  it('returns ready with the client secret + publishable key, calling the internal seam', async () => {
+  it('returns ready with the client secret + setup intent id + publishable key, calling the internal seam', async () => {
     const result = await startContinueToMandate();
     expect(result).toEqual({
       status: 'ready',
       clientSecret: 'seti_123_secret',
+      setupIntentId: 'seti_123',
       publishableKey: 'pk_test_abc',
     });
     expect(mockLoggedFetch).toHaveBeenCalledWith(
@@ -112,6 +113,15 @@ describe('startContinueToMandate', () => {
 
   it('returns error when the seam returns no clientSecret', async () => {
     mockLoggedFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    expect(await startContinueToMandate()).toEqual({ status: 'error' });
+  });
+
+  it('returns error when the seam returns no setupIntentId (BAL-526 fail-closed)', async () => {
+    mockLoggedFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ clientSecret: 'seti_123_secret' }),
+    });
     expect(await startContinueToMandate()).toEqual({ status: 'error' });
   });
 });

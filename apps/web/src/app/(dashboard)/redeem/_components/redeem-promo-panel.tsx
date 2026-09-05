@@ -7,6 +7,7 @@ import { Gift, Loader2, PartyPopper, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isSetupIntentReturnBound } from '@/lib/stripe/setup-intent-return';
 import { redeemPromoCode, type RedeemPromoActionResult } from '../_actions/redeem-promo';
 import { ContinueToMandate } from './continue-to-mandate';
 
@@ -110,19 +111,6 @@ function RedeemAnotherButton({ onClick }: Readonly<{ onClick: () => void }>): Re
   );
 }
 
-/**
- * Detect a 3DS/SCA return from Stripe mandate setup. A card that needs authentication
- * redirects the browser away and back to /redeem with the SetupIntent params appended,
- * after the redeem success state has been lost to the full-page redirect.
- */
-function isRedirectReturn(): boolean {
-  const params = new URLSearchParams(globalThis.location.search);
-  return (
-    params.get('setup_intent_client_secret') !== null ||
-    (params.get('setup_intent') !== null && params.get('redirect_status') !== null)
-  );
-}
-
 export function RedeemPromoPanel({
   companyName,
   companyId,
@@ -136,8 +124,14 @@ export function RedeemPromoPanel({
   // the continue-to-mandate confirmation directly; ContinueToMandate retrieves the
   // SetupIntent and confirms the saved card. Detected post-mount to avoid a hydration
   // mismatch on the server-rendered idle form.
+  //
+  // BAL-526 — bound-return only: a crafted `/redeem` link must not flip this panel out of
+  // the redeem form. `ContinueToMandate` mounts as a consequence of `setRedirectReturn(true)`
+  // and only clears the binding inside its async retrieve, so this read always precedes that
+  // clear. On a `processing` refresh the binding survives, so the panel re-enters the same
+  // view — which is exactly why `processing` must not clear.
   useEffect(() => {
-    if (isRedirectReturn()) {
+    if (isSetupIntentReturnBound()) {
       setRedirectReturn(true);
     }
   }, []);
