@@ -31,6 +31,29 @@ describe('requestStatusRank', () => {
     expect(requestStatusRank('eoi_submitted')).toBeLessThan(requestStatusRank('kickoff_approved'));
     expect(requestStatusRank('accepted')).toBeLessThan(requestStatusRank('kickoff_approved'));
   });
+
+  it('BAL-540: closed ranks LAST, never -1 (the root cause of the fail-open sweep)', () => {
+    expect(requestStatusRank('closed')).toBeGreaterThan(requestStatusRank('kickoff_approved'));
+    expect(requestStatusRank('closed')).not.toBe(-1);
+  });
+
+  it('is TOTAL over every ProjectRequestStatus — no label yields -1', () => {
+    const statuses = [
+      'draft',
+      'requested',
+      'exploratory_meeting_requested',
+      'experts_invited',
+      'eoi_submitted',
+      'proposal_requested',
+      'proposal_submitted',
+      'accepted',
+      'kickoff_approved',
+      'closed',
+    ] as const;
+    for (const status of statuses) {
+      expect(requestStatusRank(status)).toBeGreaterThanOrEqual(0);
+    }
+  });
 });
 
 describe('deriveThreadStage', () => {
@@ -42,6 +65,12 @@ describe('deriveThreadStage', () => {
   it("is 'not_selected' when the request is decided and this thread lost", () => {
     expect(deriveThreadStage('eoi_submitted', 'accepted')).toBe('not_selected');
     expect(deriveThreadStage('proposal_submitted', 'kickoff_approved')).toBe('not_selected');
+  });
+
+  it("is 'request_closed' when the request is closed, checked BEFORE the 'won' test (BAL-540)", () => {
+    expect(deriveThreadStage('proposal_submitted', 'closed')).toBe('request_closed');
+    // Even a relationship that was accepted before the close has no winner once closed.
+    expect(deriveThreadStage('accepted', 'closed')).toBe('request_closed');
   });
 
   it("is 'active' while the request is undecided", () => {

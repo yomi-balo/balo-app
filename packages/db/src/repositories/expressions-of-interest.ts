@@ -25,14 +25,20 @@ export const expressionsOfInterestRepository = {
    * `transitionStatus(experts_invited → eoi_submitted)`; it only re-reads the now
    * coherent stored status to source its `transitioned` flag.
    */
-  async submit(input: { relationshipId: string; message: string }): Promise<ExpressionOfInterest> {
+  async submit(input: {
+    relationshipId: string;
+    message: string;
+    /** BAL-540 / ADR-1030 — the expert submitting. Attributes the relationship audit row. */
+    actorUserId: string;
+  }): Promise<ExpressionOfInterest> {
     return db.transaction(async (tx) => {
       // Lock + validate-advance the relationship; throws if it isn't `invited`
       // (or is missing/soft-deleted) → whole txn rolls back, no orphan EOI.
-      const relationship = await advanceRelationshipStatus(tx, {
+      const { relationship } = await advanceRelationshipStatus(tx, {
         id: input.relationshipId,
         to: 'eoi_submitted',
         expectedFrom: 'invited',
+        actorUserId: input.actorUserId,
       });
 
       const [row] = await tx

@@ -11,6 +11,7 @@ import {
   projectRequestProducts,
   projectRequestDocuments,
   expressionsOfInterest,
+  proposals,
   conversationContexts,
   conversationMessages,
   requestExpertRelationships,
@@ -758,6 +759,65 @@ describe('projectRequestsRepository.findByIdWithRelations', () => {
     // The soft-deleted newer message is excluded → the older live message wins.
     expect(rel?.conversationMessages).toHaveLength(1);
     expect(rel?.conversationMessages[0]?.createdAt.getTime()).toBe(live.getTime());
+  });
+
+  it('BAL-540: the `proposals` existence sub-relation EXCLUDES a soft-deleted proposal', async () => {
+    const request = await projectRequestFactory({ status: 'experts_invited' });
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+    });
+
+    // The track's ONLY proposal is soft-deleted. Without the `deleted_at IS NULL` filter this
+    // sub-relation still returned it, and `resolveEndedTrackView`'s `hadProposal` told a
+    // de-participated expert their proposal was withdrawn when no live proposal ever existed.
+    await db.insert(proposals).values({
+      relationshipId: relationship.id,
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      status: 'withdrawn',
+      pricingMethod: 'fixed',
+      version: 1,
+      isCurrent: true,
+      overview: '<p>Removed proposal.</p>',
+      priceCents: 500_000,
+      deletedAt: new Date(),
+    });
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+    const [rel] = found?.relationships ?? [];
+    expect(rel).toBeDefined();
+    expect(rel?.proposals).toHaveLength(0);
+  });
+
+  it('BAL-540: the `proposals` existence sub-relation INCLUDES a live proposal (not vacuous)', async () => {
+    const request = await projectRequestFactory({ status: 'proposal_submitted' });
+    if (request.expertProfileId === null) {
+      throw new Error('expected a direct request with a target expert');
+    }
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      values: { status: 'proposal_submitted' },
+    });
+    await db.insert(proposals).values({
+      relationshipId: relationship.id,
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId,
+      status: 'submitted',
+      pricingMethod: 'fixed',
+      version: 1,
+      isCurrent: true,
+      overview: '<p>Live proposal.</p>',
+      priceCents: 500_000,
+    });
+
+    const found = await projectRequestsRepository.findByIdWithRelations(request.id);
+    const [rel] = found?.relationships ?? [];
+    expect(rel?.proposals).toHaveLength(1);
   });
 
   it('round-trips a null/default budget (legacy-shaped request)', async () => {

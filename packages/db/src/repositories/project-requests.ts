@@ -1,17 +1,29 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
   projectRequests,
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
+  requestExpertRelationships,
   type ProjectRequest,
+  type ProjectRequestCloseReason,
   type NewProjectRequest,
+  type RequestExpertRelationship,
 } from '../schema';
 import { auditEventsRepository } from './audit-events';
 import { conversationsRepository } from './conversations';
+import { cancelMeetingTx } from './_shared/cancel-meeting-tx';
+import { meetingContextsRepository } from './meeting-contexts';
+import { advanceProposalStatus, lockOpenProposalsForRequestTx } from './proposals';
+import { representationsRepository } from './representations';
+import {
+  advanceRelationshipStatus,
+  isAllowedRelationshipTransition,
+} from './request-expert-relationships';
 
 export type ProjectRequestStatus = ProjectRequest['status'];
+type RelationshipStatus = RequestExpertRelationship['status'];
 
 /**
  * Allowed request-level transitions. Linear spine with an admin-driven invite
@@ -25,15 +37,22 @@ export type ProjectRequestStatus = ProjectRequest['status'];
  * `advanceRelationshipStatus` (ADR-1025 / BAL-295) and written directly.
  */
 export const STATUS_TRANSITIONS: Record<ProjectRequestStatus, readonly ProjectRequestStatus[]> = {
-  draft: ['requested'],
-  requested: ['exploratory_meeting_requested', 'experts_invited'],
-  exploratory_meeting_requested: ['experts_invited'],
-  experts_invited: ['eoi_submitted'],
-  eoi_submitted: ['proposal_requested'],
-  proposal_requested: ['proposal_submitted'],
-  proposal_submitted: ['accepted'],
+  draft: ['requested', 'closed'],
+  requested: ['exploratory_meeting_requested', 'experts_invited', 'closed'],
+  exploratory_meeting_requested: ['experts_invited', 'closed'],
+  experts_invited: ['eoi_submitted', 'closed'],
+  eoi_submitted: ['proposal_requested', 'closed'],
+  proposal_requested: ['proposal_submitted', 'closed'],
+  proposal_submitted: ['accepted', 'closed'],
+  // ⚠ NO `'closed'` ON THESE TWO, DELIBERATELY (BAL-540). Once a proposal is accepted the
+  // engagement is being stood up, and "close the sourcing process" is no longer the right
+  // act — the ticket's AC says closing must be REFUSED from `accepted` and `kickoff_approved`,
+  // and this map is what delivers it, through the existing `InvalidStatusTransitionError`.
   accepted: ['kickoff_approved'],
   kickoff_approved: [],
+  // Terminal. Empty is also what makes a double-click on an already-closed request REFUSE
+  // rather than re-run the cascade.
+  closed: [],
 };
 
 export function isAllowedTransition(from: ProjectRequestStatus, to: ProjectRequestStatus): boolean {
@@ -97,6 +116,65 @@ export interface UpdateBaloFeeBpsResult {
   previousBps: number;
   newBps: number;
   changed: boolean;
+}
+
+/**
+ * BAL-540 — the close cascade's input. Everything here is SERVER-DERIVED: `actorKind` comes
+ * from WHICH authorization arm matched (membership `manage_requests` ⇒ `'client'`, platform
+ * `close_any_request` ⇒ `'balo'`), never from the wire, and `actorUserId` from the session.
+ */
+export interface CloseRequestInput {
+  requestId: string;
+  actorUserId: string;
+  actorKind: 'client' | 'balo';
+  reason: ProjectRequestCloseReason;
+  /**
+   * ⚠ STAFF-ONLY, AND `null` ON THE CLIENT ARM ALWAYS. Persisted to `close_note`, which is the
+   * note's ONLY home — it is never copied into the audit row (which records `hasNote` alone)
+   * nor into any notification payload. The Balo arm's Zod schema requires it; the client arm's
+   * forbids it.
+   */
+  note: string | null;
+}
+
+/**
+ * BAL-540 — what one close produced. EVERY field exists because the caller's POST-COMMIT
+ * fan-out needs it: this repository cannot notify, enqueue or call a vendor
+ * (`invariants/repositories-never-notify.test.ts`), so the obligation is discharged from here.
+ */
+export interface CloseRequestResult {
+  request: ProjectRequest;
+  /** The status the request held before the close — the analytics `stage_at_close`. */
+  previousStatus: ProjectRequestStatus;
+  /**
+   * The `project_request.closed` audit row id. A uuid, so COLON-FREE (the notification
+   * dispatcher builds its BullMQ jobId from the RAW correlationId), and unique per WRITE
+   * rather than per state — BullMQ silently no-ops an `add` whose jobId is already in the
+   * retained completed set, so a `requestId`-derived key would swallow a genuine second event.
+   */
+  closeAuditId: string;
+  /** One entry per track that WAS live and is now `declined`. Drives the expert fan-out. */
+  declinedTracks: Array<{
+    relationshipId: string;
+    expertProfileId: string;
+    /** The stage the track ended at — picks the notice's copy. */
+    previousStatus: RelationshipStatus;
+    declineAuditId: string;
+  }>;
+  withdrawnProposalIds: string[];
+  /**
+   * The meetings this close actually cancelled — NOT the ones it looked at. A meeting somebody
+   * had already joined (`waiting_for_participants`) is absent, deliberately (orchestrator D1).
+   * `expertProfileId` is whose availability cache the caller must rebuild post-commit (`null`
+   * ⇒ nothing to rebuild); `cancelAuditId` is that teardown's per-WRITE idempotency key.
+   */
+  cancelledMeetings: Array<{
+    meetingId: string;
+    expertProfileId: string | null;
+    cancelAuditId: string;
+  }>;
+  /** Empty on every real close today — BAL-313 ships inert. Forward-compatible arm. */
+  revokedRepresentationIds: string[];
 }
 
 export const projectRequestsRepository = {
@@ -186,6 +264,14 @@ export const projectRequestsRepository = {
         expertTermsConfirmedAt: true,
         createdAt: true,
         updatedAt: true,
+        // BAL-540 — the four terminal-close columns. `request-detail-view.ts`'s
+        // `deriveClosedSummary` needs all four to render the `ClosedBanner` (D11 gates
+        // `closeNote` on the viewer's platform capability, never here — the mapper reads it
+        // unconditionally and the CALLER decides who sees it).
+        closedAt: true,
+        closedByUserId: true,
+        closeReason: true,
+        closeNote: true,
       },
       with: {
         company: { columns: { id: true, name: true } },
@@ -209,16 +295,19 @@ export const projectRequestsRepository = {
           // `updatedAt` feeds the pipeline-health "last activity" derivation
           // alongside the latest live EOI/message timestamps below.
           //
-          // ⚠ BAL-283 widened this by EXACTLY ONE column, `availabilitySharedAt`, and
-          // deliberately NOT by `declinedAt`/`deletedAt`. This is the RENDER-PATH view-model
-          // behind every conversation read (thread list, header, nudge, files panel), so a
-          // column earns its place here only if the RENDER needs it: the "Availability
-          // shared" pill and the thread nudge are render-path consumers, which
-          // `declinedAt`/`deletedAt` are not — they are needed by exactly two MUTATIONS, and
-          // a mutation must re-read the row it is about to act on rather than trust a
-          // render-path projection read earlier in the request. Adding them here would also
-          // half-enable `relationshipDeniesHosting`, which requires BOTH `status` and
-          // `declinedAt` on purpose so it fails CLOSED when the two disagree.
+          // ⚠ BAL-283 widened this by EXACTLY ONE column, `availabilitySharedAt`, deliberately
+          // NOT by `declinedAt`/`deletedAt` — at the time, nothing on the RENDER path needed
+          // them; they were needed by exactly two MUTATIONS, which must re-read the row rather
+          // than trust a render-path projection.
+          //
+          // ⚠ BAL-540 widens it again, by `declinedAt` + `declineReason` + `declinedByUserId`,
+          // because a THIRD, genuinely render-path consumer now exists: the closed-request
+          // track list (`closed-request-view.ts`'s `deriveClosedTracks`) needs `declineReason`
+          // to pick each frozen track's final chip (`invite_withdrawn` / `declined` /
+          // `ended_request_closed`), and `declinedAt` to prove D9's file historical-read flip
+          // in tests. This does NOT reopen `relationshipDeniesHosting`'s guard — that resolver
+          // reads its OWN authoritative row inside the engagement-host seam, never this
+          // render-path projection.
           columns: {
             id: true,
             expertProfileId: true,
@@ -226,6 +315,9 @@ export const projectRequestsRepository = {
             invitedAt: true,
             updatedAt: true,
             availabilitySharedAt: true,
+            declinedAt: true,
+            declineReason: true,
+            declinedByUserId: true,
           },
           with: {
             // ⚠ BAL-422 widened this allow-list by exactly TWO DISPLAY columns
@@ -252,6 +344,20 @@ export const projectRequestsRepository = {
               // viewer's relationship.
               columns: { id: true, submittedAt: true, message: true },
               orderBy: (t, { desc: childDesc }) => [childDesc(t.submittedAt)],
+              limit: 1,
+            },
+            // BAL-540 — EXISTENCE ONLY (`id` alone, `limit: 1`): whether this track had a
+            // proposal. Drives `resolveEndedTrackView`'s `hadProposal` (the expert's
+            // ended-track copy — "your proposal is no longer under review" only when one
+            // genuinely existed). Never the proposal's money/method — those never belong on a
+            // de-participated expert's own read.
+            //
+            // ⚠ SOFT-DELETE FILTERED, like every sibling sub-relation in this query. Without
+            // it a track whose only proposal was soft-deleted told the ended-track view it
+            // "had a proposal" and picked the wrong copy.
+            proposals: {
+              where: (t, { isNull: childIsNull }) => childIsNull(t.deletedAt),
+              columns: { id: true },
               limit: 1,
             },
           },
@@ -443,6 +549,273 @@ export const projectRequestsRepository = {
       );
 
       return { previousBps: current.baloFeeBps, newBps: input.newBps, changed: true };
+    });
+  },
+
+  /**
+   * BAL-540 / ADR-1025 Amendment 1 — CLOSE A REQUEST. THE CASCADE.
+   *
+   * ONE `db.transaction` that flips the request to the terminal `closed`, declines every live
+   * track, withdraws every open proposal, cancels every still-`scheduled` request-grain
+   * meeting, revokes every active request-grain representation, and appends ONE
+   * `project_request.closed` audit row. Modelled on {@link updateBaloFeeBps} — the shipped
+   * "lock FOR UPDATE + write + audit row in ONE transaction" precedent — scaled up.
+   *
+   * ══ LOCK ORDER: PROPOSALS → RELATIONSHIPS → REQUEST. ══════════════════════════════
+   * ⚠ THIS IS THE LOAD-BEARING DECISION OF THE WHOLE METHOD and it is a DELIBERATE DEVIATION
+   * from the plan's step order (which locked relationships first and reached the proposals at
+   * step 7). Both documented orders in this package have to hold at once:
+   *   - `proposalsRepository.accept`: "proposal → relationship → request. Any future writer
+   *     that locks both must preserve this order to avoid a deadlock cycle."
+   *   - `advanceRelationshipStatus`'s LOCK ORDER block: relationship, then request LAST.
+   * Reaching the proposals AFTER the relationship rows would have held (relationship, request)
+   * while waiting on a proposal that a concurrent `accept` held while waiting on that same
+   * relationship — a textbook AB/BA pair. Locking them FIRST satisfies both rules: proposals,
+   * then relationships, then the request LAST. `declineTrack` takes the identical order.
+   * Within each set, rows are ordered by `id` so two concurrent cascades queue rather than
+   * deadlock.
+   *
+   * ══ THE SEQUENCE, ALL ON ONE `tx` ═════════════════════════════════════════════════
+   *   1. Lock the request's open proposals (`lockOpenProposalsForRequestTx`, ordered by id).
+   *   2. Lock its live relationship rows, ordered by id.
+   *   3. Lock the request row. Missing/soft-deleted ⇒ throw.
+   *   4. REFUSE, FOR FREE: `isAllowedTransition(current.status, 'closed')`. `STATUS_TRANSITIONS`
+   *      gives `closed` no edge from `accepted` / `kickoff_approved` (the AC's refusal) and
+   *      `closed: []` makes a second close refuse rather than re-cascade — both through the
+   *      existing `InvalidStatusTransitionError`, with nothing written.
+   *   5. WRITE THE REQUEST ROW NOW, BEFORE THE CASCADE. ⚠ FIRST, DELIBERATELY: every
+   *      `advanceRelationshipStatus` below re-derives the parent status, and with `closed`
+   *      already on disk `deriveRequestStatus`'s rule 1 short-circuits — so no intermediate
+   *      status can ever be written, not even transiently inside this transaction.
+   *   6. Meetings. `project_discovery`@requestId ∪ `request_interaction`@each-relationship-id,
+   *      in ONE batched read, then `cancelMeetingTx` per meeting.
+   *   7. Tracks → `declined`, reason `request_closed` (each writes its own audit row).
+   *   8. Proposals → `withdrawn` (NOT `declined`: the request ended, nobody judged them).
+   *   9. Request-grain representations → `revoked`.
+   *  10. The `project_request.closed` audit row, LAST — an audit row must never outlive a
+   *      rolled-back close.
+   *
+   * ⚠⚠ NEVER CALL A REPOSITORY METHOD THAT OPENS ITS OWN `db.transaction` FROM IN HERE
+   * (orchestrator D4). `meetingsRepository.cancel`, `proposalsRepository.transitionStatus` and
+   * `requestExpertRelationshipsRepository.transitionStatus` all do; in PRODUCTION each would
+   * take a SECOND pooled connection and commit INDEPENDENTLY of this close. ⚠ AND NO RUNTIME
+   * TEST CAN CATCH IT: the integration harness swaps `db` for the outer transaction
+   * (`test/setup-integration.ts`), so a nested call becomes a SAVEPOINT and the suite stays
+   * GREEN. Everything above therefore takes the `tx` explicitly, and the mechanical guard is
+   * `invariants/close-cascade-opens-one-transaction.test.ts`.
+   *
+   * ⚠ THE MONEY FAN-OUT IS PROVABLY EMPTY, and it is asserted rather than merely asserted-in-
+   * prose. `openCaseSessionBestEffort` early-returns unless `contextType === 'case'`
+   * (`apps/api/src/services/meetings/join-meeting.ts`), so a `project_discovery` /
+   * `request_interaction` meeting NEVER carries a credit session or a hold. No hold release, no
+   * settlement, no concealment — pinned by `project-request-close.integration.test.ts`.
+   *
+   * ⚠ ONLY `scheduled` MEETINGS ARE CANCELLED (orchestrator D1). `CANCELLABLE_MEETING_STATUSES`
+   * stays `['scheduled']` and is NOT widened, and no cascade-only status set is created. KNOWN,
+   * DELIBERATE RESIDUAL: a request-grain call somebody has already JOINED
+   * (`waiting_for_participants`) SURVIVES the close and is ended by the lifecycle sweep
+   * instead. ADR-1025 Amendment 1's "`scheduled` / `waiting_for_participants`" wording is wrong
+   * and needs correcting.
+   *
+   * ⚠ THIS REPOSITORY NOTIFIES NOBODY, and cannot (`invariants/repositories-never-notify.test.ts`).
+   * The caller owns the POST-COMMIT fan-out: the Daily room teardown + availability-cache
+   * rebuild for each returned `cancelledMeetings` entry, and the `project.request_closed`
+   * publish. Everything that fan-out needs is in the result, including the per-WRITE,
+   * colon-free `closeAuditId` / `declineAuditId` / `cancelAuditId` correlation ids.
+   *
+   * ⚠ KNOWN RESIDUAL, STATED RATHER THAN HIDDEN: a relationship inserted between step 2's
+   * snapshot and COMMIT is not declined. `invite()` is guarded against exactly this (it refuses
+   * a `closed` request under the request lock, `RequestClosedError`), and the request can never
+   * un-close (derivation rule 1), so it takes an admin invite landing inside a narrow window —
+   * `invite()` sees a not-yet-closed status, commits, and this cascade's pre-taken snapshot
+   * never saw the new row.
+   *
+   * ⚠ NAMING THE CONSEQUENCE HONESTLY, because "one stray live track" understated it: that
+   * relationship is NOT `declined`, so `resolveRequestLens` still resolves the invited expert
+   * to the `expert` participant lens — brief + client contact + LIVE (not historical-read)
+   * file access on a request that is supposed to be terminal. Booking is still refused
+   * (`closed` is in `POST_DECISION_REQUEST_STATUSES`) and the request stays closed, so nothing
+   * escalates; the track is visible to admin and declinable by hand. The closing fix is to
+   * re-read the relationship id set AFTER step 3's request lock and decline the union of both
+   * reads (no lock-order risk: same `id` order, request lock already held) — deliberately NOT
+   * done in BAL-540, which is already a wide change, and left as a follow-up rather than
+   * hidden here.
+   *
+   * Throws `InvalidStatusTransitionError` (already closed, or past `proposal_submitted`) and
+   * `Error` for a missing/soft-deleted request. Nothing is written on either.
+   */
+  async close(input: CloseRequestInput): Promise<CloseRequestResult> {
+    return db.transaction(async (tx) => {
+      const now = new Date();
+
+      // 1. PROPOSAL ROWS FIRST — see the LOCK ORDER block.
+      const openProposals = await lockOpenProposalsForRequestTx(tx, input.requestId);
+
+      // 2. Relationship rows, ordered by id (two concurrent cascades queue, never deadlock).
+      const relationships = await tx
+        .select({
+          id: requestExpertRelationships.id,
+          status: requestExpertRelationships.status,
+          expertProfileId: requestExpertRelationships.expertProfileId,
+        })
+        .from(requestExpertRelationships)
+        .where(
+          and(
+            eq(requestExpertRelationships.projectRequestId, input.requestId),
+            isNull(requestExpertRelationships.deletedAt)
+          )
+        )
+        .orderBy(asc(requestExpertRelationships.id))
+        .for('update');
+
+      // 3. The request row LAST among the locks.
+      const [current] = await tx
+        .select()
+        .from(projectRequests)
+        .where(and(eq(projectRequests.id, input.requestId), isNull(projectRequests.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Project request not found: ${input.requestId}`);
+      }
+
+      // 4. Refuse, for free.
+      if (!isAllowedTransition(current.status, 'closed')) {
+        throw new InvalidStatusTransitionError(current.status, 'closed');
+      }
+      const previousStatus = current.status;
+
+      // 5. Write the request row NOW — before anything re-derives it.
+      const [updated] = await tx
+        .update(projectRequests)
+        .set({
+          status: 'closed',
+          closedAt: now,
+          closedByUserId: input.actorUserId,
+          closeReason: input.reason,
+          closeNote: input.note,
+        })
+        .where(eq(projectRequests.id, input.requestId))
+        .returning();
+
+      if (updated === undefined) {
+        throw new Error(`Failed to update project request: ${input.requestId}`);
+      }
+
+      // 6. Meetings. `project_discovery` is keyed on the REQUEST; `request_interaction` on
+      //    each RELATIONSHIP (`@balo/shared/meetings/context-owner.ts`) — hence the batch.
+      const actorRole = input.actorKind === 'balo' ? 'admin' : 'client';
+      const liveMeetings = await meetingContextsRepository.listMeetingsForContexts(
+        [
+          { contextType: 'project_discovery', contextId: input.requestId },
+          ...relationships.map((relationship) => ({
+            contextType: 'request_interaction' as const,
+            contextId: relationship.id,
+          })),
+        ],
+        tx
+      );
+
+      const cancelledMeetings: CloseRequestResult['cancelledMeetings'] = [];
+      for (const row of liveMeetings) {
+        const cancelled = await cancelMeetingTx(tx, row.meeting.id, {
+          actorUserId: input.actorUserId,
+          actorRole,
+        });
+        // `undefined` ⇒ the CAS missed: the meeting is not `scheduled` (D1's residual — it has
+        // been joined, or was already cancelled/ended). SKIP it; never widen the CAS.
+        if (cancelled !== undefined) {
+          cancelledMeetings.push({
+            meetingId: cancelled.meeting.id,
+            expertProfileId: cancelled.expertProfileId,
+            cancelAuditId: cancelled.cancelAuditId,
+          });
+        }
+      }
+
+      // 7. Tracks. `accepted` and `declined` have no `declined` edge, so a terminal track is
+      //    skipped rather than throwing — and step 4 already made an `accepted` track
+      //    unreachable (a track only reaches `accepted` by advancing the request there too).
+      const declinedTracks: CloseRequestResult['declinedTracks'] = [];
+      for (const relationship of relationships) {
+        if (!isAllowedRelationshipTransition(relationship.status, 'declined')) {
+          continue;
+        }
+        const advanced = await advanceRelationshipStatus(tx, {
+          id: relationship.id,
+          to: 'declined',
+          actorUserId: input.actorUserId,
+          reason: 'request_closed',
+        });
+        declinedTracks.push({
+          relationshipId: relationship.id,
+          expertProfileId: relationship.expertProfileId,
+          previousStatus: advanced.previousStatus,
+          declineAuditId: advanced.auditId,
+        });
+      }
+
+      // 8. Proposals → `withdrawn`. Already locked in step 1; `advanceProposalStatus` re-takes
+      //    the row lock for free and still runs its transition guard.
+      const withdrawnProposalIds: string[] = [];
+      for (const proposal of openProposals) {
+        await advanceProposalStatus(tx, { id: proposal.id, to: 'withdrawn' });
+        withdrawnProposalIds.push(proposal.id);
+      }
+
+      // 9. Request-grain representations. Scoped by company as well as request id (IDOR
+      //    containment); sourced from the LOCKED request row, never from the wire.
+      const revokedRepresentationIds = await representationsRepository.revokeAllForRequest(
+        {
+          projectRequestId: input.requestId,
+          onBehalfOfCompanyId: current.companyId,
+          revokedByUserId: input.actorUserId,
+        },
+        now,
+        tx
+      );
+
+      // 10. The audit row, LAST.
+      //
+      // ⚠ FIXED METADATA CONTRACT. `audit_events` is APPEND-ONLY — no `updated_at`, no
+      // backfill — so this shape is unrecoverable if wrong (`_shared/request-file-audit.ts`'s
+      // rule). It is asserted key-by-key in `project-request-close.integration.test.ts`.
+      //
+      // ⚠ `hasNote`, NEVER THE NOTE TEXT. `close_note` is staff-only and the column is its
+      // ONLY home; copying it here would put it in a row that admin-history reads render.
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'project_request.closed',
+          entityType: 'project_request',
+          entityId: input.requestId,
+          metadata: {
+            reason: input.reason,
+            actorKind: input.actorKind,
+            previousStatus,
+            hasNote: input.note !== null,
+            counts: {
+              tracksDeclined: declinedTracks.length,
+              proposalsWithdrawn: withdrawnProposalIds.length,
+              meetingsCancelled: cancelledMeetings.length,
+              representationsRevoked: revokedRepresentationIds.length,
+            },
+            declinedRelationshipIds: declinedTracks.map((track) => track.relationshipId),
+            cancelledMeetingIds: cancelledMeetings.map((meeting) => meeting.meetingId),
+          },
+        },
+        tx
+      );
+
+      return {
+        request: updated,
+        previousStatus,
+        closeAuditId: auditRow.id,
+        declinedTracks,
+        withdrawnProposalIds,
+        cancelledMeetings,
+        revokedRepresentationIds,
+      };
     });
   },
 };

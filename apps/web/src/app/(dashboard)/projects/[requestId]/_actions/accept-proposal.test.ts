@@ -229,7 +229,8 @@ describe('acceptProposalAction', () => {
     });
 
     // Commits the accept via the EXISTING repo method.
-    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID });
+    // BAL-540 / ADR-1030 — the accepting client attributes the relationship's audit row.
+    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID, actorUserId: USER.id });
 
     // BAL-295: the action no longer issues a request transition — accept() derives
     // the request rollup. It re-reads the stored status to source `transitioned`.
@@ -346,7 +347,8 @@ describe('acceptProposalAction', () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.transitioned).toBe(false);
     // The accept committed before the best-effort re-read ran.
-    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID });
+    // BAL-540 / ADR-1030 — the accepting client attributes the relationship's audit row.
+    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID, actorUserId: USER.id });
     expect(log.error).toHaveBeenCalledWith(
       'Request status re-read failed after accept commit',
       expect.any(Object)
@@ -358,6 +360,7 @@ describe('acceptProposalAction', () => {
     const result = await acceptProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
     if (result.success) expect(result.transitioned).toBe(true);
-    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID });
+    // BAL-540 / ADR-1030 — the accepting client attributes the relationship's audit row.
+    expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID, actorUserId: USER.id });
   });
 });

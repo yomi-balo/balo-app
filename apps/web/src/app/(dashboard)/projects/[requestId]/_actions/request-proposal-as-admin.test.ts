@@ -177,7 +177,12 @@ describe('requestProposalAsAdmin', () => {
     const result = await requestProposalAsAdmin(VALID_INPUT);
 
     // Admin full bypass — NO expectedFrom (a deep-equal match excludes it).
-    expect(mockTransition).toHaveBeenCalledWith({ id: RELATIONSHIP_ID, to: 'proposal_requested' });
+    expect(mockTransition).toHaveBeenCalledWith({
+      id: RELATIONSHIP_ID,
+      to: 'proposal_requested',
+      // BAL-540 / ADR-1030 — the acting admin attributes the relationship audit row.
+      actorUserId: ADMIN.id,
+    });
     expect(mockFindById).toHaveBeenCalledWith(REQUEST_ID);
     // BAL-424: the ADMIN path does not go through `resolveConversationAccess` (which denies
     // admin observers), so it resolves the thread with a READ — never `ensureForContext`.
@@ -224,7 +229,12 @@ describe('requestProposalAsAdmin', () => {
       buildRequest({ relationshipStatus: 'eoi_submitted', requestStatus: 'eoi_submitted' })
     );
     const result = await requestProposalAsAdmin(VALID_INPUT);
-    expect(mockTransition).toHaveBeenCalledWith({ id: RELATIONSHIP_ID, to: 'proposal_requested' });
+    expect(mockTransition).toHaveBeenCalledWith({
+      id: RELATIONSHIP_ID,
+      to: 'proposal_requested',
+      // BAL-540 / ADR-1030 — the acting admin attributes the relationship audit row.
+      actorUserId: ADMIN.id,
+    });
     expect(result.success).toBe(true);
   });
 

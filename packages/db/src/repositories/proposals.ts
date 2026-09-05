@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
   proposals,
@@ -39,14 +39,46 @@ export type ProposalStatus = Proposal['status'];
  * the enum + map for A6.2's saveDraft/submitDraft — A6.1 `submit()` inserts
  * directly as `submitted`.
  */
+/**
+ * ⚠ BAL-540 ADDS `declined`, AND THIS `Record` IS THE TRIPWIRE THAT FORCED THE DECISION —
+ * adding the enum label without filling these arms is a compile error here, by design.
+ *
+ * `withdrawn` vs `declined`, and the distinction is NOT cosmetic:
+ *   - `withdrawn` — the EXPERT pulled the proposal, or the BAL-540 CLOSE CASCADE ended the
+ *     whole request. Nobody judged the proposal; the process it belonged to stopped.
+ *   - `declined`  — the CLIENT (or Balo on their behalf) judged THIS track and said no, via
+ *     `requestExpertRelationshipsRepository.declineTrack`.
+ * Both terminal, and both reachable from every open status.
+ *
+ * ⚠ THE `{ cause: 'request_closed' }` THE TICKET DESCRIBES LIVES ON THE **AUDIT ROW**, NOT
+ * HERE (orchestrator D8). `proposals` has no `metadata` column and no `withdrawnAt`, and
+ * BAL-540 adds neither: the cause belongs to the event, not the row. The
+ * `project_request.closed` audit row carries `withdrawnProposalIds` and the counts. Do not
+ * read the ticket's wording as a missing column.
+ */
 export const PROPOSAL_STATUS_TRANSITIONS: Record<ProposalStatus, readonly ProposalStatus[]> = {
-  draft: ['submitted', 'withdrawn'],
-  submitted: ['accepted', 'changes_requested', 'withdrawn'],
-  changes_requested: ['resubmitted', 'withdrawn'],
+  draft: ['submitted', 'withdrawn', 'declined'],
+  submitted: ['accepted', 'changes_requested', 'withdrawn', 'declined'],
+  changes_requested: ['resubmitted', 'withdrawn', 'declined'],
   resubmitted: [],
   accepted: [],
   withdrawn: [],
+  declined: [],
 };
+
+/**
+ * The OPEN (non-terminal) proposal statuses. `resubmitted`, `accepted`, `withdrawn` and
+ * `declined` are terminal — the four with an empty arm in the map above.
+ *
+ * Named once so the close cascade and the decline path cannot drift from each other on what
+ * "an open proposal" is. Enum literals in a WHERE are always safe (the ADD-VALUE restriction
+ * is on DEFAULTs, CHECKs and index predicates only).
+ */
+export const OPEN_PROPOSAL_STATUSES = [
+  'draft',
+  'submitted',
+  'changes_requested',
+] as const satisfies readonly ProposalStatus[];
 
 export function isAllowedProposalTransition(from: ProposalStatus, to: ProposalStatus): boolean {
   return PROPOSAL_STATUS_TRANSITIONS[from].includes(to);
@@ -133,6 +165,74 @@ export async function advanceProposalStatus(
   }
 
   return updated;
+}
+
+/** The minimal projection the two open-proposal finders return. */
+export interface OpenProposalRef {
+  id: string;
+  relationshipId: string;
+  status: ProposalStatus;
+}
+
+/**
+ * BAL-540 — every LIVE proposal of ONE REQUEST in an OPEN status, LOCKED `FOR UPDATE`, inside
+ * the caller's transaction. The close cascade's input.
+ *
+ * ⚠ ORDERED BY `id`, AND THAT IS A LOCK-ORDER DECISION, NOT A DISPLAY ONE. Two concurrent
+ * cascades on the same request must take these row locks in the SAME order or they deadlock.
+ * `id` is arbitrary but stable and total; `submitted_at` is neither (it is NULLable on a
+ * draft and can tie).
+ *
+ * Enum literals at QUERY time are always safe — the ADD-VALUE house restriction is on index
+ * predicates, CHECKs and DEFAULTs (`meetings.ts`'s note).
+ */
+export async function lockOpenProposalsForRequestTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  projectRequestId: string
+): Promise<OpenProposalRef[]> {
+  return tx
+    .select({
+      id: proposals.id,
+      relationshipId: proposals.relationshipId,
+      status: proposals.status,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.projectRequestId, projectRequestId),
+        inArray(proposals.status, [...OPEN_PROPOSAL_STATUSES]),
+        isNull(proposals.deletedAt)
+      )
+    )
+    .orderBy(asc(proposals.id))
+    .for('update');
+}
+
+/**
+ * BAL-540 — the per-track sibling of {@link lockOpenProposalsForRequestTx}: every LIVE, OPEN
+ * proposal of ONE RELATIONSHIP, locked `FOR UPDATE`, ordered by `id` for the same lock-order
+ * reason. `declineTrack`'s input.
+ */
+export async function lockOpenProposalsForRelationshipTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  relationshipId: string
+): Promise<OpenProposalRef[]> {
+  return tx
+    .select({
+      id: proposals.id,
+      relationshipId: proposals.relationshipId,
+      status: proposals.status,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.relationshipId, relationshipId),
+        inArray(proposals.status, [...OPEN_PROPOSAL_STATUSES]),
+        isNull(proposals.deletedAt)
+      )
+    )
+    .orderBy(asc(proposals.id))
+    .for('update');
 }
 
 /**
@@ -224,6 +324,8 @@ export const proposalsRepository = {
    */
   async submit(input: {
     relationshipId: string;
+    /** BAL-540 / ADR-1030 — the expert submitting. Attributes the relationship audit row. */
+    actorUserId: string;
     overview: string;
     pricingMethod: PricingMethod;
     priceCents: number;
@@ -251,10 +353,11 @@ export const proposalsRepository = {
         )
       );
 
-      const relationship = await advanceRelationshipStatus(tx, {
+      const { relationship } = await advanceRelationshipStatus(tx, {
         id: input.relationshipId,
         to: 'proposal_submitted',
         expectedFrom: 'proposal_requested',
+        actorUserId: input.actorUserId,
       });
 
       // Snapshot the Balo fee from the request (system-sourced, never caller-trusted).
@@ -456,13 +559,19 @@ export const proposalsRepository = {
    * it LOCALLY here (the actual submit instant) rather than changing the shared
    * `advanceProposalStatus`, which `accept`/`resubmit` also route through.
    */
-  async promoteToSubmit(input: { proposalId: string; relationshipId: string }): Promise<Proposal> {
+  async promoteToSubmit(input: {
+    proposalId: string;
+    relationshipId: string;
+    /** BAL-540 / ADR-1030 — the expert submitting. Attributes the relationship audit row. */
+    actorUserId: string;
+  }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // 1. Advance the relationship spine first (locks + validates).
       await advanceRelationshipStatus(tx, {
         id: input.relationshipId,
         to: 'proposal_submitted',
         expectedFrom: 'proposal_requested',
+        actorUserId: input.actorUserId,
       });
 
       // 1b. COHERENCE (BAL-293): lock + re-read the live header + children INSIDE
@@ -588,7 +697,11 @@ export const proposalsRepository = {
    * `advanceRelationshipStatus`). Any future writer that locks both must preserve
    * this order to avoid a deadlock cycle.
    */
-  async accept(input: { id: string }): Promise<Proposal> {
+  async accept(input: {
+    id: string;
+    /** BAL-540 / ADR-1030 — the client accepting. Attributes the relationship audit row. */
+    actorUserId: string;
+  }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // Lock the proposal first and capture its relationship id (also validates
       // the proposal is live + currently `submitted` before we touch the spine).
@@ -617,6 +730,7 @@ export const proposalsRepository = {
         id: current.relationshipId,
         to: 'accepted',
         expectedFrom: 'proposal_submitted',
+        actorUserId: input.actorUserId,
       });
 
       // Proposal status write goes THROUGH the guarded transition writer.

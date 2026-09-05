@@ -59,6 +59,8 @@ import type {
   ConversationIntroCallBookedPayload,
   RequestFileSharedWithExpertPayload,
   RequestFileSharedWithClientPayload,
+  ProjectRequestClosedPayload,
+  ProjectTrackDeclinedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -436,6 +438,10 @@ export type NotificationEvent =
   | 'project.changes_requested'
   | 'project.proposal_resubmitted'
   | 'project.billing_reminder'
+  // BAL-540 — the request lifecycle ends: closed (client withdrawal or Balo-closed) or one
+  // track declined.
+  | 'project.request_closed'
+  | 'project.track_declined'
   | 'proposal.shared'
   | 'billing.details_confirmed'
   | 'engagement.milestone_completed'
@@ -770,6 +776,8 @@ export interface EventPayloadMap {
   'project.changes_requested': ProjectChangesRequestedPayload;
   'project.proposal_resubmitted': ProjectProposalResubmittedPayload;
   'project.billing_reminder': ProjectBillingReminderPayload;
+  'project.request_closed': ProjectRequestClosedPayload;
+  'project.track_declined': ProjectTrackDeclinedPayload;
   'proposal.shared': ProposalSharedPayload;
   'billing.details_confirmed': BillingDetailsConfirmedPayload;
   'engagement.milestone_completed': EngagementMilestoneCompletedPayload;

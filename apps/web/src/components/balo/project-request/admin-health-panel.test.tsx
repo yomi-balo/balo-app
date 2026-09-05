@@ -21,6 +21,22 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/invite-experts', () => 
   inviteExpertsAction: vi.fn(),
 }));
 
+// The BAL-540 decline control's dialog imports both arms statically; both must be mocked so
+// their real ('use server' + 'server-only') modules never load in this jsdom test.
+const mockDeclineTrackAsAdmin = vi.fn();
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track-as-admin', () => ({
+  declineTrackAsAdminAction: (...args: unknown[]) => mockDeclineTrackAsAdmin(...args),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track', () => ({
+  declineTrackAction: vi.fn(),
+}));
+
+// `DeclineTrackDialog` calls `useRouter().refresh()` on success — no App Router context exists
+// in this jsdom test, so it must be mocked (mirrors `decline-track-dialog.test.tsx`).
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }));
@@ -43,6 +59,7 @@ function rel(overrides: Partial<RequestRelationshipView> = {}): RequestRelations
     isQuiet: false,
     quietDays: 0,
     removable: true,
+    declinable: true,
     ...overrides,
   };
 }
@@ -57,6 +74,7 @@ describe('AdminHealthPanel', () => {
     render(
       <AdminHealthPanel
         requestId={REQUEST_ID}
+        companyName="Northwind Industrial"
         status="experts_invited"
         relationships={[rel(), rel({ id: 'rel-2', expertName: 'Sofia Ruiz', state: 'eoi_in' })]}
       />
@@ -70,6 +88,7 @@ describe('AdminHealthPanel', () => {
     render(
       <AdminHealthPanel
         requestId={REQUEST_ID}
+        companyName="Northwind Industrial"
         status="experts_invited"
         relationships={[
           rel({ isQuiet: true, quietDays: 4 }),
@@ -83,7 +102,12 @@ describe('AdminHealthPanel', () => {
 
   it('enables remove within the window for an invited row', () => {
     render(
-      <AdminHealthPanel requestId={REQUEST_ID} status="experts_invited" relationships={[rel()]} />
+      <AdminHealthPanel
+        requestId={REQUEST_ID}
+        companyName="Northwind Industrial"
+        status="experts_invited"
+        relationships={[rel()]}
+      />
     );
     expect(screen.getByRole('button', { name: /Remove Priya Nair/i })).toBeInTheDocument();
   });
@@ -92,6 +116,7 @@ describe('AdminHealthPanel', () => {
     render(
       <AdminHealthPanel
         requestId={REQUEST_ID}
+        companyName="Northwind Industrial"
         status="experts_invited"
         relationships={[rel({ status: 'eoi_submitted', state: 'eoi_in', removable: false })]}
       />
@@ -103,6 +128,7 @@ describe('AdminHealthPanel', () => {
     render(
       <AdminHealthPanel
         requestId={REQUEST_ID}
+        companyName="Northwind Industrial"
         status="proposal_requested"
         relationships={[rel({ status: 'invited', removable: true })]}
       />
@@ -116,7 +142,12 @@ describe('AdminHealthPanel', () => {
   it('confirms then calls removeInvitedExpertAction and toasts', async () => {
     mockRemove.mockResolvedValue({ success: true });
     render(
-      <AdminHealthPanel requestId={REQUEST_ID} status="experts_invited" relationships={[rel()]} />
+      <AdminHealthPanel
+        requestId={REQUEST_ID}
+        companyName="Northwind Industrial"
+        status="experts_invited"
+        relationships={[rel()]}
+      />
     );
 
     fireEvent.click(screen.getByRole('button', { name: /Remove Priya Nair/i }));
@@ -132,7 +163,12 @@ describe('AdminHealthPanel', () => {
 
   it('opens the invite dialog from "Invite another expert"', async () => {
     render(
-      <AdminHealthPanel requestId={REQUEST_ID} status="experts_invited" relationships={[rel()]} />
+      <AdminHealthPanel
+        requestId={REQUEST_ID}
+        companyName="Northwind Industrial"
+        status="experts_invited"
+        relationships={[rel()]}
+      />
     );
     fireEvent.click(screen.getByRole('button', { name: /Invite another expert/i }));
     await waitFor(() =>
@@ -145,6 +181,7 @@ describe('AdminHealthPanel', () => {
       render(
         <AdminHealthPanel
           requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
           status="experts_invited"
           relationships={[rel({ status: 'invited' })]}
         />
@@ -158,6 +195,7 @@ describe('AdminHealthPanel', () => {
       render(
         <AdminHealthPanel
           requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
           status="eoi_submitted"
           relationships={[rel({ status: 'eoi_submitted', state: 'eoi_in', removable: false })]}
         />
@@ -173,6 +211,7 @@ describe('AdminHealthPanel', () => {
         render(
           <AdminHealthPanel
             requestId={REQUEST_ID}
+            companyName="Northwind Industrial"
             status="proposal_requested"
             relationships={[rel({ status, removable: false })]}
           />
@@ -197,6 +236,7 @@ describe('AdminHealthPanel', () => {
       render(
         <AdminHealthPanel
           requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
           status="experts_invited"
           relationships={[rel({ status: 'invited' })]}
         />
@@ -263,6 +303,7 @@ describe('AdminHealthPanel', () => {
       render(
         <AdminHealthPanel
           requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
           status="experts_invited"
           relationships={[rel({ status: 'invited' })]}
         />
@@ -290,6 +331,7 @@ describe('AdminHealthPanel', () => {
       render(
         <AdminHealthPanel
           requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
           status="experts_invited"
           relationships={[rel({ status: 'invited' })]}
         />
@@ -305,6 +347,89 @@ describe('AdminHealthPanel', () => {
       );
       expect(mockToast.success).not.toHaveBeenCalled();
       expect(mockTrack).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Decline track control (BAL-540)', () => {
+    it('renders the decline control for a declinable row, LABELLED WITH THE STAGE VERB', () => {
+      render(
+        <AdminHealthPanel
+          requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
+          status="experts_invited"
+          relationships={[rel({ status: 'invited', declinable: true })]}
+        />
+      );
+      // An unanswered invitation is WITHDRAWN, not declined — the label must match the dialog
+      // this button opens ("Withdraw Priya Nair’s invitation?"), same as `thread-header.tsx`.
+      expect(
+        screen.getByRole('button', { name: 'Withdraw invite Priya Nair' })
+      ).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Decline Priya Nair' })).not.toBeInTheDocument();
+    });
+
+    it('uses the "Decline" verb once the track is past a bare invite', () => {
+      render(
+        <AdminHealthPanel
+          requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
+          status="eoi_submitted"
+          relationships={[rel({ status: 'eoi_submitted', state: 'eoi_in', declinable: true })]}
+        />
+      );
+      expect(screen.getByRole('button', { name: 'Decline Priya Nair' })).toBeInTheDocument();
+    });
+
+    it('hides the decline control for a non-declinable row', () => {
+      render(
+        <AdminHealthPanel
+          requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
+          status="experts_invited"
+          relationships={[rel({ declinable: false })]}
+        />
+      );
+      expect(
+        screen.queryByRole('button', { name: /(Decline|Withdraw invite) Priya Nair/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it('opens the DeclineTrackDialog naming the expert', async () => {
+      render(
+        <AdminHealthPanel
+          requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
+          status="experts_invited"
+          relationships={[rel({ status: 'invited', declinable: true })]}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Withdraw invite Priya Nair' }));
+      expect(await screen.findByText('Withdraw Priya Nair’s invitation?')).toBeInTheDocument();
+    });
+
+    it('confirms and calls declineTrackAsAdminAction, on the client’s behalf', async () => {
+      mockDeclineTrackAsAdmin.mockResolvedValue({
+        success: true,
+        analytics: { stage: 'invited', actorKind: 'balo', hadOpenProposal: false },
+      });
+      render(
+        <AdminHealthPanel
+          requestId={REQUEST_ID}
+          companyName="Northwind Industrial"
+          status="experts_invited"
+          relationships={[rel({ status: 'invited', declinable: true })]}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Withdraw invite Priya Nair' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Withdraw invite' }));
+
+      await waitFor(() =>
+        expect(mockDeclineTrackAsAdmin).toHaveBeenCalledWith({
+          requestId: REQUEST_ID,
+          relationshipId: 'rel-1',
+        })
+      );
+      expect(mockToast.success).toHaveBeenCalledWith('Invite withdrawn — Priya Nair has been told');
     });
   });
 });

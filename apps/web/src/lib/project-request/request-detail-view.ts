@@ -2,6 +2,20 @@ import type { ProjectRequestWithRelations } from '@balo/db';
 import { formatBudgetRange } from '@/lib/utils/currency';
 import type { RequestViewerContext, ProjectRequestStatus } from './resolve-request-lens';
 import type { RelationshipStatus } from './conversation-view-types';
+import { narrowToTrackStage, type CloseConsequenceTrack } from './close-copy';
+import {
+  deriveClosedSummary,
+  deriveClosedTracks,
+  type ClosedRequestSummary,
+  type ClosedSummaryInput,
+  type ClosedTrackView,
+} from './closed-request-view';
+
+export type {
+  ClosedRequestSummary,
+  ClosedSummaryInput,
+  ClosedTrackView,
+} from './closed-request-view';
 
 export interface RequestProductView {
   name: string;
@@ -54,6 +68,14 @@ export interface RequestRelationshipView {
   quietDays: number;
   /** Whether the remove control may show for this row (status === 'invited'). */
   removable: boolean;
+  /**
+   * BAL-540 — whether the per-track decline control may show for this row (admin lens, on the
+   * observer relationships panel). Mirrors `removable`'s precedent as an affordance boolean:
+   * declinable for every LIVE stage a track can actually be declined FROM, matching
+   * `RELATIONSHIP_STATUS_TRANSITIONS.declined`'s allowed sources — never `accepted` (refused by
+   * the repository transition guard) and never `declined` (already terminal).
+   */
+  declinable: boolean;
 }
 
 export interface RequestDetailView {
@@ -103,6 +125,20 @@ export interface RequestDetailView {
    * expert (a losing expert never sees the board). `null` otherwise.
    */
   kickoff: KickoffView | null;
+  /**
+   * BAL-540 — the close sheet's consequence list, for the CLIENT + ADMIN lenses (never expert —
+   * an expert never closes a request). Always `[]` on a closed request (the cascade declines
+   * every live track) or when the client/admin has no live tracks to name yet.
+   */
+  liveTracksForClose: CloseConsequenceTrack[];
+  /** BAL-540 — non-null exactly when `status === 'closed'` AND the page supplied the resolved summary input. */
+  closed: ClosedRequestSummary | null;
+  /**
+   * BAL-540 — every relationship's frozen state, for the CLIENT + ADMIN lenses ONLY, ONLY when
+   * `status === 'closed'`. Always `[]` on a live request or the expert lens (an expert's OWN
+   * closed-out view is `resolve-ended-track-view.ts`'s separate, narrower surface).
+   */
+  closedTracks: ClosedTrackView[];
 }
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -202,6 +238,9 @@ function deriveRelationshipView(
     isQuiet,
     quietDays,
     removable: relationship.status === 'invited',
+    // BAL-540 — ONE narrowing for "is this track declinable", shared with the close sheet,
+    // the conversation thread and both Server Actions (`@balo/shared/project-requests`).
+    declinable: narrowToTrackStage(relationship.status) !== null,
   };
 }
 
@@ -263,6 +302,28 @@ function deriveKickoffView(
 }
 
 /**
+ * BAL-540 — the close sheet's consequence list, for the client + admin lenses only. `partyLabel`
+ * collapses to `expertName` (see `close-copy.ts`'s docblock — agency data is not yet hydrated
+ * onto this view). A relationship whose status doesn't narrow to a `TrackStage` (i.e.
+ * `declined`; `accepted` cannot coexist with a still-closable request — see `close()`'s
+ * `STATUS_TRANSITIONS`) is skipped rather than guessed at.
+ */
+function deriveLiveTracksForClose(
+  request: ProjectRequestWithRelations,
+  ctx: RequestViewerContext
+): CloseConsequenceTrack[] {
+  if (ctx.lens !== 'client' && ctx.lens !== 'admin') return [];
+  const tracks: CloseConsequenceTrack[] = [];
+  for (const relationship of request.relationships) {
+    const stage = narrowToTrackStage(relationship.status);
+    if (stage === null) continue;
+    const expertName = relationshipName(relationship);
+    tracks.push({ expertName, partyLabel: expertName, stage });
+  }
+  return tracks;
+}
+
+/**
  * Pure mapper: hydrated DB graph → fully serializable view-model the leaf
  * components consume. Mirrors `mapProfileToView`.
  *
@@ -274,7 +335,14 @@ function deriveKickoffView(
 export function mapRequestToDetailView(
   request: ProjectRequestWithRelations,
   ctx: RequestViewerContext,
-  now: Date = new Date()
+  now: Date = new Date(),
+  /**
+   * BAL-540 — the two async-resolved primitives {@link deriveClosedSummary} needs (the
+   * closer's name + the close audit row's counts). `page.tsx` reads them ONLY when
+   * `request.status === 'closed'`, so a live request pays nothing extra. Defaulted to `null`
+   * so every existing call site (and every existing test) keeps compiling unchanged.
+   */
+  closedSummaryInput: ClosedSummaryInput | null = null
 ): RequestDetailView {
   return {
     id: request.id,
@@ -307,5 +375,13 @@ export function mapRequestToDetailView(
     viewerEoi: deriveViewerEoi(request, ctx),
     viewerRelationshipStatus: deriveViewerRelationshipStatus(request, ctx),
     kickoff: deriveKickoffView(request, ctx),
+    liveTracksForClose: deriveLiveTracksForClose(request, ctx),
+    closed: deriveClosedSummary(request, ctx, closedSummaryInput),
+    // BAL-540 — the closed-track list's AUDIENCE narrowing lives here, with every other
+    // per-lens projection choice this mapper makes; `deriveClosedTracks` itself is
+    // context-free (see its docblock: it is scanned by the ADR-1029 capability invariant, so
+    // it may not name a lens). An expert never sees the counterparty track list — their own
+    // closed-state surface is `resolve-ended-track-view.ts`.
+    closedTracks: ctx.lens === 'expert' ? [] : deriveClosedTracks(request),
   };
 }

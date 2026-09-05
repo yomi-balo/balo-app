@@ -257,7 +257,12 @@ describe('submitProposalAction', () => {
       mockListInstallments.mockResolvedValue([]);
       const result = await submitProposalAction(VALID_INPUT);
       expect(result.success).toBe(true);
-      expect(mockPromote).toHaveBeenCalledWith({ proposalId: PROPOSAL_ID, relationshipId: REL_ID });
+      expect(mockPromote).toHaveBeenCalledWith({
+        proposalId: PROPOSAL_ID,
+        relationshipId: REL_ID,
+        // BAL-540 / ADR-1030 — the submitting expert attributes the relationship audit row.
+        actorUserId: USER.id,
+      });
     });
 
     it('rejects T&M when a milestone is missing an effort estimate (BAL-294)', async () => {

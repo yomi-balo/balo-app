@@ -83,6 +83,21 @@ vi.mock(
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/override-balo-fee', () => ({
   overrideBaloFee: vi.fn(),
 }));
+// BAL-540 — the close/decline islands (CloseRequestSheet, DeclineTrackDialog, rendered by the
+// header control / AdminHealthPanel / ConversationStage) import all four Server Actions
+// statically — mock every one so the shell renders in JSDOM without touching @balo/db / auth.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/close-request', () => ({
+  closeRequestAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/close-request-as-admin', () => ({
+  closeRequestAsAdminAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track', () => ({
+  declineTrackAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track-as-admin', () => ({
+  declineTrackAsAdminAction: vi.fn(),
+}));
 
 // useIsMobile reads window.matchMedia (absent in jsdom) — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
@@ -125,6 +140,7 @@ function relationship(overrides: Partial<RequestRelationshipView> = {}): Request
     isQuiet: false,
     quietDays: 0,
     removable: false,
+    declinable: true,
     ...overrides,
   };
 }
@@ -148,6 +164,9 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     viewerEoi: null,
     viewerRelationshipStatus: null,
     kickoff: null,
+    liveTracksForClose: [],
+    closed: null,
+    closedTracks: [],
     ...overrides,
   };
 }
@@ -173,6 +192,7 @@ function ctx(overrides: Partial<RequestViewerContext> = {}): RequestViewerContex
     isInvitedExpert: false,
     relationshipId: null,
     canSeeContact: false,
+    canSeeStaffOnly: false,
     ...overrides,
   };
 }
@@ -641,12 +661,86 @@ const ALL_STATUSES: ProjectRequestStatus[] = [
   'proposal_submitted',
   'accepted',
   'kickoff_approved',
+  'closed',
 ];
 
 describe('RequestDetailShell — renders for every status', () => {
   it.each(ALL_STATUSES)('renders without throwing for status=%s (client)', (status) => {
     render(<RequestDetailShell view={view({ status })} ctx={ctx()} />);
     expect(screen.getByText('Viewing as')).toBeInTheDocument();
+  });
+});
+
+describe('RequestDetailShell — BAL-540 close control + closed state', () => {
+  it('shows "Close request" for a client who holds canClose', () => {
+    render(<RequestDetailShell view={view()} ctx={ctx()} canClose />);
+    expect(screen.getByRole('button', { name: /close request/i })).toBeInTheDocument();
+  });
+
+  it('hides "Close request" for a client without canClose', () => {
+    render(<RequestDetailShell view={view()} ctx={ctx()} canClose={false} />);
+    expect(screen.queryByRole('button', { name: /close request/i })).not.toBeInTheDocument();
+  });
+
+  it('shows "Close request" for an admin who holds canCloseAsAdmin', () => {
+    render(
+      <RequestDetailShell
+        view={view()}
+        ctx={ctx({ lens: 'admin', archetype: 'observer', canSeeContact: true })}
+        canCloseAsAdmin
+      />
+    );
+    expect(screen.getByRole('button', { name: /close request/i })).toBeInTheDocument();
+  });
+
+  it('never shows "Close request" once the request is already closed', () => {
+    render(
+      <RequestDetailShell view={view({ status: 'closed' })} ctx={ctx()} canClose canCloseAsAdmin />
+    );
+    expect(screen.queryByRole('button', { name: /close request/i })).not.toBeInTheDocument();
+  });
+
+  it('renders the ClosedBanner and no status stepper / nudge once closed', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'closed',
+          closed: {
+            closedAtIso: '2026-09-05T00:00:00.000Z',
+            reason: 'unfilled',
+            closedByLabel: 'Adeeb @ Balo',
+            closedByParty: 'balo',
+            note: null,
+            counts: { tracksEnded: 1, proposalsWithdrawn: 0, meetingsCancelled: 0 },
+          },
+        })}
+        ctx={ctx()}
+      />
+    );
+    expect(screen.getByText(/Closed on 5 Sept 2026/)).toBeInTheDocument();
+  });
+
+  it('renders the frozen ClosedTrackList when closedTracks is populated', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'closed',
+          closedTracks: [
+            {
+              relationshipId: 'rel-1',
+              expertName: 'Priya Nair',
+              expertInitials: 'PN',
+              partyLabel: 'Priya Nair',
+              finalChip: 'ended_request_closed',
+              endedLabel: 'Ended when the request closed · files as they were',
+            },
+          ],
+        })}
+        ctx={ctx()}
+      />
+    );
+    expect(screen.getByText('Priya Nair')).toBeInTheDocument();
+    expect(screen.getByText('Ended — request closed')).toBeInTheDocument();
   });
 });
 

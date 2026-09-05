@@ -118,18 +118,29 @@ export const auditEventsRepository = {
 
   /**
    * The MOST-RECENT audit row for one entity + action (BAL-347) — powers the
-   * "Last changed by {Name} · {date}" header on the join-mode card. Returns just the
+   * "Last changed by {Name} · {date}" header on the join-mode card. Returns the
    * actor id + timestamp (the caller batch-hydrates the name), or `undefined` when
    * the action has never occurred. Rides `audit_events_entity_idx` (entity_type,
    * entity_id) with the `action` filter + a `created_at DESC LIMIT 1`.
+   *
+   * ⚠ BAL-540 widened this by exactly ONE column, `metadata` — additive; every existing
+   * caller (BAL-347's team page) already ignores extra fields. `request-detail-view.ts`'s
+   * `deriveClosedSummary` is the first reader: it needs the `project_request.closed` audit
+   * row's `metadata.counts` (tracksDeclined/proposalsWithdrawn/meetingsCancelled) to render
+   * the `ClosedBanner` without a second bespoke query. `metadata` is `unknown` here — this
+   * repository has no per-action metadata schema; the caller narrows it.
    */
   findLatestByEntityAndAction: async (input: {
     entityType: string;
     entityId: string;
     action: string;
-  }): Promise<{ actorUserId: string | null; createdAt: Date } | undefined> => {
+  }): Promise<{ actorUserId: string | null; createdAt: Date; metadata: unknown } | undefined> => {
     const [row] = await db
-      .select({ actorUserId: auditEvents.actorUserId, createdAt: auditEvents.createdAt })
+      .select({
+        actorUserId: auditEvents.actorUserId,
+        createdAt: auditEvents.createdAt,
+        metadata: auditEvents.metadata,
+      })
       .from(auditEvents)
       .where(
         and(

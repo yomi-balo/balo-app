@@ -1243,4 +1243,77 @@ describe('getInAppTemplate', () => {
       });
     });
   });
+
+  describe('project-request-closed-expert (BAL-540)', () => {
+    it('names the client party and deep-links to the request', () => {
+      const result = getInAppTemplate('project-request-closed-expert', {
+        title: 'CPQ implementation',
+        clientCompanyName: 'Acme Corp',
+        projectRequestId: 'req-1',
+      });
+      expect(result.title).toBe('Request closed');
+      expect(result.body).toContain('Acme Corp has stopped looking for an expert');
+      expect(result.body).toContain('CPQ implementation');
+      expect(result.actionUrl).toBe('/projects/req-1');
+    });
+
+    it('falls back when the company name is missing', () => {
+      const result = getInAppTemplate('project-request-closed-expert', {
+        title: 'CPQ implementation',
+      });
+      expect(result.body).toContain('The client has stopped looking');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-request-closed-client (BAL-540)', () => {
+    it('carries the reason CATEGORY and never a note', () => {
+      const result = getInAppTemplate('project-request-closed-client', {
+        title: 'CPQ implementation',
+        reason: 'superseded',
+        projectRequestId: 'req-1',
+        closeNote: 'internal staff note — never render this',
+      });
+      expect(result.title).toBe('Request closed');
+      expect(result.body).toBe(
+        'We\'ve closed "CPQ implementation" — the work is now covered elsewhere.'
+      );
+      expect(result.body).not.toContain('internal staff note');
+    });
+
+    it('degrades an unknown reason rather than throwing', () => {
+      const result = getInAppTemplate('project-request-closed-client', {
+        title: 'CPQ implementation',
+        reason: 'not-a-real-reason',
+      });
+      expect(result.body).toContain('no expert was available in time');
+    });
+  });
+
+  describe('project-track-declined (BAL-540)', () => {
+    it('renders the invitation-withdrawn copy at the invited stage', () => {
+      const result = getInAppTemplate('project-track-declined', {
+        title: 'CPQ implementation',
+        clientCompanyName: 'Acme Corp',
+        stage: 'invited',
+        projectRequestId: 'req-1',
+      });
+      expect(result.title).toBe('Not proceeding');
+      expect(result.body).toBe(
+        'Acme Corp withdrew your invitation to "CPQ implementation". Nothing was shared with you beyond the brief.'
+      );
+    });
+
+    it('renders the not-proceeding copy at a later stage', () => {
+      const result = getInAppTemplate('project-track-declined', {
+        title: 'CPQ implementation',
+        clientCompanyName: 'Acme Corp',
+        stage: 'proposal_submitted',
+        projectRequestId: 'req-1',
+      });
+      expect(result.body).toBe(
+        'Acme Corp decided not to proceed with your track on "CPQ implementation". There\'s nothing further to do here.'
+      );
+    });
+  });
 });

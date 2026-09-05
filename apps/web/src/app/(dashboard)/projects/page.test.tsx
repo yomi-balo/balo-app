@@ -93,6 +93,7 @@ function clientDto(allowedLenses: PortfolioLens[] = ['client']): PortfolioDTO {
     rows: [],
     tiles: { needs: 0, inProgress: 0, kicked: 0, total: 0 },
     isEmpty: true,
+    closedRows: [],
   };
 }
 
@@ -103,6 +104,7 @@ function expertDto(allowedLenses: PortfolioLens[] = ['client', 'expert']): Portf
     rows: [],
     tiles: { needs: 0, inProgress: 0, kicked: 0, total: 0 },
     isEmpty: true,
+    closedRows: [],
   };
 }
 

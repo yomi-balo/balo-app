@@ -101,6 +101,8 @@ function displayName(user: { firstName: string | null; lastName: string | null }
 async function promoteToSubmitWithStaleGuard(params: {
   proposalId: string;
   relationshipId: string;
+  /** BAL-540 / ADR-1030 — the submitting expert; attributes the relationship's audit row. */
+  actorUserId: string;
 }): Promise<'ok' | 'stale' | { coherence: ProposalCoherenceError }> {
   try {
     await proposalsRepository.promoteToSubmit(params);
@@ -340,7 +342,11 @@ async function runSubmit(
   // 9. Promote + advance the relationship spine (ONE tx). A stale double-submit
   //    trips the typed transition errors → friendly stale copy; the repo coherence
   //    guard (defence-in-depth) → generic copy + an analytics `coherence` payload.
-  const promotion = await promoteToSubmitWithStaleGuard({ proposalId, relationshipId });
+  const promotion = await promoteToSubmitWithStaleGuard({
+    proposalId,
+    relationshipId,
+    actorUserId: user.id,
+  });
   if (promotion === 'stale') {
     return { success: false, error: STALE_PROPOSAL };
   }

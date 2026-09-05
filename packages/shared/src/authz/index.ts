@@ -22,6 +22,9 @@ export const CAPABILITIES = {
    * ⚠ Base-member capability — NOT the join-request approve gate. Every
    * domain-auto-joined member holds this. Do NOT wire the approve/decline
    * endpoints to this; use `MANAGE_MEMBERS`.
+   *
+   * BAL-540 is this token's first gate call site — closing (or declining a track on) a project
+   * request, client-side.
    */
   MANAGE_REQUESTS: 'manage_requests',
   /** Approve one's own proposals (member baseline). */

@@ -9,7 +9,10 @@ interface RequestDetailAnalyticsProps {
   lens: RequestLens;
   archetype: RequestArchetype;
   status: string;
-  phase: 'phase1' | 'phase2';
+  // BAL-540 — `'closed'` is a valid phase-tracker value: the `phase !== 'phase2'` guard below
+  // already treats it exactly like `'phase1'` (no PROJECT_REQUEST_PHASE_FLIPPED fired), so
+  // nothing else in this component needs to branch on it.
+  phase: 'phase1' | 'phase2' | 'closed';
 }
 
 /**
@@ -55,13 +58,13 @@ export function RequestDetailAnalytics({
   //    when storage is available.
   useEffect(() => {
     if (phase !== 'phase2') return;
-    if (typeof window === 'undefined') return;
+    if (globalThis.window === undefined) return;
     if (phaseFlipFired.current) return;
 
     const key = `balo:phase-flipped:${requestId}:${lens}`;
     try {
-      if (window.sessionStorage.getItem(key)) return;
-      window.sessionStorage.setItem(key, '1');
+      if (globalThis.sessionStorage.getItem(key)) return;
+      globalThis.sessionStorage.setItem(key, '1');
     } catch {
       // sessionStorage unavailable (private mode) — the per-mount ref below still
       // guarantees we fire at most once for this mount.

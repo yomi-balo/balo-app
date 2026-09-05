@@ -14,6 +14,7 @@ import {
   projectRequestStatusEnum,
   projectRequestSourceEnum,
   projectRequestSendToEnum,
+  projectRequestCloseReasonEnum,
 } from './enums';
 import { companies } from './companies';
 import { expertProfiles } from './experts';
@@ -105,6 +106,39 @@ export const projectRequests = pgTable(
     clientBillingConfirmedAt: timestamp('client_billing_confirmed_at', { withTimezone: true }),
     expertTermsConfirmedAt: timestamp('expert_terms_confirmed_at', { withTimezone: true }),
 
+    // ── Terminal close (BAL-540 / ADR-1025 Amendment 1) ──────────────────────
+    // All four NULL until the request is closed. Written together, in ONE statement, by
+    // `projectRequestsRepository.close()` — the attribution house rule
+    // (`repositories/_shared/meeting-audit.ts`, `schema/meeting-presence.ts`): a column
+    // with no writer is a worse lie than its absence.
+    //
+    // ⚠ NO DEFAULT AND NO CHECK NAMES `'closed'`. That label arrives by
+    // `ALTER TYPE … ADD VALUE` in the SAME migration (0085) and is unusable there (memory
+    // `reference_enum_default_same_tx_migration_hazard`). The `status = 'closed' ⟺
+    // closed_at IS NOT NULL` coherence CHECK is therefore an explicit FOLLOW-UP migration;
+    // until it lands, coherence is the repository path's job and is pinned by
+    // `repositories/project-request-close.integration.test.ts`.
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    // WHO closed it. Preserve attribution → restrict (the dominant `users` reference here,
+    // matching `created_by_user_id` and `invited_by_user_id`).
+    closedByUserId: uuid('closed_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+    // WHY, as a category. Server-derived from the authorizing arm's input, never free text.
+    closeReason: projectRequestCloseReasonEnum('close_reason'),
+    /**
+     * ⚠⚠ STAFF-ONLY FREE TEXT. NEVER serialised on a client or expert lens (orchestrator
+     * D11): `mapRequestToDetailView` gates it on the PLATFORM capability
+     * `close_any_request`, beside the existing fee-concealment assertions, and a negative
+     * test pins that no non-staff lens emits it.
+     *
+     * ⚠ IT IS ALSO NEVER COPIED INTO A NOTIFICATION PAYLOAD OR AN AUDIT ROW. The
+     * `project_request.closed` audit row records `hasNote: boolean` and nothing more — this
+     * column is the note's ONLY home, so a leak has exactly one place to happen and one
+     * place to be tested.
+     */
+    closeNote: text('close_note'),
+
     ...timestamps,
     ...softDelete,
   },
@@ -112,6 +146,8 @@ export const projectRequests = pgTable(
     index('project_requests_company_idx').on(table.companyId),
     index('project_requests_expert_profile_idx').on(table.expertProfileId),
     index('project_requests_created_by_idx').on(table.createdByUserId),
+    // FK-column rule (drizzle-schema skill: index every foreign key column).
+    index('project_requests_closed_by_idx').on(table.closedByUserId),
     // Soft-delete-aware composite for the expert's future "incoming requests"
     // inbox: expert + status, partial predicate on live rows.
     index('project_requests_expert_status_idx')
@@ -283,6 +319,30 @@ export const projectRequestDocumentsRelations = relations(projectRequestDocument
     references: [projectRequests.id],
   }),
 }));
+
+/** BAL-540 — the four close-reason labels, as a union (the `RepresentationScope` pattern). */
+export type ProjectRequestCloseReason = (typeof projectRequestCloseReasonEnum.enumValues)[number];
+
+// ── Type-agreement pin (BAL-540 fix round) ────────────────────────────────
+//
+// ⚠ TWO DEFINITIONS OF ONE VOCABULARY, PINNED TO EACH OTHER AT COMPILE TIME — the
+// `meetingRecordingStatusAgreement` pattern in `schema/meeting-recordings.ts:304-329`, and for
+// the same reason: `@balo/shared` must not import `@balo/db` (a client component that
+// value-imports `@balo/db` drags the `postgres` driver into the bundle and fails `next build`),
+// so the client-safe restatement in `packages/shared/src/project-requests/index.ts` cannot
+// import this union. This makes a drift between the two a TYPE ERROR. `never` is a build
+// failure — the assignment below is what gives `tsc` a reason to evaluate the alias at all.
+import type { ProjectRequestCloseReason as SharedProjectRequestCloseReason } from '@balo/shared/project-requests';
+
+type ExactCloseReason<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+
+/** Compile-time proof the schema-derived union and `@balo/shared`'s agree. */
+export type ProjectRequestCloseReasonAgreement = ExactCloseReason<
+  ProjectRequestCloseReason,
+  SharedProjectRequestCloseReason
+>;
+
+export const projectRequestCloseReasonAgreement: ProjectRequestCloseReasonAgreement = true;
 
 export type ProjectRequest = typeof projectRequests.$inferSelect;
 export type NewProjectRequest = typeof projectRequests.$inferInsert;

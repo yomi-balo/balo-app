@@ -1,3 +1,13 @@
+/**
+ * BAL-540 (fix round) — the two request-lifecycle unions are IMPORTED from `@balo/shared`, never
+ * re-spelled inline. `@balo/analytics` already depends on `@balo/shared`, and `@balo/shared` is
+ * where they live precisely because a client island cannot value-import `@balo/db`.
+ */
+import type {
+  DeclinableRelationshipStatus,
+  ProjectRequestCloseReason,
+} from '@balo/shared/project-requests';
+
 export const PROJECT_EVENTS = {
   PROJECT_DRAWER_OPENED: 'project_drawer_opened',
   PROJECT_ENTRY_SELECTED: 'project_entry_selected',
@@ -63,6 +73,13 @@ export const PROJECT_EVENTS = {
   // `billing_reminder_sent` would violate the project-domain naming regex). Fired
   // CLIENT-side by the RemindClientButton after the server action succeeds.
   BILLING_REMINDER_SENT: 'project_billing_reminder_sent',
+  // BAL-540: a request was closed (client withdrawal, or Balo on the client's
+  // behalf) or one track was declined. Both carry the `project_` feature prefix
+  // to match every constant in this file. Fired CLIENT-side by the close
+  // sheet / decline confirm island off the action's returned `analytics` object —
+  // no money on either payload, unlike BAL-357's server-only proposal events.
+  PROJECT_REQUEST_CLOSED: 'project_request_closed',
+  PROJECT_TRACK_DECLINED: 'project_track_declined',
 } as const;
 
 export type ProjectEntryMethod = 'manual' | 'ai';
@@ -71,7 +88,12 @@ export type ProjectActor = 'client' | 'expert' | 'admin';
 /** Viewer lens on the request-detail page (admin is the observer archetype). */
 export type ProjectRequestLens = 'client' | 'expert' | 'admin';
 export type ProjectRequestArchetype = 'participant' | 'observer';
-export type ProjectRequestPhase = 'phase1' | 'phase2';
+// BAL-540 — `'closed'` added: a closed request is neither phase (the conversation is not
+// "the live page", it's the historical record). Widened here rather than left `'phase1' |
+// 'phase2'` so `RequestDetailAnalytics` (and any future consumer) gets a compile error to
+// decide what a closed detail-page VIEW means, rather than silently mis-typing it as one of
+// the two live phases.
+export type ProjectRequestPhase = 'phase1' | 'phase2' | 'closed';
 
 export interface ProjectEventMap {
   [PROJECT_EVENTS.PROJECT_DRAWER_OPENED]: { expert_id: string };
@@ -238,6 +260,22 @@ export interface ProjectEventMap {
     recipient_count: number;
     /** Whole days since proposal acceptance; `null` when no acceptance timestamp resolves. */
     days_since_acceptance: number | null;
+  };
+  [PROJECT_EVENTS.PROJECT_REQUEST_CLOSED]: {
+    request_id: string;
+    reason: ProjectRequestCloseReason;
+    actor_kind: 'client' | 'balo';
+    /** The request status BEFORE the close. */
+    stage_at_close: string;
+    open_tracks: number;
+    open_proposals: number;
+  };
+  [PROJECT_EVENTS.PROJECT_TRACK_DECLINED]: {
+    request_id: string;
+    relationship_id: string;
+    stage: DeclinableRelationshipStatus;
+    actor_kind: 'client' | 'balo';
+    had_open_proposal: boolean;
   };
 }
 

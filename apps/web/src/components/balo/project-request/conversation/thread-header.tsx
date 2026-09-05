@@ -1,10 +1,11 @@
 'use client';
 
-import { Calendar, Clock, FileText, Loader2 } from 'lucide-react';
+import { Calendar, Clock, FileText, Loader2, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ConversationThreadView } from '@/lib/project-request/conversation-view-types';
 import type { ThreadActions } from './thread-actions';
 import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
+import { declineVerbFor } from '@/lib/project-request/close-copy';
 
 interface ThreadHeaderProps {
   thread: ConversationThreadView;
@@ -28,6 +29,12 @@ interface ThreadHeaderProps {
    * disabled stub (defensive).
    */
   onViewProposal: (() => void) | null;
+  /**
+   * BAL-540 — the client's per-track "no" control. Non-null → renders ENABLED with
+   * `actions.declineSlot`'s verb ("Decline" / "Withdraw invite"); `null` → the slot is omitted
+   * entirely (no `declineSlot`, so nothing to decline from here).
+   */
+  onDecline: (() => void) | null;
 }
 
 /**
@@ -57,8 +64,9 @@ export function ThreadHeader({
   onRequestProposal,
   onBuildProposal,
   onViewProposal,
+  onDecline,
 }: Readonly<ThreadHeaderProps>): React.JSX.Element {
-  const { headerProposal } = actions;
+  const { headerProposal, declineSlot } = actions;
   return (
     <div className="border-border flex items-center gap-2.5 border-b px-4 py-3">
       <InitialsAvatar initials={thread.expertInitials} size="md" />
@@ -160,6 +168,16 @@ export function ThreadHeader({
         >
           <FileText className="h-3.5 w-3.5" aria-hidden="true" />
           {headerProposal.label}
+        </button>
+      )}
+      {declineSlot !== null && onDecline !== null && (
+        <button
+          type="button"
+          onClick={onDecline}
+          aria-label={`${declineVerbFor(declineSlot)} ${thread.expertName}`}
+          className="border-border bg-card text-muted-foreground hover:border-destructive/40 hover:text-destructive focus-visible:ring-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] border transition-colors focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       )}
     </div>

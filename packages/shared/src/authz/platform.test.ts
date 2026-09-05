@@ -91,4 +91,26 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
   it('bundle includes VIEW_ANY_REQUEST_FILE for the staff roles', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE);
   });
+
+  it('maps CLOSE_ANY_REQUEST to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST).toBe('close_any_request');
+  });
+
+  it('bundle includes CLOSE_ANY_REQUEST for the staff roles', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST);
+  });
+});
+
+/**
+ * BAL-540 — the request-close override token. Same allow/deny table as its siblings: closing
+ * somebody else's sourcing process bypasses BOTH party axes and is Balo-staff-only.
+ */
+describe('platformRoleHasCapability — CLOSE_ANY_REQUEST', () => {
+  it.each(['admin', 'super_admin'])('grants CLOSE_ANY_REQUEST to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])('denies CLOSE_ANY_REQUEST to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST)).toBe(false);
+  });
 });

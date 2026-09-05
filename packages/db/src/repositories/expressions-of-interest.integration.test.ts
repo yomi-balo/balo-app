@@ -3,12 +3,22 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import { expressionsOfInterest } from '../schema';
-import { requestExpertRelationshipFactory } from '../test/factories';
+import { requestExpertRelationshipFactory, userFactory } from '../test/factories';
 import { expressionsOfInterestRepository } from './expressions-of-interest';
 import {
   InvalidRelationshipTransitionError,
   requestExpertRelationshipsRepository,
 } from './request-expert-relationships';
+
+/**
+ * BAL-540 / ADR-1030 — `submit()` now carries an ACTOR (the relationship advance writes
+ * attribution + one audit row in the same transaction). This suite exercises the EOI state
+ * machine, not attribution, so it seeds a throwaway user per call; attribution is asserted in
+ * `request-track-decline.integration.test.ts`.
+ */
+async function seedActorId(): Promise<string> {
+  return (await userFactory()).id;
+}
 
 describe('expressionsOfInterestRepository.submit', () => {
   it('inserts the EOI and advances the relationship invited→eoi_submitted atomically', async () => {
@@ -17,6 +27,7 @@ describe('expressionsOfInterestRepository.submit', () => {
 
     const eoi = await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>I have built this exact flow three times.</p>',
     });
 
@@ -38,6 +49,7 @@ describe('expressionsOfInterestRepository.submit', () => {
     await expect(
       expressionsOfInterestRepository.submit({
         relationshipId: relationship.id,
+        actorUserId: await seedActorId(),
         message: '<p>Should fail — already past invited.</p>',
       })
     ).rejects.toThrow();
@@ -55,6 +67,7 @@ describe('expressionsOfInterestRepository.submit', () => {
 
     await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>First pitch.</p>',
     });
 
@@ -63,6 +76,7 @@ describe('expressionsOfInterestRepository.submit', () => {
     await expect(
       expressionsOfInterestRepository.submit({
         relationshipId: relationship.id,
+        actorUserId: await seedActorId(),
         message: '<p>Second pitch.</p>',
       })
     ).rejects.toThrow();
@@ -94,6 +108,7 @@ describe('expressionsOfInterestRepository.submit', () => {
     await expect(
       expressionsOfInterestRepository.submit({
         relationshipId: randomUUID(),
+        actorUserId: await seedActorId(),
         message: '<p>No such relationship.</p>',
       })
     ).rejects.toThrow();
@@ -105,6 +120,7 @@ describe('expressionsOfInterestRepository.findByRelationship', () => {
     const { relationship } = await requestExpertRelationshipFactory();
     const eoi = await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>Pitch.</p>',
     });
 
@@ -116,6 +132,7 @@ describe('expressionsOfInterestRepository.findByRelationship', () => {
     const { relationship } = await requestExpertRelationshipFactory();
     const eoi = await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>Pitch.</p>',
     });
     await db
@@ -133,6 +150,7 @@ describe('expressionsOfInterestRepository.withdraw', () => {
     const { relationship } = await requestExpertRelationshipFactory();
     const eoi = await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>Pitch to withdraw.</p>',
     });
 
@@ -159,6 +177,7 @@ describe('expressionsOfInterestRepository.withdraw', () => {
     const { relationship } = await requestExpertRelationshipFactory();
     await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>Pitch.</p>',
     });
 
@@ -191,6 +210,7 @@ describe('expressionsOfInterestRepository.resubmit', () => {
     // Submit, then withdraw — the relationship stays `eoi_submitted`.
     const first = await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>Original pitch.</p>',
     });
     await expressionsOfInterestRepository.withdraw({ relationshipId: relationship.id });
@@ -253,6 +273,7 @@ describe('expressionsOfInterestRepository.resubmit', () => {
     const { relationship } = await requestExpertRelationshipFactory();
     await expressionsOfInterestRepository.submit({
       relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>First (still live).</p>',
     });
 
@@ -289,6 +310,7 @@ describe('expressionsOfInterestRepository.listByRequest', () => {
 
     const eoiA = await expressionsOfInterestRepository.submit({
       relationshipId: request.relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>Expert A.</p>',
     });
 
@@ -296,6 +318,7 @@ describe('expressionsOfInterestRepository.listByRequest', () => {
     const second = await requestExpertRelationshipFactory({ projectRequestId });
     const eoiB = await expressionsOfInterestRepository.submit({
       relationshipId: second.relationship.id,
+      actorUserId: await seedActorId(),
       message: '<p>Expert B.</p>',
     });
 

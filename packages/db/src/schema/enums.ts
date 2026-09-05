@@ -25,6 +25,31 @@ export const applicationStatusEnum = pgEnum('application_status', [
 
 export const consultationStatusEnum = pgEnum('consultation_status', ['confirmed', 'cancelled']);
 
+/**
+ * Request-level lifecycle. The stored, centrally-DERIVED max-progress rollup over the
+ * request's live per-expert relationships (ADR-1025 / BAL-295), plus the admin-only
+ * milestones no relationship can express.
+ *
+ * ⚠ `'closed'` (BAL-540 / ADR-1025 Amendment 1) IS APPENDED LAST, DELIBERATELY, and its
+ * position is load-bearing in exactly the two ways `meetingStatusEnum`'s `'cancelled'` is:
+ *
+ *   1. IT MUST STAY LAST. Migration 0085 emits a BARE `ALTER TYPE … ADD VALUE 'closed'`
+ *      with NO `BEFORE`/`AFTER` clause. Inserting a future label before it — or reordering
+ *      this array — makes the generated SQL disagree with the deployed type's sort order.
+ *      LAST is also what makes it the HIGHEST RANK for `deriveRequestStatus`'s
+ *      `enumValues.indexOf` ordering (`_shared/derive-request-status.ts`).
+ *   2. THE LITERAL MUST NOT APPEAR ANYWHERE ELSE IN 0085. Postgres permits `ADD VALUE`
+ *      inside a transaction but forbids USING the new label in that same transaction, and
+ *      drizzle wraps each migration file in one. So 0085 adds the label and NO DEFAULT, NO
+ *      CHECK and NO INDEX PREDICATE names it — in particular the `status = 'closed' ⟺
+ *      closed_at IS NOT NULL` coherence CHECK is an explicit FOLLOW-UP migration, and
+ *      coherence until then is the `projectRequestsRepository.close()` path's job, pinned by
+ *      `project-request-close.integration.test.ts`.
+ *
+ * ⚠ `'closed'` IS TERMINAL AND WINS OVER EVERY ROLLUP. `deriveRequestStatus` short-circuits
+ * on it (rule 1) rather than relying on its rank, so a relationship advancing on a closed
+ * request can never argue the request back out of it.
+ */
 export const projectRequestStatusEnum = pgEnum('project_request_status', [
   'draft',
   'requested',
@@ -35,6 +60,7 @@ export const projectRequestStatusEnum = pgEnum('project_request_status', [
   'proposal_submitted',
   'accepted',
   'kickoff_approved',
+  'closed',
 ]);
 export const projectRequestSourceEnum = pgEnum('project_request_source', [
   'manual',
@@ -75,6 +101,39 @@ export const proposalStatusEnum = pgEnum('proposal_status', [
   'draft',
   'changes_requested',
   'resubmitted',
+  'declined',
+]);
+
+/**
+ * BAL-540 — why a request was CLOSED. A brand-new standalone `CREATE TYPE`, so every label
+ * commits atomically with the type and IS usable in the same migration (the one-transaction
+ * hazard is `ALTER TYPE … ADD VALUE`-only). Nothing in 0085 uses them in a DEFAULT/CHECK
+ * anyway — `close_reason` is NULL until a close happens.
+ *
+ * The client arm always writes `withdrawn` (they picked nothing — closing their own request
+ * IS a withdrawal); the Balo arm picks one of the other three.
+ */
+export const projectRequestCloseReasonEnum = pgEnum('project_request_close_reason', [
+  'withdrawn',
+  'declined',
+  'unfilled',
+  'superseded',
+]);
+
+/**
+ * BAL-540 / ADR-1030 — why ONE track ended. `request_closed` is the close cascade;
+ * `client_declined` / `balo_declined` are a deliberate per-track decline. Also a brand-new
+ * standalone `CREATE TYPE`, so D6's ADD-VALUE hazard does not apply to it.
+ *
+ * ⚠ IT IS NOT A STATUS. `request_expert_relationship_status` keeps its single terminal
+ * `declined`; this column says WHY, beside `declined_by_user_id` (WHO) and the existing
+ * `declined_at` (WHEN). All three are written together, in one statement, on the
+ * `→ declined` branch of `advanceRelationshipStatus`.
+ */
+export const relationshipDeclineReasonEnum = pgEnum('relationship_decline_reason', [
+  'request_closed',
+  'client_declined',
+  'balo_declined',
 ]);
 
 // ── A6 proposal model (BAL-287) ──────────────────────────────────────────

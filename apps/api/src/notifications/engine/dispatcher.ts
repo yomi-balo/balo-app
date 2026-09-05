@@ -24,6 +24,8 @@ const FANOUT_RECIPIENTS = new Set<NotificationRule['recipient']>([
   'company_billing_admins',
   // BAL-408 — the same-party participants of one meeting (`meeting.guest_added`).
   'meeting_party_participants',
+  // BAL-540 — every expert whose track was live at request-close.
+  'request_track_experts',
 ]);
 
 /**
@@ -223,6 +225,12 @@ function resolveRecipientIds(
       // meeting's party and its members) rather than hydrated by `engine/resolver.ts`. That
       // is deliberate: hydrating it here would put a `meeting_guests` / membership read
       // inside the notification engine, which is the coupling the engine exists to avoid.
+      source = context.payload.recipientUserIds;
+      break;
+    case 'request_track_experts':
+      // BAL-540 — same payload field as `meeting_party_participants`, by design: the KIND
+      // names the audience so the rules table stays legible, but both are publisher-resolved
+      // id lists (the tracks that were live at close), never hydrated here.
       source = context.payload.recipientUserIds;
       break;
     default:
