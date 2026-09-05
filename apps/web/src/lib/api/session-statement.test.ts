@@ -49,6 +49,36 @@ describe('fetchSessionStatement (BAL-441)', () => {
     expect(await fetchSessionStatement(SESSION_ID)).toEqual({ outcome: 'unavailable' });
   });
 
+  it('maps 429 to { outcome: "rate_limited" }, carrying the cooldown', async () => {
+    mockCallSessionApi.mockResolvedValue({
+      ok: false,
+      status: 429,
+      error: 'rate_limited',
+      retryAfterSeconds: 42,
+    });
+    expect(await fetchSessionStatement(SESSION_ID)).toEqual({
+      outcome: 'rate_limited',
+      retryAfterSeconds: 42,
+    });
+  });
+
+  it('maps 429 with no cooldown to retryAfterSeconds: null', async () => {
+    mockCallSessionApi.mockResolvedValue({ ok: false, status: 429, error: 'rate_limited' });
+    expect(await fetchSessionStatement(SESSION_ID)).toEqual({
+      outcome: 'rate_limited',
+      retryAfterSeconds: null,
+    });
+  });
+
+  // Regression pin: before BAL-519 a 429 fell through to `unavailable` → `error.tsx`, whose copy
+  // says "this is on our side". It must be neither that nor a denial.
+  it('a 429 is NEITHER denied NOR unavailable', async () => {
+    mockCallSessionApi.mockResolvedValue({ ok: false, status: 429, error: 'rate_limited' });
+    const result = await fetchSessionStatement(SESSION_ID);
+    expect(result.outcome).not.toBe('denied');
+    expect(result.outcome).not.toBe('unavailable');
+  });
+
   // ── Security: the id reaches api URL CONSTRUCTION, so its shape is a control, not a nicety.
   // Next decodes dynamic segments, so these all arrive verbatim from the route param.
   it.each([

@@ -253,7 +253,20 @@ interface SessionApiAuth {
 /** A typed result of a credit-session api call — success carries the parsed body. */
 export type ApiCallResult<T> =
   | { ok: true; status: number; data: T }
-  | { ok: false; status: number; code?: string; error: string; companies?: EligibleCompany[] };
+  | {
+      ok: false;
+      status: number;
+      code?: string;
+      error: string;
+      companies?: EligibleCompany[];
+      /**
+       * BAL-519 — the api rate limiter's cooldown, off a `429` BODY (`cooldownSeconds`). Absent
+       * unless the body carried a usable number. Purely ADDITIVE: no existing consumer reads it
+       * (`fetchSessionMoneyBlock` reads only `ok`/`data`), and it is set with a spread so a
+       * failure without one has no such property at all.
+       */
+      retryAfterSeconds?: number;
+    };
 
 /**
  * Resolve the viewer's authenticated principal from the iron-session. Fails closed
@@ -312,6 +325,27 @@ function readEligibleCompanies(body: Record<string, unknown>): EligibleCompany[]
 }
 
 /**
+ * BAL-519 — the rate-limit preHandler's `cooldownSeconds` off a failure body.
+ *
+ * ⚠ BODY ONLY — THIS FUNCTION NEVER SEES A RESPONSE HEADER. `callSessionApi` parses the body and
+ * discards the `Response`, so the api's `Retry-After` header is structurally invisible here. The
+ * api sends BOTH (`lib/rate-limit-prehandler.ts:59-64`); we read the body one.
+ *
+ * Absent unless the value is a NON-NEGATIVE INTEGER: the value is re-emitted verbatim as a
+ * `Retry-After` header by the statement PDF route, whose wire format is `delta-seconds` — an
+ * integer. `Retry-After: NaN` / `Retry-After: -1` / `Retry-After: 4.5` are all invalid headers.
+ * Unreachable today (the api sends a Redis integer TTL — `checkRateLimit`'s `ttlSeconds` is
+ * always a whole number), but this function's whole purpose is guarding against a malformed
+ * `Retry-After`, so the check must actually match that claim (TECH6, fix round 1). Not gated on
+ * `status === 429` — `cooldownSeconds` is a field name owned by the limiter's wire shape, which
+ * only ever accompanies a 429.
+ */
+function readCooldownSeconds(body: Record<string, unknown>): number | undefined {
+  const value = body['cooldownSeconds'];
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
  * Call a credit-session api route with the viewer's Bearer token. Never throws — a
  * transport error, a non-2xx, or an unauthenticated session all resolve to a typed
  * `{ ok: false }` the action layer maps to a friendly, non-leaking message.
@@ -341,12 +375,14 @@ export async function callSessionApi<T>(
 
     if (!response.ok) {
       const companies = readEligibleCompanies(parsed);
+      const retryAfterSeconds = readCooldownSeconds(parsed);
       return {
         ok: false,
         status: response.status,
         code: readString(parsed, 'code'),
         error: readString(parsed, 'error') ?? readString(parsed, 'code') ?? 'Request failed.',
         ...(companies === undefined ? {} : { companies }),
+        ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
       };
     }
 

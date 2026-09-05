@@ -29,9 +29,25 @@ vi.mock('@/lib/auth/session', () => ({
   getCurrentUser: () => mockGetCurrentUser(),
 }));
 
+// ⚠ `vi.mock()` calls are HOISTED above every top-level statement, so the fake error CLASS must
+// live in `vi.hoisted()` — a bare top-level `class` is in the temporal dead zone when the factory
+// runs (documented at `receipt/pdf/route.test.ts:3-6`). `mockLoadSessionStatement` can stay a
+// plain top-level `const` because the factory only dereferences it lazily inside an arrow; a
+// class reference is dereferenced eagerly, so it cannot.
+const { FakeSessionStatementRateLimitedError } = vi.hoisted(() => ({
+  FakeSessionStatementRateLimitedError: class extends Error {
+    retryAfterSeconds: number | null = null;
+    constructor(retryAfterSeconds: number | null) {
+      super('rate limited');
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
+  },
+}));
+
 const mockLoadSessionStatement = vi.fn();
 vi.mock('../_lib/load-session-statement', () => ({
   loadSessionStatement: (...a: unknown[]) => mockLoadSessionStatement(...a),
+  SessionStatementRateLimitedError: FakeSessionStatementRateLimitedError,
 }));
 
 const mockTrack = vi.fn();
@@ -105,6 +121,21 @@ describe('PayoutPage — access', () => {
     mockLoadSessionStatement.mockRejectedValue(new Error('boom'));
     await expect(PayoutPage(props())).rejects.toThrow(/boom/);
   });
+
+  it('renders the calm rate-limited state instead of throwing to error.tsx', async () => {
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementRateLimitedError(42));
+    const element = await PayoutPage(props());
+    render(element);
+    expect(screen.getByRole('heading', { name: 'Hold tight' })).toBeInTheDocument();
+    // It must NOT be mistaken for the not-found state — that copy would say the payout is gone.
+    expect(screen.queryByText("We couldn't find that payout")).not.toBeInTheDocument();
+  });
+
+  // TECH5 (fix round 1) — this was a byte-identical clone of "re-throws a loader failure so
+  // error.tsx renders the boundary" above. A rejected promise never reaches `render()`, so there
+  // is no DOM to additionally assert against — a not-rendered check here would be vacuously true
+  // regardless of behaviour. Deleted rather than padded with a contrived assertion; the case above
+  // already proves a generic error re-throws instead of resolving to the rate-limited state.
 });
 
 describe('PayoutPage — analytics', () => {
@@ -130,6 +161,12 @@ describe('PayoutPage — analytics', () => {
     await expect(PayoutPage(props())).rejects.toThrow(/NEXT_NOT_FOUND/);
     expect(mockTrack).not.toHaveBeenCalled();
   });
+
+  it('fires NO event on the rate-limited path', async () => {
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementRateLimitedError(42));
+    await PayoutPage(props());
+    expect(mockTrack).not.toHaveBeenCalled();
+  });
 });
 
 describe('generateMetadata', () => {
@@ -146,6 +183,12 @@ describe('generateMetadata', () => {
 
   it('falls back to GENERIC_METADATA on denial', async () => {
     mockLoadSessionStatement.mockResolvedValue(null);
+    const meta = await generateMetadata(props());
+    expect(meta.title).toBe('Payout statement — Balo');
+  });
+
+  it('falls back to GENERIC_METADATA when the loader is rate-limited', async () => {
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementRateLimitedError(42));
     const meta = await generateMetadata(props());
     expect(meta.title).toBe('Payout statement — Balo');
   });
