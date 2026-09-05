@@ -256,6 +256,10 @@ describe('ContinueToMandate', () => {
       // THE FIX: the phase must flip to "captured" even though the analytics call throws.
       expect(await screen.findByText(/set to keep going/i)).toBeInTheDocument();
       expect(screen.queryByText(/finishing up/i)).not.toBeInTheDocument();
+      // REVIEW (PR #277) — and the success toast must survive too. `track()` is sequenced LAST
+      // precisely so its throw cannot swallow any user-visible effect; asserting only the phase
+      // would leave that ordering unpinned.
+      expect(mockToastSuccess).toHaveBeenCalled();
 
       await new Promise((resolve) => setTimeout(resolve, 0));
       process.removeListener('unhandledRejection', onUnhandledRejection);

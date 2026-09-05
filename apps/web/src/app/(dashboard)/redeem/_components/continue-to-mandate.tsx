@@ -182,8 +182,12 @@ export function ContinueToMandate({
     // rejection rather than swallowing it — Sentry still sees it — but only because callers are
     // expected to set their state first, which is what this ordering now guarantees.
     setPhase({ kind: 'captured' });
-    track(PROMO_EVENTS.PROMO_CONTINUE_CARD_CAPTURED, { company_id: companyId });
+    // REVIEW (PR #277) — `track()` goes LAST, after the toast. It is the only call here that can
+    // throw, so anything sequenced after it is skipped on a posthog failure. Hoisting `setPhase`
+    // alone protected the phase but still let a throw swallow the success toast; ordering every
+    // user-visible effect ahead of analytics closes that remainder.
     toast.success("Card added — you're set to keep going.");
+    track(PROMO_EVENTS.PROMO_CONTINUE_CARD_CAPTURED, { company_id: companyId });
   }, [companyId]);
 
   // BAL-526 — the shared 3DS/SCA redirect-return hook, bound to the SetupIntent this tab
