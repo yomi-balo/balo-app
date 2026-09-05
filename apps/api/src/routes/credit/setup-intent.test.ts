@@ -9,6 +9,21 @@ vi.mock('../../services/stripe/index.js', () => ({
   confirmSavedCardMandate: (...args: unknown[]) => mockConfirmSavedCardMandate(...args),
 }));
 
+// BAL-527 — the route now calls `enforceMandateSetupRateLimit`, which calls `getRedis()`. This
+// suite previously mocked NEITHER `redis.js` nor `rate-limiter.js`, so `getRedis()` would throw
+// without `REDIS_URL` and every currently-passing case that reaches the handler would fail.
+const { mockCheckRateLimit } = vi.hoisted(() => ({ mockCheckRateLimit: vi.fn() }));
+vi.mock('../../lib/redis.js', () => ({ getRedis: () => ({}), createRedisConnection: () => ({}) }));
+// ⚠ SPREAD THE REAL MODULE. A `() => ({ checkRateLimit })` factory silently drops
+// `RATE_LIMIT_DEADLINE_MS` and the type export — the trap `end.test.ts` documents.
+vi.mock('../../lib/rate-limiter.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/rate-limiter.js')>()),
+  checkRateLimit: mockCheckRateLimit,
+}));
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
 import Fastify, { type FastifyInstance } from 'fastify';
 import { setupIntentRoute } from './setup-intent.js';
 
@@ -40,6 +55,7 @@ describe('POST /credit/setup-intent', () => {
       setupIntentId: 'seti_1',
       customerId: 'cus_1',
     });
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 3600 });
   });
 
   function inject(body?: Record<string, unknown>, headers?: Record<string, string>) {
@@ -160,5 +176,85 @@ describe('POST /credit/setup-intent', () => {
       { 'x-internal-api-key': TEST_SECRET }
     );
     expect(res.json()).toEqual({ status: 'requires_action', clientSecret: 'seti_3ds_secret' });
+  });
+
+  // ── BAL-527 — the per-wallet rate limit ───────────────────────────────────
+
+  it('C1 — new_card over the limit: 429, and createSetupIntent is never called', async () => {
+    mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 31, ttlSeconds: 900 });
+
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({ error: 'rate_limited', cooldownSeconds: 900 });
+    expect(res.headers['retry-after']).toBe('900');
+    expect(mockCreateSetupIntent).not.toHaveBeenCalled();
+  });
+
+  it('C2 — saved_card over the limit: 429, and confirmSavedCardMandate is never called (pins the deliberate both-arms widening)', async () => {
+    mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 31, ttlSeconds: 900 });
+
+    const res = await inject(
+      {
+        walletId: WALLET_ID,
+        actorUserId: ACTOR_USER_ID,
+        paymentMethodSource: 'saved_card',
+        clientRequestId: '22222222-2222-4222-8222-222222222222',
+      },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(429);
+    expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+  });
+
+  it('C3 — Redis fails: 503, and neither service is called', async () => {
+    mockCheckRateLimit.mockRejectedValue(new Error('redis unreachable'));
+
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'rate_limit_unavailable' });
+    expect(mockCreateSetupIntent).not.toHaveBeenCalled();
+    expect(mockConfirmSavedCardMandate).not.toHaveBeenCalled();
+  });
+
+  it('C4 — the bucket is keyed on walletId, never actorUserId or an ip', async () => {
+    await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(mockCheckRateLimit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ keyPrefix: 'ratelimit:mandate-setup:wallet' }),
+      WALLET_ID
+    );
+  });
+
+  it('C5 — a malformed body does not consume a token', async () => {
+    const res = await inject(
+      { walletId: 'not-a-uuid', actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(mockCheckRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('C6 — saved_card without clientRequestId does not consume a token (guard sits below that check)', async () => {
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID, paymentMethodSource: 'saved_card' },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(mockCheckRateLimit).not.toHaveBeenCalled();
   });
 });

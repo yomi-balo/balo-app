@@ -111,19 +111,44 @@ function billingIdentityFixture(
 /**
  * Minimal wallet fixture — the mandate service only reads `id` + `stripeCustomerId` (plus, as of
  * BAL-521, `stripePaymentMethodId` / `cardBrand` / `cardLast4` for the post-commit notice's
- * `hadCard` gate). `cardBrand`/`cardLast4` default to `null` (never `undefined`) to match the
- * real DB row shape — Drizzle never omits a nullable column, and `undefined !== null` would
- * silently make every fixture "have a card".
+ * `hadCard` gate, and as of BAL-527, `stripePaymentMethodId` / `cardUpdatedAt` again for
+ * `buildSetupIntentIdempotencyKey`). Every nullable column defaults to `null` (never
+ * `undefined`) to match the real DB row shape — Drizzle never omits a nullable column, and
+ * `undefined !== null` would silently make every fixture "have a card" (or, for
+ * `cardUpdatedAt`, throw: BAL-527's key does `wallet.cardUpdatedAt === null ? 'none' :
+ * wallet.cardUpdatedAt.getTime()`, and `undefined` fails that check then throws
+ * `TypeError: cardUpdatedAt.getTime is not a function`). Fix the fixture when this breaks, never
+ * loosen the helper to `== null` to paper over a fixture lying about the row shape.
  */
 function walletFixture(overrides: Partial<CreditWallet>): CreditWallet {
   return {
     id: 'wallet_1',
     companyId: 'company_1',
     stripeCustomerId: null,
+    stripePaymentMethodId: null,
+    cardUpdatedAt: null,
     cardBrand: null,
     cardLast4: null,
     ...overrides,
   } as unknown as CreditWallet;
+}
+
+/**
+ * FIX ROUND (security MEDIUM) — a FRESH `setupIntents.create` response, i.e. what Stripe returns
+ * when it really creates rather than replays. A create with no `payment_method` and no `confirm`
+ * is ALWAYS born `requires_payment_method`, and `createSetupIntent` now REFUSES every other
+ * status (a replayed intent that can no longer take a card). A mock without `status` is therefore
+ * a fixture lying about the API — repair the fixture, NEVER loosen the guard.
+ */
+function freshSetupIntent(
+  overrides: Partial<{ id: string; client_secret: string | null; status: string }> = {}
+): { id: string; client_secret: string | null; status: string } {
+  return {
+    id: 'seti_1',
+    client_secret: 'seti_1_secret',
+    status: 'requires_payment_method',
+    ...overrides,
+  };
 }
 
 describe('mandate', () => {
@@ -390,10 +415,7 @@ describe('mandate', () => {
     it('ensures the customer, creates an off_session SetupIntent, and marks mandate pending', async () => {
       mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: null }));
       mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
-      mockStripe.setupIntents.create.mockResolvedValue({
-        id: 'seti_1',
-        client_secret: 'seti_1_secret',
-      });
+      mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
 
       const result = await createSetupIntent('wallet_1', ACTOR.userId);
 
@@ -402,11 +424,12 @@ describe('mandate', () => {
         setupIntentId: 'seti_1',
         customerId: 'cus_new',
       });
-      expect(mockStripe.setupIntents.create).toHaveBeenCalledWith({
-        customer: 'cus_new',
-        usage: 'off_session',
-        metadata: { walletId: 'wallet_1' },
-      });
+      // BAL-527 — the create is now KEYED. The wallet fixture has no stored PM and no
+      // `cardUpdatedAt`, so the key ends `:none:none`.
+      expect(mockStripe.setupIntents.create).toHaveBeenCalledWith(
+        { customer: 'cus_new', usage: 'off_session', metadata: { walletId: 'wallet_1' } },
+        { idempotencyKey: 'mandate-setup:wallet_1:cus_new:none:none' }
+      );
       expect(mockApplyMandateStatus).toHaveBeenCalledWith(
         expect.objectContaining({ __brand: 'mock-db' }),
         'wallet_1',
@@ -418,17 +441,17 @@ describe('mandate', () => {
       mockFindById.mockResolvedValue(
         walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_existing' })
       );
-      mockStripe.setupIntents.create.mockResolvedValue({
-        id: 'seti_2',
-        client_secret: 'seti_2_secret',
-      });
+      mockStripe.setupIntents.create.mockResolvedValue(
+        freshSetupIntent({ id: 'seti_2', client_secret: 'seti_2_secret' })
+      );
 
       const result = await createSetupIntent('wallet_1', ACTOR.userId);
 
       expect(result.customerId).toBe('cus_existing');
       expect(mockStripe.customers.create).not.toHaveBeenCalled();
       expect(mockStripe.setupIntents.create).toHaveBeenCalledWith(
-        expect.objectContaining({ customer: 'cus_existing' })
+        expect.objectContaining({ customer: 'cus_existing' }),
+        expect.objectContaining({ idempotencyKey: expect.stringContaining('cus_existing') })
       );
     });
 
@@ -440,9 +463,283 @@ describe('mandate', () => {
 
     it('throws when the SetupIntent has no client_secret', async () => {
       mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' }));
-      mockStripe.setupIntents.create.mockResolvedValue({ id: 'seti_3', client_secret: null });
+      mockStripe.setupIntents.create.mockResolvedValue(
+        freshSetupIntent({ id: 'seti_3', client_secret: null })
+      );
       await expect(createSetupIntent('wallet_1', ACTOR.userId)).rejects.toThrow(/client_secret/);
       expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+    });
+
+    describe('BAL-527 — the idempotency key', () => {
+      /** Reads the idempotencyKey off the MOST RECENT `setupIntents.create` call. */
+      function setupIntentsCreateKey(): string {
+        const calls = mockStripe.setupIntents.create.mock.calls as [
+          Record<string, unknown>,
+          { idempotencyKey: string },
+        ][];
+        const lastCall = calls.at(-1);
+        if (lastCall === undefined) {
+          throw new Error('setupIntents.create was never called');
+        }
+        const [, options] = lastCall;
+        return options.idempotencyKey;
+      }
+
+      it('K1 — is STABLE across repeated calls with unchanged wallet state (the loop bound)', async () => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        await createSetupIntent('wallet_1', ACTOR.userId);
+
+        const [firstCall, secondCall] = mockStripe.setupIntents.create.mock.calls as [
+          [Record<string, unknown>, { idempotencyKey: string }],
+          [Record<string, unknown>, { idempotencyKey: string }],
+        ];
+        expect(firstCall[1].idempotencyKey).toBe(secondCall[1].idempotencyKey);
+      });
+
+      it('K2 — rotates when stripePaymentMethodId changes (Change works after a display-read failure)', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1', stripePaymentMethodId: null })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: 'pm_A',
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        expect(key1).not.toBe(key2);
+        expect(key2).toBe('mandate-setup:wallet_1:cus_1:pm_A:none');
+      });
+
+      it('K3 — rotates when cardUpdatedAt advances', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            cardUpdatedAt: new Date(1000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            cardUpdatedAt: new Date(2000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        expect(key1).not.toBe(key2);
+      });
+
+      it('K4 — ★ REGRESSION PIN: Add → Remove → Add does NOT reuse the first key (the exact break a pm-only key would ship)', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        // Call 1 — fresh wallet, no card, no generation yet.
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: null,
+            cardUpdatedAt: null,
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        // Call 2 — card captured (`applyMandate`).
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: 'pm_A',
+            cardUpdatedAt: new Date(1000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        // Call 3 — post-`clearSavedCard`: `pm` REVERTS to null, but `cardUpdatedAt` ADVANCES
+        // (clearSavedCard stamps `now()`, per that repository method's own docblock — it never
+        // nulls the timestamp). A pm-only key would equal key1 here; this key must not.
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: null,
+            cardUpdatedAt: new Date(2000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key3 = setupIntentsCreateKey();
+
+        expect(new Set([key1, key2, key3]).size).toBe(3);
+        expect(key3).not.toBe(key1);
+      });
+
+      it('K5 — rotates when the customer churns (no 400 idempotency_error under a changed body)', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: null }));
+        mockStripe.customers.create.mockResolvedValueOnce({ id: 'cus_A' });
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        mockStripe.customers.create.mockResolvedValueOnce({ id: 'cus_B' });
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        expect(key1).not.toBe(key2);
+      });
+
+      it("K6 — uses ensureCustomer's RETURN, never wallet.stripeCustomerId (M4: the column is not persisted)", async () => {
+        mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: null }));
+        mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        await createSetupIntent('wallet_1', ACTOR.userId);
+
+        expect(setupIntentsCreateKey()).toContain('cus_new');
+        expect(setupIntentsCreateKey()).not.toContain(':null:');
+      });
+
+      it('K7 — the create body is unchanged: no extra field beyond {customer, usage, metadata}', async () => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        await createSetupIntent('wallet_1', ACTOR.userId);
+
+        const [params] = mockStripe.setupIntents.create.mock.calls[0] as [Record<string, unknown>];
+        expect(Object.keys(params).sort()).toEqual(['customer', 'metadata', 'usage']);
+      });
+
+      // FIX ROUND (review) — RENAMED AND RE-SHAPED. This was called "409-shaped" while building
+      // a bare `new MockStripeError('idempotency_error')` with no status and no code: it pinned
+      // propagation only, and the name was doing work the fixture had not earned. The fixture now
+      // carries the wire shape stripe-node surfaces for an in-flight-key conflict, and the
+      // assertion reads those fields rather than a substring of the message.
+      it('K8 — a Stripe 409 `idempotency_error` (concurrent same-key press, SDK retries exhausted) propagates, and mandate status is NOT applied', async () => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+        const conflictErr = new MockStripeError(
+          'There is currently another in-progress request using this Idempotency Key'
+        );
+        conflictErr.code = 'idempotency_error';
+        conflictErr.statusCode = 409;
+        mockStripe.setupIntents.create.mockRejectedValue(conflictErr);
+
+        await expect(createSetupIntent('wallet_1', ACTOR.userId)).rejects.toMatchObject({
+          code: 'idempotency_error',
+          statusCode: 409,
+        });
+        expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * FIX ROUND (security MEDIUM + review) — the guard on a REPLAYED intent. A stable key means
+     * Stripe can answer a later press with a 24h-old intent that has moved past the point where
+     * a fresh card can be entered; returning that `client_secret` bricked card capture with a
+     * browser-side `setup_intent_unexpected_state` and nothing in our logs.
+     */
+    describe('BAL-527 — a replayed intent that can no longer take a card', () => {
+      beforeEach(() => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+      });
+
+      /** Run the create and hand back the `Error` it MUST reject with. */
+      async function refusalError(): Promise<Error> {
+        try {
+          await createSetupIntent('wallet_1', ACTOR.userId);
+        } catch (error: unknown) {
+          if (error instanceof Error) {
+            return error;
+          }
+          throw new Error(`createSetupIntent rejected with a non-Error: ${String(error)}`);
+        }
+        throw new Error('createSetupIntent resolved — the replayed-intent guard did not fire');
+      }
+
+      it('G1 — a replayed `succeeded` intent (the webhook never landed) throws, naming the intent and its status, and never marks the wallet pending', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          freshSetupIntent({
+            id: 'seti_stale',
+            client_secret: 'seti_stale_secret',
+            status: 'succeeded',
+          })
+        );
+
+        const error = await refusalError();
+
+        expect(error.message).toContain('seti_stale');
+        expect(error.message).toContain('succeeded');
+        expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+      });
+
+      it('G2 — a replayed `requires_action` intent (an abandoned redirect-3DS) throws — the case that never self-heals', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          freshSetupIntent({
+            id: 'seti_3ds',
+            client_secret: 'seti_3ds_secret',
+            status: 'requires_action',
+          })
+        );
+
+        const error = await refusalError();
+
+        expect(error.message).toContain('requires_action');
+        expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+      });
+
+      it('G3 — the refusal never puts the client secret in the error message', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          freshSetupIntent({
+            id: 'seti_stale',
+            client_secret: 'seti_stale_secret',
+            status: 'succeeded',
+          })
+        );
+
+        const error = await refusalError();
+
+        expect(error.message).not.toContain('seti_stale_secret');
+      });
+
+      it('G4 — `requires_payment_method` is the one status that passes (a fresh create is born in it)', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          freshSetupIntent({ id: 'seti_fresh', client_secret: 'seti_fresh_secret' })
+        );
+
+        await expect(createSetupIntent('wallet_1', ACTOR.userId)).resolves.toEqual({
+          clientSecret: 'seti_fresh_secret',
+          setupIntentId: 'seti_fresh',
+          customerId: 'cus_1',
+        });
+        expect(mockApplyMandateStatus).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

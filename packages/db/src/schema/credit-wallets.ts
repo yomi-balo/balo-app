@@ -133,6 +133,20 @@ export const creditWallets = pgTable(
     // rows — and the Testcontainers harness only ever migrates an EMPTY database, so that failure
     // would ship green. The existing constraint's comment below argues its own safety on every
     // arm having an all-NULL escape; a five-column version loses that property.
+    //
+    // ⚠ BAL-527 — THIS COLUMN'S CONTRACT IS NOW LOAD-BEARING BEYOND DISPLAY PROVENANCE. It is the
+    // generation token in `createSetupIntent`'s Stripe idempotency key
+    // (`buildSetupIntentIdempotencyKey`, `apps/api/src/services/stripe/mandate.ts`) — the
+    // component that makes the key non-reverting across an Add → Remove → Add loop. ANY FUTURE
+    // WRITER MUST stamp `now()` and MUST NEVER write `NULL`, or that key can silently revert to
+    // one that already produced a SetupIntent no longer able to take a card.
+    //
+    // ⚠ FIX ROUND (review) — WHAT THE WRITERS ACTUALLY GUARANTEE, precisely, because the key's
+    // argument rests on it: NOT global monotonicity. `now()` is Postgres TRANSACTION-START time,
+    // so a long transaction can commit a value OLDER than one a short concurrent transaction has
+    // already committed. What holds is that each writer stamps the DB's transaction time and none
+    // writes `NULL` — so an EXACT prior `(stripe_payment_method_id, card_updated_at)` pair cannot
+    // recur, which is the property the idempotency key needs. Do not restate this as "monotonic".
     cardUpdatedAt: timestamp('card_updated_at', { withTimezone: true }),
 
     // BAL-379 — durable per-wallet auto-top-up single-in-flight marker. NULL = no auto-top-up

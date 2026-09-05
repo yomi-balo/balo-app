@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
+import { enforceMandateSetupRateLimit } from '../../lib/setup-intent-rate-limit.js';
 import { createSetupIntent } from '../../services/stripe/mandate.js';
 
 const setupIntentBodySchema = z.object({
@@ -25,6 +26,12 @@ const setupIntentBodySchema = z.object({
  *
  * Registered by the `stripeRoutes` plugin OUTSIDE the raw-body scope: only
  * `/webhooks/stripe` needs the raw body; a sibling JSON route parses JSON normally.
+ *
+ * BAL-527 — guarded by `enforceMandateSetupRateLimit` (the SAME per-wallet bucket
+ * `routes/credit/setup-intent.ts` uses; see `lib/setup-intent-rate-limit.ts`'s module docblock).
+ * This is the redeem path the original ticket never named (a wallet's third production entry
+ * point into `createSetupIntent`) — covering it is why the guard lives at the shared choke
+ * point rather than being bolted onto one route.
  */
 export async function stripeSetupIntentRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post(
@@ -38,6 +45,10 @@ export async function stripeSetupIntentRoutes(fastify: FastifyInstance): Promise
           details: parsed.error.issues.map((i) => i.message),
         });
       }
+
+      // ⚠ AFTER the cheap validation, BEFORE any Stripe or database work — a malformed request
+      // must not burn a wallet's window, and a limited request must cost no vendor call at all.
+      if (await enforceMandateSetupRateLimit(parsed.data.walletId, reply)) return;
 
       const { clientSecret, setupIntentId } = await createSetupIntent(
         parsed.data.walletId,

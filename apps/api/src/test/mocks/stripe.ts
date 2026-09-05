@@ -19,6 +19,10 @@ export class MockStripeError extends Error {
   public code?: string;
   public requestId?: string;
   public payment_intent?: unknown;
+  /** The HTTP status stripe-node attaches (409 on an in-flight idempotency-key conflict, 402 on
+   *  a decline, …). Optional — set it whenever a test's NAME claims a particular wire shape, so
+   *  the name is earned by the fixture rather than by the assertion's wording. */
+  public statusCode?: number;
   constructor(message: string) {
     super(message);
     this.name = 'StripeError';
