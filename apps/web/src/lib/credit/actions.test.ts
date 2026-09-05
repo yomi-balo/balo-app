@@ -141,6 +141,10 @@ describe('credit actions', () => {
       balanceMinor: 0,
       stripePaymentMethodId: null,
     });
+    // BAL-524 — `persistLowBalanceConfig` now reads `.outcome` off `updateConfig`'s result.
+    // Without this, mockUpdateConfig resolves `undefined` and every test in this suite reds
+    // with a confusing error that looks like unrelated logic is broken.
+    mockUpdateConfig.mockResolvedValue({ outcome: 'written', wallet: { id: 'wallet-1' } });
     mockFindByIdempotencyKey.mockResolvedValue(undefined);
     mockHasActiveSessionForWallet.mockResolvedValue(false);
     mockCreatePurchaseIntent.mockResolvedValue({
@@ -210,7 +214,13 @@ describe('credit actions', () => {
         mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
         walletId: 'wallet-1',
       });
-      expect(mockUpdateConfig).toHaveBeenCalledWith('wallet-1', { lowBalanceMode: 'keep_going' });
+      // BAL-524 — the D3 exemption: this purchase ESTABLISHES the card, so the guard is named off.
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'keep_going' },
+        'card_is_established_by_this_same_operation'
+      );
+      // BAL-522 — the actor rides along to the mandate SetupIntent.
       expect(mockCreateMandateSetupIntent).toHaveBeenCalledWith('wallet-1', 'user-1');
     });
 
@@ -274,11 +284,15 @@ describe('credit actions', () => {
           },
         })
       );
-      expect(mockUpdateConfig).toHaveBeenCalledWith('wallet-1', {
-        lowBalanceMode: 'auto_topup',
-        topupReloadMinor: 40_000,
-        topupThresholdMinor: 10_000,
-      });
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        {
+          lowBalanceMode: 'auto_topup',
+          topupReloadMinor: 40_000,
+          topupThresholdMinor: 10_000,
+        },
+        'card_is_established_by_this_same_operation'
+      );
     });
 
     it('logs and returns stripe_error when intent creation throws', async () => {
@@ -472,6 +486,21 @@ describe('credit actions', () => {
       const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
       expect(res).toEqual({ ok: false, error: 'stripe_error' });
     });
+
+    // D3, PINNED (BAL-524) — if this ever reds, the exemption has been lost and every
+    // first-time cardless auto-top-up purchase is broken.
+    it('persists a CARD-BACKED mode on a wallet with NO card — the card is established by this same purchase', async () => {
+      // Default fixture (cardless wallet) + default baseStartInput() (keep_going, card-backed).
+      const res = await startPurchaseAction(baseStartInput());
+
+      expect(res).toMatchObject({ ok: true });
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'keep_going' },
+        'card_is_established_by_this_same_operation'
+      );
+      expect(mockCreatePurchaseIntent).toHaveBeenCalled();
+    });
   });
 
   describe('validatePromoAction', () => {
@@ -540,9 +569,11 @@ describe('credit actions', () => {
 
       expect(res).toEqual({ ok: true });
       expect(mockEnsureForCompany).toHaveBeenCalledWith(expect.anything(), 'company-1');
-      expect(mockUpdateConfig).toHaveBeenCalledWith('wallet-new', {
-        lowBalanceMode: 'notify_only',
-      });
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-new',
+        { lowBalanceMode: 'notify_only' },
+        'require_card_on_file'
+      );
     });
 
     it('persists valid config', async () => {
@@ -552,7 +583,113 @@ describe('credit actions', () => {
         topupThresholdMinor: 5_000,
       });
       expect(res).toEqual({ ok: true });
-      expect(mockUpdateConfig).toHaveBeenCalled();
+      // notify_only on a cardless wallet (the shipped beforeEach fixture) still saves — the
+      // guard is card-backed-mode-only and this is the default, unexempted call shape.
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'notify_only' },
+        'require_card_on_file'
+      );
+    });
+
+    // ── BAL-524 — the card-backed mode write guard, at the web layer ────────────────────────
+
+    it('refuses auto_topup with no card', async () => {
+      // The shipped beforeEach fixture already resolves stripePaymentMethodId: null.
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'auto_topup',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+      // The guard sits after provisioning, deliberately — the row still gets minted.
+      expect(mockEnsureForCompany).toHaveBeenCalled();
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Card-backed low-balance mode refused — no card on file',
+        expect.objectContaining({ refusedBy: 'action_guard', lowBalanceMode: 'auto_topup' })
+      );
+      // FIX ROUND (F9, folded from a separate case) — a card-backed refusal is a RETURNED
+      // result, never the invalid_input catch arm: it must not ALSO log as a fault.
+      expect(mockLogError).not.toHaveBeenCalled();
+    });
+
+    it('R4 (external review, BAL-524) — refuses auto_topup when stripePaymentMethodId is "" (empty string), not just null', async () => {
+      // Proves the guard now runs through `isAbsentPaymentMethodId` (shared with
+      // `updateConfig`'s write guard) rather than a bare `=== null` — a stored `''` must refuse
+      // here exactly like `null` does, never fall through to the unguarded write.
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: '',
+      });
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'auto_topup',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+    });
+
+    it("refuses keep_going with no card — the D4 set is both modes, not just the AC sentence's auto_topup", async () => {
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'keep_going',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+      expect(mockUpdateConfig).not.toHaveBeenCalled();
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Card-backed low-balance mode refused — no card on file',
+        expect.objectContaining({ refusedBy: 'action_guard', lowBalanceMode: 'keep_going' })
+      );
+    });
+
+    it('persists auto_topup when the wallet HAS a card', async () => {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+      });
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'auto_topup',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: true });
+      expect(mockUpdateConfig).toHaveBeenCalledWith(
+        'wallet-1',
+        { lowBalanceMode: 'auto_topup', topupReloadMinor: 30_000, topupThresholdMinor: 5_000 },
+        'require_card_on_file'
+      );
+    });
+
+    it('the TOCTOU arm surfaces, never silently succeeds: the wallet HAD a card at read time but the write refused', async () => {
+      mockEnsureForCompany.mockResolvedValue({
+        id: 'wallet-1',
+        balanceMinor: 0,
+        stripePaymentMethodId: 'pm_1',
+      });
+      mockUpdateConfig.mockResolvedValue({ outcome: 'refused_no_card_on_file' });
+
+      const res = await saveLowBalanceConfigAction({
+        lowBalanceMode: 'auto_topup',
+        topupReloadMinor: 30_000,
+        topupThresholdMinor: 5_000,
+      });
+
+      expect(res).toEqual({ ok: false, error: 'no_saved_card' });
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Card-backed low-balance mode refused — no card on file',
+        expect.objectContaining({ refusedBy: 'atomic_write' })
+      );
     });
   });
 

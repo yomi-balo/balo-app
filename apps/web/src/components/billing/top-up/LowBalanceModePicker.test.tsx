@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { LowBalanceModePicker } from './LowBalanceModePicker';
+import { CARD_BACKED_LOW_BALANCE_MODES } from '@balo/shared/credit';
+import { LowBalanceModePicker, MODE_OPTIONS } from './LowBalanceModePicker';
 
 function renderPicker(overrides: Partial<React.ComponentProps<typeof LowBalanceModePicker>> = {}) {
   const props = {
@@ -87,5 +88,13 @@ describe('LowBalanceModePicker', () => {
   it('shows the consent note ONLY for a card-backed mode', () => {
     renderPicker({ mode: 'notify_only', cardLabel: 'Visa •••• 4242' });
     expect(screen.queryByText(/letting Balo charge/i)).not.toBeInTheDocument();
+  });
+
+  it('MODE_OPTIONS.cardBacked agrees with the shared card-backed set (a drift would offer a mode the server refuses)', () => {
+    // FIX ROUND (F9) — compared as SORTED sets, not with an order-sensitive `toEqual`: the claim
+    // is set-membership ("the same two modes"), and `MODE_OPTIONS` is free to reorder its display
+    // list without that being a real drift this test should catch.
+    const cardBackedInOptions = MODE_OPTIONS.filter((o) => o.cardBacked).map((o) => o.id);
+    expect([...cardBackedInOptions].sort()).toEqual([...CARD_BACKED_LOW_BALANCE_MODES].sort());
   });
 });

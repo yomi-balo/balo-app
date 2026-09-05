@@ -1,4 +1,9 @@
 import { and, asc, eq, gt, isNotNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import {
+  isCardBackedLowBalanceMode,
+  isAbsentPaymentMethodId,
+  type CardBackedModeWriteGuard,
+} from '@balo/shared/credit';
 import { db } from '../client';
 import {
   creditWallets,
@@ -20,6 +25,17 @@ interface UpdateWalletConfigInput {
   stripePaymentMethodId?: string | null;
   mandateRef?: string | null;
 }
+
+/**
+ * BAL-524 — the outcome of a config write. `refused_no_card_on_file` is the guarded arm: the
+ * write named a CARD-BACKED low-balance mode (`auto_topup` / `keep_going`) and the row would not
+ * hold a `stripe_payment_method_id` afterwards, so the statement matched 0 rows and NOTHING was
+ * written. A discriminated result, never a bare `null`: a refusal a caller can ignore by accident
+ * is exactly the shape that let BAL-516 report a refused save as success.
+ */
+export type UpdateWalletConfigResult =
+  | { outcome: 'written'; wallet: CreditWallet }
+  | { outcome: 'refused_no_card_on_file' };
 
 /**
  * The DISPLAY facts of a saved card — never credentials. Brand, last4 and expiry are what a
@@ -65,6 +81,52 @@ function stuckPendingTopupWhere(cutoff: Date): SQL | undefined {
     isNotNull(creditWallets.pendingTopupTriggeringEntryId)
   );
 }
+
+/**
+ * The column-by-column `.set()` payload for `updateConfig`, extracted only to shed cognitive
+ * complexity (SonarCloud caps `updateConfig` at 15; the six inlined `if`s pushed it to 18). Byte
+ * for byte what the inlined version did — each field written only when the caller's input
+ * mentions it, so an omitted field is left untouched rather than overwritten with `undefined`.
+ */
+function buildWalletConfigSet(input: UpdateWalletConfigInput): Partial<NewCreditWallet> {
+  const set: Partial<NewCreditWallet> = {};
+  if (input.lowBalanceMode !== undefined) set.lowBalanceMode = input.lowBalanceMode;
+  if (input.topupThresholdMinor !== undefined) set.topupThresholdMinor = input.topupThresholdMinor;
+  if (input.topupReloadMinor !== undefined) set.topupReloadMinor = input.topupReloadMinor;
+  if (input.overdraftCeilingMinor !== undefined)
+    set.overdraftCeilingMinor = input.overdraftCeilingMinor;
+  if (input.stripePaymentMethodId !== undefined)
+    set.stripePaymentMethodId = input.stripePaymentMethodId;
+  if (input.mandateRef !== undefined) set.mandateRef = input.mandateRef;
+  return set;
+}
+
+/**
+ * BAL-524 — does this `updateConfig` write name a CARD-BACKED low-balance mode under the
+ * DEFAULT guard? Extracted alongside `buildWalletConfigSet` to shed the same cognitive-complexity
+ * cap; this is exactly the `armsCardBackedMode` predicate from the docblock's three arms.
+ */
+function armsCardBackedModeGuard(
+  input: UpdateWalletConfigInput,
+  cardBackedModeGuard: CardBackedModeWriteGuard
+): boolean {
+  return (
+    cardBackedModeGuard === 'require_card_on_file' &&
+    input.lowBalanceMode !== undefined &&
+    isCardBackedLowBalanceMode(input.lowBalanceMode)
+  );
+}
+
+// FIX ROUND (F5) / BAL-524 (R4, external review) — `isAbsentPaymentMethodId` (does this
+// `stripePaymentMethodId` value mean "no usable card", for arm 1's purposes? `null` is the
+// documented explicit clear; `''` is defence-in-depth — no shipped caller sends it today, but
+// without this check it is neither `null` (arm 1) nor `undefined` (arm 2), so it would fall
+// through to the UNGUARDED write path and land a non-NULL, unusable `stripe_payment_method_id`
+// that arm 3's `isNotNull` `WHERE` would then vouch for on every later write) moved to
+// `@balo/shared/credit` — imported above — so it and the Server Action guard it mirrors
+// (`apps/web/src/lib/credit/actions.ts`'s `saveLowBalanceConfigAction`) share ONE definition
+// instead of two hand-rolled spellings that could drift apart. See that predicate's own
+// docblock for the full invariant.
 
 export const creditWalletsRepository = {
   /**
@@ -487,38 +549,130 @@ export const creditWalletsRepository = {
    * Write wallet config (the data plane for the later MANAGE_BILLING-gated actions —
    * NO gating here, the caller resolves the capability). Only the provided fields are
    * written; `overdraftCeilingMinor`/`stripePaymentMethodId`/`mandateRef` accept an
-   * explicit `null` to clear. Throws if the wallet is missing.
+   * explicit `null` to clear.
+   *
+   * BAL-524 — `cardBackedModeGuard` (default `'require_card_on_file'`) is a write-time invariant:
+   * a write that names a CARD-BACKED low-balance mode (`auto_topup` / `keep_going`,
+   * `isCardBackedLowBalanceMode`) must prove the row holds a `stripe_payment_method_id`. Read
+   * this as DEFENCE-IN-DEPTH, not as the whole story — it does not by itself decide whether a
+   * charge fires: `apps/api/src/services/credit/auto-topup.ts:259-266` (skips with `no_mandate`
+   * unless `isWalletMandateActive(wallet)` plus both Stripe ids hold), `applyActiveTick`'s
+   * no-mandate hard stop (`packages/db/src/repositories/credit-sessions.ts:717`, `:759`,
+   * `if (!params.mandateActive)`), `creditSessionsRepository.open`'s connect gate (same file,
+   * `:958`, `if (available < estimateMinor && !mandateActive)`), and
+   * `apps/api/src/services/credit-session/end-session.ts`'s mandate-only `settleOverdraft` all
+   * gate every unattended charge on `isWalletMandateActive`, indifferent to `low_balance_mode`.
+   * (`drawdown.ts`'s `getSessionDrawdownState` is NOT one of these — it is a read-only in-call
+   * display projection; its own docblock says "No money moves".) BAL-523 (in progress) is what
+   * turns this (mode, card) pair into something those lanes themselves consult. The rule here is
+   * "AFTER this UPDATE the row holds a payment method", not "before" — three arms:
+   *
+   *   1. The write explicitly CLEARS the payment method (`stripePaymentMethodId: null`) while
+   *      naming a card-backed mode. The post-state provably holds no card, so no `WHERE` can
+   *      save it — refused before touching the row.
+   *   2. The write ESTABLISHES the payment method in the SAME call
+   *      (`stripePaymentMethodId: 'pm_…'`). The row holds one afterwards even though it does
+   *      not now, so no `WHERE` guard runs — guarding on the pre-update value would refuse a
+   *      legitimate write (this is what the purchase path's config-then-charge ordering needs).
+   *   3. The write says nothing about `stripePaymentMethodId`. Add
+   *      `isNotNull(creditWallets.stripePaymentMethodId)` to the `WHERE`, so the statement only
+   *      matches a row that already has a card.
+   *   4. A non-card-backed mode, or no `lowBalanceMode` in the input at all: untouched, no
+   *      guard, byte-for-byte the shipped behaviour.
+   *
+   * The `WHERE` re-evaluates under Postgres' read-committed `EvalPlanQual` re-check, so a
+   * concurrent `clearSavedCardAndReconcileMode` that commits between this caller's read and
+   * this statement is caught atomically — this single guarded `UPDATE`, not a read-then-write
+   * in the caller, is the real invariant (a caller-side check is only ever the friendly error).
+   *
+   * The ONE named exemption is `cardBackedModeGuard: 'card_is_established_by_this_same_operation'`
+   * — for the one caller whose write ESTABLISHES the card as part of the same purchase (config
+   * persisted before the PaymentIntent). Under that literal, arms 1–3 above never run: no guard
+   * applies at all. ⚠ That is an INTENT the caller states, not a guarantee this method can check
+   * — an abandoned or failed purchase under that exemption leaves a card-backed mode with no
+   * card, INDEFINITELY (see that call site's own docblock, `apps/web/src/lib/credit/actions.ts`,
+   * for why this is inert today rather than a live hole). So this method's guard, even at its
+   * default, does not claim "no row can ever look like this" — only "no write through the
+   * default path can PRODUCE it".
+   *
+   * Returns `{ outcome: 'refused_no_card_on_file' }` rather than throwing when the guard
+   * refuses — a refusal a caller can ignore by accident is exactly the shape BAL-516 shipped.
+   * Still THROWS `Credit wallet not found` for a genuinely missing wallet — 0 rows means one of
+   * two things, and only a guarded write with 0 rows pays for a follow-up `findById` to tell
+   * them apart.
+   *
+   * ⚠ F8 — `id` MUST ALREADY BE SCOPE-RESOLVED BY THE CALLER. Neither this `UPDATE`'s `WHERE`
+   * nor the 0-row follow-up `findById` carries a company scope — both trust the caller to have
+   * derived `id` from an authorised context (today's one caller reads it off the session's own
+   * wallet). A future caller that took a wallet id from a request body would hand an unauthorised
+   * actor a cross-tenant oracle: the two refusal shapes ("wallet exists but has no card" vs.
+   * "wallet not found") distinguish an existing id from a guessed one.
    */
-  async updateConfig(id: string, input: UpdateWalletConfigInput): Promise<CreditWallet> {
-    const set: Partial<NewCreditWallet> = {};
-    if (input.lowBalanceMode !== undefined) set.lowBalanceMode = input.lowBalanceMode;
-    if (input.topupThresholdMinor !== undefined)
-      set.topupThresholdMinor = input.topupThresholdMinor;
-    if (input.topupReloadMinor !== undefined) set.topupReloadMinor = input.topupReloadMinor;
-    if (input.overdraftCeilingMinor !== undefined)
-      set.overdraftCeilingMinor = input.overdraftCeilingMinor;
-    if (input.stripePaymentMethodId !== undefined)
-      set.stripePaymentMethodId = input.stripePaymentMethodId;
-    if (input.mandateRef !== undefined) set.mandateRef = input.mandateRef;
+  async updateConfig(
+    id: string,
+    input: UpdateWalletConfigInput,
+    cardBackedModeGuard: CardBackedModeWriteGuard = 'require_card_on_file'
+  ): Promise<UpdateWalletConfigResult> {
+    const set = buildWalletConfigSet(input);
+
+    // BAL-524 — does this write name a card-backed mode, and is it required to prove a card?
+    const armsCardBackedMode = armsCardBackedModeGuard(input, cardBackedModeGuard);
+
+    // Arm 1: the same write explicitly CLEARS the payment method — `null`, OR the FIX ROUND
+    // (F5) defence-in-depth arm, `''`. Unreachable today (no caller passes an empty string), but
+    // without this an empty string is neither `null` (arm 1) nor `undefined` (arm 2 below), so
+    // it would fall through to the UNGUARDED write path and land `stripe_payment_method_id = ''`
+    // — non-NULL, so arm 3's `isNotNull` `WHERE` would vouch for that row forever after. Both
+    // are treated as "no usable card": the post-state provably holds no card, so no `WHERE` can
+    // save it — refuse without touching the row.
+    if (armsCardBackedMode && isAbsentPaymentMethodId(input.stripePaymentMethodId)) {
+      return { outcome: 'refused_no_card_on_file' };
+    }
+
+    // Arm 2: the same write ESTABLISHES the card, so the row holds one afterwards even though
+    // it does not now. Guarding on the PRE-update value would refuse a legitimate write.
+    const guardWhere = armsCardBackedMode && input.stripePaymentMethodId === undefined;
 
     // Nothing to write → return the current row (a bare `.set({})` would error).
+    //
+    // F6 — THIS IS UNREACHABLE WHILE THE GUARD IS ARMED, and the proof is worth stating because
+    // it depends on a fact one layer away. `armsCardBackedMode` requires
+    // `input.lowBalanceMode !== undefined` (see `armsCardBackedModeGuard`), and
+    // `buildWalletConfigSet` assigns `set.lowBalanceMode` on EXACTLY that same condition — so
+    // whenever the guard is armed, `set` already has at least one key (`lowBalanceMode` itself),
+    // and `Object.keys(set).length === 0` cannot be true at the same time. This early return
+    // therefore applies NO guard by construction, not by omission. The correctness rests
+    // entirely on `buildWalletConfigSet` always writing `lowBalanceMode` when the input defines
+    // it — a future "skip fields already equal to the current value" optimisation there would
+    // silently reopen this branch to a card-backed mode with no card. Guard that invariant, not
+    // this one, if you add such an optimisation.
     if (Object.keys(set).length === 0) {
       const current = await db.query.creditWallets.findFirst({ where: eq(creditWallets.id, id) });
       if (current === undefined) {
         throw new Error(`Credit wallet not found: ${id}`);
       }
-      return current;
+      return { outcome: 'written', wallet: current };
     }
 
     const [row] = await db
       .update(creditWallets)
       .set(set)
-      .where(eq(creditWallets.id, id))
+      .where(
+        guardWhere
+          ? and(eq(creditWallets.id, id), isNotNull(creditWallets.stripePaymentMethodId))
+          : eq(creditWallets.id, id)
+      )
       .returning();
+
     if (row === undefined) {
+      // 0 rows means one of two things and the caller must be able to tell them apart. Only on
+      // this already-failed path do we pay for a second read.
+      if (guardWhere && (await creditWalletsRepository.findById(id)) !== undefined) {
+        return { outcome: 'refused_no_card_on_file' };
+      }
       throw new Error(`Credit wallet not found: ${id}`);
     }
-    return row;
+    return { outcome: 'written', wallet: row };
   },
 
   /**
@@ -720,8 +874,11 @@ export const creditWalletsRepository = {
    * see a half-written row), and that `stripe_customer_id` deliberately SURVIVES the detach.
    *
    * The reconcile: iff the cleared row's `low_balance_mode` is card-backed (`auto_topup` /
-   * `keep_going`) it moves to `notify_only` and `modeReconciled` is `true`. A wallet already on
-   * `notify_only` is returned untouched (`false`) — there is nothing armed to disarm.
+   * `keep_going`, `isCardBackedLowBalanceMode` — BAL-524 gave this ONE shared definition, also
+   * consulted by `updateConfig`'s write guard, so the removal reconcile and the persist refusal
+   * can never disagree about which modes need a card) it moves to `notify_only` and
+   * `modeReconciled` is `true`. A wallet already on `notify_only` is returned untouched
+   * (`false`) — there is nothing armed to disarm.
    *
    * ⚠ `topup_reload_minor` / `topup_threshold_minor` ARE NOT TOUCHED, deliberately. Removing a
    * card says nothing about how much the client wants reloaded; keeping their chosen band means
@@ -791,7 +948,7 @@ export const creditWalletsRepository = {
 
     let wallet = cleared;
     let modeReconciled = false;
-    if (cleared.lowBalanceMode === 'auto_topup' || cleared.lowBalanceMode === 'keep_going') {
+    if (isCardBackedLowBalanceMode(cleared.lowBalanceMode)) {
       const [reconciled] = await exec
         .update(creditWallets)
         .set({ lowBalanceMode: 'notify_only' })

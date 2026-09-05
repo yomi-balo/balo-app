@@ -352,6 +352,9 @@ export {
   type CardDisplayInput,
   // BAL-521 — which door detached the saved card; `apps/api` passes it to the shared primitive.
   type SavedCardDetachSource,
+  // BAL-524 — the discriminated result of `updateConfig`; callers must be able to name it to
+  // narrow on `outcome`.
+  type UpdateWalletConfigResult,
 } from './credit-wallets';
 export {
   creditLedgerRepository,

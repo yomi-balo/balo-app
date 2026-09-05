@@ -11,6 +11,11 @@ import {
   type CreditWallet,
   type PromoValidationReason,
 } from '@balo/db';
+import {
+  isCardBackedLowBalanceMode,
+  isAbsentPaymentMethodId,
+  type CardBackedModeWriteGuard,
+} from '@balo/shared/credit';
 import { requireOnboardedUser, getCompanyContext } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
@@ -49,7 +54,14 @@ import {
 const lowBalanceModeSchema = z.enum(['auto_topup', 'keep_going', 'notify_only']);
 export type LowBalanceMode = z.infer<typeof lowBalanceModeSchema>;
 
-/** Config the composer persists regardless of payment outcome (a preference). */
+/**
+ * Config the composer persists regardless of payment outcome (a preference).
+ *
+ * BAL-524 — this does NOT enforce "a card-backed mode needs a card on file". `safeParse` runs
+ * before `requireBillingActor()` / `ensureWallet()`, so the wallet — and therefore the card — is
+ * not in scope at parse time. That rule lives after wallet resolution, in
+ * `saveLowBalanceConfigAction` and `persistLowBalanceConfig` / `updateConfig` beneath it.
+ */
 const configSchema = z
   .object({
     lowBalanceMode: lowBalanceModeSchema,
@@ -185,17 +197,16 @@ export type ValidatePromoResult =
 
 export type SaveConfigResult =
   | { ok: true }
-  | { ok: false; error: 'unauthorized' | 'invalid_input' };
+  /**
+   * `no_saved_card` — the selection is a CARD-BACKED mode (`auto_topup` / `keep_going`) and the
+   * wallet holds no `stripe_payment_method_id`. Its own arm, never folded into `invalid_input`:
+   * the client's next move is a specific control one section down the page, and "please try
+   * again" is copy a retry cannot fix.
+   */
+  | { ok: false; error: 'unauthorized' | 'invalid_input' | 'no_saved_card' };
 
 export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
 
-/**
- * Persist the low-balance mode (+ auto-top-up reload/threshold). NO gating here — the caller
- * resolves MANAGE_BILLING. Reload/threshold are written only for `auto_topup`; the other
- * modes persist just the mode. Safe to persist a card-backed mode while `mandate_status` is
- * still `pending` — the enforcement lanes (BAL-378/379) gate on `mandate_status==='active'`
- * at charge time; here we record the user's stated intent.
- */
 /**
  * Resolve the acting MANAGE_BILLING holder + their company scope, or `null` when the actor
  * lacks the capability. Shared by the billing-gated actions (capability-based, ADR-1029 —
@@ -238,19 +249,75 @@ async function ensureWallet(companyId: string): Promise<CreditWallet> {
   return creditWalletsRepository.ensureForCompany(db, companyId);
 }
 
+/** Whether the mode was written, or refused because the wallet holds no card. */
+type PersistLowBalanceConfigOutcome = 'persisted' | 'refused_no_card_on_file';
+
+/**
+ * Persist the low-balance mode (+ auto-top-up reload/threshold). NO capability gating here — the
+ * caller resolves MANAGE_BILLING. Reload/threshold are written only for `auto_topup`; the other
+ * modes persist just the mode.
+ *
+ * THE CARD RULE, STATED PROPERLY (BAL-524). A card-backed mode (`auto_topup` / `keep_going`)
+ * remains safe to persist while `mandate_status` is `pending` — the enforcement lanes
+ * (BAL-378/379) gate on `mandate_status === 'active'` at charge time, so a pending mandate simply
+ * does not fire. That was always true, and it is NOT the same claim as "safe to persist with no
+ * card at all", which the previous wording collapsed into it. A card-backed mode on a wallet with
+ * no `stripe_payment_method_id` is a stated intent nothing can ever honour, and it is the exact
+ * state `clearSavedCardAndReconcileMode` exists to prevent from the other direction.
+ *
+ * WHAT ACTUALLY PROTECTS MONEY TODAY — read this guard as defence-in-depth, not as the whole
+ * story. The lanes that gate a real off-session charge key off the MANDATE, not this mode guard:
+ * `apps/api/src/services/credit/auto-topup.ts:259-266` skips with `no_mandate` unless
+ * `isWalletMandateActive(wallet)` (plus both Stripe ids) holds; `applyActiveTick`
+ * (`packages/db/src/repositories/credit-sessions.ts:717`) hard-stops at `:759`
+ * (`if (!params.mandateActive)`) rather than opening grace on a crossed-zero tick with no
+ * mandate; `creditSessionsRepository.open` (same file, `:958`,
+ * `if (available < estimateMinor && !mandateActive)`) refuses to connect a session that cannot
+ * fund its estimate without one; and `end-session.ts`'s `settleOverdraft` only attempts an
+ * off-session charge when a mandate is active, opening a receivable instead when it is not. All
+ * four are indifferent to `low_balance_mode`. (`drawdown.ts`'s `getSessionDrawdownState` is NOT
+ * one of these — it is a read-only in-call display projection; its own docblock says "No money
+ * moves".) BAL-523 (in progress) is what turns the (mode, card) pair written here into something
+ * those lanes themselves consult — until it lands, a row this guard failed to prevent (see the
+ * exemption's docblock below) is inert, not exploitable.
+ *
+ * So the requirement is the DEFAULT here and in `updateConfig` beneath it. A caller that passes
+ * nothing is guarded. The single exemption is named at its call site.
+ */
 async function persistLowBalanceConfig(
   walletId: string,
-  config: z.infer<typeof configSchema>
-): Promise<void> {
-  if (config.lowBalanceMode === 'auto_topup') {
-    await creditWalletsRepository.updateConfig(walletId, {
-      lowBalanceMode: config.lowBalanceMode,
-      topupReloadMinor: config.topupReloadMinor,
-      topupThresholdMinor: config.topupThresholdMinor,
-    });
-    return;
-  }
-  await creditWalletsRepository.updateConfig(walletId, { lowBalanceMode: config.lowBalanceMode });
+  config: z.infer<typeof configSchema>,
+  cardBackedModeGuard: CardBackedModeWriteGuard = 'require_card_on_file'
+): Promise<PersistLowBalanceConfigOutcome> {
+  const result = await creditWalletsRepository.updateConfig(
+    walletId,
+    config.lowBalanceMode === 'auto_topup'
+      ? {
+          lowBalanceMode: config.lowBalanceMode,
+          topupReloadMinor: config.topupReloadMinor,
+          topupThresholdMinor: config.topupThresholdMinor,
+        }
+      : { lowBalanceMode: config.lowBalanceMode },
+    cardBackedModeGuard
+  );
+  return result.outcome === 'written' ? 'persisted' : 'refused_no_card_on_file';
+}
+
+/**
+ * BAL-524 — one place that both refusal arms of `saveLowBalanceConfigAction` go through, so the
+ * log message exists once and the two arms differ only in `refusedBy`. That field is the point:
+ * `action_guard` is the ordinary case (a stale tab, or a hand-rolled POST); `atomic_write` means
+ * the wallet genuinely lost its card BETWEEN the read and the write, which is the race the
+ * conditional WHERE exists for and the only way to measure how often it bites.
+ */
+function refuseCardBackedModeWithoutCard(context: {
+  walletId: string;
+  companyId: string;
+  lowBalanceMode: LowBalanceMode;
+  refusedBy: 'action_guard' | 'atomic_write';
+}): Extract<SaveConfigResult, { ok: false }> {
+  log.warn('Card-backed low-balance mode refused — no card on file', context);
+  return { ok: false, error: 'no_saved_card' };
 }
 
 /**
@@ -302,7 +369,7 @@ async function resolveMandateOutcome(
   clientRequestId: string,
   actorUserId: string
 ): Promise<MandateOutcome> {
-  const cardBacked = lowBalanceMode === 'auto_topup' || lowBalanceMode === 'keep_going';
+  const cardBacked = isCardBackedLowBalanceMode(lowBalanceMode);
   if (!cardBacked) {
     return { outcome: 'not_required' };
   }
@@ -378,7 +445,32 @@ export async function startPurchaseAction(
     const wallet = await ensureWallet(actor.companyId);
 
     // Config is a preference — persist it regardless of payment outcome.
-    await persistLowBalanceConfig(wallet.id, input.config);
+    // D3 EXEMPTION — the ONLY one. FIX ROUND (security MEDIUM-1 / review WARNING) — stated
+    // honestly: this is an INTENT to establish the card, not a guarantee that it will exist.
+    // The config write below commits UNCONDITIONALLY, before `createPurchaseIntent` even runs
+    // and regardless of its outcome. If the buyer abandons the Payment Element, closes the tab
+    // during 3DS, or the card declines, this write still landed — the wallet is left at a
+    // card-backed mode with `stripe_payment_method_id IS NULL`, PERMANENTLY. Nothing sweeps it:
+    // `clearSavedCardAndReconcileMode` only reconciles on card REMOVAL, which cannot fire when
+    // there was never a card, and `TopUpComposer.tsx` re-seeds the next composer visit from that
+    // same stated mode — an abandoned purchase is self-REINFORCING, not self-healing.
+    //
+    // This is INERT today, not a live money hole: every unattended charge gates on
+    // `isWalletMandateActive` (`@balo/shared/credit`, `settlement.ts:46`), a conjunction of an
+    // ACTIVE mandate AND a payment method — a card-backed mode with no card and no mandate fires
+    // nothing. ⚠ It is not PERMANENTLY inert, though: a LATER "Add card" in Settings
+    // (`startCardCaptureAction` → Stripe `setup_intent.succeeded` → `applyMandate`) arms an
+    // active mandate on this same wallet directly, at which point the standing card-backed mode
+    // set here goes LIVE — without anyone ever pressing Save on the low-balance control itself.
+    //
+    // So BAL-524 constrains one DIRECTION OF WRITE (a mode write must prove a card, unless
+    // exempted), never the CONTENTS OF THE TABLE — this exemption is exactly why a card-backed
+    // mode with no card can still exist after BAL-524, deliberately, on the purchase path.
+    await persistLowBalanceConfig(
+      wallet.id,
+      input.config,
+      'card_is_established_by_this_same_operation'
+    );
 
     const purchase = await createPurchaseIntent({
       walletId: wallet.id,
@@ -611,9 +703,29 @@ export async function validatePromoAction(code: string): Promise<ValidatePromoRe
 }
 
 /**
- * Persist the low-balance mode + auto-top-up bounds standalone (also usable from the shared
- * billing-settings picker). Gated MANAGE_BILLING. Card-backed modes are safe to persist while
- * `mandate_status` is still pending — the enforcement lanes gate on 'active' at charge time.
+ * Persist the low-balance mode + auto-top-up bounds standalone (the billing-settings picker's
+ * Save). Gated MANAGE_BILLING.
+ *
+ * ⚠ BAL-524 — A CARD-BACKED MODE REQUIRES A CARD ON FILE, and this is where the client hears
+ * about it. The refusal is enforced TWICE, deliberately, and the two are not redundant:
+ *   · here, from the wallet already in hand, so the client gets a specific error naming the
+ *     control that fixes it rather than a generic failure; and
+ *   · inside `creditWalletsRepository.updateConfig`, as a conditional WHERE — the write is the
+ *     real invariant, because this read and that write are not one transaction and a concurrent
+ *     `clearSavedCardAndReconcileMode` (the Remove button, or Stripe's `payment_method.detached`)
+ *     can land between them.
+ * The card-presence test is necessarily spelled twice (once in TypeScript, once in SQL — SQL
+ * cannot call a TS predicate). The MODE half has exactly one definition,
+ * `isCardBackedLowBalanceMode` in `@balo/shared/credit`, which the card-removal reconcile reads
+ * too. The CARD half (R4, external review) has exactly one definition too —
+ * `isAbsentPaymentMethodId`, same module — so this guard and `updateConfig`'s conditional `WHERE`
+ * can never disagree about what "no card" means (a stored `''` could otherwise pass a bare
+ * `=== null` here while SQL's `isNotNull(...)` WHERE vouched for that same row forever after).
+ *
+ * The bar is CARD PRESENCE (`stripe_payment_method_id`), never `mandate_status === 'active'`:
+ * `armSavedCardMandateAction` exists to move a pending mandate to active during THIS SAME Save,
+ * so refusing the mode for a not-yet-active mandate would refuse the thing being armed. And never
+ * `stripe_customer_id`, which deliberately SURVIVES a card clear (`clearSavedCard`).
  */
 export async function saveLowBalanceConfigAction(
   rawInput: z.infer<typeof configSchema>
@@ -630,10 +742,33 @@ export async function saveLowBalanceConfigAction(
     }
 
     // Same provisioning rule as the purchase path — saving a preference must not depend on a
-    // row that only a money event would otherwise create.
+    // row that only a money event would otherwise create. (A cardless company that lands on the
+    // refusal below keeps the row `ensureForCompany` just minted: idempotent, and exactly the
+    // row a `notify_only` save would have created anyway.)
     const wallet = await ensureWallet(actor.companyId);
 
-    await persistLowBalanceConfig(wallet.id, parsed.data);
+    if (
+      isCardBackedLowBalanceMode(parsed.data.lowBalanceMode) &&
+      isAbsentPaymentMethodId(wallet.stripePaymentMethodId)
+    ) {
+      return refuseCardBackedModeWithoutCard({
+        walletId: wallet.id,
+        companyId: actor.companyId,
+        lowBalanceMode: parsed.data.lowBalanceMode,
+        refusedBy: 'action_guard',
+      });
+    }
+
+    if ((await persistLowBalanceConfig(wallet.id, parsed.data)) === 'refused_no_card_on_file') {
+      // The write's own guard refused: the card went away between the read above and this
+      // statement. 0 rows affected — surfaced, never reported as a successful save.
+      return refuseCardBackedModeWithoutCard({
+        walletId: wallet.id,
+        companyId: actor.companyId,
+        lowBalanceMode: parsed.data.lowBalanceMode,
+        refusedBy: 'atomic_write',
+      });
+    }
     return { ok: true };
   } catch (error) {
     log.error('Low-balance config save failed', {
@@ -682,6 +817,20 @@ export async function armSavedCardMandateAction(
     companyId = actor.companyId;
 
     const wallet = await creditWalletsRepository.findByCompanyId(actor.companyId);
+    // R4 (external review, BAL-524) — DELIBERATELY NOT `isAbsentPaymentMethodId` here. That
+    // predicate is the WRITE-invariant's shared definition (this file's `saveLowBalanceConfigAction`
+    // above, and `creditWalletsRepository.updateConfig`'s conditional `WHERE`): it exists so a
+    // stored `''` can never pass a lenient TS guard and then be vouched for by SQL's
+    // `isNotNull(...)` on every later write. This check answers a DIFFERENT question — "is there
+    // a stored card to arm a mandate against right now" — and it never WRITES
+    // `stripe_payment_method_id`, so there is no SQL `WHERE` downstream for a bare `=== null` to
+    // fall out of step with. A stray `''` here (unreachable today — no shipped caller sends one,
+    // per `isAbsentPaymentMethodId`'s own docblock) would still fail SAFE: `confirmSavedCardMandate`
+    // below would reject it at Stripe, caught by this function's own try/catch, surfacing
+    // `error: 'failed'` instead of the friendlier `no_saved_card` — a worse message, never a
+    // wrong mandate arm or a bypassed guard. Reusing the write predicate here would couple two
+    // call sites that check the same columns for unrelated reasons, for a case that cannot
+    // currently occur; left as `=== null` on purpose, not by oversight.
     if (
       wallet === undefined ||
       wallet.stripeCustomerId === null ||
