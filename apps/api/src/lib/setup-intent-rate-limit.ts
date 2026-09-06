@@ -34,7 +34,7 @@
  *   3. `startContinueToMandate`               `redeem/_actions/start-continue-to-mandate.ts:79`
  *   4. `resolveMandateOutcome` — `saved_card` `actions.ts:479`
  *   5. `armSavedCardMandateAction`            `actions.ts:980`
- * The ≤ 90-calls arithmetic below SURVIVES the two additions rather than silently having covered
+ * The ≤ 120-calls arithmetic below SURVIVES the two additions rather than silently having covered
  * them: 4 and 5 land on `confirmSavedCardMandate`, which never reaches `ensureCustomer` and so
  * costs exactly **1** Stripe call per request against the same ceiling.
  *
@@ -78,11 +78,14 @@
  * (FIX ROUND, review MEDIUM: the one-Customer bound on that path is NOT this key's — it comes
  * from the pre-existing `stripe-customer-{walletId}` key at `services/stripe/mandate.ts:173` and
  * predates BAL-527. Do not credit it to either BAL-527 control.) This limit bounds the thing
- * neither key can: API CALLS. A `new_card` request still makes up to three real Stripe calls even
- * when every one of them is a replay (`customers.create`, `customers.update` — unkeyed, a real
- * write every time — and `setupIntents.create`); a `saved_card` request makes exactly one. So the
- * honest bound this ceiling buys is **≤ 90 Stripe API calls per wallet per hour**, not "≤ 30
- * SetupIntents" — the key already gives the latter for free. 30 is a PRODUCT NUMBER, not a
+ * neither key can: API CALLS. A `new_card` request makes up to FOUR real Stripe calls even when
+ * the create is a replay (`customers.create`, `customers.update` — unkeyed, a real write every
+ * time — `setupIntents.create`, and — FIX ROUND 3, Qodo: on a detected replay only — the bounded
+ * verification `setupIntents.retrieve`); a `saved_card` request makes exactly one. So the honest
+ * bound this ceiling buys is **≤ 120 Stripe API calls per wallet per hour**, not "≤ 30
+ * SetupIntents" — the key already gives the latter for free. (The ≤ 90 previously stated here
+ * predated the verification retrieve — the same stale-arithmetic defect class this file exists
+ * to avoid; the abuse-relevant figure was ALWAYS the limiter's 30 requests, not the multiplier.) 30 is a PRODUCT NUMBER, not a
  * physical limit — sized with headroom over the realistic ~20-25/hour ceiling from two or three
  * admins on one company exercising the entry points at once, and it mirrors
  * `BOOKING_USER_RATE_LIMIT` (the closest analogue: a user-initiated, conversion-critical,
