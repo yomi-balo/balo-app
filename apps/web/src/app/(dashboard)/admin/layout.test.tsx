@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen } from '@/test/utils';
 import type { SessionUser } from '@/lib/auth/session';
 
 const { mockGetCurrentUser, mockRedirect, mockNotFound } = vi.hoisted(() => ({
@@ -64,7 +64,7 @@ describe('AdminLayout (BAL-534)', () => {
     mockGetCurrentUser.mockResolvedValue(user({ platformRole: 'admin' }));
     const ui = await AdminLayout({ children: <div data-testid="child">Child</div> });
     render(ui);
-    expect(screen.getByTestId('child')).toBeInTheDocument();
+    expect(screen.getByText('Child')).toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
     expect(mockNotFound).not.toHaveBeenCalled();
   });
@@ -73,7 +73,7 @@ describe('AdminLayout (BAL-534)', () => {
     mockGetCurrentUser.mockResolvedValue(user({ platformRole: 'super_admin' }));
     const ui = await AdminLayout({ children: <div data-testid="child">Child</div> });
     render(ui);
-    expect(screen.getByTestId('child')).toBeInTheDocument();
+    expect(screen.getByText('Child')).toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
     expect(mockNotFound).not.toHaveBeenCalled();
   });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@/test/utils';
+import { axe } from 'jest-axe';
 import AdminCatalogueError from './error';
 
 /**
@@ -20,5 +21,17 @@ describe('AdminCatalogueError (BAL-534)', () => {
 
     screen.getByRole('button', { name: /try again/i }).click();
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  // BAL-534 review round 2 (Qodo #11) — the retry control is an interactive, user-facing
+  // surface, so it carries the same axe check the catalogue list does.
+  it('has no accessibility violations', async () => {
+    const { container } = render(
+      <AdminCatalogueError
+        error={Object.assign(new Error('boom'), { digest: 'd' })}
+        reset={() => {}}
+      />
+    );
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@/test/utils';
 import { axe } from 'jest-axe';
 import { FolderKanban, Layers, Ticket } from 'lucide-react';
 import type { ResolvedCatalogueRow } from '../_lib/admin-catalogue';
