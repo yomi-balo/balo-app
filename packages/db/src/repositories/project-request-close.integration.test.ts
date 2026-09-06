@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
@@ -9,6 +10,7 @@ import {
   projectRequests,
   representations,
   requestExpertRelationships,
+  verticals,
 } from '../schema';
 import {
   expertDraftFactory,
@@ -25,6 +27,7 @@ import {
 } from './project-requests';
 import { meetingsRepository } from './meetings';
 import { proposalsRepository } from './proposals';
+import { usersRepository } from './users';
 import {
   requestExpertRelationshipsRepository,
   RequestClosedError,
@@ -342,6 +345,110 @@ describe('close() — §3 declines every live track and withdraws every open pro
     });
     // ⚠ THE NOTE TEXT MUST NEVER REACH THE AUDIT ROW — `close_note` is its only home.
     expect(JSON.stringify(audit?.metadata)).not.toContain('internal team');
+  });
+});
+
+// ── §3b — the expert recipient ids, resolved IN-TRANSACTION ─────────────────────────────
+
+/**
+ * BAL-540 Qodo round 2. `declinedTrackUserIds` exists because the fan-out used to map
+ * `expertProfileId` → `users.id` POST-COMMIT, inside a `runAfterResponse` callback that has NO
+ * RETRY against a close that had already landed — one failed read there dropped every expert
+ * notice permanently. The ids are now COMMITTED STATE, resolved on the cascade's own `tx`, and
+ * these tests are what pin that they are the RIGHT ids: exactly the declined tracks, deduped,
+ * and filtered by the SAME soft-delete rule `expertsRepository.findUserIdsByProfileIds` uses.
+ */
+describe("close() — §3b resolves the declined tracks' expert USER ids in-transaction", () => {
+  it('returns [] when the close declined no tracks', async () => {
+    const request = await projectRequestFactory({ status: 'requested' });
+
+    const result = await closeAsBalo(request.id, null);
+
+    expect(result.declinedTracks).toEqual([]);
+    expect(result.declinedTrackUserIds).toEqual([]);
+  });
+
+  it('returns the user ids of EXACTLY the tracks this close declined', async () => {
+    const firstExpert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'eoi_submitted' });
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: firstExpert.id,
+      values: { status: 'eoi_submitted' },
+    });
+    const secondExpert = await expertDraftFactory();
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: secondExpert.id,
+      values: { status: 'invited' },
+    });
+
+    // A track that was ALREADY terminal: `declined → declined` has no edge, so the cascade
+    // skips it and its expert is owed nothing. This is what makes "exactly" load-bearing.
+    const bystanderExpert = await expertDraftFactory();
+    await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: bystanderExpert.id,
+      values: { status: 'declined', declinedAt: new Date() },
+    });
+
+    const result = await closeAsBalo(request.id);
+
+    expect([...result.declinedTrackUserIds].sort()).toEqual(
+      [firstExpert.userId, secondExpert.userId].sort()
+    );
+    expect(result.declinedTrackUserIds).not.toContain(bystanderExpert.userId);
+  });
+
+  it('DEDUPES — one person holding two expert profiles on one request yields ONE id', async () => {
+    const person = await userFactory();
+    const [secondVertical] = await db
+      .insert(verticals)
+      .values({ name: 'Second vertical', slug: `vertical-${randomUUID()}` })
+      .returning();
+    if (secondVertical === undefined) throw new Error('failed to seed a second vertical');
+
+    const profileA = await expertDraftFactory({ userId: person.id });
+    const profileB = await expertDraftFactory({
+      userId: person.id,
+      verticalId: secondVertical.id,
+    });
+
+    const request = await projectRequestFactory({ status: 'eoi_submitted' });
+    for (const profileId of [profileA.id, profileB.id]) {
+      await requestExpertRelationshipFactory({
+        projectRequestId: request.id,
+        expertProfileId: profileId,
+        values: { status: 'invited' },
+      });
+    }
+
+    const result = await closeAsBalo(request.id);
+
+    expect(result.declinedTracks).toHaveLength(2);
+    expect(result.declinedTrackUserIds).toEqual([person.id]);
+  });
+
+  it('contributes NO id for a track whose expert user is soft-deleted', async () => {
+    const liveExpert = await expertDraftFactory();
+    const goneExpert = await expertDraftFactory();
+    const request = await projectRequestFactory({ status: 'eoi_submitted' });
+    for (const profileId of [liveExpert.id, goneExpert.id]) {
+      await requestExpertRelationshipFactory({
+        projectRequestId: request.id,
+        expertProfileId: profileId,
+        values: { status: 'invited' },
+      });
+    }
+    await usersRepository.softDelete(goneExpert.userId);
+
+    const result = await closeAsBalo(request.id);
+
+    // The TRACK is still declined — the cascade does not care that the person left. Only the
+    // NOTICE is withheld, mirroring `expertsRepository.findUserIdsByProfileIds` exactly.
+    expect(result.declinedTracks).toHaveLength(2);
+    expect(result.declinedTrackUserIds).toEqual([liveExpert.userId]);
+    expect(result.declinedTrackUserIds).not.toContain(goneExpert.userId);
   });
 });
 

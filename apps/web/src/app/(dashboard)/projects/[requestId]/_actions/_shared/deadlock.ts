@@ -43,9 +43,30 @@ export function isDeadlockDetected(error: unknown): boolean {
 export const CONCURRENT_RETRY_MESSAGE = 'Something ran at the same moment — please try again.';
 
 /**
+ * True when `error` carries a non-empty string `detail`. postgres-js copies the server's
+ * `PG_DIAG_MESSAGE_DETAIL` onto the thrown error, and on a 40P01 that field is the ONLY place
+ * the useful part lives: "Process 123 waits for ShareLock on transaction 456; blocked by
+ * process 789." — i.e. WHICH two writers of the five collided. Same structural narrowing
+ * shape as {@link isDeadlockDetected}: an `in` guard plus a `typeof`, no `any`, no assertion.
+ */
+function deadlockDetail(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  if (!('detail' in error)) return undefined;
+  const { detail } = error;
+  return typeof detail === 'string' && detail.length > 0 ? detail : undefined;
+}
+
+/**
  * The whole 40P01 arm of a close / decline action's `catch`, in one place: detect, `log.warn`
  * (expected-rare and self-healing — never `log.error`), and hand back the retryable failure.
  * Returns `null` when `error` is something else, so the caller falls through to its own arms.
+ *
+ * ⚠ THE ERROR ITSELF IS LOGGED, not just the caller's context. This is a HANDLED boundary —
+ * the rejection is converted into a user-facing string and never re-thrown, so without
+ * `error` / `stack` here the original is simply lost (CLAUDE.md's caught-error-boundary rule).
+ * `detail` rides along when postgres-js supplied one, because on a deadlock it names the two
+ * colliding processes and is the difference between "a deadlock happened" and knowing which
+ * pair of the five writers to serialise first.
  *
  * The returned shape is the bare `{ success: false; error }` common to all four action result
  * unions — no `code` is added, so those unions stay exactly as they were.
@@ -56,6 +77,12 @@ export function deadlockFailure(
   context: Record<string, unknown>
 ): { success: false; error: string } | null {
   if (!isDeadlockDetected(error)) return null;
-  log.warn(logMessage, context);
+  const detail = deadlockDetail(error);
+  log.warn(logMessage, {
+    ...context,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+    ...(detail === undefined ? {} : { detail }),
+  });
   return { success: false, error: CONCURRENT_RETRY_MESSAGE };
 }

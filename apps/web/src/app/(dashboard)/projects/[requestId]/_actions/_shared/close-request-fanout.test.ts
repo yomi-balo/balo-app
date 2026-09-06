@@ -16,26 +16,40 @@ vi.mock('@/lib/after-response', () => ({
   runAfterResponse: runAfterResponseMock,
 }));
 
-const mockFindUserIdsByProfileIds = vi.fn();
+/**
+ * ⚠ THE REPOSITORY IS MOCKED TO EXPLODE ON CONTACT, DELIBERATELY. The fan-out must perform NO
+ * read of its own: `runAfterResponse` never retries and the close has already committed, so a
+ * post-commit lookup is a permanent way to lose the expert notices. Re-introducing one turns
+ * every publish assertion below red as well as the explicit "never called" pin.
+ */
+const { mockFindUserIdsByProfileIds } = vi.hoisted(() => ({
+  mockFindUserIdsByProfileIds: vi.fn((): string[] => {
+    throw new Error('the close fan-out must not read the experts repository post-commit');
+  }),
+}));
 vi.mock('@balo/db', () => ({
-  expertsRepository: {
-    findUserIdsByProfileIds: (...args: unknown[]) => mockFindUserIdsByProfileIds(...args),
-  },
+  expertsRepository: { findUserIdsByProfileIds: mockFindUserIdsByProfileIds },
 }));
 
-const mockPostCancelledTeardown = vi.fn().mockResolvedValue(undefined);
+/** Call ORDER across the two halves of the deferred callback — the telling must come first. */
+const callOrder: string[] = [];
+
+const mockPostCancelledTeardown = vi.fn().mockImplementation(async () => {
+  callOrder.push('teardown');
+});
 vi.mock('@/lib/meetings/cancelled-teardown-api-client', () => ({
   postCancelledTeardown: (...args: unknown[]) => mockPostCancelledTeardown(...args),
 }));
 
-const mockPublish = vi.fn().mockResolvedValue(undefined);
+const mockPublish = vi.fn().mockImplementation(async () => {
+  callOrder.push('publish');
+});
 vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: (...args: unknown[]) => mockPublish(...args),
 }));
 
 import { runCloseRequestFanout } from './close-request-fanout';
 import type { CloseRequestResult } from '@balo/db';
-import { log } from '@/lib/logging';
 
 function closeResult(overrides: Partial<CloseRequestResult> = {}): CloseRequestResult {
   return {
@@ -43,6 +57,7 @@ function closeResult(overrides: Partial<CloseRequestResult> = {}): CloseRequestR
     previousStatus: 'proposal_submitted',
     closeAuditId: 'audit-1',
     declinedTracks: [],
+    declinedTrackUserIds: [],
     withdrawnProposalIds: [],
     cancelledMeetings: [],
     revokedRepresentationIds: [],
@@ -60,9 +75,13 @@ const BASE_CONTEXT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockFindUserIdsByProfileIds.mockResolvedValue([]);
-  mockPostCancelledTeardown.mockResolvedValue(undefined);
-  mockPublish.mockResolvedValue(undefined);
+  callOrder.length = 0;
+  mockPostCancelledTeardown.mockImplementation(async () => {
+    callOrder.push('teardown');
+  });
+  mockPublish.mockImplementation(async () => {
+    callOrder.push('publish');
+  });
 });
 
 describe('runCloseRequestFanout', () => {
@@ -90,7 +109,9 @@ describe('runCloseRequestFanout', () => {
     ]);
   });
 
-  it('resolves expert USER ids from declinedTracks and publishes them as recipientUserIds', async () => {
+  // ── The recipients are COMMITTED STATE, not a post-commit lookup (Qodo round 2) ──────
+
+  it('publishes recipientUserIds straight off the result, with NO repository call', async () => {
     const result = closeResult({
       declinedTracks: [
         {
@@ -100,13 +121,13 @@ describe('runCloseRequestFanout', () => {
           declineAuditId: 'decline-1',
         },
       ],
+      declinedTrackUserIds: ['user-1', 'user-2'],
     });
-    mockFindUserIdsByProfileIds.mockResolvedValue(['user-1']);
 
     runCloseRequestFanout(result, BASE_CONTEXT);
     await getScheduled()?.();
 
-    expect(mockFindUserIdsByProfileIds).toHaveBeenCalledWith(['expert-profile-1']);
+    expect(mockFindUserIdsByProfileIds).not.toHaveBeenCalled();
     expect(mockPublish).toHaveBeenCalledWith('project.request_closed', {
       correlationId: 'audit-1',
       projectRequestId: 'request-1',
@@ -114,25 +135,39 @@ describe('runCloseRequestFanout', () => {
       clientCompanyName: 'Acme Corp',
       closedBy: 'client',
       reason: 'withdrawn',
-      recipientUserIds: ['user-1'],
+      recipientUserIds: ['user-1', 'user-2'],
     });
   });
 
-  it('never sets recipientId on the client-closed arm', async () => {
-    mockFindUserIdsByProfileIds.mockResolvedValue(['user-1']);
+  it('copies the recipient list rather than aliasing the result array', async () => {
+    const result = closeResult({ declinedTrackUserIds: ['user-1'] });
+    runCloseRequestFanout(result, BASE_CONTEXT);
+    await getScheduled()?.();
+
+    const [, payload] = mockPublish.mock.calls[0] as [string, { recipientUserIds: string[] }];
+    expect(payload.recipientUserIds).toEqual(['user-1']);
+    expect(payload.recipientUserIds).not.toBe(result.declinedTrackUserIds);
+  });
+
+  // ── Ordering: humans before janitorial vendor calls (Qodo round 2) ───────────────────
+
+  it('publishes BEFORE the teardown, so a freeze cannot swallow the telling first', async () => {
     runCloseRequestFanout(
       closeResult({
-        declinedTracks: [
-          {
-            relationshipId: 'rel-1',
-            expertProfileId: 'expert-profile-1',
-            previousStatus: 'invited',
-            declineAuditId: 'decline-1',
-          },
+        declinedTrackUserIds: ['user-1'],
+        cancelledMeetings: [
+          { meetingId: 'meeting-1', expertProfileId: 'expert-1', cancelAuditId: 'cancel-1' },
         ],
       }),
       BASE_CONTEXT
     );
+    await getScheduled()?.();
+
+    expect(callOrder).toEqual(['publish', 'teardown']);
+  });
+
+  it('never sets recipientId on the client-closed arm', async () => {
+    runCloseRequestFanout(closeResult({ declinedTrackUserIds: ['user-1'] }), BASE_CONTEXT);
     await getScheduled()?.();
 
     const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
@@ -140,7 +175,6 @@ describe('runCloseRequestFanout', () => {
   });
 
   it('sets recipientId when Balo closed it, even with zero live tracks', async () => {
-    mockFindUserIdsByProfileIds.mockResolvedValue([]);
     runCloseRequestFanout(closeResult(), { ...BASE_CONTEXT, closedBy: 'balo', reason: 'unfilled' });
     await getScheduled()?.();
 
@@ -157,87 +191,12 @@ describe('runCloseRequestFanout', () => {
   });
 
   it('skips the publish entirely on a client-closed, zero-track close (nobody to tell)', async () => {
-    mockFindUserIdsByProfileIds.mockResolvedValue([]);
     runCloseRequestFanout(closeResult(), BASE_CONTEXT);
     await getScheduled()?.();
 
     expect(mockPublish).not.toHaveBeenCalled();
-    // The teardown call still happens even when the publish is skipped.
+    // ⚠ THE SKIP IS A CONDITION, NOT AN EARLY `return`: the teardown still runs. Turning it
+    // back into a `return` above the publish would strand every cancelled Daily room.
     expect(mockPostCancelledTeardown).toHaveBeenCalledWith([]);
-  });
-
-  // ── The expert-id lookup is ISOLATED (Qodo #16) ────────────────────────────────
-  // `runAfterResponse` only LOGS a rejected callback and never retries, so an
-  // `findUserIdsByProfileIds` throw used to take the client email down with it.
-
-  describe('when the expert user-id lookup fails', () => {
-    const TRACKED = closeResult({
-      declinedTracks: [
-        {
-          relationshipId: 'rel-1',
-          expertProfileId: 'expert-profile-1',
-          previousStatus: 'proposal_submitted',
-          declineAuditId: 'decline-1',
-        },
-      ],
-    });
-
-    it('still publishes the Balo-closed client arm, with an empty recipientUserIds', async () => {
-      mockFindUserIdsByProfileIds.mockRejectedValue(new Error('experts read exploded'));
-
-      runCloseRequestFanout(TRACKED, {
-        ...BASE_CONTEXT,
-        closedBy: 'balo',
-        reason: 'unfilled',
-      });
-      await getScheduled()?.();
-
-      expect(mockPublish).toHaveBeenCalledWith('project.request_closed', {
-        correlationId: 'audit-1',
-        projectRequestId: 'request-1',
-        title: 'CPQ implementation',
-        clientCompanyName: 'Acme Corp',
-        closedBy: 'balo',
-        reason: 'unfilled',
-        recipientUserIds: [],
-        recipientId: 'owner-1',
-      });
-    });
-
-    it('logs the failure with context rather than letting the callback die', async () => {
-      mockFindUserIdsByProfileIds.mockRejectedValue(new Error('experts read exploded'));
-
-      runCloseRequestFanout(TRACKED, { ...BASE_CONTEXT, closedBy: 'balo', reason: 'unfilled' });
-      await getScheduled()?.();
-
-      expect(log.error).toHaveBeenCalledWith(
-        'Close fan-out could not resolve expert user ids — publishing without them',
-        expect.objectContaining({
-          projectRequestId: 'request-1',
-          closeAuditId: 'audit-1',
-          closedBy: 'balo',
-          expertProfileCount: 1,
-          error: 'experts read exploded',
-        })
-      );
-    });
-
-    it('the deferred callback RESOLVES — it never rejects into runAfterResponse', async () => {
-      mockFindUserIdsByProfileIds.mockRejectedValue(new Error('experts read exploded'));
-      runCloseRequestFanout(TRACKED, { ...BASE_CONTEXT, closedBy: 'balo', reason: 'unfilled' });
-      await expect(getScheduled()?.()).resolves.toBeUndefined();
-    });
-
-    it('a client-closed close logs and SKIPS the publish (no recipient of any kind)', async () => {
-      mockFindUserIdsByProfileIds.mockRejectedValue(new Error('experts read exploded'));
-
-      runCloseRequestFanout(TRACKED, BASE_CONTEXT);
-      await getScheduled()?.();
-
-      expect(log.error).toHaveBeenCalled();
-      expect(mockPublish).not.toHaveBeenCalled();
-      // The teardown ran BEFORE the lookup, so it is unaffected.
-      expect(mockPostCancelledTeardown).toHaveBeenCalledWith([]);
-    });
   });
 });

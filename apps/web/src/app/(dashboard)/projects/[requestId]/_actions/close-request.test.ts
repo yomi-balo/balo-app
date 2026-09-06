@@ -69,6 +69,7 @@ function closeResult(overrides: Record<string, unknown> = {}) {
     previousStatus: 'proposal_submitted',
     closeAuditId: 'audit-1',
     declinedTracks: [],
+    declinedTrackUserIds: [],
     withdrawnProposalIds: [],
     cancelledMeetings: [],
     revokedRepresentationIds: [],

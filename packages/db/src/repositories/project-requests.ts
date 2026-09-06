@@ -1,11 +1,13 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
+  expertProfiles,
   projectRequests,
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
   requestExpertRelationships,
+  users,
   type ProjectRequest,
   type ProjectRequestCloseReason,
   type NewProjectRequest,
@@ -14,6 +16,7 @@ import {
 import { auditEventsRepository } from './audit-events';
 import { conversationsRepository } from './conversations';
 import { cancelMeetingTx } from './_shared/cancel-meeting-tx';
+import type { DbExecutor } from './_shared/db-executor';
 import { meetingContextsRepository } from './meeting-contexts';
 import { advanceProposalStatus, lockOpenProposalsForRequestTx } from './proposals';
 import { representationsRepository } from './representations';
@@ -173,8 +176,51 @@ export interface CloseRequestResult {
     expertProfileId: string | null;
     cancelAuditId: string;
   }>;
+  /**
+   * The expert USER ids behind {@link declinedTracks}, deduped — the `recipientUserIds` of the
+   * caller's `project.request_closed` publish.
+   *
+   * ⚠ RESOLVED INSIDE THE CLOSE TRANSACTION, AND THAT IS THE WHOLE POINT. The fan-out used to
+   * map profile ids → user ids POST-COMMIT (`expertsRepository.findUserIdsByProfileIds` inside
+   * the deferred callback). `runAfterResponse` has NO RETRY and the close has already
+   * committed, so a single failed read there dropped the expert notices PERMANENTLY, with
+   * nothing left to re-drive them. Resolving here makes the ids COMMITTED STATE that arrives
+   * with the result: the fan-out has no post-commit read left to fail, only the publish itself.
+   *
+   * Ids ONLY — no email, no `workosId`, no row hydration. This repository hands the caller a
+   * recipient key, never a person's PII (`reference_drizzle_with_hydration_leaks_secrets`).
+   *
+   * Filter semantics MIRROR `expertsRepository.findUserIdsByProfileIds` exactly: an expert
+   * whose USER row is soft-deleted contributes no id (`expert_profiles` itself carries no
+   * `deleted_at`), and the set is deduped because two tracks can name profiles owned by the
+   * same person. Empty whenever `declinedTracks` is.
+   */
+  declinedTrackUserIds: readonly string[];
   /** Empty on every real close today — BAL-313 ships inert. Forward-compatible arm. */
   revokedRepresentationIds: string[];
+}
+
+/**
+ * `expert_profiles.id[]` → live `users.id[]`, deduped, on the CALLER'S executor.
+ *
+ * The in-transaction twin of `expertsRepository.findUserIdsByProfileIds`, and deliberately not
+ * a call to it: that method is bound to the base `db`, so from inside `close()`'s transaction
+ * it would read on a SECOND pooled connection — outside the very transaction whose committed
+ * state these ids are supposed to be part of. Same filter, same dedupe, same empty-input
+ * short-circuit; explicit join projecting `users.id` alone rather than a relational `with:`,
+ * so no full user row (email, `workos_id`) is ever hydrated.
+ */
+async function resolveExpertUserIdsTx(
+  exec: DbExecutor,
+  expertProfileIds: readonly string[]
+): Promise<string[]> {
+  if (expertProfileIds.length === 0) return [];
+  const rows = await exec
+    .select({ userId: users.id })
+    .from(expertProfiles)
+    .innerJoin(users, eq(expertProfiles.userId, users.id))
+    .where(and(inArray(expertProfiles.id, [...expertProfileIds]), isNull(users.deletedAt)));
+  return [...new Set(rows.map((row) => row.userId))];
 }
 
 export const projectRequestsRepository = {
@@ -651,7 +697,11 @@ export const projectRequestsRepository = {
    * The caller owns the POST-COMMIT fan-out: the Daily room teardown + availability-cache
    * rebuild for each returned `cancelledMeetings` entry, and the `project.request_closed`
    * publish. Everything that fan-out needs is in the result, including the per-WRITE,
-   * colon-free `closeAuditId` / `declineAuditId` / `cancelAuditId` correlation ids.
+   * colon-free `closeAuditId` / `declineAuditId` / `cancelAuditId` correlation ids — AND the
+   * resolved `declinedTrackUserIds` (step 7b). That last one is deliberate: the fan-out runs
+   * in `runAfterResponse`, which has NO RETRY, so any read it still had to do post-commit was
+   * a permanent way to lose the expert notices on a close that had already landed. It now has
+   * none.
    *
    * ⚠ KNOWN RESIDUAL, STATED RATHER THAN HIDDEN: a relationship inserted between step 2's
    * snapshot and COMMIT is not declined. `invite()` is guarded against exactly this (it refuses
@@ -805,6 +855,15 @@ export const projectRequestsRepository = {
         });
       }
 
+      // 7b. The expert USER ids behind those tracks — resolved HERE, in-transaction, so the
+      //     post-commit fan-out has NO read left that can fail (see `declinedTrackUserIds`).
+      //     A PLAIN read on `expert_profiles` ⋈ `users`: it takes no row lock, so it adds no
+      //     edge to the LOCK ORDER block's sequence and cannot introduce a deadlock class.
+      const declinedTrackUserIds = await resolveExpertUserIdsTx(
+        tx,
+        declinedTracks.map((track) => track.expertProfileId)
+      );
+
       // 8. Proposals → `withdrawn`. Already locked in step 1; `advanceProposalStatus` re-takes
       //    the row lock for free and still runs its transition guard.
       const withdrawnProposalIds: string[] = [];
@@ -862,6 +921,7 @@ export const projectRequestsRepository = {
         previousStatus,
         closeAuditId: auditRow.id,
         declinedTracks,
+        declinedTrackUserIds,
         withdrawnProposalIds,
         cancelledMeetings,
         revokedRepresentationIds,

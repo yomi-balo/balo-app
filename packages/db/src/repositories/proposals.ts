@@ -436,11 +436,12 @@ export const proposalsRepository = {
    * triple, matching the spirit of `submit()` reading from a locked row.
    *
    * ⚠ THE TRACK MUST STILL BE OPEN (BAL-540 fix round). Under the relationship lock we already
-   * hold, a `declined` relationship is refused; then the parent request's status is read and a
-   * `closed` request is refused. Both throw `ProposalTrackNotOpenError`. Without this, a
-   * still-in-flight composer autosave could insert a fresh `draft` onto a track the close /
-   * decline cascade had just ended — an open proposal on a terminal request, which every
-   * downstream reader treats as live work.
+   * hold, a declined relationship is refused — on EITHER witness, the `declined` label OR a
+   * non-null `declinedAt`, so a row whose stamp and status disagree cannot slip past; then the
+   * parent request's status is read and a `closed` request is refused. Both throw
+   * `ProposalTrackNotOpenError`. Without this, a still-in-flight composer autosave could insert
+   * a fresh `draft` onto a track the close / decline cascade had just ended — an open proposal
+   * on a terminal request, which every downstream reader treats as live work.
    *
    * ⚠ THIS CLOSES THE POST-COMMIT HALF ONLY. IT DOES NOT CLOSE THE RACE, AND MUST NOT BE READ
    * AS DOING SO. What it stops is an autosave that ARRIVES AFTER the close/decline has
@@ -489,7 +490,19 @@ export const proposalsRepository = {
 
       // The track must still be open — see the docblock (post-commit half only; the race
       // half stays open and is named there rather than papered over).
-      if (relationship.status === 'declined') {
+      //
+      // ⚠ EVIDENCE, NOT ABSENCE — the `declinedAt` disjunct is not belt-and-braces. The two
+      // halves of "declined" are written together today (`advanceRelationshipStatus` stamps
+      // the timestamp in the same `.set()` as the label), but a row that carries the STAMP
+      // with a stale label is still a track somebody ended, and a state-machine guard must
+      // refuse on either witness rather than trust the enum alone.
+      //
+      // ⚠ IT IS NOT `relationshipDeniesHosting`, DELIBERATELY. That predicate is the single
+      // definition of "declined" for the ENGAGEMENT-HOSTING authz arms (ADR-1046) and lives in
+      // `@balo/shared/authz`; this is a repository state-machine guard on a different subject.
+      // Reaching for it here would make `@balo/db` a consumer of the hosting authz seam and
+      // couple two rules that are free to diverge. One line, one comment, no coupling.
+      if (relationship.status === 'declined' || relationship.declinedAt !== null) {
         throw new ProposalTrackNotOpenError(input.relationshipId, 'relationship_declined');
       }
       const [parentRequest] = await tx

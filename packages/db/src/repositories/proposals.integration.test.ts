@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { proposals, proposalChangeRequests, projectRequests, expertProfiles } from '../schema';
+import {
+  proposals,
+  proposalChangeRequests,
+  projectRequests,
+  expertProfiles,
+  requestExpertRelationships,
+} from '../schema';
 import {
   proposalFactory,
   projectRequestFactory,
@@ -992,6 +998,39 @@ describe('proposalsRepository.createDraft', () => {
       reason: 'relationship_declined',
       relationshipId: relationship.id,
     });
+  });
+
+  it('REFUSES on the `declinedAt` STAMP alone, even with a stale live status', async () => {
+    // ⚠ EVIDENCE, NOT ABSENCE. Today the label and the stamp are written in ONE `.set()`, so
+    // this row is not producible through the repository — it is forced directly, exactly
+    // because the guard must not depend on those two halves never drifting. A track somebody
+    // ended is ended whichever witness survived.
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    await db
+      .update(requestExpertRelationships)
+      .set({ declinedAt: new Date() })
+      .where(eq(requestExpertRelationships.id, relationship.id));
+
+    await expect(
+      proposalsRepository.createDraft({
+        relationshipId: relationship.id,
+        overview: '<p>Stale autosave onto an inconsistent row.</p>',
+        pricingMethod: 'fixed',
+        priceCents: 0,
+      })
+    ).rejects.toMatchObject({
+      name: 'ProposalTrackNotOpenError',
+      reason: 'relationship_declined',
+      relationshipId: relationship.id,
+    });
+
+    const rows = await db
+      .select()
+      .from(proposals)
+      .where(and(eq(proposals.relationshipId, relationship.id), isNull(proposals.deletedAt)));
+    expect(rows).toHaveLength(0);
   });
 
   it('REFUSES a draft on a LIVE relationship whose parent request is closed', async () => {
