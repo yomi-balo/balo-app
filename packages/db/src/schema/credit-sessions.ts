@@ -461,9 +461,18 @@ export const creditSessions = pgTable(
     // ⚠ SAFE TO ADD TO A NON-EMPTY TABLE (the harness migrates an EMPTY database and so cannot
     // prove this — memory `reference_db_migrations_tested_against_empty_db`): the three columns
     // and both constraints ship in the SAME migration (0085), so every pre-existing row has all
-    // three NULL and satisfies both predicates by construction. No `NOT VALID` escape hatch is
-    // needed. No enum label appears in either predicate, so the `ALTER TYPE … ADD VALUE`
-    // in-one-transaction hazard recorded on `enums.ts` does not apply either.
+    // three NULL and satisfies both predicates by construction — CORRECTNESS never required a
+    // `NOT VALID` escape hatch. No enum label appears in either predicate, so the
+    // `ALTER TYPE … ADD VALUE` in-one-transaction hazard recorded on `enums.ts` does not apply
+    // either.
+    //
+    // ⚠ The hand-edited migration 0085 STILL adds both constraints `NOT VALID` + a separate
+    // `VALIDATE CONSTRAINT` (Qodo follow-up, post-merge). That split is about LOCKING, not
+    // correctness: a plain validated `ADD CONSTRAINT` full-scans this hot table under ACCESS
+    // EXCLUSIVE, blocking the per-minute meter sweep and terminal settlement for the scan's
+    // duration. Trivial-by-construction validity (above) is exactly why the split is safe to do
+    // AFTER the fact with a cheap `VALIDATE CONSTRAINT` (SHARE UPDATE EXCLUSIVE only). Do not read
+    // this paragraph as license to regenerate this migration back into one blocking statement.
     check(
       'credit_sessions_settlement_instrument_pair',
       sql`(${t.settlementStripePaymentMethodId} IS NULL) = (${t.settlementStripeCustomerId} IS NULL)`

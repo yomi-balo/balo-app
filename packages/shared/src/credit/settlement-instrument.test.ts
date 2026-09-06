@@ -105,7 +105,10 @@ describe('resolveSettlementInstrument', () => {
       pinned: { customerId: CUS_OLD, paymentMethodId: PM_OLD },
       live: { customerId: CUS_NEW, paymentMethodId: PM_NEW },
     };
-    const snapshot = JSON.parse(JSON.stringify(candidates)) as SettlementInstrumentCandidates;
+    // `structuredClone` is type-preserving (its lib signature is `<T>(value: T): T`), so this
+    // deep-clones for the before/after comparison below without an unchecked-`JSON.parse`
+    // assertion standing in for narrowing (Qodo follow-up).
+    const snapshot = structuredClone(candidates);
     resolveSettlementInstrument(candidates);
     expect(candidates).toEqual(snapshot);
   });

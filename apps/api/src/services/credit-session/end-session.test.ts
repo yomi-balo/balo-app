@@ -18,6 +18,7 @@ const {
   mockPark,
   mockTriggerAutoTopup,
   mockWarn,
+  mockInfo,
 } = vi.hoisted(() => ({
   mockEnd: vi.fn(),
   mockMarkSettlementResult: vi.fn(),
@@ -38,10 +39,14 @@ const {
   // BAL-525 — exposed (not an anonymous vi.fn() per call) so the O2/O3 warn lines are
   // assertable, matching the sibling `settle-from-presence.test.ts` pattern.
   mockWarn: vi.fn(),
+  // Qodo follow-up — same reasoning as mockWarn: the mirror-direction mandate-flip `info` line
+  // (commit-time false, settlement-time active) needs to be assertable, since BAL-545 keys an
+  // Axiom monitor on it.
+  mockInfo: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: mockInfo, warn: mockWarn, error: vi.fn() }),
 }));
 vi.mock('@balo/db', () => ({
   creditSessionsRepository: {
@@ -447,6 +452,18 @@ describe('endSession', () => {
       ok: true,
       result: { settlementStatus: 'processing', overdraftSettledMinor: 900 },
     });
+    // Qodo follow-up: this direction of the flip must be greppable too — BAL-545 keys an Axiom
+    // monitor on it. `info`, not `warn`, since this is the expected-and-correct outcome.
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'settleOverdraft',
+        sessionId: 'session_1',
+        walletId: 'wallet_1',
+        mandateActiveAtCommit: false,
+        mandateActiveNow: true,
+      }),
+      expect.stringContaining('inactive at commit to active at settlement')
+    );
   });
 
   it('BAL-525 (O2): pin matches the live wallet — charges the pinned pair, no disagreement warn', async () => {
@@ -493,6 +510,42 @@ describe('endSession', () => {
         walletId: 'wallet_1',
         pinnedCustomerId: 'cus_old',
         pinnedPaymentMethodId: 'pm_old',
+        // Qodo follow-up: the live customer id must be present too, since a customer-only
+        // mismatch (tested below) is otherwise undiagnosable from this alert alone.
+        liveCustomerId: 'cus_1',
+        livePaymentMethodId: 'pm_1',
+      }),
+      expect.stringContaining('pin disagrees with the wallet')
+    );
+  });
+
+  it('BAL-525 (Qodo follow-up): pin disagrees on the CUSTOMER id alone — warn still carries the live customer id', async () => {
+    // The customer-only mismatch case Qodo's finding named specifically: only
+    // `settlementStripeCustomerId` differs from the live wallet; the payment method matches.
+    mockEnd.mockResolvedValue(
+      endResult({
+        overdraftMinor: 1200,
+        mandateActive: true,
+        session: {
+          ...SESSION,
+          settlementStripeCustomerId: 'cus_old',
+          settlementStripePaymentMethodId: 'pm_1',
+        },
+      })
+    );
+    mockCreateOffSessionCharge.mockResolvedValue({ status: 'processing', paymentIntentId: 'pi_1' });
+    await endSession('session_1', 'user_1');
+    expect(mockCreateOffSessionCharge).toHaveBeenCalledWith(
+      expect.objectContaining({ customerId: 'cus_1', paymentMethodId: 'pm_1' })
+    );
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        op: 'settleOverdraft',
+        sessionId: 'session_1',
+        walletId: 'wallet_1',
+        pinnedCustomerId: 'cus_old',
+        pinnedPaymentMethodId: 'pm_1',
+        liveCustomerId: 'cus_1',
         livePaymentMethodId: 'pm_1',
       }),
       expect.stringContaining('pin disagrees with the wallet')

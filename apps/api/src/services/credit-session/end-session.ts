@@ -180,6 +180,28 @@ async function settleOverdraft(
     return failed('failed');
   }
 
+  // BAL-525 (Qodo follow-up) — the MIRROR of the warn above. The wallet had NO usable mandate at
+  // commit time (e.g. grace opened under `notify_only`, or the SetupIntent was still `pending`
+  // when `end()`/`settleFromPresence()` ran) but the fresh read here — the one this PR added —
+  // now finds a live one, so settlement proceeds to charge. That is a real behavioural change
+  // this PR introduces (previously a commit-time-false mandate meant the debt could never be
+  // charged), so it needs its own greppable, stable line — BAL-545 keys an Axiom monitor on it.
+  // `info`, not `warn`: this is the expected-and-correct outcome of re-reading consent live
+  // (O3's whole point), not an anomaly an operator needs to act on.
+  if (observed.mandateActiveAtCommit === false) {
+    log.info(
+      {
+        op: 'settleOverdraft',
+        sessionId: session.id,
+        walletId: session.walletId,
+        overdraftMinor,
+        mandateActiveAtCommit: observed.mandateActiveAtCommit,
+        mandateActiveNow: true,
+      },
+      'Overdraft mandate went from inactive at commit to active at settlement — charging on the fresh mandate'
+    );
+  }
+
   // BAL-525 (O2) — resolve the settlement instrument. By construction the pair actually charged
   // below is ALWAYS the wallet's LIVE pair in this slice: the absent-pin and disagree branches of
   // `resolveSettlementInstrument` return `live` directly, and the agree branch returns a
@@ -205,6 +227,7 @@ async function settleOverdraft(
         overdraftMinor,
         pinnedCustomerId: session.settlementStripeCustomerId,
         pinnedPaymentMethodId: session.settlementStripePaymentMethodId,
+        liveCustomerId: wallet.stripeCustomerId,
         livePaymentMethodId: wallet.stripePaymentMethodId,
         pinnedAt: session.settlementInstrumentPinnedAt,
         mandateActiveAtCommit: observed.mandateActiveAtCommit,
