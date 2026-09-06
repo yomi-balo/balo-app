@@ -33,14 +33,14 @@ export const consultationStatusEnum = pgEnum('consultation_status', ['confirmed'
  * ⚠ `'closed'` (BAL-540 / ADR-1025 Amendment 1) IS APPENDED LAST, DELIBERATELY, and its
  * position is load-bearing in exactly the two ways `meetingStatusEnum`'s `'cancelled'` is:
  *
- *   1. IT MUST STAY LAST. Migration 0085 emits a BARE `ALTER TYPE … ADD VALUE 'closed'`
+ *   1. IT MUST STAY LAST. Migration 0086 emits a BARE `ALTER TYPE … ADD VALUE 'closed'`
  *      with NO `BEFORE`/`AFTER` clause. Inserting a future label before it — or reordering
  *      this array — makes the generated SQL disagree with the deployed type's sort order.
  *      LAST is also what makes it the HIGHEST RANK for `deriveRequestStatus`'s
  *      `enumValues.indexOf` ordering (`_shared/derive-request-status.ts`).
- *   2. THE LITERAL MUST NOT APPEAR ANYWHERE ELSE IN 0085. Postgres permits `ADD VALUE`
+ *   2. THE LITERAL MUST NOT APPEAR ANYWHERE ELSE IN 0086. Postgres permits `ADD VALUE`
  *      inside a transaction but forbids USING the new label in that same transaction, and
- *      drizzle wraps each migration file in one. So 0085 adds the label and NO DEFAULT, NO
+ *      drizzle wraps each migration file in one. So 0086 adds the label and NO DEFAULT, NO
  *      CHECK and NO INDEX PREDICATE names it — in particular the `status = 'closed' ⟺
  *      closed_at IS NOT NULL` coherence CHECK is an explicit FOLLOW-UP migration, and
  *      coherence until then is the `projectRequestsRepository.close()` path's job, pinned by
@@ -107,7 +107,7 @@ export const proposalStatusEnum = pgEnum('proposal_status', [
 /**
  * BAL-540 — why a request was CLOSED. A brand-new standalone `CREATE TYPE`, so every label
  * commits atomically with the type and IS usable in the same migration (the one-transaction
- * hazard is `ALTER TYPE … ADD VALUE`-only). Nothing in 0085 uses them in a DEFAULT/CHECK
+ * hazard is `ALTER TYPE … ADD VALUE`-only). Nothing in 0086 uses them in a DEFAULT/CHECK
  * anyway — `close_reason` is NULL until a close happens.
  *
  * The client arm always writes `withdrawn` (they picked nothing — closing their own request

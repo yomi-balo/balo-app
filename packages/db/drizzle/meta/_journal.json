@@ -600,8 +600,15 @@
     {
       "idx": 85,
       "version": "7",
-      "when": 1788627855396,
-      "tag": "0085_bal540_request_close",
+      "when": 1788625146289,
+      "tag": "0085_bal525_session_settlement_instrument_pin",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1788671504204,
+      "tag": "0086_bal540_request_close",
       "breakpoints": true
     }
   ]

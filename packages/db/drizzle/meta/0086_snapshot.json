@@ -1,6 +1,6 @@
 {
-  "id": "d5bed0dd-17e2-4647-a54c-72439f12dd4d",
-  "prevId": "f0adfbd8-1b0f-417b-9e8f-c0112b84cc52",
+  "id": "b702e951-1b50-413e-945c-d41ce26bbd59",
+  "prevId": "d5bed0dd-17e2-4647-a54c-72439f12dd4d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5849,6 +5849,31 @@
           "primaryKey": false,
           "notNull": false
         },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_by_user_id": {
+          "name": "closed_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "close_reason": {
+          "name": "close_reason",
+          "type": "project_request_close_reason",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "close_note": {
+          "name": "close_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -5916,6 +5941,21 @@
           "method": "btree",
           "with": {}
         },
+        "project_requests_closed_by_idx": {
+          "name": "project_requests_closed_by_idx",
+          "columns": [
+            {
+              "expression": "closed_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "project_requests_expert_status_idx": {
           "name": "project_requests_expert_status_idx",
           "columns": [
@@ -5963,6 +6003,15 @@
           "tableFrom": "project_requests",
           "tableTo": "users",
           "columnsFrom": ["created_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "project_requests_closed_by_user_id_users_id_fk": {
+          "name": "project_requests_closed_by_user_id_users_id_fk",
+          "tableFrom": "project_requests",
+          "tableTo": "users",
+          "columnsFrom": ["closed_by_user_id"],
           "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
@@ -7067,6 +7116,19 @@
           "primaryKey": false,
           "notNull": false
         },
+        "declined_by_user_id": {
+          "name": "declined_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decline_reason": {
+          "name": "decline_reason",
+          "type": "relationship_decline_reason",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
         "proposal_requested_at": {
           "name": "proposal_requested_at",
           "type": "timestamp with time zone",
@@ -7174,6 +7236,21 @@
           "method": "btree",
           "with": {}
         },
+        "request_expert_relationship_declined_by_idx": {
+          "name": "request_expert_relationship_declined_by_idx",
+          "columns": [
+            {
+              "expression": "declined_by_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "request_expert_relationship_status_idx": {
           "name": "request_expert_relationship_status_idx",
           "columns": [
@@ -7221,6 +7298,15 @@
           "tableFrom": "request_expert_relationships",
           "tableTo": "users",
           "columnsFrom": ["invited_by_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "request_expert_relationships_declined_by_user_id_users_id_fk": {
+          "name": "request_expert_relationships_declined_by_user_id_users_id_fk",
+          "tableFrom": "request_expert_relationships",
+          "tableTo": "users",
+          "columnsFrom": ["declined_by_user_id"],
           "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
@@ -15230,6 +15316,11 @@
       "schema": "public",
       "values": ["active", "pending_acceptance", "completed", "cancelled"]
     },
+    "public.project_request_close_reason": {
+      "name": "project_request_close_reason",
+      "schema": "public",
+      "values": ["withdrawn", "declined", "unfilled", "superseded"]
+    },
     "public.project_request_send_to": {
       "name": "project_request_send_to",
       "schema": "public",
@@ -15252,7 +15343,8 @@
         "proposal_requested",
         "proposal_submitted",
         "accepted",
-        "kickoff_approved"
+        "kickoff_approved",
+        "closed"
       ]
     },
     "public.promo_code_status": {
@@ -15278,12 +15370,25 @@
     "public.proposal_status": {
       "name": "proposal_status",
       "schema": "public",
-      "values": ["submitted", "accepted", "withdrawn", "draft", "changes_requested", "resubmitted"]
+      "values": [
+        "submitted",
+        "accepted",
+        "withdrawn",
+        "draft",
+        "changes_requested",
+        "resubmitted",
+        "declined"
+      ]
     },
     "public.recording_status": {
       "name": "recording_status",
       "schema": "public",
       "values": ["recording", "source_ready", "ingesting", "ready", "failed"]
+    },
+    "public.relationship_decline_reason": {
+      "name": "relationship_decline_reason",
+      "schema": "public",
+      "values": ["request_closed", "client_declined", "balo_declined"]
     },
     "public.representation_scope": {
       "name": "representation_scope",

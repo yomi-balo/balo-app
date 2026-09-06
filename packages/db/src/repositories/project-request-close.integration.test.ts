@@ -34,7 +34,7 @@ import {
 /**
  * BAL-540 / ADR-1025 Amendment 1 — THE CLOSE CASCADE, end to end against real Postgres.
  *
- * This suite is the stand-in for the coherence CHECK that migration 0085 CANNOT carry:
+ * This suite is the stand-in for the coherence CHECK that migration 0086 CANNOT carry:
  * `status = 'closed' ⟺ closed_at IS NOT NULL` names a label added by `ALTER TYPE … ADD VALUE`
  * in that same migration, so it is a documented FOLLOW-UP (orchestrator D6). Until it lands,
  * coherence is the repository path's job and §1 below is what pins it.
