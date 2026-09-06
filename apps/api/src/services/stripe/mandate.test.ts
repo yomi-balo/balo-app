@@ -13,6 +13,8 @@ const {
   mockHasOpenReceivable,
   mockNotificationPublish,
   mockTrackServer,
+  mockLogWarn,
+  mockLogError,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockApplyMandateStatus: vi.fn(),
@@ -29,11 +31,16 @@ const {
   // logic while never touching a real BullMQ queue.
   mockNotificationPublish: vi.fn(),
   mockTrackServer: vi.fn(),
+  // FIX ROUND 2 — hoisted so the REPLAY-VERIFICATION fail-soft path can be asserted (a `log.warn`
+  // and NOT a throw is the whole point of that branch; without a handle on the logger, "warns and
+  // proceeds" is unprovable).
+  mockLogWarn: vi.fn(),
+  mockLogError: vi.fn(),
 }));
 
 vi.mock('stripe', async () => (await import('../../test/mocks/stripe.js')).stripeMockModule());
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockLogWarn, error: mockLogError }),
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
@@ -83,6 +90,12 @@ const ACTOR = { userId: 'user_1' };
  *  below: dropping them is a silent ~240 s purchase stall, not a cosmetic change. */
 const SYNC_REQUEST_OPTIONS = { timeout: 5000, maxNetworkRetries: 0 };
 
+/** FIX ROUND 2 — the per-request options `createSetupIntent` pins on its REPLAY-VERIFICATION
+ *  `setupIntents.retrieve`, for the same reason and with the same numbers: an unbounded read on
+ *  capture start would inherit stripe-node's 80 s default × the client's `maxNetworkRetries: 2`.
+ *  Asserted below so dropping them is a visible change, not a silent ~240 s stall. */
+const VERIFY_REQUEST_OPTIONS = { timeout: 5000, maxNetworkRetries: 0 };
+
 /** BAL-522 — the default `findBillingIdentityById` row: a company with no billing email yet, so
  *  the default posture exercises the SEED arm unless a test overrides `billingEmail`. */
 function billingIdentityFixture(
@@ -111,19 +124,79 @@ function billingIdentityFixture(
 /**
  * Minimal wallet fixture — the mandate service only reads `id` + `stripeCustomerId` (plus, as of
  * BAL-521, `stripePaymentMethodId` / `cardBrand` / `cardLast4` for the post-commit notice's
- * `hadCard` gate). `cardBrand`/`cardLast4` default to `null` (never `undefined`) to match the
- * real DB row shape — Drizzle never omits a nullable column, and `undefined !== null` would
- * silently make every fixture "have a card".
+ * `hadCard` gate, and as of BAL-527, `stripePaymentMethodId` / `cardUpdatedAt` again for
+ * `buildSetupIntentIdempotencyKey`). Every nullable column defaults to `null` (never
+ * `undefined`) to match the real DB row shape — Drizzle never omits a nullable column, and
+ * `undefined !== null` would silently make every fixture "have a card" (or, for
+ * `cardUpdatedAt`, throw: BAL-527's key does `wallet.cardUpdatedAt === null ? 'none' :
+ * wallet.cardUpdatedAt.getTime()`, and `undefined` fails that check then throws
+ * `TypeError: cardUpdatedAt.getTime is not a function`). Fix the fixture when this breaks, never
+ * loosen the helper to `== null` to paper over a fixture lying about the row shape.
  */
 function walletFixture(overrides: Partial<CreditWallet>): CreditWallet {
   return {
     id: 'wallet_1',
     companyId: 'company_1',
     stripeCustomerId: null,
+    stripePaymentMethodId: null,
+    cardUpdatedAt: null,
     cardBrand: null,
     cardLast4: null,
     ...overrides,
   } as unknown as CreditWallet;
+}
+
+/** The `setupIntents.create` response shape the SUT reads: the resource fields PLUS the SDK's
+ *  `Response<T>` envelope field, `lastResponse.headers`. */
+interface SetupIntentCreateResponse {
+  id: string;
+  client_secret: string | null;
+  status: string;
+  lastResponse: { headers: Record<string, string> };
+}
+
+/**
+ * FIX ROUND 2 — a FRESH `setupIntents.create` response: a real create, NOT a replay.
+ *
+ * ⚠ `status` IS NOT THE REPLAY SIGNAL AND NEVER WAS — that is why it is not overridable here.
+ * Stripe's idempotency layer replays the saved body of the FIRST request verbatim
+ * (docs.stripe.com/api/idempotent_requests), and a create with no `payment_method` and no
+ * `confirm` is ALWAYS BORN `requires_payment_method` — so a REPLAYED create response says
+ * `requires_payment_method` too, whatever the live object has become. The earlier G1-G3 mocked
+ * `create` resolving with `succeeded` / `requires_action`, i.e. behaviour Stripe cannot exhibit,
+ * and pinned a guard that could never fire. A replay differs from a fresh create ONLY by the
+ * `Idempotent-Replayed` header (see `replayedSetupIntent`); its LIVE status comes from
+ * `setupIntents.retrieve`. Repair the fixture, never re-add a `status` override here.
+ *
+ * `lastResponse` is a plain enumerable property in this mock; the real SDK attaches it
+ * non-enumerably (`RequestSender._jsonResponseHandler`), which nothing under test can observe.
+ */
+function freshSetupIntent(
+  overrides: Partial<Omit<SetupIntentCreateResponse, 'status'>> = {}
+): SetupIntentCreateResponse {
+  return {
+    id: 'seti_1',
+    client_secret: 'seti_1_secret',
+    status: 'requires_payment_method',
+    lastResponse: { headers: {} },
+    ...overrides,
+  };
+}
+
+/**
+ * FIX ROUND 2 — a REPLAYED `setupIntents.create` response: byte-identical body to the fresh one
+ * (that is the whole point), marked ONLY by the header Stripe sets on a replay —
+ * docs.stripe.com/error-low-level#idempotency, "look for the header `Idempotent-Replayed: true`".
+ * Lowercase key: stripe-node's Node HTTP client exposes `lastResponse.headers` as the
+ * `http.IncomingMessage` header bag, which Node lowercases.
+ */
+function replayedSetupIntent(
+  overrides: Partial<Omit<SetupIntentCreateResponse, 'status' | 'lastResponse'>> = {}
+): SetupIntentCreateResponse {
+  return freshSetupIntent({
+    ...overrides,
+    lastResponse: { headers: { 'idempotent-replayed': 'true' } },
+  });
 }
 
 describe('mandate', () => {
@@ -150,6 +223,8 @@ describe('mandate', () => {
     mockFindEmailById.mockReset();
     mockFindEmailById.mockResolvedValue({ id: 'user_1', email: 'dana@northwind.test' });
     mockClearSavedCardAndReconcileMode.mockReset();
+    mockLogWarn.mockReset();
+    mockLogError.mockReset();
     mockTransaction.mockReset();
     mockTransaction.mockImplementation((cb: (tx: unknown) => unknown) =>
       cb({ __brand: 'mock-tx' })
@@ -390,10 +465,7 @@ describe('mandate', () => {
     it('ensures the customer, creates an off_session SetupIntent, and marks mandate pending', async () => {
       mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: null }));
       mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
-      mockStripe.setupIntents.create.mockResolvedValue({
-        id: 'seti_1',
-        client_secret: 'seti_1_secret',
-      });
+      mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
 
       const result = await createSetupIntent('wallet_1', ACTOR.userId);
 
@@ -402,11 +474,12 @@ describe('mandate', () => {
         setupIntentId: 'seti_1',
         customerId: 'cus_new',
       });
-      expect(mockStripe.setupIntents.create).toHaveBeenCalledWith({
-        customer: 'cus_new',
-        usage: 'off_session',
-        metadata: { walletId: 'wallet_1' },
-      });
+      // BAL-527 — the create is now KEYED. The wallet fixture has no stored PM and no
+      // `cardUpdatedAt`, so the key ends `:none:none`.
+      expect(mockStripe.setupIntents.create).toHaveBeenCalledWith(
+        { customer: 'cus_new', usage: 'off_session', metadata: { walletId: 'wallet_1' } },
+        { idempotencyKey: 'mandate-setup:wallet_1:cus_new:none:none' }
+      );
       expect(mockApplyMandateStatus).toHaveBeenCalledWith(
         expect.objectContaining({ __brand: 'mock-db' }),
         'wallet_1',
@@ -418,17 +491,17 @@ describe('mandate', () => {
       mockFindById.mockResolvedValue(
         walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_existing' })
       );
-      mockStripe.setupIntents.create.mockResolvedValue({
-        id: 'seti_2',
-        client_secret: 'seti_2_secret',
-      });
+      mockStripe.setupIntents.create.mockResolvedValue(
+        freshSetupIntent({ id: 'seti_2', client_secret: 'seti_2_secret' })
+      );
 
       const result = await createSetupIntent('wallet_1', ACTOR.userId);
 
       expect(result.customerId).toBe('cus_existing');
       expect(mockStripe.customers.create).not.toHaveBeenCalled();
       expect(mockStripe.setupIntents.create).toHaveBeenCalledWith(
-        expect.objectContaining({ customer: 'cus_existing' })
+        expect.objectContaining({ customer: 'cus_existing' }),
+        expect.objectContaining({ idempotencyKey: expect.stringContaining('cus_existing') })
       );
     });
 
@@ -440,9 +513,359 @@ describe('mandate', () => {
 
     it('throws when the SetupIntent has no client_secret', async () => {
       mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' }));
-      mockStripe.setupIntents.create.mockResolvedValue({ id: 'seti_3', client_secret: null });
+      mockStripe.setupIntents.create.mockResolvedValue(
+        freshSetupIntent({ id: 'seti_3', client_secret: null })
+      );
       await expect(createSetupIntent('wallet_1', ACTOR.userId)).rejects.toThrow(/client_secret/);
       expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+    });
+
+    describe('BAL-527 — the idempotency key', () => {
+      /** Reads the idempotencyKey off the MOST RECENT `setupIntents.create` call. */
+      function setupIntentsCreateKey(): string {
+        const calls = mockStripe.setupIntents.create.mock.calls as [
+          Record<string, unknown>,
+          { idempotencyKey: string },
+        ][];
+        const lastCall = calls.at(-1);
+        if (lastCall === undefined) {
+          throw new Error('setupIntents.create was never called');
+        }
+        const [, options] = lastCall;
+        return options.idempotencyKey;
+      }
+
+      it('K1 — is STABLE across repeated calls with unchanged wallet state (the loop bound)', async () => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        await createSetupIntent('wallet_1', ACTOR.userId);
+
+        const [firstCall, secondCall] = mockStripe.setupIntents.create.mock.calls as [
+          [Record<string, unknown>, { idempotencyKey: string }],
+          [Record<string, unknown>, { idempotencyKey: string }],
+        ];
+        expect(firstCall[1].idempotencyKey).toBe(secondCall[1].idempotencyKey);
+      });
+
+      it('K2 — rotates when stripePaymentMethodId changes (Change works after a display-read failure)', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1', stripePaymentMethodId: null })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: 'pm_A',
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        expect(key1).not.toBe(key2);
+        expect(key2).toBe('mandate-setup:wallet_1:cus_1:pm_A:none');
+      });
+
+      it('K3 — rotates when cardUpdatedAt advances', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            cardUpdatedAt: new Date(1000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            cardUpdatedAt: new Date(2000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        expect(key1).not.toBe(key2);
+      });
+
+      it('K4 — ★ REGRESSION PIN: Add → Remove → Add does NOT reuse the first key (the exact break a pm-only key would ship)', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        // Call 1 — fresh wallet, no card, no generation yet.
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: null,
+            cardUpdatedAt: null,
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        // Call 2 — card captured (`applyMandate`).
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: 'pm_A',
+            cardUpdatedAt: new Date(1000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        // Call 3 — post-`clearSavedCard`: `pm` REVERTS to null, but `cardUpdatedAt` ADVANCES
+        // (clearSavedCard stamps `now()`, per that repository method's own docblock — it never
+        // nulls the timestamp). A pm-only key would equal key1 here; this key must not.
+        mockFindById.mockResolvedValue(
+          walletFixture({
+            id: 'wallet_1',
+            stripeCustomerId: 'cus_1',
+            stripePaymentMethodId: null,
+            cardUpdatedAt: new Date(2000),
+          })
+        );
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key3 = setupIntentsCreateKey();
+
+        expect(new Set([key1, key2, key3]).size).toBe(3);
+        expect(key3).not.toBe(key1);
+      });
+
+      it('K5 — rotates when the customer churns (no 400 idempotency_error under a changed body)', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: null }));
+        mockStripe.customers.create.mockResolvedValueOnce({ id: 'cus_A' });
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key1 = setupIntentsCreateKey();
+
+        mockStripe.customers.create.mockResolvedValueOnce({ id: 'cus_B' });
+        await createSetupIntent('wallet_1', ACTOR.userId);
+        const key2 = setupIntentsCreateKey();
+
+        expect(key1).not.toBe(key2);
+      });
+
+      it("K6 — uses ensureCustomer's RETURN, never wallet.stripeCustomerId (M4: the column is not persisted)", async () => {
+        mockFindById.mockResolvedValue(walletFixture({ id: 'wallet_1', stripeCustomerId: null }));
+        mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        await createSetupIntent('wallet_1', ACTOR.userId);
+
+        expect(setupIntentsCreateKey()).toContain('cus_new');
+        expect(setupIntentsCreateKey()).not.toContain(':null:');
+      });
+
+      it('K7 — the create body is unchanged: no extra field beyond {customer, usage, metadata}', async () => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+        mockStripe.setupIntents.create.mockResolvedValue(freshSetupIntent());
+
+        await createSetupIntent('wallet_1', ACTOR.userId);
+
+        const [params] = mockStripe.setupIntents.create.mock.calls[0] as [Record<string, unknown>];
+        expect(Object.keys(params).sort()).toEqual(['customer', 'metadata', 'usage']);
+      });
+
+      // FIX ROUND (review) — RENAMED AND RE-SHAPED. This was called "409-shaped" while building
+      // a bare `new MockStripeError('idempotency_error')` with no status and no code: it pinned
+      // propagation only, and the name was doing work the fixture had not earned. The fixture now
+      // carries the wire shape stripe-node surfaces for an in-flight-key conflict, and the
+      // assertion reads those fields rather than a substring of the message.
+      //
+      // FIX ROUND 2 — TYPE vs CODE. The fixture previously put `idempotency_error` in `code`;
+      // that string is the error TYPE (stripe-node maps the TYPE to `StripeIdempotencyError`,
+      // `Error.js:13`, and the same type also covers a 400 under a changed body). The CODE for a
+      // concurrent same-key conflict is `idempotency_key_in_use`. Both are pinned below.
+      it('K8 — a Stripe 409 idempotency conflict (concurrent same-key press, SDK retries exhausted) propagates, and mandate status is NOT applied', async () => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+        const conflictErr = new MockStripeError(
+          'There is currently another in-progress request using this Idempotency Key'
+        );
+        conflictErr.type = 'idempotency_error';
+        conflictErr.code = 'idempotency_key_in_use';
+        conflictErr.statusCode = 409;
+        mockStripe.setupIntents.create.mockRejectedValue(conflictErr);
+
+        await expect(createSetupIntent('wallet_1', ACTOR.userId)).rejects.toMatchObject({
+          type: 'idempotency_error',
+          code: 'idempotency_key_in_use',
+          statusCode: 409,
+        });
+        expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * FIX ROUND 2 (Qodo, confirmed against docs.stripe.com + the installed SDK) — THE REPLAY
+     * GUARD, REBUILT ON THE MECHANISM THAT ACTUALLY EXISTS.
+     *
+     * A stable idempotency key means Stripe can answer a later press with a 24h-old intent that
+     * has moved past the point where a fresh card can be entered; returning that `client_secret`
+     * bricks card capture with a browser-side `setup_intent_unexpected_state` and nothing in our
+     * logs. THAT FAILURE IS REAL. The previous round's guard for it was not: it checked
+     * `status !== 'requires_payment_method'` on the CREATE response, and Stripe's idempotency
+     * layer replays "the resulting status code and body of the first request" verbatim, so a
+     * create born `requires_payment_method` reports `requires_payment_method` forever. The old
+     * G1-G3 mocked `create` resolving `succeeded` / `requires_action` — behaviour Stripe cannot
+     * exhibit — and so passed against dead code.
+     *
+     * The guard now: detect via the `Idempotent-Replayed: true` RESPONSE HEADER, verify via a
+     * bounded fail-soft `setupIntents.retrieve`, refuse on the RETRIEVED status.
+     */
+    describe('BAL-527 — a replayed intent that can no longer take a card', () => {
+      beforeEach(() => {
+        mockFindById.mockResolvedValue(
+          walletFixture({ id: 'wallet_1', stripeCustomerId: 'cus_1' })
+        );
+      });
+
+      /** Run the create and hand back the `Error` it MUST reject with. */
+      async function refusalError(): Promise<Error> {
+        try {
+          await createSetupIntent('wallet_1', ACTOR.userId);
+        } catch (error: unknown) {
+          if (error instanceof Error) {
+            return error;
+          }
+          throw new Error(`createSetupIntent rejected with a non-Error: ${String(error)}`);
+        }
+        throw new Error('createSetupIntent resolved — the replayed-intent guard did not fire');
+      }
+
+      it('G1 — replayed, and the LIVE intent is `succeeded` (the webhook never landed): throws naming the intent and its CURRENT status, verifies with exactly one BOUNDED retrieve, and never marks the wallet pending', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          replayedSetupIntent({ id: 'seti_stale', client_secret: 'seti_stale_secret' })
+        );
+        mockStripe.setupIntents.retrieve.mockResolvedValue({
+          id: 'seti_stale',
+          status: 'succeeded',
+          client_secret: 'seti_stale_live_secret',
+        });
+
+        const error = await refusalError();
+
+        expect(error.message).toContain('seti_stale');
+        // The CURRENT status, which exists only on the retrieved object — the create response
+        // said `requires_payment_method`, as every replayed create response always does.
+        expect(error.message).toContain('succeeded');
+        expect(mockStripe.setupIntents.retrieve).toHaveBeenCalledTimes(1);
+        expect(mockStripe.setupIntents.retrieve).toHaveBeenCalledWith(
+          'seti_stale',
+          {},
+          VERIFY_REQUEST_OPTIONS
+        );
+        expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+      });
+
+      it('G2 — replayed, and the LIVE intent is `requires_action` (an abandoned redirect-3DS): throws — the case that never self-heals', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          replayedSetupIntent({ id: 'seti_3ds', client_secret: 'seti_3ds_secret' })
+        );
+        mockStripe.setupIntents.retrieve.mockResolvedValue({
+          id: 'seti_3ds',
+          status: 'requires_action',
+          client_secret: 'seti_3ds_live_secret',
+        });
+
+        const error = await refusalError();
+
+        expect(error.message).toContain('seti_3ds');
+        expect(error.message).toContain('requires_action');
+        expect(mockApplyMandateStatus).not.toHaveBeenCalled();
+      });
+
+      it('G3 — the refusal leaks NEITHER the cached NOR the retrieved client secret, in the message or in the log', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          replayedSetupIntent({ id: 'seti_stale', client_secret: 'seti_cached_secret' })
+        );
+        mockStripe.setupIntents.retrieve.mockResolvedValue({
+          id: 'seti_stale',
+          status: 'succeeded',
+          client_secret: 'seti_retrieved_secret',
+        });
+
+        const error = await refusalError();
+
+        expect(error.message).not.toContain('seti_cached_secret');
+        expect(error.message).not.toContain('seti_retrieved_secret');
+        const logged = JSON.stringify(mockLogError.mock.calls);
+        expect(logged).not.toContain('seti_cached_secret');
+        expect(logged).not.toContain('seti_retrieved_secret');
+      });
+
+      it('G4 — a FRESH create (no `Idempotent-Replayed` header) resolves and makes NO verification retrieve: one Stripe call, exactly as before BAL-527', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          freshSetupIntent({ id: 'seti_fresh', client_secret: 'seti_fresh_secret' })
+        );
+
+        await expect(createSetupIntent('wallet_1', ACTOR.userId)).resolves.toEqual({
+          clientSecret: 'seti_fresh_secret',
+          setupIntentId: 'seti_fresh',
+          customerId: 'cus_1',
+        });
+        expect(mockStripe.setupIntents.retrieve).not.toHaveBeenCalled();
+        expect(mockApplyMandateStatus).toHaveBeenCalledTimes(1);
+      });
+
+      it('G5 — the COMMON replay (double-press / StrictMode double-mount): retrieve says `requires_payment_method`, so the cached secret comes back and the wallet is marked pending once', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          replayedSetupIntent({ id: 'seti_open', client_secret: 'seti_open_secret' })
+        );
+        mockStripe.setupIntents.retrieve.mockResolvedValue({
+          id: 'seti_open',
+          status: 'requires_payment_method',
+          client_secret: 'seti_open_secret',
+        });
+
+        await expect(createSetupIntent('wallet_1', ACTOR.userId)).resolves.toEqual({
+          clientSecret: 'seti_open_secret',
+          setupIntentId: 'seti_open',
+          customerId: 'cus_1',
+        });
+        expect(mockStripe.setupIntents.retrieve).toHaveBeenCalledTimes(1);
+        expect(mockApplyMandateStatus).toHaveBeenCalledTimes(1);
+      });
+
+      it('G6 — ★ FAIL-SOFT PIN: the verification retrieve REJECTS ⇒ warn and proceed with the cached secret, NEVER refuse. Do not "fix" this into fail-closed', async () => {
+        mockStripe.setupIntents.create.mockResolvedValue(
+          replayedSetupIntent({ id: 'seti_open', client_secret: 'seti_open_secret' })
+        );
+        mockStripe.setupIntents.retrieve.mockRejectedValue(new Error('stripe read timed out'));
+
+        await expect(createSetupIntent('wallet_1', ACTOR.userId)).resolves.toEqual({
+          clientSecret: 'seti_open_secret',
+          setupIntentId: 'seti_open',
+          customerId: 'cus_1',
+        });
+        expect(mockApplyMandateStatus).toHaveBeenCalledTimes(1);
+        expect(mockLogWarn).toHaveBeenCalledTimes(1);
+        const [context] = mockLogWarn.mock.calls[0] as [Record<string, unknown>];
+        expect(context).toMatchObject({
+          op: 'createSetupIntent',
+          walletId: 'wallet_1',
+          stripeId: 'seti_open',
+        });
+        expect(JSON.stringify(context)).not.toContain('seti_open_secret');
+      });
     });
   });
 

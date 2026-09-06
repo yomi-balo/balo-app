@@ -2,8 +2,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
-const { mockCreateSetupIntent } = vi.hoisted(() => ({
+const { mockCreateSetupIntent, mockCheckRateLimit } = vi.hoisted(() => ({
   mockCreateSetupIntent: vi.fn(),
+  mockCheckRateLimit: vi.fn(),
 }));
 
 vi.mock('../../services/stripe/mandate.js', () => ({
@@ -14,6 +15,15 @@ vi.mock('../../services/stripe/mandate.js', () => ({
 vi.mock('../../lib/redis.js', () => ({
   getRedis: () => ({}),
   createRedisConnection: () => ({}),
+}));
+
+// BAL-527 — the route now calls `enforceMandateSetupRateLimit`, which calls `checkRateLimit`.
+// `getRedis()` above returns `{}` with no `.multi()`, so without this mock every request would
+// hit a `TypeError` inside `checkRateLimit` and 503. ⚠ SPREAD THE REAL MODULE so
+// `RATE_LIMIT_DEADLINE_MS` (a real constant `withDeadline` reads) survives the mock.
+vi.mock('../../lib/rate-limiter.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/rate-limiter.js')>()),
+  checkRateLimit: mockCheckRateLimit,
 }));
 
 vi.mock('../../lib/queue.js', () => ({
@@ -64,6 +74,7 @@ describe('POST /stripe/setup-intent', () => {
       setupIntentId: 'seti_123',
       customerId: 'cus_123',
     });
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 3600 });
   });
 
   function inject(body?: Record<string, unknown>, headers?: Record<string, string>) {
@@ -120,5 +131,58 @@ describe('POST /stripe/setup-intent', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ clientSecret: 'seti_123_secret_abc', setupIntentId: 'seti_123' });
     expect(mockCreateSetupIntent).toHaveBeenCalledWith(WALLET_ID, ACTOR_USER_ID);
+  });
+
+  // ── BAL-527 — the per-wallet rate limit (this is the redeem path the original ticket never
+  // named — O3 — so it shares the guard rather than going unmetered) ────────────────────────
+
+  it('S1 — over the limit: 429, and createSetupIntent is never called', async () => {
+    mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 31, ttlSeconds: 600 });
+
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({ error: 'rate_limited', cooldownSeconds: 600 });
+    expect(res.headers['retry-after']).toBe('600');
+    expect(mockCreateSetupIntent).not.toHaveBeenCalled();
+  });
+
+  it('S2 — 503 on a Redis failure, fails CLOSED', async () => {
+    mockCheckRateLimit.mockRejectedValue(new Error('redis unreachable'));
+
+    const res = await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'rate_limit_unavailable' });
+    expect(mockCreateSetupIntent).not.toHaveBeenCalled();
+  });
+
+  it('S3 — the bucket is keyed on walletId', async () => {
+    await inject(
+      { walletId: WALLET_ID, actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(mockCheckRateLimit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ keyPrefix: 'ratelimit:mandate-setup:wallet' }),
+      WALLET_ID
+    );
+  });
+
+  it('S4 — a malformed body burns no token', async () => {
+    const res = await inject(
+      { walletId: 'not-a-uuid', actorUserId: ACTOR_USER_ID },
+      { 'x-internal-api-key': TEST_SECRET }
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(mockCheckRateLimit).not.toHaveBeenCalled();
   });
 });
