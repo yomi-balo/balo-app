@@ -13,7 +13,7 @@ import type { DeclinableRelationshipStatus } from '@balo/shared/project-requests
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
-import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { publishNotificationEventNow } from '@/lib/notifications/publish';
 import { runAfterResponse } from '@/lib/after-response';
 import { toDeclineTrackStage } from './_shared/decline-track-stage';
 import { deadlockFailure } from './_shared/deadlock';
@@ -114,9 +114,14 @@ export async function declineTrackAction(
     // is never told their track ended — with the decline already COMMITTED, so nothing ever
     // retries it. `runAfterResponse` keeps the instance alive until the publish settles, the
     // same durability story the close cascade's fan-out uses (`_shared/close-request-fanout.ts`).
-    // It never throws to us and logs its own rejections, so no `.catch` is needed here.
+    //
+    // ONE deferral, not two: this is the visible `runAfterResponse`, so the POST inside it is
+    // the awaitable `publishNotificationEventNow`. The plain `publishNotificationEvent` would
+    // have registered a SECOND `after()` callback from inside this one — harmless (nesting is
+    // supported) but pointless indirection. Neither form ever throws to us; both log their own
+    // failures, so no `.catch` is needed here.
     runAfterResponse('track decline fan-out', async () => {
-      await publishNotificationEvent('project.track_declined', {
+      await publishNotificationEventNow('project.track_declined', {
         correlationId: result.declineAuditId,
         projectRequestId: requestId,
         relationshipId,

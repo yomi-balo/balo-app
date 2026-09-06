@@ -38,9 +38,9 @@ vi.mock('@/lib/auth/session', () => ({
   requireOnboardedUser: () => mockRequireOnboardedUser(),
 }));
 
-const mockPublish = vi.fn().mockResolvedValue(undefined);
+const mockPublishNow = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/notifications/publish', () => ({
-  publishNotificationEvent: (...a: unknown[]) => mockPublish(...a),
+  publishNotificationEventNow: (...a: unknown[]) => mockPublishNow(...a),
 }));
 
 const { runAfterResponseMock, getScheduled, resetScheduled } = vi.hoisted(() => {
@@ -93,7 +93,7 @@ function declineResult(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   resetScheduled();
-  mockPublish.mockResolvedValue(undefined);
+  mockPublishNow.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue(ADMIN);
   mockFindByIdWithRelations.mockResolvedValue(requestRow());
   mockDeclineTrack.mockResolvedValue(declineResult());
@@ -167,6 +167,9 @@ describe('declineTrackAsAdminAction', () => {
   // ── The publish is DEFERRED, not fire-and-forget (Qodo #12) ────────────────────
   // Identical reasoning to the client arm: an un-awaited promise is at-most-once on Vercel,
   // and the decline has already committed, so a dropped publish is never retried.
+  // Qodo round 3: this `runAfterResponse` is the ONLY deferral — the awaitable
+  // `publishNotificationEventNow` sits inside it, POSTing rather than registering a second
+  // `after()` callback. The pin is unchanged in force.
 
   it('REGISTERS the publish with runAfterResponse and does not run it inline', async () => {
     await declineTrackAsAdminAction(VALID_INPUT);
@@ -175,13 +178,13 @@ describe('declineTrackAsAdminAction', () => {
       'track decline fan-out',
       expect.any(Function)
     );
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockPublishNow).not.toHaveBeenCalled();
   });
 
   it('publishes project.track_declined with declinedBy: balo', async () => {
     await declineTrackAsAdminAction(VALID_INPUT);
     await getScheduled()?.();
-    expect(mockPublish).toHaveBeenCalledWith('project.track_declined', {
+    expect(mockPublishNow).toHaveBeenCalledWith('project.track_declined', {
       correlationId: 'decline-audit-1',
       projectRequestId: REQUEST_ID,
       relationshipId: RELATIONSHIP_ID,

@@ -41,9 +41,9 @@ vi.mock('@/lib/auth/session', () => ({
   requireOnboardedUser: () => mockRequireOnboardedUser(),
 }));
 
-const mockPublish = vi.fn().mockResolvedValue(undefined);
+const mockPublishNow = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/notifications/publish', () => ({
-  publishNotificationEvent: (...a: unknown[]) => mockPublish(...a),
+  publishNotificationEventNow: (...a: unknown[]) => mockPublishNow(...a),
 }));
 
 const { runAfterResponseMock, getScheduled, resetScheduled } = vi.hoisted(() => {
@@ -96,7 +96,7 @@ function declineResult(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   resetScheduled();
-  mockPublish.mockResolvedValue(undefined);
+  mockPublishNow.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue(CLIENT_USER);
   mockFindByIdWithRelations.mockResolvedValue(requestRow());
   mockGetMemberRole.mockResolvedValue('member');
@@ -178,6 +178,11 @@ describe('declineTrackAction', () => {
   // A bare un-awaited promise is at-most-once on Vercel: the action returns, the instance
   // freezes, and the expert is never told — with the decline already committed. THIS is the
   // regression the assertions below exist to prevent.
+  //
+  // Qodo round 3: the action's own `runAfterResponse` is now the ONLY deferral — inside it
+  // sits the awaitable `publishNotificationEventNow`, which POSTs rather than registering a
+  // second `after()` callback. The pin is unchanged in force: nothing hits the wire on the
+  // response path, and the deferred callback really does publish when run.
 
   it('REGISTERS the publish with runAfterResponse and does not run it inline', async () => {
     await declineTrackAction(VALID_INPUT);
@@ -186,13 +191,13 @@ describe('declineTrackAction', () => {
       'track decline fan-out',
       expect.any(Function)
     );
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockPublishNow).not.toHaveBeenCalled();
   });
 
   it('publishes project.track_declined with the audit id as correlationId', async () => {
     await declineTrackAction(VALID_INPUT);
     await getScheduled()?.();
-    expect(mockPublish).toHaveBeenCalledWith('project.track_declined', {
+    expect(mockPublishNow).toHaveBeenCalledWith('project.track_declined', {
       correlationId: 'decline-audit-1',
       projectRequestId: REQUEST_ID,
       relationshipId: RELATIONSHIP_ID,

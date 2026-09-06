@@ -13,7 +13,7 @@ import type { DeclinableRelationshipStatus } from '@balo/shared/project-requests
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
-import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { publishNotificationEventNow } from '@/lib/notifications/publish';
 import { runAfterResponse } from '@/lib/after-response';
 import { toDeclineTrackStage } from './_shared/decline-track-stage';
 import { deadlockFailure } from './_shared/deadlock';
@@ -103,9 +103,11 @@ export async function declineTrackAsAdminAction(
     // ⚠ DEFERRED, NOT FIRE-AND-FORGET (BAL-279) — identical reasoning to the client arm:
     // an un-awaited promise is at-most-once on Vercel, and the decline has already COMMITTED,
     // so a dropped publish is a permanently un-sent expert notice with nothing to retry it.
-    // `runAfterResponse` never throws to us and logs its own rejections.
+    // ONE deferral, not two: this `runAfterResponse` is the deferral, so the POST inside it is
+    // the awaitable `publishNotificationEventNow` rather than the self-deferring wrapper.
+    // Neither ever throws to us; both log their own failures, so no `.catch` is needed here.
     runAfterResponse('track decline fan-out', async () => {
-      await publishNotificationEvent('project.track_declined', {
+      await publishNotificationEventNow('project.track_declined', {
         correlationId: result.declineAuditId,
         projectRequestId: requestId,
         relationshipId,

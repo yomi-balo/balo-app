@@ -41,11 +41,25 @@ vi.mock('@/lib/meetings/cancelled-teardown-api-client', () => ({
   postCancelledTeardown: (...args: unknown[]) => mockPostCancelledTeardown(...args),
 }));
 
-const mockPublish = vi.fn().mockImplementation(async () => {
+/**
+ * ⚠ THE ORDER MARK IS RECORDED BEHIND A REAL ASYNC GAP, DELIBERATELY — and the module mock
+ * exposes ONLY `publishNotificationEventNow`.
+ *
+ * Two regressions this shape catches that a synchronous mark would not:
+ *  1. Dropping the `await` on the publish. An async function body runs up to its first
+ *     `await` synchronously, so a mock that marked synchronously would keep the ordering pin
+ *     green even fire-and-forget.
+ *  2. Swapping back to the self-deferring `publishNotificationEvent` wrapper — which resolves
+ *     as soon as the POST is REGISTERED, so awaiting it orders the registration, not the
+ *     request. That export is absent here, so the swap fails loudly rather than silently.
+ */
+const publishOrderMark = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
   callOrder.push('publish');
-});
+};
+const mockPublishNow = vi.fn().mockImplementation(publishOrderMark);
 vi.mock('@/lib/notifications/publish', () => ({
-  publishNotificationEvent: (...args: unknown[]) => mockPublish(...args),
+  publishNotificationEventNow: (...args: unknown[]) => mockPublishNow(...args),
 }));
 
 import { runCloseRequestFanout } from './close-request-fanout';
@@ -79,9 +93,7 @@ beforeEach(() => {
   mockPostCancelledTeardown.mockImplementation(async () => {
     callOrder.push('teardown');
   });
-  mockPublish.mockImplementation(async () => {
-    callOrder.push('publish');
-  });
+  mockPublishNow.mockImplementation(publishOrderMark);
 });
 
 describe('runCloseRequestFanout', () => {
@@ -90,7 +102,7 @@ describe('runCloseRequestFanout', () => {
 
     expect(runAfterResponseMock).toHaveBeenCalledWith('close fan-out', expect.any(Function));
     expect(mockPostCancelledTeardown).not.toHaveBeenCalled();
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockPublishNow).not.toHaveBeenCalled();
   });
 
   it('tears down every cancelled meeting, mapped to {meetingId, expertProfileId}', async () => {
@@ -128,7 +140,7 @@ describe('runCloseRequestFanout', () => {
     await getScheduled()?.();
 
     expect(mockFindUserIdsByProfileIds).not.toHaveBeenCalled();
-    expect(mockPublish).toHaveBeenCalledWith('project.request_closed', {
+    expect(mockPublishNow).toHaveBeenCalledWith('project.request_closed', {
       correlationId: 'audit-1',
       projectRequestId: 'request-1',
       title: 'CPQ implementation',
@@ -144,14 +156,17 @@ describe('runCloseRequestFanout', () => {
     runCloseRequestFanout(result, BASE_CONTEXT);
     await getScheduled()?.();
 
-    const [, payload] = mockPublish.mock.calls[0] as [string, { recipientUserIds: string[] }];
+    const [, payload] = mockPublishNow.mock.calls[0] as [string, { recipientUserIds: string[] }];
     expect(payload.recipientUserIds).toEqual(['user-1']);
     expect(payload.recipientUserIds).not.toBe(result.declinedTrackUserIds);
   });
 
-  // ── Ordering: humans before janitorial vendor calls (Qodo round 2) ───────────────────
+  // ── Ordering: humans before janitorial vendor calls (Qodo round 2 / round 3) ─────────
+  // Round 3: the publish must SETTLE first, not merely be started first. The mock marks the
+  // order behind a real async gap, so this goes red if the `await` is dropped or the eagerly
+  // resolving `publishNotificationEvent` wrapper is used in place of the `Now` form.
 
-  it('publishes BEFORE the teardown, so a freeze cannot swallow the telling first', async () => {
+  it('AWAITS the publish to completion before the teardown starts', async () => {
     runCloseRequestFanout(
       closeResult({
         declinedTrackUserIds: ['user-1'],
@@ -170,7 +185,7 @@ describe('runCloseRequestFanout', () => {
     runCloseRequestFanout(closeResult({ declinedTrackUserIds: ['user-1'] }), BASE_CONTEXT);
     await getScheduled()?.();
 
-    const [, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
+    const [, payload] = mockPublishNow.mock.calls[0] as [string, Record<string, unknown>];
     expect(payload.recipientId).toBeUndefined();
   });
 
@@ -178,7 +193,7 @@ describe('runCloseRequestFanout', () => {
     runCloseRequestFanout(closeResult(), { ...BASE_CONTEXT, closedBy: 'balo', reason: 'unfilled' });
     await getScheduled()?.();
 
-    expect(mockPublish).toHaveBeenCalledWith('project.request_closed', {
+    expect(mockPublishNow).toHaveBeenCalledWith('project.request_closed', {
       correlationId: 'audit-1',
       projectRequestId: 'request-1',
       title: 'CPQ implementation',
@@ -194,7 +209,7 @@ describe('runCloseRequestFanout', () => {
     runCloseRequestFanout(closeResult(), BASE_CONTEXT);
     await getScheduled()?.();
 
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockPublishNow).not.toHaveBeenCalled();
     // ⚠ THE SKIP IS A CONDITION, NOT AN EARLY `return`: the teardown still runs. Turning it
     // back into a `return` above the publish would strand every cancelled Daily room.
     expect(mockPostCancelledTeardown).toHaveBeenCalledWith([]);

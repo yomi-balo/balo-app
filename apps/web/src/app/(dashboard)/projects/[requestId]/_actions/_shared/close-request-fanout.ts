@@ -3,7 +3,7 @@ import 'server-only';
 import type { CloseRequestResult } from '@balo/db';
 import type { ProjectRequestCloseReason } from '@balo/shared/project-requests';
 import { runAfterResponse } from '@/lib/after-response';
-import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { publishNotificationEventNow } from '@/lib/notifications/publish';
 import { postCancelledTeardown } from '@/lib/meetings/cancelled-teardown-api-client';
 
 /**
@@ -37,11 +37,22 @@ export function runCloseRequestFanout(
   context: CloseRequestFanoutContext
 ): void {
   runAfterResponse('close fan-out', async () => {
-    // ⚠ THE TELLING GOES FIRST, THE JANITORIAL VENDOR CALLS SECOND. Both halves run in the
-    // same deferred callback, so whichever is first is the one a freeze cannot swallow —
-    // and the people on those tracks matter more than a Daily room that a lifecycle sweep
-    // will reap anyway. `postCancelledTeardown` never throws (it logs and swallows), so
-    // this ordering costs the teardown nothing.
+    // ⚠ THE TELLING GOES FIRST, THE JANITORIAL VENDOR CALLS SECOND — and it is the awaitable
+    // `publishNotificationEventNow` precisely so that ordering is REAL. The plain
+    // `publishNotificationEvent` only REGISTERS its POST with `runAfterResponse` and resolves
+    // eagerly, so awaiting it here would have ordered the registration, not the request: the
+    // POST would then have run after this whole callback, i.e. after the teardown. The `Now`
+    // form performs the fetch inline, so it genuinely settles before the teardown starts. We
+    // are already inside the deferred callback, which is the only place `Now` belongs.
+    //
+    // Why the telling first: people on those tracks matter more than a Daily room a lifecycle
+    // sweep will reap anyway. Neither half throws (both log and swallow), so the ordering
+    // costs the teardown nothing.
+    //
+    // Residual, stated honestly: this buys ORDER, not durability. `after()` is best-effort —
+    // a hard kill (OOM / max-duration / eviction) still drops whatever has not run, with no
+    // retry (BAL-279's documented caveat). A transactional outbox is the target; nothing here
+    // is claimed to survive that.
     //
     // Edge case 1 (decisions-bal-540.md, Observability) — a close with zero live tracks
     // resolves nobody to tell, so the publish is SKIPPED rather than sent empty, UNLESS
@@ -53,7 +64,7 @@ export function runCloseRequestFanout(
     // what makes the empty list on the Balo arm a valid, meaningful payload rather than a
     // schema violation.
     if (result.declinedTrackUserIds.length > 0 || context.closedBy === 'balo') {
-      await publishNotificationEvent('project.request_closed', {
+      await publishNotificationEventNow('project.request_closed', {
         correlationId: result.closeAuditId,
         projectRequestId: result.request.id,
         title: context.title,
