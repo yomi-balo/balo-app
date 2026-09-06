@@ -10,9 +10,12 @@ import {
   Search,
   CalendarDays,
   LifeBuoy,
+  Briefcase,
+  Zap,
+  Layers,
 } from 'lucide-react';
 import type { Workspace } from '@balo/shared/workspaces';
-import { CAPABILITIES } from '@balo/shared/authz';
+import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import type { NavItemKey } from '@/lib/analytics'; // TYPE-ONLY — erased; no posthog-js at runtime
 
 /**
@@ -28,8 +31,16 @@ import type { NavItemKey } from '@/lib/analytics'; // TYPE-ONLY — erased; no p
 /** ADR-1053 workspace the actor is acting AS. The nav SCOPING axis — never an authz input. */
 export type NavWorkspaceType = Workspace['type']; // 'company' | 'expert'
 
-/** Which of the sidebar's two `<Separator/>`-delimited groups an entry renders in. */
-export type NavSection = 'primary' | 'secondary';
+/**
+ * Which of the sidebar's `<Separator/>`-delimited groups an entry renders in.
+ *
+ * ⚠ THREE, NOT TWO (BAL-534). `'admin'` is the staff-only "Balo admin" group: it renders ONLY
+ * when `resolveNavItems(context, 'admin')` is non-empty, which requires the
+ * `VIEW_PLATFORM_ADMIN` token in `NavContext.capabilities`. `resolveMobileNav` below MUST
+ * concatenate it too — miss that and every admin entry is silently invisible to the bottom
+ * tabs and the More sheet with nothing failing.
+ */
+export type NavSection = 'primary' | 'secondary' | 'admin';
 
 /** BAL-501 consumes this blind: 'tab' → bottom tab bar, 'more' → the More sheet. Inert here. */
 export type NavMobilePriority = 'tab' | 'more';
@@ -46,8 +57,23 @@ export type NavBadgeSource = 'expertChecklist';
  * hidden-action bug for a future Billing entry, reachable from every client component under the
  * shell via `useSidebarOptional()`. Add a token here ONLY when `nav-context.ts` actually resolves
  * it.
+ *
+ * ⚠ TWO AXES IN ONE ARRAY, DELIBERATELY (BAL-534). `MANAGE_MEMBERS` is a MEMBERSHIP token and
+ * `VIEW_PLATFORM_ADMIN` is a PLATFORM token (ADR-1035). Mixing them here is acceptable ONLY
+ * because this array is the nav-scoped UX grant set described below — never an authorization
+ * source — and because each token is still resolved by its OWN axis's predicate in
+ * `nav-context.ts` (`roleHasCapability` / `platformRoleHasCapability`), and every gated surface
+ * hard-gates server-side. ADR-1035 bans overloading `hasCapability` with a platform scope; that
+ * is a different thing and we are not doing it.
+ *
+ * ⚠ Scan A (`invariants/nav-registry-capability-gated.test.ts:53-63`) bans the token
+ * `platformRole` in this file. `PLATFORM_CAPABILITIES` / `VIEW_PLATFORM_ADMIN` do not
+ * contain it. Its `namedImportsFrom(source, '@balo/shared/authz')` assertion is
+ * `arrayContaining(['CAPABILITIES'])`, so adding a second specifier is safe.
  */
-export type NavCapability = typeof CAPABILITIES.MANAGE_MEMBERS;
+export type NavCapability =
+  | typeof CAPABILITIES.MANAGE_MEMBERS
+  | typeof PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN;
 
 export interface NavContext {
   readonly workspaceType: NavWorkspaceType;
@@ -274,7 +300,60 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     mobilePriority: 'more',
     enabled: false,
   },
+
+  // ── Balo admin (staff-only) section ───────────────────────────────────────────────────────
+  // BAL-534 / ADR-1053 Amendment 1. Authored as a THIRD BLOCK AT THE END, after `secondary`:
+  // `resolveMobileNav` concatenates primary → secondary → admin and calls that "registry
+  // order", and `nav-registry.test.ts` pins the three-block authoring order that makes it true.
+  //
+  // All three are `mobilePriority: 'more'` — the tab bar already fills to MOBILE_TAB_LIMIT for
+  // BOTH workspace types, so no admin item could reach it anyway.
+  //
+  // ⚠ NO `Projects → /projects?lens=admin` ROW (orchestrator D5). `defaultLensFor` already
+  // lands a platform admin on the admin lens from the bare `/projects` the existing primary
+  // entry links to, and `usePathname()` never carries a query string, so a query-string href
+  // can never render active. Its entry point is row 1 of `/admin/catalogue`.
+  //
+  // ⚠ `workspaceTypes: ['company', 'expert']` — staff may be in EITHER workspace (AC).
+  // ⚠ No `jumpOut` — all three targets live inside the `(dashboard)` route group.
+  {
+    key: 'admin_engagements',
+    label: 'Engagements',
+    icon: Briefcase,
+    href: '/engagements',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
+  {
+    key: 'admin_promo_codes',
+    label: 'Promo codes',
+    icon: Zap,
+    href: '/promo-codes',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
+  {
+    key: 'admin_catalogue',
+    label: 'Config & catalogue',
+    icon: Layers,
+    href: '/admin/catalogue',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
 ];
+
+// ⚠ The nav entries above are gated on `VIEW_PLATFORM_ADMIN`, **not** on each destination's own
+// token. `/promo-codes` keeps its `isPlatformAdmin → notFound()` page gate untouched (out of
+// scope). Per-item nav tokens are the D5 bundle split — do not pre-empt.
 
 /**
  * A REAL type guard — `entry.enabled === true` is verified by the compiler against
@@ -331,11 +410,12 @@ export function splitMobileNav(
 }
 
 function resolveMobileNav(context: NavContext): MobileNavSplit {
-  // `NAV_ENTRIES` is authored primary-block-then-secondary-block, so this concatenation IS
-  // registry order. Pinned by test.
+  // `NAV_ENTRIES` is authored primary-block, then secondary-block, then admin-block, so this
+  // concatenation IS registry order. Pinned by test.
   return splitMobileNav([
     ...resolveNavItems(context, 'primary'),
     ...resolveNavItems(context, 'secondary'),
+    ...resolveNavItems(context, 'admin'),
   ]);
 }
 
@@ -365,11 +445,14 @@ export interface NavCrumb {
  * NOT nav entries (adding them would ship unwanted sidebar/bottom-tab/⌘K items — `NAV_ENTRIES`
  * drives all three surfaces). Kept HERE rather than in the breadcrumb component so `NAV_ENTRIES`
  * still has exactly one consumer (Scan C), and so route labels have ONE home.
+ *
+ * ⚠ BAL-534 REMOVED `/engagements` and `/promo-codes` from this table. They are now enabled
+ * registry hrefs (the staff-only `admin` section), so `exactCrumbLabelFor` matches `NAV_ENTRIES`
+ * first and these rows were dead. Both labels are unchanged, and breadcrumb resolution reads no
+ * capability and no actor, so no viewer's crumbs changed.
  */
 const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
   '/billing/top-up': 'Top up',
-  '/engagements': 'Engagements',
-  '/promo-codes': 'Promo codes',
   '/redeem': 'Redeem a code',
   // BAL-503 — the three NEW Settings sections. `/settings` itself and `/settings/team` are both
   // enabled registry hrefs, so `exactCrumbLabelFor` matches them first and they need no row here.

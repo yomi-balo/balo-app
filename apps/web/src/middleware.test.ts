@@ -250,6 +250,17 @@ describe('middleware — admin routes', () => {
     mockRefreshSessionIfNeeded.mockResolvedValue(null);
     await expectRedirectTo('/admin/users', '/dashboard');
   });
+
+  it('allows admin to access /admin/catalogue (the shipped admin page)', async () => {
+    setupAuthenticatedSession({ platformRole: 'admin' });
+    const res = await middleware(createRequest('/admin/catalogue'));
+    expect(res.status).toBe(200);
+  });
+
+  it('redirects a non-staff user from /admin/catalogue to /dashboard', async () => {
+    setupAuthenticatedSession({ platformRole: 'user' });
+    await expectRedirectTo('/admin/catalogue', '/dashboard');
+  });
 });
 
 describe('middleware — onboarding', () => {

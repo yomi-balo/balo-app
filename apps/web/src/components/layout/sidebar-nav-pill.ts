@@ -31,7 +31,8 @@ export interface SidebarNavPillState {
 }
 
 /**
- * Resolves the sliding pill's position within ONE section (primary or secondary).
+ * Resolves the sliding pill's position within ONE section (primary, secondary, or admin —
+ * BAL-534's third).
  *
  * Why longest-match, not `findIndex`: `isNavItemActive` is a prefix-with-separator rule, so a
  * pathname like `/settings/account` can match BOTH `/settings` and `/settings/account` at once.

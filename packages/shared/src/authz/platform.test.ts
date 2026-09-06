@@ -99,6 +99,14 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
   it('bundle includes CLOSE_ANY_REQUEST for the staff roles', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST);
   });
+
+  it('maps VIEW_PLATFORM_ADMIN to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN).toBe('view_platform_admin');
+  });
+
+  it('bundle includes VIEW_PLATFORM_ADMIN for the staff roles', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN);
+  });
 });
 
 /**
@@ -112,5 +120,37 @@ describe('platformRoleHasCapability — CLOSE_ANY_REQUEST', () => {
 
   it.each(['user', '', 'owner', 'member', 'expert'])('denies CLOSE_ANY_REQUEST to %s', (role) => {
     expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST)).toBe(false);
+  });
+});
+
+/**
+ * BAL-534 / ADR-1053 Amendment 1 — the "see the Balo admin surfaces at all" token. Same
+ * allow/deny table as its siblings.
+ */
+describe('platformRoleHasCapability — VIEW_PLATFORM_ADMIN', () => {
+  it.each(['admin', 'super_admin'])('grants VIEW_PLATFORM_ADMIN to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])('denies VIEW_PLATFORM_ADMIN to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)).toBe(false);
+  });
+});
+
+/**
+ * BAL-534 fix round F1/F4 (SEC LOW) — `PLATFORM_ROLE_CAPABILITIES[role]` is a bare index into a
+ * plain object literal, which also resolves INHERITED members. A role of `constructor` /
+ * `__proto__` / `toString` must still deny every capability rather than returning an inherited
+ * function/object and throwing out of `.includes`.
+ */
+describe('platformRoleHasCapability — prototype-chain role names', () => {
+  const pollutingRoles = ['constructor', '__proto__', 'toString'];
+  const everyCapability = Object.values(PLATFORM_CAPABILITIES);
+
+  it.each(pollutingRoles)('denies every capability for role %s, without throwing', (role) => {
+    for (const capability of everyCapability) {
+      expect(() => platformRoleHasCapability(role, capability)).not.toThrow();
+      expect(platformRoleHasCapability(role, capability)).toBe(false);
+    }
   });
 });

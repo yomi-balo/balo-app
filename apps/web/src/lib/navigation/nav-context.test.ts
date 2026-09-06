@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CAPABILITIES, rolesWithCapability } from '@balo/shared/authz';
+import { CAPABILITIES, PLATFORM_CAPABILITIES, rolesWithCapability } from '@balo/shared/authz';
 import type { SessionUser } from '@/lib/auth/session';
 
 vi.mock('@balo/db', () => ({
@@ -72,12 +72,51 @@ describe('buildNavContext (BAL-347 → BAL-495 equivalence)', () => {
     expect(context.capabilities).toEqual([CAPABILITIES.MANAGE_MEMBERS]);
   });
 
-  it('findById throws → warns with the exact preserved message and returns no capabilities', async () => {
+  it('findById throws → warns with the exact preserved message and contributes no MEMBERSHIP capability', async () => {
     findById.mockRejectedValueOnce(new Error('db unreachable'));
     const user = makeUser({ companyRole: 'owner' });
     const context = await buildNavContext(user);
 
     expect(context.capabilities).toEqual([]);
+    expect(log.warn).toHaveBeenCalledWith('Failed to resolve company for nav gating', {
+      userId: user.id,
+      error: 'db unreachable',
+    });
+  });
+
+  it('BAL-534: a staff plain member of a personal company still gets the platform token', async () => {
+    const context = await buildNavContext(makeUser({ platformRole: 'super_admin' }));
+    expect(context.capabilities).toEqual([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
+    expect(findById).not.toHaveBeenCalled(); // the membership branch short-circuits before the read
+  });
+
+  it('BAL-534: platformRole "admin" grants the token too', async () => {
+    const context = await buildNavContext(makeUser({ platformRole: 'admin' }));
+    expect(context.capabilities).toEqual([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
+  });
+
+  it('BAL-534: a non-staff owner of a real company gets manage_members and NOT the platform token', async () => {
+    findById.mockResolvedValueOnce({ id: 'company_1', isPersonal: false } as never);
+    const context = await buildNavContext(makeUser({ companyRole: 'owner', platformRole: 'user' }));
+    expect(context.capabilities).toEqual([CAPABILITIES.MANAGE_MEMBERS]);
+  });
+
+  it('BAL-534: a staff owner of a real company gets BOTH, membership first', async () => {
+    findById.mockResolvedValueOnce({ id: 'company_1', isPersonal: false } as never);
+    const context = await buildNavContext(
+      makeUser({ companyRole: 'owner', platformRole: 'admin' })
+    );
+    expect(context.capabilities).toEqual([
+      CAPABILITIES.MANAGE_MEMBERS,
+      PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
+    ]);
+  });
+
+  it('BAL-534: the company read throwing does NOT discard the already-resolved platform token', async () => {
+    findById.mockRejectedValueOnce(new Error('db unreachable'));
+    const user = makeUser({ companyRole: 'owner', platformRole: 'super_admin' });
+    const context = await buildNavContext(user);
+    expect(context.capabilities).toEqual([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
     expect(log.warn).toHaveBeenCalledWith('Failed to resolve company for nav gating', {
       userId: user.id,
       error: 'db unreachable',

@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { PanelLeftClose, PanelLeft } from 'lucide-react';
+import { PanelLeftClose, PanelLeft, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.Element {
@@ -31,6 +31,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
 
   const primaryItems = resolveNavItems(navContext, 'primary');
   const secondaryItems = resolveNavItems(navContext, 'secondary');
+  const adminItems = resolveNavItems(navContext, 'admin');
   const trackNavItem = useNavItemTracking('sidebar', navContext.workspaceType);
   const badgeCounts: NavBadgeCounts = { checklistCompletedCount, checklistAllComplete };
   // D10 + D11: the Logo yields the collapsed rail TO the switcher — but only when there IS one.
@@ -108,6 +109,50 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
           </SidebarNavSection>
         </TooltipProvider>
       </div>
+
+      {/* BAL-534 / ADR-1053 Amendment 1 — the staff-only "Balo admin" group. THE SIDEBAR'S ONLY
+          LABELLED GROUP: `primary` and `secondary` stay heading-less exactly as today, and this
+          label is the design reference's shield + uppercase accent
+          (`admin-home.jsx:2960-2977`) — new chrome, not a reuse.
+          ⚠ RENDERED ONLY WHEN NON-EMPTY. `resolveNavItems` returns `[]` for every non-staff
+          context, and an always-mounted group would add a bare heading, an empty pill and a
+          third `<Separator/>` to every member's sidebar.
+          ⚠ A `<div>`, NOT a second `<nav>` — `sidebar.test.tsx` resolves the primary nav with
+          `getByRole('navigation')`, which must stay unambiguous. The bottom section is a
+          `<div>` for the same reason. */}
+      {adminItems.length > 0 && (
+        <>
+          <Separator className="bg-sidebar-border" />
+          <div className="p-3" data-testid="sidebar-admin-group">
+            <div
+              className={cn(
+                'flex items-center gap-1.5 px-3 pb-2',
+                isCollapsed && 'justify-center px-0'
+              )}
+            >
+              <Shield className="text-primary size-3 shrink-0" aria-hidden="true" />
+              <span
+                aria-hidden={isCollapsed || undefined}
+                className={cn(
+                  'text-primary overflow-hidden text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap uppercase',
+                  'transition-[max-width,opacity]',
+                  '[transition-duration:.22s,.16s]',
+                  '[transition-timing-function:cubic-bezier(.4,0,.2,1),ease]',
+                  'motion-reduce:transition-none',
+                  isCollapsed ? 'max-w-0 opacity-0' : 'max-w-[150px] opacity-100'
+                )}
+              >
+                Balo admin
+              </span>
+            </div>
+            <TooltipProvider delayDuration={0}>
+              <SidebarNavSection section="admin" hrefs={adminItems.map((entry) => entry.href)}>
+                {adminItems.map((entry) => renderLink(entry, true))}
+              </SidebarNavSection>
+            </TooltipProvider>
+          </div>
+        </>
+      )}
 
       <Separator className="bg-sidebar-border" />
 
