@@ -358,7 +358,19 @@ export async function attachPaymentMethod(
  * BAL-527 — the SERVER-DERIVED Stripe idempotency key for `createSetupIntent`'s
  * `setupIntents.create`. Bounds an Add/Cancel loop (or a StrictMode double-mount, or a
  * production retry) to exactly ONE SetupIntent per wallet within Stripe's 24h idempotency
- * window, no matter how many times the caller presses.
+ * window.
+ *
+ * ⚠ FIX ROUND 2 (review) — NAME WHICH PRESSES THAT BOUND COVERS. It previously read "no matter
+ * how many times the caller presses", which is too strong. The one-object-per-24h bound holds
+ * for presses that do NOT COMPLETE A CAPTURE. A completed capture ROTATES this key BY DESIGN —
+ * `applyMandate` writes `pm` + `cardUpdatedAt`, and a following Remove (`clearSavedCard`) writes
+ * `pm = null` and stamps `cardUpdatedAt` again — and that rotation is precisely what makes
+ * Change and re-Add work at all (the non-reversion argument below is the same fact stated from
+ * the other side). So a complete → Remove → re-Add cycle mints a FRESH SetupIntent every cycle;
+ * this key does not bound that, and is not meant to. What bounds it is the 30/hour/wallet
+ * ceiling (`lib/setup-intent-rate-limit.ts`) plus the fact that each cycle costs a real card
+ * confirmation by a real human. The two controls cover different presses; neither substitutes
+ * for the other.
  *
  * ⚠ FIX ROUND (review) — THE CUSTOMER BOUND IS NOT THIS KEY'S, DO NOT CREDIT IT HERE. An
  * Add/Cancel loop also mints only one Stripe Customer, but that comes from the PRE-EXISTING
@@ -394,11 +406,21 @@ export async function attachPaymentMethod(
  * **Non-reversion — why `cardGeneration` is `cardUpdatedAt`, not a timestamp derivation.** The
  * key must never return to a value under which an intent was already created that is now in a
  * status OTHER THAN `requires_payment_method`. Stripe replays the original response for 24h, and
- * `requires_payment_method` is the ONLY status a replayed intent can still take a fresh card in
- * (pre-flight M2): a `succeeded` one is finished, and a `requires_action` one already has a
- * PaymentMethod attached. Either way the browser's `confirmSetup` dies with
- * `setup_intent_unexpected_state` — which is why `createSetupIntent` below now REFUSES any
- * replayed status but `requires_payment_method` rather than handing the secret back.
+ * `requires_payment_method` is the ONLY status in which the LIVE intent behind such a replay can
+ * still take a fresh card (pre-flight M2): a `succeeded` one is finished, and a `requires_action`
+ * one already has a PaymentMethod attached. Either way the browser's `confirmSetup` dies with
+ * `setup_intent_unexpected_state` — which is why `createSetupIntent` below DETECTS a replay from
+ * the response HEADER and refuses on the RETRIEVED status.
+ *
+ * ⚠ FIX ROUND 2 — IT CANNOT REFUSE ON THE STATUS IN THE REPLAYED BODY, AND THE GUARD THAT TRIED
+ * TO WAS DEAD CODE. Stripe's idempotency layer saves "the resulting status code and body of the
+ * first request" and returns that verbatim on every subsequent request with the same key
+ * (docs.stripe.com/api/idempotent_requests). A create carrying no `payment_method` and no
+ * `confirm` is ALWAYS BORN `requires_payment_method` — so the replayed body says
+ * `requires_payment_method` for the whole 24h, whatever the live object has become, and a status
+ * check on the create response is blind BY CONSTRUCTION. Detection is the `Idempotent-Replayed`
+ * header; verification is a bounded fail-soft `setupIntents.retrieve`; refusal acts on the
+ * RETRIEVED status. See the guard in `createSetupIntent` below.
  *
  * A `pm`-only key (`{walletId}:{customerId}:{pm}`) FAILS THIS: `clearSavedCard`
  * (`credit-wallets.ts:839-853`) sets `stripePaymentMethodId` back to `null` on card removal, so
@@ -449,8 +471,9 @@ export async function attachPaymentMethod(
  *
  * **Concurrency (a load-bearing dependency, not a defect).** A stable key means two genuinely
  * concurrent presses (React StrictMode's double-invoke in `next dev`, or a real double-click) can
- * make Stripe answer the second with `409 idempotency_error` ("another in-progress request using
- * this Idempotency Key"). `getStripeClient`'s `maxNetworkRetries: 2` is what makes this converge
+ * make Stripe answer the second with a `409` ("another in-progress request using this
+ * Idempotency Key" — error TYPE `idempotency_error`, error CODE `idempotency_key_in_use`; the
+ * SDK's retry branch keys on the 409 alone, see `lib/stripe.ts`). `getStripeClient`'s `maxNetworkRetries: 2` is what makes this converge
  * instead of surfacing an error — see that function's docblock. If both retries are exhausted
  * (the sibling request took longer than ~1.5s), the `409` propagates to this function's own catch
  * below and the route 500s with the existing generic retryable message — no new branch, the same
@@ -464,13 +487,16 @@ export async function attachPaymentMethod(
  * (`payment-method-manager.tsx`'s `enterSyncing()`); the failure is a retryable message with NO
  * charge, mandate, or ledger effect; and the alternative (a status-check escape hatch that walks
  * a generation chain) is heavy, hard to test, and bought against a window whose UI is already
- * waiting. As of the fix round the symptom is a LOUD, logged refusal from the guard in
- * `createSetupIntent` below rather than a `setup_intent_unexpected_state` raised in the browser
- * with nothing on our side; the message the user sees is the same generic retryable one.
+ * waiting. As of fix round 2 the symptom is a LOUD, logged refusal from the header-gated guard
+ * in `createSetupIntent` below — whenever its verification read succeeds — rather than a
+ * `setup_intent_unexpected_state` raised in the browser with nothing on our side; the message the
+ * user sees is the same generic retryable one. When that read fails the guard fail-softs back to
+ * the old silent-browser symptom on purpose (see the guard for why that trade is the right one).
  *
- * ⚠ FIX ROUND (review + security) — TWO FURTHER WAYS THE KEY FREEZES, AND NEITHER SELF-HEALS.
- * The residuals above (the fail-soft display read, the lag race) are not the whole list, and
- * unlike them these two have no healing mechanism of their own:
+ * ⚠ FIX ROUND (review + security; a THIRD case added in fix round 2) — THREE FURTHER WAYS THE
+ * KEY FREEZES, AND NONE SELF-HEALS. The residuals above (the fail-soft display read, the lag
+ * race) are not the whole list, and unlike them these three have no healing mechanism of their
+ * own. ALL THREE ARE BAL-543's, not this PR's:
  *
  *  1. **`succeeded` and the webhook NEVER lands.** `applyMandate` is the only writer that reacts
  *     to THIS intent succeeding — the other writers of `pm` / `cardUpdatedAt`
@@ -483,9 +509,20 @@ export async function attachPaymentMethod(
  *     fires for an intent nobody completed, so again neither component moves. Nothing at all
  *     ends this one except the 24h idempotency window.
  *
- * In both, every later press replays an intent that can no longer take a card. The
- * `requires_payment_method` guard in `createSetupIntent` makes that a loud, logged refusal — it
- * does NOT restore card capture; see that function's docblock for the deferred follow-up.
+ *  3. **A CACHED `500`.** ⚠ FIX ROUND 2 (Qodo finding 7, verified). Stripe's idempotency layer
+ *     caches the result of POST mutations that end in a SERVER error too — "specifically 500s …
+ *     retrying them with the same idempotency key usually produces the same result"
+ *     (docs.stripe.com/error-low-level#server-errors). A create that 500s therefore freezes this
+ *     key on a FAILURE for the rest of the 24h window, and every later press re-raises it.
+ *     ⚠ NOTHING IS BUILT ON THIS CASE AND NOTHING SHOULD BE: the `Idempotent-Replayed` header
+ *     the guard below keys on is documented for replayed RESPONSES, not for error replays, so a
+ *     cached 500 arrives as an ordinary Stripe fault and takes `createSetupIntent`'s ordinary
+ *     catch. Do not add a header branch for it — recovery is BAL-543's.
+ *
+ * In all three, every later press re-serves a first response that can no longer yield a usable
+ * card-entry surface. The header-gated guard in `createSetupIntent` makes cases 1 and 2 a loud,
+ * logged refusal (case 3 was always loud — it IS an error) — it does NOT restore card capture.
+ * Restoring it is BAL-543; see that function's docblock.
  */
 function buildSetupIntentIdempotencyKey(
   walletId: string,
@@ -497,6 +534,14 @@ function buildSetupIntentIdempotencyKey(
     wallet.cardUpdatedAt === null ? 'none' : String(wallet.cardUpdatedAt.getTime());
   return `mandate-setup:${walletId}:${customerId}:${paymentMethod}:${cardGeneration}`;
 }
+
+/** ⚠ FIX ROUND 2 — PER-REQUEST OPTIONS FOR THE REPLAY VERIFICATION READ, DELIBERATE, DO NOT
+ *  DROP. Same rationale as `SYNC_REQUEST_OPTIONS` above, on a different path: `getStripeClient`
+ *  sets no `timeout`, so an unbounded verification read would inherit stripe-node's 80 s default
+ *  and, with the client's `maxNetworkRetries: 2`, could stall CAPTURE START — the press that
+ *  opens the card panel — for ~240 s. The read is FAIL-SOFT (a failure proceeds with the cached
+ *  response), so a fast failure is strictly better than a slow success: 5 s, no retries. */
+const VERIFY_REQUEST_OPTIONS: Stripe.RequestOptions = { timeout: 5000, maxNetworkRetries: 0 };
 
 /**
  * Create an `off_session` SetupIntent for a REUSABLE mandate (skill Mandate step 2).
@@ -513,26 +558,38 @@ function buildSetupIntentIdempotencyKey(
  * BAL-527 — the `setupIntents.create` call below is now KEYED (`buildSetupIntentIdempotencyKey`
  * above carries the full shape, determinism proof, non-reversion argument, and the residuals this
  * does not fix — read it before touching either the key or the create body). This bounds
- * SetupIntent creation to one per wallet per 24h (the one-Customer bound is the older
- * `stripe-customer-{walletId}` key's, not this one's); it does NOT bound the HTTP call itself —
+ * SetupIntent creation to one per wallet per 24h FOR PRESSES THAT DO NOT COMPLETE A CAPTURE — a
+ * complete → Remove → re-Add cycle rotates the key by design and mints a fresh intent per cycle
+ * (the key's docblock states the qualifier in full). The one-Customer bound is the older
+ * `stripe-customer-{walletId}` key's, not this one's. Neither key bounds the HTTP call itself —
  * `ensureCustomer`'s `customers.update` sync is a real, unkeyed Stripe write on every request
  * regardless. `enforceMandateSetupRateLimit` (every route that reaches this function) is what
  * bounds the call volume; the two controls are not substitutes for each other.
  *
- * ⚠ FIX ROUND (security MEDIUM + review) — A REPLAYED INTENT IS NOW REFUSED, NOT RETURNED. See
- * the guard below. A stable key means a later press can be answered with a 24h-old intent that
+ * ⚠ FIX ROUND 2 (Qodo, confirmed) — A REPLAYED INTENT IS DETECTED BY HEADER AND REFUSED ON A
+ * VERIFIED STATUS. A stable key means a later press can be answered with a 24h-old intent that
  * has moved past the point where a fresh card can be entered; handing that `client_secret` back
- * would surface `setup_intent_unexpected_state` in the browser with nothing in our logs. The
- * guard turns it into a logged server-side failure carrying the intent id and status.
+ * surfaces `setup_intent_unexpected_state` in the browser with nothing in our logs. The previous
+ * round's guard tried to spot that by reading `status` off the CREATE response and could never
+ * fire — the replayed body always carries the intent's BIRTH status. The working guard below
+ * reads the `Idempotent-Replayed` response header, confirms with a bounded fail-soft
+ * `setupIntents.retrieve`, and refuses on the RETRIEVED status.
+ *
+ * ⚠ THE VERIFICATION READ IS FAIL-SOFT, DELIBERATELY. The overwhelmingly common replay is
+ * legitimate (StrictMode double-mount, double-click, retried action) and must not be blocked by
+ * a transient read failure; on a failed read we warn and proceed with the cached response, which
+ * in the rare frozen case degrades to exactly the pre-existing silent browser failure — no worse
+ * than before, strictly better in the common case. Do not "fix" this into fail-closed: it is
+ * pinned by a test.
  *
  * ⚠ IT FAILS LOUDLY; IT DOES NOT RESTORE FUNCTION, AND THAT IS ACCEPTED FOR THIS PR. While the
  * wallet is stuck, card capture stays unavailable until the webhook lands or the 24h idempotency
  * window lapses — and card capture is the only in-product remediation for a client with an open
- * receivable (`SETTLEMENT_OUTSTANDING_MESSAGE`, BAL-516). Restoring function is DEFERRED to a
- * follow-up ticket; the options it will weigh are cancelling the stale intent (`setupIntents
- * .cancel`) or rotating the key off a `setup_intent.requires_action` signal. Do not implement
- * either here — both need a design that terminates and is testable (see the key's docblock for
- * why the naive generation-chain walk was rejected).
+ * receivable (`SETTLEMENT_OUTSTANDING_MESSAGE`, BAL-516). Restoring function is DEFERRED to
+ * BAL-543; the options it will weigh are cancelling the stale intent (`setupIntents.cancel`) or
+ * rotating the key off a `setup_intent.requires_action` signal. Do not implement either here —
+ * both need a design that terminates and is testable (see the key's docblock for why the naive
+ * generation-chain walk was rejected).
  */
 export async function createSetupIntent(
   walletId: string,
@@ -556,27 +613,60 @@ export async function createSetupIntent(
       { idempotencyKey: buildSetupIntentIdempotencyKey(walletId, customerId, wallet) }
     );
 
-    // ⚠ FIX ROUND (security MEDIUM + review) — a REPLAYED intent under the stable key may have
-    // progressed past the point where a fresh card can be entered. A fresh create (no
-    // `payment_method`, no `confirm`) is ALWAYS born `requires_payment_method`, so any other
-    // status here means Stripe replayed a prior intent whose wallet state never landed — an
-    // unconfirmed `setup_intent.succeeded` webhook, or an abandoned redirect-3DS parked at
-    // `requires_action` (both spelled out in the key's docblock above). Handing that secret back
-    // would surface `setup_intent_unexpected_state` in the browser with nothing in our logs.
-    // Fail loudly instead: the catch below turns this into the same generic retryable message
-    // every other Stripe fault on this path already gets. This does NOT unstick the wallet —
-    // that is the deferred follow-up named in this function's docblock.
-    if (setupIntent.status !== 'requires_payment_method') {
-      // The catch re-logs this as a generic failure; THIS line is the one that carries `status`
-      // as a structured field, so the frozen-key case is filterable in Axiom. Never the secret.
-      log.error(
-        { op: 'createSetupIntent', walletId, stripeId: setupIntent.id, status: setupIntent.status },
-        'Replayed SetupIntent can no longer take a fresh card — refusing to return its secret'
-      );
-      throw new Error(
-        `SetupIntent ${setupIntent.id} is '${setupIntent.status}', not ` +
-          `'requires_payment_method' — a replayed intent that can no longer accept a card`
-      );
+    // ⚠ FIX ROUND 2 (Qodo, confirmed against docs + the installed SDK) — DETECT THE REPLAY FROM
+    // THE HEADER, VERIFY IT WITH A RETRIEVE. The previous guard read `setupIntent.status` off the
+    // CREATE response and could NEVER fire: Stripe's idempotency layer saves "the resulting
+    // status code and body of the first request" and returns it verbatim on every subsequent
+    // request with the same key (docs.stripe.com/api/idempotent_requests), and a create with no
+    // `payment_method` and no `confirm` is ALWAYS BORN `requires_payment_method` — so the cached
+    // body says `requires_payment_method` no matter what the live object has become. stripe-node
+    // does not post-process a replay either (`RequestSender._jsonResponseHandler`: parse, attach
+    // `lastResponse`, done). What Stripe DOES mark a replay with is a response header —
+    // docs.stripe.com/error-low-level#idempotency: "look for the header
+    // `Idempotent-Replayed: true`".
+    //
+    // ⚠ RUNTIME CAVEAT — bracket access is correct because this app runs stripe-node's NODE HTTP
+    // client (Fastify on Railway, CJS entry: `NodePlatformFunctions.createDefaultHttpClient`),
+    // whose `lastResponse` is the `http.IncomingMessage` and whose `.headers` is a plain
+    // lowercase-keyed object. Under the FETCH client (edge/workers) `lastResponse.headers` is a
+    // `Headers` INSTANCE, where bracket access silently yields `undefined` and this detection
+    // would quietly disable itself — a runtime move must switch to `.get('idempotent-replayed')`.
+    const replayed = setupIntent.lastResponse.headers['idempotent-replayed'] === 'true';
+    if (replayed) {
+      // FAIL-SOFT AND BOUNDED, ON PURPOSE — see this function's docblock. The common replay is
+      // legitimate; a transient read failure must not block it. On failure: warn and proceed with
+      // the cached response (the rare frozen case then degrades to the pre-existing silent
+      // browser failure, which is no worse than before).
+      let current: Stripe.SetupIntent | null = null;
+      try {
+        // Three args, not two: `retrieve(id, params?, options?)` has a single declared
+        // signature, so the per-request options must sit in the THIRD slot behind an empty
+        // params object — the same shape `syncStripeCustomerIdentity` uses above.
+        current = await stripe.setupIntents.retrieve(setupIntent.id, {}, VERIFY_REQUEST_OPTIONS);
+      } catch (verifyErr: unknown) {
+        log.warn(
+          {
+            op: 'createSetupIntent',
+            walletId,
+            stripeId: setupIntent.id,
+            error: verifyErr instanceof Error ? verifyErr.message : String(verifyErr),
+          },
+          'Could not verify a replayed SetupIntent — proceeding with the cached response'
+        );
+      }
+      if (current !== null && current.status !== 'requires_payment_method') {
+        // The catch below re-logs this as a generic failure; THIS line is the one that carries
+        // `status` as a structured field, so the frozen-key case is filterable in Axiom. Never a
+        // client secret, never a card fact.
+        log.error(
+          { op: 'createSetupIntent', walletId, stripeId: setupIntent.id, status: current.status },
+          'Replayed SetupIntent can no longer take a fresh card — refusing to return its secret'
+        );
+        throw new Error(
+          `SetupIntent ${setupIntent.id} is '${current.status}', not ` +
+            `'requires_payment_method' — a replayed intent that can no longer accept a card`
+        );
+      }
     }
 
     const clientSecret = setupIntent.client_secret;

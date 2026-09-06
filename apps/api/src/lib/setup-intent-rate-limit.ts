@@ -69,7 +69,12 @@
  * mechanism.
  *
  * ⚠ WHAT 30/HOUR/WALLET ACTUALLY BUYS. The BAL-527 idempotency key on `createSetupIntent` bounds
- * SETUPINTENT creation to one per wallet per 24h, no matter how many times this limit is pressed.
+ * SETUPINTENT creation to one per wallet per 24h — for presses that do NOT COMPLETE A CAPTURE.
+ * (FIX ROUND 2, review: that qualifier was previously an unqualified "no matter how many times
+ * this limit is pressed", which is too strong. A completed capture followed by Remove ROTATES
+ * the key BY DESIGN — that rotation is what makes Change and re-Add work at all — so a
+ * complete → Remove → re-Add cycle mints a FRESH SetupIntent every cycle. THIS ceiling and the
+ * real card confirmation each cycle costs a human are what bound that; the key does not.)
  * (FIX ROUND, review MEDIUM: the one-Customer bound on that path is NOT this key's — it comes
  * from the pre-existing `stripe-customer-{walletId}` key at `services/stripe/mandate.ts:173` and
  * predates BAL-527. Do not credit it to either BAL-527 control.) This limit bounds the thing

@@ -23,9 +23,13 @@ let stripeSingleton: Stripe | null = null;
  * key). Uses the classic `Customer` API, not Accounts v2 / `customer_account` (skill #5).
  *
  * ⚠ BAL-527 — `maxNetworkRetries: 2` IS NOW LOAD-BEARING, NOT JUST "SAFE". stripe-node retries
- * on an HTTP `409 idempotency_error` ("another in-progress request using this Idempotency Key"),
- * verified in the installed SDK's `RequestSender.js` (`if (res.getStatusCode() === 409) return
- * true;`). `createSetupIntent`'s mandate SetupIntent create carries a STABLE key as of BAL-527,
+ * on an HTTP `409` ("another in-progress request using this Idempotency Key"), verified in the
+ * installed SDK's `RequestSender.js` (`if (res.getStatusCode() === 409) return true;`).
+ * ⚠ FIX ROUND 2 — THE RETRY BRANCH KEYS ON THE STATUS CODE, NOT ON A TYPE OR CODE STRING, and
+ * the two are easy to conflate: on the wire `idempotency_error` is the error TYPE (stripe-node
+ * maps THAT to `StripeIdempotencyError`, `Error.js:13`) and it covers a `400` under a changed
+ * body just as much as this `409`; the error CODE specific to a concurrent same-key conflict is
+ * `idempotency_key_in_use`. Nothing here branches on either string — only on `409`. `createSetupIntent`'s mandate SetupIntent create carries a STABLE key as of BAL-527,
  * so two genuinely concurrent presses against the same wallet (React StrictMode's double-invoke
  * in `next dev`, or a real double-click) now make the second request 409 instead of minting a
  * second SetupIntent — and it is this retry, with exponential backoff + jitter, that lets the
