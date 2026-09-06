@@ -227,9 +227,12 @@ describe('createRateLimitPreHandler (BAL-519)', () => {
     );
   });
 
-  // SEC1 (fix round 1) — the hit log is gated on the FIRST refusal per bucket per window
-  // (`current === maxRequests + 1`), not on every refused request. Un-gated, a flood against the
-  // two PUBLIC IP-keyed callers would amplify itself into an equal-volume Axiom ingest.
+  // SEC1 — the hit log is gated to the 1st, then every `maxRequests`-th, refusal per bucket
+  // window (61st, 121st, … at maxRequests 60), not to every refused request. Un-gated, a flood
+  // against the two PUBLIC IP-keyed callers would amplify itself into an equal-volume Axiom
+  // ingest. A MODULO RE-ARM rather than a bare `=== maxRequests + 1`: if the threshold-crossing
+  // request loses its result to the deadline race, a bare equality gate would leave the whole
+  // window silent — the re-arm bounds that silence to at most `maxRequests` further refusals.
   it('logs the FIRST refusal in a window (current === maxRequests + 1)', async () => {
     mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 61, ttlSeconds: 42 });
     const handler = createRateLimitPreHandler({ config: CONFIG, failOpen: true, label: 'probe' });
@@ -248,6 +251,34 @@ describe('createRateLimitPreHandler (BAL-519)', () => {
 
     expect(mockWarn).not.toHaveBeenCalled();
     // The 429 response itself is unaffected by the log gate — only the log line is suppressed.
+    expect(reply.statusCode).toBe(429);
+    expect(rejected).toBe(true);
+  });
+
+  it.each([121, 181])(
+    're-arms: refusal %i (a maxRequests multiple past the threshold) logs again — a lost 61 observation cannot silence the whole window',
+    async (current) => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current, ttlSeconds: 30 });
+      const handler = createRateLimitPreHandler({ config: CONFIG, failOpen: true, label: 'probe' });
+
+      await handler(fakeRequest(), asReply(fakeReply()));
+
+      expect(mockWarn).toHaveBeenCalledOnce();
+      expect(mockWarn).toHaveBeenCalledWith(
+        { label: 'probe', keyPrefix: 'ratelimit:probe', current, ttlSeconds: 30 },
+        'Rate limit exceeded'
+      );
+    }
+  );
+
+  it.each([120, 122, 180])('stays silent between re-arm points (refusal %i)', async (current) => {
+    mockCheckRateLimit.mockResolvedValue({ allowed: false, current, ttlSeconds: 30 });
+    const handler = createRateLimitPreHandler({ config: CONFIG, failOpen: true, label: 'probe' });
+    const reply = fakeReply();
+
+    const rejected = await handler(fakeRequest(), asReply(reply));
+
+    expect(mockWarn).not.toHaveBeenCalled();
     expect(reply.statusCode).toBe(429);
     expect(rejected).toBe(true);
   });

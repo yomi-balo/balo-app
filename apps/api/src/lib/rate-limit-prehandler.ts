@@ -116,15 +116,23 @@ export function createRateLimitPreHandler(
         { deadlineMs: RATE_LIMIT_DEADLINE_MS, label: `rate limit ${options.config.keyPrefix}` }
       );
       if (!result.allowed) {
-        // BAL-519 (fix round 1, SEC1) — log only the FIRST refusal per bucket per window.
-        // `checkRateLimit` INCRs before comparing, so `current` is monotonic and exactly one
-        // refused request per window sees `maxRequests + 1`. Logging every refusal would let a
-        // flood against the two PUBLIC IP-keyed callers (`/experts/search`, the availability
-        // route) amplify itself into an equal-volume Axiom ingest — the control paying for the
-        // abuse it exists to record. Volume remains visible in Fastify's own request log; this
-        // line supplies the who/which-bucket. `identifier` is present ONLY under `logIdentifier`
-        // — see the option's docblock.
-        if (result.current === options.config.maxRequests + 1) {
+        // BAL-519 (SEC1) — log the 1st, then every `maxRequests`-th, refusal per bucket window
+        // (the 61st, 121st, … at the default 60). Logging every refusal would let a flood against
+        // the two PUBLIC IP-keyed callers (`/experts/search`, the availability route) amplify
+        // itself into an equal-volume Axiom ingest — the control paying for the abuse it exists
+        // to record. Volume remains visible in Fastify's own request log; this line supplies the
+        // who/which-bucket. `identifier` is present ONLY under `logIdentifier` — see the option's
+        // docblock.
+        //
+        // ⚠ Deliberately a MODULO RE-ARM, not `current === maxRequests + 1`: `withDeadline` bounds
+        // the WAIT, not the work, so if the request whose INCR lands `maxRequests + 1` loses its
+        // result to the deadline (or a post-send Redis error), the INCR still lands and the catch
+        // below runs without ever observing that value — under a bare equality gate the ENTIRE
+        // window would then log nothing. The re-arm bounds that silence to at most `maxRequests`
+        // further refusals while keeping the amplification cap at ~1/`maxRequests`. `current` is
+        // monotonic per window (Redis serializes the MULTIs), so each re-arm value is observed by
+        // at most one request.
+        if ((result.current - options.config.maxRequests - 1) % options.config.maxRequests === 0) {
           log.warn(
             {
               label: options.label,
