@@ -40,7 +40,7 @@ const CLIENT_SUCCESS: CloseRequestActionResult = {
     stageAtClose: 'proposal_submitted',
     openTracks: 2,
     openProposals: 1,
-    expertsTold: 2,
+    tracksEnded: 2,
   },
 };
 
@@ -52,7 +52,7 @@ const ADMIN_SUCCESS: CloseRequestAsAdminActionResult = {
     stageAtClose: 'experts_invited',
     openTracks: 1,
     openProposals: 0,
-    expertsTold: 1,
+    tracksEnded: 1,
   },
 };
 
@@ -106,7 +106,10 @@ describe('CloseRequestSheet — client variant', () => {
       'project_request_closed',
       expect.objectContaining({ request_id: REQUEST_ID, reason: 'withdrawn', actor_kind: 'client' })
     );
-    expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('2 experts told'));
+    // TRACKS ENDED, not "experts told" — the action cannot know how many experts the
+    // post-commit fan-out actually reached (Qodo #13).
+    expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('2 tracks ended'));
+    expect(mockToast.success).not.toHaveBeenCalledWith(expect.stringContaining('told'));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(refresh).toHaveBeenCalled();
   });
@@ -234,7 +237,7 @@ describe('CloseRequestSheet — admin variant', () => {
         note: 'Could not staff it in time.',
       })
     );
-    expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('1 expert told'));
+    expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('1 track ended'));
   });
 
   it('shows the on-behalf mail-notice row (client is told the reason, never the note)', () => {

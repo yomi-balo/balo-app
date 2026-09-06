@@ -14,6 +14,7 @@ import {
   proposalsRepository,
   InvalidProposalTransitionError,
   ProposalNotDraftError,
+  ProposalTrackNotOpenError,
   PROPOSAL_STATUS_TRANSITIONS,
   isAllowedProposalTransition,
 } from './proposals';
@@ -929,6 +930,116 @@ describe('proposalsRepository.createDraft', () => {
         priceCents: 0,
       })
     ).rejects.toThrow();
+  });
+
+  // ── The track must still be OPEN (BAL-540 fix round / Qodo #10) ────────────────────
+  // Before this guard, an in-flight composer autosave landing AFTER a close or a track
+  // decline had COMMITTED inserted a fresh `draft` onto a terminal track — an open
+  // proposal on a request nothing will ever look at again. NOTE the honest scope: this
+  // closes the POST-COMMIT half only. The race half (autosave holding the relationship
+  // lock while `close()` sits between its proposal snapshot and its relationship lock)
+  // is still open by design and is documented on `createDraft` and on `close()`.
+
+  it('REFUSES a draft on a declined relationship (post-commit half of the decline race)', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+
+    // The real path: the client declines the track, the transaction commits, and the
+    // expert's debounced autosave lands afterwards.
+    await requestExpertRelationshipsRepository.declineTrack({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
+    });
+
+    await expect(
+      proposalsRepository.createDraft({
+        relationshipId: relationship.id,
+        overview: '<p>Stale autosave after the decline.</p>',
+        pricingMethod: 'fixed',
+        priceCents: 0,
+      })
+    ).rejects.toBeInstanceOf(ProposalTrackNotOpenError);
+
+    // NOTHING was written — the guard runs before the insert.
+    const rows = await db
+      .select()
+      .from(proposals)
+      .where(and(eq(proposals.relationshipId, relationship.id), isNull(proposals.deletedAt)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('carries reason `relationship_declined` on the declined-track refusal', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    await requestExpertRelationshipsRepository.declineTrack({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      reason: 'balo_declined',
+    });
+
+    await expect(
+      proposalsRepository.createDraft({
+        relationshipId: relationship.id,
+        overview: '<p>Stale.</p>',
+        pricingMethod: 'fixed',
+        priceCents: 0,
+      })
+    ).rejects.toMatchObject({
+      name: 'ProposalTrackNotOpenError',
+      reason: 'relationship_declined',
+      relationshipId: relationship.id,
+    });
+  });
+
+  it('REFUSES a draft on a LIVE relationship whose parent request is closed', async () => {
+    const { relationship, projectRequestId } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+
+    // ⚠ The request is flipped DIRECTLY, deliberately: `close()` declines every live track
+    // on its way past, so going through it would trip the FIRST arm and leave the
+    // request-status arm unexercised. A live relationship on a `closed` request is not a
+    // contrived state — it is exactly `close()`'s own documented KNOWN RESIDUAL (a
+    // relationship inserted between the cascade's snapshot and its commit).
+    await db
+      .update(projectRequests)
+      .set({ status: 'closed' })
+      .where(eq(projectRequests.id, projectRequestId));
+
+    await expect(
+      proposalsRepository.createDraft({
+        relationshipId: relationship.id,
+        overview: '<p>Stale autosave after the close.</p>',
+        pricingMethod: 'fixed',
+        priceCents: 0,
+      })
+    ).rejects.toMatchObject({
+      name: 'ProposalTrackNotOpenError',
+      reason: 'request_closed',
+      relationshipId: relationship.id,
+    });
+
+    const rows = await db
+      .select()
+      .from(proposals)
+      .where(and(eq(proposals.relationshipId, relationship.id), isNull(proposals.deletedAt)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('still allows a draft on every NON-terminal relationship status (the guard is narrow)', async () => {
+    for (const status of ['invited', 'eoi_submitted', 'proposal_requested'] as const) {
+      const { relationship } = await requestExpertRelationshipFactory({ values: { status } });
+      const draft = await proposalsRepository.createDraft({
+        relationshipId: relationship.id,
+        overview: `<p>Draft from ${status}.</p>`,
+        pricingMethod: 'fixed',
+        priceCents: 0,
+      });
+      expect(draft.status).toBe('draft');
+    }
   });
 });
 

@@ -46,6 +46,23 @@ vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: (...a: unknown[]) => mockPublish(...a),
 }));
 
+const { runAfterResponseMock, getScheduled, resetScheduled } = vi.hoisted(() => {
+  let scheduled: (() => Promise<void>) | null = null;
+  return {
+    runAfterResponseMock: vi.fn((_label: string, work: () => Promise<void>) => {
+      scheduled = work;
+    }),
+    getScheduled: (): (() => Promise<void>) | null => scheduled,
+    resetScheduled: (): void => {
+      scheduled = null;
+    },
+  };
+});
+
+vi.mock('@/lib/after-response', () => ({
+  runAfterResponse: runAfterResponseMock,
+}));
+
 import { declineTrackAction } from './decline-track';
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
@@ -78,6 +95,8 @@ function declineResult(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetScheduled();
+  mockPublish.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue(CLIENT_USER);
   mockFindByIdWithRelations.mockResolvedValue(requestRow());
   mockGetMemberRole.mockResolvedValue('member');
@@ -155,8 +174,24 @@ describe('declineTrackAction', () => {
     });
   });
 
+  // ── The publish is DEFERRED, not fire-and-forget (Qodo #12) ────────────────────
+  // A bare un-awaited promise is at-most-once on Vercel: the action returns, the instance
+  // freezes, and the expert is never told — with the decline already committed. THIS is the
+  // regression the assertions below exist to prevent.
+
+  it('REGISTERS the publish with runAfterResponse and does not run it inline', async () => {
+    await declineTrackAction(VALID_INPUT);
+
+    expect(runAfterResponseMock).toHaveBeenCalledWith(
+      'track decline fan-out',
+      expect.any(Function)
+    );
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
   it('publishes project.track_declined with the audit id as correlationId', async () => {
     await declineTrackAction(VALID_INPUT);
+    await getScheduled()?.();
     expect(mockPublish).toHaveBeenCalledWith('project.track_declined', {
       correlationId: 'decline-audit-1',
       projectRequestId: REQUEST_ID,
@@ -184,6 +219,22 @@ describe('declineTrackAction', () => {
       success: true,
       analytics: { stage: 'invited', actorKind: 'client', hadOpenProposal: false },
     });
+  });
+
+  it('maps a Postgres deadlock (40P01) to retryable copy and a WARN, not an error', async () => {
+    mockDeclineTrack.mockRejectedValue(
+      Object.assign(new Error('deadlock detected'), { code: '40P01' })
+    );
+    const result = await declineTrackAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID })
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('a generic thrown error is logged and returns a generic failure', async () => {

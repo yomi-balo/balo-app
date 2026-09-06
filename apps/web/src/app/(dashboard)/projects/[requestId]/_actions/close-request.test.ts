@@ -229,9 +229,23 @@ describe('closeRequestAction', () => {
         stageAtClose: 'eoi_submitted',
         openTracks: 1,
         openProposals: 1,
-        expertsTold: 1,
+        tracksEnded: 1,
       },
     });
+  });
+
+  it('maps a Postgres deadlock (40P01) to retryable copy and a WARN, not an error', async () => {
+    mockClose.mockRejectedValue(Object.assign(new Error('deadlock detected'), { code: '40P01' }));
+    const result = await closeRequestAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, actorUserId: USER.id })
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('a generic thrown error is logged and returns a generic failure', async () => {

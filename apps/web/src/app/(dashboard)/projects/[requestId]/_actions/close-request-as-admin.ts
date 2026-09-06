@@ -10,6 +10,7 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
 import { runCloseRequestFanout } from './_shared/close-request-fanout';
+import { deadlockFailure } from './_shared/deadlock';
 
 const inputSchema = z
   .object({
@@ -37,7 +38,8 @@ export type CloseRequestAsAdminActionResult =
         stageAtClose: string;
         openTracks: number;
         openProposals: number;
-        expertsTold: number;
+        /** Tracks ENDED, not experts notified — see `close-request.ts` for why. */
+        tracksEnded: number;
       };
     }
   | { success: false; error: string; code?: 'not_closable' | 'gone' | 'denied' };
@@ -116,13 +118,21 @@ export async function closeRequestAsAdminAction(
         stageAtClose: result.previousStatus,
         openTracks: result.declinedTracks.length,
         openProposals: result.withdrawnProposalIds.length,
-        expertsTold: result.declinedTracks.length,
+        tracksEnded: result.declinedTracks.length,
       },
     };
   } catch (error) {
     if (error instanceof InvalidStatusTransitionError) {
       return { success: false, error: NOT_CLOSABLE, code: 'not_closable' };
     }
+    // See `close-request.ts` — the cascade's lock set can complete an AB/BA cycle against
+    // `promoteToSubmit`, so Postgres may abort this side with 40P01.
+    const deadlock = deadlockFailure(
+      error,
+      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      { requestId, actorUserId: user.id }
+    );
+    if (deadlock !== null) return deadlock;
     log.error('Failed to close project request as admin', {
       requestId,
       actorUserId: user.id,

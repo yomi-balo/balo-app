@@ -9,6 +9,7 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 import { runCloseRequestFanout } from './_shared/close-request-fanout';
+import { deadlockFailure } from './_shared/deadlock';
 
 const inputSchema = z.object({ requestId: z.uuid() }).strict();
 
@@ -26,7 +27,13 @@ export type CloseRequestActionResult =
         stageAtClose: string;
         openTracks: number;
         openProposals: number;
-        expertsTold: number;
+        /**
+         * Tracks the cascade ENDED — NOT the number of experts notified. The fan-out runs
+         * post-commit and resolves, filters and de-duplicates USER ids after this action has
+         * already returned, so no count of people told exists here to report. Named for what
+         * this action can actually prove, and the toast copy says "tracks ended" to match.
+         */
+        tracksEnded: number;
       };
     }
   | { success: false; error: string; code?: 'not_closable' | 'denied' };
@@ -116,15 +123,24 @@ export async function closeRequestAction(
         stageAtClose: result.previousStatus,
         openTracks: result.declinedTracks.length,
         openProposals: result.withdrawnProposalIds.length,
-        // The tracks that were live at close, approximated to the underlying USER count the
-        // fan-out resolves post-commit (a soft-deleted user is the only divergence).
-        expertsTold: result.declinedTracks.length,
+        tracksEnded: result.declinedTracks.length,
       },
     };
   } catch (error) {
     if (error instanceof InvalidStatusTransitionError) {
       return { success: false, error: NOT_CLOSABLE, code: 'not_closable' };
     }
+    // The cascade locks BOTH open proposal statuses on its way to the relationship row, which
+    // bridges `accept`'s and `promoteToSubmit`'s otherwise-disjoint lock worlds and completes
+    // an AB/BA cycle (see `projectRequestsRepository.close`'s LOCK ORDER block). Postgres
+    // aborts one side with 40P01: expected-rare, self-healing, nothing written ⇒ WARN and
+    // retryable copy. No new `code` value — the result union is unchanged.
+    const deadlock = deadlockFailure(
+      error,
+      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      { requestId, actorUserId: user.id }
+    );
+    if (deadlock !== null) return deadlock;
     log.error('Failed to close project request', {
       requestId,
       actorUserId: user.id,

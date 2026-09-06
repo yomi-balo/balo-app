@@ -570,10 +570,40 @@ export const projectRequestsRepository = {
    *   - `advanceRelationshipStatus`'s LOCK ORDER block: relationship, then request LAST.
    * Reaching the proposals AFTER the relationship rows would have held (relationship, request)
    * while waiting on a proposal that a concurrent `accept` held while waiting on that same
-   * relationship — a textbook AB/BA pair. Locking them FIRST satisfies both rules: proposals,
-   * then relationships, then the request LAST. `declineTrack` takes the identical order.
-   * Within each set, rows are ordered by `id` so two concurrent cascades queue rather than
-   * deadlock.
+   * relationship — a textbook AB/BA pair. Locking them FIRST satisfies those two rules:
+   * proposals, then relationships, then the request LAST. `declineTrack` takes the identical
+   * order. Within each set, rows are ordered by `id` so two concurrent cascades queue rather
+   * than deadlock.
+   *
+   * ⚠⚠ "SATISFIES BOTH RULES" IS NOT "DEADLOCK-FREE", AND THE EARLIER WORDING OVERSTATED IT.
+   * There is a THIRD documented order in this package, and it is the OPPOSITE of `accept`'s:
+   *   - `proposalsRepository.accept`:          proposal → relationship → request
+   *   - `proposalsRepository.promoteToSubmit`: relationship → request → proposal
+   * Those two have never deadlocked EACH OTHER only because they touch DISJOINT proposal
+   * statuses — `accept` locks a `submitted` proposal, `promoteToSubmit` a `draft` one — so no
+   * single proposal row is ever contended between them. They live in two separate worlds.
+   *
+   * THE CASCADE BRIDGES THOSE WORLDS. `lockOpenProposalsForRequestTx` locks every OPEN
+   * proposal, and `OPEN_PROPOSAL_STATUSES` is `draft | submitted | changes_requested` — BOTH
+   * statuses at once. That completes the AB/BA cycle `promoteToSubmit` had been safe from:
+   *
+   *     close()          holds: draft proposal P      waits on: relationship R
+   *     promoteToSubmit  holds: relationship R        waits on: that same draft P
+   *
+   * NO SINGLE LOCK ORDER CAN FIX THIS FROM HERE. Reversing the cascade to
+   * relationship-first only re-creates the original AB/BA against `accept`; there is no
+   * ordering of {proposal, relationship, request} that agrees with both `accept` and
+   * `promoteToSubmit` at once, because those two disagree with each other.
+   *
+   * WHAT ACTUALLY HAPPENS, AND WHY IT IS TOLERABLE FOR NOW: Postgres DETECTS the cycle after
+   * `deadlock_timeout` (1s by default), aborts ONE side with SQLSTATE 40P01, and the other
+   * commits. The aborted transaction wrote NOTHING — this whole method is one `db.transaction`
+   * — so the state is consistent and a RETRY succeeds. All four BAL-540 Server Actions map
+   * 40P01 to a `log.warn` plus retryable copy (`_actions/_shared/deadlock.ts`) rather than
+   * letting it surface as a generic failure. The proper fix is to serialise all five writers
+   * (`close`, `declineTrack`, `accept`, `promoteToSubmit`, `submit`) on a single advisory lock
+   * keyed on `requestId`, so no two of them ever interleave their row locks at all — a
+   * follow-up ticket, deliberately not attempted inside BAL-540.
    *
    * ══ THE SEQUENCE, ALL ON ONE `tx` ═════════════════════════════════════════════════
    *   1. Lock the request's open proposals (`lockOpenProposalsForRequestTx`, ordered by id).
@@ -640,6 +670,26 @@ export const projectRequestsRepository = {
    * reads (no lock-order risk: same `id` order, request lock already held) — deliberately NOT
    * done in BAL-540, which is already a wide change, and left as a follow-up rather than
    * hidden here.
+   *
+   * ⚠ THE SAME RESIDUAL EXISTS FOR PROPOSALS, and the paragraph above used to name only
+   * relationships. Step 1's proposal set is a SNAPSHOT taken before this transaction owns
+   * anything, and `proposalsRepository.submit` is INSERT-based: it creates a `submitted` row
+   * that no `FOR UPDATE` taken in step 1 could possibly have covered. So a proposal committed
+   * between step 1 and this cascade acquiring the relationship lock survives the close
+   * UN-WITHDRAWN. `promoteToSubmit` cannot slip through the same gap — its draft predecessor
+   * IS in step 1's set, so it either loses the lock race or deadlocks (see the LOCK ORDER
+   * block) — but `submit()` inserts from nothing and has no predecessor row to lock.
+   * `declineTrack` has the identical gap on its per-relationship snapshot.
+   *
+   * CONSEQUENCE, NAMED: a `submitted` proposal sitting on a `closed` request (or on a
+   * `declined` track). It is INERT — `accept()` refuses it because the relationship's
+   * `expectedFrom` no longer matches, and booking refuses because the request is `closed` —
+   * but it is CLIENT-VISIBLE: the request detail view renders a live proposal on a request
+   * the client just closed. Same fix, same follow-up ticket as the relationship residual
+   * above: re-read the open-proposal set after step 3's request lock and withdraw the UNION
+   * of both reads. `createDraft` now refuses outright once the close has COMMITTED
+   * (`ProposalTrackNotOpenError`), which removes the stale-autosave half of this — but not
+   * the race half, and it does nothing for `submit()`.
    *
    * Throws `InvalidStatusTransitionError` (already closed, or past `proposal_submitted`) and
    * `Error` for a missing/soft-deleted request. Nothing is written on either.

@@ -14,7 +14,9 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { runAfterResponse } from '@/lib/after-response';
 import { toDeclineTrackStage } from './_shared/decline-track-stage';
+import { deadlockFailure } from './_shared/deadlock';
 
 const inputSchema = z
   .object({
@@ -107,18 +109,24 @@ export async function declineTrackAction(
       hadOpenProposal: result.hadOpenProposal,
     });
 
-    publishNotificationEvent('project.track_declined', {
-      correlationId: result.declineAuditId,
-      projectRequestId: requestId,
-      relationshipId,
-      expertProfileId: result.relationship.expertProfileId,
-      title: request.title,
-      clientCompanyName: request.company.name,
-      declinedBy: 'client',
-      stage,
-      hadOpenProposal: result.hadOpenProposal,
-    }).catch(() => {
-      // publishNotificationEvent logs internally.
+    // ⚠ DEFERRED, NOT FIRE-AND-FORGET (BAL-279). An un-awaited promise started here is
+    // at-most-once on Vercel: the Server Action returns, the instance freezes, and the expert
+    // is never told their track ended — with the decline already COMMITTED, so nothing ever
+    // retries it. `runAfterResponse` keeps the instance alive until the publish settles, the
+    // same durability story the close cascade's fan-out uses (`_shared/close-request-fanout.ts`).
+    // It never throws to us and logs its own rejections, so no `.catch` is needed here.
+    runAfterResponse('track decline fan-out', async () => {
+      await publishNotificationEvent('project.track_declined', {
+        correlationId: result.declineAuditId,
+        projectRequestId: requestId,
+        relationshipId,
+        expertProfileId: result.relationship.expertProfileId,
+        title: request.title,
+        clientCompanyName: request.company.name,
+        declinedBy: 'client',
+        stage,
+        hadOpenProposal: result.hadOpenProposal,
+      });
     });
 
     revalidatePath(`/projects/${requestId}`);
@@ -135,6 +143,17 @@ export async function declineTrackAction(
     if (error instanceof InvalidRelationshipTransitionError) {
       return { success: false, error: NOT_DECLINABLE, code: 'not_declinable' };
     }
+    // `declineTrack` locks proposals → relationship → request; `promoteToSubmit` locks
+    // relationship → request → proposal. Both statuses of the bridged proposal world are in
+    // this cascade's lock set, so Postgres can abort this side with 40P01. Expected-rare and
+    // self-healing (nothing was written) ⇒ WARN, and retryable copy. No new `code` value:
+    // the result union is unchanged.
+    const deadlock = deadlockFailure(
+      error,
+      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      { requestId, relationshipId, actorUserId: user.id }
+    );
+    if (deadlock !== null) return deadlock;
     log.error('Failed to decline request track', {
       requestId,
       relationshipId,

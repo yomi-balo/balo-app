@@ -5,6 +5,7 @@ import type { ProjectRequestCloseReason } from '@balo/shared/project-requests';
 import { runAfterResponse } from '@/lib/after-response';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { postCancelledTeardown } from '@/lib/meetings/cancelled-teardown-api-client';
+import { log } from '@/lib/logging';
 
 /**
  * BAL-540 — everything a `close()` commit still owes AFTER the transaction has landed:
@@ -43,8 +44,30 @@ export function runCloseRequestFanout(
 
     // Resolve the USER ids behind every track that was live at close — the payload carries
     // USER ids, never expert-profile ids (BAL-408's `meeting_party_participants` precedent).
+    //
+    // ⚠ ISOLATED, DELIBERATELY. `runAfterResponse` only LOGS a rejected callback — there is no
+    // retry — so letting this lookup throw would kill the WHOLE deferred callback, including
+    // the client arm of a Balo-initiated close, which needs no expert ids at all. Degrade to an
+    // empty recipient list instead: the skip logic below then does exactly the right thing
+    // (empty + not-Balo ⇒ nothing to tell anyone, skip; Balo ⇒ the client is still emailed).
+    // The `project.request_closed` payload has NO `.min(1)` on `recipientUserIds` for precisely
+    // this reason — an empty list is a valid, meaningful payload on the Balo arm.
+    // Cost of the degradation, stated: the experts on those tracks are not told. Their tracks
+    // ARE declined (the transaction committed), so the request detail view already shows it.
     const expertProfileIds = result.declinedTracks.map((track) => track.expertProfileId);
-    const recipientUserIds = await expertsRepository.findUserIdsByProfileIds(expertProfileIds);
+    let recipientUserIds: string[] = [];
+    try {
+      recipientUserIds = await expertsRepository.findUserIdsByProfileIds(expertProfileIds);
+    } catch (error) {
+      log.error('Close fan-out could not resolve expert user ids — publishing without them', {
+        projectRequestId: result.request.id,
+        closeAuditId: result.closeAuditId,
+        closedBy: context.closedBy,
+        expertProfileCount: expertProfileIds.length,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
 
     // Edge case 1 (decisions-bal-540.md, Observability) — a close with zero live tracks
     // resolves nobody to tell. Skip the publish entirely rather than sending an empty one,

@@ -193,6 +193,47 @@ describe('closeRequestAsAdminAction', () => {
     expect(revalidatePath).toHaveBeenCalledWith('/projects');
   });
 
+  it('reports tracksEnded (not an experts-told count) in the analytics payload', async () => {
+    mockClose.mockResolvedValue(
+      closeResult({
+        declinedTracks: [
+          {
+            relationshipId: 'rel-1',
+            expertProfileId: 'expert-1',
+            previousStatus: 'invited',
+            declineAuditId: 'decline-1',
+          },
+        ],
+      })
+    );
+    const result = await closeRequestAsAdminAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: true,
+      analytics: {
+        reason: 'unfilled',
+        actorKind: 'balo',
+        stageAtClose: 'proposal_submitted',
+        openTracks: 1,
+        openProposals: 0,
+        tracksEnded: 1,
+      },
+    });
+  });
+
+  it('maps a Postgres deadlock (40P01) to retryable copy and a WARN, not an error', async () => {
+    mockClose.mockRejectedValue(Object.assign(new Error('deadlock detected'), { code: '40P01' }));
+    const result = await closeRequestAsAdminAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, actorUserId: ADMIN.id })
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('a generic thrown error is logged and returns a generic failure', async () => {
     mockClose.mockRejectedValue(new Error('db exploded'));
     const result = await closeRequestAsAdminAction(VALID_INPUT);

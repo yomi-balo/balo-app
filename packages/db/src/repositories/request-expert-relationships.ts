@@ -572,6 +572,26 @@ export const requestExpertRelationshipsRepository = {
    * WRITTEN until step 3: taking the proposal locks after the relationship lock would invert
    * the order against `accept` and open an AB/BA deadlock class.
    *
+   * ⚠ THAT ORDER IS NECESSARY BUT NOT SUFFICIENT — this path CAN still deadlock, and saying
+   * otherwise would be false. Step 1 locks EVERY open status (`draft` AND `submitted`), which
+   * bridges the two disjoint proposal worlds `accept` (proposal→relationship→request) and
+   * `promoteToSubmit` (relationship→request→proposal) have safely occupied. Against
+   * `promoteToSubmit` that completes an AB/BA cycle: this transaction holds the draft and
+   * waits on the relationship; `promoteToSubmit` holds the relationship and waits on that
+   * draft. Postgres aborts one side with 40P01 after `deadlock_timeout`; nothing was written,
+   * so a retry succeeds, and both decline Server Actions map 40P01 to retryable copy. Full
+   * analysis and the serialisation follow-up: `projectRequestsRepository.close`'s LOCK ORDER
+   * block.
+   *
+   * ⚠ KNOWN RESIDUAL — step 1's proposal set is a SNAPSHOT. `proposalsRepository.submit` is
+   * INSERT-based, so a proposal committed after this snapshot but before step 2 wins the
+   * relationship lock is never locked here and survives the decline UN-DECLINED: a
+   * `submitted` proposal on a `declined` track. Inert (`accept()` refuses via the
+   * relationship's `expectedFrom`) but client-visible. `createDraft` now refuses once THIS
+   * transaction has committed (`ProposalTrackNotOpenError`), which removes the stale-autosave
+   * half but not the race half. The fix — re-read and lock the open set after the relationship
+   * lock, then act on the union — is the same follow-up as `close()`'s.
+   *
    * ⚠ `withdrawn` vs `declined` — THE DISTINCTION IS DELIBERATE AND LOAD-BEARING.
    * `declined` here means the CLIENT SIDE judged this proposal and said no. The BAL-540 close
    * cascade uses `withdrawn` for the same rows, because there the request ended and nobody

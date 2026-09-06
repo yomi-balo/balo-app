@@ -14,7 +14,9 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { runAfterResponse } from '@/lib/after-response';
 import { toDeclineTrackStage } from './_shared/decline-track-stage';
+import { deadlockFailure } from './_shared/deadlock';
 
 const inputSchema = z
   .object({
@@ -98,18 +100,22 @@ export async function declineTrackAsAdminAction(
       hadOpenProposal: result.hadOpenProposal,
     });
 
-    publishNotificationEvent('project.track_declined', {
-      correlationId: result.declineAuditId,
-      projectRequestId: requestId,
-      relationshipId,
-      expertProfileId: result.relationship.expertProfileId,
-      title: request.title,
-      clientCompanyName: request.company.name,
-      declinedBy: 'balo',
-      stage,
-      hadOpenProposal: result.hadOpenProposal,
-    }).catch(() => {
-      // publishNotificationEvent logs internally.
+    // ⚠ DEFERRED, NOT FIRE-AND-FORGET (BAL-279) — identical reasoning to the client arm:
+    // an un-awaited promise is at-most-once on Vercel, and the decline has already COMMITTED,
+    // so a dropped publish is a permanently un-sent expert notice with nothing to retry it.
+    // `runAfterResponse` never throws to us and logs its own rejections.
+    runAfterResponse('track decline fan-out', async () => {
+      await publishNotificationEvent('project.track_declined', {
+        correlationId: result.declineAuditId,
+        projectRequestId: requestId,
+        relationshipId,
+        expertProfileId: result.relationship.expertProfileId,
+        title: request.title,
+        clientCompanyName: request.company.name,
+        declinedBy: 'balo',
+        stage,
+        hadOpenProposal: result.hadOpenProposal,
+      });
     });
 
     revalidatePath(`/projects/${requestId}`);
@@ -126,6 +132,14 @@ export async function declineTrackAsAdminAction(
     if (error instanceof InvalidRelationshipTransitionError) {
       return { success: false, error: NOT_DECLINABLE, code: 'not_declinable' };
     }
+    // See `decline-track.ts` — the cascade's lock set bridges `promoteToSubmit`'s order, so
+    // Postgres can abort this side with 40P01. Expected-rare, self-healing, nothing written.
+    const deadlock = deadlockFailure(
+      error,
+      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      { requestId, relationshipId, actorUserId: user.id }
+    );
+    if (deadlock !== null) return deadlock;
     log.error('Failed to decline request track as admin', {
       requestId,
       relationshipId,

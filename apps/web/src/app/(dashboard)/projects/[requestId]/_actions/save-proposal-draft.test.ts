@@ -23,11 +23,21 @@ const {
   mockSetMilestones,
   mockSetInstallments,
   ProposalNotDraftError,
+  ProposalTrackNotOpenError,
 } = vi.hoisted(() => {
   class ProposalNotDraftError extends Error {
     constructor(public readonly status: string | null) {
       super('not a draft');
       this.name = 'ProposalNotDraftError';
+    }
+  }
+  class ProposalTrackNotOpenError extends Error {
+    constructor(
+      public readonly relationshipId: string,
+      public readonly reason: 'relationship_declined' | 'request_closed'
+    ) {
+      super('track no longer open');
+      this.name = 'ProposalTrackNotOpenError';
     }
   }
   return {
@@ -37,6 +47,7 @@ const {
     mockSetMilestones: vi.fn(),
     mockSetInstallments: vi.fn(),
     ProposalNotDraftError,
+    ProposalTrackNotOpenError,
   };
 });
 
@@ -51,6 +62,7 @@ vi.mock('@balo/db', () => ({
     setForProposal: (...a: unknown[]) => mockSetInstallments(...a),
   },
   ProposalNotDraftError,
+  ProposalTrackNotOpenError,
 }));
 
 import { saveProposalDraftAction } from './save-proposal-draft';
@@ -188,6 +200,27 @@ describe('saveProposalDraftAction', () => {
       expect.any(Object)
     );
   });
+
+  // ── The track ended under the autosave (BAL-540 fix round / Qodo #10) ─────────────
+  // `createDraft` now refuses a declined relationship / closed request. The action must
+  // treat that as expected-stale — WARN + the existing stale copy — not as a server fault.
+
+  it.each([['relationship_declined' as const], ['request_closed' as const]])(
+    'warns and returns stale copy when createDraft refuses (%s)',
+    async (reason) => {
+      mockCreateDraft.mockRejectedValue(new ProposalTrackNotOpenError(REL_ID, reason));
+
+      const result = await saveProposalDraftAction(VALID_INPUT);
+
+      expect(result).toEqual({ success: false, error: 'This proposal can no longer be edited.' });
+      expect(log.warn).toHaveBeenCalledWith(
+        'Proposal draft autosave rejected (track no longer open)',
+        expect.objectContaining({ requestId: REQUEST_ID, relationshipId: REL_ID, reason })
+      );
+      // NOT an error — a refused write on a terminal track is the server being correct.
+      expect(log.error).not.toHaveBeenCalled();
+    }
+  );
 
   it('maps an unexpected repo failure to generic copy and logs error', async () => {
     mockCreateDraft.mockRejectedValue(new Error('db down'));

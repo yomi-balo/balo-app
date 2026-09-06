@@ -62,8 +62,15 @@ interface CloseRequestSheetProps {
   liveTracks: readonly CloseSheetTrack[];
 }
 
-function pluralizeExperts(count: number): string {
-  return `${count} ${count === 1 ? 'expert' : 'experts'}`;
+/**
+ * ⚠ TRACKS, NOT EXPERTS. The action returns `tracksEnded` — the number of live tracks the
+ * cascade ended — and CANNOT report how many experts were actually told: the notification
+ * fan-out resolves, filters and de-duplicates user ids POST-COMMIT, after the action has
+ * already returned this payload. Saying "N experts told" claimed something nobody had
+ * verified; "N tracks ended" is exactly what committed.
+ */
+function pluralizeTracks(count: number): string {
+  return `${count} ${count === 1 ? 'track' : 'tracks'}`;
 }
 
 export function CloseRequestSheet({
@@ -130,7 +137,7 @@ export function CloseRequestSheet({
         });
 
         // pending-MJ
-        toast.success(`Request closed — ${pluralizeExperts(result.analytics.expertsTold)} told`);
+        toast.success(`Request closed — ${pluralizeTracks(result.analytics.tracksEnded)} ended`);
         handleOpenChange(false);
         router.refresh();
       } catch {

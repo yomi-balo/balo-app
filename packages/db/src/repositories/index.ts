@@ -141,6 +141,9 @@ export {
   isAllowedProposalTransition,
   InvalidProposalTransitionError,
   ProposalNotDraftError,
+  // BAL-540 fix round — `createDraft`'s track-still-open guard, branched on by
+  // `apps/web`'s `save-proposal-draft` autosave action.
+  ProposalTrackNotOpenError,
   type ProposalStatus,
 } from './proposals';
 export {

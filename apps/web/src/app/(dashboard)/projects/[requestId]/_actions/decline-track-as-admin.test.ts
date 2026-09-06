@@ -43,6 +43,23 @@ vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: (...a: unknown[]) => mockPublish(...a),
 }));
 
+const { runAfterResponseMock, getScheduled, resetScheduled } = vi.hoisted(() => {
+  let scheduled: (() => Promise<void>) | null = null;
+  return {
+    runAfterResponseMock: vi.fn((_label: string, work: () => Promise<void>) => {
+      scheduled = work;
+    }),
+    getScheduled: (): (() => Promise<void>) | null => scheduled,
+    resetScheduled: (): void => {
+      scheduled = null;
+    },
+  };
+});
+
+vi.mock('@/lib/after-response', () => ({
+  runAfterResponse: runAfterResponseMock,
+}));
+
 import { declineTrackAsAdminAction } from './decline-track-as-admin';
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
@@ -75,6 +92,8 @@ function declineResult(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetScheduled();
+  mockPublish.mockResolvedValue(undefined);
   mockRequireOnboardedUser.mockResolvedValue(ADMIN);
   mockFindByIdWithRelations.mockResolvedValue(requestRow());
   mockDeclineTrack.mockResolvedValue(declineResult());
@@ -145,8 +164,23 @@ describe('declineTrackAsAdminAction', () => {
     });
   });
 
+  // ── The publish is DEFERRED, not fire-and-forget (Qodo #12) ────────────────────
+  // Identical reasoning to the client arm: an un-awaited promise is at-most-once on Vercel,
+  // and the decline has already committed, so a dropped publish is never retried.
+
+  it('REGISTERS the publish with runAfterResponse and does not run it inline', async () => {
+    await declineTrackAsAdminAction(VALID_INPUT);
+
+    expect(runAfterResponseMock).toHaveBeenCalledWith(
+      'track decline fan-out',
+      expect.any(Function)
+    );
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
   it('publishes project.track_declined with declinedBy: balo', async () => {
     await declineTrackAsAdminAction(VALID_INPUT);
+    await getScheduled()?.();
     expect(mockPublish).toHaveBeenCalledWith('project.track_declined', {
       correlationId: 'decline-audit-1',
       projectRequestId: REQUEST_ID,
@@ -171,6 +205,22 @@ describe('declineTrackAsAdminAction', () => {
       success: true,
       analytics: { stage: 'eoi_submitted', actorKind: 'balo', hadOpenProposal: false },
     });
+  });
+
+  it('maps a Postgres deadlock (40P01) to retryable copy and a WARN, not an error', async () => {
+    mockDeclineTrack.mockRejectedValue(
+      Object.assign(new Error('deadlock detected'), { code: '40P01' })
+    );
+    const result = await declineTrackAsAdminAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID })
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('a generic thrown error is logged and returns a generic failure', async () => {
