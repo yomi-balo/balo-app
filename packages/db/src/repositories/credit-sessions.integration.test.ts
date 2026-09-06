@@ -3309,6 +3309,262 @@ describe('creditSessionsRepository.settleFromPresence — overdraft', () => {
   });
 });
 
+// ── BAL-525 — the settlement instrument pin ───────────────────────────────
+//
+// ⚠⚠ THE INVARIANT: a session that can incur a debt carries the Stripe instrument that was on
+// file when that debt was incurred — pinned ONCE at `open()` and NEVER rewritten, with a
+// WRITE-ONCE top-up at each of the two terminal wallet-locked settlements (`end`,
+// `settleFromPresence`) for the "opened card-less, then a card arrived" shape.
+//
+// The pure resolution core (`resolveSettlementInstrument`) and the source-level drift alarm live
+// in `packages/db/src/invariants/session-debt-carries-its-collection-instrument.test.ts`. THESE
+// cases are the other half: what the two helpers actually WRITE, against a real Postgres, with the
+// CHECK constraints live.
+//
+// ⚠ The pin is EVIDENCE AND PREFERENCE, never authority (O2) — nothing here asserts a collection
+// outcome. Consent is never pinned (O4): no test sets or reads a pinned mandate, because there is
+// no such column and there must never be one.
+
+/** The pair the `setup({ mandate: true })` fixture puts on the wallet. */
+const FIXTURE_CUSTOMER = 'cus_test';
+const FIXTURE_PM = 'pm_test';
+
+/** Put a Stripe pair (and, optionally, live consent + a card-backed mode) on a wallet mid-test. */
+async function putCardOnWallet(
+  walletId: string,
+  values: {
+    stripeCustomerId: string;
+    stripePaymentMethodId: string;
+    mandate?: boolean;
+    lowBalanceMode?: 'auto_topup' | 'keep_going' | 'notify_only';
+  }
+): Promise<void> {
+  const set: Partial<NewCreditWallet> = {
+    stripeCustomerId: values.stripeCustomerId,
+    stripePaymentMethodId: values.stripePaymentMethodId,
+  };
+  if (values.mandate === true) {
+    set.mandateStatus = 'active';
+  }
+  if (values.lowBalanceMode !== undefined) {
+    set.lowBalanceMode = values.lowBalanceMode;
+  }
+  await db.update(creditWallets).set(set).where(eq(creditWallets.id, walletId));
+}
+
+describe('creditSessionsRepository — the settlement instrument pin (BAL-525)', () => {
+  it('open() PINS the wallet pair when a card is on file — the base pin, taken under the advisory lock', async () => {
+    const ctx = await setup({ balanceMinor: 50_000, mandate: true });
+    const id = await openOk(ctx, 10);
+
+    const session = await creditSessionsRepository.findById(id);
+    expect(session?.settlementStripeCustomerId).toBe(FIXTURE_CUSTOMER);
+    expect(session?.settlementStripePaymentMethodId).toBe(FIXTURE_PM);
+    // Dated by the DB's transaction clock (`now()`), never a JS `Date` — so the audit answer
+    // "when was this instrument on file?" is answerable without app↔DB clock skew.
+    expect(session?.settlementInstrumentPinnedAt).toBeInstanceOf(Date);
+  });
+
+  it('open() pins NOTHING when the wallet holds no card — all three NULL, and the row is legal', async () => {
+    // NULL is a legitimate answer, not a defect. The INSERT SUCCEEDING is itself the assertion
+    // that an all-NULL row satisfies BOTH pair CHECKs — the state every pre-0085 row is in.
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    const session = await creditSessionsRepository.findById(id);
+    expect(session?.settlementStripeCustomerId).toBeNull();
+    expect(session?.settlementStripePaymentMethodId).toBeNull();
+    expect(session?.settlementInstrumentPinnedAt).toBeNull();
+  });
+
+  it('settleFromPresence() TOPS UP a card-less open — the rescue case the base pin cannot cover', async () => {
+    // Opened with a funded balance and NO card, so the base pin wrote nothing. A card is then
+    // added, and the floor draws the balance negative: the debt is collectable and the row must
+    // say which instrument it was incurred against.
+    const ctx = await setup({
+      balanceMinor: 5 * CLIENT_RATE_PER_MIN,
+      overdraftCeilingMinor: 100_000,
+    });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId, 5);
+    expect((await creditSessionsRepository.findById(id))?.settlementStripeCustomerId).toBeNull();
+
+    await putCardOnWallet(ctx.walletId, {
+      stripeCustomerId: 'cus_added',
+      stripePaymentMethodId: 'pm_added',
+      mandate: true,
+    });
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { actualMinutes: 15, shape: 'held', outcome: 'completed' })
+    );
+
+    expect(res.overdraftMinor).toBe(10 * CLIENT_RATE_PER_MIN); // a real debt
+    expect(res.session.settlementStripeCustomerId).toBe('cus_added');
+    expect(res.session.settlementStripePaymentMethodId).toBe('pm_added');
+    expect(res.session.settlementInstrumentPinnedAt).toBeInstanceOf(Date);
+  });
+
+  it('⚠⚠ settleFromPresence() is WRITE-ONCE — a card swapped after open does NOT move the pin', async () => {
+    // THE POINT OF THE COALESCE. A top-up that overwrote would let a mid-session swap rewrite the
+    // history of which card the debt was incurred against — the opposite of an audit record.
+    const ctx = await setup({
+      balanceMinor: 5 * CLIENT_RATE_PER_MIN,
+      mandate: true,
+      overdraftCeilingMinor: 100_000,
+    });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId, 5);
+    const pinnedAt = (await creditSessionsRepository.findById(id))?.settlementInstrumentPinnedAt;
+    expect(pinnedAt).toBeInstanceOf(Date);
+
+    await putCardOnWallet(ctx.walletId, {
+      stripeCustomerId: 'cus_swapped',
+      stripePaymentMethodId: 'pm_swapped',
+      mandate: true,
+    });
+
+    const res = await creditSessionsRepository.settleFromPresence(
+      settlementInput(id, meetingId, { actualMinutes: 15, shape: 'held', outcome: 'completed' })
+    );
+
+    expect(res.overdraftMinor).toBe(10 * CLIENT_RATE_PER_MIN);
+    expect(res.session.settlementStripeCustomerId).toBe(FIXTURE_CUSTOMER);
+    expect(res.session.settlementStripePaymentMethodId).toBe(FIXTURE_PM);
+    // The TIMESTAMP is write-once too — `pinned_at` still names the open, not the settlement.
+    expect(res.session.settlementInstrumentPinnedAt).toEqual(pinnedAt);
+  });
+
+  it('end() TOPS UP a card-less open — the same rescue on the live_capture / external terminal path', async () => {
+    // §1's ruling made executable: `end()` is the terminal settlement for BOTH `live_capture` and
+    // `external` (BAL-133), so ONE top-up site covers the entire non-presence population.
+    const ctx = await setup({ balanceMinor: 5000, overdraftCeilingMinor: 100_000 });
+    const id = await openOk(ctx, 10);
+    expect((await creditSessionsRepository.findById(id))?.settlementStripeCustomerId).toBeNull();
+    await creditSessionsRepository.connect(id, { now: BASE });
+
+    // A card + live consent + a card-backed mode arrive mid-call, so grace carries the balance
+    // past zero (BAL-523) and a real debt exists to collect.
+    await putCardOnWallet(ctx.walletId, {
+      stripeCustomerId: 'cus_added',
+      stripePaymentMethodId: 'pm_added',
+      mandate: true,
+      lowBalanceMode: 'keep_going',
+    });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    }); // 24 × 250 = 6000 against 5000 → −1000
+
+    const end = await creditSessionsRepository.end(id, { now: meterAt(24) });
+    expect(end.overdraftMinor).toBe(1000);
+    expect(end.session.settlementStripeCustomerId).toBe('cus_added');
+    expect(end.session.settlementStripePaymentMethodId).toBe('pm_added');
+    expect(end.session.settlementInstrumentPinnedAt).toBeInstanceOf(Date);
+  });
+
+  it('⚠⚠ end() is WRITE-ONCE — a card swapped mid-call does NOT move the pin', async () => {
+    const ctx = await setup({
+      balanceMinor: 5000,
+      ...GRACE_CAPABLE,
+      overdraftCeilingMinor: 100_000,
+    });
+    const id = await openOk(ctx, 10);
+    const pinnedAt = (await creditSessionsRepository.findById(id))?.settlementInstrumentPinnedAt;
+    expect(pinnedAt).toBeInstanceOf(Date);
+
+    await creditSessionsRepository.connect(id, { now: BASE });
+    await creditSessionsRepository.meterSessionToNow(id, meterAt(24), {
+      floorMinutes: METER_FLOOR_MINUTES,
+    });
+    await putCardOnWallet(ctx.walletId, {
+      stripeCustomerId: 'cus_swapped',
+      stripePaymentMethodId: 'pm_swapped',
+      mandate: true,
+    });
+
+    const end = await creditSessionsRepository.end(id, { now: meterAt(24) });
+    expect(end.overdraftMinor).toBe(1000);
+    expect(end.session.settlementStripeCustomerId).toBe(FIXTURE_CUSTOMER);
+    expect(end.session.settlementStripePaymentMethodId).toBe(FIXTURE_PM);
+    expect(end.session.settlementInstrumentPinnedAt).toEqual(pinnedAt);
+  });
+
+  it('an ALREADY-SETTLED settleFromPresence does not touch the pin — the idempotency arm writes nothing', async () => {
+    const ctx = await setup({
+      balanceMinor: 5 * CLIENT_RATE_PER_MIN,
+      mandate: true,
+      overdraftCeilingMinor: 100_000,
+    });
+    const meetingId = await endedMeeting();
+    const id = await openPresence(ctx, meetingId, 5);
+    const input = settlementInput(id, meetingId, {
+      actualMinutes: 15,
+      shape: 'held',
+      outcome: 'completed',
+    });
+
+    const first = await creditSessionsRepository.settleFromPresence(input);
+    expect(first.alreadySettled).toBe(false);
+    const pinnedAt = first.session.settlementInstrumentPinnedAt;
+
+    // The card moves AFTER settlement. A replay must not re-pin from today's wallet.
+    await putCardOnWallet(ctx.walletId, {
+      stripeCustomerId: 'cus_swapped',
+      stripePaymentMethodId: 'pm_swapped',
+      mandate: true,
+    });
+    const second = await creditSessionsRepository.settleFromPresence(input);
+    expect(second.alreadySettled).toBe(true);
+
+    const persisted = await creditSessionsRepository.findById(id);
+    expect(persisted?.settlementStripeCustomerId).toBe(FIXTURE_CUSTOMER);
+    expect(persisted?.settlementStripePaymentMethodId).toBe(FIXTURE_PM);
+    expect(persisted?.settlementInstrumentPinnedAt).toEqual(pinnedAt);
+  });
+
+  it('⚠ the PAIR CHECK fires — a half-set instrument is rejected by the database, not by a caller', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    // ⚠⚠ THIS MUST BE THE LAST STATEMENT IN THIS TEST. A raw constraint violation ABORTS the
+    // surrounding test transaction (memory `reference_caught_23505_aborts_test_transaction`), so
+    // any query after it would fail for the wrong reason.
+    //
+    // The CUSTOMER half alone is the deterministic probe: it violates the instrument pair
+    // (`(pm IS NULL) = (cus IS NULL)` → `true = false`) while SATISFYING the pinned-at pair
+    // (`true = true`), so Postgres can only name one constraint.
+    await expect(
+      db
+        .update(creditSessions)
+        .set({ settlementStripeCustomerId: 'cus_half' })
+        .where(eq(creditSessions.id, id))
+    ).rejects.toMatchObject({
+      code: '23514',
+      constraint_name: 'credit_sessions_settlement_instrument_pair',
+    });
+  });
+
+  it('⚠ the PINNED-AT CHECK fires — an instrument that cannot date itself is rejected too', async () => {
+    const ctx = await setup({ balanceMinor: 50_000 });
+    const id = await openOk(ctx, 10);
+
+    // ⚠⚠ LAST STATEMENT — see the note above. Both ids set with no `pinned_at` satisfies the
+    // instrument pair and violates ONLY the pinned-at pair, so the constraint name is exact.
+    await expect(
+      db
+        .update(creditSessions)
+        .set({
+          settlementStripeCustomerId: 'cus_undated',
+          settlementStripePaymentMethodId: 'pm_undated',
+        })
+        .where(eq(creditSessions.id, id))
+    ).rejects.toMatchObject({
+      code: '23514',
+      constraint_name: 'credit_sessions_settlement_instrument_pinned_at_pair',
+    });
+  });
+});
+
 describe('creditSessionsRepository — presence in the reaper finders (BAL-412)', () => {
   it('findMeterable INCLUDES a presence session while its meeting is LIVE — the tick loop still runs under a floor', async () => {
     const ctx = await setup({ balanceMinor: 50_000 });
