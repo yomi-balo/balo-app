@@ -50,6 +50,7 @@ import { CreditDormancyReminderEmail } from './credit-dormancy-reminder.js';
 import { CreditBalanceExpiredEmail } from './credit-balance-expired.js';
 import { CreditAutoTopupExecutedEmail } from './credit-auto-topup-executed.js';
 import { CreditAutoTopupFailedEmail } from './credit-auto-topup-failed.js';
+import { CreditReceivableClearedEmail } from './credit-receivable-cleared.js';
 import { SessionSettledEmail } from './session-settled.js';
 import { SessionSettlementFailedEmail } from './session-settlement-failed.js';
 import { CreditTopupCompletedEmail } from './credit-topup-completed.js';
@@ -1165,6 +1166,27 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         reason === 'requires_action'
           ? 'Confirm your card to keep auto-top-up on'
           : 'A quick card update keeps auto-top-up on',
+    };
+  },
+
+  // BAL-535 (ADR-1040 Amendment 6 §F) receivable cleared — server-only, EMAIL to the billing
+  // admins. Warm, congratulatory: the balance now covers the extra time from a recent
+  // consultation, so the account's soft hold is released. AUD face-value figures only.
+  //
+  // ⚠ `covered` is `clearedMinor` — the sum of what those CONSULTATIONS' extra time came to, and
+  // the copy attributes it to them, never to this payment (fix round N5/L2). Attributing it to
+  // the top-up was false after a partial one: the figure is the receivable's recorded amount,
+  // which diverges from what is actually owed the moment any other ledger entry lands.
+  'credit-receivable-cleared': (data) => {
+    return {
+      component: React.createElement(CreditReceivableClearedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        covered: formatAudMinor(numberCount(data.clearedMinor)),
+        balanceAfter: formatAudMinor(numberCount(data.balanceAfterMinor)),
+        ctaUrl: `${BASE_URL}/settings/billing`,
+        baseUrl: BASE_URL,
+      }),
+      subject: "You're all set — your account is clear",
     };
   },
 

@@ -35,10 +35,10 @@ import {
  * pinned instrument, FALLS BACK to the wallet's live pair when the pin is absent or the pin
  * disagrees with it, and WARNS on disagreement. It never refuses to charge because the pin is
  * gone, and it never charges the pin when the live wallet says otherwise — the anti-collapse
- * assertions below pin that shape by NAME, not merely by a changed count. Making the pin
- * authoritative ("charge the pin or nothing") is BAL-535's ruling, not this one's: it would
- * decide who eats the loss when the pinned instrument is gone, and the dunning sweep never
- * re-charges a receivable.
+ * assertions below pin that shape by NAME, not merely by a changed count. **BAL-535 ruled
+ * (ADR-1040 Amendment 6 §E): the pin is permanently evidence and preference. There is no pending
+ * decision here — these assertions are now the executable form of a settled rule, and a PR that
+ * changes them needs an ADR amendment first (ADR-1032), never the reverse.**
  *
  * ⚠⚠ NEVER PIN THE MANDATE (O4). `mandate_status` / `mandate_ref` must stay absent from this
  * table forever — a pinned `'active'` would let a client who revoked consent (or whose card
@@ -182,7 +182,7 @@ describe('INVARIANT: session debt carries its collection instrument — pure cor
   it('⚠⚠ ANTI-COLLAPSE #2 — the pin is never authority', () => {
     // An implementation "improved" into a pin-or-nothing rule fails here, loudly: the resolved
     // payment method must equal the LIVE one on every row where they could possibly differ.
-    // Authority over a stale pin is BAL-535's ruling, not this function's.
+    // Authority over a stale pin was ruled out PERMANENTLY by BAL-535 (ADR-1040 Amendment 6 §E).
     const rowsWhereResolvedOverridesLive = ROWS.filter((row) => {
       const resolved = resolveSettlementInstrument(row.candidates);
       return resolved.paymentMethodId !== row.candidates.live.paymentMethodId;
@@ -307,7 +307,17 @@ describe('INVARIANT: settlement actually resolves through the pin (cross-package
     expect(endSession).toContain(
       'const wallet = await creditWalletsRepository.findById(session.walletId);'
     );
-    expect((endSession.match(/creditWalletsRepository\.findById\(/g) ?? []).length).toBe(1);
+    // ⚠⚠ BAL-535 (R3b, ADR-1040 Amendment 6 §F residual) DELIBERATELY MOVED THIS COUNT FROM 1 TO
+    // 2. The second read lives in `openReceivableAndDun` (`const wallet = await
+    // creditWalletsRepository.findById(session.walletId, tx);`) — the late-receivable-residual
+    // fix: before recording a settlement failure as an open hold, it checks whether the wallet's
+    // CURRENT balance already covers the debt (a covering top-up raced the failure) and, if so,
+    // self-clears the row it just opened instead of leaving a hold on a company that owes
+    // nothing. NEITHER read is a mode read — the first (`settleOverdraft`) verifies the mandate
+    // is still live before charging; the second only asks whether a balance already covers a
+    // debt. A THIRD occurrence means a new site needs its own justification added here, by name,
+    // not a silent bump of this count.
+    expect((endSession.match(/creditWalletsRepository\.findById\(/g) ?? []).length).toBe(2);
     // O3 — the mandate is re-verified on settlement's OWN fresh wallet read, not inherited.
     expect(endSession).toContain('!isWalletMandateActive(wallet)');
     // O2 — exactly ONE resolution site; `reconcileStuckSettlement` goes through `settleOverdraft`

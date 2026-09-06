@@ -13,12 +13,14 @@
  * that are each already authorized on their own terms. Keeping it in its own module makes that
  * distinction structural rather than a comment that can rot.
  *
- * ⚠⚠ EVIDENCE AND PREFERENCE, NEVER AUTHORITY (O2). On disagreement this resolves to the LIVE
- * pair, never the pin — see the anti-collapse assertions in
- * `packages/db/src/invariants/session-debt-carries-its-collection-instrument.test.ts`. Making
- * the pin authoritative (charge the pin or nothing) is BAL-535's ruling, not this function's —
- * it would decide who eats the loss when the pinned instrument is gone, and the dunning sweep
- * never re-charges (`apps/api/src/jobs/receivable-dunning-sweep.ts`).
+ * ⚠⚠ EVIDENCE AND PREFERENCE, NEVER AUTHORITY — **SETTLED, PERMANENTLY** (ADR-1040 Amendment 6
+ * §E, BAL-535). On disagreement this resolves to the LIVE pair, never the pin. Authority over
+ * the pin was ruled out, not deferred: an authoritative pin routes a debt to a receivable, and a
+ * receivable has no collection arm (`receivable-dunning-sweep.ts` imports no Stripe client).
+ * Amendment 5 §E's fixed per-session idempotency key independently forecloses any "try the pin,
+ * then fall back" ladder. The anti-collapse assertions in
+ * `packages/db/src/invariants/session-debt-carries-its-collection-instrument.test.ts` fail by
+ * name if this is ever reversed.
  */
 
 /** A chargeable Stripe pair. Both ids non-null BY TYPE — see the ⚠ note on the resolver below. */

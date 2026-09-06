@@ -1,4 +1,4 @@
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, sql } from 'drizzle-orm';
 import { WALLET_EXPIRY_MONTHS } from '@balo/shared/pricing';
 import { db } from '../client';
 import {
@@ -445,6 +445,43 @@ export const creditLedgerRepository = {
       .select({ sum: sql<string>`coalesce(sum(${creditLedger.amountMinor}), 0)` })
       .from(creditLedger)
       .where(eq(creditLedger.walletId, walletId));
+    return Number(row?.sum ?? 0);
+  },
+
+  /**
+   * BAL-535 (ADR-1040 Amendment 6 §F, fix round B1) — total PROMO credit granted to a wallet
+   * at or after `since`. This is the discount that makes §F's promo exclusion real rather than
+   * merely adjacent: a marketing grant that landed while a debt was outstanding is subtracted
+   * back out of the balance before `creditCoversOutstandingDebt` is asked whether the client's
+   * own money covered it.
+   *
+   * A promo grant is `entry_type='adjustment'` AND `reason='promo'` — the shape BOTH promo
+   * write paths post (`promoRedemptionsRepository.redeem`, the purchase-bundled arm, and
+   * `promoCodesRepository.redeem`, the standalone Model-C arm). Matching on the PAIR rather
+   * than on `reason` alone keeps a future non-promo `adjustment` (an ops correction, say) out
+   * of the discount, and keeps a hypothetical non-`adjustment` promo entry from silently
+   * escaping it.
+   *
+   * `SUM(integer)` returns Postgres `bigint`; coerced to a JS number, `0` when there is
+   * nothing. Grants are always positive, so the result is `>= 0` and the discount can only
+   * ever make the predicate STRICTER. TX-COMPOSABLE — the callers ask this inside the same
+   * transaction as the clear, under the wallet's advisory lock.
+   */
+  async sumPromoGrantedSince(
+    input: { walletId: string; since: Date },
+    exec: DbExecutor = db
+  ): Promise<number> {
+    const [row] = await exec
+      .select({ sum: sql<string>`coalesce(sum(${creditLedger.amountMinor}), 0)` })
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.walletId, input.walletId),
+          eq(creditLedger.entryType, 'adjustment'),
+          eq(creditLedger.reason, 'promo'),
+          gte(creditLedger.createdAt, input.since)
+        )
+      );
     return Number(row?.sum ?? 0);
   },
 };

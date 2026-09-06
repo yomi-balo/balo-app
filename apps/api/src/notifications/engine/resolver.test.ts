@@ -541,6 +541,31 @@ describe('resolveContext', () => {
     });
   });
 
+  describe('credit.receivable.cleared hydration (BAL-535)', () => {
+    it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry) — the silent-failure guard', async () => {
+      // ⚠ The ONLY thing standing between this event and a silently unaddressed email is its
+      // one-line entry in `BILLING_FANOUT_EVENTS`, whose own docblock says omission fails
+      // SILENTLY (the rule resolves `company_billing_admins` from `data.billingUserIds`, so an
+      // un-hydrated payload fans out to nobody and throws nothing). Deleting that line fails
+      // HERE, by name.
+      mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
+      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+
+      const context = await resolveContext('credit.receivable.cleared', {
+        correlationId: 'receivable_cleared:ledger-1',
+        companyId: 'company-1',
+        walletId: 'wallet-1',
+        receivableCount: 2,
+        clearedMinor: 5_000,
+        balanceAfterMinor: 11_000,
+        clearedBy: 'manual_purchase',
+      });
+
+      expect(mockListBillingUserIds).toHaveBeenCalledWith('company-1');
+      expect(context.data.billingUserIds).toEqual(['owner-1', 'admin-1']);
+    });
+  });
+
   describe('billing.email_changed hydration (BAL-522)', () => {
     it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry) — the silent-failure guard', async () => {
       mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);

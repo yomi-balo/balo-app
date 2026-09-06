@@ -248,9 +248,10 @@ export const creditSessions = pgTable(
      * this column only selects the `source` label (`'pinned'` vs `'wallet'`) and arms the
      * disagreement warn. It never refuses to charge because the pin is gone, and it never
      * redirects a charge away from the live pair. Making the pin authoritative — charging IT
-     * instead of the live pair when they disagree — decides who eats the loss when the pinned
-     * card is gone; the dunning sweep never re-charges — and that is BAL-535's ruling, not this
-     * column's.
+     * instead of the live pair when they disagree — would decide who eats the loss when the
+     * pinned card is gone; that is ruled out PERMANENTLY (ADR-1040 Amendment 6 §E, BAL-535), not
+     * left open for this column to decide. The dunning sweep still never re-charges — a covering
+     * cash credit (Amendment 6 §F) is the receivable's only self-service exit.
      *
      * ⚠⚠ NEVER PIN THE MANDATE. The wallet's `mandate_status` / `mandate_ref` columns are
      * DELIBERATELY ABSENT here and must stay absent — do NOT "complete the set". A pinned

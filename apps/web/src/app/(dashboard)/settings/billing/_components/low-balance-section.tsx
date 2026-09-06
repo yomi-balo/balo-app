@@ -124,8 +124,10 @@ const ARM_WARNING_MESSAGE =
  * `durationSource: 'presence'` — at meeting end the presence finalizer (`settleFromPresence`)
  * posts every billable minute with no mode check and settles off-session, topping the meter's
  * refusal straight back up. Net charge is unchanged by this setting. That mode-blind finalizer is
- * ALSO what guarantees the expert is paid, so it is not fixed here: tracked as **BAL-535**, which
- * needs an ADR ruling first.
+ * ALSO what guarantees the expert is paid, and **BAL-535 ruled it stays that way permanently
+ * (ADR-1040 Amendment 6 §A.1/§C)**. This copy is therefore not interim — it is the settled
+ * description of the product, and §D of that amendment requires the mode picker's own
+ * `notify_only` description to say the same thing (see `LowBalanceModePicker.tsx`).
  *
  * ⚠ R2 also REVERSED the round-1 `hasUnsettledOverdraft` RE-GATE. That re-gate assumed FUTURE
  * sessions would be disarmed; they are not. So the truthful trigger is BAL-516's again — a

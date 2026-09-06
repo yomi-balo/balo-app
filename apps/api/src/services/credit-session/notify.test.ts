@@ -1,16 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockFindProfileById, mockFindUser, mockFindMeeting, mockPublish, mockTrackServer } =
-  vi.hoisted(() => ({
-    mockFindProfileById: vi.fn(),
-    mockFindUser: vi.fn(),
-    mockFindMeeting: vi.fn(),
-    mockPublish: vi.fn(),
-    mockTrackServer: vi.fn(),
-  }));
+const {
+  mockFindProfileById,
+  mockFindUser,
+  mockFindMeeting,
+  mockPublish,
+  mockTrackServer,
+  mockLogError,
+} = vi.hoisted(() => ({
+  mockFindProfileById: vi.fn(),
+  mockFindUser: vi.fn(),
+  mockFindMeeting: vi.fn(),
+  mockPublish: vi.fn(),
+  mockTrackServer: vi.fn(),
+  mockLogError: vi.fn(),
+}));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLogError }),
 }));
 vi.mock('@balo/db', () => ({
   expertsRepository: { findProfileById: mockFindProfileById },
@@ -26,6 +33,7 @@ vi.mock('@balo/analytics/server', () => ({
     GRACE_CEILING_HIT: 'grace_ceiling_hit',
     SESSION_SETTLED: 'session_settled',
     RECEIVABLE_OPENED: 'receivable_opened',
+    RECEIVABLE_CLEARED: 'receivable_cleared',
   },
 }));
 vi.mock('../../notifications/publisher.js', () => ({
@@ -43,6 +51,7 @@ import {
   publishNearWrap,
   publishPaymentCharged,
   publishPayoutRecorded,
+  publishReceivableCleared,
   publishSessionMissedCall,
   publishSessionSettled,
   publishSettlementFailure,
@@ -266,6 +275,110 @@ describe('notify helpers', () => {
       requestedByUserId: 'user_1',
       requestedByName: 'Dana',
     });
+  });
+
+  it('publishReceivableCleared (BAL-535) publishes ONE notice per clear operation, keyed on the ledger entry', async () => {
+    await publishReceivableCleared({
+      ledgerEntryId: 'ledger_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 3,
+      clearedMinor: 1200,
+      balanceAfterMinor: 300,
+      clearedBy: 'manual_purchase',
+    });
+    // ⚠ N4 — the correlationId is the LEDGER ENTRY, not a receivable id. Keying it per row sent
+    // three identical "your account is clear" emails for a wallet holding three receivables.
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith('credit.receivable.cleared', {
+      correlationId: 'receivable_cleared:ledger_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 3,
+      clearedMinor: 1200,
+      balanceAfterMinor: 300,
+      clearedBy: 'manual_purchase',
+    });
+    expect(mockTrackServer).toHaveBeenCalledWith('receivable_cleared', {
+      company_id: 'company_1',
+      wallet_id: 'wallet_1',
+      receivable_count: 3,
+      cleared_minor: 1200,
+      balance_after_minor: 300,
+      cleared_by: 'manual_purchase',
+      distinct_id: 'company_1',
+    });
+    expect(mockLogError).not.toHaveBeenCalled();
+  });
+
+  it('publishReceivableCleared self-catches a publish failure and NEVER re-throws (money already committed)', async () => {
+    mockPublish.mockRejectedValueOnce(new Error('queue unavailable'));
+    await expect(
+      publishReceivableCleared({
+        ledgerEntryId: 'ledger_2',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        receivableCount: 1,
+        clearedMinor: 500,
+        balanceAfterMinor: 0,
+        clearedBy: 'auto_topup',
+      })
+    ).resolves.toBeUndefined();
+    expect(mockLogError).toHaveBeenCalledTimes(1);
+    const [fields] = mockLogError.mock.calls[0] ?? [];
+    expect(fields).toMatchObject({
+      op: 'publishReceivableCleared',
+      ledgerEntryId: 'ledger_2',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 1,
+    });
+  });
+
+  // ⚠ FIX ROUND L1 — the metric must survive a queue outage. `trackServer` used to sit INSIDE the
+  // try wrapping the publish, so an outage lost the count as well as the email — while its pair
+  // `RECEIVABLE_OPENED` sits on a throwing path and is never lost. §J's "how many holds clear
+  // without ops touching them" would have counted opens reliably and clears short. Moving
+  // `trackServer` back inside the try fails HERE.
+  it('⚠ L1 — the RECEIVABLE_CLEARED metric still fires when the notification publish throws', async () => {
+    mockPublish.mockRejectedValueOnce(new Error('queue unavailable'));
+    await publishReceivableCleared({
+      ledgerEntryId: 'ledger_3',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 1,
+      clearedMinor: 500,
+      balanceAfterMinor: 0,
+      clearedBy: 'auto_topup',
+    });
+    expect(mockTrackServer).toHaveBeenCalledWith(
+      'receivable_cleared',
+      expect.objectContaining({ company_id: 'company_1', receivable_count: 1 })
+    );
+  });
+
+  // …and the containment half: the metric sits OUTSIDE the publish try but inside its own, so an
+  // analytics throw cannot escape into the post-commit loop (which has no try/catch of its own)
+  // and make Stripe retry a COMMITTED webhook. Removing that inner try fails HERE.
+  it('⚠ L1 — a throwing trackServer is contained; the notification still publishes', async () => {
+    mockTrackServer.mockImplementationOnce(() => {
+      throw new Error('posthog down');
+    });
+    await expect(
+      publishReceivableCleared({
+        ledgerEntryId: 'ledger_4',
+        companyId: 'company_1',
+        walletId: 'wallet_1',
+        receivableCount: 1,
+        clearedMinor: 500,
+        balanceAfterMinor: 0,
+        clearedBy: 'auto_topup',
+      })
+    ).resolves.toBeUndefined();
+    expect(mockPublish).toHaveBeenCalledWith(
+      'credit.receivable.cleared',
+      expect.objectContaining({ correlationId: 'receivable_cleared:ledger_4' })
+    );
   });
 
   it('publishPaymentCharged carries the client all-in charge to the acting member (self)', async () => {

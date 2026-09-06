@@ -19,6 +19,10 @@ const {
   mockRedeem,
   mockPublish,
   mockCaptureException,
+  mockReceivableClearOpenForWallet,
+  mockEarliestOpenDebtAnchor,
+  mockSumPromoGrantedSince,
+  mockAcquireWalletLock,
 } = vi.hoisted(() => {
   const store = new Map<string, StoredEvent>();
   return {
@@ -51,6 +55,25 @@ const {
     // The app error handler captures to Sentry before answering 500 — the only place the
     // commit-proof STAGE is observable, and what distinguishes the two guards from each other.
     mockCaptureException: vi.fn(),
+    // BAL-535 — every credit effect now asks whether it covers an open receivable
+    // (`clearReceivablesCoveredByCredit`), not just `overdraft_settlement`. Default: nothing
+    // open, so this route's existing manual_purchase / auto_topup fixtures are unaffected.
+    mockReceivableClearOpenForWallet: vi.fn(
+      async (): Promise<
+        Array<{
+          id: string;
+          companyId: string;
+          sessionId: string;
+          amountMinor: number;
+          status: string;
+        }>
+      > => []
+    ),
+    // BAL-535 fix round B1 — the coverage decision short-circuits on "nothing open", which is
+    // this route's case in every fixture, so the promo sum is never reached.
+    mockEarliestOpenDebtAnchor: vi.fn(async (): Promise<Date | undefined> => undefined),
+    mockSumPromoGrantedSince: vi.fn(async (): Promise<number> => 0),
+    mockAcquireWalletLock: vi.fn(),
   };
 });
 
@@ -72,6 +95,12 @@ vi.mock('@balo/db', () => ({
     applyMandate: mockApplyMandate,
     applyMandateStatus: mockApplyMandateStatus,
   },
+  creditReceivablesRepository: {
+    clearOpenForWallet: mockReceivableClearOpenForWallet,
+    earliestOpenDebtAnchor: mockEarliestOpenDebtAnchor,
+  },
+  creditLedgerRepository: { sumPromoGrantedSince: mockSumPromoGrantedSince },
+  acquireWalletLock: mockAcquireWalletLock,
   promoRedemptionsRepository: { redeem: mockRedeem },
   deriveIdempotencyKey: (input: { reason: string }) => `${input.reason}:key`,
 }));
@@ -137,6 +166,10 @@ describe('POST /webhooks/stripe', () => {
     mockRedeem.mockClear();
     mockPublish.mockClear();
     mockCaptureException.mockClear();
+    mockReceivableClearOpenForWallet.mockClear();
+    mockEarliestOpenDebtAnchor.mockClear();
+    mockSumPromoGrantedSince.mockClear();
+    mockAcquireWalletLock.mockClear();
     // Default settlement retrieval for payment_intent.succeeded.
     mockStripe.paymentIntents.retrieve.mockResolvedValue({ id: 'pi_1', latest_charge: 'ch_1' });
     mockStripe.charges.retrieve.mockResolvedValue({

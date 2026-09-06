@@ -19,7 +19,11 @@ import {
   type CreditSettlementShape,
 } from '@balo/db';
 import { trackServer, SESSION_SERVER_EVENTS } from '@balo/analytics/server';
-import { minutesOfRunway, type SettleableSession } from '@balo/shared/credit';
+import {
+  minutesOfRunway,
+  type CashCreditReason,
+  type SettleableSession,
+} from '@balo/shared/credit';
 import { createLogger } from '@balo/shared/logging';
 import { notificationEvents } from '../../notifications/publisher.js';
 import { resolveBillingFloorMinutes } from '../../config/billing-floor.js';
@@ -314,6 +318,109 @@ export async function publishSessionMissedCall(session: CreditSession, _now: Dat
     expertName,
     scheduledOn: formatSettledOn(meeting.scheduledStart),
   });
+}
+
+/**
+ * BAL-535 (ADR-1040 Amendment 6 §F) — a covering CASH credit cleared the company's open
+ * receivables, releasing its soft account hold. Publish + analytics defined ONCE here (mirroring
+ * `publishSettlementFailure`'s `RECEIVABLE_OPENED` shape) so the payload/analytics shapes for
+ * the money-in half of that pairing cannot drift from the money-out half.
+ *
+ * ⚠ ONE NOTICE PER CLEAR OPERATION, NOT PER ROW (fix round N4). A wallet can hold several open
+ * receivables — `credit-receivables.integration.test.ts` proves it — and the previous shape
+ * returned one thunk per cleared row, so three rows sent three identical "your account is clear"
+ * emails, each quoting the same balance. `correlationId` is therefore keyed on the LEDGER ENTRY
+ * that covered the debt (`receivable_cleared:{ledgerEntryId}`), which is one per clear operation
+ * and is itself idempotency-keyed, so a webhook replay collapses onto the same BullMQ jobId.
+ *
+ * ⚠ `balanceAfterMinor` IS THE DISPLAY FIGURE, and it is the caller's job to pass the TRUE final
+ * one (M3): on a `manual_purchase` the promo grant lands after the clear's predicate ran, and
+ * this email reaches the same MANAGE_BILLING holder as the top-up receipt seconds later. The
+ * predicate's own (pre-promo, promo-discounted) figures live on the `audit_events` row instead —
+ * different questions, so never one field.
+ *
+ * Called as a `PostCommitEffect` thunk from the Stripe webhook (`dispatch.ts`), whose post-commit
+ * loop has NO surrounding try/catch of its own (unlike `applyStripeEffect`'s txn) — so, mirroring
+ * `publishTopupReceipt`'s posture in that same file, this SELF-CATCHES and never re-throws: the
+ * money (the clear) is already committed, and re-throwing would make Stripe retry the WHOLE
+ * webhook for a notification hiccup.
+ *
+ * ⚠ THE ANALYTICS FIRE BEFORE — AND OUTSIDE — THE PUBLISH TRY (fix round L1), exactly as
+ * `publishTopupReceipt`'s `emitManualPurchaseCredited` does deliberately. Inside it, a queue
+ * outage lost the METRIC as well as the email, and its pair `RECEIVABLE_OPENED` sits on a
+ * throwing path — so §J's "how many holds clear without ops touching them" would have counted
+ * opens reliably and clears short. `trackServer` is a no-op without an API key and `capture`
+ * only enqueues, so this cannot itself be what fails.
+ */
+export async function publishReceivableCleared(input: {
+  /** The credit ledger entry that covered the debt — the operation's identity. */
+  ledgerEntryId: string;
+  companyId: string;
+  walletId: string;
+  /** How many open receivables this one operation cleared (`>= 1`). */
+  receivableCount: number;
+  /** Sum of the cleared receivables' recorded amounts (AUD minor) — the consultations' figure. */
+  clearedMinor: number;
+  /** The TRUE final wallet balance the client will see (AUD minor). */
+  balanceAfterMinor: number;
+  clearedBy: CashCreditReason;
+}): Promise<void> {
+  const {
+    ledgerEntryId,
+    companyId,
+    walletId,
+    receivableCount,
+    clearedMinor,
+    balanceAfterMinor,
+    clearedBy,
+  } = input;
+  // ⚠ ITS OWN try, not the publish's. Outside the publish so a queue outage cannot lose the
+  // metric (L1); contained so an analytics hiccup cannot escape into the post-commit loop, which
+  // has no try/catch of its own and would answer 500 and make Stripe retry a COMMITTED webhook.
+  // Exactly `emitManualPurchaseCredited`'s posture in `dispatch.ts`.
+  try {
+    trackServer(SESSION_SERVER_EVENTS.RECEIVABLE_CLEARED, {
+      company_id: companyId,
+      wallet_id: walletId,
+      receivable_count: receivableCount,
+      cleared_minor: clearedMinor,
+      balance_after_minor: balanceAfterMinor,
+      cleared_by: clearedBy,
+      distinct_id: companyId,
+    });
+  } catch (err: unknown) {
+    log.warn(
+      {
+        op: 'publishReceivableCleared',
+        ledgerEntryId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to emit receivable_cleared (hold released; analytics best-effort)'
+    );
+  }
+  try {
+    await notificationEvents.publish('credit.receivable.cleared', {
+      correlationId: `receivable_cleared:${ledgerEntryId}`,
+      companyId,
+      walletId,
+      receivableCount,
+      clearedMinor,
+      balanceAfterMinor,
+      clearedBy,
+    });
+  } catch (err: unknown) {
+    log.error(
+      {
+        op: 'publishReceivableCleared',
+        ledgerEntryId,
+        companyId,
+        walletId,
+        receivableCount,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      'Failed to publish credit.receivable.cleared (hold released; notification best-effort)'
+    );
+  }
 }
 
 /** Member nudge asking billing admins to top up (in-app fan-out). Re-notifiable per click. */

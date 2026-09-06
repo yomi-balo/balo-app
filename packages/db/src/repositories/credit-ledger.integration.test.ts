@@ -834,3 +834,115 @@ describe('creditLedgerRepository.expireDormantBalance (BAL-380 dormancy expiry)'
     expect(result).toEqual({ outcome: 'skipped', reason: 'not_found' });
   });
 });
+
+/**
+ * BAL-535 fix round B1 (ADR-1040 Amendment 6 §F) — `sumPromoGrantedSince`, the discount that
+ * makes the promo exclusion real. Every case here is one the shipped predicate got wrong.
+ */
+describe('creditLedgerRepository.sumPromoGrantedSince', () => {
+  /** Post one entry and force its `created_at` (append-only ⇒ set it by direct update). */
+  async function postAt(
+    walletId: string,
+    input: Pick<ApplyLedgerEntryInput, 'entryType' | 'reason' | 'amountMinor' | 'idempotencyKey'>,
+    createdAt: Date
+  ): Promise<void> {
+    const result = await db.transaction((tx) =>
+      applyLedgerEntry(tx, { walletId, memberId: null, ...input })
+    );
+    await db.update(creditLedger).set({ createdAt }).where(eq(creditLedger.id, result.entry.id));
+  }
+
+  const BEFORE = new Date('2026-08-01T00:00:00.000Z');
+  const ANCHOR = new Date('2026-09-01T00:00:00.000Z');
+  const AFTER = new Date('2026-09-02T00:00:00.000Z');
+
+  it('returns 0 for a wallet with no promo entries at all', async () => {
+    const { wallet } = await creditWalletFactory();
+    expect(
+      await creditLedgerRepository.sumPromoGrantedSince({ walletId: wallet.id, since: ANCHOR })
+    ).toBe(0);
+  });
+
+  it('sums promo grants at or after the anchor and IGNORES ones that predate it', async () => {
+    const { wallet } = await creditWalletFactory();
+    await postAt(
+      wallet.id,
+      { entryType: 'adjustment', reason: 'promo', amountMinor: 2_500, idempotencyKey: 'promo:old' },
+      BEFORE
+    );
+    await postAt(
+      wallet.id,
+      { entryType: 'adjustment', reason: 'promo', amountMinor: 5_000, idempotencyKey: 'promo:new' },
+      AFTER
+    );
+    // A promo that funded the wallet BEFORE the debt existed was legitimately consumed by the
+    // session; only what landed while the debt was outstanding is discounted back out.
+    expect(
+      await creditLedgerRepository.sumPromoGrantedSince({ walletId: wallet.id, since: ANCHOR })
+    ).toBe(5_000);
+  });
+
+  it('includes a grant landing EXACTLY on the anchor (the window is inclusive)', async () => {
+    const { wallet } = await creditWalletFactory();
+    await postAt(
+      wallet.id,
+      { entryType: 'adjustment', reason: 'promo', amountMinor: 700, idempotencyKey: 'promo:exact' },
+      ANCHOR
+    );
+    expect(
+      await creditLedgerRepository.sumPromoGrantedSince({ walletId: wallet.id, since: ANCHOR })
+    ).toBe(700);
+  });
+
+  it('counts PROMO only — a cash purchase in the same window is not discounted', async () => {
+    const { wallet } = await creditWalletFactory();
+    await postAt(
+      wallet.id,
+      {
+        entryType: 'purchase',
+        reason: 'auto_topup',
+        amountMinor: 10_000,
+        idempotencyKey: 'auto_topup:cash',
+      },
+      AFTER
+    );
+    expect(
+      await creditLedgerRepository.sumPromoGrantedSince({ walletId: wallet.id, since: ANCHOR })
+    ).toBe(0);
+  });
+
+  it("is scoped to the wallet — another wallet's promo is not discounted here", async () => {
+    const { wallet } = await creditWalletFactory();
+    const other = await creditWalletFactory();
+    await postAt(
+      other.wallet.id,
+      {
+        entryType: 'adjustment',
+        reason: 'promo',
+        amountMinor: 9_000,
+        idempotencyKey: 'promo:other-wallet',
+      },
+      AFTER
+    );
+    expect(
+      await creditLedgerRepository.sumPromoGrantedSince({ walletId: wallet.id, since: ANCHOR })
+    ).toBe(0);
+  });
+
+  it("composes under the caller's transaction (the clear reads it under the wallet lock)", async () => {
+    const { wallet } = await creditWalletFactory();
+    await postAt(
+      wallet.id,
+      { entryType: 'adjustment', reason: 'promo', amountMinor: 1_500, idempotencyKey: 'promo:tx' },
+      AFTER
+    );
+    const sum = await db.transaction(async (tx) => {
+      await acquireWalletLock(tx, wallet.id);
+      return creditLedgerRepository.sumPromoGrantedSince(
+        { walletId: wallet.id, since: ANCHOR },
+        tx
+      );
+    });
+    expect(sum).toBe(1_500);
+  });
+});

@@ -76,6 +76,27 @@ export const CARD_BACKED_MODE_TITLE: Record<CardBackedLowBalanceMode, string> = 
   keep_going: MODE_OPTIONS.find((option) => option.id === 'keep_going')?.title ?? 'keep_going',
 };
 
+/**
+ * BAL-535 (ADR-1040 Amendment 6 §D) — the `notify_only` description, in three pieces so the two
+ * arms cannot drift.
+ *
+ * ⚠⚠ THE CARD-LESS ARM IS WHERE THE CONSEQUENCE IS WORST, and it used to say nothing (fix round
+ * L3). `open()` admits on a funded estimate alone, a presence session posts every billable
+ * minute past zero, settlement finds no mandate to charge — so the client is left owing money
+ * AND soft-held, while the only sentence they read was "I'll top up myself." The two arms now
+ * share `BEYOND_BALANCE` verbatim, so the load-bearing clause is one string and a future edit to
+ * either arm cannot quietly leave the other saying less.
+ *
+ * Copy rules (CLAUDE.md): gender-neutral, warm, non-adversarial, no countdown — and the word
+ * "overdraft" NEVER appears (pinned in six files). The card-less arm states the consequence as a
+ * helpful fact plus the way out, which §F now genuinely provides: a covering top-up clears the
+ * hold in the same transaction as the credit.
+ */
+const NOTIFY_ONLY_LEAD = "Tell me when I'm running low — I'll top up myself.";
+const BEYOND_BALANCE = 'Time you use beyond your balance still';
+const NOTIFY_ONLY_SETTLES_TO_CARD = `${BEYOND_BALANCE} settles to the card on file afterward.`;
+const NOTIFY_ONLY_SETTLES_ON_TOP_UP = `${BEYOND_BALANCE} needs settling — with no card on file we'll pause new sessions until a top-up clears it.`;
+
 function RadioDot({ on }: Readonly<{ on: boolean }>) {
   return (
     <span
@@ -211,7 +232,9 @@ function ModeCard({
  * BAL-377 low-balance mode picker (shared with billing-settings). Three warm modes; "Keep me
  * going" / "Auto top-up" are card-backed and gate on `cardAvailable`. Auto top-up reveals the
  * "Add" / "When below" inputs; a mandate disclosure note appears under a selected card-backed
- * mode. "Overdraft" never appears (the copy says "keep me going" / "settle afterward").
+ * mode. "Overdraft" never appears (the copy says "keep me going" / "settle afterward") — and
+ * `notify_only`'s description states the settlement fact when a card is on file (ADR-1040
+ * Amendment 6 §D, BAL-535).
  */
 export function LowBalanceModePicker({
   mode,
@@ -232,10 +255,18 @@ export function LowBalanceModePicker({
         case 'keep_going':
           return "Don't interrupt sessions — settle any extra time to your card afterward.";
         default:
-          return "Tell me when I'm running low. I'll top up myself.";
+          // BAL-535 (ADR-1040 Amendment 6 §D) — THE GAP. This was a complete sentence about what
+          // the mode does with the part that costs money left out: settlement is mode-blind
+          // (Amendment 6 §A.1/§C, permanent), so a `notify_only` client with a card on file is
+          // still charged for time delivered past zero. `cardAvailable` is the only signal this
+          // component receives — a wallet with a card but no LIVE mandate is told slightly more
+          // than is true, which is the accepted, safe direction for an honesty fix (see this
+          // component's module docblock). Do not thread `mandateActive` in here — the
+          // top-up-composer host's `CLIENT_WALLET_VIEW_COLUMNS` deliberately excludes it.
+          return `${NOTIFY_ONLY_LEAD} ${cardAvailable ? NOTIFY_ONLY_SETTLES_TO_CARD : NOTIFY_ONLY_SETTLES_ON_TOP_UP}`;
       }
     },
-    [reloadMinor, thresholdMinor]
+    [reloadMinor, thresholdMinor, cardAvailable]
   );
 
   const cardBackedSelected = isCardBackedLowBalanceMode(mode);

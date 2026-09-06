@@ -46,6 +46,9 @@ const BILLING_FANOUT_EVENTS = new Set<string>([
   // payload-only hydration as dormancy_reminder — only `billingUserIds`).
   'credit.auto_topup.executed',
   'credit.auto_topup.failed',
+  // BAL-535: a covering credit cleared an open receivable → the billing admins. Omitting this
+  // entry fails SILENTLY the same way — see the warning above.
+  'credit.receivable.cleared',
   // BAL-378: session settlement / grace notices carry `companyId` → the billing admins.
   // (`session.low_balance` / `session.near_wrap` are `self`-only — no fan-out entry.)
   'session.grace_entered',

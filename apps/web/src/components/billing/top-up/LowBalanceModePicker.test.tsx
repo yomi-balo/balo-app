@@ -90,6 +90,67 @@ describe('LowBalanceModePicker', () => {
     expect(screen.queryByText(/letting Balo charge/i)).not.toBeInTheDocument();
   });
 
+  it('BAL-535 (ADR-1040 Amendment 6 §D) — states the settlement fact for notify_only when a card is on file', () => {
+    renderPicker({ mode: 'notify_only', cardAvailable: true });
+    expect(
+      screen.getByText(/time you use beyond your balance still settles to the card on file/i)
+    ).toBeInTheDocument();
+  });
+
+  it('BAL-535 — makes no CARD claim for notify_only when there is no card to settle to', () => {
+    renderPicker({ mode: 'notify_only', cardAvailable: false });
+    expect(screen.queryByText(/settles to the card on file/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Tell me when I'm running low — I'll top up myself\./i)
+    ).toBeInTheDocument();
+  });
+
+  // ⚠ FIX ROUND L3 — the card-less arm is where the consequence is worst (`open()` admits on a
+  // funded estimate, a presence session posts every billable minute past zero, settlement finds
+  // no mandate) and it used to say NOTHING about it. Reverting to the bare "I'll top up myself."
+  // fails here, by name.
+  it('BAL-535 (L3) — states the consequence for notify_only with NO card, and offers the way out', () => {
+    renderPicker({ mode: 'notify_only', cardAvailable: false });
+    expect(
+      screen.getByText(/Time you use beyond your balance still needs settling/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/pause new sessions until a top-up clears it/i)).toBeInTheDocument();
+  });
+
+  it.each([true, false])(
+    'BAL-535 (L3) — the notify_only arm never says "overdraft" (cardAvailable=%s; pinned across six files)',
+    (cardAvailable) => {
+      renderPicker({ mode: 'notify_only', cardAvailable });
+      expect(document.body.textContent ?? '').not.toMatch(/overdraft/i);
+    }
+  );
+
+  // ⚠ MUTATION PROOF for the `useCallback` dependency array, not a duplicate of the two tests
+  // above. Both of those mount FRESH, and `useCallback` always runs its factory on first mount
+  // regardless of its deps — so dropping `cardAvailable` from the array again (the exact defect
+  // this ticket fixed) would leave them BOTH passing. Only re-rendering the SAME mounted
+  // instance across a `cardAvailable` flip can observe a stale memo, so only this test fails on
+  // that regression.
+  it('BAL-535 — recomputes the notify_only description when cardAvailable flips on a mounted instance', () => {
+    const props = {
+      mode: 'notify_only' as const,
+      onModeChange: vi.fn(),
+      reloadMinor: 30_000,
+      thresholdMinor: 5_000,
+      onReloadChange: vi.fn(),
+      onThresholdChange: vi.fn(),
+      cardAvailable: true,
+    };
+    const { rerender } = render(<LowBalanceModePicker {...props} />);
+    expect(screen.getByText(/still settles to the card on file/i)).toBeInTheDocument();
+
+    rerender(<LowBalanceModePicker {...props} cardAvailable={false} />);
+    expect(screen.queryByText(/still settles to the card on file/i)).not.toBeInTheDocument();
+
+    rerender(<LowBalanceModePicker {...props} cardAvailable />);
+    expect(screen.getByText(/still settles to the card on file/i)).toBeInTheDocument();
+  });
+
   it('MODE_OPTIONS.cardBacked agrees with the shared card-backed set (a drift would offer a mode the server refuses)', () => {
     // FIX ROUND (F9) — compared as SORTED sets, not with an order-sensitive `toEqual`: the claim
     // is set-membership ("the same two modes"), and `MODE_OPTIONS` is free to reorder its display
