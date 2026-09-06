@@ -262,7 +262,14 @@ function toExpertRowView(
   now: Date
 ): PortfolioRowView {
   const { needsYou, nudgeLabel } = needsYouForExpert(invitation, signal);
-  const chip = stageChipForRelationship(invitation.relationshipStatus);
+  // BAL-540 — a closed REQUEST always wins the chip, even though the relationship itself is
+  // `declined` by the close cascade (which `stageChipForRelationship` alone would read as
+  // stage `'invited'` — RELATIONSHIP_STATUS_TO_STAGE has no `'closed'` arm, since a relationship
+  // status can never BE `'closed'`). Only the request-level status carries that terminal label.
+  const chip =
+    invitation.requestStatus === 'closed'
+      ? stageChipFor('closed')
+      : stageChipForRelationship(invitation.relationshipStatus);
   // The expert's recency: newest of invite, row update, and newest EOI.
   const recencyAt = maxDate(
     invitation.invitedAt,
@@ -352,6 +359,25 @@ function rankRows(rows: PortfolioRowView[]): PortfolioRowView[] {
   });
 }
 
+/**
+ * BAL-540 — partition the ranked rows into live vs. closed, AFTER ranking (so the live slice's
+ * relative order is unaffected). `stage === 'closed'` is the reliable signal for BOTH lenses:
+ * `toClientRowView` derives it from the request's own status, and `toExpertRowView` now checks
+ * `requestStatus === 'closed'` before falling back to the relationship-status chip. An
+ * engagement row's stage is never `'closed'`, so this never misclassifies one.
+ */
+function partitionClosed(rows: PortfolioRowView[]): {
+  rows: PortfolioRowView[];
+  closedRows: PortfolioRowView[];
+} {
+  const rowsOut: PortfolioRowView[] = [];
+  const closedRows: PortfolioRowView[] = [];
+  for (const row of rows) {
+    (row.stage === 'closed' ? closedRows : rowsOut).push(row);
+  }
+  return { rows: rowsOut, closedRows };
+}
+
 /** Client lens loader (requests + delivery engagements, deduped on request id). */
 export async function loadClientPortfolio(
   user: SessionUser,
@@ -387,12 +413,14 @@ export async function loadClientPortfolio(
   const engagementViews = engagementRows.map((e) => toEngagementRowView(e, 'client', now));
 
   const ranked = rankRows([...requestRows, ...engagementViews]);
+  const { rows, closedRows } = partitionClosed(ranked);
   return {
     lens: 'client',
     allowedLenses,
-    rows: ranked,
-    tiles: tilesFromRows(ranked),
-    isEmpty: ranked.length === 0,
+    rows,
+    tiles: tilesFromRows(rows),
+    isEmpty: rows.length === 0,
+    closedRows,
   };
 }
 
@@ -432,12 +460,14 @@ export async function loadExpertPortfolio(
   const engagementViews = engagementRows.map((e) => toEngagementRowView(e, 'expert', now));
 
   const ranked = rankRows([...invitationRows, ...engagementViews]);
+  const { rows, closedRows } = partitionClosed(ranked);
   return {
     lens: 'expert',
     allowedLenses,
-    rows: ranked,
-    tiles: tilesFromRows(ranked),
-    isEmpty: ranked.length === 0,
+    rows,
+    tiles: tilesFromRows(rows),
+    isEmpty: rows.length === 0,
+    closedRows,
   };
 }
 
@@ -465,7 +495,11 @@ export async function loadAdminPortfolio(
   }
 
   const [requests, engagementRows] = await Promise.all([
-    projectsInboxRepository.listAll(),
+    // BAL-540 — excluded IN SQL: a terminal request must never enter the triage board or the
+    // pipeline kanban, and hydrating every child row of every closed request first (the old
+    // JavaScript-filter shape) is pure waste. The origination columns, the triage filter and
+    // the gate tile below need NO `closed` clause as a result — `requests` never carries one.
+    projectsInboxRepository.listAll({ excludeStatuses: ['closed'] }),
     projectEngagementsRepository.listPortfolio({ platform: true }),
   ]);
 

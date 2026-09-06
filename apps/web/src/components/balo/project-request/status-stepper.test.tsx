@@ -29,4 +29,10 @@ describe('StatusStepper', () => {
     // Done steps render a checkmark icon (lucide svg).
     expect(container.querySelectorAll('svg').length).toBeGreaterThan(0);
   });
+
+  it('renders NOTHING for a closed request — never "Requested" as the active step (BAL-540)', () => {
+    const { container } = render(<StatusStepper current="closed" />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByRole('list', { name: /Request progress/i })).not.toBeInTheDocument();
+  });
 });

@@ -91,7 +91,22 @@ export interface ProposalReviewDoc {
   id: string;
   relationshipId: string;
   version: number;
-  status: 'submitted' | 'changes_requested' | 'resubmitted' | 'accepted' | 'withdrawn' | 'draft';
+  /**
+   * BAL-540 — `'declined'` added: the close cascade ends every open proposal on a closed
+   * request via this SAME status (D8 — the cause lives on the audit row, never a `proposals`
+   * column). Treated exactly like `'withdrawn'` here: neither `isSubmitted` nor `isAccepted`
+   * (`review-summary-card.tsx`, `proposal-review.tsx`) matches it, so the decision actions
+   * stay hidden and no proposal reads as still-open. A richer "this proposal was declined
+   * when the request closed" surface is Phase 6/7 (Builder B), not this widening.
+   */
+  status:
+    | 'submitted'
+    | 'changes_requested'
+    | 'resubmitted'
+    | 'accepted'
+    | 'withdrawn'
+    | 'draft'
+    | 'declined';
   pricingMethod: 'fixed' | 'tm';
   overviewHtml: string;
   exclusionsHtml: string | null;

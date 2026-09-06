@@ -1,5 +1,6 @@
 import type { ProjectRequestWithRelations } from '@balo/db';
 import type { SessionUser } from '@/lib/auth/session';
+import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 
 export type ProjectRequestStatus = ProjectRequestWithRelations['status'];
 
@@ -29,8 +30,19 @@ export const PHASE2_STATUSES = [
   'kickoff_approved',
 ] as const;
 
-/** `'phase2'` once the request has reached `eoi_submitted`; otherwise `'phase1'`. */
-export function requestPhase(status: ProjectRequestStatus): 'phase1' | 'phase2' {
+/**
+ * BAL-540 — `'closed'` once the request has ended, checked FIRST, BEFORE `PHASE2_STATUSES`
+ * (which stays exactly as-is). Without this short-circuit a closed request (which is always
+ * PAST `eoi_submitted`) would read as `'phase2'` — WRONG, since `PHASE2_STATUSES` means "the
+ * conversation is the live page", not "the conversation ever existed". `'phase2'` once the
+ * request has reached `eoi_submitted`; otherwise `'phase1'`.
+ *
+ * The widened return type is a DELIBERATE compile error at both consumers
+ * (`request-detail-shell.tsx`, `page.tsx`) — that is the point: a caller must decide what a
+ * closed request renders, not silently inherit whichever phase branch it fell into.
+ */
+export function requestPhase(status: ProjectRequestStatus): 'phase1' | 'phase2' | 'closed' {
+  if (status === 'closed') return 'closed';
   return (PHASE2_STATUSES as readonly string[]).includes(status) ? 'phase2' : 'phase1';
 }
 
@@ -50,6 +62,15 @@ export interface RequestViewerContext {
   relationshipId: string | null;
   /** Contact-field visibility — experts/admin see the named contact; the client doesn't. */
   canSeeContact: boolean;
+  /**
+   * BAL-540 / D11 — true when the viewer holds the platform capability
+   * `CLOSE_ANY_REQUEST`. This is the ONE gate `close_note` may ever be read behind
+   * (`closed-request-view.ts`'s `deriveClosedSummary`) — a CAPABILITY, never
+   * `ctx.archetype === 'observer'` (the lens-gate shape PR #273's appendix flags as
+   * a defect). Computed here, purely and synchronously (`hasPlatformCapability` is
+   * pure — no DB read), so every lens branch below sets it consistently.
+   */
+  canSeeStaffOnly: boolean;
 }
 
 const ADMIN_ROLES = new Set<SessionUser['platformRole']>(['admin', 'super_admin']);
@@ -94,6 +115,9 @@ export function resolveRequestLens(
   user: SessionUser,
   request: ProjectRequestWithRelations
 ): RequestViewerContext | null {
+  // BAL-540 / D11 — pure + sync, computed once; every branch below carries it.
+  const canSeeStaffOnly = hasPlatformCapability(user, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST);
+
   // 1. Admin → observer (precedence over ownership/invite).
   if (ADMIN_ROLES.has(user.platformRole)) {
     return {
@@ -103,6 +127,7 @@ export function resolveRequestLens(
       isInvitedExpert: false,
       relationshipId: null,
       canSeeContact: true,
+      canSeeStaffOnly,
     };
   }
 
@@ -115,6 +140,7 @@ export function resolveRequestLens(
       isInvitedExpert: false,
       relationshipId: null,
       canSeeContact: false,
+      canSeeStaffOnly,
     };
   }
 
@@ -135,6 +161,7 @@ export function resolveRequestLens(
         isInvitedExpert: true,
         relationshipId: relationship.id,
         canSeeContact: true,
+        canSeeStaffOnly,
       };
     }
   }

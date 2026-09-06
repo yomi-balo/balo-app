@@ -551,3 +551,40 @@ export async function softDeleteMeeting(
 ): Promise<MeetingMutationResult> {
   return afterMeetingMutation(await meetingsRepository.softDelete(meetingId), log);
 }
+
+/**
+ * BAL-540 — discharge the POST-COMMIT half of a cancellation the CLOSE CASCADE already committed in
+ * `@balo/db`. Two effects, both best-effort and non-fatal (`cancelMeeting`'s shape above):
+ * the availability-cache rebuild and the Daily room teardown. NO money: request-grain meetings never
+ * carry a credit session (`join-meeting.ts:578`), so there is no hold to release. NO publish:
+ * `publishBookingCancelled` is hard-gated to `contextType: 'case'` and stays that way (D5) — the
+ * telling rides BAL-540's own `project.request_closed`.
+ *
+ * ⚠ SAFE BY STATE, WHICH IS WHAT LETS IT BE A THIN INTERNAL ENDPOINT. Every entry is re-read and
+ * SKIPPED unless the meeting is live and ALREADY `status = 'cancelled'` in Postgres. The only
+ * destructive act is a Daily room delete, and `tearDownRoomBestEffort` already refuses when the
+ * stamped room name disagrees with `dailyRoomNameForMeeting(meeting.id)`.
+ */
+export async function tearDownCancelledMeetings(
+  entries: ReadonlyArray<{ meetingId: string; expertProfileId: string | null }>,
+  log: FastifyBaseLogger
+): Promise<{ processed: number; skipped: number }> {
+  let processed = 0;
+  let skipped = 0;
+
+  for (const entry of entries) {
+    const meeting = await meetingsRepository.findById(entry.meetingId);
+    if (meeting === undefined || meeting.status !== 'cancelled') {
+      skipped += 1;
+      continue;
+    }
+
+    await tearDownRoomBestEffort(meeting, log);
+    if (entry.expertProfileId !== null) {
+      await enqueueAvailabilityCacheRebuild(entry.expertProfileId, log);
+    }
+    processed += 1;
+  }
+
+  return { processed, skipped };
+}

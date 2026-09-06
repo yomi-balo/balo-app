@@ -95,6 +95,20 @@ function clientNudge(
   const name = thread.expertFirstName;
   const preview = thread.latestMessagePreview ?? undefined;
 
+  // BAL-540 — the request closed. Checked BEFORE the decided-rank branch below: `closed`
+  // outranks `accepted` (requestStatusRank), so without this arm a closed request whose
+  // thread was `won` before the close would fall into the "{name} is your expert" cell with
+  // a live "Open project workspace" CTA — exactly the pre-decision-nudge fail-open this
+  // ticket's reader sweep exists to close.
+  if (status === 'closed') {
+    return {
+      variant: 'done',
+      icon: MessageSquare,
+      headline: 'This request was closed.',
+      sub: 'The conversation stays here for your records.',
+    };
+  }
+
   // accepted / kickoff_approved — the REQUEST is decided; outcome cells come
   // first so a thread frozen mid-flight (e.g. still `eoi_submitted`) shows the
   // records copy, not a stale pre-decision prompt.
@@ -199,6 +213,20 @@ function expertNudge(
   clientCompanyName: string | null
 ): ThreadNudgeContent | null {
   const clientParty = clientPartyLabel(clientCompanyName);
+
+  // BAL-540 — the request closed. Checked FIRST: `thread.stage` is `'request_closed'`, never
+  // `'not_selected'`, once a request closes, so without this arm a closed request would fall
+  // through to the pre-decision `relationshipStatus` cells below (the exact fail-open the
+  // reader sweep exists to close).
+  if (status === 'closed') {
+    return {
+      variant: 'done',
+      icon: MessageSquare,
+      headline: `${clientParty} closed this request.`,
+      sub: 'The conversation stays here for your records.',
+    };
+  }
+
   // The expert lost the request — mirror the client's "records" framing
   // (the design's demo expert always wins, so this cell is Balo-added copy).
   if (thread.stage === 'not_selected') {

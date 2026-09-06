@@ -55,22 +55,32 @@ export function isThreadOpenStatus(status: string): boolean {
   return (THREAD_OPEN_RELATIONSHIP_STATUSES as readonly string[]).includes(status);
 }
 
-/** Pipeline order of request statuses — used for "before kickoff" style gating. */
-const REQUEST_STATUS_ORDER: readonly ProjectRequestStatus[] = [
-  'draft',
-  'requested',
-  'exploratory_meeting_requested',
-  'experts_invited',
-  'eoi_submitted',
-  'proposal_requested',
-  'proposal_submitted',
-  'accepted',
-  'kickoff_approved',
-];
+/**
+ * Pipeline rank of every request status — used for "before kickoff" style gating.
+ *
+ * ⚠ BAL-540 — A `Record`, NOT a plain array walked with `.indexOf`. The array form returned
+ * `-1` for any status it didn't enumerate, and `-1` reads as "before everything" to every
+ * `rank >= X` gate — which is precisely how a `closed` request stayed bookable
+ * (`book-intro-call.ts`) and kept its call/proposal CTAs live (`thread-actions.ts`) before this
+ * fix. A `Record<ProjectRequestStatus, number>` is TOTAL: omitting a label here is a compile
+ * error, not a silent `-1`. `closed` ranks LAST (9) — the terminal state outranks every other.
+ */
+const REQUEST_STATUS_RANK: Record<ProjectRequestStatus, number> = {
+  draft: 0,
+  requested: 1,
+  exploratory_meeting_requested: 2,
+  experts_invited: 3,
+  eoi_submitted: 4,
+  proposal_requested: 5,
+  proposal_submitted: 6,
+  accepted: 7,
+  kickoff_approved: 8,
+  closed: 9,
+};
 
-/** Index of a request status in pipeline order (-1 for unknown — fails closed). */
+/** Pipeline rank of a request status. Total — never `-1` (see `REQUEST_STATUS_RANK`). */
 export function requestStatusRank(status: ProjectRequestStatus): number {
-  return REQUEST_STATUS_ORDER.indexOf(status);
+  return REQUEST_STATUS_RANK[status];
 }
 
 /**
@@ -121,17 +131,22 @@ export function pickUpcomingContextMeeting(
 }
 
 /** Derived per-thread display stage. */
-export type ThreadStage = 'active' | 'not_selected' | 'won';
+export type ThreadStage = 'active' | 'not_selected' | 'won' | 'request_closed';
 
 /**
- * `'won'` when the relationship itself is accepted; `'not_selected'` when the
- * REQUEST has been decided (`accepted`/`kickoff_approved`) and this thread's
- * relationship isn't the accepted one; `'active'` otherwise.
+ * BAL-540 — `'request_closed'` when the REQUEST is `closed`, checked FIRST, before the `'won'`
+ * test: a closed request has no winner, even if this thread's relationship happens to still
+ * carry `status: 'accepted'` from before the close. Otherwise: `'won'` when the relationship
+ * itself is accepted; `'not_selected'` when the REQUEST has been decided
+ * (`accepted`/`kickoff_approved`) and this thread's relationship isn't the accepted one;
+ * `'active'` otherwise. Consumers narrow with `=== 'active'` / `=== 'not_selected'` so a new
+ * arm here cannot silently mis-narrow an existing one.
  */
 export function deriveThreadStage(
   relationshipStatus: string,
   requestStatus: ProjectRequestStatus
 ): ThreadStage {
+  if (requestStatus === 'closed') return 'request_closed';
   if (relationshipStatus === 'accepted') return 'won';
   if (requestStatus === 'accepted' || requestStatus === 'kickoff_approved') return 'not_selected';
   return 'active';

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, max, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, max, ne, notInArray, or } from 'drizzle-orm';
 import { db } from '../client';
 import {
   companies,
@@ -60,6 +60,7 @@ type RequestExpertRelationshipStatus = (typeof requestExpertRelationships.$infer
 async function queryPortfolioRequests(filter: {
   companyId?: string;
   statusFilter?: ProjectRequestStatus;
+  excludeStatuses?: readonly ProjectRequestStatus[];
 }) {
   const rows = await db.query.projectRequests.findMany({
     where: and(
@@ -67,7 +68,14 @@ async function queryPortfolioRequests(filter: {
       filter.companyId === undefined ? undefined : eq(projectRequests.companyId, filter.companyId),
       filter.statusFilter === undefined
         ? undefined
-        : eq(projectRequests.status, filter.statusFilter)
+        : eq(projectRequests.status, filter.statusFilter),
+      // BAL-540 — SQL-side exclusion. `undefined` on an empty/absent list so `and()` drops the
+      // term entirely; an empty `notInArray` is a SQL error, not a true predicate. Enum
+      // literals in a WHERE are always safe (the ADD-VALUE restriction is on DEFAULTs, CHECKs
+      // and index predicates).
+      filter.excludeStatuses === undefined || filter.excludeStatuses.length === 0
+        ? undefined
+        : notInArray(projectRequests.status, [...filter.excludeStatuses])
     ),
     columns: {
       id: true,
@@ -155,8 +163,21 @@ export const projectsInboxRepository = {
    * `statusFilter` scopes to one stage (e.g. `'requested'` for the triage hero).
    * Newest-created first as the stable base. Empty DB → `[]`.
    */
-  async listAll(input?: { statusFilter?: ProjectRequestStatus }): Promise<PortfolioRequestRow[]> {
-    return queryPortfolioRequests({ statusFilter: input?.statusFilter });
+  async listAll(input?: {
+    statusFilter?: ProjectRequestStatus;
+    /**
+     * BAL-540 — statuses to EXCLUDE, IN SQL. The admin triage board and pipeline kanban pass
+     * `['closed']`: a terminal request must never enter the board, and the JavaScript filter
+     * they used before still paid to hydrate every child row of every closed request first.
+     * Combines with `statusFilter` by AND (nobody does both today; the semantics are the
+     * obvious ones if they ever do).
+     */
+    excludeStatuses?: readonly ProjectRequestStatus[];
+  }): Promise<PortfolioRequestRow[]> {
+    return queryPortfolioRequests({
+      statusFilter: input?.statusFilter,
+      excludeStatuses: input?.excludeStatuses,
+    });
   },
 
   /**
@@ -203,7 +224,16 @@ export const projectsInboxRepository = {
       .where(
         and(
           eq(requestExpertRelationships.expertProfileId, expertProfileId),
-          ne(requestExpertRelationships.status, 'declined'),
+          // BAL-540 — a declined track is normally invisible to the expert (they are no
+          // longer a participant), BUT the tracks of a CLOSED request must still come back or
+          // the expert's "Closed" portfolio group would be permanently empty: the close
+          // cascade declines every track it closes, so the two predicates would cancel out.
+          // The ended state is then rendered from the REQUEST's status, which is the honest
+          // signal — "this request was closed", not "you were declined".
+          or(
+            ne(requestExpertRelationships.status, 'declined'),
+            eq(projectRequests.status, 'closed')
+          ),
           isNull(requestExpertRelationships.deletedAt)
         )
       )

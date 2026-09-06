@@ -182,6 +182,8 @@ describe('requestProposalAction', () => {
       id: RELATIONSHIP_ID,
       to: 'proposal_requested',
       expectedFrom: 'eoi_submitted',
+      // BAL-540 / ADR-1030 — the requesting client attributes the relationship audit row.
+      actorUserId: CLIENT_USER.id,
     });
     // BAL-295: the action no longer issues a request transition — the relationship
     // transition derives it. It re-reads the stored status to source `transitioned`.

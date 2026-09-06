@@ -563,6 +563,66 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(html).toContain('Acme Corp');
   });
 
+  it('resolves project-request-closed-expert with a party-named subject (BAL-540)', async () => {
+    const { component, subject } = getEmailTemplate('project-request-closed-expert', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      clientCompanyName: 'Acme Corp',
+      recipientName: 'Priya',
+    });
+    const html = await render(component);
+    expect(subject).toBe("Acme Corp isn't proceeding: CPQ implementation");
+    expect(html).toContain('Acme Corp');
+    expect(html).not.toContain('undefined');
+  });
+
+  it('resolves project-request-closed-client with the reason CATEGORY, never a note (BAL-540)', async () => {
+    const { component, subject } = getEmailTemplate('project-request-closed-client', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      reason: 'unfilled',
+      recipientName: 'Dana',
+      // A staff-only note must never leak into the rendered email even if present in `data`.
+      closeNote: 'internal staff note — never render this',
+    });
+    const html = await render(component);
+    expect(subject).toBe("We've closed your request: CPQ implementation");
+    expect(html).toContain('no expert was available in time');
+    expect(html).not.toContain('internal staff note');
+  });
+
+  it('resolves project-track-declined with the invited-stage withdrawal copy (BAL-540)', async () => {
+    const { component, subject } = getEmailTemplate('project-track-declined', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      clientCompanyName: 'Acme Corp',
+      stage: 'invited',
+      recipientName: 'Priya',
+    });
+    const html = await render(component);
+    expect(subject).toBe('Acme Corp withdrew an invitation: CPQ implementation');
+    expect(html).toContain('withdrew your invitation');
+    expect(html).toContain('Nothing was shared with you beyond the brief');
+    // The hero and the body must be DIFFERENT sentences — they were once the same string,
+    // which rendered the paragraph twice.
+    expect(html.split('withdrew your invitation').length - 1).toBe(1);
+  });
+
+  it('resolves project-track-declined with the not-proceeding copy for a later stage (BAL-540)', async () => {
+    const { component, subject } = getEmailTemplate('project-track-declined', {
+      title: 'CPQ implementation',
+      projectRequestId: 'req-1',
+      clientCompanyName: 'Acme Corp',
+      stage: 'proposal_submitted',
+      recipientName: 'Priya',
+    });
+    const html = await render(component);
+    expect(subject).toBe("Acme Corp isn't proceeding with you: CPQ implementation");
+    expect(html).toContain('decided not to proceed');
+    expect(html).toContain('stay exactly as they were');
+    expect(html.split('decided not to proceed').length - 1).toBe(1);
+  });
+
   it('resolves expert-referral-invited with an inviter-named subject (BAL-325)', () => {
     const { component, subject } = getEmailTemplate('expert-referral-invited', {
       inviterName: 'Ada Lovelace',
@@ -621,6 +681,9 @@ describe('sanitizeSubjectTitle', () => {
       'project-proposal-not-selected',
       'project-billing-reminder-owner',
       'project-billing-reminder-creator',
+      'project-request-closed-expert',
+      'project-request-closed-client',
+      'project-track-declined',
     ];
     for (const name of templateNames) {
       const { subject } = getEmailTemplate(name, {
@@ -629,7 +692,11 @@ describe('sanitizeSubjectTitle', () => {
         recipientName: 'Dana',
         expertName: 'Priya Nair',
         clientName: 'Dana Whitfield',
+        clientCompanyName: 'Acme Inc',
+        companyName: 'Acme Inc',
         company: { name: 'Acme Inc' },
+        reason: 'unfilled',
+        stage: 'proposal_submitted',
       });
       expect(subject).not.toMatch(/[\r\n]/);
     }

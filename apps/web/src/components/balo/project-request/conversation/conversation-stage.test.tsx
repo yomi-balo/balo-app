@@ -68,6 +68,15 @@ vi.mock('@/lib/booking/actions/book-intro-call', () => ({
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-proposal', () => ({
   requestProposalAction: (...args: unknown[]) => mockRequestProposal(...args),
 }));
+// BAL-540 — `DeclineTrackDialog` (rendered by this stage) statically imports both arms; both
+// must be mocked so their real ('use server' + 'server-only', @balo/db-importing) modules
+// never load in this jsdom test.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track', () => ({
+  declineTrackAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track-as-admin', () => ({
+  declineTrackAsAdminAction: vi.fn(),
+}));
 
 // BAL-283 — Step 1's calendar is embedded "as shipped" (D3, same posture as
 // `booking-flow-dialog.test.tsx`) — stubbed here so opening the intro-call dialog never

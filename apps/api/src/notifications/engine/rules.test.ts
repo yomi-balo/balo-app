@@ -526,6 +526,77 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('project.request_closed (BAL-540)', () => {
+    it('gives request_track_experts email + in-app, and client email-only gated on recipientId', () => {
+      const rules = notificationRules['project.request_closed'];
+      expect(rules).toBeDefined();
+      // request_track_experts (email + in-app) + client (email only) = 3 rules.
+      expect(rules).toHaveLength(3);
+
+      const expertRules = rules!.filter((r) => r.recipient === 'request_track_experts');
+      expect(expertRules).toHaveLength(2);
+      for (const rule of expertRules) {
+        expect(rule.template).toBe('project-request-closed-expert');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeUndefined();
+      }
+      expect(expertRules.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+
+      const clientRules = rules!.filter((r) => r.recipient === 'client');
+      expect(clientRules).toHaveLength(1);
+      expect(clientRules[0]).toMatchObject({
+        channel: 'email',
+        template: 'project-request-closed-client',
+        timing: 'immediate',
+      });
+      expect(clientRules[0]!.condition).toBeDefined();
+    });
+
+    it('client email condition fires only when recipientId is set (Balo closed it)', () => {
+      const rules = notificationRules['project.request_closed']!;
+      const [clientRule] = rules.filter((r) => r.recipient === 'client');
+      const condition = clientRule!.condition!;
+
+      expect(
+        condition({
+          event: 'project.request_closed',
+          payload: { recipientId: 'owner-1' },
+          data: {},
+        })
+      ).toBe(true);
+
+      // A client closing their own request — no recipientId — gets no email.
+      expect(
+        condition({
+          event: 'project.request_closed',
+          payload: {},
+          data: {},
+        })
+      ).toBe(false);
+    });
+  });
+
+  describe('project.track_declined (BAL-540)', () => {
+    it('gives the expert email + in-app, no gating condition', () => {
+      const rules = notificationRules['project.track_declined'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(2);
+      for (const rule of rules!) {
+        expect(rule.recipient).toBe('expert');
+        expect(rule.template).toBe('project-track-declined');
+        expect(rule.timing).toBe('immediate');
+        expect(rule.condition).toBeUndefined();
+      }
+      expect(rules!.map((r) => r.channel).sort((a, b) => a.localeCompare(b))).toEqual([
+        'email',
+        'in-app',
+      ]);
+    });
+  });
+
   describe('BAL-345 domain auto-join', () => {
     it('member_joined_via_domain notifies party_admins in-app ONLY (low-signal FYI)', () => {
       const rules = notificationRules['party.member_joined_via_domain'];

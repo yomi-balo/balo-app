@@ -22,4 +22,9 @@ describe('StageChip', () => {
     render(<StageChip stage="requested" label="Requested" className="custom-x" />);
     expect(screen.getByText('Requested')).toHaveClass('custom-x');
   });
+
+  it('applies the muted token classes for the closed stage (BAL-540)', () => {
+    render(<StageChip stage="closed" label="Closed" />);
+    expect(screen.getByText('Closed')).toHaveClass('text-muted-foreground');
+  });
 });

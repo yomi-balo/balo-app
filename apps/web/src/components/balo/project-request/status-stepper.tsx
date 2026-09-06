@@ -31,8 +31,18 @@ interface StatusStepperProps {
  * Display-only pipeline stepper (the prototype's reviewer `onPick` is NOT
  * shipped). Highlights the current step; earlier steps render as done. Scrolls
  * horizontally on narrow viewports.
+ *
+ * BAL-540 — renders NOTHING for `current === 'closed'`: `closed` is not one of the 8 pipeline
+ * steps (it is terminal and off the linear track), and the design's `ClosedBanner` replaces
+ * the stepper for a closed request (`request-detail-shell.tsx` — Phase 6). This is DEFENCE IN
+ * DEPTH, not the primary gate: without it, `findIndex` would return `-1`, `Math.max(0, -1)`
+ * would clamp to `0`, and the stepper would show "Requested" as the active step on a request
+ * that has ended — the exact silent-`-1` failure mode this ticket's reader sweep exists to
+ * close, should a future caller render this component on a closed request directly.
  */
-export function StatusStepper({ current }: Readonly<StatusStepperProps>): React.JSX.Element {
+export function StatusStepper({ current }: Readonly<StatusStepperProps>): React.JSX.Element | null {
+  if (current === 'closed') return null;
+
   // `draft` precedes `requested` — clamp it to index 0 so nothing is "done".
   const currentIndex = Math.max(
     0,

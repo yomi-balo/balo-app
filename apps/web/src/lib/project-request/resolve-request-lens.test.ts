@@ -117,6 +117,20 @@ describe('resolveRequestLens', () => {
     expect(ctx?.lens).toBe('admin');
   });
 
+  it('BAL-540 / D11: canSeeStaffOnly is true only for a platform admin/super_admin, never client or expert', () => {
+    const clientCtx = resolveRequestLens(user({ companyId: COMPANY_ID }), request());
+    const expertCtx = resolveRequestLens(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({ relationships: [relationship()] })
+    );
+    const adminCtx = resolveRequestLens(user({ platformRole: 'admin' }), request());
+    const superAdminCtx = resolveRequestLens(user({ platformRole: 'super_admin' }), request());
+    expect(clientCtx?.canSeeStaffOnly).toBe(false);
+    expect(expertCtx?.canSeeStaffOnly).toBe(false);
+    expect(adminCtx?.canSeeStaffOnly).toBe(true);
+    expect(superAdminCtx?.canSeeStaffOnly).toBe(true);
+  });
+
   it('gives admin precedence over ownership (admin who also owns → observer)', () => {
     const ctx = resolveRequestLens(
       user({ platformRole: 'admin', companyId: COMPANY_ID }),
@@ -349,6 +363,14 @@ describe('requestPhase', () => {
   it('flips to phase2 exactly at eoi_submitted', () => {
     expect(requestPhase('experts_invited')).toBe('phase1');
     expect(requestPhase('eoi_submitted')).toBe('phase2');
+  });
+
+  it('BAL-540: returns closed for a closed request, checked BEFORE PHASE2_STATUSES', () => {
+    // A closed request is always past eoi_submitted, so without the short-circuit this
+    // would read as 'phase2' — the conversation disappearing bug the ticket fixes.
+    expect(requestPhase('closed')).toBe('closed');
+    expect(requestPhase('closed')).not.toBe('phase2');
+    expect(requestPhase('closed')).not.toBe('phase1');
   });
 });
 

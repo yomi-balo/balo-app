@@ -573,5 +573,55 @@ describe('dispatch', () => {
       const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
       expect(recipientIds).toEqual(['admin-1', 'admin-2']);
     });
+
+    // ── BAL-540: request_track_experts fan-out, resolved from the PAYLOAD ──
+    it('fans request_track_experts out over payload.recipientUserIds (publisher-resolved, not hydrated)', async () => {
+      const requestTrackExpertsRule: NotificationRule = {
+        channel: 'email',
+        recipient: 'request_track_experts',
+        template: 'project-request-closed-expert',
+        timing: 'immediate',
+        priority: 'normal',
+      };
+      const context: RuleContext = {
+        event: 'project.request_closed',
+        payload: {
+          correlationId: 'close-1',
+          recipientUserIds: ['expert-x', 'expert-y'],
+        },
+        data: {},
+      };
+
+      await dispatch(requestTrackExpertsRule, context);
+
+      expect(getQueue).toHaveBeenCalledWith('notification-email');
+      expect(mockAdd).toHaveBeenCalledTimes(2);
+      const recipientIds = mockAdd.mock.calls.map((call) => call[1].recipientId);
+      expect(recipientIds).toEqual(['expert-x', 'expert-y']);
+      const jobIds = mockAdd.mock.calls.map((call) => call[2].jobId);
+      expect(jobIds).toEqual([
+        'project-request-closed-expert--expert-x--close-1',
+        'project-request-closed-expert--expert-y--close-1',
+      ]);
+    });
+
+    it('does not enqueue when payload.recipientUserIds is empty (a zero-track close)', async () => {
+      const requestTrackExpertsRule: NotificationRule = {
+        channel: 'email',
+        recipient: 'request_track_experts',
+        template: 'project-request-closed-expert',
+        timing: 'immediate',
+        priority: 'normal',
+      };
+      const context: RuleContext = {
+        event: 'project.request_closed',
+        payload: { correlationId: 'close-1', recipientUserIds: [] },
+        data: {},
+      };
+
+      await dispatch(requestTrackExpertsRule, context);
+
+      expect(mockAdd).not.toHaveBeenCalled();
+    });
   });
 });

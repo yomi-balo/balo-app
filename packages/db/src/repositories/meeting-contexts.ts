@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import {
   findPrimaryMeetingContextRepoint,
   type PrimaryMeetingContext,
@@ -311,12 +311,18 @@ export const meetingContextsRepository = {
   /**
    * THE REVERSE READ — "every live meeting for this context", earliest first. Rides
    * `meeting_context_reverse_idx`. BAL-421's case surface uses this.
+   *
+   * ⚠ `exec` DEFAULTS TO THE BASE `db` SO EVERY EXISTING CALLER IS UNCHANGED (BAL-540). Pass
+   * a transaction handle to read INSIDE a held lock — the close cascade must not read the
+   * base client while it holds the request row, or it would see a snapshot that predates its
+   * own writes. Prefer {@link listMeetingsForContexts} when you need more than one context.
    */
   async listMeetingsForContext(
     contextType: MeetingContextType,
-    contextId: string
+    contextId: string,
+    exec: DbExecutor = db
   ): Promise<Meeting[]> {
-    const rows = await db
+    const rows = await exec
       .select({ meeting: meetings })
       .from(meetingContexts)
       .innerJoin(meetings, eq(meetings.id, meetingContexts.meetingId))
@@ -330,6 +336,72 @@ export const meetingContextsRepository = {
       )
       .orderBy(asc(meetings.scheduledStart), asc(meetings.id));
     return rows.map((row) => row.meeting);
+  },
+
+  /**
+   * BAL-540 — every live meeting across MANY contexts, in ONE query.
+   *
+   * The request-close cascade needs `project_discovery`@requestId ∪
+   * `request_interaction`@each-relationship-id (`@balo/shared/meetings/context-owner.ts` for
+   * the id shapes: a discovery meeting is keyed on the REQUEST, an interaction meeting on the
+   * RELATIONSHIP — so N tracks means N contexts). N round-trips inside a held request lock is
+   * N times the lock hold, which is the whole reason this exists rather than a loop over
+   * {@link listMeetingsForContext}.
+   *
+   * ⚠ EMPTY INPUT ⇒ `[]` WITHOUT A QUERY. An empty `or()` is a SQL SYNTAX ERROR in Drizzle,
+   * not a false predicate — a request with no tracks is the common case, so this branch is
+   * load-bearing rather than defensive.
+   *
+   * Grouped by `contextType` so the predicate is one `inArray` per type rather than one
+   * `and()` per context; rides `meeting_context_reverse_idx` either way. Both `deleted_at`s
+   * filtered. Ordered `scheduled_start, id`, matching the single-context read.
+   *
+   * ⚠ `contextId` IS NON-NULLABLE HERE, DELIBERATELY. The one context type that permits a
+   * NULL id is `admin` (the DB CHECK enforces the biconditional), and an admin meeting has no
+   * owning subject to cascade from — so it is unrepresentable in this input by type rather
+   * than filtered out at runtime.
+   */
+  async listMeetingsForContexts(
+    contexts: ReadonlyArray<{ contextType: MeetingContextType; contextId: string }>,
+    exec: DbExecutor = db
+  ): Promise<Array<{ meeting: Meeting; contextType: MeetingContextType; contextId: string }>> {
+    if (contexts.length === 0) {
+      return [];
+    }
+
+    const idsByType = new Map<MeetingContextType, string[]>();
+    for (const context of contexts) {
+      const existing = idsByType.get(context.contextType);
+      if (existing === undefined) {
+        idsByType.set(context.contextType, [context.contextId]);
+      } else {
+        existing.push(context.contextId);
+      }
+    }
+
+    const typeTerms = [...idsByType.entries()].map(([contextType, ids]) =>
+      and(eq(meetingContexts.contextType, contextType), inArray(meetingContexts.contextId, ids))
+    );
+
+    const rows = await exec
+      .select({
+        meeting: meetings,
+        contextType: meetingContexts.contextType,
+        contextId: meetingContexts.contextId,
+      })
+      .from(meetingContexts)
+      .innerJoin(meetings, eq(meetings.id, meetingContexts.meetingId))
+      .where(and(or(...typeTerms), isNull(meetingContexts.deletedAt), isNull(meetings.deletedAt)))
+      .orderBy(asc(meetings.scheduledStart), asc(meetings.id));
+
+    // `context_id` is NULLABLE in the schema but provably non-null on every row here: the
+    // predicate is an `inArray` over caller-supplied non-null ids, which `NULL` never
+    // satisfies. Narrowed by filter rather than by `!` (noUncheckedIndexedAccess house rule).
+    return rows.flatMap((row) =>
+      row.contextId === null
+        ? []
+        : [{ meeting: row.meeting, contextType: row.contextType, contextId: row.contextId }]
+    );
   },
 
   /**

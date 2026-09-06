@@ -359,7 +359,7 @@ describe('requestExpertRelationshipsRepository.stampAvailabilityShared', () => {
     expect(raw?.updatedAt.getTime()).toBeGreaterThanOrEqual(relationship.updatedAt.getTime());
   });
 
-  it('surfaces on findByIdWithRelations — the render path reads it (the ONE widened column)', async () => {
+  it("surfaces on findByIdWithRelations — the render path reads it (BAL-283's widened column)", async () => {
     const request = await projectRequestFactory({ status: 'experts_invited' });
     if (request.expertProfileId === null) {
       throw new Error('expected a direct request with a target expert');
@@ -376,10 +376,15 @@ describe('requestExpertRelationshipsRepository.stampAvailabilityShared', () => {
     const found = await projectRequestsRepository.findByIdWithRelations(request.id);
     const [projected] = found?.relationships ?? [];
     expect(projected?.availabilitySharedAt?.getTime()).toBe(stamped?.sharedAt.getTime());
-    // ⚠ AND THE COLUMNS DELIBERATELY *NOT* WIDENED IN. `relationshipDeniesHosting` needs BOTH
-    // `status` and `declinedAt` so it fails CLOSED when they disagree; half-enabling it from
-    // this render-path projection is exactly the mistake the mutations must not make.
-    expect(projected).not.toHaveProperty('declinedAt');
+    // ⚠ BAL-540 widened this projection FURTHER, deliberately: `declinedAt` / `declineReason` /
+    // `declinedByUserId` now DO surface here too — the closed-request track list
+    // (`closed-request-view.ts`'s `deriveClosedTracks`) is a genuine THIRD render-path
+    // consumer (picking each frozen track's final chip), unlike BAL-283's own two mutation-only
+    // consumers this test originally guarded against. This does NOT reopen
+    // `relationshipDeniesHosting`'s guard — that resolver reads its OWN authoritative row
+    // inside the engagement-host seam, never this render-path projection; it still needs BOTH
+    // `status` and `declinedAt` read together there, not sourced from here.
+    // `deletedAt` stays excluded — nothing on the render path needs it.
     expect(projected).not.toHaveProperty('deletedAt');
   });
 
@@ -407,13 +412,26 @@ describe('requestExpertRelationshipsRepository.stampAvailabilityShared', () => {
   });
 });
 
+/**
+ * BAL-540 / ADR-1030 — every relationship advance now carries an ACTOR: `transitionStatus`
+ * writes `declined_by_user_id` / `decline_reason` on a decline and appends one
+ * `request_expert_relationship.*` audit row, in the same transaction. These cases exercise
+ * the STATE MACHINE, so they seed a throwaway actor; the attribution columns and the audit
+ * row are asserted in `request-track-decline.integration.test.ts` and
+ * `project-request-close.integration.test.ts`.
+ */
+async function seedActorId(): Promise<string> {
+  return (await userFactory()).id;
+}
+
 describe('requestExpertRelationshipsRepository.transitionStatus', () => {
   it('advances through a legal transition', async () => {
     const { relationship } = await requestExpertRelationshipFactory();
 
-    const updated = await requestExpertRelationshipsRepository.transitionStatus({
+    const { relationship: updated } = await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
 
     expect(updated.status).toBe('eoi_submitted');
@@ -432,6 +450,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
 
     const after = await projectRequestsRepository.findById(projectRequestId);
@@ -452,6 +471,8 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
     });
 
     const after = await projectRequestsRepository.findById(request.id);
@@ -461,9 +482,11 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
   it('sets declinedAt when transitioning to declined', async () => {
     const { relationship } = await requestExpertRelationshipFactory();
 
-    const updated = await requestExpertRelationshipsRepository.transitionStatus({
+    const { relationship: updated } = await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
     });
 
     expect(updated.status).toBe('declined');
@@ -477,10 +500,11 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       values: { status: 'eoi_submitted' },
     });
 
-    const updated = await requestExpertRelationshipsRepository.transitionStatus({
+    const { relationship: updated } = await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'proposal_requested',
       expectedFrom: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
 
     expect(updated.status).toBe('proposal_requested');
@@ -501,9 +525,10 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
     // the direct `invited → proposal_requested` move (no client EOI required).
     const { relationship, projectRequestId } = await requestExpertRelationshipFactory();
 
-    const updated = await requestExpertRelationshipsRepository.transitionStatus({
+    const { relationship: updated } = await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'proposal_requested',
+      actorUserId: await seedActorId(),
     });
 
     expect(updated.status).toBe('proposal_requested');
@@ -525,6 +550,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       requestExpertRelationshipsRepository.transitionStatus({
         id: relationship.id,
         to: 'proposal_requested',
+        actorUserId: await seedActorId(),
       })
     ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
 
@@ -545,6 +571,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       requestExpertRelationshipsRepository.transitionStatus({
         id: relationship.id,
         to: 'proposal_requested',
+        actorUserId: await seedActorId(),
       })
     ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
   });
@@ -554,10 +581,11 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       values: { status: 'eoi_submitted' },
     });
 
-    const first = await requestExpertRelationshipsRepository.transitionStatus({
+    const { relationship: first } = await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'proposal_requested',
       expectedFrom: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
 
     // Second request (stale tab / double-click): the expectedFrom guard throws
@@ -567,6 +595,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
         id: relationship.id,
         to: 'proposal_requested',
         expectedFrom: 'eoi_submitted',
+        actorUserId: await seedActorId(),
       })
     ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
 
@@ -583,19 +612,24 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       values: { status: 'eoi_submitted' },
     });
 
-    const requested = await requestExpertRelationshipsRepository.transitionStatus({
-      id: relationship.id,
-      to: 'proposal_requested',
-      expectedFrom: 'eoi_submitted',
-    });
+    const { relationship: requested } = await requestExpertRelationshipsRepository.transitionStatus(
+      {
+        id: relationship.id,
+        to: 'proposal_requested',
+        expectedFrom: 'eoi_submitted',
+        actorUserId: await seedActorId(),
+      }
+    );
     if (requested.proposalRequestedAt === null) {
       throw new Error('expected proposal_requested transition to stamp proposalRequestedAt');
     }
 
     // A later transition overwrites `updatedAt` — the stamp must survive.
-    const declined = await requestExpertRelationshipsRepository.transitionStatus({
+    const { relationship: declined } = await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
     });
 
     expect(declined.status).toBe('declined');
@@ -611,6 +645,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       requestExpertRelationshipsRepository.transitionStatus({
         id: relationship.id,
         to: 'accepted',
+        actorUserId: await seedActorId(),
       })
     ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
 
@@ -626,6 +661,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
         id: relationship.id,
         to: 'eoi_submitted',
         expectedFrom: 'proposal_requested',
+        actorUserId: await seedActorId(),
       })
     ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
   });
@@ -639,6 +675,8 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       requestExpertRelationshipsRepository.transitionStatus({
         id: relationship.id,
         to: 'declined',
+        actorUserId: await seedActorId(),
+        reason: 'client_declined',
       })
     ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
   });
@@ -648,6 +686,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       requestExpertRelationshipsRepository.transitionStatus({
         id: randomUUID(),
         to: 'eoi_submitted',
+        actorUserId: await seedActorId(),
       })
     ).rejects.toThrow();
   });
@@ -661,6 +700,7 @@ describe('requestExpertRelationshipsRepository.transitionStatus', () => {
       requestExpertRelationshipsRepository.transitionStatus({
         id: relationship.id,
         to: 'eoi_submitted',
+        actorUserId: await seedActorId(),
       })
     ).rejects.toThrow();
 

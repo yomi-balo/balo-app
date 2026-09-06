@@ -107,6 +107,7 @@ describe('stageChipFor', () => {
     ['proposal_submitted', 'Proposals in'],
     ['accepted', 'Accepted'],
     ['kickoff_approved', 'Kicked off'],
+    ['closed', 'Closed'],
   ];
   it.each(cases)('maps %s → %s', (status, label) => {
     expect(stageChipFor(status).label).toBe(label);
@@ -132,6 +133,12 @@ describe('stageDistribution', () => {
     expect(dist.eoi).toBe(2);
     expect(dist.kicked).toBe(1);
     expect(dist.requested).toBe(0);
+  });
+
+  it('includes closed in the complete record (BAL-540)', () => {
+    const dist = stageDistribution([{ stage: 'closed' }, { stage: 'closed' }]);
+    expect(dist.closed).toBe(2);
+    expect(dist.kicked).toBe(0);
   });
 });
 
@@ -239,6 +246,11 @@ describe('needsYouFor — client lens', () => {
     );
     expect(res).toEqual({ needsYou: false, nudgeLabel: 'Live project' });
   });
+
+  it('closed → not needs-you, closed (BAL-540 — the largest silent surface, now a compile error)', () => {
+    const res = needsYouFor('client', makeRequest({ status: 'closed' }), SIGNAL_UNREAD, NOW);
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed' });
+  });
 });
 
 describe('needsYouForExpert', () => {
@@ -305,6 +317,20 @@ describe('needsYouForExpert', () => {
       makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'kickoff_approved' })
     );
     expect(res).toEqual({ needsYou: false, nudgeLabel: 'Live project' });
+  });
+
+  it('closed request, even an ACCEPTED relationship → closed, not "Confirm terms" (BAL-540)', () => {
+    const res = needsYouForExpert(
+      makeInvitation({ relationshipStatus: 'accepted', requestStatus: 'closed' })
+    );
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed' });
+  });
+
+  it('closed request, an invited relationship → closed, not "Submit your EOI" (BAL-540)', () => {
+    const res = needsYouForExpert(
+      makeInvitation({ relationshipStatus: 'invited', requestStatus: 'closed' })
+    );
+    expect(res).toEqual({ needsYou: false, nudgeLabel: 'Closed' });
   });
 });
 

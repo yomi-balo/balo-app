@@ -62,12 +62,15 @@ export type RequestProposalAsAdminResult =
  * action's cognitive complexity stays under the gate.
  */
 async function advanceRelationshipGuarded(
-  relationshipId: string
+  relationshipId: string,
+  /** BAL-540 / ADR-1030 — the acting admin; attributes the relationship's audit row. */
+  actorUserId: string
 ): Promise<'ok' | 'already_requested'> {
   try {
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relationshipId,
       to: 'proposal_requested',
+      actorUserId,
     });
     return 'ok';
   } catch (error) {
@@ -180,7 +183,7 @@ export async function requestProposalAsAdmin(
     const timeFromFirstEoiMs = firstEoiAt === null ? null : Date.now() - firstEoiAt.getTime();
 
     const beforeStatus = request.status;
-    if ((await advanceRelationshipGuarded(relationshipId)) === 'already_requested') {
+    if ((await advanceRelationshipGuarded(relationshipId, admin.id)) === 'already_requested') {
       return { success: false, error: ALREADY_REQUESTED, code: 'already_requested' };
     }
 

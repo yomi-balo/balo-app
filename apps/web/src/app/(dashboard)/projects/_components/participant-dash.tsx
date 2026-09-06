@@ -3,9 +3,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'motion/react';
-import { Briefcase, Check, Clock, Plus, Zap } from 'lucide-react';
+import { Briefcase, Check, ChevronDown, Clock, Plus, Zap } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
 import type { ProjectsInboxFilter } from '@/lib/analytics';
 import {
@@ -169,6 +170,41 @@ export function ParticipantDash({ dto }: Readonly<ParticipantDashProps>): React.
           <p className="text-foreground text-sm font-semibold">Nothing needs you right now</p>
           <p className="text-muted-foreground mt-1 text-xs">You&apos;re all caught up.</p>
         </div>
+      )}
+
+      {/* BAL-540 — closed requests, collapsed by default. Purely retrospective data (CLAUDE.md's
+          empty-state exception): render NOTHING when there are none, never an empty state. */}
+      {dto.closedRows.length > 0 && (
+        <Collapsible>
+          <div className="border-border bg-card overflow-hidden rounded-2xl border">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="text-muted-foreground hover:text-foreground group flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-bold tracking-wider uppercase transition-colors"
+              >
+                <ChevronDown
+                  className="h-3.5 w-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-180"
+                  aria-hidden="true"
+                />
+                Closed
+                <Badge variant="secondary">{dto.closedRows.length}</Badge>
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="border-border border-t opacity-75">
+                {dto.closedRows.map((row, index) => (
+                  <ListRow
+                    key={`${row.kind}-${row.id}`}
+                    row={row}
+                    lens={dto.lens}
+                    fromFilter={filter as ProjectsInboxFilter}
+                    last={index === dto.closedRows.length - 1}
+                  />
+                ))}
+              </div>
+            </CollapsibleContent>
+          </div>
+        </Collapsible>
       )}
     </div>
   );

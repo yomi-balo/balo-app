@@ -950,6 +950,204 @@ describe('representationsRepository.revoke', () => {
   });
 });
 
+describe('representationsRepository.revokeAllForRequest (BAL-540 — the close cascade arm)', () => {
+  it('revokes EVERY active request-grain grant on the request, in one statement', async () => {
+    const company = await companyFactory();
+    const request = await projectRequestFactory({ companyId: company.id });
+    const revoker = await userFactory();
+
+    const first = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+      capabilities: ['manage_requests'],
+    });
+    const second = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+      capabilities: ['participate'],
+    });
+
+    const now = new Date();
+    const revoked = await representationsRepository.revokeAllForRequest(
+      {
+        projectRequestId: request.id,
+        onBehalfOfCompanyId: company.id,
+        revokedByUserId: revoker.id,
+      },
+      now
+    );
+
+    expect(revoked.sort()).toEqual([first.id, second.id].sort());
+    for (const id of revoked) {
+      const [row] = await db.select().from(representations).where(eq(representations.id, id));
+      expect(row?.status).toBe('revoked');
+      expect(row?.revokedAt?.getTime()).toBe(now.getTime());
+      expect(row?.revokedByUserId).toBe(revoker.id);
+      // ⚠ Revoke is a STATUS transition, never a soft delete — `revoke()`'s rule verbatim.
+      expect(row?.deletedAt).toBeNull();
+    }
+  });
+
+  it('leaves ORG grants, other requests, and already-revoked rows alone', async () => {
+    const company = await companyFactory();
+    const request = await projectRequestFactory({ companyId: company.id });
+    const otherRequest = await projectRequestFactory({ companyId: company.id });
+    const revoker = await userFactory();
+
+    const target = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+    });
+    const orgGrant = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'org',
+    });
+    const otherRequestGrant = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: otherRequest.id,
+    });
+    // `representation_revocation_paired` requires all three revocation columns together.
+    const alreadyRevoked = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+      status: 'revoked',
+      revokedAt: new Date(Date.now() - 60_000),
+      revokedByUserId: (await userFactory()).id,
+    });
+
+    const revoked = await representationsRepository.revokeAllForRequest(
+      {
+        projectRequestId: request.id,
+        onBehalfOfCompanyId: company.id,
+        revokedByUserId: revoker.id,
+      },
+      new Date()
+    );
+
+    expect(revoked).toEqual([target.id]);
+    for (const id of [orgGrant.id, otherRequestGrant.id]) {
+      const [row] = await db.select().from(representations).where(eq(representations.id, id));
+      expect(row?.status).toBe('active');
+    }
+    const [untouched] = await db
+      .select()
+      .from(representations)
+      .where(eq(representations.id, alreadyRevoked.id));
+    expect(untouched?.revokedByUserId).not.toBe(revoker.id);
+  });
+
+  it('IDOR containment — a foreign company id revokes NOTHING, even with the right request id', async () => {
+    // ⚠ The `onBehalfOfCompanyId` term is a containment rule, not a convenience:
+    // `revoke()`'s IDOR argument applied to a bulk write.
+    const company = await companyFactory();
+    const attacker = await companyFactory();
+    const request = await projectRequestFactory({ companyId: company.id });
+    const grant = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+    });
+
+    const revoked = await representationsRepository.revokeAllForRequest(
+      {
+        projectRequestId: request.id,
+        onBehalfOfCompanyId: attacker.id,
+        revokedByUserId: (await userFactory()).id,
+      },
+      new Date()
+    );
+
+    expect(revoked).toEqual([]);
+    const [row] = await db.select().from(representations).where(eq(representations.id, grant.id));
+    expect(row?.status).toBe('active');
+  });
+
+  it('REVOKES A LAPSED-BUT-ACTIVE GRANT — not guarded on expiry, deliberately', async () => {
+    // The one intended asymmetry with `liveRepresentation`, inherited from `revoke()`:
+    // refusing here would leave a lapsed row un-endable until some later `grant()` swept it.
+    const company = await companyFactory();
+    const request = await projectRequestFactory({ companyId: company.id });
+    const lapsed = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+
+    const revoked = await representationsRepository.revokeAllForRequest(
+      {
+        projectRequestId: request.id,
+        onBehalfOfCompanyId: company.id,
+        revokedByUserId: (await userFactory()).id,
+      },
+      new Date()
+    );
+    expect(revoked).toEqual([lapsed.id]);
+  });
+
+  it('skips SOFT-DELETED rows and returns [] when there is nothing to revoke', async () => {
+    const company = await companyFactory();
+    const request = await projectRequestFactory({ companyId: company.id });
+    await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+      deletedAt: new Date(),
+    });
+
+    expect(
+      await representationsRepository.revokeAllForRequest(
+        {
+          projectRequestId: request.id,
+          onBehalfOfCompanyId: company.id,
+          revokedByUserId: (await userFactory()).id,
+        },
+        new Date()
+      )
+    ).toEqual([]);
+  });
+
+  it('composes under a caller-supplied transaction — a rollback un-revokes it', async () => {
+    // ⚠ THE POINT OF THE `exec` PARAMETER, proved rather than assumed: the close cascade runs
+    // this INSIDE its own transaction, so if the close rolls back the grants must come back.
+    // The error is thrown OUT of the callback (never caught inside it) so Drizzle issues a
+    // real ROLLBACK TO SAVEPOINT and the harness connection stays usable.
+    const company = await companyFactory();
+    const request = await projectRequestFactory({ companyId: company.id });
+    const revoker = await userFactory();
+    const grant = await representationFactory({
+      onBehalfOfCompanyId: company.id,
+      scope: 'request',
+      projectRequestId: request.id,
+    });
+
+    await expect(
+      db.transaction(async (tx) => {
+        const revoked = await representationsRepository.revokeAllForRequest(
+          {
+            projectRequestId: request.id,
+            onBehalfOfCompanyId: company.id,
+            revokedByUserId: revoker.id,
+          },
+          new Date(),
+          tx
+        );
+        expect(revoked).toEqual([grant.id]);
+        throw new Error('roll the cascade back');
+      })
+    ).rejects.toThrow('roll the cascade back');
+
+    const [row] = await db.select().from(representations).where(eq(representations.id, grant.id));
+    expect(row?.status).toBe('active');
+    expect(row?.revokedAt).toBeNull();
+  });
+});
+
 describe('representationsRepository.activeCapabilitiesFor — the grain question (Q5)', () => {
   it('an org grant answers a question asked WITHOUT a projectRequestId', async () => {
     const grant = await representationFactory({ capabilities: ['participate'] });

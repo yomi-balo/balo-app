@@ -90,6 +90,7 @@ const CLIENT_CTX: RequestViewerContext = {
   isInvitedExpert: false,
   relationshipId: null,
   canSeeContact: false,
+  canSeeStaffOnly: false,
 };
 
 const EXPERT_CTX: RequestViewerContext = {
@@ -99,6 +100,7 @@ const EXPERT_CTX: RequestViewerContext = {
   isInvitedExpert: true,
   relationshipId: 'rel-1',
   canSeeContact: true,
+  canSeeStaffOnly: false,
 };
 
 const USER = { id: VIEWER_ID } as Parameters<typeof loadConversationView>[2];

@@ -35,7 +35,10 @@ export type StageKey =
   | 'prop_req'
   | 'prop_in'
   | 'accepted'
-  | 'kicked';
+  | 'kicked'
+  // BAL-540 — the terminal `closed`. Its own stage rather than folded into an
+  // existing one so the portfolio can group/exclude it distinctly (Phase 7).
+  | 'closed';
 
 /** The portfolio filter tiles (participant lenses). */
 export type PortfolioFilter = 'all' | 'needs' | 'in_progress' | 'kicked';
@@ -67,10 +70,17 @@ export interface PortfolioRowView {
 export interface PortfolioDTO {
   lens: 'client' | 'expert';
   allowedLenses: PortfolioLens[];
-  /** COMPLETE portfolio, ranked needs-you-first then recency desc. */
+  /** The LIVE portfolio (closed requests excluded), ranked needs-you-first then recency desc. */
   rows: PortfolioRowView[];
   tiles: { needs: number; inProgress: number; kicked: number; total: number };
   isEmpty: boolean;
+  /**
+   * BAL-540 — closed requests, partitioned out of `rows` (never counted in `tiles`/`isEmpty` —
+   * that keeps every pre-existing consumer's semantics unchanged). Rendered as a collapsed
+   * "Closed" group below the main list; the CLAUDE.md empty-state exception for purely
+   * retrospective data applies — an empty array renders NOTHING, never an invitation.
+   */
+  closedRows: PortfolioRowView[];
 }
 
 /** One admin triage hero card (`status === 'requested'`). */
@@ -123,6 +133,7 @@ const STAGE_LABELS: Record<StageKey, string> = {
   prop_in: 'Proposals in',
   accepted: 'Accepted',
   kicked: 'Kicked off',
+  closed: 'Closed',
 };
 
 /** Request status → design stage key (the table in the plan §Stage chip mapping). */
@@ -136,6 +147,7 @@ const REQUEST_STATUS_TO_STAGE: Record<ProjectRequestStatus, StageKey> = {
   proposal_submitted: 'prop_in',
   accepted: 'accepted',
   kickoff_approved: 'kicked',
+  closed: 'closed',
 };
 
 /** Relationship status → design stage key (expert lens, per-relationship). */
@@ -183,6 +195,7 @@ export function stageDistribution(
     prop_in: 0,
     accepted: 0,
     kicked: 0,
+    closed: 0,
   };
   for (const row of rows) dist[row.stage] += 1;
   return dist;
@@ -301,8 +314,11 @@ function clientNeedsYou(row: PortfolioRequestRow, signal: RequestThreadSignal): 
       };
     }
     case 'kickoff_approved':
-    default:
       return { needsYou: false, nudgeLabel: 'Live project' };
+    case 'closed':
+      return { needsYou: false, nudgeLabel: 'Closed' };
+    default:
+      return assertNeverStatus(row.status);
   }
 }
 
@@ -312,6 +328,13 @@ function expertNeedsYou(
   invitation: PortfolioInvitationRow,
   signal: RequestThreadSignal
 ): NeedsYouResult {
+  // BAL-540 — a closed request needs nothing from anybody, on ANY relationship status,
+  // BEFORE the accepted/kickoff_approved branch below (which would otherwise read a closed
+  // request's accepted relationship as still owing the kickoff gate).
+  if (invitation.requestStatus === 'closed') {
+    return { needsYou: false, nudgeLabel: 'Closed' };
+  }
+
   // Request-level decision: if the request is accepted, the surviving thread owes
   // the kickoff gate; a non-accepted relationship on a decided request is lost.
   if (invitation.requestStatus === 'accepted' || invitation.requestStatus === 'kickoff_approved') {
@@ -444,9 +467,13 @@ export interface EngagementRowDeriv {
   progressLabel: string | null;
 }
 
-/** Compile-time exhaustiveness guard — a new engagement status fails typecheck here. */
+/**
+ * Compile-time exhaustiveness guard — a new engagement OR project-request status fails
+ * typecheck here. Shared by `clientNeedsYou` (BAL-540) and `deriveEngagementRow`; generic
+ * over `never` so one witness serves both enums.
+ */
 function assertNeverStatus(status: never): never {
-  throw new Error(`Unhandled engagement status: ${String(status)}`);
+  throw new Error(`Unhandled engagement or project-request status: ${String(status)}`);
 }
 
 /**

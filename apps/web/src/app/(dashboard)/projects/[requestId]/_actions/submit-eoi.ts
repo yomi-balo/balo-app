@@ -72,11 +72,17 @@ function expertDisplayName(relationship: Relationship): string {
 async function persistEoi(
   rel: Relationship,
   relationshipId: string,
-  safeHtml: string
+  safeHtml: string,
+  /** BAL-540 / ADR-1030 — the submitting expert; attributes the relationship's audit row. */
+  actorUserId: string
 ): Promise<{ ok: true; eoiId: string } | { ok: false; error: string }> {
   const hasLiveEoi = rel.expressionsOfInterest.length > 0;
   if (rel.status === 'invited') {
-    const eoi = await expressionsOfInterestRepository.submit({ relationshipId, message: safeHtml });
+    const eoi = await expressionsOfInterestRepository.submit({
+      relationshipId,
+      message: safeHtml,
+      actorUserId,
+    });
     return { ok: true, eoiId: eoi.id };
   }
   if (rel.status === 'eoi_submitted' && !hasLiveEoi) {
@@ -160,7 +166,7 @@ export async function submitEoiAction(
     // request-level status atomically (ADR-1025 / BAL-295); `request.status`
     // captured here is the pre-op floor.
     const beforeStatus = request.status;
-    const persisted = await persistEoi(rel, relationshipId, safeHtml);
+    const persisted = await persistEoi(rel, relationshipId, safeHtml, user.id);
     if (!persisted.ok) {
       return { success: false, error: persisted.error };
     }

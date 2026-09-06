@@ -108,6 +108,11 @@ function makeRelationship(): Relationship {
     // this thread". Nothing in the proposal audience view reads it; `null` (never shared) is
     // the shape every pre-BAL-283 row has.
     availabilitySharedAt: null,
+    // BAL-540 — D3's per-track decline attribution columns. `null` on every row here: none of
+    // these fixtures represent a declined track.
+    declinedAt: null,
+    declinedByUserId: null,
+    declineReason: null,
     expertProfile: {
       id: 'exp-1',
       // ⚠ `rating_average` is `numeric(2,1)`, so Drizzle's relational `columns:` hands back
@@ -120,6 +125,9 @@ function makeRelationship(): Relationship {
     },
     expressionsOfInterest: [],
     conversationMessages: [],
+    // BAL-540 — existence-only projection (whether this track EVER had a proposal). Empty here:
+    // nothing in the proposal audience view reads it.
+    proposals: [],
   };
 }
 

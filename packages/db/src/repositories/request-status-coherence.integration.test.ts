@@ -6,6 +6,7 @@ import {
   expertDraftFactory,
   projectRequestFactory,
   requestExpertRelationshipFactory,
+  userFactory,
 } from '../test/factories';
 import { projectRequestsRepository } from './project-requests';
 import {
@@ -21,6 +22,18 @@ import { proposalsRepository } from './proposals';
  * `advanceRelationshipStatus` path. These tests drive through the REAL repo
  * wrappers (which run the lock + derive) and assert the stored request column.
  */
+
+/**
+ * BAL-540 / ADR-1030 — every relationship advance now carries an ACTOR: `transitionStatus`
+ * writes `declined_by_user_id` / `decline_reason` on a decline and appends one
+ * `request_expert_relationship.*` audit row, in the same transaction. These cases exercise
+ * the STATE MACHINE, so they seed a throwaway actor; the attribution columns and the audit
+ * row are asserted in `request-track-decline.integration.test.ts` and
+ * `project-request-close.integration.test.ts`.
+ */
+async function seedActorId(): Promise<string> {
+  return (await userFactory()).id;
+}
 
 /** Seed a request with a live relationship for a fresh expert, at the given statuses. */
 async function seedRequestWithRelationship(values: {
@@ -61,6 +74,7 @@ describe('request-status coherence — scenario 1: single relationship moves in 
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relationshipId,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('eoi_submitted');
 
@@ -68,6 +82,7 @@ describe('request-status coherence — scenario 1: single relationship moves in 
       id: relationshipId,
       to: 'proposal_requested',
       expectedFrom: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe(
       'proposal_requested'
@@ -77,6 +92,7 @@ describe('request-status coherence — scenario 1: single relationship moves in 
       id: relationshipId,
       to: 'proposal_submitted',
       expectedFrom: 'proposal_requested',
+      actorUserId: await seedActorId(),
     });
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe(
       'proposal_submitted'
@@ -86,6 +102,7 @@ describe('request-status coherence — scenario 1: single relationship moves in 
       id: relationshipId,
       to: 'accepted',
       expectedFrom: 'proposal_submitted',
+      actorUserId: await seedActorId(),
     });
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('accepted');
   });
@@ -106,6 +123,7 @@ describe('request-status coherence — scenario 2: second relationship does not 
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relB,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
 
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('eoi_submitted');
@@ -127,26 +145,32 @@ describe('request-status coherence — scenario 3: mixed set derives the max', (
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relSubmitted,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relSubmitted,
       to: 'proposal_requested',
       expectedFrom: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relSubmitted,
       to: 'proposal_submitted',
       expectedFrom: 'proposal_requested',
+      actorUserId: await seedActorId(),
     });
 
     // Second expert only reaches eoi_submitted; third declines.
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relEoi,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relDeclined,
       to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
     });
 
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe(
@@ -163,8 +187,18 @@ describe('request-status coherence — scenario 4: all declined stays put', () =
     });
     const { relationshipId: relB } = await addRelationship(requestId, 'invited');
 
-    await requestExpertRelationshipsRepository.transitionStatus({ id: relA, to: 'declined' });
-    await requestExpertRelationshipsRepository.transitionStatus({ id: relB, to: 'declined' });
+    await requestExpertRelationshipsRepository.transitionStatus({
+      id: relA,
+      to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
+    });
+    await requestExpertRelationshipsRepository.transitionStatus({
+      id: relB,
+      to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
+    });
 
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('experts_invited');
   });
@@ -199,6 +233,7 @@ describe('request-status coherence — scenario 5: admin milestones preserved', 
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relationshipId,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
 
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('kickoff_approved');
@@ -217,6 +252,8 @@ describe('request-status coherence — scenario 5: admin milestones preserved', 
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relationship.id,
       to: 'declined',
+      actorUserId: await seedActorId(),
+      reason: 'client_declined',
     });
 
     expect((await projectRequestsRepository.findById(request.id))?.status).toBe(
@@ -251,8 +288,16 @@ describe('request-status coherence — scenario 6: concurrent advances ⇒ corre
     const { relationshipId: relB } = await addRelationship(requestId, 'invited');
 
     await Promise.all([
-      requestExpertRelationshipsRepository.transitionStatus({ id: relA, to: 'eoi_submitted' }),
-      requestExpertRelationshipsRepository.transitionStatus({ id: relB, to: 'eoi_submitted' }),
+      requestExpertRelationshipsRepository.transitionStatus({
+        id: relA,
+        to: 'eoi_submitted',
+        actorUserId: await seedActorId(),
+      }),
+      requestExpertRelationshipsRepository.transitionStatus({
+        id: relB,
+        to: 'eoi_submitted',
+        actorUserId: await seedActorId(),
+      }),
     ]);
 
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('eoi_submitted');
@@ -277,8 +322,13 @@ describe('request-status coherence — scenario 6: concurrent advances ⇒ corre
         id: relAObj.id,
         to: 'proposal_submitted',
         expectedFrom: 'proposal_requested',
+        actorUserId: await seedActorId(),
       }),
-      requestExpertRelationshipsRepository.transitionStatus({ id: relB, to: 'eoi_submitted' }),
+      requestExpertRelationshipsRepository.transitionStatus({
+        id: relB,
+        to: 'eoi_submitted',
+        actorUserId: await seedActorId(),
+      }),
     ]);
 
     expect((await projectRequestsRepository.findById(request.id))?.status).toBe(
@@ -297,6 +347,7 @@ describe('request-status coherence — via the cross-table repo wrappers', () =>
     // request derives proposal_submitted).
     const proposal = await proposalsRepository.submit({
       relationshipId,
+      actorUserId: await seedActorId(),
       overview: '<p>Scope.</p>',
       pricingMethod: 'tm',
       priceCents: 0,
@@ -308,7 +359,7 @@ describe('request-status coherence — via the cross-table repo wrappers', () =>
       'proposal_submitted'
     );
 
-    await proposalsRepository.accept({ id: proposal.id });
+    await proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() });
     expect((await projectRequestsRepository.findById(requestId))?.status).toBe('accepted');
   });
 });
@@ -329,9 +380,10 @@ describe('request-status coherence — defensive: missing/soft-deleted request',
       .set({ deletedAt: new Date() })
       .where(eq(projectRequests.id, requestId));
 
-    const updated = await requestExpertRelationshipsRepository.transitionStatus({
+    const { relationship: updated } = await requestExpertRelationshipsRepository.transitionStatus({
       id: relationshipId,
       to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
     });
 
     // Relationship advanced; the soft-deleted request was left untouched.
@@ -342,5 +394,74 @@ describe('request-status coherence — defensive: missing/soft-deleted request',
       .where(eq(projectRequests.id, requestId));
     expect(raw?.deletedAt).not.toBeNull();
     expect(raw?.status).toBe('experts_invited'); // unchanged — rollup skipped
+  });
+});
+
+/**
+ * Scenario 7 (BAL-540 / ADR-1025 Amendment 1) — A CLOSED REQUEST IS INERT.
+ *
+ * The derivation's rule 1 short-circuits on `closed` BEFORE it reads a single relationship
+ * status, so no rollup — however far along — can argue a terminal request back open. This is
+ * the coherence half of `project-request-close.integration.test.ts` §7, asserted here beside
+ * the five original scenarios so the whole rollup contract lives in one file.
+ */
+describe('request-status coherence — scenario 7: a closed request is inert', () => {
+  it('a relationship advancing on a CLOSED request leaves it closed', async () => {
+    const { requestId, relationshipId } = await seedRequestWithRelationship({
+      requestStatus: 'experts_invited',
+      relationshipStatus: 'invited',
+    });
+    await projectRequestsRepository.close({
+      requestId,
+      actorUserId: await seedActorId(),
+      actorKind: 'balo',
+      reason: 'unfilled',
+      note: 'No suitable expert.',
+    });
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
+    expect(relationshipId).toBeDefined();
+
+    // A NEW track, inserted directly (bypassing `invite()`'s closed-request guard, which is
+    // the documented residual), then advanced as far as it will go.
+    const { relationshipId: stray } = await addRelationship(requestId, 'invited');
+    await requestExpertRelationshipsRepository.transitionStatus({
+      id: stray,
+      to: 'eoi_submitted',
+      actorUserId: await seedActorId(),
+    });
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
+
+    await requestExpertRelationshipsRepository.transitionStatus({
+      id: stray,
+      to: 'proposal_requested',
+      expectedFrom: 'eoi_submitted',
+      actorUserId: await seedActorId(),
+    });
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
+  });
+
+  it('the close itself never writes an INTERMEDIATE status on the way down', async () => {
+    // The request row is written FIRST, before the cascade declines anything, precisely so
+    // the per-track re-derivations short-circuit. If the order were reversed, declining the
+    // furthest track would first LOWER the request (BAL-540's new rule) and the row would
+    // briefly hold a status nobody chose.
+    const { requestId, relationshipId } = await seedRequestWithRelationship({
+      requestStatus: 'proposal_submitted',
+      relationshipStatus: 'proposal_submitted',
+    });
+    await addRelationship(requestId, 'eoi_submitted');
+    expect(relationshipId).toBeDefined();
+
+    const result = await projectRequestsRepository.close({
+      requestId,
+      actorUserId: await seedActorId(),
+      actorKind: 'client',
+      reason: 'withdrawn',
+      note: null,
+    });
+
+    expect(result.previousStatus).toBe('proposal_submitted');
+    expect(result.request.status).toBe('closed');
+    expect((await projectRequestsRepository.findById(requestId))?.status).toBe('closed');
   });
 });

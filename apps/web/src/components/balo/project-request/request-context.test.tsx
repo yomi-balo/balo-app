@@ -27,6 +27,9 @@ function view(overrides: Partial<RequestDetailView> = {}): RequestDetailView {
     viewerEoi: null,
     viewerRelationshipStatus: null,
     kickoff: null,
+    liveTracksForClose: [],
+    closed: null,
+    closedTracks: [],
     ...overrides,
   };
 }

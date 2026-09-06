@@ -18,6 +18,12 @@
  * while every local gate stays green. Opposite rule to `apps/api`.
  */
 import type { MeetingSettlementShape } from '../credit';
+/**
+ * BAL-540 (fix round) — the two request-lifecycle unions are IMPORTED, never re-spelled inline,
+ * for the same reason the settlement shapes above are. `../project-requests` is this package's
+ * own dependency-free home for them (a client island cannot value-import `@balo/db`).
+ */
+import type { DeclinableRelationshipStatus, ProjectRequestCloseReason } from '../project-requests';
 
 // ── Preview text (BAL-424) ─────────────────────────────────────────────────────────────
 //
@@ -1493,4 +1499,45 @@ export interface RequestFileSharedWithClientPayload {
   /** Retrospective — the person, "@ agency" on first mention. */
   expertPersonLabel: string;
   fileName: string;
+}
+
+/**
+ * BAL-540 — the request was closed. ONE publish fans out to every expert whose track was live at
+ * close (publisher-resolved ids, the BAL-408 `meeting_party_participants` precedent) and, when BALO
+ * closed it, to the request owner.
+ * ⚠ `reason` IS THE CATEGORY, NEVER `close_note`. The note is staff-only and never leaves the DB.
+ * `correlationId` = the `project_request.closed` audit row id — a uuid, so COLON-FREE, and unique
+ * per WRITE (the dispatcher builds its BullMQ jobId from the RAW correlationId,
+ * `engine/dispatcher.ts:73`).
+ */
+export interface ProjectRequestClosedPayload {
+  correlationId: string;
+  projectRequestId: string;
+  title: string;
+  clientCompanyName: string;
+  closedBy: 'client' | 'balo';
+  reason: ProjectRequestCloseReason;
+  /** expert USER ids on the tracks that were live at close. Drives `recipient:'request_track_experts'`. */
+  recipientUserIds: string[];
+  /** request owner's user id — set ONLY when Balo closed (the client rule is conditioned on it). */
+  recipientId?: string;
+}
+
+/**
+ * BAL-540 — one track was declined (client, or Balo on the client's behalf). Targets the expert via
+ * `expertProfileId` → `engine/resolver.ts` hydrates `data.expert`, exactly like
+ * `project.proposal_requested`. `correlationId` = the `request_expert_relationship.declined` audit
+ * row id.
+ */
+export interface ProjectTrackDeclinedPayload {
+  correlationId: string;
+  projectRequestId: string;
+  relationshipId: string;
+  expertProfileId: string;
+  title: string;
+  clientCompanyName: string;
+  declinedBy: 'client' | 'balo';
+  /** the stage the decline ended — picks "invitation withdrawn" vs "not proceeding" copy. */
+  stage: DeclinableRelationshipStatus;
+  hadOpenProposal: boolean;
 }

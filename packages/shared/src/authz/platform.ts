@@ -47,6 +47,17 @@ export const PLATFORM_CAPABILITIES = {
    * cannot serve it and the lens alone is not an authorization boundary for party data.
    */
   VIEW_ANY_REQUEST_FILE: 'view_any_request_file',
+  /**
+   * BAL-540 / ADR-1025 Amendment 1 — close ANY project request, on any tenant, and read the
+   * staff-only `close_note`.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE argument verbatim: authorizing "end somebody's sourcing process" with a
+   * FEE or PROMO token would make this map lie about what it grants. The PLATFORM axis is right
+   * because the Balo arm holds no membership on the client company by construction; the client arm
+   * stays on membership `manage_requests`.
+   */
+  CLOSE_ANY_REQUEST: 'close_any_request',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -58,6 +69,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES,
   PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING,
   PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE,
+  PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST,
 ];
 
 /**

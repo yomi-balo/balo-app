@@ -10,10 +10,16 @@ function thread(overrides: Partial<ConversationThreadView> = {}): ConversationTh
 }
 
 describe('hasOverflowContent', () => {
-  it('is true only when a profile link or status pill exists (never a dead sheet)', () => {
+  it('is true only when a profile link, status pill or decline slot exists (never a dead sheet)', () => {
     expect(hasOverflowContent({ profileHref: null, showProposalPill: false })).toBe(false);
     expect(hasOverflowContent({ profileHref: '/experts/x', showProposalPill: false })).toBe(true);
     expect(hasOverflowContent({ profileHref: null, showProposalPill: true })).toBe(true);
+    expect(
+      hasOverflowContent({ profileHref: null, showProposalPill: false, declineSlot: 'invited' })
+    ).toBe(true);
+    expect(
+      hasOverflowContent({ profileHref: null, showProposalPill: false, declineSlot: null })
+    ).toBe(false);
   });
 });
 
@@ -76,5 +82,43 @@ describe('MobileOverflowSheet', () => {
       />
     );
     expect(screen.queryByText('Proposal requested — awaiting submission')).not.toBeInTheDocument();
+  });
+
+  it('renders the decline row with the stage verb and fires onDecline, closing the sheet first', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    const onOpenChange = vi.fn();
+    const onDecline = vi.fn();
+    render(
+      <MobileOverflowSheet
+        open
+        onOpenChange={onOpenChange}
+        thread={thread()}
+        showProposalPill={false}
+        profileHref={null}
+        declineSlot="eoi_submitted"
+        onDecline={onDecline}
+      />
+    );
+    const button = screen.getByRole('button', { name: /^Decline$/i });
+    await user.click(button);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onDecline).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits the decline row when declineSlot is null', () => {
+    render(
+      <MobileOverflowSheet
+        open
+        onOpenChange={vi.fn()}
+        thread={thread()}
+        showProposalPill={false}
+        profileHref={null}
+        declineSlot={null}
+        onDecline={vi.fn()}
+      />
+    );
+    expect(
+      screen.queryByRole('button', { name: /Decline|Withdraw invite/i })
+    ).not.toBeInTheDocument();
   });
 });
