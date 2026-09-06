@@ -342,3 +342,68 @@ describe('callSessionApi (BAL-401 companies-parsing branches)', () => {
     expect(result.data).toEqual(body);
   });
 });
+
+describe('callSessionApi (BAL-519 cooldown parsing)', () => {
+  const originalApiUrl = process.env.API_URL;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.API_URL = 'http://api.test';
+  });
+  afterEach(() => {
+    process.env.API_URL = originalApiUrl;
+  });
+
+  it('parses cooldownSeconds off a 429 body into retryAfterSeconds', async () => {
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse({ error: 'rate_limited', cooldownSeconds: 42 }, false, 429)
+    );
+    const result = await callSessionApi('/sessions/x/statement', 'GET');
+    if (result.ok) throw new Error('expected failure');
+    expect(result.status).toBe(429);
+    expect(result.retryAfterSeconds).toBe(42);
+  });
+
+  it('omits retryAfterSeconds when the failure body carries none', async () => {
+    mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'rate_limited' }, false, 429));
+    const result = await callSessionApi('/sessions/x/statement', 'GET');
+    if (result.ok) throw new Error('expected failure');
+    expect(result).not.toHaveProperty('retryAfterSeconds');
+  });
+
+  it.each([
+    ['a string', '42'],
+    ['null', null],
+    ['NaN', Number.NaN],
+    ['negative', -1],
+    // TECH6 (fix round 1) — `Retry-After` is `delta-seconds`, an integer; `4.5` is not a valid
+    // header value even though it is finite and non-negative.
+    ['non-integer', 4.5],
+  ])('treats a %s cooldownSeconds as absent', async (_label, value) => {
+    mockLoggedFetch.mockResolvedValue(
+      jsonResponse({ error: 'rate_limited', cooldownSeconds: value }, false, 429)
+    );
+    const result = await callSessionApi('/sessions/x/statement', 'GET');
+    if (result.ok) throw new Error('expected failure');
+    expect(result).not.toHaveProperty('retryAfterSeconds');
+  });
+
+  // The load-bearing one: the api sends BOTH a `Retry-After` header and a body field, and this
+  // client must read the BODY. A header-only 429 must yield nothing.
+  it('reads the BODY only — a Retry-After header is never consulted', async () => {
+    const response = jsonResponse({ error: 'rate_limited' }, false, 429);
+    (response as unknown as { headers: Headers }).headers = new Headers({ 'Retry-After': '99' });
+    mockLoggedFetch.mockResolvedValue(response);
+    const result = await callSessionApi('/sessions/x/statement', 'GET');
+    if (result.ok) throw new Error('expected failure');
+    expect(result).not.toHaveProperty('retryAfterSeconds');
+  });
+
+  it('leaves a non-429 failure untouched — no cooldown, no companies', async () => {
+    mockLoggedFetch.mockResolvedValue(jsonResponse({ error: 'session_not_found' }, false, 404));
+    const result = await callSessionApi('/sessions/x/statement', 'GET');
+    if (result.ok) throw new Error('expected failure');
+    expect(result).not.toHaveProperty('retryAfterSeconds');
+    expect(result).not.toHaveProperty('companies');
+  });
+});

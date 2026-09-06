@@ -12,6 +12,28 @@ import { toSessionStatementView, type SessionStatementView } from './session-sta
 export class SessionStatementUnavailableError extends Error {}
 
 /**
+ * BAL-519 — thrown when the api's per-user limiter refused the statement read (`429`).
+ *
+ * ⚠ A DISTINCT CLASS, AND NEVER `null`. `null` means "denied" in this module and `notFound()`s the
+ * page — which would tell a legitimate reader their receipt does not exist because they clicked
+ * too fast. It is also not `SessionStatementUnavailableError`, whose destination is `error.tsx`
+ * ("this is on our side"). Three causes, three outcomes.
+ */
+export class SessionStatementRateLimitedError extends Error {
+  constructor(
+    message: string,
+    /**
+     * From the api's 429 BODY (`cooldownSeconds`); `null` when it sent none. Carried for the PDF
+     * route's `Retry-After` header ONLY — the page renders no countdown (D4).
+     */
+    public readonly retryAfterSeconds: number | null
+  ) {
+    super(message);
+    this.name = 'SessionStatementRateLimitedError';
+  }
+}
+
+/**
  * Load + lens-assert the session statement, `cache()`'d so `generateMetadata`'s full-gate
  * re-run is free (mirrors `loadCase` / `loadRecap`).
  *
@@ -33,6 +55,12 @@ export const loadSessionStatement = cache(
     const result = await fetchSessionStatement(sessionId);
     if (result.outcome === 'unavailable') {
       throw new SessionStatementUnavailableError(`Session statement unavailable: ${sessionId}`);
+    }
+    if (result.outcome === 'rate_limited') {
+      throw new SessionStatementRateLimitedError(
+        `Session statement rate-limited: ${sessionId}`,
+        result.retryAfterSeconds
+      );
     }
     if (result.outcome === 'denied') {
       return null;

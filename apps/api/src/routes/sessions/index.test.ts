@@ -11,6 +11,8 @@ const {
   mockResolveSessionStatement,
   mockFinalizeExternalDuration,
   mockUsersFindById,
+  mockCheckRateLimit,
+  mockWarn,
   SessionNotFoundError,
   InvalidSessionTransitionError,
   ExternalDurationConflictError,
@@ -44,15 +46,39 @@ const {
     mockResolveSessionStatement: vi.fn(),
     mockFinalizeExternalDuration: vi.fn(),
     mockUsersFindById: vi.fn(),
+    mockCheckRateLimit: vi.fn(),
+    mockWarn: vi.fn(),
     SessionNotFoundError,
     InvalidSessionTransitionError,
     ExternalDurationConflictError,
   };
 });
 
+// TECH2 (fix round 1) — `warn` MUST be the SAME shared mock across every `createLogger(...)` call
+// (sessions-route's own logger AND rate-limit-prehandler's), or the 429 hit log — emitted from
+// the prehandler's logger, not this route's — is unreachable from a test in this file. A fresh
+// `vi.fn()` per call (the prior shape) meant `logIdentifier: true` at the call site was silently
+// deletable: nothing here could observe it either way.
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: mockWarn, error: vi.fn() }),
 }));
+// ⚠ BAL-519 — WITHOUT THIS MOCK THE STATEMENT TESTS PASS BY ACCIDENT, THROUGH THE OUTAGE PATH.
+// The new preHandler calls `getRedis()`, which throws `REDIS_URL is not configured`
+// (`lib/redis.ts:12-15`); the limiter catches it and FAILS OPEN, so every case still 200s — and
+// AC1 ("`resolveSessionStatement` is never called") becomes unassertable.
+//
+// ⚠ AND IT MUST SPREAD `importOriginal`, NOT be a bare factory. `() => ({ checkRateLimit })`
+// silently drops `RATE_LIMIT_DEADLINE_MS`, so `withDeadline` gets `setTimeout(fn, undefined)`,
+// fires on the next tick, and turns every case back into a fake outage. See the same warning at
+// `routes/experts/search.test.ts:47-56` and `routes/experts/availability-overrides.test.ts:56-62`.
+vi.mock('../../lib/rate-limiter.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/rate-limiter.js')>();
+  return {
+    RATE_LIMIT_DEADLINE_MS: actual.RATE_LIMIT_DEADLINE_MS,
+    checkRateLimit: mockCheckRateLimit,
+  };
+});
+vi.mock('../../lib/redis.js', () => ({ getRedis: () => ({}) }));
 vi.mock('@balo/db', () => ({
   SessionNotFoundError,
   InvalidSessionTransitionError,
@@ -117,6 +143,8 @@ describe('sessions routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // BAL-519 — every pre-existing case must keep seeing an ALLOWED bucket.
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, current: 1, ttlSeconds: 60 });
   });
 
   describe('POST /sessions', () => {
@@ -381,6 +409,14 @@ describe('sessions routes', () => {
       const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/money-block` });
       expect(res.statusCode).toBe(503);
     });
+
+    it('is NOT rate-limited — BAL-519 registered the limiter on /statement ONLY (AC8)', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 61, ttlSeconds: 42 });
+      mockResolveMoneyBlock.mockResolvedValue({ ok: true, block: { lens: 'client' } });
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/money-block` });
+      expect(res.statusCode).toBe(200);
+      expect(mockCheckRateLimit).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /sessions/:id/statement (BAL-441)', () => {
@@ -421,6 +457,67 @@ describe('sessions routes', () => {
       const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
       expect(res.statusCode).toBe(503);
       expect(res.json()).toEqual({ error: 'statement_unavailable' });
+    });
+
+    // ── BAL-519 — the per-user front-door limit ─────────────────────────────
+
+    it('429s the over-limit read and NEVER calls resolveSessionStatement (AC1)', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 61, ttlSeconds: 42 });
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toEqual({ error: 'rate_limited', cooldownSeconds: 42 });
+      expect(res.headers['retry-after']).toBe('42');
+      // THE assertion this ticket exists for: the lens gate, the statement query and the web-tier
+      // PDF render behind it are all bounded. (A `users` SELECT inside `requireAuth` still runs —
+      // that is what establishes the identity the bucket is keyed on.)
+      expect(mockResolveSessionStatement).not.toHaveBeenCalled();
+    });
+
+    // TECH2 (fix round 1) — pins AC7's statement-side half: `logIdentifier: true` at the call
+    // site (`routes/sessions/index.ts`) is otherwise deletable with all tests here still green.
+    // `current: 61` above is `maxRequests + 1` (60), which is load-bearing under SEC1's gate —
+    // the hit log fires only on the FIRST refusal per window.
+    it('logs the 429 WITH the identifier — logIdentifier: true is load-bearing (AC7, TECH2)', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 61, ttlSeconds: 42 });
+      await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
+      expect(mockWarn).toHaveBeenCalledWith(
+        {
+          label: 'session-statement',
+          keyPrefix: 'ratelimit:session-statement:user',
+          current: 61,
+          ttlSeconds: 42,
+          identifier: 'user_1',
+        },
+        'Rate limit exceeded'
+      );
+    });
+
+    it('buckets on request.userId with the user-suffixed keyPrefix (AC2, R6)', async () => {
+      await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
+      expect(mockCheckRateLimit).toHaveBeenCalledWith(
+        expect.anything(),
+        { keyPrefix: 'ratelimit:session-statement:user', maxRequests: 60, windowSeconds: 60 },
+        'user_1'
+      );
+    });
+
+    it('counts a malformed id against the bucket — the limiter runs before parseSessionId', async () => {
+      const res = await app.inject({ method: 'GET', url: '/sessions/not-a-uuid/statement' });
+      expect(res.statusCode).toBe(400);
+      expect(mockCheckRateLimit).toHaveBeenCalledOnce();
+    });
+
+    it('fails OPEN on a limiter Redis outage — the statement still resolves (D3, AC4)', async () => {
+      mockCheckRateLimit.mockRejectedValue(new Error('ECONNREFUSED'));
+      mockResolveSessionStatement.mockResolvedValue({ ok: true, statement: { lens: 'client' } });
+      const res = await app.inject({ method: 'GET', url: `/sessions/${SESSION_ID}/statement` });
+      expect(res.statusCode).toBe(200);
+      expect(mockResolveSessionStatement).toHaveBeenCalledOnce();
+      // TECH3 (fix round 1) — mutation-verified: reverting the route to `{ preHandler: [requireAuth] }`
+      // (i.e. removing the limiter entirely) left this test green, because it only asserted the
+      // 200 + the statement call, both also true with no limiter present at all. Pinning that the
+      // limiter actually ran closes that hole.
+      expect(mockCheckRateLimit).toHaveBeenCalledOnce();
     });
   });
 

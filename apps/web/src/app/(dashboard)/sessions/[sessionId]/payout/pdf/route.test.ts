@@ -10,18 +10,29 @@ const {
   mockRenderPdf,
   mockTrackServerAndFlush,
   FakeSessionStatementUnavailableError,
+  FakeSessionStatementRateLimitedError,
 } = vi.hoisted(() => ({
   mockGetCurrentUser: vi.fn(),
   mockLoadSessionStatement: vi.fn(),
   mockRenderPdf: vi.fn(),
   mockTrackServerAndFlush: vi.fn(),
   FakeSessionStatementUnavailableError: class extends Error {},
+  // ⚠ IN `vi.hoisted()`, NOT A TOP-LEVEL CLASS — see this file's header comment. A bare top-level
+  // class is in the temporal dead zone when the hoisted `vi.mock` factory runs.
+  FakeSessionStatementRateLimitedError: class extends Error {
+    retryAfterSeconds: number | null = null;
+    constructor(retryAfterSeconds: number | null) {
+      super('rate limited');
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
+  },
 }));
 
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: () => mockGetCurrentUser() }));
 vi.mock('../../_lib/load-session-statement', () => ({
   loadSessionStatement: (...args: unknown[]) => mockLoadSessionStatement(...args),
   SessionStatementUnavailableError: FakeSessionStatementUnavailableError,
+  SessionStatementRateLimitedError: FakeSessionStatementRateLimitedError,
 }));
 vi.mock('@/lib/credit/statement/pdf/session-statement-pdf-document', () => ({
   renderSessionStatementPdfToBuffer: (...args: unknown[]) => mockRenderPdf(...args),
@@ -114,5 +125,34 @@ describe('GET session statement PDF (payout)', () => {
     mockRenderPdf.mockRejectedValue(new Error('render boom'));
     const res = await callGet();
     expect(res.status).toBe(500);
+  });
+
+  it('429s with Retry-After when the api rate-limited the gate — no render, no event', async () => {
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementRateLimitedError(42));
+    const res = await callGet();
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('42');
+    expect(mockRenderPdf).not.toHaveBeenCalled();
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  it('429s WITHOUT Retry-After when the api supplied no cooldown', async () => {
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementRateLimitedError(null));
+    const res = await callGet();
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBeNull();
+    expect(mockRenderPdf).not.toHaveBeenCalled();
+  });
+
+  it('a 429 is NOT the 500 outage path — the two errors stay distinct', async () => {
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementRateLimitedError(5));
+    expect((await callGet()).status).toBe(429);
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementUnavailableError('outage'));
+    expect((await callGet()).status).toBe(500);
+  });
+
+  it('a 429 body is empty (matching the 401/404 shape)', async () => {
+    mockLoadSessionStatement.mockRejectedValue(new FakeSessionStatementRateLimitedError(7));
+    expect(await (await callGet()).text()).toBe('');
   });
 });

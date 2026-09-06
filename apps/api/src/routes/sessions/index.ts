@@ -17,6 +17,8 @@ import { requireAuth } from '../../lib/require-auth.js';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 // BAL-129 extracted this out of THIS file — it was byte-identical to the meetings route's copy.
 import { parseBodyOr400, resolveUserId } from '../../lib/route-helpers.js';
+import type { RateLimitConfig } from '../../lib/rate-limiter.js';
+import { createRateLimitPreHandler } from '../../lib/rate-limit-prehandler.js';
 import {
   connectSession,
   endSession,
@@ -47,6 +49,53 @@ function openErrorStatus(code: OpenSessionServiceErrorCode): number {
 function sessionActorErrorStatus(code: SessionActorErrorCode): number {
   return code === 'not_found' ? 404 : 403;
 }
+
+/**
+ * BAL-519 — 60 req/min per USER on the statement read (D1/D2). The legitimate worst case for one
+ * session is ≈5/min (the page, `generateMetadata` — deduped by `cache()` — the three bounded
+ * poller refreshes, and one PDF), so 60 leaves room for a billing admin clicking through a
+ * month of receipts while still bounding a loop.
+ *
+ * `:user` suffix per the dominant convention (`ratelimit:meeting-end:user`,
+ * `ratelimit:meeting-state:user`, …): this bucket's defining property is that it is user-keyed,
+ * and the key should say so in Redis and in Axiom.
+ */
+const STATEMENT_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:session-statement:user',
+  maxRequests: 60,
+  windowSeconds: 60,
+};
+
+/**
+ * BAL-519 — the front-door limiter for `GET /sessions/:id/statement`, keyed on the AUTHENTICATED
+ * user rather than the client IP: two users behind one office NAT get independent buckets, and one
+ * user on two networks shares one.
+ *
+ * ⚠ REGISTERED AS A preHandler, AFTER `requireAuth` AND BEFORE THE HANDLER BODY — ON PURPOSE.
+ * The lens gate lives INSIDE `resolveSessionStatement` (`services/credit-session/session-statement.ts`),
+ * so a limit placed after it would let an attacker have the Postgres cost paid for them before
+ * being refused (the BAL-461 lesson this ticket exists to apply). Fastify skips the route handler
+ * once a hook has sent a reply (`fastify/lib/handle-request.js:120-121`, `lib/hooks.js:406-409`),
+ * which makes "runs before the query" structurally true rather than true-by-line-position.
+ *
+ * ⚠ WHAT THIS DOES *NOT* BOUND. Because the limiter sits after `requireAuth`, a refused request
+ * still pays one JWKS verify and one `usersRepository.findByWorkosId` SELECT (`lib/require-auth.ts:41,48`)
+ * — that read is what establishes the identity the bucket is keyed on. The invariant delivered is
+ * narrower and exact: `resolveSessionStatement` is never called, so the statement query, the lens
+ * gate and the web-tier PDF render behind it are all bounded.
+ *
+ * FAIL-OPEN (D3), matching `/experts/search`: the cost of a miss here is a Postgres read plus one
+ * render, not a third-party vendor round-trip, and there is no Redis-backed response cache in
+ * front of this route — so the BAL-236 fail-closed rationale does not apply.
+ */
+const statementRateLimit = createRateLimitPreHandler({
+  config: STATEMENT_RATE_LIMIT,
+  failOpen: true,
+  label: 'session-statement',
+  identifier: (request) => request.userId,
+  // The identifier here is an internal Balo user UUID, not a client IP — safe and useful to log.
+  logIdentifier: true,
+});
 
 /** Parse the `:id` param, or send 400 and return null. */
 function parseSessionId(request: FastifyRequest, reply: FastifyReply): string | null {
@@ -218,33 +267,40 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /sessions/:id/statement — BAL-441. Same fail-closed lens as /money-block (ONE resolver,
   // `resolveSessionLens`), plus the receipt-only context (date, subject, counterparty, back-link,
   // payout reference). NEVER serves the admin lens.
-  fastify.get('/sessions/:id/statement', { preHandler: [requireAuth] }, async (request, reply) => {
-    const userId = resolveUserId(request, reply);
-    if (userId === null) return;
-    const sessionId = parseSessionId(request, reply);
-    if (sessionId === null) return;
+  fastify.get(
+    '/sessions/:id/statement',
+    // ORDER IS LOAD-BEARING: `requireAuth` populates `request.userId`, which the limiter's
+    // selector reads. An unauthenticated request is answered by the first hook and never reaches
+    // the second, so it consumes no token.
+    { preHandler: [requireAuth, statementRateLimit] },
+    async (request, reply) => {
+      const userId = resolveUserId(request, reply);
+      if (userId === null) return;
+      const sessionId = parseSessionId(request, reply);
+      if (sessionId === null) return;
 
-    try {
-      const result = await resolveSessionStatement(sessionId, userId);
-      if (!result.ok) {
-        // Existence is hidden — NEVER 403. A 403 would confirm the session exists to a
-        // stranger, exactly the leak `resolveSessionLens` exists to prevent.
-        reply.code(404).send({ error: 'session_not_found' });
-        return;
+      try {
+        const result = await resolveSessionStatement(sessionId, userId);
+        if (!result.ok) {
+          // Existence is hidden — NEVER 403. A 403 would confirm the session exists to a
+          // stranger, exactly the leak `resolveSessionLens` exists to prevent.
+          reply.code(404).send({ error: 'session_not_found' });
+          return;
+        }
+        reply.code(200).send(result.statement);
+      } catch (error) {
+        log.error(
+          {
+            sessionId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+          },
+          'Failed to resolve session statement'
+        );
+        reply.code(503).send({ error: 'statement_unavailable' });
       }
-      reply.code(200).send(result.statement);
-    } catch (error) {
-      log.error(
-        {
-          sessionId,
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        },
-        'Failed to resolve session statement'
-      );
-      reply.code(503).send({ error: 'statement_unavailable' });
     }
-  });
+  );
 
   // GET /admin/sessions/:id/money-block — BAL-399 ADMIN (margin-bearing) lens. Platform-staff
   // ONLY (hasPlatformCapability, ADR-1035). Never reachable by a company member or expert.
