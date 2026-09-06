@@ -262,7 +262,14 @@ export function LowBalanceSection({
    * `notify_only` settlement sentence. The picker used to select that sentence on `cardAvailable`
    * alone and could therefore contradict the note sitting directly beneath it.
    */
-  const settlesToCardOnFile = cardAvailable && mandateActive;
+  //
+  // ⚠⚠ `|| armedLocally` IS LOAD-BEARING, NOT DEFENSIVE (fix round 3). `runArm` captures the
+  // mandate and records it ONLY in local state (`setArmedLocally(true)`); the `mandateActive`
+  // PROP stays stale until a server round-trip. Without this disjunct, a client who arms a card
+  // and then switches to `notify_only` in the same sitting is told their sessions will PAUSE —
+  // while the live mandate actually settles their overruns to that card. That is a false warning
+  // in the opposite direction to the one F3 fixed, and it is reachable without a remount.
+  const settlesToCardOnFile = cardAvailable && (mandateActive || armedLocally);
   // ⚠ FIX ROUND 2 (R2) — BACK TO THE THREE PRE-BAL-523 CONJUNCTS. Round 1 added a fourth
   // (`hasUnsettledOverdraft`) on the premise that FUTURE sessions would be disarmed by this save.
   // They are not (see the toast constants' ⚠⚠ note — the presence finalizer is mode-blind), so
