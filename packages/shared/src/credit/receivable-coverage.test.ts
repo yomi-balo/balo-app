@@ -43,7 +43,7 @@ describe('creditCoversOutstandingDebt', () => {
   });
 
   it('takes exactly two balance arguments — the receivable amount is not part of the signature', () => {
-    expect(creditCoversOutstandingDebt.length).toBe(2);
+    expect(creditCoversOutstandingDebt).toHaveLength(2);
   });
 });
 

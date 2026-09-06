@@ -133,6 +133,22 @@ export const creditReceivablesRepository = {
    * discounts the most promo credit, so a wallet-wide clear can only ever be made STRICTER by
    * an older sibling debt, never laxer.
    *
+   * ⚠⚠ WHY THE SESSION JOIN IS A `LEFT JOIN` FILTERED ON `deleted_at` (fix round 2, F1). Every
+   * other session read in the data layer is `deleted_at IS NULL`-scoped; this one was not, so a
+   * SOFT-DELETED session's (older) `ended_at` still entered the MIN. That widens the promo
+   * window, inflates the discount and REFUSES a covering credit — the soft hold then persists on
+   * a company that has already paid. It fails CLOSED, which is why no test caught it.
+   *
+   * ⚠ THE FILTER BELONGS IN THE JOIN CONDITION, NEVER IN THE `WHERE`. `hasOpenReceivable` — the
+   * predicate that actually holds the company — reads `credit_receivables` alone and knows
+   * nothing about sessions, so a receivable whose session was soft-deleted STILL holds that
+   * company. Filtering in the `WHERE` (with the join left INNER) would drop such a row from the
+   * aggregate entirely: an `undefined` anchor makes `assessCashCoverage` report
+   * `hasOpenReceivable: false`, so no covering credit could EVER clear it — the same fail-closed
+   * harm, made permanent. As a `LEFT JOIN` the row stays in the MIN and simply falls through
+   * `COALESCE` onto its own `opened_at`, the same fallback the never-stamped-`ended_at` case
+   * already takes.
+   *
    * TX-COMPOSABLE — read inside the same transaction (and under the same wallet advisory lock)
    * as the clear it gates.
    */
@@ -144,7 +160,10 @@ export const creditReceivablesRepository = {
         >`min(coalesce(${creditSessions.endedAt}, ${creditReceivables.openedAt}))`,
       })
       .from(creditReceivables)
-      .innerJoin(creditSessions, eq(creditReceivables.sessionId, creditSessions.id))
+      .leftJoin(
+        creditSessions,
+        and(eq(creditReceivables.sessionId, creditSessions.id), isNull(creditSessions.deletedAt))
+      )
       .where(
         and(
           eq(creditReceivables.walletId, walletId),

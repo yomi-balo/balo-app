@@ -46,7 +46,7 @@ export function CreditReceivableClearedEmail({
   balanceAfter,
   ctaUrl,
   baseUrl,
-}: Readonly<CreditReceivableClearedEmailProps>) {
+}: Readonly<CreditReceivableClearedEmailProps>): React.JSX.Element {
   const previewText = `That balance is settled — you're all set to book again.`;
 
   return (

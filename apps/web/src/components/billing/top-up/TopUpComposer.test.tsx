@@ -350,6 +350,34 @@ describe('TopUpComposer', () => {
     expect(screen.queryByText(/Add a card to use this/i)).not.toBeInTheDocument();
   });
 
+  /**
+   * ⚠⚠ BAL-535 fix round 2 (F3) — `cardAvailable` is hard-coded `true` here (a first-time card is
+   * captured inline at Pay), and the `notify_only` settlement sentence used to be selected on it.
+   * A FIRST-TIME buyer — no card, no mandate — was therefore told their overrun "still settles to
+   * the card on file afterward", false at the moment they read it. The sentence now reads the
+   * wallet's REAL mandate state, so re-hardcoding it (or dropping the mandate half) fails here.
+   */
+  it('F3 — makes NO settlement-to-card claim to a first-time buyer with no card on file', () => {
+    render(<TopUpComposer wallet={wallet({ savedCard: null })} fx={null} />);
+    expect(screen.queryByText(/settles to the card on file/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/pause new sessions until a top-up clears it/i)).toBeInTheDocument();
+  });
+
+  it('F3 — makes no such claim for a saved card with NO live off-session mandate either', () => {
+    render(
+      <TopUpComposer
+        wallet={wallet({ savedCard: { ...SAVED_CARD, mandateActive: false } })}
+        fx={null}
+      />
+    );
+    expect(screen.queryByText(/settles to the card on file/i)).not.toBeInTheDocument();
+  });
+
+  it('F3 — states the settlement fact once the saved card carries a live mandate', () => {
+    render(<TopUpComposer wallet={wallet({ savedCard: SAVED_CARD })} fx={null} />);
+    expect(screen.getByText(/still settles to the card on file/i)).toBeInTheDocument();
+  });
+
   // ── Config validation + missing key ───────────────────────────────────────
 
   it('blocks Pay while an out-of-range auto-top-up amount is entered', async () => {

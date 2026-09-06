@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { and, asc, eq } from 'drizzle-orm';
+import { creditCoversOutstandingDebt } from '@balo/shared/credit';
 import { db } from '../client';
 import {
   auditEvents,
@@ -944,5 +945,129 @@ describe('creditLedgerRepository.sumPromoGrantedSince', () => {
       );
     });
     expect(sum).toBe(1_500);
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (F2) — the discount must reflect promo credit STILL REPRESENTED IN THE LIVE
+   * BALANCE. `expireDormantBalance` posts one `entry_type='expiry'` entry that takes value the
+   * wallet no longer holds back out of `balance_minor`; a grant-only sum then subtracts that same
+   * promo a SECOND time and refuses a clear the client's own cash paid for. The first case below
+   * fails on the grant-only sum, and so does the clamp case.
+   */
+  describe('nets EXPIRY out of the grant (fix round 2, F2)', () => {
+    const EXPIRED_AT = new Date('2026-09-03T00:00:00.000Z');
+
+    it('⚠⚠ the worked example — an expiry that removed the promo is not charged to the client twice', async () => {
+      const { wallet } = await creditWalletFactory();
+      // −100 debt → promo +200 (=+100) → dormancy_expiry −100 (=0) → cash top-up +100 (=+100).
+      await postAt(
+        wallet.id,
+        {
+          entryType: 'adjustment',
+          reason: 'promo',
+          amountMinor: 20_000,
+          idempotencyKey: 'promo:worked',
+        },
+        AFTER
+      );
+      await postAt(
+        wallet.id,
+        {
+          entryType: 'expiry',
+          reason: 'dormancy_expiry',
+          amountMinor: -10_000,
+          idempotencyKey: 'dormancy_expiry:worked',
+        },
+        EXPIRED_AT
+      );
+
+      const discount = await creditLedgerRepository.sumPromoGrantedSince({
+        walletId: wallet.id,
+        since: ANCHOR,
+      });
+      // Grant-only: 20_000 → coverage asks 10_000 − 20_000 = −10_000 and REFUSES, holding a
+      // company that supplied the full 10_000 in cash. Netted: 20_000 − 10_000 = 10_000 → 0 ≥ 0.
+      expect(discount).toBe(10_000);
+      expect(creditCoversOutstandingDebt(10_000, discount)).toBe(true);
+    });
+
+    it('nets only the expiry INSIDE the window — one that predates the anchor is out of scope', async () => {
+      const { wallet } = await creditWalletFactory();
+      await postAt(
+        wallet.id,
+        {
+          entryType: 'expiry',
+          reason: 'dormancy_expiry',
+          amountMinor: -4_000,
+          idempotencyKey: 'dormancy_expiry:old',
+        },
+        BEFORE
+      );
+      await postAt(
+        wallet.id,
+        {
+          entryType: 'adjustment',
+          reason: 'promo',
+          amountMinor: 6_000,
+          idempotencyKey: 'promo:window',
+        },
+        AFTER
+      );
+      // Grant and expiry share ONE window — the same `gte(created_at, since)` both arms ride —
+      // so an expiry from before the debt existed nets nothing back.
+      expect(
+        await creditLedgerRepository.sumPromoGrantedSince({ walletId: wallet.id, since: ANCHOR })
+      ).toBe(6_000);
+    });
+
+    it('CLAMPS at zero — an expiry that also burned cash can never make the discount negative', async () => {
+      const { wallet } = await creditWalletFactory();
+      await postAt(
+        wallet.id,
+        {
+          entryType: 'adjustment',
+          reason: 'promo',
+          amountMinor: 5_000,
+          idempotencyKey: 'promo:clamp',
+        },
+        AFTER
+      );
+      await postAt(
+        wallet.id,
+        {
+          entryType: 'expiry',
+          reason: 'dormancy_expiry',
+          amountMinor: -15_000,
+          idempotencyKey: 'dormancy_expiry:clamp',
+        },
+        EXPIRED_AT
+      );
+      // Un-clamped this is −10_000, and a NEGATIVE discount would LOOSEN the predicate below its
+      // no-discount baseline — the one direction §F forbids, because marketing money could then
+      // discharge a real receivable.
+      const discount = await creditLedgerRepository.sumPromoGrantedSince({
+        walletId: wallet.id,
+        since: ANCHOR,
+      });
+      expect(discount).toBe(0);
+      expect(creditCoversOutstandingDebt(-1, discount)).toBe(false);
+    });
+
+    it('an expiry with NO promo in the window discounts nothing (never below zero)', async () => {
+      const { wallet } = await creditWalletFactory();
+      await postAt(
+        wallet.id,
+        {
+          entryType: 'expiry',
+          reason: 'dormancy_expiry',
+          amountMinor: -8_000,
+          idempotencyKey: 'dormancy_expiry:alone',
+        },
+        AFTER
+      );
+      expect(
+        await creditLedgerRepository.sumPromoGrantedSince({ walletId: wallet.id, since: ANCHOR })
+      ).toBe(0);
+    });
   });
 });

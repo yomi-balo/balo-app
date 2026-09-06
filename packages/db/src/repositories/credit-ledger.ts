@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, or, sql } from 'drizzle-orm';
 import { WALLET_EXPIRY_MONTHS } from '@balo/shared/pricing';
 import { db } from '../client';
 import {
@@ -449,11 +449,12 @@ export const creditLedgerRepository = {
   },
 
   /**
-   * BAL-535 (ADR-1040 Amendment 6 §F, fix round B1) — total PROMO credit granted to a wallet
-   * at or after `since`. This is the discount that makes §F's promo exclusion real rather than
-   * merely adjacent: a marketing grant that landed while a debt was outstanding is subtracted
-   * back out of the balance before `creditCoversOutstandingDebt` is asked whether the client's
-   * own money covered it.
+   * BAL-535 (ADR-1040 Amendment 6 §F, fix round B1; NETTED in fix round 2, F2) — the promo
+   * credit granted to a wallet at or after `since` that is STILL REPRESENTED IN THE LIVE
+   * BALANCE. This is the discount that makes §F's promo exclusion real rather than merely
+   * adjacent: a marketing grant that landed while a debt was outstanding is subtracted back out
+   * of the balance before `creditCoversOutstandingDebt` is asked whether the client's own money
+   * covered it.
    *
    * A promo grant is `entry_type='adjustment'` AND `reason='promo'` — the shape BOTH promo
    * write paths post (`promoRedemptionsRepository.redeem`, the purchase-bundled arm, and
@@ -462,10 +463,30 @@ export const creditLedgerRepository = {
    * of the discount, and keeps a hypothetical non-`adjustment` promo entry from silently
    * escaping it.
    *
+   * ⚠⚠ WHY EXPIRY IS NETTED IN (F2 — a real money bug, fail-closed). Summing grants alone
+   * DOUBLE-COUNTS a promo the wallet no longer holds. `expireDormantBalance` zeroes a dormant
+   * wallet with ONE `entry_type='expiry'` entry, so that value is already out of
+   * `balance_minor`; subtracting the historical grant a second time charges the client for it
+   * twice. Worked example — balance −100 (debt) → promo +200 (=+100) → `dormancy_expiry` −100
+   * (=0) → cash top-up +100 (=+100). The grant-only sum gave `100 − 200 = −100` and REFUSED the
+   * clear, holding a company that had supplied the full 100 in cash.
+   *
+   * Netting is exact, not an approximation. Writing the wallet's post-anchor entries as
+   * `balance = C + P − E` (C = every cash/consume entry, P = promo grants, E = expiry
+   * magnitude), the figure the predicate wants is C, and `balance − (P − E) = C` identically.
+   * The match is on `entry_type='expiry'` — the CATEGORY, not `reason='dormancy_expiry'` — so a
+   * future sibling expiry reason nets automatically instead of silently re-opening this bug.
+   * Expiry amounts are already negative, so ONE `SUM` over the union nets them.
+   *
+   * ⚠ THE CLAMP IS LOAD-BEARING. An expiry that also burned CASH can drive `P − E` negative,
+   * and a NEGATIVE discount would LOOSEN the predicate — letting marketing money discharge a
+   * real receivable, the one thing §F forbids. `Math.max(0, …)` keeps the guarantee the
+   * invariant suite pins: the discount is `>= 0`, so it can only ever make the predicate
+   * STRICTER-OR-EQUAL versus no discount at all.
+   *
    * `SUM(integer)` returns Postgres `bigint`; coerced to a JS number, `0` when there is
-   * nothing. Grants are always positive, so the result is `>= 0` and the discount can only
-   * ever make the predicate STRICTER. TX-COMPOSABLE — the callers ask this inside the same
-   * transaction as the clear, under the wallet's advisory lock.
+   * nothing. TX-COMPOSABLE — the callers ask this inside the same transaction as the clear,
+   * under the wallet's advisory lock.
    */
   async sumPromoGrantedSince(
     input: { walletId: string; since: Date },
@@ -477,11 +498,13 @@ export const creditLedgerRepository = {
       .where(
         and(
           eq(creditLedger.walletId, input.walletId),
-          eq(creditLedger.entryType, 'adjustment'),
-          eq(creditLedger.reason, 'promo'),
-          gte(creditLedger.createdAt, input.since)
+          gte(creditLedger.createdAt, input.since),
+          or(
+            and(eq(creditLedger.entryType, 'adjustment'), eq(creditLedger.reason, 'promo')),
+            eq(creditLedger.entryType, 'expiry')
+          )
         )
       );
-    return Number(row?.sum ?? 0);
+    return Math.max(0, Number(row?.sum ?? 0));
   },
 };

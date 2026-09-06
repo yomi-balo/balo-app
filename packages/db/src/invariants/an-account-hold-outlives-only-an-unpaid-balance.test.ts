@@ -233,7 +233,7 @@ describe('INVARIANT: an account hold outlives only an unpaid balance — pure co
   it('⚠⚠ ANTI-COLLAPSE #2 — the predicate cannot see the receivable amount', () => {
     // Arity 2 (balance + promo discount) since B1; a third parameter, or a re-read of the
     // receivable's own figure, fails here.
-    expect(creditCoversOutstandingDebt.length).toBe(2);
+    expect(creditCoversOutstandingDebt).toHaveLength(2);
     // CODE only — the docblock legitimately NAMES `amount_minor` to explain why the predicate
     // must never read it, and a prose mention must neither break this nor satisfy it.
     const src = codeOnly(
@@ -284,24 +284,34 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
     const service = normalize(
       readScannedSourceOrFail(COVERAGE_SERVICE_DISPLAY_PATH, COVERAGE_SERVICE_URL)
     );
-    expect((service.match(/creditCoversOutstandingDebt\(/g) ?? []).length).toBe(1);
+    expect(service.match(/creditCoversOutstandingDebt\(/g) ?? []).toHaveLength(1);
     expect(service).toContain(
       'covered: creditCoversOutstandingDebt(balanceMinor, promoGrantedSinceDebtMinor),'
     );
 
     const dispatch = normalize(readScannedSourceOrFail(DISPATCH_DISPLAY_PATH, DISPATCH_URL));
-    expect((dispatch.match(/creditCoversOutstandingDebt\(/g) ?? []).length).toBe(0);
+    expect(dispatch.match(/creditCoversOutstandingDebt\(/g) ?? []).toHaveLength(0);
 
     const endSession = normalize(
       readScannedSourceOrFail(END_SESSION_DISPLAY_PATH, END_SESSION_URL)
     );
-    expect((endSession.match(/creditCoversOutstandingDebt\(/g) ?? []).length).toBe(0);
+    expect(endSession.match(/creditCoversOutstandingDebt\(/g) ?? []).toHaveLength(0);
   });
 
-  it('⚠⚠ B1 — the discount is summed over PROMO ledger entries only, since the debt became outstanding', () => {
+  it('⚠⚠ B1 — the discount is PROMO net of EXPIRY, since the debt became outstanding, clamped at zero', () => {
     // A "reason = promo" match that dropped the `entry_type` half, or a discount that summed
     // EVERY adjustment, would over-discount an ops correction and leave real cash uncounted.
     // Widening the window to all time, or narrowing it to `>` the anchor, changes this text.
+    //
+    // ⚠⚠ FIX ROUND 2 (F2) ADDED THE EXPIRY ARM AND THE CLAMP, and both are pinned here.
+    // Summing GRANTS ALONE double-counts a promo the wallet no longer holds: `expireDormantBalance`
+    // has already removed that value from `balance_minor` with an `entry_type='expiry'` entry, so
+    // subtracting the historical grant a second time refuses a clear the client's own cash paid
+    // for — the hold then outlives a paid balance, which is the very thing this file is named
+    // after. Deleting the `'expiry'` arm restores that bug and fails here. Deleting the
+    // `Math.max(0, …)` clamp lets an expiry that also burned cash drive the discount NEGATIVE,
+    // which would LOOSEN the predicate below the no-discount baseline the pure-core rows above
+    // pin — also caught here.
     const src = normalize(
       readScannedSourceOrFail(
         'packages/db/src/repositories/credit-ledger.ts',
@@ -311,15 +321,24 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
     expect(src).toMatch(
       /async sumPromoGrantedSince\(\s*input:\s*\{\s*walletId:\s*string;\s*since:\s*Date\s*\},/
     );
-    expect(src).toContain("eq(creditLedger.entryType, 'adjustment'),");
-    expect(src).toContain("eq(creditLedger.reason, 'promo'),");
+    expect(src).toContain("eq(creditLedger.entryType, 'adjustment')");
+    expect(src).toContain("eq(creditLedger.reason, 'promo')");
+    expect(src).toContain("eq(creditLedger.entryType, 'expiry')");
     expect(src).toContain('gte(creditLedger.createdAt, input.since)');
+    expect(src).toContain('return Math.max(0, Number(row?.sum ?? 0));');
   });
 
   it("⚠⚠ B1 — the discount window is anchored on the DEBT's moment, never on the receivable row's own opened_at alone", () => {
     // Anchoring on `opened_at` alone is the vacuous case at BOTH R3b sites: the row is inserted
     // in the very transaction that then asks whether it is covered, so the window has zero width
     // and the discount is always zero. Dropping the COALESCE'd `ended_at` fails here.
+    //
+    // ⚠ FIX ROUND 2 (F1) — the session join is a LEFT JOIN filtered on the session's own
+    // `deleted_at`. Unfiltered, a soft-deleted session's older `ended_at` still entered the MIN,
+    // widening the window and refusing a covering credit. The filter must stay in the JOIN
+    // condition: moved to the `WHERE` over an INNER join it would drop the receivable from the
+    // aggregate entirely, and since `hasOpenReceivable` never joins sessions that row would hold
+    // the company with no covering credit able to reach it. Both halves are pinned.
     const src = normalize(
       readScannedSourceOrFail(
         'packages/db/src/repositories/credit-receivables.ts',
@@ -329,6 +348,10 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
     expect(src).toContain(
       'min(coalesce(${creditSessions.endedAt}, ${creditReceivables.openedAt}))'
     );
+    // Regex over the whitespace-normalised source — it pins the JOIN SHAPE, not its line breaks.
+    expect(src).toMatch(
+      /\.leftJoin\(\s*creditSessions,\s*and\(\s*eq\(creditReceivables\.sessionId, creditSessions\.id\),\s*isNull\(creditSessions\.deletedAt\)\s*\)\s*\)/
+    );
   });
 
   it('all THREE hold-releasing sites route through the one coverage module (R3 + both R3b)', () => {
@@ -337,8 +360,8 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
     // discount, which is what B1 exists to prevent — and it fails one of these counts.
     const dispatch = normalize(readScannedSourceOrFail(DISPATCH_DISPLAY_PATH, DISPATCH_URL));
     expect(dispatch).toContain("} from '../credit/receivable-coverage.js';");
-    expect((dispatch.match(/assessCashCoverage\(/g) ?? []).length).toBe(1);
-    expect((dispatch.match(/clearLateOpenedReceivableIfCovered\(/g) ?? []).length).toBe(1);
+    expect(dispatch.match(/assessCashCoverage\(/g) ?? []).toHaveLength(1);
+    expect(dispatch.match(/clearLateOpenedReceivableIfCovered\(/g) ?? []).toHaveLength(1);
 
     const endSession = normalize(
       readScannedSourceOrFail(END_SESSION_DISPLAY_PATH, END_SESSION_URL)
@@ -346,7 +369,7 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
     expect(endSession).toContain(
       "import { clearLateOpenedReceivableIfCovered } from '../credit/receivable-coverage.js';"
     );
-    expect((endSession.match(/clearLateOpenedReceivableIfCovered\(/g) ?? []).length).toBe(1);
+    expect(endSession.match(/clearLateOpenedReceivableIfCovered\(/g) ?? []).toHaveLength(1);
   });
 
   it("the clear rides the caller's txn — never a bare `db`", () => {
@@ -358,7 +381,7 @@ describe('INVARIANT: the clear is armed for cash reasons only, and the promo exc
     expect(src).toMatch(
       /creditReceivablesRepository\.clearOpenForWallet\(\s*\{\s*walletId:\s*effect\.walletId\s*\}\s*,\s*tx\s*\)/
     );
-    expect((src.match(/clearOpenForWallet\(/g) ?? []).length).toBe(1);
+    expect(src.match(/clearOpenForWallet\(/g) ?? []).toHaveLength(1);
   });
 });
 
@@ -409,7 +432,7 @@ describe('INVARIANT: both late-open (R3b) transactions serialise against the cre
         )
       )
     );
-    expect((helper.match(/pg_advisory/g) ?? []).length).toBe(1);
+    expect(helper.match(/pg_advisory/g) ?? []).toHaveLength(1);
     expect(helper).toContain('SELECT pg_advisory_xact_lock(hashtextextended(${walletId}, 0))');
 
     // …and NO other repository issues one directly.
@@ -503,7 +526,7 @@ describe('INVARIANT: an open receivable never coexists with a `processing` settl
 
   it("and neither settlement site can mark 'processing' a second time (end-session.ts) — pinning the ONE legitimate stamp inside settleOverdraft's success arm", () => {
     const endSession = readScannedSourceOrFail(END_SESSION_DISPLAY_PATH, END_SESSION_URL);
-    expect((endSession.match(/status: 'processing'/g) ?? []).length).toBe(1);
+    expect(endSession.match(/status: 'processing'/g) ?? []).toHaveLength(1);
   });
 
   it('the presence settlement service stamps no processing status at all', () => {
@@ -514,6 +537,6 @@ describe('INVARIANT: an open receivable never coexists with a `processing` settl
         import.meta.url
       )
     );
-    expect((settleFromPresence.match(/status: 'processing'/g) ?? []).length).toBe(0);
+    expect(settleFromPresence.match(/status: 'processing'/g) ?? []).toHaveLength(0);
   });
 });

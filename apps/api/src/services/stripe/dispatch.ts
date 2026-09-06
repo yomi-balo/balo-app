@@ -670,36 +670,45 @@ async function clearReceivablesCoveredByCredit(
     return NO_RECEIVABLE_CLEAR;
   }
 
-  for (const row of cleared) {
-    await auditEventsRepository.record(
-      {
-        actorUserId: effect.memberId,
-        action: 'credit_receivable.cleared_by_credit',
-        entityType: 'credit_receivable',
-        entityId: row.id,
-        metadata: {
-          walletId: effect.walletId,
-          // N11 — the receivable's OWN company, not the wallet's. They agree today (one wallet
-          // per company, `credit_wallets_company_idx` is UNIQUE) and the row is the thing being
-          // audited, so it is the honest source.
-          companyId: row.companyId,
-          sessionId: row.sessionId,
-          ledgerEntryId: base.entry.id,
-          creditReason: reason,
-          receivableAmountMinor: row.amountMinor,
-          // The PREDICATE's figures — pre-promo-grant and promo-discounted. Deliberately NOT
-          // named `balanceAfterMinor`: that is the display number the client is shown, and M3
-          // is the finding that these two must never share a field.
-          predicateBalanceMinor: coverage.balanceMinor,
-          promoDiscountedMinor: coverage.promoGrantedSinceDebtMinor,
-          cashBackedBalanceMinor: coverage.cashBackedBalanceMinor,
-          stripePaymentIntentId: effect.settlement.stripePaymentIntentId,
-          deduped: base.deduped,
+  // ⚠ ONE ROUND TRIP PER CLEAR OPERATION, NOT ONE PER ROW (fix round 2, F4). These inserts are
+  // independent of each other and of their own order, so awaiting them serially only added
+  // latency INSIDE the credit transaction — which holds the wallet's advisory lock, so every
+  // other writer on that wallet waits out the whole sequence. They stay on the SAME `tx`
+  // (`postgres-js` pipelines them on the transaction's own reserved connection), so the audit
+  // trail still commits or rolls back atomically with the ledger write and the clear; a rejection
+  // still aborts the transaction exactly as the serial `await` did.
+  await Promise.all(
+    cleared.map((row) =>
+      auditEventsRepository.record(
+        {
+          actorUserId: effect.memberId,
+          action: 'credit_receivable.cleared_by_credit',
+          entityType: 'credit_receivable',
+          entityId: row.id,
+          metadata: {
+            walletId: effect.walletId,
+            // N11 — the receivable's OWN company, not the wallet's. They agree today (one wallet
+            // per company, `credit_wallets_company_idx` is UNIQUE) and the row is the thing being
+            // audited, so it is the honest source.
+            companyId: row.companyId,
+            sessionId: row.sessionId,
+            ledgerEntryId: base.entry.id,
+            creditReason: reason,
+            receivableAmountMinor: row.amountMinor,
+            // The PREDICATE's figures — pre-promo-grant and promo-discounted. Deliberately NOT
+            // named `balanceAfterMinor`: that is the display number the client is shown, and M3
+            // is the finding that these two must never share a field.
+            predicateBalanceMinor: coverage.balanceMinor,
+            promoDiscountedMinor: coverage.promoGrantedSinceDebtMinor,
+            cashBackedBalanceMinor: coverage.cashBackedBalanceMinor,
+            stripePaymentIntentId: effect.settlement.stripePaymentIntentId,
+            deduped: base.deduped,
+          },
         },
-      },
-      tx
-    );
-  }
+        tx
+      )
+    )
+  );
 
   const clearedMinor = cleared.reduce((sum, row) => sum + row.amountMinor, 0);
   log.info(

@@ -80,6 +80,73 @@ describe('auditEventsRepository.record', () => {
     const persisted = await db.select().from(auditEvents).where(eq(auditEvents.entityId, entityId));
     expect(persisted).toHaveLength(0);
   });
+
+  /**
+   * BAL-535 fix round 2 (F4) — the provenance writer is now used CONCURRENTLY on ONE transaction.
+   * `clearReceivablesCoveredByCredit` clears every open receivable on a wallet and records one
+   * audit row per row cleared; those inserts are issued together via `Promise.all` on the credit
+   * transaction's own `tx` rather than awaited one at a time inside the wallet's advisory lock.
+   * That is only safe if `postgres-js` genuinely pipelines several statements on a transaction's
+   * reserved connection, so this asserts it against real Postgres instead of trusting the comment
+   * that claims it: every row lands, and a later failure still rolls all of them back together.
+   */
+  it('records several rows CONCURRENTLY on one transaction, and rolls them all back together', async () => {
+    const actor = await userFactory();
+    const entityIds = [randomUUID(), randomUUID(), randomUUID()];
+
+    const rows = await db.transaction((tx) =>
+      Promise.all(
+        entityIds.map((entityId) =>
+          auditEventsRepository.record(
+            {
+              actorUserId: actor.id,
+              action: 'credit_receivable.cleared_by_credit',
+              entityType: 'credit_receivable',
+              entityId,
+              metadata: { entityId },
+            },
+            tx
+          )
+        )
+      )
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.entityId).sort()).toEqual([...entityIds].sort());
+
+    const persisted = await db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.action, 'credit_receivable.cleared_by_credit'));
+    expect(persisted).toHaveLength(3);
+
+    // Atomicity survives the batching: one rejection aborts the whole set, exactly as the serial
+    // `await` loop did.
+    const rolledBack = [randomUUID(), randomUUID()];
+    await expect(
+      db.transaction(async (tx) => {
+        await Promise.all(
+          rolledBack.map((entityId) =>
+            auditEventsRepository.record(
+              {
+                actorUserId: actor.id,
+                action: 'credit_receivable.cleared_on_late_open',
+                entityType: 'credit_receivable',
+                entityId,
+              },
+              tx
+            )
+          )
+        );
+        throw new Error('force rollback');
+      })
+    ).rejects.toThrow('force rollback');
+
+    const gone = await db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.action, 'credit_receivable.cleared_on_late_open'));
+    expect(gone).toHaveLength(0);
+  });
 });
 
 describe('auditEventsRepository.countByEntityAndAction', () => {

@@ -71,19 +71,19 @@ describe('INVARIANT: settlement is blind to the low-balance mode (ADR-1040 Amend
     describe(displayPath, () => {
       it('⚠⚠ ANTI-ALIGNMENT #1 — never names the low-balance mode', () => {
         const src = readScannedSourceOrFail(displayPath, url);
-        expect((src.match(/lowBalanceMode/g) ?? []).length).toBe(0);
-        expect((src.match(/low_balance_mode/g) ?? []).length).toBe(0);
+        expect(src.match(/lowBalanceMode/g) ?? []).toHaveLength(0);
+        expect(src.match(/low_balance_mode/g) ?? []).toHaveLength(0);
       });
 
       it('⚠⚠ ANTI-ALIGNMENT #2 — the grace-entry predicate is never called from settlement', () => {
         const src = readScannedSourceOrFail(displayPath, url);
-        expect((src.match(/walletAllowsOverdraftGrace\(/g) ?? []).length).toBe(0);
+        expect(src.match(/walletAllowsOverdraftGrace\(/g) ?? []).toHaveLength(0);
       });
 
       it('⚠⚠ ANTI-ALIGNMENT #3 — no card-backed-mode predicate reaches settlement', () => {
         const src = readScannedSourceOrFail(displayPath, url);
-        expect((src.match(/isCardBackedLowBalanceMode\(/g) ?? []).length).toBe(0);
-        expect((src.match(/CARD_BACKED_LOW_BALANCE_MODES/g) ?? []).length).toBe(0);
+        expect(src.match(/isCardBackedLowBalanceMode\(/g) ?? []).toHaveLength(0);
+        expect(src.match(/CARD_BACKED_LOW_BALANCE_MODES/g) ?? []).toHaveLength(0);
       });
 
       it('⚠⚠ ANTI-ALIGNMENT #4 — no mode LITERAL appears', () => {
@@ -118,7 +118,7 @@ describe('INVARIANT: settlement is blind to the low-balance mode (ADR-1040 Amend
     // The ADR's actual requirement: settlement's gate IS the mandate. That part is a rule.
     expect(src).toContain('!isWalletMandateActive(wallet)');
     // The count is the snapshot. Amendment 6 §H does not forbid a second mandate predicate.
-    expect((src.match(/isWalletMandateActive\(/g) ?? []).length).toBe(1);
+    expect(src.match(/isWalletMandateActive\(/g) ?? []).toHaveLength(1);
   });
 
   // ⚠ `settle-from-presence.ts` holds NO mandate predicate at all — it threads
@@ -135,6 +135,6 @@ describe('INVARIANT: settlement is blind to the low-balance mode (ADR-1040 Amend
         import.meta.url
       )
     );
-    expect((src.match(/isWalletMandateActive\(/g) ?? []).length).toBe(0);
+    expect(src.match(/isWalletMandateActive\(/g) ?? []).toHaveLength(0);
   });
 });

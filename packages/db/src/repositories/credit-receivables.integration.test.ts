@@ -451,4 +451,69 @@ describe('creditReceivablesRepository.earliestOpenDebtAnchor', () => {
     });
     expect(anchor?.toISOString()).toBe(ENDED_A.toISOString());
   });
+
+  /**
+   * ⚠⚠ FIX ROUND 2 (F1) — a SOFT-DELETED session must not anchor the window. Every other session
+   * read in the data layer is `deleted_at IS NULL`-scoped; this join was not, so an invisible
+   * session's (older) `ended_at` still entered the MIN, widening the promo window, inflating the
+   * discount and REFUSING a covering credit — the hold then outlived a paid balance. It failed
+   * CLOSED, which is why the shipped suite above was green.
+   */
+  describe('a soft-deleted session (fix round 2, F1)', () => {
+    it("⚠⚠ does not widen the window with an invisible session's older ended_at", async () => {
+      const { companyId, walletId, sessionId: deletedSession } = await seedSession();
+      const { sessionId: liveSession } = await seedAnotherSessionOnWallet(walletId, companyId);
+      // The soft-deleted session ended FIRST — the value that used to win the MIN.
+      await db
+        .update(creditSessions)
+        .set({ endedAt: ENDED_A, deletedAt: new Date() })
+        .where(eq(creditSessions.id, deletedSession));
+      await db
+        .update(creditSessions)
+        .set({ endedAt: ENDED_B })
+        .where(eq(creditSessions.id, liveSession));
+      await creditReceivablesRepository.open({
+        companyId,
+        walletId,
+        sessionId: deletedSession,
+        amountMinor: 1_000,
+        reason: 'settlement_declined',
+      });
+      await creditReceivablesRepository.open({
+        companyId,
+        walletId,
+        sessionId: liveSession,
+        amountMinor: 2_000,
+        reason: 'settlement_declined',
+      });
+
+      const anchor = await creditReceivablesRepository.earliestOpenDebtAnchor(walletId);
+      // Before the fix this was ENDED_A — a month of extra promo grants discounted away.
+      expect(anchor?.toISOString()).toBe(ENDED_B.toISOString());
+    });
+
+    it('⚠ still ANSWERS for a receivable whose only session is soft-deleted — it falls back to opened_at', async () => {
+      // The other half of F1, and the reason the filter rides the JOIN condition rather than the
+      // WHERE. `hasOpenReceivable` never joins sessions, so this row STILL holds the company; if
+      // filtering dropped it from the aggregate the anchor would be `undefined`,
+      // `assessCashCoverage` would report `hasOpenReceivable: false`, and no covering credit
+      // could ever clear it. Fail-closed forever is not a fix for fail-closed sometimes.
+      const { companyId, walletId, sessionId } = await seedSession();
+      await db
+        .update(creditSessions)
+        .set({ endedAt: ENDED_A, deletedAt: new Date() })
+        .where(eq(creditSessions.id, sessionId));
+      const { receivable } = await creditReceivablesRepository.open({
+        companyId,
+        walletId,
+        sessionId,
+        amountMinor: 1_000,
+        reason: 'settlement_declined',
+      });
+
+      expect(await creditReceivablesRepository.hasOpenReceivable(companyId)).toBe(true);
+      const anchor = await creditReceivablesRepository.earliestOpenDebtAnchor(walletId);
+      expect(anchor?.toISOString()).toBe(receivable.openedAt.toISOString());
+    });
+  });
 });
