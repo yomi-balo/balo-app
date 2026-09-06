@@ -100,6 +100,17 @@ describe('threadNudgeFor — client lens', () => {
     expect(nudge?.primary).toMatchObject({ label: 'Open project workspace', action: 'stub' });
   });
 
+  it('closed → records copy, NEVER "is your expert" even on a thread that was won (BAL-540)', () => {
+    const nudge = threadNudgeFor(
+      'client',
+      'closed',
+      thread({ stage: 'request_closed', relationshipStatus: 'accepted' })
+    );
+    expect(nudge?.variant).toBe('done');
+    expect(nudge?.headline).toBe('This request was closed.');
+    expect(nudge?.primary).toBeUndefined();
+  });
+
   // ── BAL-283 — availability-shared and booked cells ──────────────────────────────────────
 
   it('eoi_submitted + availability shared → sharper "pick a time" cell, SAME call handler', () => {
@@ -206,6 +217,18 @@ describe('threadNudgeFor — expert lens', () => {
     const nudge = threadNudgeFor('expert', 'accepted', thread({ stage: 'not_selected' }));
     expect(nudge?.variant).toBe('done');
     expect(nudge?.headline).toBe('The client went with another expert');
+    expect(nudge?.primary).toBeUndefined();
+  });
+
+  it('closed → records copy naming the client party, no pre-decision CTA (BAL-540)', () => {
+    const nudge = threadNudgeFor(
+      'expert',
+      'closed',
+      thread({ stage: 'request_closed', relationshipStatus: 'invited' }),
+      'Northwind Industrial'
+    );
+    expect(nudge?.variant).toBe('done');
+    expect(nudge?.headline).toBe('Northwind Industrial closed this request.');
     expect(nudge?.primary).toBeUndefined();
   });
 

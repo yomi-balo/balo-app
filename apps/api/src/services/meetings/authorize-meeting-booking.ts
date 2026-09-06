@@ -226,6 +226,9 @@ type NonEngagementContextType = (typeof NON_ENGAGEMENT_CONTEXT_TYPES)[number];
 const POST_DECISION_REQUEST_STATUSES: ReadonlySet<string> = new Set([
   'accepted',
   'kickoff_approved',
+  // BAL-540 — the terminal `closed`. Not "post-decision" in the acceptance sense; it is
+  // post-LIFECYCLE, and the answer to "may a free intro call be booked here" is the same: no.
+  'closed',
 ]);
 
 /**

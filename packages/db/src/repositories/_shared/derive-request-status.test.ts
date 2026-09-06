@@ -126,3 +126,65 @@ describe('deriveRequestStatus — naming-trap scope translation', () => {
     expect('declined' in RELATIONSHIP_TO_REQUEST_STATUS).toBe(false);
   });
 });
+
+describe('deriveRequestStatus — BAL-540 rule 1: a terminal state wins', () => {
+  it('current closed + any live relationship set → stays closed', () => {
+    // The close cascade declines every track it finds, but a track inserted after its
+    // snapshot (or one that was terminal and skipped) must never argue the request open.
+    expect(deriveRequestStatus(['invited', 'eoi_submitted', 'proposal_submitted'], 'closed')).toBe(
+      'closed'
+    );
+  });
+
+  it('current closed + an accepted relationship → still closed', () => {
+    // `accepted` outranks every other relationship-expressible status, so this is the
+    // strongest possible argument against the terminal — and it still loses.
+    expect(deriveRequestStatus(['accepted'], 'closed')).toBe('closed');
+  });
+
+  it('current closed + empty set → closed', () => {
+    expect(deriveRequestStatus([], 'closed')).toBe('closed');
+  });
+});
+
+describe('deriveRequestStatus — BAL-540 rule 2: a decline may LOWER, down to the floor', () => {
+  it('declining the FURTHEST track drops the request to its furthest LIVE track', () => {
+    // The kanban requirement. The proposal_submitted track is now `declined`; one live
+    // track remains at eoi_submitted, so the request follows it DOWN. Under the old
+    // pure-floor rule this returned `proposal_submitted`.
+    expect(deriveRequestStatus(['declined', 'eoi_submitted'], 'proposal_submitted')).toBe(
+      'eoi_submitted'
+    );
+  });
+
+  it('declining a NON-furthest track moves nothing', () => {
+    expect(deriveRequestStatus(['declined', 'proposal_submitted'], 'proposal_submitted')).toBe(
+      'proposal_submitted'
+    );
+  });
+
+  it('lowers only to the furthest live track, not to the earliest one', () => {
+    expect(
+      deriveRequestStatus(['declined', 'invited', 'proposal_requested'], 'proposal_submitted')
+    ).toBe('proposal_requested');
+  });
+
+  it('does NOT lower below an admin milestone: accepted survives a decline', () => {
+    // The floor half of the rule, stated as its own case beside the lowering ones so the
+    // two halves are visibly one rule. `accepted` is a milestone no relationship expresses.
+    expect(deriveRequestStatus(['declined', 'eoi_submitted'], 'accepted')).toBe('accepted');
+  });
+
+  it('does NOT lower below exploratory_meeting_requested', () => {
+    expect(deriveRequestStatus(['declined'], 'exploratory_meeting_requested')).toBe(
+      'exploratory_meeting_requested'
+    );
+  });
+
+  it('lowers a request whose only live track is behind it (experts_invited is NOT a floor)', () => {
+    // `experts_invited` IS relationship-expressible, so it is deliberately absent from the
+    // milestone set: a request sitting at eoi_submitted whose only remaining live track is
+    // still `invited` must drop back to experts_invited.
+    expect(deriveRequestStatus(['declined', 'invited'], 'eoi_submitted')).toBe('experts_invited');
+  });
+});

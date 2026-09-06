@@ -87,6 +87,25 @@ describe('deriveThreadActions — the callSlot state matrix (BAL-283)', () => {
     ).toEqual({ kind: 'none' });
   });
 
+  it('blocks the call (kind: none) on a closed request (BAL-540 — was fail-open via rank -1)', () => {
+    expect(
+      deriveThreadActions({
+        lens: 'client',
+        requestStatus: 'closed',
+        thread: thread({ stage: 'request_closed' }),
+        nudgeIsProposal: false,
+      }).callSlot
+    ).toEqual({ kind: 'none' });
+    expect(
+      deriveThreadActions({
+        lens: 'expert',
+        requestStatus: 'closed',
+        thread: thread({ stage: 'request_closed', relationshipStatus: 'accepted' }),
+        nudgeIsProposal: false,
+      }).callSlot
+    ).toEqual({ kind: 'none' });
+  });
+
   it('a booked call still wins even past the call gate (nothing left to re-derive)', () => {
     const bookedCall = { meetingId: 'meeting-1', scheduledStartIso: '2026-09-01T04:00:00.000Z' };
     const actions = deriveThreadActions({
@@ -242,5 +261,52 @@ describe('deriveThreadActions — mobile rail', () => {
         nudgeIsProposal: false,
       }).railProposal
     ).toEqual({ kind: 'build', label: 'Build proposal', quiet: false });
+  });
+});
+
+describe('deriveThreadActions — declineSlot (BAL-540)', () => {
+  it('defaults to null when canDecline is omitted (every pre-existing call site)', () => {
+    const actions = deriveThreadActions({
+      lens: 'client',
+      requestStatus: 'eoi_submitted',
+      thread: thread(),
+      nudgeIsProposal: false,
+    });
+    expect(actions.declineSlot).toBeNull();
+  });
+
+  it('is null when canDecline is false even on an active thread', () => {
+    const actions = deriveThreadActions({
+      lens: 'client',
+      requestStatus: 'eoi_submitted',
+      thread: thread({ stage: 'active' }),
+      nudgeIsProposal: false,
+      canDecline: false,
+    });
+    expect(actions.declineSlot).toBeNull();
+  });
+
+  it('is the relationship status (as a TrackStage) when canDecline is true AND the thread is active', () => {
+    const actions = deriveThreadActions({
+      lens: 'client',
+      requestStatus: 'eoi_submitted',
+      thread: thread({ stage: 'active', relationshipStatus: 'eoi_submitted' }),
+      nudgeIsProposal: false,
+      canDecline: true,
+    });
+    expect(actions.declineSlot).toBe('eoi_submitted');
+  });
+
+  it('is null once the thread is decided (won / not_selected / request_closed), even with canDecline true', () => {
+    for (const stage of ['won', 'not_selected', 'request_closed'] as const) {
+      const actions = deriveThreadActions({
+        lens: 'client',
+        requestStatus: 'accepted',
+        thread: thread({ stage, relationshipStatus: 'accepted' }),
+        nudgeIsProposal: false,
+        canDecline: true,
+      });
+      expect(actions.declineSlot).toBeNull();
+    }
   });
 });

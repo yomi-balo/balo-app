@@ -150,6 +150,7 @@ import { meetingEndRoutes } from './end.js';
 import { meetingStateRoutes } from './state.js';
 import { meetingRescheduleRoutes } from './reschedule.js';
 import { meetingCancelRoutes } from './cancel.js';
+import { meetingCancelledTeardownRoutes } from './cancelled-teardown.js';
 import { meetingRescheduleProposalRoutes } from './reschedule-proposals.js';
 import { meetingRescheduleProposalAnswerRoutes } from './reschedule-proposal-answers.js';
 import {
@@ -377,6 +378,11 @@ export async function meetingsRoutes(fastify: FastifyInstance): Promise<void> {
   // (engagement vs membership) so the two API gate modules can never be folded into one.
   await meetingRescheduleProposalRoutes(fastify);
   await meetingRescheduleProposalAnswerRoutes(fastify);
+
+  // BAL-540 — internal-auth-only post-commit teardown for meetings the request-close cascade
+  // already cancelled inside its own `@balo/db` transaction. A sibling registration, same
+  // reasoning as every route above.
+  await meetingCancelledTeardownRoutes(fastify);
 
   log.info('Registered meeting routes');
 }

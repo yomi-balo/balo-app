@@ -8,6 +8,7 @@ const {
   mockUpdateSchedule,
   mockCancel,
   mockSoftDelete,
+  mockFindById,
   mockEnqueue,
   mockListByMeeting,
   mockListLiveByMeeting,
@@ -25,6 +26,8 @@ const {
   mockUpdateSchedule: vi.fn(),
   mockCancel: vi.fn(),
   mockSoftDelete: vi.fn(),
+  // BAL-540 — `tearDownCancelledMeetings` re-reads each entry before acting on it.
+  mockFindById: vi.fn(),
   mockEnqueue: vi.fn().mockResolvedValue(undefined),
   mockListByMeeting: vi.fn().mockResolvedValue([]),
   mockListLiveByMeeting: vi.fn().mockResolvedValue([]),
@@ -60,6 +63,7 @@ vi.mock('@balo/db', () => ({
     updateSchedule: mockUpdateSchedule,
     cancel: mockCancel,
     softDelete: mockSoftDelete,
+    findById: mockFindById,
   },
   meetingContextsRepository: { listByMeeting: mockListByMeeting },
   meetingGuestsRepository: { listLiveByMeeting: mockListLiveByMeeting },
@@ -98,6 +102,7 @@ import {
   cancelMeeting,
   rescheduleMeeting,
   softDeleteMeeting,
+  tearDownCancelledMeetings,
 } from './meeting-availability.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -178,6 +183,7 @@ beforeEach(() => {
   mockFindSessionById.mockResolvedValue({ id: 'session-1', initiatingMemberId: PLACER_MEMBER_ID });
   mockCancelSession.mockResolvedValue({ id: 'session-1', holdId: HOLD_ID });
   mockDeleteRoom.mockResolvedValue('deleted');
+  mockFindById.mockResolvedValue(undefined);
 });
 
 // ── The contract ─────────────────────────────────────────────────────────────
@@ -696,5 +702,115 @@ describe('cancelMeeting — the post-commit unwind', () => {
     await cancelMeeting(MEETING_ID, CANCEL_ACTOR_ID, 'client', log);
 
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-540 — tearDownCancelledMeetings: the request-close cascade's post-commit half ─────────
+
+describe('tearDownCancelledMeetings — safe by state', () => {
+  it('skips an entry the repository cannot find', async () => {
+    mockFindById.mockResolvedValue(undefined);
+
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 0, skipped: 1 });
+    expect(mockDeleteRoom).not.toHaveBeenCalled();
+    expect(mockEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('skips an entry that is NOT already cancelled — refuses to act on live state', async () => {
+    mockFindById.mockResolvedValue({
+      id: MEETING_ID,
+      status: 'scheduled',
+      dailyRoomName: CORRECT_ROOM_NAME,
+    });
+
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 0, skipped: 1 });
+    expect(mockDeleteRoom).not.toHaveBeenCalled();
+    expect(mockEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('tears down the room and rebuilds the cache for an already-cancelled meeting', async () => {
+    mockFindById.mockResolvedValue({
+      id: MEETING_ID,
+      status: 'cancelled',
+      dailyRoomName: CORRECT_ROOM_NAME,
+    });
+
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 1, skipped: 0 });
+    expect(mockDeleteRoom).toHaveBeenCalledWith(CORRECT_ROOM_NAME);
+    expect(mockEnqueue).toHaveBeenCalledWith(EXPERT_ID, log);
+  });
+
+  it('rebuilds NO cache for an admin meeting (expertProfileId: null), but still tears down the room', async () => {
+    mockFindById.mockResolvedValue({
+      id: MEETING_ID,
+      status: 'cancelled',
+      dailyRoomName: CORRECT_ROOM_NAME,
+    });
+
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: null }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 1, skipped: 0 });
+    expect(mockDeleteRoom).toHaveBeenCalledWith(CORRECT_ROOM_NAME);
+    expect(mockEnqueue).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete a room whose stamped name disagrees with the derived one', async () => {
+    mockFindById.mockResolvedValue({
+      id: MEETING_ID,
+      status: 'cancelled',
+      dailyRoomName: 'somebody-elses-room',
+    });
+
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID }],
+      log
+    );
+
+    // Still counted as "processed" — the entry WAS eligible; the vendor call itself refused.
+    expect(result).toEqual({ processed: 1, skipped: 0 });
+    expect(mockDeleteRoom).not.toHaveBeenCalled();
+    expect(mockEnqueue).toHaveBeenCalledWith(EXPERT_ID, log);
+  });
+
+  it('processes a batch, mixing eligible and ineligible entries', async () => {
+    const OTHER_MEETING_ID = '99999999-9999-4999-8999-999999999999';
+    mockFindById.mockImplementation((id: string) => {
+      if (id === MEETING_ID) {
+        return Promise.resolve({
+          id: MEETING_ID,
+          status: 'cancelled',
+          dailyRoomName: CORRECT_ROOM_NAME,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const result = await tearDownCancelledMeetings(
+      [
+        { meetingId: MEETING_ID, expertProfileId: EXPERT_ID },
+        { meetingId: OTHER_MEETING_ID, expertProfileId: EXPERT_ID },
+      ],
+      log
+    );
+
+    expect(result).toEqual({ processed: 1, skipped: 1 });
   });
 });

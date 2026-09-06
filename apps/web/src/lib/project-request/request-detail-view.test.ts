@@ -84,6 +84,7 @@ function ctx(overrides: Partial<RequestViewerContext> = {}): RequestViewerContex
     isInvitedExpert: true,
     relationshipId: 'rel-1',
     canSeeContact: true,
+    canSeeStaffOnly: false,
     ...overrides,
   };
 }
@@ -165,6 +166,7 @@ describe('mapRequestToDetailView', () => {
         isQuiet: false,
         quietDays: expect.any(Number),
         removable: false,
+        declinable: true,
       },
     ]);
   });
@@ -338,6 +340,15 @@ describe('mapRequestToDetailView — per-expert derived state (observer lens)', 
     expect(deriveOne({ status: 'invited' }).removable).toBe(true);
     expect(deriveOne({ status: 'eoi_submitted' }).removable).toBe(false);
     expect(deriveOne({ status: 'declined' }).removable).toBe(false);
+  });
+
+  it('BAL-540: marks a row declinable for every live stage, never accepted/declined', () => {
+    expect(deriveOne({ status: 'invited' }).declinable).toBe(true);
+    expect(deriveOne({ status: 'eoi_submitted' }).declinable).toBe(true);
+    expect(deriveOne({ status: 'proposal_requested' }).declinable).toBe(true);
+    expect(deriveOne({ status: 'proposal_submitted' }).declinable).toBe(true);
+    expect(deriveOne({ status: 'accepted' }).declinable).toBe(false);
+    expect(deriveOne({ status: 'declined' }).declinable).toBe(false);
   });
 
   it('uses the most recent activity timestamp for quietDays', () => {
@@ -514,6 +525,79 @@ describe('mapRequestToDetailView — kickoff (BAL-291)', () => {
       NOW
     );
     expect(adminView.kickoff?.acceptedRelationshipId).toBe('rel-1');
+  });
+});
+
+describe('mapRequestToDetailView — BAL-540 closed summary + closed tracks', () => {
+  function closedRequest(overrides: Partial<ProjectRequestWithRelations> = {}) {
+    return request({
+      status: 'closed',
+      closedAt: new Date('2026-09-05T10:00:00Z'),
+      closedByUserId: 'user-admin',
+      closeReason: 'unfilled',
+      closeNote: 'Two of three tracks went quiet.',
+      relationships: [rel({ status: 'declined', declineReason: 'request_closed' })],
+      ...overrides,
+    } as Partial<ProjectRequestWithRelations>);
+  }
+
+  const CLOSED_INPUT = {
+    closedByName: 'Adeeb',
+    counts: { tracksEnded: 1, proposalsWithdrawn: 0, meetingsCancelled: 1 },
+  };
+
+  it('is null for a live request even with input supplied', () => {
+    const view = mapRequestToDetailView(request(), ctx(), NOW, CLOSED_INPUT);
+    expect(view.closed).toBeNull();
+    expect(view.closedTracks).toEqual([]);
+  });
+
+  it('is null for a closed request when the page supplied no input (defensive default)', () => {
+    const view = mapRequestToDetailView(closedRequest(), ctx(), NOW);
+    expect(view.closed).toBeNull();
+  });
+
+  it('populates closed + closedTracks for the client lens when input is supplied', () => {
+    const view = mapRequestToDetailView(
+      closedRequest(),
+      ctx({ lens: 'client', archetype: 'participant', canSeeStaffOnly: false }),
+      NOW,
+      CLOSED_INPUT
+    );
+    expect(view.closed?.reason).toBe('unfilled');
+    expect(view.closed?.closedByParty).toBe('balo');
+    expect(view.closedTracks).toHaveLength(1);
+  });
+
+  it('D11 negative: close_note is null on the client lens even though closeNote is set', () => {
+    const view = mapRequestToDetailView(
+      closedRequest(),
+      ctx({ lens: 'client', archetype: 'participant', canSeeStaffOnly: false }),
+      NOW,
+      CLOSED_INPUT
+    );
+    expect(view.closed?.note).toBeNull();
+  });
+
+  it('D11 negative: close_note is null on the expert lens even though closeNote is set', () => {
+    const view = mapRequestToDetailView(
+      closedRequest(),
+      ctx({ lens: 'expert', archetype: 'participant', canSeeStaffOnly: false }),
+      NOW,
+      CLOSED_INPUT
+    );
+    expect(view.closed?.note).toBeNull();
+    expect(view.closedTracks).toEqual([]); // expert never sees the counterparty track list
+  });
+
+  it('close_note IS populated for a viewer holding canSeeStaffOnly (D11)', () => {
+    const view = mapRequestToDetailView(
+      closedRequest(),
+      ctx({ lens: 'admin', archetype: 'observer', canSeeStaffOnly: true }),
+      NOW,
+      CLOSED_INPUT
+    );
+    expect(view.closed?.note).toBe('Two of three tracks went quiet.');
   });
 });
 

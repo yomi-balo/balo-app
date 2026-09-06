@@ -9,6 +9,7 @@ import type {
   RelationshipState,
   RequestRelationshipView,
 } from '@/lib/project-request/request-detail-view';
+import { declineVerbFor, narrowToTrackStage } from '@/lib/project-request/close-copy';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,10 +28,12 @@ import {
 } from '@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-as-admin';
 import { RequestCard } from './request-card';
 import { ExpertInviteDialog } from './expert-invite-dialog';
+import { DeclineTrackDialog } from './close/decline-track-dialog';
 
 interface AdminHealthPanelProps {
   requestId: string;
   status: string;
+  companyName: string;
   relationships: RequestRelationshipView[];
 }
 
@@ -131,6 +134,53 @@ function RemoveExpertButton({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </>
+  );
+}
+
+/**
+ * BAL-540 — single declinable row's "no" button + its `DeclineTrackDialog` (admin variant, on
+ * the client's behalf). `stage` narrows `relationship.status` via `narrowToTrackStage` — always
+ * non-null here because the button only renders when `relationship.declinable` holds, and
+ * `declinable` is exactly the set `narrowToTrackStage` recognises.
+ */
+function DeclineTrackButton({
+  requestId,
+  companyName,
+  relationship,
+}: Readonly<{
+  requestId: string;
+  companyName: string;
+  relationship: RequestRelationshipView;
+}>): React.JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const stage = narrowToTrackStage(relationship.status);
+  if (stage === null) return null; // defensive — `declinable` already guarantees this
+  // The VERB must match the dialog this button opens: an unanswered invitation is
+  // "Withdraw invite", not "Decline" (mirrors `thread-header.tsx`'s version).
+  const declineLabel = `${declineVerbFor(stage)} ${relationship.expertName}`; // pending-MJ
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={declineLabel}
+        className="border-border bg-card text-muted-foreground hover:border-destructive/40 hover:text-destructive flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-colors"
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+      <DeclineTrackDialog
+        open={open}
+        onOpenChange={setOpen}
+        requestId={requestId}
+        relationshipId={relationship.id}
+        expertName={relationship.expertName}
+        partyLabel={relationship.expertName}
+        companyName={companyName}
+        stage={stage}
+        variant="admin"
+      />
     </>
   );
 }
@@ -249,6 +299,7 @@ function RequestProposalButton({
 export function AdminHealthPanel({
   requestId,
   status,
+  companyName,
   relationships,
 }: Readonly<AdminHealthPanelProps>): React.JSX.Element {
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -297,6 +348,13 @@ export function AdminHealthPanel({
                 <RequestProposalButton requestId={requestId} relationship={rel} />
               )}
               {canRemove && <RemoveExpertButton requestId={requestId} relationship={rel} />}
+              {rel.declinable && (
+                <DeclineTrackButton
+                  requestId={requestId}
+                  companyName={companyName}
+                  relationship={rel}
+                />
+              )}
             </li>
           );
         })}

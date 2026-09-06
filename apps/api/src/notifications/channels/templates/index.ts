@@ -22,6 +22,11 @@ import { ProjectChangesRequestedEmail } from './project-changes-requested.js';
 import { ProjectProposalResubmittedEmail } from './project-proposal-resubmitted.js';
 import { ProjectBillingReminderOwnerEmail } from './project-billing-reminder-owner.js';
 import { ProjectBillingReminderCreatorEmail } from './project-billing-reminder-creator.js';
+import {
+  ProjectRequestClosedExpertEmail,
+  ProjectRequestClosedClientEmail,
+} from './project-request-closed.js';
+import { ProjectTrackDeclinedEmail } from './project-track-declined.js';
 import { EngagementMilestoneCompletedClientEmail } from './engagement-milestone-completed.js';
 import { EngagementScopeChangedClientEmail } from './engagement-scope-changed.js';
 import { CompletionRequestEmail } from './engagement-completion-requested.js';
@@ -629,6 +634,59 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: `Billing details are still needed to start ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-540 — expert-facing: the request closed while this track was live. Subject names the
+  // PARTY (prospective copy, CLAUDE.md).
+  'project-request-closed-expert': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const companyName = (data.clientCompanyName as string) ?? 'The client';
+    return {
+      component: React.createElement(ProjectRequestClosedExpertEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+        clientCompanyName: companyName,
+      }),
+      subject: `${sanitizeSubjectTitle(companyName)} isn't proceeding: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-540 — client-facing, Balo-closed only (the client-closed arm never emails itself — a
+  // toast is enough). Never renders `close_note` (D11) — only the reason CATEGORY.
+  'project-request-closed-client': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    return {
+      component: React.createElement(ProjectRequestClosedClientEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+        reason: data.reason,
+      }),
+      subject: `We've closed your request: ${sanitizeSubjectTitle(title)}`,
+    };
+  },
+
+  // BAL-540 — one track declined (client, or Balo on the client's behalf).
+  'project-track-declined': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const companyName = (data.clientCompanyName as string) ?? 'The client';
+    return {
+      component: React.createElement(ProjectTrackDeclinedEmail, {
+        firstName: (data.recipientName as string) ?? 'there',
+        projectTitle: title,
+        projectRequestId: (data.projectRequestId as string) ?? '',
+        baseUrl: BASE_URL,
+        clientCompanyName: companyName,
+        stage: data.stage,
+      }),
+      subject:
+        data.stage === 'invited'
+          ? `${sanitizeSubjectTitle(companyName)} withdrew an invitation: ${sanitizeSubjectTitle(title)}`
+          : `${sanitizeSubjectTitle(companyName)} isn't proceeding with you: ${sanitizeSubjectTitle(title)}`,
     };
   },
 

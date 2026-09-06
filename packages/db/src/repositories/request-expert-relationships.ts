@@ -3,13 +3,44 @@ import { db } from '../client';
 import {
   projectRequests,
   requestExpertRelationships,
+  type RelationshipDeclineReason,
   type RequestExpertRelationship,
 } from '../schema';
 import { deriveRequestStatus } from './_shared/derive-request-status';
 import type { DbExecutor } from './_shared/db-executor';
+import { recordRelationshipTransition } from './_shared/relationship-audit';
 import { conversationsRepository } from './conversations';
+// ⚠ A DELIBERATE, BENIGN IMPORT CYCLE (`proposals.ts` imports `advanceRelationshipStatus`
+// from here). Both directions import ONLY hoisted `function` declarations that are called
+// from method bodies — never at module-evaluation time — so neither module reads a
+// half-initialised binding from the other, in any evaluation order. It is the natural shape:
+// a proposal advance moves the relationship spine, and `declineTrack` below ends the track's
+// open proposals. The alternative (hoisting `PROPOSAL_STATUS_TRANSITIONS`, its guard, its
+// error class and `advanceProposalStatus` into `_shared/`) was considered and rejected as a
+// larger, unrelated refactor of a file this ticket otherwise barely touches.
+import { advanceProposalStatus, lockOpenProposalsForRelationshipTx } from './proposals';
+import type { DeclinableRelationshipStatus } from '@balo/shared/project-requests';
 
 export type RelationshipStatus = RequestExpertRelationship['status'];
+
+// ── Type-agreement pin (BAL-540 fix round) ────────────────────────────────
+//
+// ⚠ `@balo/shared/project-requests` RESTATES the four declinable stages (it must — a client
+// island cannot value-import `@balo/db`; see that module's docblock). This assignment makes a
+// drift a TYPE ERROR: if a stage named there ever stops being a real
+// `request_expert_relationship_status`, `DeclinableRelationshipStatusAgreement` resolves to
+// `never` and `true` is not assignable to it. The complementary VALUE-level proof — that the
+// tuple is EXACTLY the set of sources carrying a `'declined'` edge in
+// `RELATIONSHIP_STATUS_TRANSITIONS` below — is
+// `invariants/declinable-statuses-match-the-transitions.test.ts`.
+type DeclinableIsARelationshipStatus<A, B> = [A] extends [B] ? true : never;
+
+export type DeclinableRelationshipStatusAgreement = DeclinableIsARelationshipStatus<
+  DeclinableRelationshipStatus,
+  RelationshipStatus
+>;
+
+export const declinableRelationshipStatusAgreement: DeclinableRelationshipStatusAgreement = true;
 
 /**
  * Allowed per-expert relationship transitions. Linear advance with a terminal
@@ -84,18 +115,71 @@ export class InvalidRelationshipTransitionError extends Error {
  * a live relationship normally implies a live request); the relationship advance
  * still stands.
  *
+ * ⚠ IT ALSO WRITES THE ATTRIBUTION AND THE AUDIT ROW (BAL-540 / ADR-1030, orchestrator D3).
+ * `actorUserId` is REQUIRED on every arm, and a `→ declined` advance additionally stamps
+ * `declined_by_user_id` + `decline_reason` IN THE SAME `.set()` as `declined_at`. One
+ * `request_expert_relationship.*` audit row is appended LAST, inside this transaction, and its
+ * id comes back in the result: it is the colon-free, per-WRITE `correlationId` BAL-540's
+ * `project.track_declined` fan-out keys its BullMQ job on. The `AdvanceRelationshipInput` union
+ * makes `reason` a compile-time requirement of the `declined` arm and impossible elsewhere.
+ *
+ * ⚠ THE RETURN IS A TRIPLE, NOT THE ROW (widened by BAL-540). `previousStatus` is read under
+ * the same `FOR UPDATE` lock as the write, so it is provably the value the transition moved
+ * from — callers that need "what stage did this track end at" (the decline notification's copy
+ * selector) must not re-read it afterwards.
+ *
  * `tx` is the active transaction (a Drizzle transaction client). Throws
  * `InvalidRelationshipTransitionError` for illegal moves / `expectedFrom`
  * mismatch and `Error` for a missing/soft-deleted relationship.
  */
+/**
+ * BAL-540 / ADR-1030 (orchestrator D3) — `advanceRelationshipStatus`'s input, DISCRIMINATED
+ * ON `to` so `reason` is REQUIRED exactly when the destination is `declined` and
+ * IMPOSSIBLE otherwise.
+ *
+ * ⚠ THE DISCRIMINATION IS THE POINT, not decoration. `declined_by_user_id` /
+ * `decline_reason` are attribution columns, and the house rule
+ * (`_shared/meeting-audit.ts`, `schema/meeting-presence.ts`) is that an attribution column
+ * with no writer is a worse lie than its absence. A single optional `reason?` would let a
+ * caller silently write a NULL reason onto a real decline; this shape makes that a compile
+ * error. It also stops a non-decline caller from passing a reason that would be dropped.
+ *
+ * ⚠ `actorUserId` IS REQUIRED ON EVERY ARM. There is no system-actor exemption on this
+ * path — every relationship transition has a human behind it (the expert, the client, Balo
+ * staff, or whoever closed the request).
+ */
+export type AdvanceRelationshipInput =
+  | {
+      id: string;
+      to: Exclude<RelationshipStatus, 'declined'>;
+      expectedFrom?: RelationshipStatus;
+      actorUserId: string;
+    }
+  | {
+      id: string;
+      to: 'declined';
+      expectedFrom?: RelationshipStatus;
+      actorUserId: string;
+      reason: RelationshipDeclineReason;
+    };
+
+/** What one advance produced. Widened by BAL-540 from the bare row. */
+export interface AdvanceRelationshipResult {
+  relationship: RequestExpertRelationship;
+  /** The status the row held BEFORE the write — read under the same `FOR UPDATE` lock. */
+  previousStatus: RelationshipStatus;
+  /**
+   * The `request_expert_relationship.*` audit row's id. UNIQUE PER SUCCESSFUL TRANSITION
+   * (`audit_events` is append-only) and colon-free, so BAL-540's `project.track_declined`
+   * fan-out can use it as the notification `correlationId` — per WRITE, never per STATE.
+   */
+  auditId: string;
+}
+
 export async function advanceRelationshipStatus(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  input: {
-    id: string;
-    to: RelationshipStatus;
-    expectedFrom?: RelationshipStatus;
-  }
-): Promise<RequestExpertRelationship> {
+  input: AdvanceRelationshipInput
+): Promise<AdvanceRelationshipResult> {
   const [current] = await tx
     .select()
     .from(requestExpertRelationships)
@@ -116,11 +200,22 @@ export async function advanceRelationshipStatus(
     throw new InvalidRelationshipTransitionError(current.status, input.to);
   }
 
+  const previousStatus = current.status;
+
   const [updated] = await tx
     .update(requestExpertRelationships)
     .set({
       status: input.to,
-      ...(input.to === 'declined' ? { declinedAt: new Date() } : {}),
+      // ⚠ ALL THREE DECLINE COLUMNS IN ONE STATEMENT (BAL-540 / D3). WHEN, WHO and WHY move
+      // together or not at all — a second UPDATE could be interleaved by a future edit and
+      // leave a declined row with no attribution.
+      ...(input.to === 'declined'
+        ? {
+            declinedAt: new Date(),
+            declinedByUserId: input.actorUserId,
+            declineReason: input.reason,
+          }
+        : {}),
       ...(input.to === 'proposal_requested' ? { proposalRequestedAt: new Date() } : {}),
     })
     .where(eq(requestExpertRelationships.id, input.id))
@@ -169,7 +264,20 @@ export async function advanceRelationshipStatus(
     }
   }
 
-  return updated;
+  // ── Audit (BAL-540 / ADR-1030, D3) ───────────────────────────────────────
+  // LAST, after every write this transition performs. An audit row left behind by a
+  // rolled-back transition would attest to a status change that never happened —
+  // `meetingsRepository.cancel`'s rule, verbatim.
+  const auditId = await recordRelationshipTransition(tx, {
+    actorUserId: input.actorUserId,
+    relationshipId: updated.id,
+    projectRequestId: updated.projectRequestId,
+    from: previousStatus,
+    to: input.to,
+    ...(input.to === 'declined' ? { declineReason: input.reason } : {}),
+  });
+
+  return { relationship: updated, previousStatus, auditId };
 }
 
 /**
@@ -223,6 +331,42 @@ export async function markNotSelectedByAward(
   return stamped.map((row) => row.id);
 }
 
+/** BAL-540 — what one deliberate track decline produced. */
+export interface DeclineTrackResult {
+  relationship: RequestExpertRelationship;
+  /** The stage the track ended at — picks the decline notice's copy. Read under the lock. */
+  previousStatus: RelationshipStatus;
+  /** The `request_expert_relationship.declined` audit row id: the fan-out's correlationId. */
+  declineAuditId: string;
+  /** The proposals this decline ended. Empty when the track had none open. */
+  declinedProposalIds: string[];
+  hadOpenProposal: boolean;
+}
+
+/**
+ * BAL-540 — the target request is CLOSED, so no new track may be opened on it. Thrown by
+ * {@link requestExpertRelationshipsRepository.invite} from inside its transaction, so nothing
+ * is inserted and no conversation is provisioned.
+ *
+ * ⚠ THIS IS THE AUTHORITATIVE GUARD, not the UI's, and it FAILS CLOSED. `invite-experts.ts`'s
+ * `INVITE_WINDOW_STATUSES` pre-check on the already-loaded request excludes `closed` and gives
+ * the stale-UI copy without a round trip; a close committing between that check and the insert
+ * still lands here.
+ *
+ * ⚠ NO CONSUMER BRANCHES ON THIS TYPE YET, and the docblock used to claim one did.
+ * `invite-experts.ts` does not import it — a race therefore surfaces as that action's generic
+ * failure copy rather than a specific "This request has been closed". That is a COPY gap, not
+ * a correctness gap (the invite is refused either way); wiring the `catch` arm is a follow-up.
+ * Named rather than a bare `Error` so that follow-up can branch on a TYPE instead of
+ * string-matching, and so `repositories/index.ts` can re-export it for that purpose.
+ */
+export class RequestClosedError extends Error {
+  constructor(public readonly projectRequestId: string) {
+    super(`Project request ${projectRequestId} is closed: no expert may be invited to it.`);
+    this.name = 'RequestClosedError';
+  }
+}
+
 export const requestExpertRelationshipsRepository = {
   /**
    * Admin invites an expert → creates an `invited` relationship row.
@@ -256,6 +400,24 @@ export const requestExpertRelationshipsRepository = {
     invitedByUserId: string;
   }): Promise<RequestExpertRelationship | undefined> {
     return db.transaction(async (tx) => {
+      // ⚠ BAL-540 — REFUSE A CLOSED REQUEST, UNDER THE REQUEST LOCK. Without this, an admin
+      // invite racing a close leaves an `invited` track on a `closed` request that the
+      // cascade's snapshot never saw and nothing ever declines. Taking the REQUEST lock and
+      // then INSERTING introduces NO new deadlock pair: no relationship row is locked here,
+      // so this path can never hold a relationship lock while waiting on the request lock
+      // (the inversion `advanceRelationshipStatus`'s LOCK ORDER block guards against).
+      // A missing / soft-deleted request is left to the FK and the existing behaviour.
+      const [request] = await tx
+        .select({ status: projectRequests.status })
+        .from(projectRequests)
+        .where(
+          and(eq(projectRequests.id, input.projectRequestId), isNull(projectRequests.deletedAt))
+        )
+        .for('update');
+      if (request?.status === 'closed') {
+        throw new RequestClosedError(input.projectRequestId);
+      }
+
       const [row] = await tx
         .insert(requestExpertRelationships)
         .values({
@@ -384,16 +546,105 @@ export const requestExpertRelationshipsRepository = {
 
   /**
    * Advance a single relationship's per-expert status with validation against
-   * `RELATIONSHIP_STATUS_TRANSITIONS`. Sets `declinedAt` when `to='declined'`
-   * and `proposalRequestedAt` when `to='proposal_requested'`. Optional
-   * `expectedFrom` optimistic guard. Throws
+   * `RELATIONSHIP_STATUS_TRANSITIONS`. Sets `declinedAt` / `declinedByUserId` /
+   * `declineReason` when `to='declined'` and `proposalRequestedAt` when
+   * `to='proposal_requested'`, and appends the `request_expert_relationship.*` audit row —
+   * all in ONE transaction. Optional `expectedFrom` optimistic guard. Throws
    * `InvalidRelationshipTransitionError`.
+   *
+   * ⚠ FOR A DELIBERATE DECLINE, PREFER {@link declineTrack} — it ALSO ends the track's open
+   * proposals. This wrapper flips only the relationship, which is correct for the four
+   * forward transitions and would leave a `submitted` proposal dangling on a declined track.
    */
-  async transitionStatus(input: {
-    id: string;
-    to: RelationshipStatus;
-    expectedFrom?: RelationshipStatus;
-  }): Promise<RequestExpertRelationship> {
+  async transitionStatus(input: AdvanceRelationshipInput): Promise<AdvanceRelationshipResult> {
     return db.transaction((tx) => advanceRelationshipStatus(tx, input));
+  },
+
+  /**
+   * BAL-540 — DECLINE ONE TRACK: the client says no to this expert, or Balo says it on their
+   * behalf. ONE transaction: the track's open proposals are locked, the relationship is
+   * advanced to `declined` (which stamps WHO/WHY/WHEN, re-derives the parent request status
+   * and appends the audit row), then each locked proposal is flipped to `declined`.
+   *
+   * ⚠ LOCK ORDER — PROPOSAL → RELATIONSHIP → REQUEST, the order `proposalsRepository.accept`
+   * documents and every writer that touches both must preserve. That is why the proposals are
+   * LOCKED (step 1) before `advanceRelationshipStatus` runs (step 2) even though they are not
+   * WRITTEN until step 3: taking the proposal locks after the relationship lock would invert
+   * the order against `accept` and open an AB/BA deadlock class.
+   *
+   * ⚠ THAT ORDER IS NECESSARY BUT NOT SUFFICIENT — this path CAN still deadlock, and saying
+   * otherwise would be false. Step 1 locks EVERY open status (`draft` AND `submitted`), which
+   * bridges the two disjoint proposal worlds `accept` (proposal→relationship→request) and
+   * `promoteToSubmit` (relationship→request→proposal) have safely occupied. Against
+   * `promoteToSubmit` that completes an AB/BA cycle: this transaction holds the draft and
+   * waits on the relationship; `promoteToSubmit` holds the relationship and waits on that
+   * draft. Postgres aborts one side with 40P01 after `deadlock_timeout`; nothing was written,
+   * so a retry succeeds, and both decline Server Actions map 40P01 to retryable copy. Full
+   * analysis and the serialisation follow-up: `projectRequestsRepository.close`'s LOCK ORDER
+   * block.
+   *
+   * ⚠ KNOWN RESIDUAL — step 1's proposal set is a SNAPSHOT. `proposalsRepository.submit` is
+   * INSERT-based, so a proposal committed after this snapshot but before step 2 wins the
+   * relationship lock is never locked here and survives the decline UN-DECLINED: a
+   * `submitted` proposal on a `declined` track. Inert (`accept()` refuses via the
+   * relationship's `expectedFrom`) but client-visible. `createDraft` now refuses once THIS
+   * transaction has committed (`ProposalTrackNotOpenError`), which removes the stale-autosave
+   * half but not the race half. The fix — re-read and lock the open set after the relationship
+   * lock, then act on the union — is the same follow-up as `close()`'s.
+   *
+   * ⚠ `withdrawn` vs `declined` — THE DISTINCTION IS DELIBERATE AND LOAD-BEARING.
+   * `declined` here means the CLIENT SIDE judged this proposal and said no. The BAL-540 close
+   * cascade uses `withdrawn` for the same rows, because there the request ended and nobody
+   * judged anything. Both are terminal; only the reader-facing copy differs.
+   *
+   * ⚠ NO MEETING CANCELLATION (plan deviation V2). The ticket's decline bullet does not ask
+   * for one and CLAUDE.md's ADR-1046 summary is explicit that the declined-track host denial
+   * "answers at call time only: it voids no already-booked call and runs no cascade or sweep".
+   * Residual, stated rather than hidden: a `scheduled` `request_interaction` call on a
+   * declined track survives and becomes unhostable at join time. A CLOSE does cancel.
+   *
+   * ⚠ NO FILE-GRANT REVOCATION (orchestrator D9). `resolveRequestTrackFileAccess`
+   * (`@balo/shared/authz`) already returns `{ kind: 'closed', closedAt }` = HISTORICAL READ
+   * for a `declined` track, keyed off the `status` / `declined_at` this path stamps. The file
+   * plane flips for free; calling `revokeGrant` here would DESTROY the historical read
+   * ADR-1048 guarantees. Proved by test, not by code.
+   *
+   * Throws `InvalidRelationshipTransitionError` from a terminal track (`accepted` /
+   * `declined`) — nothing is written.
+   */
+  async declineTrack(input: {
+    relationshipId: string;
+    actorUserId: string;
+    /** `request_closed` is NOT accepted here — that reason belongs to the close cascade. */
+    reason: Exclude<RelationshipDeclineReason, 'request_closed'>;
+  }): Promise<DeclineTrackResult> {
+    return db.transaction(async (tx) => {
+      // 1. Proposal rows FIRST (lock order — see the docblock).
+      const openProposals = await lockOpenProposalsForRelationshipTx(tx, input.relationshipId);
+
+      // 2. Relationship, then request (the request lock is taken inside).
+      const advanced = await advanceRelationshipStatus(tx, {
+        id: input.relationshipId,
+        to: 'declined',
+        actorUserId: input.actorUserId,
+        reason: input.reason,
+      });
+
+      // 3. End each open proposal. Already locked in step 1, so `advanceProposalStatus`'s own
+      //    `FOR UPDATE` re-take is free and its transition guard still runs.
+      const declinedProposalIds: string[] = [];
+      for (const proposal of openProposals) {
+        await advanceProposalStatus(tx, { id: proposal.id, to: 'declined' });
+        declinedProposalIds.push(proposal.id);
+      }
+
+      return {
+        relationship: advanced.relationship,
+        previousStatus: advanced.previousStatus,
+        declineAuditId: advanced.auditId,
+        declinedProposalIds,
+        hadOpenProposal: declinedProposalIds.length > 0,
+      };
+    });
   },
 };

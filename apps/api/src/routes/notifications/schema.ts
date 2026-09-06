@@ -656,6 +656,39 @@ const requestFileSharedWithClientPayload = z.object({
   fileName: z.string().min(1).max(255),
 });
 
+// BAL-540 — the request was closed. `correlationId` is the `project_request.closed` audit row
+// id. `recipientUserIds` is bounded per the `expertSearchabilityLostPayload` reasoning above: a
+// caller holding INTERNAL_API_SECRET must not be able to fan out unboundedly.
+// ⚠ NO `.min(1)`, deliberately (a deviation from a literal reading of the plan's Zod-bounds
+// list): a request closed by Balo with ZERO invited tracks still publishes — the client arm
+// (gated on `recipientId`) must still fire — with a genuinely empty `recipientUserIds` (edge
+// case 1 in decisions-bal-540.md's Observability section). Mirrors
+// packages/shared/src/notifications/index.ts.
+const projectRequestClosedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  title: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  closedBy: z.enum(['client', 'balo']),
+  reason: z.enum(['withdrawn', 'declined', 'unfilled', 'superseded']),
+  recipientUserIds: z.array(z.uuid()).max(50),
+  recipientId: z.uuid().optional(),
+});
+
+// BAL-540 — one track was declined. `correlationId` is the `request_expert_relationship.declined`
+// audit row id. Mirrors packages/shared/src/notifications/index.ts.
+const projectTrackDeclinedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  relationshipId: z.uuid(),
+  expertProfileId: z.uuid(),
+  title: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+  declinedBy: z.enum(['client', 'balo']),
+  stage: z.enum(['invited', 'eoi_submitted', 'proposal_requested', 'proposal_submitted']),
+  hadOpenProposal: z.boolean(),
+});
+
 const conversationIntroCallBookedPayload = z.object({
   correlationId: z.uuid(),
   meetingId: z.uuid(),
@@ -860,6 +893,14 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('request_file.shared_with_client'),
     payload: requestFileSharedWithClientPayload,
+  }),
+  z.object({
+    event: z.literal('project.request_closed'),
+    payload: projectRequestClosedPayload,
+  }),
+  z.object({
+    event: z.literal('project.track_declined'),
+    payload: projectTrackDeclinedPayload,
   }),
 ]);
 

@@ -3,6 +3,7 @@ import {
   requestStatusRank,
   type ConversationThreadView,
 } from '@/lib/project-request/conversation-view-types';
+import { narrowToTrackStage, type TrackStage } from '@/lib/project-request/close-copy';
 
 /**
  * Pure deriver for the per-thread action chrome (desktop header + mobile rail)
@@ -56,6 +57,15 @@ export interface ThreadActions {
   headerProposal: HeaderProposalSlot | null;
   /** Mobile rail: proposal CTA (null = none; quiet defers to the nudge). */
   railProposal: RailProposalSlot | null;
+  /**
+   * BAL-540 — the client's "no" control on this thread (plan §6.2's decline placement: on the
+   * conversation thread header, client lens only — the admin decline control lives on the
+   * observer relationships panel instead, a different component tree entirely). Non-null only
+   * when the caller's `canDecline` holds AND `thread.stage === 'active'` (a won/decided/closed
+   * thread has nothing left to decline). The `TrackStage` value is `thread.relationshipStatus`
+   * narrowed — always one of the four declinable stages while the thread is `'active'`.
+   */
+  declineSlot: TrackStage | null;
 }
 
 function deriveHeaderProposal(
@@ -140,8 +150,17 @@ export function deriveThreadActions(input: {
   thread: ConversationThreadView;
   /** True when the active nudge's primary CTA already pushes the proposal. */
   nudgeIsProposal: boolean;
+  /**
+   * BAL-540 — true when the viewer holds `CAPABILITIES.MANAGE_REQUESTS` on the request's
+   * company (resolved server-side, threaded down as a boolean — never re-derived here from a
+   * lens/role check, ADR-1029). Always `false` for the expert lens (an expert never declines
+   * their own track from this control; that is `withdraw-eoi.ts`'s separate surface).
+   * Optional, defaulting `false`, so every pre-existing call site (this file's own test suite
+   * included) keeps compiling unchanged.
+   */
+  canDecline?: boolean;
 }): ThreadActions {
-  const { lens, requestStatus, thread, nudgeIsProposal } = input;
+  const { lens, requestStatus, thread, nudgeIsProposal, canDecline = false } = input;
   const rank = requestStatusRank(requestStatus);
   const beforeKickoff = rank < requestStatusRank('kickoff_approved');
   const pastAcceptance = rank >= requestStatusRank('accepted');
@@ -166,5 +185,9 @@ export function deriveThreadActions(input: {
       pastAcceptance,
       nudgeIsProposal
     ),
+    declineSlot:
+      canDecline && thread.stage === 'active'
+        ? narrowToTrackStage(thread.relationshipStatus)
+        : null,
   };
 }

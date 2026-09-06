@@ -354,6 +354,27 @@ describe('loadClientPortfolio', () => {
     const row = dto.rows.find((r) => r.id === 'eng-prog');
     expect(row?.progressLabel).toBe('2 of 4 milestones');
   });
+
+  it('BAL-540: partitions a closed request into closedRows, never rows, and excludes it from tiles', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({ id: 'req-live', status: 'experts_invited' }),
+      requestRow({ id: 'req-closed', status: 'closed' }),
+    ]);
+
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+
+    expect(dto.rows.map((r) => r.id)).toEqual(['req-live']);
+    expect(dto.closedRows.map((r) => r.id)).toEqual(['req-closed']);
+    expect(dto.closedRows[0]?.stage).toBe('closed');
+    expect(dto.tiles.total).toBe(1); // the closed row is not counted
+    expect(dto.isEmpty).toBe(false);
+  });
+
+  it('BAL-540: closedRows is empty when there are no closed requests', async () => {
+    mockListByCompany.mockResolvedValue([requestRow({ id: 'req-live' })]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.closedRows).toEqual([]);
+  });
 });
 
 describe('loadExpertPortfolio', () => {
@@ -465,6 +486,19 @@ describe('loadExpertPortfolio', () => {
     expect(dto.tiles.kicked).toBe(2);
     expect(dto.tiles.needs).toBe(0);
   });
+
+  it('BAL-540: a closed request partitions into closedRows with the closed chip, even though the relationship is declined', async () => {
+    mockListInvitationsByExpert.mockResolvedValue([
+      invitationRow({ relationshipStatus: 'declined', requestStatus: 'closed' }),
+    ]);
+
+    const dto = await loadExpertPortfolio(expertUser, ['expert'], NOW);
+
+    expect(dto.rows).toEqual([]);
+    expect(dto.closedRows).toHaveLength(1);
+    expect(dto.closedRows[0]?.stage).toBe('closed');
+    expect(dto.closedRows[0]?.stageLabel).toBe('Closed');
+  });
 });
 
 describe('loadAdminPortfolio', () => {
@@ -482,7 +516,8 @@ describe('loadAdminPortfolio', () => {
 
     const dto = await loadAdminPortfolio(['client', 'admin'], NOW);
 
-    expect(mockListAll).toHaveBeenCalledWith();
+    // BAL-540 — closed requests are excluded IN SQL now, not filtered in JS.
+    expect(mockListAll).toHaveBeenCalledWith({ excludeStatuses: ['closed'] });
     expect(mockListPortfolioEngagements).toHaveBeenCalledWith({ platform: true });
     expect(dto.triage.map((t) => t.id)).toEqual(['triage-1']);
     expect(dto.triage[0]?.overdue).toBe(true);

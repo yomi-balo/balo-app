@@ -109,6 +109,10 @@ export {
   type ProjectRequestStatus,
   type ProjectRequestWithRelations,
   type KickoffGate,
+  // BAL-540 — the close cascade's input/output shapes. Needed by the `apps/web` Server Actions
+  // that call `projectRequestsRepository.close(...)` and by the post-commit fan-out helper.
+  type CloseRequestInput,
+  type CloseRequestResult,
 } from './project-requests';
 export type { ProjectRequest, NewProjectRequest } from '../schema';
 export { requestExpertRelationshipsRepository } from './request-expert-relationships';
@@ -121,6 +125,10 @@ export {
   // BAL-431 (Ruling 2) — award closure. Exported for `materializeFromKickoff`'s transaction
   // and for tests; there is deliberately no second write site.
   markNotSelectedByAward,
+  // BAL-540 — `declineTrack`'s output shape and its closed-request guard, needed by the
+  // `apps/web` decline-track Server Actions.
+  type DeclineTrackResult,
+  RequestClosedError,
 } from './request-expert-relationships';
 export {
   deriveRequestStatus,
@@ -133,6 +141,9 @@ export {
   isAllowedProposalTransition,
   InvalidProposalTransitionError,
   ProposalNotDraftError,
+  // BAL-540 fix round — `createDraft`'s track-still-open guard, branched on by
+  // `apps/web`'s `save-proposal-draft` autosave action.
+  ProposalTrackNotOpenError,
   type ProposalStatus,
 } from './proposals';
 export {

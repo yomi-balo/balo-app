@@ -123,10 +123,12 @@ async function loadCurrentSubmittedProposal(
  * payload; any other error rethrows to the action's generic-failure boundary.
  */
 async function commitAccept(
-  proposalId: string
+  proposalId: string,
+  /** BAL-540 / ADR-1030 — the accepting client; attributes the relationship's audit row. */
+  actorUserId: string
 ): Promise<'ok' | 'stale' | { coherence: ProposalCoherenceError }> {
   try {
-    await proposalsRepository.accept({ id: proposalId });
+    await proposalsRepository.accept({ id: proposalId, actorUserId });
     return 'ok';
   } catch (error) {
     if (error instanceof ProposalCoherenceError) {
@@ -192,7 +194,7 @@ export async function acceptProposalAction(
     // Commit the accept (proposal + relationship in ONE tx). A stale double-accept
     // trips the typed transition errors → friendly stale copy; the repo coherence
     // guard (defence-in-depth) → generic copy + an analytics `coherence` payload.
-    const committed = await commitAccept(proposalId);
+    const committed = await commitAccept(proposalId, user.id);
     if (committed === 'stale') {
       return { success: false, error: STALE_PROPOSAL };
     }

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
   proposals,
@@ -39,14 +39,46 @@ export type ProposalStatus = Proposal['status'];
  * the enum + map for A6.2's saveDraft/submitDraft — A6.1 `submit()` inserts
  * directly as `submitted`.
  */
+/**
+ * ⚠ BAL-540 ADDS `declined`, AND THIS `Record` IS THE TRIPWIRE THAT FORCED THE DECISION —
+ * adding the enum label without filling these arms is a compile error here, by design.
+ *
+ * `withdrawn` vs `declined`, and the distinction is NOT cosmetic:
+ *   - `withdrawn` — the EXPERT pulled the proposal, or the BAL-540 CLOSE CASCADE ended the
+ *     whole request. Nobody judged the proposal; the process it belonged to stopped.
+ *   - `declined`  — the CLIENT (or Balo on their behalf) judged THIS track and said no, via
+ *     `requestExpertRelationshipsRepository.declineTrack`.
+ * Both terminal, and both reachable from every open status.
+ *
+ * ⚠ THE `{ cause: 'request_closed' }` THE TICKET DESCRIBES LIVES ON THE **AUDIT ROW**, NOT
+ * HERE (orchestrator D8). `proposals` has no `metadata` column and no `withdrawnAt`, and
+ * BAL-540 adds neither: the cause belongs to the event, not the row. The
+ * `project_request.closed` audit row carries `withdrawnProposalIds` and the counts. Do not
+ * read the ticket's wording as a missing column.
+ */
 export const PROPOSAL_STATUS_TRANSITIONS: Record<ProposalStatus, readonly ProposalStatus[]> = {
-  draft: ['submitted', 'withdrawn'],
-  submitted: ['accepted', 'changes_requested', 'withdrawn'],
-  changes_requested: ['resubmitted', 'withdrawn'],
+  draft: ['submitted', 'withdrawn', 'declined'],
+  submitted: ['accepted', 'changes_requested', 'withdrawn', 'declined'],
+  changes_requested: ['resubmitted', 'withdrawn', 'declined'],
   resubmitted: [],
   accepted: [],
   withdrawn: [],
+  declined: [],
 };
+
+/**
+ * The OPEN (non-terminal) proposal statuses. `resubmitted`, `accepted`, `withdrawn` and
+ * `declined` are terminal — the four with an empty arm in the map above.
+ *
+ * Named once so the close cascade and the decline path cannot drift from each other on what
+ * "an open proposal" is. Enum literals in a WHERE are always safe (the ADD-VALUE restriction
+ * is on DEFAULTs, CHECKs and index predicates only).
+ */
+export const OPEN_PROPOSAL_STATUSES = [
+  'draft',
+  'submitted',
+  'changes_requested',
+] as const satisfies readonly ProposalStatus[];
 
 export function isAllowedProposalTransition(from: ProposalStatus, to: ProposalStatus): boolean {
   return PROPOSAL_STATUS_TRANSITIONS[from].includes(to);
@@ -78,6 +110,32 @@ export class ProposalNotDraftError extends Error {
         : `Proposal is not a draft (status: ${status}): cannot update.`
     );
     this.name = 'ProposalNotDraftError';
+  }
+}
+
+/**
+ * BAL-540 fix round — thrown by `createDraft` when the track it would attach to is no longer
+ * open: the relationship has been `declined`, or its parent request has been `closed`.
+ *
+ * A sibling of {@link ProposalNotDraftError}, not a reuse of it: that error means "the PROPOSAL
+ * moved on" and carries a `ProposalStatus`; this one means "the TRACK ended" and carries no
+ * proposal at all (there is none yet — this is the create path). Deliberately NOT
+ * `RequestClosedError` either, whose baked message is invite-specific ("no expert may be
+ * invited to it") and would read as a lie in a draft-autosave log line.
+ *
+ * `reason` discriminates the two states so a caller can branch without string-matching.
+ */
+export class ProposalTrackNotOpenError extends Error {
+  constructor(
+    public readonly relationshipId: string,
+    public readonly reason: 'relationship_declined' | 'request_closed'
+  ) {
+    super(
+      reason === 'relationship_declined'
+        ? `Relationship ${relationshipId} is declined: no proposal draft may be created on it.`
+        : `Relationship ${relationshipId} belongs to a closed request: no proposal draft may be created on it.`
+    );
+    this.name = 'ProposalTrackNotOpenError';
   }
 }
 
@@ -133,6 +191,74 @@ export async function advanceProposalStatus(
   }
 
   return updated;
+}
+
+/** The minimal projection the two open-proposal finders return. */
+export interface OpenProposalRef {
+  id: string;
+  relationshipId: string;
+  status: ProposalStatus;
+}
+
+/**
+ * BAL-540 — every LIVE proposal of ONE REQUEST in an OPEN status, LOCKED `FOR UPDATE`, inside
+ * the caller's transaction. The close cascade's input.
+ *
+ * ⚠ ORDERED BY `id`, AND THAT IS A LOCK-ORDER DECISION, NOT A DISPLAY ONE. Two concurrent
+ * cascades on the same request must take these row locks in the SAME order or they deadlock.
+ * `id` is arbitrary but stable and total; `submitted_at` is neither (it is NULLable on a
+ * draft and can tie).
+ *
+ * Enum literals at QUERY time are always safe — the ADD-VALUE house restriction is on index
+ * predicates, CHECKs and DEFAULTs (`meetings.ts`'s note).
+ */
+export async function lockOpenProposalsForRequestTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  projectRequestId: string
+): Promise<OpenProposalRef[]> {
+  return tx
+    .select({
+      id: proposals.id,
+      relationshipId: proposals.relationshipId,
+      status: proposals.status,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.projectRequestId, projectRequestId),
+        inArray(proposals.status, [...OPEN_PROPOSAL_STATUSES]),
+        isNull(proposals.deletedAt)
+      )
+    )
+    .orderBy(asc(proposals.id))
+    .for('update');
+}
+
+/**
+ * BAL-540 — the per-track sibling of {@link lockOpenProposalsForRequestTx}: every LIVE, OPEN
+ * proposal of ONE RELATIONSHIP, locked `FOR UPDATE`, ordered by `id` for the same lock-order
+ * reason. `declineTrack`'s input.
+ */
+export async function lockOpenProposalsForRelationshipTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  relationshipId: string
+): Promise<OpenProposalRef[]> {
+  return tx
+    .select({
+      id: proposals.id,
+      relationshipId: proposals.relationshipId,
+      status: proposals.status,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.relationshipId, relationshipId),
+        inArray(proposals.status, [...OPEN_PROPOSAL_STATUSES]),
+        isNull(proposals.deletedAt)
+      )
+    )
+    .orderBy(asc(proposals.id))
+    .for('update');
 }
 
 /**
@@ -224,6 +350,8 @@ export const proposalsRepository = {
    */
   async submit(input: {
     relationshipId: string;
+    /** BAL-540 / ADR-1030 — the expert submitting. Attributes the relationship audit row. */
+    actorUserId: string;
     overview: string;
     pricingMethod: PricingMethod;
     priceCents: number;
@@ -251,10 +379,11 @@ export const proposalsRepository = {
         )
       );
 
-      const relationship = await advanceRelationshipStatus(tx, {
+      const { relationship } = await advanceRelationshipStatus(tx, {
         id: input.relationshipId,
         to: 'proposal_submitted',
         expectedFrom: 'proposal_requested',
+        actorUserId: input.actorUserId,
       });
 
       // Snapshot the Balo fee from the request (system-sourced, never caller-trusted).
@@ -305,6 +434,31 @@ export const proposalsRepository = {
    * Locks the relationship FOR UPDATE (`advanceRelationshipStatus` is not used —
    * we don't transition — so the lock is taken directly) to read a consistent id
    * triple, matching the spirit of `submit()` reading from a locked row.
+   *
+   * ⚠ THE TRACK MUST STILL BE OPEN (BAL-540 fix round). Under the relationship lock we already
+   * hold, a declined relationship is refused — on EITHER witness, the `declined` label OR a
+   * non-null `declinedAt`, so a row whose stamp and status disagree cannot slip past; then the
+   * parent request's status is read and a `closed` request is refused. Both throw
+   * `ProposalTrackNotOpenError`. Without this, a still-in-flight composer autosave could insert
+   * a fresh `draft` onto a track the close / decline cascade had just ended — an open proposal
+   * on a terminal request, which every downstream reader treats as live work.
+   *
+   * ⚠ THIS CLOSES THE POST-COMMIT HALF ONLY. IT DOES NOT CLOSE THE RACE, AND MUST NOT BE READ
+   * AS DOING SO. What it stops is an autosave that ARRIVES AFTER the close/decline has
+   * COMMITTED (by far the common case — a stale tab, a debounced save in flight when the client
+   * clicks close). The genuine race remains OPEN: if `createDraft` holds the relationship lock
+   * while `close()` sits between its step-1 proposal snapshot and its step-2 relationship lock,
+   * `close()` has ALREADY taken its snapshot, so the draft this method is about to insert is
+   * still missed by the cascade and survives the close un-withdrawn. Same window for
+   * `declineTrack` (whose step-1 snapshot is per-relationship). Taking the request lock
+   * `FOR UPDATE` here instead of a plain read would NOT close it either — the cascade's proposal
+   * snapshot precedes both locks — while adding a lock edge for nothing. The real fix is the
+   * cascade re-reading the open-proposal set after its request lock; see the KNOWN RESIDUAL
+   * paragraph on `projectRequestsRepository.close` and its follow-up ticket.
+   *
+   * The request status read is a PLAIN select on `tx`, not `FOR UPDATE`: it adds no lock edge,
+   * so it introduces no new deadlock class. Were it ever locked, the order would have to stay
+   * relationship → request (`advanceRelationshipStatus`'s documented order), never the reverse.
    */
   async createDraft(input: {
     relationshipId: string;
@@ -332,6 +486,36 @@ export const proposalsRepository = {
 
       if (relationship === undefined) {
         throw new Error(`Request expert relationship not found: ${input.relationshipId}`);
+      }
+
+      // The track must still be open — see the docblock (post-commit half only; the race
+      // half stays open and is named there rather than papered over).
+      //
+      // ⚠ EVIDENCE, NOT ABSENCE — the `declinedAt` disjunct is not belt-and-braces. The two
+      // halves of "declined" are written together today (`advanceRelationshipStatus` stamps
+      // the timestamp in the same `.set()` as the label), but a row that carries the STAMP
+      // with a stale label is still a track somebody ended, and a state-machine guard must
+      // refuse on either witness rather than trust the enum alone.
+      //
+      // ⚠ IT IS NOT `relationshipDeniesHosting`, DELIBERATELY. That predicate is the single
+      // definition of "declined" for the ENGAGEMENT-HOSTING authz arms (ADR-1046) and lives in
+      // `@balo/shared/authz`; this is a repository state-machine guard on a different subject.
+      // Reaching for it here would make `@balo/db` a consumer of the hosting authz seam and
+      // couple two rules that are free to diverge. One line, one comment, no coupling.
+      if (relationship.status === 'declined' || relationship.declinedAt !== null) {
+        throw new ProposalTrackNotOpenError(input.relationshipId, 'relationship_declined');
+      }
+      const [parentRequest] = await tx
+        .select({ status: projectRequests.status })
+        .from(projectRequests)
+        .where(
+          and(
+            eq(projectRequests.id, relationship.projectRequestId),
+            isNull(projectRequests.deletedAt)
+          )
+        );
+      if (parentRequest?.status === 'closed') {
+        throw new ProposalTrackNotOpenError(input.relationshipId, 'request_closed');
       }
 
       // Snapshot the Balo fee from the request (system-sourced, never caller-trusted).
@@ -456,13 +640,19 @@ export const proposalsRepository = {
    * it LOCALLY here (the actual submit instant) rather than changing the shared
    * `advanceProposalStatus`, which `accept`/`resubmit` also route through.
    */
-  async promoteToSubmit(input: { proposalId: string; relationshipId: string }): Promise<Proposal> {
+  async promoteToSubmit(input: {
+    proposalId: string;
+    relationshipId: string;
+    /** BAL-540 / ADR-1030 — the expert submitting. Attributes the relationship audit row. */
+    actorUserId: string;
+  }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // 1. Advance the relationship spine first (locks + validates).
       await advanceRelationshipStatus(tx, {
         id: input.relationshipId,
         to: 'proposal_submitted',
         expectedFrom: 'proposal_requested',
+        actorUserId: input.actorUserId,
       });
 
       // 1b. COHERENCE (BAL-293): lock + re-read the live header + children INSIDE
@@ -588,7 +778,11 @@ export const proposalsRepository = {
    * `advanceRelationshipStatus`). Any future writer that locks both must preserve
    * this order to avoid a deadlock cycle.
    */
-  async accept(input: { id: string }): Promise<Proposal> {
+  async accept(input: {
+    id: string;
+    /** BAL-540 / ADR-1030 — the client accepting. Attributes the relationship audit row. */
+    actorUserId: string;
+  }): Promise<Proposal> {
     return db.transaction(async (tx) => {
       // Lock the proposal first and capture its relationship id (also validates
       // the proposal is live + currently `submitted` before we touch the spine).
@@ -617,6 +811,7 @@ export const proposalsRepository = {
         id: current.relationshipId,
         to: 'accepted',
         expectedFrom: 'proposal_submitted',
+        actorUserId: input.actorUserId,
       });
 
       // Proposal status write goes THROUGH the guarded transition writer.

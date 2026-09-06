@@ -22,6 +22,9 @@ const STAGE_TONE: Record<StageKey, string> = {
   prop_in: 'bg-warning/15 text-warning',
   accepted: 'bg-success/15 text-success',
   kicked: 'bg-success/15 text-success',
+  // BAL-540 — the terminal `closed`, toned like `requested` (muted, not a status to celebrate
+  // or warn about).
+  closed: 'bg-muted text-muted-foreground',
 };
 
 export function StageChip({

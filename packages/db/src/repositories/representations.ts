@@ -518,6 +518,62 @@ export const representationsRepository = {
   },
 
   /**
+   * BAL-540 — END EVERY ACTIVE REQUEST-GRAIN GRANT ON ONE REQUEST, inside the caller's
+   * transaction. The close cascade's representation arm.
+   *
+   * ONE conditional bulk `UPDATE … RETURNING id`: the CAS IS the serialisation point, exactly
+   * as in {@link revoke} — no read-then-write, so two concurrent closes cannot both "win" the
+   * same row and only one of them sees it in its returned set.
+   *
+   * ⚠ SCOPED BY `onBehalfOfCompanyId` AS WELL AS THE REQUEST ID. `revoke()`'s IDOR-containment
+   * rule, applied to a bulk write: a foreign request id can then never reach another tenant's
+   * rows even if the caller passed one. The cascade sources it from the request row it holds
+   * `FOR UPDATE`, never from the wire. (The composite FK `representation_request_company_fk`
+   * already makes the pair structurally coherent; this term is the second lock on that door.)
+   *
+   * ⚠ `eq(scope,'request')` IS REDUNDANT WITH THE `projectRequestId` TERM AND IS KEPT ANYWAY.
+   * The `representation_scope_request_paired` CHECK makes a non-null `project_request_id`
+   * imply `scope='request'`, so the term selects nothing extra — it states the grain this
+   * method is about, and survives a future CHECK relaxation.
+   *
+   * ⚠ NOT GUARDED ON EXPIRY, AND WRITES NO `deleted_at` — {@link revoke}'s two rules verbatim.
+   * Revoking a lapsed-but-`status='active'` grant must SUCCEED, and revoke is a `status`
+   * transition, not a soft delete.
+   *
+   * ⚠ IT REVOKES NOTHING TODAY, AND THAT IS EXPECTED. BAL-313 ships INERT — nothing grants
+   * request-grain representations yet — so this returns `[]` on every real close. It is the
+   * forward-compatible arm ADR-1025 Amendment 1 asks for, and it is covered by an integration
+   * test over directly-seeded rows so it cannot rot before its first grantor arrives.
+   *
+   * Returns the ids it ended, for the close audit row's count.
+   */
+  async revokeAllForRequest(
+    input: { projectRequestId: string; onBehalfOfCompanyId: string; revokedByUserId: string },
+    now: Date,
+    exec: DbExecutor = db
+  ): Promise<string[]> {
+    const rows = await exec
+      .update(representations)
+      .set({
+        status: 'revoked',
+        revokedAt: now,
+        revokedByUserId: input.revokedByUserId,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(representations.scope, 'request'),
+          eq(representations.projectRequestId, input.projectRequestId),
+          eq(representations.onBehalfOfCompanyId, input.onBehalfOfCompanyId),
+          eq(representations.status, 'active'),
+          isNull(representations.deletedAt)
+        )
+      )
+      .returning({ id: representations.id });
+    return rows.map((row) => row.id);
+  },
+
+  /**
    * Every LIVE grant this actor holds, across ALL companies and BOTH grains, newest first.
    *
    * BAL-314's "which companies may I act for?" read. Full rows — uuids, enums and timestamps

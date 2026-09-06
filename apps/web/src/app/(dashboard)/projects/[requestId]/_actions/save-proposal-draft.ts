@@ -8,6 +8,7 @@ import {
   proposalMilestonesRepository,
   proposalPaymentInstallmentsRepository,
   ProposalNotDraftError,
+  ProposalTrackNotOpenError,
   type ProposalMilestoneInput,
   type ProposalPaymentInstallmentInput,
 } from '@balo/db';
@@ -98,7 +99,10 @@ async function createOrUpdateDraft(relationshipId: string, header: DraftHeader):
  * Best-effort by design (the composer never blocks typing on it): on a stale
  * autosave landing AFTER submit, `updateDraft` throws `ProposalNotDraftError` —
  * we warn-log it and return friendly stale-UI copy rather than corrupting a
- * submitted proposal. Expert-lens guarded (mirrors `request-proposal.ts`'s
+ * submitted proposal. `ProposalTrackNotOpenError` (BAL-540 fix round: the track was
+ * declined, or its request closed, before this autosave landed) is the same shape of
+ * expected-stale event and reuses the SAME `STALE_DRAFT` string — no new user-facing
+ * copy, and no `log.error` noise for a state the server is right to refuse. Expert-lens guarded (mirrors `request-proposal.ts`'s
  * client guard); `resolveConversationAccess` denies non-participants / foreign
  * relationship ids.
  */
@@ -168,6 +172,17 @@ export async function saveProposalDraftAction(
         relationshipId,
         userId: user.id,
         status: error.status,
+      });
+      return { success: false, error: STALE_DRAFT };
+    }
+    // The track ended under the autosave — declined, or its request closed. Expected-stale,
+    // exactly like the above: warn, and tell the expert this can no longer be edited.
+    if (error instanceof ProposalTrackNotOpenError) {
+      log.warn('Proposal draft autosave rejected (track no longer open)', {
+        requestId,
+        relationshipId,
+        userId: user.id,
+        reason: error.reason,
       });
       return { success: false, error: STALE_DRAFT };
     }

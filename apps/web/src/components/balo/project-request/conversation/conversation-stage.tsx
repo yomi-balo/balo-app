@@ -41,6 +41,7 @@ import { ThreadNudge } from './thread-nudge';
 import { MobileActionRail } from './mobile-action-rail';
 import { MobileOverflowSheet, hasOverflowContent } from './mobile-overflow-sheet';
 import { ProposalRequestDialog } from './proposal-request-dialog';
+import { DeclineTrackDialog } from '../close/decline-track-dialog';
 
 interface ConversationStageProps {
   requestId: string;
@@ -55,6 +56,14 @@ interface ConversationStageProps {
   /** BAL-283 (D12) — the VIEWER's OWN email domain (never a counterparty's — ADR-1044 is not
    *  engaged), for the guest composer's "same company as you" disclosure. */
   viewerEmailDomain: string | null;
+  /**
+   * BAL-540 — true when the CLIENT lens viewer holds `CAPABILITIES.MANAGE_REQUESTS` on the
+   * request's company (resolved server-side by the page, threaded down as a boolean — never
+   * re-derived from a lens/role check, ADR-1029). Always ignored for the expert lens (an
+   * expert never declines their own track from here). Defaults `false` so every existing call
+   * site keeps compiling.
+   */
+  canDecline?: boolean;
 }
 
 interface ThreadData {
@@ -131,8 +140,10 @@ function deriveStageRender(input: {
   threadCount: number;
   /** The CLIENT PARTY's name — prospective expert-lens copy names the party (CLAUDE.md). */
   clientCompanyName: string | null;
+  /** BAL-540 — threaded straight to `deriveThreadActions`. */
+  canDecline: boolean;
 }): StageRenderModel {
-  const { lens, requestStatus, activeThread, threadCount, clientCompanyName } = input;
+  const { lens, requestStatus, activeThread, threadCount, clientCompanyName, canDecline } = input;
   const nudge = threadNudgeFor(lens, requestStatus, activeThread, clientCompanyName);
   const nudgeIsProposal = Boolean(nudge?.primary && /proposal/i.test(nudge.primary.label));
   const actions = deriveThreadActions({
@@ -140,6 +151,7 @@ function deriveStageRender(input: {
     requestStatus,
     thread: activeThread,
     nudgeIsProposal,
+    canDecline,
   });
   const profileHref =
     lens === 'client' && activeThread.expertUsername !== null
@@ -154,7 +166,11 @@ function deriveStageRender(input: {
     showYouSuffix: lens === 'expert',
     profileHref,
     showProposalPill,
-    showOverflow: hasOverflowContent({ profileHref, showProposalPill }),
+    showOverflow: hasOverflowContent({
+      profileHref,
+      showProposalPill,
+      declineSlot: actions.declineSlot,
+    }),
   };
 }
 
@@ -336,6 +352,7 @@ export function ConversationStage({
   requestTitle,
   clientCompanyName,
   viewerEmailDomain,
+  canDecline = false,
 }: Readonly<ConversationStageProps>): React.JSX.Element {
   const { viewerUserId } = view;
   const router = useRouter();
@@ -354,6 +371,7 @@ export function ConversationStage({
         }
   );
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
   const [sending, setSending] = useState(false);
   const [callPending, setCallPending] = useState(false);
@@ -971,6 +989,7 @@ export function ConversationStage({
   }, []);
 
   const handleOpenOverflow = useCallback((): void => setOverflowOpen(true), []);
+  const handleDecline = useCallback((): void => setDeclineDialogOpen(true), []);
 
   // BAL-283 — the calendar's `emptyAction` escape ("Message {expert} instead"): closes the
   // dialog and focuses the composer, reusing the SAME `focusComposer` wiring already used by
@@ -992,6 +1011,7 @@ export function ConversationStage({
       activeThread,
       threadCount: threads.length,
       clientCompanyName,
+      canDecline,
     });
 
   // Lens-gated handler wiring (pure helper — keeps the component body branch-light).
@@ -1057,6 +1077,7 @@ export function ConversationStage({
           onRequestProposal={onHeaderRequestProposal}
           onBuildProposal={onHeaderBuildProposal}
           onViewProposal={handleHeaderView}
+          onDecline={actions.declineSlot === null ? null : handleDecline}
         />
       </div>
 
@@ -1129,7 +1150,26 @@ export function ConversationStage({
         thread={activeThread}
         showProposalPill={showProposalPill}
         profileHref={profileHref}
+        declineSlot={actions.declineSlot}
+        onDecline={actions.declineSlot === null ? null : handleDecline}
       />
+
+      {/* BAL-540 — the client's per-track decline confirm. `partyLabel` collapses to
+          `expertName` (see `close-copy.ts`'s docblock: agency data is not yet plumbed onto the
+          conversation view-model). */}
+      {actions.declineSlot !== null && (
+        <DeclineTrackDialog
+          open={declineDialogOpen}
+          onOpenChange={setDeclineDialogOpen}
+          requestId={requestId}
+          relationshipId={activeThread.relationshipId}
+          expertName={activeThread.expertName}
+          partyLabel={activeThread.expertName}
+          companyName={clientCompanyName}
+          stage={actions.declineSlot}
+          variant="client"
+        />
+      )}
 
       {/* A5 confirm beat — committing action gets friction proportional to consequence. */}
       <ProposalRequestDialog

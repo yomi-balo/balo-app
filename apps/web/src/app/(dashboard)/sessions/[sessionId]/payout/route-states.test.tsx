@@ -5,6 +5,7 @@ import { render, screen } from '@/test/utils';
 import PayoutLoading from './loading';
 import PayoutError from './error';
 import PayoutNotFound from './not-found';
+import { StatementRateLimited } from '../_components/statement-rate-limited';
 
 describe('PayoutLoading', () => {
   it('announces itself as the expert-lens labelled loading region', () => {
@@ -47,6 +48,13 @@ describe('Payout route states — accessibility', () => {
 
   it('PayoutNotFound has no accessibility violations', async () => {
     const { container } = render(<PayoutNotFound />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('StatementRateLimited has no accessibility violations', async () => {
+    const { container } = render(
+      <StatementRateLimited lens="expert" sessionId="a0000000-0000-4000-8000-000000000001" />
+    );
     expect(await axe(container)).toHaveNoViolations();
   });
 });

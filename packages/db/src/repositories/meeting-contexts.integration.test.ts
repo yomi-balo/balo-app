@@ -10,6 +10,7 @@ import {
   expertDraftFactory,
   meetingFactory,
   projectRequestFactory,
+  requestExpertRelationshipFactory,
   userFactory,
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
@@ -260,6 +261,127 @@ describe('meetingContextsRepository.attach / listByMeeting', () => {
         .insert(meetingContexts)
         .values({ meetingId: meeting.id, contextType: 'retainer_checkin', contextId: null })
     );
+  });
+});
+
+describe('meetingContextsRepository.listMeetingsForContexts (BAL-540 — the batched reverse read)', () => {
+  it('unifies the TWO request-grain id shapes in ONE query', async () => {
+    // The whole reason the batched finder exists: `project_discovery` is keyed on the
+    // REQUEST while `request_interaction` is keyed on the RELATIONSHIP
+    // (`@balo/shared/meetings/context-owner.ts`), so a close cascade needs both shapes at
+    // once — and N round trips inside a held request lock is N times the lock hold.
+    const request = await projectRequestFactory();
+    const { relationship } = await requestExpertRelationshipFactory({
+      projectRequestId: request.id,
+      expertProfileId: request.expertProfileId ?? undefined,
+    });
+
+    const discovery = await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+      values: {
+        scheduledStart: new Date(Date.now() + HOUR_MS),
+        scheduledEnd: new Date(Date.now() + 2 * HOUR_MS),
+      },
+    });
+    const interaction = await meetingFactory({
+      contexts: [{ contextType: 'request_interaction', contextId: relationship.id }],
+      values: {
+        scheduledStart: new Date(Date.now() + 5 * HOUR_MS),
+        scheduledEnd: new Date(Date.now() + 6 * HOUR_MS),
+      },
+    });
+    // An unrelated meeting on another request must not leak in.
+    const other = await projectRequestFactory();
+    await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: other.id }],
+    });
+
+    const found = await meetingContextsRepository.listMeetingsForContexts([
+      { contextType: 'project_discovery', contextId: request.id },
+      { contextType: 'request_interaction', contextId: relationship.id },
+    ]);
+
+    // Ordered `scheduled_start, id`, matching the single-context read.
+    expect(found.map((row) => row.meeting.id)).toEqual([
+      discovery.meeting.id,
+      interaction.meeting.id,
+    ]);
+    expect(found.map((row) => row.contextType)).toEqual([
+      'project_discovery',
+      'request_interaction',
+    ]);
+    expect(found.map((row) => row.contextId)).toEqual([request.id, relationship.id]);
+  });
+
+  it('EMPTY INPUT returns [] without issuing a query', async () => {
+    // ⚠ Load-bearing, not defensive: an empty `or()` is a SQL SYNTAX ERROR in Drizzle, and a
+    // request with no tracks is the common case for the close cascade.
+    expect(await meetingContextsRepository.listMeetingsForContexts([])).toEqual([]);
+  });
+
+  it('excludes a soft-deleted CONTEXT row and a soft-deleted MEETING', async () => {
+    const request = await projectRequestFactory();
+    const detached = await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+    const deletedMeeting = await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+      values: { deletedAt: new Date() },
+    });
+    const live = await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+
+    await meetingContextsRepository.detach(detached.meeting.id, 'project_discovery', request.id);
+
+    const found = await meetingContextsRepository.listMeetingsForContexts([
+      { contextType: 'project_discovery', contextId: request.id },
+    ]);
+    const ids = found.map((row) => row.meeting.id);
+    expect(ids).toEqual([live.meeting.id]);
+    expect(ids).not.toContain(deletedMeeting.meeting.id);
+  });
+
+  it('groups many ids of the SAME type into one predicate', async () => {
+    const request = await projectRequestFactory();
+    const relationships = [];
+    for (let i = 0; i < 3; i += 1) {
+      const expert = await expertDraftFactory();
+      const seeded = await requestExpertRelationshipFactory({
+        projectRequestId: request.id,
+        expertProfileId: expert.id,
+      });
+      relationships.push(seeded.relationship.id);
+    }
+    for (const relationshipId of relationships) {
+      await meetingFactory({
+        contexts: [{ contextType: 'request_interaction', contextId: relationshipId }],
+      });
+    }
+
+    const found = await meetingContextsRepository.listMeetingsForContexts(
+      relationships.map((contextId) => ({
+        contextType: 'request_interaction' as const,
+        contextId,
+      }))
+    );
+    expect(found).toHaveLength(3);
+    expect(found.map((row) => row.contextId).sort()).toEqual([...relationships].sort());
+  });
+
+  it('reads inside a caller-supplied transaction (the DbExecutor seam the cascade needs)', async () => {
+    const request = await projectRequestFactory();
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'project_discovery', contextId: request.id }],
+    });
+
+    const found = await db.transaction((tx) =>
+      meetingContextsRepository.listMeetingsForContexts(
+        [{ contextType: 'project_discovery', contextId: request.id }],
+        tx
+      )
+    );
+    expect(found.map((row) => row.meeting.id)).toEqual([meeting.id]);
   });
 });
 

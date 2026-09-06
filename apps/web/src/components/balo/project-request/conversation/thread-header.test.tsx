@@ -17,13 +17,23 @@ function renderHeader(input: {
   onBuildProposal?: (() => void) | null;
   /** Non-null → the "View proposal"/"View submitted" CTA renders enabled (A6.3). */
   onViewProposal?: (() => void) | null;
+  /** Non-null → the BAL-540 decline control renders enabled when the derived slot is non-null. */
+  onDecline?: (() => void) | null;
+  /** BAL-540 — threaded to `deriveThreadActions`. */
+  canDecline?: boolean;
 }): {
   onCall: ReturnType<typeof vi.fn>;
 } {
   const lens = input.lens ?? 'client';
   const requestStatus = input.requestStatus ?? 'eoi_submitted';
   const t = thread(input.threadOverrides);
-  const actions = deriveThreadActions({ lens, requestStatus, thread: t, nudgeIsProposal: false });
+  const actions = deriveThreadActions({
+    lens,
+    requestStatus,
+    thread: t,
+    nudgeIsProposal: false,
+    canDecline: input.canDecline ?? false,
+  });
   const onCall = vi.fn();
   render(
     <ThreadHeader
@@ -35,6 +45,7 @@ function renderHeader(input: {
       onRequestProposal={input.onRequestProposal ?? null}
       onBuildProposal={input.onBuildProposal ?? null}
       onViewProposal={input.onViewProposal ?? null}
+      onDecline={input.onDecline ?? null}
     />
   );
   return { onCall };
@@ -189,5 +200,48 @@ describe('ThreadHeader', () => {
     renderHeader({ lens: 'client', threadOverrides: { bookedCall } });
     expect(screen.queryByRole('button', { name: 'Book a call' })).not.toBeInTheDocument();
     expect(screen.queryByText('Availability shared')).not.toBeInTheDocument();
+  });
+
+  // ── BAL-540 — the decline control ────────────────────────────────────────────────────────
+
+  it('omits the decline control when canDecline is false, even on an active thread', () => {
+    renderHeader({ canDecline: false, onDecline: vi.fn() });
+    expect(
+      screen.queryByRole('button', { name: /Decline|Withdraw invite/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows the decline control when canDecline is true and the thread is active', async () => {
+    const user = userEvent.setup();
+    const onDecline = vi.fn();
+    renderHeader({
+      canDecline: true,
+      onDecline,
+      threadOverrides: { relationshipStatus: 'eoi_submitted', stage: 'active' },
+    });
+    const button = screen.getByRole('button', { name: /Decline Priya Nair/i });
+    await user.click(button);
+    expect(onDecline).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses "Withdraw invite" as the label verb when the relationship is still invited', () => {
+    renderHeader({
+      canDecline: true,
+      onDecline: vi.fn(),
+      threadOverrides: { relationshipStatus: 'invited', stage: 'active' },
+    });
+    expect(screen.getByRole('button', { name: /Withdraw invite Priya Nair/i })).toBeInTheDocument();
+  });
+
+  it('omits the decline control once the thread is decided, even with canDecline true', () => {
+    renderHeader({
+      canDecline: true,
+      onDecline: vi.fn(),
+      requestStatus: 'accepted',
+      threadOverrides: { relationshipStatus: 'accepted', stage: 'won' },
+    });
+    expect(
+      screen.queryByRole('button', { name: /Decline|Withdraw invite/i })
+    ).not.toBeInTheDocument();
   });
 });

@@ -80,6 +80,7 @@ const DTO: PortfolioDTO = {
   rows: [NEEDS_ROW, PROGRESS_ROW, KICKED_ROW],
   tiles: { needs: 1, inProgress: 1, kicked: 1, total: 3 },
   isEmpty: false,
+  closedRows: [],
 };
 
 describe('ParticipantDash', () => {
@@ -156,5 +157,39 @@ describe('ParticipantDash', () => {
   it('shows the New request button for the client lens', () => {
     render(<ParticipantDash dto={DTO} />);
     expect(screen.getByRole('link', { name: /new request/i })).toHaveAttribute('href', '/experts');
+  });
+
+  describe('BAL-540 — the closed group', () => {
+    const CLOSED_ROW = makeRow({
+      id: 'closed-1',
+      title: 'Experience Cloud patient portal',
+      stage: 'closed',
+      stageLabel: 'Closed',
+      nudgeLabel: 'Closed',
+    });
+
+    it('renders nothing when closedRows is empty (purely retrospective — no invitation to draw)', () => {
+      render(<ParticipantDash dto={DTO} />);
+      expect(screen.queryByText('Closed')).not.toBeInTheDocument();
+    });
+
+    it('shows a collapsed "Closed" group naming the count when closedRows is populated, collapsed by default', () => {
+      render(<ParticipantDash dto={{ ...DTO, closedRows: [CLOSED_ROW] }} />);
+      const trigger = screen.getByRole('button', { name: /Closed/i });
+      expect(within(trigger).getByText('1')).toBeInTheDocument();
+      // Collapsed by default — the row's title is not yet in the accessibility tree.
+      expect(screen.queryByText('Experience Cloud patient portal')).not.toBeInTheDocument();
+    });
+
+    it('reveals the closed row on expand, and it never appears in the main list', async () => {
+      const user = userEvent.setup();
+      render(<ParticipantDash dto={{ ...DTO, closedRows: [CLOSED_ROW] }} />);
+
+      const list = screen.getByRole('region', { name: /all requests/i });
+      expect(within(list).queryByText('Experience Cloud patient portal')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /Closed/i }));
+      expect(screen.getByText('Experience Cloud patient portal')).toBeInTheDocument();
+    });
   });
 });

@@ -5,9 +5,12 @@ import {
   projectRequestsRepository,
   companyBillingRepository,
   projectEngagementsRepository,
+  usersRepository,
+  auditEventsRepository,
   type ProjectRequestWithRelations,
 } from '@balo/db';
 import { extractEmailDomain } from '@balo/shared/domains';
+import { personDisplayName } from '@balo/shared/parties';
 import { log } from '@/lib/logging';
 import { getCurrentUser, type SessionUser } from '@/lib/auth/session';
 import {
@@ -16,6 +19,9 @@ import {
   resolveRequestDenialReason,
   type RequestViewerContext,
 } from '@/lib/project-request/resolve-request-lens';
+import { resolveEndedTrackView } from '@/lib/project-request/resolve-ended-track-view';
+import { hasCapability, CAPABILITIES } from '@/lib/authz';
+import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import {
   resolveWorkspaceForEntity,
@@ -24,6 +30,7 @@ import {
 import {
   mapRequestToDetailView,
   type RequestDetailView,
+  type ClosedSummaryInput,
 } from '@/lib/project-request/request-detail-view';
 import { ensureAdminBillingAutoskip } from '@/lib/project-request/ensure-admin-billing-autoskip';
 import { loadAdminKickoffBilling } from '@/lib/project-request/load-admin-kickoff-billing';
@@ -38,6 +45,7 @@ import {
   type KickoffBillingCapture,
 } from '@/lib/billing/billing-capture';
 import { RequestDetailShell } from '@/components/balo/project-request/request-detail-shell';
+import { ExpertEndedTrackView } from '@/components/balo/project-request/close/expert-ended-track-view';
 import { EntityCrumb } from '@/components/layout/breadcrumb-context';
 
 interface RequestDetailPageProps {
@@ -87,6 +95,126 @@ async function loadBillingCapture(
           billingEmail: row.billingEmail,
         };
   return { companyId, canManage, details };
+}
+
+/** The `project_request.closed` audit row's `metadata.counts` shape (narrowed, never cast). */
+interface CloseAuditCounts {
+  tracksDeclined: number;
+  proposalsWithdrawn: number;
+  meetingsCancelled: number;
+}
+
+/** Narrow the audit row's `unknown` metadata to its counts, defensively (0 on anything unexpected). */
+function parseCloseAuditCounts(metadata: unknown): CloseAuditCounts {
+  const fallback: CloseAuditCounts = {
+    tracksDeclined: 0,
+    proposalsWithdrawn: 0,
+    meetingsCancelled: 0,
+  };
+  if (typeof metadata !== 'object' || metadata === null) return fallback;
+  const counts = (metadata as Record<string, unknown>).counts;
+  if (typeof counts !== 'object' || counts === null) return fallback;
+  const c = counts as Record<string, unknown>;
+  return {
+    tracksDeclined: typeof c.tracksDeclined === 'number' ? c.tracksDeclined : 0,
+    proposalsWithdrawn: typeof c.proposalsWithdrawn === 'number' ? c.proposalsWithdrawn : 0,
+    meetingsCancelled: typeof c.meetingsCancelled === 'number' ? c.meetingsCancelled : 0,
+  };
+}
+
+/**
+ * BAL-540 — the two reads `deriveClosedSummary` needs, done ONCE here so the pure mapper stays
+ * I/O-free. Returns `null` for a live request (no extra reads) or when `closedByUserId` is
+ * unexpectedly absent (a data anomaly — every close writes it — handled defensively rather than
+ * thrown).
+ */
+async function loadClosedSummaryInput(
+  request: ProjectRequestWithRelations,
+  requestId: string
+): Promise<ClosedSummaryInput | null> {
+  if (request.status !== 'closed' || request.closedByUserId === null) return null;
+
+  const [closer, auditRow] = await Promise.all([
+    usersRepository.findNamesByIds([request.closedByUserId]),
+    auditEventsRepository.findLatestByEntityAndAction({
+      entityType: 'project_request',
+      entityId: requestId,
+      action: 'project_request.closed',
+    }),
+  ]);
+  const [closerRow] = closer;
+  const closedByName =
+    closerRow === undefined
+      ? 'A team member'
+      : personDisplayName(closerRow.firstName, closerRow.lastName, 'A team member');
+  const rawCounts = parseCloseAuditCounts(auditRow?.metadata);
+
+  return {
+    closedByName,
+    counts: {
+      tracksEnded: rawCounts.tracksDeclined,
+      proposalsWithdrawn: rawCounts.proposalsWithdrawn,
+      meetingsCancelled: rawCounts.meetingsCancelled,
+    },
+  };
+}
+
+/**
+ * BAL-540 — the three `RequestDetailShell` close/decline-control booleans. The two CLIENT
+ * affordances (close the whole request; decline ONE track from the conversation thread) are the
+ * SAME right — membership `MANAGE_REQUESTS` (D7) — so they resolve from ONE async, DB-backed
+ * capability read. The admin arm is the pure, sync platform-capability check.
+ *
+ * ⚠ `canDecline` IS NOT OPTIONAL PLUMBING. It was missing on the first pass, which left the
+ * client-lens decline control (`ThreadHeader`'s icon button / `MobileOverflowSheet`'s row,
+ * both gated on `ConversationStage`'s `canDecline`, which defaults `false`) permanently
+ * unreachable in production while 11,024 tests stayed green — every one of them injected the
+ * prop below the seam. `page.test.tsx`'s "client member with MANAGE_REQUESTS sees the decline
+ * control" renders page → shell → ConversationStage for real and is what now holds this
+ * together.
+ *
+ * Extracted so the page body's cognitive complexity stays budgeted — booleans only, the shell
+ * never re-derives authorization from a role/lens (ADR-1029).
+ */
+async function resolveCloseCapabilities(
+  user: SessionUser,
+  ctx: RequestViewerContext,
+  companyId: string
+): Promise<{ canClose: boolean; canCloseAsAdmin: boolean; canDecline: boolean }> {
+  const manageRequests =
+    ctx.lens === 'client'
+      ? await hasCapability(user, CAPABILITIES.MANAGE_REQUESTS, { companyId })
+      : false;
+  const canCloseAsAdmin =
+    ctx.lens === 'admin' && hasPlatformCapability(user, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST);
+  return { canClose: manageRequests, canCloseAsAdmin, canDecline: manageRequests };
+}
+
+/**
+ * BAL-540 deviation V1 — the `!ctx` branch's FIRST check: the ONE surface a de-participated
+ * expert may still open (their own ended track — declined, or the whole request closed).
+ * `resolveRequestLens` stays untouched (D13) — this is a SECOND, strictly narrower branch
+ * consulted only after it returns `null`. Falls through to the existing denial helper
+ * (always throws) when there is no ended-track view to show. Extracted so the page body's
+ * cognitive complexity stays budgeted.
+ */
+async function resolveNonParticipantResponse(
+  user: SessionUser,
+  request: ProjectRequestWithRelations,
+  requestId: string
+): Promise<React.JSX.Element> {
+  const endedTrackView = resolveEndedTrackView(user, request);
+  if (endedTrackView !== null) {
+    return (
+      <>
+        <EntityCrumb label={request.title} />
+        <ExpertEndedTrackView view={endedTrackView} />
+      </>
+    );
+  }
+  await redirectOrDenyRequestAccess(user, request, requestId);
+  // Unreachable — the helper above always throws (redirect() or notFound()).
+  throw new Error('unreachable: redirectOrDenyRequestAccess must throw');
 }
 
 /**
@@ -195,9 +323,7 @@ export default async function RequestDetailPage({
 
   const ctx = resolveRequestLens(user, request);
   if (!ctx) {
-    await redirectOrDenyRequestAccess(user, request, requestId);
-    // Unreachable — the helper above always throws (redirect() or notFound()).
-    throw new Error('unreachable: redirectOrDenyRequestAccess must throw');
+    return resolveNonParticipantResponse(user, request, requestId);
   }
 
   // BAL-324 repeat-company auto-skip: when an admin loads the board and the client
@@ -206,7 +332,17 @@ export default async function RequestDetailPage({
   // else. Placed BEFORE the view is mapped so the kickoff projection reflects it.
   request = await ensureAdminBillingAutoskip(request, ctx.lens === 'admin');
 
-  const view = mapRequestToDetailView(request, ctx);
+  // BAL-540 — the closed-request summary's two async-resolved primitives (the closer's name +
+  // the close audit row's counts). Skipped entirely for a live request — no extra reads.
+  const closedSummaryInput = await loadClosedSummaryInput(request, requestId);
+
+  const view = mapRequestToDetailView(request, ctx, new Date(), closedSummaryInput);
+
+  const { canClose, canCloseAsAdmin, canDecline } = await resolveCloseCapabilities(
+    user,
+    ctx,
+    request.companyId
+  );
 
   // Phase-2 participants get the live conversation payload (thread summaries +
   // the default thread's first page). Observers/Phase-1 never pay for it.
@@ -266,6 +402,9 @@ export default async function RequestDetailPage({
         deliveryEngagementId={deliveryEngagementId}
         viewerEmailDomain={viewerEmailDomain}
         requestFilesView={requestFilesView}
+        canClose={canClose}
+        canCloseAsAdmin={canCloseAsAdmin}
+        canDecline={canDecline}
       />
     </>
   );

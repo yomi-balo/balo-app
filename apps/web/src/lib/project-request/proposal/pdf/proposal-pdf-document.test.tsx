@@ -103,6 +103,10 @@ function makeRelationship(): Relationship {
     // BAL-283 — the render-path projection carries "has the expert shared availability on
     // this thread". The PDF reads none of it; `null` = never shared.
     availabilitySharedAt: null,
+    // BAL-540 — D3's per-track decline attribution columns. The PDF reads none of it.
+    declinedAt: null,
+    declinedByUserId: null,
+    declineReason: null,
     expertProfile: {
       id: 'exp-1',
       // ⚠ `numeric` ⇒ a STRING off the driver — the fixture mirrors the raw row.
@@ -112,6 +116,8 @@ function makeRelationship(): Relationship {
     },
     expressionsOfInterest: [],
     conversationMessages: [],
+    // BAL-540 — existence-only projection. The PDF reads none of it.
+    proposals: [],
   };
 }
 

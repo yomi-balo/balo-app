@@ -1,7 +1,6 @@
 import { and, asc, eq, gt, gte, inArray, isNull, lt, ne, notInArray } from 'drizzle-orm';
 import {
   assertMeetingTransition,
-  CANCELLABLE_MEETING_STATUSES,
   RESCHEDULABLE_MEETING_STATUSES,
   GUEST_TOKEN_TTL_AFTER_END_MS,
   selectPrimaryMeetingContext,
@@ -27,17 +26,16 @@ import {
 } from '../schema';
 import type { EngagementType } from './_shared/engagement-supertype';
 import {
-  cancelProjectionTx,
   projectNewMeetingTx,
   softDeleteProjectionTx,
   syncProjectionScheduleTx,
 } from './_shared/consultation-projection';
+import { cancelMeetingTx } from './_shared/cancel-meeting-tx';
 import type { DbExecutor } from './_shared/db-executor';
 import { extendGuestExpiryForMeetingTx } from './_shared/guest-expiry';
 import {
   recordMeetingAudit,
   recordMeetingBooked,
-  recordMeetingCancelled,
   recordMeetingRescheduled,
 } from './_shared/meeting-audit';
 import { meetingPresenceRepository } from './meeting-presence';
@@ -1251,6 +1249,14 @@ export const meetingsRepository = {
    *   3. `recordMeetingCancelled` — the audit row, LAST among the writes. An audit row left
    *      behind by a rolled-back cancel would attest to a cancellation that never happened;
    *      `updateSchedule`'s rule, verbatim.
+   *
+   * ⚠ THOSE THREE STEPS NOW LIVE IN `_shared/cancel-meeting-tx.ts` (BAL-540), and this method
+   * is the STANDALONE WRAPPER around them: it supplies the transaction and turns the shared
+   * core's `undefined` CAS-miss into `MeetingNotCancellableError`. The extraction exists so
+   * the BAL-540 request-close cascade — which must flip meeting rows inside the SAME
+   * transaction as the request write, and so may NOT call this method (it would take a second
+   * pooled connection and commit independently, orchestrator D4) — drives the identical CAS
+   * rather than a second copy of it. Change the sequence THERE, never here.
    */
   async cancel(
     id: string,
@@ -1264,41 +1270,11 @@ export const meetingsRepository = {
     }
   ): Promise<CancelMutationResult> {
     return db.transaction(async (tx) => {
-      const now = new Date();
-      // 1. Guarded compare-and-set — the TOCTOU backstop AND the shared definition of "which
-      //    statuses may be cancelled".
-      const [meeting] = await tx
-        .update(meetings)
-        // Enum literals at QUERY time are always safe — the house restriction is on index
-        // predicates and CHECKs, which is why 0059 adds neither for this label.
-        .set({ status: 'cancelled', updatedAt: now })
-        .where(
-          and(
-            eq(meetings.id, id),
-            inArray(meetings.status, [...CANCELLABLE_MEETING_STATUSES]),
-            isNull(meetings.deletedAt)
-          )
-        )
-        .returning();
-      if (meeting === undefined) {
+      const result = await cancelMeetingTx(tx, id, audit);
+      if (result === undefined) {
         throw new MeetingNotCancellableError(id);
       }
-
-      // 2. The projection — the same instant the resolver's `confirmed`-only filter reopens
-      //    the window.
-      const expertProfileId = await cancelProjectionTx(tx, id);
-
-      // 3. LAST. See the docblock: an audit row must never outlive a rolled-back cancel.
-      const cancelAuditId = await recordMeetingCancelled(tx, {
-        meetingId: meeting.id,
-        actorUserId: audit.actorUserId,
-        actorRole: audit.actorRole,
-        scheduledStart: meeting.scheduledStart,
-        scheduledEnd: meeting.scheduledEnd,
-        expertProfileId,
-      });
-
-      return { meeting, expertProfileId, cancelAuditId };
+      return result;
     });
   },
 

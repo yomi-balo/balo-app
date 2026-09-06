@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { ChevronRight, Clock, User } from 'lucide-react';
+import { ChevronRight, Clock, User, X } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { ConversationThreadView } from '@/lib/project-request/conversation-view-types';
+import { declineVerbFor, type TrackStage } from '@/lib/project-request/close-copy';
 
 interface MobileOverflowSheetProps {
   open: boolean;
@@ -13,6 +14,13 @@ interface MobileOverflowSheetProps {
   showProposalPill: boolean;
   /** Profile link renders ONLY when a public username is available (never dead). */
   profileHref: string | null;
+  /**
+   * BAL-540 — non-null → the decline row renders, labelled with this stage's verb. Optional,
+   * defaulting `null`, so every pre-existing call site keeps compiling unchanged.
+   */
+  declineSlot?: TrackStage | null;
+  /** BAL-540 — fired when the decline row is tapped; closes this sheet first. */
+  onDecline?: (() => void) | null;
 }
 
 /**
@@ -22,8 +30,11 @@ interface MobileOverflowSheetProps {
 export function hasOverflowContent(input: {
   profileHref: string | null;
   showProposalPill: boolean;
+  declineSlot?: TrackStage | null;
 }): boolean {
-  return input.profileHref !== null || input.showProposalPill;
+  return (
+    input.profileHref !== null || input.showProposalPill || (input.declineSlot ?? null) !== null
+  );
 }
 
 /**
@@ -37,6 +48,8 @@ export function MobileOverflowSheet({
   thread,
   showProposalPill,
   profileHref,
+  declineSlot = null,
+  onDecline = null,
 }: Readonly<MobileOverflowSheetProps>): React.JSX.Element {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -72,6 +85,23 @@ export function MobileOverflowSheet({
                 Proposal requested — awaiting submission
               </span>
             </div>
+          )}
+          {declineSlot !== null && onDecline !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                onOpenChange(false);
+                onDecline();
+              }}
+              className="border-border bg-card hover:border-destructive/40 hover:text-destructive focus-visible:ring-ring flex min-h-12 items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <span className="bg-destructive/10 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg">
+                <X className="text-destructive h-4 w-4" aria-hidden="true" />
+              </span>
+              <span className="text-foreground min-w-0 flex-1 text-[13px] font-semibold">
+                {declineVerbFor(declineSlot)}
+              </span>
+            </button>
           )}
         </div>
       </SheetContent>

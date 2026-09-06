@@ -19,6 +19,16 @@ export class MockStripeError extends Error {
   public code?: string;
   public requestId?: string;
   public payment_intent?: unknown;
+  /** The error TYPE, distinct from `code`. Stripe puts the family here ('idempotency_error',
+   *  'card_error', 'invalid_request_error') and the specific reason in `code`
+   *  ('idempotency_key_in_use', 'authentication_required', …); stripe-node picks its error CLASS
+   *  off the TYPE (`Error.js:13`). Set both whenever a test's name claims a particular wire
+   *  shape. */
+  public type?: string;
+  /** The HTTP status stripe-node attaches (409 on an in-flight idempotency-key conflict, 402 on
+   *  a decline, …). Optional — set it whenever a test's NAME claims a particular wire shape, so
+   *  the name is earned by the fixture rather than by the assertion's wording. */
+  public statusCode?: number;
   constructor(message: string) {
     super(message);
     this.name = 'StripeError';
@@ -52,6 +62,9 @@ export const mockStripe = {
   },
   setupIntents: {
     create: vi.fn(),
+    // BAL-527 fix round 2 — the bounded, fail-soft VERIFICATION read `createSetupIntent` makes
+    // only when the create response carries `Idempotent-Replayed: true`.
+    retrieve: vi.fn(),
   },
   paymentIntents: {
     create: vi.fn(),

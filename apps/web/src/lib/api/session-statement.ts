@@ -13,11 +13,16 @@ import { log } from '@/lib/logging';
  * fallback) and must not change; the recap is a live consumer. A DEDICATED PAGE CANNOT SWALLOW:
  * collapsing everything to one outcome would render "not found" over a database outage and tell
  * the reader their receipt does not exist. So this module calls `callSessionApi` directly and
- * keeps THREE outcomes.
+ * keeps FOUR outcomes (BAL-519 added `rate_limited`).
  */
 export type SessionStatementFetch =
   | { outcome: 'ok'; statement: SessionStatement }
   | { outcome: 'denied' } // → notFound()
+  // BAL-519 — the api's per-user limiter refused this read. NOT a denial (404 would tell the
+  // reader their receipt does not exist) and NOT an outage (`error.tsx` says "this is on our
+  // side", a lie for a rate-limited caller). `retryAfterSeconds` is carried for the PDF route's
+  // `Retry-After` header ONLY — the page renders no countdown (D4).
+  | { outcome: 'rate_limited'; retryAfterSeconds: number | null }
   | { outcome: 'unavailable' }; // → throw → error.tsx
 
 /**
@@ -26,6 +31,9 @@ export type SessionStatementFetch =
  * outage page.
  */
 const DENIED_STATUSES: ReadonlySet<number> = new Set([400, 401, 403, 404]);
+
+/** BAL-519 — deliberately NOT a member of `DENIED_STATUSES`; see the branch below. */
+const RATE_LIMITED_STATUS = 429;
 
 /**
  * ⚠ THE UUID CHECK IS A SECURITY CONTROL, NOT A TIDINESS ONE — DO NOT REMOVE IT.
@@ -44,7 +52,7 @@ const DENIED_STATUSES: ReadonlySet<number> = new Set([400, 401, 403, 404]);
  */
 const sessionIdSchema = z.string().uuid();
 
-/** Fetch the session statement, mapping every HTTP outcome to one of three page-level signals. */
+/** Fetch the session statement, mapping every HTTP outcome to one of four page-level signals. */
 export async function fetchSessionStatement(sessionId: string): Promise<SessionStatementFetch> {
   if (!sessionIdSchema.safeParse(sessionId).success) {
     // Same outcome as every other denial, so a malformed id is indistinguishable from a real
@@ -62,6 +70,14 @@ export async function fetchSessionStatement(sessionId: string): Promise<SessionS
 
   if (result.ok) {
     return { outcome: 'ok', statement: result.data };
+  }
+
+  // ⚠ CHECKED BEFORE THE DENIAL SET, AND THE SET DELIBERATELY EXCLUDES 429. Ordering it first
+  // means a future edit that added 429 to `DENIED_STATUSES` could not silently turn a
+  // rate-limited read into a "your receipt does not exist" 404.
+  if (result.status === RATE_LIMITED_STATUS) {
+    log.warn('Session statement rate-limited', { sessionId, status: result.status });
+    return { outcome: 'rate_limited', retryAfterSeconds: result.retryAfterSeconds ?? null };
   }
 
   if (DENIED_STATUSES.has(result.status)) {

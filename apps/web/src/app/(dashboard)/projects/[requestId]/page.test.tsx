@@ -15,6 +15,9 @@ const {
   mockLogWarn,
   mockLogError,
   mockTrackServerAndFlush,
+  mockGetMemberRole,
+  mockFindNamesByIds,
+  mockFindLatestByEntityAndAction,
 } = vi.hoisted(() => ({
   mockFindByIdWithRelations: vi.fn(),
   mockGetCurrentUser: vi.fn(),
@@ -28,10 +31,32 @@ const {
   mockLogWarn: vi.fn(),
   mockLogError: vi.fn(),
   mockTrackServerAndFlush: vi.fn(),
+  // BAL-540 — `hasCapability` (real implementation, pure `@balo/shared/authz` map) needs its one
+  // DB read controlled, mirroring `close-request.test.ts`'s precedent.
+  mockGetMemberRole: vi.fn<(...args: unknown[]) => Promise<string | undefined>>(() =>
+    Promise.resolve(undefined)
+  ),
+  // BAL-540 — `loadClosedSummaryInput`'s two reads. Only exercised when a fixture's `status` is
+  // `'closed'`; every pre-existing (non-closed) fixture never reaches them.
+  mockFindNamesByIds: vi.fn<
+    (
+      ...args: unknown[]
+    ) => Promise<Array<{ id: string; firstName: string | null; lastName: string | null }>>
+  >(() => Promise.resolve([])),
+  mockFindLatestByEntityAndAction: vi.fn<
+    (
+      ...args: unknown[]
+    ) => Promise<{ actorUserId: string | null; createdAt: Date; metadata: unknown } | undefined>
+  >(() => Promise.resolve(undefined)),
 }));
 
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: { findByIdWithRelations: mockFindByIdWithRelations },
+  partyMembershipsRepository: { getMemberRole: (...a: unknown[]) => mockGetMemberRole(...a) },
+  usersRepository: { findNamesByIds: (...a: unknown[]) => mockFindNamesByIds(...a) },
+  auditEventsRepository: {
+    findLatestByEntityAndAction: (...a: unknown[]) => mockFindLatestByEntityAndAction(...a),
+  },
 }));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 
@@ -88,6 +113,7 @@ vi.mock('@/lib/request-files/load-request-files', () => ({
 // useIsMobile (inside the conversation island) reads window.matchMedia.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
+import { thread as conversationThread } from '@/test/fixtures/conversation';
 import RequestDetailPage, { generateMetadata } from './page';
 
 const REQUEST_ID = 'req-1';
@@ -335,6 +361,77 @@ describe('RequestDetailPage (RSC) — auth + lens gating', () => {
   });
 });
 
+describe('RequestDetailPage (RSC) — BAL-540 ended-track view (deviation V1)', () => {
+  function endedRelationship(
+    overrides: Partial<ProjectRequestWithRelations['relationships'][number]> = {}
+  ): ProjectRequestWithRelations['relationships'][number] {
+    return {
+      ...declinedRelationship(),
+      declinedAt: new Date('2026-09-05T00:00:00Z'),
+      declineReason: 'client_declined',
+      declinedByUserId: 'user-client',
+      proposals: [],
+      ...overrides,
+    } as ProjectRequestWithRelations['relationships'][number];
+  }
+
+  it('renders ExpertEndedTrackView instead of notFound() when declinedAt/declineReason are stamped', async () => {
+    const expertUser = user({
+      id: 'user-declined-expert',
+      companyId: OTHER_COMPANY_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      activeMode: 'expert',
+    });
+    mockGetCurrentUser.mockResolvedValue(expertUser);
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'proposal_submitted', relationships: [endedRelationship()] })
+    );
+
+    await renderPage();
+
+    expect(mockNotFound).not.toHaveBeenCalled();
+    expect(screen.getByText(/isn.t proceeding with you/i)).toBeInTheDocument();
+    // No brief, no contact, no conversation — the request title is not rendered as a heading.
+    expect(
+      screen.queryByRole('heading', { name: new RegExp(REQUEST_TITLE, 'i') })
+    ).not.toBeInTheDocument();
+  });
+
+  it('mode is request_closed when declineReason is request_closed', async () => {
+    const expertUser = user({
+      id: 'user-declined-expert',
+      companyId: OTHER_COMPANY_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      activeMode: 'expert',
+    });
+    mockGetCurrentUser.mockResolvedValue(expertUser);
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        status: 'closed',
+        relationships: [endedRelationship({ declineReason: 'request_closed' })],
+      })
+    );
+
+    await renderPage();
+    expect(screen.getByText(/closed this request/i)).toBeInTheDocument();
+  });
+
+  it('falls back to the old notFound() denial when declinedAt/declineReason are absent (D13 unchanged)', async () => {
+    const expertUser = user({
+      id: 'user-declined-expert',
+      companyId: OTHER_COMPANY_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      activeMode: 'expert',
+    });
+    mockGetCurrentUser.mockResolvedValue(expertUser);
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({ status: 'proposal_submitted', relationships: [declinedRelationship()] })
+    );
+
+    await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
+  });
+});
+
 describe('RequestDetailPage (RSC) — authorised lenses render the shell', () => {
   it('renders the client view (owner) with the request title', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
@@ -375,6 +472,122 @@ describe('RequestDetailPage (RSC) — authorised lenses render the shell', () =>
 
     await renderPage();
     expect(screen.getByText('Admin')).toBeInTheDocument();
+  });
+
+  it('BAL-540: renders the ClosedBanner for a closed request, resolving the closer name + audit counts', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        status: 'closed',
+        closedAt: new Date('2026-09-05T10:00:00Z'),
+        closedByUserId: 'user-admin',
+        closeReason: 'unfilled',
+        closeNote: 'Two of three tracks went quiet.',
+      } as Partial<ProjectRequestWithRelations>)
+    );
+    mockFindNamesByIds.mockResolvedValue([
+      { id: 'user-admin', firstName: 'Adeeb', lastName: null },
+    ]);
+    mockFindLatestByEntityAndAction.mockResolvedValue({
+      actorUserId: 'user-admin',
+      createdAt: new Date('2026-09-05T10:00:00Z'),
+      metadata: { counts: { tracksDeclined: 2, proposalsWithdrawn: 1, meetingsCancelled: 1 } },
+    });
+
+    await renderPage();
+
+    expect(mockFindNamesByIds).toHaveBeenCalledWith(['user-admin']);
+    expect(screen.getByText(/Closed on 5 Sept 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/Adeeb @ Balo/)).toBeInTheDocument();
+    // D11: close_note is staff-only — a plain client member never sees it.
+    expect(screen.queryByText(/Two of three tracks went quiet/)).not.toBeInTheDocument();
+  });
+
+  it('BAL-540: close_note IS shown to an admin who holds CLOSE_ANY_REQUEST', async () => {
+    mockGetCurrentUser.mockResolvedValue(
+      user({ companyId: OTHER_COMPANY_ID, platformRole: 'admin' })
+    );
+    mockFindByIdWithRelations.mockResolvedValue(
+      request({
+        status: 'closed',
+        closedAt: new Date('2026-09-05T10:00:00Z'),
+        closedByUserId: 'user-admin',
+        closeReason: 'unfilled',
+        closeNote: 'Two of three tracks went quiet.',
+      } as Partial<ProjectRequestWithRelations>)
+    );
+    mockFindNamesByIds.mockResolvedValue([
+      { id: 'user-admin', firstName: 'Adeeb', lastName: null },
+    ]);
+    mockFindLatestByEntityAndAction.mockResolvedValue({
+      actorUserId: 'user-admin',
+      createdAt: new Date('2026-09-05T10:00:00Z'),
+      metadata: { counts: { tracksDeclined: 2, proposalsWithdrawn: 1, meetingsCancelled: 1 } },
+    });
+
+    await renderPage();
+    expect(screen.getByText(/Two of three tracks went quiet/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠⚠ THE SEAM TEST. BAL-540's client-lens decline control shipped UNREACHABLE on the first
+ * pass: every component below `ConversationStage` was built and unit-tested by INJECTING
+ * `canDecline` / `declineSlot` directly, while nothing between `page.tsx` and the stage ever
+ * resolved or forwarded the capability — so `canDecline` kept its `false` default in
+ * production and 11,024 green tests said nothing.
+ *
+ * These two cases exercise the WHOLE chain for real — page → `resolveCloseCapabilities` →
+ * `RequestDetailShell` → `ConversationStage` → `deriveThreadActions` → `ThreadHeader` — with
+ * NOTHING between the page and the button stubbed. The only controlled seams are the ones the
+ * rest of this file already controls (the session, the request row, the membership read and
+ * the conversation payload). Do not "simplify" either case by rendering a lower component and
+ * passing `canDecline` in: that is precisely the test shape that missed the defect.
+ */
+describe('RequestDetailPage (RSC) — BAL-540 client decline control reaches the thread header', () => {
+  function phase2Request() {
+    return request({ status: 'eoi_submitted', relationships: [liveRelationship()] });
+  }
+
+  function conversationWithOneLiveThread() {
+    return {
+      viewerUserId: 'user-x',
+      threads: [conversationThread({ relationshipStatus: 'eoi_submitted', stage: 'active' })],
+      defaultThreadId: 'rel-1',
+      initialMessages: [],
+      initialHasEarlier: false,
+      initialFiles: [],
+      realtimeEnabled: false,
+    };
+  }
+
+  it('a client member WITH MANAGE_REQUESTS sees the decline control on the live thread', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(phase2Request());
+    mockLoadConversationView.mockResolvedValue(conversationWithOneLiveThread());
+    // The ONE membership read behind `hasCapability(MANAGE_REQUESTS)` — a plain member holds it.
+    mockGetMemberRole.mockResolvedValue('member');
+
+    await renderPage();
+
+    expect(mockGetMemberRole).toHaveBeenCalled();
+    expect(screen.getAllByRole('button', { name: /Decline Priya Nair/i }).length).toBeGreaterThan(
+      0
+    );
+  });
+
+  it('a client viewer WITHOUT the capability sees no decline control (the gate is real)', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ companyId: COMPANY_ID }));
+    mockFindByIdWithRelations.mockResolvedValue(phase2Request());
+    mockLoadConversationView.mockResolvedValue(conversationWithOneLiveThread());
+    // No live membership row → `hasCapability` fails closed.
+    mockGetMemberRole.mockResolvedValue(undefined);
+
+    await renderPage();
+
+    expect(screen.queryByRole('button', { name: /Decline Priya Nair/i })).not.toBeInTheDocument();
+    // …and the thread itself DID render, so the negative above is not vacuous.
+    expect(screen.getAllByText(/Priya/).length).toBeGreaterThan(0);
   });
 });
 

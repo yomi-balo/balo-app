@@ -275,7 +275,7 @@ describe('bookIntroCallAction', () => {
    * straight through and the UI's `callAllowed` gate is browser-only. Past acceptance the
    * delivering expert's hours must route through the BILLED case/kickoff path.
    */
-  it.each(['accepted', 'kickoff_approved'])(
+  it.each(['accepted', 'kickoff_approved', 'closed'])(
     'not_permitted once the request is %s — and NO api call is made',
     async (status) => {
       mockResolveConversationAccess.mockResolvedValue(accessOk({ status }));

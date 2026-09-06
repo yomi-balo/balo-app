@@ -14,7 +14,11 @@ vi.mock('react', async (importOriginal) => {
   return { ...actual, cache: (fn: unknown) => fn };
 });
 
-import { loadSessionStatement, SessionStatementUnavailableError } from './load-session-statement';
+import {
+  loadSessionStatement,
+  SessionStatementUnavailableError,
+  SessionStatementRateLimitedError,
+} from './load-session-statement';
 
 const CLIENT_STATEMENT = {
   lens: 'client' as const,
@@ -66,6 +70,33 @@ describe('loadSessionStatement (BAL-441)', () => {
   it('throws SessionStatementUnavailableError on an outage — never swallowed to null', async () => {
     mockFetchSessionStatement.mockResolvedValue({ outcome: 'unavailable' });
     await expect(loadSessionStatement('session_1', 'user_1', 'client')).rejects.toBeInstanceOf(
+      SessionStatementUnavailableError
+    );
+  });
+
+  it('throws SessionStatementRateLimitedError on a 429 — NEVER null (which would 404 the page)', async () => {
+    mockFetchSessionStatement.mockResolvedValue({ outcome: 'rate_limited', retryAfterSeconds: 42 });
+    await expect(loadSessionStatement('session_1', 'user_1', 'client')).rejects.toBeInstanceOf(
+      SessionStatementRateLimitedError
+    );
+    await expect(loadSessionStatement('session_1', 'user_1', 'client')).rejects.toMatchObject({
+      retryAfterSeconds: 42,
+    });
+  });
+
+  it('carries a null cooldown through when the api sent none', async () => {
+    mockFetchSessionStatement.mockResolvedValue({
+      outcome: 'rate_limited',
+      retryAfterSeconds: null,
+    });
+    await expect(loadSessionStatement('session_1', 'user_1', 'client')).rejects.toMatchObject({
+      retryAfterSeconds: null,
+    });
+  });
+
+  it('a rate limit is NOT an outage — the two error types are distinct', async () => {
+    mockFetchSessionStatement.mockResolvedValue({ outcome: 'rate_limited', retryAfterSeconds: 1 });
+    await expect(loadSessionStatement('session_1', 'user_1', 'client')).rejects.not.toBeInstanceOf(
       SessionStatementUnavailableError
     );
   });

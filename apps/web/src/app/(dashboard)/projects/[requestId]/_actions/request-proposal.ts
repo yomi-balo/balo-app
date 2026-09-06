@@ -57,13 +57,16 @@ export type RequestProposalResult =
  * so the action's cognitive complexity stays under the gate.
  */
 async function advanceRelationshipGuarded(
-  relationshipId: string
+  relationshipId: string,
+  /** BAL-540 / ADR-1030 — the acting user; attributes the relationship's audit row. */
+  actorUserId: string
 ): Promise<'ok' | 'already_requested'> {
   try {
     await requestExpertRelationshipsRepository.transitionStatus({
       id: relationshipId,
       to: 'proposal_requested',
       expectedFrom: 'eoi_submitted',
+      actorUserId,
     });
     return 'ok';
   } catch (error) {
@@ -137,7 +140,7 @@ export async function requestProposalAction(
     // rollup atomically — ADR-1025 / BAL-295). `expectedFrom` turns a concurrent
     // double-click into a friendly already-requested outcome.
     const beforeStatus = access.request.status;
-    if ((await advanceRelationshipGuarded(relationshipId)) === 'already_requested') {
+    if ((await advanceRelationshipGuarded(relationshipId, user.id)) === 'already_requested') {
       return { success: false, error: ALREADY_REQUESTED, code: 'already_requested' };
     }
 

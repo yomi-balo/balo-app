@@ -8,6 +8,7 @@ import { calendarProviderLabel } from '../../../lib/apiroc/provider-labels.js';
 import { pluralize } from './shared.js';
 import { EXPERT_CALENDAR_SETTINGS_PATH } from '@balo/shared/calendar';
 import { personWithOrgLabel } from '@balo/shared/parties';
+import { REASON_LABEL, readCloseReason } from './close-reason-label.js';
 
 interface InAppOutput {
   title: string;
@@ -1300,6 +1301,58 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
       body: `${who} is in the room and ready when you are.`,
       // ⚠ STRAIGHT INTO THE CALL — the whole point of the nudge is one tap to the room.
       ...(meetingId === undefined ? {} : { actionUrl: `/meetings/${meetingId}/call` }),
+    };
+  },
+
+  /**
+   * BAL-540 — the request closed while this expert's track was live. REGISTER (pending-MJ):
+   * factual and non-adversarial — the client stopped looking; nothing is asked of the expert.
+   * Prospective copy names the PARTY (CLAUDE.md).
+   */
+  'project-request-closed-expert': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const companyName = (data.clientCompanyName as string) ?? 'The client';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'Request closed',
+      body: `${companyName} has stopped looking for an expert for "${title}". Your proposal was withdrawn along with the request, and the files you had access to stay exactly as they were. There's nothing further to do here.`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  /**
+   * BAL-540 — Balo closed the request on the client's behalf. Carries the CATEGORY
+   * (`REASON_LABEL[reason]`) and NEVER the staff-only `close_note` (D11, pending-MJ).
+   */
+  'project-request-closed-client': (data) => {
+    const title = (data.title as string) ?? 'your project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    const reasonLabel = REASON_LABEL[readCloseReason(data.reason)];
+    return {
+      title: 'Request closed',
+      body: `We've closed "${title}" — ${reasonLabel}.`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  /**
+   * BAL-540 — one track was declined (client, or Balo on the client's behalf). Two bodies
+   * keyed on `stage`: an `invited` decline is a plain invitation withdrawal (nothing beyond
+   * the brief was ever shared); anything later reads as "not proceeding" — REGISTER
+   * (pending-MJ): factual, non-adversarial, gender-neutral.
+   */
+  'project-track-declined': (data) => {
+    const title = (data.title as string) ?? 'a project';
+    const companyName = (data.clientCompanyName as string) ?? 'The client';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    const body =
+      data.stage === 'invited'
+        ? `${companyName} withdrew your invitation to "${title}". Nothing was shared with you beyond the brief.`
+        : `${companyName} decided not to proceed with your track on "${title}". There's nothing further to do here.`;
+    return {
+      title: 'Not proceeding',
+      body,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },
 };

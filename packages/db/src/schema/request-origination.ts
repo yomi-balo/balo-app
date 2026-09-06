@@ -14,6 +14,7 @@ import {
 import { relations, sql } from 'drizzle-orm';
 import {
   requestExpertRelationshipStatusEnum,
+  relationshipDeclineReasonEnum,
   proposalStatusEnum,
   pricingMethodEnum,
   proposalCadenceEnum,
@@ -73,6 +74,31 @@ export const requestExpertRelationships = pgTable(
       .references(() => users.id, { onDelete: 'restrict' }),
     invitedAt: timestamp('invited_at', { withTimezone: true }).defaultNow().notNull(),
     declinedAt: timestamp('declined_at', { withTimezone: true }),
+    /**
+     * BAL-540 / ADR-1030 — WHO ended this track, and WHY. The two attribution halves of the
+     * `declined` terminal, beside the WHEN that `declinedAt` already carried.
+     *
+     * ⚠ WRITTEN ONLY ON THE `→ declined` BRANCH OF `advanceRelationshipStatus`, IN THE SAME
+     * `.set()` THAT STAMPS `declinedAt`. Both columns arrive WITH their writer in this PR —
+     * the house rule at `repositories/_shared/meeting-audit.ts` / `schema/meeting-presence.ts`
+     * is that an attribution column with no writer materialises a NULL on every row that a
+     * downstream reader consumes as fact, which is a worse lie than the column's absence.
+     * `advanceRelationshipStatus`'s input type is discriminated so `reason` is REQUIRED
+     * exactly when `to === 'declined'` and impossible otherwise — a caller cannot forget it.
+     *
+     * ⚠ PRE-BAL-540 ROWS. BAL-540 ships the FIRST production writer of relationship
+     * `declined` at all (resolver O5: `withdraw-eoi` soft-deletes the EOI and
+     * `remove-invited-expert` soft-deletes the row — neither transitions status), so there
+     * are no historical `declined` rows to backfill. NULL here therefore means "not
+     * declined", not "declined by persons unknown".
+     *
+     * `restrict` on the user FK — preserve attribution, matching `invited_by_user_id` and
+     * `project_requests.closed_by_user_id`.
+     */
+    declinedByUserId: uuid('declined_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+    declineReason: relationshipDeclineReasonEnum('decline_reason'),
     // When the client requested a proposal (BAL-272). Stamped by the shared
     // transition on `eoi_submitted → proposal_requested`; survives later
     // transitions (unlike `updatedAt`) for the cap/swap mechanic, A6 "awaiting
@@ -150,6 +176,8 @@ export const requestExpertRelationships = pgTable(
     index('request_expert_relationship_request_idx').on(t.projectRequestId),
     index('request_expert_relationship_expert_idx').on(t.expertProfileId),
     index('request_expert_relationship_invited_by_idx').on(t.invitedByUserId),
+    // FK-column rule (drizzle-schema skill: index every foreign key column).
+    index('request_expert_relationship_declined_by_idx').on(t.declinedByUserId),
     // "Active relationships at stage X" lists — partial on live rows.
     index('request_expert_relationship_status_idx')
       .on(t.projectRequestId, t.status)
@@ -574,6 +602,9 @@ export const proposalChangeRequestsRelations = relations(proposalChangeRequests,
 }));
 
 // ── Type exports ───────────────────────────────────────────────────────
+
+/** BAL-540 — the three track-decline reasons, as a union (the `RepresentationScope` pattern). */
+export type RelationshipDeclineReason = (typeof relationshipDeclineReasonEnum.enumValues)[number];
 
 export type RequestExpertRelationship = typeof requestExpertRelationships.$inferSelect;
 export type NewRequestExpertRelationship = typeof requestExpertRelationships.$inferInsert;

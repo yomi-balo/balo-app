@@ -19,7 +19,12 @@ export interface NotificationRule {
     // party-scoped, `client`/`expert` are single recipients. The id list is resolved by the
     // PUBLISHER (`payload.recipientUserIds`), never by the resolver — that is what keeps a
     // `meeting_guests` read out of the notification engine.
-    | 'meeting_party_participants';
+    | 'meeting_party_participants'
+    // BAL-540 — every expert whose track was live at request-close. Same
+    // publisher-resolves-the-ids shape as `meeting_party_participants` (also over
+    // `payload.recipientUserIds`) — a membership read has no place inside the notification
+    // engine. A distinct KIND so the rules table stays legible about WHO it fans out to.
+    | 'request_track_experts';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -582,6 +587,27 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       creatorIsDistinctMember
     ),
   ],
+  // BAL-540 — the request ended. TWO recipient arms.
+  //  · `request_track_experts` — every expert whose track was live at close, fanned out over the
+  //    PUBLISHER-resolved `payload.recipientUserIds`. Resolved by the publisher, never hydrated here,
+  //    for the same reason `meeting_party_participants` is (BAL-408): a membership read has no place
+  //    inside the notification engine.
+  //  · `client` — conditioned on `payload.recipientId`, which the publisher sets ONLY when BALO closed
+  //    the request. A client closing their own request gets the toast, not an email.
+  'project.request_closed': [
+    ...emailAndInApp('request_track_experts', 'project-request-closed-expert'),
+    {
+      channel: 'email',
+      recipient: 'client',
+      template: 'project-request-closed-client',
+      timing: 'immediate',
+      priority: 'normal',
+      condition: (ctx) => !!ctx.payload.recipientId,
+    },
+  ],
+  // BAL-540 — one track ended. Single expert, resolved from `payload.expertProfileId` via the
+  // resolver's `data.expert` hydration — the `project.proposal_requested` shape exactly.
+  'project.track_declined': emailAndInApp('expert', 'project-track-declined'),
   // BAL-323: the client captured their company's billing details (first-time only —
   // the publisher never emits this on an edit or the repeat-company auto-skip). The
   // admins (fanned out over data.adminUserIds) get an in-app "ready to invoice"

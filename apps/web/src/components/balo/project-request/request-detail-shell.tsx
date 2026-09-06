@@ -26,6 +26,9 @@ import { MobileRequestSheet } from './conversation/mobile-request-sheet';
 import { DeliveryWorkspaceLink } from '@/components/balo/engagement/delivery-workspace-link';
 import { RequestFilesPanel } from '@/components/balo/project-request/files/request-files-panel';
 import type { RequestFilesView } from '@/lib/request-files/load-request-files';
+import { CloseRequestControl } from './close/close-request-control';
+import { ClosedBanner } from './close/closed-banner';
+import { ClosedTrackList } from './close/closed-track-list';
 
 interface RequestDetailShellProps {
   view: RequestDetailView;
@@ -65,6 +68,23 @@ interface RequestDetailShellProps {
    * simply absent, never an error.
    */
   requestFilesView?: RequestFilesView | null;
+  /**
+   * BAL-540 — true when the CLIENT lens viewer holds `CAPABILITIES.MANAGE_REQUESTS` on the
+   * request's company (resolved server-side by `page.tsx` — a boolean, never a role/lens, so
+   * this Server Component never re-derives authorization from a view input, ADR-1029).
+   */
+  canClose?: boolean;
+  /** BAL-540 — true when the ADMIN lens viewer holds `PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST`. */
+  canCloseAsAdmin?: boolean;
+  /**
+   * BAL-540 — the CLIENT lens's per-track "no" control on the conversation thread. The SAME
+   * capability as {@link canClose} (`MANAGE_REQUESTS`), resolved once by `page.tsx` and
+   * forwarded verbatim to `ConversationStage`. Kept as its OWN prop rather than reusing
+   * `canClose` so the two affordances can diverge without a silent behaviour change, and so
+   * the thread through page → shell → stage is legible at every hop (it was missing entirely
+   * on the first pass, which made the control unreachable). Defaults `false`.
+   */
+  canDecline?: boolean;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -98,11 +118,18 @@ const LENS_META = {
 
 const STATUS_LABEL_BEFORE_INVITE = new Set<string>(BEFORE_INVITE_STATUSES);
 
-/** "Viewing as {lens}" line + phase pill (participants only). */
+/** "Viewing as {lens}" line + phase pill (participants only) + the BAL-540 close control. */
 function LensLine({
   ctx,
   isPhase2,
-}: Readonly<{ ctx: RequestViewerContext; isPhase2: boolean }>): React.JSX.Element {
+  isClosed,
+  closeControl,
+}: Readonly<{
+  ctx: RequestViewerContext;
+  isPhase2: boolean;
+  isClosed: boolean;
+  closeControl: React.ReactNode;
+}>): React.JSX.Element {
   const meta = LENS_META[ctx.lens];
   const Icon = meta.icon;
   return (
@@ -117,8 +144,8 @@ function LensLine({
         <span className="text-muted-foreground">Viewing as</span>
         <strong className={cn('font-semibold', meta.tone)}>{meta.label}</strong>
       </span>
-      {ctx.archetype === 'participant' && (
-        <span className="text-muted-foreground ml-auto inline-flex items-center gap-1.5 text-xs">
+      {!isClosed && ctx.archetype === 'participant' && (
+        <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
           <span
             className={cn('h-1.5 w-1.5 rounded-full', isPhase2 ? 'bg-violet-500' : 'bg-primary')}
             aria-hidden="true"
@@ -126,6 +153,7 @@ function LensLine({
           {isPhase2 ? 'Phase 2 — conversation' : 'Phase 1 — request'}
         </span>
       )}
+      <div className="ml-auto">{closeControl}</div>
     </div>
   );
 }
@@ -170,10 +198,28 @@ export function RequestDetailShell({
   deliveryEngagementId = null,
   viewerEmailDomain = null,
   requestFilesView = null,
+  canClose = false,
+  canCloseAsAdmin = false,
+  canDecline = false,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
+  const isClosed = phase === 'closed';
   const isExpertGated = ctx.lens === 'expert' && STATUS_LABEL_BEFORE_INVITE.has(view.status);
+  // BAL-540 — the header's "Close request" control. Never rendered once already closed, and
+  // never for the expert lens (an expert on a closed request never reaches this shell at all —
+  // `page.tsx`'s ended-track branch intercepts them first).
+  const closeControl =
+    !isClosed &&
+    ((ctx.lens === 'client' && canClose) || (ctx.lens === 'admin' && canCloseAsAdmin)) ? (
+      <CloseRequestControl
+        requestId={view.id}
+        requestTitle={view.title}
+        companyName={view.companyName}
+        variant={ctx.lens === 'admin' ? 'admin' : 'client'}
+        liveTracks={view.liveTracksForClose}
+      />
+    ) : null;
   // Expert lens: the proposal-phase nudge cells key on the VIEWER'S relationship
   // status (BAL-272 divergence fix) — request status is the max-progress aggregate.
   const nudge = isExpertGated
@@ -221,45 +267,68 @@ export function RequestDetailShell({
         <BillingBlockedViewTracker companyId={billingCapture.companyId} requestId={view.id} />
       )}
 
-      <LensLine ctx={ctx} isPhase2={isPhase2} />
+      <LensLine ctx={ctx} isPhase2={isPhase2} isClosed={isClosed} closeControl={closeControl} />
 
-      {/* At-a-glance pipeline position — shown for every lens. A slim full-width
-          strip; the stepper itself scrolls horizontally on narrow viewports. */}
-      <div
-        className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
-        style={{ animationDelay: '60ms' }}
-      >
-        <StatusStepper current={view.status} />
-      </div>
+      {/* BAL-540 — the stepper and the nudge bar are replaced by `ClosedBanner` once a request
+          is closed (design ref: no stage pill, no nudge on a terminal request). */}
+      {!isClosed && (
+        <>
+          {/* At-a-glance pipeline position — shown for every lens. A slim full-width
+              strip; the stepper itself scrolls horizontally on narrow viewports. */}
+          <div
+            className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
+            style={{ animationDelay: '60ms' }}
+          >
+            <StatusStepper current={view.status} />
+          </div>
 
-      {/* BAL-331 deep-link: once kickoff is approved and a delivery engagement
-          exists, surface the workspace entry for EVERY lens. Rendered once here
-          (a single navigational Link) so it never duplicates across the mobile /
-          desktop kickoff-board mounts. */}
-      {deliveryEngagementId && (
-        <div
-          className="border-border bg-card animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 duration-500 motion-reduce:animate-none"
-          style={{ animationDelay: '90ms' }}
-        >
-          <span className="text-muted-foreground text-sm">
-            Kickoff approved — delivery is underway.
-          </span>
-          <DeliveryWorkspaceLink engagementId={deliveryEngagementId} />
-        </div>
+          {/* BAL-331 deep-link: once kickoff is approved and a delivery engagement
+              exists, surface the workspace entry for EVERY lens. Rendered once here
+              (a single navigational Link) so it never duplicates across the mobile /
+              desktop kickoff-board mounts. */}
+          {deliveryEngagementId && (
+            <div
+              className="border-border bg-card animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 duration-500 motion-reduce:animate-none"
+              style={{ animationDelay: '90ms' }}
+            >
+              <span className="text-muted-foreground text-sm">
+                Kickoff approved — delivery is underway.
+              </span>
+              <DeliveryWorkspaceLink engagementId={deliveryEngagementId} />
+            </div>
+          )}
+
+          {nudge && (
+            <div
+              className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
+              style={{ animationDelay: '120ms' }}
+            >
+              <NudgeBar
+                nudge={nudge}
+                lens={ctx.lens}
+                status={view.status}
+                requestId={view.id}
+                viewerRelationshipId={ctx.relationshipId}
+              />
+            </div>
+          )}
+        </>
       )}
 
-      {nudge && (
-        <div
-          className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both mb-5 duration-500 motion-reduce:animate-none"
-          style={{ animationDelay: '120ms' }}
-        >
-          <NudgeBar
-            nudge={nudge}
-            lens={ctx.lens}
-            status={view.status}
-            requestId={view.id}
-            viewerRelationshipId={ctx.relationshipId}
-          />
+      {/* BAL-540 — the closed state (design ref `ClosedBanner` + frozen `TrackCard`s). Only the
+          client + admin lenses ever reach this: a closed-out expert is intercepted earlier by
+          `page.tsx`'s ended-track branch (`resolveRequestLens` returns `null` for a declined
+          relationship, and every track is declined by the close cascade). */}
+      {isClosed && (
+        <div className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both space-y-5 duration-500 motion-reduce:animate-none">
+          {view.closed && (
+            <ClosedBanner
+              closed={view.closed}
+              viewerLens={ctx.lens === 'admin' ? 'admin' : 'client'}
+            />
+          )}
+          <RequestContext view={view} variant="full" />
+          <ClosedTrackList tracks={view.closedTracks} />
         </div>
       )}
 
@@ -267,7 +336,7 @@ export function RequestDetailShell({
         className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none"
         style={{ animationDelay: '180ms' }}
       >
-        {ctx.archetype === 'observer' && (
+        {!isClosed && ctx.archetype === 'observer' && (
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <RequestContext view={view} variant="full" />
             <div className="space-y-5">
@@ -305,6 +374,7 @@ export function RequestDetailShell({
                 <AdminHealthPanel
                   requestId={view.id}
                   status={view.status}
+                  companyName={view.companyName}
                   relationships={view.relationships}
                 />
               )}
@@ -314,7 +384,7 @@ export function RequestDetailShell({
 
         {ctx.archetype === 'participant' && isExpertGated && <ExpertGatedCard />}
 
-        {ctx.archetype === 'participant' && !isExpertGated && !isPhase2 && (
+        {!isClosed && ctx.archetype === 'participant' && !isExpertGated && !isPhase2 && (
           <div className="space-y-5">
             <RequestContext view={view} variant="full" />
             {/* Expert Phase-1: the EOI-entry card sits under the brief. The client
@@ -386,6 +456,7 @@ export function RequestDetailShell({
                 requestTitle={view.title}
                 clientCompanyName={view.companyName}
                 viewerEmailDomain={viewerEmailDomain}
+                canDecline={canDecline}
               />
             </div>
             <div className="hidden space-y-5 lg:block">

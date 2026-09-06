@@ -167,6 +167,8 @@ describe('submitEoiAction', () => {
     expect(mockSubmit).toHaveBeenCalledWith({
       relationshipId: RELATIONSHIP_ID,
       message: VALID_INPUT.message,
+      // BAL-540 / ADR-1030 — the submitting expert attributes the relationship audit row.
+      actorUserId: EXPERT_USER.id,
     });
   });
 
@@ -175,6 +177,8 @@ describe('submitEoiAction', () => {
     expect(mockSubmit).toHaveBeenCalledWith({
       relationshipId: RELATIONSHIP_ID,
       message: VALID_INPUT.message,
+      // BAL-540 / ADR-1030 — the submitting expert attributes the relationship audit row.
+      actorUserId: EXPERT_USER.id,
     });
     // BAL-295: the action no longer issues a request transition — submit() derives
     // it. It re-reads the stored status via findById to source `transitioned`.
