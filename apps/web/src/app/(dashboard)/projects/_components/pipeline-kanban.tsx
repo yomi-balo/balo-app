@@ -7,6 +7,8 @@ import { AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { track, PROJECTS_INBOX_EVENTS } from '@/lib/analytics';
 import type { AdminKanbanCard, AdminKanbanColumn } from '@/lib/projects-inbox/portfolio-row';
+import { InitialsAvatar } from '@/components/balo/conversation/initials-avatar';
+import { deriveInitials } from '@/lib/format/initials';
 import { StageChip } from './stage-chip';
 
 /**
@@ -19,6 +21,10 @@ import { StageChip } from './stage-chip';
 
 interface PipelineKanbanProps {
   columns: AdminKanbanColumn[];
+  /** BAL-541 (D8) — when true, every column shows only the viewer's own Balo-owned cards. */
+  mine: boolean;
+  /** BAL-541 (D8) — the viewer's own user id, compared against `card.baloOwner.userId`. */
+  viewerUserId: string;
 }
 
 function KanbanCard({ card }: Readonly<{ card: AdminKanbanCard }>): React.JSX.Element {
@@ -43,10 +49,23 @@ function KanbanCard({ card }: Readonly<{ card: AdminKanbanCard }>): React.JSX.El
           : 'border-destructive/40'
       )}
     >
-      <p className="text-foreground text-sm leading-snug font-semibold">{card.title}</p>
-      <p className="text-muted-foreground mt-1 text-xs">
-        {card.companyName ?? 'Unknown company'} · {card.updatedRelative}
-      </p>
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-foreground text-sm leading-snug font-semibold">{card.title}</p>
+          <p className="text-muted-foreground mt-1 text-xs">
+            {card.companyName ?? 'Unknown company'} · {card.updatedRelative}
+          </p>
+        </div>
+        {card.baloOwner ? (
+          <InitialsAvatar initials={deriveInitials(card.baloOwner.name)} size="sm" />
+        ) : (
+          <span
+            title="No Balo owner"
+            aria-label="No Balo owner"
+            className="border-border h-6 w-6 shrink-0 rounded-full border border-dashed"
+          />
+        )}
+      </div>
       {card.stalledLabel !== null && (
         <span className="bg-destructive/10 text-destructive mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold">
           <AlertCircle className="h-3 w-3" aria-hidden="true" />
@@ -57,30 +76,42 @@ function KanbanCard({ card }: Readonly<{ card: AdminKanbanCard }>): React.JSX.El
   );
 }
 
-export function PipelineKanban({ columns }: Readonly<PipelineKanbanProps>): React.JSX.Element {
+export function PipelineKanban({
+  columns,
+  mine,
+  viewerUserId,
+}: Readonly<PipelineKanbanProps>): React.JSX.Element {
   return (
     <div className="flex gap-3 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
-      {columns.map((column, columnIndex) => (
-        <motion.div
-          key={column.stage}
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35, delay: 0.14 + columnIndex * 0.05 }}
-          className="w-[230px] shrink-0"
-        >
-          <div className="flex items-center gap-2 px-1 pb-2">
-            <StageChip stage={column.stage} label={column.label} />
-            <span className="text-muted-foreground text-xs font-bold">{column.items.length}</span>
-          </div>
-          <div className="bg-muted flex min-h-[110px] flex-col gap-2 rounded-2xl p-2">
-            {column.items.length === 0 ? (
-              <p className="text-muted-foreground px-2 py-4 text-center text-xs">Nothing here</p>
-            ) : (
-              column.items.map((card) => <KanbanCard key={card.id} card={card} />)
-            )}
-          </div>
-        </motion.div>
-      ))}
+      {columns.map((column, columnIndex) => {
+        // BAL-541 (D8) — plain client-side fold, exactly as the design ref.
+        const items = mine
+          ? column.items.filter((c) => c.baloOwner?.userId === viewerUserId)
+          : column.items;
+        return (
+          <motion.div
+            key={column.stage}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay: 0.14 + columnIndex * 0.05 }}
+            className="w-[230px] shrink-0"
+          >
+            <div className="flex items-center gap-2 px-1 pb-2">
+              <StageChip stage={column.stage} label={column.label} />
+              <span className="text-muted-foreground text-xs font-bold">{items.length}</span>
+            </div>
+            <div className="bg-muted flex min-h-[110px] flex-col gap-2 rounded-2xl p-2">
+              {items.length === 0 ? (
+                <p className="text-muted-foreground px-2 py-4 text-center text-xs">
+                  {mine ? `Nothing in ${column.label} is yours right now.` : 'Nothing here'}
+                </p>
+              ) : (
+                items.map((card) => <KanbanCard key={card.id} card={card} />)
+              )}
+            </div>
+          </motion.div>
+        );
+      })}
     </div>
   );
 }

@@ -103,6 +103,22 @@ const PINNED_REPOSITORIES: readonly string[] = [
    * that then rolled back on the `RepresentationConflictError` path.
    */
   'representations.ts',
+  /**
+   * BAL-541 (plan §20 item 2) adds the two Balo-owner / internal-notes repositories, for the
+   * same reason: BOTH sit at exactly the "publish-after-commit adjacency" this pin exists for.
+   *
+   * `project-requests.ts`'s `assignOwner` returns an `auditId` the WEB call site
+   * (`assign-request-owner.ts`) uses as `correlationId` for `runAssignOwnerFanout`, which
+   * publishes `project.request_owner_assigned` AFTER the transaction commits — mirroring the
+   * `close()` / `close-request-fanout.ts` shape this file already polices for the same
+   * repository. `internal-notes.ts`'s `create`/`softDelete` never notify at all (BAL-541 ships
+   * no notification for a note write), but the repository sits in the identical position —
+   * inside `db.transaction`, with a caller one layer up that could otherwise be tempted to
+   * smuggle a publish in here — so pinning it now costs nothing and closes the gap before a
+   * future ticket adds one.
+   */
+  'project-requests.ts',
+  'internal-notes.ts',
 ];
 
 /**

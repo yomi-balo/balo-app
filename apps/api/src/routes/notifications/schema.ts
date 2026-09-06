@@ -689,6 +689,17 @@ const projectTrackDeclinedPayload = z.object({
   hadOpenProposal: z.boolean(),
 });
 
+// BAL-541 — a Balo staffer was assigned as a request's Balo owner. `correlationId` is the
+// `project_request.owner_assigned` audit row id. Mirrors packages/shared/src/notifications/index.ts.
+const projectRequestOwnerAssignedPayload = z.object({
+  correlationId: z.uuid(),
+  projectRequestId: z.uuid(),
+  userId: z.uuid(),
+  assignedByUserId: z.uuid(),
+  title: z.string().min(1).max(200),
+  clientCompanyName: z.string().min(1).max(200),
+});
+
 const conversationIntroCallBookedPayload = z.object({
   correlationId: z.uuid(),
   meetingId: z.uuid(),
@@ -901,6 +912,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
   z.object({
     event: z.literal('project.track_declined'),
     payload: projectTrackDeclinedPayload,
+  }),
+  z.object({
+    event: z.literal('project.request_owner_assigned'),
+    payload: projectRequestOwnerAssignedPayload,
   }),
 ]);
 

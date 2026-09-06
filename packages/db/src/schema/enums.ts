@@ -1295,3 +1295,22 @@ export const requestFileAudienceEnum = pgEnum('request_file_audience', [
  * migration. Null-until-seeded avoids it structurally.
  */
 export const billingEmailSourceEnum = pgEnum('billing_email_source', ['seeded', 'set']);
+
+/**
+ * BAL-541 — WHICH KIND OF ENTITY a staff-internal note is written about
+ * (`schema/internal-notes.ts`).
+ *
+ * ⚠ ONE LABEL TODAY, AND THAT IS THE DESIGN. A note on a company, an expert or an engagement
+ * later is a NEW LABEL HERE, never a new table — the ticket puts a second notes table out of
+ * scope, and the `internal_notes` row shape (subject + body + author) is already
+ * entity-agnostic.
+ *
+ * ⚠ APPEND-ONLY: a new label goes at the END. This is a standalone `CREATE TYPE` (0087), so
+ * every value it ships with commits atomically with the type; a LATER label arrives by
+ * `ALTER TYPE … ADD VALUE`, which is unusable in its own migration (memory
+ * `reference_enum_default_same_tx_migration_hazard`). That hazard is structurally avoided
+ * here: this enum appears in NO column default, NO CHECK and NO index predicate anywhere —
+ * `internal_notes`'s partial index predicates on `deleted_at` only (the `action-items.ts` /
+ * `meeting-files.ts` house rule) — so a future ADD VALUE migration has nothing to trip on.
+ */
+export const internalNoteEntityTypeEnum = pgEnum('internal_note_entity_type', ['project_request']);

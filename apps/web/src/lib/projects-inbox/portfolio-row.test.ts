@@ -48,6 +48,10 @@ function makeRequest(overrides: Partial<PortfolioRequestRow> = {}): PortfolioReq
     expertTermsConfirmedAt: null,
     createdAt: day(20),
     updatedAt: day(20),
+    // BAL-541 — the SHARED portfolio query now selects the Balo owner id, so the repository
+    // ROW carries it on every lens. Unassigned by default here; `PortfolioRowView` still
+    // carries neither it nor anything derived from it, which is what the leak invariant pins.
+    baloOwnerUserId: null,
     company: { id: 'company-1', name: 'Northwind Industrial' },
     relationships: [],
     ...overrides,

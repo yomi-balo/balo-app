@@ -46,28 +46,28 @@ const ADMIN_DTO: AdminPortfolioDTO = {
 
 describe('ProjectsInboxShell', () => {
   it('renders the per-lens "Viewing as" line and subtitle', () => {
-    render(<ProjectsInboxShell dto={EMPTY_CLIENT} />);
+    render(<ProjectsInboxShell dto={EMPTY_CLIENT} viewerUserId="viewer-1" />);
     expect(screen.getByText('Client')).toBeInTheDocument();
     expect(screen.getByText(/from idea to kickoff/i)).toBeInTheDocument();
   });
 
   it('hides the lens switch for a single-lens viewer', () => {
-    render(<ProjectsInboxShell dto={EMPTY_CLIENT} />);
+    render(<ProjectsInboxShell dto={EMPTY_CLIENT} viewerUserId="viewer-1" />);
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
   });
 
   it('shows the lens switch for a multi-lens viewer', () => {
-    render(<ProjectsInboxShell dto={ADMIN_DTO} />);
+    render(<ProjectsInboxShell dto={ADMIN_DTO} viewerUserId="viewer-1" />);
     expect(screen.getByRole('tablist', { name: /portfolio lens/i })).toBeInTheDocument();
   });
 
   it('renders the empty state when the DTO is empty', () => {
-    render(<ProjectsInboxShell dto={EMPTY_CLIENT} />);
+    render(<ProjectsInboxShell dto={EMPTY_CLIENT} viewerUserId="viewer-1" />);
     expect(screen.getByText('Start your first project')).toBeInTheDocument();
   });
 
   it('renders the admin dashboard for the admin lens', () => {
-    render(<ProjectsInboxShell dto={ADMIN_DTO} />);
+    render(<ProjectsInboxShell dto={ADMIN_DTO} viewerUserId="viewer-1" />);
     expect(screen.getByRole('region', { name: /pipeline by stage/i })).toBeInTheDocument();
   });
 });

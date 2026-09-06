@@ -5,12 +5,13 @@ import {
   conversationsRepository,
   projectEngagementsRepository,
   projectsInboxRepository,
+  usersRepository,
   AUTO_ACCEPT_DAYS,
   type PortfolioRequestRow,
   type PortfolioInvitationRow,
   type PortfolioProjectEngagementView,
 } from '@balo/db';
-import { expertPartyDisplayName } from '@balo/shared/parties';
+import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { isThreadOpenStatus, previewOfHtml } from '@/lib/project-request/conversation-view-types';
@@ -515,6 +516,24 @@ export async function loadAdminPortfolio(
       overdue: now.getTime() - r.createdAt.getTime() > TRIAGE_OVERDUE_MS,
     }));
 
+  // BAL-541 (§11.4b) — one batched name read for every distinct Balo owner across the
+  // origination requests. `findNamesByIds` is soft-delete-filtered and empty-input
+  // short-circuited, and returns id/firstName/lastName ONLY — never a hydrated user row.
+  // ⚠ NO ROLE FILTER (D7) — a demoted past owner still displays.
+  const ownerIds = [
+    ...new Set(requests.map((r) => r.baloOwnerUserId).filter((id): id is string => id !== null)),
+  ];
+  const ownerNames = new Map(
+    (await usersRepository.findNamesByIds(ownerIds)).map((u) => [
+      u.id,
+      personDisplayName(u.firstName, u.lastName, 'A team member'),
+    ])
+  );
+  const baloOwnerFor = (ownerUserId: string | null): AdminKanbanCard['baloOwner'] =>
+    ownerUserId === null
+      ? null
+      : { userId: ownerUserId, name: ownerNames.get(ownerUserId) ?? 'A team member' };
+
   // Origination kanban columns by stage (requested → triage hero; kickoff_approved
   // → in delivery, excluded here and appended below).
   const originationColumns: AdminKanbanColumn[] = KANBAN_STAGES.map(({ stage, label }) => ({
@@ -545,6 +564,7 @@ export async function loadAdminPortfolio(
           companyName: r.company.name,
           updatedRelative: formatPostedRelative(requestRecencyAt(r), now),
           stalledLabel,
+          baloOwner: baloOwnerFor(r.baloOwnerUserId),
         };
       }),
   }));
@@ -573,6 +593,8 @@ export async function loadAdminPortfolio(
       companyName: e.company.name,
       updatedRelative: formatPostedRelative(e.lastActivityAt ?? e.createdAt, now),
       stalledLabel: e.status === 'pending_acceptance' ? 'Awaiting client' : null,
+      // BAL-541 — delivery (engagement) cards have no Balo owner; out of scope.
+      baloOwner: null,
     }));
 
   const kanban: AdminKanbanColumn[] = [

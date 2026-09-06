@@ -98,6 +98,18 @@ vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track', () => (
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/decline-track-as-admin', () => ({
   declineTrackAsAdminAction: vi.fn(),
 }));
+// BAL-541 — the BaloPanel client island (rendered whenever `baloPanel` is non-null) imports all
+// three of its Server Actions statically — mock every one so the shell renders in JSDOM without
+// touching @balo/db / auth.
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/assign-request-owner', () => ({
+  assignRequestOwnerAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/create-internal-note', () => ({
+  createInternalNoteAction: vi.fn(),
+}));
+vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/delete-internal-note', () => ({
+  deleteInternalNoteAction: vi.fn(),
+}));
 
 // useIsMobile reads window.matchMedia (absent in jsdom) — default to desktop.
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
@@ -193,6 +205,7 @@ function ctx(overrides: Partial<RequestViewerContext> = {}): RequestViewerContex
     relationshipId: null,
     canSeeContact: false,
     canSeeStaffOnly: false,
+    canSeeBaloPanel: false,
     ...overrides,
   };
 }
@@ -647,6 +660,127 @@ describe('RequestDetailShell — AdminFeeOverridePanel mounting (BAL-358)', () =
       />
     );
     expect(screen.queryByRole('heading', { name: 'Balo fee' })).not.toBeInTheDocument();
+  });
+});
+
+function baloPanelView(
+  overrides: Partial<import('@/lib/project-request/load-balo-panel').BaloPanelView> = {}
+) {
+  return {
+    owner: null,
+    staff: [{ userId: 'staff-1', name: 'Adeeb Khan' }],
+    notes: [],
+    canAssignOwner: true,
+    canWriteNotes: true,
+    canDeleteAnyNote: false,
+    ...overrides,
+  };
+}
+
+describe('RequestDetailShell — BaloPanel mounting + shell restructure (BAL-541 / D5)', () => {
+  it('does NOT render the Balo panel when baloPanel is null (default — no BAL-541 token)', () => {
+    render(
+      <RequestDetailShell
+        view={view()}
+        ctx={ctx({
+          lens: 'admin',
+          archetype: 'observer',
+          canSeeContact: true,
+          canSeeBaloPanel: true,
+        })}
+      />
+    );
+    expect(screen.queryByText('Balo')).not.toBeInTheDocument();
+  });
+
+  it('renders the Balo panel in the LIVE observer right column, above the fee panel', () => {
+    render(
+      <RequestDetailShell
+        view={view({ status: 'requested' })}
+        ctx={ctx({
+          lens: 'admin',
+          archetype: 'observer',
+          canSeeContact: true,
+          canSeeBaloPanel: true,
+        })}
+        baloPanel={baloPanelView()}
+      />
+    );
+    expect(screen.getByText('Balo')).toBeInTheDocument();
+    expect(screen.getByText('Staff only')).toBeInTheDocument();
+    // Both mounted — the panel is first in DOM order (checked via compareDocumentPosition).
+    const baloHeader = screen.getByText('Staff only');
+    const feeHeading = screen.getByRole('heading', { name: 'Balo fee' });
+    expect(
+      baloHeader.compareDocumentPosition(feeHeading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('D5: renders the Balo panel on a CLOSED request too, in a two-column layout beside the closed track list', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'closed',
+          closed: {
+            closedAtIso: '2026-09-05T00:00:00.000Z',
+            reason: 'unfilled',
+            closedByLabel: 'Adeeb @ Balo',
+            closedByParty: 'balo',
+            note: null,
+            counts: { tracksEnded: 1, proposalsWithdrawn: 0, meetingsCancelled: 0 },
+          },
+        })}
+        ctx={ctx({
+          lens: 'admin',
+          archetype: 'observer',
+          canSeeContact: true,
+          canSeeBaloPanel: true,
+        })}
+        baloPanel={baloPanelView()}
+      />
+    );
+    // The ClosedBanner + track list still render (D5 doesn't touch them)...
+    expect(screen.getByText(/Closed on 5 Sept 2026/)).toBeInTheDocument();
+    // ...alongside the Balo panel, still interactive (not read-only).
+    expect(screen.getByText('Balo')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Balo owner' })).not.toBeDisabled();
+  });
+
+  it('a closed request with NO Balo panel (baloPanel: null) renders the plain single-column closed layout', () => {
+    render(
+      <RequestDetailShell
+        view={view({
+          status: 'closed',
+          closed: {
+            closedAtIso: '2026-09-05T00:00:00.000Z',
+            reason: 'unfilled',
+            closedByLabel: 'Adeeb @ Balo',
+            closedByParty: 'balo',
+            note: null,
+            counts: { tracksEnded: 1, proposalsWithdrawn: 0, meetingsCancelled: 0 },
+          },
+        })}
+        ctx={ctx()}
+      />
+    );
+    expect(screen.getByText(/Closed on 5 Sept 2026/)).toBeInTheDocument();
+    expect(screen.queryByText('Balo')).not.toBeInTheDocument();
+  });
+
+  it("on a CLOSED request, the layout switch keys purely off baloPanelNode's null-ness, never off ctx.archetype/lens — the ACTUAL gate is page.tsx (ctx.canSeeBaloPanel, pinned in resolve-request-lens.test.ts)", () => {
+    // A client lens with baloPanel populated still mounts the panel on the CLOSED branch: that
+    // switch checks `baloPanelNode === null`, never `ctx.lens`/`ctx.archetype` (D5/§15: "no
+    // lens/role/archetype gate in the shell's layout switch"). In the shipped app this
+    // combination cannot arise (only admin/super_admin ever resolve `canSeeBaloPanel: true`),
+    // but the shell itself must not be the thing enforcing that — `page.tsx` is.
+    render(
+      <RequestDetailShell
+        view={view({ status: 'closed' })}
+        ctx={ctx()}
+        baloPanel={baloPanelView()}
+      />
+    );
+    expect(screen.getByText('Balo')).toBeInTheDocument();
   });
 });
 

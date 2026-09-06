@@ -113,7 +113,7 @@ export const projectRequests = pgTable(
     // with no writer is a worse lie than its absence.
     //
     // ⚠ NO DEFAULT AND NO CHECK NAMES `'closed'`. That label arrives by
-    // `ALTER TYPE … ADD VALUE` in the SAME migration (0085) and is unusable there (memory
+    // `ALTER TYPE … ADD VALUE` in the SAME migration (0086) and is unusable there (memory
     // `reference_enum_default_same_tx_migration_hazard`). The `status = 'closed' ⟺
     // closed_at IS NOT NULL` coherence CHECK is therefore an explicit FOLLOW-UP migration;
     // until it lands, coherence is the repository path's job and is pinned by
@@ -139,6 +139,32 @@ export const projectRequests = pgTable(
      */
     closeNote: text('close_note'),
 
+    // ── Balo owner (BAL-541) ────────────────────────────────────────────────
+    /**
+     * WHO AT BALO owns this request. Nullable, and NULL is a real, reachable state:
+     * NULL = unassigned = the CLEARED state. One column, one audit action
+     * (`project_request.owner_assigned`), three affordances (assign / reassign / clear) —
+     * clearing is the same act with `to: null`, not a separate one.
+     *
+     * RESTRICT, preserving attribution — the dominant `users` reference on this table
+     * (`created_by_user_id`, `invited_by_user_id`, `closed_by_user_id`).
+     *
+     * ⚠ "MUST BE PLATFORM STAFF" IS A REPOSITORY RULE, NOT A CHECK. A CHECK cannot see
+     * `users.platform_role`, and — more importantly — a DEMOTED staffer's past ownership must
+     * stay READABLE, which a constraint would eventually make un-writable-around. So
+     * `assignOwner` resolves the candidate's role IN-TRANSACTION via `platformRoleIsStaff`
+     * (`@balo/shared/authz`, the one interpretation point) and refuses a non-staff candidate,
+     * while the DISPLAY path NEVER re-filters on role.
+     *
+     * ⚠ ADMIN-AUDIENCE. Selected by `findByIdWithRelations` and `queryPortfolioRequests`, but
+     * carried by NEITHER `mapRequestToDetailView` NOR `PortfolioRowView` — the id reaches a
+     * Balo staffer only through `loadBaloPanel`, behind `assign_any_request_owner`. Pinned by
+     * a sentinel leak test over both DTOs.
+     */
+    baloOwnerUserId: uuid('balo_owner_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+
     ...timestamps,
     ...softDelete,
   },
@@ -148,6 +174,9 @@ export const projectRequests = pgTable(
     index('project_requests_created_by_idx').on(table.createdByUserId),
     // FK-column rule (drizzle-schema skill: index every foreign key column).
     index('project_requests_closed_by_idx').on(table.closedByUserId),
+    // Same FK-column rule (BAL-541). It ALSO serves the future "requests I own" queue
+    // (ADR-1055) and the restrict FK's delete-time scan.
+    index('project_requests_balo_owner_idx').on(table.baloOwnerUserId),
     // Soft-delete-aware composite for the expert's future "incoming requests"
     // inbox: expert + status, partial predicate on live rows.
     index('project_requests_expert_status_idx')

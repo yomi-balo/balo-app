@@ -113,8 +113,19 @@ export {
   // that call `projectRequestsRepository.close(...)` and by the post-commit fan-out helper.
   type CloseRequestInput,
   type CloseRequestResult,
+  // BAL-541 — the owner-assignment outcome union. The `apps/web` Server Action maps each of
+  // its four arms onto its own copy, so the union has to cross the package boundary.
+  type AssignRequestOwnerResult,
 } from './project-requests';
 export type { ProjectRequest, NewProjectRequest } from '../schema';
+
+// BAL-541 — staff-internal notes. Reachable ONLY behind the platform tokens
+// `manage_internal_notes` / `delete_any_internal_note` (ADR-1035); no client- or expert-facing
+// path touches this repository.
+export { internalNotesRepository } from './internal-notes';
+export type { InternalNoteWithAuthor, SoftDeleteInternalNoteResult } from './internal-notes';
+export type { InternalNote, NewInternalNote, InternalNoteEntityType } from '../schema';
+
 export { requestExpertRelationshipsRepository } from './request-expert-relationships';
 export { expertReferralInvitesRepository } from './expert-referral-invites';
 export {

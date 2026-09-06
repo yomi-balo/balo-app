@@ -1,4 +1,7 @@
-import { eq, and, isNull, inArray, gt, lte } from 'drizzle-orm';
+import { eq, and, asc, isNull, inArray, gt, lte } from 'drizzle-orm';
+// BAL-541 — the ONE place the Balo-staff role set is spelled (ADR-1029). `listPlatformStaff`
+// asks it who is eligible to be named a request owner; it never lists the roles itself.
+import { PLATFORM_STAFF_ROLES } from '@balo/shared/authz';
 import { db } from '../client';
 import {
   users,
@@ -150,6 +153,46 @@ export const usersRepository = {
       .from(users)
       .where(and(inArray(users.platformRole, roles), isNull(users.deletedAt)));
     return rows.map((r) => r.id);
+  },
+
+  /**
+   * BAL-541 — THE BALO-STAFF ROSTER: every live user eligible to be named a request's Balo
+   * owner, with the identity an owner picker needs.
+   *
+   * ⚠ A SEPARATE METHOD RATHER THAN A WIDENING OF {@link usersRepository.findIdsByPlatformRoles}.
+   * That one exists for notification fan-out, returns bare ids, and has ONE caller; giving it a
+   * second, differently-shaped audience would make each caller pay for the other's columns.
+   *
+   * ⚠ EXPLICIT `.select()` PROJECTION, NEVER A RELATIONAL `with:` — a hydrated `users` row
+   * carries `workosId`, `phone` and the rest (memory
+   * `reference_drizzle_with_hydration_leaks_secrets`). Only `id`/`firstName`/`lastName` are
+   * projected — no consumer needs `email` or `platformRole`, so neither is selected.
+   *
+   * The role set comes from `PLATFORM_STAFF_ROLES`, the ONE interpretation point (ADR-1029), so
+   * this roster and `assignOwner`'s in-transaction eligibility check can never disagree about
+   * who counts as staff. Ordered by name so the picker is stable between renders.
+   */
+  listPlatformStaff: async (): Promise<
+    Array<{
+      id: string;
+      firstName: string | null;
+      lastName: string | null;
+    }>
+  > => {
+    return db
+      .select({
+        id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+      })
+      .from(users)
+      .where(
+        and(
+          inArray(users.platformRole, [...PLATFORM_STAFF_ROLES] as PlatformRole[]),
+          isNull(users.deletedAt)
+        )
+      )
+      .orderBy(asc(users.firstName), asc(users.lastName));
   },
 
   /**

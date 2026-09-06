@@ -18,6 +18,7 @@ const {
   mockGetMemberRole,
   mockFindNamesByIds,
   mockFindLatestByEntityAndAction,
+  mockLoadBaloPanel,
 } = vi.hoisted(() => ({
   mockFindByIdWithRelations: vi.fn(),
   mockGetCurrentUser: vi.fn(),
@@ -48,6 +49,12 @@ const {
       ...args: unknown[]
     ) => Promise<{ actorUserId: string | null; createdAt: Date; metadata: unknown } | undefined>
   >(() => Promise.resolve(undefined)),
+  // BAL-541 — the "Balo" staff panel's loader. Its own unit tests (`load-balo-panel.test.ts`)
+  // cover the real implementation, which reaches `internalNotesRepository.listForEntity` and
+  // `usersRepository.listPlatformStaff` — NEITHER is mocked at the `@balo/db` level in this
+  // file (mirroring the `loadRequestFiles` / `loadConversationView` module-level mock
+  // precedent just below). Defaults to `null` (no panel) for every fixture below.
+  mockLoadBaloPanel: vi.fn<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve(null)),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -108,6 +115,12 @@ vi.mock('@/lib/project-request/conversation-view', () => ({
 const mockLoadRequestFiles = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/request-files/load-request-files', () => ({
   loadRequestFiles: (...args: unknown[]) => mockLoadRequestFiles(...args),
+}));
+
+// BAL-541 — see the `mockLoadBaloPanel` docblock above for why this loader is mocked at the
+// module level rather than via its underlying `@balo/db` reads.
+vi.mock('@/lib/project-request/load-balo-panel', () => ({
+  loadBaloPanel: (...args: unknown[]) => mockLoadBaloPanel(...args),
 }));
 
 // useIsMobile (inside the conversation island) reads window.matchMedia.

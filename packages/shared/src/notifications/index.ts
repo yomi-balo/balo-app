@@ -1541,3 +1541,22 @@ export interface ProjectTrackDeclinedPayload {
   stage: DeclinableRelationshipStatus;
   hadOpenProposal: boolean;
 }
+
+/**
+ * BAL-541 — a Balo staffer was assigned (or reassigned) as a request's Balo owner. IN-APP ONLY, to
+ * the NEW owner alone — NOTHING to either party (client or expert): this is Balo's own internal
+ * staffing and neither side has a reason to learn who owns it. NO EVENT ON CLEAR (owner → null) —
+ * the caller (`assign-owner-fanout.ts`) never fires this when `ownerUserId` is null. The self-assign
+ * suppression lives in `rules.ts`'s `condition`, not at the call site, so the decision has ONE home.
+ * `correlationId` = the `project_request.owner_assigned` audit row id — a uuid, so COLON-FREE.
+ */
+export interface ProjectRequestOwnerAssignedPayload {
+  correlationId: string;
+  projectRequestId: string;
+  /** the NEW owner — `recipient:'self'` resolves the recipient from this. */
+  userId: string;
+  /** exists SOLELY for the rule's self-assign `condition`; never rendered. */
+  assignedByUserId: string;
+  title: string;
+  clientCompanyName: string;
+}

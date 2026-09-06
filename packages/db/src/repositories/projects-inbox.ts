@@ -87,6 +87,17 @@ async function queryPortfolioRequests(filter: {
       expertTermsConfirmedAt: true,
       createdAt: true,
       updatedAt: true,
+      // BAL-541 — THE USER ID ONLY, on a query the CLIENT and EXPERT lenses also run.
+      //
+      // ⚠ A SCALAR, DELIBERATELY NOT A `with: { baloOwner: … }` RELATION. Hydrating a name here
+      // would make every client-lens list read pay for — and carry — a Balo staffer's identity,
+      // which is exactly the over-hydration this allow-list exists to prevent. The ADMIN loader
+      // alone resolves names, batching the ids through `usersRepository.findNamesByIds`.
+      //
+      // ⚠ `PortfolioRowView` MUST NEVER READ IT. The column stops at the admin kanban card; a
+      // sentinel test pins that neither the client nor the expert row DTO carries the id or
+      // anything derived from it.
+      baloOwnerUserId: true,
     },
     with: {
       company: { columns: { id: true, name: true } },

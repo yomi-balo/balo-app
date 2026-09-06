@@ -610,6 +610,13 @@
       "when": 1788671504204,
       "tag": "0086_bal540_request_close",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1788704476671,
+      "tag": "0087_bal541_balo_owner_and_internal_notes",
+      "breakpoints": true
     }
   ]
 }

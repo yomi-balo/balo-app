@@ -22,6 +22,12 @@ type ShellDTO = PortfolioDTO | AdminPortfolioDTO;
 
 interface ProjectsInboxShellProps {
   dto: ShellDTO;
+  /**
+   * BAL-541 (D8) — the viewer's own user id, forwarded to `AdminDash` ONLY for the "Mine"
+   * kanban pill's client-side filter. No loader-signature change, no searchParam — the pill is
+   * pure client state over an admin-only field already on the DTO (`AdminKanbanCard.baloOwner`).
+   */
+  viewerUserId: string;
 }
 
 const LENS_META: Record<
@@ -55,13 +61,16 @@ const LENS_LABEL: Record<PortfolioLens, string> = {
 };
 
 /** Pick the lens body — empty state, admin board, or participant dashboard. */
-function renderBody(dto: ShellDTO): React.JSX.Element {
+function renderBody(dto: ShellDTO, viewerUserId: string): React.JSX.Element {
   if (dto.isEmpty) return <InboxEmptyState lens={dto.lens} />;
-  if (dto.lens === 'admin') return <AdminDash dto={dto} />;
+  if (dto.lens === 'admin') return <AdminDash dto={dto} viewerUserId={viewerUserId} />;
   return <ParticipantDash dto={dto} />;
 }
 
-export function ProjectsInboxShell({ dto }: Readonly<ProjectsInboxShellProps>): React.JSX.Element {
+export function ProjectsInboxShell({
+  dto,
+  viewerUserId,
+}: Readonly<ProjectsInboxShellProps>): React.JSX.Element {
   const meta = LENS_META[dto.lens];
   const LensIcon = meta.icon;
 
@@ -93,7 +102,7 @@ export function ProjectsInboxShell({ dto }: Readonly<ProjectsInboxShellProps>): 
         <p className="text-muted-foreground mt-1 text-sm">{meta.subtitle}</p>
       </motion.div>
 
-      {renderBody(dto)}
+      {renderBody(dto, viewerUserId)}
     </div>
   );
 }

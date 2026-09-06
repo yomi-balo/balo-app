@@ -608,6 +608,22 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   // BAL-540 — one track ended. Single expert, resolved from `payload.expertProfileId` via the
   // resolver's `data.expert` hydration — the `project.proposal_requested` shape exactly.
   'project.track_declined': emailAndInApp('expert', 'project-track-declined'),
+  // BAL-541 (D11): a Balo staffer was assigned as a request's Balo owner. IN-APP ONLY, to the
+  // NEW owner alone (recipient:'self' via payload.userId) — this is Balo's own internal
+  // staffing and neither client nor expert has a reason to learn it, so there is no other
+  // recipient arm and no email channel. `condition` suppresses the notification on a
+  // self-assignment (actor === new owner) — the decision lives HERE, not at the call site,
+  // so it has one home (the `billing.details_confirmed` literal-array precedent, NOT
+  // `emailAndInApp`).
+  'project.request_owner_assigned': [
+    {
+      channel: 'in-app',
+      recipient: 'self',
+      template: 'project-request-owner-assigned',
+      timing: 'immediate',
+      condition: (ctx) => ctx.payload.assignedByUserId !== ctx.payload.userId,
+    },
+  ],
   // BAL-323: the client captured their company's billing details (first-time only —
   // the publisher never emits this on an edit or the repeat-company auto-skip). The
   // admins (fanned out over data.adminUserIds) get an in-app "ready to invoice"

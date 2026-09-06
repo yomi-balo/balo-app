@@ -103,6 +103,13 @@ export interface AdminKanbanCard {
   updatedRelative: string;
   /** Stall chip copy ("No EOIs · 3d") or null. */
   stalledLabel: string | null;
+  /**
+   * BAL-541 — ADMIN DTO ONLY. `null` = unassigned (design ref's dashed placeholder,
+   * `request-close.jsx:1291-1298`) and always `null` on delivery (engagement) cards —
+   * engagements have no Balo owner (out of scope). Initials are derived in the component.
+   * ⚠ THERE IS NO EQUIVALENT FIELD ON `PortfolioRowView` and there must not be (D9).
+   */
+  baloOwner: { userId: string; name: string } | null;
 }
 
 /** One admin kanban column, grouped by stage. */

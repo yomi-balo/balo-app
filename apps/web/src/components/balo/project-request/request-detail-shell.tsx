@@ -29,6 +29,8 @@ import type { RequestFilesView } from '@/lib/request-files/load-request-files';
 import { CloseRequestControl } from './close/close-request-control';
 import { ClosedBanner } from './close/closed-banner';
 import { ClosedTrackList } from './close/closed-track-list';
+import { BaloPanel } from './balo-panel';
+import type { BaloPanelView } from '@/lib/project-request/load-balo-panel';
 
 interface RequestDetailShellProps {
   view: RequestDetailView;
@@ -85,6 +87,13 @@ interface RequestDetailShellProps {
    * on the first pass, which made the control unreachable). Defaults `false`.
    */
   canDecline?: boolean;
+  /**
+   * BAL-541 — the "Balo" staff panel's server-resolved view, loaded by the page ONLY when
+   * `ctx.canSeeBaloPanel` holds. `null` ⇒ the panel does not exist for this viewer — the shell
+   * keys its layout off this NULL-NESS (never off lens/archetype/status, D5): the panel renders
+   * on a CLOSED request too, so closing must not hide it.
+   */
+  baloPanel?: BaloPanelView | null;
 }
 
 /** Defensive fallback when the page passed no conversation payload. */
@@ -201,11 +210,17 @@ export function RequestDetailShell({
   canClose = false,
   canCloseAsAdmin = false,
   canDecline = false,
+  baloPanel = null,
 }: Readonly<RequestDetailShellProps>): React.JSX.Element {
   const phase = requestPhase(view.status);
   const isPhase2 = phase === 'phase2';
   const isClosed = phase === 'closed';
   const isExpertGated = ctx.lens === 'expert' && STATUS_LABEL_BEFORE_INVITE.has(view.status);
+  // BAL-541 (D5) — built once; the layout switches on THIS NODE'S null-ness, never on
+  // lens/archetype/status. `null` when the page never loaded a panel (the viewer holds
+  // neither BAL-541 token) — the shell never re-derives that from `ctx`.
+  const baloPanelNode =
+    baloPanel === null ? null : <BaloPanel requestId={view.id} view={baloPanel} />;
   // BAL-540 — the header's "Close request" control. Never rendered once already closed, and
   // never for the expert lens (an expert on a closed request never reaches this shell at all —
   // `page.tsx`'s ended-track branch intercepts them first).
@@ -327,8 +342,25 @@ export function RequestDetailShell({
               viewerLens={ctx.lens === 'admin' ? 'admin' : 'client'}
             />
           )}
-          <RequestContext view={view} variant="full" />
-          <ClosedTrackList tracks={view.closedTracks} />
+          {/* BAL-541 (D5) — the design reference renders the Balo panel unconditionally inside
+              the admin grid (`request-close.jsx:1604,1633-1644`), and the handover note matters
+              MOST once a request has ended. Switches on `baloPanelNode`'s null-ness, never on
+              `ctx.archetype` — an admin who cannot see the panel (no BAL-541 token, however
+              unlikely today) still gets the plain single-column closed layout. */}
+          {baloPanelNode === null ? (
+            <>
+              <RequestContext view={view} variant="full" />
+              <ClosedTrackList tracks={view.closedTracks} />
+            </>
+          ) : (
+            <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+              <div className="space-y-5">
+                <RequestContext view={view} variant="full" />
+                <ClosedTrackList tracks={view.closedTracks} />
+              </div>
+              <div className="space-y-5">{baloPanelNode}</div>
+            </div>
+          )}
         </div>
       )}
 
@@ -340,6 +372,10 @@ export function RequestDetailShell({
           <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
             <RequestContext view={view} variant="full" />
             <div className="space-y-5">
+              {/* BAL-541 — "who is handling this, and what the last person left behind" is
+                  the orienting fact for an admin landing on a request; it sits ABOVE the fee
+                  control, which is a rarer act. */}
+              {baloPanelNode}
               {/* BAL-358: request-level Balo fee control — config-first, so it shows
                   even before any expert is invited (the mapper populates baloFeeBps
                   for the observer lens only; the guard is defensive). */}

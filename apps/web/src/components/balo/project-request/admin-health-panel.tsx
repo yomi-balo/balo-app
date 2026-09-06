@@ -10,6 +10,7 @@ import type {
   RequestRelationshipView,
 } from '@/lib/project-request/request-detail-view';
 import { declineVerbFor, narrowToTrackStage } from '@/lib/project-request/close-copy';
+import { deriveInitials } from '@/lib/format/initials';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -64,17 +65,6 @@ const PANEL_CONTROL_WINDOW_STATUSES = new Set<string>(['experts_invited', 'eoi_s
  * so the gate reads the per-row enum.
  */
 const REQUEST_PROPOSAL_STATUSES = new Set<string>(['invited', 'eoi_submitted']);
-
-function deriveInitials(name: string): string {
-  return (
-    name
-      .split(' ')
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((p) => p[0]?.toUpperCase() ?? '')
-      .join('') || '?'
-  );
-}
 
 /** Single removable row's remove button + its confirmation AlertDialog. */
 function RemoveExpertButton({

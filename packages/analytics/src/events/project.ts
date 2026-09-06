@@ -80,7 +80,21 @@ export const PROJECT_EVENTS = {
   // no money on either payload, unlike BAL-357's server-only proposal events.
   PROJECT_REQUEST_CLOSED: 'project_request_closed',
   PROJECT_TRACK_DECLINED: 'project_track_declined',
+  // BAL-541: Balo staff assigned/cleared/reassigned themselves or a colleague as the
+  // request's Balo owner, or wrote a staff-internal note. Both carry the `project_`
+  // feature prefix — the third ticket in a row (BAL-294 / BAL-324 / BAL-540) whose
+  // bare ticket-body name would fail this file's naming regex (`project.test.ts`).
+  // Fired CLIENT-side from `balo-panel.tsx` after the Server Action returns success.
+  REQUEST_OWNER_ASSIGNED: 'project_request_owner_assigned',
+  INTERNAL_NOTE_CREATED: 'project_internal_note_created',
 } as const;
+
+/**
+ * BAL-541 — MIRRORS `@balo/db`'s `internal_note_entity_type` pgEnum, which
+ * `@balo/analytics` cannot import (it must stay free of `@balo/db`). ONE label
+ * today; widen BOTH when the enum gains a second label.
+ */
+export type InternalNoteEntityType = 'project_request';
 
 export type ProjectEntryMethod = 'manual' | 'ai';
 export type ProjectStep = 'start' | 'manual' | 'review' | 'done';
@@ -276,6 +290,17 @@ export interface ProjectEventMap {
     stage: DeclinableRelationshipStatus;
     actor_kind: 'client' | 'balo';
     had_open_proposal: boolean;
+  };
+  [PROJECT_EVENTS.REQUEST_OWNER_ASSIGNED]: {
+    request_id: string;
+    /** Whether a Balo owner was already set before this assignment (reassignment vs first assignment). */
+    previous_owner_present: boolean;
+    /** The case the notification rule's `condition` suppresses — the actor assigned themselves. */
+    self_assigned: boolean;
+  };
+  [PROJECT_EVENTS.INTERNAL_NOTE_CREATED]: {
+    entity_type: InternalNoteEntityType;
+    entity_id: string;
   };
 }
 
