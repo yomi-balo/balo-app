@@ -64,8 +64,7 @@ export function CreditReceivableClearedEmail({
         <Text style={shared.greeting}>Hi {firstName},</Text>
         <Text style={shared.bodyText}>
           The extra time still to settle from your recent consultations — {covered} — is now covered
-          by your balance, so your account is clear. You can book and start consultations again
-          right away; there&apos;s nothing else to do.
+          by your balance, so your account is clear. There&apos;s nothing else to do.
         </Text>
         <Text style={shared.bodyText}>Your balance is now {balanceAfter}.</Text>
 

@@ -111,11 +111,23 @@ export const CARD_BACKED_MODE_TITLE: Record<CardBackedLowBalanceMode, string> = 
  * "overdraft" NEVER appears (pinned in six files). This arm states the consequence as a helpful
  * fact plus the way out, which §F now genuinely provides: a covering top-up clears the hold in
  * the same transaction as the credit.
+ *
+ * ⚠⚠ IT PROMISES NO ENFORCEMENT, DELIBERATELY (fix round 3). An earlier draft of this arm said
+ * "we'll pause new sessions until a top-up clears it". THE PRODUCT DOES NOT DO THAT. On the only
+ * session path it creates, an `account_hold` refusal from `open()` reaches
+ * `openCaseSessionBestEffort`, which is categorical under ADR-1052 / BAL-466 D2 that a funding
+ * problem may NEVER fail a join — `join-meeting.ts`'s own
+ * `SESSION_OPEN_REFUSED_MESSAGES.account_hold` reads "this consultation is unbilled and the
+ * expert is unpaid". There is no booking-time gate either, and Amendment 6 §H leaves admission
+ * prevention to BAL-474. A pause sentence would therefore be a NEW false claim on the arm every
+ * first-time buyer reads — the exact defect this ticket exists to remove — and it contradicts
+ * two shipped emails (`credit-auto-topup-failed`'s "Nothing is on hold" and this feature's own
+ * cleared notice). State the amount owed and the way out; never the enforcement.
  */
 const NOTIFY_ONLY_LEAD = "Tell me when I'm running low — I'll top up myself.";
 const BEYOND_BALANCE = 'Time you use beyond your balance still';
 const NOTIFY_ONLY_SETTLES_TO_CARD = `${BEYOND_BALANCE} settles to the card on file afterward.`;
-const NOTIFY_ONLY_SETTLES_ON_TOP_UP = `${BEYOND_BALANCE} needs settling — we'll pause new sessions until a top-up clears it.`;
+const NOTIFY_ONLY_SETTLES_ON_TOP_UP = `${BEYOND_BALANCE} needs settling — your next top-up covers it.`;
 
 function RadioDot({ on }: Readonly<{ on: boolean }>) {
   return (

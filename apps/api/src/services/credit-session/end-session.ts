@@ -104,9 +104,18 @@ function extractPaymentIntentId(error: unknown): string | null {
  * and find zero open rows to clear, and T1's fresh wallet read below would still see the
  * pre-credit negative balance — committing an open receivable plus dunning against a company
  * that had paid in full. Taking the same `pg_advisory_xact_lock` the credit path takes makes the
- * two strictly ordered. DEADLOCK-FREE: it is the ONLY advisory lock any money path takes, at
- * most one per transaction (distinct wallets hash to distinct keys), and it is taken before any
- * row is touched — one lock class and no second means no ordering cycle can exist.
+ * two strictly ordered.
+ *
+ * ⚠ ON DEADLOCK-FREEDOM, STATED HONESTLY (fix round 3). An earlier draft of this comment claimed
+ * "one lock class and no second means no ordering cycle can exist". That OVERSTATES the proof:
+ * ROW locks on `credit_sessions` and `credit_wallets` are locks too, so this is not a
+ * single-lock-class system. What actually holds is narrower and worth stating precisely: the
+ * advisory lock is the only ADVISORY one, at most one is taken per transaction (distinct wallets
+ * hash to distinct keys), and every writer that touches those rows takes it BEFORE its first row
+ * write. So all row-lock acquisition on this wallet happens underneath one globally-ordered
+ * gate, and two transactions cannot hold row locks the other needs while waiting on each other.
+ * That is a property of the CALLERS, not of the lock — so it is only true for as long as every
+ * new writer keeps taking the wallet lock first.
  *
  * ⚠ THIS IS THE SECOND WALLET READ VIA THAT REPOSITORY IN THIS FILE (deliberate, pinned by the
  * invariant suite's drift alarm) — and NEITHER of the two is a mode read. `settleOverdraft`'s

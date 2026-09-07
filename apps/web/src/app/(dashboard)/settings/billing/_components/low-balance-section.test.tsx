@@ -347,7 +347,7 @@ describe('LowBalanceSection', () => {
     await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
 
     expect(screen.getByText(/still settles to the card on file/i)).toBeInTheDocument();
-    expect(screen.queryByText(/we'll pause new sessions/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/your next top-up covers it/i)).not.toBeInTheDocument();
   });
 
   it('never arms when the card already has an active mandate', async () => {

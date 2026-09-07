@@ -360,7 +360,7 @@ describe('TopUpComposer', () => {
   it('F3 — makes NO settlement-to-card claim to a first-time buyer with no card on file', () => {
     render(<TopUpComposer wallet={wallet({ savedCard: null })} fx={null} />);
     expect(screen.queryByText(/settles to the card on file/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/pause new sessions until a top-up clears it/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs settling — your next top-up covers it/i)).toBeInTheDocument();
   });
 
   it('F3 — makes no such claim for a saved card with NO live off-session mandate either', () => {

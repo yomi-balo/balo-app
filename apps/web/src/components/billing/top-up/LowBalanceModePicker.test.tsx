@@ -115,7 +115,7 @@ describe('LowBalanceModePicker', () => {
     expect(
       screen.getByText(/Time you use beyond your balance still needs settling/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/pause new sessions until a top-up clears it/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs settling — your next top-up covers it/i)).toBeInTheDocument();
   });
 
   it.each([true, false])(
@@ -137,7 +137,7 @@ describe('LowBalanceModePicker', () => {
   it('F3 — a card ON FILE with NO live mandate makes no settlement claim', () => {
     renderPicker({ mode: 'notify_only', cardAvailable: true, settlesToCardOnFile: false });
     expect(screen.queryByText(/settles to the card on file/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/pause new sessions until a top-up clears it/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs settling — your next top-up covers it/i)).toBeInTheDocument();
   });
 
   it('F3 — that arm no longer blames a missing card, because a card may well be on file', () => {

@@ -394,6 +394,11 @@ export async function publishReceivableCleared(input: {
         op: 'publishReceivableCleared',
         ledgerEntryId,
         error: err instanceof Error ? err.message : String(err),
+        // CLAUDE.md's caught-error rule is message + STACK + ids. `join-meeting.ts` states it
+        // outright ("THE STACK IS REQUIRED, NOT OPTIONAL"): without it the original throw site
+        // is unrecoverable from the log, which is the whole point of logging at a boundary
+        // that swallows.
+        stack: err instanceof Error ? err.stack : undefined,
       },
       'Failed to emit receivable_cleared (hold released; analytics best-effort)'
     );
@@ -417,6 +422,7 @@ export async function publishReceivableCleared(input: {
         walletId,
         receivableCount,
         error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
       },
       'Failed to publish credit.receivable.cleared (hold released; notification best-effort)'
     );
