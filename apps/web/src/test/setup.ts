@@ -82,6 +82,10 @@ vi.mock('@/lib/analytics', async () => {
   return {
     analytics: { identify: vi.fn(), track: vi.fn(), page: vi.fn(), reset: vi.fn() },
     track: vi.fn(),
+    // BAL-529 §A — the reporter-installer seam. ⚠ WITHOUT THIS LINE any test whose module graph
+    // reaches `PostHogProvider` throws on an undefined constant (memory
+    // `reference_web_analytics_test_mock_export_list`).
+    setAnalyticsErrorReporter: vi.fn(),
     AUTH_EVENTS: events.AUTH_EVENTS,
     ONBOARDING_EVENTS: events.ONBOARDING_EVENTS,
     EXPERT_EVENTS: events.EXPERT_EVENTS,
@@ -170,6 +174,13 @@ vi.mock('@/lib/analytics', async () => {
     COMMAND_PALETTE_EVENTS: events.COMMAND_PALETTE_EVENTS,
     COMMAND_PALETTE_OPEN_METHODS: events.COMMAND_PALETTE_OPEN_METHODS,
     COMMAND_PALETTE_ACTION_TYPES: events.COMMAND_PALETTE_ACTION_TYPES,
+    // BAL-529 §D — the Stripe redirect-return family's event constant + its two vocabularies.
+    // ⚠ WITHOUT THESE LINES every test whose module graph reaches
+    // `useSetupIntentRedirectReturn` throws on an undefined constant (memory
+    // `reference_web_analytics_test_mock_export_list`).
+    STRIPE_REDIRECT_EVENTS: events.STRIPE_REDIRECT_EVENTS,
+    STRIPE_REDIRECT_SURFACES: events.STRIPE_REDIRECT_SURFACES,
+    STRIPE_REDIRECT_UNBOUND_REASONS: events.STRIPE_REDIRECT_UNBOUND_REASONS,
     initAnalytics: vi.fn(),
   };
 });

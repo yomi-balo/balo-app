@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@/test/utils';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, act } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 
 const { mockStart, mockConfirmSetup, mockRetrieveSetupIntent, mockToastSuccess } = vi.hoisted(
@@ -16,7 +16,7 @@ vi.mock('../_actions/start-continue-to-mandate', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: vi.fn() } }));
 
-// ⚠ BAL-526 — mock `@/lib/stripe-loader`'s `getStripe`, NOT `@stripe/stripe-js`'s `loadStripe`
+// ⚠ BAL-526 — mock `@/lib/stripe/loader`'s `getStripe`, NOT `@stripe/stripe-js`'s `loadStripe`
 // directly. The hook imports `getStripe`, which wraps `loadStripe` and MEMOISES it per key in a
 // module-level `Map` — a `mockResolvedValueOnce`/`mockRejectedValueOnce` on `loadStripe` would be
 // swallowed by that cache across tests in this file.
@@ -31,7 +31,7 @@ const mockGetStripe = vi.fn<
     retrieveSetupIntent: mockRetrieveSetupIntent,
   })
 );
-vi.mock('@/lib/stripe-loader', () => ({
+vi.mock('@/lib/stripe/loader', () => ({
   getStripe: (publishableKey: string) => mockGetStripe(publishableKey),
 }));
 vi.mock('@stripe/react-stripe-js', () => ({
@@ -43,6 +43,10 @@ vi.mock('@stripe/react-stripe-js', () => ({
 
 import { ContinueToMandate } from './continue-to-mandate';
 import { track, PROMO_EVENTS } from '@/lib/analytics';
+import {
+  SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE,
+  PROCESSING_FALLBACK_DELAY_MS,
+} from '@/lib/stripe/use-setup-intent-redirect-return';
 
 const COMPANY_ID = 'company-1';
 const SETUP_INTENT_KEY = 'balo.stripe.setup-intent.v1';
@@ -277,6 +281,89 @@ describe('ContinueToMandate', () => {
       expect(await screen.findByText(/finishing up/i)).toBeInTheDocument();
       expect(track).not.toHaveBeenCalledWith(PROMO_EVENTS.PROMO_CONTINUE_CARD_CAPTURED, {
         company_id: COMPANY_ID,
+      });
+    });
+
+    describe('BAL-529 M5 — the bounded processing fallback', () => {
+      // Deterministic: no `shouldAdvanceTime` — the fake clock only moves via explicit
+      // `advanceTimersByTimeAsync`, so this is not sensitive to real wall-clock load (memory
+      // `reference_web_timer_tests_flake_under_local_load`).
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('M5 — a processing return shows the finishing spinner, then the fallback copy after the bound', async () => {
+        vi.stubEnv('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'pk_test_redirect');
+        setReturnUrl('processing');
+        mockRetrieveSetupIntent.mockResolvedValue({
+          setupIntent: { id: 'seti_x', status: 'processing' },
+        });
+
+        render(<ContinueToMandate companyId={COMPANY_ID} />);
+        // Drain the hook's promise chain (real microtasks, unaffected by the faked clock).
+        await act(async () => {
+          for (let i = 0; i < 10; i += 1) await Promise.resolve();
+        });
+        expect(screen.getByText(/finishing up/i)).toBeInTheDocument();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(PROCESSING_FALLBACK_DELAY_MS);
+        });
+
+        expect(screen.getByText(SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE)).toBeInTheDocument();
+        expect(screen.queryByText(/finishing up/i)).not.toBeInTheDocument();
+      });
+
+      it('M5 — the fallback leaves location.search and the binding untouched', async () => {
+        vi.stubEnv('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'pk_test_redirect');
+        setReturnUrl('processing');
+        mockRetrieveSetupIntent.mockResolvedValue({
+          setupIntent: { id: 'seti_x', status: 'processing' },
+        });
+        const searchBefore = globalThis.location.search;
+
+        render(<ContinueToMandate companyId={COMPANY_ID} />);
+        await act(async () => {
+          for (let i = 0; i < 10; i += 1) await Promise.resolve();
+        });
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(PROCESSING_FALLBACK_DELAY_MS);
+        });
+
+        expect(screen.getByText(SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE)).toBeInTheDocument();
+        expect(globalThis.location.search).toBe(searchBefore);
+        expect(globalThis.sessionStorage.getItem(SETUP_INTENT_KEY)).toBe('seti_x');
+      });
+
+      it('FIX ROUND 1 F7 (UX U2) — the fallback copy carries aria-live="polite", both before and after the swap', async () => {
+        vi.stubEnv('NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY', 'pk_test_redirect');
+        setReturnUrl('processing');
+        mockRetrieveSetupIntent.mockResolvedValue({
+          setupIntent: { id: 'seti_x', status: 'processing' },
+        });
+
+        render(<ContinueToMandate companyId={COMPANY_ID} />);
+        await act(async () => {
+          for (let i = 0; i < 10; i += 1) await Promise.resolve();
+        });
+
+        const finishingCopy = screen.getByText(/finishing up/i);
+        expect(finishingCopy).toHaveAttribute('aria-live', 'polite');
+        expect(finishingCopy).not.toHaveAttribute('role', 'status');
+        expect(finishingCopy).not.toHaveAttribute('role', 'alert');
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(PROCESSING_FALLBACK_DELAY_MS);
+        });
+
+        const fallbackCopy = screen.getByText(SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE);
+        expect(fallbackCopy).toHaveAttribute('aria-live', 'polite');
+        expect(fallbackCopy).not.toHaveAttribute('role', 'status');
+        expect(fallbackCopy).not.toHaveAttribute('role', 'alert');
       });
     });
 

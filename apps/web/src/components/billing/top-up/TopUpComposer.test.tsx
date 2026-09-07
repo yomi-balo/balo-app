@@ -19,7 +19,13 @@ vi.mock('@/lib/credit/actions', () => ({
 
 // Stripe.js is stubbed at the module boundary so the composer's real <Elements> hoist, its
 // PaymentMethodSection and its PayAction all render — only the SDK is fake.
-vi.mock('@stripe/stripe-js', () => ({ loadStripe: vi.fn(() => Promise.resolve({})) }));
+// BAL-529 §E — mock the shared `@/lib/stripe/loader`'s `getStripe`, not `@stripe/stripe-js`'s
+// `loadStripe` directly: the composer no longer keeps its own un-keyed singleton over
+// `loadStripe`, it calls the shared per-key-memoised loader like every other Stripe surface.
+const mockGetStripe = vi.fn((publishableKey: string) => Promise.resolve({ publishableKey }));
+vi.mock('@/lib/stripe/loader', () => ({
+  getStripe: (publishableKey: string) => mockGetStripe(publishableKey),
+}));
 const { mockStripeApi, mockElementsApi } = vi.hoisted(() => ({
   // Stable identities across renders — a fresh object each render would re-fire PayAction's
   // `elements.update({ amount })` effect on every keystroke.
@@ -389,6 +395,11 @@ describe('TopUpComposer', () => {
     expect(screen.getByRole('button', { name: /^Pay A\$/i })).toBeDisabled();
     // The offending field shows an inline message (not a Pay-button "amount" error).
     expect(screen.getByText(/Minimum top-up is/i)).toBeInTheDocument();
+  });
+
+  it('uses the shared per-key loader, never a private singleton', () => {
+    render(<TopUpComposer wallet={wallet()} fx={null} />);
+    expect(mockGetStripe).toHaveBeenCalledWith('pk_test_123');
   });
 
   it('renders without <Elements> and without Pay when Stripe is not configured', () => {

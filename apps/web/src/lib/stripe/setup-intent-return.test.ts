@@ -8,6 +8,7 @@ import {
   matchSetupIntentReturn,
   isSetupIntentReturnBound,
   clearSetupIntentReturnParams,
+  diagnoseUnboundSetupIntentReturn,
 } from './setup-intent-return';
 
 beforeEach(() => {
@@ -238,5 +239,98 @@ describe('clearSetupIntentReturnParams', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('§F — preserves an unrelated query param and removes only the three Stripe ones', () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/settings/billing?tab=cards&setup_intent=seti_x&setup_intent_client_secret=seti_x_secret&redirect_status=succeeded'
+    );
+    clearSetupIntentReturnParams();
+    expect(globalThis.location.pathname).toBe('/settings/billing');
+    expect(globalThis.location.search).toBe('?tab=cards');
+  });
+
+  it('§F — preserves the fragment', () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/settings/billing?setup_intent=seti_x&setup_intent_client_secret=seti_x_secret#payment'
+    );
+    clearSetupIntentReturnParams();
+    expect(globalThis.location.search).toBe('');
+    expect(globalThis.location.hash).toBe('#payment');
+  });
+
+  it('§F — removes DUPLICATED occurrences of a param (the A2 shape)', () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/settings/billing?setup_intent=seti_evil&setup_intent_client_secret=seti_evil_secret&setup_intent=seti_real&setup_intent_client_secret=seti_real_secret'
+    );
+    clearSetupIntentReturnParams();
+    expect(globalThis.location.search).toBe('');
+  });
+
+  it('§F — a URL with no Stripe params at all is left byte-identical', () => {
+    globalThis.history.replaceState({}, '', '/settings/billing?tab=cards');
+    clearSetupIntentReturnParams();
+    expect(globalThis.location.pathname + globalThis.location.search).toBe(
+      '/settings/billing?tab=cards'
+    );
+  });
+});
+
+describe('diagnoseUnboundSetupIntentReturn', () => {
+  it('returns null when the URL carries no return', () => {
+    setUrl(null, null);
+    expect(diagnoseUnboundSetupIntentReturn()).toBeNull();
+  });
+
+  it('returns null when the return IS bound', () => {
+    rememberSetupIntent('seti_x');
+    setUrl('seti_x', 'seti_x_secret');
+    expect(diagnoseUnboundSetupIntentReturn()).toBeNull();
+  });
+
+  it('returns no_binding when params are present and nothing is stored', () => {
+    setUrl('seti_x', 'seti_x_secret');
+    expect(diagnoseUnboundSetupIntentReturn()).toBe('no_binding');
+  });
+
+  it('returns id_mismatch when a DIFFERENT id is stored', () => {
+    rememberSetupIntent('seti_mine');
+    setUrl('seti_theirs', 'seti_theirs_secret');
+    expect(diagnoseUnboundSetupIntentReturn()).toBe('id_mismatch');
+  });
+
+  it('returns duplicate_params for a duplicated setup_intent (the A2 shape)', () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/settings/billing?setup_intent=seti_evil&setup_intent_client_secret=seti_evil_secret&setup_intent=seti_real&setup_intent_client_secret=seti_real_secret'
+    );
+    expect(diagnoseUnboundSetupIntentReturn()).toBe('duplicate_params');
+  });
+
+  it('returns duplicate_params for a duplicated client secret', () => {
+    const params = new URLSearchParams();
+    params.append('setup_intent', 'seti_real');
+    params.append('setup_intent_client_secret', 'seti_evil_secret');
+    params.append('setup_intent_client_secret', 'seti_real_secret');
+    globalThis.history.replaceState({}, '', `/settings/billing?${params.toString()}`);
+    expect(diagnoseUnboundSetupIntentReturn()).toBe('duplicate_params');
+  });
+
+  it('is READ-ONLY — the binding and the URL are untouched after every branch', () => {
+    rememberSetupIntent('seti_mine');
+    setUrl('seti_theirs', 'seti_theirs_secret');
+    const searchBefore = globalThis.location.search;
+
+    diagnoseUnboundSetupIntentReturn();
+
+    expect(globalThis.location.search).toBe(searchBefore);
+    expect(readRememberedSetupIntent()).toBe('seti_mine');
   });
 });

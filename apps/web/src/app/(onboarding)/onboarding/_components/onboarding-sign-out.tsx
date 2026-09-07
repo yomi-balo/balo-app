@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useTransition } from 'react';
-import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
-import { logoutAction } from '@/lib/auth/actions';
+import { useLogout } from '@/components/layout/use-logout';
 import { Button } from '@/components/ui/button';
 import { LogOut, Loader2 } from 'lucide-react';
 
@@ -15,16 +14,16 @@ import { LogOut, Loader2 } from 'lucide-react';
  */
 export function OnboardingSignOut(): React.JSX.Element {
   const [isPending, startTransition] = useTransition();
+  const logout = useLogout();
 
+  // BAL-529 §C — ONE client sign-out sequence for the whole app. `useLogout` owns the analytics
+  // event, the deferred reset, the SetupIntent-binding clear and the Server Action call; this
+  // path adds only the transition that keeps the button disabled until the navigation lands.
   const handleSignOut = useCallback(() => {
-    track(AUTH_EVENTS.LOGOUT_COMPLETED, {});
-    // Defer reset so PostHog flushes the event with the user's identity first.
-    setTimeout(() => analytics.reset(), 500);
-    // Keep the button disabled until the sign-out Server Action resolves + navigates.
     startTransition(() => {
-      logoutAction();
+      logout();
     });
-  }, []);
+  }, [logout]);
 
   return (
     <Button

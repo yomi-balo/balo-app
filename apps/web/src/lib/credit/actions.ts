@@ -120,11 +120,20 @@ export type StartPurchaseInput = z.input<typeof startPurchaseSchema>;
  *                        `handleNextAction` for 3DS on the stored card.
  *  · `failed`          — the confirmation did not complete. The PURCHASE still succeeds; only
  *                        the automatic-charging setup did not, and the receipt says so.
+ *
+ * BAL-529 §G — `requires_action` also carries `setupIntentId: string | null`, REQUIRED-BUT-
+ * NULLABLE rather than optional. Two arms produce `requires_action` and only one can name an
+ * id: `new_card` (via `createMandateSetupIntent` → `SetupIntentResult`, which carries one) and
+ * `saved_card` (via `confirmSavedCardMandate` → `SavedCardMandateResult`, which has no id at
+ * all). A required field forces the saved-card arm to say `null` OUT LOUD instead of silently
+ * omitting it — the same "STATED, never inferred" discipline this type's whole design follows.
+ * `PayAction`'s `new_card` mandate arm needs the id to bind the SetupIntent redirect return
+ * (`@/lib/stripe/setup-intent-return`) before calling `confirmSetup`.
  */
 export type MandateOutcome =
   | { outcome: 'not_required' }
   | { outcome: 'captured' }
-  | { outcome: 'requires_action'; clientSecret: string }
+  | { outcome: 'requires_action'; clientSecret: string; setupIntentId: string | null }
   | { outcome: 'failed' };
 
 export type StartPurchaseResult =
@@ -540,12 +549,17 @@ async function resolveMandateOutcome(
   }
   try {
     if (paymentMethodSource === 'new_card') {
-      const { clientSecret } = await createMandateSetupIntent(wallet.id, actorUserId);
-      return { outcome: 'requires_action', clientSecret };
+      const { clientSecret, setupIntentId } = await createMandateSetupIntent(
+        wallet.id,
+        actorUserId
+      );
+      return { outcome: 'requires_action', clientSecret, setupIntentId };
     }
     const result = await confirmSavedCardMandate(wallet.id, clientRequestId, actorUserId);
     if (result.status === 'requires_action' && result.clientSecret !== null) {
-      return { outcome: 'requires_action', clientSecret: result.clientSecret };
+      // The api confirms this mandate against the STORED card server-side and never returns an
+      // id — `handleNextAction` needs only the secret, so there is nothing to bind. Stated null.
+      return { outcome: 'requires_action', clientSecret: result.clientSecret, setupIntentId: null };
     }
     return result.status === 'succeeded' ? { outcome: 'captured' } : { outcome: 'failed' };
   } catch (error) {

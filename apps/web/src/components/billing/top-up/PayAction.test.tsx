@@ -32,6 +32,11 @@ import type { StartPurchaseInput, LowBalanceMode } from '@/lib/credit/actions';
 import type { PaymentMethodSource } from '@/lib/credit/api-client';
 import type { PurchaseCompletion } from './types';
 
+// BAL-529 §G — the module is pure and jsdom's `sessionStorage` is real, so assert on real
+// storage exactly as `card-capture-panel.test.tsx` does. No `@/lib/stripe/setup-intent-return`
+// mock is added here.
+const SETUP_INTENT_KEY = 'balo.stripe.setup-intent.v1';
+
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 function renderAction(overrides: {
@@ -77,6 +82,9 @@ function renderAction(overrides: {
 describe('PayAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // BAL-529 §G — jsdom persists sessionStorage AND the URL across tests in a file.
+    globalThis.sessionStorage.clear();
+    globalThis.history.replaceState({}, '', '/billing/top-up');
     mockSubmit.mockResolvedValue({});
     mockStartPurchaseAction.mockResolvedValue({
       ok: true,
@@ -891,5 +899,119 @@ describe('PayAction', () => {
   it('keeps the Payment Element amount in sync as the amount changes', () => {
     renderAction({});
     expect(mockUpdate).toHaveBeenCalledWith({ amount: 100_000 });
+  });
+
+  // ── BAL-529 §G — bind PayAction's new_card mandate arm ────────────────────
+
+  it('§G — records the SetupIntent binding before confirming the new-card mandate', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'needs_client_confirmation',
+      clientSecret: 'pi_secret',
+      paymentIntentId: 'pi_1',
+      mandate: {
+        outcome: 'requires_action',
+        clientSecret: 'seti_secret',
+        setupIntentId: 'seti_topup',
+      },
+      walletId: 'wallet-1',
+    });
+    // Models the redirect: confirmSetup never resolves inline (the page is about to navigate).
+    mockConfirmSetup.mockReturnValue(new Promise(() => undefined));
+
+    renderAction({ lowBalanceMode: 'keep_going' });
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() =>
+      expect(globalThis.sessionStorage.getItem(SETUP_INTENT_KEY)).toBe('seti_topup')
+    );
+  });
+
+  it('§G — confirmSetup return_url is origin+pathname ONLY, even when the address bar already carries a crafted setup_intent', async () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/billing/top-up?setup_intent=seti_evil&setup_intent_client_secret=seti_evil_secret'
+    );
+
+    renderAction({ lowBalanceMode: 'keep_going' });
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(mockConfirmSetup).toHaveBeenCalled());
+    expect(mockConfirmSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confirmParams: expect.objectContaining({
+          return_url: 'http://localhost:3000/billing/top-up',
+        }),
+      })
+    );
+  });
+
+  it('§G — an INLINE confirmSetup (no redirect) clears the binding again', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'needs_client_confirmation',
+      clientSecret: 'pi_secret',
+      paymentIntentId: 'pi_1',
+      mandate: {
+        outcome: 'requires_action',
+        clientSecret: 'seti_secret',
+        setupIntentId: 'seti_topup',
+      },
+      walletId: 'wallet-1',
+    });
+    mockConfirmSetup.mockResolvedValue({}); // resolves inline — no redirect happened
+
+    const { onComplete } = renderAction({ lowBalanceMode: 'keep_going' });
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(globalThis.sessionStorage.getItem(SETUP_INTENT_KEY)).toBeNull();
+  });
+
+  it('§G — a saved-card requires_action mandate (setupIntentId null) writes NO binding', async () => {
+    mockStartPurchaseAction.mockResolvedValue({
+      ok: true,
+      outcome: 'needs_client_confirmation',
+      clientSecret: 'pi_secret',
+      paymentIntentId: 'pi_1',
+      mandate: { outcome: 'requires_action', clientSecret: 'seti_secret', setupIntentId: null },
+      walletId: 'wallet-1',
+    });
+    // Held pending so the assertion below runs BEFORE `forgetSetupIntent()` (the writer-is-the-
+    // clearer rule) would clear the slot regardless — that would make this assertion vacuous.
+    let resolveConfirmSetup: (value: Record<string, never>) => void = () => undefined;
+    mockConfirmSetup.mockImplementation(
+      () =>
+        new Promise<Record<string, never>>((resolve) => {
+          resolveConfirmSetup = resolve;
+        })
+    );
+
+    renderAction({ lowBalanceMode: 'keep_going' });
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(mockConfirmSetup).toHaveBeenCalled());
+    expect(globalThis.sessionStorage.getItem(SETUP_INTENT_KEY)).toBeNull();
+
+    resolveConfirmSetup({});
+  });
+
+  it('§G — confirmPayment return_url is origin+pathname ONLY', async () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/billing/top-up?payment_intent=pi_evil&payment_intent_client_secret=pi_evil_secret'
+    );
+
+    renderAction({ lowBalanceMode: 'keep_going' });
+    await userEvent.click(screen.getByRole('button', { name: /Pay/i }));
+
+    await waitFor(() => expect(mockConfirmPayment).toHaveBeenCalled());
+    expect(mockConfirmPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confirmParams: { return_url: 'http://localhost:3000/billing/top-up' },
+      })
+    );
   });
 });

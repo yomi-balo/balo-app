@@ -5,7 +5,7 @@ vi.mock('@stripe/stripe-js', () => ({
   loadStripe: (...args: unknown[]) => mockLoadStripe(...args),
 }));
 
-import { getStripe } from './stripe-loader';
+import { getStripe } from './loader';
 
 describe('getStripe', () => {
   beforeEach(() => {

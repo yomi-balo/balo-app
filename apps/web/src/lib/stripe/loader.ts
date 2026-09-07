@@ -5,11 +5,11 @@ import { loadStripe, type Stripe } from '@stripe/stripe-js';
  * `redeem/_components/continue-to-mandate.tsx` (was a local module-level `Map` there) so the
  * billing-settings capture panel doesn't mint a THIRD copy of this cache (Sonar duplication).
  *
- * ⚠ FIX ROUND (review MINOR) — `TopUpComposer.tsx` keeps its OWN un-keyed module-level singleton
- * over the SAME `@stripe/stripe-js` `loadStripe` import (not, as an earlier draft of this comment
- * claimed, through some separate `@stripe/react-stripe-js`-owned loader — that package exports no
- * `loadStripe` at all). Folding that singleton into this cache is a follow-up, out of this
- * ticket's scope, not a settled architectural difference.
+ * BAL-529 §E — moved from `lib/stripe-loader.ts` into `lib/stripe/` (kebab-case domain name,
+ * matching `setup-intent-return.ts`) and `TopUpComposer.tsx`'s own un-keyed module-level
+ * singleton was folded into this cache — see its `stripePromise` `useMemo` for the re-wiring.
+ * No `index.ts` barrel here: a barrel would pull the React hook into non-React module graphs,
+ * so every module in this directory stays imported by concrete path.
  *
  * Behaviour-preserving: same Map-per-key memoisation, same `loadStripe` call, so
  * `continue-to-mandate.test.tsx` needs no change.

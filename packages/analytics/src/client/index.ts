@@ -1,6 +1,10 @@
 export { initAnalytics, analytics } from './client';
 export { track } from './track';
 export type { AllEvents, EventName } from '../types';
+// BAL-529 §A — the browser-side analytics error reporter seam. The host app installs a
+// Sentry-backed reporter; failures with no reporter installed are silently swallowed.
+export { setAnalyticsErrorReporter } from './error-reporter';
+export type { AnalyticsErrorReporter } from './error-reporter';
 
 // Re-export all event constants and types for consumer convenience
 export {
@@ -80,6 +84,12 @@ export {
   COMMAND_PALETTE_EVENTS,
   COMMAND_PALETTE_OPEN_METHODS,
   COMMAND_PALETTE_ACTION_TYPES,
+  // BAL-529 §D — the Stripe redirect-return family's event constant + its two canonical
+  // vocabulary tuples. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT
+  // package (`apps/web` cannot import it), not in this one.
+  STRIPE_REDIRECT_EVENTS,
+  STRIPE_REDIRECT_SURFACES,
+  STRIPE_REDIRECT_UNBOUND_REASONS,
 } from '../events';
 
 export type {
@@ -187,4 +197,8 @@ export type {
   CommandPaletteEventMap,
   CommandPaletteOpenMethod,
   CommandPaletteActionType,
+  // BAL-529 §D — the Stripe redirect-return family's event payload and its two vocabularies.
+  StripeRedirectEventMap,
+  StripeRedirectSurface,
+  StripeRedirectUnboundReason,
 } from '../events';

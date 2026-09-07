@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { redactSensitivePath, SENSITIVE_PATH_PREFIXES } from './index';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  redactSensitivePath,
+  SENSITIVE_PATH_PREFIXES,
+  STRIPE_SETUP_INTENT_RETURN_QUERY_PARAMS,
+} from './index';
+import * as asciiFold from './ascii-fold';
 
 describe('redactSensitivePath', () => {
   it('redacts the token segment after a sensitive prefix', () => {
@@ -448,6 +453,210 @@ describe('redactSensitivePath — sensitive query parameters', () => {
   });
 });
 
+// ── BAL-529 §B: the Stripe redirect-return params, PATH-INDEPENDENT ─────────
+
+describe('redactSensitivePath — Stripe redirect-return params (BAL-529 §B)', () => {
+  it('redacts setup_intent and setup_intent_client_secret on /settings/billing', () => {
+    expect(
+      redactSensitivePath(
+        '/settings/billing?setup_intent=seti_abc123&setup_intent_client_secret=seti_abc123_secret_XYZ'
+      )
+    ).toBe('/settings/billing?setup_intent=[redacted]&setup_intent_client_secret=[redacted]');
+  });
+
+  it('redacts them on /redeem', () => {
+    expect(
+      redactSensitivePath(
+        '/redeem?setup_intent=seti_def456&setup_intent_client_secret=seti_def456_secret_XYZ'
+      )
+    ).toBe('/redeem?setup_intent=[redacted]&setup_intent_client_secret=[redacted]');
+  });
+
+  it('redacts them on a path in NO registry (/billing/top-up) — these params are path-independent', () => {
+    // ⚠ THE DESIGN DECISION ITSELF. A `pathMarker`-scoped registry (the ticket's suggested
+    // shape) would leave this path uncovered — and §G's `confirmSetup`/`confirmPayment`
+    // return here today.
+    expect(
+      redactSensitivePath('/billing/top-up?setup_intent=seti_ghi789&redirect_status=succeeded')
+    ).toBe('/billing/top-up?setup_intent=[redacted]&redirect_status=[redacted]');
+  });
+
+  it('redacts redirect_status too', () => {
+    expect(redactSensitivePath('/settings/billing?redirect_status=failed')).toBe(
+      '/settings/billing?redirect_status=[redacted]'
+    );
+  });
+
+  it('redacts payment_intent + payment_intent_client_secret (the confirmPayment 3DS return)', () => {
+    expect(
+      redactSensitivePath(
+        '/billing/top-up?payment_intent=pi_abc123&payment_intent_client_secret=pi_abc123_secret_XYZ'
+      )
+    ).toBe('/billing/top-up?payment_intent=[redacted]&payment_intent_client_secret=[redacted]');
+  });
+
+  it('redacts BOTH setup_intent and setup_intent_client_secret when both are present, in either query order', () => {
+    // The prefix-collision hazard: `setup_intent=` must not falsely match inside
+    // `setup_intent_client_secret=`, and vice versa.
+    expect(
+      redactSensitivePath(
+        '/settings/billing?setup_intent_client_secret=seti_xyz_secret&setup_intent=seti_xyz'
+      )
+    ).toBe('/settings/billing?setup_intent_client_secret=[redacted]&setup_intent=[redacted]');
+  });
+
+  it('preserves an unrelated param alongside them', () => {
+    expect(redactSensitivePath('/settings/billing?tab=cards&setup_intent=seti_abc123')).toBe(
+      '/settings/billing?tab=cards&setup_intent=[redacted]'
+    );
+  });
+
+  it('is idempotent', () => {
+    const once = redactSensitivePath(
+      '/settings/billing?setup_intent=seti_abc123&setup_intent_client_secret=seti_abc123_secret'
+    );
+    expect(redactSensitivePath(once)).toBe(once);
+  });
+
+  it('still redacts a PATH secret on a URL that also carries a Stripe param', () => {
+    expect(redactSensitivePath('/join/guest-token-abc?setup_intent=seti_abc123')).toBe(
+      '/join/[redacted]?setup_intent=[redacted]'
+    );
+  });
+
+  it('STRIPE_SETUP_INTENT_RETURN_QUERY_PARAMS lists exactly the three, in order', () => {
+    expect(STRIPE_SETUP_INTENT_RETURN_QUERY_PARAMS).toEqual([
+      'setup_intent',
+      'setup_intent_client_secret',
+      'redirect_status',
+    ]);
+  });
+});
+
+// ── BAL-529 fix-round-1 F1 (security S2 / review CRITICAL-1): EVERY occurrence, not just the
+// first. Empirically confirmed against the shipped (pre-fix) code that a duplicated pair left
+// the SECOND occurrence — the GENUINE one on the A2 return_url-poisoning shape, since Stripe
+// appends its own pair AFTER an attacker's — completely unredacted. ────────────────────────
+
+describe('redactSensitivePath — BAL-529 fix-round-1 F1 (every occurrence of a duplicated param)', () => {
+  it('⚠⚠ the exact A2 return_url-poisoning shape: the LIVE secret does not survive', () => {
+    const value =
+      '/settings/billing?setup_intent=seti_evil&setup_intent_client_secret=seti_evil_secret' +
+      '&setup_intent=seti_real&setup_intent_client_secret=seti_real_secret_LIVE';
+
+    const redacted = redactSensitivePath(value);
+
+    expect(redacted).toBe(
+      '/settings/billing?setup_intent=[redacted]&setup_intent_client_secret=[redacted]' +
+        '&setup_intent=[redacted]&setup_intent_client_secret=[redacted]'
+    );
+    // Belt-and-braces on the actual claim the finding makes: no raw value anywhere in the output.
+    expect(redacted).not.toContain('seti_evil');
+    expect(redacted).not.toContain('seti_real');
+    expect(redacted).not.toContain('LIVE');
+  });
+
+  it('redacts THREE occurrences of the same param, not just the first', () => {
+    expect(
+      redactSensitivePath('/settings/billing?setup_intent=a&setup_intent=b&setup_intent=c')
+    ).toBe(
+      '/settings/billing?setup_intent=[redacted]&setup_intent=[redacted]&setup_intent=[redacted]'
+    );
+  });
+
+  it('a LEADING unrelated param does not shield a later duplicate occurrence', () => {
+    // Pre-fix, the `?`-lead scan only ever matches at the very start of the query string, so a
+    // leading unrelated param meant the `?setup_intent=` shape never matched at all and ONLY the
+    // `&`-led occurrence(s) were found — still just the first of those.
+    expect(redactSensitivePath('/settings/billing?tab=x&setup_intent=a&setup_intent=b')).toBe(
+      '/settings/billing?tab=x&setup_intent=[redacted]&setup_intent=[redacted]'
+    );
+  });
+
+  it('the scoped SENSITIVE_QUERY_PARAMS (?t=) pass has the identical fix', () => {
+    const SEALED_1 = 'Fe26.2**aaa**bbb**ccc';
+    const SEALED_2 = 'Fe26.2**ddd**eee**fff';
+    // Both occurrences deliberately share the `&` lead (rather than one `?`-led + one `&`-led)
+    // so this actually exercises the loop: a single-scan-per-lead implementation would still
+    // redact one `?t=` and one `&t=` occurrence by accident even without the fix.
+    expect(redactSensitivePath(`/api/auth/switch-workspace?x=1&t=${SEALED_1}&t=${SEALED_2}`)).toBe(
+      '/api/auth/switch-workspace?x=1&t=[redacted]&t=[redacted]'
+    );
+  });
+
+  it('a duplicated payment_intent pair (the confirmPayment twin) is fully redacted too', () => {
+    // Both occurrences share the `&` lead — see the `?t=` test above for why that matters to
+    // actually exercise the loop rather than passing by accident.
+    expect(
+      redactSensitivePath('/billing/top-up?x=1&payment_intent=pi_evil&payment_intent=pi_real_LIVE')
+    ).toBe('/billing/top-up?x=1&payment_intent=[redacted]&payment_intent=[redacted]');
+  });
+
+  it('is idempotent over a duplicated-pair value', () => {
+    const once = redactSensitivePath(
+      '/settings/billing?setup_intent=a&setup_intent=b&setup_intent=c'
+    );
+    expect(redactSensitivePath(once)).toBe(once);
+  });
+});
+
+// ── BAL-529 fix-round-1 F8 (security S5 + S6): case-fold, percent-encoding and fragment
+// defences on the path-independent Stripe/PaymentIntent query-param registry only. ──────────
+
+describe('redactSensitivePath — BAL-529 fix-round-1 F8 (case-fold, %5f, fragment)', () => {
+  it('redacts an UPPERCASE param name', () => {
+    expect(redactSensitivePath('/settings/billing?SETUP_INTENT=seti_abc123')).toBe(
+      '/settings/billing?SETUP_INTENT=[redacted]'
+    );
+  });
+
+  it('redacts a MIXED-case param name', () => {
+    expect(redactSensitivePath('/settings/billing?Setup_Intent=seti_abc123')).toBe(
+      '/settings/billing?Setup_Intent=[redacted]'
+    );
+  });
+
+  it('redacts the percent-encoded-underscore form of the param name (?setup%5Fintent=)', () => {
+    expect(redactSensitivePath('/settings/billing?setup%5Fintent=seti_abc123')).toBe(
+      '/settings/billing?setup%5Fintent=[redacted]'
+    );
+  });
+
+  it('redacts the lowercase-hex percent-encoded-underscore form too (?setup%5fintent=)', () => {
+    expect(redactSensitivePath('/settings/billing?setup%5fintent=seti_abc123')).toBe(
+      '/settings/billing?setup%5fintent=[redacted]'
+    );
+  });
+
+  it('redacts a fragment-carried param — $current_url includes the fragment', () => {
+    expect(redactSensitivePath('/settings/billing#setup_intent=seti_abc123')).toBe(
+      '/settings/billing#setup_intent=[redacted]'
+    );
+  });
+
+  it('redacts a fragment-carried param on a full URL', () => {
+    expect(redactSensitivePath('https://balo.expert/redeem#setup_intent=seti_abc123')).toBe(
+      'https://balo.expert/redeem#setup_intent=[redacted]'
+    );
+  });
+
+  it('does NOT extend the fragment lead to the pathMarker-scoped switch-token pass', () => {
+    const value = '/api/auth/switch-workspace#t=Fe26.2**abc';
+    expect(redactSensitivePath(value)).toBe(value);
+  });
+
+  it('combines case-fold with the duplicate-occurrence fix (F1 + F8 together)', () => {
+    expect(redactSensitivePath('/settings/billing?SETUP_INTENT=a&setup_intent=b')).toBe(
+      '/settings/billing?SETUP_INTENT=[redacted]&setup_intent=[redacted]'
+    );
+  });
+
+  it('is idempotent over an uppercase param name', () => {
+    const once = redactSensitivePath('/settings/billing?SETUP_INTENT=seti_abc123');
+    expect(redactSensitivePath(once)).toBe(once);
+  });
+});
+
 describe('SENSITIVE_PATH_PREFIXES', () => {
   it('lists exactly the four registered landings', () => {
     expect([...SENSITIVE_PATH_PREFIXES].sort((a, b) => a.localeCompare(b))).toEqual([
@@ -484,5 +693,72 @@ describe('SENSITIVE_PATH_PREFIXES', () => {
         ).toBeLessThan(index);
       }
     });
+  });
+});
+
+// ── FIX ROUND 2 G1: the F1 (fixpoint loop) + F8 (case-fold) combination made the
+// case-folded query-param pass O(occurrences × length) — quadratic — because the fold was
+// recomputed from scratch on EVERY iteration of the occurrence loop, over the WHOLE haystack.
+// `apps/web/src/middleware.ts:27` calls `redactSensitivePath` on the bare pathname for the
+// request log BEFORE any auth check (`&` is a legal path character), so this was an
+// unauthenticated CPU-burn vector on Edge. ──────────────────────────────────────────────────
+
+describe('redactSensitivePath — FIX ROUND 2 G1 (no O(n²) re-fold on the case-folded pass)', () => {
+  let foldSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    foldSpy = vi.spyOn(asciiFold, 'toAsciiLowerCase');
+  });
+
+  afterEach(() => {
+    foldSpy.mockRestore();
+  });
+
+  /**
+   * ⚠⚠ THE CALL-COUNT ASSERTION, PREFERRED OVER A WALL-CLOCK BOUND — deterministic and immune
+   * to a loaded CI box, unlike a timing assertion. Exercises the ORCHESTRATOR'S OWN measured
+   * shape: a bare PATHNAME (no scheme, no host) with the Stripe param repeated many times —
+   * exactly `middleware.ts:27`'s pre-auth argument.
+   *
+   * Before the G1 fix, `redactAllAfterPrefix` called `toAsciiLowerCase` once per OCCURRENCE
+   * found (500 here, not counting the final non-matching probe) — this assertion would have
+   * read `toHaveBeenCalledTimes(501)` or worse pre-fix; after the fix it is called exactly
+   * ONCE per `redactSensitivePath` call, independent of occurrence count.
+   */
+  it('folds the case-fold haystack ONCE, independent of occurrence count (~500 occurrences)', () => {
+    const manyOccurrences = '/a' + '&setup_intent='.repeat(500);
+
+    foldSpy.mockClear();
+    redactSensitivePath(manyOccurrences);
+
+    expect(foldSpy).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * THE "SECONDARY" G1 finding: even a URL carrying NONE of the five path-independent Stripe
+   * params used to pay up to 30 full-string folds (5 params × 3 leads × 2 encoded forms) for
+   * nothing, because each of the 30 `redactAllAfterPrefix` calls folded `result` again from
+   * scratch. `redactSensitiveQueryParams` now folds once and threads the result through all 30.
+   */
+  it('folds the haystack ONCE even when the URL carries none of the Stripe params', () => {
+    foldSpy.mockClear();
+    redactSensitivePath('/dashboard');
+
+    expect(foldSpy).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Correctness, not just call count: the hoist-and-splice approach must still produce the
+   * SAME output a full re-fold would have. Unlike the two tests above, these occurrences carry
+   * a real one-character value (`x`) so the splice path (`tokenEnd > tokenStart`) is actually
+   * exercised on every one of the 50 occurrences, not just the bare-prefix advance.
+   */
+  it('still redacts EVERY occurrence correctly with the hoisted, spliced fold', () => {
+    const value = '/a' + '&setup_intent=x'.repeat(50);
+
+    const redacted = redactSensitivePath(value);
+
+    expect(redacted).not.toContain('setup_intent=x');
+    expect((redacted.match(/\[redacted\]/g) ?? []).length).toBe(50);
   });
 });

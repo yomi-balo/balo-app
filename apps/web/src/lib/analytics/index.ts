@@ -4,6 +4,9 @@ export {
   initAnalytics,
   analytics,
   track,
+  // BAL-529 §A — the browser-side analytics error reporter seam. Installed by
+  // `PostHogProvider` with a Sentry-backed reporter before `initAnalytics()` runs.
+  setAnalyticsErrorReporter,
   AUTH_EVENTS,
   ONBOARDING_EVENTS,
   EXPERT_EVENTS,
@@ -66,11 +69,17 @@ export {
   COMMAND_PALETTE_EVENTS,
   COMMAND_PALETTE_OPEN_METHODS,
   COMMAND_PALETTE_ACTION_TYPES,
+  /** BAL-529 §D — the Stripe redirect-return family's event constant + its two vocabularies. */
+  STRIPE_REDIRECT_EVENTS,
+  STRIPE_REDIRECT_SURFACES,
+  STRIPE_REDIRECT_UNBOUND_REASONS,
 } from '@balo/analytics/client';
 
 export type {
   AllEvents,
   EventName,
+  // BAL-529 §A — the reporter callback signature `PostHogProvider` implements.
+  AnalyticsErrorReporter,
   ExpertProfileSection,
   ExpertProfileCta,
   ProfileViewport,
@@ -137,4 +146,8 @@ export type {
   CommandPaletteEventMap,
   CommandPaletteOpenMethod,
   CommandPaletteActionType,
+  /** BAL-529 §D — the Stripe redirect-return family's event payload and its two vocabularies. */
+  StripeRedirectEventMap,
+  StripeRedirectSurface,
+  StripeRedirectUnboundReason,
 } from '@balo/analytics/client';

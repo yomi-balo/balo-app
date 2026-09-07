@@ -344,3 +344,14 @@ export {
   COMMAND_PALETTE_ACTION_TYPES,
   type CommandPaletteActionType,
 } from './command-palette';
+// BAL-529 §D — the Stripe redirect-return family's CLIENT event + its two canonical vocabulary
+// tuples (surface, unbound reason). Deliberately NOT folded into `./settings` — see this
+// module's own header for why.
+export {
+  STRIPE_REDIRECT_EVENTS,
+  type StripeRedirectEventMap,
+  STRIPE_REDIRECT_SURFACES,
+  type StripeRedirectSurface,
+  STRIPE_REDIRECT_UNBOUND_REASONS,
+  type StripeRedirectUnboundReason,
+} from './stripe-redirect';

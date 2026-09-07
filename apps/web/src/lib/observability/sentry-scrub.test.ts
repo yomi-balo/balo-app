@@ -283,6 +283,43 @@ describe('isSensitiveUrl', () => {
     // "any /join page" rule that would cost coverage for no security gain.
     expect(isSensitiveUrl('/join/')).toBe(false);
   });
+
+  /**
+   * FIX ROUND 1 F12 (security S7) — pins that a Stripe redirect return ALSO trips
+   * `isSensitiveUrl`, and therefore ALSO disables Sentry Session Replay for the whole page load
+   * (`instrumentation-client.ts`'s `onSensitiveLanding` gate), on every surface BAL-529 §B
+   * added to the registry. This is the deliberate trade instrumentation-client.ts's docblock
+   * now states — a future param/prefix addition changing this set is a visible diff here.
+   */
+  describe('BAL-529 fix-round-1 F12 — Stripe redirect-return landings also disable Replay', () => {
+    const STRIPE_RETURN_URLS = [
+      {
+        label: '/settings/billing — setup_intent return',
+        path: '/settings/billing?setup_intent=seti_abc&setup_intent_client_secret=seti_abc_secret',
+      },
+      {
+        label: '/redeem — setup_intent return',
+        path: '/redeem?setup_intent=seti_def&redirect_status=succeeded',
+      },
+      {
+        label: '/billing/top-up — payment_intent return',
+        path: '/billing/top-up?payment_intent=pi_abc&payment_intent_client_secret=pi_abc_secret',
+      },
+    ] as const;
+
+    for (const { label, path } of STRIPE_RETURN_URLS) {
+      it(`is true for ${label}`, () => {
+        expect(isSensitiveUrl(path)).toBe(true);
+        expect(isSensitiveUrl(`${ORIGIN}${path}`)).toBe(true);
+      });
+    }
+
+    it('is false for the same pages with no Stripe params — Replay stays on for a normal visit', () => {
+      expect(isSensitiveUrl('/settings/billing')).toBe(false);
+      expect(isSensitiveUrl('/redeem')).toBe(false);
+      expect(isSensitiveUrl('/billing/top-up')).toBe(false);
+    });
+  });
 });
 
 describe('sentryScrubbingOptions', () => {

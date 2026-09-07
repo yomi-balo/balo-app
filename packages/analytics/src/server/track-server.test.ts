@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mockCapture = vi.fn();
 const mockShutdown = vi.fn();
 const mockFlush = vi.fn();
+const mockLoggerError = vi.fn();
 
 vi.mock('posthog-node', () => ({
   PostHog: class MockPostHog {
@@ -10,6 +11,10 @@ vi.mock('posthog-node', () => ({
     shutdown = mockShutdown;
     flush = mockFlush;
   },
+}));
+
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({ error: mockLoggerError }),
 }));
 
 describe('shutdownServerAnalytics', () => {
@@ -100,6 +105,7 @@ describe('trackServer', () => {
     mockCapture.mockClear();
     mockShutdown.mockClear();
     mockFlush.mockClear();
+    mockLoggerError.mockClear();
   });
 
   afterEach(() => {
@@ -145,5 +151,41 @@ describe('trackServer', () => {
         beneficiary_status: 'verified',
       },
     });
+  });
+
+  it("a throwing client.capture does not escape trackServer, and the failure is logged under Pino's err key", async () => {
+    process.env.POSTHOG_API_KEY = 'phc_test_key';
+    const thrown = new Error('posthog is down');
+    mockCapture.mockImplementationOnce(() => {
+      throw thrown;
+    });
+
+    const { trackServer } = await import('./track-server');
+    const { EXPERT_PAYOUT_SERVER_EVENTS } = await import('../events/expert-payouts');
+
+    expect(() =>
+      trackServer(EXPERT_PAYOUT_SERVER_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
+        method: 'LOCAL',
+        country_code: 'AU',
+        beneficiary_status: 'verified',
+        distinct_id: 'user-789',
+      })
+    ).not.toThrow();
+
+    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+    const [payload, message] = mockLoggerError.mock.calls[0] as [
+      { event: string; err: unknown },
+      string,
+    ];
+    expect(payload.event).toBe('expert_airwallex_beneficiary_registered');
+    // FIX ROUND 3 R5 — logged under Pino's `err` key (its default `pino-std-serializers` err
+    // serializer attaches type/message/stack), not flattened to a bare `error: error.message`
+    // string.
+    expect(payload.err).toBe(thrown);
+    expect(payload).not.toHaveProperty('error');
+    // ⚠ event PROPERTIES never appear in the log line — the payload can carry PII.
+    expect(payload).not.toHaveProperty('properties');
+    expect(payload).not.toHaveProperty('country_code');
+    expect(message).toBe('PostHog capture failed');
   });
 });

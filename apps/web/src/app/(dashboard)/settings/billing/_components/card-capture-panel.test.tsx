@@ -10,7 +10,7 @@ const { mockStartCardCaptureAction, mockConfirmSetup } = vi.hoisted(() => ({
 vi.mock('@/lib/credit/actions', () => ({
   startCardCaptureAction: (...a: unknown[]) => mockStartCardCaptureAction(...a),
 }));
-vi.mock('@/lib/stripe-loader', () => ({ getStripe: vi.fn(() => Promise.resolve({})) }));
+vi.mock('@/lib/stripe/loader', () => ({ getStripe: vi.fn(() => Promise.resolve({})) }));
 vi.mock('@stripe/react-stripe-js', () => ({
   Elements: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   PaymentElement: () => <div data-testid="payment-element" />,

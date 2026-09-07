@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Loader2, Plus } from 'lucide-react';
 import { SectionCard } from '@/components/balo/section/section-states';
 import { SavedCardRow } from '@/components/billing/top-up/SavedCardRow';
@@ -10,10 +11,13 @@ import type { SavedCard } from '@/components/billing/top-up/types';
 import type { LowBalanceMode } from '@/lib/credit/actions';
 import { removeSavedCardAction } from '@/lib/credit/actions';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
-import { useSetupIntentRedirectReturn } from '@/lib/stripe/use-setup-intent-redirect-return';
+import {
+  useSetupIntentRedirectReturn,
+  SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE,
+} from '@/lib/stripe/use-setup-intent-redirect-return';
 import { CardCapturePanel } from './card-capture-panel';
 import { RemoveCardConfirm } from './remove-card-confirm';
-import { STRIPE_UNCONFIGURED_MESSAGE } from './messages';
+import { STRIPE_UNCONFIGURED_MESSAGE, CHANGE_CARD_DISABLED_REASON } from './messages';
 
 interface PaymentMethodManagerProps {
   /** The EFFECTIVE saved card (coordinator's `cardRemoved` local-optimism already applied). */
@@ -95,11 +99,13 @@ function sameSavedCard(a: SavedCard | null, b: SavedCard | null): boolean {
  *    PRE-capture snapshot after up to two more refreshes (1500ms apart), fall back to an honest
  *    "refresh if you don't see it" line rather than spinning forever.
  *
- * Stripe-unconfigured (`!NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`): the empty-state "Add a card"
- * button is a real `disabled` HTML button; "Change" (part of the REUSED, unmodified
- * `SavedCardRow`) has no external disabled hook, so it is made INERT here instead — pressing it
- * while unconfigured does not open the capture panel. Removal never needs Stripe.js client-side,
- * so it stays live either way.
+ * Stripe-unconfigured (`!NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`): BOTH capture entry points are
+ * real `disabled` HTML buttons — the empty-state "Add a card" directly, and "Change" via
+ * `SavedCardRow`'s optional `changeDisabledReason` (BAL-529 M3; it renders the control disabled
+ * and attaches the reason with `aria-describedby`, leaving the accessible name "Change" alone).
+ * `handleChange`'s own `if (!stripeConfigured) return;` guard stays as the second line of
+ * defence — a disabled button and a guarded handler, not one or the other. Removal never needs
+ * Stripe.js client-side, so it stays live either way.
  */
 export function PaymentMethodManager({
   card,
@@ -234,6 +240,25 @@ export function PaymentMethodManager({
     setPhase('finishing'); // stay put; params + binding kept so a refresh re-checks
   }, []);
 
+  // BAL-529 M5 — the bounded processing fallback. No reset path: the hook fires at most one
+  // terminal callback per mount, `finishing` exposes no control that could exit it, and a
+  // refresh remounts with fresh state.
+  //
+  // FIX ROUND 1 F10 (review MINOR-2) — guarded on `phase === 'finishing'`, mirroring
+  // `continue-to-mandate.tsx`'s functional `prev.kind === 'finishing'` check on its own phase
+  // union. `processingFallback` lives in a SEPARATE state slot here (this component's phase
+  // machine is `Phase`, not the discriminated union `ContinueToMandate` uses), so the guard
+  // reads `phase` directly rather than through a functional updater — safe because this
+  // callback is only ever invoked via the hook's `latest.current.onProcessingTimeout()`, which
+  // always resolves the newest closure regardless of this `useCallback`'s own dependency churn.
+  // Without it, a late-firing 15s timer could paint the slow-processing copy onto a phase that
+  // already moved on to `idle`/`syncing`/`capturing`.
+  const [processingFallback, setProcessingFallback] = useState(false);
+  const handleRedirectProcessingTimeout = useCallback((): void => {
+    if (phase !== 'finishing') return;
+    setProcessingFallback(true);
+  }, [phase]);
+
   const handleRedirectFailed = useCallback((message: string): void => {
     setPhase('idle');
     setRedirectError(message);
@@ -241,9 +266,11 @@ export function PaymentMethodManager({
 
   useSetupIntentRedirectReturn({
     retryMessage: REDIRECT_RETRY_MESSAGE,
+    surface: 'settings',
     onStarted: handleRedirectStarted,
     onSucceeded: handleRedirectSucceeded,
     onProcessing: handleRedirectProcessing,
+    onProcessingTimeout: handleRedirectProcessingTimeout,
     onFailed: handleRedirectFailed,
   });
 
@@ -278,6 +305,23 @@ export function PaymentMethodManager({
     return (): void => clearTimeout(timer);
   }, [phase, card, router, captureIntent]);
 
+  /**
+   * BAL-529 M4 — the 150ms fade between the saved-card row and the capture panel (O2). Each of
+   * the four mutually-exclusive phase bodies below is wrapped in `AnimatePresence mode="wait"`,
+   * so a phase swap fades the outgoing body out THEN the incoming one in (a fade-through, not a
+   * true simultaneous cross-fade — a real cross-fade needs both children mounted at once, which
+   * is layout-fragile for a ~70px row swapping against a 300px+ Stripe iframe). Each leg is still
+   * the specified 150ms. `useReducedMotion()` zeroes the duration at the Motion layer — a
+   * Tailwind `motion-reduce:` variant would not work here since Motion drives the opacity.
+   */
+  const reduceMotion = useReducedMotion();
+  const fade = {
+    initial: { opacity: 0 },
+    animate: { opacity: 1 },
+    exit: { opacity: 0 },
+    transition: { duration: reduceMotion ? 0 : 0.15, ease: 'easeOut' as const },
+  };
+
   return (
     <>
       <SectionCard
@@ -290,52 +334,70 @@ export function PaymentMethodManager({
           </p>
         )}
 
-        {phase === 'capturing' && (
-          <CardCapturePanel onCancel={handleCancelCapture} onCaptured={handleCaptured} />
-        )}
+        <AnimatePresence mode="wait" initial={false}>
+          {phase === 'capturing' && (
+            <motion.div key="capturing" {...fade}>
+              <CardCapturePanel onCancel={handleCancelCapture} onCaptured={handleCaptured} />
+            </motion.div>
+          )}
 
-        {phase === 'finishing' && (
-          <div className="flex items-center gap-3">
-            <Loader2 className="text-primary size-5 shrink-0 animate-spin" aria-hidden="true" />
-            <p className="text-foreground text-sm leading-relaxed">
-              Finishing up — just confirming your card…
-            </p>
-          </div>
-        )}
-
-        {phase === 'syncing' && (
-          <div className="flex items-center gap-3">
-            {!syncFallback && (
-              <Loader2 className="text-primary size-5 shrink-0 animate-spin" aria-hidden="true" />
-            )}
-            <p className="text-foreground text-sm leading-relaxed">
-              {syncFallback ? SYNC_FALLBACK_MESSAGE : 'Card saved — updating your payment method…'}
-            </p>
-          </div>
-        )}
-
-        {phase === 'idle' && (
-          <>
-            {redirectError !== null && (
-              <p role="alert" className="text-destructive mb-3 text-sm">
-                {redirectError}
+          {phase === 'finishing' && (
+            <motion.div key="finishing" {...fade} className="flex items-center gap-3">
+              {!processingFallback && (
+                <Loader2 className="text-primary size-5 shrink-0 animate-spin" aria-hidden="true" />
+              )}
+              {/* FIX ROUND 1 F7 (UX U2) — `aria-live="polite"` so a screen-reader user who tabbed
+                  away during the 15s wait still hears the M5 fallback swap. NOT role="alert"
+                  (this is not an error) and NOT role="status" (SonarCloud S6819). */}
+              <p className="text-foreground text-sm leading-relaxed" aria-live="polite">
+                {processingFallback
+                  ? SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE
+                  : 'Finishing up — just confirming your card…'}
               </p>
-            )}
-            {card === null ? (
-              <button
-                type="button"
-                onClick={handleAdd}
-                disabled={!stripeConfigured}
-                className="border-primary/40 text-primary hover:bg-primary/5 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-dashed py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Plus className="size-4" aria-hidden="true" />
-                Add a card
-              </button>
-            ) : (
-              <SavedCardRow card={card} onChange={handleChange} onRemove={handleOpenRemove} />
-            )}
-          </>
-        )}
+            </motion.div>
+          )}
+
+          {phase === 'syncing' && (
+            <motion.div key="syncing" {...fade} className="flex items-center gap-3">
+              {!syncFallback && (
+                <Loader2 className="text-primary size-5 shrink-0 animate-spin" aria-hidden="true" />
+              )}
+              <p className="text-foreground text-sm leading-relaxed">
+                {syncFallback
+                  ? SYNC_FALLBACK_MESSAGE
+                  : 'Card saved — updating your payment method…'}
+              </p>
+            </motion.div>
+          )}
+
+          {phase === 'idle' && (
+            <motion.div key="idle" {...fade}>
+              {redirectError !== null && (
+                <p role="alert" className="text-destructive mb-3 text-sm">
+                  {redirectError}
+                </p>
+              )}
+              {card === null ? (
+                <button
+                  type="button"
+                  onClick={handleAdd}
+                  disabled={!stripeConfigured}
+                  className="border-primary/40 text-primary hover:bg-primary/5 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-dashed py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                  Add a card
+                </button>
+              ) : (
+                <SavedCardRow
+                  card={card}
+                  onChange={handleChange}
+                  onRemove={handleOpenRemove}
+                  changeDisabledReason={stripeConfigured ? undefined : CHANGE_CARD_DISABLED_REASON}
+                />
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </SectionCard>
 
       {card !== null && (

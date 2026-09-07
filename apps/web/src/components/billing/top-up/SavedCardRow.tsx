@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import { Trash2 } from 'lucide-react';
 import { CardBrandMark, formatCardBrand } from './CardBrandMark';
 import { formatCardExpiry } from '@/lib/credit/display-constants';
@@ -15,6 +16,16 @@ interface SavedCardRowProps {
    * mid-purchase — rendering is byte-identical there.
    */
   readonly onRemove?: () => void;
+  /**
+   * BAL-529 M3 — when present, "Change" renders as a real `disabled` button and this string is
+   * its accessible description. Absent (the default) in the composer's purchase flow — rendering
+   * there is byte-identical, same discipline as `onRemove?` above.
+   *
+   * ⚠ The ACCESSIBLE NAME stays exactly "Change" — the reason is attached via `aria-describedby`,
+   * never appended to the label, so `getByRole('button', { name: 'Change' })` keeps working
+   * everywhere it is already used.
+   */
+  readonly changeDisabledReason?: string;
 }
 
 /** "Visa •••• 4242" — the one string both this row and the summary rail's line use. */
@@ -30,7 +41,14 @@ export function describeSavedCard(card: SavedCard): string {
  * "Change" is a real button (44px tap target via the padded hit area), not a link: it mounts the
  * Payment Element beside this row. It never unmounts anything.
  */
-export function SavedCardRow({ card, onChange, onRemove }: Readonly<SavedCardRowProps>) {
+export function SavedCardRow({
+  card,
+  onChange,
+  onRemove,
+  changeDisabledReason,
+}: Readonly<SavedCardRowProps>) {
+  const disabledReasonId = useId();
+  const changeDisabled = changeDisabledReason !== undefined;
   return (
     <div className="border-border bg-card flex items-center gap-4 rounded-xl border p-3.5">
       <CardBrandMark brand={card.brand} />
@@ -43,10 +61,17 @@ export function SavedCardRow({ card, onChange, onRemove }: Readonly<SavedCardRow
       <button
         type="button"
         onClick={onChange}
-        className="text-primary focus-visible:ring-ring relative rounded text-sm font-semibold before:absolute before:-inset-3 before:content-[''] hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none"
+        disabled={changeDisabled}
+        aria-describedby={changeDisabled ? disabledReasonId : undefined}
+        className="text-primary focus-visible:ring-ring relative rounded text-sm font-semibold before:absolute before:-inset-3 before:content-[''] hover:opacity-80 focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:opacity-60"
       >
         Change
       </button>
+      {changeDisabled && (
+        <span id={disabledReasonId} className="sr-only">
+          {changeDisabledReason}
+        </span>
+      )}
       {onRemove !== undefined && (
         // FIX ROUND (UX MINOR M1 + review MINOR) — sized to an ACTUAL 44×44 hit target via
         // `min-h-11 min-w-11` on the real button box, rather than the `before:-inset` trick
