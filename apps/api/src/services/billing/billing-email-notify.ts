@@ -70,9 +70,11 @@ async function resolvePreviousAddressKeys(
  */
 export async function publishBillingEmailChanged(n: BillingEmailChangedNotice): Promise<void> {
   // ⚠ `.`-JOINED, NEVER `:`-JOINED (memory `reference_bullmq_jobid_colon_rejected`).
-  // `engine/dispatcher.ts` builds the per-CHANNEL BullMQ jobId from the RAW correlationId with NO
-  // escape, and BullMQ throws unless the colon count is exactly 0 or 2. UUIDs never contain a
-  // `.`, so this join is colon-free by construction regardless of what the parts turn out to be.
+  // `engine/dispatcher.ts`'s delivery enqueue builds the per-CHANNEL BullMQ jobId via
+  // `buildJobId(...)` (BAL-531) — a colon in the correlationId is no longer fatal there, since
+  // `buildJobId` escapes it. The `.`-join stays anyway: UUIDs never contain a `.`, so this join
+  // is colon-free by construction regardless of what the parts turn out to be. (Named by
+  // symbol, not line number — this pointer has rotted twice.)
   const correlationId = `billing-email-changed.${n.companyId}.${n.dedupKey}`;
   try {
     // BOTH set together, or neither — see `resolvePreviousAddressKeys`. Absent together on a

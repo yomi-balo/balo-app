@@ -258,6 +258,9 @@ trackServer(EXPERT_PAYOUT_SERVER_EVENTS.AIRWALLEX_BENEFICIARY_REGISTERED, {
 - Feature code publishes domain events via `notificationEvents.publish()`
 - Notification engine (BullMQ) resolves rules, selects channels, delivers
 - Feature code NEVER imports Brevo, writes to notification tables, or sends email directly
+- Custom BullMQ job ids are built ONLY by `buildJobId()` (`apps/api/src/lib/queue.ts`) — never a
+  template literal at the call site. It escapes `:` (BullMQ rejects most colon-bearing ids) and is
+  enforced by `apps/api/src/invariants/colon-free-job-ids.test.ts`.
 
 ### UI
 

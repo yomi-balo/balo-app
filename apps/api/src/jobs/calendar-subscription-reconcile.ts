@@ -2,7 +2,7 @@ import { Worker, type Job } from 'bullmq';
 import type { FastifyBaseLogger } from 'fastify';
 import { calendarRepository } from '@balo/db';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import { reconcileConnectionSubscriptions } from '../services/calendar/subscription-reconcile.js';
 
 /**
@@ -33,11 +33,20 @@ export async function enqueueSubscriptionReconcile(
 ): Promise<void> {
   try {
     const queue = getQueue(CALENDAR_SUBSCRIPTION_RECONCILE_QUEUE);
+    // BAL-531 fix round (F5) — CONSTANT arity, not `options.force ? [...2 parts] : [...1 part]`.
+    // A variable-arity call site is the one shape `buildJobId`'s separator join is NOT provably
+    // unambiguous over (see `lib/queue.ts`'s docblock): a 2-part id could in principle collide
+    // with a 3-part id from a different call. Always passing a discriminator closes that, at the
+    // cost of rewriting the non-force id from `subscriptions--{connectionId}` to
+    // `subscriptions--noforce--{connectionId}` — accepted, because this queue sets BOTH
+    // `removeOnComplete: true` and `removeOnFail: true` (below), so nothing is ever retained and
+    // there is no dedup key for a rewritten id to fail to match — zero duplicate-delivery window.
+    const discriminator = options.force ? 'force' : 'noforce';
     await queue.add(
       'reconcile',
       { connectionId, force: options.force } satisfies CalendarSubscriptionReconcileJobData,
       {
-        jobId: `subscriptions-${options.force ? 'force-' : ''}${connectionId}`,
+        jobId: buildJobId('subscriptions', discriminator, connectionId),
         removeOnComplete: true,
         // A RETAINED failed job under a fixed jobId would block every later enqueue for this
         // connection — the same wedging argument as the availability queue's docblock.

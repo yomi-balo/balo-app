@@ -48,7 +48,8 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
-vi.mock('../../lib/queue.js', () => ({
+vi.mock('../../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/queue.js')>()),
   getQueue: (...args: unknown[]) => {
     mockGetQueue(...args);
     return { add: mockQueueAdd };
@@ -128,7 +129,7 @@ const expectRebuildEnqueued = (): void => {
     'rebuild-availability-cache',
     { expertProfileId: EXPERT_UUID },
     {
-      jobId: `availability-${EXPERT_UUID}`,
+      jobId: `availability--${EXPERT_UUID}`,
       removeOnComplete: true,
       removeOnFail: true,
       attempts: 3,

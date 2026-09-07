@@ -36,7 +36,7 @@ import {
   type TranscriptCaptureFailureReason,
 } from '@balo/analytics/server';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
 import {
   BatchArtefactTooLargeError,
@@ -86,7 +86,7 @@ export async function enqueueTranscriptSubmit(input: EnqueueTranscriptSubmitInpu
     'submit',
     { recordingId: input.recordingId } satisfies TranscriptCaptureSubmitJobData,
     {
-      jobId: `transcript-submit--${input.recordingId}`,
+      jobId: buildJobId('transcript-submit', input.recordingId),
       attempts: SUBMIT_ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
     }
@@ -107,7 +107,7 @@ export async function enqueueTranscriptIngest(input: EnqueueTranscriptIngestInpu
       batchJobId: input.batchJobId,
     } satisfies TranscriptCaptureIngestJobData,
     {
-      jobId: `transcript-ingest--${input.recordingId}`,
+      jobId: buildJobId('transcript-ingest', input.recordingId),
       attempts: INGEST_ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
     }

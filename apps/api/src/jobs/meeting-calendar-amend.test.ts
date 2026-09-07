@@ -7,6 +7,7 @@ const {
   mockListConnectionsByExpertProfileId,
   mockUpdateConsultationEvent,
   ApirocErrorStub,
+  mockAdd,
 } = vi.hoisted(() => {
   class ApirocErrorStubImpl extends Error {
     readonly kind: string;
@@ -25,8 +26,17 @@ const {
     mockListConnectionsByExpertProfileId: vi.fn(),
     mockUpdateConsultationEvent: vi.fn(),
     ApirocErrorStub: ApirocErrorStubImpl,
+    mockAdd: vi.fn().mockResolvedValue(undefined),
   };
 });
+
+// BAL-531 — `getQueue` IS now mocked (it used to be left real; see the historical note below),
+// but `buildJobId` is kept REAL via `importOriginal`: a mocked `buildJobId` would prove nothing
+// about the new enqueue test's jobId string assertion.
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
+  getQueue: vi.fn(() => ({ add: mockAdd })),
+}));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -49,12 +59,14 @@ vi.mock('../lib/apiroc/errors.js', () => ({
   ApirocError: ApirocErrorStub,
 }));
 
-// `getQueue`/`createRedisConnection` are not exercised by `processMeetingCalendarAmend`
-// directly (only by `enqueueMeetingCalendarAmend`/`startMeetingCalendarAmendWorker`, neither
-// of which these tests call), so they are left real — importing them constructs no connection
-// until actually invoked.
+// `createRedisConnection` is not exercised by `processMeetingCalendarAmend` or
+// `enqueueMeetingCalendarAmend` (only by `startMeetingCalendarAmendWorker`, which these tests
+// never call), so it is left real — importing it constructs no connection until invoked.
+// `getQueue` is NO LONGER left real (BAL-531): the new enqueue test below needs to assert on
+// `mockAdd`'s arguments.
 
-const { processMeetingCalendarAmend } = await import('./meeting-calendar-amend.js');
+const { processMeetingCalendarAmend, enqueueMeetingCalendarAmend } =
+  await import('./meeting-calendar-amend.js');
 
 const MEETING_ID = 'meeting-1';
 const EXPERT_PROFILE_ID = 'expert-1';
@@ -300,5 +312,26 @@ describe('processMeetingCalendarAmend — T-JOB (BAL-409 §4)', () => {
       await expect(processMeetingCalendarAmend(fakeJob())).resolves.toBeUndefined();
       expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('enqueueMeetingCalendarAmend — BAL-531', () => {
+  it('enqueues with a colon-free jobId built by the REAL buildJobId', async () => {
+    await enqueueMeetingCalendarAmend(MEETING_ID, EXPERT_PROFILE_ID, 'audit-1');
+
+    expect(mockAdd).toHaveBeenCalledWith(
+      'amend',
+      { meetingId: MEETING_ID, expertProfileId: EXPERT_PROFILE_ID },
+      expect.objectContaining({
+        jobId: 'meeting-calendar-amend--audit-1',
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 10_000 },
+        removeOnComplete: { count: 1000 },
+        removeOnFail: { count: 5000 },
+      })
+    );
+
+    const [, , opts] = mockAdd.mock.calls[0] as [unknown, unknown, { jobId: string }];
+    expect(opts.jobId).not.toContain(':');
   });
 });

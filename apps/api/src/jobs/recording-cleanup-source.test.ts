@@ -40,7 +40,10 @@ const WorkerMock = vi.hoisted(() =>
   })
 );
 
-vi.mock('../lib/queue.js', () => ({ getQueue: () => ({ add: queueAdd }) }));
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
+  getQueue: () => ({ add: queueAdd }),
+}));
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn(() => ({ conn: true })) }));
 vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecoverableError }));
 vi.mock('@balo/db', () => ({

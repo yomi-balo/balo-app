@@ -70,7 +70,10 @@ const MockUnrecoverableError = vi.hoisted(
     }
 );
 
-vi.mock('../lib/queue.js', () => ({ getQueue: () => ({ add: queueAdd }) }));
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
+  getQueue: () => ({ add: queueAdd }),
+}));
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn(() => ({ conn: true })) }));
 vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecoverableError }));
 vi.mock('../services/transcript/pipeline.js', () => ({
@@ -130,12 +133,39 @@ describe('transcript-pipeline job', () => {
         jobId: 'transcript-pipeline--cap-abc',
         attempts: 3,
         backoff: { type: 'exponential', delay: 2000 },
+        // BAL-531 fix round (F4) — the full VendorTranscriptPayload rides on `job.data` above,
+        // and this enqueue now succeeds for the first time (it used to throw on the
+        // `daily-batch:` shape). `removeOnComplete: true` + a small `removeOnFail` count — set
+        // on THIS queue only, via per-call options, not `lib/queue.ts`'s shared defaults —
+        // bound how many verbatim consultation transcripts can sit in Redis at once.
+        removeOnComplete: true,
+        removeOnFail: { count: 10 },
       }
     );
   });
 
   it('exposes the queue name', () => {
     expect(TRANSCRIPT_PIPELINE_QUEUE).toBe('transcript-pipeline');
+  });
+
+  it('BAL-531 — a real-shape captureId (embedding the daily-batch: prefix) yields a colon-free jobId', async () => {
+    // The regression this closes: `transcript-capture.ts` builds `captureId` as
+    // `` `daily-batch:${batchJobId}` `` — the ':cap-abc' fixture above can never fail, because
+    // it never contained a colon in the first place. This is the real production shape.
+    await enqueueTranscriptPipeline({
+      captureId: 'daily-batch:9f1c0a2e-1234-4a1b-8c3d-abcdefabcdef',
+      engagementId: 'eng1',
+      meetingId: '11111111-1111-4111-8111-111111111111',
+      vendor: 'daily_deepgram',
+      payload: dailyMultiSpeaker,
+      durationMs: 12500,
+    });
+
+    const [, , opts] = queueAdd.mock.calls[0] as [unknown, unknown, { jobId: string }];
+    expect(opts.jobId).not.toContain(':');
+    expect(opts.jobId).toBe(
+      'transcript-pipeline--daily-batch_c9f1c0a2e-1234-4a1b-8c3d-abcdefabcdef'
+    );
   });
 
   it('startTranscriptPipelineWorker constructs a Worker on the queue with concurrency 5', () => {

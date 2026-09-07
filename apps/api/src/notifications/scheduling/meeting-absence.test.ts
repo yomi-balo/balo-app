@@ -361,9 +361,9 @@ describe('the two schedulers (§6.1)', () => {
 
   /**
    * ⚠⚠ A FRESH uuid PER PROMISE, NEVER THE MEETING ID. `publisher.publish` mints
-   * `jobId = ${event}--${correlationId}` and the shared queue retains completed jobs
-   * `{ count: 100 }`, so a value stable per meeting forever would silently collide with its own
-   * earlier send while the row is still marked `published`. That is BAL-424's documented defect.
+   * `jobId = buildJobId(event, correlationId)` (BAL-531) and the shared queue retains completed
+   * jobs `{ count: 100 }`, so a value stable per meeting forever would silently collide with its
+   * own earlier send while the row is still marked `published`. That is BAL-424's documented defect.
    */
   it('⚠⚠ mints a FRESH correlationId per promise — never the meeting id', async () => {
     await scheduleExpertAbsentAlert({

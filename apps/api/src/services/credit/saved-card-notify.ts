@@ -36,15 +36,14 @@ export interface SavedCardDetachedNotice {
  * notification hiccup (the webhook door). Same posture as `dispatch.ts`'s `publishTopupReceipt`.
  */
 export async function publishSavedCardDetached(notice: SavedCardDetachedNotice): Promise<void> {
-  // BAL-521 (DEC-7) — `.`-JOINED, NEVER `:`-JOINED. `notifications/engine/dispatcher.ts:73`
-  // builds the per-CHANNEL BullMQ jobId from the RAW correlationId with NO escape (unlike
-  // `notifications/publisher.ts`'s `toJobId`, which DOES escape colons for the top-level
-  // notification-events jobId) — BullMQ 5.70.4 throws unless the correlationId's colon count is
-  // exactly 0 or 2, so a ONE-colon id would die at `channelQueue.add` and the notice would never
-  // be delivered. Stripe event ids (`evt_…`) and uuids never contain a `.`, so this join is
-  // colon-free by construction regardless of what the parts turn out to be. Several SHIPPED
-  // credit correlationIds ARE one-colon-joined and are very likely failing at that same line
-  // today — a real, separate defect, out of scope here (do not "fix" `dispatcher.ts`).
+  // BAL-521 (DEC-7) — `.`-JOINED, NEVER `:`-JOINED. `engine/dispatcher.ts`'s delivery enqueue
+  // (the `enqueueDelivery` helper) builds the per-CHANNEL BullMQ jobId via
+  // `buildJobId(rule.template, recipientId, correlationId)` (BAL-531) — a colon in the
+  // correlationId is no longer fatal there, since `buildJobId` escapes it. The `.`-join stays
+  // anyway: it keeps the emitted correlationId readable, and Stripe event ids (`evt_…`) and
+  // uuids never contain a `.`, so this join is colon-free by construction regardless of what
+  // the parts turn out to be. (Named by symbol, not line number — a line-number pointer at this
+  // exact spot has already rotted twice across BAL-531's own fix rounds.)
   const correlationId = `saved-card-detached.${notice.walletId}.${notice.dedupKey}`;
   try {
     await notificationEvents.publish('credit.saved_card.detached', {

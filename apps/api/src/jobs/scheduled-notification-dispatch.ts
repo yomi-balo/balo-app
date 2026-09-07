@@ -201,12 +201,13 @@ async function dispatchRow(candidate: ScheduledNotification): Promise<RowOutcome
   // so nothing upstream guarantees the rebuilt object still carries one.
   //
   // Dropping it is not a cosmetic defect. `publisher.publish` mints
-  // `jobId = \`${event}--${payload.correlationId}\``, so every scheduled promise of that
-  // event would collapse into the SINGLE BullMQ job `event--undefined` for as long as it sat
-  // in the completed set: the second no-show alert is silently never delivered WHILE THE ROW
-  // IS MARKED `published`. `notification_log.correlation_id` is `NOT NULL`, so the audit
-  // insert would throw into `logNotification`'s swallowing catch and leave no trace either.
-  // That is precisely the eviction-dependent dedup this ADR exists to stop depending on.
+  // `jobId = buildJobId(event, payload.correlationId)` (BAL-531), so every scheduled promise of
+  // that event would collapse into the SINGLE BullMQ job for `correlationId: undefined` for as
+  // long as it sat in the completed set: the second no-show alert is silently never delivered
+  // WHILE THE ROW IS MARKED `published`. `notification_log.correlation_id` is `NOT NULL`, so the
+  // audit insert would throw into `logNotification`'s swallowing catch and leave no trace either.
+  // That is precisely the eviction-dependent dedup this ADR exists to stop depending on. The
+  // fail-closed behaviour below is unchanged by BAL-531 — only the jobId formula reference is.
   //
   // So: fail CLOSED and LOUD, exactly as the unregistered-recheck path does. A promise that
   // cannot be published correctly is a terminal `failed` with a readable reason, never a

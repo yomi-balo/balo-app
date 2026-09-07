@@ -360,8 +360,10 @@ export interface RescheduleProposalUnansweredPayload {
  * and the templates branch on `source` regardless.
  */
 export interface CreditSavedCardDetachedPayload {
-  /** `saved-card-detached.{walletId}.{doorKey}` — COLON-FREE by construction (DEC-7): a
-   *  colon-joined correlationId dies at `engine/dispatcher.ts`'s unescaped per-channel jobId. */
+  /** `saved-card-detached.{walletId}.{doorKey}` — COLON-FREE by construction (DEC-7). Since
+   *  BAL-531, `engine/dispatcher.ts`'s delivery enqueue escapes a colon in the correlationId
+   *  via `buildJobId` anyway; the `.`-join stays for readability, not because a colon would be
+   *  fatal. (Named by symbol, not line number — this pointer has rotted twice.) */
   correlationId: string;
   /** → resolver hydrates `data.billingUserIds` (the fan-out) AND `data.company` (context). */
   companyId: string;

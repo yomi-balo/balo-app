@@ -3,7 +3,7 @@ import { transcriptsRepository, type TranscriptVendor } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, TRANSCRIPT_SERVER_EVENTS } from '@balo/analytics/server';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import {
   createLlmClient,
   LlmOutputTruncatedError,
@@ -42,6 +42,26 @@ export interface EnqueueTranscriptPipelineInput {
  * Enqueue a transcript pipeline run. The stable `jobId` (`transcript-pipeline--${captureId}`)
  * collapses duplicate enqueues (BullMQ dedup) — the first idempotency layer atop the per-stage
  * gates + the partial-unique `capture_id`.
+ *
+ * ⚠⚠ FIX ROUND (F4) — THIS ENQUEUE CARRIES THE FULL VENDOR TRANSCRIPT (`payload`), NOT JUST
+ * IDS, AND THAT IS DELIBERATE, NOT AN OVERSIGHT. BAL-531 makes this jobId collision-free for the
+ * first time (it used to throw at `queue.add` on the `daily-batch:{id}` shape, so this enqueue
+ * had never actually landed), which means the queue's job DATA — the complete adapted Deepgram
+ * transcript, a real consultation recording — is about to sit in Redis for the first time too.
+ * The obvious mitigation, enqueue only `captureId` and have the worker re-read the transcript
+ * row, does NOT apply here: `stagePersistRaw`
+ * (`services/transcript/pipeline.ts`) is what WRITES the `transcripts` row, from `job.payload`,
+ * and it runs AFTER this enqueue, inside the worker. At the moment this function is called, the
+ * caller (`jobs/transcript-capture.ts`'s `handleIngest`) has only just confirmed
+ * `transcriptsRepository.findByCaptureId` returns `undefined` — no row exists yet for the
+ * worker to re-read. Slimming the payload here would leave the worker with nothing to persist.
+ *
+ * The fallback instead: keep the payload, but stop RETAINING it. `removeOnComplete: true` means
+ * a successfully processed job (row now persisted, transcript no longer only-in-Redis) is
+ * deleted immediately rather than sitting in the shared `{ count: 100 }` default. `removeOnFail`
+ * keeps a SMALL number for debugging a genuinely failing capture, rather than the shared
+ * `{ count: 500 }` default — bounding how many verbatim transcripts can be at rest at once, on
+ * THIS queue only (`lib/queue.ts`'s `DEFAULT_JOB_OPTIONS` is unchanged for every other queue).
  */
 export async function enqueueTranscriptPipeline(
   input: EnqueueTranscriptPipelineInput
@@ -51,9 +71,15 @@ export async function enqueueTranscriptPipeline(
     'run',
     { ...input },
     {
-      jobId: `transcript-pipeline--${input.captureId}`,
+      jobId: buildJobId('transcript-pipeline', input.captureId),
       attempts: RETRY_ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
+      // F4 — do not retain a completed job's full transcript payload; keep only a handful of
+      // failures for debugging. Scoped to THIS queue via per-call job options, matching the
+      // codebase's existing pattern (e.g. `availability-cache.ts`, `calendar-subscription-
+      // reconcile.ts`) for overriding `lib/queue.ts`'s shared defaults on one queue.
+      removeOnComplete: true,
+      removeOnFail: { count: 10 },
     }
   );
 }

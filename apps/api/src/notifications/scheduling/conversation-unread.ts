@@ -185,9 +185,9 @@ export async function scheduleConversationUnreadDigest(
       /**
        * ⚠⚠ AN OCCURRENCE ID, MINTED PER PROMISE — **NOT** `${conversationId}:${recipientUserId}`.
        *
-       * `publisher.publish` derives the BullMQ jobId from this
-       * (`jobId = \`${event}--${correlationId}\``) and `lib/queue.ts` retains completed jobs
-       * `{ count: 100 }` on ONE SHARED queue. A value stable per (conversation, recipient)
+       * `publisher.publish` derives the BullMQ jobId from this via `buildJobId(event,
+       * correlationId)` (BAL-531), and `lib/queue.ts` retains completed jobs `{ count: 100 }`
+       * on ONE SHARED queue. A value stable per (conversation, recipient)
        * FOREVER therefore collides with its own earlier send for as long as that jobId sits
        * in the completed set — at pre-launch volume, days — and `queue.add` silently NO-OPS
        * while the dispatch tick still marks the row `published`.

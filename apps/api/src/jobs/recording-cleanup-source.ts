@@ -6,7 +6,7 @@ import { Worker, UnrecoverableError, type Job } from 'bullmq';
 import { meetingRecordingsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
 import { deleteRecording } from '../services/daily/recordings.js';
 import { DailyApiError } from '../services/daily/errors.js';
@@ -56,11 +56,27 @@ export interface EnqueueRecordingCleanupSourceInput {
  * delivery, which carries the same batch job id and therefore the same jobId) is a clean no-op
  * either way: `handleCleanup` below short-circuits on `sourceDeletedAt !== null` before it ever
  * touches Daily.
+ *
+ * ⚠⚠ BAL-531 FIX ROUND (F5) — DELIBERATELY LEFT VARIABLE-ARITY, UNLIKE
+ * `calendar-subscription-reconcile.ts`'s identical-shaped helper. Considered and rejected making
+ * this always-3-part (`buildJobId('recording-cleanup-source', recordingId, dedupeToken ??
+ * 'primary')`) to close the same theoretical cross-arity collision `lib/queue.ts`'s docblock
+ * documents. Decision: NOT worth it here, for two independent reasons —
+ *  1. UNLIKE that call site, this queue has NO per-call `removeOnComplete`/`removeOnFail`
+ *     override, so it inherits `lib/queue.ts`'s shared, NON-ZERO defaults
+ *     (`{ count: 100 }` / `{ count: 500 }`). Rewriting the bare form's id would therefore open a
+ *     real (if harmless — see the no-op above) duplicate-delivery window on EVERY recording, not
+ *     a zero-cost change the way the reconcile queue's rewrite was.
+ *  2. The collision this would close cannot occur here in the first place: `recordingId` is
+ *     `meeting_recordings.id`, a Postgres `uuid` column — a real UUID's fixed hyphen positions
+ *     mean it can never contain the `--` sequence the two-part/three-part join is keyed on, so
+ *     the bare form's escaped output can never equal a genuinely different (recordingId,
+ *     dedupeToken) pair's 3-part output. There is no live risk to trade the churn for.
  */
 export function recordingCleanupSourceJobId(recordingId: string, dedupeToken?: string): string {
   return dedupeToken === undefined
-    ? `recording-cleanup-source--${recordingId}`
-    : `recording-cleanup-source--${recordingId}--${dedupeToken}`;
+    ? buildJobId('recording-cleanup-source', recordingId)
+    : buildJobId('recording-cleanup-source', recordingId, dedupeToken);
 }
 
 /**

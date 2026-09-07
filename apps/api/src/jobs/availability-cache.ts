@@ -3,7 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { calendarRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import { trackServer, CALENDAR_SERVER_EVENTS } from '@balo/analytics/server';
 import { resolveAndCacheAvailability } from '../services/availability/resolve-and-cache.js';
 
@@ -61,8 +61,9 @@ async function enqueueRebuild(expertProfileId: string): Promise<void> {
     { expertProfileId } satisfies AvailabilityCacheJobData,
     {
       // ⚠ Per-EXPERT, not per-calendar or per-subscription. The jobId string is load-bearing:
-      // getting it wrong (e.g. `availability-${expertId}`) silently disables the dedupe.
-      jobId: `availability-${expertProfileId}`,
+      // getting it wrong (e.g. a different escaping than `:215`'s) silently disables the dedupe
+      // — both sites MUST call `buildJobId('availability', expertProfileId)` identically.
+      jobId: buildJobId('availability', expertProfileId),
       removeOnComplete: true,
       removeOnFail: true,
       attempts: 3,
@@ -212,7 +213,9 @@ export function startStalenessCheckWorker(): Worker {
           'rebuild-availability-cache',
           { expertProfileId: conn.expertProfileId } satisfies AvailabilityCacheJobData,
           {
-            jobId: `availability-${conn.expertProfileId}`,
+            // ⚠ MUST stay byte-identical to `enqueueRebuild`'s jobId (`:65`, above) — see its
+            // docblock. Both mint the same per-expert dedup key.
+            jobId: buildJobId('availability', conn.expertProfileId),
             removeOnComplete: true,
             // Self-heal on failure — a retained failed job would block this same
             // fixed jobId on every later trigger (see enqueue-rebuild.ts).

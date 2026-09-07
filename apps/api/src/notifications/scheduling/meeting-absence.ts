@@ -27,12 +27,12 @@
  *
  * ── ⚠⚠ `correlationId` IS A FRESH uuid PER PROMISE, NEVER THE MEETING ID ─────────────────
  *
- * `publisher.publish` mints `jobId = \`${event}--${correlationId}\`` and `lib/queue.ts` retains
- * completed jobs `{ count: 100 }` on ONE SHARED queue, so a value stable per meeting forever
- * would silently collide with its own earlier send — `queue.add` no-ops while the dispatch tick
- * still marks the row `published`. That is BAL-424's documented defect; it is not repeated
- * here. The guards SPREAD `row.payload`, so the id is stable across a REBUILD of the same
- * promise, which is the other half of the requirement.
+ * `publisher.publish` mints the BullMQ jobId via `buildJobId(event, correlationId)` (BAL-531),
+ * and `lib/queue.ts` retains completed jobs `{ count: 100 }` on ONE SHARED queue, so a value
+ * stable per meeting forever would silently collide with its own earlier send — `queue.add`
+ * no-ops while the dispatch tick still marks the row `published`. That is BAL-424's documented
+ * defect; it is not repeated here. The guards SPREAD `row.payload`, so the id is stable across
+ * a REBUILD of the same promise, which is the other half of the requirement.
  */
 import { randomUUID } from 'node:crypto';
 import {

@@ -25,7 +25,7 @@ import {
   type RecordingTrigger,
 } from '@balo/analytics/server';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import {
   MIN_IDLE_TIMEOUT_SECONDS,
   startRoomRecording,
@@ -73,7 +73,7 @@ export async function enqueueRecordingEnsure(input: EnqueueRecordingEnsureInput)
     'ensure',
     { meetingId: input.meetingId, trigger: input.trigger } satisfies RecordingEnsureJobData,
     {
-      jobId: `recording-ensure--${input.meetingId}--${input.dedupeToken}`,
+      jobId: buildJobId('recording-ensure', input.meetingId, input.dedupeToken),
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
       // BAL-508 — latency-sensitive: outranks `stop` under the 1/s limiter. See the constant's
@@ -99,7 +99,7 @@ export async function enqueueRecordingStop(input: EnqueueRecordingStopInput): Pr
     'stop',
     { meetingId: input.meetingId } satisfies RecordingStopJobData,
     {
-      jobId: `recording-stop--${input.meetingId}`,
+      jobId: buildJobId('recording-stop', input.meetingId),
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
       // ⚠ BAL-508 — MUST be set EXPLICITLY, never omitted or left at 0. An unprioritized job
