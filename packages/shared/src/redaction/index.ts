@@ -23,8 +23,15 @@
  * bare pathname (`&` is a legal path character) BEFORE any auth check, so this was an
  * unauthenticated Edge CPU-burn vector. Fixed by folding once and keeping the fold in sync by
  * splicing, not recomputing — see {@link redactAllAfterPrefix}'s own docblock for the proof
- * this is sound. Measured back to nearly-linear; see `redaction.test.ts`'s
- * "FIX ROUND 2 G1" suite and this module's git history for the before/after numbers.
+ * this is sound. ⚠ FIX ROUND 3 R4 — "nearly-linear" overclaimed what the fix actually bought:
+ * the per-occurrence FOLD is now O(1) (one splice, no re-scan of the whole haystack), but
+ * {@link redactAfterPrefix} still does `value.slice(0, tokenStart) + REDACTED +
+ * value.slice(tokenEnd)` per occurrence, which copies the full string every time — so the
+ * worst case remains O(occurrences × length), just memcpy-bound instead of
+ * `toAsciiLowerCase`-fold-bound. That is why the measured 33.7ms → 0.21ms drop is a large
+ * constant-factor win, not a change in asymptotic class. See `redaction.test.ts`'s
+ * "FIX ROUND 2 G1" suite (which pins the O(1)-fold-count claim precisely, by call count, not
+ * the string-copy behaviour) and this module's git history for the before/after numbers.
  *
  * ⚠ THE SINK REGISTRY — every place a URL leaves the process must route through here:
  *   1. `apps/web/src/middleware.ts`            → the Axiom request line, and `?from=` / `returnTo`

@@ -153,10 +153,11 @@ describe('trackServer', () => {
     });
   });
 
-  it('a throwing client.capture does not escape trackServer, and the failure is logged', async () => {
+  it("a throwing client.capture does not escape trackServer, and the failure is logged under Pino's err key", async () => {
     process.env.POSTHOG_API_KEY = 'phc_test_key';
+    const thrown = new Error('posthog is down');
     mockCapture.mockImplementationOnce(() => {
-      throw new Error('posthog is down');
+      throw thrown;
     });
 
     const { trackServer } = await import('./track-server');
@@ -173,11 +174,15 @@ describe('trackServer', () => {
 
     expect(mockLoggerError).toHaveBeenCalledTimes(1);
     const [payload, message] = mockLoggerError.mock.calls[0] as [
-      { event: string; error: string },
+      { event: string; err: unknown },
       string,
     ];
     expect(payload.event).toBe('expert_airwallex_beneficiary_registered');
-    expect(payload.error).toBe('posthog is down');
+    // FIX ROUND 3 R5 — logged under Pino's `err` key (its default `pino-std-serializers` err
+    // serializer attaches type/message/stack), not flattened to a bare `error: error.message`
+    // string.
+    expect(payload.err).toBe(thrown);
+    expect(payload).not.toHaveProperty('error');
     // ⚠ event PROPERTIES never appear in the log line — the payload can carry PII.
     expect(payload).not.toHaveProperty('properties');
     expect(payload).not.toHaveProperty('country_code');

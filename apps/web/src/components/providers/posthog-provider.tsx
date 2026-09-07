@@ -26,8 +26,16 @@ import { initAnalytics, analytics, setAnalyticsErrorReporter } from '@/lib/analy
  * `apps/web/instrumentation-client.ts`'s Sentry init, which relies on the identical guarantee.
  * `initAnalytics()` is itself idempotent (the `initialized` module flag in
  * `packages/analytics/src/client/client.ts`), so re-evaluation (Fast Refresh, a second import in
- * a test) is safe. The reporter is installed FIRST, same as before, so a failure during init is
- * itself reported.
+ * a test) is safe. The reporter is installed FIRST, same as before.
+ *
+ * ⚠ FIX ROUND 3 R1 — the line this replaces used to claim "a failure during init is itself
+ * reported", which was FALSE: at module scope, an unguarded `posthog.init` throw would fail
+ * evaluation of THIS client bundle before the reporter (or anything else) could act on it — a
+ * strictly worse blast radius than the `useEffect` this module-scope statement replaced.
+ * `initAnalytics()` now wraps its own `posthog.init(...)` call in a try/catch
+ * (`packages/analytics/src/client/client.ts`) that routes any failure to the installed reporter
+ * with `method: 'init'`, the same shape `track`/`identify`/`page`/`reset` already used — so a
+ * throw here can no longer escape this statement, and IS now genuinely reported once caught.
  *
  * Pinned WITHOUT mocking `initAnalytics` in
  * `posthog-provider.init-order.test.tsx` — the global test mock (`apps/web/src/test/setup.ts`)

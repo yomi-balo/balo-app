@@ -56,16 +56,27 @@ const INITIAL_URL_PROPERTY_KEYS = [
  * emits `$snapshot` events whose payload lives at `properties.$snapshot_data[]`, and a `Meta`
  * frame in that array carries `href` — the full URL — independently of both this walk and
  * `mask_personal_data_properties` above (neither reaches inside `$snapshot_data`).
- * `posthog.init` below does not set `disable_session_recording`, so Session Replay is armed by
- * default and this residual is live wherever it records. NOT fixed here: whether to disable
- * Session Replay outright is a product decision, not this function's to make.
  *
- * Partially bounded, on a DIFFERENT sink: `apps/web/instrumentation-client.ts`'s FIX ROUND 1
- * F12 already refuses SENTRY's OWN, separate Replay integration outright (never starts it) on
- * exactly the Stripe-return / token-bearing landings this residual matters most on, via
- * `isSensitiveUrl`. That protects Sentry Replay, not PostHog's session recording — the two are
- * independent SDKs with independent recorders — so it does not close this gap, but it does mean
- * the highest-value targets already lose ONE of their two replay sinks.
+ * ⚠⚠ CLOSED, FIX ROUND 3 R2 — this residual is now closed for PostHog, the same way FIX ROUND 1
+ * F12 already closed the equivalent gap for Sentry Replay on the same landings (see below):
+ * `initAnalytics` sets `disable_session_recording: true` whenever the landing URL is one
+ * `redactSensitivePath` would rewrite, refusing Session Replay outright rather than trying to
+ * scrub it. The reasoning is identical to F12's — stated once here and not duplicated:
+ * Session Replay is a THIRD-PARTY SINK with no equivalent to `before_send`'s per-field
+ * redaction (there is no callback here at all, unlike Sentry's `beforeAddRecordingEvent`, so
+ * even F12's "cannot scrub, can only refuse" fallback has no hook to reach for on the PostHog
+ * side), so refusing the whole recording is the only sound option on a page that may carry a
+ * live `setup_intent_client_secret` in its URL. `client.test.ts`'s
+ * "BAL-529 fix-round-3 R2" suite pins exactly which landings pay it.
+ *
+ * Symmetric with a DIFFERENT sink: `apps/web/instrumentation-client.ts`'s FIX ROUND 1 F12
+ * refuses SENTRY's OWN, separate Replay integration outright (never starts it) on exactly the
+ * Stripe-return / token-bearing landings this residual matters most on, via `isSensitiveUrl`.
+ * The two are independent SDKs with independent recorders, so this is two separate fixes on the
+ * SAME predicate (`redactSensitivePath(url) !== url`) rather than one shared implementation —
+ * `isSensitiveUrl` itself lives in `apps/web/src/lib/observability/sentry-scrub.ts`, out of
+ * reach of this framework-agnostic package (see the module-scope note above on why
+ * `@sentry/nextjs` cannot be a dependency here), so the predicate is replicated, not imported.
  */
 export function sanitizeAnalyticsEvent(cr: CaptureResult | null): CaptureResult | null {
   if (cr === null) return null;
@@ -93,46 +104,86 @@ export function sanitizeAnalyticsEvent(cr: CaptureResult | null): CaptureResult 
   return cr;
 }
 
+/**
+ * The landing URL, or `''` off-browser. `globalThis.*` over bare `window.*` (SonarCloud
+ * S7764), and the same defensive `?? ''` shape `apps/web/instrumentation-client.ts` uses for
+ * its own `currentHref()` — this function's `disable_session_recording` gate is the PostHog
+ * twin of that file's Sentry Replay gate (FIX ROUND 3 R2, see `sanitizeAnalyticsEvent`'s G7
+ * docblock above).
+ */
+function currentHref(): string {
+  return globalThis.location?.href ?? '';
+}
+
+/**
+ * FIX ROUND 3 R2 — replicates `apps/web/src/lib/observability/sentry-scrub.ts`'s
+ * `isSensitiveUrl` predicate rather than importing it: that module is `apps/web`-only (it sits
+ * behind no export this framework-agnostic, also-`apps/api`-consumed package may depend on —
+ * see the module docblock on why `@sentry/nextjs` itself cannot be a dependency here), while
+ * `@balo/shared/redaction` is already a dependency of this package. "Sensitive" is DERIVED,
+ * never a second registry: a URL is sensitive exactly when redaction would change it, so this
+ * cannot drift from `SENSITIVE_PATH_PREFIXES` / the Stripe query-param registry the way a
+ * hand-copied prefix list would — identical reasoning to `isSensitiveUrl`'s own docblock.
+ */
+function isOnSensitiveLanding(): boolean {
+  const href = currentHref();
+  return redactSensitivePath(href) !== href;
+}
+
 export function initAnalytics(): void {
   if (globalThis.window === undefined || initialized) return;
 
   if (process.env.NEXT_PUBLIC_POSTHOG_KEY) {
-    posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
-      api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://app.posthog.com',
-      capture_pageview: true,
-      capture_pageleave: true,
-      // Redact secret-bearing URLs (magic-link tokens, Stripe redirect-return params) before
-      // any event is sent.
-      before_send: sanitizeAnalyticsEvent,
-      // FIX ROUND 1 F4 (security S1) — belt-and-braces WITH the `before_send` walk above, at the
-      // SDK's own source rather than after the fact. Verified against posthog-js@1.335.3's
-      // shipped dist: `mask_personal_data_properties` + `custom_personal_data_properties` gate
-      // `ds()` (`ph_person_props.ts`'s initial-person-info builder), whose masked `u` (URL) field
-      // feeds BOTH `set_initial_person_info` (→ `$set_once.$initial_current_url`) and
-      // `sessionPropsManager.getSetOnceProps()` (→ `$session_entry_url`) — i.e. the SAME two
-      // sinks the walk above targets, masked at the SOURCE before either bag is even assembled.
-      // This means a future posthog-js upgrade that adds a THIRD "landing URL" property derived
-      // from the same masked snapshot is covered by this ONE allowlist, not a fourth hand-copied
-      // sink here.
-      //
-      // ⚠⚠ FIX ROUND 2 G4 — `mask_personal_data_properties: true` is NOT scoped to the five
-      // custom params in `custom_personal_data_properties` below; per the shipped dist it ALSO
-      // masks posthog-js's own DEFAULT list of 17 ad-click-id params (`gclid`, `gclsrc`,
-      // `dclid`, `gbraid`, `wbraid`, `fbclid`, `msclkid`, `twclid`, `li_fat_id`, `igshid`,
-      // `ttclid`, `rdt_cid`, `epik`, `qclid`, `sccid`, `irclid`, `_kx`) out of
-      // `update_campaign_params()` / `set_initial_person_info()`, for EVERY user, on EVERY page —
-      // so `$initial_gclid`, `$initial_fbclid`, etc. read `<masked>` platform-wide from this PR
-      // onward. `utm_*` params are NOT affected (a different, unmasked code path). This is a
-      // real, if narrow, ad-attribution behaviour change riding along with a Stripe-secret fix —
-      // stated here so it is not a surprise to whoever next looks at attribution data. The
-      // option is correct defence in depth and is NOT being removed for that reason.
-      mask_personal_data_properties: true,
-      custom_personal_data_properties: [
-        ...STRIPE_SETUP_INTENT_RETURN_QUERY_PARAMS,
-        'payment_intent',
-        'payment_intent_client_secret',
-      ],
-    });
+    try {
+      posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY, {
+        api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://app.posthog.com',
+        capture_pageview: true,
+        capture_pageleave: true,
+        // Redact secret-bearing URLs (magic-link tokens, Stripe redirect-return params) before
+        // any event is sent.
+        before_send: sanitizeAnalyticsEvent,
+        // FIX ROUND 1 F4 (security S1) — belt-and-braces WITH the `before_send` walk above, at
+        // the SDK's own source rather than after the fact. Verified against posthog-js@1.335.3's
+        // shipped dist: `mask_personal_data_properties` + `custom_personal_data_properties` gate
+        // `ds()` (`ph_person_props.ts`'s initial-person-info builder), whose masked `u` (URL)
+        // field feeds BOTH `set_initial_person_info` (→ `$set_once.$initial_current_url`) and
+        // `sessionPropsManager.getSetOnceProps()` (→ `$session_entry_url`) — i.e. the SAME two
+        // sinks the walk above targets, masked at the SOURCE before either bag is even assembled.
+        // This means a future posthog-js upgrade that adds a THIRD "landing URL" property
+        // derived from the same masked snapshot is covered by this ONE allowlist, not a fourth
+        // hand-copied sink here.
+        //
+        // ⚠⚠ FIX ROUND 2 G4 — `mask_personal_data_properties: true` is NOT scoped to the five
+        // custom params in `custom_personal_data_properties` below; per the shipped dist it ALSO
+        // masks posthog-js's own DEFAULT list of 17 ad-click-id params (`gclid`, `gclsrc`,
+        // `dclid`, `gbraid`, `wbraid`, `fbclid`, `msclkid`, `twclid`, `li_fat_id`, `igshid`,
+        // `ttclid`, `rdt_cid`, `epik`, `qclid`, `sccid`, `irclid`, `_kx`) out of
+        // `update_campaign_params()` / `set_initial_person_info()`, for EVERY user, on EVERY page
+        // — so `$initial_gclid`, `$initial_fbclid`, etc. read `<masked>` platform-wide from this
+        // PR onward. `utm_*` params are NOT affected (a different, unmasked code path). This is a
+        // real, if narrow, ad-attribution behaviour change riding along with a Stripe-secret fix
+        // — stated here so it is not a surprise to whoever next looks at attribution data. The
+        // option is correct defence in depth and is NOT being removed for that reason.
+        mask_personal_data_properties: true,
+        custom_personal_data_properties: [
+          ...STRIPE_SETUP_INTENT_RETURN_QUERY_PARAMS,
+          'payment_intent',
+          'payment_intent_client_secret',
+        ],
+        // FIX ROUND 3 R2 — refuse Session Replay outright (never start it) on a landing whose
+        // URL `redactSensitivePath` would rewrite. See `sanitizeAnalyticsEvent`'s G7 docblock
+        // above for why scrubbing is not an option for this sink.
+        disable_session_recording: isOnSensitiveLanding(),
+      });
+    } catch (error) {
+      // FIX ROUND 3 R1 — `posthog.init` is the one call in this module that used to be
+      // unguarded. At MODULE SCOPE (`apps/web/src/components/providers/posthog-provider.tsx`'s
+      // FIX ROUND 1 F3), a throw here would fail evaluation of a root-layout CLIENT BUNDLE —
+      // every route, before first paint — which is a strictly worse blast radius than the
+      // `useEffect` this replaced. Guarded the same shape as `track`/`identify`/`page`/`reset`
+      // below, reported to the SAME reporter with `method: 'init'`.
+      reportAnalyticsError(error, 'init');
+    }
     initialized = true;
   }
 }

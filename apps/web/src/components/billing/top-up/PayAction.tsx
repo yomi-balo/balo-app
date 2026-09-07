@@ -230,10 +230,20 @@ export function PayAction({
        * (`/billing/top-up`) does not — nothing here ever calls the hook. Two consequences, both
        * UI-only (the value itself is server-originated and only ever compared browser-locally,
        * per the docblock above):
-       *   1. A mandate started here OVERWRITES a live binding from a concurrent
-       *      `/settings/billing` capture in another tab. That tab's later genuine return then
-       *      reads `id_mismatch` and shows the retry copy for a card that was, in fact, saved —
-       *      a FALSE FAILURE paint.
+       *   1. ⚠⚠ FIX ROUND 3 R3 — CORRECTED. A mandate started here can overwrite a live binding
+       *      from a `/settings/billing` capture begun earlier IN THE SAME TAB, and ONLY that —
+       *      `sessionStorage` is tab-scoped, so a capture running concurrently in a DIFFERENT
+       *      tab has its own separate store and cannot be overwritten by this one; the
+       *      "concurrent capture in another tab" scenario this point previously described is
+       *      not possible. When the same-tab overwrite does happen, the earlier capture's later
+       *      return does NOT read `id_mismatch` (that outcome fires only when the stored id
+       *      still matches the URL's `?setup_intent=` but the RETRIEVED intent disagrees — the
+       *      A1 attack shape, see `use-setup-intent-redirect-return.ts`). With a DIFFERENT id
+       *      now in the slot, `matchSetupIntentReturn()` instead returns `null` — the return is
+       *      UNBOUND — and an unbound return is COMPLETELY INERT per that hook's own contract:
+       *      no callback fires, no state changes, the URL is not rewritten. It fires only the
+       *      §D `stripe_redirect_return_unbound` analytics event. There is no retry-copy paint
+       *      and no false failure; the buyer simply sees nothing happen on that other surface.
        *   2. On the actual REDIRECT path (3DS required, `confirmSetup` navigates away rather
        *      than resolving inline), no hook is mounted here to consume or clear the binding it
        *      just wrote — it sits as an inert orphan until the next capture overwrites the slot

@@ -220,3 +220,100 @@ describe('initAnalytics — BAL-529 fix-round-1 F4 SDK-level masking', () => {
     ]);
   });
 });
+
+// ── FIX ROUND 3 R1 — posthog.init is the one unguarded analytics call, now guarded ───────────
+describe('initAnalytics — BAL-529 fix-round-3 R1 (posthog.init failure is guarded and reported)', () => {
+  const PREV_KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+
+  afterEach(() => {
+    if (PREV_KEY === undefined) {
+      delete process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    } else {
+      process.env.NEXT_PUBLIC_POSTHOG_KEY = PREV_KEY;
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it('does not throw when posthog.init throws, and reports it with method "init"', async () => {
+    // A FRESH module pair, via `vi.resetModules()` + a dynamic re-import (mirrors
+    // `track-server.test.ts`'s per-test reset pattern) — `initAnalytics()`'s `initialized` flag
+    // and `error-reporter.ts`'s installed `reporter` are both module-level singletons already
+    // touched by the F4 test above (and by every `describe` before it in this file), so a fresh
+    // pair is the only way to observe THIS call's outcome in isolation. `mockInit` itself is
+    // untouched by the reset — it is captured by the `vi.mock('posthog-js', …)` factory's
+    // closure over a `const` declared at the top of this file, outside any module boundary.
+    vi.resetModules();
+    vi.stubGlobal('window', {});
+    process.env.NEXT_PUBLIC_POSTHOG_KEY = 'phc_test_key';
+
+    const { initAnalytics: freshInitAnalytics } = await import('./client');
+    const { setAnalyticsErrorReporter: freshSetReporter } = await import('./error-reporter');
+
+    const reporter = vi.fn();
+    freshSetReporter(reporter);
+    const error = new Error('posthog.init boom');
+    mockInit.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    expect(() => freshInitAnalytics()).not.toThrow();
+    expect(reporter).toHaveBeenCalledWith(error, { method: 'init' });
+  });
+});
+
+// ── FIX ROUND 3 R2 — Session Replay folded into the per-landing refusal, symmetric with Sentry
+// Replay's FIX ROUND 1 F12 (`apps/web/instrumentation-client.ts` /
+// `sentry-scrub.test.ts`'s "isSensitiveUrl — BAL-529 fix-round-1 F12" suite, mirrored here) ────
+describe('initAnalytics — BAL-529 fix-round-3 R2 (disable_session_recording on a sensitive landing)', () => {
+  const PREV_KEY = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+
+  afterEach(() => {
+    if (PREV_KEY === undefined) {
+      delete process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    } else {
+      process.env.NEXT_PUBLIC_POSTHOG_KEY = PREV_KEY;
+    }
+    vi.unstubAllGlobals();
+  });
+
+  const STRIPE_RETURN_URLS = [
+    {
+      label: '/settings/billing — setup_intent return',
+      href: 'https://balo.expert/settings/billing?setup_intent=seti_abc&setup_intent_client_secret=seti_abc_secret',
+    },
+    {
+      label: '/redeem — setup_intent return',
+      href: 'https://balo.expert/redeem?setup_intent=seti_def&redirect_status=succeeded',
+    },
+  ] as const;
+
+  for (const { label, href } of STRIPE_RETURN_URLS) {
+    it(`disables session recording on a Stripe-return landing (${label})`, async () => {
+      vi.resetModules();
+      mockInit.mockClear();
+      vi.stubGlobal('window', {});
+      vi.stubGlobal('location', { href });
+      process.env.NEXT_PUBLIC_POSTHOG_KEY = 'phc_test_key';
+
+      const { initAnalytics: freshInitAnalytics } = await import('./client');
+      freshInitAnalytics();
+
+      const [, options] = mockInit.mock.calls[0] as [string, Record<string, unknown>];
+      expect(options.disable_session_recording).toBe(true);
+    });
+  }
+
+  it('leaves session recording enabled on a normal landing', async () => {
+    vi.resetModules();
+    mockInit.mockClear();
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('location', { href: 'https://balo.expert/experts/dana' });
+    process.env.NEXT_PUBLIC_POSTHOG_KEY = 'phc_test_key';
+
+    const { initAnalytics: freshInitAnalytics } = await import('./client');
+    freshInitAnalytics();
+
+    const [, options] = mockInit.mock.calls[0] as [string, Record<string, unknown>];
+    expect(options.disable_session_recording).toBe(false);
+  });
+});
