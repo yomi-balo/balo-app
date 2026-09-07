@@ -100,8 +100,14 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
           ⚠ The header and the user pill stay OUTSIDE this wrapper — they must remain pinned, and
           the pill must not scroll away from above the collapse control.
           ⚠ `flex-1` stays on the <nav> so that when the content DOES fit, the secondary and admin
-          groups still sit at the bottom of the available space exactly as before. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          groups still sit at the bottom of the available space exactly as before.
+          ⚠ `overflow-x-hidden` IS DELIBERATE, not belt-and-braces: per CSS Overflow, when one axis
+          is not `visible` the other computes `visible` → `auto`, so `overflow-y-auto` ALONE would
+          silently make this box horizontally scrollable. The admin label animates `max-w-0` →
+          `max-w-[150px]` over 220ms while holding `whitespace-nowrap`, so its intrinsic width
+          exceeds the collapsed rail for the whole transition — exactly the window in which a
+          transient horizontal scrollbar would flash. Pinning the axis removes the question. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
         {/* Primary navigation. BAL-497 — `space-y-1` moved INTO `SidebarNavSection`'s row stack as
           `gap-1`: `space-y-*` is a `~` sibling selector, so the pill (a sibling of the rows) would
           otherwise push every row down by 4px. */}
