@@ -55,7 +55,8 @@ describe('getEmailTemplate — session-settlement-failed', () => {
     expect(html).toContain('confirmation');
     expect(html.toLowerCase()).not.toContain('overdraft');
     // BAL-552 — the SCA arm now also offers the working alternative (a covering top-up).
-    expect(html).toContain('or top up to cover it, which settles it just the same');
+    expect(html).toContain('or top up to cover it. Either way, the extra time is taken care of');
+    expect(html).not.toContain('settles it just the same');
     expect(html).not.toContain('nothing else is on hold'); // retired phrase
     expect(html).toContain('/settings/billing'); // the SCA arm's ctaUrl
   });

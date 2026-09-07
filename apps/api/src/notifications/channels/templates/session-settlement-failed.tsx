@@ -51,7 +51,7 @@ export function SessionSettlementFailedEmail({
   const bodyLines = needsConfirmation
     ? [
         `A little extra time ran past your balance on a recent session, and settling ${amount} needs a quick confirmation on your card.`,
-        'Confirm it whenever suits — or top up to cover it, which settles it just the same.',
+        'Confirm it whenever suits — or top up to cover it. Either way, the extra time is taken care of.',
       ]
     : [
         `A little extra time ran past your balance on a recent session, and we couldn't settle ${amount} to your card.`,
