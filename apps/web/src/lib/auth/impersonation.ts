@@ -40,9 +40,11 @@ export const IMPERSONATION_REFUSAL_MESSAGE =
   'Destructive money action refused — impersonated session';
 
 /**
- * What a refusal names: the specific action refused, the company it was refused for, and the
- * actor who attempted it. `actorUserId` is REQUIRED, not optional — see the function docblock
- * below for why it cannot be inferred from ambient request context here.
+ * What a refusal names: the specific action refused, the company it was refused for, and
+ * `actorUserId` — the session's own user id. ⚠ NOT necessarily "who attempted it"; see the
+ * {@link refuseMoneyActionUnderImpersonation} docblock's WorkOS-semantics caveat below.
+ * `actorUserId` is REQUIRED, not optional — see the function docblock below for why it cannot be
+ * inferred from ambient request context here.
  */
 export interface ImpersonationRefusalContext {
   readonly action: string;
@@ -64,10 +66,23 @@ export interface ImpersonationRefusalContext {
  * the session, never an email or card fact, the same discipline `removeSavedCardAction`'s catch
  * documents. `actorUserId` is passed explicitly by every caller (never inferred here): apps/web has
  * no application call site of `withContext()` today, so the pino AsyncLocalStorage mixin
- * (`lib/logging/index.ts`) has no request context to attach a `userId` from on this path, and this
- * line is the sole server-side record of WHO attempted a blocked money action while impersonating —
- * it must not identify only a company. Sibling code in this same surface already threads the same
- * field the same way (`redeem-promo.ts`'s `actorUserId: user.id`).
+ * (`lib/logging/index.ts`) has no request context to attach a `userId` from on this path, and
+ * without this field the log line would identify only a company. Sibling code in this same surface
+ * already threads the same field the same way (`redeem-promo.ts`'s `actorUserId: user.id`).
+ *
+ * ⚠⚠ (fix round 3, human pre-merge review) — `actorUserId` NAMES THE SESSION'S OWN USER ID, WHICH
+ * IS NOT THE SAME THING AS "WHO ATTEMPTED THE ACTION" ONCE IMPERSONATION IS REAL. Under WorkOS's
+ * impersonation semantics, the session's `user` object during an impersonated session IS the
+ * IMPERSONATED account — the account being acted ON — while the impersonating staff member's
+ * identity lives on a separate `impersonator` object that `SessionUser` does not carry today. So
+ * `actorUserId: user.id` records precisely and only the session's user id: today (guard inert,
+ * `isImpersonating` always `undefined`) that is simply the normal actor; once impersonation ships
+ * unchanged, it will be the IMPERSONATED account, not the staff member who impersonated them.
+ * Nothing in this module can fix that — no field exists yet to carry staff identity. The
+ * impersonation entry-point ticket (`.implement/plan.md` Deferred #1) MUST put the impersonator's
+ * own identity onto `SessionUser` and thread it into this log line before this guard can attribute
+ * the acting staff member; until then, this payload identifies the affected company and account,
+ * never assume it names the staff member who pressed the button.
  *
  * ⚠ THIS IS A REFUSAL, AND IT IS NOT THE ONLY VALID RESPONSE TO IMPERSONATION.
  * `lib/actions/expert-checklist.ts` deliberately does the opposite — it ANNOTATES the audit row and

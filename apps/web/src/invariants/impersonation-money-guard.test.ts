@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRouteDir, scanRouteSources, occurrences, type ScannedFile } from './_source-scan';
+import {
+  resolveRouteDir,
+  scanRouteSources,
+  occurrences,
+  hasUseServerDirective,
+  type ScannedFile,
+} from './_source-scan';
 
 /**
  * BAL-528 — structural invariant: destructive money actions refuse under an impersonated session,
@@ -26,25 +32,43 @@ import { resolveRouteDir, scanRouteSources, occurrences, type ScannedFile } from
  *    the real source — a rename that isn't mirrored into those consts now fails I1 first, so I3
  *    cannot go stale and pass vacuously.)
  *  · I4 — the READ exemption literal (`billing_read_permitted_under_impersonation`) lives in
- *    exactly two files: its type declaration, and the one gate that has reads.
- *  · I5 — the exemption occurs EXACTLY TWICE in `lib/credit/actions.ts` — the two documented READS,
- *    no more. A third occurrence means a mutation has quietly been excused.
+ *    exactly two FILES: its type declaration, and the one gate that has reads. (A file-level check
+ *    only — I5 below is where the WITHIN-FILE location is pinned.)
+ *  · I5 — (fix round 3, human pre-merge review) the exemption literal appears in the CALLER
+ *    position ONLY inside the OWN body segments of `getTopUpCreditStatusAction` and
+ *    `validatePromoAction` — BODY-SCOPED, not a bare whole-file occurrence count. The old version
+ *    only asserted the literal occurred exactly twice SOMEWHERE in the file, so moving the
+ *    exemption from one of the two documented READ callers onto a MUTATION (e.g.
+ *    `saveBillingEmailAction`) left the count at 2 and this assertion green while a mutation was
+ *    quietly excused from the refusal default. Naming the exact two callers closes that. The ONE
+ *    other legitimate occurrence — the TYPE POSITION in `requireBillingActor`'s second overload
+ *    signature (Item B, "belt-and-braces": `impersonationGuard: 'billing_read_permitted_under_
+ *    impersonation'`) — lives in the file's PREAMBLE (before the first `export async function`,
+ *    i.e. in no export's own body) and is pinned to exactly one occurrence there, so a second
+ *    stray mention anywhere outside a segment still fails loudly.
  *  · I6 — every `'use server'` module under `app/(dashboard)/redeem/_actions/` references the
  *    guard, asserted as an exact set in BOTH directions, so a third redeem action cannot land
- *    ungated and a guarded entry cannot be silently pruned while the file still exists.
- *  · I7 — (fix round 1, F2/F5) every exported action in `lib/credit/actions.ts` either calls
- *    `requireBillingActor()` naming itself, or is named in `CHOKEPOINT_BYPASS` with a written
- *    reason — asserted as an exact set, both directions, over the file's own
- *    `export async function` names. Before this assertion existed, the ONLY thing I1 checked about
- *    `lib/credit/actions.ts` was that the guard function's NAME appeared somewhere in the file —
- *    true the moment ONE caller used it, so a tenth action copying `nudgeBillingAdminAction`'s
- *    documented-bypass shape (direct `requireOnboardedUser()`, no `requireBillingActor()`) shipped
- *    invisibly to every other assertion here. I7 closes that: it is the assertion that actually
- *    covers the chokepoint the docblock below claims to. (Fix round 2: the "every exported action"
- *    claim is true only because I7 also form-pins it — an `export ` occurrence count that must
- *    equal `export type ` plus the async-function exports the walk above already covers, so a third
- *    export form (e.g. `export const foo = async () => {}`), invisible to that walk, fails here
- *    instead of shipping ungated and unseen.)
+ *    ungated and a guarded entry cannot be silently pruned while the file still exists. (Fix round
+ *    3: the directive detector is now `hasUseServerDirective` from `./_source-scan` — shared with
+ *    `use-server-exports-only-async.test.ts`, its first consumer — rather than a bare
+ *    `raw.includes("'use server'")`, which missed a double-quoted directive.)
+ *  · I7 — (fix round 1, F2/F5; rebuilt fix round 3, human pre-merge review) every exported action in
+ *    `lib/credit/actions.ts` either calls `requireBillingActor()` naming ITSELF from within its OWN
+ *    body, or is named in `CHOKEPOINT_BYPASS` with a written reason — asserted as an exact,
+ *    BODY-SCOPED walk, never a whole-file aggregate. Before fix round 1, the ONLY thing checked
+ *    about `lib/credit/actions.ts` was that the guard function's NAME appeared somewhere in the
+ *    file — true the moment ONE caller used it. Fix round 1's I7 closed that by comparing the SET
+ *    of exported names against the SET of `requireBillingActor('<name>')` literals found ANYWHERE
+ *    in the file — better, but still two whole-file aggregates, which leaves two gaps a human
+ *    pre-merge review (fix round 3) found: (a) moving the exemption literal from
+ *    `validatePromoAction`'s call to a MUTATION's call leaves both aggregate sets identical, so
+ *    nothing fails for a newly-unguarded existing action; (b) one function's body calling
+ *    `requireBillingActor` TWICE — naming itself AND a sibling — satisfies the aggregate set-
+ *    membership check for that sibling even though the sibling's OWN body never calls the gate.
+ *    Fix round 3 rebuilds I7 as a walk over PER-EXPORT body segments
+ *    (`exportedAsyncFunctionSegmentsOf`): each export from its own `export async function` up to
+ *    the next one (or EOF) is sliced out, and only THAT segment's own `requireBillingActor(...)`
+ *    calls count toward gating IT. Neither gap above can pass this version.
  *
  * ⚠ A REPO-WIDE "every money action carries this guard" scan is DEFERRED, NOT IMPOSSIBLE. The
  * blocker is the same one `onboarding-mutation-gate.test.ts:217-238` documents: ~35 shipped actions
@@ -55,10 +79,17 @@ import { resolveRouteDir, scanRouteSources, occurrences, type ScannedFile } from
  * for widening is resolving that indirection — import-following, or a wrapper-name list — not
  * growing an allowlist. **Growing an allowlist instead of resolving the indirection is the one move
  * that must not happen.** This invariant is therefore scoped to the two surfaces this ticket
- * actually touches: EVERY export of `lib/credit/actions.ts` (I7, exact set, not just "the guard
- * function's name appears somewhere"), and the two ungated redeem mutations (I6) — exactly like
- * `onboarding-mutation-gate.test.ts` scopes its anonymous-action half to `app/join/`. Neither I7 nor
- * I6 needs import-following: every gated action in both surfaces calls its gate directly, by name.
+ * actually touches: EVERY export of `lib/credit/actions.ts` (I7, exact BODY-SCOPED set, not just
+ * "the guard function's name appears somewhere"), and the two ungated redeem mutations (I6) —
+ * exactly like `onboarding-mutation-gate.test.ts` scopes its anonymous-action half to `app/join/`.
+ * Neither I7 nor I6 needs import-following: every gated action in both surfaces calls its gate
+ * directly, by name, from its own body.
+ *
+ * ⚠ (fix round 3, human pre-merge review) — `scanRouteSources` runs ONCE, hoisted to a module-scope
+ * const (`ALL_FILES`, below), not re-invoked inside each `it` block. It walks ~1,271 files; the
+ * previous version paid that cost in six of the seven tests here. Matches the module-scope-const
+ * pattern this directory already uses elsewhere (e.g. `join-link-never-writes.test.ts`,
+ * `review-link-never-writes.test.ts`, `request-file-no-lens-gate.test.ts`).
  *
  * NO REGEX ANYWHERE, per this directory's S5852 convention — `indexOf`/`includes`/`startsWith`
  * only.
@@ -84,8 +115,8 @@ const REDEEM_ACTIONS_DIR = 'app/(dashboard)/redeem/_actions';
  * — `nudgeBillingAdminAction` publishes a notification to the company's own billing holders; it
  * moves no money and changes no payment instrument (see that action's own comment, `actions.ts`
  * immediately above its `requireOnboardedUser()` call). Any OTHER export appearing in
- * `lib/credit/actions.ts` that is neither gated nor named here is I7's failure — a new bypass must
- * be a deliberate, reviewed edit to this constant, never silent.
+ * `lib/credit/actions.ts` that is neither gated (from its OWN body) nor named here is I7's failure
+ * — a new bypass must be a deliberate, reviewed edit to this constant, never silent.
  */
 const CHOKEPOINT_BYPASS: readonly string[] = ['nudgeBillingAdminAction'];
 
@@ -101,23 +132,47 @@ function isBlank(ch: string): boolean {
   return ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t';
 }
 
+/** One `export async function <name>` declaration, sliced into its OWN body segment. */
+interface ExportedFunctionSegment {
+  readonly name: string;
+  readonly body: string;
+}
+
 /**
- * Every `<name>` in `export async function <name>(` — an indexOf walk, no regex. Matches ONLY a
- * function DECLARATION (the marker requires the literal `function` keyword), so it cannot pick up
- * a call site like `requireBillingActor(...)`.
+ * Every `export async function <name>` declaration in `code`, sliced into its OWN body segment —
+ * from that declaration's `export` keyword up to (not including) the START of the next
+ * `export async function`, or EOF for the last one. An indexOf walk, no regex.
+ *
+ * ⚠⚠ (fix round 3, human pre-merge review) — REPLACES the whole-file aggregate scan I7 used to
+ * run. The aggregate scan asked two SEPARATE questions over the WHOLE FILE — "which names are
+ * exported" and "which names appear as a `requireBillingActor('<name>')` literal anywhere" — and
+ * then compared the two SETS. A `requireBillingActor('<name>')` call satisfied that check for
+ * `<name>` no matter WHERE in the file it appeared — including from inside a DIFFERENT export's
+ * body. So one function calling `requireBillingActor` twice, naming itself and a sibling, satisfied
+ * the old I7 with the sibling completely ungated. Body-scoping closes that: each export's OWN gate
+ * call must be found inside ITS OWN segment, produced here.
  */
-function exportedAsyncFunctionNamesOf(code: string): string[] {
+function exportedAsyncFunctionSegmentsOf(code: string): ExportedFunctionSegment[] {
   const marker = 'export async function ';
-  const names: string[] = [];
+  const starts: { name: string; index: number }[] = [];
   let i = code.indexOf(marker);
   while (i !== -1) {
-    const start = i + marker.length;
-    let end = start;
-    while (end < code.length && isNameChar(code.charAt(end))) end += 1;
-    names.push(code.slice(start, end));
-    i = code.indexOf(marker, end);
+    const nameStart = i + marker.length;
+    let nameEnd = nameStart;
+    while (nameEnd < code.length && isNameChar(code.charAt(nameEnd))) nameEnd += 1;
+    starts.push({ name: code.slice(nameStart, nameEnd), index: i });
+    i = code.indexOf(marker, nameEnd);
   }
-  return names;
+
+  const segments: ExportedFunctionSegment[] = [];
+  for (let idx = 0; idx < starts.length; idx += 1) {
+    const current = starts[idx];
+    if (current === undefined) continue; // noUncheckedIndexedAccess guard; unreachable in-bounds.
+    const next = starts[idx + 1];
+    const end = next === undefined ? code.length : next.index;
+    segments.push({ name: current.name, body: code.slice(current.index, end) });
+  }
+  return segments;
 }
 
 /**
@@ -126,6 +181,9 @@ function exportedAsyncFunctionNamesOf(code: string): string[] {
  * first non-blank character after the paren is an identifier, not a quote). Tolerates both this
  * file's single-line calls (`requireBillingActor('startPurchaseAction')`) and its
  * prettier-wrapped multi-line ones (`requireBillingActor(\n  'getTopUpCreditStatusAction',\n  …`).
+ *
+ * Body-scoped callers (I7) pass a single export's `body` slice here rather than the whole file, so
+ * the names returned are only the calls made FROM WITHIN that export's own declaration.
  */
 function requireBillingActorCallerNamesOf(code: string): string[] {
   const marker = 'requireBillingActor(';
@@ -148,19 +206,23 @@ function requireBillingActorCallerNamesOf(code: string): string[] {
 // a developer's `apps/web` (the first candidate) and CI's repo root (the second).
 const SRC_DIR = resolveRouteDir(['src', 'apps/web/src']);
 
-function scanAll(): ScannedFile[] {
-  return scanRouteSources(SRC_DIR, '', ['node_modules', '.next', '__snapshots__']);
-}
-
 describe('BAL-528 — destructive money actions refuse under an impersonated session', () => {
+  // (fix round 3, human pre-merge review) — hoisted to run the ~1,271-file walk ONCE for the whole
+  // suite, matching this directory's established module-scope-const pattern, rather than
+  // re-walking it inside six of the seven `it` blocks below.
+  const ALL_FILES: ScannedFile[] = scanRouteSources(SRC_DIR, '', [
+    'node_modules',
+    '.next',
+    '__snapshots__',
+  ]);
+
   it('I1 — guards the guard: the scan root resolves, finds a real surface, and lib/credit/actions.ts genuinely calls the guard (non-vacuity)', () => {
     expect(SRC_DIR).not.toBe('');
 
-    const files = scanAll();
     // apps/web/src holds ~1271 non-test .ts/.tsx files today — a real floor, not a token one.
-    expect(files.length).toBeGreaterThan(500);
+    expect(ALL_FILES.length).toBeGreaterThan(500);
 
-    const actionsFile = files.find((f) => f.rel === ACTIONS_FILE);
+    const actionsFile = ALL_FILES.find((f) => f.rel === ACTIONS_FILE);
     expect(actionsFile).toBeDefined();
     expect(actionsFile?.code.includes(GUARD_FUNCTION)).toBe(true);
 
@@ -168,19 +230,18 @@ describe('BAL-528 — destructive money actions refuse under an impersonated ses
     // If `isImpersonatedSession` or `IMPERSONATION_REFUSAL_MESSAGE` is ever renamed without
     // updating PREDICATE_FUNCTION / REFUSAL_CONSTANT here, THIS assertion fails first — before I3
     // gets a chance to keep passing against a name nothing exports any more.
-    const impersonationModule = files.find((f) => f.rel === IMPERSONATION_MODULE);
+    const impersonationModule = ALL_FILES.find((f) => f.rel === IMPERSONATION_MODULE);
     expect(impersonationModule).toBeDefined();
     expect(impersonationModule?.code.includes(`export function ${PREDICATE_FUNCTION}`)).toBe(true);
     expect(impersonationModule?.code.includes(`export const ${REFUSAL_CONSTANT}`)).toBe(true);
 
-    const expertChecklistFile = files.find((f) => f.rel === EXPERT_CHECKLIST_FILE);
+    const expertChecklistFile = ALL_FILES.find((f) => f.rel === EXPERT_CHECKLIST_FILE);
     expect(expertChecklistFile).toBeDefined();
     expect(expertChecklistFile?.code.includes(PREDICATE_FUNCTION)).toBe(true);
   });
 
   it('I2 — isImpersonating is read in EXACTLY the two allowlisted modules', () => {
-    const rels = scanAll()
-      .filter((f) => f.code.includes(IMPERSONATION_FIELD))
+    const rels = ALL_FILES.filter((f) => f.code.includes(IMPERSONATION_FIELD))
       .map((f) => f.rel)
       .sort();
 
@@ -209,31 +270,82 @@ describe('BAL-528 — destructive money actions refuse under an impersonated ses
   });
 
   it('I4 — the READ exemption literal lives in exactly two files: its type declaration and the one gate that has reads', () => {
-    const rels = scanAll()
-      .filter((f) => f.code.includes(READ_EXEMPTION_LITERAL))
+    const rels = ALL_FILES.filter((f) => f.code.includes(READ_EXEMPTION_LITERAL))
       .map((f) => f.rel)
       .sort();
 
     expect(rels).toEqual([IMPERSONATION_MODULE, ACTIONS_FILE].sort());
   });
 
-  it('I5 — the exemption occurs EXACTLY TWICE in lib/credit/actions.ts — the two documented READS, no more', () => {
-    const actionsFile = scanAll().find((f) => f.rel === ACTIONS_FILE);
+  it('I5 — the READ exemption literal lives ONLY in the bodies of the two documented READ callers (plus the ONE compiler-bound overload signature), and nowhere else in lib/credit/actions.ts', () => {
+    const actionsFile = ALL_FILES.find((f) => f.rel === ACTIONS_FILE);
     if (actionsFile === undefined) {
       throw new Error(`${ACTIONS_FILE} not found by the scan — see the I1 non-vacuity test`);
     }
+
+    const segments = exportedAsyncFunctionSegmentsOf(actionsFile.code);
+    const segmentsCarryingExemption = segments
+      .filter((s) => s.body.includes(READ_EXEMPTION_LITERAL))
+      .map((s) => s.name)
+      .sort();
+
     expect(
-      occurrences(actionsFile.code, READ_EXEMPTION_LITERAL),
-      'A third occurrence means a mutation has quietly been excused from the refusal default.'
+      segmentsCarryingExemption,
+      'The READ exemption literal must live in exactly getTopUpCreditStatusAction and ' +
+        'validatePromoAction — a THIRD caller (or the exemption having MOVED onto a different ' +
+        'caller entirely, with the aggregate count unchanged) means a mutation has quietly been ' +
+        `excused from the refusal default:\n  ${segmentsCarryingExemption.join('\n  ')}`
+    ).toEqual(['getTopUpCreditStatusAction', 'validatePromoAction'].sort());
+
+    // The PREAMBLE — everything before the first `export async function` — is where
+    // `requireBillingActor`'s own declaration (implementation + Item B's overload signatures)
+    // lives. Item B's second overload names the literal in TYPE position
+    // (`impersonationGuard: 'billing_read_permitted_under_impersonation'`) so only a
+    // `BillingReadCaller` can pass it — that is a legitimate, EXPECTED occurrence, pinned to
+    // exactly one, and it is not a call site.
+    const firstExportMarker = actionsFile.code.indexOf('export async function ');
+    const preamble =
+      firstExportMarker === -1 ? actionsFile.code : actionsFile.code.slice(0, firstExportMarker);
+    const preambleOccurrences = occurrences(preamble, READ_EXEMPTION_LITERAL);
+    expect(
+      preambleOccurrences,
+      "the exemption literal's shape changed in requireBillingActor's overload signature " +
+        '(Item B) — update this pin if that was a deliberate, reviewed edit'
+    ).toBe(1);
+
+    const totalInsideSegments = segments.reduce(
+      (sum, segment) => sum + occurrences(segment.body, READ_EXEMPTION_LITERAL),
+      0
+    );
+    expect(
+      totalInsideSegments,
+      'a THIRD occurrence inside an export body means a mutation has quietly been excused from ' +
+        'the refusal default'
     ).toBe(2);
+
+    // "Nowhere else in the file": every occurrence in the whole scanned `code` view must be
+    // accounted for by the preamble's one pinned overload occurrence PLUS occurrences found
+    // strictly INSIDE the per-export body segments above — a stray occurrence sitting anywhere
+    // else (a private helper between two exports, a docblock the comment-stripper missed) would
+    // otherwise be invisible to the checks above.
+    const totalInFile = occurrences(actionsFile.code, READ_EXEMPTION_LITERAL);
+    expect(
+      totalInFile,
+      'the exemption literal appears somewhere that is neither the pinned overload signature ' +
+        "nor an export's own body segment"
+    ).toBe(preambleOccurrences + totalInsideSegments);
   });
 
   it('I6 — every use-server module under redeem/_actions/ references the guard, in BOTH directions', () => {
-    const redeemFiles = scanAll().filter((f) => f.rel.startsWith(`${REDEEM_ACTIONS_DIR}/`));
+    const redeemFiles = ALL_FILES.filter((f) => f.rel.startsWith(`${REDEEM_ACTIONS_DIR}/`));
     // Non-vacuity: redeem-promo.ts and start-continue-to-mandate.ts, at minimum.
     expect(redeemFiles.length).toBeGreaterThanOrEqual(2);
 
-    const serverActionFiles = redeemFiles.filter((f) => f.raw.includes("'use server'"));
+    // (fix round 3, human pre-merge review) — `hasUseServerDirective` (shared with
+    // `use-server-exports-only-async.test.ts` via `./_source-scan`) recognises BOTH quote styles.
+    // The previous `f.raw.includes("'use server'")` here only ever matched the single-quoted
+    // form.
+    const serverActionFiles = redeemFiles.filter((f) => hasUseServerDirective(f.raw));
     expect(serverActionFiles.length).toBeGreaterThanOrEqual(2);
 
     const unguarded = serverActionFiles
@@ -256,41 +368,56 @@ describe('BAL-528 — destructive money actions refuse under an impersonated ses
     ).toEqual([]);
   });
 
-  it('I7 — every exported action in lib/credit/actions.ts either calls requireBillingActor() by name or is named in CHOKEPOINT_BYPASS', () => {
-    const actionsFile = scanAll().find((f) => f.rel === ACTIONS_FILE);
+  it('I7 — every exported action in lib/credit/actions.ts calls requireBillingActor() naming ITSELF from within its OWN body, or is named in CHOKEPOINT_BYPASS', () => {
+    const actionsFile = ALL_FILES.find((f) => f.rel === ACTIONS_FILE);
     if (actionsFile === undefined) {
       throw new Error(`${ACTIONS_FILE} not found by the scan — see the I1 non-vacuity test`);
     }
 
-    const exported = exportedAsyncFunctionNamesOf(actionsFile.code).sort();
-    const gated = requireBillingActorCallerNamesOf(actionsFile.code);
-    // Non-vacuity: today's file has 8 gated callers, not 0 — a broken walk that found none would
-    // make `expected` collapse to just CHOKEPOINT_BYPASS and this assertion would still (rightly)
-    // fail against the real 9 exports, but pin the walk itself so a silent regression is loud here.
-    expect(gated.length).toBeGreaterThan(0);
-    const expected = [...gated, ...CHOKEPOINT_BYPASS].sort();
+    const segments = exportedAsyncFunctionSegmentsOf(actionsFile.code);
+    // Non-vacuity: today's file has 9 exported async functions (8 gated + 1 documented bypass) —
+    // a broken walk that found none would make the assertions below fail for the wrong reason
+    // rather than catching a real regression.
+    expect(segments.length).toBeGreaterThan(0);
 
-    // Form-pin: I7's coverage claim ("every exported action") holds only because every export in
-    // this file today is either `export type ` or `export async function ` — the only form
-    // exportedAsyncFunctionNamesOf() can see. If a THIRD export form ever lands (e.g. `export const
-    // foo = async () => {}`), it is invisible to `exported` above and could ship with no
-    // impersonation guard, undetected by the assertion below. This fails the moment `export `
-    // occurrences stop being fully accounted for by `export type ` plus the async-function exports
-    // this test already walks.
+    // Form-pin (unchanged from fix round 1): I7's "every exported action" claim holds only
+    // because every export in this file today is `export type ` or `export async function `. If
+    // a THIRD export form ever lands (e.g. `export const foo = async () => {}`), it is invisible
+    // to exportedAsyncFunctionSegmentsOf() and could ship with no impersonation guard, undetected
+    // by the assertion below.
     expect(
       occurrences(actionsFile.code, 'export '),
       'actions.ts grew an export that is neither `export type` nor `export async function` — ' +
-        'widen exportedAsyncFunctionNamesOf() first, or I7 cannot see it.'
-    ).toBe(occurrences(actionsFile.code, 'export type ') + exported.length);
+        'widen exportedAsyncFunctionSegmentsOf() first, or I7 cannot see it.'
+    ).toBe(occurrences(actionsFile.code, 'export type ') + segments.length);
+
+    // Every name CHOKEPOINT_BYPASS excuses must be a REAL export — a stale/typo'd bypass entry
+    // would otherwise silently excuse nothing while still LOOKING like coverage.
+    const exportedNames = segments.map((s) => s.name);
+    const staleBypassEntries = CHOKEPOINT_BYPASS.filter((name) => !exportedNames.includes(name));
+    expect(
+      staleBypassEntries,
+      'CHOKEPOINT_BYPASS names something that is not an actual export of lib/credit/actions.ts'
+    ).toEqual([]);
+
+    // BODY-SCOPED (fix round 3, human pre-merge review — closes the two gaps a whole-file
+    // aggregate scan left open, see the top docblock's I7 entry): each non-bypass export's OWN
+    // body segment must call requireBillingActor() naming ITSELF. Neither (a) a sibling
+    // function's body naming this export, nor (b) the exemption literal having simply moved to a
+    // different caller while the aggregate sets stay equal, can satisfy this.
+    const misgated = segments
+      .filter((s) => !CHOKEPOINT_BYPASS.includes(s.name))
+      .filter((s) => !requireBillingActorCallerNamesOf(s.body).includes(s.name))
+      .map((s) => s.name);
 
     expect(
-      exported,
-      `lib/credit/actions.ts exports an action that neither calls requireBillingActor() by name ` +
-        `nor is named in CHOKEPOINT_BYPASS — it can ship with NO impersonation guard at all. ` +
-        `Route it through requireBillingActor(), or add it to CHOKEPOINT_BYPASS with a written ` +
-        `reason (it must move no money and change no payment instrument).\n` +
-        `  exported: [${exported.join(', ')}]\n` +
-        `  expected (gated + bypass): [${expected.join(', ')}]`
-    ).toEqual(expected);
+      misgated,
+      `These exports in lib/credit/actions.ts do not call requireBillingActor('<their own name>') ` +
+        `from within THEIR OWN body — they can ship with NO impersonation guard at all, even if a ` +
+        `SIBLING function's body happens to call requireBillingActor with this name. Route each ` +
+        `through requireBillingActor() from its own body, or add it to CHOKEPOINT_BYPASS with a ` +
+        `written reason (it must move no money and change no payment instrument).\n` +
+        `  misgated: [${misgated.join(', ')}]`
+    ).toEqual([]);
   });
 });

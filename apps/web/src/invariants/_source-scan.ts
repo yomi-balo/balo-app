@@ -296,6 +296,32 @@ export function occurrences(haystack: string, needle: string): number {
   return count;
 }
 
+/**
+ * Whether `source` is a Server Action module — the `'use server'` (or `"use server"`) directive as
+ * the FIRST real statement, comments and blank lines skipped. Both quote styles are checked
+ * literally, per this directory's no-regex convention (Prettier normalises to single quotes, but
+ * nothing type-checks a hand-written directive).
+ *
+ * ⚠⚠ EXTRACTED FOR BAL-528 fix round 3's `impersonation-money-guard.test.ts`, ITS SECOND CONSUMER.
+ * `use-server-exports-only-async.test.ts` shipped this first (as a local `hasUseServerDirective`); a
+ * second verbatim copy in the same directory is exactly the shape SonarCloud's >3% new-code
+ * duplication gate exists to catch (memory `reference_sonar_duplication_not_caught_locally`).
+ * Behaviour is unchanged from the original, including that it is a STRICT "is this a Server Action
+ * module" test (the directive must be the first real statement) — a different, looser question from
+ * "does this file's raw text contain the substring `'use server'` anywhere", which some scans
+ * (deliberately) ask instead.
+ */
+export function hasUseServerDirective(source: string): boolean {
+  for (const raw of source.split('\n')) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('//') || line.startsWith('/*') || line.startsWith('*')) {
+      continue;
+    }
+    return line === `'use server';` || line === `"use server";`;
+  }
+  return false;
+}
+
 /** One scanned source file: its path relative to the route root, plus two views of it. */
 export interface ScannedFile {
   readonly rel: string;

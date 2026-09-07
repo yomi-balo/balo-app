@@ -49,15 +49,11 @@ export async function startContinueToMandate(): Promise<StartContinueToMandateRe
     return { status: 'forbidden' };
   }
 
-  const allowed = await hasCapability(user, CAPABILITIES.MANAGE_BILLING, {
-    companyId: user.companyId,
-  });
-  if (!allowed) {
-    return { status: 'forbidden' };
-  }
-
-  // BAL-528 — opens an off-session mandate SetupIntent, i.e. "modifying payment methods" in the
-  // skill's blocked list. Returns the existing non-leaking `forbidden` arm — no new copy.
+  // BAL-528 (fix round 3: reordered ahead of the MANAGE_BILLING read, human pre-merge review) —
+  // opens an off-session mandate SetupIntent, i.e. "modifying payment methods" in the skill's
+  // blocked list. Checked BEFORE `hasCapability` so a refusal never pays for a membership DB
+  // round-trip — the same ordering `requireBillingActor()` uses on the credit chokepoint. Returns
+  // the existing non-leaking `forbidden` arm — no new copy.
   if (
     refuseMoneyActionUnderImpersonation(user, {
       action: 'startContinueToMandate',
@@ -65,6 +61,13 @@ export async function startContinueToMandate(): Promise<StartContinueToMandateRe
       actorUserId: user.id,
     })
   ) {
+    return { status: 'forbidden' };
+  }
+
+  const allowed = await hasCapability(user, CAPABILITIES.MANAGE_BILLING, {
+    companyId: user.companyId,
+  });
+  if (!allowed) {
     return { status: 'forbidden' };
   }
 

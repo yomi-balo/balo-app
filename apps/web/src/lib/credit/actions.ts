@@ -250,6 +250,22 @@ type BillingActorCaller =
   | 'saveBillingEmailAction';
 
 /**
+ * BAL-528 (fix round 3, human pre-merge review, "belt-and-braces") — the two callers documented as
+ * READS on this gate, and ONLY these two. Split out of {@link BillingActorCaller} so the overloads
+ * on `requireBillingActor` below can bind `'billing_read_permitted_under_impersonation'` to this
+ * exact caller set AT THE TYPE LEVEL: a mutation passing the exemption is a `tsc` error, not merely
+ * a fact the invariant scan discovers after the fact. This is belt-and-braces alongside the
+ * source-scan invariant (`invariants/impersonation-money-guard.test.ts`), not a replacement for
+ * it — the invariant still catches a *rename* of the literal or a *body-scoped* misuse the compiler
+ * cannot see (e.g. a caller that copies the literal into its OWN code without ever calling this
+ * function with it).
+ */
+type BillingReadCaller = 'getTopUpCreditStatusAction' | 'validatePromoAction';
+
+/** What `requireBillingActor` resolves to, or `null` on any refusal (capability or impersonation). */
+type BillingActor = { userId: string; companyId: string; name: string | null } | null;
+
+/**
  * Resolve the acting MANAGE_BILLING holder + their company scope, or `null` when the actor
  * lacks the capability. Shared by the billing-gated actions (capability-based, ADR-1029 —
  * never role/activeMode). Fail-closed on onboarding (requireOnboardedUser, BAL-365): these
@@ -271,15 +287,23 @@ type BillingActorCaller =
  * anything (`findByCompanyId` / `promoRedemptionsRepository.validate`).
  * INERT TODAY: no impersonation entry point exists, so `isImpersonating` is always `undefined`
  * and this branch never fires in production. That is deliberate — the guard precedes the feature.
+ *
+ * BAL-528 (fix round 3, "belt-and-braces") — THE EXEMPTION IS COMPILER-BOUND TO THE TWO READ
+ * CALLERS. The overloads below make `'billing_read_permitted_under_impersonation'` acceptable ONLY
+ * when `caller` is a {@link BillingReadCaller} — a mutation naming the exemption is a `tsc` error,
+ * not merely a fact this file's source-scan invariant would otherwise discover after the fact.
  */
+function requireBillingActor(
+  caller: Exclude<BillingActorCaller, BillingReadCaller>
+): Promise<BillingActor>;
+function requireBillingActor(
+  caller: BillingReadCaller,
+  impersonationGuard: 'billing_read_permitted_under_impersonation'
+): Promise<BillingActor>;
 async function requireBillingActor(
   caller: BillingActorCaller,
   impersonationGuard: ImpersonationGuard = 'refuse_under_impersonation'
-): Promise<{
-  userId: string;
-  companyId: string;
-  name: string | null;
-} | null> {
+): Promise<BillingActor> {
   const user = await requireOnboardedUser();
   const { companyId } = await getCompanyContext();
 

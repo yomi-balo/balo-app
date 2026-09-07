@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { hasUseServerDirective } from './_source-scan';
 
 /**
  * BUILD INVARIANT — a `'use server'` module may export ONLY async functions.
@@ -66,18 +67,6 @@ function walk(dir: string): string[] {
     found.push(full);
   }
   return found;
-}
-
-/** A file is a Server Action module only if the directive is the first real statement. */
-function hasUseServerDirective(source: string): boolean {
-  for (const raw of source.split('\n')) {
-    const line = raw.trim();
-    if (line === '' || line.startsWith('//') || line.startsWith('/*') || line.startsWith('*')) {
-      continue;
-    }
-    return line === `'use server';` || line === `"use server";`;
-  }
-  return false;
 }
 
 /**
