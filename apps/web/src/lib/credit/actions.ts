@@ -17,6 +17,10 @@ import {
   type CardBackedModeWriteGuard,
 } from '@balo/shared/credit';
 import { requireOnboardedUser, getCompanyContext } from '@/lib/auth/session';
+import {
+  refuseMoneyActionUnderImpersonation,
+  type ImpersonationGuard,
+} from '@/lib/auth/impersonation';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -231,6 +235,21 @@ export type SaveConfigResult =
 export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
 
 /**
+ * Which of this file's actions is asking. Named as a union rather than a bare `string` so a typo
+ * fails `tsc` and adding a NINTH billing-gated action is a deliberate edit here — a small,
+ * deliberate speed bump in front of the fail-closed default below.
+ */
+type BillingActorCaller =
+  | 'startPurchaseAction'
+  | 'getTopUpCreditStatusAction'
+  | 'validatePromoAction'
+  | 'saveLowBalanceConfigAction'
+  | 'armSavedCardMandateAction'
+  | 'startCardCaptureAction'
+  | 'removeSavedCardAction'
+  | 'saveBillingEmailAction';
+
+/**
  * Resolve the acting MANAGE_BILLING holder + their company scope, or `null` when the actor
  * lacks the capability. Shared by the billing-gated actions (capability-based, ADR-1029 —
  * never role/activeMode). Fail-closed on onboarding (requireOnboardedUser, BAL-365): these
@@ -240,14 +259,38 @@ export type NudgeResult = { ok: true } | { ok: false; error: 'error' };
  * BAL-522 — widened to also return the session's own display `name` (`null` when empty), so
  * `saveBillingEmailAction` can attribute a just-saved provenance line WITHOUT a second session
  * read — the session is already in hand here.
+ *
+ * BAL-528 — DESTRUCTIVE MONEY ACTIONS REFUSE UNDER AN IMPERSONATED SESSION, AND THE DEFAULT IS
+ * REFUSAL. The `workos-auth` skill blocks purchases, credit spend and payment-method changes under
+ * impersonation, and explicitly PERMITS billing *reads*. Both halves are expressed here rather than
+ * at six call sites, so a ninth billing-gated action inherits the refusal by writing nothing.
+ * `null` is returned — never a throw — because every caller wraps this in a `try` whose `catch`
+ * renders generic retry copy, and a permanent refusal reported as "please try again" is the exact
+ * defect BAL-523/BAL-524 spent two rounds removing. The two callers naming
+ * `'billing_read_permitted_under_impersonation'` are the only READS on this gate and neither writes
+ * anything (`findByCompanyId` / `promoRedemptionsRepository.validate`).
+ * INERT TODAY: no impersonation entry point exists, so `isImpersonating` is always `undefined`
+ * and this branch never fires in production. That is deliberate — the guard precedes the feature.
  */
-async function requireBillingActor(): Promise<{
+async function requireBillingActor(
+  caller: BillingActorCaller,
+  impersonationGuard: ImpersonationGuard = 'refuse_under_impersonation'
+): Promise<{
   userId: string;
   companyId: string;
   name: string | null;
 } | null> {
   const user = await requireOnboardedUser();
   const { companyId } = await getCompanyContext();
+
+  // BAL-528 — see the docblock: default REFUSE, two named READ exemptions.
+  if (
+    impersonationGuard === 'refuse_under_impersonation' &&
+    refuseMoneyActionUnderImpersonation(user, { action: caller, companyId, actorUserId: user.id })
+  ) {
+    return null;
+  }
+
   if (!(await hasCapability(user, CAPABILITIES.MANAGE_BILLING, { companyId }))) {
     return null;
   }
@@ -532,7 +575,7 @@ export async function startPurchaseAction(
   const input = parsed.data;
 
   try {
-    const actor = await requireBillingActor();
+    const actor = await requireBillingActor('startPurchaseAction');
     if (actor === null) {
       return { ok: false, error: 'unauthorized' };
     }
@@ -720,7 +763,14 @@ export async function getTopUpCreditStatusAction(
   }
 
   try {
-    const actor = await requireBillingActor();
+    // BAL-528: a billing READ. The skill permits reading billing state under impersonation
+    // (references/webhooks-sessions.md:292-297), and this action writes nothing —
+    // `findByCompanyId`, never `ensureForCompany` (see this action's own docblock). Polled ~13×
+    // per receipt.
+    const actor = await requireBillingActor(
+      'getTopUpCreditStatusAction',
+      'billing_read_permitted_under_impersonation'
+    );
     if (actor === null) {
       return { status: 'unauthorized' };
     }
@@ -777,7 +827,12 @@ export async function getTopUpCreditStatusAction(
  */
 export async function validatePromoAction(code: string): Promise<ValidatePromoResult> {
   try {
-    const actor = await requireBillingActor();
+    // BAL-528: a billing READ. `promoRedemptionsRepository.validate` is a SELECT; the
+    // authoritative grant happens only in the settlement webhook.
+    const actor = await requireBillingActor(
+      'validatePromoAction',
+      'billing_read_permitted_under_impersonation'
+    );
     if (actor === null) {
       return { ok: false, reason: 'unauthorized' };
     }
@@ -862,7 +917,7 @@ export async function saveLowBalanceConfigAction(
   }
 
   try {
-    const actor = await requireBillingActor();
+    const actor = await requireBillingActor('saveLowBalanceConfigAction');
     if (actor === null) {
       return { ok: false, error: 'unauthorized' };
     }
@@ -944,7 +999,7 @@ export async function armSavedCardMandateAction(
 
   let companyId: string | undefined;
   try {
-    const actor = await requireBillingActor();
+    const actor = await requireBillingActor('armSavedCardMandateAction');
     if (actor === null) {
       return { ok: false, error: 'unauthorized' };
     }
@@ -1037,7 +1092,7 @@ export type StartCardCaptureResult =
 export async function startCardCaptureAction(): Promise<StartCardCaptureResult> {
   let companyId: string | undefined;
   try {
-    const actor = await requireBillingActor();
+    const actor = await requireBillingActor('startCardCaptureAction');
     if (actor === null) {
       return { ok: false, error: 'unauthorized' };
     }
@@ -1114,7 +1169,7 @@ export async function removeSavedCardAction(): Promise<RemoveSavedCardResult> {
   let walletId: string | undefined;
   let companyId: string | undefined;
   try {
-    const actor = await requireBillingActor();
+    const actor = await requireBillingActor('removeSavedCardAction');
     if (actor === null) {
       return { ok: false, error: 'unauthorized' };
     }
@@ -1186,6 +1241,10 @@ const NUDGE_WINDOW_MS = 60 * 60 * 1000;
  */
 export async function nudgeBillingAdminAction(): Promise<NudgeResult> {
   try {
+    // BAL-528 — deliberately NOT run through requireBillingActor()/the impersonation guard: this
+    // publishes a notification to the company's own billing holders, moves no money, changes no
+    // payment instrument, and refusing it under impersonation would block a staff member from the
+    // one harmless "ask your admin" affordance.
     const user = await requireOnboardedUser();
     const { companyId } = await getCompanyContext();
 
@@ -1257,7 +1316,7 @@ export async function saveBillingEmailAction(
 
   let companyId: string | undefined;
   try {
-    const actor = await requireBillingActor();
+    const actor = await requireBillingActor('saveBillingEmailAction');
     if (actor === null) {
       return { ok: false, error: 'unauthorized' };
     }

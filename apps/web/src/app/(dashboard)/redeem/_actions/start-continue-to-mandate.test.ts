@@ -124,4 +124,15 @@ describe('startContinueToMandate', () => {
     });
     expect(await startContinueToMandate()).toEqual({ status: 'error' });
   });
+
+  // BAL-528 — opens an off-session mandate SetupIntent ("modifying payment methods" in the
+  // skill's blocked list), so it must refuse under an impersonated session. `@/lib/auth/
+  // impersonation` is deliberately NOT mocked — the real predicate must run.
+  it('refuses opening a mandate SetupIntent under an impersonated session', async () => {
+    mockRequireUser.mockResolvedValue({ ...USER, isImpersonating: true });
+
+    expect(await startContinueToMandate()).toEqual({ status: 'forbidden' });
+    expect(mockLoggedFetch).not.toHaveBeenCalled();
+    expect(mockFindByCompanyId).not.toHaveBeenCalled();
+  });
 });

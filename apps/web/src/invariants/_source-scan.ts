@@ -277,6 +277,25 @@ export function namedImportsFrom(source: string, moduleSpecifier: string): strin
   return names;
 }
 
+/**
+ * How many times `needle` occurs in `haystack`, non-overlapping — an `indexOf` loop, no regex.
+ *
+ * ⚠⚠ EXTRACTED FOR BAL-528's `impersonation-money-guard.test.ts`, ITS SECOND CONSUMER.
+ * `card-backed-mode-write-exemption.test.ts` shipped this inline first; a second verbatim copy in
+ * the same directory is exactly the shape SonarCloud's >3% new-code duplication gate exists to
+ * catch (memory `reference_sonar_duplication_not_caught_locally`). Behaviour is unchanged from the
+ * original.
+ */
+export function occurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let i = haystack.indexOf(needle);
+  while (i !== -1) {
+    count += 1;
+    i = haystack.indexOf(needle, i + needle.length);
+  }
+  return count;
+}
+
 /** One scanned source file: its path relative to the route root, plus two views of it. */
 export interface ScannedFile {
   readonly rel: string;

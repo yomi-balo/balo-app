@@ -5,6 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { promoCodesRepository, normalizePromoCode, type RedeemPromoResult } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { refuseMoneyActionUnderImpersonation } from '@/lib/auth/impersonation';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { trackServerAndFlush, PROMO_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -118,6 +119,19 @@ export async function redeemPromoCode(
     companyId: user.companyId,
   });
   if (!allowed) {
+    return { status: 'forbidden' };
+  }
+
+  // BAL-528 — a redeem CREDITS a wallet; the skill blocks credit movement under an impersonated
+  // session. Returns the existing non-leaking `forbidden` arm (see this file's result docblock) —
+  // no new copy, and indistinguishable from the capability refusal above by design.
+  if (
+    refuseMoneyActionUnderImpersonation(user, {
+      action: 'redeemPromoCode',
+      companyId: user.companyId,
+      actorUserId: user.id,
+    })
+  ) {
     return { status: 'forbidden' };
   }
 

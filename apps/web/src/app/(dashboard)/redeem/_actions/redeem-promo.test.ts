@@ -180,4 +180,17 @@ describe('redeemPromoCode', () => {
       expect.objectContaining({ error: 'DB down', companyId: 'company-1' })
     );
   });
+
+  // BAL-528 — a redeem CREDITS a wallet, so it must refuse under an impersonated session.
+  // `@/lib/auth/impersonation` is deliberately NOT mocked — the real predicate must run.
+  it('refuses a redeem under an impersonated session — and NEVER credits the wallet', async () => {
+    mockRequireUser.mockResolvedValue({ ...USER, isImpersonating: true });
+
+    const result = await redeemPromoCode({ code: 'WELCOME50' });
+
+    expect(result).toEqual({ status: 'forbidden' });
+    expect(mockRedeem).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+  });
 });
