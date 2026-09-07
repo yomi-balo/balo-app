@@ -14,6 +14,11 @@ import { getInAppTemplate } from './in-app-templates.js';
  * globs `*.test.ts` ONLY — a `.test.tsx` here never runs and reports green, which is exactly how
  * this template shipped with zero coverage in the first place. That is why every element below
  * is built with `React.createElement` rather than JSX.
+ *
+ * ⚠ BAL-552 — "book again" was retired from every arm here. An `account_hold` gates
+ * `creditSessionsRepository.open`, auto-top-up and card removal, and NOTHING on the booking
+ * path; on the presence path an `open()` refusal never fails a join (`join-meeting.ts:358`).
+ * Bookings were never blocked, so do not "restore" the friendlier "book again" phrasing.
  */
 
 const BASE = 'https://app.balo.expert';
@@ -63,6 +68,9 @@ describe('CreditReceivableClearedEmail (BAL-535)', () => {
     expect(html).toContain('A$50.00');
     expect(html).toContain('Your balance is now A$110.00');
     expect(html).toContain(`${BASE}/settings/billing`);
+    // BAL-552 — the previewText no longer implies bookings were ever blocked.
+    expect(html).toContain("That balance is settled — nothing's outstanding on your account");
+    expect(html).not.toMatch(/book again/i);
   });
 
   it('⚠ N5/L2 — attributes the figure to the CONSULTATIONS, never to the payment', async () => {
@@ -107,6 +115,7 @@ describe('getEmailTemplate — credit-receivable-cleared factory', () => {
     // … and `balanceAfter` from the TRUE final display balance (M3).
     expect(html).toContain('Your balance is now A$110.00');
     expect(visibleText(html)).not.toMatch(LEAK_WORDS);
+    expect(html).not.toMatch(/book again/i);
   });
 
   it('greets "there" for a name-less recipient', async () => {
@@ -134,7 +143,10 @@ describe('getInAppTemplate — credit-receivable-cleared', () => {
     });
     expect(out.title).toBe('Account clear');
     expect(out.body).toContain('A$110.00');
-    expect(out.body).toContain("You're all set to book again");
+    // BAL-552 — an `account_hold` never gated booking (see the component docblock), so the copy
+    // no longer implies a restriction was lifted.
+    expect(out.body).toContain("Nothing's outstanding");
+    expect(out.body).not.toMatch(/book again/i);
     expect(out.actionUrl).toBe('/settings/billing');
   });
 

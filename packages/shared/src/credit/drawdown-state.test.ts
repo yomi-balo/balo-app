@@ -6,6 +6,16 @@ import {
   type DrawdownKey,
 } from './drawdown-state';
 
+/**
+ * BAL-552 — drift-prevention note. The `end` key's two mandate arms below are verbatim pins on
+ * the SAME fact `LowBalanceModePicker.tsx`'s `NOTIFY_ONLY_SETTLES_TO_CARD` /
+ * `NOTIFY_ONLY_SETTLES_ON_TOP_UP` state, but they are NOT one shared source — the picker keeps
+ * its own private strings (out of scope this round; `LowBalanceModePicker.tsx` is untouched).
+ * Nothing in CI asserts the two surfaces agree with each other; this file only pins that THIS
+ * surface is internally consistent and truthful. If a later ticket clears touching the picker,
+ * hoist the clause family into `@balo/shared/credit` and have both consume it.
+ */
+
 const NOW = new Date('2026-07-16T12:00:00.000Z');
 const RATE = 100; // A$1.00/min
 
@@ -24,6 +34,7 @@ function base(overrides: Partial<DrawdownInputs> = {}): DrawdownInputs {
     billingFloorMinutes: 15,
     minutesAlreadyDrawn: 42,
     graceAvailable: true,
+    mandateActive: true,
     lens: 'client',
     now: NOW,
     ...overrides,
@@ -143,12 +154,34 @@ describe('deriveDrawdownState — client lens copy', () => {
     expect(state.meter.pct).toBe(100);
   });
 
-  it('end (no card) is the balance-used pause', () => {
+  it('end (no live mandate): balance-used pause that says the extra time still needs settling', () => {
     const state = deriveDrawdownState(
-      base({ ...KEY_INPUTS.end, lens: 'client', graceAvailable: false })
+      base({ ...KEY_INPUTS.end, lens: 'client', graceAvailable: false, mandateActive: false })
     );
     expect(state.title).toBe("You're at the end of your balance");
     expect(state.meter).toMatchObject({ mode: 'empty', pct: 0, tone: 'faint' });
+    expect(state.body).toBe(
+      "Top up to keep going — your expert can pick right back up whenever you're ready. Extra time from here still needs settling — your next top-up covers it."
+    );
+    expect(state.body).not.toContain('settles to your card');
+    expect(state.body).not.toContain('pause');
+    expect(state.body).not.toContain('interrupt');
+  });
+
+  // BAL-552 (ADR-1040 Amendment 6 §A.1/§D) — `notify_only` + a LIVE mandate reads
+  // `graceAvailable: false` (BAL-523), but settlement charges it anyway. The `end` copy must
+  // branch on `mandateActive`, NEVER on `graceAvailable`.
+  it('⚠ end with a LIVE mandate on a notify_only wallet says the extra time settles to the card', () => {
+    const state = deriveDrawdownState(
+      base({ ...KEY_INPUTS.end, lens: 'client', graceAvailable: false, mandateActive: true })
+    );
+    expect(state.title).toBe("You're at the end of your balance");
+    expect(state.body).toBe(
+      "Top up to keep going — your expert can pick right back up whenever you're ready. Extra time from here settles to your card afterward."
+    );
+    expect(state.body).not.toContain('needs settling');
+    expect(state.body).not.toContain('pause');
+    expect(state.body).not.toContain('interrupt');
   });
 });
 
@@ -208,6 +241,48 @@ describe('deriveDrawdownState — member lens copy', () => {
     );
     expect(state.meter.label).toBe('Team balance healthy');
   });
+
+  // BAL-552 — the member twin of the client-lens `end` mandate arms. The member's own wording
+  // differs by exactly one word between the two no-mandate arms ("your" vs "the" next top-up —
+  // the member does not hold the card, so they ask the admin rather than topping up themselves).
+  it('⚠ end with a LIVE mandate says the extra time settles to the team card', () => {
+    const state = deriveDrawdownState(
+      base({
+        ...KEY_INPUTS.end,
+        lens: 'member',
+        adminName: 'Sam',
+        graceAvailable: false,
+        mandateActive: true,
+      })
+    );
+    expect(state.title).toBe("Your team's balance is used up");
+    expect(state.body).toBe(
+      "Ask Sam to top up to keep going — your expert can pick right back up. Extra time from here settles to your team's card afterward."
+    );
+    expect(state.body).not.toContain('needs settling');
+    expect(state.body).not.toContain('pause');
+    expect(state.body).not.toContain('interrupt');
+  });
+
+  it('end (no live mandate) says the extra time still needs settling, on the NEXT top-up (not "your")', () => {
+    const state = deriveDrawdownState(
+      base({
+        ...KEY_INPUTS.end,
+        lens: 'member',
+        adminName: 'Sam',
+        graceAvailable: false,
+        mandateActive: false,
+      })
+    );
+    expect(state.title).toBe("Your team's balance is used up");
+    expect(state.body).toBe(
+      'Ask Sam to top up to keep going — your expert can pick right back up. Extra time from here still needs settling — the next top-up covers it.'
+    );
+    expect(state.body).not.toContain("team's card");
+    expect(state.body).not.toContain('your next top-up');
+    expect(state.body).not.toContain('pause');
+    expect(state.body).not.toContain('interrupt');
+  });
 });
 
 describe('deriveDrawdownState — promo chip', () => {
@@ -228,22 +303,40 @@ describe('deriveDrawdownState — the word "overdraft" never appears', () => {
     for (const key of Object.keys(KEY_INPUTS) as DrawdownKey[]) {
       for (const lens of ['client', 'member'] as const) {
         for (const graceAvailable of [true, false]) {
-          const state = deriveDrawdownState(
-            base({ ...KEY_INPUTS[key], lens, graceAvailable, adminName: 'Sam' })
-          );
-          strings.push(
-            state.title ?? '',
-            state.body ?? '',
-            state.sms ?? '',
-            state.meter.label,
-            state.cta?.label ?? '',
-            state.cta?.secondaryLabel ?? ''
-          );
+          for (const mandateActive of [true, false]) {
+            const state = deriveDrawdownState(
+              base({ ...KEY_INPUTS[key], lens, graceAvailable, mandateActive, adminName: 'Sam' })
+            );
+            strings.push(
+              state.title ?? '',
+              state.body ?? '',
+              state.sms ?? '',
+              state.meter.label,
+              state.cta?.label ?? '',
+              state.cta?.secondaryLabel ?? ''
+            );
+          }
         }
       }
     }
     for (const value of strings) {
       expect(value.toLowerCase()).not.toContain('overdraft');
+    }
+  });
+});
+
+describe('deriveDrawdownState — BAL-552: mandateActive reaches ONLY the `end` key', () => {
+  it('every other key is byte-identical regardless of mandateActive', () => {
+    for (const key of ['healthy', 'low', 'grace', 'near', 'wrap'] as const) {
+      for (const lens of ['client', 'member'] as const) {
+        const withMandate = deriveDrawdownState(
+          base({ ...KEY_INPUTS[key], lens, mandateActive: true, adminName: 'Sam' })
+        );
+        const withoutMandate = deriveDrawdownState(
+          base({ ...KEY_INPUTS[key], lens, mandateActive: false, adminName: 'Sam' })
+        );
+        expect(withMandate).toEqual(withoutMandate);
+      }
     }
   });
 });

@@ -182,6 +182,35 @@ describe('getSessionDrawdownState', () => {
     expect(state?.graceAvailable).toBe(false);
   });
 
+  // BAL-552 — the `end` key's copy branches on `mandateActive`, threaded from
+  // `isWalletMandateActive(wallet)`, independently of `graceAvailable`.
+  it('⚠ BAL-552: a live mandate on a notify_only wallet at `end` says the extra time settles to the card', async () => {
+    mockFindForClientView.mockResolvedValue(
+      sessionView({ status: 'wrapped', graceEnteredAt: null })
+    );
+    mockFindWalletById.mockResolvedValue(walletRow({ lowBalanceMode: 'notify_only' }));
+
+    const state = await getSessionDrawdownState(SESSION_ID, USER_ID, NOW);
+
+    expect(state?.key).toBe('end');
+    expect(state?.graceAvailable).toBe(false);
+    expect(state?.body).toContain('settles to your card afterward');
+  });
+
+  it('BAL-552: no live mandate at `end` says the extra time still needs settling on the next top-up', async () => {
+    mockFindForClientView.mockResolvedValue(
+      sessionView({ status: 'wrapped', graceEnteredAt: null })
+    );
+    mockFindWalletById.mockResolvedValue(
+      walletRow({ mandateStatus: 'none', stripeCustomerId: null, stripePaymentMethodId: null })
+    );
+
+    const state = await getSessionDrawdownState(SESSION_ID, USER_ID, NOW);
+
+    expect(state?.key).toBe('end');
+    expect(state?.body).toContain('still needs settling — your next top-up covers it');
+  });
+
   it('BAL-412 (D5/D6) — threads the shipped MIN_MEETING_MINUTES floor + minutesAlreadyDrawn', async () => {
     mockFindForClientView.mockResolvedValue(sessionView({ connectedMinutes: 2 }));
     mockFindWalletById.mockResolvedValue(walletRow({ balanceMinor: 900 }));

@@ -153,6 +153,7 @@ function drawdownStateFor(
     graceEnteredAt: null,
     balanceMinor: 45000,
     graceAvailable: true,
+    mandateActive: true,
     lens: 'client',
     // BAL-412 — the billing floor in force + nothing drawn yet; unrelated to this panel's own
     // assertions.

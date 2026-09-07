@@ -1010,7 +1010,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const balanceAfter = formatAudMinor(numberOrZero(data.balanceAfterMinor));
     return {
       title: 'Account clear',
-      body: `Your balance now covers the extra time still to settle. You're all set to book again — your balance is now ${balanceAfter}.`,
+      body: `Your balance now covers the extra time that was still to settle. Nothing's outstanding — your balance is now ${balanceAfter}.`,
       actionUrl: '/settings/billing',
     };
   },
@@ -1095,8 +1095,8 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     }
     return {
       title: "Let's sort the extra time",
-      body: `We couldn't settle ${amount} of extra time from a recent session — a quick card update sorts it.`,
-      actionUrl: '/settings/billing',
+      body: `We couldn't settle ${amount} of extra time from a recent session — a top-up that covers it clears it right away.`,
+      actionUrl: '/billing/top-up',
     };
   },
 

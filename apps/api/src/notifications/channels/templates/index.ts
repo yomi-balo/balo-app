@@ -1272,8 +1272,9 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
   },
 
   // BAL-378 (ADR-1040 Lane 2) settlement failed — billing-admin dunning. `reason` switches the
-  // SCA "confirm your card" recovery vs the hard-decline "update your card" copy. Warm, no
-  // "overdraft". The expert has already been paid — this is only about clearing the card.
+  // SCA arm (`requires_action` — confirm your card, links to /settings/billing) from the
+  // hard-decline arm (a covering top-up, links to /billing/top-up — the dunning sweep only
+  // re-notifies and never re-charges, ADR-1040 Amendment 6 §F). Warm, no "overdraft".
   'session-settlement-failed': (data) => {
     const reason = data.reason === 'requires_action' ? 'requires_action' : 'declined';
     return {
@@ -1281,7 +1282,14 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         firstName: (data.recipientName as string) ?? 'there',
         amount: formatAudMinor(numberCount(data.amountMinor)),
         reason,
-        ctaUrl: `${BASE_URL}/settings/billing`,
+        // BAL-552 — the dunning sweep only ever RE-NOTIFIES, never re-charges
+        // (`mandate.ts:1040`), so a card update alone clears nothing on the declined arm. The
+        // real exit is a covering CASH top-up (`receivable-coverage.ts`), so that arm's CTA
+        // points at the top-up composer instead of the card-update settings page.
+        ctaUrl:
+          reason === 'requires_action'
+            ? `${BASE_URL}/settings/billing`
+            : `${BASE_URL}/billing/top-up`,
         baseUrl: BASE_URL,
       }),
       subject:

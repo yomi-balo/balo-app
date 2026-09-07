@@ -36,9 +36,15 @@ const successPillStyle = {
 /**
  * Receivable-cleared email (BAL-535 / ADR-1040 Amendment 6 §F) — a warm, congratulatory
  * confirmation that a top-up covered the extra time still to settle from a recent consultation,
- * so the account's soft hold is released and the team can book again right away. Voice matches
- * the auto-top-up-executed / top-up-receipt family: first-name greeting, plain verbs,
- * gender-neutral, resolution-moment tone. No fee, no Stripe references, no "overdraft".
+ * so the account's soft hold is released. Voice matches the auto-top-up-executed / top-up-receipt
+ * family: first-name greeting, plain verbs, gender-neutral, resolution-moment tone. No fee, no
+ * Stripe references, no "overdraft".
+ *
+ * ⚠ BAL-552 — the copy does NOT say "book again". An `account_hold` gates
+ * `creditSessionsRepository.open` (`credit-sessions.ts:995`), auto-top-up and card removal, and
+ * NOTHING on the booking path; on the presence path an `open()` refusal never fails a join
+ * (`join-meeting.ts:358`). Bookings were never blocked, so "all set to book again" named a
+ * restriction the client never had.
  */
 export function CreditReceivableClearedEmail({
   firstName = 'there',
@@ -47,7 +53,7 @@ export function CreditReceivableClearedEmail({
   ctaUrl,
   baseUrl,
 }: Readonly<CreditReceivableClearedEmailProps>): React.JSX.Element {
-  const previewText = `That balance is settled — you're all set to book again.`;
+  const previewText = `That balance is settled — nothing's outstanding on your account.`;
 
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>

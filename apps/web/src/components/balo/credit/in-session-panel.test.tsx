@@ -26,6 +26,7 @@ function build(partial: Partial<DrawdownInputs>): DrawdownState {
     graceEnteredAt: null,
     balanceMinor: 45000,
     graceAvailable: true,
+    mandateActive: true,
     lens: 'client',
     // BAL-412 — the floor (15) is already fully drawn by CONNECTED_AT (42min elapsed), so
     // `minutesOfRunway` reduces to the pre-BAL-412 `floor(balance/rate)` bit-for-bit — this
@@ -59,6 +60,16 @@ const STATES = {
     status: 'wrapped',
     graceEnteredAt: null,
     graceAvailable: false,
+    mandateActive: false,
+    balanceMinor: 0,
+  }),
+  // BAL-552 — `notify_only` wallet with a LIVE mandate: `graceAvailable: false` but
+  // `mandateActive: true`. Proves the card arm reaches the in-call surface.
+  endLiveMandate: build({
+    status: 'wrapped',
+    graceEnteredAt: null,
+    graceAvailable: false,
+    mandateActive: true,
     balanceMinor: 0,
   }),
   lowMember: build({ balanceMinor: 3600, lens: 'member', adminName: 'Sam' }),
@@ -134,6 +145,18 @@ describe('InSessionPanel — client lens', () => {
   it('end (no grace): warm balance-used wrap', () => {
     renderPanel(STATES.endNoGrace);
     expect(screen.getByText("You're at the end of your balance")).toBeInTheDocument();
+    expect(
+      screen.getByText(/still needs settling — your next top-up covers it/)
+    ).toBeInTheDocument();
+  });
+
+  // BAL-552 — `notify_only` + a LIVE mandate must render the settles-to-card sentence, not the
+  // top-up-needed one. This is the only proof the new arm reaches the in-call surface.
+  it('end (live mandate on notify_only): states the extra time settles to the card', () => {
+    renderPanel(STATES.endLiveMandate);
+    expect(screen.getByText("You're at the end of your balance")).toBeInTheDocument();
+    expect(screen.getByText(/settles to your card afterward/)).toBeInTheDocument();
+    expect(screen.queryByText(/needs settling/)).not.toBeInTheDocument();
   });
 });
 

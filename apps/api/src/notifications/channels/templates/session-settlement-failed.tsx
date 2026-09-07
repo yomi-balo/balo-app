@@ -6,8 +6,10 @@ export type SettlementFailureReason = 'declined' | 'requires_action';
 
 /**
  * Props for the settlement-failed dunning email (BAL-378). `amount` is pre-formatted; `reason`
- * switches between the SCA "confirm your card" recovery and the hard-decline "update your card"
- * copy. Warm, non-adversarial, no "overdraft" — "extra time" is its name.
+ * switches between the SCA "confirm your card" recovery (→ /settings/billing) and the
+ * hard-decline arm's covering top-up remedy (→ /billing/top-up — the dunning sweep only
+ * re-notifies and never re-charges, ADR-1040 Amendment 6 §F). Warm, non-adversarial, no
+ * "overdraft" — "extra time" is its name.
  */
 export interface SessionSettlementFailedEmailProps {
   readonly firstName: string;
@@ -28,7 +30,8 @@ const attentionPillStyle = {
 /**
  * Settlement-failed dunning email (BAL-378 / ADR-1040 Lane 2) — a warm nudge to the billing
  * admins that a small amount of extra time from a recent session still needs settling. The
- * expert has already been paid; this is only about clearing the card. Gender-neutral.
+ * expert has already been paid; the remedy is a card confirmation on the SCA arm or a covering
+ * top-up on the hard-decline arm (the dunning sweep never re-charges). Gender-neutral.
  */
 export function SessionSettlementFailedEmail({
   firstName = 'there',
@@ -43,16 +46,16 @@ export function SessionSettlementFailedEmail({
     : "Let's sort the extra time";
   const previewText = needsConfirmation
     ? `Your card needs a quick confirmation to settle ${amount}.`
-    : `We couldn't settle ${amount} of extra time — a quick card update sorts it.`;
-  const ctaLabel = needsConfirmation ? 'Confirm your card' : 'Update payment';
+    : `We couldn't settle ${amount} of extra time — a top-up that covers it clears it.`;
+  const ctaLabel = needsConfirmation ? 'Confirm your card' : 'Top up';
   const bodyLines = needsConfirmation
     ? [
         `A little extra time ran past your balance on a recent session, and settling ${amount} needs a quick confirmation on your card.`,
-        'Confirm it whenever suits — nothing else is on hold.',
+        'Confirm it whenever suits — or top up to cover it, which settles it just the same.',
       ]
     : [
         `A little extra time ran past your balance on a recent session, and we couldn't settle ${amount} to your card.`,
-        'A quick update to your card details sorts it out.',
+        `A top-up that covers ${amount} clears it right away.`,
       ];
 
   return (
@@ -63,7 +66,9 @@ export function SessionSettlementFailedEmail({
         <StatusPill label="💳 A quick heads-up" style={attentionPillStyle} />
         <Heading style={shared.smallHeroHeading}>{heroHeading}</Heading>
         <Text style={shared.smallHeroSubtext}>
-          Your expert's already taken care of — this is just the card.
+          {needsConfirmation
+            ? "Your expert's already taken care of — this is just the card."
+            : "Your expert's already taken care of — this is just the balance."}
         </Text>
       </Section>
 
