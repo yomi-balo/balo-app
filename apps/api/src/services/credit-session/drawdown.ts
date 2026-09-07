@@ -9,6 +9,7 @@ import { creditWalletsRepository, partyMembershipsRepository } from '@balo/db';
 import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
 import {
   deriveDrawdownState,
+  isWalletMandateActive,
   walletAllowsOverdraftGrace,
   type DrawdownState,
 } from '@balo/shared/credit';
@@ -59,6 +60,7 @@ export async function getSessionDrawdownState(
     billingFloorMinutes: resolveBillingFloorMinutes(),
     minutesAlreadyDrawn: session.connectedMinutes,
     graceAvailable: walletAllowsOverdraftGrace(wallet),
+    mandateActive: isWalletMandateActive(wallet),
     lens,
     ...(adminName === undefined ? {} : { adminName }),
     now,

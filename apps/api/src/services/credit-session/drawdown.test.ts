@@ -124,6 +124,45 @@ describe('getSessionDrawdownState', () => {
     expect(state?.body).not.toMatch(/keep going/i);
   });
 
+  // BAL-552 — the `end` key's copy branches on `mandateActive`, threaded from
+  // `isWalletMandateActive(wallet)`, NOT from `graceAvailable`.
+  it('⚠ BAL-552: a live mandate on a notify_only wallet at `end` says the extra time settles to the card', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      session: { ...SESSION, status: 'wrapped', graceEnteredAt: null },
+      role: 'owner',
+    });
+    mockFindWallet.mockResolvedValue({
+      balanceMinor: 0,
+      mandateStatus: 'active',
+      stripeCustomerId: 'cus_1',
+      stripePaymentMethodId: 'pm_1',
+      lowBalanceMode: 'notify_only',
+    });
+    const state = await getSessionDrawdownState('session_1', 'owner_user', NOW);
+    expect(state?.key).toBe('end');
+    expect(state?.graceAvailable).toBe(false);
+    expect(state?.body).toContain('settles to your card afterward');
+  });
+
+  it('BAL-552: no live mandate at `end` says the extra time still needs settling on the next top-up', async () => {
+    mockAuthorize.mockResolvedValue({
+      ok: true,
+      session: { ...SESSION, status: 'wrapped', graceEnteredAt: null },
+      role: 'owner',
+    });
+    mockFindWallet.mockResolvedValue({
+      balanceMinor: 0,
+      mandateStatus: 'none',
+      stripeCustomerId: null,
+      stripePaymentMethodId: null,
+      lowBalanceMode: 'keep_going',
+    });
+    const state = await getSessionDrawdownState('session_1', 'owner_user', NOW);
+    expect(state?.key).toBe('end');
+    expect(state?.body).toContain('still needs settling — your next top-up covers it');
+  });
+
   it('BAL-412 (D5/D6) — threads the floor + minutesAlreadyDrawn early in a session', async () => {
     mockAuthorize.mockResolvedValue({
       ok: true,

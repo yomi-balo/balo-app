@@ -9,8 +9,10 @@
  *
  * `deriveDrawdownState` maps a session snapshot + the live wallet balance into the six
  * presentational keys (healthy | low | grace | near | wrap | end) across the client and
- * member lenses, with/without an active mandate. All copy is VERBATIM from the two design
- * prototypes (`in-session-sequence.jsx`, `member-variant.jsx`). Tone rules honoured:
+ * member lenses, with/without an active mandate (BAL-552: the `end` key's copy branches on
+ * `DrawdownInputs.mandateActive`). Copy ORIGINATES from the two design prototypes
+ * (`in-session-sequence.jsx`, `member-variant.jsx`), except where a later truthfulness fix
+ * superseded them (BAL-535 R3 on `low`, BAL-552 on `end`). Tone rules honoured:
  *  - `elapsed` is session time, NEVER a countdown;
  *  - `minutesRemaining` / grace-room surface only when actionable;
  *  - SMS fires only on entering grace + nearing the wrap;
@@ -113,6 +115,15 @@ export interface DrawdownInputs {
    * never re-derive it here.
    */
   graceAvailable: boolean;
+  /**
+   * BAL-552 — = the money path's `isWalletMandateActive(wallet)`, NOT re-derived here. REQUIRED
+   * (not optional): an optional field defaults to a silent `false`, which would tell a
+   * live-mandate client they will not be charged — the exact defect this ticket removes.
+   * Strictly WIDER than `graceAvailable` (`graceAvailable = isWalletMandateActive(w) &&
+   * isCardBackedLowBalanceMode(w.lowBalanceMode)`), so the two are not interchangeable and
+   * neither may be folded into the other.
+   */
+  mandateActive: boolean;
   lens: 'client' | 'member';
   adminName?: string;
   now: Date;
@@ -185,7 +196,9 @@ function deriveKey(inputs: DrawdownInputs, minutesRemaining: number): DrawdownKe
     case 'wrapped':
       // Grace history ⇒ the ceiling/30-min pause (`wrap`); none ⇒ balance-used (`end`). ⚠ R9:
       // "no-mandate" is stale — since BAL-523 grace is withheld for a card-backed-MODE failure
-      // too, so `end` is now reached by either an absent mandate or "Just notify me".
+      // too, so `end` is now reached by either an absent mandate or "Just notify me". Which of
+      // the two it was is now carried explicitly by `DrawdownInputs.mandateActive`, and the
+      // `end` copy branches on it (BAL-552) — `graceAvailable` alone cannot tell the two apart.
       return inputs.graceEnteredAt === null ? 'end' : 'wrap';
     default:
       return 'healthy';
@@ -269,6 +282,7 @@ interface CopyCtx {
   /** min(grace time left, ceiling room in minutes) — the "N more minutes" figure. */
   remainingBeforeWrap: number;
   graceAvailable: boolean;
+  mandateActive: boolean;
   adminName: string;
 }
 
@@ -279,6 +293,23 @@ interface Copy {
   cta?: DrawdownCta;
   sms?: string;
 }
+
+/**
+ * BAL-552 (ADR-1040 Amendment 6 §A.1/§D) — the `end` key's settlement fact, in four strings that
+ * share ONE prefix so the two lenses × two mandate arms cannot drift apart. Same posture as
+ * `LowBalanceModePicker.tsx`'s `BEYOND_BALANCE`, which this is the compressed echo of.
+ *
+ * ⚠ THE ARMS ARE CHOSEN BY `mandateActive`, NEVER BY `graceAvailable`. `graceAvailable` is
+ * strictly narrower (`isWalletMandateActive && isCardBackedLowBalanceMode`), so a `notify_only`
+ * wallet with a LIVE mandate reads `graceAvailable: false` — and settlement charges it anyway
+ * (Amendment 6 §A.1, permanent). Branching on `graceAvailable` would tell exactly that client
+ * they will not be charged. Neither arm promises a pause or any enforcement.
+ */
+const EXTRA_TIME_FROM_HERE = 'Extra time from here';
+const END_SETTLES_TO_CARD_CLIENT = `${EXTRA_TIME_FROM_HERE} settles to your card afterward.`;
+const END_SETTLES_TO_CARD_MEMBER = `${EXTRA_TIME_FROM_HERE} settles to your team's card afterward.`;
+const END_NEEDS_SETTLING_CLIENT = `${EXTRA_TIME_FROM_HERE} still needs settling — your next top-up covers it.`;
+const END_NEEDS_SETTLING_MEMBER = `${EXTRA_TIME_FROM_HERE} still needs settling — the next top-up covers it.`;
 
 /** Client-lens copy (from `in-session-sequence.jsx`). */
 const CLIENT_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
@@ -318,10 +349,12 @@ const CLIENT_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
     body: "We've reached the extra time we can cover this session. Top up to pick right back up — your expert can rejoin in a moment. We'll settle the extra time used to your card.",
     cta: { kind: 'client_topup', label: 'Top up to continue' },
   }),
-  end: () => ({
+  // ⚠ BAL-552 — branch on `ctx.mandateActive`, NEVER on `ctx.graceAvailable`. See the clause
+  // constants' docblock above for why the two are not interchangeable here.
+  end: (ctx) => ({
     meterLabel: 'Balance used',
     title: "You're at the end of your balance",
-    body: "Top up to keep going — your expert can pick right back up whenever you're ready.",
+    body: `Top up to keep going — your expert can pick right back up whenever you're ready. ${ctx.mandateActive ? END_SETTLES_TO_CARD_CLIENT : END_NEEDS_SETTLING_CLIENT}`,
     cta: { kind: 'client_topup', label: 'Top up to continue' },
   }),
 };
@@ -367,10 +400,12 @@ const MEMBER_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
     body: `We've reached the extra time we can cover this session. Ask ${ctx.adminName} to top up to pick right back up.`,
     cta: { kind: 'member_nudge', label: `Ask ${ctx.adminName} to top up` },
   }),
+  // ⚠ BAL-552 — branch on `ctx.mandateActive`, NEVER on `ctx.graceAvailable`. See the clause
+  // constants' docblock above for why the two are not interchangeable here.
   end: (ctx) => ({
     meterLabel: 'Team balance used',
     title: "Your team's balance is used up",
-    body: `Ask ${ctx.adminName} to top up to keep going — your expert can pick right back up.`,
+    body: `Ask ${ctx.adminName} to top up to keep going — your expert can pick right back up. ${ctx.mandateActive ? END_SETTLES_TO_CARD_MEMBER : END_NEEDS_SETTLING_MEMBER}`,
     cta: { kind: 'member_nudge', label: `Ask ${ctx.adminName} to top up` },
   }),
 };
@@ -401,6 +436,7 @@ export function deriveDrawdownState(inputs: DrawdownInputs): DrawdownState {
     minutesRemaining,
     remainingBeforeWrap,
     graceAvailable: inputs.graceAvailable,
+    mandateActive: inputs.mandateActive,
     adminName,
   };
   const copy = (inputs.lens === 'client' ? CLIENT_COPY : MEMBER_COPY)[key](ctx);

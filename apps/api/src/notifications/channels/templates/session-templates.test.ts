@@ -54,6 +54,11 @@ describe('getEmailTemplate — session-settlement-failed', () => {
     expect(html).toContain('A$15.00');
     expect(html).toContain('confirmation');
     expect(html.toLowerCase()).not.toContain('overdraft');
+    // BAL-552 — the SCA arm now also offers the working alternative (a covering top-up).
+    expect(html).toContain('or top up to cover it. Either way, the extra time is taken care of');
+    expect(html).not.toContain('settles it just the same');
+    expect(html).not.toContain('nothing else is on hold'); // retired phrase
+    expect(html).toContain('/settings/billing'); // the SCA arm's ctaUrl
   });
 
   it('renders the decline copy for a declined settlement', async () => {
@@ -65,6 +70,17 @@ describe('getEmailTemplate — session-settlement-failed', () => {
     expect(out.subject).toBe('A payment on your recent session needs attention');
     const html = clean(await render(out.component));
     expect(html).toContain("couldn't settle");
+    // BAL-552 — the dunning sweep never re-charges, so the only true remedy is a covering
+    // top-up; the card-update remedy + its CTA are retired.
+    expect(html).toContain('a top-up that covers it clears it'); // previewText
+    expect(html).toContain('A top-up that covers A$15.00 clears it right away'); // bodyLines[1]
+    expect(html).toContain('this is just the balance'); // arm-dependent hero subtext
+    expect(html).toContain('/billing/top-up'); // the ctaUrl change
+    expect(html).toContain('Top up'); // ctaLabel
+    expect(html).not.toContain('card details sorts it out'); // retired
+    expect(html).not.toContain('card update sorts it'); // retired
+    expect(html).not.toContain('/settings/billing'); // the declined arm must no longer link there
+    expect(html.toLowerCase()).not.toContain('overdraft');
   });
 });
 
@@ -115,6 +131,12 @@ describe('getInAppTemplate — session notices', () => {
       reason: 'declined',
     });
     expect(declined.title).toBe("Let's sort the extra time");
+    // BAL-552 — the declined arm's remedy + CTA moved to the top-up composer; the SCA arm's
+    // actionUrl is pinned unchanged.
+    expect(declined.body).toContain('a top-up that covers it clears it right away');
+    expect(declined.body).not.toContain('card update sorts it');
+    expect(declined.actionUrl).toBe('/billing/top-up');
+    expect(sca.actionUrl).toBe('/settings/billing');
   });
 });
 

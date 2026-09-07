@@ -16,6 +16,7 @@ import {
 } from '@balo/db';
 import {
   deriveDrawdownState,
+  isWalletMandateActive,
   walletAllowsOverdraftGrace,
   type DrawdownState,
 } from '@balo/shared/credit';
@@ -138,6 +139,7 @@ export async function getSessionDrawdownState(
     billingFloorMinutes: MIN_MEETING_MINUTES,
     minutesAlreadyDrawn: session.connectedMinutes,
     graceAvailable: walletAllowsOverdraftGrace(wallet),
+    mandateActive: isWalletMandateActive(wallet),
     lens,
     ...(adminName === undefined ? {} : { adminName }),
     now,

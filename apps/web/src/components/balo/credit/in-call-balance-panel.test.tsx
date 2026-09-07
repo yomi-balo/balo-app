@@ -31,6 +31,7 @@ function build(partial: Partial<DrawdownInputs>): DrawdownState {
     graceEnteredAt: null,
     balanceMinor: 45000,
     graceAvailable: true,
+    mandateActive: true,
     lens: 'client',
     // BAL-412 — the floor (15) is already fully drawn by CONNECTED_AT (42min elapsed), so
     // `minutesOfRunway` reduces to the pre-BAL-412 `floor(balance/rate)` bit-for-bit — this
@@ -64,6 +65,7 @@ const STATES: Record<string, DrawdownState> = {
     status: 'wrapped',
     graceEnteredAt: null,
     graceAvailable: false,
+    mandateActive: false,
     balanceMinor: 0,
   }),
 };
