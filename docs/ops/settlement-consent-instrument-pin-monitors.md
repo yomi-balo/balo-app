@@ -29,7 +29,7 @@ already existed did not hold — see the amendment note at the bottom).
 
 The notifier is a single shared Email notifier to the on-call engineer's address, reused by both
 monitors. **Follow-up (see below): wire a real team destination** (Slack/PagerDuty) once one
-exists — email was the only zero-setup option available at build time.
+exists — email was the only zero-setup option available at build time. End-to-end delivery was verified 2026-09-07 via the notifier's Test action — the test email arrived in the inbox.
 
 ---
 
