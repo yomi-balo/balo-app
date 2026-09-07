@@ -1002,6 +1002,19 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  // BAL-535 (ADR-1040 Amendment 6 §F) receivable cleared — company billing admins. Warm,
+  // congratulatory: the balance now covers the extra time from a recent consultation, so the
+  // account's soft hold is released. AUD face value only. The extra time is attributed to the
+  // consultation, never to this payment (fix round N5/L2) — see the email arm's docblock.
+  'credit-receivable-cleared': (data) => {
+    const balanceAfter = formatAudMinor(numberOrZero(data.balanceAfterMinor));
+    return {
+      title: 'Account clear',
+      body: `Your balance now covers the extra time still to settle. You're all set to book again — your balance is now ${balanceAfter}.`,
+      actionUrl: '/settings/billing',
+    };
+  },
+
   // BAL-379 (ADR-1040) auto-top-up failed — company billing admins. Calm, non-dunning (nothing
   // owed, nothing on hold). `reason` switches SCA vs hard-decline copy. AUD face value only.
   'credit-auto-topup-failed': (data) => {

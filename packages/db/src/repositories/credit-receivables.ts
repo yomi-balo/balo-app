@@ -1,6 +1,11 @@
-import { and, asc, eq, isNull, lte, or, type SQL } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
-import { creditReceivables, type CreditReceivable, type CreditReceivableReason } from '../schema';
+import {
+  creditReceivables,
+  creditSessions,
+  type CreditReceivable,
+  type CreditReceivableReason,
+} from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
 
 /** The row selector for `clear` — by `receivableId` (priority) or `sessionId`; one is required. */
@@ -111,6 +116,70 @@ export const creditReceivablesRepository = {
     return row !== undefined;
   },
 
+  /**
+   * BAL-535 (ADR-1040 Amendment 6 §F, fix round B1) — the moment the OLDEST debt still open on
+   * this wallet became outstanding: `MIN(COALESCE(session.ended_at, receivable.opened_at))`
+   * over every open, non-deleted receivable. `undefined` when the wallet owes nothing.
+   *
+   * ⚠ WHY `session.ended_at` AND NOT SIMPLY `opened_at`. The debt exists from the moment the
+   * session ended and its terminal overdraft was computed; the receivable row is only the
+   * record of it, and on the LATE-OPEN (R3b) paths that row is inserted hours later — in the
+   * very transaction that then asks whether the debt is covered. Anchoring on `opened_at`
+   * there would give a window of zero width and a promo discount of zero, i.e. exactly the
+   * vacuous gate B1 exists to remove. `COALESCE` keeps a session that somehow never stamped
+   * `ended_at` anchored on the receivable instead of dropping out of the MIN.
+   *
+   * The MIN (rather than a per-row anchor) is the conservative choice: the widest window
+   * discounts the most promo credit, so a wallet-wide clear can only ever be made STRICTER by
+   * an older sibling debt, never laxer.
+   *
+   * ⚠⚠ WHY THE SESSION JOIN IS A `LEFT JOIN` FILTERED ON `deleted_at` (fix round 2, F1). Every
+   * other session read in the data layer is `deleted_at IS NULL`-scoped; this one was not, so a
+   * SOFT-DELETED session's (older) `ended_at` still entered the MIN. That widens the promo
+   * window, inflates the discount and REFUSES a covering credit — the soft hold then persists on
+   * a company that has already paid. It fails CLOSED, which is why no test caught it.
+   *
+   * ⚠ THE FILTER BELONGS IN THE JOIN CONDITION, NEVER IN THE `WHERE`. `hasOpenReceivable` — the
+   * predicate that actually holds the company — reads `credit_receivables` alone and knows
+   * nothing about sessions, so a receivable whose session was soft-deleted STILL holds that
+   * company. Filtering in the `WHERE` (with the join left INNER) would drop such a row from the
+   * aggregate entirely: an `undefined` anchor makes `assessCashCoverage` report
+   * `hasOpenReceivable: false`, so no covering credit could EVER clear it — the same fail-closed
+   * harm, made permanent. As a `LEFT JOIN` the row stays in the MIN and simply falls through
+   * `COALESCE` onto its own `opened_at`, the same fallback the never-stamped-`ended_at` case
+   * already takes.
+   *
+   * TX-COMPOSABLE — read inside the same transaction (and under the same wallet advisory lock)
+   * as the clear it gates.
+   */
+  async earliestOpenDebtAnchor(walletId: string, exec: DbExecutor = db): Promise<Date | undefined> {
+    const [row] = await exec
+      .select({
+        anchor: sql<
+          Date | string | null
+        >`min(coalesce(${creditSessions.endedAt}, ${creditReceivables.openedAt}))`,
+      })
+      .from(creditReceivables)
+      .leftJoin(
+        creditSessions,
+        and(eq(creditReceivables.sessionId, creditSessions.id), isNull(creditSessions.deletedAt))
+      )
+      .where(
+        and(
+          eq(creditReceivables.walletId, walletId),
+          eq(creditReceivables.status, 'open'),
+          isNull(creditReceivables.deletedAt)
+        )
+      );
+    const anchor = row?.anchor;
+    if (anchor === null || anchor === undefined) {
+      return undefined;
+    }
+    // A raw aggregate is not routed through the column's driver mapper, so the value arrives
+    // as whatever `postgres-js` decoded — a `Date` today, a string if that ever changes.
+    return anchor instanceof Date ? anchor : new Date(anchor);
+  },
+
   /** All open, non-deleted receivables for a company, oldest-opened first. */
   async findOpenByCompany(companyId: string): Promise<CreditReceivable[]> {
     return db
@@ -183,5 +252,37 @@ export const creditReceivablesRepository = {
       )
       .returning();
     return row;
+  },
+
+  /**
+   * Clear EVERY open, non-deleted receivable on a wallet (status → `cleared`, stamp
+   * `cleared_at`), releasing the company's soft hold. BAL-535 / ADR-1040 Amendment 6 §F — the
+   * covering-credit exit. TX-COMPOSABLE so the Stripe webhook clears in the SAME transaction as
+   * the ledger credit that covered the debt; a crash can therefore never leave a paid debt held.
+   *
+   * ⚠ A SEPARATE METHOD, NOT A THIRD ARM ON `clear()`. `clear()` destructures a single row
+   * (`const [row] = …`), which is correct for its session/receivable selectors (both address at
+   * most one row) and would SILENTLY DROP rows for a wallet-wide selector. Returning the array is
+   * what lets the caller audit each cleared row individually.
+   *
+   * Idempotent — matches only `status = 'open'`, so a replay (or a wallet with nothing open)
+   * returns `[]` and writes nothing.
+   */
+  async clearOpenForWallet(
+    input: { walletId: string; now?: Date },
+    exec: DbExecutor = db
+  ): Promise<CreditReceivable[]> {
+    const now = input.now ?? new Date();
+    return exec
+      .update(creditReceivables)
+      .set({ status: 'cleared', clearedAt: now })
+      .where(
+        and(
+          eq(creditReceivables.walletId, input.walletId),
+          eq(creditReceivables.status, 'open'),
+          isNull(creditReceivables.deletedAt)
+        )
+      )
+      .returning();
   },
 };

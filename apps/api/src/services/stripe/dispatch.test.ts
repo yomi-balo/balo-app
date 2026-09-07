@@ -24,8 +24,13 @@ const {
   mockMarkSettlementResult,
   mockReceivableOpen,
   mockReceivableClear,
+  mockReceivableClearOpenForWallet,
+  mockEarliestOpenDebtAnchor,
+  mockSumPromoGrantedSince,
+  mockAcquireWalletLock,
   mockPublishSessionSettled,
   mockPublishSettlementFailure,
+  mockPublishReceivableCleared,
   mockNotificationPublish,
   mockWalletFindById,
   mockClearPendingTopup,
@@ -70,8 +75,32 @@ const {
   mockMarkSettlementResult: vi.fn(),
   mockReceivableOpen: vi.fn(),
   mockReceivableClear: vi.fn(),
+  // BAL-535 — default: nothing open on the wallet, so `clearReceivablesCoveredByCredit` is a
+  // silent no-op for every EXISTING test fixture that does not explicitly override this. The
+  // explicit return type is required — otherwise TS infers `never[]` from this empty-array
+  // implementation and every `mockResolvedValueOnce([{ ...row }])` override below fails to typecheck.
+  mockReceivableClearOpenForWallet: vi.fn(
+    async (): Promise<
+      Array<{
+        id: string;
+        companyId: string;
+        sessionId: string;
+        amountMinor: number;
+        status: string;
+      }>
+    > => []
+  ),
+  // BAL-535 fix round B1 — the coverage decision now asks TWO questions before it clears:
+  // "when did the oldest still-open debt on this wallet become outstanding" and "how much promo
+  // credit has landed since". Default: NOTHING is open (`undefined`), so `assessCashCoverage`
+  // short-circuits and every EXISTING fixture is a silent no-op that never reaches the promo sum.
+  mockEarliestOpenDebtAnchor: vi.fn(async (): Promise<Date | undefined> => undefined),
+  mockSumPromoGrantedSince: vi.fn(async (): Promise<number> => 0),
+  // M2 — both R3b sites now take the wallet advisory lock before they write.
+  mockAcquireWalletLock: vi.fn(),
   mockPublishSessionSettled: vi.fn(),
   mockPublishSettlementFailure: vi.fn(),
+  mockPublishReceivableCleared: vi.fn(),
   mockNotificationPublish: vi.fn(),
   mockWalletFindById: vi.fn(),
   mockClearPendingTopup: vi.fn(),
@@ -126,7 +155,11 @@ vi.mock('@balo/db', () => ({
   creditReceivablesRepository: {
     open: mockReceivableOpen,
     clear: mockReceivableClear,
+    clearOpenForWallet: mockReceivableClearOpenForWallet,
+    earliestOpenDebtAnchor: mockEarliestOpenDebtAnchor,
   },
+  creditLedgerRepository: { sumPromoGrantedSince: mockSumPromoGrantedSince },
+  acquireWalletLock: mockAcquireWalletLock,
   promoRedemptionsRepository: { redeem: mockRedeem },
   deriveIdempotencyKey: mockDeriveIdempotencyKey,
   // `applyOverdraftSettlementFromStripe` opens its own transaction (every other export here is
@@ -137,6 +170,7 @@ vi.mock('@balo/db', () => ({
 vi.mock('../credit-session/notify.js', () => ({
   publishSessionSettled: mockPublishSessionSettled,
   publishSettlementFailure: mockPublishSettlementFailure,
+  publishReceivableCleared: mockPublishReceivableCleared,
 }));
 vi.mock('../../notifications/publisher.js', () => ({
   notificationEvents: { publish: mockNotificationPublish },
@@ -1168,6 +1202,10 @@ describe('applyStripeEffect', () => {
       expertProfileId: 'expert_2',
       overdraftSettledMinor: 5000,
     });
+    // BAL-535 (R3b) — the debt is still UNCOVERED, so the receivable stays open and dunning
+    // still fires. The suite's default `mockWalletFindById` balance (500) is POSITIVE, which
+    // would otherwise trip the R3b self-clear this test is not exercising.
+    mockWalletFindById.mockResolvedValue({ companyId: 'company_2', balanceMinor: -5000 });
     const postCommit = await applyStripeEffect(tx, {
       kind: 'charge_failed',
       walletId: 'wallet_2',
@@ -1205,6 +1243,90 @@ describe('applyStripeEffect', () => {
     );
   });
 
+  it('R3b (BAL-535, ADR-1040 Amendment 6 §F residual) — self-clears the just-opened receivable and suppresses dunning when a covering CASH credit already landed', async () => {
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_2',
+      companyId: 'company_2',
+      walletId: 'wallet_2',
+      expertProfileId: 'expert_2',
+      overdraftSettledMinor: 5000,
+    });
+    // A covering top-up raced the settlement failure — the wallet is ALREADY non-negative, and
+    // NO promo landed since the debt became outstanding, so the coverage is real cash.
+    mockWalletFindById.mockResolvedValue({ companyId: 'company_2', balanceMinor: 200 });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(new Date('2026-09-01T00:00:00Z'));
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    // `clear()` returns the row it transitioned; the audit row is written only when it really did.
+    mockReceivableClear.mockResolvedValueOnce({ id: 'rcv_1', status: 'cleared' });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_2',
+      paymentIntentId: 'pi_8',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'overdraft_settlement',
+      sessionId: 'session_2',
+      triggeringEntryId: null,
+      amountMinor: null,
+    });
+    // M2 — the wallet is locked before anything is written.
+    expect(mockAcquireWalletLock).toHaveBeenCalledWith(tx, 'wallet_2');
+    // The receivable STILL opens — the failure is a real event worth recording.
+    expect(mockReceivableOpen).toHaveBeenCalled();
+    // But it self-clears in the SAME txn, and no dunning thunk is returned at all.
+    expect(mockReceivableClear).toHaveBeenCalledWith({ receivableId: 'rcv_1' }, tx);
+    expect(postCommit).toEqual([]);
+    // N2 — the clear leaves a DISTINCT trace, so an R3b clear is separable from an R3 one.
+    expect(mockAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'credit_receivable.cleared_on_late_open',
+        entityType: 'credit_receivable',
+        entityId: 'rcv_1',
+        metadata: expect.objectContaining({
+          openedBy: 'stripe_webhook',
+          created: true,
+          companyId: 'company_2',
+          sessionId: 'session_2',
+          promoDiscountedMinor: 0,
+          cashBackedBalanceMinor: 200,
+        }),
+      }),
+      tx
+    );
+  });
+
+  it('⚠⚠ B1 (R3b) — a PROMO-funded non-negative balance does NOT self-clear; the hold and the dunning stand', async () => {
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_2',
+      companyId: 'company_2',
+      walletId: 'wallet_2',
+      expertProfileId: 'expert_2',
+      overdraftSettledMinor: 5000,
+    });
+    // The shipped defect: committed wallet state reads a $50 promo as if it were cash, so a
+    // $50 receivable discharged itself with no hold and no dunning.
+    mockWalletFindById.mockResolvedValue({ companyId: 'company_2', balanceMinor: 0 });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(new Date('2026-09-01T00:00:00Z'));
+    mockSumPromoGrantedSince.mockResolvedValueOnce(5000);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_2',
+      paymentIntentId: 'pi_8',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'overdraft_settlement',
+      sessionId: 'session_2',
+      triggeringEntryId: null,
+      amountMinor: null,
+    });
+    expect(mockReceivableClear).not.toHaveBeenCalled();
+    expect(postCommit).toHaveLength(1);
+    await postCommit[0]?.();
+    expect(mockPublishSettlementFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'declined', amountMinor: 5000 })
+    );
+  });
+
   it('does NOT re-dun when the async payment_failed opens onto an already-open receivable (FIX 5)', async () => {
     mockSessionFindById.mockResolvedValue({
       id: 'session_2',
@@ -1227,6 +1349,47 @@ describe('applyStripeEffect', () => {
       amountMinor: null,
     });
     expect(mockReceivableOpen).toHaveBeenCalled();
+    expect(postCommit).toEqual([]);
+  });
+
+  // ⚠ FIX ROUND N3 — the two R3b sites used to DISAGREE on `created`: this one returned early and
+  // never asked about coverage, while `end-session.ts` asked unconditionally. They now agree —
+  // coverage is a fact about the WALLET, not about which path inserted the row — and `created`
+  // keeps only its FIX-5 job of gating the dunning publish. Restoring the `if (!created) return
+  // []` short-circuit above the coverage check fails HERE.
+  it('N3 — a `created: false` hit STILL asks about coverage, and clears when the debt is covered', async () => {
+    mockSessionFindById.mockResolvedValue({
+      id: 'session_2',
+      companyId: 'company_2',
+      walletId: 'wallet_2',
+      expertProfileId: 'expert_2',
+      overdraftSettledMinor: 5000,
+    });
+    mockReceivableOpen.mockResolvedValue({ receivable: { id: 'rcv_2' }, created: false });
+    mockWalletFindById.mockResolvedValue({ companyId: 'company_2', balanceMinor: 200 });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(new Date('2026-09-01T00:00:00Z'));
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    // `clear()` returns the row it transitioned; the audit row is written only when it really did.
+    mockReceivableClear.mockResolvedValueOnce({ id: 'rcv_2', status: 'cleared' });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'charge_failed',
+      walletId: 'wallet_2',
+      paymentIntentId: 'pi_8',
+      code: 'card_declined',
+      outcome: null,
+      reason: 'overdraft_settlement',
+      sessionId: 'session_2',
+      triggeringEntryId: null,
+      amountMinor: null,
+    });
+    expect(mockReceivableClear).toHaveBeenCalledWith({ receivableId: 'rcv_2' }, tx);
+    expect(mockAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'credit_receivable.cleared_on_late_open',
+        metadata: expect.objectContaining({ created: false, openedBy: 'stripe_webhook' }),
+      }),
+      tx
+    );
     expect(postCommit).toEqual([]);
   });
 
@@ -1280,6 +1443,356 @@ describe('applyStripeEffect', () => {
       })
     ).rejects.toThrow(/sessionId/);
     expect(mockApplyLedgerEntry).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-535 (ADR-1040 Amendment 6 §F) — `clearReceivablesCoveredByCredit`, exercised through
+ * `applyStripeEffect`'s `credit` arm (it is not exported on its own). Arms covered: wrong reason
+ * → no clear; nothing open → no clear (and no promo query); negative balance → no clear;
+ * PROMO-funded balance → no clear (fix round B1); covered by cash with an open row → cleared +
+ * audit + ONE aggregated post-commit thunk; deduped replay → still clears.
+ */
+describe('applyStripeEffect — credit clears a covering receivable (BAL-535)', () => {
+  /** One open receivable on the wallet, opened while the debt was outstanding. */
+  const ANCHOR = new Date('2026-09-01T00:00:00Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // ⚠ FIX ROUND N6 — this note is about `mockReceivableClearOpenForWallet` (and the two
+    // coverage mocks below) ONLY, which is what it was ever true of: use mockResolvedValueONCE
+    // for those, never mockResolvedValue, because the LATTER sets a PERSISTENT implementation
+    // that survives vi.clearAllMocks() (only mockReset/resetAllMocks clear it) and would leak a
+    // non-empty return into every later describe block in this file that shares these
+    // module-level mocks. Their vi.hoisted defaults (`[]` / `undefined` / `0`) are already the
+    // correct baseline for every test that does not explicitly need otherwise.
+    //
+    // It was NEVER true of `mockApplyLedgerEntry`, which every test below deliberately opens with
+    // a plain `mockResolvedValue(...)`: it is re-set at the top of each test, so a leak is
+    // impossible, and a `…Once` there would starve the second internal call some arms make.
+  });
+
+  it('a non-cash reason (overdraft_settlement) never even asks — the clear is skipped by reason', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 500, expiresAt: new Date('2027-01-01') },
+    });
+    mockSessionFindById.mockResolvedValue({ id: 'session_1', settlementShape: null });
+    await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'overdraft_settlement',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: 'session_1',
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    // Not even the anchor read — the reason gate short-circuits first.
+    expect(mockEarliestOpenDebtAnchor).not.toHaveBeenCalled();
+    expect(mockReceivableClearOpenForWallet).not.toHaveBeenCalled();
+  });
+
+  it('a wallet with nothing open short-circuits on the anchor read — no promo query, no clear', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockEarliestOpenDebtAnchor).toHaveBeenCalledWith('wallet_1', tx);
+    expect(mockSumPromoGrantedSince).not.toHaveBeenCalled();
+    expect(mockReceivableClearOpenForWallet).not.toHaveBeenCalled();
+    expect(mockAuditRecord).not.toHaveBeenCalled();
+    expect(postCommit).toHaveLength(1); // the ordinary receipt thunk only
+  });
+
+  it('a cash credit that leaves the balance negative never clears (partial top-up)', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: -100, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockReceivableClearOpenForWallet).not.toHaveBeenCalled();
+    expect(mockAuditRecord).not.toHaveBeenCalled();
+    // The ordinary receipt thunk still runs — only the receivable-clear half is skipped.
+    expect(postCommit).toHaveLength(1);
+  });
+
+  it('⚠⚠ B1 — a PROMO granted since the debt opened is discounted back out: a cent of cash does NOT clear', async () => {
+    // THE SHIPPED DEFECT, at R3. A $50 promo redeemed in an EARLIER transaction (the standalone
+    // Model-C redeem needs no purchase and passes no receivable gate) is already inside
+    // `balance_minor`, so the old predicate saw a covered wallet and cleared the whole hold on
+    // one cent of real money. Deleting the discount fails HERE.
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 1, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(5000);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockSumPromoGrantedSince).toHaveBeenCalledWith(
+      { walletId: 'wallet_1', since: ANCHOR },
+      tx
+    );
+    expect(mockReceivableClearOpenForWallet).not.toHaveBeenCalled();
+    expect(mockPublishReceivableCleared).not.toHaveBeenCalled();
+    expect(postCommit).toHaveLength(1); // the receipt only — the hold stands
+  });
+
+  it('⚠⚠ B1 — cash ON TOP of the promo does clear (the discount is a discount, not a veto)', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 5000, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(5000);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      {
+        id: 'rcv_1',
+        companyId: 'company_1',
+        sessionId: 'session_1',
+        amountMinor: 1200,
+        status: 'cleared',
+      },
+    ]);
+    await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockReceivableClearOpenForWallet).toHaveBeenCalledWith({ walletId: 'wallet_1' }, tx);
+  });
+
+  it('a cash credit that covers an OPEN receivable clears it, records provenance, and returns one extra thunk', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 17600, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      {
+        id: 'rcv_1',
+        companyId: 'company_1',
+        sessionId: 'session_1',
+        amountMinor: 1200,
+        status: 'cleared',
+      },
+    ]);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'auto_topup',
+      walletId: 'wallet_1',
+      memberId: null,
+      sessionId: null,
+      triggeringEntryId: 'entry_1',
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: null,
+        action: 'credit_receivable.cleared_by_credit',
+        entityType: 'credit_receivable',
+        entityId: 'rcv_1',
+        metadata: expect.objectContaining({
+          walletId: 'wallet_1',
+          // N11 — the ROW's company, not the wallet's.
+          companyId: 'company_1',
+          sessionId: 'session_1',
+          ledgerEntryId: 'ledger_1',
+          creditReason: 'auto_topup',
+          receivableAmountMinor: 1200,
+          // M3 — the PREDICATE's figures live here and are NOT named `balanceAfterMinor`.
+          predicateBalanceMinor: 17600,
+          promoDiscountedMinor: 0,
+          cashBackedBalanceMinor: 17600,
+        }),
+      }),
+      tx
+    );
+    // The auto_topup arm's own executed-notice thunk PLUS the receivable-cleared thunk.
+    expect(postCommit).toHaveLength(2);
+    await postCommit[0]?.();
+    expect(mockPublishReceivableCleared).toHaveBeenCalledWith({
+      ledgerEntryId: 'ledger_1',
+      companyId: 'company_1',
+      walletId: 'wallet_1',
+      receivableCount: 1,
+      clearedMinor: 1200,
+      balanceAfterMinor: 17600,
+      clearedBy: 'auto_topup',
+    });
+  });
+
+  it('⚠ N4 — THREE cleared receivables produce ONE notice, keyed on the ledger entry', async () => {
+    // The regression: one thunk per row meant three identical "your account is clear" emails,
+    // each quoting the same balance. `credit-receivables.integration.test.ts` proves a wallet
+    // really can hold several open rows.
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_7' },
+      wallet: { companyId: 'company_1', balanceMinor: 900, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      { id: 'rcv_1', companyId: 'company_1', sessionId: 's1', amountMinor: 100, status: 'cleared' },
+      { id: 'rcv_2', companyId: 'company_1', sessionId: 's2', amountMinor: 250, status: 'cleared' },
+      { id: 'rcv_3', companyId: 'company_1', sessionId: 's3', amountMinor: 400, status: 'cleared' },
+    ]);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'auto_topup',
+      walletId: 'wallet_1',
+      memberId: null,
+      sessionId: null,
+      triggeringEntryId: 'entry_1',
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    // One audit row PER ROW (provenance is per receivable) …
+    expect(mockAuditRecord).toHaveBeenCalledTimes(3);
+    // … but exactly ONE notice thunk, alongside the auto-top-up executed notice.
+    expect(postCommit).toHaveLength(2);
+    await postCommit[0]?.();
+    expect(mockPublishReceivableCleared).toHaveBeenCalledTimes(1);
+    expect(mockPublishReceivableCleared).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ledgerEntryId: 'ledger_7',
+        receivableCount: 3,
+        clearedMinor: 750,
+      })
+    );
+  });
+
+  it('⚠ M3 — the notice quotes the TRUE final balance (promo included), not the predicate figure', async () => {
+    // Both emails reach the same MANAGE_BILLING holder seconds apart: the top-up receipt quotes
+    // `base + promo`, so a cleared notice quoting the pre-promo figure contradicts it.
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: false,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 1000, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      {
+        id: 'rcv_1',
+        companyId: 'company_1',
+        sessionId: 'session_1',
+        amountMinor: 300,
+        status: 'cleared',
+      },
+    ]);
+    mockRedeem.mockResolvedValue({ outcome: 'redeemed', grantMinor: 2500 });
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: 'WELCOME25',
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    await postCommit[0]?.();
+    expect(mockPublishReceivableCleared).toHaveBeenCalledWith(
+      expect.objectContaining({ balanceAfterMinor: 3500 })
+    );
+    // …while the AUDIT row keeps the predicate's own pre-promo figure. Different questions.
+    expect(mockAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ predicateBalanceMinor: 1000 }),
+      }),
+      tx
+    );
+  });
+
+  it('clears on a DEDUPED (replayed) credit too — the predicate reads current state, not the fresh flag', async () => {
+    mockApplyLedgerEntry.mockResolvedValue({
+      deduped: true,
+      entry: { id: 'ledger_1' },
+      wallet: { companyId: 'company_1', balanceMinor: 200, expiresAt: new Date('2027-01-01') },
+    });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(ANCHOR);
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    mockReceivableClearOpenForWallet.mockResolvedValueOnce([
+      {
+        id: 'rcv_2',
+        companyId: 'company_1',
+        sessionId: 'session_2',
+        amountMinor: 900,
+        status: 'cleared',
+      },
+    ]);
+    const postCommit = await applyStripeEffect(tx, {
+      kind: 'credit',
+      reason: 'manual_purchase',
+      walletId: 'wallet_1',
+      memberId: 'member_1',
+      sessionId: null,
+      triggeringEntryId: null,
+      promoCode: null,
+      cardOnFile: null,
+      settlement: SETTLEMENT,
+    });
+    expect(mockReceivableClearOpenForWallet).toHaveBeenCalledWith({ walletId: 'wallet_1' }, tx);
+    // The receivable-cleared thunk runs; the ordinary manual_purchase receipt does NOT (deduped).
+    expect(postCommit).toHaveLength(1);
+    // N10 — a replay is separable in the audit trail from a fresh credit.
+    expect(mockAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ deduped: true }) }),
+      tx
+    );
   });
 });
 

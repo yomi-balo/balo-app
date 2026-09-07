@@ -35,10 +35,10 @@ import {
  * pinned instrument, FALLS BACK to the wallet's live pair when the pin is absent or the pin
  * disagrees with it, and WARNS on disagreement. It never refuses to charge because the pin is
  * gone, and it never charges the pin when the live wallet says otherwise — the anti-collapse
- * assertions below pin that shape by NAME, not merely by a changed count. Making the pin
- * authoritative ("charge the pin or nothing") is BAL-535's ruling, not this one's: it would
- * decide who eats the loss when the pinned instrument is gone, and the dunning sweep never
- * re-charges a receivable.
+ * assertions below pin that shape by NAME, not merely by a changed count. **BAL-535 ruled
+ * (ADR-1040 Amendment 6 §E): the pin is permanently evidence and preference. There is no pending
+ * decision here — these assertions are now the executable form of a settled rule, and a PR that
+ * changes them needs an ADR amendment first (ADR-1032), never the reverse.**
  *
  * ⚠⚠ NEVER PIN THE MANDATE (O4). `mandate_status` / `mandate_ref` must stay absent from this
  * table forever — a pinned `'active'` would let a client who revoked consent (or whose card
@@ -182,7 +182,7 @@ describe('INVARIANT: session debt carries its collection instrument — pure cor
   it('⚠⚠ ANTI-COLLAPSE #2 — the pin is never authority', () => {
     // An implementation "improved" into a pin-or-nothing rule fails here, loudly: the resolved
     // payment method must equal the LIVE one on every row where they could possibly differ.
-    // Authority over a stale pin is BAL-535's ruling, not this function's.
+    // Authority over a stale pin was ruled out PERMANENTLY by BAL-535 (ADR-1040 Amendment 6 §E).
     const rowsWhereResolvedOverridesLive = ROWS.filter((row) => {
       const resolved = resolveSettlementInstrument(row.candidates);
       return resolved.paymentMethodId !== row.candidates.live.paymentMethodId;
@@ -249,17 +249,17 @@ describe('INVARIANT: the pin sites are wired at exactly the counts this rule dep
     // other than the literal `'session_consume'`, escapes this count silently — there is no
     // repo-wide "every negative-balance write" scan, only this one file's. Treat a green run here
     // as "no new site in credit-sessions.ts", not "no new site anywhere".
-    expect((repo.match(/reason: 'session_consume'/g) ?? []).length).toBe(6);
+    expect(repo.match(/reason: 'session_consume'/g) ?? []).toHaveLength(6);
 
     // The BASE pin has EXACTLY ONE caller — `open()`, the only production INSERT into
     // credit_sessions. 1 definition + 1 call = 2 occurrences of the call form (matched on the
     // opening `(`, never on a bare identifier, so a prose mention in a docblock cannot inflate
     // the count — BAL-523's R8 note).
-    expect((repo.match(/settlementInstrumentBasePin\(/g) ?? []).length).toBe(2);
+    expect(repo.match(/settlementInstrumentBasePin\(/g) ?? []).toHaveLength(2);
     // The TOP-UP pin has EXACTLY TWO callers — the two terminal wallet-locked UPDATEs (`end`,
     // `settleFromPresence`). 1 definition + 2 calls = 3. A third means someone pinned somewhere
     // that is not a terminal settlement.
-    expect((repo.match(/settlementInstrumentTopUpPin\(/g) ?? []).length).toBe(3);
+    expect(repo.match(/settlementInstrumentTopUpPin\(/g) ?? []).toHaveLength(3);
 
     // Write-once is enforced in SQL via COALESCE over the row's own pre-UPDATE value, not by a
     // droppable caller guard. COUNTED, not a bare `toContain('COALESCE(')` — the bare form also
@@ -267,12 +267,12 @@ describe('INVARIANT: the pin sites are wired at exactly the counts this rule dep
     // "`COALESCE(...)`") and would stay green even if the top-up pin helper were rewritten to a
     // plain overwrite. Three occurrences: the two pin columns plus the pinned-at timestamp, each
     // wrapping `${creditSessions.settlement…}` inside the COALESCE.
-    expect((repo.match(/COALESCE\(\$\{creditSessions\.settlement/g) ?? []).length).toBe(3);
+    expect(repo.match(/COALESCE\(\$\{creditSessions\.settlement/g) ?? []).toHaveLength(3);
 
     // ⚠ BAL-523's counts must stay UNDISTURBED — restated here so a BAL-525 edit that perturbs
     // them fails in BOTH suites rather than only in the older one
     // (`overdraft-grace-requires-card-backed-mode.test.ts`, which must stay green and unedited).
-    expect((repo.match(/walletAllowsOverdraftGrace\(/g) ?? []).length).toBe(1);
+    expect(repo.match(/walletAllowsOverdraftGrace\(/g) ?? []).toHaveLength(1);
     expect(
       (repo.match(/mandateActive: isWalletMandateActive\(/g) ?? []).length
     ).toBeGreaterThanOrEqual(4);
@@ -307,12 +307,22 @@ describe('INVARIANT: settlement actually resolves through the pin (cross-package
     expect(endSession).toContain(
       'const wallet = await creditWalletsRepository.findById(session.walletId);'
     );
-    expect((endSession.match(/creditWalletsRepository\.findById\(/g) ?? []).length).toBe(1);
+    // ⚠⚠ BAL-535 (R3b, ADR-1040 Amendment 6 §F residual) DELIBERATELY MOVED THIS COUNT FROM 1 TO
+    // 2. The second read lives in `openReceivableAndDun` (`const wallet = await
+    // creditWalletsRepository.findById(session.walletId, tx);`) — the late-receivable-residual
+    // fix: before recording a settlement failure as an open hold, it checks whether the wallet's
+    // CURRENT balance already covers the debt (a covering top-up raced the failure) and, if so,
+    // self-clears the row it just opened instead of leaving a hold on a company that owes
+    // nothing. NEITHER read is a mode read — the first (`settleOverdraft`) verifies the mandate
+    // is still live before charging; the second only asks whether a balance already covers a
+    // debt. A THIRD occurrence means a new site needs its own justification added here, by name,
+    // not a silent bump of this count.
+    expect(endSession.match(/creditWalletsRepository\.findById\(/g) ?? []).toHaveLength(2);
     // O3 — the mandate is re-verified on settlement's OWN fresh wallet read, not inherited.
     expect(endSession).toContain('!isWalletMandateActive(wallet)');
     // O2 — exactly ONE resolution site; `reconcileStuckSettlement` goes through `settleOverdraft`
     // rather than resolving its own instrument a second time.
-    expect((endSession.match(/resolveSettlementInstrument\(/g) ?? []).length).toBe(1);
+    expect(endSession.match(/resolveSettlementInstrument\(/g) ?? []).toHaveLength(1);
     // ⚠ The Stripe idempotency key is NOT instrument-varied (plan §6.5) — the first settlement
     // attempt fixes the instrument at Stripe for the session's whole life; no "try the pin, then
     // fall back to the live card" ladder.

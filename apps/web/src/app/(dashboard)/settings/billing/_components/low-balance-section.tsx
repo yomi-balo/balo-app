@@ -124,8 +124,10 @@ const ARM_WARNING_MESSAGE =
  * `durationSource: 'presence'` — at meeting end the presence finalizer (`settleFromPresence`)
  * posts every billable minute with no mode check and settles off-session, topping the meter's
  * refusal straight back up. Net charge is unchanged by this setting. That mode-blind finalizer is
- * ALSO what guarantees the expert is paid, so it is not fixed here: tracked as **BAL-535**, which
- * needs an ADR ruling first.
+ * ALSO what guarantees the expert is paid, and **BAL-535 ruled it stays that way permanently
+ * (ADR-1040 Amendment 6 §A.1/§C)**. This copy is therefore not interim — it is the settled
+ * description of the product, and §D of that amendment requires the mode picker's own
+ * `notify_only` description to say the same thing (see `LowBalanceModePicker.tsx`).
  *
  * ⚠ R2 also REVERSED the round-1 `hasUnsettledOverdraft` RE-GATE. That re-gate assumed FUTURE
  * sessions would be disarmed; they are not. So the truthful trigger is BAL-516's again — a
@@ -251,13 +253,30 @@ export function LowBalanceSection({
   const errors = autoTopupConfigErrors(draft.mode, draft.reloadMinor, draft.thresholdMinor);
   const hasFieldErrors = errors.reload !== undefined || errors.threshold !== undefined;
   const isDirty = !sameDraft(draft, baseline);
+  /**
+   * Will time used beyond the balance actually settle to a card afterward? A card ON FILE is not
+   * enough — settlement is `isWalletMandateActive`-gated (ADR-1040 Amendment 6 §A.1/§C), so the
+   * live off-session mandate is the other half.
+   *
+   * ⚠ ONE COMPUTATION, TWO CONSUMERS (fix round 2, F3): the standing note below and the picker's
+   * `notify_only` settlement sentence. The picker used to select that sentence on `cardAvailable`
+   * alone and could therefore contradict the note sitting directly beneath it.
+   */
+  //
+  // ⚠⚠ `|| armedLocally` IS LOAD-BEARING, NOT DEFENSIVE (fix round 3). `runArm` captures the
+  // mandate and records it ONLY in local state (`setArmedLocally(true)`); the `mandateActive`
+  // PROP stays stale until a server round-trip. Without this disjunct, a client who arms a card
+  // and then switches to `notify_only` in the same sitting is told their sessions will PAUSE —
+  // while the live mandate actually settles their overruns to that card. That is a false warning
+  // in the opposite direction to the one F3 fixed, and it is reachable without a remount.
+  const settlesToCardOnFile = cardAvailable && (mandateActive || armedLocally);
   // ⚠ FIX ROUND 2 (R2) — BACK TO THE THREE PRE-BAL-523 CONJUNCTS. Round 1 added a fourth
   // (`hasUnsettledOverdraft`) on the premise that FUTURE sessions would be disarmed by this save.
   // They are not (see the toast constants' ⚠⚠ note — the presence finalizer is mode-blind), so
   // narrowing to "a client who has exposure right now" under-warned everyone else. Every
   // `notify_only` client with a live mandate on a card still has overruns settled to it.
   // `hasUnsettledOverdraft` still runs — it picks the LEVER, not the gate.
-  const showResidualSettlementNote = draft.mode === 'notify_only' && cardAvailable && mandateActive;
+  const showResidualSettlementNote = draft.mode === 'notify_only' && settlesToCardOnFile;
   /**
    * FIX ROUND (F3) — the card-backed mode currently drafted while the wallet has no card, or
    * `null` when Save is not blocked for this reason. This is the THIRD reachability path
@@ -414,6 +433,7 @@ export function LowBalanceSection({
         onReloadChange={handleReloadChange}
         onThresholdChange={handleThresholdChange}
         cardAvailable={cardAvailable}
+        settlesToCardOnFile={settlesToCardOnFile}
         errors={errors}
         cardLabel={cardLabel}
       />

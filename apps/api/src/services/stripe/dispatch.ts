@@ -1,5 +1,6 @@
 import type Stripe from 'stripe';
 import {
+  acquireWalletLock,
   applyLedgerEntry,
   auditEventsRepository,
   creditReceivablesRepository,
@@ -8,14 +9,23 @@ import {
   promoRedemptionsRepository,
   db,
   deriveIdempotencyKey,
+  type ApplyLedgerEntryResult,
   type CreditSession,
   type CreditWallet,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { trackServer, CREDIT_SERVER_EVENTS } from '@balo/analytics/server';
-import { toSettleableSession } from '@balo/shared/credit';
+import { toSettleableSession, isCashCreditReason } from '@balo/shared/credit';
+import {
+  assessCashCoverage,
+  clearLateOpenedReceivableIfCovered,
+} from '../credit/receivable-coverage.js';
 import { getStripeClient } from '../../lib/stripe.js';
-import { publishSessionSettled, publishSettlementFailure } from '../credit-session/notify.js';
+import {
+  publishSessionSettled,
+  publishSettlementFailure,
+  publishReceivableCleared,
+} from '../credit-session/notify.js';
 import {
   publishAutoTopupExecuted,
   publishAutoTopupFailed,
@@ -44,6 +54,12 @@ type CreditReason = (typeof CREDIT_REASONS)[number];
 function isCreditReason(value: string | undefined): value is CreditReason {
   return value !== undefined && (CREDIT_REASONS as readonly string[]).includes(value);
 }
+
+// BAL-535 / ADR-1040 Amendment 6 §F — the CASH-funded credit reason gate (`CASH_CREDIT_REASONS`
+// / `isCashCreditReason`) MOVED to `@balo/shared/credit`'s `receivable-coverage.ts` in the fix
+// round, so `@balo/analytics` and `@balo/shared/notifications` can derive `CashCreditReason`
+// from the one list instead of restating the union (N9/L5). It is still the reason gate, and it
+// is still pinned by the money-invariant suite — now against its new home.
 
 /** Read `charge.outcome` (Radar-aware) for a failed PI, falling back to `last_payment_error`. */
 async function resolveFailureOutcome(pi: Stripe.PaymentIntent): Promise<unknown> {
@@ -584,6 +600,158 @@ async function publishTopupReceipt(receipt: CreditTopupReceipt): Promise<void> {
   }
 }
 
+/**
+ * The outcome of the R3 clear. `publish` is deferred rather than returned as a ready-made thunk
+ * because the figure the CLIENT is shown and the figure the PREDICATE judged are different
+ * numbers answering different questions (fix round M3): the predicate runs before
+ * `grantPromoBestEffort`, so `base.wallet.balanceMinor` is the pre-promo balance — correct for
+ * the audit trail and wrong for an email the buyer reads seconds after a top-up receipt quoting
+ * the promo-inclusive figure. The caller supplies the true final display balance on the arm that
+ * knows it, and the two numbers never share a field.
+ */
+interface ReceivableClearOutcome {
+  /** How many open receivables this credit cleared. `0` ⇒ nothing happened. */
+  clearedCount: number;
+  /** Build the post-commit notice from the TRUE final balance the client will see. */
+  publish: (displayBalanceMinor: number) => PostCommitEffect[];
+}
+
+const NO_RECEIVABLE_CLEAR: ReceivableClearOutcome = { clearedCount: 0, publish: () => [] };
+
+/**
+ * BAL-535 / ADR-1040 Amendment 6 §F — does THIS credit cover the company's outstanding debt, and
+ * if so, clear every open receivable (+ record provenance) in the SAME transaction as the ledger
+ * write. Called from `applyCredit` immediately after the base ledger entry lands, BEFORE every
+ * per-reason branch.
+ *
+ * ⚠⚠ THE PROMO EXCLUSION IS THE DISCOUNT, NOT THE ORDERING (fix round B1). This function used to
+ * lean on being upstream of `grantPromoBestEffort` and call the predicate on the raw balance.
+ * That only ever excluded a promo bundled onto THIS purchase; a promo granted in an EARLIER
+ * transaction — including the standalone Model-C redeem in
+ * `apps/web/src/app/(dashboard)/redeem/_actions/redeem-promo.ts`, which has no purchase and no
+ * receivable gate — is already inside the aggregate `balance_minor`, so one cent of cash cleared
+ * a $50 receivable. `assessCashCoverage` subtracts every promo grant made since the debt became
+ * outstanding, so the exclusion now holds however the promo arrived. The predicate is STILL a
+ * live balance figure and STILL never reads the receivable's stale `amount_minor`.
+ *
+ * ⚠ `base.wallet.balanceMinor` — NEVER A FRESH READ. `applyLedgerEntry` already returns the
+ * post-credit wallet (the current read AND the deduped-replay read both carry it), so this adds
+ * NO wallet read anywhere — the money-invariant suite's pinned `creditWalletsRepository.findById(`
+ * counts in `end-session.ts` are untouched by this file. It also already holds the wallet's
+ * advisory lock, so the coverage reads below see one consistent, untearable snapshot.
+ *
+ * ⚠ RUNS ON THE DEDUPED ARM TOO, DELIBERATELY. Do NOT gate this on `!base.deduped` — on a webhook
+ * replay `base.wallet` is a CURRENT read, so the predicate still answers "does this wallet owe
+ * anything right now" correctly, and `clearOpenForWallet` is itself idempotent (matches only
+ * `status = 'open'`). This mirrors `markSettlementSettled`'s shipped posture (its mark + clear run
+ * on a replay too) and makes the operation a pure function of current state. Only the PUBLISH
+ * is dedup-gated — by its `correlationId`, now keyed on the LEDGER ENTRY so one clear operation
+ * sends ONE notice however many receivables it discharged (fix round N4).
+ */
+async function clearReceivablesCoveredByCredit(
+  tx: DbTx,
+  effect: Extract<StripeEffect, { kind: 'credit' }>,
+  base: ApplyLedgerEntryResult
+): Promise<ReceivableClearOutcome> {
+  const { reason } = effect;
+  if (!isCashCreditReason(reason)) {
+    return NO_RECEIVABLE_CLEAR;
+  }
+  const coverage = await assessCashCoverage(tx, effect.walletId, base.wallet.balanceMinor);
+  if (!coverage.covered) {
+    return NO_RECEIVABLE_CLEAR;
+  }
+  const cleared = await creditReceivablesRepository.clearOpenForWallet(
+    { walletId: effect.walletId },
+    tx
+  );
+  const [firstCleared] = cleared;
+  if (firstCleared === undefined) {
+    return NO_RECEIVABLE_CLEAR;
+  }
+
+  // ⚠ ONE ROUND TRIP PER CLEAR OPERATION, NOT ONE PER ROW (fix round 2, F4). These inserts are
+  // independent of each other and of their own order, so awaiting them serially only added
+  // latency INSIDE the credit transaction — which holds the wallet's advisory lock, so every
+  // other writer on that wallet waits out the whole sequence. They stay on the SAME `tx`
+  // (`postgres-js` pipelines them on the transaction's own reserved connection), so the audit
+  // trail still commits or rolls back atomically with the ledger write and the clear; a rejection
+  // still aborts the transaction exactly as the serial `await` did.
+  await Promise.all(
+    cleared.map((row) =>
+      auditEventsRepository.record(
+        {
+          actorUserId: effect.memberId,
+          action: 'credit_receivable.cleared_by_credit',
+          entityType: 'credit_receivable',
+          entityId: row.id,
+          metadata: {
+            walletId: effect.walletId,
+            // N11 — the receivable's OWN company, not the wallet's. They agree today (one wallet
+            // per company, `credit_wallets_company_idx` is UNIQUE) and the row is the thing being
+            // audited, so it is the honest source.
+            companyId: row.companyId,
+            sessionId: row.sessionId,
+            ledgerEntryId: base.entry.id,
+            creditReason: reason,
+            receivableAmountMinor: row.amountMinor,
+            // The PREDICATE's figures — pre-promo-grant and promo-discounted. Deliberately NOT
+            // named `balanceAfterMinor`: that is the display number the client is shown, and M3
+            // is the finding that these two must never share a field.
+            predicateBalanceMinor: coverage.balanceMinor,
+            promoDiscountedMinor: coverage.promoGrantedSinceDebtMinor,
+            cashBackedBalanceMinor: coverage.cashBackedBalanceMinor,
+            stripePaymentIntentId: effect.settlement.stripePaymentIntentId,
+            deduped: base.deduped,
+          },
+        },
+        tx
+      )
+    )
+  );
+
+  const clearedMinor = cleared.reduce((sum, row) => sum + row.amountMinor, 0);
+  log.info(
+    {
+      op: 'applyStripeEffect',
+      kind: 'receivable_cleared',
+      walletId: effect.walletId,
+      // N10 — `companyId` and `deduped` complete the field set plan §9 specifies for the line
+      // §J nominates for BAL-545's Axiom monitor (a hold-clear count is per COMPANY, and a
+      // replayed webhook must be separable from a fresh one).
+      companyId: firstCleared.companyId,
+      reason,
+      clearedCount: cleared.length,
+      clearedMinor,
+      predicateBalanceMinor: coverage.balanceMinor,
+      promoDiscountedMinor: coverage.promoGrantedSinceDebtMinor,
+      cashBackedBalanceMinor: coverage.cashBackedBalanceMinor,
+      deduped: base.deduped,
+      receivableIds: cleared.map((row) => row.id),
+    },
+    'Covering credit cleared the company soft hold'
+  );
+
+  return {
+    clearedCount: cleared.length,
+    publish: (displayBalanceMinor: number) => [
+      () =>
+        publishReceivableCleared({
+          // N4 — ONE notice per clear OPERATION, keyed on the ledger entry that covered the
+          // debt, not per receivable row. Three cleared rows used to send three identical
+          // "your account is clear" emails quoting one balance.
+          ledgerEntryId: base.entry.id,
+          companyId: firstCleared.companyId,
+          walletId: effect.walletId,
+          receivableCount: cleared.length,
+          clearedMinor,
+          balanceAfterMinor: displayBalanceMinor,
+          clearedBy: reason,
+        }),
+    ],
+  };
+}
+
 async function applyCredit(
   tx: DbTx,
   effect: Extract<StripeEffect, { kind: 'credit' }>
@@ -651,17 +819,31 @@ async function applyCredit(
     );
   }
 
+  // BAL-535 / ADR-1040 Amendment 6 §F — a covering CASH credit clears every open receivable on
+  // this wallet, BEFORE every per-reason branch below. The promo exclusion is the DISCOUNT
+  // inside `assessCashCoverage`, not this ordering (fix round B1) — the ordering only ever
+  // excluded a promo bundled onto this same purchase. No-op on every reason but
+  // `manual_purchase` / `auto_topup`, and no-op whenever there is no open receivable — the
+  // overwhelmingly common case, and the one that costs a single indexed read.
+  const receivableClear = await clearReceivablesCoveredByCredit(tx, effect, base);
+
   // BAL-378: an overdraft settlement credit ALSO marks the session settled + clears the
   // receivable (single webhook source of truth). ledgerKeyForCredit guarantees a non-null
   // sessionId for this reason. A replayed (deduped) credit still idempotently re-marks, but
-  // never re-publishes the receipt / re-counts analytics (FIX 9).
+  // never re-publishes the receipt / re-counts analytics (FIX 9). The clear is a no-op by
+  // construction here (`overdraft_settlement` is absent from `CASH_CREDIT_REASONS`) — spread for
+  // uniformity with every other return in this function. No promo can ride this arm, so the
+  // display balance IS the post-credit balance.
   if (effect.reason === 'overdraft_settlement' && effect.sessionId !== null) {
-    return markSettlementSettled(
-      tx,
-      effect.sessionId,
-      effect.settlement.stripePaymentIntentId,
-      base.deduped
-    );
+    return [
+      ...receivableClear.publish(base.wallet.balanceMinor),
+      ...(await markSettlementSettled(
+        tx,
+        effect.sessionId,
+        effect.settlement.stripePaymentIntentId,
+        base.deduped
+      )),
+    ];
   }
 
   // BAL-379: a FRESH auto_topup credit surfaces the executed notice + AUTO_TOPUP_FIRED analytics
@@ -671,7 +853,7 @@ async function applyCredit(
   // no re-analytics). `ledgerKeyForCredit` guarantees a non-null `triggeringEntryId` here.
   if (effect.reason === 'auto_topup') {
     if (base.deduped || effect.triggeringEntryId === null) {
-      return [];
+      return receivableClear.publish(base.wallet.balanceMinor);
     }
     // BAL-379: the reload landed — CLEAR the single-in-flight marker in the SAME webhook txn so
     // future reloads can fire.
@@ -700,16 +882,26 @@ async function applyCredit(
       balanceAfterMinor: base.wallet.balanceMinor,
       expiresAt: base.wallet.expiresAt ? base.wallet.expiresAt.toISOString() : '',
     };
-    return [() => publishAutoTopupExecuted(executed)];
+    // No promo rides the auto_topup arm, so the display balance IS the post-credit balance.
+    return [
+      ...receivableClear.publish(base.wallet.balanceMinor),
+      () => publishAutoTopupExecuted(executed),
+    ];
   }
 
   // BAL-377: only a FRESH manual_purchase surfaces a receipt (+ grants any promo) as a
   // post-commit publish. A deduped replay never re-grants or re-publishes; auto_topup has its
-  // own lane (above) and overdraft_settlement is handled above.
+  // own lane (above) and overdraft_settlement is handled above. A deduped replay also grants no
+  // promo, so its display balance is the post-credit balance unmodified.
   if (effect.reason !== 'manual_purchase' || base.deduped) {
-    return [];
+    return receivableClear.publish(base.wallet.balanceMinor);
   }
   const promoGrantedMinor = await grantPromoBestEffort(tx, effect, base.wallet.companyId);
+  // The promo grant (when present) adds to the post-base balance in the same txn. This is the
+  // TRUE final balance and therefore the only figure either of the two emails below may quote:
+  // both reach the same person (a top-up requires MANAGE_BILLING), seconds apart, and M3 is the
+  // finding that they must not disagree about the balance.
+  const displayBalanceMinor = base.wallet.balanceMinor + promoGrantedMinor;
   const receipt: CreditTopupReceipt = {
     correlationId: idempotencyKey, // = manual_purchase:{piId}
     walletId: effect.walletId,
@@ -719,11 +911,10 @@ async function applyCredit(
     chargedCurrency: effect.settlement.chargedCurrency,
     chargedAmountMinor: effect.settlement.chargedAmountMinor,
     promoGrantedMinor,
-    // The promo grant (when present) adds to the post-base balance in the same txn.
-    balanceAfterMinor: base.wallet.balanceMinor + promoGrantedMinor,
+    balanceAfterMinor: displayBalanceMinor,
     expiresAt: base.wallet.expiresAt ? base.wallet.expiresAt.toISOString() : null,
   };
-  return [() => publishTopupReceipt(receipt)];
+  return [...receivableClear.publish(displayBalanceMinor), () => publishTopupReceipt(receipt)];
 }
 
 /**
@@ -733,6 +924,21 @@ async function applyCredit(
  * (`created`) — the sync end-session hard-decline path opens the SAME session receivable, so
  * gating on `created` means exactly one dunning + one analytics fire per failed session,
  * whichever path lands first (FIX 5). No-op (logs) if the session is gone.
+ *
+ * ⚠⚠ M2 (fix round) — THE WALLET LOCK IS THE FIRST WRITE-PATH STATEMENT HERE, and it closes a
+ * real interleaving rather than narrowing one. This path takes NO ledger write, so before the
+ * lock it did not serialise against `applyLedgerEntry`'s `acquireWalletLock` at all: T1 could
+ * insert the receivable (uncommitted), T2 could credit the wallet and find zero open rows to
+ * clear, and T1's fresh wallet read would still see the pre-credit negative balance — committing
+ * an open receivable plus dunning against a company that had paid in full. Taking the same
+ * advisory lock T2 takes makes the two transactions strictly ordered on this wallet.
+ *
+ * ⚠ DEADLOCK-FREE, and here is why: `pg_advisory_xact_lock(hashtextextended(walletId, 0))` is
+ * the ONLY advisory lock any money path takes, exactly one per transaction (distinct wallets
+ * hash to distinct keys and never contend), and it is taken BEFORE any row is touched. With one
+ * lock and no second lock class there is no ordering cycle to form; re-taking it inside
+ * `applyLedgerEntry` later in the same transaction is a no-op (advisory locks are re-entrant
+ * within a session).
  */
 async function handleOverdraftChargeFailed(
   tx: DbTx,
@@ -747,6 +953,7 @@ async function handleOverdraftChargeFailed(
     );
     return [];
   }
+  await acquireWalletLock(tx, session.walletId);
   await creditSessionsRepository.markSettlementResult(tx, {
     sessionId,
     status: 'failed',
@@ -756,7 +963,7 @@ async function handleOverdraftChargeFailed(
   if (amountMinor <= 0) {
     return [];
   }
-  const { created } = await creditReceivablesRepository.open(
+  const { receivable, created } = await creditReceivablesRepository.open(
     {
       companyId: session.companyId,
       walletId: session.walletId,
@@ -767,7 +974,32 @@ async function handleOverdraftChargeFailed(
     },
     tx
   );
-  if (!created) {
+  // BAL-535 (R3b, ADR-1040 Amendment 6 §F residual) — an ASYNC failure can land after a covering
+  // top-up already returned the wallet to a non-negative balance. Record the failure (the
+  // `open()` above already did) but, under this SAME txn, self-clear it immediately and suppress
+  // the dunning publish rather than re-imposing a hold on a company that owes nothing. ONE
+  // shared decision with `end-session.ts`'s `openReceivableAndDun` — see
+  // `clearLateOpenedReceivableIfCovered`, which is also where the deliberate `created`-blindness
+  // (N3) and the audit trace (N2) live.
+  const wallet = await creditWalletsRepository.findById(session.walletId, tx);
+  const alreadyCovered =
+    wallet !== undefined &&
+    (await clearLateOpenedReceivableIfCovered(tx, {
+      receivable: {
+        id: receivable.id,
+        companyId: session.companyId,
+        sessionId,
+        amountMinor,
+      },
+      walletId: session.walletId,
+      balanceMinor: wallet.balanceMinor,
+      created,
+      openedBy: 'stripe_webhook',
+      stripePaymentIntentId: paymentIntentId,
+      // No human actor on the webhook path — Stripe delivered this, nobody clicked it.
+      actorUserId: null,
+    }));
+  if (alreadyCovered || !created) {
     return [];
   }
   const settleable = toSettleableSession(session);
@@ -937,7 +1169,12 @@ export async function applyStripeEffect(
       //    ⚠ BAL-525 does NOT close that: it records on the session the instrument the debt was
       //    incurred against and warns when that record and the wallet disagree, but consent is
       //    read live and a detached card is dead at Stripe either way. Who absorbs a debt whose
-      //    instrument is gone is **BAL-535**'s ruling — cross-referenced here, solved nowhere yet.
+      //    instrument is gone is now SETTLED (ADR-1040 Amendment 6 §E/§F, BAL-535): the pin is
+      //    never authority, so there is no special routing for it — settlement falls through to
+      //    the same live-mandate gate every card-less wallet hits and opens the ordinary soft-hold
+      //    receivable. That hold is no longer a dead end: a covering cash credit (Amendment 6 §F)
+      //    that returns the wallet to a non-negative balance clears it, self-service, the moment
+      //    the company tops up again.
       const { wallet, modeReconciled, previousLowBalanceMode } =
         await creditWalletsRepository.clearSavedCardAndReconcileMode(tx, effect.walletId, {
           actorUserId: null,

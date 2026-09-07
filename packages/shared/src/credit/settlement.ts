@@ -177,13 +177,24 @@ export interface OverdraftGraceWalletFields extends MandateWalletFields {
  * permission by not being the one value we thought to exclude. Pinned from this end too, by the
  * invariant suite's unknown-mode case.
  *
- * ⚠⚠ THE ASYMMETRY IS DELIBERATE AND MUST NOT BE "TIDIED UP". This gates GRACE ENTRY ONLY
- * (`applyActiveTick`). SETTLEMENT (`settleOverdraft`, `reconcileStuckSettlement`) stays
- * `isWalletMandateActive`-only, forever: entry is the moment Balo takes on NEW collection risk,
- * so it follows the client's current preference; settlement honours a debt already incurred
- * under consent that was live at the time. Gating settlement on the mode too would open a
- * payment-evasion window (enter grace on `keep_going`, flip to `notify_only`, walk away from
- * consumed time) and break ADR-1040's "expert always gets paid, with no asterisk".
+ * ⚠⚠ THE ASYMMETRY IS DELIBERATE, PERMANENT, AND MUST NOT BE "TIDIED UP" (ADR-1040 Amendment 6
+ * §A.1/§C/§H, BAL-535 — SETTLED, not pending). This gates GRACE ENTRY ONLY (`applyActiveTick`).
+ * SETTLEMENT (`settleOverdraft`, `reconcileStuckSettlement`) stays `isWalletMandateActive`-only,
+ * forever, on EVERY session. TWO justifications, not one — because grace does not open on every
+ * path settlement serves:
+ *  · Where grace DID open (`live_capture` / `external`): entry is the moment Balo takes on NEW
+ *    collection risk, so it follows the client's current preference; settlement honours a debt
+ *    already incurred under consent that was live at the time. Gating settlement on the mode too
+ *    would open a payment-evasion window (enter grace on `keep_going`, flip to `notify_only`,
+ *    walk away from consumed time) and break ADR-1040's "expert always gets paid, with no
+ *    asterisk".
+ *  · Where grace NEVER opens (`durationSource: 'presence'` — the production path for every Case
+ *    consultation): the evasion argument above cannot reach, because there is no grace to flip
+ *    out of. The reason settlement still charges is simpler and independent of it: the debt is
+ *    for time an expert ACTUALLY DELIVERED; the mandate is live consent to exactly this, re-read
+ *    fresh at settlement; and gating on the mode would make the expert deliver a full
+ *    consultation for nothing. See `end-session.ts`'s `settleOverdraft` docblock for the fuller
+ *    statement of this argument.
  *
  * ⚠ The `open()` CONNECT GATE is NOT on this predicate either, and that is also deliberate
  * (Yomi, 2026-09-04, reversing an earlier BAL-523 revision). `open()` refusing does not refuse

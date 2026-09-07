@@ -22,6 +22,7 @@ import type {
   CreditBalanceExpiredPayload,
   CreditAutoTopupExecutedPayload,
   CreditAutoTopupFailedPayload,
+  CreditReceivableClearedPayload,
   CreditTopupCompletedPayload,
   CreditTopupRequestedPayload,
   PromoRedeemedPayload,
@@ -476,6 +477,9 @@ export type NotificationEvent =
   | 'credit.balance_expired'
   | 'credit.auto_topup.executed'
   | 'credit.auto_topup.failed'
+  // BAL-535 (ADR-1040 Amendment 6 §F) — a covering cash credit cleared an open receivable,
+  // releasing the company's soft account hold. SERVER-ONLY.
+  | 'credit.receivable.cleared'
   | 'session.low_balance'
   | 'session.grace_entered'
   | 'session.near_wrap'
@@ -610,6 +614,9 @@ export type ServerOnlyNotificationEvent =
   // apps/web, so neither has a publishBodySchema arm.
   | 'credit.auto_topup.executed'
   | 'credit.auto_topup.failed'
+  // BAL-535: fires from the API Stripe webhook post-commit (`clearReceivablesCoveredByCredit`)
+  // — never from apps/web, so no `publishBodySchema` arm.
+  | 'credit.receivable.cleared'
   | 'session.low_balance'
   | 'session.grace_entered'
   | 'session.near_wrap'
@@ -808,6 +815,7 @@ export interface EventPayloadMap {
   'credit.balance_expired': CreditBalanceExpiredPayload;
   'credit.auto_topup.executed': CreditAutoTopupExecutedPayload;
   'credit.auto_topup.failed': CreditAutoTopupFailedPayload;
+  'credit.receivable.cleared': CreditReceivableClearedPayload;
   'session.low_balance': SessionLowBalancePayload;
   'session.grace_entered': SessionGraceEnteredPayload;
   'session.near_wrap': SessionNearWrapPayload;

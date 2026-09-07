@@ -6,6 +6,10 @@ const {
   mockFindWallet,
   mockReceivableOpen,
   mockReceivableClear,
+  mockEarliestOpenDebtAnchor,
+  mockSumPromoGrantedSince,
+  mockAcquireWalletLock,
+  mockAuditRecord,
   mockCreateOffSessionCharge,
   mockRetrievePaymentIntentStatus,
   mockApplyOverdraftSettlementFromStripe,
@@ -25,6 +29,16 @@ const {
   mockFindWallet: vi.fn(),
   mockReceivableOpen: vi.fn(),
   mockReceivableClear: vi.fn(),
+  // BAL-535 fix round B1 — the R3b self-clear now asks the SHARED coverage decision: when did
+  // the oldest still-open debt on this wallet become outstanding, and how much PROMO credit has
+  // landed since. Defaults: nothing open (`undefined`) ⇒ `assessCashCoverage` short-circuits, so
+  // every EXISTING dunning fixture keeps its behaviour without touching these.
+  mockEarliestOpenDebtAnchor: vi.fn(async (): Promise<Date | undefined> => undefined),
+  mockSumPromoGrantedSince: vi.fn(async (): Promise<number> => 0),
+  // M2 — the receivable-opening transaction now takes the wallet advisory lock FIRST.
+  mockAcquireWalletLock: vi.fn(),
+  // N2 — an R3b clear leaves a distinct audit trace.
+  mockAuditRecord: vi.fn(),
   mockCreateOffSessionCharge: vi.fn(),
   mockRetrievePaymentIntentStatus: vi.fn(),
   mockApplyOverdraftSettlementFromStripe: vi.fn(),
@@ -55,8 +69,17 @@ vi.mock('@balo/db', () => ({
     parkAwaitingDuration: mockPark,
   },
   creditWalletsRepository: { findById: mockFindWallet },
-  creditReceivablesRepository: { open: mockReceivableOpen, clear: mockReceivableClear },
-  creditLedgerRepository: { findByIdempotencyKey: mockFindLedgerByIdempotencyKey },
+  creditReceivablesRepository: {
+    open: mockReceivableOpen,
+    clear: mockReceivableClear,
+    earliestOpenDebtAnchor: mockEarliestOpenDebtAnchor,
+  },
+  creditLedgerRepository: {
+    findByIdempotencyKey: mockFindLedgerByIdempotencyKey,
+    sumPromoGrantedSince: mockSumPromoGrantedSince,
+  },
+  auditEventsRepository: { record: mockAuditRecord },
+  acquireWalletLock: mockAcquireWalletLock,
   deriveIdempotencyKey: (input: { sessionId?: string }) =>
     `overdraft_settlement:${input.sessionId}`,
   db: { transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({}) },
@@ -100,6 +123,12 @@ const MANDATE_WALLET = {
   mandateStatus: 'active',
   stripeCustomerId: 'cus_1',
   stripePaymentMethodId: 'pm_1',
+  // ⚠ FIX ROUND N7/L4 — EXPLICITLY NEGATIVE, and load-bearing. This fixture is the wallet the
+  // R3b self-clear re-reads, so with no `balanceMinor` at all the ~8 dunning tests below passed
+  // only because `undefined >= 0` is false — an invariant satisfied by ACCIDENT. A debt-carrying
+  // wallet has a negative balance; stating it means those tests assert "uncovered ⇒ the hold and
+  // the dunning stand" rather than merely surviving a missing field.
+  balanceMinor: -1200,
 };
 
 function endResult(overrides: Record<string, unknown>) {
@@ -352,6 +381,98 @@ describe('endSession', () => {
       expect.objectContaining({ reason: 'settlement_requires_action', amountMinor: 1200 }),
       {}
     );
+    expect(mockPublishSettlementFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'requires_action', amountMinor: 1200 })
+    );
+  });
+
+  it('R3b (BAL-535, ADR-1040 Amendment 6 §F residual) — self-clears the just-opened receivable and suppresses dunning when a covering credit already landed', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1200, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({
+      status: 'requires_action',
+      paymentIntentId: 'pi_2',
+      clientSecret: 'cs',
+    });
+    // First call — settleOverdraft's own mandate check. Second call — openReceivableAndDun's
+    // FRESH read, under the same txn, which finds the wallet ALREADY covered by a top-up that
+    // raced the settlement failure. No promo landed since the debt opened, so it is real cash.
+    mockFindWallet
+      .mockResolvedValueOnce(MANDATE_WALLET)
+      .mockResolvedValueOnce({ ...MANDATE_WALLET, balanceMinor: 300 });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(new Date('2026-09-01T00:00:00Z'));
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    // `clear()` returns the row it transitioned; the audit row is written only when it really did.
+    mockReceivableClear.mockResolvedValueOnce({ id: 'rcv_1', status: 'cleared' });
+    const result = await endSession('session_1', 'user_1');
+    expect(result).toEqual({
+      ok: true,
+      result: { settlementStatus: 'requires_action', overdraftSettledMinor: 1200 },
+    });
+    // M2 — the wallet is locked as the first statement of the receivable transaction.
+    expect(mockAcquireWalletLock).toHaveBeenCalledWith({}, 'wallet_1');
+    // The receivable STILL opens — the settlement failure is a real event worth recording.
+    expect(mockReceivableOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'settlement_requires_action', amountMinor: 1200 }),
+      {}
+    );
+    // But it self-clears in the SAME txn, and the dunning notice never fires.
+    expect(mockReceivableClear).toHaveBeenCalledWith({ receivableId: 'rcv_1' }, {});
+    expect(mockPublishSettlementFailure).not.toHaveBeenCalled();
+    // N2 — and the clear leaves a DISTINCT trace, so §G.3's future SCA re-confirm surface can
+    // tell an R3b clear from an R3 one.
+    expect(mockAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'credit_receivable.cleared_on_late_open',
+        entityType: 'credit_receivable',
+        entityId: 'rcv_1',
+        metadata: expect.objectContaining({
+          openedBy: 'end_session',
+          created: true,
+          promoDiscountedMinor: 0,
+          cashBackedBalanceMinor: 300,
+        }),
+      }),
+      {}
+    );
+  });
+
+  it('R3b does NOT self-clear when the wallet balance still leaves the debt uncovered (partial top-up)', async () => {
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1200, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({
+      status: 'requires_action',
+      paymentIntentId: 'pi_2',
+      clientSecret: 'cs',
+    });
+    mockFindWallet
+      .mockResolvedValueOnce(MANDATE_WALLET)
+      .mockResolvedValueOnce({ ...MANDATE_WALLET, balanceMinor: -50 });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(new Date('2026-09-01T00:00:00Z'));
+    mockSumPromoGrantedSince.mockResolvedValueOnce(0);
+    await endSession('session_1', 'user_1');
+    expect(mockReceivableClear).not.toHaveBeenCalled();
+    expect(mockPublishSettlementFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'requires_action', amountMinor: 1200 })
+    );
+  });
+
+  it('⚠⚠ B1 (R3b) — a PROMO-funded non-negative balance does NOT self-clear; the hold and the dunning stand', async () => {
+    // The shipped defect at this site: `creditWalletsRepository.findById` returns COMMITTED
+    // state, which includes every promo adjustment ever made, so a $50 promo discharged a $50
+    // receivable with no hold and no dunning. Deleting the discount fails HERE.
+    mockEnd.mockResolvedValue(endResult({ overdraftMinor: 1200, mandateActive: true }));
+    mockCreateOffSessionCharge.mockResolvedValue({
+      status: 'requires_action',
+      paymentIntentId: 'pi_2',
+      clientSecret: 'cs',
+    });
+    mockFindWallet
+      .mockResolvedValueOnce(MANDATE_WALLET)
+      .mockResolvedValueOnce({ ...MANDATE_WALLET, balanceMinor: 0 });
+    mockEarliestOpenDebtAnchor.mockResolvedValueOnce(new Date('2026-09-01T00:00:00Z'));
+    mockSumPromoGrantedSince.mockResolvedValueOnce(1200);
+    await endSession('session_1', 'user_1');
+    expect(mockReceivableClear).not.toHaveBeenCalled();
+    expect(mockAuditRecord).not.toHaveBeenCalled();
     expect(mockPublishSettlementFailure).toHaveBeenCalledWith(
       expect.objectContaining({ reason: 'requires_action', amountMinor: 1200 })
     );

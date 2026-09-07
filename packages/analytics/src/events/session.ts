@@ -1,4 +1,4 @@
-import type { DrawdownKey } from '@balo/shared/credit';
+import type { CashCreditReason, DrawdownKey } from '@balo/shared/credit';
 
 /**
  * BAL-378 (ADR-1040 Lane 2) in-session drawdown / overdraft analytics.
@@ -71,6 +71,13 @@ export const SESSION_SERVER_EVENTS = {
   /** A failed settlement opened a receivable (soft account hold). */
   RECEIVABLE_OPENED: 'receivable_opened',
   /**
+   * BAL-535 (ADR-1040 Amendment 6 §F) — a cash-funded credit (`manual_purchase` / `auto_topup`)
+   * returned the wallet to a non-negative balance and cleared every open receivable on it,
+   * releasing the company's soft account hold. Paired with `RECEIVABLE_OPENED` above — together
+   * they answer "how many holds clear without ops touching them" (§J's measurement claim).
+   */
+  RECEIVABLE_CLEARED: 'receivable_cleared',
+  /**
    * BAL-466 (F7/F8, review fix round; widened by G5, second review round) — admission tried to
    * open a `'presence'` credit session and the gate refused, so the consultation proceeds
    * UNBILLED and (for every reason but `insufficient_no_mandate`) the expert goes UNPAID. Fired
@@ -131,6 +138,24 @@ export interface SessionServerEventMap {
     company_id: string;
     amount_minor: number;
     reason: string;
+    /** = company_id. */
+    distinct_id: string;
+  };
+  [SESSION_SERVER_EVENTS.RECEIVABLE_CLEARED]: {
+    company_id: string;
+    wallet_id: string;
+    /**
+     * How many open receivables this ONE clear operation discharged. There is no `session_id`
+     * here on purpose (fix round N4): a wallet can hold several open receivables and the clear
+     * is wallet-wide, so the event is per OPERATION — its pair `RECEIVABLE_OPENED` stays per
+     * session, and §J's "how many holds clear without ops touching them" sums this count.
+     */
+    receivable_count: number;
+    /** Sum of the cleared receivables' recorded amounts (AUD minor). */
+    cleared_minor: number;
+    balance_after_minor: number;
+    /** How it was covered — DERIVED from `CASH_CREDIT_REASONS`, never a restated union. */
+    cleared_by: CashCreditReason;
     /** = company_id. */
     distinct_id: string;
   };

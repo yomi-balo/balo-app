@@ -37,6 +37,12 @@ export {
   type SettlementInstrumentCandidates,
 } from './settlement-instrument';
 export {
+  creditCoversOutstandingDebt,
+  isCashCreditReason,
+  CASH_CREDIT_REASONS,
+  type CashCreditReason,
+} from './receivable-coverage';
+export {
   resolveMeetingSettlement,
   clampedExpertPresentMs,
   type MeetingSettlementShape,

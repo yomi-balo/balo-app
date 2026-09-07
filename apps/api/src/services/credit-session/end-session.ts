@@ -22,6 +22,7 @@
  * extraction — `end-session.test.ts`'s existing assertions are the regression guard.
  */
 import {
+  acquireWalletLock,
   creditLedgerRepository,
   creditReceivablesRepository,
   creditSessionsRepository,
@@ -47,6 +48,7 @@ import {
   retrievePaymentIntentStatus,
 } from '../stripe/index.js';
 import { triggerAutoTopupBestEffort } from '../credit/auto-topup.js';
+import { clearLateOpenedReceivableIfCovered } from '../credit/receivable-coverage.js';
 import { authorizeSessionActor } from './authorize-session-actor.js';
 import { driveSession } from './meter-driver.js';
 import { finalizeBilling } from './finalize-billing.js';
@@ -82,6 +84,44 @@ function extractPaymentIntentId(error: unknown): string | null {
  * `payment_intent.payment_failed` webhook opens the SAME session receivable, so gating the
  * publish on `created` guarantees exactly one dunning + one analytics fire per failed
  * session, whichever path opens it first (FIX 5). Idempotent open per session (partial unique).
+ *
+ * ⚠⚠ R3b (BAL-535, ADR-1040 Amendment 6 §F residual) — THE LATE-RECEIVABLE RESIDUAL. A
+ * settlement PI can fail (or this reconcile arm can find it canceled/hard-declined — see
+ * `reconcileStuckSettlement`) AFTER a covering top-up has already returned the wallet to a
+ * non-negative balance: the settlement failure is real and worth recording, but re-imposing the
+ * hold and re-dunning a company that owes nothing reproduces the exact defect R3 exists to
+ * remove, and it would look intermittently broken to precisely the clients who used the exit.
+ * So the receivable STILL opens (the event is recorded), but a fresh wallet read INSIDE THIS SAME
+ * TXN decides whether it self-clears immediately: if the company's own CASH already covers the
+ * debt, clear the just-opened row here and suppress the dunning publish.
+ * `clearLateOpenedReceivableIfCovered` is the SAME decision `dispatch.ts`'s
+ * `handleOverdraftChargeFailed` makes — one implementation, never a second, and it is where the
+ * deliberate `created`-blindness (N3), the promo discount (B1) and the audit trace (N2) live.
+ *
+ * ⚠⚠ M2 (fix round) — THE WALLET LOCK IS THE FIRST STATEMENT OF THIS TRANSACTION. Nothing here
+ * calls `applyLedgerEntry`, so before the lock this transaction did not serialise against the
+ * credit path at all: T1 could insert the receivable (uncommitted), T2 could credit the wallet
+ * and find zero open rows to clear, and T1's fresh wallet read below would still see the
+ * pre-credit negative balance — committing an open receivable plus dunning against a company
+ * that had paid in full. Taking the same `pg_advisory_xact_lock` the credit path takes makes the
+ * two strictly ordered.
+ *
+ * ⚠ ON DEADLOCK-FREEDOM, STATED HONESTLY (fix round 3). An earlier draft of this comment claimed
+ * "one lock class and no second means no ordering cycle can exist". That OVERSTATES the proof:
+ * ROW locks on `credit_sessions` and `credit_wallets` are locks too, so this is not a
+ * single-lock-class system. What actually holds is narrower and worth stating precisely: the
+ * advisory lock is the only ADVISORY one, at most one is taken per transaction (distinct wallets
+ * hash to distinct keys), and every writer that touches those rows takes it BEFORE its first row
+ * write. So all row-lock acquisition on this wallet happens underneath one globally-ordered
+ * gate, and two transactions cannot hold row locks the other needs while waiting on each other.
+ * That is a property of the CALLERS, not of the lock — so it is only true for as long as every
+ * new writer keeps taking the wallet lock first.
+ *
+ * ⚠ THIS IS THE SECOND WALLET READ VIA THAT REPOSITORY IN THIS FILE (deliberate, pinned by the
+ * invariant suite's drift alarm) — and NEITHER of the two is a mode read. `settleOverdraft`'s
+ * (the first) verifies the mandate is still live before charging; THIS one only asks whether the
+ * wallet's balance already covers a debt that is about to be recorded as unpaid. Mode is never
+ * consulted by either (ADR-1040 Amendment 6 §A.1/§C).
  */
 async function openReceivableAndDun(
   session: CreditSession,
@@ -94,13 +134,15 @@ async function openReceivableAndDun(
   const settlementStatus: Extract<CreditSettlementStatus, 'failed' | 'requires_action'> =
     reason === 'requires_action' ? 'requires_action' : 'failed';
 
-  const { created } = await db.transaction(async (tx) => {
+  const { created, alreadyCovered } = await db.transaction(async (tx) => {
+    // M2 — FIRST statement: serialise this whole transaction against the credit path.
+    await acquireWalletLock(tx, session.walletId);
     await creditSessionsRepository.markSettlementResult(tx, {
       sessionId: session.id,
       status: settlementStatus,
       stripePaymentIntentId: paymentIntentId,
     });
-    return creditReceivablesRepository.open(
+    const { receivable, created } = await creditReceivablesRepository.open(
       {
         companyId: session.companyId,
         walletId: session.walletId,
@@ -111,9 +153,30 @@ async function openReceivableAndDun(
       },
       tx
     );
+    const wallet = await creditWalletsRepository.findById(session.walletId, tx);
+    if (wallet === undefined) {
+      return { created, alreadyCovered: false };
+    }
+    const alreadyCovered = await clearLateOpenedReceivableIfCovered(tx, {
+      receivable: {
+        id: receivable.id,
+        companyId: session.companyId,
+        sessionId: session.id,
+        amountMinor,
+      },
+      walletId: session.walletId,
+      balanceMinor: wallet.balanceMinor,
+      created,
+      openedBy: 'end_session',
+      // The member who ended the session is not the party whose money covered the debt, and the
+      // reconcile arm has no actor at all — this is a system clear, like the webhook's.
+      actorUserId: null,
+      stripePaymentIntentId: paymentIntentId,
+    });
+    return { created, alreadyCovered };
   });
 
-  if (created) {
+  if (created && !alreadyCovered) {
     await publishSettlementFailure({
       session: toSettleableSession(session),
       reason,
@@ -141,17 +204,26 @@ async function settleOverdraft(
     overdraftSettledMinor: overdraftMinor,
   });
 
-  // Grace only opens with a mandate AND a card-backed mode (BAL-523), so this holds — but a
-  // mandate revoked mid-grace is possible. ⚠ THE ASYMMETRY IS DELIBERATE: settlement gates on
-  // the MANDATE ALONE and must stay that way. A client who switches to "Just notify me" while
-  // a session is already in grace is still charged for that session — the grace opened under
-  // consent that was live at the time, and gating settlement on the current mode would open a
-  // payment-evasion window that breaks ADR-1040's "expert always gets paid, with no asterisk".
+  // ⚠⚠ THE ASYMMETRY IS DELIBERATE AND PERMANENT (ADR-1040 Amendment 6 §A.1/§C, BAL-535 —
+  // SETTLED, not pending): settlement gates on the MANDATE ALONE and must stay that way, on
+  // EVERY session — including a `durationSource: 'presence'` session, where grace never opens at
+  // all (`settleSessionFromPresence` posts every billable minute directly, with no mandate/mode
+  // check of its own). The reason is NOT "grace already vetted this" — that premise is FALSE on
+  // the presence path, and a comment that stated it as though it held everywhere was itself part
+  // of the gap Amendment 6 closes. The real reason has three parts, independent of whether grace
+  // ever opened: (1) the debt is for time an expert ACTUALLY DELIVERED, not exposure Balo chose
+  // to take on; (2) the mandate is live consent to exactly this, re-read fresh below, so a
+  // revoked mandate still stops the charge; (3) the alternative — gating on the mode — makes the
+  // expert deliver a full consultation for nothing, the direct inversion of "expert always gets
+  // paid, with no asterisk". On a session where grace DID open (`live_capture` / `external`), the
+  // same rule also forecloses a payment-evasion window: a client who switches to "Just notify me"
+  // mid-grace is still charged for time already consumed under consent that was live when it
+  // accrued.
   //
   // ⚠ BAL-525: the mandate is now re-read on settlement's OWN fresh wallet row, not inherited
   // from the committed terminal transaction — a stale `true` no longer authorizes a charge. The
   // instrument is resolved through the session's pin (evidence and preference, never authority —
-  // ADR-1040 Amendment 5).
+  // ADR-1040 Amendment 5; PERMANENTLY so per Amendment 6 §E).
   const wallet = await creditWalletsRepository.findById(session.walletId);
   // ⚠ THE TWO NULL CHECKS BELOW ARE DELIBERATE, NOT REDUNDANT WITH `isWalletMandateActive`. That
   // predicate already implies both ids are non-null when it returns `true` (`settlement.ts`'s
@@ -206,8 +278,8 @@ async function settleOverdraft(
   // below is ALWAYS the wallet's LIVE pair in this slice: the absent-pin and disagree branches of
   // `resolveSettlementInstrument` return `live` directly, and the agree branch returns a
   // value-identical pair. The pin only selects the `source` label (for the log line below) and
-  // arms the disagreement warn — it never redirects a charge away from the live pair. Making the
-  // pin authoritative instead is BAL-535's ruling, not this one's — see
+  // arms the disagreement warn — it never redirects a charge away from the live pair. **That is
+  // now permanent (ADR-1040 Amendment 6 §E, BAL-535), not pending a ruling** — see
   // `resolveSettlementInstrument`'s docblock and the invariant suite's anti-collapse assertions.
   const instrument = resolveSettlementInstrument({
     pinned: {

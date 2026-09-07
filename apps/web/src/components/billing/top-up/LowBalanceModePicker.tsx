@@ -21,6 +21,21 @@ interface LowBalanceModePickerProps {
    * disable with a warm "Add a card to use this".
    */
   readonly cardAvailable: boolean;
+  /**
+   * BAL-535 fix round 2 (F3) — whether time used beyond the balance WILL in fact settle to a
+   * card afterward, i.e. this wallet has a card on file AND a live off-session mandate
+   * (`isWalletMandateActive`). Drives the `notify_only` settlement sentence and NOTHING else.
+   *
+   * ⚠⚠ A SECOND PROP, NOT A REUSE OF `cardAvailable` — the two answer different questions and
+   * disagree on real wallets. `cardAvailable` is about mode ENABLEMENT ("may this client pick a
+   * card-backed mode"), and the composer hard-codes it `true` because a first-time card is
+   * captured inline at Pay. Selecting the settlement sentence on it therefore promised a
+   * FIRST-TIME buyer — nobody's card, no mandate — that their overrun "still settles to the card
+   * on file afterward", which is simply false at the moment they read it. Settlement is
+   * `isWalletMandateActive`-gated (permanently, ADR-1040 Amendment 6 §A.1/§C), so that is the
+   * fact this prop must carry, from the wallet, at both call sites.
+   */
+  readonly settlesToCardOnFile: boolean;
   /** Inline field-level validation messages for the auto-top-up "Add" / "When below" inputs. */
   readonly errors?: AutoTopupErrors;
   /**
@@ -75,6 +90,44 @@ export const CARD_BACKED_MODE_TITLE: Record<CardBackedLowBalanceMode, string> = 
   auto_topup: MODE_OPTIONS.find((option) => option.id === 'auto_topup')?.title ?? 'auto_topup',
   keep_going: MODE_OPTIONS.find((option) => option.id === 'keep_going')?.title ?? 'keep_going',
 };
+
+/**
+ * BAL-535 (ADR-1040 Amendment 6 §D) — the `notify_only` description, in three pieces so the two
+ * arms cannot drift.
+ *
+ * ⚠⚠ THE NON-SETTLING ARM IS WHERE THE CONSEQUENCE IS WORST, and it used to say nothing (fix
+ * round L3). `open()` admits on a funded estimate alone, a presence session posts every billable
+ * minute past zero, settlement finds no mandate to charge — so the client is left owing money
+ * AND soft-held, while the only sentence they read was "I'll top up myself." The two arms now
+ * share `BEYOND_BALANCE` verbatim, so the load-bearing clause is one string and a future edit to
+ * either arm cannot quietly leave the other saying less.
+ *
+ * ⚠ FIX ROUND 2 (F3) — THE ARMS ARE CHOSEN BY `settlesToCardOnFile`, NOT BY `cardAvailable`, and
+ * this arm no longer says "with no card on file". It now covers BOTH ways settlement can fail to
+ * reach a card — no card at all, and a card with no live off-session mandate — so naming only
+ * the first would have been false in the second.
+ *
+ * Copy rules (CLAUDE.md): gender-neutral, warm, non-adversarial, no countdown — and the word
+ * "overdraft" NEVER appears (pinned in six files). This arm states the consequence as a helpful
+ * fact plus the way out, which §F now genuinely provides: a covering top-up clears the hold in
+ * the same transaction as the credit.
+ *
+ * ⚠⚠ IT PROMISES NO ENFORCEMENT, DELIBERATELY (fix round 3). An earlier draft of this arm said
+ * "we'll pause new sessions until a top-up clears it". THE PRODUCT DOES NOT DO THAT. On the only
+ * session path it creates, an `account_hold` refusal from `open()` reaches
+ * `openCaseSessionBestEffort`, which is categorical under ADR-1052 / BAL-466 D2 that a funding
+ * problem may NEVER fail a join — `join-meeting.ts`'s own
+ * `SESSION_OPEN_REFUSED_MESSAGES.account_hold` reads "this consultation is unbilled and the
+ * expert is unpaid". There is no booking-time gate either, and Amendment 6 §H leaves admission
+ * prevention to BAL-474. A pause sentence would therefore be a NEW false claim on the arm every
+ * first-time buyer reads — the exact defect this ticket exists to remove — and it contradicts
+ * two shipped emails (`credit-auto-topup-failed`'s "Nothing is on hold" and this feature's own
+ * cleared notice). State the amount owed and the way out; never the enforcement.
+ */
+const NOTIFY_ONLY_LEAD = "Tell me when I'm running low — I'll top up myself.";
+const BEYOND_BALANCE = 'Time you use beyond your balance still';
+const NOTIFY_ONLY_SETTLES_TO_CARD = `${BEYOND_BALANCE} settles to the card on file afterward.`;
+const NOTIFY_ONLY_SETTLES_ON_TOP_UP = `${BEYOND_BALANCE} needs settling — your next top-up covers it.`;
 
 function RadioDot({ on }: Readonly<{ on: boolean }>) {
   return (
@@ -211,7 +264,16 @@ function ModeCard({
  * BAL-377 low-balance mode picker (shared with billing-settings). Three warm modes; "Keep me
  * going" / "Auto top-up" are card-backed and gate on `cardAvailable`. Auto top-up reveals the
  * "Add" / "When below" inputs; a mandate disclosure note appears under a selected card-backed
- * mode. "Overdraft" never appears (the copy says "keep me going" / "settle afterward").
+ * mode. "Overdraft" never appears (the copy says "keep me going" / "settle afterward") — and
+ * `notify_only`'s description states the settlement fact when settlement will really reach a
+ * card (ADR-1040 Amendment 6 §D, BAL-535).
+ *
+ * ⚠⚠ FIX ROUND 2 (F3) — THE PREVIOUSLY-ACCEPTED IMPRECISION IS FIXED, NOT ACCEPTED. This
+ * docblock used to record that a wallet with a card but no LIVE mandate was "told slightly more
+ * than is true". That framing understated it: the composer hard-codes `cardAvailable = true`, so
+ * the sentence was shown to FIRST-TIME buyers with no card and no mandate at all — a plain
+ * falsehood at the moment they read it. Settlement now has its own prop, `settlesToCardOnFile`,
+ * carrying the wallet's real mandate state; `cardAvailable` keeps its one job, mode ENABLEMENT.
  */
 export function LowBalanceModePicker({
   mode,
@@ -221,6 +283,7 @@ export function LowBalanceModePicker({
   onReloadChange,
   onThresholdChange,
   cardAvailable,
+  settlesToCardOnFile,
   errors,
   cardLabel = null,
 }: Readonly<LowBalanceModePickerProps>) {
@@ -232,10 +295,19 @@ export function LowBalanceModePicker({
         case 'keep_going':
           return "Don't interrupt sessions — settle any extra time to your card afterward.";
         default:
-          return "Tell me when I'm running low. I'll top up myself.";
+          // BAL-535 (ADR-1040 Amendment 6 §D) — THE GAP. This was a complete sentence about what
+          // the mode does with the part that costs money left out: settlement is mode-blind
+          // (Amendment 6 §A.1/§C, permanent), so a `notify_only` client whose card carries a live
+          // mandate is still charged for time delivered past zero.
+          //
+          // ⚠ FIX ROUND 2 (F3) — the arm is chosen by `settlesToCardOnFile`, NEVER by
+          // `cardAvailable`. The latter is `true` unconditionally in the composer (a first-time
+          // card is captured inline at Pay), so selecting on it promised settlement to a card
+          // that did not exist. Both hosts now pass the wallet's real mandate state.
+          return `${NOTIFY_ONLY_LEAD} ${settlesToCardOnFile ? NOTIFY_ONLY_SETTLES_TO_CARD : NOTIFY_ONLY_SETTLES_ON_TOP_UP}`;
       }
     },
-    [reloadMinor, thresholdMinor]
+    [reloadMinor, thresholdMinor, settlesToCardOnFile]
   );
 
   const cardBackedSelected = isCardBackedLowBalanceMode(mode);

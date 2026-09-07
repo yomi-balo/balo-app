@@ -17,7 +17,7 @@
  * packages/shared is consumed as raw TS by Turbopack, so a `.js` suffix here 404s the web build
  * while every local gate stays green. Opposite rule to `apps/api`.
  */
-import type { MeetingSettlementShape } from '../credit';
+import type { CashCreditReason, MeetingSettlementShape } from '../credit';
 /**
  * BAL-540 (fix round) — the two request-lifecycle unions are IMPORTED, never re-spelled inline,
  * for the same reason the settlement shapes above are. `../project-requests` is this package's
@@ -524,6 +524,31 @@ export interface CreditAutoTopupFailedPayload {
   companyId: string; // → fan-out
   reason: 'declined' | 'requires_action';
   attemptedMinor: number; // AUD reload face value we tried to charge (no trigger-balance in copy)
+}
+
+// BAL-535 (ADR-1040 Amendment 6 §F) — a cash-funded credit (`manual_purchase` / `auto_topup`)
+// returned the wallet to a non-negative cash-backed balance and cleared every open receivable on
+// it, releasing the company's soft account hold. SERVER-ONLY (published from the API Stripe
+// webhook post-commit — no web mirror, no `publishBodySchema` arm). Fans out to the company's
+// MANAGE_BILLING holders (recipient 'company_billing_admins' → the resolver hydrates
+// `data.billingUserIds` from `companyId`). Defined ONCE here (shared-home convention).
+//
+// ⚠ ONE NOTICE PER CLEAR OPERATION, NOT PER ROW (fix round N4). A wallet can hold several open
+// receivables, so `correlationId` is keyed on the LEDGER ENTRY that covered them — one per
+// operation, itself idempotency-keyed, so a webhook replay collapses onto the same BullMQ jobId.
+//
+// ⚠ `balanceAfterMinor` IS THE DISPLAY FIGURE — the TRUE final balance, promo grant included
+// (M3), because the same MANAGE_BILLING holder gets the top-up receipt seconds later and the two
+// must not disagree. The predicate's own pre-promo / promo-discounted figures live on the
+// `audit_events` row, never in this payload.
+export interface CreditReceivableClearedPayload {
+  correlationId: string; // = receivable_cleared:{ledgerEntryId} — one notice per clear operation
+  companyId: string;
+  walletId: string;
+  receivableCount: number; // how many open receivables this operation cleared (>= 1)
+  clearedMinor: number; // what those consultations' extra time came to (AUD minor)
+  balanceAfterMinor: number; // the TRUE final wallet balance the client is shown (AUD minor)
+  clearedBy: CashCreditReason; // how it was covered — DERIVED, never a restated union
 }
 
 // BAL-378 (ADR-1040 Lane 2) — in-session drawdown / settlement notification payloads.

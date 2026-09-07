@@ -34,6 +34,7 @@ describe('SESSION_SERVER_EVENTS (server)', () => {
       'GRACE_CEILING_HIT',
       'SESSION_SETTLED',
       'RECEIVABLE_OPENED',
+      'RECEIVABLE_CLEARED',
       'SESSION_OPEN_REFUSED',
     ]);
   });
@@ -44,6 +45,7 @@ describe('SESSION_SERVER_EVENTS (server)', () => {
     expect(SESSION_SERVER_EVENTS.GRACE_CEILING_HIT).toBe('grace_ceiling_hit');
     expect(SESSION_SERVER_EVENTS.SESSION_SETTLED).toBe('session_settled');
     expect(SESSION_SERVER_EVENTS.RECEIVABLE_OPENED).toBe('receivable_opened');
+    expect(SESSION_SERVER_EVENTS.RECEIVABLE_CLEARED).toBe('receivable_cleared');
     expect(SESSION_SERVER_EVENTS.SESSION_OPEN_REFUSED).toBe('session_open_refused');
   });
 

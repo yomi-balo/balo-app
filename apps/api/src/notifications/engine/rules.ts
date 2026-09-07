@@ -881,6 +881,12 @@ export const notificationRules: Record<string, NotificationRule[]> = {
     'credit-auto-topup-executed'
   ),
   'credit.auto_topup.failed': emailAndInApp('company_billing_admins', 'credit-auto-topup-failed'),
+  // BAL-535 (ADR-1040 Amendment 6 §F): a covering cash credit cleared an open receivable,
+  // releasing the company's soft account hold. Fans out to the company's MANAGE_BILLING holders
+  // (recipient 'company_billing_admins', resolved from data.billingUserIds) via email + in-app.
+  // Warm, congratulatory — the resolution moment, never adversarial. Server-only (published from
+  // the Stripe webhook post-commit).
+  'credit.receivable.cleared': emailAndInApp('company_billing_admins', 'credit-receivable-cleared'),
   // BAL-378 (ADR-1040 Lane 2): in-session drawdown / settlement notices. Warm, no
   // "overdraft" anywhere (billing admins are client-side too). Self events carry `userId`
   // (resolver hydrates data.user → the SMS `phoneVerifiedAt` gate); fan-out events carry

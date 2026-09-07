@@ -81,6 +81,18 @@ export function TopUpComposer({
   // Every path is a card now (Invoice is gone from the UI), so card-backed modes are always
   // usable — a first-time card is captured inline at Pay, a returning card is already on file.
   const cardAvailable = true;
+  /**
+   * BAL-535 fix round 2 (F3) — will an overrun actually settle to a card afterward? This is the
+   * wallet's REAL state, never `cardAvailable`. `projectSavedCard` yields a non-null `savedCard`
+   * only when a Stripe customer AND payment method are both on file, and stamps `mandateActive`
+   * from `mandate_status === 'active'` — together exactly `isWalletMandateActive`, the predicate
+   * `settleOverdraft` itself gates on.
+   *
+   * A first-time buyer therefore reads `false` and is NOT told their overrun "settles to the card
+   * on file", which was false at the moment they read it: the card they are about to enter is
+   * captured inline at Pay, and the off-session mandate is captured separately after that.
+   */
+  const settlesToCardOnFile = wallet.savedCard?.mandateActive === true;
 
   // Inline validation of the auto-top-up "Add"/"When below" inputs. A bad combo shows a
   // field-level message in the mode picker AND blocks Pay — so a config error never surfaces as
@@ -206,6 +218,7 @@ export function TopUpComposer({
         onReloadChange={setReloadMinor}
         onThresholdChange={setThresholdMinor}
         cardAvailable={cardAvailable}
+        settlesToCardOnFile={settlesToCardOnFile}
         errors={configErrors}
         cardLabel={usingSavedCard && wallet.savedCard ? describeSavedCard(wallet.savedCard) : null}
       />

@@ -327,6 +327,29 @@ describe('LowBalanceSection', () => {
     });
   });
 
+  // ⚠⚠ MUTATION PROOF for the `|| armedLocally` disjunct in `settlesToCardOnFile`. `runArm`
+  // records a captured mandate ONLY in local state; the `mandateActive` prop stays stale until a
+  // server round-trip. Without the disjunct this flow tells a client with a LIVE mandate that
+  // their sessions will pause — the false warning is the inverse of the one F3 fixed. No other
+  // test mounts, arms, and THEN switches to notify_only on the same instance, so only this one
+  // observes it.
+  it('after arming in this sitting, switching to notify_only states the settlement fact rather than falsely warning', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    mockArmSavedCardMandateAction.mockResolvedValue({ ok: true, outcome: 'captured' });
+    renderSection({ mandateActive: false, cardAvailable: true });
+
+    // Arm the mandate via a card-backed save — `mandateActive` stays false on the props.
+    await userEvent.click(screen.getByRole('radio', { name: /Keep me going/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
+    await waitFor(() => expect(mockArmSavedCardMandateAction).toHaveBeenCalledTimes(1));
+
+    // Same mounted instance — no remount, so only `armedLocally` knows the mandate is live.
+    await userEvent.click(screen.getByRole('radio', { name: /Just notify me/i }));
+
+    expect(screen.getByText(/still settles to the card on file/i)).toBeInTheDocument();
+    expect(screen.queryByText(/your next top-up covers it/i)).not.toBeInTheDocument();
+  });
+
   it('never arms when the card already has an active mandate', async () => {
     mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
     renderSection({ mandateActive: true, cardAvailable: true });
