@@ -13,7 +13,7 @@ import {
   type NavContext,
   type EnabledNavEntry,
 } from './nav-registry';
-import { CAPABILITIES } from '@balo/shared/authz';
+import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 
 /**
  * BAL-495 — registry unit tests. Deliberately does NOT re-assert the BAL-347 bottom gating
@@ -32,15 +32,38 @@ const EXPERT_MANAGE: NavContext = {
   capabilities: [CAPABILITIES.MANAGE_MEMBERS],
 };
 
-const ALL_CONTEXTS = [COMPANY_NO_MANAGE, COMPANY_MANAGE, EXPERT_NO_MANAGE, EXPERT_MANAGE];
+/**
+ * BAL-534 — a staff viewer who is a PLAIN MEMBER of a PERSONAL company: holds the platform
+ * token and NOT `MANAGE_MEMBERS`. That combination is the AC ("a super_admin who is a plain
+ * member of a personal company sees the Balo admin group and NO Members item") and is exactly
+ * what the D16 union restructure exists to make expressible.
+ */
+const COMPANY_STAFF: NavContext = {
+  workspaceType: 'company',
+  capabilities: [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
+};
+const EXPERT_STAFF: NavContext = {
+  workspaceType: 'expert',
+  capabilities: [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
+};
+
+const ALL_CONTEXTS = [
+  COMPANY_NO_MANAGE,
+  COMPANY_MANAGE,
+  EXPERT_NO_MANAGE,
+  EXPERT_MANAGE,
+  COMPANY_STAFF,
+  EXPERT_STAFF,
+];
 const DISABLED_KEYS = ['help'];
 
 describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
-  it('excludes disabled entries from every context, in either section (AC #2)', () => {
+  it('excludes disabled entries from every context, in any of the three sections', () => {
     for (const context of ALL_CONTEXTS) {
       const resolvedKeys = [
         ...resolveNavItems(context, 'primary'),
         ...resolveNavItems(context, 'secondary'),
+        ...resolveNavItems(context, 'admin'),
       ].map((entry) => entry.key);
       for (const disabledKey of DISABLED_KEYS) {
         expect(resolvedKeys).not.toContain(disabledKey);
@@ -53,9 +76,12 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(keys).toEqual(['dashboard', 'find_experts', 'consultations', 'projects', 'messages']);
   });
 
-  it('NAV_ENTRIES is authored as one primary block then one secondary block (resolveMobileNav depends on it)', () => {
+  it('NAV_ENTRIES is authored primary block → secondary block → admin block (resolveMobileNav depends on it)', () => {
     const sections = NAV_ENTRIES.map((e) => e.section);
+    // No 'primary' after the last 'secondary', and no 'secondary' after the last 'admin' —
+    // together those two are "primary block, then secondary block, then admin block".
     expect(sections.indexOf('primary', sections.lastIndexOf('secondary'))).toBe(-1);
+    expect(sections.indexOf('secondary', sections.lastIndexOf('admin'))).toBe(-1);
   });
 
   it('preserves NAV_ENTRIES order for the primary section in an expert context (calendar is expert-only)', () => {
@@ -116,6 +142,48 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(withJumpOut[0]?.key).toBe('find_experts');
   });
 
+  it('the admin section resolves for a staff context in BOTH workspace types, and for nobody else', () => {
+    for (const context of [COMPANY_STAFF, EXPERT_STAFF]) {
+      expect(resolveNavItems(context, 'admin').map((e) => e.key)).toEqual([
+        'admin_engagements',
+        'admin_promo_codes',
+        'admin_catalogue',
+      ]);
+    }
+    for (const context of [COMPANY_NO_MANAGE, COMPANY_MANAGE, EXPERT_NO_MANAGE, EXPERT_MANAGE]) {
+      expect(resolveNavItems(context, 'admin')).toEqual([]);
+    }
+  });
+
+  it('the two capability axes gate independently: staff-without-manage sees admin and NOT Team; owner-without-staff sees Team and NOT admin', () => {
+    // A super_admin who is a plain member of a personal company (expert workspace, where `team`
+    // lives after BAL-503).
+    expect(resolveNavItems(EXPERT_STAFF, 'admin')).toHaveLength(3);
+    expect(resolveNavItems(EXPERT_STAFF, 'secondary').map((e) => e.key)).not.toContain('team');
+    // A company/agency owner who is not Balo staff.
+    expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('team');
+    expect(resolveNavItems(EXPERT_MANAGE, 'admin')).toEqual([]);
+    // Both at once.
+    const both: NavContext = {
+      workspaceType: 'expert',
+      capabilities: [CAPABILITIES.MANAGE_MEMBERS, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
+    };
+    expect(resolveNavItems(both, 'secondary').map((e) => e.key)).toContain('team');
+    expect(resolveNavItems(both, 'admin')).toHaveLength(3);
+  });
+
+  it('every admin entry is mobilePriority "more", scoped to both workspace types, and carries no badge or jumpOut', () => {
+    const admin = NAV_ENTRIES.filter((e) => e.section === 'admin');
+    expect(admin).toHaveLength(3);
+    for (const entry of admin) {
+      expect(entry.mobilePriority).toBe('more');
+      expect([...entry.workspaceTypes].sort()).toEqual(['company', 'expert']);
+      expect(entry.badgeSource).toBeUndefined();
+      expect(entry.jumpOut).toBeUndefined();
+      expect(entry.enabled).toBe(true);
+    }
+  });
+
   it('href pins: every enabled entry matches today’s literal; help is null', () => {
     const byKey = new Map(NAV_ENTRIES.map((e) => [e.key, e]));
     expect(byKey.get('dashboard')?.href).toBe('/dashboard');
@@ -129,6 +197,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('find_experts')?.href).toBe('/experts');
     expect(byKey.get('calendar')?.href).toBe('/expert/calendar');
     expect(byKey.get('help')?.href).toBeNull();
+    expect(byKey.get('admin_engagements')?.href).toBe('/engagements');
+    expect(byKey.get('admin_promo_codes')?.href).toBe('/promo-codes');
+    expect(byKey.get('admin_catalogue')?.href).toBe('/admin/catalogue');
   });
 
   it('key vocabulary is closed both ways against NAV_ITEM_KEYS', () => {
@@ -139,21 +210,29 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   });
 
   it('requiresCapability requires the token to be held; NO_CAPABILITY_REQUIRED is true for an empty set', () => {
-    // `NavCapability` is deliberately closed to `MANAGE_MEMBERS` alone (fix round #1), so the
-    // "requires ALL tokens" `.every()` path is exercised with a duplicated real token rather
-    // than a second capability the registry doesn't carry — the vocabulary must not widen just
-    // to serve this test.
-    const needsToken = requiresCapability(CAPABILITIES.MANAGE_MEMBERS, CAPABILITIES.MANAGE_MEMBERS);
-    expect(needsToken({ workspaceType: 'company', capabilities: [] })).toBe(false);
+    // BAL-534 — `NavCapability` is now a TWO-token union (membership `MANAGE_MEMBERS` +
+    // platform `VIEW_PLATFORM_ADMIN`), so the "requires ALL tokens" `.every()` path is
+    // exercised with two genuinely DIFFERENT real tokens rather than one duplicated one.
+    const needsBoth = requiresCapability(
+      CAPABILITIES.MANAGE_MEMBERS,
+      PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN
+    );
+    expect(needsBoth({ workspaceType: 'company', capabilities: [] })).toBe(false);
     expect(
-      needsToken({ workspaceType: 'company', capabilities: [CAPABILITIES.MANAGE_MEMBERS] })
+      needsBoth({ workspaceType: 'company', capabilities: [CAPABILITIES.MANAGE_MEMBERS] })
+    ).toBe(false);
+    expect(
+      needsBoth({
+        workspaceType: 'company',
+        capabilities: [CAPABILITIES.MANAGE_MEMBERS, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
+      })
     ).toBe(true);
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 11 declared entries, 10 enabled', () => {
-    expect(NAV_ENTRIES).toHaveLength(11);
-    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(10);
+  it('non-vacuity: 14 declared entries, 13 enabled', () => {
+    expect(NAV_ENTRIES).toHaveLength(14);
+    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(13);
   });
 
   it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
@@ -278,7 +357,33 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
     ]);
   });
 
-  it('conservation: tabs + moreItems is a permutation of the primary+secondary resolution, for every context', () => {
+  it('BAL-534: the admin rows reach the More sheet for a staff context, in registry order, and nobody else’s', () => {
+    expect(resolveMoreItems(COMPANY_STAFF).map((e) => e.key)).toEqual([
+      'projects',
+      'settings',
+      'account',
+      'admin_engagements',
+      'admin_promo_codes',
+      'admin_catalogue',
+    ]);
+    expect(resolveMoreItems(EXPERT_STAFF).map((e) => e.key)).toEqual([
+      'projects',
+      'expert_settings',
+      'account',
+      'admin_engagements',
+      'admin_promo_codes',
+      'admin_catalogue',
+    ]);
+    // …and none of them reaches the tab bar (all `'more'`; the bar is already at the cap).
+    expect(resolveMobileTabs(COMPANY_STAFF).map((e) => e.key)).toEqual([
+      'dashboard',
+      'find_experts',
+      'consultations',
+      'messages',
+    ]);
+  });
+
+  it('conservation: tabs + moreItems is a permutation of the primary+secondary+admin resolution, for every context', () => {
     for (const context of ALL_CONTEXTS) {
       const tabs = resolveMobileTabs(context);
       const moreItems = resolveMoreItems(context);
@@ -286,6 +391,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       const expected = [
         ...resolveNavItems(context, 'primary'),
         ...resolveNavItems(context, 'secondary'),
+        ...resolveNavItems(context, 'admin'),
       ]
         .map((e) => e.key)
         .sort();
@@ -296,10 +402,11 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
 
 /**
  * BAL-499 — the executable form of the Q1 decision: what every `(dashboard)` route's
- * breadcrumb trail resolves to. 20 routes total (BAL-503 adds `/settings`, `/settings/company`,
- * `/settings/billing`, `/settings/notifications`): 7 have an exact registry `href`, 7 are
- * supplemental list routes, 6 are entity routes (each resolving to ONLY its parent — the
- * entity's own crumb is published separately by `EntityCrumb`).
+ * breadcrumb trail resolves to. BAL-534 moved `/engagements` and `/promo-codes` into the exact
+ * registry block (they are now enabled `admin`-section registry hrefs) and added
+ * `/admin/catalogue`: **10** exact registry hrefs, **5** supplemental list routes, 6 entity
+ * routes (each resolving to ONLY its parent — the entity's own crumb is published separately by
+ * `EntityCrumb`).
  */
 describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it.each([
@@ -314,10 +421,12 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     // BAL-503 — `/settings` always redirects, so this crumb never actually renders. Pinned
     // anyway as executable documentation.
     ['/settings', [{ label: 'Settings', href: null }]],
-    // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
-    ['/billing/top-up', [{ label: 'Top up', href: null }]],
+    // BAL-534 — now enabled `admin`-section registry hrefs (moved from supplemental below).
     ['/engagements', [{ label: 'Engagements', href: null }]],
     ['/promo-codes', [{ label: 'Promo codes', href: null }]],
+    ['/admin/catalogue', [{ label: 'Config & catalogue', href: null }]],
+    // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
+    ['/billing/top-up', [{ label: 'Top up', href: null }]],
     ['/redeem', [{ label: 'Redeem a code', href: null }]],
     // BAL-503 — the three new Settings sections.
     ['/settings/company', [{ label: 'Company', href: null }]],
@@ -379,9 +488,10 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/messages',
       '/expert/settings',
       '/settings/team',
-      '/billing/top-up',
       '/engagements',
       '/promo-codes',
+      '/admin/catalogue',
+      '/billing/top-up',
       '/redeem',
       '/settings',
       '/settings/company',
@@ -397,11 +507,10 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it('drift guard: no supplemental route collides with an enabled registry href', () => {
     const registryHrefs = new Set(NAV_ENTRIES.filter((e) => e.enabled).map((e) => e.href));
     // ⚠ Do not add '/settings' here — it IS an enabled registry href, so adding it would make
-    // this drift guard fail correctly.
+    // this drift guard fail correctly. BAL-534 removed '/engagements' and '/promo-codes' — they
+    // are now enabled `admin`-section registry hrefs too.
     const supplementalRoutes = [
       '/billing/top-up',
-      '/engagements',
-      '/promo-codes',
       '/redeem',
       '/settings/company',
       '/settings/billing',

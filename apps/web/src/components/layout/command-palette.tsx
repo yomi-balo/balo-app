@@ -207,6 +207,7 @@ export function CommandPalette(): React.JSX.Element {
 
   const primaryItems = resolveNavItems(navContext, 'primary');
   const secondaryItems = resolveNavItems(navContext, 'secondary');
+  const adminItems = resolveNavItems(navContext, 'admin');
   const switchable = workspaces.filter((w) => w.key !== activeWorkspaceKey);
 
   useEffect(() => {
@@ -330,6 +331,10 @@ export function CommandPalette(): React.JSX.Element {
           <CommandEmpty>Try a page name or a workspace name</CommandEmpty>
           <NavGroup heading="Go to" entries={primaryItems} onSelect={handleNavigate} />
           <NavGroup heading="Settings" entries={secondaryItems} onSelect={handleNavigate} />
+          {/* BAL-534 — staff only. `NavGroup` returns null for an empty list, so a non-staff
+              viewer sees neither the heading nor a separator (same contract as the workspace
+              group below). */}
+          <NavGroup heading="Balo admin" entries={adminItems} onSelect={handleNavigate} />
           {switchable.length > 0 && (
             <>
               {/* Purely decorative — `aria-hidden` keeps it out of the accessibility tree so it

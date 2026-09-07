@@ -16,6 +16,7 @@ import {
 } from '@/lib/auth/route-config';
 import { COOKIE_NAME } from '@/lib/auth/session-config';
 import { redactSensitivePath } from '@balo/shared/redaction';
+import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
@@ -106,11 +107,20 @@ function checkRouteGuards(
   baseUrl: string,
   activeResponse: NextResponse
 ): NextResponse | null {
-  if (isAdminRoute(pathname)) {
-    const role = user.platformRole ?? 'user';
-    if (role !== 'admin' && role !== 'super_admin') {
-      return redirectWithCookies(new URL('/dashboard', baseUrl), activeResponse);
-    }
+  // BAL-534 / ADR-1029 — the /admin prefix gates on a CAPABILITY, never on a role literal.
+  // `@balo/shared/authz` is pure and dependency-free (no `server-only`, no `node:`, no
+  // `postgres`, no `@balo/db`), so it is legal in Edge — the same property that lets
+  // `@balo/shared/redaction` be imported above.
+  //
+  // ⚠ RUNTIME-SAFE WITHOUT A `??`. `SessionUser.platformRole` is typed non-optional, but a
+  // stale sealed cookie can carry `undefined` (middleware.test.ts seeds exactly that).
+  // `PLATFORM_ROLE_CAPABILITIES[role] ?? []` inside the predicate denies any absent or unknown
+  // key, so a nullish coalesce here would be dead code that lint flags as unnecessary.
+  if (
+    isAdminRoute(pathname) &&
+    !platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
+  ) {
+    return redirectWithCookies(new URL('/dashboard', baseUrl), activeResponse);
   }
 
   // API routes never HTTP-redirect (would break XHR/RSC fetches); route-level auth

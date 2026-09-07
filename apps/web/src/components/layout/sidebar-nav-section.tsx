@@ -12,8 +12,9 @@ interface SidebarNavSectionProps {
 }
 
 /**
- * BAL-497 (D5) — one sliding active-background pill per sidebar section (primary/secondary),
- * positioned by pure index arithmetic (`resolveSidebarNavPill`) rather than DOM measurement.
+ * BAL-497 (D5) — one sliding active-background pill per sidebar section (primary/secondary/admin,
+ * BAL-534's third), positioned by pure index arithmetic (`resolveSidebarNavPill`) rather than DOM
+ * measurement.
  *
  * `relative` lives on THIS wrapper, not on `<nav>`: an absolutely-positioned child resolves
  * `top: 0` against its containing block's PADDING box, and `<nav>` carries `p-3` — that would put
@@ -24,9 +25,9 @@ interface SidebarNavSectionProps {
  * the rows' `relative` links on top of the pill (see `sidebar-nav-link.tsx`) — no `z-` utility
  * needed anywhere.
  *
- * `section` exists only to give the two pills unambiguous test ids
- * (`sidebar-nav-pill-primary` / `-secondary`); the type-only `NavSection` import carries no
- * reference to the nav registry's entry list, so the Scan C invariant
+ * `section` exists only to give the three pills unambiguous test ids
+ * (`sidebar-nav-pill-primary` / `-secondary` / `-admin`, BAL-534); the type-only `NavSection`
+ * import carries no reference to the nav registry's entry list, so the Scan C invariant
  * (`apps/web/src/invariants/nav-registry-capability-gated.test.ts`) is unaffected.
  */
 export function SidebarNavSection({

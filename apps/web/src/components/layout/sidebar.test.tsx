@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { CAPABILITIES } from '@balo/shared/authz';
+import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import type { Workspace } from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
@@ -73,6 +73,12 @@ import type { NavContext } from './nav-registry';
  * when written, one commit before BAL-501 deleted that block outright. The notes are a
  * chronological record, not a description of the file's current state — same convention as
  * BAL-496's note above.
+ *
+ * ⚠⚠ BAL-534 — INTENTIONAL, TICKET-AUTHORISED UNFREEZE (the FIFTH), and the narrowest yet:
+ * `navContextFor`/`renderSidebar` gain an OPTIONAL `isStaff` flag that defaults to false, so
+ * every pre-existing call site and assertion above is byte-identical. Two blocks are ADDED;
+ * none is edited. They are the unit-layer stand-in for the Playwright "staff sees the group"
+ * arm, which orchestrator D2 dropped because `test-login` hardcodes `platformRole: 'user'`.
  */
 
 // ── Mocks (declared BEFORE the component import — hoisting-safe, top-nav.test.tsx precedent) ──
@@ -106,10 +112,17 @@ vi.mock('@/components/balo/notification-bell', () => ({
 import { Sidebar } from './sidebar';
 
 // ── THE ONLY THING THAT MAY CHANGE IN THE REFACTOR (decision 6: renderSidebar's BODY only) ──
-function navContextFor(mode: 'client' | 'expert', canManageCompany: boolean): NavContext {
+function navContextFor(
+  mode: 'client' | 'expert',
+  canManageCompany: boolean,
+  isStaff = false
+): NavContext {
   return {
     workspaceType: mode === 'expert' ? 'expert' : 'company',
-    capabilities: canManageCompany ? [CAPABILITIES.MANAGE_MEMBERS] : [],
+    capabilities: [
+      ...(canManageCompany ? [CAPABILITIES.MANAGE_MEMBERS] : []),
+      ...(isStaff ? [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN] : []),
+    ],
   };
 }
 
@@ -121,6 +134,7 @@ function renderSidebar(opts: {
   workspaces?: readonly Workspace[];
   activeWorkspaceKey?: string;
   isCollapsed?: boolean;
+  isStaff?: boolean;
 }): ReturnType<typeof render> {
   sidebarValue = {
     activeMode: opts.mode,
@@ -129,7 +143,7 @@ function renderSidebar(opts: {
     userAvatarUrl: null,
     checklistCompletedCount: opts.checklistCompletedCount ?? 0,
     checklistAllComplete: opts.checklistAllComplete ?? false,
-    navContext: navContextFor(opts.mode, opts.canManageCompany),
+    navContext: navContextFor(opts.mode, opts.canManageCompany, opts.isStaff ?? false),
     workspaces: opts.workspaces ?? [SINGLE_COMPANY_WORKSPACE],
     activeWorkspaceKey: opts.activeWorkspaceKey ?? SINGLE_COMPANY_WORKSPACE.key,
     isCollapsed: opts.isCollapsed ?? false,
@@ -396,5 +410,39 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
   it('has no accessibility violations', async () => {
     const { container } = renderSidebar({ mode: 'client', canManageCompany: true });
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // BAL-534 fix round F9 — the assertion above renders a NON-staff context, so the `<span>`-as-
+  // heading "Balo admin" label and the shield admin group are never accessibility-scanned. This
+  // one carries `VIEW_PLATFORM_ADMIN` so that markup is actually present in `container`.
+  it('has no accessibility violations — staff context with the Balo admin group', async () => {
+    const { container } = renderSidebar({ mode: 'client', canManageCompany: true, isStaff: true });
+    expect(screen.getByTestId('sidebar-admin-group')).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('BAL-534: a staff context renders the labelled "Balo admin" group with its three rows, in both modes', () => {
+    for (const mode of ['client', 'expert'] as const) {
+      const view = renderSidebar({ mode, canManageCompany: false, isStaff: true });
+      const group = screen.getByTestId('sidebar-admin-group');
+      expect(within(group).getByText('Balo admin')).toBeInTheDocument();
+      expect(
+        within(group)
+          .getAllByRole('link')
+          .map((l) => l.getAttribute('href'))
+      ).toEqual(['/engagements', '/promo-codes', '/admin/catalogue']);
+      expect(within(group).getByTestId('sidebar-nav-pill-admin')).toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it('BAL-534: a non-staff context renders no admin group, no label and no third pill', () => {
+    renderSidebar({ mode: 'client', canManageCompany: true });
+    expect(screen.queryByTestId('sidebar-admin-group')).not.toBeInTheDocument();
+    expect(screen.queryByText('Balo admin')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-nav-pill-admin')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain(
+      '/admin/catalogue'
+    );
   });
 });

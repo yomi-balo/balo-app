@@ -2,7 +2,12 @@ import 'server-only';
 
 import { cache } from 'react';
 import { companiesRepository } from '@balo/db';
-import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
+import {
+  CAPABILITIES,
+  PLATFORM_CAPABILITIES,
+  platformRoleHasCapability,
+  roleHasCapability,
+} from '@balo/shared/authz';
 import type { SessionUser } from '@/lib/auth/session';
 import type { NavCapability, NavContext, NavWorkspaceType } from '@/components/layout/nav-registry';
 import { log } from '@/lib/logging';
@@ -43,17 +48,18 @@ export const readCompanyForRequest = cache(async (companyId: string) =>
 );
 
 /**
- * BAL-347 → BAL-495. Byte-for-byte the outcome of the deleted `resolveCanManageCompany`, with the
- * raw `companyRole !== 'owner' && companyRole !== 'admin'` comparison replaced by the ONE
- * role→capability map (ADR-1029 HARD CONSTRAINT B). Over `SessionUser['companyRole']`
- * (`owner|admin|member`) — and over any unknown value a stale cookie could carry —
- * `roleHasCapability(role, MANAGE_MEMBERS)` is true for exactly `owner` and `admin`.
+ * BAL-347 → BAL-495 → BAL-534. THE MEMBERSHIP CONTRIBUTION, byte-for-byte the outcome of the
+ * previous single-branch resolver: `MANAGE_MEMBERS` for an `owner`/`admin` of a NON-personal
+ * company, withheld otherwise.
  *
  * ⚠ The personal-company suppression is applied by WITHHOLDING the token, never by exporting an
  * `isPersonal` flag the registry could re-derive (orchestrator decision 3).
+ * ⚠ Its `catch` returns only THIS contribution's empty set — it can no longer discard an
+ * already-resolved platform token, which is the whole point of the BAL-534 split.
  */
-async function resolveNavCapabilities(user: SessionUser | null): Promise<readonly NavCapability[]> {
-  if (!user) return [];
+async function resolveMembershipNavCapabilities(
+  user: SessionUser
+): Promise<readonly NavCapability[]> {
   if (!roleHasCapability(user.companyRole, CAPABILITIES.MANAGE_MEMBERS)) return [];
   try {
     const company = await readCompanyForRequest(user.companyId);
@@ -67,6 +73,31 @@ async function resolveNavCapabilities(user: SessionUser | null): Promise<readonl
     });
     return [];
   }
+}
+
+/**
+ * BAL-534 — THE PLATFORM CONTRIBUTION (ADR-1035 axis). Synchronous and I/O-free: it reads the
+ * session's `platformRole` through the ONE platform predicate, so it cannot throw and cannot be
+ * lost to the company read's `catch` above.
+ *
+ * ⚠ Every Balo user is provisioned into a PERSONAL company, and most staff are plain members of
+ * it — which is exactly why this is a separate contribution and not another line inside the
+ * membership branch. Appending to that branch would have kept the old behaviour of returning
+ * `[]` for a staff member before this token was ever considered.
+ */
+function resolvePlatformNavCapabilities(user: SessionUser): readonly NavCapability[] {
+  return platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
+    ? [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]
+    : [];
+}
+
+/** The nav grant set: the UNION of the two independent contributions, membership first. */
+async function resolveNavCapabilities(user: SessionUser | null): Promise<readonly NavCapability[]> {
+  if (user === null) return [];
+  return [
+    ...(await resolveMembershipNavCapabilities(user)),
+    ...resolvePlatformNavCapabilities(user),
+  ];
 }
 
 export async function buildNavContext(user: SessionUser | null): Promise<NavContext> {

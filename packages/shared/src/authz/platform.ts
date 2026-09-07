@@ -58,6 +58,19 @@ export const PLATFORM_CAPABILITIES = {
    * stays on membership `manage_requests`.
    */
   CLOSE_ANY_REQUEST: 'close_any_request',
+  /**
+   * BAL-534 / ADR-1053 Amendment 1 — see the Balo admin surfaces at all: the `/admin/*` route
+   * group, and the "Balo admin" nav group inside the member shell.
+   *
+   * ⚠ A VIEW token on an axis whose usual framing is "capability gates the MUTATION"
+   * (ADR-1035) — the same deliberate widening `VIEW_ANY_REQUEST_FILE` documents above. It gates
+   * REACHABILITY of a cross-tenant staff surface, which no membership role can express.
+   *
+   * ⚠ IT IS NOT A PER-SURFACE GRANT. Every admin surface keeps its own token where one exists
+   * (promo codes → MANAGE_PROMO_CODES). Per-item tokens for the surfaces that have none arrive
+   * with the D5 bundle split; do NOT pre-empt that here.
+   */
+  VIEW_PLATFORM_ADMIN: 'view_platform_admin',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -70,6 +83,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING,
   PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE,
   PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST,
+  PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
 ];
 
 /**
@@ -83,7 +97,20 @@ export const PLATFORM_ROLE_CAPABILITIES: Record<string, readonly PlatformCapabil
   super_admin: PLATFORM_STAFF_BUNDLE,
 };
 
-/** True when `role`'s platform bundle grants `capability`. Unknown role ⇒ false. */
+/**
+ * True when `role`'s platform bundle grants `capability`. Unknown role ⇒ false.
+ *
+ * ⚠ `Object.hasOwn`, NOT a bare index — `PLATFORM_ROLE_CAPABILITIES[role]` indexes a plain
+ * object literal, which resolves INHERITED keys too: a `role` of `constructor` / `toString` /
+ * `__proto__` would return a non-`undefined` function/object, so `?? []` never fires and
+ * `.includes` throws `TypeError` instead of returning `false`. Not reachable today
+ * (`platformRole` originates from a pgEnum via a sealed cookie), but this repo already treats
+ * the bare-index class as a defect regardless of reachability — see the same guard at
+ * `nav-registry.ts:483`.
+ */
 export function platformRoleHasCapability(role: string, capability: PlatformCapability): boolean {
-  return (PLATFORM_ROLE_CAPABILITIES[role] ?? []).includes(capability);
+  if (!Object.hasOwn(PLATFORM_ROLE_CAPABILITIES, role)) return false;
+  const capabilities = PLATFORM_ROLE_CAPABILITIES[role];
+  if (capabilities === undefined) return false;
+  return capabilities.includes(capability);
 }

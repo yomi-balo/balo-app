@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { CAPABILITIES } from '@balo/shared/authz';
+import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import type { CompanyWorkspace, Workspace } from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
 import { track } from '@/lib/analytics';
@@ -58,23 +58,35 @@ const COMPANY_B_REPRESENTATION: CompanyWorkspace = {
   isPersonal: false,
 };
 
-function navContextFor(workspaceType: 'company' | 'expert', canManage: boolean): NavContext {
+function navContextFor(
+  workspaceType: 'company' | 'expert',
+  canManage: boolean,
+  isStaff = false
+): NavContext {
   return {
     workspaceType,
-    capabilities: canManage ? [CAPABILITIES.MANAGE_MEMBERS] : [],
+    capabilities: [
+      ...(canManage ? [CAPABILITIES.MANAGE_MEMBERS] : []),
+      ...(isStaff ? [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN] : []),
+    ],
   };
 }
 
 function buildSidebarValue(opts: {
   workspaceType?: 'company' | 'expert';
   canManage?: boolean;
+  isStaff?: boolean;
   workspaces?: readonly Workspace[];
   activeWorkspaceKey?: string | null;
   checklistCompletedCount?: number;
   checklistAllComplete?: boolean;
 }): Record<string, unknown> {
   return {
-    navContext: navContextFor(opts.workspaceType ?? 'company', opts.canManage ?? false),
+    navContext: navContextFor(
+      opts.workspaceType ?? 'company',
+      opts.canManage ?? false,
+      opts.isStaff ?? false
+    ),
     checklistCompletedCount: opts.checklistCompletedCount ?? 0,
     checklistAllComplete: opts.checklistAllComplete ?? false,
     workspaces: opts.workspaces ?? [SINGLE_COMPANY_WORKSPACE],
@@ -161,6 +173,25 @@ describe('MobileMoreSheet (BAL-501)', () => {
       surface: 'more_sheet',
       workspace_type: 'company',
     });
+  });
+
+  it('BAL-534: the three admin rows appear for a staff context, after the member rows, in registry order', () => {
+    renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: false, isStaff: true }));
+    expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual([
+      '/projects',
+      '/settings',
+      '/settings/account',
+      '/engagements',
+      '/promo-codes',
+      '/admin/catalogue',
+    ]);
+  });
+
+  it('BAL-534: a non-staff context sees no admin row', () => {
+    renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: true }));
+    const hrefs = screen.getAllByRole('link').map((l) => l.getAttribute('href'));
+    expect(hrefs).not.toContain('/admin/catalogue');
+    expect(hrefs).not.toContain('/promo-codes');
   });
 
   describe('Workspace section', () => {

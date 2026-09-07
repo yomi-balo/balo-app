@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { CAPABILITIES } from '@balo/shared/authz';
+import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import type { Workspace, CompanyWorkspace } from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
@@ -265,6 +265,18 @@ describe('CommandPalette', () => {
 
     expect(expertLabels).toContain('Expert Settings');
     expect(companyLabels).not.toContain('Expert Settings');
+  });
+
+  it('BAL-534: a staff context lists the three Balo admin destinations under their own heading', async () => {
+    renderPalette({
+      workspaceType: 'company',
+      capabilities: [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText('Balo admin')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Config & catalogue/ })).toBeInTheDocument();
   });
 
   it('T8: disabled registry keys never surface, in any context', async () => {

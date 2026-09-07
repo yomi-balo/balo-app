@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { CAPABILITIES } from '@balo/shared/authz';
+import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import { track, NAV_EVENTS } from '@/lib/analytics';
 import { SINGLE_COMPANY_WORKSPACE } from '@/test/fixtures/workspaces';
 import type { NavContext } from './nav-registry';
@@ -45,6 +45,17 @@ function buildSidebarValue(mode: 'client' | 'expert'): Record<string, unknown> {
     activeWorkspaceKey: SINGLE_COMPANY_WORKSPACE.key,
     isCollapsed: false,
     toggleCollapsed: vi.fn(),
+  };
+}
+
+function buildStaffSidebarValue(mode: 'client' | 'expert'): Record<string, unknown> {
+  const base = buildSidebarValue(mode);
+  return {
+    ...base,
+    navContext: {
+      workspaceType: mode === 'expert' ? 'expert' : 'company',
+      capabilities: [CAPABILITIES.MANAGE_MEMBERS, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
+    },
   };
 }
 
@@ -99,6 +110,26 @@ describe('Sidebar nav click tracking (BAL-495)', () => {
     expect(track).toHaveBeenCalledTimes(1);
     expect(track).toHaveBeenCalledWith(NAV_EVENTS.ITEM_CLICKED, {
       item: 'find_experts',
+      surface: 'sidebar',
+      workspace_type: 'company',
+    });
+  });
+
+  // BAL-534 / D12 — ZERO new analytics CODE. `nav_item_clicked` already exists and `sidebar.tsx`
+  // already fires the hook for every rendered entry, so adding the registry entries is what
+  // starts the event. The ONLY analytics change in this ticket is the NAV_ITEM_KEYS vocabulary.
+  // ⚠ NO `section` property — `use-nav-item-tracking.ts` carries none (D12); admin usage is
+  // separable in PostHog by the three new `item` keys alone.
+  it('emits nav_item_clicked with the new admin item key, surface "sidebar"', async () => {
+    const user = userEvent.setup();
+    sidebarValue = buildStaffSidebarValue('client');
+    render(<Sidebar />);
+
+    await user.click(screen.getByRole('link', { name: /^Config & catalogue/ }));
+
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(NAV_EVENTS.ITEM_CLICKED, {
+      item: 'admin_catalogue',
       surface: 'sidebar',
       workspace_type: 'company',
     });

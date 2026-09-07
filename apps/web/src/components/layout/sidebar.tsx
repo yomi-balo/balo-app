@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { PanelLeftClose, PanelLeft } from 'lucide-react';
+import { PanelLeftClose, PanelLeft, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.Element {
@@ -31,6 +31,7 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
 
   const primaryItems = resolveNavItems(navContext, 'primary');
   const secondaryItems = resolveNavItems(navContext, 'secondary');
+  const adminItems = resolveNavItems(navContext, 'admin');
   const trackNavItem = useNavItemTracking('sidebar', navContext.workspaceType);
   const badgeCounts: NavBadgeCounts = { checklistCompletedCount, checklistAllComplete };
   // D10 + D11: the Logo yields the collapsed rail TO the switcher — but only when there IS one.
@@ -87,26 +88,94 @@ function SidebarContent({ isCollapsed }: { isCollapsed: boolean }): React.JSX.El
         />
       </div>
 
-      {/* Primary navigation. BAL-497 — `space-y-1` moved INTO `SidebarNavSection`'s row stack as
+      {/* BAL-534 — THE SCROLL REGION. The outer `<aside>` is `h-screen` (`:201`) and this column
+          has no overflow handling of its own, so before this wrapper every section was fixed-height
+          in a fixed-height box: once the content exceeded the viewport it simply ran off the
+          bottom, unreachable, behind the absolutely-positioned collapse control (`:211`).
+          Harmless while the tallest sidebar was ~607px — but the staff "Balo admin" group adds a
+          separator, a heading and three 44px rows (~189px), which takes a company-mode staff
+          sidebar past a 768px viewport and well past a 1366×768 laptop's ~640px of usable height.
+          ⚠ `min-h-0` IS LOAD-BEARING: a flex item defaults to `min-height:auto`, which refuses to
+          shrink below content height, so `overflow-y-auto` alone would never engage.
+          ⚠ The header and the user pill stay OUTSIDE this wrapper — they must remain pinned, and
+          the pill must not scroll away from above the collapse control.
+          ⚠ `flex-1` stays on the <nav> so that when the content DOES fit, the secondary and admin
+          groups still sit at the bottom of the available space exactly as before.
+          ⚠ `overflow-x-hidden` IS DELIBERATE, not belt-and-braces: per CSS Overflow, when one axis
+          is not `visible` the other computes `visible` → `auto`, so `overflow-y-auto` ALONE would
+          silently make this box horizontally scrollable. The admin label animates `max-w-0` →
+          `max-w-[150px]` over 220ms while holding `whitespace-nowrap`, so its intrinsic width
+          exceeds the collapsed rail for the whole transition — exactly the window in which a
+          transient horizontal scrollbar would flash. Pinning the axis removes the question. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
+        {/* Primary navigation. BAL-497 — `space-y-1` moved INTO `SidebarNavSection`'s row stack as
           `gap-1`: `space-y-*` is a `~` sibling selector, so the pill (a sibling of the rows) would
           otherwise push every row down by 4px. */}
-      <nav className="flex-1 p-3">
-        <TooltipProvider delayDuration={0}>
-          <SidebarNavSection section="primary" hrefs={primaryItems.map((entry) => entry.href)}>
-            {primaryItems.map((entry) => renderLink(entry, false))}
-          </SidebarNavSection>
-        </TooltipProvider>
-      </nav>
+        <nav className="flex-1 p-3">
+          <TooltipProvider delayDuration={0}>
+            <SidebarNavSection section="primary" hrefs={primaryItems.map((entry) => entry.href)}>
+              {primaryItems.map((entry) => renderLink(entry, false))}
+            </SidebarNavSection>
+          </TooltipProvider>
+        </nav>
 
-      <Separator className="bg-sidebar-border" />
+        <Separator className="bg-sidebar-border" />
 
-      {/* Bottom navigation */}
-      <div className="p-3">
-        <TooltipProvider delayDuration={0}>
-          <SidebarNavSection section="secondary" hrefs={secondaryItems.map((entry) => entry.href)}>
-            {secondaryItems.map((entry) => renderLink(entry, true))}
-          </SidebarNavSection>
-        </TooltipProvider>
+        {/* Bottom navigation */}
+        <div className="p-3">
+          <TooltipProvider delayDuration={0}>
+            <SidebarNavSection
+              section="secondary"
+              hrefs={secondaryItems.map((entry) => entry.href)}
+            >
+              {secondaryItems.map((entry) => renderLink(entry, true))}
+            </SidebarNavSection>
+          </TooltipProvider>
+        </div>
+
+        {/* BAL-534 / ADR-1053 Amendment 1 — the staff-only "Balo admin" group. THE SIDEBAR'S ONLY
+          LABELLED GROUP: `primary` and `secondary` stay heading-less exactly as today, and this
+          label is the design reference's shield + uppercase accent
+          (`admin-home.jsx:2960-2977`) — new chrome, not a reuse.
+          ⚠ RENDERED ONLY WHEN NON-EMPTY. `resolveNavItems` returns `[]` for every non-staff
+          context, and an always-mounted group would add a bare heading, an empty pill and a
+          third `<Separator/>` to every member's sidebar.
+          ⚠ A `<div>`, NOT a second `<nav>` — `sidebar.test.tsx` resolves the primary nav with
+          `getByRole('navigation')`, which must stay unambiguous. The bottom section is a
+          `<div>` for the same reason. */}
+        {adminItems.length > 0 && (
+          <>
+            <Separator className="bg-sidebar-border" />
+            <div className="p-3" data-testid="sidebar-admin-group">
+              <div
+                className={cn(
+                  'flex items-center gap-1.5 px-3 pb-2',
+                  isCollapsed && 'justify-center px-0'
+                )}
+              >
+                <Shield className="text-primary size-3 shrink-0" aria-hidden="true" />
+                <span
+                  aria-hidden={isCollapsed || undefined}
+                  className={cn(
+                    'text-primary overflow-hidden text-[11px] font-semibold tracking-[0.06em] whitespace-nowrap uppercase',
+                    'transition-[max-width,opacity]',
+                    '[transition-duration:.22s,.16s]',
+                    '[transition-timing-function:cubic-bezier(.4,0,.2,1),ease]',
+                    'motion-reduce:transition-none',
+                    isCollapsed ? 'max-w-0 opacity-0' : 'max-w-[150px] opacity-100'
+                  )}
+                >
+                  Balo admin
+                </span>
+              </div>
+              <TooltipProvider delayDuration={0}>
+                <SidebarNavSection section="admin" hrefs={adminItems.map((entry) => entry.href)}>
+                  {adminItems.map((entry) => renderLink(entry, true))}
+                </SidebarNavSection>
+              </TooltipProvider>
+            </div>
+          </>
+        )}
       </div>
 
       <Separator className="bg-sidebar-border" />

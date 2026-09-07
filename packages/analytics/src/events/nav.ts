@@ -18,6 +18,11 @@ export const NAV_ITEM_KEYS = [
   'team',
   'account',
   'help',
+  // BAL-534 — the staff-only "Balo admin" group (ADR-1053 Amendment 1). Declared here, like
+  // every other nav key, so a registry entry and an analytics `item` value cannot drift.
+  'admin_engagements',
+  'admin_promo_codes',
+  'admin_catalogue',
 ] as const;
 export type NavItemKey = (typeof NAV_ITEM_KEYS)[number];
 
