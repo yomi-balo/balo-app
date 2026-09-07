@@ -72,26 +72,40 @@ export const JOB_ID_CONTRACT_VIOLATION = 'BullMQ job id contract violation';
  * ⚠ SEPARATOR: `--`, NOT ESCAPED, DELIBERATELY. Escaping `-` would rewrite every id in the
  * codebase (every UUID contains hyphens) for no benefit.
  *
- * ⚠⚠ THE TRUE PRECONDITION FOR THE JOIN TO BE UNAMBIGUOUS (corrected — an earlier draft of this
- * paragraph both misstated the precondition AND cited a non-example): no part except the LAST
- * may itself contain `--`, and no non-final part may END with `-` while the NEXT part BEGINS
- * with `-`. Two earlier claims here were wrong: "unambiguous given a fixed arity per call site,
- * which every call site has" is false (`calendar-subscription-reconcile.ts` and
- * `recording-cleanup-source.ts` call this with 2 OR 3 parts depending on a runtime branch), and
- * the cited "counter-example",
- * `buildJobId('a--b','c') === buildJobId('a','b--c')`, is not one — both sides are ARITY 2, so
- * it shows nothing about crossing arities. The real, TIGHTER collision needs no `--` inside
- * either part at all: `buildJobId('a-', 'b') === buildJobId('a', '-b')` (both `'a---b'`), fixed
- * arity on both sides — see `queue.test.ts`'s pinned example.
+ * ⚠⚠ THE TRUE PRECONDITION FOR THE JOIN TO BE UNAMBIGUOUS — THIRD FORMULATION. The first two
+ * drafts of this paragraph were both wrong, and both wrongness has now been fixed differently:
+ * the first claimed "unambiguous given a fixed arity per call site", which is false on its own
+ * terms (`calendar-subscription-reconcile.ts` and `recording-cleanup-source.ts` call this with 2
+ * OR 3 parts depending on a runtime branch). The second replaced it with "no part except the
+ * LAST may itself contain `--`, and no non-final part may END with `-` while the NEXT part
+ * BEGINS with `-`" — a condition on a PAIR of adjacent parts, checked nowhere, which is not a
+ * precondition a single call can violate and so enforces nothing: it admits BOTH
+ * `buildJobId('a-', 'b')` and `buildJobId('a', '-b')`, and both produce `'a---b'` — the precondition
+ * permitted the exact collision it was supposed to rule out. This codebase treats this docblock
+ * as a load-bearing control, and an over-claiming comment restating a broken invariant a third
+ * time is exactly the defect BAL-531's fix round exists to stop re-committing.
  *
- * Today the precondition holds, for a reason that has nothing to do with arity: every non-final
- * part in the tree is either a literal prefix (`'subscriptions'`, `'meeting-calendar-amend'`, …
- * — never ends in `-`) or a UUID (never leads or trails with `-`, by RFC 4122's fixed
- * hyphen positions). The one shipped correlation id that genuinely contains `--`
- * (`share-availability.ts`'s `{relationshipId}--{iso}--{ms}`) is safe ONLY because it is always
- * passed in the FINAL slot — the precondition explicitly permits that. Do NOT add a `--`- or
- * trailing-`-`-rejecting guard: it would throw on that shipped id and on every other id today,
- * for a collision that is a documented property of the scheme, not a live bug.
+ * The correct, simpler, SUFFICIENT condition, stated as a property of ONE part at a time, not a
+ * pair: **every part except the last contains no `--` and does not end with `-`.** Given that,
+ * the first `--` in the joined string is always the first separator (a non-final part can never
+ * manufacture one, on its own or by combining a trailing `-` with the next part's leading `-`),
+ * so decoding back into the original arity-many parts is unique FOR A FIXED ARITY. This says
+ * nothing about, and is not claimed to say anything about, collisions ACROSS different arities —
+ * `queue.test.ts` pins the fixed-arity guarantee, not a cross-arity one. The final part is
+ * completely unconstrained: it may contain `--`, and it may lead or trail with `-`.
+ *
+ * Enforced in code, not just documented: `buildJobId` below throws
+ * `${JOB_ID_CONTRACT_VIOLATION}: non-final part ... ` when a NON-FINAL part violates this — a
+ * guard the second, disproven formulation explicitly told the reader NOT to add (on the
+ * mistaken belief it would break the one shipped `--`-bearing id). It doesn't: that id
+ * (`{relationshipId}--{iso}` on the availability-shared correlationId, joined at
+ * `notifications/publisher.ts`'s `buildJobId(event, correlationId)`) always lands in the FINAL
+ * slot, which this guard never inspects. Every other non-final part in the tree today is a
+ * literal prefix (`'subscriptions'`, `'meeting-calendar-amend'`, …), a UUID (RFC 4122's fixed
+ * hyphen positions mean it can never lead or trail with `-`, or contain `--`), or a
+ * dedupe/force token (`force`/`noforce`, a Daily batch or webhook event id) — none of which trip
+ * the guard; `queue.test.ts` pins the real event-name and template-name sets (from
+ * `notifications/engine/rules.ts`) against it directly rather than trusting this claim.
  *
  * ⚠ THE THROW IS A CANARY, NOT THE REAL ENFORCEMENT. After the escape, the result CANNOT
  * contain a colon — the throw guards against a future edit to the escape breaking that
@@ -118,6 +132,22 @@ export function buildJobId(...parts: string[]): string {
       throw new Error(`${JOB_ID_CONTRACT_VIOLATION}: part ${index} is empty`);
     }
     return part.replaceAll('_', '__').replaceAll(':', '_c');
+  });
+
+  // Enforce the precondition documented above: a NON-FINAL part may not contain `--` and may not
+  // end with `-` — either would let it manufacture (or hand off) a separator, breaking per-arity
+  // unique decoding. The FINAL part is deliberately exempt (see the docblock's `--`-bearing
+  // correlationId example, which always lands last).
+  const lastIndex = escaped.length - 1;
+  escaped.forEach((part, index) => {
+    if (index === lastIndex) {
+      return;
+    }
+    if (part.includes('--') || part.endsWith('-')) {
+      throw new Error(
+        `${JOB_ID_CONTRACT_VIOLATION}: non-final part ${index} ("${part}") contains "--" or ends with "-"`
+      );
+    }
   });
 
   const id = escaped.join('--');

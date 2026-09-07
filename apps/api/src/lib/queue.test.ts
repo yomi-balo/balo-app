@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { buildJobId, JOB_ID_CONTRACT_VIOLATION } from './queue.js';
+import { notificationRules } from '../notifications/engine/rules.js';
 
 /**
  * BAL-531 — `buildJobId` is the ONLY way a custom BullMQ jobId may be minted. This suite pins:
@@ -82,13 +83,84 @@ describe('JOB_ID_CONTRACT_VIOLATION — verbatim stability', () => {
   });
 });
 
-describe('buildJobId — separator collision across a fixed arity (documented limitation, F3)', () => {
-  // The docblock's own worked example, `buildJobId('a--b','c') === buildJobId('a','b--c')`, is
-  // NOT a real collision — both sides are arity-2, so it demonstrates nothing about crossing
-  // arities. The genuine collision needs no `--` inside either part at all:
-  it('a trailing "-" on a non-final part collides with a leading "-" on the next (same arity)', () => {
-    expect(buildJobId('a-', 'b')).toBe(buildJobId('a', '-b'));
-    expect(buildJobId('a-', 'b')).toBe('a---b');
+describe('buildJobId — the non-final-part guard (fix round 2, G1 — third docblock formulation)', () => {
+  // The docblock's SECOND formulation ("no non-final part may end with '-' while the NEXT part
+  // begins with '-'") was a condition on a PAIR, checked nowhere, and admitted BOTH members of
+  // this exact colliding pair. The guard below closes it by rejecting the OFFENDING part on its
+  // own, regardless of what the next part looks like.
+  it('throws for a non-final part ending with "-" (the pair the docblock names)', () => {
+    expect(() => buildJobId('a-', 'b')).toThrow(JOB_ID_CONTRACT_VIOLATION);
+    // The other member of the pair is UNAFFECTED — 'a' does not end with '-' and '-b' is the
+    // FINAL part, which the guard never inspects.
+    expect(buildJobId('a', '-b')).toBe('a---b');
+  });
+
+  it('throws for a non-final part containing "--"', () => {
+    expect(() => buildJobId('a--b', 'c')).toThrow(JOB_ID_CONTRACT_VIOLATION);
+    expect(() => buildJobId('a--b', 'c')).toThrow(
+      `${JOB_ID_CONTRACT_VIOLATION}: non-final part 0 ("a--b") contains "--" or ends with "-"`
+    );
+  });
+
+  it('the FINAL part is unconstrained — may contain "--" or lead/trail with "-"', () => {
+    expect(() => buildJobId('a', 'b--c')).not.toThrow();
+    expect(() => buildJobId('a', '-b-')).not.toThrow();
+  });
+
+  // BAL-283 (Ruling 3) — `conversation.availability_shared`'s real shape:
+  // `buildJobId(event, correlationId)` where `correlationId` = `${relationshipId}--${sharedAtIso}`
+  // (`routes/notifications/schema.ts`'s `conversationAvailabilitySharedPayload` docblock;
+  // minted via `notifications/publisher.ts`'s `buildJobId(event, payload.correlationId)`).
+  // correlationId is always the LAST part — pin that this shipped `--`-bearing shape survives
+  // the new guard unharmed.
+  it('the shipped availability-shared correlationId ("{relationshipId}--{iso}") survives, final slot only', () => {
+    const relationshipId = '3f2a2b7e-1234-4a1b-9c3d-abcdefabcdef';
+    // A real ISO timestamp carries colons, which get escaped like any other part — the point
+    // pinned here is the "--" INSIDE the correlationId, not the timestamp's own escaping.
+    const sharedAtIso = '2026-09-04T12:00:00.000Z';
+    const correlationId = `${relationshipId}--${sharedAtIso}`;
+    const id = buildJobId('conversation.availability_shared', correlationId);
+    expect(id.includes(':')).toBe(false);
+    // `relationshipId` contains neither `_` nor `:`, so it (and the "--" that follows it, which
+    // came from INSIDE the final part, not from `buildJobId`'s own join) survives byte-identical
+    // — proof the guard did not treat the final part's internal "--" as an extra separator.
+    expect(id).toContain(`--${relationshipId}--`);
+  });
+});
+
+describe('buildJobId — canonical collision pair, asserted directly (review non-blocking #2)', () => {
+  // Previously pinned only indirectly via the 2-part `buildJobId('e', 'manual:x')` vs
+  // `buildJobId('e', 'manual_x')` case below. The reviewer asked for the single-part pair named
+  // in the docblock's "a bare `:` -> `_` is not injective" discussion, asserted on its own.
+  it('buildJobId("a:b") !== buildJobId("a_cb")', () => {
+    expect(buildJobId('a:b')).not.toBe(buildJobId('a_cb'));
+  });
+});
+
+describe('buildJobId — the real event-name and template-name sets never trip the new guard', () => {
+  // The reviewer flagged the 85+ template names as the one set they could not enumerate by hand.
+  // `notifications/engine/rules.ts` is a pure data file (no imports), so pulling it in here
+  // carries no import-cycle risk.
+  const eventNames = Object.keys(notificationRules);
+  const templates = Object.values(notificationRules)
+    .flat()
+    .map((rule) => rule.template);
+
+  it('has a non-trivial number of event names and templates to check (non-vacuity)', () => {
+    expect(eventNames.length).toBeGreaterThan(20);
+    expect(templates.length).toBeGreaterThan(60);
+  });
+
+  it("every event name is safe as buildJobId's FIRST (non-final) part — mirrors publisher.ts", () => {
+    for (const event of eventNames) {
+      expect(() => buildJobId(event, 'correlation-id-1')).not.toThrow();
+    }
+  });
+
+  it("every rule template is safe as buildJobId's FIRST (non-final) part — mirrors dispatcher.ts", () => {
+    for (const template of templates) {
+      expect(() => buildJobId(template, 'recipient-1', 'correlation-id-1')).not.toThrow();
+    }
   });
 });
 

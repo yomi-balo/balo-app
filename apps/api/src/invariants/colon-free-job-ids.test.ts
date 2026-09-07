@@ -29,14 +29,26 @@ import { ALL_SOURCE_FILES, isCommentLine, isUnderAny, readRaw } from './_source-
  * / `split` only — see `_source-scan.ts`'s docblock for the comment-classifier and
  * `import.meta.url` reasoning this file relies on but does not re-derive.
  *
- * IF THIS TEST FAILS, THE REMEDY IS TO ROUTE THE OFFENDING LINE THROUGH `buildJobId` — see
- * `apps/api/src/lib/queue.ts`'s docblock. It is not to widen `BLESSED_JOB_ID_BUILDERS` or
- * `NON_QUEUE_JOB_ID_SHAPES` to make the failure go away.
+ * IF THIS TEST FAILS ON A LINE THAT GENUINELY MINTS A jobId, THE REMEDY IS TO ROUTE IT THROUGH
+ * `buildJobId` — see `apps/api/src/lib/queue.ts`'s docblock. Do NOT widen `BLESSED_JOB_ID_BUILDERS`
+ * or `NON_QUEUE_JOB_ID_SHAPES` just to make that failure go away.
+ *
+ * ⚠⚠ FIX ROUND 2 (G3) — THAT GUIDANCE IS ABOUT A REAL CONSTRUCTION, NOT ABOUT EVERY MATCH. A
+ * `jobId: string` / `jobId?: string` TYPE ANNOTATION on a function parameter also contains the
+ * `jobId:` marker and used to be flagged here — it mints nothing, it names a parameter's type.
+ * `services/daily/batch-processor.ts`'s `getBatchJobTranscriptLink` paid a rename tax for exactly
+ * this (`jobId` → `batchJobId`) before this shape was recognised. The rename is KEPT — `batchJobId`
+ * is a genuinely better name for a Daily batch job id than the generic `jobId` — but it is no
+ * longer *required*: a future parameter named `jobId: string` passes this scan today via
+ * `NON_QUEUE_JOB_ID_SHAPES` below, same as the pinned log-field shapes.
  */
 
 const REMEDY =
-  'BAL-531: a custom BullMQ jobId may only be minted by buildJobId(). Route this line through ' +
-  'it instead of widening this invariant.';
+  'BAL-531: a custom BullMQ jobId may only be minted by buildJobId(). If this line actually ' +
+  'CONSTRUCTS a jobId (an assignment or object-key set feeding `queue.add`/a BullMQ option), ' +
+  'route it through buildJobId() instead of a hand-rolled template. If it is not a construction ' +
+  'at all — e.g. a `jobId: string` type annotation or a structured log field — add its exact ' +
+  'shape to NON_QUEUE_JOB_ID_SHAPES instead of hand-editing the offending line.';
 
 /**
  * `jobId` being ASSIGNED or set as an object key — the only forms that can mint an id.
@@ -59,11 +71,21 @@ const CONSTRUCTION_MARKERS = ['jobId:', 'jobId =', 'jobId=', "['jobId']"] as con
 const BLESSED_JOB_ID_BUILDERS = ['buildJobId(', 'recordingCleanupSourceJobId('] as const;
 
 /**
- * `jobId:` that is NOT a BullMQ option — a structured LOG field in a `worker.on('failed')`
- * handler (the router worker plus three channel adapters). Shape-based, not file-based, so a
- * fifth channel adapter passes without an edit to this list.
+ * `jobId:` that is NOT a BullMQ option:
+ *  · a structured LOG field in a `worker.on('failed')` handler (the router worker plus three
+ *    channel adapters) — `jobId: job?.id` / `jobId: job.id`;
+ *  · FIX ROUND 2 (G3) — a `jobId: string` / `jobId?: string` TYPE ANNOTATION on a function
+ *    parameter, which mints nothing at all. See this file's module docblock for why this was
+ *    added and what it makes no-longer-required (the `batchJobId` rename).
+ * Shape-based, not file-based, so a fifth channel adapter — or a fifth `jobId: string` parameter
+ * — passes without an edit to this list.
  */
-const NON_QUEUE_JOB_ID_SHAPES = ['jobId: job?.id', 'jobId: job.id'] as const;
+const NON_QUEUE_JOB_ID_SHAPES = [
+  'jobId: job?.id',
+  'jobId: job.id',
+  'jobId: string',
+  'jobId?: string',
+] as const;
 
 /**
  * Guards must be able to NAME what they forbid.
@@ -253,6 +275,17 @@ describe('the matchers actually fire (positive controls)', () => {
 
   it('a pinned non-queue shape does not fire', () => {
     expect(isOffendingLine('log.error({ jobId: job?.id, error: err.message }, "x");')).toBe(false);
+  });
+
+  it('a `jobId: string` / `jobId?: string` TYPE ANNOTATION does not fire (fix round 2, G3)', () => {
+    // The exact shape `services/daily/batch-processor.ts` used to be forced to rename away from
+    // — it mints nothing, it names a parameter's type. Kept as a forward guard, like
+    // `SCAN_EXEMPT`'s own F10 note: this shape has no live occurrence in `apps/api/src` today
+    // (the rename already happened), so this is proved only here, not by the source walk.
+    expect(
+      isOffendingLine('export function f(jobId: string, format: "json"): Promise<string> {')
+    ).toBe(false);
+    expect(isOffendingLine('function g(jobId?: string): void {}')).toBe(false);
   });
 
   it('⚠ does NOT fire on a COMMENT — the classifier is live', () => {
