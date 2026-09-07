@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   PLATFORM_CAPABILITIES,
   PLATFORM_ROLE_CAPABILITIES,
+  PLATFORM_STAFF_ROLES,
   platformRoleHasCapability,
+  platformRoleIsStaff,
 } from './platform';
 
 /**
@@ -83,9 +85,44 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
     expect(PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE).toBe('view_any_request_file');
   });
 
-  it('gives admin and super_admin the identical staff bundle, and omits user', () => {
-    expect(PLATFORM_ROLE_CAPABILITIES.admin).toEqual(PLATFORM_ROLE_CAPABILITIES.super_admin);
+  /**
+   * ⚠ BAL-541 REWROTE THIS ASSERTION, IT DID NOT DELETE IT. It used to read
+   * `expect(admin).toEqual(super_admin)` — the two roles held one shared array. `super_admin` now
+   * holds `DELETE_ANY_INTERNAL_NOTE` on top, so the relationship this pins is CONTAINMENT plus an
+   * EXACT difference: `admin` ⊆ `super_admin`, and the only thing between them is that one token.
+   * Written as a set difference rather than as a length check so a third role-differentiated token
+   * fails here loudly and has to be argued for, instead of sliding in.
+   */
+  it('gives super_admin the admin bundle plus exactly DELETE_ANY_INTERNAL_NOTE, and omits user', () => {
+    const admin = PLATFORM_ROLE_CAPABILITIES.admin ?? [];
+    const superAdmin = PLATFORM_ROLE_CAPABILITIES.super_admin ?? [];
+
+    // Containment: every admin token is a super_admin token.
+    expect(superAdmin).toEqual(expect.arrayContaining([...admin]));
+    // The difference, in both directions, is exactly one token.
+    expect(superAdmin.filter((c) => !admin.includes(c))).toEqual([
+      PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE,
+    ]);
+    expect(admin.filter((c) => !superAdmin.includes(c))).toEqual([]);
     expect(PLATFORM_ROLE_CAPABILITIES.user).toBeUndefined();
+  });
+
+  it('admin does NOT hold DELETE_ANY_INTERNAL_NOTE', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).not.toContain(
+      PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE
+    );
+  });
+
+  /**
+   * BAL-541 — the map's keys and the staff-role list are two spellings of "who is Balo staff".
+   * A staff role with no bundle would pass `platformRoleIsStaff` while holding nothing; a bundle
+   * under a key that is not a staff role would grant tokens to somebody the eligibility check
+   * refuses. Pinned so the two can never drift.
+   */
+  it('has exactly the staff roles as its keys', () => {
+    expect(Object.keys(PLATFORM_ROLE_CAPABILITIES).sort()).toEqual(
+      [...PLATFORM_STAFF_ROLES].sort()
+    );
   });
 
   it('bundle includes VIEW_ANY_REQUEST_FILE for the staff roles', () => {
@@ -107,6 +144,105 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
   it('bundle includes VIEW_PLATFORM_ADMIN for the staff roles', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN);
   });
+  it('maps ASSIGN_ANY_REQUEST_OWNER to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER).toBe('assign_any_request_owner');
+  });
+
+  it('maps MANAGE_INTERNAL_NOTES to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES).toBe('manage_internal_notes');
+  });
+
+  it('maps DELETE_ANY_INTERNAL_NOTE to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE).toBe('delete_any_internal_note');
+  });
+
+  it('bundle includes the two BAL-541 staff tokens for the staff roles', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(
+      PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER
+    );
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES);
+  });
+});
+
+/**
+ * BAL-541 — the request-owner token. Same allow/deny table as its siblings: staffing a request is
+ * Balo's own business, so both party axes are bypassed and a plain `user` must never hold it.
+ */
+describe('platformRoleHasCapability — ASSIGN_ANY_REQUEST_OWNER', () => {
+  it.each(['admin', 'super_admin'])('grants ASSIGN_ANY_REQUEST_OWNER to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER)).toBe(
+      true
+    );
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies ASSIGN_ANY_REQUEST_OWNER to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER)).toBe(
+        false
+      );
+    }
+  );
+});
+
+/**
+ * BAL-541 — the internal-notes token. Gates a READ as well as a write (there is no party-axis
+ * reader for staff-only text), so the deny half of this table is the entire confidentiality
+ * boundary for note bodies — not a formality.
+ */
+describe('platformRoleHasCapability — MANAGE_INTERNAL_NOTES', () => {
+  it.each(['admin', 'super_admin'])('grants MANAGE_INTERNAL_NOTES to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies MANAGE_INTERNAL_NOTES to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES)).toBe(
+        false
+      );
+    }
+  );
+});
+
+/**
+ * BAL-541 — the axis's FIRST role-differentiated token: `super_admin` only. `admin` sits on the
+ * DENY side here and nowhere else, which is the whole point — it is what lets "author or
+ * super_admin" be expressed without a `platformRole === 'super_admin'` read in feature code.
+ */
+describe('platformRoleHasCapability — DELETE_ANY_INTERNAL_NOTE', () => {
+  it('grants DELETE_ANY_INTERNAL_NOTE to super_admin', () => {
+    expect(
+      platformRoleHasCapability('super_admin', PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE)
+    ).toBe(true);
+  });
+
+  it.each(['admin', 'user', '', 'owner', 'member', 'expert'])(
+    'denies DELETE_ANY_INTERNAL_NOTE to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE)).toBe(
+        false
+      );
+    }
+  );
+});
+
+/**
+ * BAL-541 — `platformRoleIsStaff` answers a question about a SUBJECT (may this user be named as a
+ * request's Balo owner?), not about an actor's rights. Its truth table is locked here because
+ * `@balo/db`'s `assignOwner` refuses a candidate on its say-so, in-transaction.
+ */
+describe('platformRoleIsStaff', () => {
+  it.each([...PLATFORM_STAFF_ROLES])('treats %s as staff', (role) => {
+    expect(platformRoleIsStaff(role)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert', 'ADMIN', 'superadmin'])(
+    'treats %s as NOT staff',
+    (role) => {
+      expect(platformRoleIsStaff(role)).toBe(false);
+    }
+  );
 });
 
 /**

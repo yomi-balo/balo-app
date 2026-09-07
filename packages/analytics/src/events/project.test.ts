@@ -11,6 +11,18 @@ describe('PROJECT_EVENTS.BILLING_REMINDER_SENT (BAL-324)', () => {
   });
 });
 
+describe('PROJECT_EVENTS.REQUEST_OWNER_ASSIGNED / INTERNAL_NOTE_CREATED (BAL-541)', () => {
+  it('maps to the feature-prefixed snake_case event names', () => {
+    expect(PROJECT_EVENTS.REQUEST_OWNER_ASSIGNED).toBe('project_request_owner_assigned');
+    expect(PROJECT_EVENTS.INTERNAL_NOTE_CREATED).toBe('project_internal_note_created');
+  });
+
+  it('follows the {feature}_{noun}_{past_tense_verb} convention', () => {
+    expect(PROJECT_EVENTS.REQUEST_OWNER_ASSIGNED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+    expect(PROJECT_EVENTS.INTERNAL_NOTE_CREATED).toMatch(/^project_[a-z]+(_[a-z]+)*$/);
+  });
+});
+
 describe('PROJECT_SERVER_EVENTS', () => {
   it('has the request-access-denied, server-emitted proposal, admin-fee, PDF-download, and share events (BAL-276 / BAL-357 / BAL-358 / BAL-385 / BAL-386)', () => {
     expect(Object.keys(PROJECT_SERVER_EVENTS)).toEqual([

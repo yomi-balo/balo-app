@@ -103,8 +103,13 @@ export {
   PLATFORM_CAPABILITIES,
   PLATFORM_ROLE_CAPABILITIES,
   platformRoleHasCapability,
+  // BAL-541 — the staff-ROLE-SET seam, distinct from the capability seam above: "may this user
+  // be NAMED as a request's Balo owner?" asks about a SUBJECT's eligibility, which no capability
+  // token expresses. `@balo/db`'s `assignOwner` is the first consumer.
+  PLATFORM_STAFF_ROLES,
+  platformRoleIsStaff,
 } from './platform';
-export type { PlatformCapability } from './platform';
+export type { PlatformCapability, PlatformStaffRole } from './platform';
 
 // The DISTINCT engagement-capability axis (BAL-413 / ADR-1046) — gates by DELIVERY
 // IDENTITY on ONE already-resolved meeting context, not by membership role and not by

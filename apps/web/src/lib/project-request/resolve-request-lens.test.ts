@@ -131,6 +131,20 @@ describe('resolveRequestLens', () => {
     expect(superAdminCtx?.canSeeStaffOnly).toBe(true);
   });
 
+  it('BAL-541 / D13: canSeeBaloPanel is true only for a platform admin/super_admin, never client or expert', () => {
+    const clientCtx = resolveRequestLens(user({ companyId: COMPANY_ID }), request());
+    const expertCtx = resolveRequestLens(
+      user({ companyId: OTHER_COMPANY_ID, expertProfileId: EXPERT_PROFILE_ID }),
+      request({ relationships: [relationship()] })
+    );
+    const adminCtx = resolveRequestLens(user({ platformRole: 'admin' }), request());
+    const superAdminCtx = resolveRequestLens(user({ platformRole: 'super_admin' }), request());
+    expect(clientCtx?.canSeeBaloPanel).toBe(false);
+    expect(expertCtx?.canSeeBaloPanel).toBe(false);
+    expect(adminCtx?.canSeeBaloPanel).toBe(true);
+    expect(superAdminCtx?.canSeeBaloPanel).toBe(true);
+  });
+
   it('gives admin precedence over ownership (admin who also owns → observer)', () => {
     const ctx = resolveRequestLens(
       user({ platformRole: 'admin', companyId: COMPANY_ID }),

@@ -71,6 +71,15 @@ export interface RequestViewerContext {
    * pure — no DB read), so every lens branch below sets it consistently.
    */
   canSeeStaffOnly: boolean;
+  /**
+   * BAL-541 (D13) — true when the viewer holds EITHER BAL-541 staff-surface token, i.e. the
+   * "Balo" panel exists for them at all. A purpose-named SIBLING of `canSeeStaffOnly`, NOT a
+   * widening of it: that flag is hard-wired to `CLOSE_ANY_REQUEST` / `close_note` semantics and
+   * must keep meaning exactly that. OR'd across the two tokens so it stays honest if they ever
+   * diverge (both sit in the staff bundle today); the panel's INDIVIDUAL affordances re-resolve
+   * their own token server-side in `load-balo-panel.ts`.
+   */
+  canSeeBaloPanel: boolean;
 }
 
 const ADMIN_ROLES = new Set<SessionUser['platformRole']>(['admin', 'super_admin']);
@@ -117,6 +126,10 @@ export function resolveRequestLens(
 ): RequestViewerContext | null {
   // BAL-540 / D11 — pure + sync, computed once; every branch below carries it.
   const canSeeStaffOnly = hasPlatformCapability(user, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST);
+  // BAL-541 (D13) — pure + sync, computed once; every branch below carries it.
+  const canSeeBaloPanel =
+    hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES) ||
+    hasPlatformCapability(user, PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER);
 
   // 1. Admin → observer (precedence over ownership/invite).
   if (ADMIN_ROLES.has(user.platformRole)) {
@@ -128,6 +141,7 @@ export function resolveRequestLens(
       relationshipId: null,
       canSeeContact: true,
       canSeeStaffOnly,
+      canSeeBaloPanel,
     };
   }
 
@@ -141,6 +155,7 @@ export function resolveRequestLens(
       relationshipId: null,
       canSeeContact: false,
       canSeeStaffOnly,
+      canSeeBaloPanel,
     };
   }
 
@@ -162,6 +177,7 @@ export function resolveRequestLens(
         relationshipId: relationship.id,
         canSeeContact: true,
         canSeeStaffOnly,
+        canSeeBaloPanel,
       };
     }
   }

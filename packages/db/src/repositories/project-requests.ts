@@ -1,4 +1,7 @@
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+// BAL-541 — the ONE place a platform role string may be interpreted (ADR-1029). `assignOwner`
+// asks it whether a CANDIDATE owner is Balo staff; it never spells the role set itself.
+import { platformRoleIsStaff } from '@balo/shared/authz';
 import { db } from '../client';
 import {
   expertProfiles,
@@ -120,6 +123,35 @@ export interface UpdateBaloFeeBpsResult {
   newBps: number;
   changed: boolean;
 }
+
+/**
+ * BAL-541 — outcome of naming (or clearing) a request's Balo owner. A DISCRIMINATED UNION
+ * rather than a throw-or-boolean, because three of the four outcomes are ordinary product
+ * states the action renders differently:
+ *
+ *   `assigned`        — the column moved and ONE audit row was appended.
+ *   `unchanged`       — the candidate already IS the owner: no UPDATE, no audit row, no
+ *                       notification, no analytics beat (the `updateBaloFeeBps` `changed:false`
+ *                       semantics).
+ *   `not_staff`       — the candidate exists but is not Balo staff. Nothing is written.
+ *   `owner_not_found` — the candidate id names no live user. Nothing is written.
+ *
+ * A missing or soft-deleted REQUEST is the exception and still THROWS — it is a routing bug,
+ * not a product state, and the caller pre-checks with `findById` for the friendly path.
+ */
+export type AssignRequestOwnerResult =
+  | {
+      outcome: 'assigned';
+      /** Feeds the caller's `previous_owner_present` analytics flag. */
+      previousOwnerUserId: string | null;
+      /** `null` ⇒ the owner was CLEARED. */
+      ownerUserId: string | null;
+      /** The audit row's uuid — colon-free by construction, so it is a safe `correlationId`. */
+      auditId: string;
+    }
+  | { outcome: 'unchanged'; ownerUserId: string | null }
+  | { outcome: 'not_staff'; candidateUserId: string }
+  | { outcome: 'owner_not_found'; candidateUserId: string };
 
 /**
  * BAL-540 — the close cascade's input. Everything here is SERVER-DERIVED: `actorKind` comes
@@ -318,6 +350,11 @@ export const projectRequestsRepository = {
         closedByUserId: true,
         closeReason: true,
         closeNote: true,
+        // BAL-541 — widened by EXACTLY ONE column. ADMIN-AUDIENCE: `load-balo-panel.ts`
+        // resolves the NAME behind `assign_any_request_owner`; `mapRequestToDetailView` carries
+        // it on NO lens, not even the admin one (pinned by the sentinel leak test). Selected
+        // here rather than re-read because the panel already has this row in hand.
+        baloOwnerUserId: true,
       },
       with: {
         company: { columns: { id: true, name: true } },
@@ -595,6 +632,119 @@ export const projectRequestsRepository = {
       );
 
       return { previousBps: current.baloFeeBps, newBps: input.newBps, changed: true };
+    });
+  },
+
+  /**
+   * BAL-541 — NAME (or CLEAR) THE BALO STAFFER WHO OWNS THIS REQUEST.
+   *
+   * Modelled line-for-line on {@link updateBaloFeeBps}: read the row FOR UPDATE, short-circuit
+   * a genuine no-op, write the column, append ONE audit row — all in ONE `db.transaction`, so
+   * the change and its "who moved it, from whom, to whom" record commit or roll back together.
+   * The `FOR UPDATE` serialises concurrent admin assignments; two racing assignments queue and
+   * the last writer wins, with BOTH audited. (Concurrency is argued by inspection here, as
+   * `close()` does: the integration harness runs one transaction per test on a `max:1` pool, so
+   * it cannot express a second connection.)
+   *
+   * ── CLEARING IS THE SAME ACT ──────────────────────────────────────────────────────────
+   * `ownerUserId: null` is not a separate method: one column, one audit action, three
+   * affordances (assign / reassign / clear). The audit row carries `to: null` and the caller
+   * suppresses the notification — THIS METHOD KNOWS NOTHING ABOUT NOTIFICATIONS and must not
+   * learn (`invariants/repositories-never-notify.test.ts`).
+   *
+   * ── STAFF ELIGIBILITY IS ENFORCED HERE, INTERPRETED ELSEWHERE ─────────────────────────
+   * The candidate's `platform_role` is read INSIDE the transaction and judged by
+   * `platformRoleIsStaff` from `@balo/shared/authz` — the ONE interpretation point for that
+   * role set (ADR-1029). This repository never spells a role literal. The read takes NO ROW
+   * LOCK, deliberately: an unlocked `users` read adds no edge to any lock-order sequence in
+   * this package and so introduces no deadlock class (the `resolveExpertUserIdsTx` rationale).
+   * A role change racing this assignment is ACCEPTED — the audit row records what was true at
+   * commit.
+   *
+   * ⚠ THE READ SIDE NEVER RE-FILTERS ON ROLE. A staffer demoted after being named stays the
+   * owner and stays displayed; only a NEW assignment is checked. That asymmetry is the point —
+   * re-filtering on read would silently erase history.
+   */
+  async assignOwner(input: {
+    requestId: string;
+    ownerUserId: string | null;
+    actorUserId: string;
+  }): Promise<AssignRequestOwnerResult> {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          baloOwnerUserId: projectRequests.baloOwnerUserId,
+          updatedAt: projectRequests.updatedAt,
+        })
+        .from(projectRequests)
+        .where(and(eq(projectRequests.id, input.requestId), isNull(projectRequests.deletedAt)))
+        .for('update');
+
+      if (current === undefined) {
+        throw new Error(`Project request not found: ${input.requestId}`);
+      }
+
+      // Genuine no-op — covers "re-selected the current owner" AND "cleared an already
+      // unassigned request". Nothing is written, so nothing is audited or announced.
+      if (current.baloOwnerUserId === input.ownerUserId) {
+        return { outcome: 'unchanged', ownerUserId: current.baloOwnerUserId };
+      }
+
+      const candidateUserId = input.ownerUserId;
+      if (candidateUserId !== null) {
+        const [candidate] = await tx
+          .select({ id: users.id, platformRole: users.platformRole })
+          .from(users)
+          .where(and(eq(users.id, candidateUserId), isNull(users.deletedAt)))
+          .limit(1);
+
+        if (candidate === undefined) {
+          return { outcome: 'owner_not_found', candidateUserId };
+        }
+        if (!platformRoleIsStaff(candidate.platformRole)) {
+          return { outcome: 'not_staff', candidateUserId };
+        }
+      }
+
+      // ⚠ `updatedAt` is passed back EXPLICITLY to defeat the `timestamps` helper's
+      // `$onUpdateFn` (Drizzle applies it only when the column is ABSENT from `.set()`).
+      // `updated_at` is the admin stall signal — `requestRecencyAt` folds it and
+      // `adminStallDays` reads the fold — and internal STAFFING is not request ACTIVITY:
+      // without this, assigning an owner to a stalled request (the exact triage act) would
+      // erase the very stall chip that prompted it. (`updateBaloFeeBps` has the same latent
+      // bump; left as-is — fee overrides are rare and not a triage-surface act.)
+      const [updated] = await tx
+        .update(projectRequests)
+        .set({ baloOwnerUserId: input.ownerUserId, updatedAt: current.updatedAt })
+        .where(eq(projectRequests.id, input.requestId))
+        .returning({ id: projectRequests.id });
+
+      if (updated === undefined) {
+        throw new Error(`Failed to update project request: ${input.requestId}`);
+      }
+
+      // ⚠ FIXED METADATA CONTRACT. `audit_events` is APPEND-ONLY — no `updated_at`, no
+      // backfill — so this shape is unrecoverable if wrong; it is asserted key-by-key in
+      // `project-requests.integration.test.ts`. `from`/`to` are USER IDS and `null` means
+      // unset/cleared. NO names and NO roles: both are mutable elsewhere, so storing them
+      // would freeze a stale copy of somebody's identity into an immutable row.
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action: 'project_request.owner_assigned',
+          entityType: 'project_request',
+          entityId: input.requestId,
+          metadata: { from: current.baloOwnerUserId, to: input.ownerUserId },
+        },
+        tx
+      );
+
+      return {
+        outcome: 'assigned',
+        previousOwnerUserId: current.baloOwnerUserId,
+        ownerUserId: input.ownerUserId,
+        auditId: auditRow.id,
+      };
     });
   },
 

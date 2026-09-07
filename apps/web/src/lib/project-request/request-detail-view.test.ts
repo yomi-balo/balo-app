@@ -85,6 +85,7 @@ function ctx(overrides: Partial<RequestViewerContext> = {}): RequestViewerContex
     relationshipId: 'rel-1',
     canSeeContact: true,
     canSeeStaffOnly: false,
+    canSeeBaloPanel: false,
     ...overrides,
   };
 }
@@ -204,6 +205,52 @@ describe('mapRequestToDetailView — baloFeeBps audience boundary (BAL-358)', ()
       NOW
     );
     expect(view.baloFeeBps).toBeNull();
+  });
+});
+
+/**
+ * BAL-541 (D9) — the dual-DTO leak invariant, Detail-DTO half. `RequestDetailView` must
+ * structurally lack `baloOwner`/`notes` on EVERY lens, including admin/observer — the owner
+ * reaches an admin viewer only through `loadBaloPanel`'s separate `BaloPanelView` (its own
+ * positive control lives in `load-balo-panel.test.ts`), never through this mapper. The mirror
+ * of `mapRequestToDetailView — baloFeeBps audience boundary` above, one step stricter: THERE IS
+ * NO POSITIVE CASE HERE ON ANY LENS, and that absence is deliberate — do not "fix" it by adding
+ * one.
+ */
+describe('mapRequestToDetailView — Balo owner never leaks onto ANY lens (BAL-541 / D9)', () => {
+  const OWNER_SENTINEL = '00000000-beef-4bad-9541-000000000541';
+
+  it('client lens: carries neither baloOwner nor notes, and the owner id never serialises', () => {
+    const view = mapRequestToDetailView(
+      request({ baloOwnerUserId: OWNER_SENTINEL }),
+      ctx({ lens: 'client', archetype: 'participant', relationshipId: null }),
+      NOW
+    );
+    expect('baloOwner' in view).toBe(false);
+    expect('notes' in view).toBe(false);
+    expect(JSON.stringify(view)).not.toContain(OWNER_SENTINEL);
+  });
+
+  it('expert lens: carries neither baloOwner nor notes, and the owner id never serialises', () => {
+    const view = mapRequestToDetailView(
+      request({ baloOwnerUserId: OWNER_SENTINEL }),
+      ctx({ lens: 'expert', archetype: 'participant', relationshipId: 'rel-1' }),
+      NOW
+    );
+    expect('baloOwner' in view).toBe(false);
+    expect('notes' in view).toBe(false);
+    expect(JSON.stringify(view)).not.toContain(OWNER_SENTINEL);
+  });
+
+  it('admin/observer lens: SAME assertions — the owner reaches the admin only via loadBaloPanel', () => {
+    const view = mapRequestToDetailView(
+      request({ baloOwnerUserId: OWNER_SENTINEL }),
+      ctx({ lens: 'admin', archetype: 'observer', relationshipId: null, canSeeBaloPanel: true }),
+      NOW
+    );
+    expect('baloOwner' in view).toBe(false);
+    expect('notes' in view).toBe(false);
+    expect(JSON.stringify(view)).not.toContain(OWNER_SENTINEL);
   });
 });
 

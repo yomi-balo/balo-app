@@ -194,6 +194,69 @@ describe('usersRepository.findIdsByPlatformRoles', () => {
   });
 });
 
+describe('usersRepository.listPlatformStaff (BAL-541)', () => {
+  it('returns both staff roles (admin and super_admin)', async () => {
+    const admin = await userFactory({ platformRole: 'admin' });
+    const superAdmin = await userFactory({ platformRole: 'super_admin' });
+
+    const staff = await usersRepository.listPlatformStaff();
+    const ids = staff.map((s) => s.id);
+
+    expect(ids).toContain(admin.id);
+    expect(ids).toContain(superAdmin.id);
+  });
+
+  it('excludes an ordinary user role', async () => {
+    const plainUser = await userFactory({ platformRole: 'user' });
+
+    const staff = await usersRepository.listPlatformStaff();
+
+    expect(staff.map((s) => s.id)).not.toContain(plainUser.id);
+  });
+
+  it('excludes soft-deleted staff', async () => {
+    const liveAdmin = await userFactory({ platformRole: 'admin' });
+    const deletedAdmin = await userFactory({ platformRole: 'admin' });
+    await usersRepository.softDelete(deletedAdmin.id);
+
+    const staff = await usersRepository.listPlatformStaff();
+    const ids = staff.map((s) => s.id);
+
+    expect(ids).toContain(liveAdmin.id);
+    expect(ids).not.toContain(deletedAdmin.id);
+  });
+
+  it('projects exactly { id, firstName, lastName } — no PII columns leak', async () => {
+    await userFactory({ platformRole: 'admin', firstName: 'Adeeb', lastName: 'Khan' });
+
+    const [firstRow] = await usersRepository.listPlatformStaff();
+
+    if (firstRow === undefined) throw new Error('expected a row');
+    expect(Object.keys(firstRow).sort()).toEqual(['firstName', 'id', 'lastName']);
+  });
+
+  it('orders by firstName ascending, then lastName ascending', async () => {
+    const zoe = await userFactory({ platformRole: 'admin', firstName: 'Zoe', lastName: 'Adams' });
+    const adaLovelace = await userFactory({
+      platformRole: 'super_admin',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+    });
+    const adaAdams = await userFactory({
+      platformRole: 'admin',
+      firstName: 'Ada',
+      lastName: 'Adams',
+    });
+
+    const staff = await usersRepository.listPlatformStaff();
+    const ids = staff.map((s) => s.id);
+
+    // Ada Adams, then Ada Lovelace (same firstName, lastName tiebreak), then Zoe Adams.
+    expect(ids.indexOf(adaAdams.id)).toBeLessThan(ids.indexOf(adaLovelace.id));
+    expect(ids.indexOf(adaLovelace.id)).toBeLessThan(ids.indexOf(zoe.id));
+  });
+});
+
 describe('usersRepository.findWithCompany (BAL-345 deterministic session read)', () => {
   it('orders companyMemberships owner-first and excludes soft-deleted', async () => {
     const user = await userFactory();

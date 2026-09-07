@@ -597,6 +597,34 @@ describe('notificationRules', () => {
     });
   });
 
+  describe('project.request_owner_assigned (BAL-541)', () => {
+    it('is in-app only, to self, immediate', () => {
+      const rules = notificationRules['project.request_owner_assigned'];
+      expect(rules).toBeDefined();
+      expect(rules).toHaveLength(1);
+      const [rule] = rules!;
+      expect(rule).toBeDefined();
+      expect(rule!.channel).toBe('in-app');
+      expect(rule!.recipient).toBe('self');
+      expect(rule!.template).toBe('project-request-owner-assigned');
+      expect(rule!.timing).toBe('immediate');
+    });
+
+    it('suppresses a self-assignment and fires otherwise', () => {
+      const rules = notificationRules['project.request_owner_assigned']!;
+      const [rule] = rules;
+      expect(rule).toBeDefined();
+      expect(rule!.condition).toBeDefined();
+      const base = { event: 'project.request_owner_assigned', data: {} };
+      expect(
+        rule!.condition!({ ...base, payload: { userId: 'user-1', assignedByUserId: 'user-1' } })
+      ).toBe(false);
+      expect(
+        rule!.condition!({ ...base, payload: { userId: 'user-1', assignedByUserId: 'user-2' } })
+      ).toBe(true);
+    });
+  });
+
   describe('BAL-345 domain auto-join', () => {
     it('member_joined_via_domain notifies party_admins in-app ONLY (low-signal FYI)', () => {
       const rules = notificationRules['party.member_joined_via_domain'];

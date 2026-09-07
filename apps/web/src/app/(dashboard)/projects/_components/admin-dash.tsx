@@ -1,7 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, ArrowRight, Briefcase, Clock, Ticket, Zap } from 'lucide-react';
+import { AlertCircle, ArrowRight, Briefcase, Clock, Filter, Ticket, Zap } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { AdminPortfolioDTO } from '@/lib/projects-inbox/portfolio-row';
 import { StatTiles, type StatTileDescriptor } from './stat-tiles';
 import { AdminTriageCard } from './admin-triage-card';
@@ -16,9 +18,14 @@ import { PipelineKanban } from './pipeline-kanban';
 
 interface AdminDashProps {
   dto: AdminPortfolioDTO;
+  /** BAL-541 (D8) — the viewer's own user id, for the "Mine" kanban pill's client-side filter. */
+  viewerUserId: string;
 }
 
-export function AdminDash({ dto }: Readonly<AdminDashProps>): React.JSX.Element {
+export function AdminDash({ dto, viewerUserId }: Readonly<AdminDashProps>): React.JSX.Element {
+  // BAL-541 (D8) — client-side only; no searchParam, no loader-signature change.
+  const [mine, setMine] = useState(false);
+
   const tiles: StatTileDescriptor[] = [
     {
       key: 'untriaged',
@@ -86,8 +93,24 @@ export function AdminDash({ dto }: Readonly<AdminDashProps>): React.JSX.Element 
           </div>
           {/* Cross-links to the admin-only surfaces: the delivery oversight list (the
               pipeline ends at kickoff; the engagements list begins there) and promo-code
-              management (BAL-384). */}
+              management (BAL-384). BAL-541 (D8): the "Mine" pill sits BEFORE the cross-links —
+              the design ref puts it in the COLUMN header, but the shipped board has ONE shared
+              header for all columns, so a single section-level pill is the faithful adaptation. */}
           <div className="flex shrink-0 items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setMine(!mine)}
+              aria-pressed={mine}
+              className={cn(
+                'focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none',
+                mine
+                  ? 'border-primary/40 bg-primary/10 text-primary'
+                  : 'border-border text-muted-foreground'
+              )}
+            >
+              <Filter className="h-3 w-3" aria-hidden="true" />
+              Mine
+            </button>
             <Link
               href="/promo-codes"
               className="text-primary focus-visible:ring-ring inline-flex items-center gap-1 rounded text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
@@ -104,7 +127,7 @@ export function AdminDash({ dto }: Readonly<AdminDashProps>): React.JSX.Element 
             </Link>
           </div>
         </div>
-        <PipelineKanban columns={dto.kanban} />
+        <PipelineKanban columns={dto.kanban} mine={mine} viewerUserId={viewerUserId} />
       </section>
     </div>
   );

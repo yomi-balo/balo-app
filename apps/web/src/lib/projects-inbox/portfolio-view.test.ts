@@ -9,6 +9,7 @@ const {
   mockListPortfolioEngagements,
   mockListThreadSummaries,
   mockConversationIdsForContexts,
+  mockFindNamesByIds,
 } = vi.hoisted(() => ({
   mockListByCompany: vi.fn(),
   mockListAll: vi.fn(),
@@ -16,6 +17,9 @@ const {
   mockListPortfolioEngagements: vi.fn(),
   mockListThreadSummaries: vi.fn(),
   mockConversationIdsForContexts: vi.fn(),
+  // BAL-541 — the admin loader's Balo-owner name hydration. Every existing admin test throws
+  // without this: `loadAdminPortfolio` now calls `usersRepository.findNamesByIds` unconditionally.
+  mockFindNamesByIds: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -32,6 +36,9 @@ vi.mock('@balo/db', () => ({
   conversationsRepository: {
     listThreadSummaries: (...args: unknown[]) => mockListThreadSummaries(...args),
     conversationIdsForContexts: (...args: unknown[]) => mockConversationIdsForContexts(...args),
+  },
+  usersRepository: {
+    findNamesByIds: (...args: unknown[]) => mockFindNamesByIds(...args),
   },
   // Server-only window const; the real `@balo/shared/parties` helper runs unmocked.
   AUTO_ACCEPT_DAYS: 7,
@@ -68,6 +75,10 @@ function requestRow(overrides: Record<string, unknown> = {}): Record<string, unk
     expertTermsConfirmedAt: null,
     createdAt: day(10),
     updatedAt: day(10),
+    // BAL-541 — the SHARED portfolio query now selects the Balo owner id on every lens'
+    // request row. Unassigned by default; the D9 leak-invariant tests below override it with
+    // a sentinel to prove `loadClientPortfolio`/`loadExpertPortfolio` never carry it forward.
+    baloOwnerUserId: null,
     company: { id: 'company-1', name: 'Northwind' },
     relationships: [],
     ...overrides,
@@ -136,8 +147,13 @@ beforeEach(() => {
   mockListPortfolioEngagements.mockReset();
   mockListThreadSummaries.mockReset();
   mockConversationIdsForContexts.mockReset();
+  mockFindNamesByIds.mockReset();
   mockListPortfolioEngagements.mockResolvedValue([]);
   mockListThreadSummaries.mockResolvedValue([]);
+  // BAL-541 — `loadAdminPortfolio` calls `usersRepository.findNamesByIds` unconditionally (even
+  // with an empty owner-id list, matching the real repository's empty-input short-circuit).
+  // Individual tests override this when they need named owners.
+  mockFindNamesByIds.mockResolvedValue([]);
   // The read-only relationship→conversation resolution the portfolio loaders use.
   mockConversationIdsForContexts.mockImplementation(
     (refs: { contextType: string; contextId: string }[]) =>
@@ -574,5 +590,58 @@ describe('loadAdminPortfolio', () => {
     mockListPortfolioEngagements.mockResolvedValue([]);
     const dto = await loadAdminPortfolio(['client', 'admin'], NOW);
     expect(dto.isEmpty).toBe(true);
+  });
+});
+
+/**
+ * BAL-541 (D9) — the dual-DTO leak invariant, Portfolio-DTO half. `PortfolioRowView` (client +
+ * expert lens) must structurally lack `baloOwner` and never carry the owner id in ANY form;
+ * `AdminKanbanCard` (admin lens ONLY) is the one place it may surface. A uuid sentinel that
+ * cannot collide with any other id in either fixture payload proves absence via serialisation,
+ * not just via the key check (the `request-detail-view.test.ts` fee-concealment shape, D9).
+ *
+ * ⚠ Positive control lives in the same file as the negative controls, deliberately — so a
+ * reviewer sees both halves of the D9 statement side by side ("never here, always there").
+ */
+describe('BAL-541 (D9) — Balo owner never leaks into a client/expert portfolio row', () => {
+  const OWNER_SENTINEL = '00000000-beef-4bad-9541-000000000541';
+
+  it('loadClientPortfolio: PortfolioRowView carries neither baloOwner nor the owner id', async () => {
+    mockListByCompany.mockResolvedValue([
+      requestRow({ id: 'req-owned', baloOwnerUserId: OWNER_SENTINEL }),
+    ]);
+    const dto = await loadClientPortfolio(USER, ['client'], NOW);
+    expect(dto.rows).toHaveLength(1);
+    expect('baloOwner' in dto.rows[0]!).toBe(false);
+    expect(JSON.stringify(dto.rows)).not.toContain(OWNER_SENTINEL);
+  });
+
+  it('loadExpertPortfolio: PortfolioRowView carries neither baloOwner nor the owner id', async () => {
+    const expertUser = { ...USER, expertProfileId: 'expert-1' };
+    // `PortfolioInvitationRow` has no `baloOwnerUserId` column at all (§6.5 — the scalar lives
+    // only on the SHARED `queryPortfolioRequests` row). The extra field is passed anyway as a
+    // defensive belt-and-braces check: even if a future row shape carried it, `toExpertRowView`
+    // builds its return via an explicit object literal, so nothing would spread it through.
+    mockListInvitationsByExpert.mockResolvedValue([
+      invitationRow({ projectRequestId: 'req-9', baloOwnerUserId: OWNER_SENTINEL }),
+    ]);
+    const dto = await loadExpertPortfolio(expertUser, ['expert'], NOW);
+    expect(dto.rows).toHaveLength(1);
+    expect('baloOwner' in dto.rows[0]!).toBe(false);
+    expect(JSON.stringify(dto.rows)).not.toContain(OWNER_SENTINEL);
+  });
+
+  it('loadAdminPortfolio (positive control): the matching kanban card DOES carry baloOwner', async () => {
+    mockListAll.mockResolvedValue([
+      requestRow({ id: 'req-owned', status: 'experts_invited', baloOwnerUserId: OWNER_SENTINEL }),
+    ]);
+    mockFindNamesByIds.mockResolvedValue([
+      { id: OWNER_SENTINEL, firstName: 'Adeeb', lastName: 'Khan' },
+    ]);
+    const dto = await loadAdminPortfolio(['admin'], NOW);
+    const invitedColumn = dto.kanban.find((c) => c.stage === 'invited');
+    const card = invitedColumn?.items.find((i) => i.id === 'req-owned');
+    expect(card?.baloOwner).toEqual({ userId: OWNER_SENTINEL, name: 'Adeeb Khan' });
+    expect(mockFindNamesByIds).toHaveBeenCalledWith([OWNER_SENTINEL]);
   });
 });

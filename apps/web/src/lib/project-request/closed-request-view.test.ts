@@ -59,6 +59,7 @@ function ctx(overrides: Partial<RequestViewerContext> = {}): RequestViewerContex
     relationshipId: null,
     canSeeContact: false,
     canSeeStaffOnly: false,
+    canSeeBaloPanel: false,
     ...overrides,
   };
 }

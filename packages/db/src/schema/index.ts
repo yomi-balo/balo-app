@@ -60,3 +60,7 @@ export * from './reviews';
 export * from './review-invite-tokens';
 export * from './reschedule-proposals';
 export * from './representations';
+// BAL-541 — staff-internal notes. Its own file, and POLYMORPHIC (`entity_type` + an
+// FK-less `entity_id`), so it belongs to no single domain file — the `meeting-contexts.ts`
+// precedent for a seam table that points at several parents.
+export * from './internal-notes';

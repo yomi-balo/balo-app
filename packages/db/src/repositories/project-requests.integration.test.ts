@@ -7,6 +7,7 @@ import {
   companyMembers,
   categories,
   products,
+  projectRequests,
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
@@ -16,6 +17,7 @@ import {
   conversationMessages,
   requestExpertRelationships,
   auditEvents,
+  users,
 } from '../schema';
 import {
   userFactory,
@@ -1127,5 +1129,273 @@ describe('projectRequestsRepository.updateBaloFeeBps', () => {
     ).rejects.toThrow();
 
     await expect(feeOverrideAuditRows(created.id)).resolves.toHaveLength(0);
+  });
+});
+
+/**
+ * BAL-541 — the Balo-owner assignment. Every audit assertion here is KEY-BY-KEY on purpose:
+ * `audit_events` is append-only (no `updated_at`, no backfill), so a wrong metadata shape is
+ * unrecoverable and a `toMatchObject` would let an extra key through unnoticed.
+ */
+async function ownerAssignedAuditRows(
+  requestId: string
+): Promise<(typeof auditEvents.$inferSelect)[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityId, requestId),
+        eq(auditEvents.action, 'project_request.owner_assigned')
+      )
+    );
+}
+
+/** A live Balo staffer, eligible to be named a request's owner. */
+async function staffUser(platformRole: 'admin' | 'super_admin' = 'admin') {
+  return userFactory({ platformRole });
+}
+
+describe('projectRequestsRepository.assignOwner', () => {
+  it('names an owner, returns the previous value, and writes exactly one audit row', async () => {
+    const actor = await staffUser();
+    const owner = await staffUser();
+    const created = await projectRequestFactory();
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: owner.id,
+      actorUserId: actor.id,
+    });
+
+    expect(result.outcome).toBe('assigned');
+    if (result.outcome !== 'assigned') throw new Error('expected assigned');
+    expect(result.previousOwnerUserId).toBeNull();
+    expect(result.ownerUserId).toBe(owner.id);
+
+    const reloaded = await projectRequestsRepository.findByIdWithRelations(created.id);
+    expect(reloaded?.baloOwnerUserId).toBe(owner.id);
+
+    const audits = await ownerAssignedAuditRows(created.id);
+    expect(audits).toHaveLength(1);
+    const [audit] = audits;
+    if (audit === undefined) throw new Error('expected an audit row');
+    expect(audit.id).toBe(result.auditId);
+    expect(audit.actorUserId).toBe(actor.id);
+    expect(audit.entityType).toBe('project_request');
+    expect(audit.entityId).toBe(created.id);
+    // KEY-BY-KEY, camelCase, USER IDS ONLY — no names, no roles.
+    expect(audit.metadata).toEqual({ from: null, to: owner.id });
+  });
+
+  it('does NOT bump updated_at — internal staffing is not request activity', async () => {
+    // `updated_at` is the admin stall signal (`requestRecencyAt` folds it; `adminStallDays`
+    // reads the fold). On pre-fix source the `timestamps` helper's `$onUpdateFn` stamps a
+    // fresh value on every `.update()`, so this equality is the revert-proof for the fix.
+    const actor = await staffUser();
+    const owner = await staffUser();
+    const created = await projectRequestFactory();
+
+    const [before] = await db
+      .select({ updatedAt: projectRequests.updatedAt })
+      .from(projectRequests)
+      .where(eq(projectRequests.id, created.id));
+    if (before === undefined) throw new Error('expected the request row');
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: owner.id,
+      actorUserId: actor.id,
+    });
+    expect(result.outcome).toBe('assigned');
+
+    const [after] = await db
+      .select({ updatedAt: projectRequests.updatedAt })
+      .from(projectRequests)
+      .where(eq(projectRequests.id, created.id));
+    if (after === undefined) throw new Error('expected the request row');
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+  });
+
+  it('records both endpoints on a reassignment', async () => {
+    const actor = await staffUser();
+    const first = await staffUser();
+    const second = await staffUser('super_admin');
+    const created = await projectRequestFactory({ baloOwnerUserId: first.id });
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: second.id,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'assigned',
+      previousOwnerUserId: first.id,
+      ownerUserId: second.id,
+    });
+
+    const audits = await ownerAssignedAuditRows(created.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.metadata).toEqual({ from: first.id, to: second.id });
+  });
+
+  it('clears the owner as the SAME act — audited with to:null', async () => {
+    const actor = await staffUser();
+    const owner = await staffUser();
+    const created = await projectRequestFactory({ baloOwnerUserId: owner.id });
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: null,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'assigned',
+      previousOwnerUserId: owner.id,
+      ownerUserId: null,
+    });
+
+    const reloaded = await projectRequestsRepository.findByIdWithRelations(created.id);
+    expect(reloaded?.baloOwnerUserId).toBeNull();
+
+    const audits = await ownerAssignedAuditRows(created.id);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.metadata).toEqual({ from: owner.id, to: null });
+  });
+
+  it('is a no-op when the candidate already owns the request — no update, no audit row', async () => {
+    const actor = await staffUser();
+    const owner = await staffUser();
+    const created = await projectRequestFactory({ baloOwnerUserId: owner.id });
+
+    const before = await ownerAssignedAuditRows(created.id);
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: owner.id,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'unchanged', ownerUserId: owner.id });
+
+    const after = await ownerAssignedAuditRows(created.id);
+    expect(after).toHaveLength(before.length);
+
+    const reloaded = await projectRequestsRepository.findByIdWithRelations(created.id);
+    expect(reloaded?.baloOwnerUserId).toBe(owner.id);
+  });
+
+  it('is a no-op when clearing an already-unassigned request', async () => {
+    const actor = await staffUser();
+    const created = await projectRequestFactory();
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: null,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'unchanged', ownerUserId: null });
+    await expect(ownerAssignedAuditRows(created.id)).resolves.toHaveLength(0);
+  });
+
+  it('refuses a candidate who is not Balo staff, writing nothing', async () => {
+    const actor = await staffUser();
+    // `platformRole` defaults to `user` — an ordinary marketplace user.
+    const outsider = await userFactory();
+    const created = await projectRequestFactory();
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: outsider.id,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'not_staff', candidateUserId: outsider.id });
+
+    const reloaded = await projectRequestsRepository.findByIdWithRelations(created.id);
+    expect(reloaded?.baloOwnerUserId).toBeNull();
+    await expect(ownerAssignedAuditRows(created.id)).resolves.toHaveLength(0);
+  });
+
+  it('refuses a soft-deleted candidate as owner_not_found', async () => {
+    const actor = await staffUser();
+    const departed = await userFactory({ platformRole: 'admin', deletedAt: new Date() });
+    const created = await projectRequestFactory();
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: departed.id,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'owner_not_found', candidateUserId: departed.id });
+    await expect(ownerAssignedAuditRows(created.id)).resolves.toHaveLength(0);
+  });
+
+  it('refuses an unknown candidate id as owner_not_found', async () => {
+    const actor = await staffUser();
+    const created = await projectRequestFactory();
+    const ghost = randomUUID();
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: ghost,
+      actorUserId: actor.id,
+    });
+
+    expect(result).toEqual({ outcome: 'owner_not_found', candidateUserId: ghost });
+  });
+
+  /**
+   * The read side NEVER re-filters on role (BAL-541 / D7). Eligibility is checked once, at
+   * assignment; demoting the owner afterwards must not erase who was responsible.
+   */
+  it('keeps a DEMOTED owner readable on the request', async () => {
+    const actor = await staffUser();
+    const owner = await staffUser();
+    const created = await projectRequestFactory();
+
+    await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: owner.id,
+      actorUserId: actor.id,
+    });
+
+    await db.update(users).set({ platformRole: 'user' }).where(eq(users.id, owner.id));
+
+    const reloaded = await projectRequestsRepository.findByIdWithRelations(created.id);
+    expect(reloaded?.baloOwnerUserId).toBe(owner.id);
+  });
+
+  it('throws for an unknown request id', async () => {
+    const actor = await staffUser();
+    const owner = await staffUser();
+
+    await expect(
+      projectRequestsRepository.assignOwner({
+        requestId: randomUUID(),
+        ownerUserId: owner.id,
+        actorUserId: actor.id,
+      })
+    ).rejects.toThrow();
+  });
+
+  it('throws for a soft-deleted request, leaving nothing written', async () => {
+    const actor = await staffUser();
+    const owner = await staffUser();
+    const created = await projectRequestFactory({ deletedAt: new Date() });
+
+    await expect(
+      projectRequestsRepository.assignOwner({
+        requestId: created.id,
+        ownerUserId: owner.id,
+        actorUserId: actor.id,
+      })
+    ).rejects.toThrow();
+
+    await expect(ownerAssignedAuditRows(created.id)).resolves.toHaveLength(0);
   });
 });

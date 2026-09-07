@@ -38,6 +38,7 @@ import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickof
 import { loadConversationView } from '@/lib/project-request/conversation-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
 import { loadRequestFiles, type RequestFilesView } from '@/lib/request-files/load-request-files';
+import { loadBaloPanel, type BaloPanelView } from '@/lib/project-request/load-balo-panel';
 import {
   canManageBilling,
   type CapturedBillingDetails,
@@ -388,6 +389,14 @@ export default async function RequestDetailPage({
     requestFilesView = await loadRequestFiles(user, requestId);
   }
 
+  // BAL-541 — the "Balo" staff panel. Gated on `ctx.canSeeBaloPanel` (D13) so nobody else pays
+  // for the extra reads; renders on a CLOSED request too (D5), which is why this sits outside
+  // any `!isClosed` guard.
+  let baloPanel: BaloPanelView | null = null;
+  if (ctx.canSeeBaloPanel) {
+    baloPanel = await loadBaloPanel(user, request);
+  }
+
   return (
     <>
       {/* BAL-499 — publishes the request's title into the top bar's breadcrumb trail. Safe
@@ -405,6 +414,7 @@ export default async function RequestDetailPage({
         canClose={canClose}
         canCloseAsAdmin={canCloseAsAdmin}
         canDecline={canDecline}
+        baloPanel={baloPanel}
       />
     </>
   );

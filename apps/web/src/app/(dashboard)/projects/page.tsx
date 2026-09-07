@@ -72,7 +72,7 @@ export default async function ProjectsPage({
         inProgressCount={dto.lens === 'admin' ? dto.tiles.pipeline : dto.tiles.inProgress}
         totalCount={dto.lens === 'admin' ? dto.triage.length + dto.tiles.pipeline : dto.tiles.total}
       />
-      <ProjectsInboxShell dto={dto} />
+      <ProjectsInboxShell dto={dto} viewerUserId={user.id} />
     </>
   );
 }
