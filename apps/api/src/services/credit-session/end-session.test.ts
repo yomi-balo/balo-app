@@ -54,8 +54,9 @@ const {
   // assertable, matching the sibling `settle-from-presence.test.ts` pattern.
   mockWarn: vi.fn(),
   // Qodo follow-up — same reasoning as mockWarn: the mirror-direction mandate-flip `info` line
-  // (commit-time false, settlement-time active) needs to be assertable, since BAL-545 keys an
-  // Axiom monitor on it.
+  // (commit-time false, settlement-time active) needs to be assertable. It is deliberately
+  // un-alerted (expected-correct outcome — no Axiom monitor keys on it); BAL-545 pins its exact
+  // wording in the drift-guard describe at the bottom of this file.
   mockInfo: vi.fn(),
 }));
 
@@ -101,7 +102,13 @@ vi.mock('../credit/auto-topup.js', () => ({
 }));
 
 import type { CreditSession } from '@balo/db';
-import { endSession, reconcileStuckSettlement } from './end-session.js';
+import {
+  endSession,
+  reconcileStuckSettlement,
+  SETTLEMENT_MANDATE_REVIVED_MSG,
+  SETTLEMENT_NO_USABLE_MANDATE_MSG,
+  SETTLEMENT_PIN_DISAGREES_MSG,
+} from './end-session.js';
 
 const SESSION = {
   id: 'session_1',
@@ -573,8 +580,9 @@ describe('endSession', () => {
       ok: true,
       result: { settlementStatus: 'processing', overdraftSettledMinor: 900 },
     });
-    // Qodo follow-up: this direction of the flip must be greppable too — BAL-545 keys an Axiom
-    // monitor on it. `info`, not `warn`, since this is the expected-and-correct outcome.
+    // Qodo follow-up: this direction of the flip must be greppable too. `info`, not `warn`, since
+    // this is the expected-and-correct outcome — deliberately un-alerted (no Axiom monitor keys on
+    // it); BAL-545 pins its exact wording in the drift-guard describe at the bottom of this file.
     expect(mockInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         op: 'settleOverdraft',
@@ -949,5 +957,29 @@ describe('reconcileStuckSettlement', () => {
     await reconcileStuckSettlement(stuck({ stripePaymentIntentId: null }), { now: NOW });
     expect(mockRetrievePaymentIntentStatus).not.toHaveBeenCalled();
     expect(mockCreateOffSessionCharge).toHaveBeenCalled();
+  });
+});
+
+describe('BAL-545 — Axiom monitor strings are pinned verbatim', () => {
+  // The literals are DUPLICATED here on purpose. The Axiom monitors
+  // (docs/ops/settlement-consent-instrument-pin-monitors.md) match `msg` by EXACT equality, so
+  // rewording a constant in end-session.ts must fail THIS test — the `stringContaining`
+  // assertions above deliberately stay fragment-based and cannot catch a reword.
+  it('pins the no-usable-mandate warn (live monitor)', () => {
+    expect(SETTLEMENT_NO_USABLE_MANDATE_MSG).toBe(
+      'Overdraft with no usable mandate AT SETTLEMENT TIME — opening receivable + dunning'
+    );
+  });
+
+  it('pins the mandate-revived info (deliberately un-alerted; pinned so a dashboard count stays stable)', () => {
+    expect(SETTLEMENT_MANDATE_REVIVED_MSG).toBe(
+      'Overdraft mandate went from inactive at commit to active at settlement — charging on the fresh mandate'
+    );
+  });
+
+  it('pins the pin-disagrees warn (live monitor)', () => {
+    expect(SETTLEMENT_PIN_DISAGREES_MSG).toBe(
+      'Settlement instrument pin disagrees with the wallet — charging the live instrument (BAL-525: the pin is evidence and preference, never authority)'
+    );
   });
 });

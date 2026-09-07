@@ -56,6 +56,18 @@ import { publishSessionSettled, publishSettlementFailure } from './notify.js';
 import { settlementIdempotencyKey } from './settlement.js';
 import type { EndSessionServiceOutcome, EndSessionServiceResult } from './types.js';
 
+// SETTLEMENT_NO_USABLE_MANDATE_MSG and SETTLEMENT_PIN_DISAGREES_MSG are matched by EXACT string
+// equality by the BAL-545 Axiom monitors (docs/ops/settlement-consent-instrument-pin-monitors.md).
+// SETTLEMENT_MANDATE_REVIVED_MSG has no monitor; it is exported only so its wording is pinned.
+// Rewording a monitored one is a four-place change: this constant, the literal in
+// `end-session.test.ts`, the monitor's query in Axiom, and the runbook.
+export const SETTLEMENT_NO_USABLE_MANDATE_MSG =
+  'Overdraft with no usable mandate AT SETTLEMENT TIME — opening receivable + dunning';
+export const SETTLEMENT_MANDATE_REVIVED_MSG =
+  'Overdraft mandate went from inactive at commit to active at settlement — charging on the fresh mandate';
+export const SETTLEMENT_PIN_DISAGREES_MSG =
+  'Settlement instrument pin disagrees with the wallet — charging the live instrument (BAL-525: the pin is evidence and preference, never authority)';
+
 const log = createLogger('credit-session');
 
 type FailureReason = 'declined' | 'requires_action';
@@ -246,7 +258,7 @@ async function settleOverdraft(
         mandateActiveAtCommit: observed.mandateActiveAtCommit,
         mandateActiveNow: false,
       },
-      'Overdraft with no usable mandate AT SETTLEMENT TIME — opening receivable + dunning'
+      SETTLEMENT_NO_USABLE_MANDATE_MSG
     );
     await openReceivableAndDun(session, overdraftMinor, 'declined', null);
     return failed('failed');
@@ -257,9 +269,11 @@ async function settleOverdraft(
   // when `end()`/`settleFromPresence()` ran) but the fresh read here — the one this PR added —
   // now finds a live one, so settlement proceeds to charge. That is a real behavioural change
   // this PR introduces (previously a commit-time-false mandate meant the debt could never be
-  // charged), so it needs its own greppable, stable line — BAL-545 keys an Axiom monitor on it.
-  // `info`, not `warn`: this is the expected-and-correct outcome of re-reading consent live
-  // (O3's whole point), not an anomaly an operator needs to act on.
+  // charged), so it needs its own greppable, stable line. It is DELIBERATELY un-alerted — no Axiom
+  // monitor keys on it (a dashboard count is optional): `info`, not `warn`, because this is the
+  // expected-and-correct outcome of re-reading consent live (O3's whole point), not an anomaly an
+  // operator needs to act on. BAL-545 exports it as `SETTLEMENT_MANDATE_REVIVED_MSG` so its
+  // wording can be pinned verbatim alongside the two monitored lines.
   if (observed.mandateActiveAtCommit === false) {
     log.info(
       {
@@ -270,7 +284,7 @@ async function settleOverdraft(
         mandateActiveAtCommit: observed.mandateActiveAtCommit,
         mandateActiveNow: true,
       },
-      'Overdraft mandate went from inactive at commit to active at settlement — charging on the fresh mandate'
+      SETTLEMENT_MANDATE_REVIVED_MSG
     );
   }
 
@@ -304,8 +318,7 @@ async function settleOverdraft(
         pinnedAt: session.settlementInstrumentPinnedAt,
         mandateActiveAtCommit: observed.mandateActiveAtCommit,
       },
-      'Settlement instrument pin disagrees with the wallet — charging the live instrument ' +
-        '(BAL-525: the pin is evidence and preference, never authority)'
+      SETTLEMENT_PIN_DISAGREES_MSG
     );
   }
 
