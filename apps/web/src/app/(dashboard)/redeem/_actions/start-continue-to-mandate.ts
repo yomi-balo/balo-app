@@ -4,6 +4,7 @@ import 'server-only';
 
 import { creditWalletsRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { refuseMoneyActionUnderImpersonation } from '@/lib/auth/impersonation';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
@@ -45,6 +46,21 @@ export async function startContinueToMandate(): Promise<StartContinueToMandateRe
   try {
     user = await requireOnboardedUser();
   } catch {
+    return { status: 'forbidden' };
+  }
+
+  // BAL-528 (fix round 3: reordered ahead of the MANAGE_BILLING read, human pre-merge review) —
+  // opens an off-session mandate SetupIntent, i.e. "modifying payment methods" in the skill's
+  // blocked list. Checked BEFORE `hasCapability` so a refusal never pays for a membership DB
+  // round-trip — the same ordering `requireBillingActor()` uses on the credit chokepoint. Returns
+  // the existing non-leaking `forbidden` arm — no new copy.
+  if (
+    refuseMoneyActionUnderImpersonation(user, {
+      action: 'startContinueToMandate',
+      companyId: user.companyId,
+      actorUserId: user.id,
+    })
+  ) {
     return { status: 'forbidden' };
   }
 

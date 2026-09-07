@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRouteDir, scanRouteSources, type ScannedFile } from './_source-scan';
+import { resolveRouteDir, scanRouteSources, occurrences, type ScannedFile } from './_source-scan';
 
 /**
  * BAL-524 — structural invariant: THE `'card_is_established_by_this_same_operation'` WRITE-GUARD
@@ -59,17 +59,6 @@ const SCAN_ROOTS: readonly ScanRoot[] = [
 ];
 
 const WEB_ACTIONS_FILE = 'web:lib/credit/actions.ts';
-
-/** How many times `needle` occurs in `haystack`, non-overlapping — an `indexOf` loop, no regex. */
-function occurrences(haystack: string, needle: string): number {
-  let count = 0;
-  let i = haystack.indexOf(needle);
-  while (i !== -1) {
-    count += 1;
-    i = haystack.indexOf(needle, i + needle.length);
-  }
-  return count;
-}
 
 /**
  * Every scanned file across all three roots, `rel` prefixed `${label}:` so files from different

@@ -193,7 +193,7 @@ Key rules:
 
 - Only `platformRole: 'admin'` or `super_admin'` can start impersonation
 - Session carries `isImpersonating: true` flag during impersonation
-- Destructive actions (payments, password change, account deletion, email change) must check `session.isImpersonating` and throw — `withAuth()` blocks these by default unless `{ allowImpersonation: true }` is passed
+- Destructive actions (payments, password change, account deletion, email change) must refuse under impersonation — check `SessionUser.isImpersonating` (declared on `SessionUser` in `apps/web/src/lib/auth/session.ts`; never `SessionData`, which carries no such field). The INTENDED home for this is a throw-by-default `withAuth()` gate, opted out of via `{ allowImpersonation: true }` (sketched in [references/webhooks-sessions.md](references/webhooks-sessions.md)) — but that gate is NOT BUILT today: `WithAuthOptions` (`apps/web/src/lib/auth/with-auth.ts`) carries only `allowUnonboarded`, no impersonation branch exists. Until it ships, each seam carries its own refusal — e.g. `requireBillingActor()` on the credit surface (BAL-528) returns that seam's own typed refusal rather than throwing, since a throw there would be swallowed by the action's own `catch` and rendered as generic retry copy.
 - Impersonation cookie has a 1-hour max-age (not 7 days like normal sessions)
 
 ## Key Rules

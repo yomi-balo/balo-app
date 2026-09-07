@@ -114,6 +114,10 @@ import {
   type StartPurchaseInput,
   type SaveConfigResult,
 } from './actions';
+// BAL-528 — deliberately the REAL module, never mocked: the wiring these tests exercise is
+// whether `requireBillingActor()` actually calls the real predicate, so mocking it away would
+// prove nothing.
+import { IMPERSONATION_REFUSAL_MESSAGE } from '@/lib/auth/impersonation';
 
 const CLIENT_REQUEST_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -1473,6 +1477,115 @@ describe('credit actions', () => {
       );
       const [, meta] = mockLogError.mock.calls[0] as [string, Record<string, unknown>];
       expect(JSON.stringify(meta)).not.toContain('dana@northwind.test');
+    });
+  });
+
+  // ── BAL-528 — destructive money actions refuse under an impersonated session ────────────────
+  //
+  // INERT TODAY (no impersonation entry point exists), but the guard is real code and must be
+  // proven against the REAL predicate — `@/lib/auth/impersonation` is deliberately NOT mocked
+  // anywhere in this file. Every case below sets `isImpersonating: true` on the mocked session
+  // user; `mockRequireUser` already drives both `requireUser` and `requireOnboardedUser` (see the
+  // `@/lib/auth/session` mock above), so no new mock plumbing is needed.
+  describe('BAL-528 impersonation refusal', () => {
+    beforeEach(() => {
+      mockRequireUser.mockResolvedValue({ id: 'user-1', isImpersonating: true });
+    });
+
+    // Six mutations, one table — near-identical bodies otherwise, which is exactly the shape
+    // `npx jscpd` flags against SonarCloud's <3% new-code duplication gate.
+    it.each([
+      [
+        'startPurchaseAction',
+        () => startPurchaseAction(baseStartInput()),
+        [mockCreatePurchaseIntent, mockEnsureForCompany, mockCreateMandateSetupIntent],
+      ],
+      [
+        'saveLowBalanceConfigAction',
+        () =>
+          saveLowBalanceConfigAction({
+            lowBalanceMode: 'notify_only',
+            topupReloadMinor: 30_000,
+            topupThresholdMinor: 5_000,
+          }),
+        [mockUpdateConfig, mockEnsureForCompany],
+      ],
+      [
+        'armSavedCardMandateAction',
+        () => armSavedCardMandateAction({ clientRequestId: CLIENT_REQUEST_ID }),
+        [mockConfirmSavedCardMandate, mockFindByCompanyId],
+      ],
+      [
+        'startCardCaptureAction',
+        () => startCardCaptureAction(),
+        [mockCreateMandateSetupIntent, mockEnsureForCompany],
+      ],
+      [
+        'removeSavedCardAction',
+        () => removeSavedCardAction(),
+        [mockDetachSavedCardPaymentMethod, mockFindByCompanyId],
+      ],
+      [
+        'saveBillingEmailAction',
+        () => saveBillingEmailAction({ billingEmail: 'billing@northwind.test' }),
+        [mockSetCompanyBillingEmail],
+      ],
+    ] as const)(
+      '%s refuses under an impersonated session and fires none of its side effects',
+      async (_name, invoke, forbiddenMocks) => {
+        const res = await invoke();
+        expect(res).toMatchObject({ ok: false, error: 'unauthorized' });
+        for (const mock of forbiddenMocks) {
+          expect(mock).not.toHaveBeenCalled();
+        }
+      }
+    );
+
+    it("⚠ the refusal names the acting company, the specific action, and the session's user id", async () => {
+      await removeSavedCardAction();
+
+      expect(mockLogWarn).toHaveBeenCalledWith(IMPERSONATION_REFUSAL_MESSAGE, {
+        action: 'removeSavedCardAction',
+        companyId: 'company-1',
+        actorUserId: 'user-1',
+      });
+    });
+
+    it('⚠ the refusal precedes the membership read — no DB round-trip is paid to say no', async () => {
+      await removeSavedCardAction();
+
+      expect(mockHasCapability).not.toHaveBeenCalled();
+    });
+
+    it('getTopUpCreditStatusAction still ANSWERS under impersonation (the skill permits billing reads)', async () => {
+      mockFindByCompanyId.mockResolvedValue({ id: 'wallet-1', balanceMinor: 100_000 });
+      mockFindByIdempotencyKey.mockResolvedValue(undefined);
+
+      const res = await getTopUpCreditStatusAction('pi_1');
+
+      expect(res).toEqual({ status: 'pending', balanceMinor: 100_000 });
+      // Proves the exemption reaches the repo, not merely that nothing threw (mirrors the
+      // validatePromoAction exemption test directly below).
+      expect(mockFindByCompanyId).toHaveBeenCalled();
+      // A polled read firing a warn ~13× per receipt would be noise — it must stay silent.
+      expect(mockLogWarn).not.toHaveBeenCalledWith(
+        IMPERSONATION_REFUSAL_MESSAGE,
+        expect.anything()
+      );
+    });
+
+    it('validatePromoAction still ANSWERS under impersonation', async () => {
+      mockValidate.mockResolvedValue({ ok: true, promoCodeId: 'p1', grantMinor: 5_000 });
+
+      const res = await validatePromoAction('WELCOME50');
+
+      expect(res).toEqual({ ok: true, grantMinor: 5_000, promoCodeId: 'p1' });
+      // Proves the exemption reaches the repo, not merely that nothing threw.
+      expect(mockValidate).toHaveBeenCalled();
+      expect(mockLogWarn).not.toHaveBeenCalledWith(
+        IMPERSONATION_REFUSAL_MESSAGE,
+        expect.anything()
+      );
     });
   });
 });

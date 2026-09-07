@@ -2,6 +2,7 @@ import 'server-only';
 
 import { cache } from 'react';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { expertSearchabilityRepository } from '@balo/db';
 import { deriveExpertChecklist } from '@balo/shared/experts';
 import { log } from '@/lib/logging';
@@ -75,7 +76,10 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
   // not have this de-list attributed to the impersonated expert alone. Preferred over refusing
   // the reconcile (which would leave `searchable` stale): the write still happens, and the fact
   // of impersonation rides into `audit_events.metadata` alongside it.
-  const actorImpersonating = user.isImpersonating === true;
+  //
+  // ⚠ This is the ANNOTATION pattern, not BAL-528's refusal — the write proceeds. Both read the
+  // same predicate; only this call site tolerates the session.
+  const actorImpersonating = isImpersonatedSession(user);
 
   // D1/D3.2 — symmetric: writes BOTH directions, conditional (a no-op when the row already
   // matches). Best-effort: a reconcile failure must never break the render, which is why

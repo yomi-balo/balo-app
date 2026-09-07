@@ -5,6 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { promoCodesRepository, normalizePromoCode, type RedeemPromoResult } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { refuseMoneyActionUnderImpersonation } from '@/lib/auth/impersonation';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { trackServerAndFlush, PROMO_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -112,6 +113,22 @@ export async function redeemPromoCode(
   const parsed = redeemInputSchema.safeParse(input);
   if (!parsed.success) {
     return { status: 'not_found' };
+  }
+
+  // BAL-528 (fix round 3: reordered ahead of the MANAGE_BILLING read, human pre-merge review) — a
+  // redeem CREDITS a wallet; the skill blocks credit movement under an impersonated session.
+  // Checked BEFORE `hasCapability` so a refusal never pays for a membership DB round-trip — the
+  // same ordering `requireBillingActor()` uses on the credit chokepoint. Returns the existing
+  // non-leaking `forbidden` arm (see this file's result docblock) — no new copy, and
+  // indistinguishable from the capability refusal below by design.
+  if (
+    refuseMoneyActionUnderImpersonation(user, {
+      action: 'redeemPromoCode',
+      companyId: user.companyId,
+      actorUserId: user.id,
+    })
+  ) {
+    return { status: 'forbidden' };
   }
 
   const allowed = await hasCapability(user, CAPABILITIES.MANAGE_BILLING, {
