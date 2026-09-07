@@ -134,7 +134,12 @@ describe('assignRequestOwnerAction', () => {
       success: true,
       owner: { userId: OWNER_ID, name: 'Dana Ho' },
       changed: false,
-      analytics: { requestId: REQUEST_ID, previousOwnerPresent: true, selfAssigned: false },
+      analytics: {
+        requestId: REQUEST_ID,
+        previousOwnerPresent: true,
+        selfAssigned: false,
+        cleared: false,
+      },
     });
     expect(mockRunAssignOwnerFanout).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
@@ -147,7 +152,12 @@ describe('assignRequestOwnerAction', () => {
       success: true,
       owner: null,
       changed: false,
-      analytics: { requestId: REQUEST_ID, previousOwnerPresent: false, selfAssigned: false },
+      analytics: {
+        requestId: REQUEST_ID,
+        previousOwnerPresent: false,
+        selfAssigned: false,
+        cleared: true,
+      },
     });
   });
 
@@ -166,7 +176,12 @@ describe('assignRequestOwnerAction', () => {
       success: true,
       owner: { userId: OWNER_ID, name: 'Dana Ho' },
       changed: true,
-      analytics: { requestId: REQUEST_ID, previousOwnerPresent: false, selfAssigned: false },
+      analytics: {
+        requestId: REQUEST_ID,
+        previousOwnerPresent: false,
+        selfAssigned: false,
+        cleared: false,
+      },
     });
     expect(mockRunAssignOwnerFanout).toHaveBeenCalledWith({
       correlationId: 'audit-1',
@@ -198,7 +213,12 @@ describe('assignRequestOwnerAction', () => {
       success: true,
       owner: null,
       changed: true,
-      analytics: { requestId: REQUEST_ID, previousOwnerPresent: true, selfAssigned: false },
+      analytics: {
+        requestId: REQUEST_ID,
+        previousOwnerPresent: true,
+        selfAssigned: false,
+        cleared: true,
+      },
     });
     expect(mockRunAssignOwnerFanout).not.toHaveBeenCalled();
     expect(mockFindNamesByIds).not.toHaveBeenCalled();

@@ -297,6 +297,8 @@ export interface ProjectEventMap {
     previous_owner_present: boolean;
     /** The case the notification rule's `condition` suppresses — the actor assigned themselves. */
     self_assigned: boolean;
+    /** The owner was CLEARED (set to nobody) — without this a clear is indistinguishable from a reassignment. */
+    cleared: boolean;
   };
   [PROJECT_EVENTS.INTERNAL_NOTE_CREATED]: {
     entity_type: InternalNoteEntityType;

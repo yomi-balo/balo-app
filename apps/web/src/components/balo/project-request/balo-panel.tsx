@@ -83,6 +83,7 @@ export function BaloPanel({ requestId, view }: Readonly<BaloPanelProps>): React.
             request_id: res.analytics.requestId,
             previous_owner_present: res.analytics.previousOwnerPresent,
             self_assigned: res.analytics.selfAssigned,
+            cleared: res.analytics.cleared,
           });
         }
       });

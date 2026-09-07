@@ -25,7 +25,12 @@ export type AssignRequestOwnerActionResult =
       success: true;
       owner: { userId: string; name: string } | null;
       changed: boolean;
-      analytics: { requestId: string; previousOwnerPresent: boolean; selfAssigned: boolean };
+      analytics: {
+        requestId: string;
+        previousOwnerPresent: boolean;
+        selfAssigned: boolean;
+        cleared: boolean;
+      };
     }
   | { success: false; error: string; code?: 'denied' | 'gone' | 'not_staff' };
 
@@ -110,6 +115,7 @@ export async function assignRequestOwnerAction(
           requestId,
           previousOwnerPresent: result.ownerUserId !== null,
           selfAssigned: result.ownerUserId === user.id,
+          cleared: result.ownerUserId === null,
         },
       };
     }
@@ -147,6 +153,7 @@ export async function assignRequestOwnerAction(
         requestId,
         previousOwnerPresent: result.previousOwnerUserId !== null,
         selfAssigned: result.ownerUserId === user.id,
+        cleared: result.ownerUserId === null,
       },
     };
   } catch (error) {

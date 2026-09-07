@@ -908,6 +908,9 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // BAL-541 (D11): the new Balo owner alone — self-assign is suppressed upstream by the
   // rule's `condition`, so this template only ever renders for someone ELSE's assignment.
   'project-request-owner-assigned': (data) => {
+    // pending-MJ — NOTE for the checkpoint: the ticket's copy sketch was request-title-only
+    // ("You're now the Balo owner of {request title}"); the "for {company}" clause is a
+    // plan-level addition. Flag both the addition and the wording at MJ review.
     const title = (data.title as string) ?? 'a project request';
     const company = (data.clientCompanyName as string) ?? 'a client';
     const projectRequestId = data.projectRequestId as string | undefined;

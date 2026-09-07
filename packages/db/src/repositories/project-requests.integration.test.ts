@@ -7,6 +7,7 @@ import {
   companyMembers,
   categories,
   products,
+  projectRequests,
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
@@ -1185,6 +1186,35 @@ describe('projectRequestsRepository.assignOwner', () => {
     expect(audit.entityId).toBe(created.id);
     // KEY-BY-KEY, camelCase, USER IDS ONLY — no names, no roles.
     expect(audit.metadata).toEqual({ from: null, to: owner.id });
+  });
+
+  it('does NOT bump updated_at — internal staffing is not request activity', async () => {
+    // `updated_at` is the admin stall signal (`requestRecencyAt` folds it; `adminStallDays`
+    // reads the fold). On pre-fix source the `timestamps` helper's `$onUpdateFn` stamps a
+    // fresh value on every `.update()`, so this equality is the revert-proof for the fix.
+    const actor = await staffUser();
+    const owner = await staffUser();
+    const created = await projectRequestFactory();
+
+    const [before] = await db
+      .select({ updatedAt: projectRequests.updatedAt })
+      .from(projectRequests)
+      .where(eq(projectRequests.id, created.id));
+    if (before === undefined) throw new Error('expected the request row');
+
+    const result = await projectRequestsRepository.assignOwner({
+      requestId: created.id,
+      ownerUserId: owner.id,
+      actorUserId: actor.id,
+    });
+    expect(result.outcome).toBe('assigned');
+
+    const [after] = await db
+      .select({ updatedAt: projectRequests.updatedAt })
+      .from(projectRequests)
+      .where(eq(projectRequests.id, created.id));
+    if (after === undefined) throw new Error('expected the request row');
+    expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
   });
 
   it('records both endpoints on a reassignment', async () => {

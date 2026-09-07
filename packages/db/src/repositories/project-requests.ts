@@ -672,7 +672,10 @@ export const projectRequestsRepository = {
   }): Promise<AssignRequestOwnerResult> {
     return db.transaction(async (tx) => {
       const [current] = await tx
-        .select({ baloOwnerUserId: projectRequests.baloOwnerUserId })
+        .select({
+          baloOwnerUserId: projectRequests.baloOwnerUserId,
+          updatedAt: projectRequests.updatedAt,
+        })
         .from(projectRequests)
         .where(and(eq(projectRequests.id, input.requestId), isNull(projectRequests.deletedAt)))
         .for('update');
@@ -703,9 +706,16 @@ export const projectRequestsRepository = {
         }
       }
 
+      // ⚠ `updatedAt` is passed back EXPLICITLY to defeat the `timestamps` helper's
+      // `$onUpdateFn` (Drizzle applies it only when the column is ABSENT from `.set()`).
+      // `updated_at` is the admin stall signal — `requestRecencyAt` folds it and
+      // `adminStallDays` reads the fold — and internal STAFFING is not request ACTIVITY:
+      // without this, assigning an owner to a stalled request (the exact triage act) would
+      // erase the very stall chip that prompted it. (`updateBaloFeeBps` has the same latent
+      // bump; left as-is — fee overrides are rare and not a triage-surface act.)
       const [updated] = await tx
         .update(projectRequests)
-        .set({ baloOwnerUserId: input.ownerUserId })
+        .set({ baloOwnerUserId: input.ownerUserId, updatedAt: current.updatedAt })
         .where(eq(projectRequests.id, input.requestId))
         .returning({ id: projectRequests.id });
 

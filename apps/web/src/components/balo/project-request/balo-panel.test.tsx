@@ -267,7 +267,12 @@ describe('BaloPanel', () => {
       success: true,
       owner: { userId: STAFF_A_ID, name: 'Adeeb Khan' },
       changed: true,
-      analytics: { requestId: REQUEST_ID, previousOwnerPresent: false, selfAssigned: false },
+      analytics: {
+        requestId: REQUEST_ID,
+        previousOwnerPresent: false,
+        selfAssigned: false,
+        cleared: false,
+      },
     });
     const user = userEvent.setup();
     render(<BaloPanel requestId={REQUEST_ID} view={view()} />);
@@ -284,6 +289,7 @@ describe('BaloPanel', () => {
       request_id: REQUEST_ID,
       previous_owner_present: false,
       self_assigned: false,
+      cleared: false,
     });
   });
 
@@ -292,7 +298,12 @@ describe('BaloPanel', () => {
       success: true,
       owner: null,
       changed: true,
-      analytics: { requestId: REQUEST_ID, previousOwnerPresent: true, selfAssigned: false },
+      analytics: {
+        requestId: REQUEST_ID,
+        previousOwnerPresent: true,
+        selfAssigned: false,
+        cleared: true,
+      },
     });
     const user = userEvent.setup();
     render(
@@ -314,6 +325,7 @@ describe('BaloPanel', () => {
       request_id: REQUEST_ID,
       previous_owner_present: true,
       self_assigned: false,
+      cleared: true,
     });
   });
 
