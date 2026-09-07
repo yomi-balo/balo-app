@@ -26,7 +26,7 @@ vi.mock('@/lib/credit/actions', () => ({
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock('@/lib/stripe-loader', () => ({ getStripe: vi.fn(() => Promise.resolve(null)) }));
+vi.mock('@/lib/stripe/loader', () => ({ getStripe: vi.fn(() => Promise.resolve(null)) }));
 
 const mockTrack = vi.mocked(track);
 

@@ -48,6 +48,22 @@ function currentHref(): string {
  * a client-side navigation into that page could let a later rrweb full-snapshot meta frame
  * record the URL. Extending that invariant's app-router scan to all of
  * `SENSITIVE_PATH_PREFIXES` is the fix if it comes up.
+ *
+ * ⚠⚠ FIX ROUND 1 F12 (security S7) — BAL-529 §B added `redirect_status` / `setup_intent` /
+ * `setup_intent_client_secret` / `payment_intent` / `payment_intent_client_secret` to the
+ * query-param registry `redactSensitivePath` (and therefore `isSensitiveUrl`) consults. Because
+ * "sensitive" here is DERIVED from "redaction changes the URL", that one registry change
+ * silently drops `replayIntegration` for the WHOLE PAGE LOAD on `/settings/billing`, `/redeem`
+ * and `/billing/top-up` whenever a Stripe redirect return lands there — not just the moment the
+ * secret is on screen. This is DELIBERATE, not a regression: Session Replay is a THIRD-PARTY
+ * SINK with no equivalent to `before_send`'s per-field redaction (see the `beforeAddRecordingEvent`
+ * / rrweb-meta-frame limitation above — the same "cannot scrub, can only refuse" reasoning
+ * applies), so refusing the whole recording is the only sound option on a page that may carry a
+ * live `setup_intent_client_secret` in its URL. The trade is a real, if narrow, observability
+ * regression on three payments surfaces — `sentry-scrub.test.ts`'s
+ * `isSensitiveUrl — BAL-529 fix-round-1 F12` suite pins exactly which landings pay it, so a
+ * future prefix/param addition to the registry is a visible diff here rather than a silent
+ * Replay outage nobody notices.
  */
 const onSensitiveLanding = isSensitiveUrl(currentHref());
 

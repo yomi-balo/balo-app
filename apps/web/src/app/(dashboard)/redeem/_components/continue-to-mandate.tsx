@@ -6,8 +6,11 @@ import { toast } from 'sonner';
 import { CheckCircle2, CreditCard, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { track, PROMO_EVENTS } from '@/lib/analytics';
-import { getStripe } from '@/lib/stripe-loader';
-import { useSetupIntentRedirectReturn } from '@/lib/stripe/use-setup-intent-redirect-return';
+import { getStripe } from '@/lib/stripe/loader';
+import {
+  useSetupIntentRedirectReturn,
+  SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE,
+} from '@/lib/stripe/use-setup-intent-redirect-return';
 import {
   forgetSetupIntent,
   isSetupIntentReturnBound,
@@ -38,7 +41,8 @@ type Phase =
   | { kind: 'prompt' }
   | { kind: 'form'; clientSecret: string; publishableKey: string }
   | { kind: 'active' }
-  | { kind: 'finishing' }
+  // BAL-529 M5 — `slow` is `true` once the bounded processing fallback has fired.
+  | { kind: 'finishing'; slow: boolean }
   | { kind: 'captured' }
   | { kind: 'error'; message: string };
 
@@ -194,8 +198,19 @@ export function ContinueToMandate({
   // actually started. An unbound/crafted return is completely inert (see the hook's docblock).
   // `handleCaptured` is both the inline (non-redirect) success handler AND the hook's
   // `onSucceeded`.
-  const handleRedirectStarted = useCallback(() => setPhase({ kind: 'finishing' }), []);
-  const handleRedirectProcessing = useCallback(() => setPhase({ kind: 'finishing' }), []);
+  const handleRedirectStarted = useCallback(() => setPhase({ kind: 'finishing', slow: false }), []);
+  const handleRedirectProcessing = useCallback(
+    () => setPhase({ kind: 'finishing', slow: false }),
+    []
+  );
+  // BAL-529 M5 — the functional guard makes this callback incapable of clobbering a phase it
+  // did not set (e.g. a late-firing timer after the intent already resolved and `phase` moved
+  // on to `captured`/`error`).
+  const handleRedirectProcessingTimeout = useCallback(
+    () =>
+      setPhase((prev) => (prev.kind === 'finishing' ? { kind: 'finishing', slow: true } : prev)),
+    []
+  );
   const handleRedirectFailed = useCallback(
     (message: string) => setPhase({ kind: 'error', message }),
     []
@@ -203,9 +218,11 @@ export function ContinueToMandate({
 
   useSetupIntentRedirectReturn({
     retryMessage: REDIRECT_RETRY_MESSAGE,
+    surface: 'redeem',
     onStarted: handleRedirectStarted,
     onSucceeded: handleCaptured,
     onProcessing: handleRedirectProcessing,
+    onProcessingTimeout: handleRedirectProcessingTimeout,
     onFailed: handleRedirectFailed,
   });
 
@@ -246,9 +263,19 @@ export function ContinueToMandate({
   if (phase.kind === 'finishing') {
     return (
       <div className="border-border bg-card flex items-start gap-3 rounded-xl border p-5">
-        <Loader2 className="text-primary mt-0.5 h-5 w-5 shrink-0 animate-spin" aria-hidden="true" />
-        <p className="text-foreground text-sm leading-relaxed">
-          Finishing up — just confirming your card…
+        {!phase.slow && (
+          <Loader2
+            className="text-primary mt-0.5 h-5 w-5 shrink-0 animate-spin"
+            aria-hidden="true"
+          />
+        )}
+        {/* FIX ROUND 1 F7 (UX U2) — `aria-live="polite"` so a screen-reader user who tabbed away
+            during the 15s wait still hears the M5 fallback swap. NOT role="alert" (this is not
+            an error) and NOT role="status" (SonarCloud S6819). */}
+        <p className="text-foreground text-sm leading-relaxed" aria-live="polite">
+          {phase.slow
+            ? SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE
+            : 'Finishing up — just confirming your card…'}
         </p>
       </div>
     );

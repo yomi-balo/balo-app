@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook, waitFor, act } from '@testing-library/react';
+import { track, STRIPE_REDIRECT_EVENTS } from '@/lib/analytics';
 import { rememberSetupIntent } from './setup-intent-return';
 
 const { mockRetrieveSetupIntent, mockGetStripe } = vi.hoisted(() => {
@@ -13,9 +14,12 @@ const { mockRetrieveSetupIntent, mockGetStripe } = vi.hoisted(() => {
     ),
   };
 });
-vi.mock('@/lib/stripe-loader', () => ({ getStripe: mockGetStripe }));
+vi.mock('@/lib/stripe/loader', () => ({ getStripe: mockGetStripe }));
 
-import { useSetupIntentRedirectReturn } from './use-setup-intent-redirect-return';
+import {
+  useSetupIntentRedirectReturn,
+  PROCESSING_FALLBACK_DELAY_MS,
+} from './use-setup-intent-redirect-return';
 
 const RETRY_MESSAGE = 'That card could not be confirmed. Try again.';
 const PREV_PK = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
@@ -29,15 +33,19 @@ function setReturnUrl(setupIntentId = 'seti_x'): void {
 }
 
 function makeCallbacks(): {
+  surface: 'settings';
   onStarted: ReturnType<typeof vi.fn<() => void>>;
   onSucceeded: ReturnType<typeof vi.fn<() => void>>;
   onProcessing: ReturnType<typeof vi.fn<() => void>>;
+  onProcessingTimeout: ReturnType<typeof vi.fn<() => void>>;
   onFailed: ReturnType<typeof vi.fn<(message: string) => void>>;
 } {
   return {
+    surface: 'settings',
     onStarted: vi.fn<() => void>(),
     onSucceeded: vi.fn<() => void>(),
     onProcessing: vi.fn<() => void>(),
+    onProcessingTimeout: vi.fn<() => void>(),
     onFailed: vi.fn<(message: string) => void>(),
   };
 }
@@ -337,9 +345,11 @@ describe('useSetupIntentRedirectReturn', () => {
       (props: { onSucceeded: () => void }) =>
         useSetupIntentRedirectReturn({
           retryMessage: RETRY_MESSAGE,
+          surface: 'settings',
           onStarted: cb.onStarted,
           onSucceeded: props.onSucceeded,
           onProcessing: cb.onProcessing,
+          onProcessingTimeout: cb.onProcessingTimeout,
           onFailed: cb.onFailed,
         }),
       { initialProps: { onSucceeded: cb.onSucceeded } }
@@ -354,5 +364,271 @@ describe('useSetupIntentRedirectReturn', () => {
     expect(secondOnSucceeded).toHaveBeenCalledTimes(1);
     expect(cb.onSucceeded).not.toHaveBeenCalled();
     expect(mockGetStripe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BAL-529 §D — unbound-return observability', () => {
+  it('fires exactly ONE stripe_redirect_return_unbound with { surface, reason: no_binding } and NOTHING else', () => {
+    setReturnUrl('seti_x');
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+
+    expect(track).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledWith(STRIPE_REDIRECT_EVENTS.RETURN_UNBOUND, {
+      surface: 'settings',
+      reason: 'no_binding',
+    });
+  });
+
+  it('reason: id_mismatch for a mismatched binding', () => {
+    rememberSetupIntent('seti_mine');
+    setReturnUrl('seti_theirs');
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+
+    expect(track).toHaveBeenCalledWith(STRIPE_REDIRECT_EVENTS.RETURN_UNBOUND, {
+      surface: 'settings',
+      reason: 'id_mismatch',
+    });
+  });
+
+  it('reason: duplicate_params for a duplicated pair', () => {
+    globalThis.history.replaceState(
+      {},
+      '',
+      '/settings/billing?setup_intent=seti_evil&setup_intent_client_secret=seti_evil_secret&setup_intent=seti_real&setup_intent_client_secret=seti_real_secret'
+    );
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+
+    expect(track).toHaveBeenCalledWith(STRIPE_REDIRECT_EVENTS.RETURN_UNBOUND, {
+      surface: 'settings',
+      reason: 'duplicate_params',
+    });
+  });
+
+  it('a bound return fires NO unbound event', async () => {
+    rememberSetupIntent('seti_x');
+    setReturnUrl('seti_x');
+    mockRetrieveSetupIntent.mockResolvedValue({
+      setupIntent: { id: 'seti_x', status: 'succeeded' },
+    });
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+
+    await waitFor(() => expect(cb.onSucceeded).toHaveBeenCalledTimes(1));
+    expect(track).not.toHaveBeenCalledWith(
+      STRIPE_REDIRECT_EVENTS.RETURN_UNBOUND,
+      expect.anything()
+    );
+  });
+
+  it('no params at all fires NO event', () => {
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('⚠ the event does NOT break inertness: no callback, location.search unchanged, binding untouched', () => {
+    rememberSetupIntent('seti_mine');
+    setReturnUrl('seti_theirs');
+    const searchBefore = globalThis.location.search;
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+
+    expect(cb.onStarted).not.toHaveBeenCalled();
+    expect(cb.onSucceeded).not.toHaveBeenCalled();
+    expect(cb.onProcessing).not.toHaveBeenCalled();
+    expect(cb.onFailed).not.toHaveBeenCalled();
+    expect(mockRetrieveSetupIntent).not.toHaveBeenCalled();
+    expect(globalThis.location.search).toBe(searchBefore);
+    expect(globalThis.sessionStorage.getItem('balo.stripe.setup-intent.v1')).toBe('seti_mine');
+  });
+
+  it('surface: redeem is reported when the redeem surface mounts the hook', () => {
+    setReturnUrl('seti_x');
+
+    renderHook(() =>
+      useSetupIntentRedirectReturn({
+        retryMessage: RETRY_MESSAGE,
+        surface: 'redeem',
+        onStarted: vi.fn(),
+        onSucceeded: vi.fn(),
+        onProcessing: vi.fn(),
+        onProcessingTimeout: vi.fn(),
+        onFailed: vi.fn(),
+      })
+    );
+
+    expect(track).toHaveBeenCalledWith(STRIPE_REDIRECT_EVENTS.RETURN_UNBOUND, {
+      surface: 'redeem',
+      reason: 'no_binding',
+    });
+  });
+});
+
+/**
+ * BAL-529 M5 — drains the hook's `getStripe().then().catch().then()` chain (real Promise
+ * microtasks — NOT part of Vitest's faked timer system, which only intercepts
+ * setTimeout/setInterval/Date) without tying the fake clock to real wall time. Deliberately NOT
+ * `vi.useFakeTimers({ shouldAdvanceTime: true })` + `waitFor`: that ties the fake 15s delay to
+ * REAL elapsed wall-clock time, which is exactly what makes a timer test flake on a loaded
+ * machine (memory `reference_web_timer_tests_flake_under_local_load`) — several hops are needed
+ * to drain the chain, so a fixed count is used rather than a real-time-bounded `waitFor`.
+ */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+describe('BAL-529 M5 — the bounded processing timer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('M5 — onProcessingTimeout fires exactly once, PROCESSING_FALLBACK_DELAY_MS after onProcessing', async () => {
+    rememberSetupIntent('seti_x');
+    setReturnUrl('seti_x');
+    mockRetrieveSetupIntent.mockResolvedValue({
+      setupIntent: { id: 'seti_x', status: 'processing' },
+    });
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+    await act(flushMicrotasks);
+    expect(cb.onProcessing).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PROCESSING_FALLBACK_DELAY_MS - 1);
+    });
+    expect(cb.onProcessingTimeout).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(cb.onProcessingTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠⚠ M5 — the timeout does NOT clear the URL params and does NOT clear the binding', async () => {
+    rememberSetupIntent('seti_x');
+    setReturnUrl('seti_x');
+    const searchBefore = globalThis.location.search;
+    mockRetrieveSetupIntent.mockResolvedValue({
+      setupIntent: { id: 'seti_x', status: 'processing' },
+    });
+    const cb = makeCallbacks();
+
+    renderHook(() => useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb }));
+    await act(flushMicrotasks);
+    expect(cb.onProcessing).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PROCESSING_FALLBACK_DELAY_MS);
+    });
+
+    expect(cb.onProcessingTimeout).toHaveBeenCalledTimes(1);
+    // The ticket's hard constraint — a `processing` intent is still live, and a refresh must
+    // still be able to re-check it.
+    expect(globalThis.location.search).toBe(searchBefore);
+    expect(globalThis.sessionStorage.getItem('balo.stripe.setup-intent.v1')).toBe('seti_x');
+  });
+
+  it('M5 — no timer is armed on succeeded / failed / unresolved', async () => {
+    const scenarios = [
+      {
+        label: 'succeeded',
+        arrange: (): void => {
+          mockRetrieveSetupIntent.mockResolvedValue({
+            setupIntent: { id: 'seti_x', status: 'succeeded' },
+          });
+        },
+        assertSettled: (cb: ReturnType<typeof makeCallbacks>): void => {
+          expect(cb.onSucceeded).toHaveBeenCalledTimes(1);
+        },
+      },
+      {
+        label: 'failed',
+        arrange: (): void => {
+          mockRetrieveSetupIntent.mockResolvedValue({
+            setupIntent: { id: 'seti_x', status: 'requires_payment_method' },
+          });
+        },
+        assertSettled: (cb: ReturnType<typeof makeCallbacks>): void => {
+          expect(cb.onFailed).toHaveBeenCalledTimes(1);
+        },
+      },
+      {
+        label: 'unresolved',
+        arrange: (): void => {
+          mockRetrieveSetupIntent.mockRejectedValue(new Error('network blip'));
+        },
+        assertSettled: (cb: ReturnType<typeof makeCallbacks>): void => {
+          expect(cb.onFailed).toHaveBeenCalledTimes(1);
+        },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      globalThis.sessionStorage.clear();
+      rememberSetupIntent('seti_x');
+      setReturnUrl('seti_x');
+      scenario.arrange();
+      const cb = makeCallbacks();
+
+      const { unmount } = renderHook(() =>
+        useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb })
+      );
+      await act(flushMicrotasks);
+      scenario.assertSettled(cb);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PROCESSING_FALLBACK_DELAY_MS + 1_000);
+      });
+
+      expect(cb.onProcessingTimeout).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
+  it('M5 — unmounting before the bound clears the timer (no callback after unmount)', async () => {
+    rememberSetupIntent('seti_x');
+    setReturnUrl('seti_x');
+    mockRetrieveSetupIntent.mockResolvedValue({
+      setupIntent: { id: 'seti_x', status: 'processing' },
+    });
+    const cb = makeCallbacks();
+    // ⚠ The `cancelled` flag ALSO guards the callback, so a behavioural assertion alone
+    // ("no callback after unmount") stays green even if `clearTimeout` itself is deleted from
+    // the cleanup — that guard is redundant-by-design defence in depth, not proof this specific
+    // line runs. Spy on the real `clearTimeout` so dropping the call is directly observable.
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    const { unmount } = renderHook(() =>
+      useSetupIntentRedirectReturn({ retryMessage: RETRY_MESSAGE, ...cb })
+    );
+    await act(flushMicrotasks);
+    expect(cb.onProcessing).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PROCESSING_FALLBACK_DELAY_MS + 1_000);
+    });
+
+    expect(cb.onProcessingTimeout).not.toHaveBeenCalled();
   });
 });

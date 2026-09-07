@@ -157,7 +157,10 @@ describe('credit actions', () => {
       clientSecret: 'pi_secret',
       paymentIntentId: 'pi_1',
     });
-    mockCreateMandateSetupIntent.mockResolvedValue({ clientSecret: 'seti_secret' });
+    mockCreateMandateSetupIntent.mockResolvedValue({
+      clientSecret: 'seti_secret',
+      setupIntentId: 'seti_new_card',
+    });
     mockConfirmSavedCardMandate.mockResolvedValue({ status: 'succeeded', clientSecret: null });
     mockPublish.mockResolvedValue(undefined);
   });
@@ -216,7 +219,11 @@ describe('credit actions', () => {
         outcome: 'needs_client_confirmation',
         clientSecret: 'pi_secret',
         paymentIntentId: 'pi_1',
-        mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
+        mandate: {
+          outcome: 'requires_action',
+          clientSecret: 'seti_secret',
+          setupIntentId: 'seti_new_card',
+        },
         walletId: 'wallet-1',
       });
       // BAL-524 — the D3 exemption: this purchase ESTABLISHES the card, so the guard is named off.
@@ -262,6 +269,34 @@ describe('credit actions', () => {
       expect(res).toMatchObject({
         ok: true,
         mandate: { outcome: 'requires_action', clientSecret: 'seti_secret' },
+      });
+    });
+
+    it('§G — the new_card mandate arm carries the SetupIntent id through to the browser', async () => {
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'new_card' }));
+      expect(res).toMatchObject({
+        ok: true,
+        mandate: {
+          outcome: 'requires_action',
+          clientSecret: 'seti_secret',
+          setupIntentId: 'seti_new_card',
+        },
+      });
+    });
+
+    it('§G — the saved-card mandate arm states setupIntentId: null', async () => {
+      mockConfirmSavedCardMandate.mockResolvedValue({
+        status: 'requires_action',
+        clientSecret: 'seti_saved_secret',
+      });
+      const res = await startPurchaseAction(baseStartInput({ paymentMethodSource: 'saved_card' }));
+      expect(res).toMatchObject({
+        ok: true,
+        mandate: {
+          outcome: 'requires_action',
+          clientSecret: 'seti_saved_secret',
+          setupIntentId: null,
+        },
       });
     });
 

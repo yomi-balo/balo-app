@@ -14,6 +14,7 @@ import {
 } from '@/lib/credit/actions';
 import { formatAud } from '@/lib/credit/display-constants';
 import type { PaymentMethodSource } from '@/lib/credit/api-client';
+import { forgetSetupIntent, rememberSetupIntent } from '@/lib/stripe/setup-intent-return';
 import type { PurchaseCompletion } from './types';
 
 interface PayActionProps {
@@ -201,14 +202,63 @@ export function PayAction({
         }
       }
       if (savedPaymentMethodId === null) return false;
+      /**
+       * BAL-529 §G — BIND BEFORE CONFIRMING. This is the last `confirmSetup` in the app whose
+       * `return_url` was `globalThis.location.href` with no binding. Nothing is exploitable
+       * today — every composer render site was chased and none hosts a `setup_intent*`
+       * reader — but that held for an UNENFORCED reason ("the composer never renders on a page
+       * hosting a redirect-return reader"), and nothing stopped a future ticket from breaking
+       * it. Origin + pathname only: with `location.href`, a crafted `?setup_intent=` already in
+       * the address bar would be baked into the redirect and Stripe would append a SECOND,
+       * genuine pair after it — `URLSearchParams.get` reads the FIRST, so the buyer's own
+       * return would go unmatched (the A2 shape, #277).
+       *
+       * FIX ROUND 1 F11(a) (review MINOR-1 / security S9) — ⚠ ORIGIN + PATHNAME ONLY ALSO
+       * DISCARDS ANY QUERY STATE the host page carried across the 3DS round trip — the exact
+       * opposite of what §F's `clearSetupIntentReturnParams` was built to preserve (it deletes
+       * only Stripe's three params and keeps everything else). Harmless today: nothing that
+       * renders this composer puts state in the query string. But it is a latent trap for the
+       * surface §F was opened for — a future composer host that DOES carry query state (a
+       * `?step=` wizard param, a `?ref=` attribution tag) loses it silently on return. Ticket if
+       * it comes up; do not "fix" by switching back to `location.href` (that reopens the A2 shape
+       * above).
+       *
+       * FIX ROUND 1 F11(b) (review MINOR-1 / security S9) — ⚠ THIS IS A THIRD WRITER TO THE
+       * SINGLE-SLOT BINDING (`SETUP_INTENT_BINDING_STORAGE_KEY`), alongside
+       * `card-capture-panel.tsx` and `continue-to-mandate.tsx`. Those two mount
+       * `useSetupIntentRedirectReturn` on the SAME page that starts the capture; this composer
+       * (`/billing/top-up`) does not — nothing here ever calls the hook. Two consequences, both
+       * UI-only (the value itself is server-originated and only ever compared browser-locally,
+       * per the docblock above):
+       *   1. A mandate started here OVERWRITES a live binding from a concurrent
+       *      `/settings/billing` capture in another tab. That tab's later genuine return then
+       *      reads `id_mismatch` and shows the retry copy for a card that was, in fact, saved —
+       *      a FALSE FAILURE paint.
+       *   2. On the actual REDIRECT path (3DS required, `confirmSetup` navigates away rather
+       *      than resolving inline), no hook is mounted here to consume or clear the binding it
+       *      just wrote — it sits as an inert orphan until the next capture overwrites the slot
+       *      (the same "orphan is cheap" reasoning `use-setup-intent-redirect-return.ts`'s
+       *      `id_mismatch`/`unresolved` branch already relies on). The INLINE path (no redirect)
+       *      is unaffected — `forgetSetupIntent()` below still clears it before this function
+       *      returns.
+       */
+      if (mandate.setupIntentId !== null) rememberSetupIntent(mandate.setupIntentId);
       const { error: setupError } = await stripe.confirmSetup({
         clientSecret: mandate.clientSecret,
         confirmParams: {
           payment_method: savedPaymentMethodId,
-          return_url: globalThis.location.href,
+          return_url: `${globalThis.location.origin}${globalThis.location.pathname}`,
         },
         redirect: 'if_required',
       });
+      /**
+       * THE WRITER IS THE CLEARER. Reaching this line at all means `confirmSetup` resolved
+       * INLINE — no redirect happened, so no redirect-return hook will ever consume the
+       * binding written above and it would otherwise sit as an inert orphan. Same rule
+       * `CardCapturePanel.handleCaptured` follows. (On the redirect path this line is never
+       * reached: the page navigates away.)
+       */
+      forgetSetupIntent();
       return !setupError;
     },
     [stripe, usingSavedCard]
@@ -225,10 +275,18 @@ export function PayAction({
         fail(null);
         return null;
       }
+      // BAL-529 §G — origin + pathname, matching `captureMandate`'s `confirmSetup` above. NOT
+      // bound: the binding mechanism is SetupIntent-shaped (one slot, `?setup_intent=`
+      // matcher), and a PaymentIntent return carries `?payment_intent=`, for which no reader
+      // exists — binding it would be a second binding slot, a second matcher, a second hook,
+      // which is a feature, not a residual, and out of scope. Its params ARE still redacted:
+      // §B's path-independent registry covers `payment_intent` / `payment_intent_client_secret`.
       const { error: payError, paymentIntent } = await stripe.confirmPayment({
         elements,
         clientSecret,
-        confirmParams: { return_url: globalThis.location.href },
+        confirmParams: {
+          return_url: `${globalThis.location.origin}${globalThis.location.pathname}`,
+        },
         redirect: 'if_required',
       });
       if (payError) {

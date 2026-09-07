@@ -11,6 +11,7 @@ import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { AuthHeader } from '../auth-header';
 import { signInAction } from '@/lib/auth/actions';
 import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
+import { forgetSetupIntent } from '@/lib/stripe/setup-intent-return';
 import { signInSchema, type SignInFormData } from '../schemas';
 
 interface PasswordStepProps {
@@ -45,6 +46,26 @@ export function PasswordStep({
     try {
       const result = await signInAction(data);
       if (result.success) {
+        // FIX ROUND 1 F5 (security S4) — the tab-scoped SetupIntent binding
+        // (`@/lib/stripe/setup-intent-return`) is bound to the TAB, not to the session that
+        // wrote it. `useLogout`'s `forgetSetupIntent()` call closes the explicit sign-OUT half
+        // of the shared-machine false-paint (BAL-529 §C): A starts a capture, signs out, the tab
+        // stays open. But a SESSION-EXPIRY teardown never runs any client code at all —
+        // `clearMiddlewareSession` (middleware.ts) tears the session down server-side on decode
+        // failure and redirects to `/login`, so A's binding survives untouched in that tab's
+        // sessionStorage. Clearing it here, on the SIGN-IN success that starts B's session,
+        // closes that remaining path too: a binding is meaningless to a session that did not
+        // create it, whichever way the PREVIOUS session ended.
+        //
+        // ⚠⚠ FIX ROUND 2 G2 — this call covers ONLY this one path (email/password sign-in). It
+        // is NOT a complete closure of the shared-machine scenario: OAuth sign-in
+        // (`social-auth-buttons.tsx` → the `/api/auth/callback` route's `createSession`),
+        // sign-up (`sign-up.ts`'s `session.save()`) and email verification
+        // (`verify-email.ts`'s `session.save()`) all establish B's session with NO client code
+        // running and none of them clears this binding. See `use-logout.ts`'s docblock for the
+        // full, corrected accounting — an earlier version of THIS comment claimed "no third gap
+        // currently known", which was false.
+        forgetSetupIntent();
         track(AUTH_EVENTS.LOGIN_COMPLETED, {
           method: 'email',
           is_returning_user: !result.data?.needsOnboarding,

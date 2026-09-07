@@ -17,11 +17,11 @@ vi.mock('@/lib/credit/actions', () => ({
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const mockHandleNextAction = vi.fn();
-vi.mock('@/lib/stripe-loader', () => ({
+vi.mock('@/lib/stripe/loader', () => ({
   getStripe: vi.fn(() => Promise.resolve({ handleNextAction: mockHandleNextAction })),
 }));
 
-import { LowBalanceSection } from './low-balance-section';
+import { LowBalanceSection, ARM_WARNING_MESSAGE } from './low-balance-section';
 
 const PREV_PK = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
 
@@ -260,6 +260,61 @@ describe('LowBalanceSection', () => {
     ).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     expect(mockArmSavedCardMandateAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('M2 — the arm-failure warning is announced (role=alert) with the exact copy', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    mockArmSavedCardMandateAction.mockResolvedValueOnce({ ok: false, error: 'failed' });
+    renderSection({ mandateActive: false, cardAvailable: true });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
+
+    // ⚠ `getByText`, not `getByRole('alert')`: the two warnings can co-exist and `getByRole`
+    // would throw on multiple matches.
+    const warning = await screen.findByText(ARM_WARNING_MESSAGE);
+    expect(warning).toHaveAttribute('role', 'alert');
+    // FIX ROUND 2 G3 — hand-copied FULL LITERAL, not just the imported constant. This test's
+    // own title claims "with the exact copy", but every assertion in this file (here and the
+    // `findByText`/`getByText` calls elsewhere) read `ARM_WARNING_MESSAGE` on BOTH sides, which
+    // is a vacuous pin — editing the copy in `low-balance-section.tsx` changes both sides at
+    // once and every test stays green. ⚠ `toBe` on `.textContent`, NOT `toHaveTextContent` —
+    // jest-dom's `toHaveTextContent` does a PARTIAL (substring) match by default, so appending
+    // or prepending text to the constant would still satisfy it; only exact equality catches
+    // every mutation.
+    expect(warning.textContent).toBe(
+      "We couldn't finish setting up automatic charging — your low-balance setting is saved. You can retry anytime from here."
+    );
+  });
+
+  it('M2 — the Retry button is OUTSIDE the live region', async () => {
+    mockSaveLowBalanceConfigAction.mockResolvedValue({ ok: true });
+    mockArmSavedCardMandateAction.mockResolvedValueOnce({ ok: false, error: 'failed' });
+    renderSection({ mandateActive: false, cardAvailable: true });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save low-balance settings' }));
+    await screen.findByText(ARM_WARNING_MESSAGE);
+
+    // The role-bearing element, not the `<p>` by assumption — only one `role="alert"` is on
+    // screen in this scenario, so `getByRole` cannot throw on multiple matches here.
+    expect(screen.getByRole('alert')).not.toContainElement(
+      screen.getByRole('button', { name: 'Retry' })
+    );
+  });
+
+  it('M2 — the card-backed-mode block warning is announced too', async () => {
+    const section = renderSection({
+      initialConfig: { mode: 'notify_only', reloadMinor: 10_000, thresholdMinor: 2_000 },
+      cardAvailable: true,
+      mandateActive: false,
+    });
+
+    await userEvent.click(screen.getByRole('radio', { name: /Auto top-up/i }));
+    section.rerender({ cardAvailable: false });
+
+    const inlineWarning = screen.getByText(/Auto top-up needs a card on file/i);
+    expect(inlineWarning).toHaveAttribute('role', 'alert');
   });
 
   it('fires onSaved with the persisted draft right after a successful Save (review CRITICAL — feeds the remove dialog)', async () => {

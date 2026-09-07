@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { getStripe } from '@/lib/stripe-loader';
+import { getStripe } from '@/lib/stripe/loader';
 import { startCardCaptureAction } from '@/lib/credit/actions';
 import { forgetSetupIntent, rememberSetupIntent } from '@/lib/stripe/setup-intent-return';
 import { STRIPE_UNCONFIGURED_MESSAGE } from './messages';

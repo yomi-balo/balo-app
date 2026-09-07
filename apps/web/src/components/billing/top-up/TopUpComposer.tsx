@@ -2,8 +2,9 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { loadStripe, type Stripe, type StripeElementsOptions } from '@stripe/stripe-js';
+import type { StripeElementsOptions } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
+import { getStripe } from '@/lib/stripe/loader';
 import { TopUpHero } from './TopUpHero';
 import { AmountSlider } from './AmountSlider';
 import { PromoField, type AppliedPromo } from './PromoField';
@@ -30,14 +31,6 @@ interface TopUpComposerProps {
    * `'stacked'` — see `useContainerLayout` for why the viewport is the wrong signal.
    */
   readonly layoutHint?: TopUpLayout;
-}
-
-let stripePromise: Promise<Stripe | null> | null = null;
-function getStripe(): Promise<Stripe | null> {
-  const key = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-  if (!key) return Promise.resolve(null);
-  stripePromise ??= loadStripe(key);
-  return stripePromise;
 }
 
 /**
@@ -187,7 +180,18 @@ export function TopUpComposer({
   const usingSavedCard = wallet.savedCard !== null && paymentMethodSource === 'saved_card';
   const payingWith =
     usingSavedCard && wallet.savedCard !== null ? describeSavedCard(wallet.savedCard) : 'New card';
-  const stripeConfigured = Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY);
+  const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+  const stripeConfigured = Boolean(publishableKey);
+  /**
+   * BAL-529 §E — the shared, per-key-memoised loader. The unset-key guard lives here because the
+   * shared loader takes a key; `Promise.resolve(null)` is the same "Stripe unconfigured" value
+   * `<Elements>` received before. `useMemo` keeps the promise identity stable across renders —
+   * `<Elements>` treats a new promise as a new Stripe instance.
+   */
+  const stripePromise = useMemo(
+    () => (publishableKey ? getStripe(publishableKey) : Promise.resolve(null)),
+    [publishableKey]
+  );
 
   if (completion) {
     return (
@@ -286,7 +290,7 @@ export function TopUpComposer({
   return (
     <div ref={containerRef} className="w-full">
       {stripeConfigured ? (
-        <Elements stripe={getStripe()} options={options}>
+        <Elements stripe={stripePromise} options={options}>
           {body}
         </Elements>
       ) : (

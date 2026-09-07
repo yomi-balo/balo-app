@@ -71,3 +71,32 @@ describe('SavedCardRow', () => {
     expect(screen.queryByRole('button', { name: 'Remove card' })).not.toBeInTheDocument();
   });
 });
+
+// BAL-529 M3 — appended by fix-round-1 F2. `git show origin/main:.../SavedCardRow.test.tsx`
+// restored the nine tests above VERBATIM; these two are the only net-new coverage for the
+// `changeDisabledReason` prop. Do not fold these into the restored tests above or edit them.
+describe('SavedCardRow — BAL-529 M3 changeDisabledReason', () => {
+  it('without changeDisabledReason the Change button is enabled and renders no sr-only description', () => {
+    render(<SavedCardRow card={card()} onChange={vi.fn()} />);
+
+    const change = screen.getByRole('button', { name: 'Change' });
+    expect(change).toBeEnabled();
+    expect(change).not.toHaveAccessibleDescription();
+  });
+
+  it('with changeDisabledReason the Change button is disabled and describes the reason', () => {
+    render(
+      <SavedCardRow
+        card={card()}
+        onChange={vi.fn()}
+        changeDisabledReason="Changing your card isn't available right now — please try again later."
+      />
+    );
+
+    const change = screen.getByRole('button', { name: 'Change' });
+    expect(change).toBeDisabled();
+    expect(change).toHaveAccessibleDescription(
+      "Changing your card isn't available right now — please try again later."
+    );
+  });
+});

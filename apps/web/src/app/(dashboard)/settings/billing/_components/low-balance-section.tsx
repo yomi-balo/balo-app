@@ -12,7 +12,7 @@ import { autoTopupConfigErrors } from '@/lib/credit/display-constants';
 import type { LowBalanceMode } from '@/lib/credit/actions';
 import { armSavedCardMandateAction, saveLowBalanceConfigAction } from '@/lib/credit/actions';
 import { isCardBackedLowBalanceMode, type CardBackedLowBalanceMode } from '@balo/shared/credit';
-import { getStripe } from '@/lib/stripe-loader';
+import { getStripe } from '@/lib/stripe/loader';
 import { track, SETTINGS_EVENTS } from '@/lib/analytics';
 
 export interface LowBalanceDraft {
@@ -110,7 +110,8 @@ const NO_SAVED_CARD_INLINE_DESCRIPTION =
 const SAVE_BLOCKED_LIVE_SESSION_TITLE = "We're still finalising a consultation.";
 const SAVE_BLOCKED_LIVE_SESSION_DESCRIPTION =
   "We'll keep your current setting until that's wrapped up. You can switch to Just notify me once it's done.";
-const ARM_WARNING_MESSAGE =
+// BAL-529 M2 — exported so the test pins the FULL literal, not a regex.
+export const ARM_WARNING_MESSAGE =
   "We couldn't finish setting up automatic charging — your low-balance setting is saved. You can retry anytime from here.";
 
 /**
@@ -459,7 +460,13 @@ export function LowBalanceSection({
             aria-hidden="true"
           />
           <div className="flex-1">
-            <p className="text-foreground text-xs leading-relaxed font-medium">
+            {/*
+             * BAL-529 M2 — `role="alert"` (assertive), never `role="status"` (SonarCloud
+             * S6819): the client pressed Save and the arm failed. Placed on the `<p>`, NOT the
+             * container — the container also wraps the interactive Retry button below, and a
+             * live region there would fold "Retry" into the announcement.
+             */}
+            <p role="alert" className="text-foreground text-xs leading-relaxed font-medium">
               {ARM_WARNING_MESSAGE}
             </p>
             <button
@@ -492,7 +499,13 @@ export function LowBalanceSection({
             strokeWidth={2.3}
             aria-hidden="true"
           />
-          <p className="text-foreground text-xs leading-relaxed font-medium">
+          {/*
+           * BAL-529 M2 — scope addition: the same one-attribute fix, identical treatment. This
+           * warning is arguably the more important of the two — it appears as a consequence of
+           * a PICKER SELECTION rather than a button press, and it is the only explanation for
+           * the Save button going `disabled`.
+           */}
+          <p role="alert" className="text-foreground text-xs leading-relaxed font-medium">
             {CARD_BACKED_MODE_TITLE[cardBackedDraftBlockedMode]} needs a card on file.{' '}
             {NO_SAVED_CARD_INLINE_DESCRIPTION}
           </p>

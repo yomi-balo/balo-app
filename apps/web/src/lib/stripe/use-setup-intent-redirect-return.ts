@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { getStripe } from '@/lib/stripe-loader';
+import { track, STRIPE_REDIRECT_EVENTS, type StripeRedirectSurface } from '@/lib/analytics';
+import { getStripe } from './loader';
 import {
   clearSetupIntentReturnParams,
+  diagnoseUnboundSetupIntentReturn,
   forgetSetupIntent,
   matchSetupIntentReturn,
 } from './setup-intent-return';
@@ -16,15 +18,49 @@ export interface UseSetupIntentRedirectReturnOptions {
    *   redeem   → "That card couldn't be confirmed. You can add another to keep going."
    */
   readonly retryMessage: string;
+  /** BAL-529 §D — which surface is mounting the hook. REQUIRED: an optional value would let a
+   *  third consumer emit an untagged `stripe_redirect_return_unbound`, destroying the one
+   *  business question the event exists to answer (rate per surface). */
+  readonly surface: StripeRedirectSurface;
   /** A BOUND return was detected and the retrieve is in flight — enter your "finishing" state. */
   readonly onStarted: () => void;
   /** `succeeded`. Params AND binding are ALREADY cleared when this fires. */
   readonly onSucceeded: () => void;
   /** `processing`. Params AND binding are deliberately KEPT so a refresh re-checks. */
   readonly onProcessing: () => void;
+  /**
+   * BAL-529 M5 — fires ONCE, {@link PROCESSING_FALLBACK_DELAY_MS} after `onProcessing`, if this
+   * component is still mounted. ⚠⚠ THE URL PARAMS AND THE BINDING ARE DELIBERATELY UNTOUCHED:
+   * a `processing` intent is still live and a refresh must still be able to re-check it. This
+   * callback changes NOTHING but what the surface paints. REQUIRED for the same reason
+   * `onProcessing` is — a consumer that ignores it spins forever, which is the defect.
+   */
+  readonly onProcessingTimeout: () => void;
   /** Every non-success exit. Params + binding already cleared; `message` is `retryMessage`. */
   readonly onFailed: (message: string) => void;
 }
+
+/**
+ * BAL-529 M5 — how long a `processing` return may spin before the surface admits it is slow.
+ * Comfortably beyond a normal Stripe settle (sub-second to a few seconds) and well inside a
+ * user's patience for a spinner. Exported so both surfaces' tests advance fake timers by
+ * exactly this, never by a hand-copied number.
+ */
+export const PROCESSING_FALLBACK_DELAY_MS = 15_000;
+
+/**
+ * BAL-529 M5 — the copy a surface shows once a `processing` return has spun for
+ * {@link PROCESSING_FALLBACK_DELAY_MS}. ⚠ HOISTED, unlike `retryMessage`, and deliberately:
+ * `retryMessage` differs because the two pages offer different next steps ("try again" on
+ * settings, "add another to keep going" on redeem). The slow-processing situation is IDENTICAL
+ * on both — the same intent, still live, still re-checkable by a refresh — so one string.
+ *
+ * States the truth and nothing more: the intent is not failed, we simply do not know yet, and a
+ * refresh re-checks (which is exactly why the params and the binding are kept). No countdown, no
+ * deadline, no apology for something that has not gone wrong.
+ */
+export const SETUP_INTENT_PROCESSING_FALLBACK_MESSAGE =
+  'This is taking longer than usual. Your card is still being confirmed — refresh this page in a moment to check again.';
 
 /**
  * BAL-526 — the shared 3DS/SCA redirect-return effect, extracted from
@@ -51,6 +87,13 @@ export function useSetupIntentRedirectReturn(options: UseSetupIntentRedirectRetu
   useEffect(() => {
     const matched = matchSetupIntentReturn();
     if (matched === null) {
+      // BAL-529 §D — ANALYTICS ONLY. ⚠⚠ THE INERTNESS CONTRACT IS UNCHANGED: no callback, no
+      // state, no URL rewrite, no binding clear. `track()` is guarded package-side (BAL-529 §A)
+      // so a posthog failure cannot break the page from inside this mount effect.
+      const reason = diagnoseUnboundSetupIntentReturn();
+      if (reason !== null) {
+        track(STRIPE_REDIRECT_EVENTS.RETURN_UNBOUND, { surface: latest.current.surface, reason });
+      }
       return;
     }
     const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
@@ -61,6 +104,9 @@ export function useSetupIntentRedirectReturn(options: UseSetupIntentRedirectRetu
     }
 
     let cancelled = false;
+    // BAL-529 M5 — armed only on the `processing` outcome below; the cleanup clears it
+    // regardless (a no-op `clearTimeout` on `undefined` is fine).
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
 
     /**
      * B3 — a discriminated outcome, resolved INSIDE the retrieve's own try/catch chain.
@@ -151,6 +197,12 @@ export function useSetupIntentRedirectReturn(options: UseSetupIntentRedirectRetu
           // Leave both the params AND the binding in place so a refresh re-checks while the
           // webhook finalises. Do not "tidy" this — it is load-bearing.
           latest.current.onProcessing();
+          // BAL-529 M5 — the bounded fallback timer. Fires at most once; the params and the
+          // binding are NEVER touched here (see the callback's own docblock).
+          fallbackTimer = setTimeout(() => {
+            if (cancelled) return;
+            latest.current.onProcessingTimeout();
+          }, PROCESSING_FALLBACK_DELAY_MS);
           return;
         }
         if (outcome === 'id_mismatch' || outcome === 'unresolved') {
@@ -181,6 +233,7 @@ export function useSetupIntentRedirectReturn(options: UseSetupIntentRedirectRetu
 
     return (): void => {
       cancelled = true;
+      if (fallbackTimer !== undefined) clearTimeout(fallbackTimer);
     };
   }, []);
 }
