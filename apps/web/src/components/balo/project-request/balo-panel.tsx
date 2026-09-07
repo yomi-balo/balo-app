@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, useTransition } from 'react';
+import { useCallback, useId, useState, useTransition } from 'react';
 import { Loader2, Send, Shield, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
@@ -56,6 +56,7 @@ export function BaloPanel({ requestId, view }: Readonly<BaloPanelProps>): React.
   const [isOwnerPending, startOwnerTransition] = useTransition();
   const [isNotePending, startNoteTransition] = useTransition();
   const [isDeletePending, startDeleteTransition] = useTransition();
+  const errorId = useId();
 
   // The current owner may have been demoted out of the staff roster (D7) — prepend them so the
   // select still renders a value instead of falling back to a blank/placeholder row.
@@ -183,6 +184,8 @@ export function BaloPanel({ requestId, view }: Readonly<BaloPanelProps>): React.
               placeholder="Add a note for the team"
               disabled={isNotePending}
               aria-label="Add a note for the team"
+              aria-invalid={noteError !== null}
+              aria-describedby={noteError === null ? undefined : errorId}
               className="flex-1 resize-none"
             />
             <Button
@@ -191,6 +194,7 @@ export function BaloPanel({ requestId, view }: Readonly<BaloPanelProps>): React.
               size="sm"
               onClick={handleAddNote}
               disabled={draft.trim().length < 3 || isNotePending}
+              className="min-h-11"
             >
               {isNotePending ? (
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -200,7 +204,11 @@ export function BaloPanel({ requestId, view }: Readonly<BaloPanelProps>): React.
               Add
             </Button>
           </div>
-          {noteError !== null && <p className="text-destructive mt-1.5 text-xs">{noteError}</p>}
+          {noteError !== null && (
+            <p id={errorId} role="alert" className="text-destructive mt-1.5 text-xs">
+              {noteError}
+            </p>
+          )}
         </div>
       )}
 
@@ -259,7 +267,7 @@ function NoteRow({
               type="button"
               variant="ghost"
               size="icon-xs"
-              className="ml-auto"
+              className="relative ml-auto after:absolute after:-inset-2.5 after:content-['']"
               aria-label="Delete note"
               onClick={() => onRequestDelete(note.id)}
             >

@@ -73,14 +73,16 @@ export async function assignRequestOwnerAction(
   }
   const { requestId, ownerUserId } = parsed.data;
 
-  // `findByIdWithRelations`, not the plain `findById` — the fan-out needs `request.company.name`
-  // for the notification body, the `close-request-as-admin.ts` precedent.
-  const request = await projectRequestsRepository.findByIdWithRelations(requestId);
-  if (request === undefined) {
-    return { success: false, error: REQUEST_GONE, code: 'gone' };
-  }
-
   try {
+    // `findByIdWithRelations`, not the plain `findById` — the fan-out needs
+    // `request.company.name` for the notification body, the `close-request-as-admin.ts`
+    // precedent. Read lives INSIDE the try (`override-balo-fee.ts` precedent) — a DB
+    // rejection here must land in the catch below, not escape as an unhandled rejection.
+    const request = await projectRequestsRepository.findByIdWithRelations(requestId);
+    if (request === undefined) {
+      return { success: false, error: REQUEST_GONE, code: 'gone' };
+    }
+
     const result = await projectRequestsRepository.assignOwner({
       requestId,
       ownerUserId,

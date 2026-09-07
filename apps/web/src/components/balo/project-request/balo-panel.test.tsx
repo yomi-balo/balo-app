@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
+import { axe } from 'jest-axe';
 import { toast } from 'sonner';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import type { BaloPanelView } from '@/lib/project-request/load-balo-panel';
@@ -205,6 +206,24 @@ describe('BaloPanel', () => {
     expect(screen.getByPlaceholderText('Add a note for the team')).toHaveValue('A fresh note');
   });
 
+  it('announces the note error via role="alert" and links it to the textarea with aria-describedby', async () => {
+    mockCreateInternalNote.mockResolvedValue({ success: false, error: 'Could not add the note.' });
+    const user = userEvent.setup();
+    render(<BaloPanel requestId={REQUEST_ID} view={view()} />);
+
+    const textarea = screen.getByPlaceholderText('Add a note for the team');
+    expect(textarea).toHaveAttribute('aria-invalid', 'false');
+    expect(textarea).not.toHaveAttribute('aria-describedby');
+
+    await user.type(textarea, 'A fresh note');
+    await user.click(screen.getByRole('button', { name: /add/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not add the note.');
+    expect(textarea).toHaveAttribute('aria-invalid', 'true');
+    expect(textarea).toHaveAttribute('aria-describedby', alert.id);
+  });
+
   it('deletes a note via the confirm dialog and fires no analytics (delete has none)', async () => {
     mockDeleteInternalNote.mockResolvedValue({ success: true, noteId: 'note-1' });
     const user = userEvent.setup();
@@ -355,5 +374,28 @@ describe('BaloPanel', () => {
   it('never renders a gradient class (no emphasised/promotional action on this panel)', () => {
     const { container } = render(<BaloPanel requestId={REQUEST_ID} view={view()} />);
     expect(container.querySelector('[class*="bg-gradient"]')).toBeNull();
+  });
+
+  it('has no accessibility violations in its fullest state (owner set, one note, canDeleteAnyNote true)', async () => {
+    const { container } = render(
+      <BaloPanel
+        requestId={REQUEST_ID}
+        view={view({
+          owner: { userId: STAFF_A_ID, name: 'Adeeb Khan' },
+          notes: [
+            {
+              id: 'note-1',
+              authorName: 'Priya Nair',
+              authorInitials: 'PN',
+              body: 'Waiting on the client to sign off.',
+              createdAtIso: new Date().toISOString(),
+              canDelete: true,
+            },
+          ],
+          canDeleteAnyNote: true,
+        })}
+      />
+    );
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

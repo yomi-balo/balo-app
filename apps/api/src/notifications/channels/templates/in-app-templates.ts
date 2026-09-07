@@ -912,8 +912,8 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     const company = (data.clientCompanyName as string) ?? 'a client';
     const projectRequestId = data.projectRequestId as string | undefined;
     return {
-      title: 'You’re the Balo owner',
-      body: `You’re now the Balo owner of ‘${title}’ for ${company}.`,
+      title: "You're the Balo owner",
+      body: `You're now the Balo owner of '${title}' for ${company}.`,
       actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
     };
   },

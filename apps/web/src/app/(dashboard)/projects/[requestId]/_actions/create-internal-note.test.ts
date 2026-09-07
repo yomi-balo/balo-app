@@ -165,4 +165,18 @@ describe('createInternalNoteAction', () => {
     ];
     expect(JSON.stringify(fields)).not.toContain(VALID_INPUT.body);
   });
+
+  it('a rejected pre-flight read (findById) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockFindById.mockRejectedValue(new Error('connection reset'));
+    const result = await createInternalNoteAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not add the note. Please try again.',
+    });
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to create internal note',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'connection reset' })
+    );
+  });
 });

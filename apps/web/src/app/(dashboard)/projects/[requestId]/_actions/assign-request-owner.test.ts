@@ -258,4 +258,18 @@ describe('assignRequestOwnerAction', () => {
       expect.objectContaining({ requestId: REQUEST_ID, error: 'db exploded' })
     );
   });
+
+  it('a rejected pre-flight read (findByIdWithRelations) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockFindByIdWithRelations.mockRejectedValue(new Error('connection reset'));
+    const result = await assignRequestOwnerAction({ requestId: REQUEST_ID, ownerUserId: OWNER_ID });
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not update the Balo owner. Please try again.',
+    });
+    expect(mockAssignOwner).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to assign Balo owner',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'connection reset' })
+    );
+  });
 });

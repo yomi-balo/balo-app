@@ -1324,14 +1324,14 @@ describe('getInAppTemplate', () => {
         clientCompanyName: 'Acme Corp',
         projectRequestId: 'req-1',
       });
-      expect(result.title).toBe('You’re the Balo owner');
-      expect(result.body).toBe('You’re now the Balo owner of ‘CPQ implementation’ for Acme Corp.');
+      expect(result.title).toBe("You're the Balo owner");
+      expect(result.body).toBe("You're now the Balo owner of 'CPQ implementation' for Acme Corp.");
       expect(result.actionUrl).toBe('/projects/req-1');
     });
 
     it('falls back when title and client company are missing', () => {
       const result = getInAppTemplate('project-request-owner-assigned', {});
-      expect(result.body).toBe('You’re now the Balo owner of ‘a project request’ for a client.');
+      expect(result.body).toBe("You're now the Balo owner of 'a project request' for a client.");
     });
 
     it('omits actionUrl when projectRequestId is absent', () => {

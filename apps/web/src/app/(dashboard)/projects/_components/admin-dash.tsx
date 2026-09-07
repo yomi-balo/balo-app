@@ -102,7 +102,7 @@ export function AdminDash({ dto, viewerUserId }: Readonly<AdminDashProps>): Reac
               onClick={() => setMine(!mine)}
               aria-pressed={mine}
               className={cn(
-                'inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold',
+                'focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none',
                 mine
                   ? 'border-primary/40 bg-primary/10 text-primary'
                   : 'border-border text-muted-foreground'

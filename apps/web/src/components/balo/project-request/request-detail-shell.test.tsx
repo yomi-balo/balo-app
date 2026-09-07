@@ -126,6 +126,7 @@ import { RequestDetailShell } from './request-detail-shell';
 import { track, BILLING_EVENTS } from '@/lib/analytics';
 import { ConversationStage } from './conversation/conversation-stage';
 import { EoiEntry } from './eoi-entry';
+import { BaloPanel } from './balo-panel';
 import { thread as conversationThread } from '@/test/fixtures/conversation';
 import type { RequestRelationshipView } from '@/lib/project-request/request-detail-view';
 import type { ConversationView } from '@/lib/project-request/conversation-view-types';
@@ -781,6 +782,27 @@ describe('RequestDetailShell — BaloPanel mounting + shell restructure (BAL-541
       />
     );
     expect(screen.getByText('Balo')).toBeInTheDocument();
+  });
+
+  it('keys the Balo panel island by request id (no owner/notes/draft state bleed across /projects/A → /projects/B)', () => {
+    // BAL-541 fix round (X5): same shape as the ConversationStage/EoiEntry keying tests
+    // above — the shell is a sync server component, so walk the element tree (RTL can't
+    // observe React keys in the DOM).
+    const element = RequestDetailShell({
+      view: view({ status: 'requested' }),
+      ctx: ctx({
+        lens: 'admin',
+        archetype: 'observer',
+        canSeeContact: true,
+        canSeeBaloPanel: true,
+      }),
+      baloPanel: baloPanelView(),
+    });
+    const panels = findAllOfType(element, BaloPanel);
+    expect(panels.length).toBeGreaterThan(0);
+    for (const panel of panels) {
+      expect(panel.key).toBe('req-1');
+    }
   });
 });
 

@@ -68,12 +68,14 @@ export async function createInternalNoteAction(
   }
   const { requestId, body } = parsed.data;
 
-  const request = await projectRequestsRepository.findById(requestId);
-  if (request === undefined) {
-    return { success: false, error: REQUEST_GONE, code: 'gone' };
-  }
-
   try {
+    // Read lives INSIDE the try (`override-balo-fee.ts` precedent) — a DB rejection here
+    // must land in the catch below, not escape as an unhandled rejection.
+    const request = await projectRequestsRepository.findById(requestId);
+    if (request === undefined) {
+      return { success: false, error: REQUEST_GONE, code: 'gone' };
+    }
+
     const { note } = await internalNotesRepository.create({
       entityType: 'project_request',
       entityId: requestId,

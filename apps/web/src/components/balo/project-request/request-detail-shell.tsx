@@ -219,8 +219,11 @@ export function RequestDetailShell({
   // BAL-541 (D5) — built once; the layout switches on THIS NODE'S null-ness, never on
   // lens/archetype/status. `null` when the page never loaded a panel (the viewer holds
   // neither BAL-541 token) — the shell never re-derives that from `ctx`.
+  // key={view.id}: App Router preserves client state across dynamic-param navigation
+  // (/projects/A → /projects/B) — keying by request remounts the panel so A's owner/notes/
+  // draft state never lingers under B's URL (mirrors ConversationStage/EoiEntry below).
   const baloPanelNode =
-    baloPanel === null ? null : <BaloPanel requestId={view.id} view={baloPanel} />;
+    baloPanel === null ? null : <BaloPanel key={view.id} requestId={view.id} view={baloPanel} />;
   // BAL-540 — the header's "Close request" control. Never rendered once already closed, and
   // never for the expert lens (an expert on a closed request never reaches this shell at all —
   // `page.tsx`'s ended-track branch intercepts them first).
