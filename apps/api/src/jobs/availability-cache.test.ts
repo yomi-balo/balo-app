@@ -25,7 +25,8 @@ vi.mock('../lib/redis.js', () => ({
   createRedisConnection: () => ({}),
 }));
 
-vi.mock('../lib/queue.js', () => ({
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
   getQueue: vi.fn(() => ({ add: mockQueueAdd })),
 }));
 
@@ -175,12 +176,34 @@ describe('availability-cache jobs', () => {
         'rebuild-availability-cache',
         { expertProfileId: 'expert-1' },
         expect.objectContaining({
-          jobId: 'availability-expert-1',
+          jobId: 'availability--expert-1',
           removeOnComplete: true,
           removeOnFail: true,
         })
       );
       expect(mockJob.log).toHaveBeenCalledWith('Enqueued 2 stale connection rebuild jobs');
+    });
+
+    it('BAL-531 — the staleness-sweep path and the direct-enqueue path emit the SAME jobId for the same expert (the load-bearing dedup key)', async () => {
+      startStalenessCheckWorker();
+      const mockJob = { log: vi.fn() };
+      mockFindStaleConnections.mockResolvedValue([{ expertProfileId: 'expert-9' }]);
+      mockQueueAdd.mockResolvedValue(undefined);
+
+      await capturedStalenessProcessor!(mockJob);
+      const staleSweepJobId = (
+        mockQueueAdd.mock.calls[0] as [unknown, unknown, { jobId: string }]
+      )[2].jobId;
+
+      mockQueueAdd.mockClear();
+      await enqueueAvailabilityCacheRebuild('expert-9', {
+        error: vi.fn(),
+      } as unknown as FastifyBaseLogger);
+      const directJobId = (mockQueueAdd.mock.calls[0] as [unknown, unknown, { jobId: string }])[2]
+        .jobId;
+
+      expect(staleSweepJobId).toBe(directJobId);
+      expect(staleSweepJobId).toBe('availability--expert-9');
     });
   });
 
@@ -213,7 +236,7 @@ describe('availability-cache jobs', () => {
         'rebuild-availability-cache',
         { expertProfileId: 'expert-1' },
         {
-          jobId: 'availability-expert-1',
+          jobId: 'availability--expert-1',
           removeOnComplete: true,
           // removeOnFail: true so a terminal failure can't wedge the fixed jobId.
           removeOnFail: true,
@@ -249,7 +272,7 @@ describe('availability-cache jobs', () => {
       expect(mockQueueAdd).toHaveBeenCalledWith(
         'rebuild-availability-cache',
         { expertProfileId: 'expert-1' },
-        expect.objectContaining({ jobId: 'availability-expert-1' })
+        expect.objectContaining({ jobId: 'availability--expert-1' })
       );
     });
 

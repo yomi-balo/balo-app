@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { payoutsRepository, type EntityType } from '@balo/db';
 
 import { requireInternalAuth } from '../../lib/internal-auth.js';
-import { getQueue } from '../../lib/queue.js';
+import { buildJobId, getQueue } from '../../lib/queue.js';
 import {
   reconstructFormValues,
   registerBeneficiary,
@@ -113,7 +113,7 @@ export async function beneficiaryRoute(fastify: FastifyInstance): Promise<void> 
             'verify-beneficiary',
             { expertProfileId, expertName } satisfies VerifyBeneficiaryJobData,
             {
-              jobId: `verify-beneficiary-${expertProfileId}-${updatedAtMs}`,
+              jobId: buildJobId('verify-beneficiary', expertProfileId, String(updatedAtMs)),
               attempts: 5,
               backoff: {
                 type: 'exponential',

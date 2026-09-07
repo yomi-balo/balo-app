@@ -48,7 +48,10 @@ const WorkerMock = vi.hoisted(() =>
   })
 );
 
-vi.mock('../lib/queue.js', () => ({ getQueue: () => ({ add: queueAdd }) }));
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
+  getQueue: () => ({ add: queueAdd }),
+}));
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn(() => ({ conn: true })) }));
 vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecoverableError }));
 vi.mock('@balo/db', () => ({
@@ -86,6 +89,11 @@ vi.mock('../services/transcript/normalizers/daily-batch-json.js', () => ({
 vi.mock('../services/meetings/resolve-meeting-engagement.js', () => ({
   resolveMeetingEngagement,
 }));
+// BAL-531 — this mocks `./transcript-pipeline.js` wholesale, so it covers `handleIngest`'s INPUT
+// half only (that `captureId` is built and passed through correctly). The OUTPUT half — that
+// `enqueueTranscriptPipeline`'s own `queue.add` call receives a colon-free jobId for a
+// `captureId` containing the `daily-batch:` prefix — is covered by
+// `transcript-pipeline.test.ts`'s dedicated regression case, not here.
 vi.mock('./transcript-pipeline.js', () => ({ enqueueTranscriptPipeline }));
 
 import {

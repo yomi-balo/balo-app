@@ -39,7 +39,10 @@ const { mockQueueAdd, mockGetQueue } = vi.hoisted(() => {
   return { mockQueueAdd: add, mockGetQueue: vi.fn(() => ({ add })) };
 });
 
-vi.mock('../../lib/queue.js', () => ({ getQueue: mockGetQueue }));
+vi.mock('../../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/queue.js')>()),
+  getQueue: mockGetQueue,
+}));
 
 /**
  * EVERYTHING COMES FROM THE `@balo/db` BARREL, INCLUDING THE FIXTURES — deliberately.
@@ -224,7 +227,7 @@ describe('BAL-428 — booking a meeting removes the slot the marketplace adverti
     expect(mockQueueAdd).toHaveBeenCalledWith(
       'rebuild-availability-cache',
       { expertProfileId: expert.expertProfileId },
-      expect.objectContaining({ jobId: `availability-${expert.expertProfileId}` })
+      expect.objectContaining({ jobId: `availability--${expert.expertProfileId}` })
     );
 
     // ── THE ASSERTION THE WHOLE TICKET EXISTS FOR ──

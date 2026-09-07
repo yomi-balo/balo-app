@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockAdd = vi.fn().mockResolvedValue(undefined);
-vi.mock('../../lib/queue.js', () => ({
+vi.mock('../../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/queue.js')>()),
   getQueue: vi.fn(() => ({ add: mockAdd })),
 }));
 
@@ -623,5 +624,70 @@ describe('dispatch', () => {
 
       expect(mockAdd).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * BAL-531 — the emitted jobId STRING is the load-bearing assertion here, not `add` resolving.
+ * The ticket's own acceptance criterion ("assert `channelQueue.add` succeeds") is vacuous as
+ * written: `mockAdd` is a mocked function that cannot enforce BullMQ's real colon rule, so it
+ * resolves identically whether the jobId is well-formed or not. Every fixture below pins the
+ * exact escaped string via `buildJobId` (kept REAL above via `importOriginal`, never mocked
+ * away) so a regression back to `` `${rule.template}--${recipientId}--${correlationId}` `` is
+ * caught on the string, not the mock call succeeding.
+ *
+ * That the entire suite ABOVE this block uses colon-free templates, recipient ids and
+ * correlationIds (`'welcome--user-456--corr-123'`, `'project-request-closed-expert--expert-x--close-1'`,
+ * …) is precisely why this bug survived BAL-289 → BAL-531: every existing fixture happens to
+ * avoid the shape that throws.
+ */
+describe('dispatch — BAL-531 colon-bearing correlationIds no longer throw at queue.add', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const rule: NotificationRule = {
+    channel: 'email',
+    recipient: 'self',
+    template: 'credit-session-low-balance',
+    timing: 'immediate',
+  };
+
+  function contextWith(correlationId: string): RuleContext {
+    return {
+      event: 'credit.session.low_balance',
+      payload: { correlationId, userId: 'user-456' },
+      data: {},
+    } as RuleContext;
+  }
+
+  it('one-colon correlationId — zero colons in the emitted jobId, exact string pinned', async () => {
+    await dispatch(rule, contextWith('sess-1:low_balance'));
+
+    const opts = mockAdd.mock.calls[0][2] as { jobId: string };
+    expect(opts.jobId).not.toContain(':');
+    expect(opts.jobId).toBe('credit-session-low-balance--user-456--sess-1_clow__balance');
+  });
+
+  it('three-colon correlationId — zero colons in the emitted jobId, exact string pinned', async () => {
+    await dispatch(rule, contextWith('w1:dormancy_reminder:band-a:2026-09-07'));
+
+    const opts = mockAdd.mock.calls[0][2] as { jobId: string };
+    expect(opts.jobId).not.toContain(':');
+    expect(opts.jobId).toBe(
+      'credit-session-low-balance--user-456--w1_cdormancy__reminder_cband-a_c2026-09-07'
+    );
+  });
+
+  it('two-colon correlationId — documents the deliberate rewrite of an id that delivers today', async () => {
+    // `auto_topup:{wallet}:{entry}` is a TWO-colon shape, which the raw upstream predicate
+    // (`jobId.includes(':') && jobId.split(':').length !== 3`) already accepted — this id
+    // delivered notifications BEFORE this ticket. `buildJobId` still rewrites it (D1: uniform
+    // escaping), so the ONLY regression this pins is that it stays colon-free and distinct.
+    await dispatch(rule, contextWith('auto_topup:wallet-a:entry-1'));
+
+    const opts = mockAdd.mock.calls[0][2] as { jobId: string };
+    expect(opts.jobId).not.toContain(':');
+    expect(opts.jobId).toBe('credit-session-low-balance--user-456--auto__topup_cwallet-a_centry-1');
   });
 });

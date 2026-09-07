@@ -17,7 +17,8 @@ vi.mock('../lib/redis.js', () => ({
   createRedisConnection: () => ({}),
 }));
 
-vi.mock('../lib/queue.js', () => ({
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
   getQueue: vi.fn(() => ({ add: mockQueueAdd })),
 }));
 
@@ -60,17 +61,20 @@ describe('calendar-subscription-reconcile job (BAL-468 §8.4)', () => {
       await enqueueSubscriptionReconcile('conn-1', { force: false }, makeLog());
       await enqueueSubscriptionReconcile('conn-1', { force: true }, makeLog());
 
+      // BAL-531 fix round (F5) — CONSTANT arity: the non-force lane now carries an explicit
+      // 'noforce' discriminator rather than omitting a part, so the two lanes are always
+      // 3-part `buildJobId` calls, never 2-part vs. 3-part.
       expect(mockQueueAdd).toHaveBeenNthCalledWith(
         1,
         'reconcile',
         { connectionId: 'conn-1', force: false },
-        expect.objectContaining({ jobId: 'subscriptions-conn-1' })
+        expect.objectContaining({ jobId: 'subscriptions--noforce--conn-1' })
       );
       expect(mockQueueAdd).toHaveBeenNthCalledWith(
         2,
         'reconcile',
         { connectionId: 'conn-1', force: true },
-        expect.objectContaining({ jobId: 'subscriptions-force-conn-1' })
+        expect.objectContaining({ jobId: 'subscriptions--force--conn-1' })
       );
     });
 

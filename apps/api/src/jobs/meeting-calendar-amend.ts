@@ -2,7 +2,7 @@ import { DelayedError, Worker, type Job } from 'bullmq';
 import { calendarRepository, meetingCalendarEventsRepository, meetingsRepository } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import { ApirocError } from '../lib/apiroc/errors.js';
 import { classifyRetry } from '../lib/apiroc/retry.js';
 import { updateConsultationEvent } from '../services/consultation-events/index.js';
@@ -66,10 +66,9 @@ export function enqueueMeetingCalendarAmend(
   rescheduleAuditId: string
 ): Promise<void> {
   const queue = getQueue(MEETING_CALENDAR_AMEND_QUEUE);
-  const jobId = `meeting-calendar-amend:${rescheduleAuditId}`;
   return queue
     .add('amend', { meetingId, expertProfileId } satisfies MeetingCalendarAmendJobData, {
-      jobId,
+      jobId: buildJobId('meeting-calendar-amend', rescheduleAuditId),
       attempts: 5,
       backoff: { type: 'exponential', delay: 10_000 },
       removeOnComplete: { count: 1000 },

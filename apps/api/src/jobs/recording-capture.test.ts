@@ -46,7 +46,10 @@ const WorkerMock = vi.hoisted(() =>
   })
 );
 
-vi.mock('../lib/queue.js', () => ({ getQueue: () => ({ add: queueAdd }) }));
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
+  getQueue: () => ({ add: queueAdd }),
+}));
 vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn(() => ({ conn: true })) }));
 vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecoverableError }));
 vi.mock('@balo/db', () => ({
@@ -145,7 +148,11 @@ describe('recording-capture job — enqueue', () => {
       'ensure',
       { meetingId: MEETING_ID, trigger: 'in_progress' },
       {
-        jobId: `recording-ensure--${MEETING_ID}--evt_1`,
+        // BAL-531 — `buildJobId` escapes EVERY part uniformly, so the `_` in the dedupeToken
+        // fixture becomes `__` (not byte-identical for THIS fixture — the plan's general
+        // byte-identical claim for `recording-ensure` held only for underscore/colon-free
+        // dedupe tokens; this webhook-event-id-shaped one is not).
+        jobId: `recording-ensure--${MEETING_ID}--evt__1`,
         attempts: 3,
         backoff: { type: 'exponential', delay: 5000 },
         priority: RECORDING_ENSURE_PRIORITY,

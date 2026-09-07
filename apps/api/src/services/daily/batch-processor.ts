@@ -96,8 +96,11 @@ const batchAccessLinkSchema = z.object({
  * `400` = "job status is not finished" (retryable); `404` = unknown job id (terminal) —
  * both propagate to the caller as a raw `DailyApiError` for it to classify.
  */
-export async function getBatchJobTranscriptLink(jobId: string, format: 'json'): Promise<string> {
-  const path = `/batch-processor/${encodeURIComponent(jobId)}/access-link`;
+export async function getBatchJobTranscriptLink(
+  batchJobId: string,
+  format: 'json'
+): Promise<string> {
+  const path = `/batch-processor/${encodeURIComponent(batchJobId)}/access-link`;
   const body = await dailyRequest<unknown>('GET', path);
   const parsed = batchAccessLinkSchema.safeParse(body);
   if (!parsed.success) {

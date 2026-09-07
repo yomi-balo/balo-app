@@ -40,10 +40,10 @@ describe('publishSavedCardDetached', () => {
     const [event, payload] = mockPublish.mock.calls[0] as [string, Record<string, unknown>];
     expect(event).toBe('credit.saved_card.detached');
     expect(payload.correlationId).toBe('saved-card-detached.wallet_9.evt_abc');
-    // ⚠ `.`-JOINED, NEVER `:`-JOINED (DEC-7). `engine/dispatcher.ts:73` builds the per-CHANNEL
-    // BullMQ jobId from the RAW correlationId with NO escape (unlike `publisher.ts`'s `toJobId`,
-    // which DOES escape colons for the top-level notification-events jobId) — a colon-joined
-    // correlationId would throw at `channelQueue.add` and the notice would never be delivered.
+    // ⚠ `.`-JOINED, NEVER `:`-JOINED (DEC-7). `engine/dispatcher.ts`'s delivery enqueue builds
+    // the per-CHANNEL BullMQ jobId via `buildJobId(...)` (BAL-531) — a colon in the
+    // correlationId is no longer fatal there, since `buildJobId` escapes it. The `.`-join stays
+    // for readability. (Named by symbol, not line number — this pointer has rotted twice.)
     expect((payload.correlationId as string).includes(':')).toBe(false);
   });
 

@@ -15,7 +15,7 @@ import {
   type RecordingFailureReason,
 } from '@balo/analytics/server';
 import { createRedisConnection } from '../lib/redis.js';
-import { getQueue } from '../lib/queue.js';
+import { buildJobId, getQueue } from '../lib/queue.js';
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
 import { getRecordingAccessLink } from '../services/daily/recordings.js';
 import { createSignedAssetFromUrl, type CreatedMuxAsset } from '../services/mux/assets.js';
@@ -67,7 +67,7 @@ export async function enqueueRecordingIngest(input: EnqueueRecordingIngestInput)
     'ingest',
     { recordingId: input.recordingId } satisfies RecordingIngestJobData,
     {
-      jobId: `recording-ingest--${input.recordingId}`,
+      jobId: buildJobId('recording-ingest', input.recordingId),
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
     }

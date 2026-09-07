@@ -41,7 +41,8 @@ vi.mock('@balo/db', () => ({
   resolveClientCompaniesForMeetings: mockResolveCompanies,
 }));
 
-vi.mock('../../lib/queue.js', () => ({
+vi.mock('../../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/queue.js')>()),
   getQueue: (...args: unknown[]) => {
     mockGetQueue(...args);
     return { add: mockQueueAdd };
@@ -223,7 +224,7 @@ describe('experts availability-overrides routes', () => {
     expect(mockQueueAdd).toHaveBeenCalledWith(
       'rebuild-availability-cache',
       { expertProfileId: EXPERT_ID },
-      expect.objectContaining({ jobId: `availability-${EXPERT_ID}` })
+      expect.objectContaining({ jobId: `availability--${EXPERT_ID}` })
     );
     // Analytics: 3-day inclusive block with a label.
     expect(mockTrackServer).toHaveBeenCalledWith('availability_override_created', {
@@ -349,7 +350,7 @@ describe('experts availability-overrides routes', () => {
     expect(mockQueueAdd).toHaveBeenCalledWith(
       'rebuild-availability-cache',
       { expertProfileId: EXPERT_ID },
-      expect.objectContaining({ jobId: `availability-${EXPERT_ID}` })
+      expect.objectContaining({ jobId: `availability--${EXPERT_ID}` })
     );
     expect(mockTrackServer).toHaveBeenCalledWith('availability_override_deleted', {
       distinct_id: EXPERT_ID,

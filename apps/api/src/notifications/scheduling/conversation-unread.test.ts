@@ -122,8 +122,9 @@ describe('conversationUnreadRecheck', () => {
 
   /**
    * ⚠ THE REBUILT PAYLOAD MUST KEEP `correlationId`. `publisher.publish` derives the BullMQ
-   * jobId from it, so a missing one collapses every promise of this event into the single job
-   * `event--undefined`. The guard SPREADS the stored payload; it never builds fresh.
+   * jobId from it via `buildJobId(event, correlationId)` (BAL-531), so a missing one collapses
+   * every promise of this event into the single job for `correlationId: undefined`. The guard
+   * SPREADS the stored payload; it never builds fresh.
    */
   it('preserves correlationId (and every other stored field) on the rebuilt payload', async () => {
     mockUnreadSummaryFor.mockResolvedValue(
@@ -356,7 +357,8 @@ describe('scheduleConversationUnreadDigest', () => {
 
   /**
    * ⚠⚠ THE HIGH-SEVERITY REGRESSION THIS TEST EXISTS FOR. `publisher.publish` derives the
-   * BullMQ jobId as `${event}--${correlationId}`, and `lib/queue.ts` retains completed jobs
+   * BullMQ jobId as `buildJobId(event, correlationId)` (BAL-531), and `lib/queue.ts` retains
+   * completed jobs
    * `{ count: 100 }` on ONE SHARED queue. A correlationId stable per (conversation,
    * recipient) FOREVER — which is what the plan specified and called "stable per promise" —
    * therefore collides with its OWN EARLIER SEND for days at pre-launch volume:

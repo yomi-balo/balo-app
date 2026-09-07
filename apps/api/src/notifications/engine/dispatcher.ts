@@ -1,6 +1,6 @@
 import { createLogger } from '@balo/shared/logging';
 import type { EmailAttachmentSpec } from '@balo/shared/notifications';
-import { getQueue } from '../../lib/queue.js';
+import { buildJobId, getQueue } from '../../lib/queue.js';
 import type { NotificationChannel, NotificationRule, RuleContext } from './rules.js';
 
 const log = createLogger('notification-dispatcher');
@@ -72,10 +72,15 @@ async function enqueueDelivery(
 
   const queueName = CHANNEL_QUEUES[rule.channel];
   const channelQueue = getQueue(queueName);
-  const jobId = `${rule.template}--${recipientId}--${context.payload.correlationId}`;
 
+  // `context.payload` is `Record<string, unknown>` (the resolver hydrates it from an arbitrary
+  // published payload), so `correlationId` is not statically a `string` here the way it is
+  // everywhere `buildJobId` is called from typed job data. `String(...)` matches the RUNTIME
+  // behaviour the deleted `` `${rule.template}--${recipientId}--${correlationId}` `` template
+  // literal already had — both stringify identically for every value that reaches this line in
+  // practice (the publish route's Zod schema requires `correlationId: string`).
   await channelQueue.add(rule.template, deliveryPayload, {
-    jobId,
+    jobId: buildJobId(rule.template, recipientId, String(context.payload.correlationId)),
     attempts: 3,
     backoff: { type: 'exponential', delay: 2000 },
   });

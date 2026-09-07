@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockAdd = vi.fn().mockResolvedValue(undefined);
-vi.mock('../lib/queue.js', () => ({
+vi.mock('../lib/queue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/queue.js')>()),
   getQueue: vi.fn(() => ({ add: mockAdd })),
 }));
 
@@ -41,7 +42,7 @@ describe('notificationEvents.publish', () => {
   it('sanitises colons out of the jobId — BullMQ rejects them outright', async () => {
     // The regression this pins: credit correlationIds ARE ledger idempotency keys, and those
     // are colon-joined (`manual_purchase:{piId}`). BullMQ rejects a jobId whose colon count is
-    // not 0 or exactly 2 (a legacy repeatable-job carve-out — see toJobId's docblock), so the
+    // not 0 or exactly 2 (a legacy repeatable-job carve-out — see buildJobId's docblock), so the
     // one-colon and 3+-colon shapes had never delivered a notification; it surfaced only as a
     // best-effort log line beside an already-committed money effect, which is why it went
     // unnoticed. The pre-existing cases above all use colon-free ids, so they could never
@@ -118,7 +119,7 @@ describe('notificationEvents.publish', () => {
         payload,
       }),
       expect.objectContaining({
-        jobId: 'expert.application_submitted--app-456',
+        jobId: 'expert.application__submitted--app-456',
       })
     );
   });
