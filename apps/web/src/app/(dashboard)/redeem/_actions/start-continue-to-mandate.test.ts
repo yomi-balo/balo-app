@@ -134,5 +134,8 @@ describe('startContinueToMandate', () => {
     expect(await startContinueToMandate()).toEqual({ status: 'forbidden' });
     expect(mockLoggedFetch).not.toHaveBeenCalled();
     expect(mockFindByCompanyId).not.toHaveBeenCalled();
+    // The impersonation guard runs BEFORE the MANAGE_BILLING read — a refusal never pays for a
+    // membership DB round-trip.
+    expect(mockHasCapability).not.toHaveBeenCalled();
   });
 });

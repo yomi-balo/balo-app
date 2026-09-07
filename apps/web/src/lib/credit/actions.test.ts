@@ -1541,7 +1541,7 @@ describe('credit actions', () => {
       }
     );
 
-    it('⚠ the refusal names the acting company, the specific action, and the acting user', async () => {
+    it("⚠ the refusal names the acting company, the specific action, and the session's user id", async () => {
       await removeSavedCardAction();
 
       expect(mockLogWarn).toHaveBeenCalledWith(IMPERSONATION_REFUSAL_MESSAGE, {

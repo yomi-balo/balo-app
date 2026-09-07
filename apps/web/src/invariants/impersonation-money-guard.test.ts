@@ -69,6 +69,11 @@ import {
  *    (`exportedAsyncFunctionSegmentsOf`): each export from its own `export async function` up to
  *    the next one (or EOF) is sliced out, and only THAT segment's own `requireBillingActor(...)`
  *    calls count toward gating IT. Neither gap above can pass this version.
+ *    ⚠ KNOWN APPROXIMATION: a private (non-exported) helper defined BETWEEN two exports falls
+ *    inside the PRECEDING export's sliced body segment, not its own — `exportedAsyncFunctionSegmentsOf`
+ *    only splits on `export async function`. This is acceptable: a `requireBillingActor(...)` call
+ *    inside such a helper still names a real action, and the per-export self-naming requirement I7
+ *    enforces is unaffected either way.
  *
  * ⚠ A REPO-WIDE "every money action carries this guard" scan is DEFERRED, NOT IMPOSSIBLE. The
  * blocker is the same one `onboarding-mutation-gate.test.ts:217-238` documents: ~35 shipped actions
@@ -85,11 +90,13 @@ import {
  * Neither I7 nor I6 needs import-following: every gated action in both surfaces calls its gate
  * directly, by name, from its own body.
  *
- * ⚠ (fix round 3, human pre-merge review) — `scanRouteSources` runs ONCE, hoisted to a module-scope
- * const (`ALL_FILES`, below), not re-invoked inside each `it` block. It walks ~1,271 files; the
- * previous version paid that cost in six of the seven tests here. Matches the module-scope-const
+ * ⚠ (fix round 3, human pre-merge review) — `scanRouteSources` runs ONCE, hoisted to a
+ * describe-scope const (`ALL_FILES`, below, declared at the top of the `describe` block rather
+ * than inside an `it`), not re-invoked inside each `it` block. It walks ~1,271 files; the
+ * previous version paid that cost in six of the seven tests here. Matches the describe-scope-const
  * pattern this directory already uses elsewhere (e.g. `join-link-never-writes.test.ts`,
- * `review-link-never-writes.test.ts`, `request-file-no-lens-gate.test.ts`).
+ * `review-link-never-writes.test.ts`, `request-file-no-lens-gate.test.ts`) — none of those hoist
+ * all the way to true module scope either.
  *
  * NO REGEX ANYWHERE, per this directory's S5852 convention — `indexOf`/`includes`/`startsWith`
  * only.
@@ -208,7 +215,7 @@ const SRC_DIR = resolveRouteDir(['src', 'apps/web/src']);
 
 describe('BAL-528 — destructive money actions refuse under an impersonated session', () => {
   // (fix round 3, human pre-merge review) — hoisted to run the ~1,271-file walk ONCE for the whole
-  // suite, matching this directory's established module-scope-const pattern, rather than
+  // suite, matching this directory's established describe-scope-const pattern, rather than
   // re-walking it inside six of the seven `it` blocks below.
   const ALL_FILES: ScannedFile[] = scanRouteSources(SRC_DIR, '', [
     'node_modules',
@@ -347,6 +354,24 @@ describe('BAL-528 — destructive money actions refuse under an impersonated ses
     // form.
     const serverActionFiles = redeemFiles.filter((f) => hasUseServerDirective(f.raw));
     expect(serverActionFiles.length).toBeGreaterThanOrEqual(2);
+
+    // Completeness pin (round-2 review) — `hasUseServerDirective` only recognises a MODULE-LEVEL
+    // directive (the first real statement in the file). A redeem/_actions/*.ts file using an
+    // inline, FUNCTION-LEVEL 'use server' directive instead would silently fail that check and
+    // drop out of `serverActionFiles` — and therefore out of the `unguarded` check below too,
+    // never tripping I6 even if it moved money with no guard call. Asserting the two counts equal
+    // closes that blind spot: every .ts file this scan finds under the directory must either carry
+    // a module-level 'use server', or be a conscious, reviewed exclusion added to this test.
+    expect(
+      serverActionFiles.length,
+      `A .ts file under ${REDEEM_ACTIONS_DIR}/ has no MODULE-LEVEL 'use server' directive — it ` +
+        'must either gain one, or be consciously added to an exclusion in this test (an inline, ' +
+        "function-level 'use server' directive is invisible to hasUseServerDirective and would " +
+        `silently escape this gate check):\n  ${redeemFiles
+          .filter((f) => !hasUseServerDirective(f.raw))
+          .map((f) => f.rel)
+          .join('\n  ')}`
+    ).toBe(redeemFiles.length);
 
     const unguarded = serverActionFiles
       .filter((f) => !f.code.includes(GUARD_FUNCTION))

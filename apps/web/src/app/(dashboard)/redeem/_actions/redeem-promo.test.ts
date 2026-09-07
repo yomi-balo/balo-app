@@ -192,5 +192,8 @@ describe('redeemPromoCode', () => {
     expect(mockRedeem).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
+    // The impersonation guard runs BEFORE the MANAGE_BILLING read — a refusal never pays for a
+    // membership DB round-trip.
+    expect(mockHasCapability).not.toHaveBeenCalled();
   });
 });
