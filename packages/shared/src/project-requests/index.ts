@@ -58,6 +58,32 @@ export function narrowToDeclinableRelationshipStatus(
 }
 
 /**
+ * Which part of a submitted proposal a client's change request targets. Mirrors the DB
+ * `proposal_change_section` pgEnum (`packages/db/src/schema/enums.ts`), which is the source of
+ * truth and which the `proposals.section` column enforces.
+ *
+ * ⚠ RE-DECLARED, NOT DERIVED FROM `@balo/db` — deliberately, for the same reason as the two
+ * tuples below it: this module is value-imported from a client island
+ * (`components/balo/project-request/proposal/changes-modal.tsx`), and a client component that
+ * value-imports `@balo/db` breaks the web build. Keeping the tuple dependency-free is the price
+ * of a single source that both apps and the browser bundle can reach.
+ *
+ * BAL-427 — before this tuple the five values were spelled SIX times (the pgEnum, the shared
+ * notification payload as a bare `string`, the publish Zod arm, the Server Action's input gate,
+ * and twice in the modal). Four of those now read from here.
+ */
+export const PROPOSAL_CHANGE_SECTIONS = [
+  'general',
+  'milestones',
+  'pricing',
+  'payment_terms',
+  'timeline',
+] as const;
+
+/** @see PROPOSAL_CHANGE_SECTIONS */
+export type ProposalChangeSection = (typeof PROPOSAL_CHANGE_SECTIONS)[number];
+
+/**
  * Why a request was CLOSED (`project_request_close_reason`). `withdrawn` is the CLIENT arm's
  * only reason — closing your own request IS a withdrawal, so it is stated rather than chosen;
  * the Balo arm picks one of the other three.

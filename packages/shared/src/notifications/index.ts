@@ -23,7 +23,11 @@ import type { CashCreditReason, MeetingSettlementShape } from '../credit';
  * for the same reason the settlement shapes above are. `../project-requests` is this package's
  * own dependency-free home for them (a client island cannot value-import `@balo/db`).
  */
-import type { DeclinableRelationshipStatus, ProjectRequestCloseReason } from '../project-requests';
+import type {
+  DeclinableRelationshipStatus,
+  ProjectRequestCloseReason,
+  ProposalChangeSection,
+} from '../project-requests';
 
 // ── Preview text (BAL-424) ─────────────────────────────────────────────────────────────
 //
@@ -132,7 +136,7 @@ export interface ProjectChangesRequestedPayload {
   expertProfileId: string; // → resolver hydrates data.expert; recipient:'expert'
   clientName: string; // requesting client's display name — email/in-app body
   projectTitle: string; // request title — email/in-app body
-  section: string; // which part of the proposal needs work
+  section: ProposalChangeSection; // which part of the proposal needs work
   note: string; // the client's change note — email/in-app body
 }
 
@@ -220,7 +224,10 @@ export interface EngagementMilestoneRevertedPayload {
  * rather than spelled out as an inline union at each use, so the notification payload
  * below and the web action that builds its `changeSummary` cannot drift apart.
  */
-export type MilestoneChangeKind = 'added' | 'edited' | 'removed';
+export const MILESTONE_CHANGE_KINDS = ['added', 'edited', 'removed'] as const;
+
+/** @see MILESTONE_CHANGE_KINDS */
+export type MilestoneChangeKind = (typeof MILESTONE_CHANGE_KINDS)[number];
 
 export interface EngagementScopeChangedPayload {
   correlationId: string; // dedup/debounce key — see Decision D

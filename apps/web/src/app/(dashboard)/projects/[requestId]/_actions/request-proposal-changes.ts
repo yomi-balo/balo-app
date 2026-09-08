@@ -5,6 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { proposalsRepository, InvalidProposalTransitionError, type Proposal } from '@balo/db';
+import { PROPOSAL_CHANGE_SECTIONS } from '@balo/shared/project-requests';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
@@ -18,9 +19,7 @@ const inputSchema = z.object({
   // current, and belong to the claimed relationship.
   proposalId: z.uuid(),
   // Which part of the proposal needs work — the DB `proposalChangeSectionEnum`.
-  section: z
-    .enum(['general', 'milestones', 'pricing', 'payment_terms', 'timeline'])
-    .default('general'),
+  section: z.enum(PROPOSAL_CHANGE_SECTIONS).default('general'),
   // Required free-text note to the expert.
   note: z.string().trim().min(1, 'A note is required').max(4000),
 });
