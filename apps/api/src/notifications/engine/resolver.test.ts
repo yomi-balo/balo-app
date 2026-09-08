@@ -4,6 +4,7 @@ const {
   mockFindById,
   mockFindUserIdByProfileId,
   mockCompanyFindById,
+  mockCompanyFindNameById,
   mockFindIdsByPlatformRoles,
   mockFindUserIdsByProfileIds,
   mockListByRequest,
@@ -14,6 +15,7 @@ const {
   mockFindById: vi.fn(),
   mockFindUserIdByProfileId: vi.fn(),
   mockCompanyFindById: vi.fn(),
+  mockCompanyFindNameById: vi.fn(),
   mockFindIdsByPlatformRoles: vi.fn(),
   mockFindUserIdsByProfileIds: vi.fn(),
   mockListByRequest: vi.fn(),
@@ -31,7 +33,7 @@ vi.mock('@balo/db', () => ({
     findUserIdByProfileId: mockFindUserIdByProfileId,
     findUserIdsByProfileIds: mockFindUserIdsByProfileIds,
   },
-  companiesRepository: { findById: mockCompanyFindById },
+  companiesRepository: { findById: mockCompanyFindById, findNameById: mockCompanyFindNameById },
   proposalsRepository: { listByRequest: mockListByRequest },
   partyMembershipsRepository: {
     listAdminUserIds: mockListAdminUserIds,
@@ -130,7 +132,7 @@ describe('resolveContext', () => {
 
   it('hydrates data.company when companyId is present (e.g. project.match_requested)', async () => {
     const mockCompany = { id: 'company-1', name: 'Acme Inc' };
-    mockCompanyFindById.mockResolvedValue(mockCompany);
+    mockCompanyFindNameById.mockResolvedValue(mockCompany);
 
     const context = await resolveContext('project.match_requested', {
       correlationId: 'req-3',
@@ -139,7 +141,7 @@ describe('resolveContext', () => {
       title: 'Lead routing rebuild',
     });
 
-    expect(mockCompanyFindById).toHaveBeenCalledWith('company-1');
+    expect(mockCompanyFindNameById).toHaveBeenCalledWith('company-1');
     expect(context.data.company).toEqual(mockCompany);
     // No expert hydration for match mode.
     expect(mockFindUserIdByProfileId).not.toHaveBeenCalled();
@@ -151,6 +153,63 @@ describe('resolveContext', () => {
       userId: 'user-123',
     });
 
+    expect(mockCompanyFindNameById).not.toHaveBeenCalled();
+  });
+
+  // ── BAL-530 — data.company is a NARROW projection, never the whole row ──
+
+  /**
+   * A REALISTIC whole `companies` row (every column as of migration 0084), returned by the
+   * `findById` mock ONLY. Its job is to make the key-set whitelist below MUTATION-PROVABLE:
+   * revert the `data.company` hydration in `resolveContext` to `findById` and the whitelist
+   * fails on SHAPE, enumerating every leaked column by name. The whitelist is asserted FIRST,
+   * ahead of the mechanism assertions, so that it — not a `toHaveBeenCalled` check — is what
+   * reports the revert. It also catches a mutation the mechanism assertions cannot: a
+   * hand-spread widening such as `{ ...(await findNameById(id)), billingEmail }`.
+   *
+   * ⚠ `mockCompanyFindById` MUST stay wired into the `vi.mock('@balo/db')` factory above. Drop
+   * it and the revert throws `TypeError: findById is not a function` instead of failing an
+   * assertion — a mutation proof that dies on a TypeError proves nothing about the shape.
+   *
+   * Staleness here is harmless: if `companies` gains a column this fixture does not list, the
+   * whitelist still fails on the revert (14 keys ≠ 2), so there is no maintenance trap.
+   */
+  const FULL_COMPANY_ROW = {
+    id: 'company-1',
+    name: 'Acme Inc',
+    slug: 'acme-inc',
+    logoUrl: 'https://cdn.example.com/acme.png',
+    domain: 'acme.example.com',
+    isPersonal: false,
+    billingEmail: 'billing@acme.example.com',
+    billingEmailSource: 'seeded',
+    billingEmailSetByUserId: 'user-9',
+    billingEmailSetAt: new Date('2026-08-01T00:00:00Z'),
+    domainJoinMode: 'auto',
+    membershipAuthority: 'balo',
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    updatedAt: new Date('2026-08-01T00:00:00Z'),
+  };
+
+  it('hydrates data.company from the NARROW projection — id + name only (BAL-530)', async () => {
+    mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Acme Inc' });
+    mockCompanyFindById.mockResolvedValue(FULL_COMPANY_ROW);
+
+    const context = await resolveContext('project.match_requested', {
+      correlationId: 'req-530',
+      companyId: 'company-1',
+    });
+
+    // 1. OUTCOME — a POSITIVE whitelist on what is serialized into the per-channel BullMQ job
+    //    (`dispatcher.ts:66` → `channelQueue.add`). Positive, not `not.toHaveProperty(...)`: a
+    //    negative list goes vacuously green the moment `companies` gains a column nobody
+    //    remembers to add to it. This fails on ANY widening, including columns not yet added.
+    //    Asserted BEFORE the mechanism checks so a revert to `findById` is reported as a shape
+    //    failure that names the leaked columns, not as a bare `toHaveBeenCalled` miss.
+    expect(Object.keys(context.data.company as object).sort()).toEqual(['id', 'name']);
+
+    // 2. MECHANISM — the narrow read is the one that ran.
+    expect(mockCompanyFindNameById).toHaveBeenCalledWith('company-1');
     expect(mockCompanyFindById).not.toHaveBeenCalled();
   });
 
@@ -445,7 +504,7 @@ describe('resolveContext', () => {
   describe('credit.saved_card.detached hydration (BAL-521 §3)', () => {
     it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry)', async () => {
       mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
 
       const context = await resolveContext('credit.saved_card.detached', {
         correlationId: 'saved-card-detached.wallet-1.evt_1',
@@ -462,7 +521,7 @@ describe('resolveContext', () => {
 
     it('hydrates data.detachedByName (bare) and data.detachedByLabel ("Name @ Company") from detachedByUserId', async () => {
       mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana', lastName: 'Okoro' });
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
       mockListBillingUserIds.mockResolvedValue([]);
 
       const context = await resolveContext('credit.saved_card.detached', {
@@ -482,7 +541,7 @@ describe('resolveContext', () => {
 
     it('degrades to "A teammate" when the actor has no resolvable name', async () => {
       mockFindById.mockResolvedValue({ id: 'user-1', firstName: null, lastName: null });
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
       mockListBillingUserIds.mockResolvedValue([]);
 
       const context = await resolveContext('credit.saved_card.detached', {
@@ -502,7 +561,7 @@ describe('resolveContext', () => {
     });
 
     it('the stripe_webhook door has no actor: neither detachedByName nor detachedByLabel is set', async () => {
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
       mockListBillingUserIds.mockResolvedValue([]);
 
       const context = await resolveContext('credit.saved_card.detached', {
@@ -521,7 +580,7 @@ describe('resolveContext', () => {
 
     it('(D12) never hydrates data.user and never reads a userId key — the actor key is detachedByUserId, not userId', async () => {
       mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana' });
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
       mockListBillingUserIds.mockResolvedValue([]);
 
       const context = await resolveContext('credit.saved_card.detached', {
@@ -549,7 +608,7 @@ describe('resolveContext', () => {
       // un-hydrated payload fans out to nobody and throws nothing). Deleting that line fails
       // HERE, by name.
       mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
 
       const context = await resolveContext('credit.receivable.cleared', {
         correlationId: 'receivable_cleared:ledger-1',
@@ -569,7 +628,7 @@ describe('resolveContext', () => {
   describe('billing.email_changed hydration (BAL-522)', () => {
     it('hydrates data.billingUserIds from companyId (the BILLING_FANOUT_EVENTS entry) — the silent-failure guard', async () => {
       mockListBillingUserIds.mockResolvedValue(['owner-1', 'admin-1']);
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
 
       const context = await resolveContext('billing.email_changed', {
         correlationId: 'billing-email-changed.company-1.audit-1',
@@ -584,7 +643,7 @@ describe('resolveContext', () => {
 
     it('hydrates data.changedByName (bare) and data.changedByLabel ("Name @ Company") from changedByUserId', async () => {
       mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana', lastName: 'Okoro' });
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
       mockListBillingUserIds.mockResolvedValue([]);
 
       const context = await resolveContext('billing.email_changed', {
@@ -601,7 +660,7 @@ describe('resolveContext', () => {
 
     it('degrades to "A teammate" (no org clause) when the actor has no resolvable name', async () => {
       mockFindById.mockResolvedValue({ id: 'user-1', firstName: null, lastName: null });
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
       mockListBillingUserIds.mockResolvedValue([]);
 
       const context = await resolveContext('billing.email_changed', {
@@ -620,7 +679,7 @@ describe('resolveContext', () => {
     // be mailed twice (once via the fan-out, once as a `self` recipient).
     it('never hydrates data.user — the actor key is changedByUserId, not userId', async () => {
       mockFindById.mockResolvedValue({ id: 'user-1', firstName: 'Dana' });
-      mockCompanyFindById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
+      mockCompanyFindNameById.mockResolvedValue({ id: 'company-1', name: 'Northwind Industrial' });
       mockListBillingUserIds.mockResolvedValue([]);
 
       const context = await resolveContext('billing.email_changed', {
