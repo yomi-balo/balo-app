@@ -1524,7 +1524,13 @@ describe('credit actions', () => {
   // `@/lib/auth/session` mock above), so no new mock plumbing is needed.
   describe('BAL-528 impersonation refusal', () => {
     beforeEach(() => {
-      mockRequireUser.mockResolvedValue({ id: 'user-1', isImpersonating: true });
+      // BAL-553 — `impersonatorUserId` set alongside the flag, so the exact-payload test below
+      // is a real mutation proof: revert the guard's payload change and it fails.
+      mockRequireUser.mockResolvedValue({
+        id: 'user-1',
+        isImpersonating: true,
+        impersonatorUserId: 'admin-1',
+      });
     });
 
     // Six mutations, one table — near-identical bodies otherwise, which is exactly the shape
@@ -1583,6 +1589,7 @@ describe('credit actions', () => {
         action: 'removeSavedCardAction',
         companyId: 'company-1',
         actorUserId: 'user-1',
+        impersonatorUserId: 'admin-1',
       });
     });
 

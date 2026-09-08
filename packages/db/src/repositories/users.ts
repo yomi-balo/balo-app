@@ -112,9 +112,12 @@ export const usersRepository = {
    * - `expertApprovedAt` — taken from the SAME left-joined `expert_profiles` row
    *   that already produces `expertProfileId`, so the derived expert workspace and
    *   the session's `expertProfileId` can never point at different profiles.
-   *   `verticalId` is deliberately NOT selected: nothing consumes it, and this row
-   *   feeds the session cookie, so an unused column is dead widening on a
-   *   session-bound read.
+   *
+   * BAL-553 widened it by a THIRD column, from the SAME left-joined row: `verticalId`.
+   * `buildImpersonatedSessionUser` (`apps/web`) needs it to seal the impersonated TARGET's own
+   * `SessionUser.verticalId` in one round trip rather than a second query — the left join
+   * already produces it for free. The pre-BAL-553 "deliberately NOT selected, nothing consumes
+   * it" reasoning no longer holds now that a real consumer exists.
    *
    * ⚠ Known pre-existing wart, deliberately NOT fixed here: the left join +
    * `.limit(1)` picks an arbitrary profile when a user holds profiles in several
@@ -132,6 +135,7 @@ export const usersRepository = {
         expertProfileId: expertProfiles.id,
         activeCompanyId: users.activeCompanyId,
         expertApprovedAt: expertProfiles.approvedAt,
+        verticalId: expertProfiles.verticalId,
       })
       .from(users)
       .leftJoin(expertProfiles, eq(expertProfiles.userId, users.id))

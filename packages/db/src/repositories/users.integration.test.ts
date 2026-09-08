@@ -709,8 +709,8 @@ describe('usersRepository.findEmailById — the PROJECTED actor-address read (BA
 
 // ── BAL-494: the workspace column + the widened session-sync projection ───────
 
-describe('usersRepository.findForSessionSync — widened projection (BAL-494)', () => {
-  it('returns exactly the eight session-sync columns and NO PII (email / workosId / phone)', async () => {
+describe('usersRepository.findForSessionSync — widened projection (BAL-494 / BAL-553)', () => {
+  it('returns exactly the nine session-sync columns and NO PII (email / workosId / phone)', async () => {
     const user = await userFactory();
 
     const row = await usersRepository.findForSessionSync(user.id);
@@ -727,15 +727,14 @@ describe('usersRepository.findForSessionSync — widened projection (BAL-494)', 
       'onboardingCompleted',
       'platformRole',
       'status',
+      'verticalId',
     ]);
     expect(row).not.toHaveProperty('email');
     expect(row).not.toHaveProperty('workosId');
     expect(row).not.toHaveProperty('phone');
-    // `verticalId` has no consumer — it must NOT be re-added to a session-bound read.
-    expect(row).not.toHaveProperty('expertVerticalId');
   });
 
-  it('returns nulls for the two new columns on a plain user with no expert profile', async () => {
+  it('returns nulls for the widened columns on a plain user with no expert profile', async () => {
     const user = await userFactory();
 
     const row = await usersRepository.findForSessionSync(user.id);
@@ -743,9 +742,22 @@ describe('usersRepository.findForSessionSync — widened projection (BAL-494)', 
     expect(row?.activeCompanyId).toBeNull();
     expect(row?.expertProfileId).toBeNull();
     expect(row?.expertApprovedAt).toBeNull();
+    expect(row?.verticalId).toBeNull();
     // The pre-BAL-494 columns are unaffected by the widening.
     expect(row?.activeMode).toBe('client');
     expect(row?.status).toBe('active');
+  });
+
+  // BAL-553 — `buildImpersonatedSessionUser` seals the impersonation TARGET's own verticalId
+  // from this same left-joined row, in one round trip.
+  it('returns the expert profile verticalId from the SAME left-joined row as expertProfileId', async () => {
+    const user = await userFactory();
+    const profile = await expertFactory({ userId: user.id });
+
+    const row = await usersRepository.findForSessionSync(user.id);
+
+    expect(row?.expertProfileId).toBe(profile.id);
+    expect(row?.verticalId).toBe(profile.verticalId);
   });
 
   it('returns the stored activeCompanyId once a workspace choice is persisted', async () => {

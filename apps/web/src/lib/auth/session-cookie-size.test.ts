@@ -1,8 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { sealData } from 'iron-session';
 import type { ActiveWorkspacePointer, Workspace } from '@balo/shared/workspaces';
 import { COOKIE_NAME } from './session-config';
 import type { SessionData, SessionUser } from './session';
+
+// BAL-553 fix round 2, F6 — `sealPreservedAdminSession` reads `sessionConfig.password`, which
+// `session-config.ts` reads from `process.env.WORKOS_COOKIE_PASSWORD` at MODULE LOAD time. Set
+// before the hoisted imports below so the real seal path has a real (test) password, the same
+// `vi.hoisted` + env-var technique `impersonation-guard-end-to-end.test.ts` uses.
+vi.hoisted(() => {
+  process.env.WORKOS_COOKIE_PASSWORD ??=
+    'session-cookie-size-preserved-admin-test-password-0123456789';
+});
+
+import {
+  sealPreservedAdminSession,
+  PRESERVED_ADMIN_COOKIE,
+} from './impersonation-preserved-session';
 
 /**
  * BAL-494 orchestrator ruling R2 — THE COOKIE BUDGET GUARD.
@@ -118,6 +132,37 @@ describe('balo_session cookie budget (BAL-494 R2)', () => {
     // was ~2859 before `activeWorkspace` narrowed to the `ActiveWorkspacePointer` shape). If
     // this fails, something was added to SessionData — do NOT raise the bound; work out what
     // grew.
+    expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
+    expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
+  });
+
+  // BAL-553 — the three impersonation fields (`isImpersonating`, `impersonatorUserId`,
+  // `impersonationExpiresAt`) are small (a boolean, a uuid, an epoch-ms number), but they are
+  // only ever ADDED on top of an otherwise fully-populated session — no `accessToken` /
+  // `refreshToken` are dropped from the sealed payload (only from the LIVE `session.accessToken`
+  // object, which this fixture cannot model), so this is the worst-case measurement.
+  it('an impersonated session (with the three added fields) still seals well under budget', async () => {
+    const impersonatedUser: SessionUser = {
+      ...user,
+      isImpersonating: true,
+      impersonatorUserId: '11111111-1111-4111-8111-111111111111',
+      impersonationExpiresAt: 1_700_000_000_000,
+    };
+    const bytes = await sealedCookieBytes({ ...sessionData, user: impersonatedUser });
+
+    expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
+    expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
+  });
+
+  // BAL-553 fix round 2, F6 — the ticket asked for a budget answer on BOTH cookies, and only
+  // `balo_session` had one. `balo_admin_session` carries the SAME generous payload plus the
+  // `purpose` discriminator (S2), and it rides every request DURING an impersonation ALONGSIDE
+  // `balo_session` — two ~2.8KB cookies, not one. Real `sealPreservedAdminSession`, not a
+  // hand-rolled `sealData` call, so a future change to what it seals is caught here too.
+  it('the preserved-admin cookie (balo_admin_session) also seals well under the 4096-byte limit', async () => {
+    const sealed = await sealPreservedAdminSession(sessionData);
+    const bytes = `${PRESERVED_ADMIN_COOKIE}=${sealed}`.length;
+
     expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
     expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
   });

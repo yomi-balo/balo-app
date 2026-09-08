@@ -132,6 +132,24 @@ describe('reconcileFromRead (BAL-414, D3.2 web read-path)', () => {
     );
   });
 
+  // BAL-553 — the impersonating staff member's own id, threaded alongside the boolean.
+  it('BAL-553: forwards actorImpersonatorUserId to the repository when present', async () => {
+    mockApplySearchable.mockResolvedValue({ changed: false });
+
+    await reconcileFromRead({
+      expertProfileId: 'profile-1',
+      actorUserId: 'user-1',
+      derivation: completeDerivation(),
+      currentSearchable: false,
+      actorImpersonating: true,
+      actorImpersonatorUserId: 'admin-1',
+    });
+
+    expect(mockApplySearchable).toHaveBeenCalledWith(
+      expect.objectContaining({ actorImpersonatorUserId: 'admin-1' })
+    );
+  });
+
   it('on a true transition: logs, tracks, and publishes expert.searchability_restored', async () => {
     mockApplySearchable.mockResolvedValue({
       changed: true,

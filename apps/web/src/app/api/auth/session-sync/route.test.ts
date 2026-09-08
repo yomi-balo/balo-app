@@ -112,6 +112,10 @@ function createMockSession(userOverrides: Record<string, unknown> = {}) {
       // `session.user.activeWorkspace` (asserted on below) typechecks. BAL-507 (R-A): the
       // sealed field is an `ActiveWorkspacePointer`, not a `Workspace`.
       activeWorkspace: undefined as ActiveWorkspacePointer | undefined,
+      // BAL-553 — typed (not left to inference) so the AC 4 survival assertions typecheck.
+      isImpersonating: undefined as boolean | undefined,
+      impersonatorUserId: undefined as string | undefined,
+      impersonationExpiresAt: undefined as number | undefined,
       ...userOverrides,
     },
     save: vi.fn().mockResolvedValue(undefined),
@@ -427,6 +431,177 @@ describe('GET /api/auth/session-sync', () => {
 
       expect(response.status).toBe(307);
       expect(getRedirectLocation(response)).toBe('/projects/123');
+    });
+
+    // BAL-553 AC 4 — the impersonation fields must survive the drift repair. The route patches
+    // `session.user` IN PLACE (never rebuilds it), so this proves that continues to hold once
+    // the fields exist, plus a mutation control (delete the fields from the seeded session) so
+    // the assertion cannot be vacuous.
+    it('AC 4 — isImpersonating / impersonatorUserId / impersonationExpiresAt survive the repair, with repaired values patched in', async () => {
+      const session = createMockSession({
+        activeMode: 'client',
+        platformRole: 'user',
+        onboardingCompleted: false,
+        expertProfileId: undefined,
+        isImpersonating: true,
+        impersonatorUserId: 'admin-1',
+        impersonationExpiresAt: 1_700_000_000_000,
+      });
+      mockGetSession.mockResolvedValue(session);
+      // BAL-553 fix round 2, F3 — `platformRole` stays `'user'` here (NOT `'admin'`, its
+      // pre-F3 value) so this general "the repair patches survive" test doesn't collide with
+      // the NEW staff-promotion fail-closed guard below, which has its own dedicated test.
+      mockFindForSessionSync.mockResolvedValue(
+        createDbUser({
+          activeMode: 'expert',
+          platformRole: 'user',
+          onboardingCompleted: true,
+          expertProfileId: 'ep-789',
+        })
+      );
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(true));
+
+      await GET(makeRequest('returnTo=/settings'));
+
+      // The repaired values landed…
+      expect(session.user.activeMode).toBe('expert');
+      expect(session.user.platformRole).toBe('user');
+      expect(session.user.onboardingCompleted).toBe(true);
+      // …and the three impersonation fields survived, untouched.
+      expect(session.user.isImpersonating).toBe(true);
+      expect(session.user.impersonatorUserId).toBe('admin-1');
+      expect(session.user.impersonationExpiresAt).toBe(1_700_000_000_000);
+      expect(session.save).toHaveBeenCalled();
+    });
+
+    it('AC 4 mutation control — a session seeded WITHOUT the impersonation fields does NOT have them after the repair (proves the assertion above is not vacuous)', async () => {
+      const session = createMockSession({
+        activeMode: 'client',
+        platformRole: 'user',
+        onboardingCompleted: false,
+        expertProfileId: undefined,
+      });
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(
+        createDbUser({
+          activeMode: 'expert',
+          platformRole: 'admin',
+          onboardingCompleted: true,
+          expertProfileId: 'ep-789',
+        })
+      );
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(true));
+
+      await GET(makeRequest('returnTo=/settings'));
+
+      expect(session.user.isImpersonating).toBeUndefined();
+      expect(session.user.impersonatorUserId).toBeUndefined();
+      expect(session.user.impersonationExpiresAt).toBeUndefined();
+    });
+
+    it('AC 4 — the repair-write and sync-line log payloads gain impersonatorUserId when present', async () => {
+      const impersonatedSession = createMockSession({
+        activeMode: 'expert',
+        impersonatorUserId: 'admin-1',
+        isImpersonating: true,
+      });
+      mockGetSession.mockResolvedValue(impersonatedSession);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ activeMode: 'expert' }));
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(false));
+
+      await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        'Workspace repair: activeMode demoted to client',
+        expect.objectContaining({
+          userId: impersonatedSession.user.id,
+          impersonatorUserId: 'admin-1',
+        })
+      );
+      expect(mockLogInfo).toHaveBeenCalledWith(
+        'Session synced: drift detected and patched',
+        expect.objectContaining({
+          userId: impersonatedSession.user.id,
+          impersonatorUserId: 'admin-1',
+        })
+      );
+    });
+
+    // BAL-553 fix round 1, B2 — the sibling half of the test above. Replacing BOTH conditional
+    // spreads in `route.ts` with an unconditional `impersonatorUserId: session.user.impersonatorUserId`
+    // makes every test in this file pass unchanged, because nothing pinned the ABSENT case to an
+    // EXACT key set — `objectContaining` only ever asserted the present half. `Object.keys(...)
+    // .toEqual([...])`, not `objectContaining`, is what a mutant adding an
+    // `impersonatorUserId: undefined` key cannot satisfy.
+    it('AC 4 — the repair-write and sync-line log payloads carry EXACTLY {userId} for a normal (non-impersonated) session', async () => {
+      const normalSession = createMockSession({ activeMode: 'expert' });
+      mockGetSession.mockResolvedValue(normalSession);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ activeMode: 'expert' }));
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(expertModeMaterials(false));
+
+      await GET(makeRequest('returnTo=/dashboard'));
+
+      const repairCall = mockLogInfo.mock.calls.find(
+        (call) => call[0] === 'Workspace repair: activeMode demoted to client'
+      );
+      const syncCall = mockLogInfo.mock.calls.find(
+        (call) => call[0] === 'Session synced: drift detected and patched'
+      );
+      if (repairCall === undefined) throw new Error('expected the repair log call to fire');
+      if (syncCall === undefined) throw new Error('expected the sync log call to fire');
+
+      expect(Object.keys(repairCall[1] as Record<string, unknown>)).toEqual(['userId']);
+      expect(Object.keys(syncCall[1] as Record<string, unknown>)).toEqual(['userId']);
+    });
+
+    // BAL-553 fix round 2, F3 — a SECOND super_admin promoting the impersonation TARGET to
+    // staff mid-session must not hand the impersonated session `/admin` (or any
+    // `hasPlatformCapability` gate) while `isImpersonating` stays true. Fail closed: destroy +
+    // redirect, exactly like the other invalidation arms (deleted/suspended) above.
+    it('F3 — fails closed when the impersonation target is promoted to staff mid-session', async () => {
+      const session = createMockSession({
+        activeMode: 'client',
+        platformRole: 'user',
+        onboardingCompleted: true,
+        isImpersonating: true,
+        impersonatorUserId: 'admin-1',
+        impersonationExpiresAt: 1_700_000_000_000,
+      });
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ platformRole: 'admin' }));
+
+      const response = await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(session.destroy).toHaveBeenCalledTimes(1);
+      expect(session.save).not.toHaveBeenCalled();
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(response.status).toBe(307);
+      expect(getRedirectLocation(response)).toBe('/login?error=session_expired');
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Session invalidated: impersonation target promoted to staff mid-session',
+        expect.objectContaining({
+          userId: session.user.id,
+          impersonatorUserId: 'admin-1',
+          newPlatformRole: 'admin',
+        })
+      );
+    });
+
+    it('F3 — a NON-impersonated session promoted to staff patches normally (no false positive)', async () => {
+      const session = createMockSession({
+        activeMode: 'client',
+        platformRole: 'user',
+        onboardingCompleted: true,
+      });
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ platformRole: 'admin' }));
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(materials());
+
+      await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(session.destroy).not.toHaveBeenCalled();
+      expect(session.user.platformRole).toBe('admin');
+      expect(session.save).toHaveBeenCalled();
     });
 
     it('leaves workspace fields absent (no crash) when the derivation resolves null', async () => {

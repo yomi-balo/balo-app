@@ -80,6 +80,10 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
   // ⚠ This is the ANNOTATION pattern, not BAL-528's refusal — the write proceeds. Both read the
   // same predicate; only this call site tolerates the session.
   const actorImpersonating = isImpersonatedSession(user);
+  // BAL-553 — the impersonating staff member's own id, alongside the boolean above. Omitted
+  // (via `reconcileFromRead` → `applySearchable`'s own omit-when-absent spread) on a normal
+  // session, since `user.impersonatorUserId` is undefined there.
+  const actorImpersonatorUserId = user.impersonatorUserId;
 
   // D1/D3.2 — symmetric: writes BOTH directions, conditional (a no-op when the row already
   // matches). Best-effort: a reconcile failure must never break the render, which is why
@@ -92,6 +96,7 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
       derivation,
       currentSearchable: snapshot.currentSearchable,
       actorImpersonating,
+      actorImpersonatorUserId,
     });
   } catch (error) {
     log.error('Expert searchability reconcile failed', {

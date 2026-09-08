@@ -4,6 +4,8 @@ import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
 import type { ActiveWorkspacePointer } from '@balo/shared/workspaces';
 import { sessionConfig } from './config';
+import { impersonatedSessionConfig } from './session-config';
+import { isImpersonatedSession } from './impersonation';
 import type { AuthMethodSignal } from './auth-method';
 
 export interface SessionUser {
@@ -23,6 +25,23 @@ export interface SessionUser {
   // Admin impersonation (workos-auth skill, "Admin Impersonation"): `true` for the duration of
   // an admin's impersonated session. Optional — undefined for every normal session.
   isImpersonating?: boolean;
+
+  // BAL-553 — the staff member operating this session. Present iff `isImpersonating` is true;
+  // written ONLY by markSessionAsImpersonated() in ./impersonation.ts. An ID, not an email:
+  // the refusal log line and the audit row both need something that JOINS (ruling R2).
+  impersonatorUserId?: string;
+
+  // BAL-553 — ABSOLUTE deadline (epoch ms) for this impersonated session. Every save recomputes
+  // the cookie maxAge AND the iron seal ttl as the remaining time, so re-saving cannot extend
+  // the window past this deadline. ⚠ (fix round 2, F2) — that guarantee needs a SECOND part,
+  // enforced in `getSession()` below: `iron-webcrypto` applies a fixed 60s clock-skew allowance
+  // on top of `ttl`, so a seal issued at t=1799s with `ttl` floored to 1s is still ACCEPTED (not
+  // yet expired) at t=1800..1860s — and without the guard, saving inside that window would
+  // re-seal with a FRESH `exp = now + 1s`, itself valid for another ~61s, repeatable forever.
+  // `getSession()` closes this by comparing this field against `Date.now()` directly and
+  // deleting the in-memory session once it has passed, rather than trusting iron's ttl-derived
+  // expiry alone.
+  impersonationExpiresAt?: number;
 
   // Company context (always present - personal workspace or real company)
   companyId: string;
@@ -76,7 +95,41 @@ export interface SessionData {
 
 export async function getSession() {
   const cookieStore = await cookies();
-  return getIronSession<SessionData>(cookieStore, sessionConfig);
+  const session = await getIronSession<SessionData>(cookieStore, sessionConfig);
+  // BAL-553 — arm the short config BEFORE anything can call save(). Every save() in the app
+  // (the sync route's repair, switch-workspace, complete-onboarding, …) goes through a session
+  // obtained here, so this is the ONE place that has to know, and no call site can forget.
+  // Driven by the SEALED session's own content, never by the presence of the preserved cookie:
+  // a cookie the browser controls must not be able to promote an impersonated session back to
+  // seven days. Remaining time, not a fresh 30 minutes — the deadline is absolute.
+  const user = session.user;
+  if (user !== undefined && isImpersonatedSession(user)) {
+    const remaining = ((user.impersonationExpiresAt ?? 0) - Date.now()) / 1000;
+    // ⚠⚠ (fix round 2, F2) — PAST THE DEADLINE, DO NOT ARM: `impersonatedSessionConfig` floors
+    // `ttl` at 1s, and `iron-webcrypto` grants a further fixed 60s clock-skew allowance on TOP
+    // of that — so arming with a non-positive `remaining` would still produce a seal that
+    // unseals successfully for up to ~61s, and (because `save()` is called unconditionally
+    // downstream, e.g. by the session-sync route) a client polling inside that window could
+    // re-trigger a save and get ANOTHER ~61s, indefinitely. Once the absolute deadline has
+    // passed, the ONLY correct move is to make this render see no session at all.
+    //
+    // IN-MEMORY DELETION ONLY — NEVER `session.destroy()` HERE. `getSession()` is called from
+    // React Server Component renders (the root layout, `checkSessionDrift`, …), where
+    // `cookies().set()` — which `destroy()` calls under the hood — throws
+    // ("Cookies can only be modified in a Server Action or Route Handler"). Deleting the
+    // in-memory fields makes every downstream reader (`getCurrentUser`, `requireUser`, …) see
+    // no user, which is fail-closed and safe from an RSC context; a Route Handler that wants
+    // the cookie itself cleared (e.g. session-sync's `!session?.user?.id` arm) already redirects
+    // to `/login`, which converges to the same place on the next request regardless.
+    if (remaining <= 0) {
+      delete session.user;
+      delete session.accessToken;
+      delete session.refreshToken;
+    } else {
+      session.updateConfig(impersonatedSessionConfig(remaining));
+    }
+  }
+  return session;
 }
 
 export async function getCurrentUser(): Promise<SessionUser | null> {

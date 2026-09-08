@@ -255,6 +255,17 @@ describe('getChecklistStatus', () => {
       );
     });
 
+    // BAL-553 — the impersonating staff member's own id, threaded alongside the boolean.
+    it('flags actorImpersonatorUserId when the viewing session is an admin impersonation', async () => {
+      mockUserObj = { ...EXPERT_USER, isImpersonating: true, impersonatorUserId: 'admin-1' };
+
+      await getChecklistStatus();
+
+      expect(mockReconcileFromRead).toHaveBeenCalledWith(
+        expect.objectContaining({ actorImpersonatorUserId: 'admin-1' })
+      );
+    });
+
     it('a reconcile failure is caught and logged — the render still succeeds', async () => {
       mockReconcileFromRead.mockRejectedValue(new Error('db unavailable'));
 

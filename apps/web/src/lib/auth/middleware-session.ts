@@ -12,7 +12,7 @@ import { WorkOS } from '@workos-inc/node';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import type { SessionData } from './session';
-import { sessionConfig } from './session-config';
+import { sessionConfig, impersonatedSessionConfig } from './session-config';
 
 /** Buffer before actual JWT expiry to trigger proactive refresh (seconds) */
 const REFRESH_BUFFER_SECONDS = 60;
@@ -90,6 +90,15 @@ export async function refreshSessionIfNeeded(
   request: NextRequest,
   session: IronSession<SessionData>
 ): Promise<NextResponse | null> {
+  // BAL-553 fix round 1, S3 — THIS EARLY RETURN IS LOAD-BEARING FOR THE 30-MINUTE TTL, NOT JUST
+  // A TOKEN CHECK. `startImpersonationAction` deletes BOTH `accessToken`/`refreshToken` from an
+  // impersonated session precisely so this function can never reach the `.save()` below for one
+  // — that save re-seals with the default 7-day `sessionConfig`, which would silently promote an
+  // impersonated session past its 30-minute deadline with `isImpersonating` still intact. That
+  // coupling holds today, but it is undocumented and the `workos-auth` skill's own sketch
+  // *carries* the tokens on an impersonated session — a future ticket following the skill would
+  // silently reopen this. The `impersonatorUserId` re-arm below is the DEFENSIVE backstop, not
+  // the primary guarantee: do not remove either half.
   if (!session.accessToken || !session.refreshToken) {
     return null;
   }
@@ -110,6 +119,17 @@ export async function refreshSessionIfNeeded(
     updatedSession.user = session.user;
     updatedSession.accessToken = result.accessToken;
     updatedSession.refreshToken = result.refreshToken;
+
+    // BAL-553 fix round 1, S3 — defensive re-arm BEFORE save(), independent of the early return
+    // above. Reads `impersonatorUserId` (never the literal `isImpersonating` — this file is
+    // Edge-safe and must not import `@/lib/auth/impersonation`, which pulls in the Node-only
+    // structured logger). `impersonatorUserId` is set ONLY alongside `isImpersonating` by
+    // `markSessionAsImpersonated`, so it is an equally reliable signal here.
+    if (updatedSession.user?.impersonatorUserId !== undefined) {
+      const remaining = ((updatedSession.user.impersonationExpiresAt ?? 0) - Date.now()) / 1000;
+      updatedSession.updateConfig(impersonatedSessionConfig(remaining));
+    }
+
     await updatedSession.save();
 
     return response;
