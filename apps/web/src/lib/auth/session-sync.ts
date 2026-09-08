@@ -96,7 +96,7 @@ export async function checkSessionDrift(): Promise<CheckResult> {
   //     ⚠ THERE IS DELIBERATELY NO "STALE SWITCHER LIST" CHECK. An earlier cut compared
   //     `workspaceKeys(session.user.workspaces)` against the derived list; that check existed
   //     only to keep a COOKIE-CACHED list fresh, and the list is no longer sealed into the
-  //     cookie (it overran the 4096-byte browser limit at five to eight company workspaces —
+  //     cookie (it overran the 4096-byte browser limit at five company workspaces —
   //     see `SessionUser`, and `session-cookie-size.test.ts` for the measurement).
   //     With the list always derived fresh per request there is nothing stale to detect, and
   //     the three checks that remain are the authz-relevant ones: (2) the active workspace is

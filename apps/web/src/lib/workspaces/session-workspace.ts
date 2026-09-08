@@ -14,7 +14,7 @@ import type { SessionUser } from '@/lib/auth/session';
  *
  * ⚠ WRITES THE POINTER (`activeWorkspace`) AND THE PROJECTION — NEVER THE LIST.
  * `derived.workspaces` is deliberately dropped on the floor here: the sealed cookie has a hard
- * 4096-byte browser limit and a list of five to eight company workspaces overruns it, at which
+ * 4096-byte browser limit and a list of five company workspaces overruns it, at which
  * point the browser silently discards the `Set-Cookie` and the user is locked out with no
  * server-side error (security fix round 2; see `SessionUser`'s docblock, and
  * `lib/auth/session-cookie-size.test.ts` for the measured budget). The list is re-derived

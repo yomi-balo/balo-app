@@ -65,10 +65,22 @@ interface CompanyWorkspaceBase {
  * this arm is a statement about what is KNOWN, not a licence to gate on it. Authorization
  * resolves a capability at the call site: `hasCapability(actor, capability, { companyId })` in
  * `@balo/shared/authz`. Reading `.role` off a workspace to decide what someone MAY DO is the
- * exact drift ADR-1029 exists to prevent, and it is now CI-enforced —
- * `apps/web/src/invariants/workspace-role-presentation.test.ts` fails the build on every DIRECT
- * `.role` read (property access, element access, and destructuring — including renamed and
- * parameter forms) off a `Workspace`-typed value outside its two-file allowlist.
+ * exact drift ADR-1029 exists to prevent, and it is CI-enforced —
+ * `apps/web/src/invariants/workspace-role-presentation.test.ts` fails the build on a DIRECT
+ * `.role` read off a `Workspace`-typed value outside its single-entry allowlist (the switcher's
+ * subtitle builder, `apps/web/src/components/layout/workspace-presentation.ts`).
+ *
+ * ⚠ WHAT "DIRECT" COVERS, PRECISELY — an earlier wording of this sentence claimed "including
+ * renamed … forms" without qualification, and that is FALSE. Caught: property access
+ * (`w.role`), element access with a string-literal or string-literal-TYPED key (`w['role']`,
+ * `w[ROLE_FIELD]`), destructuring (`const { role } = w`), and the IDENTIFIER spelling of a
+ * rename (`const { role: myRole } = w`). NOT caught, each measured: the non-identifier rename
+ * spellings `const { 'role': r } = w` and `const { [KEY]: r } = w`, destructuring ASSIGNMENT
+ * (`({ role } = w)`), and any read through a value first re-typed into a mapped or anonymous
+ * type (`Readonly<…>` / `Pick<…>` at the read site, a spread copy). That suite's own KNOWN BLIND
+ * SPOTS docblock is the maintained list; this note exists so the guarantee is not overstated
+ * HERE, where a reader meets it first. The invariant is a backstop against drift, not a proof of
+ * absence — review still has to think.
  */
 export interface MembershipCompanyWorkspace extends CompanyWorkspaceBase {
   readonly via: 'membership';

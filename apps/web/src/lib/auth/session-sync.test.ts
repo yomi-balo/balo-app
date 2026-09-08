@@ -291,7 +291,7 @@ describe('checkSessionDrift — BAL-494 workspace drift', () => {
   // 3. ⚠ THE DELETED CHECK. An earlier cut compared the session's cached workspace KEY SET
   //    against the freshly derived one. That existed only to keep a COOKIE-CACHED list fresh,
   //    and the list is no longer in the cookie — it overran the browser's 4096-byte limit at
-  //    five to eight company workspaces, at which point the browser silently discards the
+  //    five company workspaces, at which point the browser silently discards the
   //    `Set-Cookie` and the user is locked out with no server-side error
   //    (see `lib/auth/session-cookie-size.test.ts`). With the list always derived fresh there
   //    is nothing stale to detect, and a gratuitous 'sync-needed' here would be a wasted

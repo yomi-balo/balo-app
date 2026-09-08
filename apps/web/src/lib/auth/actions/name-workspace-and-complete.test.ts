@@ -326,7 +326,7 @@ describe('nameWorkspaceAndCompleteAction', () => {
 
     it('never writes a workspace LIST onto the session (cookie budget)', async () => {
       // The rename used to re-map a sealed `workspaces[]` too. That field is gone: the list
-      // crossed the browser's 4096-byte cookie limit at five to eight company workspaces and an
+      // crossed the browser's 4096-byte cookie limit at five company workspaces and an
       // oversized `Set-Cookie` is silently discarded. See `lib/auth/session-cookie-size.test.ts`.
       const workspace = {
         type: 'company' as const,

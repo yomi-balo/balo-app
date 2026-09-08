@@ -97,8 +97,7 @@ describe('applyWorkspaceDerivationToSessionUser', () => {
   it('NEVER writes the workspace LIST onto the session user', () => {
     // ⚠ THE COOKIE-BUDGET INVARIANT, pinned at the one place every writer funnels through
     // (OAuth callback, session-sync route, switch service). The sealed `balo_session` cookie
-    // crosses the browser's 4096-byte `name=value` limit at five to eight company
-    // workspaces, and an
+    // crosses the browser's 4096-byte `name=value` limit at five company workspaces, and an
     // oversized `Set-Cookie` is SILENTLY DISCARDED — an unrecoverable sign-in loop. The
     // derivation carries the list; this patcher must drop it on the floor.
     // `lib/auth/session-cookie-size.test.ts` measures the actual bytes.
