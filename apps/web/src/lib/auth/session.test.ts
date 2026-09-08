@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -21,7 +21,7 @@ vi.mock('iron-session', () => ({
   getIronSession: vi.fn(() => Promise.resolve(mockSession)),
 }));
 
-import { requireUser, requireOnboardedUser, getCompanyContext } from './session';
+import { requireUser, requireOnboardedUser, getCompanyContext, getSession } from './session';
 import type { SessionUser } from './session';
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -144,6 +144,66 @@ describe('SessionUser.activeWorkspace / workspaces (BAL-494 / ADR-1053) — opti
     mockSession = { user: { ...userWith(true), activeWorkspace: workspace } };
     const user = await requireUser();
     expect(user.activeWorkspace).toEqual(workspace);
+  });
+});
+
+describe('getSession() — BAL-553 impersonated-session TTL pre-arm chokepoint', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls session.updateConfig with the REMAINING time (not a fresh 30 minutes) for an impersonated session', async () => {
+    const updateConfig = vi.fn();
+    const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes left
+    mockSession = {
+      user: { ...userWith(true), isImpersonating: true, impersonationExpiresAt: expiresAt },
+      updateConfig,
+    };
+
+    await getSession();
+
+    expect(updateConfig).toHaveBeenCalledTimes(1);
+    const [config] = updateConfig.mock.calls[0] as [{ ttl: number }];
+    expect(config.ttl).toBe(15 * 60);
+  });
+
+  it('does NOT call session.updateConfig for a normal (non-impersonated) session', async () => {
+    const updateConfig = vi.fn();
+    mockSession = { user: userWith(true), updateConfig };
+
+    await getSession();
+
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call session.updateConfig when isImpersonating is explicitly false', async () => {
+    const updateConfig = vi.fn();
+    mockSession = { user: { ...userWith(true), isImpersonating: false }, updateConfig };
+
+    await getSession();
+
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call session.updateConfig when there is no session.user at all', async () => {
+    const updateConfig = vi.fn();
+    mockSession = { updateConfig };
+
+    await getSession();
+
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('returns the session object itself (not a copy)', async () => {
+    mockSession = { user: userWith(true) };
+    const session = await getSession();
+    expect(session).toBe(mockSession);
   });
 });
 

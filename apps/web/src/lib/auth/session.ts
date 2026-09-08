@@ -4,6 +4,8 @@ import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
 import type { Workspace } from '@balo/shared/workspaces';
 import { sessionConfig } from './config';
+import { impersonatedSessionConfig } from './session-config';
+import { isImpersonatedSession } from './impersonation';
 import type { AuthMethodSignal } from './auth-method';
 
 export interface SessionUser {
@@ -23,6 +25,16 @@ export interface SessionUser {
   // Admin impersonation (workos-auth skill, "Admin Impersonation"): `true` for the duration of
   // an admin's impersonated session. Optional — undefined for every normal session.
   isImpersonating?: boolean;
+
+  // BAL-553 — the staff member operating this session. Present iff `isImpersonating` is true;
+  // written ONLY by markSessionAsImpersonated() in ./impersonation.ts. An ID, not an email:
+  // the refusal log line and the audit row both need something that JOINS (ruling R2).
+  impersonatorUserId?: string;
+
+  // BAL-553 — ABSOLUTE deadline (epoch ms) for this impersonated session. Every save recomputes
+  // the cookie maxAge AND the iron seal ttl as the remaining time, so re-saving can never extend
+  // the window: the session expires 30 minutes after it started no matter how active it is.
+  impersonationExpiresAt?: number;
 
   // Company context (always present - personal workspace or real company)
   companyId: string;
@@ -70,7 +82,19 @@ export interface SessionData {
 
 export async function getSession() {
   const cookieStore = await cookies();
-  return getIronSession<SessionData>(cookieStore, sessionConfig);
+  const session = await getIronSession<SessionData>(cookieStore, sessionConfig);
+  // BAL-553 — arm the short config BEFORE anything can call save(). Every save() in the app
+  // (the sync route's repair, switch-workspace, complete-onboarding, …) goes through a session
+  // obtained here, so this is the ONE place that has to know, and no call site can forget.
+  // Driven by the SEALED session's own content, never by the presence of the preserved cookie:
+  // a cookie the browser controls must not be able to promote an impersonated session back to
+  // seven days. Remaining time, not a fresh 30 minutes — the deadline is absolute.
+  const user = session.user;
+  if (user !== undefined && isImpersonatedSession(user)) {
+    const remaining = ((user.impersonationExpiresAt ?? 0) - Date.now()) / 1000;
+    session.updateConfig(impersonatedSessionConfig(remaining));
+  }
+  return session;
 }
 
 export async function getCurrentUser(): Promise<SessionUser | null> {

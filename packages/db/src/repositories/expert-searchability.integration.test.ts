@@ -497,6 +497,36 @@ describe('expertSearchabilityRepository.applySearchable — the write', () => {
     });
   });
 
+  // BAL-553 — the impersonating staff member's own id, alongside the S2 `actorImpersonating`
+  // boolean. Omitted entirely (not the S2 case above) when absent, so the exact `toEqual` above
+  // stays untouched.
+  it('records actorImpersonatorUserId in metadata when the write happened under an impersonated session', async () => {
+    const actor = await userFactory();
+    const staffMember = await userFactory();
+    const expert = await expertDraftFactory();
+
+    const result = await expertSearchabilityRepository.applySearchable({
+      expertProfileId: expert.id,
+      searchable: true,
+      actorUserId: actor.id,
+      source: 'dashboard_read',
+      failingItems: [],
+      actorImpersonating: true,
+      actorImpersonatorUserId: staffMember.id,
+    });
+
+    expect(result.changed).toBe(true);
+    const rows = await auditRowsFor(expert.id);
+    const [row] = rows;
+    expect(row?.metadata).toEqual({
+      source: 'dashboard_read',
+      failingItems: [],
+      previousSearchable: false,
+      actorImpersonating: true,
+      actorImpersonatorUserId: staffMember.id,
+    });
+  });
+
   /**
    * ⚠⚠ IDEMPOTENCE, THE `true` DIRECTION. This is what makes a re-rendered dashboard and a
    * retried BullMQ job silent: no row moved, so no audit row, and every downstream effect

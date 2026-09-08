@@ -114,6 +114,24 @@ describe('balo_session cookie budget (BAL-494 R2)', () => {
     expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
   });
 
+  // BAL-553 — the three impersonation fields (`isImpersonating`, `impersonatorUserId`,
+  // `impersonationExpiresAt`) are small (a boolean, a uuid, an epoch-ms number), but they are
+  // only ever ADDED on top of an otherwise fully-populated session — no `accessToken` /
+  // `refreshToken` are dropped from the sealed payload (only from the LIVE `session.accessToken`
+  // object, which this fixture cannot model), so this is the worst-case measurement.
+  it('an impersonated session (with the three added fields) still seals well under budget', async () => {
+    const impersonatedUser: SessionUser = {
+      ...user,
+      isImpersonating: true,
+      impersonatorUserId: '11111111-1111-4111-8111-111111111111',
+      impersonationExpiresAt: 1_700_000_000_000,
+    };
+    const bytes = await sealedCookieBytes({ ...sessionData, user: impersonatedUser });
+
+    expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
+    expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
+  });
+
   it('the SessionUser type carries no workspace LIST field — compile-time pin', () => {
     // Reintroducing `workspaces` to `SessionUser` resolves `NoWorkspaceListOnSessionUser` to
     // `never`, `true` stops being assignable to it, and `pnpm typecheck` fails — the

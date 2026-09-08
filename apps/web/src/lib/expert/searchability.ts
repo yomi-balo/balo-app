@@ -43,6 +43,8 @@ export interface ReconcileFromReadInput {
   /** S2 — recorded into `audit_events.metadata` (never used to gate authorization) when the
    *  session viewing this dashboard is a staff member's impersonated session. */
   readonly actorImpersonating?: boolean;
+  /** BAL-553 — the impersonating staff member's own user id, alongside `actorImpersonating`. */
+  readonly actorImpersonatorUserId?: string;
 }
 
 export async function reconcileFromRead(
@@ -63,6 +65,7 @@ export async function reconcileFromRead(
     source: 'dashboard_read',
     failingItems: input.derivation.failingItems,
     actorImpersonating: input.actorImpersonating,
+    actorImpersonatorUserId: input.actorImpersonatorUserId,
   });
 
   if (!result.changed) return result;

@@ -4,6 +4,7 @@ import { Providers } from '@/components/providers';
 import { AppFooter } from '@/components/layout/app-footer';
 import { Toaster } from '@/components/ui/sonner';
 import { getCurrentUser } from '@/lib/auth/session';
+import { analyticsIdentityFor } from '@/lib/auth/impersonation';
 import { resolveSiteOrigin } from '@/lib/site-url';
 import './globals.css';
 
@@ -62,6 +63,12 @@ export default async function RootLayout({
     // Session unavailable (e.g. missing env vars in E2E/CI) — continue without user
   }
 
+  // BAL-553 — `undefined` under an impersonated session: PostHogProvider identifies from this
+  // on every page load, so without this suppression the staff member's entire browsing session
+  // would be attributed to the customer's PostHog profile. No rendering change — see
+  // `analyticsIdentityFor`'s docblock in `@/lib/auth/impersonation`.
+  const analyticsUserId = user === null ? undefined : analyticsIdentityFor(user);
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
@@ -69,9 +76,9 @@ export default async function RootLayout({
         suppressHydrationWarning
       >
         <Providers
-          userId={user?.id}
+          userId={analyticsUserId}
           userTraitsJson={
-            user
+            user && analyticsUserId !== undefined
               ? JSON.stringify({
                   email: user.email,
                   active_mode: user.activeMode,

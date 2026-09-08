@@ -170,6 +170,12 @@ export interface ApplySearchableInput {
    * absent, so every pre-existing caller's `row.metadata` assertion is untouched.
    */
   readonly actorImpersonating?: boolean;
+  /**
+   * BAL-553 — the impersonating STAFF member's own user id, alongside `actorImpersonating`.
+   * Audit-integrity metadata only, NEVER an authorization input — same omit-when-absent
+   * discipline, so every pre-existing caller's `row.metadata` assertion stays untouched.
+   */
+  readonly actorImpersonatorUserId?: string;
 }
 
 // ── SQL fragments (correlated, so the whole read is ONE round trip) ──
@@ -399,9 +405,13 @@ async function applySearchableTx(
         source: input.source,
         failingItems: [...input.failingItems],
         previousSearchable,
-        // S2 — omitted entirely unless `true`, so every pre-existing `row.metadata` assertion
-        // (a `toEqual` on exactly {source, failingItems, previousSearchable}) is untouched.
+        // S2 / BAL-553 — omitted entirely unless present, so every pre-existing `row.metadata`
+        // assertion (a `toEqual` on exactly {source, failingItems, previousSearchable}) is
+        // untouched.
         ...(input.actorImpersonating ? { actorImpersonating: true } : {}),
+        ...(input.actorImpersonatorUserId === undefined
+          ? {}
+          : { actorImpersonatorUserId: input.actorImpersonatorUserId }),
       },
     },
     exec

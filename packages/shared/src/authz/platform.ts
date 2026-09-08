@@ -125,6 +125,20 @@ export const PLATFORM_CAPABILITIES = {
    * repository a plain boolean — `@balo/db` never sees a platform role for an ACTOR.
    */
   DELETE_ANY_INTERNAL_NOTE: 'delete_any_internal_note',
+  /**
+   * BAL-553 — operate the product AS another user: start a Balo-local impersonated session.
+   * `super_admin` ONLY.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST argument verbatim: authorizing "act as someone
+   * else" with any other token would make this map lie about what it grants.
+   *
+   * ⚠ DELIBERATELY OUTSIDE `PLATFORM_STAFF_BUNDLE`, following the DELETE_ANY_INTERNAL_NOTE
+   * precedent. Operating as another user is strictly more powerful than every capability in the
+   * staff bundle combined: it reaches every surface that user can reach, on their tenant, with
+   * their memberships. `admin` does not hold it.
+   */
+  IMPERSONATE_USER: 'impersonate_user',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -182,7 +196,11 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
  */
 export const PLATFORM_ROLE_CAPABILITIES: Record<string, readonly PlatformCapability[]> = {
   admin: PLATFORM_STAFF_BUNDLE,
-  super_admin: [...PLATFORM_STAFF_BUNDLE, PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE],
+  super_admin: [
+    ...PLATFORM_STAFF_BUNDLE,
+    PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE,
+    PLATFORM_CAPABILITIES.IMPERSONATE_USER,
+  ],
 };
 
 /**

@@ -23,13 +23,21 @@ function MockWorkOS() {
 }
 vi.mock('@workos-inc/node', () => ({ WorkOS: MockWorkOS }));
 
-vi.mock('./session-config', () => ({
-  sessionConfig: {
-    password: 'test-password-that-is-at-least-32-chars!!', // NOSONAR — test fixture, not a real credential
-    cookieName: 'balo_session',
-    cookieOptions: { secure: false, httpOnly: true, sameSite: 'lax', maxAge: 604800 },
-  },
-}));
+// BAL-553 fix round 1, S3 — widened to keep the REAL `impersonatedSessionConfig` /
+// `IMPERSONATED_SESSION_MAX_AGE_SECONDS` in play (only `sessionConfig` itself is overridden for
+// a deterministic test password), so the re-arm tests below exercise the genuine TTL seam rather
+// than a hand-rolled stand-in.
+vi.mock('./session-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./session-config')>();
+  return {
+    ...actual,
+    sessionConfig: {
+      password: 'test-password-that-is-at-least-32-chars!!', // NOSONAR — test fixture, not a real credential
+      cookieName: 'balo_session',
+      cookieOptions: { secure: false, httpOnly: true, sameSite: 'lax', maxAge: 604800 },
+    },
+  };
+});
 
 import {
   getMiddlewareSession,
@@ -269,6 +277,59 @@ describe('refreshSessionIfNeeded', () => {
       const result = await refreshSessionIfNeeded(createRequest(), session);
       expect(result).not.toBeNull();
       expect(result).toBeInstanceOf(NextResponse);
+    });
+
+    // BAL-553 fix round 1, S3 — this path is unreachable in production TODAY only because an
+    // impersonated session carries no tokens (the early return above). These tests prove the
+    // DEFENSIVE re-arm works on its own terms, independent of that coupling: if tokens were ever
+    // present on an impersonated session, this save must NOT promote it to the 7-day cookie.
+    describe('S3 — re-arms the TTL config for an impersonated session before save()', () => {
+      it('calls updateConfig with the REMAINING time (not the 7-day default) when impersonatorUserId is present', async () => {
+        const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes left
+        // `refreshSessionIfNeeded` copies `session.user` onto `updatedSession.user` (line
+        // `updatedSession.user = session.user`) — the impersonation fields must be seeded on
+        // the ORIGINAL `session` argument, not on `updatedSession`, or they are overwritten.
+        const session = mockSession({
+          accessToken: createExpiredToken(),
+          user: {
+            id: 'target-1',
+            impersonatorUserId: 'admin-1',
+            impersonationExpiresAt: expiresAt,
+          },
+        });
+        const updatedSession = mockSessionData();
+        mockGetIronSession.mockResolvedValue(updatedSession);
+        mockAuthenticateWithRefreshToken.mockResolvedValue({
+          accessToken: 'new-at',
+          refreshToken: 'new-rt',
+        });
+
+        await refreshSessionIfNeeded(createRequest(), session);
+
+        expect(updatedSession.updateConfig).toHaveBeenCalledTimes(1);
+        const [config] = updatedSession.updateConfig.mock.calls[0] as [{ ttl: number }];
+        expect(config.ttl).toBe(15 * 60);
+        // The re-arm must happen BEFORE save() — not after.
+        const [updateOrder] = updatedSession.updateConfig.mock.invocationCallOrder;
+        const [saveOrder] = updatedSession.save.mock.invocationCallOrder;
+        if (updateOrder === undefined) throw new Error('expected updateConfig to have been called');
+        if (saveOrder === undefined) throw new Error('expected save to have been called');
+        expect(updateOrder).toBeLessThan(saveOrder);
+      });
+
+      it('does NOT call updateConfig for a normal (non-impersonated) session', async () => {
+        const session = mockSession({ accessToken: createExpiredToken() });
+        const updatedSession = mockSessionData({ user: { id: 'user-1' } });
+        mockGetIronSession.mockResolvedValue(updatedSession);
+        mockAuthenticateWithRefreshToken.mockResolvedValue({
+          accessToken: 'new-at',
+          refreshToken: 'new-rt',
+        });
+
+        await refreshSessionIfNeeded(createRequest(), session);
+
+        expect(updatedSession.updateConfig).not.toHaveBeenCalled();
+      });
     });
   });
 

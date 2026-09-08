@@ -92,16 +92,22 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
    * EXACT difference: `admin` ⊆ `super_admin`, and the only thing between them is that one token.
    * Written as a set difference rather than as a length check so a third role-differentiated token
    * fails here loudly and has to be argued for, instead of sliding in.
+   *
+   * ⚠ BAL-553 WIDENED THE DIFFERENCE, IT DID NOT REWRITE THE SHAPE. `IMPERSONATE_USER` is the
+   * exact "a third role-differentiated token fails here loudly and has to be argued for" case
+   * this test was written to force — ⟦R3⟧ is the argument. `super_admin` now holds the admin
+   * bundle plus BOTH `DELETE_ANY_INTERNAL_NOTE` and `IMPERSONATE_USER`, and nothing else.
    */
-  it('gives super_admin the admin bundle plus exactly DELETE_ANY_INTERNAL_NOTE, and omits user', () => {
+  it('gives super_admin the admin bundle plus exactly DELETE_ANY_INTERNAL_NOTE and IMPERSONATE_USER, and omits user', () => {
     const admin = PLATFORM_ROLE_CAPABILITIES.admin ?? [];
     const superAdmin = PLATFORM_ROLE_CAPABILITIES.super_admin ?? [];
 
     // Containment: every admin token is a super_admin token.
     expect(superAdmin).toEqual(expect.arrayContaining([...admin]));
-    // The difference, in both directions, is exactly one token.
+    // The difference, in both directions, is exactly two tokens.
     expect(superAdmin.filter((c) => !admin.includes(c))).toEqual([
       PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE,
+      PLATFORM_CAPABILITIES.IMPERSONATE_USER,
     ]);
     expect(admin.filter((c) => !superAdmin.includes(c))).toEqual([]);
     expect(PLATFORM_ROLE_CAPABILITIES.user).toBeUndefined();
@@ -111,6 +117,10 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).not.toContain(
       PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE
     );
+  });
+
+  it('admin does NOT hold IMPERSONATE_USER', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).not.toContain(PLATFORM_CAPABILITIES.IMPERSONATE_USER);
   });
 
   /**
@@ -225,6 +235,30 @@ describe('platformRoleHasCapability — DELETE_ANY_INTERNAL_NOTE', () => {
       );
     }
   );
+});
+
+/**
+ * BAL-553 ⟦R3⟧ — the impersonation entry-point token. Same shape as `DELETE_ANY_INTERNAL_NOTE`:
+ * `super_admin` ONLY, and `admin` sits on the DENY side deliberately — operating as another user
+ * is strictly more powerful than every capability in the staff bundle combined.
+ */
+describe('platformRoleHasCapability — IMPERSONATE_USER', () => {
+  it('grants IMPERSONATE_USER to super_admin', () => {
+    expect(platformRoleHasCapability('super_admin', PLATFORM_CAPABILITIES.IMPERSONATE_USER)).toBe(
+      true
+    );
+  });
+
+  it.each(['admin', 'user', '', 'owner', 'member', 'expert'])(
+    'denies IMPERSONATE_USER to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.IMPERSONATE_USER)).toBe(false);
+    }
+  );
+
+  it('maps IMPERSONATE_USER to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.IMPERSONATE_USER).toBe('impersonate_user');
+  });
 });
 
 /**

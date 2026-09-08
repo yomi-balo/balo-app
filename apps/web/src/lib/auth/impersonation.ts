@@ -18,6 +18,38 @@ export function isImpersonatedSession(actor: Pick<SessionUser, 'isImpersonating'
 }
 
 /**
+ * BAL-553 — THE ONE WRITER of the impersonation flag, living in the same module as the ONE
+ * READER (`isImpersonatedSession`). `invariants/impersonation-money-guard.test.ts` I2 pins the
+ * field to exactly this file and `lib/auth/session.ts`; the orchestrator's ruling R4 is that the
+ * setter comes HERE rather than the allowlist growing. Callers hand in a fully-built SessionUser
+ * and get back the marked copy — this function does no I/O and knows nothing about cookies.
+ */
+export function markSessionAsImpersonated(
+  user: SessionUser,
+  options: { readonly impersonatorUserId: string; readonly expiresAt: number }
+): SessionUser {
+  return {
+    ...user,
+    isImpersonating: true,
+    impersonatorUserId: options.impersonatorUserId,
+    impersonationExpiresAt: options.expiresAt,
+  };
+}
+
+/**
+ * The user id analytics may identify as. `undefined` under impersonation: PostHogProvider
+ * identifies from the session on every page load, so without this the staff member's entire
+ * browsing session would be attributed to the customer's PostHog profile — a permanent, silent
+ * corruption of that person's product analytics. Suppressing identify is strictly better than
+ * mislabelling: the events simply stay anonymous for the 30 minutes.
+ */
+export function analyticsIdentityFor(
+  user: Pick<SessionUser, 'isImpersonating' | 'id'>
+): string | undefined {
+  return isImpersonatedSession(user) ? undefined : user.id;
+}
+
+/**
  * Whether a gate that admits both mutations and reads should REFUSE under impersonation.
  * Defaults to refusal at every consumer; the permissive value is only ever named explicitly, at a
  * call site that is documented as a READ. Deliberately a named string literal rather than a
@@ -45,6 +77,11 @@ export const IMPERSONATION_REFUSAL_MESSAGE =
  * {@link refuseMoneyActionUnderImpersonation} docblock's WorkOS-semantics caveat below.
  * `actorUserId` is REQUIRED, not optional — see the function docblock below for why it cannot be
  * inferred from ambient request context here.
+ *
+ * `impersonatorUserId` is NOT a field on this interface, deliberately — BAL-553 adds it to the
+ * emitted payload FROM the actor's own session (see `refuseMoneyActionUnderImpersonation` below),
+ * not from a fourth field every call site would have to thread. None of the three existing call
+ * sites change.
  */
 export interface ImpersonationRefusalContext {
   readonly action: string;
@@ -71,18 +108,19 @@ export interface ImpersonationRefusalContext {
  * already threads the same field the same way (`redeem-promo.ts`'s `actorUserId: user.id`).
  *
  * ⚠⚠ (fix round 3, human pre-merge review) — `actorUserId` NAMES THE SESSION'S OWN USER ID, WHICH
- * IS NOT THE SAME THING AS "WHO ATTEMPTED THE ACTION" ONCE IMPERSONATION IS REAL. Under WorkOS's
- * impersonation semantics, the session's `user` object during an impersonated session IS the
- * IMPERSONATED account — the account being acted ON — while the impersonating staff member's
- * identity lives on a separate `impersonator` object that `SessionUser` does not carry today. So
- * `actorUserId: user.id` records precisely and only the session's user id: today (guard inert,
- * `isImpersonating` always `undefined`) that is simply the normal actor; once impersonation ships
- * unchanged, it will be the IMPERSONATED account, not the staff member who impersonated them.
- * Nothing in this module can fix that — no field exists yet to carry staff identity. The
- * impersonation entry-point ticket (`.implement/plan.md` Deferred #1) MUST put the impersonator's
- * own identity onto `SessionUser` and thread it into this log line before this guard can attribute
- * the acting staff member; until then, this payload identifies the affected company and account,
- * never assume it names the staff member who pressed the button.
+ * IS NOT THE SAME THING AS "WHO ATTEMPTED THE ACTION" under WorkOS's impersonation semantics: the
+ * session's `user` object during an impersonated session IS the IMPERSONATED account — the
+ * account being acted ON — while the impersonating staff member's identity lives on a separate
+ * field. So `actorUserId: user.id` records precisely and only the session's user id — the
+ * impersonated account, never the staff member who impersonated them.
+ *
+ * ⚠⚠ BAL-553 SHIPS THE FIELD THAT NAMES THE STAFF MEMBER. `SessionUser.impersonatorUserId` (set
+ * ONLY by {@link markSessionAsImpersonated}, above) now rides into this payload as
+ * `impersonatorUserId` — added HERE, by this function, from the actor's own session, so none of
+ * the three existing call sites changed and none of them can forget it (see
+ * {@link ImpersonationRefusalContext}'s docblock). `actorUserId` REMAINS — correctly — the
+ * impersonated account (the account acted upon); `impersonatorUserId` is the staff member. Both
+ * facts matter: deleting the `actorUserId` caveat above would be a regression in this record.
  *
  * ⚠ THIS IS A REFUSAL, AND IT IS NOT THE ONLY VALID RESPONSE TO IMPERSONATION.
  * `lib/actions/expert-checklist.ts` deliberately does the opposite — it ANNOTATES the audit row and
@@ -90,10 +128,13 @@ export interface ImpersonationRefusalContext {
  * they answer different questions. That call site uses {@link isImpersonatedSession} only.
  */
 export function refuseMoneyActionUnderImpersonation(
-  actor: Pick<SessionUser, 'isImpersonating'>,
+  actor: Pick<SessionUser, 'isImpersonating' | 'impersonatorUserId'>,
   context: ImpersonationRefusalContext
 ): boolean {
   if (!isImpersonatedSession(actor)) return false;
-  log.warn(IMPERSONATION_REFUSAL_MESSAGE, context);
+  log.warn(IMPERSONATION_REFUSAL_MESSAGE, {
+    ...context,
+    impersonatorUserId: actor.impersonatorUserId,
+  });
   return true;
 }
