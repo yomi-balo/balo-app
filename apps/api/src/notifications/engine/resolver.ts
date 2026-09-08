@@ -210,8 +210,20 @@ export async function resolveContext(
   // Hydrate the buyer company (e.g. project.match_requested) so the ops template
   // can name the requesting org. The admin recipient is resolved by the
   // dispatcher to OPS_NOTIFICATION_EMAIL — this is context only.
+  //
+  // ⚠ BAL-530 — `findNameById`, NEVER `findById`. Whatever lands on `data` is serialized into
+  // EVERY per-channel BullMQ job (`dispatcher.ts:66` → `channelQueue.add` at `:82`) and retained
+  // in Redis (`removeOnComplete: {count:100}` / `removeOnFail: {count:500}`). `findById` returns
+  // the whole row — `billingEmail` and its three BAL-522 provenance columns, `domain`, and the
+  // `domainJoinMode` / `membershipAuthority` governance columns — for the ~22 event types that
+  // carry a `companyId`. The shape of memory `reference_drizzle_with_hydration_leaks_secrets`.
+  // ALL FOUR readers of `data.company` want only `name` (resolver `:161`, `:188`;
+  // `templates/index.ts:426`; `templates/billing-email-changed.tsx:38`). TypeScript will NOT
+  // catch a regression here — `data` is `Record<string, unknown>`, so `data.company` is
+  // `unknown` and every consumer casts locally. The resolver test's key-set whitelist is the
+  // only enforcement.
   if (typeof payload.companyId === 'string') {
-    data.company = await companiesRepository.findById(payload.companyId);
+    data.company = await companiesRepository.findNameById(payload.companyId);
   }
 
   // Admin fan-out recipients (dispatcher resolves recipient:'admin_users' from
