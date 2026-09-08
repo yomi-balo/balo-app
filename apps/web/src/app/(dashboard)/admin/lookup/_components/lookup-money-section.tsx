@@ -87,7 +87,6 @@ export function LookupMoneySection({
           setState({ ok: false, reason: 'unavailable' });
         }
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- retryToken is a manual re-fetch trigger, not a value read in the effect body
   }, [sessionId, retryToken]);
 
   if (state === 'loading') return <LoadingSkeleton />;
