@@ -1,6 +1,12 @@
 import { z } from 'zod';
-import type { PublishableNotificationEvent } from '../../notifications/events.js';
+import type { EventPayloadMap, PublishableNotificationEvent } from '../../notifications/events.js';
 import { EXPERT_CHECKLIST_ITEM_KEYS } from '@balo/shared/experts';
+import { MILESTONE_CHANGE_KINDS } from '@balo/shared/notifications';
+import {
+  DECLINABLE_RELATIONSHIP_STATUSES,
+  PROJECT_REQUEST_CLOSE_REASONS,
+  PROPOSAL_CHANGE_SECTIONS,
+} from '@balo/shared/project-requests';
 
 // N3 — `joinPath` MUST be a same-origin, ROUTE-SHAPED path, never a bare `.min(1).max(200)`
 // string. `booking.confirmed`'s email template renders it as `${BASE_URL}${joinPath}`, so an
@@ -205,7 +211,7 @@ const projectChangesRequestedPayload = z.object({
   expertProfileId: z.uuid(),
   clientName: z.string().min(1).max(120),
   projectTitle: z.string().min(1).max(200),
-  section: z.enum(['general', 'milestones', 'pricing', 'payment_terms', 'timeline']),
+  section: z.enum(PROPOSAL_CHANGE_SECTIONS),
   note: z.string().min(1).max(4000),
 });
 
@@ -317,7 +323,7 @@ const engagementScopeChangedPayload = z.object({
   recipientId: z.uuid().optional(),
   actorExpertLabel: z.string().min(1).max(200),
   projectTitle: z.string().min(1).max(200),
-  changeKind: z.enum(['added', 'edited', 'removed']),
+  changeKind: z.enum(MILESTONE_CHANGE_KINDS),
   changeSummary: z.string().min(1).max(240),
 });
 
@@ -670,7 +676,7 @@ const projectRequestClosedPayload = z.object({
   title: z.string().min(1).max(200),
   clientCompanyName: z.string().min(1).max(200),
   closedBy: z.enum(['client', 'balo']),
-  reason: z.enum(['withdrawn', 'declined', 'unfilled', 'superseded']),
+  reason: z.enum(PROJECT_REQUEST_CLOSE_REASONS),
   recipientUserIds: z.array(z.uuid()).max(50),
   recipientId: z.uuid().optional(),
 });
@@ -685,7 +691,7 @@ const projectTrackDeclinedPayload = z.object({
   title: z.string().min(1).max(200),
   clientCompanyName: z.string().min(1).max(200),
   declinedBy: z.enum(['client', 'balo']),
-  stage: z.enum(['invited', 'eoi_submitted', 'proposal_requested', 'proposal_submitted']),
+  stage: z.enum(DECLINABLE_RELATIONSHIP_STATUSES),
   hadOpenProposal: z.boolean(),
 });
 
@@ -950,4 +956,142 @@ type AssertNever<T extends never> = T;
 export type AssertPublishCoverageComplete = [
   AssertNever<MissingSchemaArm>,
   AssertNever<StraySchemaArm>,
+];
+
+/**
+ * Compile-time PAYLOAD-SHAPE guard (BAL-427) — the sibling of `AssertPublishCoverageComplete`
+ * above, one level deeper.
+ *
+ * That guard proves every publishable event NAME has an arm here. It says nothing about the
+ * arm's SHAPE. So a payload interface and its Zod arm could disagree — a widened union, a
+ * renamed field, an added property — and still compile: the web publisher typechecks against
+ * the interface, this schema validates the wire body, and the mismatch only surfaces as a 400
+ * at runtime. `publishNotificationEvent` swallows that 400 by contract
+ * (`apps/web/src/lib/notifications/publish.ts` — a notification hiccup must NEVER break the
+ * user-facing action), so the notification vanished silently: no email, no in-app row, no
+ * `notification_log`. Exactly the failure mode the docblock above describes, one layer down.
+ * The live instance BAL-427 found: `ProjectChangesRequestedPayload.section` was `string` while
+ * this file validated a five-value enum.
+ *
+ * `SameShape` asserts mutual assignability AND identical key sets between each arm's inferred
+ * payload and the catalog's `EventPayloadMap` entry. `AssertNever` then fails `tsc` right here
+ * and names the offending event(s).
+ *
+ * ⚠ THE MAPPED-TYPE LOOKUP IS INLINED INSIDE `AssertNever` ON PURPOSE — DO NOT EXTRACT IT TO A
+ * NAMED ALIAS. With an alias, tsc prints the alias name and HIDES the events as soon as more
+ * than one arm diverges ("Type 'PayloadShapeMismatch' does not satisfy the constraint 'never'").
+ * Inlined, it prints the union of offending event names every time
+ * ("Type '"expert.approved" | "engagement.scope_changed"' does not satisfy…"). Naming the event
+ * is the whole point of this guard.
+ *
+ * ⚠ WHY THE `keyof` CHECK EXISTS. Mutual assignability alone does NOT see an OPTIONAL property
+ * present on one side only — optional props are assignable in both directions. That is a live
+ * hazard, not a theoretical one: Zod v4 `z.object()` STRIPS unknown keys rather than rejecting
+ * them, so a payload that gains an optional field in TS but not in its arm here publishes a
+ * clean 200 with the field silently dropped — and a recipient silently never notified. Comparing
+ * key sets closes it AT THE TOP LEVEL. Verified: green across all arms today, and it catches an
+ * added `.optional()` that the assignability check alone waves through — as long as that field
+ * is added directly on the object, not nested inside one. See L4 below for the gap that leaves.
+ *
+ * ⚠⚠ WHAT THIS GUARD DOES **NOT** CATCH — four documented limits. Do not read it as total.
+ *
+ *   L1. CONSTRAINT drift. `z.infer` erases refinements: `z.string().min(1).max(4000)` infers a
+ *       plain `string`. `ProjectChangesRequestedPayload.note` is `string` in TS and `.min(1)`
+ *       here, so publishing an empty note still 400s silently and this guard stays green. Same
+ *       for `.uuid()`, `.max(n)`, `.email()`, and `memberJoinPathSchema`'s regex. DO NOT try to
+ *       encode length bounds or formats into the TS types — that trades a small invisible gap
+ *       for a large unreadable one. Bounds are validated here and only here, on purpose.
+ *   L2. DEFAULTS and transforms. `.default(...)` makes `z.input` and `z.output` differ; this
+ *       guard compares against `z.infer` (= output). No publish arm uses one today.
+ *   L3. THE WEB MIRROR. This binds `publishBodySchema` to the API-side catalog
+ *       (`apps/api/src/notifications/events.ts`). The web publisher compiles against its OWN
+ *       mirror at `apps/web/src/lib/notifications/types.ts`, and neither app can import the
+ *       other — that separation is why the mirror exists. ~15 payload interfaces are declared in
+ *       both files; they are field-for-field identical today, but a web-side edit to one of them
+ *       would still drift past this guard. The durable fix is migrating those stragglers into
+ *       `@balo/shared/notifications` (that module's header already says "migrate
+ *       opportunistically"); every payload that lives there is bound on BOTH sides by
+ *       construction. Not in BAL-427's scope.
+ *   L4. NESTING. The `keyof` comparison above is TOP-LEVEL ONLY — it compares the outer
+ *       object's own key sets, not the keys of any object nested inside an array or nested
+ *       object field. `SameShape<{x:{k:string}[]},{x:{k:string;c?:string}[]}>` evaluates to
+ *       `true`: mutual assignability holds for arrays of structurally-compatible-enough element
+ *       types and the outer `keyof` sees only `x` on both sides, so the extra nested `c` is
+ *       invisible to this guard. The live surface is `proposalSharedPayload.attachments[]`
+ *       (below) — the one arm whose payload nests an object inside an array. A nested optional
+ *       added to `ProposalSharedPayload['attachments'][number]` on only one side compiles clean
+ *       here, and Zod v4 strips it on the wire at publish time: the exact silent-drop failure
+ *       this guard exists to prevent, one level deeper than it currently looks. Recursing the
+ *       comparison is out of scope for BAL-427 — this is a documented limit, not a fix.
+ *
+ * SCOPE NOTE (BAL-427, D3) — enum tuples were single-sourced for exactly four fields
+ * (`section`, `changeKind`, `reason`, `stage`), not for all ~17 enum-valued fields. The shape
+ * guard makes the remaining independent spellings SAFE (they cannot diverge without failing
+ * here), so consolidating them buys churn, not safety. ⚠ In particular: `initiatedBy` is spelled
+ * TWICE with GENUINELY DIFFERENT value sets — `['client','admin']` on
+ * `project.proposal_requested` and `['client','expert']` on `booking.rescheduled`. They are
+ * different domain concepts. A field-name-driven "let's finish single-sourcing `initiatedBy`"
+ * would silently merge them. DO NOT.
+ */
+type CoveredPublishArm = Extract<PublishBody['event'], keyof EventPayloadMap>;
+
+type PublishArmPayload<E extends PublishBody['event']> = Extract<
+  PublishBody,
+  { event: E }
+>['payload'];
+
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+type SameShape<A, B> =
+  MutuallyAssignable<A, B> extends true
+    ? MutuallyAssignable<keyof A, keyof B> extends true
+      ? true
+      : false
+    : false;
+
+/**
+ * A schema arm whose event has no `EventPayloadMap` entry. Without this, the mapped type below
+ * would fail to index and tsc would emit an opaque "cannot be used to index" error instead of
+ * naming the event.
+ */
+export type AssertEveryPublishArmHasAPayloadMapEntry = AssertNever<
+  Exclude<PublishBody['event'], keyof EventPayloadMap>
+>;
+
+export type AssertPublishPayloadShapesMatch = AssertNever<
+  {
+    [E in CoveredPublishArm]: SameShape<PublishArmPayload<E>, EventPayloadMap[E]> extends true
+      ? never
+      : E;
+  }[CoveredPublishArm]
+>;
+
+/**
+ * NON-VACUITY CONTROLS — these keep the guard honest without a test file. Each probe resolves to
+ * `never` only while `SameShape` behaves correctly; if a refactor ever makes it answer `true`
+ * unconditionally (the way a guard silently dies), the matching `AssertNever` goes red here.
+ * `IdenticalShapesProbe` is the positive control: it goes red if `SameShape` starts rejecting
+ * shapes that genuinely match.
+ */
+type IdenticalShapesProbe = SameShape<{ a: string }, { a: string }> extends true ? never : 'a';
+type FieldTypeDriftProbe = SameShape<{ a: string }, { a: number }> extends true ? 'b' : never;
+type WidenedUnionProbe = SameShape<{ a: 'x' }, { a: 'x' | 'y' }> extends true ? 'c' : never;
+type ExtraOptionalFieldProbe =
+  SameShape<{ a: string }, { a: string; b?: number }> extends true ? 'd' : never;
+/**
+ * `NarrowedZodProbe` — catches a degradation of `MutuallyAssignable` to ONE direction only
+ * (e.g. `[B] extends [A]`). All four probes above stay green under that degradation: they never
+ * exercise a pair where only the reverse direction fails. `{ a: string }` vs `{ a: 'x' }` does —
+ * `'x'` is assignable to `string` but not the other way — so a one-directional check would wave
+ * this through as `true`. If `MutuallyAssignable` is ever narrowed to one direction, this probe
+ * goes red.
+ */
+type NarrowedZodProbe = SameShape<{ a: string }, { a: 'x' }> extends true ? 'e' : never;
+
+export type AssertShapeGuardIsNotVacuous = [
+  AssertNever<IdenticalShapesProbe>,
+  AssertNever<FieldTypeDriftProbe>,
+  AssertNever<WidenedUnionProbe>,
+  AssertNever<ExtraOptionalFieldProbe>,
+  AssertNever<NarrowedZodProbe>,
 ];

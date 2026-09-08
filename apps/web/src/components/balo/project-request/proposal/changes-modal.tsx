@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
+import type { ProposalChangeSection } from '@balo/shared/project-requests';
 import {
   Dialog,
   DialogContent,
@@ -27,8 +28,8 @@ import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta'
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { requestProposalChangesAction } from '@/app/(dashboard)/projects/[requestId]/_actions/request-proposal-changes';
 
-/** The DB `proposalChangeSectionEnum` value space — must stay in lockstep with the action's Zod enum. */
-type ChangeSection = 'general' | 'milestones' | 'pricing' | 'payment_terms' | 'timeline';
+/** The DB `proposalChangeSectionEnum` value space — single-sourced (BAL-427). */
+type ChangeSection = ProposalChangeSection;
 
 /** Data-driven section options — friendly labels for the five enum values (default `general`). */
 const SECTION_OPTIONS: ReadonlyArray<{ value: ChangeSection; label: string }> = [
