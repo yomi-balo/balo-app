@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import type { CompanyWorkspace, ExpertWorkspace } from '@balo/shared/workspaces';
+import type {
+  ExpertWorkspace,
+  MembershipCompanyWorkspace,
+  RepresentationCompanyWorkspace,
+} from '@balo/shared/workspaces';
 import { EXPERT_WORKSPACE } from '@balo/shared/workspaces';
 import {
   workspaceSubtitle,
@@ -8,17 +12,38 @@ import {
   EXPERT_WORKSPACE_SUBTITLE,
   REPRESENTING_WORKSPACE_SUBTITLE,
   PERSONAL_WORKSPACE_SUBTITLE,
-  PLAIN_CLIENT_SUBTITLE,
   REPRESENTATION_SWITCH_UNAVAILABLE_NOTE,
 } from './workspace-presentation';
 
-function company(overrides: Partial<CompanyWorkspace> = {}): CompanyWorkspace {
+// BAL-507 — split into two builders rather than one `company()` with a default `role`. A
+// default role would let `company({ via:'representation', isPersonal:true })` keep compiling
+// and silently recreate `{ via:'representation', role:'owner' }` at runtime — exactly the
+// illegal state the discriminated union exists to make unrepresentable. `Omit<…, 'type'|'via'>`
+// makes it impossible to steer either helper onto the other arm.
+function membershipCompany(
+  overrides: Partial<Omit<MembershipCompanyWorkspace, 'type' | 'via'>> = {}
+): MembershipCompanyWorkspace {
   return {
     type: 'company',
     key: 'company:11111111-1111-4111-8111-111111111111',
     companyId: '11111111-1111-4111-8111-111111111111',
     name: 'Northwind Industrial',
     via: 'membership',
+    isPersonal: false,
+    role: 'owner',
+    ...overrides,
+  };
+}
+
+function representationCompany(
+  overrides: Partial<Omit<RepresentationCompanyWorkspace, 'type' | 'via'>> = {}
+): RepresentationCompanyWorkspace {
+  return {
+    type: 'company',
+    key: 'company:11111111-1111-4111-8111-111111111111',
+    companyId: '11111111-1111-4111-8111-111111111111',
+    name: 'Northwind Industrial',
+    via: 'representation',
     isPersonal: false,
     ...overrides,
   };
@@ -32,33 +57,23 @@ describe('workspaceSubtitle', () => {
   });
 
   it('representation AND isPersonal:true → "Client · Representing" (proves 2 beats 3)', () => {
-    const workspace = company({ via: 'representation', isPersonal: true });
-    expect(workspaceSubtitle(workspace)).toBe(REPRESENTING_WORKSPACE_SUBTITLE);
-  });
-
-  it('representation AND an (illegally) present role → still "Client · Representing"', () => {
-    const workspace = company({ via: 'representation', role: 'owner' });
+    const workspace = representationCompany({ isPersonal: true });
     expect(workspaceSubtitle(workspace)).toBe(REPRESENTING_WORKSPACE_SUBTITLE);
   });
 
   it('personal AND role:owner → "Client · Personal" (proves 3 beats 4)', () => {
-    const workspace = company({ isPersonal: true, role: 'owner' });
+    const workspace = membershipCompany({ isPersonal: true });
     expect(workspaceSubtitle(workspace)).toBe(PERSONAL_WORKSPACE_SUBTITLE);
   });
 
   it('membership, non-personal, each role → the three exact strings', () => {
-    expect(workspaceSubtitle(company({ role: 'owner' }))).toBe('Client · Owner');
-    expect(workspaceSubtitle(company({ role: 'admin' }))).toBe('Client · Admin');
-    expect(workspaceSubtitle(company({ role: 'member' }))).toBe('Client · Member');
-  });
-
-  it('membership, non-personal, role:undefined → "Client"', () => {
-    const workspace = company({ role: undefined });
-    expect(workspaceSubtitle(workspace)).toBe(PLAIN_CLIENT_SUBTITLE);
+    expect(workspaceSubtitle(membershipCompany({ role: 'owner' }))).toBe('Client · Owner');
+    expect(workspaceSubtitle(membershipCompany({ role: 'admin' }))).toBe('Client · Admin');
+    expect(workspaceSubtitle(membershipCompany({ role: 'member' }))).toBe('Client · Member');
   });
 
   it('byte-exact "·" — a stray ASCII hyphen or different dot cannot slip through', () => {
-    expect(workspaceSubtitle(company({ role: 'member' }))).toBe('Client · Member');
+    expect(workspaceSubtitle(membershipCompany({ role: 'member' }))).toBe('Client · Member');
   });
 });
 
@@ -68,9 +83,9 @@ describe('workspaceDisplayName', () => {
   });
 
   it('company → workspace.name', () => {
-    expect(workspaceDisplayName(company({ name: 'Northwind Industrial' }), 'Dana Lee')).toBe(
-      'Northwind Industrial'
-    );
+    expect(
+      workspaceDisplayName(membershipCompany({ name: 'Northwind Industrial' }), 'Dana Lee')
+    ).toBe('Northwind Industrial');
   });
 });
 
@@ -80,28 +95,28 @@ describe('workspaceInitials', () => {
   });
 
   it("company 'Northwind Industrial' → 'NI'", () => {
-    expect(workspaceInitials(company({ name: 'Northwind Industrial' }), 'DL')).toBe('NI');
+    expect(workspaceInitials(membershipCompany({ name: 'Northwind Industrial' }), 'DL')).toBe('NI');
   });
 
   it("single token 'Globex' → 'G'", () => {
-    expect(workspaceInitials(company({ name: 'Globex' }), 'DL')).toBe('G');
+    expect(workspaceInitials(membershipCompany({ name: 'Globex' }), 'DL')).toBe('G');
   });
 
   it("three tokens 'Acme Widgets Co' → 'AC' (first+last)", () => {
-    expect(workspaceInitials(company({ name: 'Acme Widgets Co' }), 'DL')).toBe('AC');
+    expect(workspaceInitials(membershipCompany({ name: 'Acme Widgets Co' }), 'DL')).toBe('AC');
   });
 
   it("'  spaced   out  ' → 'SO'", () => {
-    expect(workspaceInitials(company({ name: '  spaced   out  ' }), 'DL')).toBe('SO');
+    expect(workspaceInitials(membershipCompany({ name: '  spaced   out  ' }), 'DL')).toBe('SO');
   });
 
   it("'' and '   ' → '?'", () => {
-    expect(workspaceInitials(company({ name: '' }), 'DL')).toBe('?');
-    expect(workspaceInitials(company({ name: '   ' }), 'DL')).toBe('?');
+    expect(workspaceInitials(membershipCompany({ name: '' }), 'DL')).toBe('?');
+    expect(workspaceInitials(membershipCompany({ name: '   ' }), 'DL')).toBe('?');
   });
 
   it('lower-case input upper-cases', () => {
-    expect(workspaceInitials(company({ name: 'northwind industrial' }), 'DL')).toBe('NI');
+    expect(workspaceInitials(membershipCompany({ name: 'northwind industrial' }), 'DL')).toBe('NI');
   });
 });
 

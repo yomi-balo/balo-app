@@ -7,6 +7,7 @@ import {
   type WorkspaceDerivationInput,
   type StoredWorkspaceChoice,
   type CompanyWorkspace,
+  type MembershipCompanyWorkspace,
   type MembershipCompanyInput,
   type RepresentedCompanyInput,
 } from './index';
@@ -468,22 +469,23 @@ describe('BAL-496 (D2) — CompanyWorkspace.role', () => {
   it('membership workspaces carry the REAL role — one case each for owner / admin / member', () => {
     for (const role of ['owner', 'admin', 'member'] as const) {
       const result = deriveNonNull(baseInput({ memberships: [membership({ role })] }), stored());
-      const [companyWorkspace] = companyWorkspaces(result.workspaces);
-      expect(companyWorkspace?.role).toBe(role);
+      const [membershipWorkspace] = companyWorkspaces(result.workspaces).filter(
+        (w): w is MembershipCompanyWorkspace => w.via === 'membership'
+      );
+      expect(membershipWorkspace?.role).toBe(role);
     }
   });
 
-  it("a representation-only workspace has role === undefined AND 'role' in w === false", () => {
+  it("a representation-only workspace has 'role' in w === false", () => {
     const result = deriveNonNull(baseInput({ representedCompanies: [represented()] }), stored());
     const repWorkspace = companyWorkspaces(result.workspaces).find(
       (w) => w.via === 'representation'
     );
     expect(repWorkspace).toBeDefined();
-    expect(repWorkspace?.role).toBeUndefined();
     expect('role' in (repWorkspace ?? {})).toBe(false);
   });
 
-  it('THE INVARIANT — for every company workspace, (role !== undefined) === (via === "membership")', () => {
+  it('THE INVARIANT — for every company workspace, (\'role\' in w) === (via === "membership")', () => {
     const result = deriveNonNull(
       baseInput({
         memberships: [
@@ -496,7 +498,7 @@ describe('BAL-496 (D2) — CompanyWorkspace.role', () => {
       stored()
     );
     for (const workspace of companyWorkspaces(result.workspaces)) {
-      expect(workspace.role !== undefined).toBe(workspace.via === 'membership');
+      expect('role' in workspace).toBe(workspace.via === 'membership');
     }
   });
 

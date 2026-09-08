@@ -369,6 +369,16 @@ describe('OAuth callback — BAL-494 / ADR-1053 workspace hydration', () => {
     via: 'membership' as const,
     isPersonal: false,
   };
+  // BAL-507 (R-A) — the ROUTE writes the narrow pointer via `applyWorkspaceDerivationToSession
+  // User`, never the full `membershipWorkspace` above (`via` / `isPersonal` are dropped).
+  // `toMatchObject` requires every expected key to be present on the received value, so the
+  // assertion below must compare against this 4-key shape.
+  const membershipWorkspacePointer = {
+    type: 'company' as const,
+    key: 'company:co-1',
+    companyId: 'co-1',
+    name: 'Corp',
+  };
   const returningMembership = {
     companyMemberships: [{ role: 'owner', company: { id: 'co-1', name: 'Corp' } }],
   };
@@ -409,13 +419,13 @@ describe('OAuth callback — BAL-494 / ADR-1053 workspace hydration', () => {
 
     expect(mockDeriveWorkspacesForUser).toHaveBeenCalledWith('user-1');
     expect(mockSessionObj.user).toMatchObject({
-      activeWorkspace: membershipWorkspace,
+      activeWorkspace: membershipWorkspacePointer,
       companyId: 'co-1',
       companyName: 'Corp',
       companyRole: 'owner',
     });
     // ⚠ The derivation HAS a `workspaces` list (mocked above) and login must NOT seal it:
-    // the cookie's 4096-byte ceiling is crossed at five to eight company workspaces, and a
+    // the cookie's 4096-byte ceiling is crossed at five company workspaces, and a browser
     // silently discards an oversized `Set-Cookie` — an unrecoverable sign-in loop. The list
     // is re-derived per request via `getWorkspacesForCurrentUser()`.
     expect(mockSessionObj.user).not.toHaveProperty('workspaces');

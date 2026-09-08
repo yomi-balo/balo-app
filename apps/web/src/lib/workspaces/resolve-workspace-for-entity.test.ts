@@ -45,6 +45,9 @@ const otherWorkspace = {
   name: 'Other Co',
   via: 'membership' as const,
   isPersonal: false,
+  // BAL-507 — `workspaceSwitchRedirectPath` below takes a real `Workspace`, and a
+  // `via:'membership'` arm now requires `role`.
+  role: 'owner' as const,
 };
 
 const representationWorkspace = {

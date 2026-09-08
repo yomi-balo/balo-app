@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { sealData } from 'iron-session';
-import type { Workspace } from '@balo/shared/workspaces';
+import type { ActiveWorkspacePointer, Workspace } from '@balo/shared/workspaces';
 import { COOKIE_NAME } from './session-config';
 import type { SessionData, SessionUser } from './session';
 
@@ -17,15 +17,14 @@ import type { SessionData, SessionUser } from './session';
  *
  * ⚠ WHY THE WORKSPACE **LIST** IS NOT SEALED. The first cut of BAL-494 put the actor's full
  * `Workspace[]` in the cookie. Measured against this repo's `iron-session@8.0.4` with the
- * representative payload below, that costs ~270 bytes per company workspace and crosses 4096
- * at FIVE of them (EIGHT on the leaner minimal session the auditor measured at 2326 bytes) —
- * a completely ordinary number of company memberships. Truncating or
- * capping the list is forbidden (R2: it would hide a workspace the user legitimately holds),
- * so the list was removed from the cookie entirely in security fix round 2. Only
- * `activeWorkspace` — one small object, the "what am I acting as" pointer that drift and every
- * consumer actually reads — is sealed. The list is derived server-side on every request
- * anyway (`checkSessionDrift` → `deriveWorkspacesForUser`, React-`cache()`d per request), and
- * `getWorkspacesForCurrentUser()` is its accessor.
+ * representative payload below, that costs ~290 bytes per (role-bearing) company workspace and
+ * crosses 4096 at FIVE of them — a completely ordinary number of company memberships.
+ * Truncating or capping the list is forbidden (R2: it would hide a workspace the user
+ * legitimately holds), so the list was removed from the cookie entirely in security fix round
+ * 2. Only `activeWorkspace` — now a narrow `ActiveWorkspacePointer` (BAL-507), the "what am I
+ * acting as" pointer that drift and every consumer actually reads — is sealed. The list is
+ * derived server-side on every request anyway (`checkSessionDrift` → `deriveWorkspacesForUser`,
+ * React-`cache()`d per request), and `getWorkspacesForCurrentUser()` is its accessor.
  *
  * The second test below is the executable proof of that reasoning: it seals the SAME payload
  * WITH a list and shows it blowing the limit. If a future change puts a list-shaped field back
@@ -56,13 +55,14 @@ const refreshToken = 'r'.repeat(64);
 
 const COMPANY_ID = '3a1f8e22-7b60-4a5d-8e19-2c4f6b8d0a11';
 
-const activeWorkspace: Workspace = {
+// BAL-507 (R-A) — the sealed cookie carries the narrow POINTER, never the full `Workspace`
+// (see `ActiveWorkspacePointer`'s docblock). This is the real shape `applyWorkspaceDerivationTo
+// SessionUser` writes.
+const activeWorkspace: ActiveWorkspacePointer = {
   type: 'company',
   key: `company:${COMPANY_ID}`,
   companyId: COMPANY_ID,
   name: 'Northwind Industrial Holdings',
-  via: 'membership',
-  isPersonal: false,
 };
 
 const user: SessionUser = {
@@ -91,7 +91,12 @@ async function sealedCookieBytes(data: unknown): Promise<number> {
   return `${COOKIE_NAME}=${sealed}`.length;
 }
 
-/** A plausible company workspace with a real-world-length name. */
+/**
+ * A plausible company workspace with a real-world-length name — the shape a `workspaces[]`
+ * LIST entry would carry (this is the hypothetical "proof of the reason" payload below, not
+ * the pointer that is actually sealed). Post-BAL-507 a `via:'membership'` workspace requires
+ * `role`, so this must supply one to remain a valid `Workspace`.
+ */
 function companyWorkspace(index: number): Workspace {
   const companyId = `${String(index).padStart(8, '0')}-0000-4000-8000-000000000000`;
   return {
@@ -101,6 +106,7 @@ function companyWorkspace(index: number): Workspace {
     name: `Northwind Industrial Holdings ${index}`,
     via: 'membership',
     isPersonal: false,
+    role: 'owner',
   };
 }
 
@@ -108,8 +114,10 @@ describe('balo_session cookie budget (BAL-494 R2)', () => {
   it('a fully-populated session with activeWorkspace seals well under the 4096-byte limit', async () => {
     const bytes = await sealedCookieBytes(sessionData);
 
-    // Measured at ~2859 bytes on iron-session@8.0.4 at the time of writing. If this fails,
-    // something was added to SessionData — do NOT raise the bound; work out what grew.
+    // Measured at ~2817 bytes on iron-session@8.0.4 at the time of writing (BAL-507 re-measure:
+    // was ~2859 before `activeWorkspace` narrowed to the `ActiveWorkspacePointer` shape). If
+    // this fails, something was added to SessionData — do NOT raise the bound; work out what
+    // grew.
     expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
     expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
   });
@@ -149,6 +157,15 @@ describe('balo_session cookie budget (BAL-494 R2)', () => {
   it('PROOF OF THE REASON: sealing the workspace LIST blows the limit at ordinary scale', async () => {
     // Five company memberships is unremarkable for an agency admin or a consultant who has
     // been invited into several client orgs. This is the lockout that fix round 2 removed.
+    //
+    // BAL-507 fix round — the prose claims the budget crosses 4096 AT five, but until now only
+    // the ">4096 at five" side was pinned; nothing asserted the "<4096 at four" side, so the
+    // word "AT" was only half-backed by an assertion. `withFour` closes that gap (measured:
+    // 3990 bytes).
+    const withFour = {
+      ...sessionData,
+      user: { ...user, workspaces: Array.from({ length: 4 }, (_, i) => companyWorkspace(i)) },
+    };
     const withFive = {
       ...sessionData,
       user: { ...user, workspaces: Array.from({ length: 5 }, (_, i) => companyWorkspace(i)) },
@@ -158,6 +175,7 @@ describe('balo_session cookie budget (BAL-494 R2)', () => {
       user: { ...user, workspaces: Array.from({ length: 8 }, (_, i) => companyWorkspace(i)) },
     };
 
+    expect(await sealedCookieBytes(withFour)).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
     expect(await sealedCookieBytes(withFive)).toBeGreaterThan(BROWSER_COOKIE_LIMIT_BYTES);
     expect(await sealedCookieBytes(withEight)).toBeGreaterThan(BROWSER_COOKIE_LIMIT_BYTES);
   });

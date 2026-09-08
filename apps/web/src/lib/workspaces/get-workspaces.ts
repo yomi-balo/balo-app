@@ -11,8 +11,8 @@ import { deriveWorkspacesForUser } from './derive-workspaces';
  *
  * ⚠ WHY THIS EXISTS RATHER THAN A COOKIE FIELD. The list was originally sealed into
  * `balo_session` as `SessionUser.workspaces`. That is an unbounded lockout: a browser SILENTLY
- * DISCARDS a `Set-Cookie` over 4096 bytes, and the sealed cookie crosses that at five to eight
- * company workspaces (see `lib/auth/session-cookie-size.test.ts` for the measurement) — so
+ * DISCARDS a `Set-Cookie` over 4096 bytes, and the sealed cookie crosses that at five company
+ * workspaces (see `lib/auth/session-cookie-size.test.ts` for the measurement) — so
  * such a user would sign in, lose the cookie, be bounced to `/login`, and repeat forever with
  * no server-side error. Capping or truncating is forbidden (orchestrator ruling R2: it would
  * hide a workspace the user legitimately holds). Deriving on demand has no such ceiling.

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { DerivedWorkspaces } from '@balo/shared/workspaces';
+import { toActiveWorkspacePointer } from '@balo/shared/workspaces';
 import type { SessionUser } from '@/lib/auth/session';
 
 /**
@@ -13,17 +14,22 @@ import type { SessionUser } from '@/lib/auth/session';
  *
  * ⚠ WRITES THE POINTER (`activeWorkspace`) AND THE PROJECTION — NEVER THE LIST.
  * `derived.workspaces` is deliberately dropped on the floor here: the sealed cookie has a hard
- * 4096-byte browser limit and a list of five to eight company workspaces overruns it, at which
+ * 4096-byte browser limit and a list of five company workspaces overruns it, at which
  * point the browser silently discards the `Set-Cookie` and the user is locked out with no
  * server-side error (security fix round 2; see `SessionUser`'s docblock, and
  * `lib/auth/session-cookie-size.test.ts` for the measured budget). The list is re-derived
  * server-side on every request anyway — `getWorkspacesForCurrentUser()` is its accessor.
+ *
+ * BAL-507 — and the pointer is a narrow `ActiveWorkspacePointer`, projected here and nowhere
+ * else. `derived.activeWorkspace` is a full `Workspace` and is structurally assignable to the
+ * field, so the compiler will not stop a future writer assigning it raw; the exact-key-set test
+ * in `session-workspace.test.ts` will.
  */
 export function applyWorkspaceDerivationToSessionUser(
   user: SessionUser,
   derived: DerivedWorkspaces
 ): void {
-  user.activeWorkspace = derived.activeWorkspace;
+  user.activeWorkspace = toActiveWorkspacePointer(derived.activeWorkspace);
   user.activeMode = derived.session.activeMode;
   user.companyId = derived.session.companyId;
   user.companyName = derived.session.companyName;
