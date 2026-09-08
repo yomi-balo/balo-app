@@ -310,4 +310,42 @@ describe('Breadcrumbs', () => {
       expect(screen.queryByText('Balo')).not.toBeInTheDocument();
     });
   });
+
+  // ── BAL-533 — /engagements/[id] has no parent crumb; the admin-only list would 404 members ──
+  describe('BAL-533 — /engagements/[id] offers no route back to the admin-only list', () => {
+    it('a published label is the whole trail — no link to /engagements, no back arrow', () => {
+      pathname = '/engagements/eng-1';
+      render(
+        <BreadcrumbProvider>
+          <EntityCrumb label="Northwind CRM migration" />
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+
+      const nav = screen.getByLabelText('Breadcrumb');
+      const heading = within(nav).getByRole('heading', { level: 1 });
+      expect(heading).toHaveTextContent('Northwind CRM migration');
+      expect(heading).toHaveAttribute('aria-current', 'page');
+      const linksToTheAdminList = within(nav)
+        .queryAllByRole('link')
+        .filter((link) => link.getAttribute('href') === '/engagements');
+      expect(linksToTheAdminList).toHaveLength(0);
+      expect(
+        within(nav).queryByRole('link', { name: 'Back to Engagements' })
+      ).not.toBeInTheDocument();
+      expect(within(nav).queryAllByRole('link')).toHaveLength(0);
+    });
+
+    it('with no published label the trail renders nothing at all (accepted: no <h1> on this route until the page publishes one)', () => {
+      pathname = '/engagements/eng-1';
+      render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+
+      expect(screen.queryByLabelText('Breadcrumb')).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+    });
+  });
 });
