@@ -181,6 +181,10 @@ vi.mock('@/lib/analytics', async () => {
     STRIPE_REDIRECT_EVENTS: events.STRIPE_REDIRECT_EVENTS,
     STRIPE_REDIRECT_SURFACES: events.STRIPE_REDIRECT_SURFACES,
     STRIPE_REDIRECT_UNBOUND_REASONS: events.STRIPE_REDIRECT_UNBOUND_REASONS,
+    // BAL-551 — the admin lookup surface's CLIENT event constant. ⚠ WITHOUT THIS LINE every test
+    // whose module graph reaches the lookup shell throws on an undefined constant (memory
+    // `reference_web_analytics_test_mock_export_list`).
+    ADMIN_LOOKUP_EVENTS: events.ADMIN_LOOKUP_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

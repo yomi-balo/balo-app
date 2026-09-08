@@ -7,6 +7,10 @@ import { track, AUTH_EVENTS, analytics } from '@/lib/analytics';
 // `logout.ts` imports only `../session` and `@/lib/logging`.
 import { logoutAction } from '@/lib/auth/actions/logout';
 import { forgetSetupIntent } from '@/lib/stripe/setup-intent-return';
+// BAL-551 fix round F7 — a route-private helper, deliberately imported here anyway: this hook
+// is the app's ONE client sign-out sequence (see the docblock below), and Recent's own header
+// comment states clearing on sign-out is wired to this exact call site.
+import { clearStoredRecentLookups } from '@/app/(dashboard)/admin/lookup/_lib/use-recent-lookups';
 
 /**
  * BAL-501 (D10) — the three-step logout sequence, extracted verbatim from
@@ -61,6 +65,9 @@ export function useLogout(): () => void {
      * never run once the action navigates away.
      */
     forgetSetupIntent();
+    // BAL-551 fix round F7 — synchronous, same reasoning as `forgetSetupIntent()` above: this
+    // is a plain key removal, not an async flush, so it does not need the deferred timer.
+    clearStoredRecentLookups();
     // Defer reset so PostHog flushes the event with the user's identity
     setTimeout(() => analytics.reset(), 500);
     logoutAction();

@@ -26,6 +26,7 @@
     "./experts": "./src/experts/index.ts",
     "./redaction": "./src/redaction/index.ts",
     "./reviews": "./src/reviews/index.ts",
+    "./lookup": "./src/lookup/index.ts",
     "./testing": "./src/testing/index.ts",
     "./marketing": "./src/marketing/index.ts"
   },

@@ -187,6 +187,18 @@ const ENCODED_SENSITIVE_PATH_PREFIXES: readonly string[] = SENSITIVE_PATH_PREFIX
  */
 const SENSITIVE_QUERY_PARAMS: readonly { readonly pathMarker: string; readonly param: string }[] = [
   { pathMarker: '/api/auth/switch-workspace', param: 't' },
+  // BAL-551 fix round F2 — the admin Lookup search box pushes every debounced keystroke into
+  // `?q=` (`lookup-search-box.tsx`), and `lookup-analytics.tsx`'s own header states the
+  // invariant this is closing: "THE QUERY STRING ITSELF IS NEVER A PROPERTY" — the analytics
+  // island only ever sends a three-way SHAPE classification, never the raw text, to PostHog.
+  // But `packages/analytics/src/client/client.ts` sets `capture_pageview: true`, which
+  // autocaptures `$current_url` from `location.href` regardless of what the feature code
+  // intentionally avoids sending — a client email, a person's name, or which tenant a staff
+  // member investigated would otherwise reach a third-party processor verbatim. `q` is far
+  // too generic a name to redact globally (an expert-directory `?q=` search, for one, is
+  // meant to be visible), so this is scoped to the one path where it carries admin-lookup
+  // input, the same shape as the `/api/auth/switch-workspace` + `t` entry above.
+  { pathMarker: '/admin/lookup', param: 'q' },
 ];
 
 /**

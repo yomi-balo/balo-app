@@ -267,7 +267,7 @@ describe('CommandPalette', () => {
     expect(companyLabels).not.toContain('Expert Settings');
   });
 
-  it('BAL-534: a staff context lists the three Balo admin destinations under their own heading', async () => {
+  it('BAL-534 / BAL-551: a staff context lists all FOUR Balo admin destinations under their own heading', async () => {
     renderPalette({
       workspaceType: 'company',
       capabilities: [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
@@ -276,7 +276,17 @@ describe('CommandPalette', () => {
     await user.click(screen.getByRole('button', { name: 'Search' }));
 
     expect(await screen.findByText('Balo admin')).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Config & catalogue/ })).toBeInTheDocument();
+    // ⚠ DERIVED FROM THE REGISTRY, NEVER HARD-CODED (same reasoning as T8 below) — this used
+    // to assert only `Config & catalogue` was present, which passed whether there were three
+    // admin destinations or four; BAL-551 added `Lookup` as the fourth and nothing here caught
+    // it not being wired up.
+    const adminLabels = NAV_ENTRIES.filter((entry) => entry.section === 'admin').map(
+      (entry) => entry.label
+    );
+    expect(adminLabels.length).toBe(4);
+    for (const label of adminLabels) {
+      expect(screen.getByRole('option', { name: new RegExp(label) })).toBeInTheDocument();
+    }
   });
 
   it('T8: disabled registry keys never surface, in any context', async () => {

@@ -23,6 +23,7 @@ export const NAV_ITEM_KEYS = [
   'admin_engagements',
   'admin_promo_codes',
   'admin_catalogue',
+  'admin_lookup',
 ] as const;
 export type NavItemKey = (typeof NAV_ITEM_KEYS)[number];
 

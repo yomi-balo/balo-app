@@ -1,4 +1,12 @@
-import { Briefcase, FolderKanban, Layers, SlidersHorizontal, Star, Zap } from 'lucide-react';
+import {
+  Briefcase,
+  FolderKanban,
+  Layers,
+  ScanSearch,
+  SlidersHorizontal,
+  Star,
+  Zap,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PLATFORM_CAPABILITIES, type PlatformCapability } from '@balo/shared/authz';
 
@@ -73,6 +81,17 @@ export const ADMIN_CATALOGUE_ROWS: readonly AdminCatalogueRow[] = [
     href: '/engagements',
     icon: Briefcase,
     requiredCapability: null,
+    status: 'Shipped', // pending-MJ
+    tone: 'success',
+    isShipped: true,
+  },
+  {
+    key: 'lookup',
+    title: 'Lookup', // pending-MJ
+    description: 'One search box — users, companies, agencies, experts, requests, sessions.', // pending-MJ
+    href: '/admin/lookup',
+    icon: ScanSearch,
+    requiredCapability: PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
     status: 'Shipped', // pending-MJ
     tone: 'success',
     isShipped: true,

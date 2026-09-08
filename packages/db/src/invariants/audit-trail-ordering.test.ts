@@ -13,10 +13,11 @@ import { stripComments } from '@balo/shared/testing';
  * (`schema/audit-events.ts`) is the monotonic bigint IDENTITY that makes those rows orderable.
  *
  * THE CONTRACT (`schema/audit-events.ts`'s `seq` docblock, `repositories/audit-events.ts`'s
- * `findLatestByEntityAndAction` docblock, and ADR-1030's PENDING BAL-426 amendment — drafted in
- * this PR's body, NOT yet written to the Notion page — all say the same thing): every ordered read of `audit_events` orders by `created_at` THEN `seq`, BOTH COLUMNS
- * IN THE SAME DIRECTION, and NEVER tiebreaks on `id` — a `defaultRandom()` uuid, which is a coin
- * flip for same-transaction rows.
+ * `findLatestByEntityAndAction` docblock, and ADR-1030's BAL-426 amendment (“Amendment —
+ * 2026-09-08 (trail ordering, BAL-426 / PR #294)”) — all say the same thing): every ordered
+ * read of `audit_events` orders by `created_at` THEN `seq`, BOTH COLUMNS IN THE SAME DIRECTION,
+ * and NEVER tiebreaks on `id` — a `defaultRandom()` uuid, which is a coin flip for
+ * same-transaction rows.
  *
  * WHY THIS IS A TEST AND NOT ONLY A COMMENT. AC #2 is a GLOBAL claim ("no reader tiebreaks on
  * `id`"). Editing the nine sites this ticket touches holds the contract TODAY; nothing holds it

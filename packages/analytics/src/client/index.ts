@@ -90,6 +90,9 @@ export {
   STRIPE_REDIRECT_EVENTS,
   STRIPE_REDIRECT_SURFACES,
   STRIPE_REDIRECT_UNBOUND_REASONS,
+  // BAL-551 — the admin lookup surface's event constant. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a
+  // name here fails in a DIFFERENT package (`apps/web` cannot import it), not in this one.
+  ADMIN_LOOKUP_EVENTS,
 } from '../events';
 
 export type {
@@ -201,4 +204,7 @@ export type {
   StripeRedirectEventMap,
   StripeRedirectSurface,
   StripeRedirectUnboundReason,
+  // BAL-551 — the admin lookup surface's event payload and its matched-by vocabulary.
+  AdminLookupEventMap,
+  AdminLookupMatchedBy,
 } from '../events';

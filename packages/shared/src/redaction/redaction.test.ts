@@ -453,6 +453,50 @@ describe('redactSensitivePath — sensitive query parameters', () => {
   });
 });
 
+// ── BAL-551 fix round F2: the admin Lookup search query, scoped to `/admin/lookup` ──────────
+
+describe('redactSensitivePath — admin Lookup search query (BAL-551 fix round F2)', () => {
+  it('redacts the query text from the admin Lookup route', () => {
+    expect(redactSensitivePath('/admin/lookup?q=dana@northwind.com')).toBe(
+      '/admin/lookup?q=[redacted]'
+    );
+  });
+
+  it('redacts a personal name, not just an email', () => {
+    expect(redactSensitivePath('/admin/lookup?q=Dana Whitfield')).toBe(
+      '/admin/lookup?q=[redacted]'
+    );
+  });
+
+  it('redacts the query when it is NOT the first parameter', () => {
+    expect(redactSensitivePath('/admin/lookup?tab=results&q=dana@northwind.com')).toBe(
+      '/admin/lookup?tab=results&q=[redacted]'
+    );
+  });
+
+  it('redacts inside a full URL (the PostHog `$current_url` shape)', () => {
+    expect(redactSensitivePath('https://balo.expert/admin/lookup?q=dana@northwind.com')).toBe(
+      'https://balo.expert/admin/lookup?q=[redacted]'
+    );
+  });
+
+  it('leaves a `q` parameter on ANY OTHER path completely alone', () => {
+    // The registry is path-scoped on purpose: `?q=` is a common, generic parameter name —
+    // the expert-directory search, for one, must stay visible.
+    expect(redactSensitivePath('/experts?q=salesforce')).toBe('/experts?q=salesforce');
+    expect(redactSensitivePath('/dashboard?q=1234')).toBe('/dashboard?q=1234');
+  });
+
+  it('leaves the route URL untouched when it carries no query at all', () => {
+    expect(redactSensitivePath('/admin/lookup')).toBe('/admin/lookup');
+  });
+
+  it('is idempotent', () => {
+    const once = redactSensitivePath('/admin/lookup?q=dana@northwind.com');
+    expect(redactSensitivePath(once)).toBe(once);
+  });
+});
+
 // ── BAL-529 §B: the Stripe redirect-return params, PATH-INDEPENDENT ─────────
 
 describe('redactSensitivePath — Stripe redirect-return params (BAL-529 §B)', () => {
@@ -581,6 +625,14 @@ describe('redactSensitivePath — BAL-529 fix-round-1 F1 (every occurrence of a 
     // redact one `?t=` and one `&t=` occurrence by accident even without the fix.
     expect(redactSensitivePath(`/api/auth/switch-workspace?x=1&t=${SEALED_1}&t=${SEALED_2}`)).toBe(
       '/api/auth/switch-workspace?x=1&t=[redacted]&t=[redacted]'
+    );
+  });
+
+  it('the scoped SENSITIVE_QUERY_PARAMS (?q= on /admin/lookup) pass has the identical fix', () => {
+    // Same shape as the `?t=` case above — both `&`-led, so a single-scan-per-lead
+    // implementation would pass this by accident without exercising the loop.
+    expect(redactSensitivePath('/admin/lookup?x=1&q=dana@northwind.com&q=priya@cloudpeak.io')).toBe(
+      '/admin/lookup?x=1&q=[redacted]&q=[redacted]'
     );
   });
 
