@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
-import type { Workspace } from '@balo/shared/workspaces';
+import type { ActiveWorkspacePointer } from '@balo/shared/workspaces';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -31,14 +31,14 @@ vi.mock('@/lib/logging', () => ({
 }));
 
 const PERSONAL_ID = 'company-1';
-const COMPANY_WORKSPACE = {
+// BAL-507 (R-A) — the ROUTE writes the narrow pointer via `applyWorkspaceDerivationToSession
+// User`, never a full `Workspace` (`via` / `isPersonal` / `role`). Assertions that read
+// `session.user.activeWorkspace` after the route runs must compare against this 4-key shape.
+const COMPANY_WORKSPACE_POINTER = {
   type: 'company' as const,
   key: `company:${PERSONAL_ID}`,
   companyId: PERSONAL_ID,
   name: 'Test Company',
-  via: 'membership' as const,
-  isPersonal: true,
-  role: 'owner' as const,
 };
 const EXPERT_WORKSPACE = { type: 'expert' as const, key: 'expert' };
 
@@ -109,8 +109,9 @@ function createMockSession(userOverrides: Record<string, unknown> = {}) {
       companyRole: 'owner',
       expertProfileId: undefined,
       // BAL-494 / ADR-1053 — typed (not left to inference) so the route's mutations of
-      // `session.user.activeWorkspace` (asserted on below) typechecks.
-      activeWorkspace: undefined as Workspace | undefined,
+      // `session.user.activeWorkspace` (asserted on below) typechecks. BAL-507 (R-A): the
+      // sealed field is an `ActiveWorkspacePointer`, not a `Workspace`.
+      activeWorkspace: undefined as ActiveWorkspacePointer | undefined,
       ...userOverrides,
     },
     save: vi.fn().mockResolvedValue(undefined),
@@ -378,8 +379,8 @@ describe('GET /api/auth/session-sync', () => {
 
       await GET(makeRequest('returnTo=/dashboard'));
 
-      expect(session.user.activeWorkspace).toEqual(COMPANY_WORKSPACE);
-      // The cookie's hard 4096-byte limit is crossed at five to eight company workspaces and an
+      expect(session.user.activeWorkspace).toEqual(COMPANY_WORKSPACE_POINTER);
+      // The cookie's hard 4096-byte limit is crossed at five company workspaces and an
       // oversized `Set-Cookie` is silently discarded — so the sync route repopulates the
       // POINTER only. See `lib/auth/session-cookie-size.test.ts`.
       expect(session.user).not.toHaveProperty('workspaces');
@@ -400,7 +401,7 @@ describe('GET /api/auth/session-sync', () => {
         expect.objectContaining({ userId: session.user.id })
       );
       expect(session.user.activeMode).toBe('client');
-      expect(session.user.activeWorkspace).toEqual(COMPANY_WORKSPACE);
+      expect(session.user.activeWorkspace).toEqual(COMPANY_WORKSPACE_POINTER);
     });
 
     it('does NOT write to the DB when the expert workspace still exists', async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { DerivedWorkspaces } from '@balo/shared/workspaces';
+import { toActiveWorkspacePointer } from '@balo/shared/workspaces';
 import type { SessionUser } from '@/lib/auth/session';
 import { applyWorkspaceDerivationToSessionUser, activeWorkspaceKeyOf } from './session-workspace';
 
@@ -28,6 +29,7 @@ function derivation(overrides: Partial<DerivedWorkspaces> = {}): DerivedWorkspac
     name: 'Northwind Industrial',
     via: 'membership' as const,
     isPersonal: false,
+    role: 'owner' as const,
   };
   return {
     workspaces: [companyWorkspace],
@@ -53,7 +55,9 @@ describe('applyWorkspaceDerivationToSessionUser', () => {
     expect(user.companyId).toBe('company-new');
     expect(user.companyName).toBe('Northwind Industrial');
     expect(user.companyRole).toBe('owner');
-    expect(user.activeWorkspace).toEqual(derived.activeWorkspace);
+    // BAL-507 (R-A) — the writer converts to the narrow pointer; it no longer seals
+    // `derived.activeWorkspace` (a full `Workspace`) raw.
+    expect(user.activeWorkspace).toEqual(toActiveWorkspacePointer(derived.activeWorkspace));
   });
 
   it('mutates the user object in place (same reference)', () => {
@@ -93,8 +97,7 @@ describe('applyWorkspaceDerivationToSessionUser', () => {
   it('NEVER writes the workspace LIST onto the session user', () => {
     // ⚠ THE COOKIE-BUDGET INVARIANT, pinned at the one place every writer funnels through
     // (OAuth callback, session-sync route, switch service). The sealed `balo_session` cookie
-    // crosses the browser's 4096-byte `name=value` limit at five to eight company
-    // workspaces, and an
+    // crosses the browser's 4096-byte `name=value` limit at five company workspaces, and an
     // oversized `Set-Cookie` is SILENTLY DISCARDED — an unrecoverable sign-in loop. The
     // derivation carries the list; this patcher must drop it on the floor.
     // `lib/auth/session-cookie-size.test.ts` measures the actual bytes.
@@ -106,6 +109,18 @@ describe('applyWorkspaceDerivationToSessionUser', () => {
     expect(derived.workspaces.length).toBeGreaterThan(0);
     expect(user).not.toHaveProperty('workspaces');
     expect(Object.keys(user)).not.toContain('workspaces');
+  });
+
+  it('seals the NARROW pointer, not the full Workspace — exact key set (BAL-507 R-A)', () => {
+    // ⚠ `Workspace` is structurally assignable to `ActiveWorkspacePointer`, so
+    // `user.activeWorkspace = derived.activeWorkspace` would COMPILE. This is what stops it.
+    // The cookie must never carry `via` / `isPersonal` / `role`: they are presentation and
+    // authorization-adjacent, and a 7-day-old cookie's copy of them is a lie by construction.
+    const user = baseUser();
+    applyWorkspaceDerivationToSessionUser(user, derivation());
+    expect(Object.keys(user.activeWorkspace ?? {}).sort()).toEqual(
+      ['companyId', 'key', 'name', 'type'].sort()
+    );
   });
 });
 

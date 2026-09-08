@@ -24,9 +24,6 @@
  * reconcile `hasCapability` with representation before this guard can even be reconsidered.
  */
 
-/** How the actor holds a company workspace. Presentation + telemetry only — never an authz input. */
-export type WorkspaceVia = 'membership' | 'representation';
-
 /** The company-membership role shape, mirrored from `company_members.role` (native pg enum). */
 export type CompanyMemberRole = 'owner' | 'admin' | 'member';
 
@@ -36,37 +33,138 @@ export interface ExpertWorkspace {
   readonly key: 'expert';
 }
 
-export interface CompanyWorkspace {
+/**
+ * The five fields every company workspace carries regardless of HOW it is held. Not exported:
+ * `via` is what makes a company workspace meaningful, so there is no legitimate consumer of a
+ * `via`-less company shape. (`ActiveWorkspacePointer` below is a different, narrower thing — the
+ * serialized cookie projection — and is declared separately rather than extending this.)
+ *
+ * `via` itself is declared per-arm below (`'membership'` / `'representation'`), not as a shared
+ * literal-union type here — a former `WorkspaceVia` alias was deleted (BAL-507 fix round) once
+ * its last two consumers (the pre-union `CompanyWorkspace.via` field and `toCompanyWorkspace`'s
+ * parameter) were removed by the discriminated-union restructure, leaving it dead code.
+ * How the actor holds a company workspace is PRESENTATION + TELEMETRY ONLY — never an authz
+ * input.
+ */
+interface CompanyWorkspaceBase {
   readonly type: 'company';
   /** `company:${companyId}`. Deliberately does NOT encode `via`: a company that flips from
    *  representation to membership keeps its key, so no spurious drift and no dead switch target. */
   readonly key: string;
   readonly companyId: string;
   readonly name: string;
-  readonly via: WorkspaceVia;
-  /** Orchestrator decision: personal workspaces are INCLUDED; BAL-496 decides presentation. */
+  /** Orchestrator decision (BAL-494): personal workspaces are INCLUDED; BAL-496 decides presentation. */
   readonly isPersonal: boolean;
-  /**
-   * BAL-496 (D2) — the actor's REAL membership role in this company. BAL-494 kept a role only
-   * for the ACTIVE workspace (`WorkspaceSessionProjection.companyRole`) and DISCARDED
-   * `roleByCompanyId` for every other company, so a switcher row could not name it.
-   *
-   * ⚠⚠ INVARIANT — `role !== undefined` ⟺ `via === 'membership'`. A representation workspace
-   * carries NO role, never a fabricated `'member'`: BAL-494 deliberately DELETED exactly that
-   * fabrication (see the R1 note at the top of this file), because a fabricated role makes
-   * `hasCapability` and the presentation layer disagree — the thing ADR-1029 warns against.
-   * The invariant is enforced by CODE PATH, not by the type — `{ via: 'representation', role:
-   * 'owner' }` still type-checks (a discriminated union on `via` would make it a type-level
-   * guarantee, but this isn't one). In practice it never arises: only the membership arm below
-   * attaches a role, and `RepresentedCompanyInput` has no `role` field to attach. Pinned in
-   * `index.test.ts`.
-   *
-   * ⚠ PRESENTATION ONLY, exactly like `via`. Never an authorization input.
-   */
-  readonly role?: CompanyMemberRole;
 }
 
+/**
+ * A company held by MEMBERSHIP. `role` is REQUIRED here and is the actor's REAL
+ * `company_members.role` — never fabricated, never defaulted.
+ *
+ * ⚠⚠ PRESENTATION ONLY — NEVER AN AUTHORIZATION INPUT (ADR-1029). `role` being *required* on
+ * this arm is a statement about what is KNOWN, not a licence to gate on it. Authorization
+ * resolves a capability at the call site: `hasCapability(actor, capability, { companyId })` in
+ * `@balo/shared/authz`. Reading `.role` off a workspace to decide what someone MAY DO is the
+ * exact drift ADR-1029 exists to prevent, and it is CI-enforced —
+ * `apps/web/src/invariants/workspace-role-presentation.test.ts` fails the build on a DIRECT
+ * `.role` read off a `Workspace`-typed value outside its single-entry allowlist (the switcher's
+ * subtitle builder, `apps/web/src/components/layout/workspace-presentation.ts`).
+ *
+ * ⚠ WHAT "DIRECT" COVERS, PRECISELY — an earlier wording of this sentence claimed "including
+ * renamed … forms" without qualification, and that is FALSE. Caught: property access
+ * (`w.role`), element access with a string-literal or string-literal-TYPED key (`w['role']`,
+ * `w[ROLE_FIELD]`), destructuring (`const { role } = w`), and the IDENTIFIER spelling of a
+ * rename (`const { role: myRole } = w`). NOT caught, each measured: the non-identifier rename
+ * spellings `const { 'role': r } = w` and `const { [KEY]: r } = w`, destructuring ASSIGNMENT
+ * (`({ role } = w)`), and any read through a value first re-typed into a mapped or anonymous
+ * type (`Readonly<…>` / `Pick<…>` at the read site, a spread copy). That suite's own KNOWN BLIND
+ * SPOTS docblock is the maintained list; this note exists so the guarantee is not overstated
+ * HERE, where a reader meets it first. The invariant is a backstop against drift, not a proof of
+ * absence — review still has to think.
+ */
+export interface MembershipCompanyWorkspace extends CompanyWorkspaceBase {
+  readonly via: 'membership';
+  readonly role: CompanyMemberRole;
+}
+
+/**
+ * A company held ONLY by an org-grain representation grant (BAL-313 / ADR-1029).
+ *
+ * ⚠⚠ THERE IS NO `role` MEMBER, AT ALL — not `role?: …`, not `role: undefined`. BAL-494
+ * deliberately DELETED the plan's `companyRole: 'member'` fabrication (see the R1 note at the
+ * top of this file) because a fabricated role makes `hasCapability` and the presentation layer
+ * disagree. BAL-507 promotes that from a code-path property to a TYPE-LEVEL one:
+ * `{ via: 'representation', role: 'owner' }` is now a COMPILE ERROR, pinned under
+ * `@ts-expect-error` in `apps/web/src/invariants/workspace-role-presentation.test.ts` (an
+ * `apps/web` file, because `web#check-types` compiles it — nothing in CI compiles any test
+ * file under `packages/shared/src`).
+ *
+ * ⚠ The runtime shape must have NO `role` KEY. `index.test.ts` asserts `'role' in w === false`;
+ * writing `role: undefined` would type-check and fail that assertion.
+ */
+export interface RepresentationCompanyWorkspace extends CompanyWorkspaceBase {
+  readonly via: 'representation';
+}
+
+export type CompanyWorkspace = MembershipCompanyWorkspace | RepresentationCompanyWorkspace;
+
 export type Workspace = ExpertWorkspace | CompanyWorkspace;
+
+/**
+ * BAL-507 (R-A) — THE SERIALIZED PROJECTION of the active workspace, and the ONLY workspace
+ * shape that is ever sealed into the `balo_session` cookie (`SessionUser.activeWorkspace`).
+ *
+ * ⚠⚠ WHY THIS EXISTS AND WHY IT IS NOT `Workspace`. `getIronSession<SessionData>()` is a TYPE
+ * ASSERTION over cookie JSON — no Zod, no runtime shape check. With a 7-day cookie TTL, a
+ * session sealed before BAL-496 carries `{ type:'company', via:'membership', … }` with NO
+ * `role`: a value `MembershipCompanyWorkspace` now declares impossible. Typing the cookie field
+ * as `Workspace` would therefore be a type LIE for a week after every deploy, and a permanent
+ * one for any future field the union makes required. The pointer carries only IDENTITY
+ * (`type` / `key` / `companyId`) and DISPLAY (`name`) — never `via`, `isPersonal`, or `role` —
+ * so no `Workspace`, `CompanyWorkspace`, or `MembershipCompanyWorkspace` is ever reconstructed
+ * from cookie JSON and there is nothing for a stale cookie to lie about.
+ *
+ * ⚠ A discriminated union on `type`, not `{ companyId?: string }`, so
+ * `name-workspace-and-complete.ts`'s `activeWorkspace?.type === 'company'` guard narrows to a
+ * shape where `companyId` and `name` are non-optional — no cast, no `!`.
+ *
+ * ⚠ `Workspace` IS structurally assignable to this type (it has every member plus extras), so
+ * the compiler does NOT force writers through `toActiveWorkspacePointer`. That is deliberate —
+ * a nominal brand or `via?: never` phantom members would buy byte-hygiene, not correctness,
+ * because the TYPE is what stops a reader touching `.role`, whatever bytes are in the cookie.
+ * The single-conversion-site rule is held by a runtime key-set pin in
+ * `apps/web/src/lib/workspaces/session-workspace.test.ts`.
+ */
+export interface ExpertWorkspacePointer {
+  readonly type: 'expert';
+  readonly key: 'expert';
+}
+
+export interface CompanyWorkspacePointer {
+  readonly type: 'company';
+  readonly key: string;
+  readonly companyId: string;
+  readonly name: string;
+}
+
+export type ActiveWorkspacePointer = ExpertWorkspacePointer | CompanyWorkspacePointer;
+
+/**
+ * THE ONE place a live `Workspace` becomes the sealed pointer. Every session writer goes through
+ * `applyWorkspaceDerivationToSessionUser` (`apps/web/src/lib/workspaces/session-workspace.ts`),
+ * which is this function's only caller. The rename patch in
+ * `apps/web/src/lib/auth/actions/name-workspace-and-complete.ts` is a pointer→pointer edit, not a
+ * conversion, so it does not need — and must not duplicate — this projection.
+ */
+export function toActiveWorkspacePointer(workspace: Workspace): ActiveWorkspacePointer {
+  if (workspace.type === 'expert') return { type: 'expert', key: workspace.key };
+  return {
+    type: 'company',
+    key: workspace.key,
+    companyId: workspace.companyId,
+    name: workspace.name,
+  };
+}
 
 /** The frozen singleton — there is only ever one expert workspace per actor. */
 export const EXPERT_WORKSPACE: ExpertWorkspace = Object.freeze({ type: 'expert', key: 'expert' });
@@ -155,18 +253,32 @@ export interface DerivedWorkspaces {
   readonly session: WorkspaceSessionProjection;
 }
 
-function toCompanyWorkspace(
-  entry: { readonly companyId: string; readonly name: string; readonly isPersonal: boolean },
-  via: WorkspaceVia
-): CompanyWorkspace {
+function companyWorkspaceBase(entry: {
+  readonly companyId: string;
+  readonly name: string;
+  readonly isPersonal: boolean;
+}): CompanyWorkspaceBase {
   return {
     type: 'company',
     key: companyWorkspaceKey(entry.companyId),
     companyId: entry.companyId,
     name: entry.name,
-    via,
     isPersonal: entry.isPersonal,
   };
+}
+
+/** D2 — the role rides along HERE and only here; `MembershipCompanyInput.role` is required, so
+ *  there is nothing to default and nothing to fabricate. */
+function toMembershipCompanyWorkspace(entry: MembershipCompanyInput): MembershipCompanyWorkspace {
+  return { ...companyWorkspaceBase(entry), via: 'membership', role: entry.role };
+}
+
+/** D2 — emits NO `role` key at all (not `role: undefined`): `index.test.ts` asserts
+ *  `'role' in w === false`, and `RepresentedCompanyInput` has no role to supply anyway. */
+function toRepresentationCompanyWorkspace(
+  entry: RepresentedCompanyInput
+): RepresentationCompanyWorkspace {
+  return { ...companyWorkspaceBase(entry), via: 'representation' };
 }
 
 /**
@@ -313,13 +425,9 @@ export function deriveWorkspaces(
     if (seenCompanyIds.has(membership.companyId)) continue; // defensive: never double-count
     seenCompanyIds.add(membership.companyId);
     roleByCompanyId.set(membership.companyId, membership.role);
-    // D2 — the role rides along ONLY here. The representation arm below calls the same builder
-    // WITHOUT this spread, and `RepresentedCompanyInput` has no `role` to supply, so the
-    // `role ⟺ membership` invariant is structural rather than conventional.
-    membershipWorkspaces.push({
-      ...toCompanyWorkspace(membership, 'membership'),
-      role: membership.role,
-    });
+    // Two builders, one per arm. The `role ⟺ membership` invariant is now carried by the TYPE
+    // (see `MembershipCompanyWorkspace`), not by which builder happens to be called.
+    membershipWorkspaces.push(toMembershipCompanyWorkspace(membership));
   }
 
   if (membershipWorkspaces.length === 0) {
@@ -344,7 +452,7 @@ export function deriveWorkspaces(
   for (const represented of sortedRepresented) {
     if (seenCompanyIds.has(represented.companyId)) continue;
     seenCompanyIds.add(represented.companyId);
-    representationWorkspaces.push(toCompanyWorkspace(represented, 'representation'));
+    representationWorkspaces.push(toRepresentationCompanyWorkspace(represented));
   }
 
   const workspaces: Workspace[] = [

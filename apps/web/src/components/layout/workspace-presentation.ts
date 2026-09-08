@@ -1,10 +1,11 @@
 import type { CompanyMemberRole, Workspace } from '@balo/shared/workspaces';
 
 /**
- * BAL-496 (D3) — THE single source of the workspace subtitle strings, shared by the sidebar
- * switcher today and by BAL-501's More sheet / BAL-503's palette later. Pure; no `'use client'`
- * and no `server-only`, so both halves of the tree may import it (same stance as
- * `nav-registry.ts`). The `·` is U+00B7 MIDDLE DOT, exactly as the design reference writes it
+ * BAL-496 (D3) — THE single source of the workspace subtitle strings. Shipped consumers today:
+ * `workspace-switcher.tsx`, `workspace-row-parts.tsx`, `command-palette.tsx` (BAL-500), and
+ * `mobile-more-sheet.tsx` (BAL-501). Pure; no `'use client'` and no `server-only`, so both
+ * halves of the tree may import it (same stance as `nav-registry.ts`). The `·` is U+00B7 MIDDLE
+ * DOT, exactly as the design reference writes it
  * (`.claude/design-references/balo-nav-explorer.jsx:165,169,173`).
  */
 
@@ -24,7 +25,6 @@ const CLIENT_ROLE_SUBTITLES: Record<CompanyMemberRole, string> = {
 export const EXPERT_WORKSPACE_SUBTITLE = 'Expert workspace';
 export const REPRESENTING_WORKSPACE_SUBTITLE = 'Client · Representing';
 export const PERSONAL_WORKSPACE_SUBTITLE = 'Client · Personal';
-export const PLAIN_CLIENT_SUBTITLE = 'Client';
 
 /**
  * BAL-496 (D5) / BAL-500 — the visible note on a representation row, which is listed but NEVER
@@ -42,21 +42,22 @@ export const REPRESENTATION_SWITCH_UNAVAILABLE_NOTE = 'Switching here isn’t av
  *   2. via === 'representation'   → 'Client · Representing'
  *   3. isPersonal                 → 'Client · Personal'
  *   4. role owner|admin|member    → 'Client · Owner' | '… Admin' | '… Member'
- *   5. company, no role           → 'Client'
  *
  * ⚠ REPRESENTATION OUTRANKS PERSONAL deliberately: "you are acting for someone else" is the more
- * consequential fact. It also falls out of D2's invariant — a representation workspace has no
- * role at all, so without arm 2 it would land on arm 5 and read as a bare 'Client'.
- * ⚠ Arm 5 is reachable ONLY through D2's invariant hole in reverse (a company row with
- * `via:'membership'` and no role) — impossible from `deriveWorkspaces` today, but this function
- * takes any `Workspace`, so it answers rather than throws.
+ * consequential fact. Under the BAL-507 discriminated union this is no longer merely deliberate,
+ * it is NECESSARY — a `RepresentationCompanyWorkspace` has no `role` member at all, so without
+ * arm 2 a representation-and-personal row would have nothing for arm 4 to read.
+ * ⚠ A fifth "company, no role" arm no longer exists — BAL-507 made it UNREPRESENTABLE. Every
+ * `CompanyWorkspace` that reaches arm 4 is a `MembershipCompanyWorkspace`, whose `role` is
+ * required, so the destructure below can never see `undefined`.
  */
 export function workspaceSubtitle(workspace: Workspace): string {
   if (workspace.type === 'expert') return EXPERT_WORKSPACE_SUBTITLE;
   if (workspace.via === 'representation') return REPRESENTING_WORKSPACE_SUBTITLE;
   if (workspace.isPersonal) return PERSONAL_WORKSPACE_SUBTITLE;
-  const { role } = workspace; // destructure + guard, never `!`
-  if (role === undefined) return PLAIN_CLIENT_SUBTITLE;
+  const { role } = workspace; // ⚠ DESTRUCTURED ON PURPOSE — the typed invariant scan
+  // (`apps/web/src/invariants/workspace-role-presentation.test.ts`) proves it catches this exact
+  // form, not just `workspace.role`. This is the allowlisted, presentation-only read (ADR-1029).
   return CLIENT_ROLE_SUBTITLES[role];
 }
 

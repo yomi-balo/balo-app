@@ -397,8 +397,6 @@ describe('BAL-494 / ADR-1053 — expand/contract pin (site 1)', () => {
         key: `company:${COMPANY_ID}`,
         companyId: COMPANY_ID,
         name: 'Northwind Industrial',
-        via: 'membership',
-        isPersonal: false,
       },
     });
     const withoutWorkspace = user({ companyId: COMPANY_ID });

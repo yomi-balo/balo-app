@@ -2,7 +2,7 @@ import 'server-only';
 
 import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
-import type { Workspace } from '@balo/shared/workspaces';
+import type { ActiveWorkspacePointer } from '@balo/shared/workspaces';
 import { sessionConfig } from './config';
 import type { AuthMethodSignal } from './auth-method';
 
@@ -44,14 +44,14 @@ export interface SessionUser {
   // ⚠⚠ THE FULL WORKSPACE **LIST** IS DELIBERATELY NOT SEALED HERE — it is a POINTER, not a
   // cache. A `workspaces: Workspace[]` field shipped in the first cut of BAL-494 and was
   // removed in security fix round 2 because it is an UNBOUNDED, NON-SELF-HEALING LOCKOUT.
-  // A browser SILENTLY DISCARDS a `Set-Cookie` whose name+value exceeds 4096 bytes, and
-  // measured against this repo's `iron-session@8.0.4` the sealed `balo_session` cookie is
-  // 2326 bytes with no list on a minimal session (2859 on a fully-populated one) and grows
-  // ~270 bytes per company workspace — so it crosses 4096 somewhere between FIVE and EIGHT
-  // company memberships, depending on the rest of the payload. Such a user would sign in,
-  // get a cookie the browser throws away, be bounced to `/login`, and re-run the identical
-  // path forever with no server-side error. Capping or truncating the list is forbidden
-  // (orchestrator ruling R2 — it would hide a workspace the user legitimately holds).
+  // A browser SILENTLY DISCARDS a `Set-Cookie` whose name+value exceeds 4096 bytes. Measured
+  // against this repo's `iron-session@8.0.4` and the exact payload in
+  // `apps/web/src/lib/auth/session-cookie-size.test.ts`: the fully-populated baseline seals to
+  // 2817 bytes, and a hypothetical `role`-bearing workspace list grows it ~290 bytes per
+  // company workspace — so it crosses 4096 at FIVE company memberships. Such a user would
+  // sign in, get a cookie the browser throws away, be bounced to `/login`, and re-run the
+  // identical path forever with no server-side error. Capping or truncating the list is
+  // forbidden (orchestrator ruling R2 — it would hide a workspace the user legitimately holds).
   //
   // Nothing is lost: `checkSessionDrift` already calls `deriveWorkspacesForUser` on EVERY
   // page render (the accepted R4 cost) and that function is React-`cache()`d per request, so
@@ -59,7 +59,13 @@ export interface SessionUser {
   // redundancy. Consumers that need the list (BAL-496's switcher) call
   // `getWorkspacesForCurrentUser()` in `@/lib/workspaces/get-workspaces`.
   // `apps/web/src/lib/auth/session-cookie-size.test.ts` pins the 4096-byte budget.
-  activeWorkspace?: Workspace;
+  //
+  // ⚠ BAL-507 — the field is an `ActiveWorkspacePointer`, NOT a `Workspace`. `getIronSession`
+  // is a type assertion over cookie JSON with no runtime validation, so a `Workspace`-typed
+  // field would claim things about seven-day-old cookies the type cannot honour — see
+  // `ActiveWorkspacePointer`'s docblock. Everything the pointer carries is identity or
+  // display; nothing on it is an authorization input.
+  activeWorkspace?: ActiveWorkspacePointer;
 }
 
 export interface SessionData {
