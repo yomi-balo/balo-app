@@ -64,13 +64,19 @@ async function seedSessionId(
   return session.id;
 }
 
-/** Read credit audit rows for a wallet + action, oldest first. */
+/**
+ * Read credit audit rows for a wallet + action, oldest first.
+ *
+ * Ordered by the BAL-426 trail contract — `created_at` then `seq`, both ascending. NEVER `id`:
+ * it is `defaultRandom()`, and `created_at` is the TRANSACTION timestamp, so `(created_at, id)`
+ * is a coin flip for rows written in one `db.transaction`.
+ */
 async function auditRowsFor(walletId: string, action: string): Promise<AuditEvent[]> {
   return db
     .select()
     .from(auditEvents)
     .where(and(eq(auditEvents.entityId, walletId), eq(auditEvents.action, action)))
-    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
 }
 
 describe('applyLedgerEntry — invariant #3 (cache == ledger sum)', () => {

@@ -1,0 +1,24 @@
+-- BAL-426 — `audit_events.seq`: a monotonic bigint IDENTITY that makes the append-only trail
+-- ORDERABLE. `created_at` is `DEFAULT now()` = `transaction_timestamp()`, identical for every row
+-- written inside one `db.transaction` (ADR-1030's DESIGNED shape, not an edge case), and the `id`
+-- PK is a random v4 uuid — so same-transaction rows had NO recoverable order at all. Canonical read
+-- order from here on: `created_at` then `seq`, BOTH COLUMNS IN THE SAME DIRECTION. Never `id`.
+--
+-- ⚠ BACKFILL ORDER IS ARBITRARY, AND DOES NOT RECONSTRUCT HISTORY. `ADD COLUMN` with an identity
+-- default is a per-row value, so PG's fast-default path does not apply: Postgres REWRITES the table
+-- under ACCESS EXCLUSIVE and assigns `seq` in PHYSICAL SCAN order. That is not the rows' true
+-- insertion order. Only rows written AFTER this migration carry a meaningful `seq`; pre-0088 rows
+-- must never be presented as ordered. Acceptable pre-launch — this is why the caveat exists rather
+-- than a backfill.
+--
+-- ⚠ GAPS ARE EXPECTED AND CORRECT. Sequences are non-transactional: a rolled-back transaction still
+-- consumes values, and `apps/api/src/services/seed/truncate.ts` DELETEs audit rows (deliberately
+-- DELETE, never TRUNCATE … RESTART IDENTITY), so repeated seeding leaves permanent gaps. `seq` is an
+-- ORDERING KEY, never a count — nothing may derive "how many events" from `max(seq)`.
+--
+-- ⚠ PURELY ADDITIVE. No column is dropped, renamed or retyped; no existing data is modified; no
+-- constraint or index changes. GENERATED ALWAYS is safe because exactly one insert path exists in
+-- the repo (`auditEventsRepository.record`) and it names five columns, never `seq`. The explicit
+-- `NOT NULL` below is drizzle-kit's ADD COLUMN form of the same thing an IDENTITY column implies
+-- anyway; `0043`'s inline CREATE TABLE form omits it. Both describe the identical column.
+ALTER TABLE "audit_events" ADD COLUMN "seq" bigint NOT NULL GENERATED ALWAYS AS IDENTITY (sequence name "audit_events_seq_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 1);

@@ -41,6 +41,21 @@ export const creditLedger = pgTable(
     // same-instant entries (Postgres `now()` is transaction-scoped, so several appends in
     // one txn TIE on `created_at`) still read back in the exact order they were appended —
     // a random-UUID tiebreaker would scramble them. GENERATED ALWAYS ⇒ never writer-set.
+    //
+    // ⚠ BAL-426 — `audit_events.seq` IS THE SAME MECHANISM ORDERED DIFFERENTLY, ON PURPOSE. DO
+    // NOT "ALIGN" THEM IN EITHER DIRECTION. That table orders `(created_at, seq)`; this one
+    // orders by `seq` ALONE, and each is correct for its own table:
+    //   • HERE, appends for one wallet are serialised by a per-wallet `pg_advisory_xact_lock`
+    //     held to COMMIT (`_shared/wallet-lock.ts`), so for a wallet `seq` order IS commit
+    //     order — and the running `balance_after_minor` is DEFINED against that append order.
+    //     Widening `listByWallet` to `(created_at, seq)` would sort primarily by TRANSACTION
+    //     START, silently reordering a money ledger against the balances it carries. Nothing in
+    //     the repo would catch that; this comment is the guard.
+    //   • THERE, every feature writes for every entity under whatever lock or none, so there is
+    //     no serialisation point. `seq` alone would advertise a global chronology a sequence
+    //     cannot deliver (it orders INSERTS, not COMMITS) and would let two concurrent
+    //     transactions interleave; leading with `created_at` keeps one transaction's rows
+    //     contiguous. See `schema/audit-events.ts`'s `seq` docblock.
     seq: bigint('seq', { mode: 'number' }).generatedAlwaysAsIdentity(),
 
     // RESTRICT: never orphan a money row. The wallet has no soft-delete, so restrict

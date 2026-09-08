@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { db } from '../client';
-import { auditEvents } from '../schema';
+import { auditEvents, type AuditEvent } from '../schema';
 import { userFactory } from '../test/factories';
 import { auditEventsRepository } from './audit-events';
 
@@ -418,5 +418,143 @@ describe('auditEventsRepository.findLatestByEntityAndAction', () => {
         action: 'company.join_mode_changed',
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * BAL-426 AC #3. ≥20 iterations, and the number is NOT ceremony — with `seq` in the ORDER BY
+ * these assertions are DETERMINISTIC, so 20 passing runs prove nothing on their own. The count
+ * exists for the MUTATION PROOF: flip `asc(auditEvents.seq)` back to `asc(auditEvents.id)` in
+ * `trailFor` below and ONE iteration still passes ~50 % of the time (two random v4 uuids), while
+ * 20 independent iterations fail with probability 1 − 2⁻²⁰ ≈ 0.999999. That is what turns a
+ * coin-flip mutation test into a reliable one. Shrink this number and the mutation test stops
+ * biting. It HAS been run that way — see the PR body.
+ *
+ * ⚠ SERIAL `await`s, NEVER `Promise.all`. The concurrency test above deliberately batches its
+ * inserts with `Promise.all`; that has NO defined source order on the `max: 1` pool, so an
+ * ordering assertion written in that shape would be vacuous.
+ */
+const ORDERING_TRIALS = 20;
+
+/**
+ * Local reader that states the contract LITERALLY, deliberately not shared with the other
+ * suites: the mutation proof needs exactly one line to flip.
+ */
+async function trailFor(entityId: string): Promise<AuditEvent[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(eq(auditEvents.entityId, entityId))
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
+}
+
+describe('audit_events trail ordering (BAL-426)', () => {
+  it(`reads two same-transaction rows back in INSERTION order (${ORDERING_TRIALS} trials)`, async () => {
+    const seqs: number[] = [];
+
+    for (let trial = 0; trial < ORDERING_TRIALS; trial += 1) {
+      const entityId = randomUUID();
+
+      // One transaction, two SERIAL awaits — the exact shape ADR-1030 prescribes and the exact
+      // shape `materializeFromKickoff` / `close()` / `share()` use in production.
+      await db.transaction(async (tx) => {
+        await auditEventsRepository.record(
+          {
+            actorUserId: null,
+            action: 'ordering_probe.first',
+            entityType: 'ordering_probe',
+            entityId,
+            metadata: { trial },
+          },
+          tx
+        );
+        await auditEventsRepository.record(
+          {
+            actorUserId: null,
+            action: 'ordering_probe.second',
+            entityType: 'ordering_probe',
+            entityId,
+            metadata: { trial },
+          },
+          tx
+        );
+      });
+
+      const rows = await trailFor(entityId);
+      expect(rows).toHaveLength(2);
+      const [first, second] = rows;
+      if (first === undefined || second === undefined) throw new Error('expected two audit rows');
+
+      // ⚠ THE PREMISE, PINNED. If `created_at` ever stopped tying — someone switching the default
+      // to clock_timestamp(), say — this test would start passing for the WRONG reason (ordered by
+      // the timestamp, never consulting `seq`) and the mutation proof would silently stop biting.
+      expect(second.createdAt.getTime()).toBe(first.createdAt.getTime());
+
+      expect([first.action, second.action]).toEqual([
+        'ordering_probe.first',
+        'ordering_probe.second',
+      ]);
+      expect(first.seq).toBeLessThan(second.seq);
+      seqs.push(first.seq, second.seq);
+    }
+
+    // Allocation is monotonic across the whole run, not merely within a pair. GAPS ARE EXPECTED
+    // AND CORRECT (sequences are non-transactional) — this asserts increase, never contiguity.
+    let previous = Number.NEGATIVE_INFINITY;
+    for (const value of seqs) {
+      expect(value).toBeGreaterThan(previous);
+      previous = value;
+    }
+  });
+
+  /**
+   * Closes the gap the AC #2 production fix would otherwise ship into. The existing
+   * `findLatestByEntityAndAction` suite fabricates DISTINCT `created_at` values with an `UPDATE`,
+   * so it passes with or without `desc(seq)` — it has NO coverage of the same-transaction tie the
+   * fix actually repairs. This does, and both rows share entity + action so the tie is the real
+   * one: before `desc(seq)` this function had no tiebreaker whatsoever.
+   */
+  it(`findLatestByEntityAndAction resolves a same-transaction tie to the LAST row (${ORDERING_TRIALS} trials)`, async () => {
+    for (let trial = 0; trial < ORDERING_TRIALS; trial += 1) {
+      const entityId = randomUUID();
+
+      await db.transaction(async (tx) => {
+        await auditEventsRepository.record(
+          {
+            actorUserId: null,
+            action: 'company.join_mode_changed',
+            entityType: 'ordering_probe',
+            entityId,
+            metadata: { position: 'first' },
+          },
+          tx
+        );
+        await auditEventsRepository.record(
+          {
+            actorUserId: null,
+            action: 'company.join_mode_changed',
+            entityType: 'ordering_probe',
+            entityId,
+            metadata: { position: 'second' },
+          },
+          tx
+        );
+      });
+
+      // Same premise pin as the test above: both rows really do tie on `created_at`, so this
+      // exercises `seq` and not the timestamp.
+      const rows = await trailFor(entityId);
+      expect(rows).toHaveLength(2);
+      const [first, second] = rows;
+      if (first === undefined || second === undefined) throw new Error('expected two audit rows');
+      expect(second.createdAt.getTime()).toBe(first.createdAt.getTime());
+
+      const latest = await auditEventsRepository.findLatestByEntityAndAction({
+        entityType: 'ordering_probe',
+        entityId,
+        action: 'company.join_mode_changed',
+      });
+      expect(latest?.metadata).toEqual({ position: 'second' });
+    }
   });
 });
