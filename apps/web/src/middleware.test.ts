@@ -225,11 +225,63 @@ describe('middleware — authenticated access', () => {
   });
 });
 
+// BAL-553 fix round 2, F2 — the Edge mirror of `getSession()`'s in-memory absolute-deadline
+// guard. Middleware decodes its OWN session (`getMiddlewareSession`), so the check has to be
+// repeated here; plain-field reads only (`impersonatorUserId` / `impersonationExpiresAt`), Edge-safe.
+describe('middleware — F2: impersonation absolute-deadline guard', () => {
+  it("redirects to /login when an impersonated session's deadline has passed", async () => {
+    setupAuthenticatedSession({
+      impersonatorUserId: 'admin-1',
+      impersonationExpiresAt: Date.now() - 1000,
+    });
+    await expectLoginRedirect('/dashboard', '/dashboard');
+  });
+
+  it("allows access when an impersonated session's deadline has NOT yet passed", async () => {
+    setupAuthenticatedSession({
+      impersonatorUserId: 'admin-1',
+      impersonationExpiresAt: Date.now() + 15 * 60 * 1000,
+    });
+    const res = await middleware(createRequest('/dashboard'));
+    expect(res.status).toBe(200);
+  });
+
+  it('does not affect a normal (non-impersonated) session — no impersonatorUserId at all', async () => {
+    setupAuthenticatedSession({ impersonatorUserId: undefined, impersonationExpiresAt: undefined });
+    const res = await middleware(createRequest('/dashboard'));
+    expect(res.status).toBe(200);
+  });
+
+  it('serves an un-onboarded/public route anonymously when an expired impersonated session hits it with a cookie', async () => {
+    setupAuthenticatedSession({
+      impersonatorUserId: 'admin-1',
+      impersonationExpiresAt: Date.now() - 1000,
+    });
+    const res = await middleware(createRequestWithCookie('/experts'));
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('middleware — admin routes', () => {
   it('allows admin to access /admin/users', async () => {
     setupAuthenticatedSession({ platformRole: 'admin' });
     const res = await middleware(createRequest('/admin/users'));
     expect(res.status).toBe(200);
+  });
+
+  // BAL-553 fix round 2, F3 — belt-and-braces: even if a second super_admin promoted the
+  // target mid-impersonation and the sync route's own fail-closed check somehow didn't run
+  // first, middleware must deny `/admin` independent of `platformRole` whenever
+  // `impersonatorUserId` is set. Plain field, Edge-safe.
+  it('denies /admin to an impersonated session even when platformRole would otherwise grant it', async () => {
+    setupAuthenticatedSession({
+      platformRole: 'super_admin',
+      impersonatorUserId: 'admin-1',
+      // Not expired — proves this is `checkRouteGuards`' admin-route denial (F3), not F2's
+      // expiry guard, which would ALSO redirect but to /login, not /dashboard.
+      impersonationExpiresAt: Date.now() + 15 * 60 * 1000,
+    });
+    await expectRedirectTo('/admin/users', '/dashboard');
   });
 
   it('allows super_admin to access /admin', async () => {

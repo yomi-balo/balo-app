@@ -32,8 +32,15 @@ export interface SessionUser {
   impersonatorUserId?: string;
 
   // BAL-553 — ABSOLUTE deadline (epoch ms) for this impersonated session. Every save recomputes
-  // the cookie maxAge AND the iron seal ttl as the remaining time, so re-saving can never extend
-  // the window: the session expires 30 minutes after it started no matter how active it is.
+  // the cookie maxAge AND the iron seal ttl as the remaining time, so re-saving cannot extend
+  // the window past this deadline. ⚠ (fix round 2, F2) — that guarantee needs a SECOND part,
+  // enforced in `getSession()` below: `iron-webcrypto` applies a fixed 60s clock-skew allowance
+  // on top of `ttl`, so a seal issued at t=1799s with `ttl` floored to 1s is still ACCEPTED (not
+  // yet expired) at t=1800..1860s — and without the guard, saving inside that window would
+  // re-seal with a FRESH `exp = now + 1s`, itself valid for another ~61s, repeatable forever.
+  // `getSession()` closes this by comparing this field against `Date.now()` directly and
+  // deleting the in-memory session once it has passed, rather than trusting iron's ttl-derived
+  // expiry alone.
   impersonationExpiresAt?: number;
 
   // Company context (always present - personal workspace or real company)
@@ -98,7 +105,29 @@ export async function getSession() {
   const user = session.user;
   if (user !== undefined && isImpersonatedSession(user)) {
     const remaining = ((user.impersonationExpiresAt ?? 0) - Date.now()) / 1000;
-    session.updateConfig(impersonatedSessionConfig(remaining));
+    // ⚠⚠ (fix round 2, F2) — PAST THE DEADLINE, DO NOT ARM: `impersonatedSessionConfig` floors
+    // `ttl` at 1s, and `iron-webcrypto` grants a further fixed 60s clock-skew allowance on TOP
+    // of that — so arming with a non-positive `remaining` would still produce a seal that
+    // unseals successfully for up to ~61s, and (because `save()` is called unconditionally
+    // downstream, e.g. by the session-sync route) a client polling inside that window could
+    // re-trigger a save and get ANOTHER ~61s, indefinitely. Once the absolute deadline has
+    // passed, the ONLY correct move is to make this render see no session at all.
+    //
+    // IN-MEMORY DELETION ONLY — NEVER `session.destroy()` HERE. `getSession()` is called from
+    // React Server Component renders (the root layout, `checkSessionDrift`, …), where
+    // `cookies().set()` — which `destroy()` calls under the hood — throws
+    // ("Cookies can only be modified in a Server Action or Route Handler"). Deleting the
+    // in-memory fields makes every downstream reader (`getCurrentUser`, `requireUser`, …) see
+    // no user, which is fail-closed and safe from an RSC context; a Route Handler that wants
+    // the cookie itself cleared (e.g. session-sync's `!session?.user?.id` arm) already redirects
+    // to `/login`, which converges to the same place on the next request regardless.
+    if (remaining <= 0) {
+      delete session.user;
+      delete session.accessToken;
+      delete session.refreshToken;
+    } else {
+      session.updateConfig(impersonatedSessionConfig(remaining));
+    }
   }
   return session;
 }

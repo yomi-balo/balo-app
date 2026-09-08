@@ -448,10 +448,13 @@ describe('GET /api/auth/session-sync', () => {
         impersonationExpiresAt: 1_700_000_000_000,
       });
       mockGetSession.mockResolvedValue(session);
+      // BAL-553 fix round 2, F3 — `platformRole` stays `'user'` here (NOT `'admin'`, its
+      // pre-F3 value) so this general "the repair patches survive" test doesn't collide with
+      // the NEW staff-promotion fail-closed guard below, which has its own dedicated test.
       mockFindForSessionSync.mockResolvedValue(
         createDbUser({
           activeMode: 'expert',
-          platformRole: 'admin',
+          platformRole: 'user',
           onboardingCompleted: true,
           expertProfileId: 'ep-789',
         })
@@ -462,7 +465,7 @@ describe('GET /api/auth/session-sync', () => {
 
       // The repaired values landed…
       expect(session.user.activeMode).toBe('expert');
-      expect(session.user.platformRole).toBe('admin');
+      expect(session.user.platformRole).toBe('user');
       expect(session.user.onboardingCompleted).toBe(true);
       // …and the three impersonation fields survived, untouched.
       expect(session.user.isImpersonating).toBe(true);
@@ -549,6 +552,56 @@ describe('GET /api/auth/session-sync', () => {
 
       expect(Object.keys(repairCall[1] as Record<string, unknown>)).toEqual(['userId']);
       expect(Object.keys(syncCall[1] as Record<string, unknown>)).toEqual(['userId']);
+    });
+
+    // BAL-553 fix round 2, F3 — a SECOND super_admin promoting the impersonation TARGET to
+    // staff mid-session must not hand the impersonated session `/admin` (or any
+    // `hasPlatformCapability` gate) while `isImpersonating` stays true. Fail closed: destroy +
+    // redirect, exactly like the other invalidation arms (deleted/suspended) above.
+    it('F3 — fails closed when the impersonation target is promoted to staff mid-session', async () => {
+      const session = createMockSession({
+        activeMode: 'client',
+        platformRole: 'user',
+        onboardingCompleted: true,
+        isImpersonating: true,
+        impersonatorUserId: 'admin-1',
+        impersonationExpiresAt: 1_700_000_000_000,
+      });
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ platformRole: 'admin' }));
+
+      const response = await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(session.destroy).toHaveBeenCalledTimes(1);
+      expect(session.save).not.toHaveBeenCalled();
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(response.status).toBe(307);
+      expect(getRedirectLocation(response)).toBe('/login?error=session_expired');
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Session invalidated: impersonation target promoted to staff mid-session',
+        expect.objectContaining({
+          userId: session.user.id,
+          impersonatorUserId: 'admin-1',
+          newPlatformRole: 'admin',
+        })
+      );
+    });
+
+    it('F3 — a NON-impersonated session promoted to staff patches normally (no false positive)', async () => {
+      const session = createMockSession({
+        activeMode: 'client',
+        platformRole: 'user',
+        onboardingCompleted: true,
+      });
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ platformRole: 'admin' }));
+      mockLoadWorkspaceDerivationMaterials.mockResolvedValue(materials());
+
+      await GET(makeRequest('returnTo=/dashboard'));
+
+      expect(session.destroy).not.toHaveBeenCalled();
+      expect(session.user.platformRole).toBe('admin');
+      expect(session.save).toHaveBeenCalled();
     });
 
     it('leaves workspace fields absent (no crash) when the derivation resolves null', async () => {

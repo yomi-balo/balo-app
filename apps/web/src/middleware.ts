@@ -94,6 +94,20 @@ async function handleSessionedRoute(
     return redirectToLogin(request, pathname);
   }
 
+  // BAL-553 fix round 2, F2 — the Edge mirror of `getSession()`'s in-memory expiry guard
+  // (`lib/auth/session.ts`). Middleware decodes its OWN session via `getMiddlewareSession`, so
+  // the same absolute-deadline check has to be repeated here rather than relied on transitively.
+  // Plain field reads only (`impersonatorUserId` as the "is this impersonated" proxy, exactly
+  // like `checkRouteGuards` below and `middleware-session.ts`'s S3 fix) — Edge cannot import
+  // `@/lib/auth/impersonation` (it pulls in the Node-only structured logger).
+  if (
+    session.user.impersonatorUserId !== undefined &&
+    (session.user.impersonationExpiresAt ?? 0) <= Date.now()
+  ) {
+    if (publicRoute) return NextResponse.next();
+    return redirectToLogin(request, pathname);
+  }
+
   const refreshedResponse = await refreshSessionIfNeeded(request, session);
   const activeResponse = refreshedResponse ?? response;
 
@@ -116,9 +130,14 @@ function checkRouteGuards(
   // stale sealed cookie can carry `undefined` (middleware.test.ts seeds exactly that).
   // `PLATFORM_ROLE_CAPABILITIES[role] ?? []` inside the predicate denies any absent or unknown
   // key, so a nullish coalesce here would be dead code that lint flags as unnecessary.
+  // BAL-553 fix round 2, F3 — belt-and-braces: an impersonated session must never reach
+  // `/admin`, independent of whatever `platformRole` the sync route may have just copied onto
+  // it (e.g. a second super_admin promoting the target mid-impersonation — the sync route fails
+  // closed on that case too, `session-sync/route.ts`). Plain field, Edge-safe.
   if (
     isAdminRoute(pathname) &&
-    !platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
+    (user.impersonatorUserId !== undefined ||
+      !platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN))
   ) {
     return redirectWithCookies(new URL('/dashboard', baseUrl), activeResponse);
   }

@@ -6,6 +6,8 @@ import {
   type StoredWorkspaceChoice,
 } from '@balo/shared/workspaces';
 import { getSession, type SessionUser } from '@/lib/auth/session';
+import { isImpersonatedSession } from '@/lib/auth/impersonation';
+import { platformRoleIsStaff } from '@balo/shared/authz';
 import { getSafeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   loadWorkspaceDerivationMaterials,
@@ -106,6 +108,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
     session.destroy();
     return NextResponse.redirect(new URL('/login?error=account_suspended', request.url));
+  }
+
+  // BAL-553 fix round 2, F3 — a SECOND super_admin promoting the impersonation TARGET to staff
+  // while the impersonation is live must not hand the impersonated session `/admin` (and every
+  // `hasPlatformCapability` gate) while `isImpersonating` stays true — exactly the attribution-
+  // laundering case the staff-target refusal at start exists to prevent. Not a privilege
+  // escalation beyond what the impersonator already holds (session chaining is refused
+  // unconditionally at start), but it must fail closed rather than silently copy the promotion
+  // onto a session still flagged as impersonated.
+  if (isImpersonatedSession(session.user) && platformRoleIsStaff(dbUser.platformRole)) {
+    log.warn('Session invalidated: impersonation target promoted to staff mid-session', {
+      userId: session.user.id,
+      impersonatorUserId: session.user.impersonatorUserId,
+      newPlatformRole: dbUser.platformRole,
+    });
+    session.destroy();
+    return NextResponse.redirect(new URL('/login?error=session_expired', request.url));
   }
 
   // Patch session with fresh DB values

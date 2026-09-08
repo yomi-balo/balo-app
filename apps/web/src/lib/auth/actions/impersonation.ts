@@ -84,8 +84,9 @@ export type StopImpersonationResult =
     };
 
 /**
- * Start a Balo-local impersonated session (⟦R1⟧). See the module docblock for the accepted
- * `apps/api` degradation and the threat model recorded in `.implement/plan-bal-553.md`.
+ * Start a Balo-local impersonated session (⟦R1⟧). See the module docblock above for the
+ * accepted `apps/api` degradation; see the `platformRoleIsStaff` check below for the threat
+ * model behind refusing a staff target.
  *
  * Ordered so that every cheap refusal precedes every expensive one, and so that nothing is
  * written before every check has passed.
@@ -182,9 +183,18 @@ export async function startImpersonationAction(input: {
       return { success: false, error: PERMISSION_DENIED, code: 'target_unavailable' };
     }
 
-    // Cannot impersonate another staff member — see the module docblock's threat-model
-    // reference for the three independent reasons (capability inheritance, attribution
-    // laundering, no support use case).
+    // Cannot impersonate another staff member — three independent reasons, each load-bearing
+    // on its own (fix round 2, F5 — inlined here; this used to point at a gitignored plan file
+    // no reader could open):
+    //   1. CAPABILITY INHERITANCE. The sealed session carries the TARGET's real `platformRole`
+    //      (⟦R7b⟧ self-consistency). Impersonating another `super_admin` would therefore mint a
+    //      session that itself holds `IMPERSONATE_USER` — a chain of impersonations, each with
+    //      its own preserved cookie, with no way to reason about who is really acting.
+    //   2. ATTRIBUTION LAUNDERING. Staff actions are audited by `actorUserId`. Acting as another
+    //      staff member would let one `super_admin` produce audit rows naming a colleague —
+    //      exactly the confusion `impersonatorUserId` exists to prevent.
+    //   3. NO SUPPORT USE CASE. Impersonation exists to see what a CUSTOMER sees; there is no
+    //      legitimate reason to operate the product as a fellow staff member.
     if (platformRoleIsStaff(targetRow.platformRole)) {
       log.warn('Impersonation start refused', {
         actorUserId: actor.id,
@@ -194,7 +204,9 @@ export async function startImpersonationAction(input: {
       return { success: false, error: PERMISSION_DENIED, code: 'target_is_staff' };
     }
 
-    const target = await buildImpersonatedSessionUser(targetUserId);
+    // BAL-553 fix round 2, F4 — pass the SAME `targetRow` just checked above, rather than
+    // letting `buildImpersonatedSessionUser` re-query and seal a possibly-different row.
+    const target = await buildImpersonatedSessionUser(targetUserId, targetRow);
     if (target === null) {
       log.warn('Impersonation start refused', {
         actorUserId: actor.id,

@@ -5,20 +5,32 @@ import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 import type { SessionUser } from './session';
 
+/** The `findForSessionSync` row shape this module builds a `SessionUser` from. */
+export type ImpersonationTargetRow = NonNullable<
+  Awaited<ReturnType<typeof usersRepository.findForSessionSync>>
+>;
+
 /**
  * BAL-553 — build the impersonation TARGET's `SessionUser`, mirroring `createSession` in
  * `app/api/auth/callback/route.ts`. This module deliberately never mentions `isImpersonating` —
  * marking the flag is `markSessionAsImpersonated`'s job alone (`./impersonation.ts`, invariant
  * I2/⟦R4⟧); this file only builds an ordinary, unmarked `SessionUser` for the target.
  *
- * `null` for: the target missing, soft-deleted, non-`active`, or with no derivable company
- * workspace (`SessionUser.companyId` is required and there is nothing honest to put in it).
+ * ⚠⚠ (fix round 2, F4) — `targetRow` is PASSED IN, not re-queried. `startImpersonationAction`
+ * already reads `findForSessionSync(targetUserId)` once to check `platformRoleIsStaff` before
+ * calling this function; a SECOND internal read here would seal whatever the row said at that
+ * LATER instant — a real, if narrow, TOCTOU window between the staff-target check and the data
+ * actually sealed into the cookie. Passing the same row closes it and drops a duplicate query.
+ *
+ * `null` for: the target soft-deleted, non-`active`, missing its `User` row, or with no
+ * derivable company workspace (`SessionUser.companyId` is required and there is nothing honest
+ * to put in it).
  */
 export async function buildImpersonatedSessionUser(
-  targetUserId: string
+  targetUserId: string,
+  targetRow: ImpersonationTargetRow
 ): Promise<SessionUser | null> {
-  const syncRow = await usersRepository.findForSessionSync(targetUserId);
-  if (syncRow === null || syncRow.deletedAt !== null || syncRow.status !== 'active') {
+  if (targetRow.deletedAt !== null || targetRow.status !== 'active') {
     return null;
   }
 
@@ -42,9 +54,9 @@ export async function buildImpersonatedSessionUser(
   // `/admin`, and cannot start a second impersonation.
   //
   // ⚠⚠ (fix round 1, F7) — `activeMode` is initialized from `derived.session.activeMode`, NOT
-  // `syncRow.activeMode`, and that is deliberate, not an oversight: `applyWorkspaceDerivationToSessionUser`
+  // `targetRow.activeMode`, and that is deliberate, not an oversight: `applyWorkspaceDerivationToSessionUser`
   // below UNCONDITIONALLY overwrites `activeMode` (and `companyId`/`companyName`/`companyRole`)
-  // from the same `derived.session` projection, so a raw copy of `syncRow.activeMode` here would
+  // from the same `derived.session` projection, so a raw copy of `targetRow.activeMode` here would
   // be a dead write — worse, a MISLEADING one, because `resolveActiveWorkspace`
   // (`@balo/shared/workspaces`) fails safe: a target whose stored `activeMode` is `'expert'` but
   // who holds no (approved) expert profile derives `'client'`, so the two values are NOT always
@@ -59,16 +71,16 @@ export async function buildImpersonatedSessionUser(
     lastName: displayUser.lastName,
     avatarUrl: displayUser.avatarUrl,
     activeMode: derived.session.activeMode,
-    onboardingCompleted: syncRow.onboardingCompleted,
-    platformRole: syncRow.platformRole,
+    onboardingCompleted: targetRow.onboardingCompleted,
+    platformRole: targetRow.platformRole,
     // `authMethod` is deliberately NOT carried — it describes how THIS BROWSER authenticated,
     // and nobody authenticated as the target.
     companyId: derived.session.companyId,
     companyName: derived.session.companyName,
     companyRole: derived.session.companyRole,
-    ...(syncRow.expertProfileId !== null && {
-      expertProfileId: syncRow.expertProfileId,
-      verticalId: syncRow.verticalId ?? undefined,
+    ...(targetRow.expertProfileId !== null && {
+      expertProfileId: targetRow.expertProfileId,
+      verticalId: targetRow.verticalId ?? undefined,
     }),
   };
 

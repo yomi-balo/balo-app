@@ -398,6 +398,65 @@ describe('BAL-553 AC 3 — the impersonation guard end-to-end', () => {
     expect(unsealedAfterRepair.user?.impersonatorUserId).toBe(ADMIN_ID);
   });
 
+  // BAL-553 fix round 2, F2 (BLOCKING) — the window the earlier "seal expiry" test below cannot
+  // see. That test jumps straight to 1890s (well past BOTH the 1800s deadline AND iron's 60s
+  // skew allowance). At t ∈ (1800, 1860) the ORIGINAL seal is still ACCEPTED by `unsealData`
+  // (iron's fixed clock-skew grace), so without the `getSession()` guard the session-sync route
+  // would see a live `session.user`, patch it, and call `session.save()` — re-issuing a FRESH
+  // seal (`exp = now + 1s` after the floor) that is itself valid for another ~61s. Repeatable
+  // forever: a scripted `super_admin` could poll session-sync every ~60s and keep the
+  // impersonation alive indefinitely past the audited `expiresAt`.
+  it("F2 — inside iron's 60s skew window past the 30-minute deadline, session-sync does NOT re-seal", async () => {
+    await seedAdminSession();
+    await startImpersonationAction({ targetUserId: TARGET_ID, reason: 'ttl extension check' });
+
+    const startedAt = Date.now();
+    const sealedBefore = jar.get(COOKIE_NAME)?.value;
+    if (sealedBefore === undefined) throw new Error('expected balo_session to be set after start');
+
+    vi.useFakeTimers();
+    // Past the 1800s absolute deadline, but still inside iron-webcrypto's fixed 60s skew — the
+    // ORIGINAL seal still unseals successfully at this instant. This is the exact window the
+    // hole lived in.
+    vi.setSystemTime(startedAt + 1830 * 1000);
+
+    // ⚠ PRIMED SO THE MUTATION FAILS ON THE ASSERTIONS, NOT ON A CRASH. With the guard in place
+    // the route never reaches this leaf — it redirects at its `!session?.user?.id` arm. But if
+    // the `getSession()` deadline guard were REMOVED, the route would run on with a live user,
+    // and without this mock it would die at `deriveWorkspaces(materials.input, …)` on an
+    // unmocked leaf BEFORE reaching the two assertions below — leaving them unproven, since a
+    // test that only ever fails by crashing has not shown its assertions can catch anything.
+    // Primed, the mutated path instead runs to completion and calls `session.save()`, so the
+    // re-seal assertion itself is what fails.
+    mockLoadWorkspaceDerivationMaterials.mockResolvedValue({
+      input: {
+        hasApprovedExpertProfile: false,
+        memberships: [
+          {
+            companyId: TARGET_COMPANY_ID,
+            name: 'Northwind Industrial',
+            isPersonal: true,
+            role: 'owner',
+          },
+        ],
+        eligibleCompanyIds: [TARGET_COMPANY_ID],
+        representedCompanies: [],
+      },
+      stored: { activeMode: 'client', activeCompanyId: null },
+    });
+
+    const request = new NextRequest(new URL('/api/auth/session-sync', 'http://localhost:3000'));
+    const response = await sessionSyncGet(request);
+
+    // NO RE-SEAL: the cookie is byte-identical to what start() wrote — proof session-sync never
+    // called `session.save()` on this request.
+    expect(jar.get(COOKIE_NAME)?.value).toBe(sealedBefore);
+    // The route treated the session as ABSENT (fail closed) rather than "still valid".
+    const location = response.headers.get('Location');
+    expect(location).not.toBeNull();
+    expect(new URL(location ?? '').pathname).toBe('/login');
+  });
+
   it('seal expiry — advancing past 30 minutes makes getSession() yield no user; the SEAL itself has expired', async () => {
     await seedAdminSession();
     await startImpersonationAction({ targetUserId: TARGET_ID, reason: 'expiry check' });
