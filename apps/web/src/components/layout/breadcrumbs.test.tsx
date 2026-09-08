@@ -310,4 +310,57 @@ describe('Breadcrumbs', () => {
       expect(screen.queryByText('Balo')).not.toBeInTheDocument();
     });
   });
+
+  // ── BAL-533 — /engagements/[id] parents to Projects; the admin-only list would 404 members ──
+  describe('BAL-533 — /engagements/[id] parents to Projects, never the admin-only list', () => {
+    it('with a published label: Projects is the parent, the title is the h1, and nothing links to /engagements', async () => {
+      pathname = '/engagements/eng-1';
+      const { container } = render(
+        <BreadcrumbProvider>
+          <EntityCrumb label="Northwind CRM migration" />
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+
+      const nav = screen.getByLabelText('Breadcrumb');
+      const heading = within(nav).getByRole('heading', { level: 1 });
+      expect(heading).toHaveTextContent('Northwind CRM migration');
+      expect(heading).toHaveAttribute('aria-current', 'page');
+      expect(within(nav).getByRole('link', { name: 'Projects' })).toHaveAttribute(
+        'href',
+        '/projects'
+      );
+      expect(within(nav).getByRole('link', { name: 'Back to Projects' })).toHaveAttribute(
+        'href',
+        '/projects'
+      );
+      const linksToTheAdminList = within(nav)
+        .queryAllByRole('link')
+        .filter((link) => link.getAttribute('href') === '/engagements');
+      expect(linksToTheAdminList).toHaveLength(0);
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    it('before the label publishes: the h1 is the Projects link, so the way back is never lost', () => {
+      pathname = '/engagements/eng-1';
+      render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+
+      const nav = screen.getByLabelText('Breadcrumb');
+      const heading = within(nav).getByRole('heading', { level: 1 });
+      expect(within(heading).getByRole('link', { name: 'Projects' })).toHaveAttribute(
+        'href',
+        '/projects'
+      );
+      // A single crumb has no parent, so no mobile back arrow — same as any list route.
+      expect(within(nav).queryByRole('link', { name: /^Back to/ })).not.toBeInTheDocument();
+      const linksToTheAdminList = within(nav)
+        .queryAllByRole('link')
+        .filter((link) => link.getAttribute('href') === '/engagements');
+      expect(linksToTheAdminList).toHaveLength(0);
+    });
+  });
 });

@@ -404,9 +404,9 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
  * BAL-499 — the executable form of the Q1 decision: what every `(dashboard)` route's
  * breadcrumb trail resolves to. BAL-534 moved `/engagements` and `/promo-codes` into the exact
  * registry block (they are now enabled `admin`-section registry hrefs) and added
- * `/admin/catalogue`: **10** exact registry hrefs, **5** supplemental list routes, 6 entity
- * routes (each resolving to ONLY its parent — the entity's own crumb is published separately by
- * `EntityCrumb`).
+ * `/admin/catalogue`: **10** exact registry hrefs, **5** supplemental list routes, **8** entity
+ * routes each resolving to ONLY their parent (the entity's own crumb is published separately by
+ * `EntityCrumb`). `/engagements/:id` parents to Projects because its list is admin-only (BAL-533).
  */
 describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it.each([
@@ -436,7 +436,8 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/cases/case-1', [{ label: 'Consultations', href: '/consultations' }]],
     ['/meetings/meeting-1', [{ label: 'Consultations', href: '/consultations' }]],
     ['/meetings/meeting-1/end', [{ label: 'Consultations', href: '/consultations' }]],
-    ['/engagements/eng-1', [{ label: 'Engagements', href: '/engagements' }]],
+    // BAL-533 — Projects, not Engagements: the list is admin-only and this route is project-only.
+    ['/engagements/eng-1', [{ label: 'Projects', href: '/projects' }]],
     ['/projects/req-1', [{ label: 'Projects', href: '/projects' }]],
     ['/projects/req-1/proposal/rel-1', [{ label: 'Projects', href: '/projects' }]],
     // BAL-441 — the session receipt/payout pages.
@@ -473,9 +474,14 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/engagements/eng-1',
       '/projects/req-1',
       '/projects/req-1/proposal/rel-1',
+      '/sessions/session-1/receipt',
+      '/sessions/session-1/payout',
     ];
     for (const pathname of entityRoutes) {
       const [crumb] = resolveBreadcrumbTrail(pathname);
+      // BAL-533 — `const [crumb] = []` is `undefined`, and `undefined.not.toBeNull()` passes;
+      // this closes that vacuous-green trap for the next route removed from the table.
+      expect(crumb).toBeDefined();
       expect(crumb?.href).not.toBeNull();
     }
   });
