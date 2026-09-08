@@ -58,7 +58,7 @@ const REASON_COPY: Record<'forbidden' | 'not_found' | 'unavailable', string> = {
   // pending-MJ
   not_found: "This session's money record isn't available.",
   // pending-MJ
-  unavailable: 'These details didn’t load. Nothing was changed — try selecting the session again.',
+  unavailable: "These details didn't load. Nothing was changed — retry below.",
 };
 
 export function LookupMoneySection({
@@ -66,6 +66,12 @@ export function LookupMoneySection({
 }: Readonly<LookupMoneySectionProps>): React.JSX.Element {
   const [state, setState] = useState<AdminSessionMoneyResult | 'loading'>('loading');
   const requestIdRef = useRef(0);
+  // BAL-551 fix round R2 — the effect below is keyed on `sessionId` alone, so re-selecting
+  // the SAME row never re-runs it: the old copy's "try selecting the session again" could
+  // never actually cause a refetch. `retryToken` is a second, independent dependency the
+  // Retry button bumps, so a retry works without discarding the whole drill-in (the
+  // reviewer's `key={opened?.seq}` remount) just to recover this one section.
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
     const requestId = requestIdRef.current + 1;
@@ -81,7 +87,8 @@ export function LookupMoneySection({
           setState({ ok: false, reason: 'unavailable' });
         }
       });
-  }, [sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- retryToken is a manual re-fetch trigger, not a value read in the effect body
+  }, [sessionId, retryToken]);
 
   if (state === 'loading') return <LoadingSkeleton />;
 
@@ -89,6 +96,15 @@ export function LookupMoneySection({
     return (
       <div className="border-warning/30 bg-warning/5 rounded-xl border p-3.5">
         <ReasonNotice text={REASON_COPY[state.reason]} />
+        {state.reason === 'unavailable' && (
+          <button
+            type="button"
+            onClick={() => setRetryToken((token) => token + 1)}
+            className="text-warning focus-visible:ring-ring mt-2 inline-flex min-h-[44px] items-center rounded px-1 text-xs font-semibold underline underline-offset-2 focus-visible:ring-2 focus-visible:outline-none"
+          >
+            Retry
+          </button>
+        )}
       </div>
     );
   }
@@ -115,7 +131,20 @@ export function LookupMoneySection({
             label="Balo margin"
             value={`${formatAud(block.marginAudMinor)} (${block.baloFeeBps / 100}% markup)`}
           />
-          <MoneyRow label="Charged minutes" value={`${block.durationMinutes} min`} />
+          {/* BAL-551 fix round R3 — the BAL-412 billing-floor facts (`AdminMoneyBlock`) were
+              already fetched and on the wire, unused. When the 15-minute minimum is what set
+              the charge, say so plainly rather than showing a bare minute count that looks
+              like the real duration. `settlementShape` is deliberately NOT rendered here — a
+              raw enum (`no_show_client`, `abandoned_wait`, …) does not read plainly to a
+              support person, and the floor sentence already says what they need. */}
+          <MoneyRow
+            label="Charged minutes"
+            value={
+              block.billingFloorApplied
+                ? `${block.durationMinutes} min (actual ${block.actualMinutes} min — billed at the ${block.billingFloorMinutes}-minute minimum)`
+                : `${block.durationMinutes} min`
+            }
+          />
           {block.overdraftSettledMinor !== 0 && (
             <MoneyRow label="Overdraft settled" value={formatAud(block.overdraftSettledMinor)} />
           )}

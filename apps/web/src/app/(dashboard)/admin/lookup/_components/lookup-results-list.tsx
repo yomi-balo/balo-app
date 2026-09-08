@@ -3,7 +3,12 @@
 import { motion } from 'motion/react';
 import { ChevronRight, RotateCcw, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { LookupEntityType, LookupResult, LookupTypeFilter } from '@balo/shared/lookup';
+import {
+  LOOKUP_RESULT_CAP,
+  type LookupEntityType,
+  type LookupResult,
+  type LookupTypeFilter,
+} from '@balo/shared/lookup';
 import type { RecentLookupEntry } from '../_lib/use-recent-lookups';
 import { LOOKUP_FILTER_LABEL, LOOKUP_TYPE_LABEL, LOOKUP_TYPE_ICON } from '../_lib/lookup-view';
 
@@ -256,7 +261,7 @@ export function LookupResultsList({
       {truncated && (
         <p className="text-muted-foreground mt-2 text-xs">
           {/* pending-MJ */}
-          Showing the first 20 matches — add a word to narrow it down.
+          Showing the first {LOOKUP_RESULT_CAP} matches — add a word to narrow it down.
         </p>
       )}
     </div>

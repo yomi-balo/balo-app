@@ -15,7 +15,10 @@ import {
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import {
   isLookupUuid,
+  LOOKUP_ARM_LIMIT,
   LOOKUP_ENTITY_TYPES,
+  LOOKUP_MIN_QUERY_LENGTH,
+  LOOKUP_RESULT_CAP,
   type LookupEntityType,
   type LookupResult,
   type LookupSearchResult,
@@ -127,26 +130,15 @@ import {
 
 // ── Constants ────────────────────────────────────────────────────────────────────────
 
-/** The merged result ceiling. The UI says "showing the first 20 — refine" past it. */
-export const LOOKUP_RESULT_CAP = 20;
-
 /**
- * Per-arm `LIMIT` — the cap PLUS ONE PROBE ROW.
- *
- * ONE arm may legitimately fill the whole budget (30 companies matching "north" and
- * nothing else), so the per-arm limit cannot be smaller than the cap. It cannot be EQUAL
- * to it either: `truncated` is `Σ|arm| > cap`, so an arm capped at exactly 20 could never
- * report that a 30-row match had been trimmed — the single-arm overflow case, which is the
- * commonest one, would silently claim it showed everything. The extra row is fetched and
- * never rendered; it exists only to answer "was there more?".
+ * BAL-551 fix round R5 — `LOOKUP_RESULT_CAP`, `LOOKUP_ARM_LIMIT` and `LOOKUP_MIN_QUERY_LENGTH`
+ * now live in `@balo/shared/lookup` (`./constants`), so a client component can read them
+ * without a value import of `@balo/db` (memory `reference_balo_db_client_bundle_footgun`).
+ * Re-exported here unchanged so every existing caller on this `@balo/db` path — this
+ * module's own arm-limit clauses below, `repositories/index.ts`, `platform-lookup.test.ts`
+ * and `platform-lookup.integration.test.ts` — keeps working without an import-path change.
  */
-export const LOOKUP_ARM_LIMIT = LOOKUP_RESULT_CAP + 1;
-
-/**
- * A one-character query is `%a%` against six tables. Refuse it — `search` returns
- * `{ results: [], truncated: false, tooShort: true }` and issues NO query at all.
- */
-export const LOOKUP_MIN_QUERY_LENGTH = 2;
+export { LOOKUP_RESULT_CAP, LOOKUP_ARM_LIMIT, LOOKUP_MIN_QUERY_LENGTH };
 
 // ── Pure helpers (unit-tested in platform-lookup.test.ts) ────────────────────────────
 

@@ -87,6 +87,11 @@ describe('LookupSearchBox', () => {
     expect(mockReplace).toHaveBeenCalledWith('/admin/lookup?q=northwind', { scroll: false });
   });
 
+  it('BAL-551 R8 — the input meets the 44px touch target, matching the chip/link precedent', () => {
+    render(<LookupSearchBox initialQuery="" onPendingChange={vi.fn()} />);
+    expect(screen.getByRole('textbox', { name: /search lookup/i })).toHaveClass('min-h-[44px]');
+  });
+
   it('reports pending state to the parent via onPendingChange', async () => {
     const onPendingChange = vi.fn();
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });

@@ -18,3 +18,4 @@ export {
   type LookupSearchResult,
 } from './types';
 export { isLookupUuid } from './uuid';
+export { LOOKUP_RESULT_CAP, LOOKUP_ARM_LIMIT, LOOKUP_MIN_QUERY_LENGTH } from './constants';

@@ -40,7 +40,31 @@ export function LookupShell({
   truncated,
   tooShort,
 }: Readonly<LookupShellProps>): React.JSX.Element {
-  const [filter, setFilter] = useState<LookupTypeFilter>('all');
+  // ⚠ BAL-551 fix round R1 — the filter reset used to live in the effect below, keyed on
+  // `query`. `LookupAnalytics` is a CHILD of this component, and React runs effects
+  // bottom-up: on a query change the child's effect ran BEFORE this one, so it observed one
+  // render carrying the NEW query paired with the STALE filter and fired
+  // `admin_lookup_searched` with a `type_filter` the user never searched under — a double
+  // fire, the first one describing a state that never existed on screen.
+  //
+  // Fixed with React's documented "adjusting state when a prop changes" pattern: the reset
+  // happens SYNCHRONOUSLY DURING RENDER (a `chip` state object keyed to the `query` it was
+  // computed for), not in an effect, so the child never observes the stale pair — by the
+  // time `LookupAnalytics` renders, `filter` has already settled to `'all'` for the new
+  // query. React re-renders immediately when `setChip` is called during render, before any
+  // child commits (see the React docs on "You Might Not Need an Effect").
+  const [chip, setChip] = useState<{ query: string; filter: LookupTypeFilter }>({
+    query,
+    filter: 'all',
+  });
+  if (chip.query !== query) {
+    setChip({ query, filter: 'all' });
+  }
+  const filter = chip.query === query ? chip.filter : 'all';
+  function setFilter(nextFilter: LookupTypeFilter): void {
+    setChip({ query, filter: nextFilter });
+  }
+
   const [selection, setSelection] = useState<LookupSelection | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [opened, setOpened] = useState<LookupOpenedSelection | null>(null);
@@ -48,18 +72,16 @@ export function LookupShell({
   const previousQueryRef = useRef(query);
   const { recent, remember } = useRecentLookups();
 
-  // Typing resets the chip to All (the ticket's stated behaviour).
-  //
   // ⚠ BAL-551 fix round F4 — a change to a DIFFERENT non-empty query also clears the
   // drill-in `selection`, so it cannot keep rendering query A's orphaned entity while the
   // list underneath has already moved on to query B. Clearing the query to EMPTY is the
   // one deliberate exception — that is the Recent view, and `lookup-shell.test.tsx`'s
   // "selecting a result remembers it so it appears in Recent on an empty query" test pins
-  // the selection staying open there.
+  // the selection staying open there. This is genuinely effect-shaped (it clears state that
+  // is independent of this render, not derived from it), unlike the filter reset above.
   useEffect(() => {
     const previousQuery = previousQueryRef.current;
     previousQueryRef.current = query;
-    setFilter('all');
     if (query !== '' && query !== previousQuery) {
       setSelection(null);
     }

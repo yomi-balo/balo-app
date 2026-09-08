@@ -75,7 +75,7 @@ export function LookupSearchBox({
         placeholder="Name, email, company, session id, PaymentIntent…"
         className={cn(
           'border-border bg-card text-foreground placeholder:text-muted-foreground w-full min-w-0',
-          'focus-visible:ring-ring rounded-xl border py-2.5 pr-4 pl-10 text-sm',
+          'focus-visible:ring-ring min-h-[44px] rounded-xl border py-2.5 pr-4 pl-10 text-sm',
           'focus-visible:ring-2 focus-visible:outline-none'
         )}
       />

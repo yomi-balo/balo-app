@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import type { LookupResult } from '@balo/shared/lookup';
+import { track, ADMIN_LOOKUP_EVENTS } from '@/lib/analytics';
 import { LookupShell } from './lookup-shell';
 
 vi.mock('next/navigation', () => ({
@@ -13,6 +14,8 @@ vi.mock('../_actions/fetch-lookup-money-block', () => ({
   fetchLookupMoneyBlockAction: mockAction,
 }));
 
+const trackMock = vi.mocked(track);
+
 function result(
   overrides: Partial<LookupResult> & Pick<LookupResult, 'id' | 'type'>
 ): LookupResult {
@@ -22,6 +25,7 @@ function result(
 beforeEach(() => {
   globalThis.localStorage.clear();
   mockAction.mockReturnValue(new Promise(() => {}));
+  trackMock.mockClear();
 });
 
 describe('LookupShell', () => {
@@ -114,5 +118,33 @@ describe('LookupShell', () => {
     // The selected drill-in stays mounted (selection is independent client state) AND the
     // Recent list now carries the same entry — two matches is the expected shape here.
     expect(screen.getAllByText('Dana Whitfield').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('BAL-551 R1 (mutation-proof) — a query change with a non-All chip active fires SEARCHED exactly once, under "all"', async () => {
+    const user = userEvent.setup();
+    const resultsA = [
+      result({ id: 'u1', type: 'user', title: 'Dana' }),
+      result({ id: 'co1', type: 'company', title: 'Northwind' }),
+    ];
+    const { rerender } = render(
+      <LookupShell query="dana" results={resultsA} truncated={false} tooShort={false} />
+    );
+    await user.click(screen.getByRole('button', { name: /^Companies & agencies/ }));
+    expect(screen.getByRole('button', { name: /^Companies & agencies/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    trackMock.mockClear();
+
+    const resultsB = [result({ id: 'co2', type: 'company', title: 'Southwind' })];
+    rerender(<LookupShell query="south" results={resultsB} truncated={false} tooShort={false} />);
+
+    // The fix: exactly ONE fire for the new query, already settled under 'all' — never a
+    // first fire under the stale 'orgs' chip.
+    expect(trackMock).toHaveBeenCalledTimes(1);
+    expect(trackMock).toHaveBeenCalledWith(
+      ADMIN_LOOKUP_EVENTS.SEARCHED,
+      expect.objectContaining({ type_filter: 'all' })
+    );
   });
 });

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LOOKUP_ENTITY_TYPES, type LookupEntityType, type LookupResult } from '@balo/shared/lookup';
+import { ADMIN_LOOKUP_RECENT_STORAGE_KEY } from '@/lib/admin-lookup/recent-storage';
 
 /**
  * BAL-551 — "Recent · opened by you", shown on an empty query. Client-side ONLY.
@@ -15,20 +16,26 @@ import { LOOKUP_ENTITY_TYPES, type LookupEntityType, type LookupResult } from '@
  *
  * ⚠ BAL-551 fix round F7 — titles fall back to EMAIL ADDRESSES and company sub-lines carry
  * WALLET BALANCES, so on a shared support machine these used to outlive the session
- * indefinitely. `clearStoredRecentLookups()` is now wired into `useLogout` (the app's one
- * client sign-out sequence), synchronously alongside `forgetSetupIntent()`, so an explicit
- * sign-out clears this key.
+ * indefinitely. `clearStoredRecentLookups()` (`@/lib/admin-lookup/recent-storage`) is wired
+ * into `useLogout` (the app's one client sign-out sequence), synchronously alongside
+ * `forgetSetupIntent()`, so an explicit sign-out clears this key.
  *
- * ⚠ RESIDUAL EXPOSURE, STATED RATHER THAN CLAIMED CLOSED: this only fires on an EXPLICIT
- * sign-out. A tab left open past the 7-day session cookie, a browser force-closed or crashed,
- * or `clearMiddlewareSession`'s server-side teardown on decode failure/expiry (no client code
- * runs on that path — see `use-logout.ts`'s own FIX ROUND 1 F5 note for the identical gap on
- * the SetupIntent binding) all leave this key populated in that browser's storage. This is the
- * same exposure `balo:project-draft:*` already accepts for draft briefs; it stores NO money
- * figure beyond what was already rendered on screen.
+ * ⚠ BAL-551 fix round R4 — the storage key and `clearStoredRecentLookups` used to be DEFINED
+ * here and imported by `use-logout.ts` reaching into this route-private `_lib` — a layering
+ * inversion (a shared layout module depending on one route's private implementation detail).
+ * Both now live in `@/lib/admin-lookup/recent-storage`; this file imports the key from there,
+ * ONE definition, no second literal.
+ *
+ * ⚠ RESIDUAL EXPOSURE, STATED RATHER THAN CLAIMED CLOSED: the sign-out clear only fires on an
+ * EXPLICIT sign-out. A tab left open past the 7-day session cookie, a browser force-closed or
+ * crashed, or `clearMiddlewareSession`'s server-side teardown on decode failure/expiry (no
+ * client code runs on that path — see `use-logout.ts`'s own FIX ROUND 1 F5 note for the
+ * identical gap on the SetupIntent binding) all leave this key populated in that browser's
+ * storage. This is the same exposure `balo:project-draft:*` already accepts for draft briefs;
+ * it stores NO money figure beyond what was already rendered on screen.
  */
 
-const RECENT_KEY = 'balo:admin-lookup-recent';
+const RECENT_KEY = ADMIN_LOOKUP_RECENT_STORAGE_KEY;
 const RECENT_LIMIT = 10;
 
 export interface RecentLookupEntry {
@@ -85,20 +92,6 @@ function writeStoredRecent(entries: readonly RecentLookupEntry[]): void {
   } catch {
     // Storage full, disabled, or a private-browsing throw — Recent degrading silently is
     // acceptable; it is a convenience list, never a source of truth.
-  }
-}
-
-/**
- * BAL-551 fix round F7 — wired into `useLogout` so an explicit sign-out clears the names,
- * emails and wallet-balance sub-lines Recent carries. See this file's header comment for the
- * residual exposure this does NOT close.
- */
-export function clearStoredRecentLookups(): void {
-  if (typeof globalThis.window === 'undefined') return;
-  try {
-    globalThis.localStorage.removeItem(RECENT_KEY);
-  } catch {
-    // A disabled store or a private-browsing throw — nothing to clear either way.
   }
 }
 
