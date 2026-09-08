@@ -61,9 +61,7 @@ function crumbContent(crumb: NavCrumb, variant: 'last' | 'earlier'): React.JSX.E
  * rule: its own title heading is `h2` (or deeper), never `h1` — this component owns the `h1`.
  *
  * An unrecognised route renders nothing (`resolveBreadcrumbTrail` returns `[]`): no crumb beats
- * a wrong crumb (BAL-499 D11) — the old silent `'Dashboard'` fallback is gone. So does
- * `/engagements/[id]` until its page publishes a label (BAL-533): its list is admin-only, so
- * that route deliberately has no parent row and owns no chrome `<h1>` on first paint.
+ * a wrong crumb (BAL-499 D11) — the old silent `'Dashboard'` fallback is gone.
  */
 export function Breadcrumbs(): React.JSX.Element | null {
   const pathname = usePathname();

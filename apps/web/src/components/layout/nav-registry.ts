@@ -472,9 +472,10 @@ const ENTITY_PARENTS: Readonly<Record<string, NavCrumb>> = {
   // BAL-441 — `/sessions/:id/receipt` and `/sessions/:id/payout`. Consistent with `cases` and
   // `meetings` above: `/consultations` is a "Coming soon" stub, not new debt.
   sessions: { label: 'Consultations', href: '/consultations' },
-  // BAL-533 — NO `engagements` row, deliberately. `/engagements` is the admin-only list
-  // (`notFound()`s for non-staff), while `/engagements/[id]` is the member route, and this
-  // resolver is actor-free so a conditional parent can't be expressed. Do not re-add. (PR #273 D6)
+  // BAL-533 — Projects, NOT Engagements: `/engagements` is the admin-only list (`notFound()` for
+  // non-staff) and `/engagements/[id]` is project-only, so `/projects` is the honest, never-404
+  // parent for every lens.
+  engagements: { label: 'Projects', href: '/projects' },
   projects: { label: 'Projects', href: '/projects' },
 };
 
