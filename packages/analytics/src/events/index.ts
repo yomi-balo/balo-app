@@ -355,3 +355,9 @@ export {
   STRIPE_REDIRECT_UNBOUND_REASONS,
   type StripeRedirectUnboundReason,
 } from './stripe-redirect';
+// BAL-551 — the admin lookup surface's CLIENT event family (one search box across entity types).
+export {
+  ADMIN_LOOKUP_EVENTS,
+  type AdminLookupEventMap,
+  type AdminLookupMatchedBy,
+} from './admin-lookup';

@@ -52,6 +52,7 @@ import type { MarketingHomeEventMap } from './events/marketing-home';
 import type { SettingsEventMap } from './events/settings';
 import type { CommandPaletteEventMap } from './events/command-palette';
 import type { StripeRedirectEventMap } from './events/stripe-redirect';
+import type { AdminLookupEventMap } from './events/admin-lookup';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -111,7 +112,10 @@ export type AllEvents = AuthEventMap &
   CommandPaletteEventMap &
   // BAL-529 §D — the Stripe redirect-return family. `useSetupIntentRedirectReturn` (apps/web)
   // is the ONE dispatch point; no other module calls `track()` with this event.
-  StripeRedirectEventMap;
+  StripeRedirectEventMap &
+  // BAL-551 — the admin lookup surface's CLIENT family. Both events are browser-emitted; there
+  // is no server family, so nothing here joins `ServerEvents` below.
+  AdminLookupEventMap;
 
 export type EventName = keyof AllEvents;
 

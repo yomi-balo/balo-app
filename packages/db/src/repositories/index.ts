@@ -756,3 +756,14 @@ export type {
   RepresentationScope,
   RepresentationStatus,
 } from '../schema';
+// ── Platform lookup (BAL-551) ──────────────────────────────────────────────
+// The platform-staff support search across six entity types. READ-ONLY: there is no write
+// member and never will be. `@balo/db` never reads a platform role — the caller passes an
+// already-resolved `authorizedPlatformStaff: true` (ADR-1029 / ADR-1035).
+export {
+  platformLookupRepository,
+  LOOKUP_RESULT_CAP,
+  LOOKUP_ARM_LIMIT,
+  LOOKUP_MIN_QUERY_LENGTH,
+  type PlatformLookupSearchInput,
+} from './platform-lookup';

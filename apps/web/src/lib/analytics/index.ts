@@ -73,6 +73,8 @@ export {
   STRIPE_REDIRECT_EVENTS,
   STRIPE_REDIRECT_SURFACES,
   STRIPE_REDIRECT_UNBOUND_REASONS,
+  /** BAL-551 — the admin lookup surface's event constant (one search box across entity types). */
+  ADMIN_LOOKUP_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -150,4 +152,7 @@ export type {
   StripeRedirectEventMap,
   StripeRedirectSurface,
   StripeRedirectUnboundReason,
+  /** BAL-551 — the admin lookup surface's event payload and its matched-by vocabulary. */
+  AdminLookupEventMap,
+  AdminLookupMatchedBy,
 } from '@balo/analytics/client';

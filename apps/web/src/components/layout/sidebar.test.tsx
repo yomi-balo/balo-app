@@ -421,7 +421,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('BAL-534: a staff context renders the labelled "Balo admin" group with its three rows, in both modes', () => {
+  it('BAL-534: a staff context renders the labelled "Balo admin" group with its four rows, in both modes', () => {
     for (const mode of ['client', 'expert'] as const) {
       const view = renderSidebar({ mode, canManageCompany: false, isStaff: true });
       const group = screen.getByTestId('sidebar-admin-group');
@@ -430,7 +430,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
         within(group)
           .getAllByRole('link')
           .map((l) => l.getAttribute('href'))
-      ).toEqual(['/engagements', '/promo-codes', '/admin/catalogue']);
+      ).toEqual(['/engagements', '/promo-codes', '/admin/catalogue', '/admin/lookup']);
       expect(within(group).getByTestId('sidebar-nav-pill-admin')).toBeInTheDocument();
       view.unmount();
     }
@@ -443,6 +443,9 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(screen.queryByTestId('sidebar-nav-pill-admin')).not.toBeInTheDocument();
     expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain(
       '/admin/catalogue'
+    );
+    expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain(
+      '/admin/lookup'
     );
   });
 });

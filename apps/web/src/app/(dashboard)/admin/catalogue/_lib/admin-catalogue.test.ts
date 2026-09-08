@@ -5,12 +5,15 @@ import { ADMIN_CATALOGUE_ROWS, resolveCatalogueRows } from './admin-catalogue';
 const FULL_STAFF_SET: readonly PlatformCapability[] = Object.values(PLATFORM_CAPABILITIES);
 
 describe('ADMIN_CATALOGUE_ROWS (D9)', () => {
-  it('is the six pinned rows, in order, with the design reference’s statuses and tones', () => {
+  it('is the seven pinned rows, in order, with the design reference’s statuses and tones', () => {
+    // BAL-551 fix round F14 — the catalogue indexes "the admin surfaces that already exist",
+    // and Lookup now exists.
     expect(ADMIN_CATALOGUE_ROWS.map((r) => [r.title, r.href, r.status, r.tone])).toEqual([
       ['Projects', '/projects?lens=admin', 'Shipped', 'success'],
       ['Platform config', '/admin/config', 'Not on main yet', 'warning'],
       ['Promo codes', '/promo-codes', 'Shipped', 'success'],
       ['Engagements', '/engagements', 'Shipped', 'success'],
+      ['Lookup', '/admin/lookup', 'Shipped', 'success'],
       ['Featured experts', '/admin/config/spotlight', 'Designed — BAL-493', 'neutral'],
       ['Taxonomy', '/admin/taxonomy', 'Seeded, not editable', 'neutral'],
     ]);
@@ -48,7 +51,10 @@ describe('resolveCatalogueRows (D10)', () => {
 
   it('an empty held set gates every row that HAS a capability, and no others', () => {
     const resolved = resolveCatalogueRows(ADMIN_CATALOGUE_ROWS, []);
-    expect(resolved.filter((r) => r.isViewOnly).map((r) => r.key)).toEqual(['promo_codes']);
+    expect(resolved.filter((r) => r.isViewOnly).map((r) => r.key)).toEqual([
+      'promo_codes',
+      'lookup',
+    ]);
     expect(resolved.filter((r) => r.requiredCapability === null).every((r) => !r.isViewOnly)).toBe(
       true
     );
@@ -60,6 +66,7 @@ describe('resolveCatalogueRows (D10)', () => {
       'projects',
       'promo_codes',
       'engagements',
+      'lookup',
     ]);
     expect(resolved.filter((r) => r.linkHref === null).map((r) => r.key)).toEqual([
       'platform_config',

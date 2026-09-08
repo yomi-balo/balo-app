@@ -35,12 +35,13 @@ describe('NAV_ITEM_KEYS', () => {
       'admin_engagements',
       'admin_promo_codes',
       'admin_catalogue',
+      'admin_lookup',
     ]);
   });
 
-  it('has 14 entries with no duplicates', () => {
-    expect(NAV_ITEM_KEYS.length).toBe(14);
-    expect(new Set(NAV_ITEM_KEYS).size).toBe(14);
+  it('has 15 entries with no duplicates', () => {
+    expect(NAV_ITEM_KEYS.length).toBe(15);
+    expect(new Set(NAV_ITEM_KEYS).size).toBe(15);
   });
 });
 

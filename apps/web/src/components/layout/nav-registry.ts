@@ -13,6 +13,7 @@ import {
   Briefcase,
   Zap,
   Layers,
+  ScanSearch,
 } from 'lucide-react';
 import type { Workspace } from '@balo/shared/workspaces';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
@@ -306,7 +307,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   // `resolveMobileNav` concatenates primary → secondary → admin and calls that "registry
   // order", and `nav-registry.test.ts` pins the three-block authoring order that makes it true.
   //
-  // All three are `mobilePriority: 'more'` — the tab bar already fills to MOBILE_TAB_LIMIT for
+  // All four are `mobilePriority: 'more'` — the tab bar already fills to MOBILE_TAB_LIMIT for
   // BOTH workspace types, so no admin item could reach it anyway.
   //
   // ⚠ NO `Projects → /projects?lens=admin` ROW (orchestrator D5). `defaultLensFor` already
@@ -315,7 +316,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   // can never render active. Its entry point is row 1 of `/admin/catalogue`.
   //
   // ⚠ `workspaceTypes: ['company', 'expert']` — staff may be in EITHER workspace (AC).
-  // ⚠ No `jumpOut` — all three targets live inside the `(dashboard)` route group.
+  // ⚠ No `jumpOut` — all four targets live inside the `(dashboard)` route group.
   {
     key: 'admin_engagements',
     label: 'Engagements',
@@ -343,6 +344,17 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     label: 'Config & catalogue',
     icon: Layers,
     href: '/admin/catalogue',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
+  {
+    key: 'admin_lookup',
+    label: 'Lookup',
+    icon: ScanSearch,
+    href: '/admin/lookup',
     section: 'admin',
     workspaceTypes: ['company', 'expert'],
     requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
