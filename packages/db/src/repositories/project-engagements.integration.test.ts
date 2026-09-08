@@ -52,14 +52,17 @@ import { markNotSelectedByAward } from './request-expert-relationships';
  * Read delivery audit rows for one entity from main's generic `audit_events` table
  * (BAL-344). Engagement lifecycle events use `entity_id = engagementId`; that table
  * has no `engagement_id` column (the id is folded into `metadata.engagementId`).
- * Ordered createdAt asc, ties by id.
+ *
+ * Ordered by the BAL-426 trail contract — `created_at` then `seq`, both ascending. NEVER `id`:
+ * it is `defaultRandom()`, and `created_at` is the TRANSACTION timestamp, so `(created_at, id)`
+ * is a coin flip for rows written in one `db.transaction`.
  */
 async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
   return db
     .select()
     .from(auditEvents)
     .where(eq(auditEvents.entityId, entityId))
-    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
 }
 
 /**
@@ -488,19 +491,29 @@ describe('engagement.created audit — the project creation paths (BAL-417 post-
       engagementId: engagement.id,
     });
 
-    // Both audit rows are written, and BOTH are attributed to this engagement.
+    // Both audit rows are written, BOTH are attributed to this engagement, and — BAL-426 —
+    // their relative ORDER is now recoverable and asserted.
     //
-    // ⚠ DO NOT assert their relative ORDER. It is not recoverable from `audit_events`:
-    // `created_at` is `defaultNow()`, which in Postgres is TRANSACTION START time, so
-    // two rows written in one transaction carry an IDENTICAL timestamp — and the
-    // tiebreaker `id` is `defaultRandom()`, not a sequence. `(created_at, id)` order is
-    // therefore a coin flip per run, not insertion order. An earlier revision of this
-    // test asserted creation-before-snapshot and passed locally purely by luck before
-    // failing in CI. Ordering the delivery trail would need a monotonic column on
-    // `audit_events` (BAL-344's table, shared by every feature) — out of scope here.
+    // `created_at` is still `defaultNow()` (= TRANSACTION START), so these two rows carry an
+    // IDENTICAL timestamp. `audit_events.seq` — a monotonic bigint IDENTITY — breaks that tie
+    // by INSERTION order, and `auditEventsForEntity` orders `created_at` then `seq`, both
+    // ascending. An earlier revision asserted creation-before-snapshot on `(created_at, id)`,
+    // which is a random-uuid coin flip: it passed locally and failed in CI, and the assertion
+    // was removed in 8e2d6616 ("engagement supertype …", BAL-417 / PR #187). BAL-426 makes the
+    // claim hold, so it is reinstated — and it is the claim `project-engagements.ts:1041`
+    // already makes in prose ("FIRST audit row for the engagement, before
+    // `milestones_snapshotted`, so the trail reads creation-then-snapshot"), which until now
+    // the schema did not hold.
+    //
+    // ⚠ POSITIONAL, NOT ADJACENT. `indexOf` rather than `[0]`/`[1]`, so a future third
+    // engagement-scoped audit row landing between them does not break the invariant actually
+    // under test.
     const actions = events.map((e) => e.action);
     expect(actions).toContain('engagement.created');
     expect(actions).toContain('engagement.milestones_snapshotted');
+    expect(actions.indexOf('engagement.created')).toBeLessThan(
+      actions.indexOf('engagement.milestones_snapshotted')
+    );
   });
 });
 

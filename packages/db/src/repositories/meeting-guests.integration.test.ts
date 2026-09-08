@@ -81,6 +81,10 @@ function claimInput(
  * The `audit_events` rows one guest holds for one action, oldest first. ONE helper rather
  * than a per-action copy — a second copy is both a Sonar new-code duplication finding and a
  * copy that keeps passing after the original's `entity_type` scoping is broken.
+ *
+ * Ordered by the BAL-426 trail contract — `created_at` then `seq`, both ascending. NEVER `id`:
+ * it is `defaultRandom()`, and `created_at` is the TRANSACTION timestamp, so `(created_at, id)`
+ * is a coin flip for rows written in one `db.transaction`.
  */
 async function guestAuditRows(
   guestId: string,
@@ -96,7 +100,7 @@ async function guestAuditRows(
         eq(auditEvents.action, action)
       )
     )
-    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
 }
 
 /** Every audit action recorded against one guest, for "wrote NOTHING" assertions. */

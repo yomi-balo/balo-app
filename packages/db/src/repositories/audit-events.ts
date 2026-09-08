@@ -120,8 +120,19 @@ export const auditEventsRepository = {
    * The MOST-RECENT audit row for one entity + action (BAL-347) — powers the
    * "Last changed by {Name} · {date}" header on the join-mode card. Returns the
    * actor id + timestamp (the caller batch-hydrates the name), or `undefined` when
-   * the action has never occurred. Rides `audit_events_entity_idx` (entity_type,
-   * entity_id) with the `action` filter + a `created_at DESC LIMIT 1`.
+   * the action has never occurred.
+   *
+   * Rides `audit_events_entity_idx` (entity_type, entity_id) with the `action` filter + a
+   * `created_at DESC, seq DESC LIMIT 1`.
+   *
+   * ⚠ BAL-426 — BOTH KEYS DESCEND, AND THAT IS NOT COSMETIC. The trail contract is
+   * "`created_at` then `seq`, both in the SAME direction". `created_at` is the TRANSACTION
+   * timestamp, so two rows of the same entity + action written in one `db.transaction` tie on
+   * it; before `seq` this function had no tiebreaker whatsoever and Postgres was free to return
+   * either row, so "the most recent" was already arbitrary for a tie. Writing
+   * `desc(createdAt), asc(seq)` — or pasting in the ascending `(created_at, seq)` form the ticket
+   * quotes — returns the EARLIEST row of that tie and inverts this function. `asc` here is a bug,
+   * not a style choice.
    *
    * ⚠ BAL-540 widened this by exactly ONE column, `metadata` — additive; every existing
    * caller (BAL-347's team page) already ignores extra fields. `request-detail-view.ts`'s
@@ -149,7 +160,7 @@ export const auditEventsRepository = {
           eq(auditEvents.action, input.action)
         )
       )
-      .orderBy(desc(auditEvents.createdAt))
+      .orderBy(desc(auditEvents.createdAt), desc(auditEvents.seq))
       .limit(1);
     return row;
   },

@@ -106,9 +106,12 @@ async function auditRowsFor(
     })
     .from(auditEvents)
     .where(eq(auditEvents.entityId, fileId))
-    // ⚠ NOT `created_at`. `defaultNow()` is the TRANSACTION timestamp, so every row written
-    // by one `share()` carries the SAME instant and ordering by it is non-deterministic.
-    .orderBy(asc(auditEvents.action), asc(auditEvents.id));
+    // BAL-426 — ordered by the trail contract: `created_at` then `seq`, both ascending.
+    // This USED to sort by `action` to dodge the non-determinism, because `defaultNow()` is the
+    // TRANSACTION timestamp and every row one `share()` writes carries the SAME instant, while
+    // the `id` tiebreak is a random uuid. `seq` breaks that tie by INSERTION order, so these rows
+    // now read back in the order `share()` actually wrote them.
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
   return rows;
 }
 
@@ -998,7 +1001,7 @@ describe('the audit payload contract (Ruling 4 — append-only, no backfill)', (
     const [t0, t1] = seed.tracks;
     if (t0 === undefined || t1 === undefined) throw new Error('seed too small');
 
-    const { file } = await requestSharedFilesRepository.share(
+    const { file, grants } = await requestSharedFilesRepository.share(
       shareInput(seed, {
         fileName: 'scope.pdf',
         audience: 'grants',
@@ -1010,20 +1013,33 @@ describe('the audit payload contract (Ruling 4 — append-only, no backfill)', (
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.action === 'request_shared_file.grant_added')).toBe(true);
 
-    const payloads = rows
-      .map((r) => r.metadata as Record<string, unknown>)
-      .sort((a, b) => String(a.relationshipId).localeCompare(String(b.relationshipId)));
-    const expected = [t0, t1]
-      .map((t) => ({
+    const payloads = rows.map((r) => r.metadata as Record<string, unknown>);
+    const trackById = new Map(seed.tracks.map((t) => [t.relationshipId, t]));
+    const expected = grants.map((g) => {
+      const track = trackById.get(g.relationshipId);
+      if (track === undefined) {
+        throw new Error(`seed has no track for relationshipId ${g.relationshipId}`);
+      }
+      return {
         projectRequestId: seed.projectRequestId,
         fileName: 'scope.pdf',
         side: 'client',
         audience: 'grants',
-        relationshipId: t.relationshipId,
-        expertProfileId: t.expertProfileId,
-      }))
-      .sort((a, b) => a.relationshipId.localeCompare(b.relationshipId));
+        relationshipId: track.relationshipId,
+        expertProfileId: track.expertProfileId,
+      };
+    });
     expect(payloads).toEqual(expected);
+
+    // BAL-426 — the two `grant_added` rows read back in the order `share()` WROTE them, which is
+    // the order the caller listed the grants. Before `seq` this was unassertable: both rows carry
+    // the same `action` and the same transaction `created_at`, so the old `asc(action), asc(id)`
+    // helper returned them in random-uuid order and this test had to `.sort()` both sides.
+    //
+    // ⚠ Asserted against `grants` (what `share()` returned), never against a hand-written
+    // `[t0, t1]`, so this pins "the trail reads back in write order" without also assuming
+    // anything about multi-row `INSERT … RETURNING` ordering.
+    expect(payloads.map((p) => p.relationshipId)).toEqual(grants.map((g) => g.relationshipId));
   });
 
   it('grant_revoked: the track, its expert profile, the grant id and when it was granted', async () => {

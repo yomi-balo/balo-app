@@ -37,13 +37,19 @@ import {
   expectConstraintViolation,
 } from '../test/helpers/expect-check-violation';
 
-/** Delivery audit rows for one entity (BAL-344 generic table, ordered createdAt asc). */
+/**
+ * Delivery audit rows for one entity (BAL-344 generic table).
+ *
+ * Ordered by the BAL-426 trail contract — `created_at` then `seq`, both ascending. NEVER `id`:
+ * it is `defaultRandom()`, and `created_at` is the TRANSACTION timestamp, so `(created_at, id)`
+ * is a coin flip for rows written in one `db.transaction`.
+ */
 async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
   return db
     .select()
     .from(auditEvents)
     .where(eq(auditEvents.entityId, entityId))
-    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.id));
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
 }
 
 async function seedCompanyId(): Promise<string> {
