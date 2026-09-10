@@ -1,15 +1,34 @@
-import { eq, and, asc, isNull, lt, or, sql } from 'drizzle-orm';
+import { eq, and, asc, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   calendarConnections,
   calendarSubCalendars,
   availabilityCache,
+  expertProfiles,
+  users,
+  agencies,
   type CalendarConnection,
   type CalendarCredentialStatus,
   type CalendarSubCalendar,
   type NewCalendarSubCalendar,
 } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
+
+/**
+ * BAL-548 / ADR-1055 — one calendar connection's human identity, for the
+ * `calendar.subscription_lapse` alert row. See
+ * {@link calendarRepository.listConnectionAlertLabels}.
+ */
+export interface ConnectionAlertLabel {
+  connectionId: string;
+  expertProfileId: string;
+  userFirstName: string | null;
+  userLastName: string | null;
+  /** The expert's agency, or null for an independent expert. */
+  agencyName: string | null;
+  provider: string;
+  connectionCreatedAt: Date;
+}
 
 /**
  * ADR-1021, amendment 18 Aug 2026 (BAL-467), §1 — "A calendar connection is per
@@ -749,5 +768,64 @@ export const calendarRepository = {
           updatedAt: new Date(),
         },
       });
+  },
+
+  /**
+   * (d) ROW-ID-SCOPED. BAL-548 / ADR-1055 — BATCH IDENTITY HYDRATION for the
+   * `calendar.subscription_lapse` alert: given the connection ids the three monitor arms
+   * returned, resolve who each one belongs to.
+   *
+   * ⚠⚠ WHY A SIXTH READ RATHER THAN WIDENING THE THREE ARMS (R5). The alert row must read
+   * "Marcus Lee's Google calendar is connected but has no live subscriptions", and two of the
+   * three arms (`listExpiringBefore`, `listUnconfirmedBefore`) return bare
+   * `calendar_subscriptions` rows that carry a `connection_id` and NO expert identity; only
+   * arm 3 returns an `expertProfileId`. Those three arms are consumed by
+   * `calendar-subscription-monitor.ts` and R5 forbids moving or reshaping them, so an
+   * id-keyed hydration is the minimum that buys the sentence without touching them.
+   *
+   * ⚠ NOT A FINDER, AND IT TAKES NO `limit`. It is bounded by its INPUT — the sweep passes at
+   * most `3 × ARM_LIMIT` ids, already batch-bounded upstream. A cap here would silently drop
+   * labels for rows the sweep is about to raise.
+   *
+   * ⚠ EMPTY INPUT ⇒ EMPTY MAP, NO QUERY. A bare `inArray(x, [])` is a Drizzle footgun and
+   * "nothing to hydrate" has an unambiguous answer (the `latestMessagesForRelationships`
+   * idiom).
+   *
+   * ⚠ A CONNECTION MISSING FROM THE RESULT IS THE ANSWER, NOT AN ERROR — it was soft-deleted
+   * between the arm's read and this one (a disconnect racing the sweep). The caller renders a
+   * neutral label or drops the finding; do not throw.
+   *
+   * `LEFT JOIN agencies` — an independent expert has no agency, and that is the shape.
+   * Rides the `calendar_connections` primary key.
+   */
+  async listConnectionAlertLabels(
+    connectionIds: readonly string[]
+  ): Promise<Map<string, ConnectionAlertLabel>> {
+    if (connectionIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await db
+      .select({
+        connectionId: calendarConnections.id,
+        expertProfileId: calendarConnections.expertProfileId,
+        userFirstName: users.firstName,
+        userLastName: users.lastName,
+        agencyName: agencies.name,
+        provider: calendarConnections.provider,
+        connectionCreatedAt: calendarConnections.createdAt,
+      })
+      .from(calendarConnections)
+      .innerJoin(expertProfiles, eq(expertProfiles.id, calendarConnections.expertProfileId))
+      .innerJoin(users, eq(users.id, expertProfiles.userId))
+      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .where(
+        and(
+          inArray(calendarConnections.id, [...connectionIds]),
+          isNull(calendarConnections.deletedAt)
+        )
+      );
+
+    return new Map(rows.map((row) => [row.connectionId, row]));
   },
 };

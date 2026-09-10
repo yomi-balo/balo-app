@@ -93,6 +93,9 @@ export {
   // BAL-551 — the admin lookup surface's event constant. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a
   // name here fails in a DIFFERENT package (`apps/web` cannot import it), not in this one.
   ADMIN_LOOKUP_EVENTS,
+  // BAL-548 / ADR-1055 — the admin pending-actions queue's event constant. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  ADMIN_ALERTS_EVENTS,
 } from '../events';
 
 export type {
@@ -207,4 +210,9 @@ export type {
   // BAL-551 — the admin lookup surface's event payload and its matched-by vocabulary.
   AdminLookupEventMap,
   AdminLookupMatchedBy,
+  // BAL-548 / ADR-1055 — the admin pending-actions queue's event payload and its two
+  // vocabularies.
+  AdminAlertsEventMap,
+  AdminAlertAgeBucket,
+  AdminAlertQueueFilter,
 } from '../events';

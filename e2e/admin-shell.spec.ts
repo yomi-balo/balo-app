@@ -86,4 +86,47 @@ test.describe('admin shell — signed in, staff', () => {
     // ("Config & catalogue"), so an unqualified name match would be ambiguous between the two.
     await expect(page.getByRole('heading', { level: 2, name: 'Config & catalogue' })).toBeVisible();
   });
+
+  test('staff sees the pending-actions queue at /admin', async ({ page, seedSession }) => {
+    await seedSession({ onboardingCompleted: true, persona: 'staff' });
+    await page.goto('/admin');
+    await expect(page).toHaveURL(/\/admin$/);
+    // Same idiom as the /admin/catalogue arm above: a `notFound()` 404 renders at the SAME URL,
+    // so assert the page-level `<h2>Home</h2>` actually rendered — never just the URL.
+    await expect(page.getByRole('heading', { level: 2, name: 'Home' })).toBeVisible();
+  });
+
+  test('Open deep-links from a queue row', async ({ page, seedSession }) => {
+    await seedSession({ onboardingCompleted: true, persona: 'staff' });
+    await page.goto('/admin');
+    await expect(page.getByRole('heading', { level: 2, name: 'Home' })).toBeVisible();
+
+    // ⚠ Nothing seeds `admin_alerts` in this harness — no sweep runs here, so an EMPTY queue is
+    // the normal case (`_lib/admin-queue-view.test.ts` / `page.test.tsx` cover the true-zero
+    // empty state; this spec's job is only the deep link). Each row is a `role="button"` with
+    // `aria-expanded` (`alert-row.tsx`) — expand the first one if it exists, follow its
+    // "Open …" link, and assert navigation actually happened. When the queue is empty there is
+    // nothing to deep-link from; skip DYNAMICALLY rather than fail or depend on seeded data
+    // (a test that depends on a sweep having run would be flaky by construction).
+    //
+    // BAL-548 fix round (B-F1): the un-scoped `page.getByRole('button', { expanded: false })`
+    // also matched the dashboard shell's own Radix dropdown triggers (`workspace-switcher.tsx`,
+    // `user-menu.tsx` — both real `<button aria-expanded="false">`s), so the "empty queue"
+    // dynamic skip never fired and this arm clicked the workspace switcher instead. Scope to
+    // the queue card via `data-testid="admin-alert-queue"` (`alert-queue.tsx`) — absent
+    // entirely when the queue is empty, so the scoped locator's count is genuinely 0 in that
+    // case.
+    const firstRow = page
+      .getByTestId('admin-alert-queue')
+      .getByRole('button', { expanded: false })
+      .first();
+    if ((await firstRow.count()) === 0) {
+      test.skip(true, 'no admin_alerts rows exist in this harness run — nothing to deep-link from');
+      return;
+    }
+    await firstRow.click();
+    const openLink = page.getByRole('link', { name: /^Open / }).first();
+    await openLink.click();
+    await expect(page).not.toHaveURL(/\/admin$/);
+  });
 });

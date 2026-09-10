@@ -7,3 +7,10 @@
  * reach it by accident.
  */
 export { stripComments } from './strip-comments';
+export {
+  listSourceFiles,
+  scanMentioningFiles,
+  toDisplayPath,
+  type ScannedFile,
+  type WalkSourceTreesInput,
+} from './source-walk';

@@ -282,6 +282,49 @@ export const meetingRecordings = pgTable(
       'meeting_recording_transcript_job_submitted',
       sql`${t.transcriptJobId} IS NULL OR ${t.transcriptJobSubmittedAt} IS NOT NULL`
     ),
+
+    /**
+     * BAL-548 / ADR-1055 — the `recording.failed` finder's index. Failed segments, OLDEST
+     * FIRST, which is what `meetingRecordingsRepository.listFailedSince` runs every five
+     * minutes. Neither `status` nor `failed_stage` was indexed before, so that read was a
+     * platform-wide sequential scan.
+     *
+     * ⚠ THE PREDICATE IS COLUMNS-ONLY (`failed_stage IS NOT NULL`), NOT `status = 'failed'`,
+     * because THIS TABLE'S OWN HOUSE RULE SAYS SO — see the `capture_ended_at` docblock
+     * above, which is emphatic that an index predicate here references columns and never an
+     * enum literal. That makes it deliberately INCONSISTENT with the two BAL-548 indexes on
+     * `expert_profiles` and `credit_receivables`, which DO name enum literals: those tables
+     * carry no such rule and already have literal-naming precedent
+     * (`credit_receivables_company_open_idx`). Two rules, each applied where it lives.
+     *
+     * ⚠ THE PREDICATE IS EXACT FOR THIS TABLE, BUT THE READ STILL NARROWS. `markFailed` is
+     * the ONLY writer of `failed_stage` and it always sets `status = 'failed'` in the same
+     * statement, so `failed_stage IS NOT NULL` ⇔ `status = 'failed'` here today — unlike
+     * `transcripts`, where `recordStageSkip` stamps `failed_stage` on a completed row. The
+     * read carries `status = 'failed'` ANYWAY, so a future non-failing writer of
+     * `failed_stage` (the shape `transcripts` already has) cannot silently turn skips into
+     * alerts.
+     */
+    index('meeting_recording_failed_idx')
+      .on(t.createdAt)
+      .where(sql`${t.failedStage} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+
+    /**
+     * BAL-548 / ADR-1055 (R6) — the `transcript_capture.withheld_source` finder's index: a
+     * batch job SUBMITTED and never answered, oldest submission first. Despite that kind's
+     * NAME the condition is a `meeting_recordings` predicate, not a `transcripts` one — the
+     * two columns exist only here.
+     *
+     * Columns-only by construction (both terms are timestamps), so the house rule costs
+     * nothing. `transcript_job_submitted_at` leads the key because it is both the filter
+     * anchor and the sort key; `meeting_recording_transcript_job_idx` cannot serve this — it
+     * is keyed on the vendor JOB ID.
+     */
+    index('meeting_recording_withheld_source_idx')
+      .on(t.transcriptJobSubmittedAt)
+      .where(
+        sql`${t.transcriptJobSubmittedAt} IS NOT NULL AND ${t.transcriptJobFinishedAt} IS NULL AND ${t.deletedAt} IS NULL`
+      ),
   ]
 );
 

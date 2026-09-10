@@ -14,6 +14,7 @@ import {
   Zap,
   Layers,
   ScanSearch,
+  Inbox,
 } from 'lucide-react';
 import type { Workspace } from '@balo/shared/workspaces';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
@@ -316,7 +317,28 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   // can never render active. Its entry point is row 1 of `/admin/catalogue`.
   //
   // ⚠ `workspaceTypes: ['company', 'expert']` — staff may be in EITHER workspace (AC).
-  // ⚠ No `jumpOut` — all four targets live inside the `(dashboard)` route group.
+  // ⚠ No `jumpOut` — all targets live inside the `(dashboard)` route group.
+  //
+  // BAL-548 — 'admin_home' is authored FIRST in this block: the design prototype's `ADMIN_NAV`
+  // leads with Home, and the pending-actions queue is the lane's entry point. Label collision
+  // with the member `dashboard` entry (`label: 'Dashboard'`, `shortLabel: 'Home'`) is not an
+  // issue — in the More sheet the admin rows now sit under a "Balo admin" heading (BAL-548
+  // item 2), so the two "Home"s are never ambiguous in context.
+  // ⚠ NO `badgeSource`. An open-count badge is deferred: it needs a new `NavBadgeSource`, a new
+  // renderer, and a platform-wide `admin_alerts` count threaded through `NavContext` on EVERY
+  // nav render for EVERY staff member on EVERY page — a cross-tenant aggregate on the hot path,
+  // to duplicate a number the Home page already shows one click away.
+  {
+    key: 'admin_home',
+    label: 'Home',
+    icon: Inbox,
+    href: '/admin',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
   {
     key: 'admin_engagements',
     label: 'Engagements',

@@ -20,6 +20,7 @@ const {
   mockFindSessionById,
   mockCancelSession,
   mockDeleteRoom,
+  mockRaiseAdminAlert,
   MockInvalidSessionTransitionError,
 } = vi.hoisted(() => ({
   mockCreate: vi.fn(),
@@ -42,6 +43,8 @@ const {
   mockFindSessionById: vi.fn().mockResolvedValue(undefined),
   mockCancelSession: vi.fn(),
   mockDeleteRoom: vi.fn().mockResolvedValue('deleted'),
+  /** BAL-548 — the `calendar.amend_failed` raise, additive to log.error on the enqueue catch. */
+  mockRaiseAdminAlert: vi.fn().mockResolvedValue(undefined),
   /**
    * BAL-410 — the real `InvalidSessionTransitionError` cannot be imported here (`@balo/db` is
    * factory-mocked below), so the mock exports a stand-in the service's `instanceof` check
@@ -95,6 +98,8 @@ vi.mock('./guest-participation.js', () => ({
   formatExpiryDate: mockFormatExpiryDate,
   resolveMeetingTitle: mockResolveMeetingTitle,
 }));
+
+vi.mock('../admin-alerts/raise.js', () => ({ raiseAdminAlert: mockRaiseAdminAlert }));
 
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import {
@@ -417,6 +422,31 @@ describe('rescheduleMeeting — T-API-SVC', () => {
       expect.objectContaining({ meetingId: MEETING_ID }),
       'Failed to enqueue meeting-calendar-amend job'
     );
+    // BAL-548 / ADR-1055 — raises `calendar.amend_failed`, ADDITIVE to the log.error above,
+    // from the ENQUEUE CATCH only (R7).
+    expect(mockRaiseAdminAlert).toHaveBeenCalledTimes(1);
+    expect(mockRaiseAdminAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'calendar.amend_failed',
+        entityType: 'meeting',
+        entityId: MEETING_ID,
+      })
+    );
+  });
+
+  it('A-F5: sanitizes the enqueue error before persisting it into the alert evidence', async () => {
+    mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+    // A URL-shaped substring is exactly the leak `sanitize-error.ts` exists to prevent (e.g. a
+    // live Daily signed access link echoed inside a vendor error body).
+    mockEnqueueCalendarAmend.mockRejectedValue(
+      new Error('upstream said https://daily.co/secret-room-token?x=1 is invalid')
+    );
+
+    await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+    const [[input]] = mockRaiseAdminAlert.mock.calls;
+    expect(input.detail.evidence).not.toContain('https://daily.co/secret-room-token');
+    expect(input.detail.evidence).toContain('[redacted-url]');
   });
 
   it('publishes meeting.guest_rescheduled once per ADMITTED guest', async () => {

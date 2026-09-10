@@ -20,6 +20,7 @@ import type { OrgIntentServerEventMap } from './events/org-intent';
 import type { PartyJoinServerEventMap } from './events/party-join';
 import type { EngagementServerEventMap, EngagementEventMap } from './events/engagement';
 import type { AdminEngagementsEventMap } from './events/admin-engagements';
+import type { AdminAlertsEventMap } from './events/admin-alerts';
 import type { DomainJoinEventMap } from './events/domain-join';
 import type { ExpertAgencyEventMap } from './events/expert-agency';
 import type {
@@ -115,7 +116,11 @@ export type AllEvents = AuthEventMap &
   StripeRedirectEventMap &
   // BAL-551 — the admin lookup surface's CLIENT family. Both events are browser-emitted; there
   // is no server family, so nothing here joins `ServerEvents` below.
-  AdminLookupEventMap;
+  AdminLookupEventMap &
+  // BAL-548 / ADR-1055 — the admin pending-actions queue's CLIENT family. `AdminQueueAnalytics`
+  // and `AlertRow` (apps/web) are the dispatch points; no server events (see the family's own
+  // header).
+  AdminAlertsEventMap;
 
 export type EventName = keyof AllEvents;
 

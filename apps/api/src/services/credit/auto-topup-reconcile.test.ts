@@ -10,6 +10,7 @@ const {
   mockCreateOffSessionCharge,
   mockApplyAutoTopupFromStripe,
   mockPublishAutoTopupFailed,
+  mockRaiseAdminAlert,
   mockLog,
   mockStripeClient,
 } = vi.hoisted(() => ({
@@ -26,6 +27,9 @@ const {
   mockCreateOffSessionCharge: vi.fn(),
   mockApplyAutoTopupFromStripe: vi.fn(),
   mockPublishAutoTopupFailed: vi.fn(),
+  /** BAL-548 — the two `topup.*` raise sites. Mocked so a call is provable rather than
+   *  silently absorbed by `raiseAdminAlert`'s own internal best-effort catch. */
+  mockRaiseAdminAlert: vi.fn().mockResolvedValue(undefined),
   /** Stable logger — the aging escalation is a LOG-LEVEL branch, so it is asserted on this. */
   mockLog: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   /** The Stripe CLIENT surface — the assertion of last resort that nothing here ever charges. */
@@ -69,6 +73,7 @@ vi.mock('@balo/db', () => ({
     }
   },
 }));
+vi.mock('../admin-alerts/raise.js', () => ({ raiseAdminAlert: mockRaiseAdminAlert }));
 /**
  * ⚠ THE CHARGE SURFACE ITSELF, not just the wrapper. `mockCreateOffSessionCharge` above lives on a
  * module the SUT never imports that symbol from, so asserting it was not called is true against
@@ -328,6 +333,15 @@ describe('reconcileStuckAutoTopup — a PARTIAL refund never destroys the remain
     expect(mockClearPendingTopup).not.toHaveBeenCalled();
     expect(mockApplyAutoTopupFromStripe).not.toHaveBeenCalled();
     expect(mockPublishAutoTopupFailed).not.toHaveBeenCalled();
+    // BAL-548 / ADR-1055 — raises `topup.partial_refund`, ADDITIVE to the log.error above.
+    expect(mockRaiseAdminAlert).toHaveBeenCalledTimes(1);
+    expect(mockRaiseAdminAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'topup.partial_refund',
+        entityType: 'wallet',
+        entityId: wallet().id,
+      })
+    );
   });
 
   it('escalates with the UN-REFUNDED remainder, and never claims the money is back', async () => {
@@ -616,6 +630,15 @@ describe('reconcileStuckAutoTopup — recovering an unstamped PaymentIntent (REA
     expect(out).toEqual({ outcome: 'alarm', reason: 'payment_intent_unresolvable' });
     expect(mockClearPendingTopup).not.toHaveBeenCalled();
     expect(mockRecordPendingTopupPaymentIntent).not.toHaveBeenCalled();
+    // BAL-548 / ADR-1055 — raises `topup.unresolved_pi`, ADDITIVE to the log.warn above.
+    expect(mockRaiseAdminAlert).toHaveBeenCalledTimes(1);
+    expect(mockRaiseAdminAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'topup.unresolved_pi',
+        entityType: 'wallet',
+        entityId: 'wallet_1',
+      })
+    );
   });
 
   it('ALARMS without scanning when the wallet has no Stripe customer to scan', async () => {
@@ -626,6 +649,9 @@ describe('reconcileStuckAutoTopup — recovering an unstamped PaymentIntent (REA
     expect(out).toEqual({ outcome: 'alarm', reason: 'payment_intent_unresolvable' });
     expect(mockFindPaymentIntentByIdempotencyKey).not.toHaveBeenCalled();
     expect(mockClearPendingTopup).not.toHaveBeenCalled();
+    expect(mockRaiseAdminAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'topup.unresolved_pi' })
+    );
   });
 });
 

@@ -1,7 +1,8 @@
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte } from 'drizzle-orm';
 import { db } from '../client';
 import {
   transcripts,
+  meetings,
   type Transcript,
   type TranscriptVendor,
   type CanonicalTranscript,
@@ -32,6 +33,25 @@ export type TranscriptStatusRef = Pick<Transcript, 'id' | 'status'>;
  * one round trip and therefore cannot rely on the caller remembering which id it asked about.
  */
 export type TranscriptMeetingStatusRef = Pick<Transcript, 'id' | 'status' | 'meetingId'>;
+
+/**
+ * BAL-548 / ADR-1055 — one failed transcript, projected for the pending-actions queue. See
+ * {@link transcriptsRepository.listFailedSince}.
+ *
+ * ⚠ EXPORTED EXPLICITLY. `TranscriptStatusRef`/`TranscriptMeetingStatusRef` above are NOT
+ * re-exported from `repositories/index.ts`; this one is, because the sweep in `apps/api` has
+ * to name it.
+ *
+ * ⚠ `meetingScheduledStart`, NOT a meeting title — `meetings` has no `title` column.
+ */
+export interface FailedTranscriptAlertRow {
+  transcriptId: string;
+  meetingId: string;
+  meetingScheduledStart: Date;
+  failedStage: string | null;
+  failureReason: string | null;
+  createdAt: Date;
+}
 
 export interface InsertRawTranscriptInput {
   captureId: string;
@@ -262,5 +282,47 @@ export const transcriptsRepository = {
     if (updated === undefined) {
       throw new Error(`Failed to record stage skip on transcript: ${id}`);
     }
+  },
+
+  /**
+   * BAL-548 / ADR-1055 — the `transcript.failed` finder read: transcripts whose pipeline
+   * FAILED, created at or before `failedBefore`, OLDEST FIRST.
+   *
+   * ⚠⚠ `status = 'failed'` IS REQUIRED HERE AND CAN NEVER BE REPLACED BY
+   * `failed_stage IS NOT NULL`. {@link transcriptsRepository.recordStageSkip} ALSO stamps
+   * `failed_stage`/`failure_reason` — on a DEGRADED-BUT-COMPLETED path that leaves `status`
+   * untouched, so a `ready` row can legitimately carry a stage. Reading the index predicate
+   * alone would surface every recorded stage SKIP in the admin queue as a failure. The INDEX
+   * (`transcript_failed_idx`) is deliberately the columns-only SUPERSET — the ADD-VALUE house
+   * rule this file's other indexes follow — and this READ is what narrows it.
+   *
+   * ⚠ `limit` IS A BATCH BOUND THE CALLER MUST WARN ABOUT WHEN IT FILLS. No silent caps.
+   *
+   * ⚠ THE MEETING JOIN IS INNER, WITH `meetings.deleted_at IS NULL` IN THE JOIN CONDITION — a
+   * failed transcript of a soft-deleted meeting is not work anybody can do. There is no
+   * `meetings.title` column, so the projection carries `scheduled_start` and the finder words
+   * the row from it.
+   */
+  async listFailedSince(failedBefore: Date, limit: number): Promise<FailedTranscriptAlertRow[]> {
+    return db
+      .select({
+        transcriptId: transcripts.id,
+        meetingId: transcripts.meetingId,
+        meetingScheduledStart: meetings.scheduledStart,
+        failedStage: transcripts.failedStage,
+        failureReason: transcripts.failureReason,
+        createdAt: transcripts.createdAt,
+      })
+      .from(transcripts)
+      .innerJoin(meetings, and(eq(meetings.id, transcripts.meetingId), isNull(meetings.deletedAt)))
+      .where(
+        and(
+          eq(transcripts.status, 'failed'),
+          isNull(transcripts.deletedAt),
+          lte(transcripts.createdAt, failedBefore)
+        )
+      )
+      .orderBy(asc(transcripts.createdAt), asc(transcripts.id))
+      .limit(limit);
   },
 };

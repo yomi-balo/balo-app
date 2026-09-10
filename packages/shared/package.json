@@ -28,7 +28,8 @@
     "./reviews": "./src/reviews/index.ts",
     "./lookup": "./src/lookup/index.ts",
     "./testing": "./src/testing/index.ts",
-    "./marketing": "./src/marketing/index.ts"
+    "./marketing": "./src/marketing/index.ts",
+    "./admin-alerts": "./src/admin-alerts/index.ts"
   },
   "dependencies": {
     "pino": "^9.0.0",

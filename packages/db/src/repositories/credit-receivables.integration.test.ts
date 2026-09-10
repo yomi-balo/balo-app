@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
-import { creditSessions, expertProfiles } from '../schema';
+import { creditReceivables, creditSessions, expertProfiles } from '../schema';
 import { creditWalletFactory, expertFactory, userFactory } from '../test/factories';
 import { creditReceivablesRepository } from './credit-receivables';
 import { creditSessionsRepository } from './credit-sessions';
@@ -515,5 +515,101 @@ describe('creditReceivablesRepository.earliestOpenDebtAnchor', () => {
       const anchor = await creditReceivablesRepository.earliestOpenDebtAnchor(walletId);
       expect(anchor?.toISOString()).toBe(receivable.openedAt.toISOString());
     });
+  });
+});
+
+/**
+ * BAL-548 / ADR-1055 — the `receivable.open` finder read. A DIFFERENT method from
+ * `listOpenForDunning` on purpose (R5): this one is the alert queue's — bounded, ordered, and
+ * carrying no dunning-cadence term. The two must never be merged.
+ */
+describe('creditReceivablesRepository.listOpen — the admin-queue finder read', () => {
+  /** One open receivable on its own company/wallet/session, with a chosen `opened_at`. */
+  async function seedOpenReceivable(openedAt: Date): Promise<{
+    receivableId: string;
+    companyId: string;
+  }> {
+    const { companyId, walletId, sessionId } = await seedSession();
+    const { receivable } = await creditReceivablesRepository.open({
+      companyId,
+      walletId,
+      sessionId,
+      amountMinor: 6_240,
+      reason: 'settlement_declined',
+      stripePaymentIntentId: 'pi_alert',
+    });
+    // ⚠ `opened_at` defaults to `now()` = transaction START time inside the harness, so every
+    // row would otherwise share a byte-identical anchor and an ordering assertion would fall
+    // through to `id`, a random v4 uuid.
+    await db
+      .update(creditReceivables)
+      .set({ openedAt })
+      .where(eq(creditReceivables.id, receivable.id));
+    return { receivableId: receivable.id, companyId };
+  }
+
+  it('returns open receivables OLDEST FIRST, with the company name flattened on', async () => {
+    const older = await seedOpenReceivable(new Date('2026-01-01T00:00:00.000Z'));
+    const newer = await seedOpenReceivable(new Date('2026-01-02T00:00:00.000Z'));
+
+    const rows = await creditReceivablesRepository.listOpen(
+      new Date('2026-02-01T00:00:00.000Z'),
+      50
+    );
+    const mine = rows.filter((row) =>
+      [older.receivableId, newer.receivableId].includes(row.receivableId)
+    );
+
+    expect(mine.map((row) => row.receivableId)).toEqual([older.receivableId, newer.receivableId]);
+    const [first] = mine;
+    expect(first?.companyId).toBe(older.companyId);
+    expect(first?.companyName).toMatch(/^Test Company /);
+    expect(first?.amountMinor).toBe(6_240);
+    expect(first?.reason).toBe('settlement_declined');
+    expect(first?.stripePaymentIntentId).toBe('pi_alert');
+  });
+
+  it('the cutoff excludes a receivable opened too recently', async () => {
+    const recent = await seedOpenReceivable(new Date('2026-01-10T00:00:00.000Z'));
+
+    const rows = await creditReceivablesRepository.listOpen(
+      new Date('2026-01-05T00:00:00.000Z'),
+      50
+    );
+
+    expect(rows.map((row) => row.receivableId)).not.toContain(recent.receivableId);
+  });
+
+  it('the limit BOUNDS the result — a filled batch is what the caller must warn about', async () => {
+    await seedOpenReceivable(new Date('2026-01-01T00:00:00.000Z'));
+    await seedOpenReceivable(new Date('2026-01-02T00:00:00.000Z'));
+
+    const rows = await creditReceivablesRepository.listOpen(
+      new Date('2026-02-01T00:00:00.000Z'),
+      1
+    );
+
+    expect(rows).toHaveLength(1);
+  });
+
+  it('excludes CLEARED and soft-deleted receivables', async () => {
+    const cleared = await seedOpenReceivable(new Date('2026-01-01T00:00:00.000Z'));
+    const deleted = await seedOpenReceivable(new Date('2026-01-01T00:00:00.000Z'));
+    const live = await seedOpenReceivable(new Date('2026-01-01T00:00:00.000Z'));
+    await creditReceivablesRepository.clear({ receivableId: cleared.receivableId });
+    await db
+      .update(creditReceivables)
+      .set({ deletedAt: new Date() })
+      .where(eq(creditReceivables.id, deleted.receivableId));
+
+    const rows = await creditReceivablesRepository.listOpen(
+      new Date('2026-02-01T00:00:00.000Z'),
+      50
+    );
+    const ids = rows.map((row) => row.receivableId);
+
+    expect(ids).toContain(live.receivableId);
+    expect(ids).not.toContain(cleared.receivableId);
+    expect(ids).not.toContain(deleted.receivableId);
   });
 });

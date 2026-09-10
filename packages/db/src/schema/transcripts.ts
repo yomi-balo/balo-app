@@ -157,6 +157,24 @@ export const transcripts = pgTable(
     index('transcript_meeting_idx')
       .on(t.meetingId)
       .where(sql`${t.deletedAt} IS NULL`),
+    /**
+     * BAL-548 / ADR-1055 — the `transcript.failed` finder's index. Failed pipelines, oldest
+     * first, read every five minutes; `status` and `created_at` were both unindexed here.
+     *
+     * ⚠ THE PREDICATE IS COLUMNS-ONLY (`failed_stage IS NOT NULL`), NOT `status = 'failed'` —
+     * the ADD-VALUE house rule this file already states two indexes up. It is therefore a
+     * deliberate SUPERSET of failure: `recordStageSkip` ALSO stamps `failed_stage` (and
+     * `failure_reason`) on a DEGRADED-BUT-COMPLETED path, leaving `status` untouched, so a
+     * `ready` row can carry a `failed_stage`.
+     *
+     * ⚠⚠ WHICH IS WHY `transcriptsRepository.listFailedSince` MUST CARRY AN EXPLICIT
+     * `status = 'failed'` TERM AND MAY NEVER BE "SIMPLIFIED" ONTO THIS PREDICATE ALONE —
+     * doing so would surface every recorded stage SKIP in the admin queue as a failure. The
+     * index is the superset; the READ narrows.
+     */
+    index('transcript_failed_idx')
+      .on(t.createdAt)
+      .where(sql`${t.failedStage} IS NOT NULL AND ${t.deletedAt} IS NULL`),
   ]
 );
 

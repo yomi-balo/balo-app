@@ -624,6 +624,13 @@
       "when": 1788829200468,
       "tag": "0088_bal426_audit_events_seq",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1788860405683,
+      "tag": "0089_bal548_admin_alerts",
+      "breakpoints": true
     }
   ]
 }

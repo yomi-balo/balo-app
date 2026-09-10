@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../client';
 import {
+  companies,
   creditReceivables,
   creditSessions,
   type CreditReceivable,
@@ -40,6 +41,25 @@ export interface OpenReceivableInput {
 export interface OpenReceivableResult {
   receivable: CreditReceivable;
   created: boolean;
+}
+
+/**
+ * BAL-548 / ADR-1055 — one open receivable, projected for the pending-actions queue. See
+ * {@link creditReceivablesRepository.listOpen}.
+ *
+ * ⚠ `amountMinor` IS AUD MINOR UNITS, and the alert stores a PRE-FORMATTED string. The finder
+ * formats once, at the moment the evidence is captured; nothing re-formats it later against a
+ * display-FX rate that has since moved.
+ */
+export interface OpenReceivableAlertRow {
+  receivableId: string;
+  companyId: string;
+  companyName: string;
+  amountMinor: number;
+  reason: CreditReceivableReason;
+  openedAt: Date;
+  lastDunningAt: Date | null;
+  stripePaymentIntentId: string | null;
 }
 
 /**
@@ -215,6 +235,56 @@ export const creditReceivablesRepository = {
         )
       )
       .orderBy(asc(creditReceivables.openedAt));
+  },
+
+  /**
+   * BAL-548 / ADR-1055 — the `receivable.open` finder read: every OPEN receivable opened at or
+   * before `openedBefore`, OLDEST FIRST, with the company's name flattened on.
+   *
+   * ⚠⚠ A NEW METHOD, NOT A WIDENING OF `listOpenForDunning`, AND THE TWO MUST NOT BE MERGED.
+   * That method's NAME, its `last_dunning_at` term, its index intent and its MISSING batch
+   * bound all say "dunning", and `receivable-dunning-sweep.ts` already consumes it. Widening it
+   * would couple two sweeps with different cadences and different failure modes onto one query
+   * — the alert queue would start (or stop) firing because the dunning cadence changed.
+   *
+   * ⚠ THE ALERT'S GRAIN IS THE COMPANY, NOT THE RECEIVABLE. The row reads "Northwind
+   * Industrial owes A$62.40", and a company with two open receivables is ONE problem for ONE
+   * person, so the finder keys the alert on `companyId` and carries `receivableId` in the
+   * evidence. This read still returns ONE ROW PER RECEIVABLE — folding is the finder's job,
+   * because only it knows how to word the combined sentence.
+   *
+   * ⚠ `limit` IS A BATCH BOUND THE CALLER MUST WARN ABOUT WHEN IT FILLS. No silent caps.
+   *
+   * ⚠ `companies` HAS NO `deleted_at` (memory `reference_companies_table_no_deleted_at`), so
+   * the INNER JOIN carries no soft-delete term. Do not add one.
+   *
+   * Rides `credit_receivables_open_queue_idx` (`opened_at` WHERE `status = 'open' AND
+   * deleted_at IS NULL`) — `credit_receivables_company_open_idx` cannot serve it: it is keyed
+   * on `company_id` and neither orders nor bounds.
+   */
+  async listOpen(openedBefore: Date, limit: number): Promise<OpenReceivableAlertRow[]> {
+    return db
+      .select({
+        receivableId: creditReceivables.id,
+        companyId: creditReceivables.companyId,
+        companyName: companies.name,
+        amountMinor: creditReceivables.amountMinor,
+        reason: creditReceivables.reason,
+        openedAt: creditReceivables.openedAt,
+        lastDunningAt: creditReceivables.lastDunningAt,
+        stripePaymentIntentId: creditReceivables.stripePaymentIntentId,
+      })
+      .from(creditReceivables)
+      .innerJoin(companies, eq(companies.id, creditReceivables.companyId))
+      .where(
+        and(
+          eq(creditReceivables.status, 'open'),
+          isNull(creditReceivables.deletedAt),
+          lte(creditReceivables.openedAt, openedBefore)
+        )
+      )
+      .orderBy(asc(creditReceivables.openedAt), asc(creditReceivables.id))
+      .limit(limit);
   },
 
   /** Stamp the dunning cadence anchor after a re-notify. Throws if the receivable is gone. */
