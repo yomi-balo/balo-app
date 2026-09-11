@@ -49,6 +49,8 @@ import {
 } from '../stripe/charges.js';
 import { applyAutoTopupFromStripe } from '../stripe/dispatch.js';
 import { publishAutoTopupFailed } from './auto-topup.js';
+import { raiseAdminAlert } from '../admin-alerts/raise.js';
+import { formatAudMinor } from '../../notifications/channels/templates/credit-format.js';
 
 const log = createLogger('credit-auto-topup-reconcile');
 
@@ -284,6 +286,28 @@ async function repairOrClear(
       },
       'Reconcile: auto-top-up charge was PARTIALLY refunded and has no ledger credit — wrote NOTHING and cleared NOTHING; the un-refunded remainder is still owed to the company and needs a human (complete the refund, or credit the remainder by hand)'
     );
+    // BAL-548 / ADR-1055 — ADDITIVE to the log.error above, never a replacement. The kind is
+    // `topup.partial_refund`; the alarm reason literal here is `'partial_refund'` — same
+    // condition, two different vocabularies (R3). Best-effort: `raiseAdminAlert` swallows its
+    // own failure, so a queue-write problem can never turn into a second money-path failure.
+    const unrefundedMinor = refund.amountMinor - refund.amountRefundedMinor;
+    await raiseAdminAlert({
+      kind: 'topup.partial_refund',
+      entityType: 'wallet',
+      entityId: wallet.id,
+      detail: {
+        title: 'Auto-top-up charge partially refunded with no ledger credit',
+        entityLabel: `Wallet ${wallet.id}`,
+        evidence: `${formatAudMinor(refund.amountRefundedMinor)} of ${formatAudMinor(refund.amountMinor)} was refunded; the ${formatAudMinor(unrefundedMinor)} remainder is neither refunded nor credited.`,
+        facts: [
+          ['Company', wallet.companyId],
+          ['PaymentIntent', paymentIntentId],
+          ['Amount charged', formatAudMinor(refund.amountMinor)],
+          ['Amount refunded', formatAudMinor(refund.amountRefundedMinor)],
+          ['Unrefunded remainder', formatAudMinor(unrefundedMinor)],
+        ],
+      },
+    });
     return { outcome: 'alarm', reason: 'partial_refund' };
   }
 
@@ -463,6 +487,28 @@ export async function reconcileStuckAutoTopup(
       { ...walletLogFields(wallet), crossingKey },
       'Reconcile: could not resolve the auto-top-up PaymentIntent conclusively — writing nothing'
     );
+    // BAL-548 / ADR-1055 — ADDITIVE to the log.warn above, never a replacement. The kind is
+    // `topup.unresolved_pi`; the alarm reason literal here is `'payment_intent_unresolvable'`
+    // — same condition, two different vocabularies (R3). Best-effort: `raiseAdminAlert`
+    // swallows its own failure so a queue-write problem can never risk this reconcile pass.
+    await raiseAdminAlert({
+      kind: 'topup.unresolved_pi',
+      entityType: 'wallet',
+      entityId: wallet.id,
+      detail: {
+        title: 'Auto-top-up PaymentIntent could not be resolved',
+        entityLabel: `Wallet ${wallet.id}`,
+        evidence:
+          "The scan for this crossing's PaymentIntent was inconclusive (Stripe unreadable, " +
+          'more than a page of candidates, or no customer to scan) — nothing was written.',
+        facts: [
+          ['Company', wallet.companyId],
+          ['Crossing key', crossingKey],
+          ['Pending since', pendingSince.toISOString()],
+          ['Mandate status', wallet.mandateStatus ?? 'none'],
+        ],
+      },
+    });
     return { outcome: 'alarm', reason: 'payment_intent_unresolvable' };
   }
   if (paymentIntentId === null) {

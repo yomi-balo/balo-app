@@ -308,6 +308,30 @@ describe('platformRoleHasCapability — VIEW_PLATFORM_ADMIN', () => {
 });
 
 /**
+ * BAL-548 / ADR-1055 — the alert-close capability. Same allow/deny table as its siblings:
+ * closing a no-finder `admin_alerts` row is the support role's ordinary work, so BOTH staff
+ * roles hold it and a plain `user` must never.
+ */
+describe('platformRoleHasCapability — RESOLVE_ADMIN_ALERTS', () => {
+  it.each(['admin', 'super_admin'])('grants RESOLVE_ADMIN_ALERTS to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies RESOLVE_ADMIN_ALERTS to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS)).toBe(
+        false
+      );
+    }
+  );
+
+  it('maps RESOLVE_ADMIN_ALERTS to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS).toBe('resolve_admin_alerts');
+  });
+});
+
+/**
  * BAL-534 fix round F1/F4 (SEC LOW) — `PLATFORM_ROLE_CAPABILITIES[role]` is a bare index into a
  * plain object literal, which also resolves INHERITED members. A role of `constructor` /
  * `__proto__` / `toString` must still deny every capability rather than returning an inherited

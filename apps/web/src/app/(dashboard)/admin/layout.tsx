@@ -1,11 +1,18 @@
 import { notFound, redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { AdminSectionNav } from './_components/admin-section-nav';
 
 /**
  * BAL-534 / ADR-1053 Amendment 1 — the `/admin/*` shell gate. Admin lives INSIDE the member
- * `(dashboard)` shell (D6 "Option B cheap"), so this layout adds NO chrome: it exists purely to
- * gate the whole subtree once instead of per page.
+ * `(dashboard)` shell (D6 "Option B cheap"), so this layout exists purely to gate the whole
+ * subtree once instead of per page.
+ *
+ * BAL-548 (folded from the BAL-534 / PR #285 review, item 1) — it now renders chrome: the
+ * `AdminSectionNav` chip sub-nav above `{children}`. BAL-534's pre-flight deferred this because
+ * one admin page would have shipped a one-chip tab bar; with Home and Config & catalogue as
+ * siblings it earns its place. The old "adds NO chrome today" claim is deliberately removed
+ * from this docblock — it is no longer true, and leaving it would mislead the next reader.
  *
  * `getCurrentUser()` + an explicit `redirect('/login')` — matching `settings/layout.tsx` and
  * `settings/team/page.tsx`, and NOT `requireUser()`: that also throws on incomplete onboarding,
@@ -25,7 +32,9 @@ import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platfo
  * (`create-component-tree.js:289,394`). `(dashboard)` has no group-level boundary. That is a
  * real 404 with no existence leak — a non-staff viewer cannot distinguish "no route" from
  * "not for you" — which is the property that matters. Do not "fix" it by adding a
- * `(dashboard)/not-found.tsx`; that changes the 404 UI for every dashboard route.
+ * `(dashboard)/not-found.tsx`; that changes the 404 UI for every dashboard route. Adding
+ * `AdminSectionNav` chrome below does not move this boundary — the gate above still runs, and
+ * still throws, before the nav (or `{children}`) ever renders.
  */
 export default async function AdminLayout({
   children,
@@ -38,5 +47,10 @@ export default async function AdminLayout({
     notFound();
   }
 
-  return <>{children}</>;
+  return (
+    <div className="flex flex-col gap-6">
+      <AdminSectionNav />
+      {children}
+    </div>
+  );
 }

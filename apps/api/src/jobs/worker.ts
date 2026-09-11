@@ -35,6 +35,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startRecordingIngestWorker },
     { startRecordingCleanupSourceWorker },
     { startTranscriptCaptureWorker },
+    { startAdminAlertSweepWorker, registerAdminAlertSweepCron },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -61,6 +62,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./recording-ingest.js'),
     import('./recording-cleanup-source.js'),
     import('./transcript-capture.js'),
+    import('./admin-alert-sweep.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -132,5 +134,10 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // BAL-483: the Daily Batch Processor transcription producer (submit + ingest). Event-driven,
   // no cron. ⚠ Its `vi.mock` in `worker.test.ts` must land in THIS commit.
   startTranscriptCaptureWorker();
+  // BAL-548 (ADR-1055): the pending-actions queue sweep — three repeatables (1m / 5m / 15m) on
+  // one queue. ⚠ THE CADENCE IS THE CLOSE LATENCY a person sees as "swept Ns ago"; it is not a
+  // free knob.
+  startAdminAlertSweepWorker();
+  await registerAdminAlertSweepCron();
   logger?.info('BullMQ workers started');
 }

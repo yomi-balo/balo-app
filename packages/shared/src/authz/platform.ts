@@ -139,6 +139,20 @@ export const PLATFORM_CAPABILITIES = {
    * their memberships. `admin` does not hold it.
    */
   IMPERSONATE_USER: 'impersonate_user',
+  /**
+   * BAL-548 / ADR-1055 — close an `admin_alerts` row that has NO finder, with a note.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST / ASSIGN_ANY_REQUEST_OWNER argument verbatim.
+   * In particular it is NOT `VIEW_PLATFORM_ADMIN`: that token's own docblock says it gates
+   * REACHABILITY and "IS NOT A PER-SURFACE GRANT", so gating a MUTATION on it would make this
+   * map lie about what it grants — the one thing a capability map must never do. The design
+   * prototype's own bundle model agrees (`CAP.RESOLVE_ALERTS` is distinct from `CAP.VIEW_ADMIN`).
+   *
+   * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`, so `admin` (support) holds
+   * it — working the queue IS the support role. It is not a `super_admin` privilege.
+   */
+  RESOLVE_ADMIN_ALERTS: 'resolve_admin_alerts',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -181,6 +195,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
   PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER,
   PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES,
+  PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS,
 ];
 
 /**

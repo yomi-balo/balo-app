@@ -1,4 +1,4 @@
-import { eq, and, not, inArray, or, like, isNotNull, isNull, sql } from 'drizzle-orm';
+import { eq, and, asc, lte, not, inArray, or, like, isNotNull, isNull, sql } from 'drizzle-orm';
 import { createLogger } from '@balo/shared/logging';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
@@ -11,6 +11,7 @@ import {
   expertIndustries,
   workHistory,
   users,
+  agencies,
   type ExpertProfile,
   type ExpertCompetency,
   type ExpertCertification,
@@ -273,6 +274,23 @@ export interface ApplicationWithRelations {
   languages: ApplicationLanguageWithRelations[];
   industries: ApplicationIndustryWithRelations[];
   workHistory: WorkHistoryType[];
+}
+
+/**
+ * BAL-548 / ADR-1055 — one waiting application, projected for the pending-actions queue. See
+ * {@link expertsRepository.listPendingApplicationsForAlerts}.
+ *
+ * `userFirstName`/`userLastName` are nullable because `users` allows it, not because the join
+ * can miss (it is an INNER JOIN); the finder renders a fallback label.
+ */
+export interface PendingApplicationAlertRow {
+  expertProfileId: string;
+  userFirstName: string | null;
+  userLastName: string | null;
+  /** The agency the applicant is applying as, or null for an independent expert. */
+  agencyName: string | null;
+  submittedAt: Date;
+  applicationStatus: 'submitted' | 'under_review';
 }
 
 // ── Repository ───────────────────────────────────────────────────
@@ -1159,6 +1177,76 @@ export const expertsRepository = {
     }
 
     return profile;
+  },
+
+  /**
+   * BAL-548 / ADR-1055 — the `expert.application_pending` finder read: applications that have
+   * been waiting for a decision since before `submittedBefore`, OLDEST SUBMISSION FIRST.
+   *
+   * A PROJECTION, not a row select: the alert row has to read "Priya Nair (CloudPeak) applied
+   * 6 days ago", and `expert_profiles` carries no display name. `INNER JOIN users` for the
+   * person, `LEFT JOIN agencies` for the agency an agency-based applicant is applying under
+   * (NULL for an independent expert — that is the shape, not a missing row).
+   *
+   * ⚠ `limit` IS A BATCH BOUND THE CALLER MUST WARN ABOUT WHEN IT FILLS. No silent caps — the
+   * `calendarSubscriptionsRepository` monitor-arm contract, verbatim. A saturated batch on an
+   * alerting query is itself the alarming reading.
+   *
+   * ⚠ NO `deleted_at` FILTER ON `expert_profiles`, BECAUSE IT HAS NO SUCH COLUMN — the table
+   * spreads `...timestamps` only. `users` DOES have one, and its filter sits in the JOIN
+   * CONDITION: an applicant whose user row was soft-deleted is not a pending application
+   * anybody can action, so dropping the row is the right answer here (unlike the `LEFT JOIN`
+   * attribution case, where the filter in the WHERE would wrongly drop the parent).
+   *
+   * ⚠ `'under_review'` HAS NO WRITER TODAY. The only transitions in this repository are
+   * `draft → submitted → approved`. It is matched anyway because the kind's copy promises the
+   * row closes "once the application is approved or rejected"; a triage state that starts being
+   * written later must not silently drop those applications out of the queue.
+   *
+   * ⚠ NO CERTIFICATION COUNT. An aggregate join for one line of colour is a join too many on a
+   * per-minute cron — the alert's job is to say an application is waiting, not to review it.
+   *
+   * Rides `expert_profiles_pending_application_idx`.
+   */
+  async listPendingApplicationsForAlerts(
+    submittedBefore: Date,
+    limit: number
+  ): Promise<PendingApplicationAlertRow[]> {
+    const rows = await db
+      .select({
+        expertProfileId: expertProfiles.id,
+        userFirstName: users.firstName,
+        userLastName: users.lastName,
+        agencyName: agencies.name,
+        submittedAt: expertProfiles.submittedAt,
+        applicationStatus: expertProfiles.applicationStatus,
+      })
+      .from(expertProfiles)
+      .innerJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
+      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .where(
+        and(
+          inArray(expertProfiles.applicationStatus, ['submitted', 'under_review']),
+          isNotNull(expertProfiles.submittedAt),
+          lte(expertProfiles.submittedAt, submittedBefore)
+        )
+      )
+      .orderBy(asc(expertProfiles.submittedAt), asc(expertProfiles.id))
+      .limit(limit);
+
+    // `submitted_at` is nullable on the column but NOT NULL in this result set (the
+    // `isNotNull` term above). Narrowed by filter + guard rather than by `!` —
+    // `noUncheckedIndexedAccess` / the no-assertion house rule.
+    return rows.flatMap((row) => {
+      const { submittedAt, applicationStatus } = row;
+      if (submittedAt === null) {
+        return [];
+      }
+      if (applicationStatus !== 'submitted' && applicationStatus !== 'under_review') {
+        return [];
+      }
+      return [{ ...row, submittedAt, applicationStatus }];
+    });
   },
 };
 

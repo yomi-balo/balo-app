@@ -12,7 +12,12 @@ const { mockGetCurrentUser, mockRedirect, mockNotFound } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock('next/navigation', () => ({ redirect: mockRedirect, notFound: mockNotFound }));
+vi.mock('next/navigation', () => ({
+  redirect: mockRedirect,
+  notFound: mockNotFound,
+  // BAL-548 — `AdminSectionNav` (rendered inside this layout now) reads the pathname.
+  usePathname: () => '/admin',
+}));
 vi.mock('@/lib/auth/session', () => ({ getCurrentUser: mockGetCurrentUser }));
 // ⚠ Do NOT mock `@/lib/authz/platform` — it is pure and synchronous, and mocking it would make
 // the gate assertion vacuous. Let the real predicate run over the seeded `platformRole`.
@@ -67,6 +72,18 @@ describe('AdminLayout (BAL-534)', () => {
     expect(screen.getByText('Child')).toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
     expect(mockNotFound).not.toHaveBeenCalled();
+  });
+
+  it('BAL-548: renders the AdminSectionNav chip sub-nav above the children', async () => {
+    mockGetCurrentUser.mockResolvedValue(user({ platformRole: 'admin' }));
+    const ui = await AdminLayout({ children: <div data-testid="child">Child</div> });
+    render(ui);
+    expect(screen.getByRole('navigation', { name: 'Balo admin sections' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/admin');
+    expect(screen.getByRole('link', { name: 'Config & catalogue' })).toHaveAttribute(
+      'href',
+      '/admin/catalogue'
+    );
   });
 
   it('renders children for platformRole "super_admin"', async () => {

@@ -75,6 +75,8 @@ export {
   STRIPE_REDIRECT_UNBOUND_REASONS,
   /** BAL-551 — the admin lookup surface's event constant (one search box across entity types). */
   ADMIN_LOOKUP_EVENTS,
+  /** BAL-548 / ADR-1055 — the admin pending-actions queue's event constant. */
+  ADMIN_ALERTS_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -155,4 +157,9 @@ export type {
   /** BAL-551 — the admin lookup surface's event payload and its matched-by vocabulary. */
   AdminLookupEventMap,
   AdminLookupMatchedBy,
+  /** BAL-548 / ADR-1055 — the admin pending-actions queue's event payload and its two
+   *  vocabularies. */
+  AdminAlertsEventMap,
+  AdminAlertAgeBucket,
+  AdminAlertQueueFilter,
 } from '@balo/analytics/client';

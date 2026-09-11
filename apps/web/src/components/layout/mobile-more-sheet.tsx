@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LogOut, Check } from 'lucide-react';
+import { LogOut, Check, Shield } from 'lucide-react';
 import type { CompanyWorkspace, Workspace } from '@balo/shared/workspaces';
 import { SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
@@ -130,9 +130,37 @@ export function MobileMoreSheet({
 
   const badgeCounts: NavBadgeCounts = { checklistCompletedCount, checklistAllComplete };
 
+  // BAL-548 — a stable split of the already-resolved, already-ordered `items` list: everything
+  // that isn't the staff-only admin block, and the admin block itself. `resolveMoreItems`
+  // returns primary → secondary → admin (registry order), so `.filter()` here preserves that
+  // order on both sides — never a re-sort, and never a hand-placed row (BAL-501 D11).
+  const primaryish = items.filter((entry) => entry.section !== 'admin');
+  const adminItems = items.filter((entry) => entry.section === 'admin');
+
   const handleItemClick = (entry: EnabledNavEntry) => (): void => {
     onNavigate();
     trackNavItem(entry.key);
+  };
+
+  /**
+   * BAL-548 (folded from the BAL-534 / PR #285 review, item 2) — one row's markup, extracted so
+   * the member rows and the "Balo admin" block below cannot drift (and so jscpd never sees a
+   * clone of this Link).
+   */
+  const renderRow = (entry: EnabledNavEntry): React.JSX.Element => {
+    const Icon = entry.icon;
+    return (
+      <Link
+        key={entry.key}
+        href={entry.href}
+        onClick={handleItemClick(entry)}
+        className={cn(ROW_CLASSNAME, 'text-foreground hover:bg-accent')}
+      >
+        <Icon className="size-[18px] shrink-0" aria-hidden="true" />
+        <span className="flex-1">{entry.label}</span>
+        {entry.badgeSource !== undefined && NAV_BADGE_RENDERERS[entry.badgeSource](badgeCounts)}
+      </Link>
+    );
   };
 
   const handleWorkspaceSelect = (key: string): void => {
@@ -164,21 +192,35 @@ export function MobileMoreSheet({
       />
       <SheetTitle className="sr-only">More</SheetTitle>
 
-      {items.map((entry) => {
-        const Icon = entry.icon;
-        return (
-          <Link
-            key={entry.key}
-            href={entry.href}
-            onClick={handleItemClick(entry)}
-            className={cn(ROW_CLASSNAME, 'text-foreground hover:bg-accent')}
+      {/* BAL-548 — partitioned by `entry.section`, preserving `resolveMoreItems`'s registry
+          order (primary → secondary → admin), so this is a stable SPLIT, not a re-sort. Never a
+          second gate: `entry.section` is a PRESENTATION field (`nav-registry.ts`'s own
+          `resolveNavItems` docblock), not an authorization input — the registry's `requires`
+          predicate already decided which rows reached `items` at all. */}
+      {primaryish.map(renderRow)}
+
+      {/* The desktop sidebar's ONLY labelled group (BAL-534) gets its mobile counterpart here:
+          the shield + "Balo admin" heading, rendered ONLY when non-empty (mirrors
+          `sidebar.tsx:146`) so a member's sheet gains no bare heading.
+          BAL-548 fix round (B-F6) — `text-primary` on BOTH the shield and the label, mirroring
+          `sidebar.tsx:156-168`'s own "THE SIDEBAR'S ONLY LABELLED GROUP" treatment. Without it
+          this reused `WORKSPACE_SECTION_LABEL_CLASSNAME` renders muted grey, identical to the
+          ordinary "Companies" / "Your expert workspace" labels below it, losing the one cue
+          that this group is staff-only. */}
+      {adminItems.length > 0 && (
+        <div data-testid="more-sheet-admin-group">
+          <p
+            className={cn(
+              WORKSPACE_SECTION_LABEL_CLASSNAME,
+              'text-primary flex items-center gap-1.5'
+            )}
           >
-            <Icon className="size-[18px] shrink-0" aria-hidden="true" />
-            <span className="flex-1">{entry.label}</span>
-            {entry.badgeSource !== undefined && NAV_BADGE_RENDERERS[entry.badgeSource](badgeCounts)}
-          </Link>
-        );
-      })}
+            <Shield className="text-primary size-3" aria-hidden="true" />
+            Balo admin
+          </p>
+          {adminItems.map(renderRow)}
+        </div>
+      )}
 
       <div className="border-border my-1.5 border-t" />
 

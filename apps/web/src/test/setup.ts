@@ -185,6 +185,10 @@ vi.mock('@/lib/analytics', async () => {
     // whose module graph reaches the lookup shell throws on an undefined constant (memory
     // `reference_web_analytics_test_mock_export_list`).
     ADMIN_LOOKUP_EVENTS: events.ADMIN_LOOKUP_EVENTS,
+    // BAL-548 / ADR-1055 — the admin pending-actions queue's CLIENT event constant. ⚠ WITHOUT
+    // THIS LINE every test whose module graph reaches `AdminQueueAnalytics` or `AlertRow`
+    // throws on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
+    ADMIN_ALERTS_EVENTS: events.ADMIN_ALERTS_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

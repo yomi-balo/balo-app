@@ -43,7 +43,16 @@ const MEETING_ID = '22222222-2222-4222-8222-222222222222';
 const ENGAGEMENT_ID = '44444444-4444-4444-8444-444444444444';
 const COMPANY_ID = '55555555-5555-4555-8555-555555555555';
 const CORRELATION_ID = 'c0000000-0000-4000-8000-000000000000';
-const ORIGINAL_START = new Date('2026-09-10T10:00:00.000Z');
+/**
+ * ⚠ RELATIVE TO NOW, NEVER A CALENDAR LITERAL — this suite went red on 2026-09-10 without a single
+ * line changing, because this was `new Date('2026-09-10T10:00:00.000Z')` and the wall clock walked
+ * past it. `row()` derives the proposal's `expiresAt` from this constant, so once it fell into the
+ * past EVERY recheck test short-circuited on `proposal_expired` before reaching the branch it
+ * actually asserts — five failures, all reporting the wrong reason rather than the real cause.
+ * Keep it in the future so "the proposal has not expired yet" stays the default, and let the one
+ * genuinely-expired case opt in explicitly (it already does: `new Date(Date.now() - 1000)`).
+ */
+const ORIGINAL_START = new Date(Date.now() + 7 * 24 * 3600_000);
 
 function row(payload: Record<string, unknown> = {}): ScheduledNotification {
   return {

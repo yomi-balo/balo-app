@@ -112,6 +112,14 @@ export {
   type AdminEngagementsEventMap,
   type AdminEngagementsFilter,
 } from './admin-engagements';
+// BAL-548 / ADR-1055 — the admin pending-actions queue's CLIENT event family. A NEW file, not
+// folded into `./admin-engagements` — see that module's own header for why.
+export {
+  ADMIN_ALERTS_EVENTS,
+  type AdminAlertsEventMap,
+  type AdminAlertAgeBucket,
+  type AdminAlertQueueFilter,
+} from './admin-alerts';
 export {
   ONBOARDING_REMINDER_SERVER_EVENTS,
   type OnboardingReminderServerEventMap,

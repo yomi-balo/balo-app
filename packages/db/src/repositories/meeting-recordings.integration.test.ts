@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
-import { meetingRecordings } from '../schema';
+import { meetingRecordings, meetings } from '../schema';
 import type { NewMeetingRecording } from '../schema';
 import { meetingFactory, meetingRecordingFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
@@ -1606,5 +1606,189 @@ describe('meetingRecordingsRepository.markTranscriptJobFailed', () => {
         db
       )
     ).toBeUndefined();
+  });
+});
+
+/**
+ * BAL-548 / ADR-1055 — the two capture-side finder reads.
+ *
+ * ⚠ `created_at` / `transcript_job_submitted_at` are stamped EXPLICITLY in every case below.
+ * `created_at` defaults to `now()` = transaction START time inside the harness, so rows
+ * written "seconds apart" here share a byte-identical anchor and an ordering assertion would
+ * otherwise fall through to `id`, a random v4 uuid.
+ */
+/** A cutoff comfortably after every seeded anchor below — "everything qualifies". */
+const ALERT_CUTOFF = new Date('2026-02-01T00:00:00.000Z');
+
+/**
+ * The seeded ids the read returned, IN THE READ'S ORDER. Both finder suites share this so a
+ * concurrently-seeded sibling row cannot make an ordering assertion flaky, and so neither
+ * suite restates the same filter/map pair.
+ */
+function orderedSeededIds(
+  rows: readonly { recordingId: string }[],
+  seeded: readonly string[]
+): string[] {
+  return rows.filter((row) => seeded.includes(row.recordingId)).map((row) => row.recordingId);
+}
+
+describe('meetingRecordingsRepository.listFailedSince', () => {
+  async function seedFailed(createdAt: Date, overrides: { deletedAt?: Date } = {}) {
+    const { recording, meetingId } = await meetingRecordingFactory({
+      status: 'failed',
+      failedStage: 'mux_ingest',
+      failureReason: 'Mux rejected the asset',
+      createdAt,
+      ...(overrides.deletedAt === undefined ? {} : { deletedAt: overrides.deletedAt }),
+    });
+    return { recordingId: recording.id, meetingId };
+  }
+
+  it('returns failed segments OLDEST FIRST, with the meeting id and schedule projected', async () => {
+    const older = await seedFailed(new Date('2026-01-01T00:00:00.000Z'));
+    const newer = await seedFailed(new Date('2026-01-02T00:00:00.000Z'));
+
+    const rows = await meetingRecordingsRepository.listFailedSince(ALERT_CUTOFF, 50);
+
+    expect(orderedSeededIds(rows, [older.recordingId, newer.recordingId])).toEqual([
+      older.recordingId,
+      newer.recordingId,
+    ]);
+    const first = rows.find((row) => row.recordingId === older.recordingId);
+    expect(first?.meetingId).toBe(older.meetingId);
+    expect(first?.failedStage).toBe('mux_ingest');
+    expect(first?.failureReason).toBe('Mux rejected the asset');
+    expect(first?.meetingScheduledStart).toBeInstanceOf(Date);
+  });
+
+  /**
+   * ⚠ THE `status = 'failed'` TERM, PROVEN. The index predicate is the columns-only
+   * `failed_stage IS NOT NULL` superset; a row carrying a stage WITHOUT a failed status is
+   * exactly what the read's explicit status term exists to exclude. `transcripts` already
+   * produces that shape via `recordStageSkip`, so this guards the same class of mistake on
+   * this table.
+   */
+  it('excludes a row that carries a failed_stage but is NOT status=failed', async () => {
+    const { recording } = await meetingRecordingFactory({
+      status: 'ready',
+      failedStage: 'mux_ingest',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const rows = await meetingRecordingsRepository.listFailedSince(ALERT_CUTOFF, 50);
+
+    expect(rows.map((row) => row.recordingId)).not.toContain(recording.id);
+  });
+
+  it('excludes soft-deleted recordings and recordings of a soft-deleted meeting', async () => {
+    const live = await seedFailed(new Date('2026-01-01T00:00:00.000Z'));
+    const deletedRecording = await seedFailed(new Date('2026-01-01T00:00:00.000Z'), {
+      deletedAt: new Date(),
+    });
+    const orphaned = await seedFailed(new Date('2026-01-01T00:00:00.000Z'));
+    await db
+      .update(meetings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetings.id, orphaned.meetingId));
+
+    const rows = await meetingRecordingsRepository.listFailedSince(ALERT_CUTOFF, 50);
+    const ids = rows.map((row) => row.recordingId);
+
+    expect(ids).toContain(live.recordingId);
+    expect(ids).not.toContain(deletedRecording.recordingId);
+    expect(ids).not.toContain(orphaned.recordingId);
+  });
+
+  it('the cutoff excludes a too-recent failure, and the limit bounds the batch', async () => {
+    const old = await seedFailed(new Date('2026-01-01T00:00:00.000Z'));
+    const recent = await seedFailed(new Date('2026-01-10T00:00:00.000Z'));
+
+    const beforeCutoff = await meetingRecordingsRepository.listFailedSince(
+      new Date('2026-01-05T00:00:00.000Z'),
+      50
+    );
+    expect(beforeCutoff.map((row) => row.recordingId)).toContain(old.recordingId);
+    expect(beforeCutoff.map((row) => row.recordingId)).not.toContain(recent.recordingId);
+
+    const bounded = await meetingRecordingsRepository.listFailedSince(ALERT_CUTOFF, 1);
+    expect(bounded).toHaveLength(1);
+  });
+});
+
+/**
+ * BAL-548 / ADR-1055 (R6) — `transcript_capture.withheld_source`. Despite the kind's name the
+ * condition is a `meeting_recordings` predicate: a batch job SUBMITTED and never answered.
+ * That window is exactly the one in which `recording-cleanup-source` withholds the Daily
+ * source delete, so a silent job pins the vendor artefact AND loses the transcript.
+ */
+describe('meetingRecordingsRepository.listWithheldTranscriptSourceSince', () => {
+  async function seedSubmitted(submittedAt: Date, overrides: Partial<NewMeetingRecording> = {}) {
+    const { recording, meetingId } = await meetingRecordingFactory({
+      status: 'ready',
+      transcriptJobId: `job-${randomUUID()}`,
+      transcriptJobSubmittedAt: submittedAt,
+      ...overrides,
+    });
+    return { recordingId: recording.id, meetingId };
+  }
+
+  it('returns submitted-but-unanswered jobs OLDEST SUBMISSION FIRST', async () => {
+    const older = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'));
+    const newer = await seedSubmitted(new Date('2026-01-02T00:00:00.000Z'));
+
+    const rows = await meetingRecordingsRepository.listWithheldTranscriptSourceSince(
+      ALERT_CUTOFF,
+      50
+    );
+
+    expect(orderedSeededIds(rows, [older.recordingId, newer.recordingId])).toEqual([
+      older.recordingId,
+      newer.recordingId,
+    ]);
+    const first = rows.find((row) => row.recordingId === older.recordingId);
+    expect(first?.meetingId).toBe(older.meetingId);
+    expect(first?.transcriptJobSubmittedAt.getTime()).toBe(
+      new Date('2026-01-01T00:00:00.000Z').getTime()
+    );
+  });
+
+  it('excludes a job that HAS answered, a never-submitted row, and a soft-deleted recording', async () => {
+    const pending = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'));
+    const answered = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'), {
+      transcriptJobFinishedAt: new Date('2026-01-01T00:10:00.000Z'),
+    });
+    const neverSubmitted = await meetingRecordingFactory({ status: 'ready' });
+    const deleted = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'), {
+      deletedAt: new Date(),
+    });
+
+    const rows = await meetingRecordingsRepository.listWithheldTranscriptSourceSince(
+      ALERT_CUTOFF,
+      50
+    );
+    const ids = rows.map((row) => row.recordingId);
+
+    expect(ids).toContain(pending.recordingId);
+    expect(ids).not.toContain(answered.recordingId);
+    expect(ids).not.toContain(neverSubmitted.recording.id);
+    expect(ids).not.toContain(deleted.recordingId);
+  });
+
+  it('the cutoff keeps a job that was submitted moments ago out of the alert, and the limit bounds the batch', async () => {
+    const stale = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'));
+    const fresh = await seedSubmitted(new Date('2026-01-10T00:00:00.000Z'));
+
+    const beforeCutoff = await meetingRecordingsRepository.listWithheldTranscriptSourceSince(
+      new Date('2026-01-05T00:00:00.000Z'),
+      50
+    );
+    expect(beforeCutoff.map((row) => row.recordingId)).toContain(stale.recordingId);
+    expect(beforeCutoff.map((row) => row.recordingId)).not.toContain(fresh.recordingId);
+
+    const bounded = await meetingRecordingsRepository.listWithheldTranscriptSourceSince(
+      ALERT_CUTOFF,
+      1
+    );
+    expect(bounded).toHaveLength(1);
   });
 });

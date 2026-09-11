@@ -1505,3 +1505,100 @@ describe('expertsRepository.findDisplayProfileById — the PROJECTED party-card 
     await expect(expertsRepository.findDisplayProfileById(randomUUID())).resolves.toBeUndefined();
   });
 });
+
+/**
+ * BAL-548 / ADR-1055 — the `expert.application_pending` finder read.
+ *
+ * ⚠ `expert_profiles` HAS NO `deleted_at`, so there is no soft-deleted-profile case to
+ * exclude here; the soft-delete case this suite CAN express is a soft-deleted USER, which the
+ * INNER JOIN drops.
+ */
+describe('expertsRepository.listPendingApplicationsForAlerts', () => {
+  /** A submitted (undecided) application, with a chosen `submitted_at`. */
+  async function seedSubmitted(submittedAt: Date, overrides: { agencyId?: string } = {}) {
+    const draft = await expertDraftFactory();
+    await expertsRepository.submitApplication(draft.id);
+    // ⚠ `submitted_at` is stamped with a JS `new Date()`, so every row in one test lands
+    // within the same millisecond band; the ordering assertion needs an explicit anchor.
+    await db
+      .update(expertProfiles)
+      .set({ submittedAt, agencyId: overrides.agencyId ?? null })
+      .where(eq(expertProfiles.id, draft.id));
+    return draft;
+  }
+
+  it('returns undecided applications OLDEST SUBMISSION FIRST, with the person and agency named', async () => {
+    const agency = await agencyFactory();
+    const older = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'), {
+      agencyId: agency.id,
+    });
+    const newer = await seedSubmitted(new Date('2026-01-02T00:00:00.000Z'));
+
+    const rows = await expertsRepository.listPendingApplicationsForAlerts(
+      new Date('2026-02-01T00:00:00.000Z'),
+      50
+    );
+    const mine = rows.filter((row) => [older.id, newer.id].includes(row.expertProfileId));
+
+    expect(mine.map((row) => row.expertProfileId)).toEqual([older.id, newer.id]);
+    const [first, second] = mine;
+    expect(first?.applicationStatus).toBe('submitted');
+    expect(first?.userFirstName).not.toBeNull();
+    expect(first?.agencyName).toBe(agency.name);
+    // An independent applicant has NO agency — that is the shape, not a missing row.
+    expect(second?.agencyName).toBeNull();
+  });
+
+  it('excludes draft, approved and never-submitted applications', async () => {
+    const draft = await expertDraftFactory();
+    const approved = await expertFactory();
+    const pending = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'));
+
+    const rows = await expertsRepository.listPendingApplicationsForAlerts(
+      new Date('2026-02-01T00:00:00.000Z'),
+      50
+    );
+    const ids = rows.map((row) => row.expertProfileId);
+
+    expect(ids).toContain(pending.id);
+    expect(ids).not.toContain(draft.id);
+    expect(ids).not.toContain(approved.id);
+  });
+
+  it('excludes an application whose USER was soft-deleted', async () => {
+    const pending = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'));
+    const [profile] = await db
+      .select({ userId: expertProfiles.userId })
+      .from(expertProfiles)
+      .where(eq(expertProfiles.id, pending.id));
+    if (profile === undefined) {
+      throw new Error('expected the seeded profile');
+    }
+    await usersRepository.softDelete(profile.userId);
+
+    const rows = await expertsRepository.listPendingApplicationsForAlerts(
+      new Date('2026-02-01T00:00:00.000Z'),
+      50
+    );
+
+    expect(rows.map((row) => row.expertProfileId)).not.toContain(pending.id);
+  });
+
+  it('the cutoff excludes a too-recent submission, and the limit bounds the batch', async () => {
+    const old = await seedSubmitted(new Date('2026-01-01T00:00:00.000Z'));
+    const recent = await seedSubmitted(new Date('2026-01-10T00:00:00.000Z'));
+
+    const beforeCutoff = await expertsRepository.listPendingApplicationsForAlerts(
+      new Date('2026-01-05T00:00:00.000Z'),
+      50
+    );
+    expect(beforeCutoff.map((row) => row.expertProfileId)).toContain(old.id);
+    expect(beforeCutoff.map((row) => row.expertProfileId)).not.toContain(recent.id);
+
+    const bounded = await expertsRepository.listPendingApplicationsForAlerts(
+      new Date('2026-02-01T00:00:00.000Z'),
+      1
+    );
+    expect(bounded).toHaveLength(1);
+  });
+});

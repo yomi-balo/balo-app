@@ -25,18 +25,19 @@ import { codeLinesOf, resolveRouteDir } from './_source-scan';
  * past both words. All three files below are genuinely motion-free after BAL-511, so the import
  * ban is satisfiable (BAL-511 D12 / M8).
  *
- * THREE controls are covered, not two. `app/(dashboard)/settings/_components/settings-section-nav.tsx`
+ * FOUR controls are covered now, not two. `app/(dashboard)/settings/_components/settings-section-nav.tsx`
  * (BAL-503, the CLIENT settings tab bar) carried a byte-identical `layoutId="settings-section-pill"`
  * spring violation and was NOT in the ticket's originally-stated scope — it is an orchestrator
  * scope addition (D18), flattened in this same PR rather than left as a documented gap. See the
  * PR body for the reasoning: a freshly-written invariant that documents its own hole is a bad
- * artifact.
+ * artifact. `app/(dashboard)/admin/_components/admin-section-nav.tsx` (BAL-548, folded from the
+ * BAL-534 / PR #285 review) is the fourth — a genuinely new control, shipped static from day one.
  *
  * NOT covered on purpose: BAL-497's sidebar sliding pill, which the spec's `sidebar pill` line
  * keeps deliberately; and the non-tab `whileHover`/`whileTap` on meeting cards and agenda rows,
  * which the spec's separate `buttons` line sanctions.
  *
- * ⚠ KNOWN LIMITATION — THIS LIST IS FIXED, SO A FOURTH TAB CONTROL SHIPS UNCOVERED. `CONTROLS`
+ * ⚠ KNOWN LIMITATION — THIS LIST IS FIXED, SO A FIFTH TAB CONTROL SHIPS UNCOVERED. `CONTROLS`
  * below is hand-maintained, and nothing fails when a new tab bar is added elsewhere: BAL-511
  * itself only found the third entry because a reviewer read a neighbouring route by hand. The
  * same limitation applies to every existing `_source-scan` consumer, so this is not a regression
@@ -88,11 +89,24 @@ const CONTROLS: readonly TabControl[] = [
     present: 'aria-label="Settings sections"',
   },
   {
+    label: 'Balo admin section nav (BAL-548 — the /admin/* chip sub-nav)',
+    path: resolveRouteDir([
+      'src/app/(dashboard)/admin/_components/admin-section-nav.tsx',
+      'apps/web/src/app/(dashboard)/admin/_components/admin-section-nav.tsx',
+    ]),
+    // Route links + `aria-current="page"`, not the ARIA tabs pattern — same as the client
+    // settings nav above. The non-vacuity anchor is the `<nav aria-label>`, which IS genuinely
+    // present.
+    present: 'aria-label="Balo admin sections"',
+  },
+  {
     label: 'admin lookup drill-in tabs (BAL-555)',
     path: resolveRouteDir([
       'src/app/(dashboard)/admin/lookup/_components/lookup-drill-in-tabs.tsx',
       'apps/web/src/app/(dashboard)/admin/lookup/_components/lookup-drill-in-tabs.tsx',
     ]),
+    // Unlike the two navs above, this one IS the ARIA tabs pattern — in-page panels, not route
+    // links — so the non-vacuity anchor is `role="tablist"` itself.
     present: 'role="tablist"',
   },
 ];

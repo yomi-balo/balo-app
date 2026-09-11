@@ -157,6 +157,30 @@ export const transcripts = pgTable(
     index('transcript_meeting_idx')
       .on(t.meetingId)
       .where(sql`${t.deletedAt} IS NULL`),
+    /**
+     * BAL-548 / ADR-1055 — the `transcript.failed` finder's index. Failed pipelines, oldest
+     * first, read every five minutes; `status` and `created_at` were both unindexed here.
+     *
+     * ⚠ THE PREDICATE IS COLUMNS-ONLY (`failed_stage IS NOT NULL`), NOT `status = 'failed'` —
+     * the ADD-VALUE house rule this file already states two indexes up. It is therefore a
+     * deliberate SUPERSET of failure: `recordStageSkip` ALSO stamps `failed_stage` (and
+     * `failure_reason`) on a DEGRADED-BUT-COMPLETED path, leaving `status` untouched, so a
+     * `ready` row can carry a `failed_stage`.
+     *
+     * ⚠⚠ `transcriptsRepository.listFailedSince` CARRIES `status = 'failed'` **AND**
+     * `failed_stage IS NOT NULL` — INSTEAD of `status = 'failed'` alone, not additionally to
+     * some other narrowing. Postgres cannot prove `status = 'failed'` implies
+     * `failed_stage IS NOT NULL`, so a read carrying only the status term is not provably a
+     * subset of this predicate and the planner will not use this index — it seq-scans
+     * `transcripts` instead. The read needs BOTH terms: `failed_stage IS NOT NULL` so the read
+     * is provably a subset of this index's predicate (making the index usable), and
+     * `status = 'failed'` so a `recordStageSkip`ped-but-`ready` row (which satisfies this
+     * index's predicate but is not a failure) is excluded from the finder's result. The index
+     * stays the columns-only superset; the read narrows it on both axes.
+     */
+    index('transcript_failed_idx')
+      .on(t.createdAt)
+      .where(sql`${t.failedStage} IS NOT NULL AND ${t.deletedAt} IS NULL`),
   ]
 );
 
