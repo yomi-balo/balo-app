@@ -14,4 +14,9 @@ describe('AdminLookupLoading (BAL-551)', () => {
     const { container } = render(<Loading />);
     expect(container.querySelectorAll('.divide-y > div')).toHaveLength(3);
   });
+
+  it('renders six chip skeletons (BAL-555 — SIX chips, not five)', () => {
+    const { container } = render(<Loading />);
+    expect(container.querySelectorAll('.rounded-full')).toHaveLength(6);
+  });
 });

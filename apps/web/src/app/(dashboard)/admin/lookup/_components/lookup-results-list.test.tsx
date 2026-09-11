@@ -13,7 +13,13 @@ vi.mock('motion/react', async () => {
 function result(
   overrides: Partial<LookupResult> & Pick<LookupResult, 'id' | 'type'>
 ): LookupResult {
-  return { title: 'Title', sub: 'Sub', publicExpertUsername: null, ...overrides };
+  return {
+    title: 'Title',
+    sub: 'Sub',
+    publicExpertUsername: null,
+    engagementType: null,
+    ...overrides,
+  };
 }
 
 function baseProps(overrides: Partial<React.ComponentProps<typeof LookupResultsList>> = {}) {

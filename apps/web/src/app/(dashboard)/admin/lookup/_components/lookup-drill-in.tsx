@@ -1,15 +1,20 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink } from 'lucide-react';
 import type { LookupSelection } from '../_lib/lookup-view';
 import { LOOKUP_TYPE_LABEL, resolveOpenTarget } from '../_lib/lookup-view';
 import { LookupMoneySection } from './lookup-money-section';
+import { LookupTimelineSection } from './lookup-timeline-section';
+import { LookupDrillInTabs, panelId, tabId, type LookupDrillInTab } from './lookup-drill-in-tabs';
 
 /**
- * BAL-551 — the Lookup drill-in. Header (type eyebrow, title, Open-or-not) plus, for a
- * `credit_session` only, the Money section. NOTHING here mutates: no forms, no `action=`, no
- * write-shaped button.
+ * BAL-551/BAL-555 — the Lookup drill-in. Header (type eyebrow, title, Open-or-not) plus a
+ * TAB SHELL: a `role="tablist"` bar rendered ONLY when there are two or more tabs (credit
+ * sessions get Timeline + Money); every other type renders the Timeline as a single labelled
+ * SECTION with no tab bar at all (C2 — a one-tab tab bar is still a defect). NOTHING here
+ * mutates: no forms, no `action=`, no write-shaped button.
  */
 
 function noDestinationCopy(selection: LookupSelection): string {
@@ -27,16 +32,44 @@ function noDestinationCopy(selection: LookupSelection): string {
     // pending-MJ
     return "The receipt is the client's own view — there's no staff page for a session yet.";
   }
+  if (selection.type === 'engagement') {
+    if (selection.engagementType === 'case') {
+      // pending-MJ — BAL-555 C1: `/cases/[engagementId]` has NO ADMIN LENS at all.
+      return "There's no staff page for a case yet — what Balo has is above.";
+    }
+    if (selection.via === 'recent') {
+      // pending-MJ — a Recent entry saved before BAL-555 shipped carries no engagementType.
+      return 'Recent links can go stale — search for this engagement again to open its current page.';
+    }
+  }
   // pending-MJ
   return `There's no ${LOOKUP_TYPE_LABEL[selection.type].toLowerCase()} page yet — what Balo has is above.`;
 }
 
 interface LookupDrillInProps {
   readonly selection: LookupSelection;
+  readonly onTabSelect: (tab: LookupDrillInTab) => void;
 }
 
-export function LookupDrillIn({ selection }: Readonly<LookupDrillInProps>): React.JSX.Element {
+export function LookupDrillIn({
+  selection,
+  onTabSelect,
+}: Readonly<LookupDrillInProps>): React.JSX.Element {
   const target = resolveOpenTarget(selection);
+  const [tab, setTab] = useState<LookupDrillInTab>('timeline');
+
+  const tabs: readonly { readonly key: LookupDrillInTab; readonly label: string }[] =
+    selection.type === 'credit_session'
+      ? [
+          { key: 'timeline', label: 'Timeline' },
+          { key: 'money', label: 'Money' },
+        ]
+      : [{ key: 'timeline', label: 'Timeline' }];
+
+  function selectTab(next: LookupDrillInTab): void {
+    setTab(next);
+    onTabSelect(next);
+  }
 
   return (
     <div className="border-border bg-card overflow-hidden rounded-2xl border">
@@ -64,11 +97,34 @@ export function LookupDrillIn({ selection }: Readonly<LookupDrillInProps>): Reac
       </div>
       <div className="p-4">
         <p className="text-muted-foreground text-xs leading-relaxed">{selection.sub}</p>
-        {selection.type === 'credit_session' && (
-          <div className="mt-3">
-            <LookupMoneySection sessionId={selection.id} />
-          </div>
-        )}
+
+        <div className="mt-3">
+          {tabs.length >= 2 ? (
+            <>
+              <LookupDrillInTabs tabs={tabs} active={tab} onSelect={selectTab} />
+              <div
+                role="tabpanel"
+                key={tab}
+                id={panelId(tab)}
+                aria-labelledby={tabId(tab)}
+                className="mt-3"
+              >
+                {tab === 'timeline' && (
+                  <LookupTimelineSection
+                    entityType={selection.type}
+                    entityId={selection.id}
+                    labelled={false}
+                  />
+                )}
+                {tab === 'money' && selection.type === 'credit_session' && (
+                  <LookupMoneySection sessionId={selection.id} labelled={false} />
+                )}
+              </div>
+            </>
+          ) : (
+            <LookupTimelineSection entityType={selection.type} entityId={selection.id} labelled />
+          )}
+        </div>
       </div>
     </div>
   );

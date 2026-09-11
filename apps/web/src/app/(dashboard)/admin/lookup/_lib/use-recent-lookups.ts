@@ -43,26 +43,57 @@ export interface RecentLookupEntry {
   readonly id: string;
   readonly title: string;
   readonly sub: string;
+  /**
+   * BAL-555 — present only for a `type: 'engagement'` entry stored since this shipped.
+   * `engagements.engagement_type` is IMMUTABLE by schema design (no column default,
+   * `schema/engagements.ts`), so — unlike `publicExpertUsername`, which is deliberately never
+   * cached because a renamed username can be RE-CLAIMED by a different expert (`lookup-view.ts`)
+   * — a cached value here can only ever be right or absent, never wrong. A legacy stored entry
+   * without it reads `undefined` here, which `selectionFromRecent` normalises to `null` (no
+   * Open link).
+   */
+  readonly engagementType?: LookupResult['engagementType'];
 }
 
 function isLookupEntityType(value: unknown): value is LookupEntityType {
   return typeof value === 'string' && (LOOKUP_ENTITY_TYPES as readonly string[]).includes(value);
 }
 
+const VALID_ENGAGEMENT_TYPES: ReadonlySet<string> = new Set([
+  'project',
+  'case',
+  'package',
+  'retainer',
+]);
+
+/** `undefined` (absent — a legacy entry) or `null`, or one of the four shipped labels. */
+function isValidStoredEngagementType(
+  value: unknown
+): value is LookupResult['engagementType'] | undefined {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === 'string' && VALID_ENGAGEMENT_TYPES.has(value))
+  );
+}
+
 /** Narrow an unknown value to one valid entry, dropping anything malformed rather than throwing. */
 function readEntry(value: unknown): RecentLookupEntry | null {
   if (typeof value !== 'object' || value === null) return null;
   const record = value as Record<string, unknown>;
-  const { type, id, title, sub } = record;
+  const { type, id, title, sub, engagementType } = record;
   if (
     !isLookupEntityType(type) ||
     typeof id !== 'string' ||
     typeof title !== 'string' ||
-    typeof sub !== 'string'
+    typeof sub !== 'string' ||
+    !isValidStoredEngagementType(engagementType)
   ) {
     return null;
   }
-  return { type, id, title, sub };
+  return engagementType === undefined
+    ? { type, id, title, sub }
+    : { type, id, title, sub, engagementType };
 }
 
 function readStoredRecent(): RecentLookupEntry[] {
@@ -133,7 +164,13 @@ export function useRecentLookups(): UseRecentLookupsResult {
         (entry) => !(entry.type === result.type && entry.id === result.id)
       );
       return [
-        { type: result.type, id: result.id, title: result.title, sub: result.sub },
+        {
+          type: result.type,
+          id: result.id,
+          title: result.title,
+          sub: result.sub,
+          engagementType: result.engagementType,
+        },
         ...withoutExisting,
       ].slice(0, RECENT_LIMIT);
     });

@@ -20,7 +20,7 @@ export default function AdminLookupLoading(): React.JSX.Element {
 
       {/* Chip row */}
       <div className="mb-4 flex gap-1.5">
-        {['chip-a', 'chip-b', 'chip-c', 'chip-d', 'chip-e'].map((key) => (
+        {['chip-a', 'chip-b', 'chip-c', 'chip-d', 'chip-e', 'chip-f'].map((key) => (
           <div key={key} className="bg-muted h-8 w-20 shrink-0 animate-pulse rounded-full" />
         ))}
       </div>

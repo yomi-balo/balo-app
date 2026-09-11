@@ -4,6 +4,7 @@ import {
   Building2,
   Users,
   Briefcase,
+  Handshake,
   CircleDollarSign,
   type LucideIcon,
 } from 'lucide-react';
@@ -33,26 +34,29 @@ export const LOOKUP_TYPE_LABEL: Record<LookupEntityType, string> = {
   company: 'Company',
   agency: 'Agency',
   project_request: 'Project request',
+  engagement: 'Engagement',
   credit_session: 'Credit session',
 };
 
-/** The row-tile icon per entity type. */
+/** The row-tile icon per entity type. `Handshake` is distinct from `Briefcase` (project_request). */
 export const LOOKUP_TYPE_ICON: Record<LookupEntityType, LucideIcon> = {
   user: User,
   expert: UserCog,
   company: Building2,
   agency: Users,
   project_request: Briefcase,
+  engagement: Handshake,
   credit_session: CircleDollarSign,
 };
 
-/** The five chip labels, in `LOOKUP_TYPE_FILTERS` order. */
+/** The six chip labels, in `LOOKUP_TYPE_FILTERS` order. */
 export const LOOKUP_FILTER_LABEL: Record<LookupTypeFilter, string> = {
   all: 'All',
   people: 'People',
   orgs: 'Companies & agencies',
   sessions: 'Sessions',
   requests: 'Requests',
+  engagements: 'Engagements',
 };
 
 /**
@@ -65,6 +69,7 @@ export const LOOKUP_FILTER_TYPES: Record<LookupTypeFilter, readonly LookupEntity
   orgs: ['company', 'agency'],
   sessions: ['credit_session'],
   requests: ['project_request'],
+  engagements: ['engagement'],
 };
 
 /** The results a chip filter keeps. `'all'` (or any `null`-mapped filter) is the identity. */
@@ -115,6 +120,17 @@ export interface LookupSelection {
   readonly title: string;
   readonly sub: string;
   readonly publicExpertUsername: string | null;
+  /**
+   * BAL-555 — the engagement's supertype discriminator, or `null` for every other type. The
+   * Open-link policy needs it: `/engagements/[id]` is the PROJECT delivery workspace and
+   * 404s a CASE id, and `/cases/[engagementId]` has NO ADMIN LENS at all (C1).
+   *
+   * ⚠ This is NOT the F12 staleness case: `publicExpertUsername` is never cached because a
+   * renamed username can be RE-CLAIMED by a different expert, but `engagements.engagement_type`
+   * is IMMUTABLE by schema design (no column default, `schema/engagements.ts`) — a cached
+   * value can only ever be right or absent, never wrong.
+   */
+  readonly engagementType: LookupResult['engagementType'];
   readonly via: 'search' | 'recent';
 }
 
@@ -126,6 +142,7 @@ export function selectionFromResult(result: LookupResult): LookupSelection {
     title: result.title,
     sub: result.sub,
     publicExpertUsername: result.publicExpertUsername,
+    engagementType: result.engagementType,
     via: 'search',
   };
 }
@@ -135,6 +152,7 @@ export function selectionFromRecent(entry: {
   readonly id: string;
   readonly title: string;
   readonly sub: string;
+  readonly engagementType?: LookupResult['engagementType'];
 }): LookupSelection {
   return {
     key: `${entry.type}:${entry.id}`,
@@ -146,6 +164,11 @@ export function selectionFromRecent(entry: {
     // username, on both paths that reach here (a fresh `remember()` call and a stored entry
     // read back from a prior session).
     publicExpertUsername: null,
+    // A legacy stored entry with no `engagementType` reads `undefined` here — normalised to
+    // `null` (no Open link) rather than left `undefined`, which `resolveOpenTarget`'s
+    // `LookupResult['engagementType']` typing (`'project' | 'case' | 'package' | 'retainer' |
+    // null`) does not admit.
+    engagementType: entry.engagementType ?? null,
     via: 'recent',
   };
 }
@@ -156,16 +179,27 @@ export function selectionFromRecent(entry: {
  *  - `project_request` → `/projects/{id}` ALWAYS (the admin lens is never denied).
  *  - `expert` → `/experts/{publicExpertUsername}` only when a public profile currently
  *    resolves (approved ∧ searchable ∧ live user, encoded upstream in `publicExpertUsername`).
+ *  - `engagement` → `/engagements/{id}` ONLY for `engagementType === 'project'` (BAL-555 C1).
+ *    `/engagements/[id]` is the PROJECT delivery workspace (`projectEngagementsRepository
+ *    .findWithMilestones` filters `engagement_type = 'project'`), so a CASE id resolves to
+ *    `undefined` there and 404s; `/cases/[engagementId]` has NO ADMIN LENS at all
+ *    (`authorizeEngagementConversation` has no admin arm). A link that 404s is worse than no
+ *    link (O3), so a case (or package/retainer) engagement gets no Open link.
  *  - `user` / `company` / `agency` / `credit_session` → no page exists for staff. A link that
  *    404s (the client-lens session receipt, `/meetings/{id}`) is worse than no link, so this
  *    returns `null` and the drill-in renders explanatory copy instead.
  */
-export function resolveOpenTarget(result: LookupResult): LookupOpenTarget | null {
+export function resolveOpenTarget(
+  result: Pick<LookupResult, 'type' | 'id' | 'publicExpertUsername' | 'engagementType'>
+): LookupOpenTarget | null {
   if (result.type === 'project_request') {
     return { href: `/projects/${result.id}`, label: 'Open' };
   }
   if (result.type === 'expert' && result.publicExpertUsername !== null) {
     return { href: `/experts/${result.publicExpertUsername}`, label: 'Open' };
+  }
+  if (result.type === 'engagement' && result.engagementType === 'project') {
+    return { href: `/engagements/${result.id}`, label: 'Open' };
   }
   return null;
 }

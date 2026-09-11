@@ -87,6 +87,14 @@ const CONTROLS: readonly TabControl[] = [
     // the non-vacuity anchor is its `<nav aria-label>`, which IS genuinely present.
     present: 'aria-label="Settings sections"',
   },
+  {
+    label: 'admin lookup drill-in tabs (BAL-555)',
+    path: resolveRouteDir([
+      'src/app/(dashboard)/admin/lookup/_components/lookup-drill-in-tabs.tsx',
+      'apps/web/src/app/(dashboard)/admin/lookup/_components/lookup-drill-in-tabs.tsx',
+    ]),
+    present: 'role="tablist"',
+  },
 ];
 
 /** Every token that reintroduces tab motion, including the import that would carry a new one in. */

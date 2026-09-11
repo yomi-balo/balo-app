@@ -17,6 +17,7 @@ describe('LookupAnalytics', () => {
         typeFilter="all"
         resultCount={3}
         opened={null}
+        tabSelected={null}
       />
     );
     expect(trackMock).toHaveBeenCalledWith(ADMIN_LOOKUP_EVENTS.SEARCHED, {
@@ -27,23 +28,53 @@ describe('LookupAnalytics', () => {
   });
 
   it('does not fire SEARCHED for an empty query', () => {
-    render(<LookupAnalytics query="" typeFilter="all" resultCount={0} opened={null} />);
+    render(
+      <LookupAnalytics query="" typeFilter="all" resultCount={0} opened={null} tabSelected={null} />
+    );
     expect(trackMock).not.toHaveBeenCalled();
   });
 
   it('does not re-fire SEARCHED on an unchanged (query, filter) pair', () => {
     const { rerender } = render(
-      <LookupAnalytics query="dana" typeFilter="all" resultCount={3} opened={null} />
+      <LookupAnalytics
+        query="dana"
+        typeFilter="all"
+        resultCount={3}
+        opened={null}
+        tabSelected={null}
+      />
     );
-    rerender(<LookupAnalytics query="dana" typeFilter="all" resultCount={3} opened={null} />);
+    rerender(
+      <LookupAnalytics
+        query="dana"
+        typeFilter="all"
+        resultCount={3}
+        opened={null}
+        tabSelected={null}
+      />
+    );
     expect(trackMock).toHaveBeenCalledTimes(1);
   });
 
   it('re-fires SEARCHED when the filter changes for the same query', () => {
     const { rerender } = render(
-      <LookupAnalytics query="dana" typeFilter="all" resultCount={3} opened={null} />
+      <LookupAnalytics
+        query="dana"
+        typeFilter="all"
+        resultCount={3}
+        opened={null}
+        tabSelected={null}
+      />
     );
-    rerender(<LookupAnalytics query="dana" typeFilter="people" resultCount={2} opened={null} />);
+    rerender(
+      <LookupAnalytics
+        query="dana"
+        typeFilter="people"
+        resultCount={2}
+        opened={null}
+        tabSelected={null}
+      />
+    );
     expect(trackMock).toHaveBeenCalledTimes(2);
     expect(trackMock).toHaveBeenLastCalledWith(ADMIN_LOOKUP_EVENTS.SEARCHED, {
       result_count: 2,
@@ -59,6 +90,7 @@ describe('LookupAnalytics', () => {
         typeFilter="all"
         resultCount={1}
         opened={null}
+        tabSelected={null}
       />
     );
     const [, payload] = trackMock.mock.calls[0] ?? [];
@@ -72,6 +104,7 @@ describe('LookupAnalytics', () => {
         typeFilter="all"
         resultCount={0}
         opened={{ entityType: 'user', via: 'search', seq: 1 }}
+        tabSelected={null}
       />
     );
     expect(trackMock).toHaveBeenCalledWith(ADMIN_LOOKUP_EVENTS.OPENED, {
@@ -86,6 +119,7 @@ describe('LookupAnalytics', () => {
         typeFilter="all"
         resultCount={0}
         opened={{ entityType: 'user', via: 'search', seq: 1 }}
+        tabSelected={null}
       />
     );
     expect(trackMock).not.toHaveBeenCalled();
@@ -96,6 +130,7 @@ describe('LookupAnalytics', () => {
         typeFilter="all"
         resultCount={0}
         opened={{ entityType: 'company', via: 'recent', seq: 2 }}
+        tabSelected={null}
       />
     );
     expect(trackMock).toHaveBeenCalledWith(ADMIN_LOOKUP_EVENTS.OPENED, {
@@ -104,9 +139,42 @@ describe('LookupAnalytics', () => {
     });
   });
 
+  it('fires TAB_SELECTED once per tabSelected seq, never on the default render', () => {
+    const { rerender } = render(
+      <LookupAnalytics query="" typeFilter="all" resultCount={0} opened={null} tabSelected={null} />
+    );
+    expect(trackMock).not.toHaveBeenCalled();
+
+    rerender(
+      <LookupAnalytics
+        query=""
+        typeFilter="all"
+        resultCount={0}
+        opened={null}
+        tabSelected={{ tab: 'money', entityType: 'credit_session', seq: 1 }}
+      />
+    );
+    expect(trackMock).toHaveBeenCalledWith(ADMIN_LOOKUP_EVENTS.TAB_SELECTED, {
+      entity_type: 'credit_session',
+      tab: 'money',
+    });
+
+    trackMock.mockClear();
+    rerender(
+      <LookupAnalytics
+        query=""
+        typeFilter="all"
+        resultCount={0}
+        opened={null}
+        tabSelected={{ tab: 'money', entityType: 'credit_session', seq: 1 }}
+      />
+    );
+    expect(trackMock).not.toHaveBeenCalled();
+  });
+
   it('renders nothing', () => {
     const { container } = render(
-      <LookupAnalytics query="" typeFilter="all" resultCount={0} opened={null} />
+      <LookupAnalytics query="" typeFilter="all" resultCount={0} opened={null} tabSelected={null} />
     );
     expect(container).toBeEmptyDOMElement();
   });

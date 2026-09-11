@@ -17,7 +17,12 @@ import { LookupSearchBox } from './lookup-search-box';
 import { LookupTypeChips } from './lookup-type-chips';
 import { LookupResultsList } from './lookup-results-list';
 import { LookupDrillIn } from './lookup-drill-in';
-import { LookupAnalytics, type LookupOpenedSelection } from './lookup-analytics';
+import type { LookupDrillInTab } from './lookup-drill-in-tabs';
+import {
+  LookupAnalytics,
+  type LookupOpenedSelection,
+  type LookupTabSelected,
+} from './lookup-analytics';
 
 /**
  * BAL-551 — the Lookup shell. Owns chip filter, selection and Recent state; composes the
@@ -68,6 +73,7 @@ export function LookupShell({
   const [selection, setSelection] = useState<LookupSelection | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [opened, setOpened] = useState<LookupOpenedSelection | null>(null);
+  const [tabSelected, setTabSelected] = useState<LookupTabSelected | null>(null);
   const seqRef = useRef(0);
   const previousQueryRef = useRef(query);
   const { recent, remember } = useRecentLookups();
@@ -100,9 +106,19 @@ export function LookupShell({
 
   function selectRecent(entry: RecentLookupEntry): void {
     setSelection(selectionFromRecent(entry));
-    remember({ ...entry, publicExpertUsername: null });
+    remember({
+      ...entry,
+      publicExpertUsername: null,
+      engagementType: entry.engagementType ?? null,
+    });
     seqRef.current += 1;
     setOpened({ entityType: entry.type, via: 'recent', seq: seqRef.current });
+  }
+
+  function selectTab(tab: LookupDrillInTab): void {
+    if (selection === null) return;
+    seqRef.current += 1;
+    setTabSelected({ tab, entityType: selection.type, seq: seqRef.current });
   }
 
   return (
@@ -145,7 +161,9 @@ export function LookupShell({
             onSelectRecent={selectRecent}
             onShowAllTypes={() => setFilter('all')}
           />
-          {selection !== null && <LookupDrillIn selection={selection} />}
+          {selection !== null && (
+            <LookupDrillIn key={selection.key} selection={selection} onTabSelect={selectTab} />
+          )}
         </div>
       </div>
 
@@ -154,6 +172,7 @@ export function LookupShell({
         typeFilter={filter}
         resultCount={filtered.length}
         opened={opened}
+        tabSelected={tabSelected}
       />
     </div>
   );

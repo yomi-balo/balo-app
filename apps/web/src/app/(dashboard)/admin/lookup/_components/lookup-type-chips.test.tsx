@@ -3,19 +3,20 @@ import { render, screen, within } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { LookupTypeChips } from './lookup-type-chips';
 
-const COUNTS = { all: 6, people: 2, orgs: 2, sessions: 1, requests: 1 };
+const COUNTS = { all: 7, people: 2, orgs: 2, sessions: 1, requests: 1, engagements: 1 };
 
 describe('LookupTypeChips', () => {
-  it('renders five chips in order with live counts', () => {
+  it('renders six chips in order with live counts', () => {
     render(<LookupTypeChips filter="all" counts={COUNTS} onSelect={vi.fn()} />);
     const group = screen.getByRole('group', { name: /filter results by type/i });
     const buttons = within(group).getAllByRole('button');
     expect(buttons.map((b) => b.textContent)).toEqual([
-      'All6',
+      'All7',
       'People2',
       'Companies & agencies2',
       'Sessions1',
       'Requests1',
+      'Engagements1',
     ]);
   });
 

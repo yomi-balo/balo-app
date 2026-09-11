@@ -18,4 +18,22 @@ export {
   type LookupSearchResult,
 } from './types';
 export { isLookupUuid } from './uuid';
-export { LOOKUP_RESULT_CAP, LOOKUP_ARM_LIMIT, LOOKUP_MIN_QUERY_LENGTH } from './constants';
+export {
+  LOOKUP_RESULT_CAP,
+  LOOKUP_ARM_LIMIT,
+  LOOKUP_MIN_QUERY_LENGTH,
+  LOOKUP_TIMELINE_PAGE_SIZE,
+} from './constants';
+// ⚠ BAL-555 fix round F9 — `AUDIT_ACTION_SENTENCES` and `humanizeActionTail` are deliberately
+// NOT re-exported here (plan §3.4's stated barrel surface): nothing outside `./timeline` and
+// its own unit test imports either, so the barrel stays scoped to what a Timeline consumer
+// actually needs.
+export {
+  LOOKUP_AUDIT_ENTITY_TYPE,
+  auditActorLabel,
+  describeAuditEvent,
+  type AuditActorFacts,
+  type LookupTimelineEntry,
+  type LookupTimelineCursorDTO,
+  type LookupTimelineResult,
+} from './timeline';
