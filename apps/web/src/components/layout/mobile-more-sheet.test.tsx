@@ -175,12 +175,13 @@ describe('MobileMoreSheet (BAL-501)', () => {
     });
   });
 
-  it('BAL-534: the four admin rows appear for a staff context, after the member rows, in registry order', () => {
+  it('BAL-534/BAL-548/BAL-551: the five admin rows appear for a staff context, after the member rows, in registry order', () => {
     renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: false, isStaff: true }));
     expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual([
       '/projects',
       '/settings',
       '/settings/account',
+      '/admin',
       '/engagements',
       '/promo-codes',
       '/admin/catalogue',
@@ -194,6 +195,24 @@ describe('MobileMoreSheet (BAL-501)', () => {
     expect(hrefs).not.toContain('/admin/catalogue');
     expect(hrefs).not.toContain('/admin/lookup');
     expect(hrefs).not.toContain('/promo-codes');
+    expect(hrefs).not.toContain('/admin');
+  });
+
+  it('BAL-548: the admin rows render under a "Balo admin" label, in registry order', () => {
+    renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: false, isStaff: true }));
+    const group = screen.getByTestId('more-sheet-admin-group');
+    expect(within(group).getByText('Balo admin')).toBeInTheDocument();
+    expect(
+      within(group)
+        .getAllByRole('link')
+        .map((l) => l.getAttribute('href'))
+    ).toEqual(['/admin', '/engagements', '/promo-codes', '/admin/catalogue', '/admin/lookup']);
+  });
+
+  it('BAL-548: the "Balo admin" group is absent for a non-staff context', () => {
+    renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: true }));
+    expect(screen.queryByTestId('more-sheet-admin-group')).not.toBeInTheDocument();
+    expect(screen.queryByText('Balo admin')).not.toBeInTheDocument();
   });
 
   describe('Workspace section', () => {

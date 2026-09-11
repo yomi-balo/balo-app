@@ -102,6 +102,7 @@ import { assertMeetingJoinable } from './meeting-liveness.js';
 import { canonicalEmail } from './guest-participation.js';
 import { resolveMeetingContextLabel } from './resolve-meeting-context-label.js';
 import { resolveWaitingCounterparty } from './resolve-waiting-counterparty.js';
+import { raiseAdminAlert } from '../admin-alerts/raise.js';
 
 const log = createLogger('join-meeting');
 
@@ -410,6 +411,29 @@ async function reportSessionOpenRefused(
     wallet_id: walletId,
     reason,
     distinct_id: companyId,
+  });
+
+  // BAL-548 / ADR-1055 — ADDITIVE to the log.error / Sentry / trackServer calls above, never a
+  // replacement. `entity_id` is the MEETING, not a session — there IS no session row, that is
+  // the whole point of the refusal, so the meeting is the only real id in hand; company and
+  // wallet ride in `facts`. Best-effort: `raiseAdminAlert` swallows its own failure, matching
+  // this whole function's "an alarm about a refusal must never itself risk failing the join"
+  // posture.
+  await raiseAdminAlert({
+    kind: 'session.open_refused',
+    entityType: 'meeting',
+    entityId: meetingId,
+    detail: {
+      title: 'Credit session refused at admission',
+      entityLabel: `Meeting ${meetingId}`,
+      evidence: message,
+      facts: [
+        ['Meeting', meetingId],
+        ['Company', companyId],
+        ['Wallet', walletId ?? 'unknown'],
+        ['Reason', reason],
+      ],
+    },
   });
 }
 

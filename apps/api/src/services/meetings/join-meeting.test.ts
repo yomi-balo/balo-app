@@ -21,6 +21,7 @@ const {
   mockFindWalletByCompanyId,
   mockCaptureException,
   mockConnectSessionAsSystem,
+  mockRaiseAdminAlert,
 } = vi.hoisted(() => ({
   mockMeetingFindById: vi.fn(),
   mockListByMeeting: vi.fn(),
@@ -45,6 +46,8 @@ const {
   mockCaptureException: vi.fn(),
   /** G3 (second review round) — the guest-first co-presence connect fallback. */
   mockConnectSessionAsSystem: vi.fn(),
+  /** BAL-548 — the `session.open_refused` raise, additive to the alarm above. */
+  mockRaiseAdminAlert: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -93,6 +96,7 @@ vi.mock('@balo/db', () => ({
   creditWalletsRepository: { findByCompanyId: mockFindWalletByCompanyId },
 }));
 vi.mock('@sentry/node', () => ({ captureException: mockCaptureException }));
+vi.mock('../admin-alerts/raise.js', () => ({ raiseAdminAlert: mockRaiseAdminAlert }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer: mockTrackServer,
   GUEST_SERVER_EVENTS: {
@@ -611,6 +615,15 @@ describe('joinMeetingAsMember — BAL-466, the credit session open', () => {
         reason: 'wallet_busy',
         distinct_id: COMPANY_ID,
       });
+      // BAL-548 / ADR-1055 — raises `session.open_refused`, ADDITIVE to the calls above.
+      expect(mockRaiseAdminAlert).toHaveBeenCalledTimes(1);
+      expect(mockRaiseAdminAlert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'session.open_refused',
+          entityType: 'meeting',
+          entityId: MEETING_ID,
+        })
+      );
     });
 
     it('shape B — a failed diagnostic wallet lookup degrades to wallet_id: null, never throws', async () => {

@@ -31,6 +31,8 @@ export type {
   ProfileSettingsData,
   PublicExpertProfile,
   ProfileStepWrite,
+  // BAL-548 — the `expert.application_pending` finder's projected row.
+  PendingApplicationAlertRow,
 } from './experts';
 /**
  * BAL-414 — the ONLY reader of the six checklist inputs and the ONLY writer of
@@ -71,7 +73,12 @@ export {
 } from './scheduled-notifications';
 export { userNotificationsRepository } from './user-notifications';
 export { calendarRepository } from './calendar';
-export type { UpsertApirocConnectionInput, BusyReadTarget } from './calendar';
+export type {
+  UpsertApirocConnectionInput,
+  BusyReadTarget,
+  // BAL-548 — the batch identity hydration behind the `calendar.subscription_lapse` alert.
+  ConnectionAlertLabel,
+} from './calendar';
 export type { CalendarConnection, CalendarCredentialStatus, CalendarSubCalendar } from '../schema';
 export { CALENDAR_CREDENTIAL_STATUSES } from '../schema';
 // ── Apiroc webhook subscriptions (BAL-468) — the ONLY access path to that table ──────────
@@ -234,7 +241,13 @@ export {
 } from './action-items';
 export type { ActionItem, NewActionItem } from '../schema';
 // ── Transcript pipeline (BAL-387 / ADR-1013 + ADR-1043) ────────────────────
-export { transcriptsRepository, type InsertRawTranscriptInput } from './transcripts';
+export {
+  transcriptsRepository,
+  type InsertRawTranscriptInput,
+  // BAL-548 — the `transcript.failed` finder's projected row. `TranscriptStatusRef` /
+  // `TranscriptMeetingStatusRef` are deliberately NOT re-exported; this one must be.
+  type FailedTranscriptAlertRow,
+} from './transcripts';
 export {
   transcriptArtifactsRepository,
   type UpsertTranscriptArtifactInput,
@@ -412,6 +425,8 @@ export {
   creditReceivablesRepository,
   type OpenReceivableInput,
   type OpenReceivableResult,
+  // BAL-548 — the `receivable.open` finder's projected row (NOT the dunning read).
+  type OpenReceivableAlertRow,
 } from './credit-receivables';
 export { fxDisplayRatesRepository } from './fx-display-rates';
 export { deriveIdempotencyKey, type IdempotencyKeyInput } from './_shared/credit-idempotency';
@@ -652,6 +667,10 @@ export {
   type MarkRecordingFailedInput,
   type MarkRecordingSourceDeletedInput,
   type FindMeetingRecordingInput,
+  // BAL-548 — the two capture-side finder rows. `transcript_capture.withheld_source` lives
+  // HERE, not on `transcriptsRepository`: the condition is a `meeting_recordings` predicate.
+  type FailedRecordingAlertRow,
+  type WithheldSourceAlertRow,
 } from './meeting-recordings';
 /**
  * The judgement-free "who owns this meeting context" READ (BAL-423). Exported because BOTH
@@ -767,3 +786,18 @@ export {
   LOOKUP_MIN_QUERY_LENGTH,
   type PlatformLookupSearchInput,
 } from './platform-lookup';
+// ── Pending-actions queue (BAL-548 / ADR-1055) — the ONLY access path to `admin_alerts` ────
+// ⚠ READS NEVER WRITE. Nothing outside `reconcileKind` (the sweep) and `close` (a person with
+// a note) may resolve a row; no approve / pay / repair path may clear one as a side effect.
+export {
+  adminAlertsRepository,
+  adminSweepTicksRepository,
+  type AdminAlertFinding,
+  type RaiseAdminAlertInput,
+  type ReconcileKindInput,
+  type ReconcileKindResult,
+  type CloseAdminAlertInput,
+  type CloseAdminAlertOutcome,
+  type AdminAlertKindCount,
+} from './admin-alerts';
+export type { AdminAlert, NewAdminAlert, AdminSweepTick, NewAdminSweepTick } from '../schema';

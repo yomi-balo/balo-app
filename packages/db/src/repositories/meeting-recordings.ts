@@ -1,6 +1,6 @@
-import { and, asc, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { meetingRecordings } from '../schema';
+import { meetingRecordings, meetings } from '../schema';
 import type { MeetingRecording } from '../schema';
 import type { DbExecutor } from './_shared/db-executor';
 
@@ -99,6 +99,40 @@ export interface MarkRecordingFailedInput {
    * held, and the reaper's fall-through insert loses the partial unique index cleanly.
    */
   onlyIfUnacknowledged?: boolean;
+}
+
+/**
+ * BAL-548 / ADR-1055 — one failed segment, projected for the pending-actions queue. See
+ * {@link meetingRecordingsRepository.listFailedSince}.
+ *
+ * ⚠ `meetingScheduledStart`, NOT a meeting title — `meetings` HAS NO `title` COLUMN. The
+ * finder words the row's label from the time and whatever context it already holds.
+ */
+export interface FailedRecordingAlertRow {
+  recordingId: string;
+  meetingId: string;
+  meetingScheduledStart: Date;
+  failedStage: string | null;
+  failureReason: string | null;
+  dailyRecordingId: string | null;
+  muxAssetId: string | null;
+  createdAt: Date;
+  captureEndedAt: Date | null;
+}
+
+/**
+ * BAL-548 / ADR-1055 (R6) — one segment whose batch-processor job never answered, projected
+ * for the pending-actions queue. See
+ * {@link meetingRecordingsRepository.listWithheldTranscriptSourceSince}.
+ */
+export interface WithheldSourceAlertRow {
+  recordingId: string;
+  meetingId: string;
+  meetingScheduledStart: Date;
+  transcriptJobId: string | null;
+  transcriptJobSubmittedAt: Date;
+  dailyRecordingId: string | null;
+  readyAt: Date | null;
 }
 
 /** {@link meetingRecordingsRepository.markSourceDeleted} — T10, from `recording-cleanup-source`. */
@@ -984,5 +1018,124 @@ export const meetingRecordingsRepository = {
       .where(and(eq(meetingRecordings.id, input.id), isNull(meetingRecordings.deletedAt)))
       .returning();
     return row;
+  },
+
+  /**
+   * BAL-548 / ADR-1055 — the `recording.failed` finder read: segments that FAILED and were
+   * created at or before `failedBefore`, OLDEST FIRST.
+   *
+   * ⚠ IT CARRIES `status = 'failed'` **AND** `failed_stage IS NOT NULL`, AND BOTH TERMS STAY.
+   * The index (`meeting_recording_failed_idx`) is columns-only — this table's own house rule
+   * (see the `capture_ended_at` docblock in `schema/meeting-recordings.ts`) — so its predicate
+   * is `failed_stage IS NOT NULL` alone. Today {@link meetingRecordingsRepository.markFailed}
+   * is the only writer of `failed_stage` and always sets `status = 'failed'` with it, so the
+   * two agree; the explicit status term is what keeps them agreeing if a future writer ever
+   * stamps a stage WITHOUT failing the row — which is exactly the shape `transcripts` already
+   * has (`recordStageSkip`). Do not "simplify" it onto the index predicate.
+   *
+   * ⚠ `created_at` IS THE AGE ANCHOR, NOT THE FAILURE INSTANT. There is no `failed_at` column;
+   * `capture_ended_at` is the closest thing and it is COALESCED on a T5 failure (so it can
+   * predate the failure), while `updated_at` moves on every unrelated write. `created_at` is
+   * stable, indexed, and is what "this segment has been broken since…" actually means to a
+   * responder — the recording was minted when the call started.
+   *
+   * ⚠ `limit` IS A BATCH BOUND THE CALLER MUST WARN ABOUT WHEN IT FILLS. No silent caps.
+   *
+   * ⚠ THE MEETING JOIN IS INNER, WITH `meetings.deleted_at IS NULL` IN THE JOIN CONDITION. A
+   * failed recording of a soft-deleted meeting is not work anybody can do, and there is no
+   * `meetings.title` to project — the finder words the row from `scheduledStart`.
+   */
+  async listFailedSince(failedBefore: Date, limit: number): Promise<FailedRecordingAlertRow[]> {
+    return db
+      .select({
+        recordingId: meetingRecordings.id,
+        meetingId: meetingRecordings.meetingId,
+        meetingScheduledStart: meetings.scheduledStart,
+        failedStage: meetingRecordings.failedStage,
+        failureReason: meetingRecordings.failureReason,
+        dailyRecordingId: meetingRecordings.dailyRecordingId,
+        muxAssetId: meetingRecordings.muxAssetId,
+        createdAt: meetingRecordings.createdAt,
+        captureEndedAt: meetingRecordings.captureEndedAt,
+      })
+      .from(meetingRecordings)
+      .innerJoin(
+        meetings,
+        and(eq(meetings.id, meetingRecordings.meetingId), isNull(meetings.deletedAt))
+      )
+      .where(
+        and(
+          eq(meetingRecordings.status, 'failed'),
+          isNotNull(meetingRecordings.failedStage),
+          isNull(meetingRecordings.deletedAt),
+          lte(meetingRecordings.createdAt, failedBefore)
+        )
+      )
+      .orderBy(asc(meetingRecordings.createdAt), asc(meetingRecordings.id))
+      .limit(limit);
+  },
+
+  /**
+   * BAL-548 / ADR-1055 (R6) — the `transcript_capture.withheld_source` finder read: segments
+   * whose batch-processor job was SUBMITTED at or before `submittedBefore` and has never
+   * answered, OLDEST SUBMISSION FIRST.
+   *
+   * ⚠⚠ DESPITE THE KIND'S NAME, THIS IS A `meeting_recordings` PREDICATE, NOT A `transcripts`
+   * ONE, AND IT MUST NOT BE MOVED TO `transcriptsRepository`. The two columns it reads
+   * (`transcript_job_submitted_at`, `transcript_job_finished_at`) exist ONLY on this table, and
+   * before BAL-548 they appeared in this repository exclusively inside the CAS `WHERE` clauses
+   * of the four `markTranscriptJob*` WRITERS — there was no read of them at all. The condition
+   * itself existed only as a transient `log.info` in
+   * `apps/api/src/jobs/recording-cleanup-source.ts`.
+   *
+   * ⚠ WHY IT MATTERS: this window is exactly the one in which `recording-cleanup-source`
+   * WITHHOLDS the Daily source delete, because the batch processor is still downloading it. A
+   * job that never answers therefore pins the vendor source indefinitely AND loses the
+   * transcript — two costs, neither visible without this read.
+   *
+   * ⚠ THE SWEEP PASSES A GENEROUS CUTOFF (now − 24h). A batch job that answers in minutes must
+   * not raise a row; the alert is about jobs that have gone silent, not slow ones.
+   *
+   * ⚠ `limit` IS A BATCH BOUND THE CALLER MUST WARN ABOUT WHEN IT FILLS. No silent caps.
+   *
+   * Rides `meeting_recording_withheld_source_idx` — columns-only, by construction.
+   */
+  async listWithheldTranscriptSourceSince(
+    submittedBefore: Date,
+    limit: number
+  ): Promise<WithheldSourceAlertRow[]> {
+    const rows = await db
+      .select({
+        recordingId: meetingRecordings.id,
+        meetingId: meetingRecordings.meetingId,
+        meetingScheduledStart: meetings.scheduledStart,
+        transcriptJobId: meetingRecordings.transcriptJobId,
+        transcriptJobSubmittedAt: meetingRecordings.transcriptJobSubmittedAt,
+        dailyRecordingId: meetingRecordings.dailyRecordingId,
+        readyAt: meetingRecordings.readyAt,
+      })
+      .from(meetingRecordings)
+      .innerJoin(
+        meetings,
+        and(eq(meetings.id, meetingRecordings.meetingId), isNull(meetings.deletedAt))
+      )
+      .where(
+        and(
+          isNotNull(meetingRecordings.transcriptJobSubmittedAt),
+          isNull(meetingRecordings.transcriptJobFinishedAt),
+          isNull(meetingRecordings.deletedAt),
+          lte(meetingRecordings.transcriptJobSubmittedAt, submittedBefore)
+        )
+      )
+      .orderBy(asc(meetingRecordings.transcriptJobSubmittedAt), asc(meetingRecordings.id))
+      .limit(limit);
+
+    // `transcript_job_submitted_at` is nullable on the column but NOT NULL in this result set
+    // (the `isNotNull` term above). Narrowed by destructure + guard, never by `!` — the
+    // `noUncheckedIndexedAccess` house rule applied to a nullable projection.
+    return rows.flatMap((row) => {
+      const { transcriptJobSubmittedAt } = row;
+      return transcriptJobSubmittedAt === null ? [] : [{ ...row, transcriptJobSubmittedAt }];
+    });
   },
 };

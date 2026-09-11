@@ -145,6 +145,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('the admin section resolves for a staff context in BOTH workspace types, and for nobody else', () => {
     for (const context of [COMPANY_STAFF, EXPERT_STAFF]) {
       expect(resolveNavItems(context, 'admin').map((e) => e.key)).toEqual([
+        'admin_home',
         'admin_engagements',
         'admin_promo_codes',
         'admin_catalogue',
@@ -159,7 +160,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('the two capability axes gate independently: staff-without-manage sees admin and NOT Team; owner-without-staff sees Team and NOT admin', () => {
     // A super_admin who is a plain member of a personal company (expert workspace, where `team`
     // lives after BAL-503).
-    expect(resolveNavItems(EXPERT_STAFF, 'admin')).toHaveLength(4);
+    expect(resolveNavItems(EXPERT_STAFF, 'admin')).toHaveLength(5);
     expect(resolveNavItems(EXPERT_STAFF, 'secondary').map((e) => e.key)).not.toContain('team');
     // A company/agency owner who is not Balo staff.
     expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('team');
@@ -170,12 +171,12 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
       capabilities: [CAPABILITIES.MANAGE_MEMBERS, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
     };
     expect(resolveNavItems(both, 'secondary').map((e) => e.key)).toContain('team');
-    expect(resolveNavItems(both, 'admin')).toHaveLength(4);
+    expect(resolveNavItems(both, 'admin')).toHaveLength(5);
   });
 
   it('every admin entry is mobilePriority "more", scoped to both workspace types, and carries no badge or jumpOut', () => {
     const admin = NAV_ENTRIES.filter((e) => e.section === 'admin');
-    expect(admin).toHaveLength(4);
+    expect(admin).toHaveLength(5);
     for (const entry of admin) {
       expect(entry.mobilePriority).toBe('more');
       expect([...entry.workspaceTypes].sort()).toEqual(['company', 'expert']);
@@ -198,6 +199,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('find_experts')?.href).toBe('/experts');
     expect(byKey.get('calendar')?.href).toBe('/expert/calendar');
     expect(byKey.get('help')?.href).toBeNull();
+    expect(byKey.get('admin_home')?.href).toBe('/admin');
     expect(byKey.get('admin_engagements')?.href).toBe('/engagements');
     expect(byKey.get('admin_promo_codes')?.href).toBe('/promo-codes');
     expect(byKey.get('admin_catalogue')?.href).toBe('/admin/catalogue');
@@ -232,9 +234,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 15 declared entries, 14 enabled', () => {
-    expect(NAV_ENTRIES).toHaveLength(15);
-    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(14);
+  it('non-vacuity: 16 declared entries, 15 enabled', () => {
+    expect(NAV_ENTRIES).toHaveLength(16);
+    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(15);
   });
 
   it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
@@ -364,6 +366,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'projects',
       'settings',
       'account',
+      'admin_home',
       'admin_engagements',
       'admin_promo_codes',
       'admin_catalogue',
@@ -373,6 +376,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'projects',
       'expert_settings',
       'account',
+      'admin_home',
       'admin_engagements',
       'admin_promo_codes',
       'admin_catalogue',
@@ -408,10 +412,11 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
  * BAL-499 — the executable form of the Q1 decision: what every `(dashboard)` route's
  * breadcrumb trail resolves to. BAL-534 moved `/engagements` and `/promo-codes` into the exact
  * registry block (they are now enabled `admin`-section registry hrefs) and added
- * `/admin/catalogue`; BAL-551 added `/admin/lookup`: **11** exact registry hrefs, **5**
- * supplemental list routes, **8** entity
- * routes each resolving to ONLY their parent (the entity's own crumb is published separately by
- * `EntityCrumb`). `/engagements/:id` parents to Projects because its list is admin-only (BAL-533).
+ * `/admin/catalogue`; BAL-551 added `/admin/lookup` and BAL-548 added `/admin` (the `admin_home`
+ * entry): every enabled registry href gets an exact-match case below, plus a fixed set of
+ * supplemental list routes and entity routes each resolving to ONLY their parent (the entity's
+ * own crumb is published separately by `EntityCrumb`). `/engagements/:id` parents to Projects
+ * because its list is admin-only (BAL-533).
  */
 describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it.each([
@@ -431,6 +436,8 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/promo-codes', [{ label: 'Promo codes', href: null }]],
     ['/admin/catalogue', [{ label: 'Config & catalogue', href: null }]],
     ['/admin/lookup', [{ label: 'Lookup', href: null }]],
+    // BAL-548 — the admin Home page's own registry entry.
+    ['/admin', [{ label: 'Home', href: null }]],
     // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
     ['/billing/top-up', [{ label: 'Top up', href: null }]],
     ['/redeem', [{ label: 'Redeem a code', href: null }]],
@@ -504,6 +511,7 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/promo-codes',
       '/admin/catalogue',
       '/admin/lookup',
+      '/admin',
       '/billing/top-up',
       '/redeem',
       '/settings',

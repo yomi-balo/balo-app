@@ -71,9 +71,29 @@ export const creditReceivables = pgTable(
     index('credit_receivables_company_open_idx')
       .on(t.companyId)
       .where(sql`${t.status} = 'open' AND ${t.deletedAt} IS NULL`),
+    /**
+     * BAL-548 / ADR-1055 — the `receivable.open` finder's index. The same partial space as
+     * `credit_receivables_company_open_idx` above (and the same permitted `status = 'open'`
+     * literal — an ORIGINAL label of `credit_receivable_status`, migration 0048), but keyed
+     * on `opened_at`, because the alert read is PLATFORM-WIDE and oldest-first rather than
+     * scoped to one company. The company-scoped index cannot serve it: it neither orders nor
+     * bounds.
+     */
+    index('credit_receivables_open_queue_idx')
+      .on(t.openedAt)
+      .where(sql`${t.status} = 'open' AND ${t.deletedAt} IS NULL`),
     // At most one (non-deleted) receivable per session — idempotent `open`. Partial on
     // `deleted_at IS NULL` avoids the soft-delete non-partial-unique recreate footgun
     // (memory `reference_softdelete_nonpartial_unique_recreate`).
+    //
+    // ⚠⚠ ORDERING IS LOAD-BEARING — KEEP THIS UNIQUE LAST AMONG THE INDEXES, AND KEEP EVERY
+    // `status`-NAMING INDEX ABOVE IT. Its status-blindness is fenced by
+    // `invariants/an-account-hold-outlives-only-an-unpaid-balance.test.ts`, which scans from
+    // this index's NAME to the next `;`. A `pgTable` index array contains NO semicolons, so
+    // that window actually runs to the END of the table definition — meaning any LATER index
+    // naming `status` trips the guard as a false positive even though this unique is
+    // untouched. BAL-548 hit exactly that by first appending its index below this one. The
+    // guard is coarser than its comment claims; this ordering is what keeps it honest.
     uniqueIndex('credit_receivables_session_uidx')
       .on(t.sessionId)
       .where(sql`${t.deletedAt} IS NULL`),

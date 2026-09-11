@@ -166,6 +166,27 @@ export const expertProfiles = pgTable(
     // "experts by agency" / payout-entity lookups. `agencyId` is set by
     // expertsRepository.linkAgency for all three agency-resolution outcomes.
     agencyIdx: index('expert_profiles_agency_id_idx').on(table.agencyId),
+    /**
+     * BAL-548 / ADR-1055 — the `expert.application_pending` finder's index. Applications
+     * awaiting a decision, OLDEST SUBMISSION FIRST, which is exactly the read
+     * `expertsRepository.listPendingApplicationsForAlerts` runs once a minute. Without it
+     * that read is a platform-wide sequential scan on a per-MINUTE cron.
+     *
+     * ⚠ THE PREDICATE NAMES ENUM LITERALS, AND THAT IS PERMITTED HERE. The house rule
+     * ("index predicates reference columns only") exists because `ALTER TYPE … ADD VALUE`
+     * cannot be used in the same migration transaction that adds the label. `'submitted'`
+     * and `'under_review'` both shipped in the ORIGINAL `CREATE TYPE application_status`
+     * (migration 0000), so neither is a just-added label. In-repo precedent for exactly
+     * this: `credit_receivables_company_open_idx`, which names `status = 'open'` and says so.
+     *
+     * ⚠ NO `deleted_at IS NULL` CLAUSE — `expert_profiles` HAS NO `deleted_at` COLUMN (it
+     * spreads `...timestamps` only, never `...softDelete`). The four sibling indexes BAL-548
+     * adds all carry that clause; this one cannot, and its absence is the table's shape, not
+     * an omission. Do not "make it consistent" by adding a soft-delete column for it.
+     */
+    pendingApplicationIdx: index('expert_profiles_pending_application_idx')
+      .on(table.submittedAt)
+      .where(sql`${table.applicationStatus} IN ('submitted', 'under_review')`),
     // Booking-rule bounds (BAL-234) — mirrored by Zod in the schedule route/action.
     bookingBufferBeforeCheck: check(
       'expert_profiles_booking_buffer_before_check',

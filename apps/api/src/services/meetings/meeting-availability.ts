@@ -23,6 +23,8 @@ import { enqueueMeetingCalendarAmend } from '../../jobs/meeting-calendar-amend.j
 import { notificationEvents } from '../../notifications/index.js';
 import { dailyRoomTeardown } from '../daily/rooms.js';
 import { formatExpiryDate, resolveMeetingTitle } from './guest-participation.js';
+import { raiseAdminAlert } from '../admin-alerts/raise.js';
+import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
 
 /**
  * BAL-428 — THE MEETING-MUTATION SEAM: every write that can move an expert's
@@ -305,11 +307,31 @@ export async function rescheduleMeeting(
       meetingId,
       result.expertProfileId,
       result.rescheduleAuditId
-    ).catch((error: unknown) => {
-      log.error(
-        { meetingId, error: error instanceof Error ? error.message : String(error) },
-        'Failed to enqueue meeting-calendar-amend job'
-      );
+    ).catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error({ meetingId, error: message }, 'Failed to enqueue meeting-calendar-amend job');
+      // BAL-548 / ADR-1055 (R7) — ADDITIVE to the log.error above, never a replacement. THE
+      // ENQUEUE CATCH ONLY: `meeting-calendar-amend.ts`'s `handleAmendError` terminal path is
+      // deliberately NOT a second raise site — the XOR invariant forbids two, and that residual
+      // is ADR-1021's amendment territory for a future slice. Best-effort: `raiseAdminAlert`
+      // swallows its own failure so a queue-write problem can never block this reschedule.
+      // A-F5 — PERSISTED text (admin_alerts.detail), unlike the log.error above: never the raw
+      // error, which may itself wrap a vendor body (the `sanitize-error.ts` doctrine).
+      await raiseAdminAlert({
+        kind: 'calendar.amend_failed',
+        entityType: 'meeting',
+        entityId: meetingId,
+        detail: {
+          title: 'Calendar amend could not be enqueued after a reschedule',
+          entityLabel: `Meeting ${meetingId}`,
+          evidence: `The retrying, converging Apiroc amend job failed to enqueue: ${sanitizedErrorMessage(error)}`,
+          facts: [
+            ['Meeting', meetingId],
+            ['Expert profile', result.expertProfileId ?? 'unknown'],
+            ['New start', result.meeting.scheduledStart.toISOString()],
+          ],
+        },
+      });
     });
   }
 

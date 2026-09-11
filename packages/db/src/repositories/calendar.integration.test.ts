@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../client';
-import { calendarConnections, type CalendarConnection } from '../schema';
-import { expertDraftFactory } from '../test/factories';
+import { calendarConnections, expertProfiles, type CalendarConnection } from '../schema';
+import { agencyFactory, expertDraftFactory } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { calendarRepository, type UpsertApirocConnectionInput } from './calendar';
 
@@ -1089,5 +1089,62 @@ describe('calendarRepository — per-provider writes', () => {
       (await calendarRepository.findConnectionByExpertAndProvider(expert.id, 'microsoft'))
         ?.lastSyncedAt
     ).toBeNull();
+  });
+});
+
+/**
+ * BAL-548 / ADR-1055 — the batch identity hydration behind the `calendar.subscription_lapse`
+ * alert. R5 forbids reshaping the three monitor arms, two of which return bare
+ * `calendar_subscriptions` rows with no expert identity, so this fills the gap by connection id.
+ */
+describe('calendarRepository.listConnectionAlertLabels', () => {
+  it('resolves each connection to its expert, and to the agency when there is one', async () => {
+    const agency = await agencyFactory();
+    const independentExpert = await expertDraftFactory();
+    const agencyExpert = await expertDraftFactory();
+    await db
+      .update(expertProfiles)
+      .set({ agencyId: agency.id })
+      .where(eq(expertProfiles.id, agencyExpert.id));
+
+    const independentConnection = await calendarRepository.upsertApirocConnection(
+      apirocInput(independentExpert.id, 'google')
+    );
+    const agencyConnection = await calendarRepository.upsertApirocConnection(
+      apirocInput(agencyExpert.id, 'microsoft')
+    );
+
+    const labels = await calendarRepository.listConnectionAlertLabels([
+      independentConnection.id,
+      agencyConnection.id,
+    ]);
+
+    expect(labels.size).toBe(2);
+    const independentLabel = labels.get(independentConnection.id);
+    expect(independentLabel?.expertProfileId).toBe(independentExpert.id);
+    expect(independentLabel?.provider).toBe('google');
+    // No agency is the SHAPE for an independent expert, not a missing row.
+    expect(independentLabel?.agencyName).toBeNull();
+    expect(independentLabel?.userFirstName).not.toBeNull();
+    expect(labels.get(agencyConnection.id)?.agencyName).toBe(agency.name);
+  });
+
+  it('omits a soft-deleted connection rather than throwing — a disconnect can race the sweep', async () => {
+    const expert = await expertDraftFactory();
+    const connection = await calendarRepository.upsertApirocConnection(
+      apirocInput(expert.id, 'google')
+    );
+    await db
+      .update(calendarConnections)
+      .set({ deletedAt: new Date() })
+      .where(eq(calendarConnections.id, connection.id));
+
+    const labels = await calendarRepository.listConnectionAlertLabels([connection.id]);
+
+    expect(labels.size).toBe(0);
+  });
+
+  it('answers an EMPTY input with an empty map and no query', async () => {
+    await expect(calendarRepository.listConnectionAlertLabels([])).resolves.toEqual(new Map());
   });
 });
