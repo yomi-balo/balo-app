@@ -120,6 +120,15 @@ export {
   type AdminAlertAgeBucket,
   type AdminAlertQueueFilter,
 } from './admin-alerts';
+// BAL-550 — the `/admin/health/capture` lens's CLIENT event family. A NEW file, same reason as
+// `./admin-alerts`.
+export {
+  ADMIN_CAPTURE_HEALTH_EVENTS,
+  type AdminCaptureHealthEventMap,
+  type CaptureHealthQueueFilter,
+  type AdminRedriveKind,
+  type AdminRedriveOutcome,
+} from './admin-capture-health';
 export {
   ONBOARDING_REMINDER_SERVER_EVENTS,
   type OnboardingReminderServerEventMap,

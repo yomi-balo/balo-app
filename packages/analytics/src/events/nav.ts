@@ -29,6 +29,9 @@ export const NAV_ITEM_KEYS = [
   'admin_promo_codes',
   'admin_catalogue',
   'admin_lookup',
+  // BAL-550 — the capture-health detail lens, after `admin_catalogue` per the design's
+  // `ADMIN_NAV` order.
+  'admin_health',
 ] as const;
 export type NavItemKey = (typeof NAV_ITEM_KEYS)[number];
 

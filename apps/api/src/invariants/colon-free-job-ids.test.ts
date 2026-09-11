@@ -77,6 +77,12 @@ const BLESSED_JOB_ID_BUILDERS = ['buildJobId(', 'recordingCleanupSourceJobId('] 
  *  · FIX ROUND 2 (G3) — a `jobId: string` / `jobId?: string` TYPE ANNOTATION on a function
  *    parameter, which mints nothing at all. See this file's module docblock for why this was
  *    added and what it makes no-longer-required (the `batchJobId` rename).
+ *  · BAL-550 — a READ-BACK of an id the enqueue already minted. `enqueueRecordingIngest` and
+ *    `enqueueTranscriptRecapResume` build their id via `buildJobId` INTERNALLY and return it, so
+ *    the admin re-drive service surfaces that id on its result and the route echoes it in the
+ *    200 body. Neither line mints anything; both name a variable that already holds a built id.
+ *    They are listed by their exact right-hand side rather than as a bare `jobId:` so a
+ *    hand-rolled template (`jobId: ` + a backtick string) still fails here.
  * Shape-based, not file-based, so a fifth channel adapter — or a fifth `jobId: string` parameter
  * — passes without an edit to this list.
  */
@@ -85,6 +91,8 @@ const NON_QUEUE_JOB_ID_SHAPES = [
   'jobId: job.id',
   'jobId: string',
   'jobId?: string',
+  'jobId: enqueuedJobId',
+  'jobId: outcome.jobId',
 ] as const;
 
 /**

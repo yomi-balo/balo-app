@@ -162,6 +162,18 @@ export const meetings = pgTable(
     index('meeting_status_scheduled_start_idx')
       .on(t.status, t.scheduledStart)
       .where(sql`${t.deletedAt} IS NULL`),
+    /**
+     * BAL-550 — THE CAPTURE-HEALTH WINDOW. `captureHealthRepository` ranges on
+     * `scheduled_start` with NO status term (a staff lens looks at every recorded
+     * consultation, whatever lifecycle state it ended in), and the index above cannot serve
+     * that: it LEADS with `status`, so a bare range on the second key is not an index scan.
+     *
+     * Partial on `deleted_at IS NULL`, matching every read on this table — and matching the
+     * index above, so the two stay comparable to the planner.
+     */
+    index('meeting_scheduled_start_idx')
+      .on(t.scheduledStart)
+      .where(sql`${t.deletedAt} IS NULL`),
     // A Daily room resolves to exactly ONE meeting — BAL-129/BAL-131 webhooks key on it.
     // PARTIAL on deleted_at (memory `reference_softdelete_nonpartial_unique_recreate`):
     // a soft-deleted meeting must not permanently occupy its room name.

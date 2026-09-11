@@ -21,6 +21,7 @@ import type { PartyJoinServerEventMap } from './events/party-join';
 import type { EngagementServerEventMap, EngagementEventMap } from './events/engagement';
 import type { AdminEngagementsEventMap } from './events/admin-engagements';
 import type { AdminAlertsEventMap } from './events/admin-alerts';
+import type { AdminCaptureHealthEventMap } from './events/admin-capture-health';
 import type { DomainJoinEventMap } from './events/domain-join';
 import type { ExpertAgencyEventMap } from './events/expert-agency';
 import type {
@@ -124,7 +125,11 @@ export type AllEvents = AuthEventMap &
   AdminAlertsEventMap &
   // BAL-549 — the admin expert-applications surface's CLIENT family. Both events are
   // browser-emitted; there is no server family.
-  AdminApplicationsEventMap;
+  AdminApplicationsEventMap &
+  // BAL-550 — the `/admin/health/capture` lens's CLIENT family. `CaptureHealthAnalytics` and
+  // `RedriveSheet` (apps/web) are the dispatch points; no server events (see the family's own
+  // header).
+  AdminCaptureHealthEventMap;
 
 export type EventName = keyof AllEvents;
 

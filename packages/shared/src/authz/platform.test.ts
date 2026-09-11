@@ -96,21 +96,30 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
    * ⚠ BAL-553 WIDENED THE DIFFERENCE, IT DID NOT REWRITE THE SHAPE. `IMPERSONATE_USER` is the
    * exact "a third role-differentiated token fails here loudly and has to be argued for" case
    * this test was written to force — ⟦R3⟧ is the argument. `super_admin` now holds the admin
-   * bundle plus BOTH `DELETE_ANY_INTERNAL_NOTE` and `IMPERSONATE_USER`, and nothing else.
+   * bundle plus `DELETE_ANY_INTERNAL_NOTE` and `IMPERSONATE_USER`, and nothing else.
+   *
+   * ⚠ BAL-550 WIDENED IT AGAIN, SAME SHAPE — `REDRIVE_JOB` is the fourth role-differentiated
+   * token, argued for in its own docblock (a re-drive spends real vendor budget and re-enters a
+   * pipeline that publishes to both parties).
    */
-  it('gives super_admin the admin bundle plus exactly DELETE_ANY_INTERNAL_NOTE and IMPERSONATE_USER, and omits user', () => {
+  it('gives super_admin the admin bundle plus exactly DELETE_ANY_INTERNAL_NOTE, IMPERSONATE_USER and REDRIVE_JOB, and omits user', () => {
     const admin = PLATFORM_ROLE_CAPABILITIES.admin ?? [];
     const superAdmin = PLATFORM_ROLE_CAPABILITIES.super_admin ?? [];
 
     // Containment: every admin token is a super_admin token.
     expect(superAdmin).toEqual(expect.arrayContaining([...admin]));
-    // The difference, in both directions, is exactly two tokens.
+    // The difference, in both directions, is exactly three tokens.
     expect(superAdmin.filter((c) => !admin.includes(c))).toEqual([
       PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE,
       PLATFORM_CAPABILITIES.IMPERSONATE_USER,
+      PLATFORM_CAPABILITIES.REDRIVE_JOB,
     ]);
     expect(admin.filter((c) => !superAdmin.includes(c))).toEqual([]);
     expect(PLATFORM_ROLE_CAPABILITIES.user).toBeUndefined();
+  });
+
+  it('admin does NOT hold REDRIVE_JOB', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).not.toContain(PLATFORM_CAPABILITIES.REDRIVE_JOB);
   });
 
   it('admin does NOT hold DELETE_ANY_INTERNAL_NOTE', () => {
@@ -258,6 +267,27 @@ describe('platformRoleHasCapability — IMPERSONATE_USER', () => {
 
   it('maps IMPERSONATE_USER to its snake_case token', () => {
     expect(PLATFORM_CAPABILITIES.IMPERSONATE_USER).toBe('impersonate_user');
+  });
+});
+
+/**
+ * BAL-550 — the capture-health re-drive token. Same shape as `DELETE_ANY_INTERNAL_NOTE` /
+ * `IMPERSONATE_USER`: `super_admin` ONLY, `admin` on the DENY side deliberately (D7).
+ */
+describe('platformRoleHasCapability — REDRIVE_JOB', () => {
+  it('grants REDRIVE_JOB to super_admin', () => {
+    expect(platformRoleHasCapability('super_admin', PLATFORM_CAPABILITIES.REDRIVE_JOB)).toBe(true);
+  });
+
+  it.each(['admin', 'user', '', 'owner', 'member', 'expert'])(
+    'denies REDRIVE_JOB to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.REDRIVE_JOB)).toBe(false);
+    }
+  );
+
+  it('maps REDRIVE_JOB to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.REDRIVE_JOB).toBe('redrive_job');
   });
 });
 

@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 
 describe('AdminSectionNav', () => {
-  it('renders all four chips with the expected hrefs and labels', () => {
+  it('renders all five chips with the expected hrefs and labels', () => {
     render(<AdminSectionNav />);
     const links = screen.getAllByRole('link');
     expect(links.map((l) => l.textContent?.trim())).toEqual([
@@ -22,12 +22,14 @@ describe('AdminSectionNav', () => {
       'Applications',
       'Lookup',
       'Config & catalogue',
+      'Capture health',
     ]);
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
       '/admin',
       '/admin/applications',
       '/admin/lookup',
       '/admin/catalogue',
+      '/admin/health/capture',
     ]);
   });
 

@@ -193,6 +193,10 @@ vi.mock('@/lib/analytics', async () => {
     // LINE every test whose module graph reaches the applications list/review islands throws on
     // an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
     ADMIN_APPLICATIONS_EVENTS: events.ADMIN_APPLICATIONS_EVENTS,
+    // BAL-550 — the `/admin/health/capture` lens's CLIENT event constant. ⚠ WITHOUT THIS LINE
+    // every test whose module graph reaches `CaptureHealthAnalytics` or `RedriveSheet` throws
+    // on an undefined constant (memory `reference_web_analytics_test_mock_export_list`).
+    ADMIN_CAPTURE_HEALTH_EVENTS: events.ADMIN_CAPTURE_HEALTH_EVENTS,
     initAnalytics: vi.fn(),
   };
 });

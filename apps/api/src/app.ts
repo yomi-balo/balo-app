@@ -13,6 +13,7 @@ import { creditRoutes } from './routes/credit/index.js';
 import { meetingsRoutes } from './routes/meetings/index.js';
 import { dailyRoutes } from './routes/daily/index.js';
 import { muxRoutes } from './routes/mux/index.js';
+import { adminRoutes } from './routes/admin/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
   // `trustProxy: 1` trusts exactly one proxy hop (the Railway edge), so
@@ -77,6 +78,9 @@ export async function buildApp(opts?: { logger?: boolean }) {
   // BAL-473 — the Mux ingest webhook (video.asset.ready / video.asset.errored). Own raw-body
   // scope, own rate-limit budget — nothing inherited from the Daily or Stripe plugins.
   await fastify.register(muxRoutes);
+  // BAL-550 — the admin re-drive route (REDRIVE_JOB, super_admin only). Its own plugin: the
+  // money-block admin route predates `routes/admin/` and is deliberately left where it is.
+  await fastify.register(adminRoutes);
 
   // Dev-only seed routes (BAL-239). Guarded dynamic import so the seed service
   // and @faker-js/faker never load in production.

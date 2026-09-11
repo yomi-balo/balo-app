@@ -56,3 +56,29 @@ export function parseBodyOr400<Schema extends z.ZodType>(
   }
   return parsed.data;
 }
+
+/**
+ * BAL-550 — the `parseBodyOr400` sibling for `request.params`. Same house shape (the
+ * `invalid_request` literal + Zod issue messages), extracted rather than hand-copied so the
+ * admin re-drive route (the first PARAMS-validated route in this file's family) does not become
+ * a second place to get the 400 body subtly wrong. See `parseBodyOr400`'s own docblock for why
+ * echoing `issue.message` is safe here too — it describes the SHAPE the caller sent, never a
+ * server-side value.
+ *
+ * Callers must `return` immediately on `null` — the reply has already been sent.
+ */
+export function parseParamsOr400<Schema extends z.ZodType>(
+  schema: Schema,
+  request: FastifyRequest,
+  reply: FastifyReply
+): z.infer<Schema> | null {
+  const parsed = schema.safeParse(request.params);
+  if (!parsed.success) {
+    reply.code(400).send({
+      error: 'invalid_request',
+      details: parsed.error.issues.map((issue) => issue.message),
+    });
+    return null;
+  }
+  return parsed.data;
+}

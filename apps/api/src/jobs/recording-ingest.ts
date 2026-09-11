@@ -51,6 +51,16 @@ export interface RecordingIngestJobData {
 
 export interface EnqueueRecordingIngestInput {
   recordingId: string;
+  /**
+   * BAL-550 (D2) — OPTIONAL disjoint-id suffix for an ADMIN RE-DRIVE. Absent ⇒ the stable
+   * `recording-ingest--<recordingId>` every existing producer mints (unchanged).
+   *
+   * ⚠ RE-STATED PARTS, NEVER A WRAPPED ID: `buildJobId('recording-ingest--<id>', 'redrive', …)`
+   * THROWS — `lib/queue.ts` rejects a non-final part containing `--`. The variadic call below
+   * keeps `recordingId` (a UUID: no `--`, cannot lead/trail `-`) legal in a non-final slot and
+   * puts the unconstrained `redrive-<uuid>` suffix last.
+   */
+  jobIdSuffix?: string;
 }
 
 /**
@@ -58,20 +68,33 @@ export interface EnqueueRecordingIngestInput {
  * Our id is always present the moment the row exists; the Daily id may only have arrived by
  * the room-name fallback. One ingest per ROW is one write.
  *
- * ⚠ OPS RE-DRIVE CAVEAT (runbook-load-bearing): because completed and failed jobs are
- * RETAINED, a plain re-`add` under the same jobId is SILENTLY DROPPED. Re-driving a `failed`
- * row requires `await getQueue('recording-ingest').remove('recording-ingest--<id>')` first.
+ * ⚠ RE-DRIVE VIA A DISJOINT ID (BAL-550), NOT A REMOVE-THEN-ADD. Because completed and failed
+ * jobs are RETAINED, a plain re-`add` under the SAME jobId is SILENTLY DROPPED — but
+ * `POST /admin/redrive/recording-ingest/:id` never re-adds under this stable id: it passes
+ * `jobIdSuffix: 'redrive-<auditId>'`, which mints a jobId the retained failed job cannot
+ * collide with. See `services/admin/redrive.ts`.
+ *
+ * ⚠ RETURNS THE BUILT jobId, DELIBERATELY — so a caller that needs to SHOW it (the admin
+ * re-drive route's response, its log line) reads it off THIS call rather than hand-rolling a
+ * second copy of the `buildJobId` shape. `apps/api/src/invariants/colon-free-job-ids.test.ts`
+ * would fail on a hand-rolled reconstruction; this is the sanctioned way to know the id.
  */
-export async function enqueueRecordingIngest(input: EnqueueRecordingIngestInput): Promise<void> {
+export async function enqueueRecordingIngest(input: EnqueueRecordingIngestInput): Promise<string> {
+  const jobId = buildJobId(
+    'recording-ingest',
+    input.recordingId,
+    ...(input.jobIdSuffix === undefined ? [] : [input.jobIdSuffix])
+  );
   await getQueue(RECORDING_INGEST_QUEUE).add(
     'ingest',
     { recordingId: input.recordingId } satisfies RecordingIngestJobData,
     {
-      jobId: buildJobId('recording-ingest', input.recordingId),
+      jobId,
       attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
     }
   );
+  return jobId;
 }
 
 async function handleIngest(job: Job<RecordingIngestJobData>): Promise<void> {

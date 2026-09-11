@@ -10,6 +10,7 @@ import {
 } from '../services/transcript/llm/anthropic-client.js';
 import {
   runTranscriptPipeline,
+  resumeTranscriptRecap,
   TranscriptStageError,
   type TranscriptPipelineJobInput,
 } from '../services/transcript/pipeline.js';
@@ -68,7 +69,7 @@ export async function enqueueTranscriptPipeline(
 ): Promise<void> {
   const queue = getQueue(TRANSCRIPT_PIPELINE_QUEUE);
   await queue.add(
-    'run',
+    TRANSCRIPT_PIPELINE_JOB_RUN,
     { ...input },
     {
       jobId: buildJobId('transcript-pipeline', input.captureId),
@@ -82,6 +83,74 @@ export async function enqueueTranscriptPipeline(
       removeOnFail: { count: 10 },
     }
   );
+}
+
+/**
+ * BAL-550 (D2, D5) — the admin re-drive's job name. `job.name` is distinct from `'run'` for Bull
+ * Board legibility, but the PAYLOAD (`resume: true`) is the routing authority — see
+ * {@link isResumeJobData}.
+ */
+export const TRANSCRIPT_PIPELINE_JOB_RUN = 'run';
+export const TRANSCRIPT_PIPELINE_JOB_RESUME = 'resume';
+
+/**
+ * BAL-550 (D5) — the admin re-drive's job payload. ID-ONLY, DELIBERATELY: no vendor payload
+ * (none survives capture — see `enqueueTranscriptPipeline`'s docblock) and NO
+ * `meeting_recordings.id`, so this payload cannot even ADDRESS a `transcript_job_*` column.
+ * The type-level brace lives in `packages/db/src/repositories/transcripts.ts` (where `apps/api`'s
+ * `tsc` actually reaches it — vitest strips types, so a test file could not hold it); the runtime
+ * half is `transcripts.redrive-type.test.ts`.
+ */
+export interface TranscriptRecapResumeJobData {
+  readonly resume: true;
+  readonly transcriptId: string;
+  readonly auditEventId: string;
+}
+
+/** Same queue, worker, retry policy and `removeOnComplete` as the capture job — discriminated
+ *  by payload shape, never by a second queue. */
+export type TranscriptPipelineJobData = TranscriptPipelineJobInput | TranscriptRecapResumeJobData;
+
+/**
+ * COMPILER-CHECKED NARROWING — `'resume' in data` narrows the union (the `in` operator narrows
+ * in TS), so no hand-written predicate body is trusted to agree with the type. Every job
+ * written before this deploy lacks `resume`, so it falls to the capture arm untouched — no
+ * in-flight job changes meaning across the deploy boundary.
+ */
+function isResumeJobData(data: TranscriptPipelineJobData): data is TranscriptRecapResumeJobData {
+  return 'resume' in data;
+}
+
+/**
+ * BAL-550 (D2) — enqueue the admin re-drive's resume job. `jobId` is
+ * `buildJobId('transcript-pipeline', transcriptId, 'redrive-' + auditEventId)` — DISJOINT from
+ * the capture-id shape (`transcript-pipeline--<captureId>`), so a retained failed capture job
+ * cannot swallow a re-drive under the same id (D2's "re-state the parts, never wrap the
+ * original id"). Same queue, retry policy and `removeOnComplete` as the capture enqueue.
+ */
+export async function enqueueTranscriptRecapResume(input: {
+  transcriptId: string;
+  auditEventId: string;
+}): Promise<string> {
+  const queue = getQueue(TRANSCRIPT_PIPELINE_QUEUE);
+  const data: TranscriptRecapResumeJobData = {
+    resume: true,
+    transcriptId: input.transcriptId,
+    auditEventId: input.auditEventId,
+  };
+  const jobId = buildJobId(
+    'transcript-pipeline',
+    input.transcriptId,
+    `redrive-${input.auditEventId}`
+  );
+  await queue.add(TRANSCRIPT_PIPELINE_JOB_RESUME, data, {
+    jobId,
+    attempts: RETRY_ATTEMPTS,
+    backoff: { type: 'exponential', delay: BACKOFF_DELAY_MS },
+    removeOnComplete: true,
+    removeOnFail: { count: 10 },
+  });
+  return jobId;
 }
 
 const log = createLogger('transcript-pipeline');
@@ -139,11 +208,40 @@ async function markFailedForCapture(
 }
 
 /**
+ * BAL-550 — the resume arm's terminal-failure counterpart to {@link markFailedForCapture}. Keyed
+ * on `transcriptId` (the resume payload carries no `captureId`); best-effort, and takes `vendor`
+ * OFF THE ROW for the `TRANSCRIPT_FAILED` analytic, since the resume payload carries none. This
+ * CLOSES THE LOOP: a failed re-run returns the row to `failed` with the NEW stage, so
+ * `transcript.failed` re-raises in the pending-actions queue and the capture-health lens shows
+ * `failed` again.
+ */
+async function markFailedForTranscript(
+  transcriptId: string,
+  stage: string,
+  reason: string
+): Promise<TranscriptVendor | undefined> {
+  try {
+    const transcript = await transcriptsRepository.findById(transcriptId);
+    if (transcript === undefined) {
+      return undefined;
+    }
+    await transcriptsRepository.markFailed(transcript.id, stage, reason);
+    return transcript.vendor;
+  } catch (error) {
+    log.error(
+      { transcriptId, error: errorMessage(error) },
+      'Failed to mark transcript failed on exhausted retries (resume arm)'
+    );
+    return undefined;
+  }
+}
+
+/**
  * Start the transcript pipeline worker (event-triggered; concurrency 5, own Redis connection).
  * On exhausted attempts, `on('failed')` records `markFailed(stage, reason)` so a permanently
  * failing capture surfaces its failing stage.
  */
-export function startTranscriptPipelineWorker(): Worker<TranscriptPipelineJobInput> {
+export function startTranscriptPipelineWorker(): Worker<TranscriptPipelineJobData> {
   // Deploy-time signal: in prod without a key EVERY job fails fast (createLlmClient throws). Only
   // fires when a worker is actually started (startWorkers gates on REDIS_URL), so never in dev/CI.
   if (process.env.NODE_ENV === 'production' && (process.env.ANTHROPIC_API_KEY ?? '').length === 0) {
@@ -152,11 +250,15 @@ export function startTranscriptPipelineWorker(): Worker<TranscriptPipelineJobInp
     );
   }
 
-  const worker = new Worker<TranscriptPipelineJobInput>(
+  const worker = new Worker<TranscriptPipelineJobData>(
     TRANSCRIPT_PIPELINE_QUEUE,
-    async (job: Job<TranscriptPipelineJobInput>) => {
+    async (job: Job<TranscriptPipelineJobData>) => {
       try {
-        await runTranscriptPipeline(job.data, { llm: createLlmClient() });
+        if (isResumeJobData(job.data)) {
+          await resumeTranscriptRecap(job.data, { llm: createLlmClient() });
+        } else {
+          await runTranscriptPipeline(job.data, { llm: createLlmClient() });
+        }
       } catch (err) {
         if (err instanceof TranscriptStageError && err.cause instanceof LlmOutputTruncatedError) {
           // Deterministic truncation → surface as UnrecoverableError so BullMQ does NOT retry
@@ -182,6 +284,21 @@ export function startTranscriptPipelineWorker(): Worker<TranscriptPipelineJobInp
       return;
     }
     const stage = stageOf(err);
+    if (isResumeJobData(job.data)) {
+      // BAL-550 — the resume arm keyed on transcriptId, vendor taken off the row (the resume
+      // payload carries none).
+      markFailedForTranscript(job.data.transcriptId, stage, err.message)
+        .then((vendor) => {
+          if (vendor === undefined) return;
+          trackServer(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED, {
+            stage,
+            vendor,
+            distinct_id: 'system:transcript-pipeline',
+          });
+        })
+        .catch(() => undefined);
+      return;
+    }
     markFailedForCapture(job.data.captureId, stage, err.message).catch(() => undefined);
     trackServer(TRANSCRIPT_SERVER_EVENTS.TRANSCRIPT_FAILED, {
       stage,

@@ -8,6 +8,7 @@ import {
   type Transcript,
   type TranscriptVendor,
   type ExtractedActionItem,
+  type CanonicalTranscript,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
 import type { RecapReadyPayload } from '@balo/shared/notifications';
@@ -356,11 +357,71 @@ async function stagePublishRecap(
 }
 
 /**
- * BAL-387 (ADR-1013 + ADR-1043) — the transcript pipeline. Runs the six sequential, individually
- * gated stages (each `gate → work → mark`) over a fixture payload; pure of BullMQ (takes the
- * job data + injected `{ llm }`). A retry re-enters and each stage short-circuits on its durable
- * marker, so an LLM stage never re-spends and action items are not re-created. A stage that does
- * real work `log.info`s; a caught-and-rethrown failure `log.error`s (BullMQ retries).
+ * One copy of the "log + wrap" a stage failure gets, shared by BOTH entry points (BAL-550 §6.1).
+ * `captureId` is presentational only (it identifies WHICH transcript in the log line); the
+ * resume entry passes the row's own `captureId`, never a synthetic value.
+ */
+function toStageError(
+  stage: TranscriptStage,
+  captureId: string,
+  error: unknown
+): TranscriptStageError {
+  log.error(
+    {
+      stage,
+      captureId,
+      error: errorMessage(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    },
+    'Transcript pipeline stage failed'
+  );
+  return new TranscriptStageError(stage, error);
+}
+
+/**
+ * BAL-550 (D5) — stages 3–6, ROW-DEPENDENT (never the vendor payload). Shared VERBATIM by both
+ * entry points below: the capture path (`runTranscriptPipeline`) reaches it immediately after
+ * `stagePersistRaw`; the admin re-drive resume path (`resumeTranscriptRecap`) reaches it from an
+ * already-persisted row, with no normalisation step to run. Each stage keeps its own durable
+ * gate (`gate → work → mark`), so entering here twice — on a retry, or on a re-drive of an
+ * already-far-along row — re-spends no LLM budget and re-creates no action item.
+ */
+async function runRecapStages(a: {
+  transcript: Transcript;
+  canonical: CanonicalTranscript;
+  deps: TranscriptPipelineDeps;
+  startedAt: number;
+  captureId: string;
+}): Promise<void> {
+  let stage: TranscriptStage = 'cleanup';
+  try {
+    const cleanedText = await stageCleanup(a.transcript, a.canonical, a.deps.llm);
+
+    stage = 'summarize';
+    const { summaryText, extractedItems } = await stageSummaryExtract(
+      a.transcript,
+      cleanedText,
+      a.deps.llm,
+      a.startedAt
+    );
+
+    stage = 'extract_action_items';
+    await stagePromoteActionItems(a.transcript, extractedItems);
+
+    stage = 'publish_recap';
+    await stagePublishRecap(a.transcript, summaryText, extractedItems);
+  } catch (error) {
+    throw toStageError(stage, a.captureId, error);
+  }
+}
+
+/**
+ * BAL-387 (ADR-1013 + ADR-1043) — THE CAPTURE ENTRY. Signature and observable behaviour
+ * UNCHANGED by BAL-550: stages 1–2 (normalise + persist raw) run in their own try, exactly as
+ * before, then `runRecapStages` runs stages 3–6. A retry re-enters and each stage
+ * short-circuits on its durable marker, so an LLM stage never re-spends and action items are
+ * not re-created. A stage that does real work `log.info`s; a caught-and-rethrown failure
+ * `log.error`s (BullMQ retries).
  */
 export async function runTranscriptPipeline(
   job: TranscriptPipelineJobInput,
@@ -368,38 +429,54 @@ export async function runTranscriptPipeline(
 ): Promise<void> {
   const startedAt = Date.now();
   let stage: TranscriptStage = 'normalize';
+  let canonical: CanonicalTranscript;
+  let transcript: Transcript;
   try {
-    const canonical = normalizeVendorPayload(job.vendor, job.payload);
+    canonical = normalizeVendorPayload(job.vendor, job.payload);
 
     stage = 'persist_raw';
-    const transcript = await stagePersistRaw(job, canonical, startedAt);
-
-    stage = 'cleanup';
-    const cleanedText = await stageCleanup(transcript, canonical, deps.llm);
-
-    stage = 'summarize';
-    const { summaryText, extractedItems } = await stageSummaryExtract(
-      transcript,
-      cleanedText,
-      deps.llm,
-      startedAt
-    );
-
-    stage = 'extract_action_items';
-    await stagePromoteActionItems(transcript, extractedItems);
-
-    stage = 'publish_recap';
-    await stagePublishRecap(transcript, summaryText, extractedItems);
+    transcript = await stagePersistRaw(job, canonical, startedAt);
   } catch (error) {
-    log.error(
-      {
-        stage,
-        captureId: job.captureId,
-        error: errorMessage(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      },
-      'Transcript pipeline stage failed'
-    );
-    throw new TranscriptStageError(stage, error);
+    throw toStageError(stage, job.captureId, error);
   }
+
+  await runRecapStages({ transcript, canonical, deps, startedAt, captureId: job.captureId });
+}
+
+/**
+ * BAL-550 (D5) — THE RESUME ENTRY. Re-runs stages 3–6 for an ALREADY-PERSISTED transcript, read
+ * from `transcripts.canonical` — `normalizeVendorPayload`'s output, persisted at capture time.
+ *
+ * ⚠⚠ IT EXISTS BECAUSE THE VENDOR PAYLOAD IS GONE BY CONSTRUCTION: `enqueueTranscriptPipeline`
+ * carries the full transcript in the job DATA with `removeOnComplete: true`, precisely so a real
+ * consultation transcript does not sit at rest in Redis. A re-drive has nothing to re-normalise
+ * — `normalize` has no input, `persist_raw` has nothing to persist, the ROW is the input.
+ *
+ * ⚠ IT RESETS NOTHING AND CLAIMS NOTHING OF ITS OWN — the `status: failed → processing` claim
+ * already happened in the admin re-drive route's ONE transaction
+ * (`transcriptsRepository.claimRecapResume`); this function runs no CAS. A missing or
+ * soft-deleted transcript is a logged no-op, never a throw — the row may have been hard-deleted
+ * or the id mistyped between the confirm sheet and the enqueue, and neither is this job's fault
+ * to retry over.
+ */
+export async function resumeTranscriptRecap(
+  job: { transcriptId: string; auditEventId: string },
+  deps: TranscriptPipelineDeps
+): Promise<void> {
+  const transcript = await transcriptsRepository.findById(job.transcriptId);
+  if (transcript === undefined) {
+    log.warn(
+      { transcriptId: job.transcriptId, auditEventId: job.auditEventId },
+      'Recap resume: no live transcript — no-op'
+    );
+    return;
+  }
+
+  await runRecapStages({
+    transcript,
+    canonical: transcript.canonical,
+    deps,
+    startedAt: Date.now(),
+    captureId: transcript.captureId,
+  });
 }

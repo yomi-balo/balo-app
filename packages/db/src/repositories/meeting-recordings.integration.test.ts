@@ -1792,3 +1792,153 @@ describe('meetingRecordingsRepository.listWithheldTranscriptSourceSince', () => 
     expect(bounded).toHaveLength(1);
   });
 });
+
+// ── 11. reopenForIngestRedrive (BAL-550 / D6) ────────────────────────────────
+
+/**
+ * THE ADMIN RE-DRIVE'S CAS — the only BACKWARDS transition in this state machine.
+ *
+ * ⚠ Every refusal returns `undefined` rather than throwing, so several can share one `it`
+ * without aborting the harness transaction. The harness `db` IS the per-test transaction and
+ * therefore satisfies the required `DbExecutor` (see the file header).
+ */
+describe('meetingRecordingsRepository.reopenForIngestRedrive', () => {
+  /** A segment in exactly the state a failed Mux ingest leaves behind. */
+  async function seedFailedIngest(overrides: Partial<NewMeetingRecording> = {}) {
+    const { meeting } = await meetingFactory();
+    return meetingRecordingFactory({
+      meetingId: meeting.id,
+      status: 'failed',
+      dailyRecordingId: vendorId('daily'),
+      muxAssetId: vendorId('mux'),
+      failedStage: 'mux_ingest',
+      failureReason: '422 invalid_parameters',
+      ...overrides,
+    });
+  }
+
+  it('moves failed → source_ready and CLEARS mux_asset_id, failed_stage and failure_reason', async () => {
+    const { recording } = await seedFailedIngest();
+
+    const reopened = await meetingRecordingsRepository.reopenForIngestRedrive(
+      { id: recording.id },
+      db
+    );
+
+    expect(reopened).toBeDefined();
+    expect(reopened?.status).toBe('source_ready');
+    // ⚠⚠ THE CLEAR THAT MAKES THE RE-DRIVE MEAN ANYTHING — see the next test for the proof.
+    expect(reopened?.muxAssetId).toBeNull();
+    expect(reopened?.failedStage).toBeNull();
+    expect(reopened?.failureReason).toBeNull();
+    // The Daily source is what the retry reads from — it must survive untouched.
+    expect(reopened?.dailyRecordingId).toBe(recording.dailyRecordingId);
+    // The capture slot stays RELEASED: this re-drive is about the ingest half of the ladder
+    // and must never make the meeting look capturable again.
+    expect(reopened?.captureEndedAt).not.toBeNull();
+  });
+
+  it('⚠⚠ THE END-TO-END PROOF: the re-opened row is then ACCEPTED by markIngesting', async () => {
+    const { recording } = await seedFailedIngest();
+
+    await meetingRecordingsRepository.reopenForIngestRedrive({ id: recording.id }, db);
+    // `markIngesting` CASes on `status='source_ready' AND mux_asset_id IS NULL`. If the CAS
+    // above had left the errored asset id in place this would match ZERO rows and the
+    // re-driven job would be structurally unrunnable — which is exactly why clearing it is
+    // REQUIRED and not cosmetic.
+    const ingesting = await meetingRecordingsRepository.markIngesting(
+      { id: recording.id, muxAssetId: vendorId('mux-retry') },
+      db
+    );
+
+    expect(ingesting).toBeDefined();
+    expect(ingesting?.status).toBe('ingesting');
+  });
+
+  it('REFUSES the wrong prior state: ready, source_ready and ingesting rows', async () => {
+    const { recording: ready } = await seedFailedIngest({
+      status: 'ready',
+      failedStage: null,
+      failureReason: null,
+    });
+    const { recording: sourceReady } = await seedFailedIngest({
+      status: 'source_ready',
+      muxAssetId: null,
+      failedStage: null,
+      failureReason: null,
+    });
+    const { recording: ingesting } = await seedFailedIngest({
+      status: 'ingesting',
+      failedStage: null,
+      failureReason: null,
+    });
+
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: ready.id }, db)
+    ).toBeUndefined();
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: sourceReady.id }, db)
+    ).toBeUndefined();
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: ingesting.id }, db)
+    ).toBeUndefined();
+  });
+
+  it('REFUSES a row whose Daily source is gone, and one that never had a daily_recording_id', async () => {
+    // `source_deleted_at` set — `recording-cleanup-source` removed the only thing an ingest
+    // could retry from, so the failure is permanent and the page says so instead of offering
+    // a button that cannot work.
+    const { recording: sourceGone } = await seedFailedIngest({ sourceDeletedAt: new Date() });
+    // No Daily id — `recording-ingest` throws `UnrecoverableError` without one, so re-driving
+    // such a row is a GUARANTEED failure. This term is the server-side backstop for the page's
+    // "Not recoverable — Daily never produced a source" note.
+    const { recording: neverCaptured } = await seedFailedIngest({ dailyRecordingId: null });
+
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: sourceGone.id }, db)
+    ).toBeUndefined();
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: neverCaptured.id }, db)
+    ).toBeUndefined();
+  });
+
+  it('REFUSES a soft-deleted segment', async () => {
+    const { recording } = await seedFailedIngest({ deletedAt: new Date() });
+
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: recording.id }, db)
+    ).toBeUndefined();
+  });
+
+  /**
+   * ⚠⚠ A LIVE SEGMENT ON A SOFT-DELETED MEETING. The row's OWN `deleted_at` is null, so every
+   * other term of the CAS passes — the `EXISTS` on `meetings` is the only thing refusing it.
+   * Such a row is never rendered (the page's windowed read filters `meetings.deleted_at`), so
+   * a hand-crafted request is the only way to reach it; it matters because a successful
+   * re-drive ends in `recap.ready` reaching BOTH PARTIES about a deleted consultation.
+   */
+  it('REFUSES a live segment whose MEETING has been soft-deleted', async () => {
+    const { recording } = await seedFailedIngest();
+    await db
+      .update(meetings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetings.id, recording.meetingId));
+
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: recording.id }, db)
+    ).toBeUndefined();
+  });
+
+  it('THE DOUBLE-CLICK GUARD: the second re-drive against the same segment matches nothing', async () => {
+    const { recording } = await seedFailedIngest();
+
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: recording.id }, db)
+    ).toBeDefined();
+    // `status` is `source_ready` now, so the CAS matches zero rows — which is what makes the
+    // route write ONE audit row and enqueue ONE job for two clicks.
+    expect(
+      await meetingRecordingsRepository.reopenForIngestRedrive({ id: recording.id }, db)
+    ).toBeUndefined();
+  });
+});

@@ -198,3 +198,29 @@ describe('buildJobId — throws', () => {
     });
   });
 });
+
+/**
+ * BAL-550 (D2, §10.9) — the admin re-drive's jobId shapes, pinned against the design
+ * reference's exact string and against D2's own reason for re-stating the parts.
+ */
+describe('buildJobId — BAL-550 admin re-drive shapes', () => {
+  it('recording-ingest redrive — re-stated parts produce the design reference shape', () => {
+    const id = buildJobId('recording-ingest', '<uuid>', 'redrive-<auditId>');
+    expect(id).toBe('recording-ingest--<uuid>--redrive-<auditId>');
+  });
+
+  it('transcript-pipeline redrive — re-stated parts produce a disjoint, colon-free shape', () => {
+    const id = buildJobId('transcript-pipeline', '<uuid>', 'redrive-<auditId>');
+    expect(id).toBe('transcript-pipeline--<uuid>--redrive-<auditId>');
+    expect(id).not.toContain(':');
+  });
+
+  it('D2 — wrapping the ORIGINAL job id (which already contains "--") THROWS, never re-stating it', () => {
+    expect(() => buildJobId('recording-ingest--<uuid>', 'redrive', '<auditId>')).toThrow(
+      JOB_ID_CONTRACT_VIOLATION
+    );
+    expect(() => buildJobId('transcript-pipeline--<captureId>', 'redrive', '<auditId>')).toThrow(
+      JOB_ID_CONTRACT_VIOLATION
+    );
+  });
+});

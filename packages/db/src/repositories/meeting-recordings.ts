@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, isNotNull, isNull, lte, ne, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { meetingRecordings, meetings } from '../schema';
 import type { MeetingRecording } from '../schema';
@@ -139,6 +139,15 @@ export interface WithheldSourceAlertRow {
 export interface MarkRecordingSourceDeletedInput {
   id: string;
   at: Date;
+}
+
+/**
+ * {@link meetingRecordingsRepository.reopenForIngestRedrive} — BAL-550 (D6), the ADMIN
+ * re-drive. Segment-grain, deliberately: the capture-health row is per MEETING but the
+ * `recording-ingest` job is per SEGMENT, so the re-drive names the one failing segment.
+ */
+export interface ReopenRecordingForIngestRedriveInput {
+  id: string;
 }
 
 /**
@@ -793,6 +802,96 @@ export const meetingRecordingsRepository = {
           isNull(meetingRecordings.deletedAt),
           eq(meetingRecordings.status, 'ready'),
           isNull(meetingRecordings.sourceDeletedAt)
+        )
+      )
+      .returning();
+    return row;
+  },
+
+  /**
+   * BAL-550 (D6) — THE ADMIN RE-DRIVE OF A FAILED MUX INGEST. Moves the segment BACKWARDS,
+   * `failed → source_ready`, so `recording-ingest` can be re-enqueued against it. The ONLY
+   * backwards transition in this state machine, and the only mutator here with no vendor
+   * event behind it: its caller is a `super_admin` pressing a button
+   * (`REDRIVE_JOB`, ADR-1035 platform axis), audited in the SAME transaction.
+   *
+   * CAS: `id = $ AND deleted_at IS NULL AND status = 'failed' AND source_deleted_at IS NULL
+   *       AND daily_recording_id IS NOT NULL AND EXISTS (live meeting)`.
+   * SET: `status='source_ready'`, `mux_asset_id=NULL`, `failed_stage=NULL`,
+   *      `failure_reason=NULL`.
+   *
+   * ⚠⚠ IT ALSO REQUIRES A LIVE MEETING. The `EXISTS` term is the row's SECOND soft-delete
+   * filter and it guards a different table: the segment's own `deleted_at` says nothing about
+   * the MEETING having been deleted underneath it. Such a row is never rendered — the page's
+   * windowed read joins `meetings` with `deleted_at IS NULL` — so this closes a hand-crafted
+   * request, the only way to reach it. It matters because a successful re-drive ends in
+   * `stagePublishRecap` firing `recap.ready` to BOTH PARTIES: a user-visible notification
+   * about a consultation the platform considers deleted.
+   *
+   * ⚠⚠ CLEARING `mux_asset_id` IS REQUIRED, NOT COSMETIC. {@link markIngesting} CASes on
+   * `status = 'source_ready' AND mux_asset_id IS NULL` — its ORPHAN GUARD. A re-opened row
+   * still carrying the errored asset id would therefore match ZERO rows there, and the
+   * re-driven job would be STRUCTURALLY UNRUNNABLE: it would create a fresh Mux asset, fail to
+   * attach it, and log an orphan. The clear is what makes the re-drive mean anything.
+   * `meeting_recording_mux_asset_idx` is vacated by the same write, so the retry may legally
+   * mint a new asset.
+   *
+   * ⚠ `source_deleted_at IS NULL` — the Daily source is the ONLY thing an ingest can retry
+   * from ({@link markSourceDeleted}'s D4 argument, read in the other direction). Once
+   * `recording-cleanup-source` has removed it the failure is permanent, and the page says so
+   * per row rather than offering a button that cannot work.
+   *
+   * ⚠ `daily_recording_id IS NOT NULL` — `recording-ingest`'s handler throws
+   * `UnrecoverableError` without one (there is no source to build an access link from), so
+   * re-driving such a row is a GUARANTEED failure. This term is the server-side backstop for
+   * the page's "Not recoverable — Daily never produced a source" note, held here rather than
+   * only in the view so a hand-crafted request cannot bypass it.
+   *
+   * ⚠ IT ALSO CLEARS `failed_stage` / `failure_reason`, BEYOND D6's LETTER (plan §13). A
+   * `source_ready` row still narrating a Mux error is exactly the confusion this lens exists
+   * to remove, and the prior values are NOT lost: the route writes them onto the
+   * `admin.redrive.recording-ingest` `audit_events` row's `metadata` inside this same
+   * transaction. A SECOND failure still records correctly — {@link markFailed} refuses
+   * `failed → failed`, and by then this row is `source_ready`, not `failed`.
+   *
+   * ⚠ `capture_ended_at` IS UNTOUCHED. The capture slot stays released; this re-drive is about
+   * the INGEST half of the ladder and must never make the meeting look capturable again.
+   *
+   * `undefined` = the CAS matched nothing (already re-driven, never failed, source gone, no
+   * Daily id, soft-deleted) ⇒ the caller answers `409 not_redrivable`, writes NO audit row and
+   * enqueues NO job. That refusal is ALSO the double-click guard: the second request finds
+   * `status <> 'failed'`.
+   *
+   * ⚠ REQUIRES AN EXECUTOR — it runs inside the re-drive route's ONE transaction alongside the
+   * `audit_events` insert, the {@link markSourceReady} / {@link markReady} discipline. A caller
+   * that passed the base client by omission would commit the state change outside the audit
+   * row's transaction and could leave a re-driven row with no record of who re-drove it.
+   */
+  async reopenForIngestRedrive(
+    input: ReopenRecordingForIngestRedriveInput,
+    exec: DbExecutor
+  ): Promise<MeetingRecording | undefined> {
+    const [row] = await exec
+      .update(meetingRecordings)
+      .set({
+        status: 'source_ready',
+        muxAssetId: null,
+        failedStage: null,
+        failureReason: null,
+      })
+      .where(
+        and(
+          eq(meetingRecordings.id, input.id),
+          isNull(meetingRecordings.deletedAt),
+          eq(meetingRecordings.status, 'failed'),
+          isNull(meetingRecordings.sourceDeletedAt),
+          isNotNull(meetingRecordings.dailyRecordingId),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(meetings)
+              .where(and(eq(meetings.id, meetingRecordings.meetingId), isNull(meetings.deletedAt)))
+          )
         )
       )
       .returning();

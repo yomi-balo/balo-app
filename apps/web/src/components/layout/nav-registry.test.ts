@@ -150,6 +150,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
         'admin_engagements',
         'admin_promo_codes',
         'admin_catalogue',
+        'admin_health',
         'admin_lookup',
       ]);
     }
@@ -161,7 +162,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('the two capability axes gate independently: staff-without-manage sees admin and NOT Team; owner-without-staff sees Team and NOT admin', () => {
     // A super_admin who is a plain member of a personal company (expert workspace, where `team`
     // lives after BAL-503).
-    expect(resolveNavItems(EXPERT_STAFF, 'admin')).toHaveLength(6);
+    expect(resolveNavItems(EXPERT_STAFF, 'admin')).toHaveLength(7);
     expect(resolveNavItems(EXPERT_STAFF, 'secondary').map((e) => e.key)).not.toContain('team');
     // A company/agency owner who is not Balo staff.
     expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('team');
@@ -172,12 +173,12 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
       capabilities: [CAPABILITIES.MANAGE_MEMBERS, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
     };
     expect(resolveNavItems(both, 'secondary').map((e) => e.key)).toContain('team');
-    expect(resolveNavItems(both, 'admin')).toHaveLength(6);
+    expect(resolveNavItems(both, 'admin')).toHaveLength(7);
   });
 
   it('every admin entry is mobilePriority "more", scoped to both workspace types, and carries no badge or jumpOut', () => {
     const admin = NAV_ENTRIES.filter((e) => e.section === 'admin');
-    expect(admin).toHaveLength(6);
+    expect(admin).toHaveLength(7);
     for (const entry of admin) {
       expect(entry.mobilePriority).toBe('more');
       expect([...entry.workspaceTypes].sort()).toEqual(['company', 'expert']);
@@ -205,6 +206,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('admin_engagements')?.href).toBe('/engagements');
     expect(byKey.get('admin_promo_codes')?.href).toBe('/promo-codes');
     expect(byKey.get('admin_catalogue')?.href).toBe('/admin/catalogue');
+    expect(byKey.get('admin_health')?.href).toBe('/admin/health/capture');
     expect(byKey.get('admin_lookup')?.href).toBe('/admin/lookup');
   });
 
@@ -236,9 +238,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 17 declared entries, 16 enabled', () => {
-    expect(NAV_ENTRIES).toHaveLength(17);
-    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(16);
+  it('non-vacuity: 18 declared entries, 17 enabled', () => {
+    expect(NAV_ENTRIES).toHaveLength(18);
+    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(17);
   });
 
   it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
@@ -373,6 +375,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'admin_engagements',
       'admin_promo_codes',
       'admin_catalogue',
+      'admin_health',
       'admin_lookup',
     ]);
     expect(resolveMoreItems(EXPERT_STAFF).map((e) => e.key)).toEqual([
@@ -384,6 +387,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'admin_engagements',
       'admin_promo_codes',
       'admin_catalogue',
+      'admin_health',
       'admin_lookup',
     ]);
     // …and none of them reaches the tab bar (all `'more'`; the bar is already at the cap).

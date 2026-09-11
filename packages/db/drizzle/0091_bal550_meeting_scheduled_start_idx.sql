@@ -1,0 +1,1 @@
+CREATE INDEX "meeting_scheduled_start_idx" ON "meetings" USING btree ("scheduled_start") WHERE "meetings"."deleted_at" IS NULL;
