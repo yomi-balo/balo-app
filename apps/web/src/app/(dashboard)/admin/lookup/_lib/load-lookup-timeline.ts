@@ -76,6 +76,10 @@ export async function loadLookupTimeline(
       action: row.action,
       summary: describeAuditEvent({ action: row.action, metadata: row.metadata, actorLabel }),
       occurredAtIso: row.createdAt.toISOString(),
+      // ⚠ BAL-555 fix round F1 — the OPAQUE grouping key, carried verbatim from the repository's
+      // full-microsecond `createdAtPrecise`. NEVER derive this from `occurredAtIso` above (that
+      // field is millisecond-truncated) — see `LookupTimelineEntry.instantKey`'s docblock.
+      instantKey: row.createdAtPrecise,
     };
   });
 

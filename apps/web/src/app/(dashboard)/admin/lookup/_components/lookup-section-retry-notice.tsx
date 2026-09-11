@@ -25,7 +25,7 @@ export function LookupSectionRetryNotice({
         <button
           type="button"
           onClick={onRetry}
-          className="text-warning focus-visible:ring-ring mt-2 inline-flex min-h-[44px] items-center rounded px-1 text-xs font-semibold underline underline-offset-2 focus-visible:ring-2 focus-visible:outline-none"
+          className="text-warning focus-visible:ring-ring mt-2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded px-1 text-xs font-semibold underline underline-offset-2 focus-visible:ring-2 focus-visible:outline-none"
         >
           Retry
         </button>

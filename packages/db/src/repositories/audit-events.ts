@@ -51,6 +51,20 @@ export interface AuditTrailRow {
   readonly id: string;
   readonly action: string;
   readonly createdAt: Date;
+  /**
+   * ⚠⚠ BAL-555 fix round F1 — the DISPLAY path's grouping key, carried at FULL microsecond
+   * precision from the SAME column as {@link AuditTrailRow.createdAt} (via `created_at::text`,
+   * same read as {@link AuditTrailCursor.createdAtPrecise} above). `createdAt` above is
+   * millisecond-precision (a JS `Date`) and is for DISPLAY (the visible clock face) ONLY — it
+   * must NEVER be used to decide whether two rows share ONE transaction's instant, because two
+   * rows from genuinely DIFFERENT transactions can land in the same millisecond while differing
+   * in microseconds, and a millisecond-truncated equality key would render them as one change
+   * that never happened (the C4 design ruling: rows sharing one `created_at` instant are one
+   * transaction and render under one visible timestamp). `createdAtPrecise` is that equality
+   * key: an OPAQUE, Postgres-parseable string, never parsed into a `Date`, never displayed, and
+   * never collapsed back into `createdAt` — that collapse is precisely this bug re-appearing.
+   */
+  readonly createdAtPrecise: string;
   readonly seq: number;
   readonly metadata: unknown;
   readonly actorUserId: string | null;
@@ -415,6 +429,7 @@ export const auditEventsRepository = {
           id: row.id,
           action: row.action,
           createdAt: row.createdAt,
+          createdAtPrecise: row.createdAtPrecise,
           seq: row.seq,
           metadata: row.metadata,
           actorUserId: row.actorUserId,

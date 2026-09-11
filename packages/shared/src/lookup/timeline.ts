@@ -240,6 +240,16 @@ export const AUDIT_ACTION_SENTENCES: Record<string, (m: Record<string, unknown>)
  *
  * ⚠ GENDER-NEUTRAL BY CONSTRUCTION — no sentence contains a pronoun. Pinned by a property
  * test.
+ *
+ * ⚠⚠ THE BY-CLAUSE CARRIES "@ Company/Agency" ON EVERY ROW, DELIBERATELY — RULED, DO NOT
+ * "FIX" (BAL-555 review round). CLAUDE.md's retrospective-attribution rule ("name the person
+ * with '@ company/agency' on FIRST mention, bare name after") assumes prose with a stable
+ * reading order. The Timeline has none: it is paginated and loaded backwards — "Load earlier"
+ * PREPENDS older rows above whatever was "first" a moment ago, so a bare name would render
+ * above its own first mention the next time someone pages back. Rows are also scanned
+ * independently (a support agent skimming for one action), not read top-to-bottom as a
+ * sequence. The ruling is to keep the org suffix on every row; this is not an oversight to
+ * collapse to first-mention-only.
  */
 export function describeAuditEvent(input: {
   readonly action: string;
@@ -273,8 +283,29 @@ export interface LookupTimelineEntry {
   readonly action: string;
   /** The plain-words sentence, actor attribution included. */
   readonly summary: string;
-  /** ISO instant. ⚠ NO `Date` CROSSES THE BOUNDARY (the `oversight-row.ts` house rule). */
+  /**
+   * ISO instant, MILLISECOND precision (a JS `Date` round-trip). DISPLAY ONLY — the visible
+   * clock face and the `<time dateTime>`/`title` attributes. ⚠ NO `Date` CROSSES THE BOUNDARY
+   * (the `oversight-row.ts` house rule).
+   *
+   * ⚠⚠ NEVER GROUP ON THIS FIELD (BAL-555 fix round F1). It is millisecond-truncated, so two
+   * rows from genuinely DIFFERENT transactions can share one `occurredAtIso` while carrying
+   * different microsecond `created_at` values — grouping on it renders two unrelated changes as
+   * one, exactly the false claim the Timeline must not make. Use {@link instantKey} to decide
+   * whether rows share one transaction's instant; use this field only to paint pixels.
+   */
   readonly occurredAtIso: string;
+  /**
+   * ⚠⚠ OPAQUE EQUALITY KEY ONLY (BAL-555 fix round F1) — carries `audit_events.created_at` at
+   * FULL microsecond precision, exactly as Postgres prints it (`created_at::text`), forwarded
+   * verbatim from `AuditTrailRow.createdAtPrecise` (`packages/db/src/repositories/audit-events.ts`)
+   * via the loader. Two rows sharing one `instantKey` are, by the C4 design ruling, one
+   * transaction and render under one visible timestamp as one change. NEVER format it, NEVER
+   * parse it into a `Date`, NEVER display it — that is what {@link occurredAtIso} is for. Do NOT
+   * collapse these two fields back into one; that collapse is precisely the truncation bug this
+   * field exists to close.
+   */
+  readonly instantKey: string;
 }
 
 export interface LookupTimelineCursorDTO {

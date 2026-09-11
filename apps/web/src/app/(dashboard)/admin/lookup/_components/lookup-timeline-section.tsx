@@ -23,8 +23,11 @@ import { LookupSectionRetryNotice } from './lookup-section-retry-notice';
  *
  * ⚠ THE PRE-`0088` CAVEAT (C4): pre-migration rows carry an arbitrary `seq` (physical scan
  * order), so this component makes NO ordinal claim it cannot support — no numbering, no
- * "first/then/last" copy. Rows sharing one `occurredAtIso` instant render under ONE visible
- * timestamp as one change (ADR-1030's meaning of `created_at`).
+ * "first/then/last" copy. Rows sharing one `created_at` INSTANT render under ONE visible
+ * timestamp as one change (ADR-1030's meaning of `created_at`) — grouped on `instantKey`, the
+ * full-microsecond opaque equality key, NEVER on the millisecond-truncated `occurredAtIso`
+ * (BAL-555 fix round F1; see `LookupTimelineEntry.instantKey`'s docblock in
+ * `@balo/shared/lookup`).
  *
  * ⚠ NO MONEY, NO FEE FIGURE (C3) — enforced upstream by `describeAuditEvent`; this component
  * never reads `metadata` (the DTO never carries it).
@@ -84,17 +87,31 @@ const REASON_COPY: Record<'forbidden' | 'not_found' | 'unavailable', string> = {
   unavailable: "The timeline didn't load. Nothing was changed — retry below.",
 };
 
+/**
+ * BAL-555 fix round F4 — the visible date INCLUDES THE YEAR. An entity's audit trail spans
+ * years; the `title` tooltip already carries the full precise timestamp, but the visible date
+ * used to omit the year entirely, which is ambiguous on a multi-year trail.
+ */
 function formatTimestamp(iso: string): string {
   return new Intl.DateTimeFormat(undefined, {
     day: 'numeric',
     month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   }).format(new Date(iso));
 }
 
-/** Consecutive entries sharing ONE `occurredAtIso` instant become one connector group (C4). */
+/**
+ * Consecutive entries sharing ONE `created_at` instant become one connector group (C4).
+ *
+ * ⚠⚠ BAL-555 fix round F1 — grouped on {@link LookupTimelineEntry.instantKey}, the FULL
+ * MICROSECOND-precision opaque equality key, NEVER on `occurredAtIso` (millisecond-truncated).
+ * Two rows from genuinely different transactions can share one millisecond while differing in
+ * microseconds; grouping on the truncated field would render them as one change that never
+ * happened.
+ */
 function groupByInstant(
   entries: readonly LookupTimelineEntry[]
 ): (readonly LookupTimelineEntry[])[] {
@@ -102,7 +119,7 @@ function groupByInstant(
   for (const entry of entries) {
     const currentGroup = groups[groups.length - 1];
     const groupHead = currentGroup?.[0];
-    if (groupHead !== undefined && groupHead.occurredAtIso === entry.occurredAtIso) {
+    if (groupHead !== undefined && groupHead.instantKey === entry.instantKey) {
       currentGroup?.push(entry);
     } else {
       groups.push([entry]);
@@ -225,7 +242,9 @@ export function LookupTimelineSection({
   const eyebrow = labelled ? (
     <div className="mb-2 flex items-center gap-1.5">
       <History className="text-warning size-3" aria-hidden="true" />
-      <span className="text-warning text-[11px] font-bold tracking-wide uppercase">Timeline</span>
+      <span className="text-warning text-[11px] font-semibold tracking-wide uppercase">
+        Timeline
+      </span>
       <span className="text-muted-foreground text-[11px]">· every change to this record</span>
     </div>
   ) : null;
@@ -306,7 +325,7 @@ export function LookupTimelineSection({
               <time
                 dateTime={head.occurredAtIso}
                 title={head.occurredAtIso}
-                className="text-muted-foreground pt-0.5 text-[11.5px] whitespace-nowrap tabular-nums"
+                className="text-muted-foreground pt-0.5 font-mono text-[11.5px] whitespace-nowrap tabular-nums"
               >
                 {formatTimestamp(head.occurredAtIso)}
               </time>

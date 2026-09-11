@@ -208,6 +208,62 @@ describe('LookupDrillIn — the tab shell (C2)', () => {
     await waitFor(() => expect(mockAction).toHaveBeenCalledWith('s1'));
   });
 
+  it('BAL-555 fix round F2 — paging state survives a tab round-trip (Timeline stays mounted, hidden)', async () => {
+    mockAction.mockReturnValue(new Promise(() => {}));
+    mockTimelineAction.mockReset();
+    mockTimelineAction.mockResolvedValueOnce({
+      ok: true,
+      entries: [
+        {
+          id: 'newer',
+          action: 'engagement.accepted',
+          summary: 'Delivery accepted',
+          occurredAtIso: '2026-02-01T00:00:00.000Z',
+          instantKey: '2026-02-01 00:00:00.000000+00',
+        },
+      ],
+      hasEarlier: true,
+      earlier: { createdAtPrecise: '2026-02-01 00:00:00.000000+00', seq: 5 },
+    });
+    const user = userEvent.setup();
+    render(
+      <LookupDrillIn
+        selection={selection({ type: 'credit_session', id: 's1' })}
+        onTabSelect={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText('Delivery accepted')).toBeInTheDocument());
+
+    mockTimelineAction.mockResolvedValueOnce({
+      ok: true,
+      entries: [
+        {
+          id: 'older',
+          action: 'engagement.created',
+          summary: 'Project created',
+          occurredAtIso: '2026-01-01T00:00:00.000Z',
+          instantKey: '2026-01-01 00:00:00.000000+00',
+        },
+      ],
+      hasEarlier: false,
+      earlier: null,
+    });
+    await user.click(screen.getByRole('button', { name: /load earlier/i }));
+    await waitFor(() => expect(screen.getByText('Project created')).toBeInTheDocument());
+    expect(mockTimelineAction).toHaveBeenCalledTimes(2);
+
+    // Switch away to Money, then back to Timeline.
+    await user.click(screen.getByRole('tab', { name: 'Money' }));
+    await user.click(screen.getByRole('tab', { name: 'Timeline' }));
+
+    // The already-loaded page is still there, with no additional fetch — a remount would have
+    // both dropped the older row and refired the effect for page 1.
+    expect(screen.getByText('Delivery accepted')).toBeInTheDocument();
+    expect(screen.getByText('Project created')).toBeInTheDocument();
+    expect(mockTimelineAction).toHaveBeenCalledTimes(2);
+  });
+
   it('every non-credit_session type renders no tablist and the Timeline section directly', async () => {
     for (const type of [
       'user',

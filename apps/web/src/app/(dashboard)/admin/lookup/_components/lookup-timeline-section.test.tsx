@@ -43,6 +43,7 @@ describe('LookupTimelineSection', () => {
             action: 'agency.created',
             summary: 'Agency created — MJ @ Balo',
             occurredAtIso: '2026-06-02T10:15:30.000Z',
+            instantKey: '2026-06-02 10:15:30.000000+00',
           },
         ],
       })
@@ -66,6 +67,7 @@ describe('LookupTimelineSection', () => {
             action: 'agency.created',
             summary: 'Agency created',
             occurredAtIso: '2026-06-02T10:15:30.000Z',
+            instantKey: '2026-06-02 10:15:30.000000+00',
           },
         ],
       })
@@ -73,6 +75,50 @@ describe('LookupTimelineSection', () => {
     render(<LookupTimelineSection entityType="agency" entityId="a1" labelled={false} />);
     const actionEl = await screen.findByText('agency.created');
     expect(actionEl.className).toContain('font-mono');
+  });
+
+  it('BAL-555 fix round F4 — the timestamp renders in a font-mono <time> element', async () => {
+    mockFetchLookupTimelineAction.mockResolvedValue(
+      okResult({
+        entries: [
+          {
+            id: 'r1',
+            action: 'agency.created',
+            summary: 'Agency created',
+            occurredAtIso: '2026-06-02T10:15:30.000Z',
+            instantKey: '2026-06-02 10:15:30.000000+00',
+          },
+        ],
+      })
+    );
+    render(<LookupTimelineSection entityType="agency" entityId="a1" labelled={false} />);
+    await waitFor(() => expect(screen.getByText('agency.created')).toBeInTheDocument());
+    const timeEl = document.querySelector('time');
+    expect(timeEl).not.toBeNull();
+    expect(timeEl?.className).toContain('font-mono');
+  });
+
+  it('BAL-555 fix round F4 — the visible date includes the year', async () => {
+    mockFetchLookupTimelineAction.mockResolvedValue(
+      okResult({
+        entries: [
+          {
+            id: 'r1',
+            action: 'agency.created',
+            summary: 'Agency created',
+            occurredAtIso: '2026-06-02T10:15:30.000Z',
+            instantKey: '2026-06-02 10:15:30.000000+00',
+          },
+        ],
+      })
+    );
+    render(<LookupTimelineSection entityType="agency" entityId="a1" labelled={false} />);
+    const timeEl = await waitFor(() => {
+      const el = document.querySelector('time');
+      if (el === null) throw new Error('time element not rendered yet');
+      return el;
+    });
+    expect(timeEl.textContent).toContain('2026');
   });
 
   it('shows the exact empty-state copy, not absence-framed', async () => {
@@ -96,6 +142,7 @@ describe('LookupTimelineSection', () => {
             action: 'agency.created',
             summary: 'Agency created',
             occurredAtIso: '2026-01-01T00:00:00.000Z',
+            instantKey: '2026-01-01 00:00:00.000000+00',
           },
         ],
       })
@@ -139,6 +186,7 @@ describe('LookupTimelineSection', () => {
             action: 'engagement.accepted',
             summary: 'Delivery accepted',
             occurredAtIso: '2026-02-01T00:00:00.000Z',
+            instantKey: '2026-02-01 00:00:00.000000+00',
           },
         ],
         hasEarlier: true,
@@ -158,6 +206,7 @@ describe('LookupTimelineSection', () => {
             action: 'engagement.created',
             summary: 'Project created',
             occurredAtIso: '2026-01-01T00:00:00.000Z',
+            instantKey: '2026-01-01 00:00:00.000000+00',
           },
         ],
         hasEarlier: false,
@@ -187,6 +236,7 @@ describe('LookupTimelineSection', () => {
             action: 'engagement.accepted',
             summary: 'Delivery accepted',
             occurredAtIso: '2026-02-01T00:00:00.000Z',
+            instantKey: '2026-02-01 00:00:00.000000+00',
           },
         ],
         hasEarlier: true,
@@ -221,6 +271,7 @@ describe('LookupTimelineSection', () => {
             action: 'engagement.accepted',
             summary: 'Delivery accepted',
             occurredAtIso: '2026-02-01T00:00:00.000Z',
+            instantKey: '2026-02-01 00:00:00.000000+00',
           },
         ],
         hasEarlier: true,
@@ -259,6 +310,7 @@ describe('LookupTimelineSection', () => {
             action: 'engagement.accepted',
             summary: 'Delivery accepted',
             occurredAtIso: '2026-02-01T00:00:00.000Z',
+            instantKey: '2026-02-01 00:00:00.000000+00',
           },
         ],
         hasEarlier: true,
@@ -284,12 +336,14 @@ describe('LookupTimelineSection', () => {
             action: 'engagement.created',
             summary: 'Project created',
             occurredAtIso: '2026-01-01T00:00:00.000Z',
+            instantKey: '2026-01-01 00:00:00.083951+00',
           },
           {
             id: 'r2',
             action: 'engagement.milestones_snapshotted',
             summary: 'Milestones snapshotted from the accepted proposal',
             occurredAtIso: '2026-01-01T00:00:00.000Z',
+            instantKey: '2026-01-01 00:00:00.083951+00',
           },
         ],
       })
@@ -305,9 +359,50 @@ describe('LookupTimelineSection', () => {
     expect(timeElements).toHaveLength(1);
   });
 
+  it('BAL-555 fix round F1 — two rows in the SAME millisecond but DIFFERENT microseconds render as TWO groups, not one', async () => {
+    // Both entries round-trip to the IDENTICAL millisecond-precision `occurredAtIso` — a
+    // millisecond-truncated grouping key would incorrectly merge them into one visible change.
+    // Their `instantKey`s (the full-microsecond opaque equality key) differ, so they must
+    // render as two separate groups with two separate `<time>` elements.
+    mockFetchLookupTimelineAction.mockResolvedValue(
+      okResult({
+        entries: [
+          {
+            id: 'r1',
+            action: 'engagement.accepted',
+            summary: 'Delivery accepted',
+            occurredAtIso: '2026-03-01T12:00:00.083Z',
+            instantKey: '2026-03-01 12:00:00.083999+00',
+          },
+          {
+            id: 'r2',
+            action: 'engagement.changes_requested',
+            summary: 'Changes requested',
+            occurredAtIso: '2026-03-01T12:00:00.083Z',
+            instantKey: '2026-03-01 12:00:00.083001+00',
+          },
+        ],
+      })
+    );
+    render(<LookupTimelineSection entityType="engagement" entityId="e1" labelled={false} />);
+
+    await waitFor(() => expect(screen.getByText('Delivery accepted')).toBeInTheDocument());
+    expect(screen.getByText('Changes requested')).toBeInTheDocument();
+
+    const timeElements = document.querySelectorAll('time');
+    expect(timeElements).toHaveLength(2);
+  });
+
   it('renders the eyebrow chrome when labelled', async () => {
     mockFetchLookupTimelineAction.mockResolvedValue(okResult());
     render(<LookupTimelineSection entityType="agency" entityId="a1" labelled />);
     await waitFor(() => expect(screen.getByText('Timeline')).toBeInTheDocument());
+  });
+
+  it('BAL-555 fix round F4 — the eyebrow label uses font-semibold', async () => {
+    mockFetchLookupTimelineAction.mockResolvedValue(okResult());
+    render(<LookupTimelineSection entityType="agency" entityId="a1" labelled />);
+    const eyebrowLabel = await screen.findByText('Timeline');
+    expect(eyebrowLabel.className).toContain('font-semibold');
   });
 });

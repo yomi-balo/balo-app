@@ -15,6 +15,16 @@ import { LookupDrillInTabs, panelId, tabId, type LookupDrillInTab } from './look
  * sessions get Timeline + Money); every other type renders the Timeline as a single labelled
  * SECTION with no tab bar at all (C2 — a one-tab tab bar is still a defect). NOTHING here
  * mutates: no forms, no `action=`, no write-shaped button.
+ *
+ * ⚠⚠ BAL-555 fix round F2 — VISITED TABS STAY MOUNTED, HIDDEN RATHER THAN UNMOUNTED. The two
+ * panels previously conditionally rendered ONE AT A TIME under a `key={tab}`-remounting
+ * wrapper, so switching Timeline → Money → Timeline discarded every "Load earlier" page the
+ * user had already loaded and silently refetched page 1. `visitedTabs` tracks which panels
+ * have ever been selected; a visited panel's `<div role="tabpanel">` stays in the tree forever
+ * after, toggled with the native `hidden` attribute (never `style.display`) so the ARIA
+ * tabs wiring (`aria-labelledby`, and testing-library's/AT's accessibility-tree exclusion of
+ * `hidden` elements) keeps working unchanged. Only the two-tab (credit session) case is
+ * affected — a single-tab type never unmounts anything to begin with.
  */
 
 function noDestinationCopy(selection: LookupSelection): string {
@@ -57,6 +67,13 @@ export function LookupDrillIn({
 }: Readonly<LookupDrillInProps>): React.JSX.Element {
   const target = resolveOpenTarget(selection);
   const [tab, setTab] = useState<LookupDrillInTab>('timeline');
+  // BAL-555 fix round F2 — the initial tab is always "visited" (it fetches immediately on
+  // mount today, and this preserves that), `money` joins only once the user actually selects
+  // it, and NEVER leaves once added — that's what keeps its "Load earlier" paging alive across
+  // a switch back to Timeline and forth again.
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<LookupDrillInTab>>(
+    () => new Set<LookupDrillInTab>(['timeline'])
+  );
 
   const tabs: readonly { readonly key: LookupDrillInTab; readonly label: string }[] =
     selection.type === 'credit_session'
@@ -68,6 +85,7 @@ export function LookupDrillIn({
 
   function selectTab(next: LookupDrillInTab): void {
     setTab(next);
+    setVisitedTabs((current) => (current.has(next) ? current : new Set(current).add(next)));
     onTabSelect(next);
   }
 
@@ -104,22 +122,28 @@ export function LookupDrillIn({
               <LookupDrillInTabs tabs={tabs} active={tab} onSelect={selectTab} />
               <div
                 role="tabpanel"
-                key={tab}
-                id={panelId(tab)}
-                aria-labelledby={tabId(tab)}
+                id={panelId('timeline')}
+                aria-labelledby={tabId('timeline')}
+                hidden={tab !== 'timeline'}
                 className="mt-3"
               >
-                {tab === 'timeline' && (
-                  <LookupTimelineSection
-                    entityType={selection.type}
-                    entityId={selection.id}
-                    labelled={false}
-                  />
-                )}
-                {tab === 'money' && selection.type === 'credit_session' && (
-                  <LookupMoneySection sessionId={selection.id} labelled={false} />
-                )}
+                <LookupTimelineSection
+                  entityType={selection.type}
+                  entityId={selection.id}
+                  labelled={false}
+                />
               </div>
+              {selection.type === 'credit_session' && visitedTabs.has('money') && (
+                <div
+                  role="tabpanel"
+                  id={panelId('money')}
+                  aria-labelledby={tabId('money')}
+                  hidden={tab !== 'money'}
+                  className="mt-3"
+                >
+                  <LookupMoneySection sessionId={selection.id} labelled={false} />
+                </div>
+              )}
             </>
           ) : (
             <LookupTimelineSection entityType={selection.type} entityId={selection.id} labelled />

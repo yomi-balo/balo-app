@@ -88,6 +88,10 @@ describe('loadLookupTimeline — the DTO projection', () => {
           id: 'row-1',
           action: 'agency.created',
           createdAt: new Date('2026-06-02T10:15:30.000Z'),
+          // Deliberately DIFFERENT microsecond digits than `createdAt`'s own millisecond
+          // rendering would suggest — proves `instantKey` below is forwarded from THIS field,
+          // never re-derived from `createdAt`/`occurredAtIso` (BAL-555 fix round F1).
+          createdAtPrecise: '2026-06-02 10:15:30.000123+00',
           seq: 1,
           metadata: { secret: 'workos-id-should-never-cross' },
           actorUserId: 'user-1',
@@ -112,6 +116,7 @@ describe('loadLookupTimeline — the DTO projection', () => {
       action: 'agency.created',
       summary: 'Agency created — MJ @ Balo',
       occurredAtIso: '2026-06-02T10:15:30.000Z',
+      instantKey: '2026-06-02 10:15:30.000123+00',
     });
     expect(JSON.stringify(entry)).not.toContain('workos-id-should-never-cross');
   });
@@ -123,6 +128,7 @@ describe('loadLookupTimeline — the DTO projection', () => {
           id: 'row-2',
           action: 'engagement.accepted',
           createdAt: new Date('2026-06-02T10:15:30.000Z'),
+          createdAtPrecise: '2026-06-02 10:15:30.000456+00',
           seq: 2,
           metadata: null,
           actorUserId: null,
@@ -141,6 +147,51 @@ describe('loadLookupTimeline — the DTO projection', () => {
     expect(dto.ok).toBe(true);
     if (!dto.ok) return;
     expect(dto.entries[0]?.summary).toBe('Delivery accepted');
+  });
+
+  it('BAL-555 fix round F1 — two rows sharing a millisecond but differing in microseconds get DISTINCT instantKeys, never derived from occurredAtIso', async () => {
+    mockListTrailForEntity.mockResolvedValue({
+      rows: [
+        {
+          id: 'row-a',
+          action: 'engagement.accepted',
+          createdAt: new Date('2026-03-01T12:00:00.083Z'),
+          createdAtPrecise: '2026-03-01 12:00:00.083999+00',
+          seq: 2,
+          metadata: null,
+          actorUserId: null,
+          actorFirstName: null,
+          actorLastName: null,
+          actorPlatformRole: null,
+          actorCompanyName: null,
+          actorAgencyName: null,
+        },
+        {
+          id: 'row-b',
+          action: 'engagement.changes_requested',
+          createdAt: new Date('2026-03-01T12:00:00.083Z'),
+          createdAtPrecise: '2026-03-01 12:00:00.083001+00',
+          seq: 1,
+          metadata: null,
+          actorUserId: null,
+          actorFirstName: null,
+          actorLastName: null,
+          actorPlatformRole: null,
+          actorCompanyName: null,
+          actorAgencyName: null,
+        },
+      ],
+      hasEarlier: false,
+      earlierCursor: null,
+    });
+
+    const dto = await loadLookupTimeline(user(), { type: 'engagement', id: 'e1' });
+    expect(dto.ok).toBe(true);
+    if (!dto.ok) return;
+    expect(dto.entries[0]?.occurredAtIso).toBe(dto.entries[1]?.occurredAtIso);
+    expect(dto.entries[0]?.instantKey).toBe('2026-03-01 12:00:00.083999+00');
+    expect(dto.entries[1]?.instantKey).toBe('2026-03-01 12:00:00.083001+00');
+    expect(dto.entries[0]?.instantKey).not.toBe(dto.entries[1]?.instantKey);
   });
 
   it('forwards hasEarlier and carries earlierCursor.createdAtPrecise to the wire DTO VERBATIM', async () => {
