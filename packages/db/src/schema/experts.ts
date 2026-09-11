@@ -13,7 +13,12 @@ import {
   customType,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
-import { expertTypeEnum, applicationStatusEnum, languageProficiencyEnum } from './enums';
+import {
+  expertTypeEnum,
+  applicationStatusEnum,
+  languageProficiencyEnum,
+  expertDeclineReasonEnum,
+} from './enums';
 import { users } from './users';
 import { agencies } from './agencies';
 import { verticals, products, supportTypes, certifications } from './verticals';
@@ -77,6 +82,64 @@ export const expertProfiles = pgTable(
     // Application lifecycle
     applicationStatus: applicationStatusEnum('application_status').default('draft').notNull(),
     submittedAt: timestamp('submitted_at', { withTimezone: true }),
+
+    // ── Terminal decision (BAL-549 / ADR-1030) ──────────────────────────────
+    // `decided_at` / `decided_by_user_id` are NULL until a decision lands; `decline_reason` /
+    // `decline_note` stay NULL on the APPROVE arm. Written together, in ONE statement, by
+    // `expertsRepository.decideApplication` — the attribution house rule
+    // (`repositories/_shared/meeting-audit.ts`, `schema/meeting-presence.ts`): a column with no
+    // writer is a worse lie than its absence.
+    //
+    // ⚠ WHY `decided_at` AND NOT JUST `approved_at`. `approved_at` is the pre-existing
+    // "when without who" defect ADR-1030 was written to fix, and it cannot express a DECLINE at
+    // all. It is KEPT and still written on the approve arm — `findPublicProfileByUsername`,
+    // `isPubliclyVisible`, `platform-lookup.ts` and `deriveExpertChecklist` all read it, and
+    // BAL-549 does not touch searchability (out of scope). `decided_at` is the decision-grain
+    // timestamp for BOTH arms; on an approve the two are written with the SAME `Date` instance.
+    //
+    // ⚠ NO COHERENCE CHECK. `applicationStatus IN ('approved','rejected') ⟺ decided_at IS NOT
+    // NULL` cannot be a CHECK constraint here: ~every pre-BAL-549 `approved` row has a NULL
+    // `decided_at`, so the constraint would fail validation on ADD. Backfilling is not on
+    // (`approved_at` has no actor to attribute). Coherence is the repository path's job and is
+    // pinned by `expert-application-decision.integration.test.ts` §1 — the same stance
+    // `project_requests` takes, for a different reason.
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    // WHO decided. Preserve attribution → restrict (the `project_requests.closed_by_user_id` /
+    // `admin_alerts.resolved_by_user_id` precedent).
+    decidedByUserId: uuid('decided_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
+    // WHY, as a category. Server-derived from a closed enum, never free text. NULL on approve.
+    declineReason: expertDeclineReasonEnum('decline_reason'),
+    /**
+     * ⚠⚠ STAFF-ONLY FREE TEXT. NEVER serialised on ANY applicant-facing lens, page, Server
+     * Action result, notification payload or audit row. This column is the note's ONLY home,
+     * so a leak has exactly one place to happen and one place to be tested.
+     *
+     * The `expert_application.declined` audit row records `hasNote: boolean` and nothing more
+     * (the `project_request.closed` precedent). The notification payload carries the reason
+     * CATEGORY and no note field at all — it is structurally unrepresentable there.
+     *
+     * ⚠⚠ WHAT ACTUALLY ENFORCES THAT (corrected in BAL-549's fix round — this docblock
+     * previously ASSERTED the invariant while nothing held it, reasoning only about
+     * `application-review.tsx` and never about `expert-application-wizard.tsx`, the applicant's
+     * real client boundary):
+     *
+     *  1. THE PROJECTION. `expertsRepository.findApplicationWithRelations` — the applicant's OWN
+     *     read, which `(apply)/expert/apply/_actions/load-draft.ts` feeds into a `'use client'`
+     *     wizard — now names its columns explicitly (`APPLICATION_PROFILE_COLUMNS`) and this one
+     *     is not among them. It cannot reach an applicant's browser because it is not on the row
+     *     that gets there. Pinned in `expert-application-decision.integration.test.ts` §7.
+     *  2. THE ONE CARRIER. `expertsRepository.findApplicationForStaffReview` is the only read in
+     *     this package that projects it, and `/admin/applications/[profileId]/page.tsx` is its
+     *     only caller.
+     *  3. THE RENDER GATE. That page resolves `REVIEW_EXPERT_APPLICATIONS` separately from the
+     *     `VIEW_PLATFORM_ADMIN` gate that merely lets a staffer reach the page, and passes
+     *     `declineNote={null}` to the banner without it.
+     *  4. THE LIST READ never selects it, and re-projects field by field so a later widening
+     *     cannot carry it out at runtime.
+     */
+    declineNote: text('decline_note'),
 
     // Calendar / availability
     timezone: text('timezone').notNull().default('UTC'),
@@ -187,6 +250,24 @@ export const expertProfiles = pgTable(
     pendingApplicationIdx: index('expert_profiles_pending_application_idx')
       .on(table.submittedAt)
       .where(sql`${table.applicationStatus} IN ('submitted', 'under_review')`),
+    /**
+     * BAL-549 — the `restrict` FK's delete-time scan (drizzle-schema skill: index every FK
+     * column). On the `admin_alerts_resolved_by_idx` / `project_requests_closed_by_idx`
+     * reasoning: a restrict FK whose scan can actually run needs an index.
+     *
+     * ⚠ NOT PARTIAL — the scan Postgres runs on a user delete ignores any predicate we would
+     * add, and `expert_profiles` has no `deleted_at` to filter on regardless.
+     */
+    decidedByIdx: index('expert_profiles_decided_by_idx').on(table.decidedByUserId),
+    /**
+     * BAL-549 — the `/admin/applications` "recently decided" arm: decisions in the last 30 days,
+     * NEWEST FIRST. PARTIAL on `decided_at IS NOT NULL`, which is a COLUMN-ONLY predicate — no
+     * enum literal, so the `ALTER TYPE … ADD VALUE` same-transaction hazard cannot apply (and
+     * 0090 adds no enum value anyway). Keeps the index to the decided minority of rows.
+     */
+    decidedAtIdx: index('expert_profiles_decided_at_idx')
+      .on(table.decidedAt)
+      .where(sql`${table.decidedAt} IS NOT NULL`),
     // Booking-rule bounds (BAL-234) — mirrored by Zod in the schedule route/action.
     bookingBufferBeforeCheck: check(
       'expert_profiles_booking_buffer_before_check',
@@ -443,6 +524,37 @@ export const workHistoryRelations = relations(workHistory, ({ one }) => ({
     references: [expertProfiles.id],
   }),
 }));
+
+/**
+ * BAL-549 — the `application_status` labels, as a union. Exported because the repository's
+ * `not_pending` outcome has to NAME the status it refused, and every caller of that outcome
+ * (the two Server Actions, the review page's banner) needs the type rather than `string`.
+ */
+export type ApplicationStatus = (typeof applicationStatusEnum.enumValues)[number];
+
+/** BAL-549 — the four decline-reason labels, as a union (the `ProjectRequestCloseReason` pattern). */
+export type ExpertDeclineReason = (typeof expertDeclineReasonEnum.enumValues)[number];
+
+// ── Type-agreement pin (BAL-549) ──────────────────────────────────────────
+//
+// ⚠ TWO DEFINITIONS OF ONE VOCABULARY, PINNED TO EACH OTHER AT COMPILE TIME — the
+// `ProjectRequestCloseReasonAgreement` pattern in `schema/project-requests.ts`, and for the same
+// reason: `@balo/shared` must not import `@balo/db` (a client component that value-imports
+// `@balo/db` drags the `postgres` driver into the bundle and fails `next build`), so the
+// client-safe restatement in `packages/shared/src/experts/application-decision.ts` cannot import
+// this union. This makes a drift between the two a TYPE ERROR. `never` is a build failure — the
+// assignment below is what gives `tsc` a reason to evaluate the alias at all.
+import type { ExpertDeclineReason as SharedExpertDeclineReason } from '@balo/shared/experts';
+
+type ExactDeclineReason<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+
+/** Compile-time proof the schema-derived union and `@balo/shared`'s agree. */
+export type ExpertDeclineReasonAgreement = ExactDeclineReason<
+  ExpertDeclineReason,
+  SharedExpertDeclineReason
+>;
+
+export const expertDeclineReasonAgreement: ExpertDeclineReasonAgreement = true;
 
 export type ExpertProfile = typeof expertProfiles.$inferSelect;
 export type NewExpertProfile = typeof expertProfiles.$inferInsert;

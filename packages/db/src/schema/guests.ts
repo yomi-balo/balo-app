@@ -45,8 +45,9 @@ import { timestamps, softDelete } from './helpers';
  * (BAL-390) — persists only a SHA-256 hex digest of a ≥256-bit random token, and a
  * plaintext credential in a widely-readable table is the one shape a compromised read
  * turns straight into meeting access. Redefined in place rather than expand-contract:
- * pre-launch, migration 0056 ran `DELETE FROM "meeting_guests"`, there is exactly one live
- * consumer (`apps/web/src/app/admin-dev/_actions/delete-user.ts`) and its columns are kept.
+ * pre-launch, migration 0056 ran `DELETE FROM "meeting_guests"`, there was exactly one live
+ * consumer — a hard-delete path existed at `admin-dev/_actions/delete-user.ts` until BAL-549
+ * deleted it — and its columns are kept.
  *
  * ── THE TOKEN IS AN IDENTITY CLAIM, NOT AN AUTHORIZATION GRANT ─────────────────────────
  * Resolving `token_hash` tells the landing WHO the visitor claims to be. Every action taken
@@ -136,8 +137,9 @@ export const meetingGuests = pgTable(
      *
      * ⚠ FK left at NO ACTION, unchanged from BAL-418 and deliberately NOT `restrict`:
      * this is a SUBJECT pointer, not an ATTRIBUTION column, so ADR-1030's actor-FK
-     * convention does not govern it. `admin-dev/_actions/delete-user.ts` NULLs it before
-     * hard-deleting a user, which is the contract that keeps that operator action working.
+     * convention does not govern it. A hard-delete path existed at `admin-dev/_actions/
+     * delete-user.ts` until BAL-549 deleted it; it NULLed this column before hard-deleting a
+     * user, proving the contract that any future operator delete path must also honour.
      */
     userId: uuid('user_id').references(() => users.id),
 
@@ -174,10 +176,11 @@ export const meetingGuests = pgTable(
      * / `expert_referral_invites` treatment): the actor must survive their own departure.
      *
      * ⚠ BEHAVIOUR CHANGE FROM BAL-418, which left this at NO ACTION.
-     * `admin-dev/_actions/delete-user.ts` already HARD-DELETES guests by `invited_by_id`
-     * BEFORE deleting the user, which satisfies `restrict` — but the two NEW attribution
-     * FKs below do NOT have that treatment for free, and that file was patched in this same
-     * PR to NULL them. See the note on `revoked_by_user_id`.
+     * A hard-delete path existed at `admin-dev/_actions/delete-user.ts` until BAL-549 deleted
+     * it; it already HARD-DELETED guests by `invited_by_id` BEFORE deleting the user, which
+     * satisfied `restrict` — but the two NEW attribution FKs below did NOT have that treatment
+     * for free, and that file was patched in the same PR to NULL them. See the note on
+     * `revoked_by_user_id`.
      *
      * ⚠⚠ NULLABLE SINCE MIGRATION 0064 (BAL-132, Decision 4). A SELF-CLAIMED LOBBY ROW HAS
      * NO INVITER, AND THERE IS NO HONEST NON-NULL VALUE. Attributing a knock to the
@@ -197,9 +200,10 @@ export const meetingGuests = pgTable(
      * harness migrates an EMPTY container, so a retro-validating `ADD CONSTRAINT` that could
      * actually reject a row would be green in CI and red on Railway; this one cannot).
      *
-     * ⚠ NO RIPPLE IN `admin-dev/_actions/delete-user.ts`. A self-claimed row names no
-     * inviter, so its `delete(... WHERE invited_by_id = $user)` simply does not match it;
-     * the row's only actor FK is `admitted_by_user_id`, which that file already NULLs.
+     * ⚠ NO RIPPLE IN the hard-delete path that existed at `admin-dev/_actions/delete-user.ts`
+     * until BAL-549 deleted it. A self-claimed row names no inviter, so its
+     * `delete(... WHERE invited_by_id = $user)` simply did not match it; the row's only actor
+     * FK is `admitted_by_user_id`, which that file already NULLed.
      */
     invitedById: uuid('invited_by_id').references(() => users.id, { onDelete: 'restrict' }),
 
@@ -243,12 +247,13 @@ export const meetingGuests = pgTable(
      * ATTRIBUTION — who revoked. `restrict`, mirroring
      * `proposal_share_links.revoked_by_user_id`.
      *
-     * ⚠ NEW `restrict` FK: a user who REVOKED a guest they did not INVITE would otherwise
-     * make `delete-user.ts`'s hard delete fail with 23503, because that file's Phase 4 only
-     * knew about `invited_by_id` / `user_id` / `converted_to_user_id`. It now NULLs this
-     * column and `admitted_by_user_id` too, AFTER the `invited_by_id` delete. Nulling
-     * attribution on a SURVIVING row is the same call `meeting_presence.user_id` makes —
-     * `restrict` would block an operator action outright — and it is why both are nullable.
+     * ⚠ NEW `restrict` FK: a user who REVOKED a guest they did not INVITE would otherwise have
+     * made the hard-delete path that existed at `admin-dev/_actions/delete-user.ts` (until
+     * BAL-549 deleted it) fail with 23503, because that file's Phase 4 only knew about
+     * `invited_by_id` / `user_id` / `converted_to_user_id`. It was patched to also NULL this
+     * column and `admitted_by_user_id`, AFTER the `invited_by_id` delete. Nulling attribution
+     * on a SURVIVING row is the same call `meeting_presence.user_id` makes — `restrict` would
+     * block an operator action outright — and it is why both are nullable.
      */
     revokedByUserId: uuid('revoked_by_user_id').references(() => users.id, {
       onDelete: 'restrict',
@@ -280,9 +285,10 @@ export const meetingGuests = pgTable(
     emailDomain: text('email_domain'),
 
     /**
-     * The acquisition loop. KEPT THOUGH NOTHING WRITES THEM: `delete-user.ts` reads
-     * `converted_to_user_id` today, and BAL-345's (currently inert) domain auto-join is
-     * their intended writer. No `guest_converted_to_member` analytics constant is declared
+     * The acquisition loop. KEPT THOUGH NOTHING WRITES THEM: a hard-delete path existed at
+     * `admin-dev/_actions/delete-user.ts` (until BAL-549 deleted it) that read
+     * `converted_to_user_id`, and BAL-345's (currently inert) domain auto-join is their
+     * intended writer. No `guest_converted_to_member` analytics constant is declared
      * anywhere — an event with no producer reads as 100% drop-off in a PostHog funnel.
      */
     convertedToUserId: uuid('converted_to_user_id').references(() => users.id),
@@ -347,9 +353,9 @@ export const meetingGuests = pgTable(
     // ── FK delete-time scans ─────────────────────────────────────────────────────────
     // ⚠ These are indexed on the SAME reasoning `reviews.reviewer_user_id` gives, and
     // AGAINST the BAL-417 actor-FK ruling: that ruling assumes users are never hard-deleted,
-    // and `admin-dev/_actions/delete-user.ts` proves the assumption false. A `restrict` FK
-    // whose delete-time scan can actually run needs an index — and `delete-user.ts` scans
-    // by every one of these four columns.
+    // and a hard-delete path existed at `admin-dev/_actions/delete-user.ts` until BAL-549
+    // deleted it, proving the assumption false. A `restrict` FK whose delete-time scan can
+    // actually run needs an index — and that file scanned by every one of these four columns.
     index('meeting_guest_invited_by_idx').on(t.invitedById),
     index('meeting_guest_user_idx').on(t.userId),
     index('meeting_guest_converted_to_user_idx').on(t.convertedToUserId),
@@ -394,12 +400,12 @@ export const meetingGuests = pgTable(
     //     revoked/decided it while it is not revoked/decided at all.
     //   · The state they PERMIT is a stamp whose actor is gone. That is not a half-write,
     //     it is the RESIDUE OF A HARD USER DELETE: `revoked_by_user_id` /
-    //     `admitted_by_user_id` are ADR-1030 `restrict` FKs, and
-    //     `apps/web/src/app/admin-dev/_actions/delete-user.ts` therefore NULLs them (it
-    //     cannot delete the guest row — that row belongs to a meeting the departing user may
-    //     have had nothing to do with beyond pressing Admit). A biconditional would make
-    //     that operator action fail with 23514, and the only alternatives would be to also
-    //     null `revoked_at` — resurrecting a revocation that really happened — or to hard
+    //     `admitted_by_user_id` are ADR-1030 `restrict` FKs, and a hard-delete path existed at
+    //     `admin-dev/_actions/delete-user.ts` until BAL-549 deleted it, which NULLed them (it
+    //     could not delete the guest row — that row belongs to a meeting the departing user may
+    //     have had nothing to do with beyond pressing Admit). A biconditional would make any
+    //     future operator action of that shape fail with 23514, and the only alternatives would
+    //     be to also null `revoked_at` — resurrecting a revocation that really happened — or to hard
     //     delete an unrelated participation record. Losing the ACTOR while keeping the FACT
     //     is the same trade `meeting_presence.user_id` makes with `set null`.
     //

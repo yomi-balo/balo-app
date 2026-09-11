@@ -332,6 +332,32 @@ describe('platformRoleHasCapability — RESOLVE_ADMIN_ALERTS', () => {
 });
 
 /**
+ * BAL-549 — the application-decision capability. Same allow/deny table as its siblings:
+ * deciding an expert application is the support role's ordinary work, so BOTH staff roles hold
+ * it and a plain `user` must never.
+ */
+describe('platformRoleHasCapability — REVIEW_EXPERT_APPLICATIONS', () => {
+  it.each(['admin', 'super_admin'])('grants REVIEW_EXPERT_APPLICATIONS to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS)).toBe(
+      true
+    );
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies REVIEW_EXPERT_APPLICATIONS to %s',
+    (role) => {
+      expect(
+        platformRoleHasCapability(role, PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS)
+      ).toBe(false);
+    }
+  );
+
+  it('maps REVIEW_EXPERT_APPLICATIONS to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS).toBe('review_expert_applications');
+  });
+});
+
+/**
  * BAL-534 fix round F1/F4 (SEC LOW) — `PLATFORM_ROLE_CAPABILITIES[role]` is a bare index into a
  * plain object literal, which also resolves INHERITED members. A role of `constructor` /
  * `__proto__` / `toString` must still deny every capability rather than returning an inherited

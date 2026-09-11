@@ -63,6 +63,7 @@ import type {
   ProjectRequestClosedPayload,
   ProjectTrackDeclinedPayload,
   ProjectRequestOwnerAssignedPayload,
+  ExpertApplicationDeclinedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -78,7 +79,7 @@ export interface ExpertApplicationSubmittedPayload {
 }
 
 export interface ExpertApprovedPayload {
-  correlationId: string; // expertProfileId
+  correlationId: string; // the expert_application.approved audit row id — per WRITE, not per state (BAL-549)
   userId: string;
   expertProfileId: string;
 }
@@ -426,6 +427,7 @@ export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
   | 'expert.approved'
+  | 'expert.application_declined'
   | 'expert.referral_invited'
   | 'calendar.auth_error'
   // BAL-468 — the daily calendar-subscription monitor's non-zero-arm alert. SERVER-ONLY.
@@ -774,6 +776,7 @@ export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
+  'expert.application_declined': ExpertApplicationDeclinedPayload;
   'expert.referral_invited': ExpertReferralInvitedPayload;
   'calendar.auth_error': CalendarAuthErrorPayload;
   'calendar.subscription_lapse': CalendarSubscriptionLapsePayload;

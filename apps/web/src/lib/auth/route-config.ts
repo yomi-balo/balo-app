@@ -13,7 +13,6 @@ export const PUBLIC_PATHS = new Set([
   '/about',
   '/pricing',
   '/contact',
-  '/admin-dev',
   // BAL-502 — the marketing header's supply-side "For experts" link target. EXACT PATH ONLY:
   // `PUBLIC_PATHS` is matched with `.has(pathname)` (see `isPublicRoute` below), so
   // `/expert/apply/success` and `/expert/apply/review` stay protected.

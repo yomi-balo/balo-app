@@ -369,3 +369,10 @@ export {
   type AdminLookupEventMap,
   type AdminLookupMatchedBy,
 } from './admin-lookup';
+// BAL-549 — the admin expert-applications surface's CLIENT event family (throughput and wait
+// times for the application funnel).
+export {
+  ADMIN_APPLICATIONS_EVENTS,
+  type AdminApplicationsEventMap,
+  type AdminApplicationDecision,
+} from './admin-applications';

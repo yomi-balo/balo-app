@@ -148,9 +148,9 @@ export const reviews = pgTable(
 
     // ⚠ DIVERGES from the BAL-417 actor-FK ruling (`case-engagements.ts`), which leaves
     // actor FKs unindexed on the premise that users are never hard-deleted. THAT PREMISE
-    // IS FALSE HERE: `apps/web/src/app/admin-dev/_actions/delete-user.ts` HARD deletes
-    // users (the reason `meeting_presence.user_id` is `set null`). A `restrict` FK whose
-    // delete-time scan can actually run needs an index.
+    // IS FALSE HERE: a hard-delete path existed at `admin-dev/_actions/delete-user.ts` until
+    // BAL-549 deleted it, and it HARD deleted users (the reason `meeting_presence.user_id` is
+    // `set null`). A `restrict` FK whose delete-time scan can actually run needs an index.
     index('review_reviewer_idx').on(t.reviewerUserId),
 
     // ── STRUCTURAL EXPERT COHERENCE ──────────────────────────────────────────────

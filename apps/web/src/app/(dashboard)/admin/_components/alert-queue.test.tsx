@@ -39,7 +39,8 @@ function row(id: string, overrides: Partial<AdminQueueRowView> = {}): AdminQueue
     closes: 'Closes itself once the application is approved or rejected',
     selfCloses: true,
     noteCloseable: false,
-    target: { label: 'the expert', href: '/admin/catalogue' },
+    // BAL-549 re-point — the id-keyed application review page, not the /admin/catalogue fallback.
+    target: { label: 'the application', href: `/admin/applications/${id}` },
     cursor: { firstSeenAtIso: '2026-09-05T12:00:00.000Z', id },
     ...overrides,
   };

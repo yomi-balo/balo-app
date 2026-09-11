@@ -144,9 +144,10 @@ export const meetingPresence = pgTable(
       .references(() => meetings.id, { onDelete: 'cascade' }),
 
     // NULL for a guest (a guest's identity is `meeting_guest_id` below). SET NULL, not
-    // restrict: `admin-dev/_actions/delete-user.ts` HARD-deletes users, and a presence
-    // interval is a BILLING input (BAL-412) that must survive the actor row. `party`
-    // preserves the side even after the user is gone.
+    // restrict: a hard-delete path existed at `admin-dev/_actions/delete-user.ts` until
+    // BAL-549 deleted it, and it HARD-deleted users, and a presence interval is a BILLING
+    // input (BAL-412) that must survive the actor row. `party` preserves the side even after
+    // the user is gone.
     userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
 
     /**

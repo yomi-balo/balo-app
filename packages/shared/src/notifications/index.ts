@@ -1164,7 +1164,7 @@ export * from './meeting-absence';
 // ── BAL-414 — the two searchability-transition promises (D1/D2) ────────────────────────
 //
 // ⚠ EXTENSIONLESS relative specifier — same rule as every other import in this file.
-import type { ExpertChecklistItemKey } from '../experts';
+import type { ExpertChecklistItemKey, ExpertDeclineReason } from '../experts';
 
 /**
  * BAL-414 (D1/D2) — the expert stopped meeting the six-item checklist and has been removed
@@ -1194,6 +1194,42 @@ export interface ExpertSearchabilityLostPayload {
 export interface ExpertSearchabilityRestoredPayload {
   correlationId: string; // = audit_events.id → BullMQ jobId dedup
   expertProfileId: string; // → resolver hydrates data.expert → recipient 'expert'
+}
+
+/**
+ * BAL-549 — the applicant's expert application was DECLINED by Balo. Recipient `self` via
+ * `userId` (`engine/dispatcher.ts:253` reads exactly that field). EMAIL ONLY — there is no
+ * in-app rule; a decision this consequential belongs in the applicant's inbox, and they have no
+ * reason to return to an in-app bell for it.
+ *
+ * ⚠ DECLARED HERE, NOT INLINE IN EITHER APP. `expert.approved` predates this shared home and is
+ * mirrored in both `apps/api/src/notifications/events.ts` and
+ * `apps/web/src/lib/notifications/types.ts` — that mirror is the documented `L3` drift hole in
+ * `routes/notifications/schema.ts`'s shape-guard docblock. A payload that lives here is bound on
+ * BOTH sides by construction. This file's own header says "migrate opportunistically"; a NEW
+ * event starts here.
+ *
+ * ⚠⚠ `reason` IS THE CATEGORY, AND THERE IS NO `note` FIELD AT ALL. `expert_profiles.decline_note`
+ * is staff-only and never leaves the DB — making it structurally unrepresentable here is the
+ * point, not an oversight.
+ *
+ * ⚠ NO ACTOR ID. `payload.userId` drives BOTH the generic `data.user` hydration (`resolver.ts`)
+ * AND the `self` recipient path, so an actor id under the wrong key would mail the deciding
+ * staffer. The applicant email never names the decider, so it is simply absent.
+ *
+ * `correlationId` is `expert-application-declined.{expertProfileId}.{auditEventId}` — COLON-FREE
+ * by construction (a `.`-joined uuid pair never contains a `:`) and unique per WRITE, so a
+ * re-decline is not deduped away against a retained completed job. Do NOT use the bare
+ * `expertProfileId`: the dispatcher builds its BullMQ jobId from the RAW correlationId
+ * (`engine/dispatcher.ts:83`).
+ */
+export interface ExpertApplicationDeclinedPayload {
+  correlationId: string;
+  /** the applicant — `recipient:'self'` resolves the recipient from this. */
+  userId: string;
+  expertProfileId: string;
+  /** ⚠ the CATEGORY. Never the note. */
+  reason: ExpertDeclineReason;
 }
 
 /**

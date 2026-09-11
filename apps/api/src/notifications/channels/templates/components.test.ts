@@ -591,6 +591,30 @@ describe('getEmailTemplate — A2 templates', () => {
     expect(html).not.toContain('internal staff note');
   });
 
+  it('resolves expert-application-declined with the reason CATEGORY, never a note (BAL-549)', async () => {
+    const { component, subject } = getEmailTemplate('expert-application-declined', {
+      recipientName: 'Priya',
+      reason: 'credentials_unverified',
+      // A staff-only note must never leak into the rendered email even if present in `data`.
+      declineNote: 'internal staff note — never render this',
+    });
+    const html = await render(component);
+    expect(subject).toBe('An update on your Balo expert application');
+    expect(html).toContain('could not verify the certifications listed');
+    expect(html).not.toContain('internal staff note');
+    expect(html).not.toContain('undefined');
+  });
+
+  it('falls back to not_a_fit for an unknown expert-application-declined reason rather than rendering undefined', async () => {
+    const { component } = getEmailTemplate('expert-application-declined', {
+      recipientName: 'Priya',
+      reason: 'not-a-real-reason',
+    });
+    const html = await render(component);
+    expect(html).toContain('the skills on offer are not ones our clients are asking for right now');
+    expect(html).not.toContain('undefined');
+  });
+
   it('resolves project-track-declined with the invited-stage withdrawal copy (BAL-540)', async () => {
     const { component, subject } = getEmailTemplate('project-track-declined', {
       title: 'CPQ implementation',

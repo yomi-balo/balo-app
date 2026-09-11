@@ -156,9 +156,10 @@ export const rescheduleProposals = pgTable(
 
     /**
      * The FK delete-time scans. Indexed on the `meeting_files` reasoning: a FK whose scan
-     * can actually run needs an index, and `admin-dev/_actions/delete-user.ts` proves users
-     * really are hard-deleted. Both columns get one — `restrict` makes the delete FAIL and
-     * `set null` makes it WRITE, and either way Postgres scans this table.
+     * can actually run needs an index — a hard-delete path existed at `admin-dev/_actions/
+     * delete-user.ts` until BAL-549 deleted it, proving users really are hard-deleted. Both
+     * columns get one — `restrict` makes the delete FAIL and `set null` makes it WRITE, and
+     * either way Postgres scans this table.
      */
     index('reschedule_proposal_proposed_by_idx').on(t.proposedByUserId),
     index('reschedule_proposal_resolved_by_idx').on(t.resolvedByUserId),

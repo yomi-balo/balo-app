@@ -35,6 +35,7 @@ import type {
   ProjectRequestClosedPayload,
   ProjectTrackDeclinedPayload,
   ProjectRequestOwnerAssignedPayload,
+  ExpertApplicationDeclinedPayload,
 } from '@balo/shared/notifications';
 
 export interface UserWelcomePayload {
@@ -205,6 +206,7 @@ export type NotificationEvent =
   | 'user.welcome'
   | 'expert.application_submitted'
   | 'expert.approved'
+  | 'expert.application_declined'
   | 'expert.referral_invited'
   | 'project.request_submitted'
   | 'project.match_requested'
@@ -301,6 +303,7 @@ export interface EventPayloadMap {
   'user.welcome': UserWelcomePayload;
   'expert.application_submitted': ExpertApplicationSubmittedPayload;
   'expert.approved': ExpertApprovedPayload;
+  'expert.application_declined': ExpertApplicationDeclinedPayload;
   'expert.referral_invited': ExpertReferralInvitedPayload;
   'project.request_submitted': ProjectRequestSubmittedPayload;
   'project.match_requested': ProjectMatchRequestedPayload;

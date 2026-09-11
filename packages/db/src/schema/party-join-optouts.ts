@@ -20,7 +20,9 @@ import { timestamps, softDelete } from './helpers';
  * `partyId` is POLYMORPHIC (companies.id OR agencies.id by partyType), app-side
  * integrity (mirror party_domains). `userId` = the opting-out subject AND actor
  * (self-opt-out only in v1); userId + createdAt is the full attribution. CASCADE
- * keeps `delete-user.ts`'s final `tx.delete(users)` clean with no new phase.
+ * kept the hard-delete path that existed at `admin-dev/_actions/delete-user.ts` (until
+ * BAL-549 deleted it) — its final `tx.delete(users)` — clean with no new phase; any future
+ * operator hard-delete inherits the same property for free.
  */
 export const partyJoinOptouts = pgTable(
   'party_join_optouts',

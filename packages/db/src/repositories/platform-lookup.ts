@@ -442,7 +442,10 @@ export function buildExpertSub(input: {
   } else if (input.applicationStatus === 'draft') {
     approval = 'draft application';
   } else if (input.applicationStatus === 'rejected') {
-    approval = 'application rejected';
+    // BAL-549 (orchestrator D2) — the STORED label is `rejected`; every staff and applicant
+    // surface says "declined". Realigned here so Lookup and `/admin/applications` agree. The
+    // comparison above still reads the unchanged enum label.
+    approval = 'application declined';
   } else {
     approval = 'awaiting approval';
   }

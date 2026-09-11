@@ -175,13 +175,14 @@ describe('MobileMoreSheet (BAL-501)', () => {
     });
   });
 
-  it('BAL-534/BAL-548/BAL-551: the five admin rows appear for a staff context, after the member rows, in registry order', () => {
+  it('BAL-534/BAL-548/BAL-551/BAL-549: the six admin rows appear for a staff context, after the member rows, in registry order', () => {
     renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: false, isStaff: true }));
     expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual([
       '/projects',
       '/settings',
       '/settings/account',
       '/admin',
+      '/admin/applications',
       '/engagements',
       '/promo-codes',
       '/admin/catalogue',
@@ -206,7 +207,14 @@ describe('MobileMoreSheet (BAL-501)', () => {
       within(group)
         .getAllByRole('link')
         .map((l) => l.getAttribute('href'))
-    ).toEqual(['/admin', '/engagements', '/promo-codes', '/admin/catalogue', '/admin/lookup']);
+    ).toEqual([
+      '/admin',
+      '/admin/applications',
+      '/engagements',
+      '/promo-codes',
+      '/admin/catalogue',
+      '/admin/lookup',
+    ]);
   });
 
   it('BAL-548: the "Balo admin" group is absent for a non-staff context', () => {

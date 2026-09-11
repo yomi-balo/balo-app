@@ -1,7 +1,24 @@
-import { eq, and, asc, lte, not, inArray, or, like, isNotNull, isNull, sql } from 'drizzle-orm';
+import {
+  eq,
+  and,
+  asc,
+  desc,
+  gte,
+  lte,
+  not,
+  inArray,
+  or,
+  like,
+  isNotNull,
+  isNull,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { createLogger } from '@balo/shared/logging';
 import { parseRatingAverage } from '@balo/shared/reviews';
 import { type Database, db } from '../client';
+import { auditEventsRepository } from './audit-events';
 import { consultationCountExpression } from './_shared/consultation-count';
 import {
   expertProfiles,
@@ -12,6 +29,8 @@ import {
   workHistory,
   users,
   agencies,
+  type ApplicationStatus,
+  type ExpertDeclineReason,
   type ExpertProfile,
   type ExpertCompetency,
   type ExpertCertification,
@@ -267,8 +286,81 @@ export interface ApplicationIndustryWithRelations extends ExpertIndustry {
   industry: { id: string; name: string; slug: string };
 }
 
+/**
+ * BAL-549 — the applicant, NARROWED. Ten columns, and `workosId` is structurally absent: a bare
+ * `with: { user: true }` would hydrate the identity-provider key, `emailVerified`,
+ * `phoneVerifiedAt`, `platformRole` and `activeCompanyId` into a read that has no use for any of
+ * them. Widen this interface only alongside the `columns` narrowing it mirrors.
+ */
+export interface ApplicationApplicant {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string;
+  avatarUrl: string | null;
+  phone: string | null;
+  timezone: string | null;
+  country: string | null;
+  countryCode: string | null;
+  deletedAt: Date | null;
+}
+
+/** BAL-549 — the agency an applicant is applying under. `stripeConnectId` is excluded. */
+export interface ApplicationAgency {
+  id: string;
+  name: string;
+  slug: string | null;
+  logoUrl: string | null;
+}
+
+/**
+ * BAL-549 FIX ROUND (F1) — THE APPLICANT-SAFE `expert_profiles` PROJECTION.
+ *
+ * ⚠⚠ THIS READ IS THE APPLICANT'S OWN (`(apply)/expert/apply/_actions/load-draft.ts` feeds it
+ * straight into `expert-application-wizard.tsx`, a `'use client'` boundary, so every column on
+ * it is serialised into the applicant's browser-visible RSC flight payload). Before the fix the
+ * top-level select carried NO `columns:` at all, so `decline_note` — staff-only free text —
+ * reached the declined applicant the decline email actively sends back to `/expert/apply`.
+ *
+ * OMITTED, AND WHY:
+ *  - `declineNote` — staff-only. Its ONE read is {@link expertsRepository.findApplicationForStaffReview}.
+ *  - `stripeConnectId` — a payments identifier no application surface renders (pre-existing
+ *    over-hydration; the `agency` relation already excluded its own copy).
+ *  - `searchVector` — a generated `tsvector`, never read through Drizzle.
+ *
+ * KEPT, AND WHY (each decision column earns its place on an applicant-facing read):
+ *  - `applicationStatus` — `/expert/apply/page.tsx` routes on it; the staff page gates its
+ *    controls on it.
+ *  - `submittedAt` — the days-waiting derivation both staff surfaces render.
+ *  - `approvedAt` — `deriveExpertChecklist` and the applicant's own success page read it.
+ *  - `decidedAt` / `decidedByUserId` — the staff banner's "when" and "who". Both are facts about
+ *    the applicant's OWN row (a timestamp and an opaque uuid), not staff-authored content.
+ *  - `declineReason` — the CATEGORY, which the applicant already receives by email (D3).
+ *
+ * ⚠ `Omit<>` HERE IS A COMPLETENESS GUARD, NOT COSMETIC: if `APPLICATION_PROFILE_COLUMNS` misses
+ * a column this type names, the query result stops being assignable and `tsc` fails.
+ */
+export type ApplicationProfile = Omit<
+  ExpertProfile,
+  'declineNote' | 'stripeConnectId' | 'searchVector'
+>;
+
+/**
+ * BAL-549 FIX ROUND (F1) — the STAFF projection: every applicant-safe column PLUS the staff-only
+ * `decline_note`. Returned by {@link expertsRepository.findApplicationForStaffReview} and by
+ * nothing else, so the note has exactly one read site to gate and to test.
+ */
+export interface StaffApplicationWithRelations extends Omit<ApplicationWithRelations, 'profile'> {
+  profile: ApplicationProfile & { declineNote: string | null };
+}
+
 export interface ApplicationWithRelations {
-  profile: ExpertProfile;
+  /** BAL-549 FIX ROUND (F1) — an ALLOW-LISTED projection; never the bare row. */
+  profile: ApplicationProfile;
+  /** BAL-549 — the applicant. NARROWED columns; never `workosId`. */
+  user: ApplicationApplicant;
+  /** BAL-549 — the agency the applicant is applying under; `null` for an independent expert. */
+  agency: ApplicationAgency | null;
   competencies: ApplicationCompetencyWithRelations[];
   certifications: ApplicationCertWithRelations[];
   languages: ApplicationLanguageWithRelations[];
@@ -292,6 +384,172 @@ export interface PendingApplicationAlertRow {
   submittedAt: Date;
   applicationStatus: 'submitted' | 'under_review';
 }
+
+// ── The application decision (BAL-549 / ADR-1030) ────────────────
+
+/** The two `application_status` labels a pending application may hold (orchestrator D4). */
+export const PENDING_APPLICATION_STATUSES = ['submitted', 'under_review'] as const;
+export type PendingApplicationStatus = (typeof PENDING_APPLICATION_STATUSES)[number];
+
+/**
+ * BAL-549 — one application decision. SERVER-DERIVED throughout: `actorUserId` comes from the
+ * session, `decision` from WHICH Server Action ran, and the applicant's user id is NOT here at
+ * all — it is read from the LOCKED profile row inside the transaction (see `decideApplication`).
+ */
+export type DecideApplicationInput = { expertProfileId: string; actorUserId: string } & (
+  | { decision: 'approve' }
+  | { decision: 'decline'; reason: ExpertDeclineReason; note: string }
+);
+
+/**
+ * BAL-549 — what one decision produced. Every field exists because the caller's POST-COMMIT
+ * fan-out or its analytics needs it: this repository cannot notify
+ * (`invariants/repositories-never-notify.test.ts`), so the obligation is discharged from the
+ * Server Action.
+ *
+ * ⚠ `outcome` IS A DISCRIMINANT, NOT A THROW. `'not_pending'` and `'not_found'` are ordinary,
+ * reachable states (two staffers open the same queue row; a queue row survives a decision until
+ * the next sweep) and the UI must be able to say which. Only genuine integrity failures throw.
+ */
+export type DecideApplicationResult =
+  | {
+      outcome: 'decided';
+      profile: ExpertProfile;
+      /** The status held immediately before the decision — `'submitted'` or `'under_review'`. */
+      previousStatus: PendingApplicationStatus;
+      /**
+       * The applicant's `users.id`, read from the LOCKED profile row — never from the caller.
+       * Recipient of `expert.application_declined`; subject of the `activeMode` write.
+       */
+      applicantUserId: string;
+      /** For the `days_waiting` analytics property and the inline outcome line. */
+      submittedAt: Date | null;
+      /**
+       * The `expert_application.{approved,declined}` audit row id. A uuid, so COLON-FREE, and
+       * unique per WRITE rather than per state — BullMQ silently no-ops an `add` whose jobId is
+       * already in the retained completed set, so an `expertProfileId`-derived key would swallow
+       * a genuine second event (orchestrator D5).
+       */
+      auditEventId: string;
+    }
+  | { outcome: 'not_pending'; currentStatus: ApplicationStatus }
+  | { outcome: 'not_found' };
+
+/** BAL-549 — the `/admin/applications` filter vocabulary. `declined` reads the stored `rejected`. */
+export const APPLICATION_REVIEW_FILTERS = ['pending', 'approved', 'declined'] as const;
+export type ApplicationReviewFilter = (typeof APPLICATION_REVIEW_FILTERS)[number];
+
+/**
+ * BAL-549 — one row of the `/admin/applications` list. A PROJECTION, not a row select:
+ * `expert_profiles` carries no display name, and the list must never hydrate a full `users` row.
+ *
+ * ⚠ NO `declineNote`. The list is a scannable index; the note is read on the DETAIL page only,
+ * which keeps the staff-only text on exactly one surface.
+ */
+export interface ApplicationReviewRow {
+  expertProfileId: string;
+  applicantUserId: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string;
+  /** The agency the applicant is applying under; `null` for an independent expert. */
+  agencyName: string | null;
+  applicationStatus: ApplicationStatus;
+  submittedAt: Date | null;
+  decidedAt: Date | null;
+  decidedByFirstName: string | null;
+  decidedByLastName: string | null;
+  declineReason: ExpertDeclineReason | null;
+}
+
+export interface ApplicationReviewList {
+  rows: ApplicationReviewRow[];
+  /**
+   * Chip counts. `pending` is EVERY pending application; `approved`/`declined` count only the
+   * RECENTLY-DECIDED window (`decidedSince`) — an all-time approved count would be "every expert
+   * ever" and would say nothing about throughput.
+   *
+   * ⚠ `approved` COUNTS ROWS WITH A `decided_at`, so it EXCLUDES every pre-BAL-549 approval
+   * (which has `approved_at` but no `decided_at`). That is correct and intended: this list is a
+   * decision log, and a decision with no recorded decider is not one this surface can render.
+   */
+  counts: Record<ApplicationReviewFilter, number>;
+  /** True when `rows` filled the batch — the caller must say so rather than silently capping. */
+  truncated: boolean;
+}
+
+/**
+ * The per-filter status predicate, shared by the row read and its chip count so the two can
+ * never drift. `declined` reads the STORED `'rejected'` label (orchestrator D2).
+ */
+function applicationReviewPredicate(
+  filter: ApplicationReviewFilter,
+  decidedSince: Date
+): SQL<unknown> {
+  if (filter === 'pending') {
+    return inArray(expertProfiles.applicationStatus, [...PENDING_APPLICATION_STATUSES]);
+  }
+  // `and()` of two non-undefined terms is never undefined, but its TYPE admits it; the `??`
+  // keeps the signature honest without an assertion.
+  //
+  // ⚠ THE FALLBACK IS `false`, NOT `true` (fix round, F3). It is unreachable today, but this is
+  // a filter predicate on a staff surface: an unreachable fallback that widens a result set is
+  // the wrong direction on an authorization-adjacent read. A predicate that somehow degrades
+  // must return NOTHING, never EVERYTHING.
+  return (
+    and(
+      eq(expertProfiles.applicationStatus, filter === 'approved' ? 'approved' : 'rejected'),
+      gte(expertProfiles.decidedAt, decidedSince)
+    ) ?? sql`false`
+  );
+}
+
+/**
+ * BAL-549 FIX ROUND (F1) — the allow-list behind {@link ApplicationProfile}.
+ *
+ * ⚠ `as const` IS LOAD-BEARING. Drizzle resolves a `columns` selection from LITERAL `true`s;
+ * widening these to `boolean` makes every column vanish from the inferred result type.
+ *
+ * ⚠ ADDING A COLUMN TO `expert_profiles` DOES NOT ADD IT HERE. That is the point: a new
+ * staff-only column is absent from every applicant-facing read until somebody names it.
+ */
+const APPLICATION_PROFILE_COLUMNS = {
+  id: true,
+  userId: true,
+  verticalId: true,
+  type: true,
+  agencyId: true,
+  headline: true,
+  bio: true,
+  username: true,
+  rateCents: true,
+  trailheadUrl: true,
+  linkedinUrl: true,
+  websiteUrl: true,
+  availableForWork: true,
+  searchable: true,
+  skillsLocked: true,
+  yearStartedSalesforce: true,
+  projectCountMin: true,
+  projectLeadCountMin: true,
+  isSalesforceMvp: true,
+  isSalesforceCta: true,
+  isCertifiedTrainer: true,
+  applicationStatus: true,
+  submittedAt: true,
+  decidedAt: true,
+  decidedByUserId: true,
+  declineReason: true,
+  timezone: true,
+  bookingBufferBeforeMinutes: true,
+  bookingBufferAfterMinutes: true,
+  bookingMinimumNoticeMinutes: true,
+  ratingAverage: true,
+  ratingCount: true,
+  createdAt: true,
+  updatedAt: true,
+  approvedAt: true,
+} as const;
 
 // ── Repository ───────────────────────────────────────────────────
 
@@ -713,13 +971,57 @@ export const expertsRepository = {
     });
   },
 
-  /** Find application with all related data */
+  /**
+   * Find application with all related data.
+   *
+   * ⚠ BAL-549 WIDENED THIS BY TWO RELATIONS — `user` and `agency` — BOTH WITH AN EXPLICIT
+   * `columns` NARROWING, NEVER `true`. A bare `with: { user: true }` hydrates the FULL `users`
+   * row, including `workos_id`, `email_verified`, `phone_verified_at`, `platform_role` and
+   * `active_company_id` — the identity-provider key and PII this read has no use for. `agency`
+   * likewise excludes `stripe_connect_id`.
+   *
+   * ⚠ THE APPLICANT'S OWN PAGE ALSO READS THIS (`(apply)/expert/apply/_actions/load-submitted.ts`,
+   * `load-draft.ts`, `save-draft.ts`, `submit-application.ts`). The widening is ADDITIVE and the
+   * added columns are the applicant's own name/email/phone and their agency's public identity —
+   * nothing a staff-only lens would carry. If a future column here is staff-only, it does NOT
+   * belong on this read: add a separate staff projection.
+   *
+   * ⚠⚠ THE TOP-LEVEL SELECT IS ALLOW-LISTED TOO (BAL-549 FIX ROUND, F1) — see
+   * `APPLICATION_PROFILE_COLUMNS` / {@link ApplicationProfile}. It previously had NO `columns:`,
+   * which returned the bare row: `decline_note` and `stripe_connect_id` included. This read
+   * feeds `load-draft.ts` → `expert-application-wizard.tsx` (`'use client'`), so the bare row
+   * was serialised into the APPLICANT'S OWN browser payload — and a declined applicant is sent
+   * to exactly that page by the decline email's CTA.
+   *
+   * ⚠ `decline_note` IS NOT ON THIS READ AT ALL. The staff review page reads it through
+   * {@link expertsRepository.findApplicationForStaffReview}, which is the only method that
+   * projects it. Pinned in `expert-application-decision.integration.test.ts` §7 — removing the
+   * `columns:` allow-list turns that suite red.
+   */
   async findApplicationWithRelations(
     expertProfileId: string
   ): Promise<ApplicationWithRelations | undefined> {
     const profile = await db.query.expertProfiles.findFirst({
       where: eq(expertProfiles.id, expertProfileId),
+      columns: APPLICATION_PROFILE_COLUMNS,
       with: {
+        user: {
+          columns: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            avatarUrl: true,
+            phone: true,
+            timezone: true,
+            country: true,
+            countryCode: true,
+            deletedAt: true,
+          },
+        },
+        agency: {
+          columns: { id: true, name: true, slug: true, logoUrl: true },
+        },
         competencies: { with: { product: true, supportType: true } },
         certifications: { with: { certification: true } },
         languages: { with: { language: true } },
@@ -732,11 +1034,47 @@ export const expertsRepository = {
 
     return {
       profile,
+      user: profile.user,
+      agency: profile.agency,
       competencies: profile.competencies as unknown as ApplicationCompetencyWithRelations[],
       certifications: profile.certifications as unknown as ApplicationCertWithRelations[],
       languages: profile.languages as unknown as ApplicationLanguageWithRelations[],
       industries: profile.industries as unknown as ApplicationIndustryWithRelations[],
       workHistory: profile.workHistory,
+    };
+  },
+
+  /**
+   * BAL-549 FIX ROUND (F1) — THE STAFF READ. Everything
+   * {@link expertsRepository.findApplicationWithRelations} returns, PLUS the staff-only
+   * `decline_note`.
+   *
+   * ⚠ A SEPARATE METHOD, NOT A FLAG ON THE APPLICANT READ. A boolean parameter would put the
+   * note one wrong argument away from the applicant's own page; a separate method makes the
+   * staff column reachable only from a call site that names it. Its ONE caller is
+   * `/admin/applications/[profileId]/page.tsx`, which renders the note behind
+   * `REVIEW_EXPERT_APPLICATIONS` (never on the page's own `VIEW_PLATFORM_ADMIN` gate).
+   *
+   * ⚠ THE NOTE IS FETCHED BY ITS OWN ONE-COLUMN READ rather than by re-stating the relation
+   * block with a wider allow-list — one definition of the relations, one definition of the
+   * allow-list, and the staff column appears in exactly one `columns:` literal in this package.
+   */
+  async findApplicationForStaffReview(
+    expertProfileId: string
+  ): Promise<StaffApplicationWithRelations | undefined> {
+    const [application, staffColumns] = await Promise.all([
+      expertsRepository.findApplicationWithRelations(expertProfileId),
+      db.query.expertProfiles.findFirst({
+        where: eq(expertProfiles.id, expertProfileId),
+        columns: { declineNote: true },
+      }),
+    ]);
+
+    if (application === undefined) return undefined;
+
+    return {
+      ...application,
+      profile: { ...application.profile, declineNote: staffColumns?.declineNote ?? null },
     };
   },
 
@@ -1155,28 +1493,270 @@ export const expertsRepository = {
     return profile;
   },
 
-  /** Approve application: transition from submitted to approved, set approvedAt */
-  async approveApplication(expertProfileId: string): Promise<ExpertProfile> {
-    const [profile] = await db
-      .update(expertProfiles)
-      .set({
-        applicationStatus: 'approved',
-        approvedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(expertProfiles.id, expertProfileId),
-          eq(expertProfiles.applicationStatus, 'submitted')
+  /**
+   * BAL-549 / ADR-1030 — DECIDE AN EXPERT APPLICATION. ONE `db.transaction` that flips the
+   * profile to its terminal status, stamps all four ADR-1030 floor columns, switches the
+   * applicant's `active_mode` to `'expert'` on the APPROVE arm, and appends ONE
+   * `expert_application.{approved,declined}` audit row. Modelled on
+   * `projectRequestsRepository.close()` — the shipped "lock FOR UPDATE + write + audit row in
+   * ONE transaction" precedent — scaled down.
+   *
+   * ⚠⚠ THIS REPLACES `approveApplication`, WHICH RAN AS TWO UNTRANSACTIONED CALLS WITH NO AUDIT
+   * ROW (`admin-dev/_actions/approve-expert.ts`). A crash between them left an approved expert
+   * stuck in the client workspace, with nothing recording who approved them. Both halves now
+   * commit or roll back together.
+   *
+   * ⚠⚠ THE APPLICANT'S USER ID IS READ FROM THE LOCKED ROW, NEVER FROM THE CALLER. The deleted
+   * action took `userId` as its SECOND ARGUMENT and wrote `active_mode` to whatever it was
+   * handed — an IDOR: approve profile A while flipping user B into the expert workspace. There
+   * is no parameter for it here, so the class is structurally unreachable.
+   *
+   * ⚠ BOTH PENDING LABELS ARE ACCEPTED (orchestrator D4). The deleted `approveApplication`
+   * guarded on `'submitted'` ONLY, while the BAL-548 finder, the partial index and
+   * `listPendingApplicationsForAlerts` all treat `('submitted','under_review')` as pending. A
+   * queue row that cannot be actioned is exactly the bug this must not ship. `'under_review'`
+   * has no writer today; that is latent, not dead.
+   *
+   * ⚠ THE STORED DECLINE LABEL IS `'rejected'`, AND EVERY SURFACE SAYS "DECLINED" — a
+   * DELIBERATE, DOCUMENTED divergence (orchestrator D2). `'rejected'` shipped in migration
+   * 0000's original `CREATE TYPE application_status` and already has readers
+   * (`(apply)/expert/apply/review/page.tsx` redirects a declined applicant back to the wizard;
+   * BAL-551's Lookup renders a sub-label). Changing the stored label would be a migration and a
+   * data backfill to buy a synonym. The AUDIT ACTION and the NOTIFICATION EVENT are both named
+   * `…declined`, against a `rejected` column, on purpose.
+   *
+   * ⚠ `approved_at` IS STILL WRITTEN ON THE APPROVE ARM, beside `decided_at`, with the SAME
+   * `Date`. Four shipped readers depend on it (`findPublicProfileByUsername`,
+   * `isPubliclyVisible`, `platform-lookup.ts`, `deriveExpertChecklist`) and searchability is out
+   * of BAL-549's scope. It is NOT cleared on the decline arm — a declined application never had
+   * one.
+   *
+   * ⚠ `decline_note` IS NOT COPIED INTO THE AUDIT ROW. The row records `hasNote: boolean` and
+   * nothing more (the `project_request.closed` precedent) — the column is the note's ONLY home,
+   * so a leak has exactly one place to happen and one place to be tested.
+   *
+   * ⚠ THIS REPOSITORY NOTIFIES NOBODY, and cannot
+   * (`invariants/repositories-never-notify.test.ts`). The caller owns the POST-COMMIT publish of
+   * `expert.application_declined`, using the returned `auditEventId` as half of its compound,
+   * colon-free correlationId.
+   *
+   * LOCK ORDER: the profile row, then the user row, in that fixed order, so two concurrent
+   * decisions on the same application queue rather than deadlock. Only the PROFILE row is taken
+   * with an explicit `FOR UPDATE`; the user row is locked implicitly, by its own `UPDATE`, on
+   * the approve arm only (fix round, F6 — the previous wording said "both are taken
+   * `FOR UPDATE`", which over-claimed). Equivalent for ordering, and worth stating precisely:
+   * on the DECLINE arm no user-row lock is taken at all, because no user row is written.
+   *
+   * Returns a DISCRIMINATED outcome; throws only on genuine integrity failure (the `UPDATE`
+   * matching zero rows after the lock succeeded).
+   */
+  async decideApplication(input: DecideApplicationInput): Promise<DecideApplicationResult> {
+    return db.transaction(async (tx) => {
+      const now = new Date();
+
+      // 1. Lock the profile row.
+      const [current] = await tx
+        .select()
+        .from(expertProfiles)
+        .where(eq(expertProfiles.id, input.expertProfileId))
+        .for('update');
+
+      if (current === undefined) return { outcome: 'not_found' };
+
+      // 2. Refuse a non-pending application, for free — BOTH pending labels (D4).
+      if (
+        current.applicationStatus !== 'submitted' &&
+        current.applicationStatus !== 'under_review'
+      ) {
+        return { outcome: 'not_pending', currentStatus: current.applicationStatus };
+      }
+      const previousStatus = current.applicationStatus;
+      const applicantUserId = current.userId; // ← from the LOCKED ROW, never the caller
+
+      // 3. The profile write. ONE statement, all four floor columns.
+      const [updated] = await tx
+        .update(expertProfiles)
+        .set(
+          input.decision === 'approve'
+            ? {
+                applicationStatus: 'approved',
+                approvedAt: now,
+                decidedAt: now,
+                decidedByUserId: input.actorUserId,
+                updatedAt: now,
+              }
+            : {
+                applicationStatus: 'rejected',
+                decidedAt: now,
+                decidedByUserId: input.actorUserId,
+                declineReason: input.reason,
+                declineNote: input.note,
+                updatedAt: now,
+              }
         )
+        .where(eq(expertProfiles.id, input.expertProfileId))
+        .returning();
+
+      if (updated === undefined) {
+        throw new Error(`Failed to update expert profile: ${input.expertProfileId}`);
+      }
+
+      // 4. APPROVE ARM ONLY — put the new expert into the expert workspace.
+      //    ⚠ `deleted_at IS NULL` guarded: this write is reachable from a request path, so it
+      //    must never resurrect a soft-deleted user's row (`usersRepository.updateTimezone`'s
+      //    rule). A soft-deleted applicant still gets the profile decision — there is nothing
+      //    to un-decide — but no `users` write.
+      if (input.decision === 'approve') {
+        await tx
+          .update(users)
+          .set({ activeMode: 'expert', updatedAt: now })
+          .where(and(eq(users.id, applicantUserId), isNull(users.deletedAt)));
+      }
+
+      // 5. The audit row, LAST — an audit row must never outlive a rolled-back decision.
+      //
+      // ⚠ FIXED METADATA CONTRACT. `audit_events` is APPEND-ONLY — no `updated_at`, no
+      // backfill — so this shape is unrecoverable if wrong. Asserted key-by-key in
+      // `expert-application-decision.integration.test.ts`.
+      //
+      // ⚠ `hasNote`, NEVER THE NOTE TEXT.
+      const auditRow = await auditEventsRepository.record(
+        {
+          actorUserId: input.actorUserId,
+          action:
+            input.decision === 'approve'
+              ? 'expert_application.approved'
+              : 'expert_application.declined',
+          entityType: 'expert_profile', // the `_shared/schedule-audit.ts` spelling
+          entityId: input.expertProfileId,
+          metadata: {
+            previousStatus,
+            applicantUserId,
+            ...(input.decision === 'decline'
+              ? { reason: input.reason, hasNote: input.note.length > 0 }
+              : {}),
+          },
+        },
+        tx
+      );
+
+      return {
+        outcome: 'decided',
+        profile: updated,
+        previousStatus,
+        applicantUserId,
+        submittedAt: updated.submittedAt,
+        auditEventId: auditRow.id,
+      };
+    });
+  },
+
+  /**
+   * BAL-549 — the `/admin/applications` list read. ONE filter arm per call plus the three chip
+   * counts, in one round trip's worth of queries.
+   *
+   * PENDING arm: `('submitted','under_review')`, OLDEST SUBMISSION FIRST — rides
+   * `expert_profiles_pending_application_idx`. Same predicate as
+   * `listPendingApplicationsForAlerts` so the list and the queue agree on WHICH applications are
+   * pending (they deliberately disagree on how OLD each one is — see `applicationWaitingDays`'s
+   * docblock in `@balo/shared/experts` and orchestrator O7).
+   *
+   * DECIDED arms: `decided_at >= decidedSince`, NEWEST FIRST — rides
+   * `expert_profiles_decided_at_idx`.
+   *
+   * ⚠ `INNER JOIN users` for the applicant, with `deleted_at IS NULL` IN THE JOIN CONDITION: an
+   * applicant whose user row was soft-deleted is not an application anybody can action, so
+   * dropping the row is right. `LEFT JOIN agencies` for the agency (NULL = independent — the
+   * shape, not a missing row) and `LEFT JOIN users AS decider` for attribution, whose filter
+   * stays in the JOIN CONDITION so a soft-deleted DECIDER does not drop the parent row.
+   *
+   * ⚠ NO `deleted_at` FILTER ON `expert_profiles`, BECAUSE IT HAS NO SUCH COLUMN.
+   *
+   * ⚠ `limit` IS A BATCH BOUND THE CALLER MUST SURFACE WHEN IT FILLS (`truncated`). No silent
+   * caps — the `listPendingApplicationsForAlerts` contract, verbatim.
+   *
+   * ⚠ THE THREE CHIP COUNTS ARE THREE SEPARATE `count(*)` SELECTS, EACH REUSING
+   * `applicationReviewPredicate` — deliberately NOT one `GROUP BY`. A grouped count would have
+   * to fold the `decidedSince` window into a conditional aggregate, which is exactly where the
+   * window silently stops applying to one arm. Three indexed counts on a staff surface is not a
+   * hot path; do not "optimise" this into a GROUP BY.
+   */
+  async listApplicationsForReview(input: {
+    filter: ApplicationReviewFilter;
+    decidedSince: Date;
+    limit: number;
+  }): Promise<ApplicationReviewList> {
+    const decider = alias(users, 'decider');
+
+    const rowsQuery = db
+      .select({
+        expertProfileId: expertProfiles.id,
+        applicantUserId: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+        agencyName: agencies.name,
+        applicationStatus: expertProfiles.applicationStatus,
+        submittedAt: expertProfiles.submittedAt,
+        decidedAt: expertProfiles.decidedAt,
+        decidedByFirstName: decider.firstName,
+        decidedByLastName: decider.lastName,
+        declineReason: expertProfiles.declineReason,
+      })
+      .from(expertProfiles)
+      .innerJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
+      .leftJoin(agencies, eq(agencies.id, expertProfiles.agencyId))
+      .leftJoin(
+        decider,
+        and(eq(decider.id, expertProfiles.decidedByUserId), isNull(decider.deletedAt))
       )
-      .returning();
+      .where(applicationReviewPredicate(input.filter, input.decidedSince))
+      .orderBy(
+        ...(input.filter === 'pending'
+          ? [asc(expertProfiles.submittedAt), asc(expertProfiles.id)]
+          : [desc(expertProfiles.decidedAt), desc(expertProfiles.id)])
+      )
+      .limit(input.limit);
 
-    if (!profile) {
-      throw new Error('Application not found or not in submitted status');
-    }
+    const countFor = async (filter: ApplicationReviewFilter): Promise<number> => {
+      const [row] = await db
+        .select({ count: sql<number>`cast(count(*) as int)` })
+        .from(expertProfiles)
+        .innerJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
+        .where(applicationReviewPredicate(filter, input.decidedSince));
+      return row?.count ?? 0;
+    };
 
-    return profile;
+    const [rows, pending, approved, declined] = await Promise.all([
+      rowsQuery,
+      countFor('pending'),
+      countFor('approved'),
+      countFor('declined'),
+    ]);
+
+    return {
+      // ⚠ RE-PROJECTED FIELD BY FIELD, NOT SPREAD. `applicationStatus` and `declineReason`
+      // already arrive typed by the schema (no `!`, no narrowing needed) — the explicit literal
+      // exists so a later widening of the `select()` above cannot silently carry a new column,
+      // `decline_note` above all, out of this list at RUNTIME while the declared type still
+      // says it does not.
+      rows: rows.map((row) => ({
+        expertProfileId: row.expertProfileId,
+        applicantUserId: row.applicantUserId,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        email: row.email,
+        agencyName: row.agencyName,
+        applicationStatus: row.applicationStatus,
+        submittedAt: row.submittedAt,
+        decidedAt: row.decidedAt,
+        decidedByFirstName: row.decidedByFirstName,
+        decidedByLastName: row.decidedByLastName,
+        declineReason: row.declineReason,
+      })),
+      counts: { pending, approved, declined },
+      truncated: rows.length === input.limit,
+    };
   },
 
   /**

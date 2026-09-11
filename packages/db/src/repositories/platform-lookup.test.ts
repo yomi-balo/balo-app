@@ -394,9 +394,11 @@ describe('buildExpertSub', () => {
     expect(buildExpertSub({ ...approved, approvedAt: null, applicationStatus: 'draft' })).toContain(
       'draft application'
     );
+    // BAL-549 (D2) — the STORED label is still `rejected`; the RENDERED word is "declined", so
+    // Lookup and `/admin/applications` say the same thing about the same row.
     expect(
       buildExpertSub({ ...approved, approvedAt: null, applicationStatus: 'rejected' })
-    ).toContain('application rejected');
+    ).toContain('application declined');
   });
 });
 

@@ -146,6 +146,19 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'critical',
     },
   ],
+  // BAL-549 — the applicant's application was declined. EMAIL ONLY (no in-app): a decision this
+  // consequential belongs in the inbox, and the applicant has no reason to return to a bell for
+  // it. `priority: 'critical'` matches `expert.approved` — both are terminal decisions on a
+  // person's standing with Balo.
+  'expert.application_declined': [
+    {
+      channel: 'email',
+      recipient: 'self',
+      template: 'expert-application-declined',
+      timing: 'immediate',
+      priority: 'critical',
+    },
+  ],
   // BAL-325: referral invite to an EXTERNAL email (not a Balo user). The
   // 'email_address' recipient reads the address straight from the event payload in
   // the dispatcher — there is no user row to hydrate. Email channel only (no in-app

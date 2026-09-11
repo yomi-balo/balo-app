@@ -136,6 +136,32 @@ export const relationshipDeclineReasonEnum = pgEnum('relationship_decline_reason
   'balo_declined',
 ]);
 
+/**
+ * BAL-549 / ADR-1030 — why an expert APPLICATION was declined. A brand-new standalone
+ * `CREATE TYPE`, so every label commits atomically with the type and IS usable in the same
+ * migration (the one-transaction hazard is `ALTER TYPE … ADD VALUE`-only) — the
+ * `project_request_close_reason` argument verbatim. Nothing in 0090 uses them in a
+ * DEFAULT/CHECK/index predicate anyway: `decline_reason` is NULL until a decline happens.
+ *
+ * ⚠ IT IS NOT A STATUS. `application_status` keeps its existing terminal `'rejected'` (shipped
+ * in migration 0000's original CREATE TYPE, already read by
+ * `(apply)/expert/apply/review/page.tsx` and by BAL-551's Lookup). This column says WHY, beside
+ * `decided_by_user_id` (WHO) and `decided_at` (WHEN). All four are written together, in ONE
+ * statement, by `expertsRepository.decideApplication`.
+ *
+ * ⚠ THE STORED LABEL IS `rejected`; EVERY SURFACE SAYS "DECLINED" (orchestrator D2). That
+ * divergence is DELIBERATE and DOCUMENTED — "declined" is the warmer word and is what the
+ * admin UI, the applicant email, the notification event and the audit action all use. BAL-551's
+ * Lookup sub-label was realigned to "application declined" in the same PR so the two staff
+ * surfaces agree.
+ */
+export const expertDeclineReasonEnum = pgEnum('expert_decline_reason', [
+  'experience_depth',
+  'credentials_unverified',
+  'application_incomplete',
+  'not_a_fit',
+]);
+
 // ── A6 proposal model (BAL-287) ──────────────────────────────────────────
 
 /**

@@ -183,8 +183,9 @@ export const adminAlerts = pgTable(
     /**
      * The `restrict` FK's delete-time scan (drizzle-schema skill: index every FK column). On
      * the `internal_notes_author_idx` reasoning: a restrict FK whose scan can actually run
-     * needs an index, and `admin-dev/_actions/delete-user.ts` proves users really are
-     * hard-deleted. NOT partial — the scan Postgres runs on delete ignores `deleted_at`.
+     * needs an index — a hard-delete path existed at `admin-dev/_actions/delete-user.ts` until
+     * BAL-549 deleted it, proving users really are hard-deleted. NOT partial — the scan
+     * Postgres runs on delete ignores `deleted_at`.
      */
     index('admin_alerts_resolved_by_idx').on(t.resolvedByUserId),
 
