@@ -1,0 +1,23 @@
+{
+  "probe": "event-delete",
+  "request": {
+    "method": "DELETE",
+    "url": "https://api.apiroc.com/api/v1/events/cmssf6bhg1pnwoi2k3ovlula8/«email-redacted»/kavrdnlpm8s67cm6gbbkpi29ek",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 753,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "17450c25ea19ed92f2084e1ea6267f7c",
+      "date": "Fri, 14 Aug 2026 07:28:35 GMT"
+    },
+    "bodyRaw": "{\"success\":true}",
+    "bodyParsed": {
+      "success": true
+    }
+  }
+}

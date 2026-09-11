@@ -1,0 +1,191 @@
+{
+  "accountHttp": 200,
+  "accountStatus": "ACTIVE",
+  "authorizedScopes": [
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "openid"
+  ],
+  "credentialsHttp": 200,
+  "credentialStatus": "ACTIVE",
+  "accessTokenPresent": true,
+  "refreshTokenPresent": true,
+  "calendarsHttp": 200,
+  "calendarsBody": "4 calendars",
+  "freeBusyHttp": 200,
+  "freeBusyBody": "ok",
+  "raw": {
+    "account": {
+      "probe": "account",
+      "request": {
+        "method": "GET",
+        "url": "https://api.apiroc.com/api/v1/endUserAccounts/cmssf6bhg1pnwoi2k3ovlula8",
+        "authMode": "valid",
+        "body": null
+      },
+      "durationMs": 332,
+      "response": {
+        "status": 200,
+        "statusText": "OK",
+        "headers": {
+          "content-type": "application/json",
+          "x-request-id": "ad90319efe180225e558b36d591c6884",
+          "date": "Fri, 14 Aug 2026 07:28:43 GMT"
+        },
+        "bodyRaw": "{\"id\":\"cmssf6bhg1pnwoi2k3ovlula8\",\"createdAt\":\"2026-08-14T04:00:57.508Z\",\"updatedAt\":\"2026-08-14T05:38:53.185Z\",\"email\":\"«email-redacted»\",\"externalId\":\"\",\"authorizedScopes\":[\"email\",\"profile\",\"https://www.googleapis.com/auth/calendar.events\",\"https://www.googleapis.com/auth/calendar\",\"https://www.googleapis.com/auth/userinfo.profile\",\"https://www.googleapis.com/auth/userinfo.email\",\"openid\"],\"providerAccountId\":\"107212653014340215388\",\"applicationId\":\"cmssdxh231phkoi2kfad0cuse\",\"status\":\"ACTIVE\",\"providerType\":\"GOOGLE\"}",
+        "bodyParsed": {
+          "id": "cmssf6bhg1pnwoi2k3ovlula8",
+          "createdAt": "2026-08-14T04:00:57.508Z",
+          "updatedAt": "2026-08-14T05:38:53.185Z",
+          "email": "«email-redacted»",
+          "externalId": "",
+          "authorizedScopes": [
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/calendar",
+            "https://www.googleapis.com/auth/userinfo.profile",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "openid"
+          ],
+          "providerAccountId": "107212653014340215388",
+          "applicationId": "cmssdxh231phkoi2kfad0cuse",
+          "status": "ACTIVE",
+          "providerType": "GOOGLE"
+        }
+      }
+    },
+    "creds": {
+      "probe": "credentials",
+      "request": {
+        "method": "GET",
+        "url": "https://api.apiroc.com/api/v1/endUserAccounts/cmssf6bhg1pnwoi2k3ovlula8/credentials",
+        "authMode": "valid",
+        "body": null
+      },
+      "durationMs": 256,
+      "response": {
+        "status": 200,
+        "statusText": "OK",
+        "headers": {
+          "content-type": "application/json",
+          "x-request-id": "176a978fa4cc9ffdeec256bad6f53739",
+          "date": "Fri, 14 Aug 2026 07:28:43 GMT"
+        },
+        "bodyRaw": "{\"id\":\"cmssf6bhk1pnyoi2kh8dneug3\",\"endUserAccountId\":\"cmssf6bhg1pnwoi2k3ovlula8\",\"accessToken\":\"«string present, 253 chars — REDACTED»\",\"refreshToken\":\"«string present, 103 chars — REDACTED»\",\"password\":null,\"expiresAt\":\"2026-08-14T08:20:51.028Z\",\"status\":\"ACTIVE\",\"createdAt\":\"2026-08-14T04:00:57.512Z\",\"updatedAt\":\"2026-08-14T07:20:52.029Z\"}",
+        "bodyParsed": {
+          "id": "cmssf6bhk1pnyoi2kh8dneug3",
+          "endUserAccountId": "cmssf6bhg1pnwoi2k3ovlula8",
+          "accessToken": "«string present, 253 chars — REDACTED»",
+          "refreshToken": "«string present, 103 chars — REDACTED»",
+          "password": null,
+          "expiresAt": "2026-08-14T08:20:51.028Z",
+          "status": "ACTIVE",
+          "createdAt": "2026-08-14T04:00:57.512Z",
+          "updatedAt": "2026-08-14T07:20:52.029Z"
+        }
+      }
+    },
+    "calendars": {
+      "probe": "calendars",
+      "request": {
+        "method": "GET",
+        "url": "https://api.apiroc.com/api/v1/calendars/cmssf6bhg1pnwoi2k3ovlula8",
+        "authMode": "valid",
+        "body": null
+      },
+      "durationMs": 507,
+      "response": {
+        "status": 200,
+        "statusText": "OK",
+        "headers": {
+          "content-type": "application/json",
+          "x-request-id": "fac77920c8e23c609f23f35a33c3f8c8",
+          "date": "Fri, 14 Aug 2026 07:28:43 GMT"
+        },
+        "bodyRaw": "{\"data\":[{\"id\":\"«email-redacted»\",\"name\":\"«email-redacted»\",\"readOnly\":false,\"hexColor\":\"#9fe1e7\",\"inviteEmail\":\"«email-redacted»\",\"isPrimary\":true,\"isShared\":false,\"timeZone\":\"Australia/Melbourne\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]},{\"id\":\"family08440323956599785867@group.calendar.google.com\",\"name\":\"Family\",\"readOnly\":false,\"hexColor\":\"#f83a22\",\"inviteEmail\":\"family08440323956599785867@group.calendar.google.com\",\"isShared\":false,\"timeZone\":\"UTC\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]},{\"id\":\"en.australian#holiday@group.v.calendar.google.com\",\"name\":\"Holidays in Australia\",\"readOnly\":true,\"hexColor\":\"#16a765\",\"inviteEmail\":\"en.australian#holiday@group.v.calendar.google.com\",\"isShared\":true,\"timeZone\":\"Australia/Melbourne\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]},{\"id\":\"en-gb.australian#holiday@group.v.calendar.google.com\",\"name\":\"Holidays in Australia\",\"readOnly\":true,\"hexColor\":\"#16a765\",\"inviteEmail\":\"en-gb.australian#holiday@group.v.calendar.google.com\",\"isShared\":true,\"timeZone\":\"Australia/Melbourne\",\"allowedOnlineMeetingProviders\":[\"hangoutsMeet\"]}],\"nextSyncToken\":\"CM_q36XMn5YDEhd5b21pa2FkcmkyMDIzQGdtYWlsLmNvbQ==\"}",
+        "bodyParsed": {
+          "data": [
+            {
+              "id": "«email-redacted»",
+              "name": "«email-redacted»",
+              "readOnly": false,
+              "hexColor": "#9fe1e7",
+              "inviteEmail": "«email-redacted»",
+              "isPrimary": true,
+              "isShared": false,
+              "timeZone": "Australia/Melbourne",
+              "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+            },
+            {
+              "id": "family08440323956599785867@group.calendar.google.com",
+              "name": "Family",
+              "readOnly": false,
+              "hexColor": "#f83a22",
+              "inviteEmail": "family08440323956599785867@group.calendar.google.com",
+              "isShared": false,
+              "timeZone": "UTC",
+              "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+            },
+            {
+              "id": "en.australian#holiday@group.v.calendar.google.com",
+              "name": "Holidays in Australia",
+              "readOnly": true,
+              "hexColor": "#16a765",
+              "inviteEmail": "en.australian#holiday@group.v.calendar.google.com",
+              "isShared": true,
+              "timeZone": "Australia/Melbourne",
+              "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+            },
+            {
+              "id": "en-gb.australian#holiday@group.v.calendar.google.com",
+              "name": "Holidays in Australia",
+              "readOnly": true,
+              "hexColor": "#16a765",
+              "inviteEmail": "en-gb.australian#holiday@group.v.calendar.google.com",
+              "isShared": true,
+              "timeZone": "Australia/Melbourne",
+              "allowedOnlineMeetingProviders": ["hangoutsMeet"]
+            }
+          ],
+          "nextSyncToken": "CM_q36XMn5YDEhd5b21pa2FkcmkyMDIzQGdtYWlsLmNvbQ=="
+        }
+      }
+    },
+    "freeBusy": {
+      "probe": "freeBusy",
+      "request": {
+        "method": "POST",
+        "url": "https://api.apiroc.com/api/v1/freeBusy/cmssf6bhg1pnwoi2k3ovlula8",
+        "authMode": "valid",
+        "body": {
+          "startDateTime": "2026-08-20T00:00:00Z",
+          "endDateTime": "2026-08-21T00:00:00Z",
+          "timeZone": "UTC",
+          "calendarIds": ["«email-redacted»"]
+        }
+      },
+      "durationMs": 474,
+      "response": {
+        "status": 200,
+        "statusText": "OK",
+        "headers": {
+          "content-type": "application/json",
+          "x-request-id": "bf502da3b43c00af3ec8766be6ee0cd8",
+          "date": "Fri, 14 Aug 2026 07:28:44 GMT"
+        },
+        "bodyRaw": "[{\"calendarId\":\"«email-redacted»\",\"busySlots\":[]}]",
+        "bodyParsed": [
+          {
+            "calendarId": "«email-redacted»",
+            "busySlots": []
+          }
+        ]
+      }
+    }
+  }
+}

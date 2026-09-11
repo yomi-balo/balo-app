@@ -1,0 +1,33 @@
+{
+  "probe": "freeBusy-before",
+  "request": {
+    "method": "POST",
+    "url": "https://api.apiroc.com/api/v1/freeBusy/cmssgqb791pukoi2kuqn2trt0",
+    "authMode": "valid",
+    "body": {
+      "startDateTime": "2026-08-20T10:00:00Z",
+      "endDateTime": "2026-08-20T10:30:00Z",
+      "timeZone": "UTC",
+      "calendarIds": [
+        "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA"
+      ]
+    }
+  },
+  "durationMs": 367,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "e2113f69253860a5dba86039e2c4ec38",
+      "date": "Fri, 14 Aug 2026 07:28:39 GMT"
+    },
+    "bodyRaw": "[{\"calendarId\":\"AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA\",\"busySlots\":[]}]",
+    "bodyParsed": [
+      {
+        "calendarId": "AQMkADAwATM3ZmYBLWI3MmMtNWU3OS0wMAItMDAKAEYAAANMyyK7iZHURL5YIXRPTwC_EwcADjIgqYA_gUmE3S5GKAxtJgAAAgEGAAAADjIgqYA_gUmE3S5GKAxtJgAAAiC2AAAA",
+        "busySlots": []
+      }
+    ]
+  }
+}

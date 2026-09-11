@@ -1,0 +1,40 @@
+{
+  "name": "unknown-calendar",
+  "raw": {
+    "probe": "unknown-calendar",
+    "request": {
+      "method": "GET",
+      "url": "https://api.apiroc.com/api/v1/calendars/cmssf6bhg1pnwoi2k3ovlula8/cal_bal393_does_not_exist",
+      "authMode": "valid",
+      "body": null
+    },
+    "durationMs": 555,
+    "response": {
+      "status": 404,
+      "statusText": "Not Found",
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "a370ffba9820047a4af4dae3df53da1b",
+        "date": "Fri, 14 Aug 2026 07:28:28 GMT"
+      },
+      "bodyRaw": "{\"error\":404,\"message\":\"Not Found\",\"requestId\":\"a370ffba9820047a4af4dae3df53da1b\"}",
+      "bodyParsed": {
+        "error": 404,
+        "message": "Not Found",
+        "requestId": "a370ffba9820047a4af4dae3df53da1b"
+      }
+    }
+  },
+  "sdk": {
+    "probe": "unknown-calendar",
+    "threw": true,
+    "durationMs": 523,
+    "errorClass": "_NotFoundError",
+    "code": "NOT_FOUND",
+    "status": 404,
+    "message": "Not Found",
+    "details": null,
+    "retryAfter": null,
+    "ownKeys": ["name", "status", "code", "details"]
+  }
+}

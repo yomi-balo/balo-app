@@ -1,0 +1,102 @@
+{
+  "name": "baseline-valid-key",
+  "raw": {
+    "probe": "baseline-valid-key",
+    "request": {
+      "method": "GET",
+      "url": "https://api.apiroc.com/api/v1/endUserAccounts",
+      "authMode": "valid",
+      "body": null
+    },
+    "durationMs": 688,
+    "response": {
+      "status": 200,
+      "statusText": "OK",
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "46a0243d9f8a7f991d154388aa4b1a51",
+        "date": "Fri, 14 Aug 2026 07:28:26 GMT"
+      },
+      "bodyRaw": "{\"data\":[{\"id\":\"cmssgqb791pukoi2kuqn2trt0\",\"createdAt\":\"2026-08-14T04:44:29.878Z\",\"updatedAt\":\"2026-08-14T04:44:29.878Z\",\"email\":\"«email-redacted»\",\"externalId\":\"\",\"authorizedScopes\":[\"openid\",\"email\",\"profile\",\"User.Read\",\"Calendars.ReadWrite\"],\"providerAccountId\":\"AAAAAAAAAAAAAAAAAAAAAOJMG72Kz3P1K0UXIM-IBE0\",\"applicationId\":\"cmssdxh231phkoi2kfad0cuse\",\"status\":\"ACTIVE\",\"providerType\":\"MICROSOFT\"},{\"id\":\"cmssf6bhg1pnwoi2k3ovlula8\",\"createdAt\":\"2026-08-14T04:00:57.508Z\",\"updatedAt\":\"2026-08-14T05:38:53.185Z\",\"email\":\"«email-redacted»\",\"externalId\":\"\",\"authorizedScopes\":[\"email\",\"profile\",\"https://www.googleapis.com/auth/calendar.events\",\"https://www.googleapis.com/auth/calendar\",\"https://www.googleapis.com/auth/userinfo.profile\",\"https://www.googleapis.com/auth/userinfo.email\",\"openid\"],\"providerAccountId\":\"107212653014340215388\",\"applicationId\":\"cmssdxh231phkoi2kfad0cuse\",\"status\":\"ACTIVE\",\"providerType\":\"GOOGLE\"}],\"nextPageToken\":null}",
+      "bodyParsed": {
+        "data": [
+          {
+            "id": "cmssgqb791pukoi2kuqn2trt0",
+            "createdAt": "2026-08-14T04:44:29.878Z",
+            "updatedAt": "2026-08-14T04:44:29.878Z",
+            "email": "«email-redacted»",
+            "externalId": "",
+            "authorizedScopes": ["openid", "email", "profile", "User.Read", "Calendars.ReadWrite"],
+            "providerAccountId": "AAAAAAAAAAAAAAAAAAAAAOJMG72Kz3P1K0UXIM-IBE0",
+            "applicationId": "cmssdxh231phkoi2kfad0cuse",
+            "status": "ACTIVE",
+            "providerType": "MICROSOFT"
+          },
+          {
+            "id": "cmssf6bhg1pnwoi2k3ovlula8",
+            "createdAt": "2026-08-14T04:00:57.508Z",
+            "updatedAt": "2026-08-14T05:38:53.185Z",
+            "email": "«email-redacted»",
+            "externalId": "",
+            "authorizedScopes": [
+              "email",
+              "profile",
+              "https://www.googleapis.com/auth/calendar.events",
+              "https://www.googleapis.com/auth/calendar",
+              "https://www.googleapis.com/auth/userinfo.profile",
+              "https://www.googleapis.com/auth/userinfo.email",
+              "openid"
+            ],
+            "providerAccountId": "107212653014340215388",
+            "applicationId": "cmssdxh231phkoi2kfad0cuse",
+            "status": "ACTIVE",
+            "providerType": "GOOGLE"
+          }
+        ],
+        "nextPageToken": null
+      }
+    }
+  },
+  "sdk": {
+    "probe": "baseline-valid-key",
+    "threw": false,
+    "result": {
+      "data": [
+        {
+          "id": "cmssgqb791pukoi2kuqn2trt0",
+          "createdAt": "2026-08-14T04:44:29.878Z",
+          "updatedAt": "2026-08-14T04:44:29.878Z",
+          "email": "«email-redacted»",
+          "externalId": "",
+          "authorizedScopes": ["openid", "email", "profile", "User.Read", "Calendars.ReadWrite"],
+          "providerAccountId": "AAAAAAAAAAAAAAAAAAAAAOJMG72Kz3P1K0UXIM-IBE0",
+          "applicationId": "cmssdxh231phkoi2kfad0cuse",
+          "status": "ACTIVE",
+          "providerType": "MICROSOFT"
+        },
+        {
+          "id": "cmssf6bhg1pnwoi2k3ovlula8",
+          "createdAt": "2026-08-14T04:00:57.508Z",
+          "updatedAt": "2026-08-14T05:38:53.185Z",
+          "email": "«email-redacted»",
+          "externalId": "",
+          "authorizedScopes": [
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/calendar",
+            "https://www.googleapis.com/auth/userinfo.profile",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "openid"
+          ],
+          "providerAccountId": "107212653014340215388",
+          "applicationId": "cmssdxh231phkoi2kfad0cuse",
+          "status": "ACTIVE",
+          "providerType": "GOOGLE"
+        }
+      ],
+      "nextPageToken": null
+    },
+    "durationMs": 373
+  }
+}

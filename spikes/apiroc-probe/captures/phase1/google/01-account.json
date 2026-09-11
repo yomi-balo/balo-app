@@ -1,0 +1,40 @@
+{
+  "probe": "account",
+  "request": {
+    "method": "GET",
+    "url": "https://api.apiroc.com/api/v1/endUserAccounts/cmssf6bhg1pnwoi2k3ovlula8",
+    "authMode": "valid",
+    "body": null
+  },
+  "durationMs": 356,
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "90183f899039c99a65a63a3b6d75fd03",
+      "date": "Fri, 14 Aug 2026 07:28:30 GMT"
+    },
+    "bodyRaw": "{\"id\":\"cmssf6bhg1pnwoi2k3ovlula8\",\"createdAt\":\"2026-08-14T04:00:57.508Z\",\"updatedAt\":\"2026-08-14T05:38:53.185Z\",\"email\":\"«email-redacted»\",\"externalId\":\"\",\"authorizedScopes\":[\"email\",\"profile\",\"https://www.googleapis.com/auth/calendar.events\",\"https://www.googleapis.com/auth/calendar\",\"https://www.googleapis.com/auth/userinfo.profile\",\"https://www.googleapis.com/auth/userinfo.email\",\"openid\"],\"providerAccountId\":\"107212653014340215388\",\"applicationId\":\"cmssdxh231phkoi2kfad0cuse\",\"status\":\"ACTIVE\",\"providerType\":\"GOOGLE\"}",
+    "bodyParsed": {
+      "id": "cmssf6bhg1pnwoi2k3ovlula8",
+      "createdAt": "2026-08-14T04:00:57.508Z",
+      "updatedAt": "2026-08-14T05:38:53.185Z",
+      "email": "«email-redacted»",
+      "externalId": "",
+      "authorizedScopes": [
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "openid"
+      ],
+      "providerAccountId": "107212653014340215388",
+      "applicationId": "cmssdxh231phkoi2kfad0cuse",
+      "status": "ACTIVE",
+      "providerType": "GOOGLE"
+    }
+  }
+}

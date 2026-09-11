@@ -1,0 +1,16 @@
+{
+  "name": "apiroc-probe",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "BAL-393 throwaway spike harness — probes Apiroc (OneCal) sandbox runtime behaviour. Not part of the pnpm workspace. Never merged.",
+  "scripts": {
+    "phase0": "node src/phase0.mjs",
+    "phase0:rate-limit": "node src/phase0.mjs --rate-limit",
+    "authorize-url": "node src/authorize-url.mjs"
+  },
+  "dependencies": {
+    "@apiroc/unified-calendar-api-node-sdk": "2.0.1",
+    "svix": "^1.45.1"
+  }
+}
