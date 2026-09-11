@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { db } from '../client';
-import { auditEvents, type AuditEvent } from '../schema';
-import { userFactory } from '../test/factories';
-import { auditEventsRepository } from './audit-events';
+import { auditEvents, users, type AuditEvent } from '../schema';
+import {
+  agencyFactory,
+  agencyMemberFactory,
+  companyFactory,
+  companyMemberFactory,
+  userFactory,
+} from '../test/factories';
+import { auditEventsRepository, type AuditTrailCursor } from './audit-events';
 
 /**
  * Integration tests for the generic audit writer (BAL-344). Uses the in-harness
@@ -556,5 +562,365 @@ describe('audit_events trail ordering (BAL-426)', () => {
       });
       expect(latest?.metadata).toEqual({ position: 'second' });
     }
+  });
+});
+
+/**
+ * BAL-555 — `listTrailForEntity`, the Lookup Timeline reader. Extends the file's own
+ * `ORDERING_TRIALS` pattern and `trailFor` local oracle (both defined above) as the
+ * cross-check for the keyset cursor.
+ */
+describe('auditEventsRepository.listTrailForEntity', () => {
+  async function record(input: {
+    entityId: string;
+    actorUserId: string | null;
+    action?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AuditEvent> {
+    return auditEventsRepository.record(
+      {
+        actorUserId: input.actorUserId,
+        action: input.action ?? 'ordering_probe.first',
+        entityType: 'ordering_probe',
+        entityId: input.entityId,
+        metadata: input.metadata,
+      },
+      db
+    );
+  }
+
+  it(`reads a same-transaction tie back ASCENDING (${ORDERING_TRIALS} trials)`, async () => {
+    for (let trial = 0; trial < ORDERING_TRIALS; trial += 1) {
+      const entityId = randomUUID();
+
+      await db.transaction(async (tx) => {
+        await auditEventsRepository.record(
+          {
+            actorUserId: null,
+            action: 'ordering_probe.first',
+            entityType: 'ordering_probe',
+            entityId,
+          },
+          tx
+        );
+        await auditEventsRepository.record(
+          {
+            actorUserId: null,
+            action: 'ordering_probe.second',
+            entityType: 'ordering_probe',
+            entityId,
+          },
+          tx
+        );
+      });
+
+      const oracle = await trailFor(entityId);
+      expect(oracle).toHaveLength(2);
+      const [first, second] = oracle;
+      if (first === undefined || second === undefined) throw new Error('expected two audit rows');
+      // Premise pin, mirroring the suite above.
+      expect(second.createdAt.getTime()).toBe(first.createdAt.getTime());
+
+      const page = await auditEventsRepository.listTrailForEntity({
+        entityType: 'ordering_probe',
+        entityId,
+        limit: 25,
+        authorizedPlatformStaff: true,
+      });
+      // Mutation: `asc(seq)` in the reader ⇒ inverted ⇒ this fails.
+      expect(page.rows.map((r) => r.action)).toEqual([
+        'ordering_probe.first',
+        'ordering_probe.second',
+      ]);
+    }
+  });
+
+  it('the cursor round-trip across a tie that spans a page boundary matches the oracle exactly — NATURAL microsecond precision, no forced timestamps', async () => {
+    // ⚠ BAL-555 fix round — this test used to force clean, WHOLE-MILLISECOND, explicitly
+    // distinct `created_at` values via `db.update(...)` for two separate tie groups, precisely
+    // to SIDESTEP the precision this defect lives in. That was a workaround for the bug, not a
+    // test of the fix — it could never have caught the truncation defect it was named after.
+    //
+    // Here every row is seeded with NO `db.update(...)` at all: `record()` is called directly
+    // on `db`, which in this harness (`setup-integration.ts`) IS the one per-test transaction
+    // (nested `db.transaction()` calls inside a repository become SAVEPOINTs on it, never a
+    // second top-level transaction) — so every row's `created_at` is the SAME
+    // `transaction_timestamp()`, at its genuine, naturally-occurring MICROSECOND precision,
+    // whatever that happens to be. That is exactly the shape the defect needs: a real tie group
+    // larger than one page, at real sub-millisecond precision. Against the truncating
+    // (`Date`/`.toISOString()`) form of the cursor, the very FIRST cursor built from this tie
+    // group is already LESS than every row's true `created_at` (the truncated value is always
+    // ⩽ the real one), so the row-value predicate excludes the entire remaining group — every
+    // page after the first comes back empty and `collected` ends up short. See the PR body for
+    // the before/after proof this test was run against.
+    const entityId = randomUUID();
+    const TIE_GROUP_SIZE = 5; // > the limit:2 page size below, so paging must cross a boundary
+    // INSIDE this one natural tie.
+
+    for (let i = 0; i < TIE_GROUP_SIZE; i += 1) {
+      await record({ entityId, actorUserId: null, action: `ordering_probe.tie_${i}` });
+    }
+
+    const oracle = await trailFor(entityId);
+    expect(oracle).toHaveLength(TIE_GROUP_SIZE);
+    // The premise, pinned: every row in this group genuinely ties on created_at — if it didn't,
+    // this test would pass for the wrong reason (ordered by the timestamp, never needing the
+    // cursor's precision at all).
+    const [firstOracleRow] = oracle;
+    if (firstOracleRow === undefined) throw new Error('expected at least one row');
+    for (const row of oracle) {
+      expect(row.createdAt.getTime()).toBe(firstOracleRow.createdAt.getTime());
+    }
+
+    // ⚠⚠ BAL-555 fix round F8 — THE SECOND HALF OF THE PREMISE, PINNED. Tying on `.getTime()`
+    // (millisecond precision) is not enough: it is satisfied just as well by a tie that ALSO
+    // happens to land on a whole millisecond (`transaction_timestamp()` doing so is rare but
+    // real — roughly 1 run in 1000). In that specific case a TRUNCATING (Date-round-tripped)
+    // cursor pages this exact tie group correctly too, by accident, and this test would report
+    // a false green for the precision-loss bug it exists to catch. Read the SAME row's
+    // `created_at::text` independently of `trailFor` (which selects a plain, already-truncated
+    // `Date` column) and assert it genuinely carries a fractional-second component longer than
+    // 3 digits — i.e. real sub-millisecond precision, not merely a value under 1000ms.
+    const [rawFirst] = await db
+      .select({ createdAtText: sql<string>`${auditEvents.createdAt}::text` })
+      .from(auditEvents)
+      .where(eq(auditEvents.id, firstOracleRow.id));
+    if (rawFirst === undefined) throw new Error('expected the seeded row to still exist');
+    const fractionalDigits = /\.(\d+)[+-]\d/.exec(rawFirst.createdAtText)?.[1] ?? '';
+    expect(
+      fractionalDigits.length,
+      `Seeded created_at was "${rawFirst.createdAtText}" — expected more than 3 fractional-second ` +
+        'digits (genuine sub-millisecond precision). This run landed on a whole millisecond ' +
+        '(the ~1-in-1000 case), so this specific tie group cannot exercise the truncation bug ' +
+        'this test is named after. Re-run the suite.'
+    ).toBeGreaterThan(3);
+
+    // Page with limit: 2 until hasEarlier is false, concatenating OLDEST-FIRST pages in the
+    // order they are returned (each page is itself ascending, and earlier pages are older).
+    const collected: string[] = [];
+    let before: AuditTrailCursor | undefined;
+    let hasEarlier = true;
+    let guard = 0;
+    const olderPages: string[][] = [];
+    while (hasEarlier) {
+      guard += 1;
+      if (guard > 10) throw new Error('pagination did not terminate');
+      const page = await auditEventsRepository.listTrailForEntity({
+        entityType: 'ordering_probe',
+        entityId,
+        limit: 2,
+        before,
+        authorizedPlatformStaff: true,
+      });
+      olderPages.unshift(page.rows.map((r) => r.id));
+      hasEarlier = page.hasEarlier;
+      before = page.earlierCursor ?? undefined;
+    }
+    for (const page of olderPages) collected.push(...page);
+
+    // Mutation: swap auditTrailKeysetBefore for and(lt(createdAt), lt(seq)) ⇒ rows drop.
+    // Mutation: round-trip cursor.createdAtPrecise through `new Date(...)` / `.toISOString()`
+    // ⇒ this whole tie group is dropped after the first page (see the comment above).
+    expect(collected).toEqual(oracle.map((row) => row.id));
+    expect(new Set(collected).size).toBe(oracle.length); // no duplicate id
+  });
+
+  it('scopes strictly to entityType + entityId', async () => {
+    const entityId = randomUUID();
+    const otherEntityId = randomUUID();
+
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.in_scope' });
+    await record({
+      entityId: otherEntityId,
+      actorUserId: null,
+      action: 'ordering_probe.other_entity',
+    });
+    // Same entityId, different entityType.
+    await auditEventsRepository.record(
+      {
+        actorUserId: null,
+        action: 'ordering_probe.other_type',
+        entityType: 'ordering_probe_other',
+        entityId,
+      },
+      db
+    );
+
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'ordering_probe',
+      entityId,
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+    expect(page.rows.map((r) => r.action)).toEqual(['ordering_probe.in_scope']);
+  });
+
+  it('hydrates actor name + platformRole, and a soft-deleted actor still attributes', async () => {
+    const entityId = randomUUID();
+    const actor = await userFactory({
+      firstName: 'Dana',
+      lastName: 'Whitfield',
+      platformRole: 'user',
+    });
+    await record({ entityId, actorUserId: actor.id });
+
+    const deletedActor = await userFactory({ firstName: 'Ghost', lastName: 'Actor' });
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, deletedActor.id));
+    await record({ entityId, actorUserId: deletedActor.id, action: 'ordering_probe.second' });
+
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.system' });
+
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'ordering_probe',
+      entityId,
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+
+    const live = page.rows.find((r) => r.actorUserId === actor.id);
+    expect(live?.actorFirstName).toBe('Dana');
+    expect(live?.actorLastName).toBe('Whitfield');
+    expect(live?.actorPlatformRole).toBe('user');
+
+    // ⚠ NO isNull(users.deletedAt) guard, deliberately — a soft-deleted actor still attributes.
+    const deleted = page.rows.find((r) => r.actorUserId === deletedActor.id);
+    expect(deleted?.actorFirstName).toBe('Ghost');
+    expect(deleted?.actorLastName).toBe('Actor');
+
+    const systemRow = page.rows.find((r) => r.actorUserId === null);
+    expect(systemRow?.actorFirstName).toBeNull();
+    expect(systemRow?.actorLastName).toBeNull();
+    expect(systemRow?.actorPlatformRole).toBeNull();
+    expect(systemRow?.actorCompanyName).toBeNull();
+    expect(systemRow?.actorAgencyName).toBeNull();
+  });
+
+  it('resolves the oldest LIVE company/agency membership name, and nulls when there is none', async () => {
+    const entityId = randomUUID();
+
+    const companyActor = await userFactory();
+    const company1 = await companyFactory({ name: 'Older Co' });
+    const company2 = await companyFactory({ name: 'Newer Co' });
+    await companyMemberFactory({
+      companyId: company1.id,
+      userId: companyActor.id,
+      joinedAt: new Date('2020-01-01T00:00:00Z'),
+    });
+    await companyMemberFactory({
+      companyId: company2.id,
+      userId: companyActor.id,
+      joinedAt: new Date('2021-01-01T00:00:00Z'),
+    });
+    await record({ entityId, actorUserId: companyActor.id, action: 'ordering_probe.company' });
+
+    const agencyActor = await userFactory();
+    const agency = await agencyFactory({ name: 'CloudPeak' });
+    await agencyMemberFactory({ agencyId: agency.id, userId: agencyActor.id });
+    await record({ entityId, actorUserId: agencyActor.id, action: 'ordering_probe.agency' });
+
+    const noMembershipActor = await userFactory();
+    await record({ entityId, actorUserId: noMembershipActor.id, action: 'ordering_probe.none' });
+
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'ordering_probe',
+      entityId,
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+
+    const companyRow = page.rows.find((r) => r.actorUserId === companyActor.id);
+    expect(companyRow?.actorCompanyName).toBe('Older Co'); // oldest live membership wins
+    expect(companyRow?.actorAgencyName).toBeNull();
+
+    const agencyRow = page.rows.find((r) => r.actorUserId === agencyActor.id);
+    expect(agencyRow?.actorAgencyName).toBe('CloudPeak');
+    expect(agencyRow?.actorCompanyName).toBeNull();
+
+    const noneRow = page.rows.find((r) => r.actorUserId === noMembershipActor.id);
+    expect(noneRow?.actorCompanyName).toBeNull();
+    expect(noneRow?.actorAgencyName).toBeNull();
+  });
+
+  it('an empty page issues the batched org lookup with no ids, and returns hasEarlier: false / earlierCursor: null', async () => {
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'ordering_probe',
+      entityId: randomUUID(),
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+    expect(page.rows).toEqual([]);
+    expect(page.hasEarlier).toBe(false);
+    expect(page.earlierCursor).toBeNull();
+  });
+
+  it('hasEarlier is false and earlierCursor is null on a complete first page', async () => {
+    const entityId = randomUUID();
+    await record({ entityId, actorUserId: null });
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.second' });
+
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'ordering_probe',
+      entityId,
+      limit: 25,
+      authorizedPlatformStaff: true,
+    });
+    expect(page.hasEarlier).toBe(false);
+    expect(page.earlierCursor).toBeNull();
+  });
+
+  it("earlierCursor carries the oldest row's FULL-PRECISION created_at, not the millisecond-truncated Date", async () => {
+    const entityId = randomUUID();
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.first' });
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.second' });
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.third' });
+
+    const page = await auditEventsRepository.listTrailForEntity({
+      entityType: 'ordering_probe',
+      entityId,
+      limit: 2,
+      authorizedPlatformStaff: true,
+    });
+    expect(page.hasEarlier).toBe(true);
+    const [oldest] = page.rows;
+    if (oldest === undefined) throw new Error('expected at least one row');
+
+    // Independently read the SAME row's `created_at::text` — the oracle for full precision,
+    // deliberately NOT `oldest.createdAt.toISOString()` (that IS the millisecond-truncated
+    // value this test must not be fooled by).
+    const [raw] = await db
+      .select({ createdAtText: sql<string>`${auditEvents.createdAt}::text` })
+      .from(auditEvents)
+      .where(eq(auditEvents.id, oldest.id));
+    if (raw === undefined) throw new Error('expected the oldest row to still exist');
+
+    expect(page.earlierCursor).toEqual({ createdAtPrecise: raw.createdAtText, seq: oldest.seq });
+  });
+
+  it('the precise-string bind proof — the cursor path executes at all against real Postgres', async () => {
+    // ⚠ This is the ONLY gate that catches `reference_date_in_raw_sql_template_throws` — a
+    // bare Date in a raw sql template throws "Received an instance of Date" AT BIND TIME. It
+    // also proves `cursor.createdAtPrecise` (a plain string, `created_at::text`) binds cleanly
+    // as `$1::timestamptz` (BAL-555). `pnpm typecheck` stays green either way.
+    const entityId = randomUUID();
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.first' });
+    await record({ entityId, actorUserId: null, action: 'ordering_probe.second' });
+    const firstPage = await auditEventsRepository.listTrailForEntity({
+      entityType: 'ordering_probe',
+      entityId,
+      limit: 1,
+      authorizedPlatformStaff: true,
+    });
+    const cursor = firstPage.earlierCursor;
+    expect(cursor).not.toBeNull();
+    if (cursor === null) throw new Error('expected a cursor');
+    await expect(
+      auditEventsRepository.listTrailForEntity({
+        entityType: 'ordering_probe',
+        entityId,
+        limit: 1,
+        before: cursor,
+        authorizedPlatformStaff: true,
+      })
+    ).resolves.toBeDefined();
   });
 });

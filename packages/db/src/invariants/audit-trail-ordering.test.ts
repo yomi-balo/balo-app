@@ -25,7 +25,9 @@ import { stripComments } from '@balo/shared/testing';
  * precisely because nothing checked. (The ninth ordered reader,
  * `repositories/audit-events.ts`'s `findLatestByEntityAndAction`, was worse still: it had NO
  * tiebreaker AT ALL, so "the most recent row" was already arbitrary on a tie.) This file is that check, run on every unit pass (no
- * Docker). It mechanically fences THREE independent ways the contract can silently break:
+ * Docker). It mechanically fences FOUR independent ways the contract can silently break
+ * (docblock addition, BAL-555 fix round F7 — this line read "THREE" before residual 3 below was
+ * added as a fourth, separate assertion and the summary was never updated to match):
  *
  *   1. a NEW reader tiebreaks on `auditEvents.id` (the original defect, reintroduced);
  *   2. a reader orders by `created_at` (or `seq`) alone, dropping the tiebreak entirely;
@@ -34,6 +36,46 @@ import { stripComments } from '@balo/shared/testing';
  *      reader (`findLatestByEntityAndAction`'s shape) silently returns the EARLIEST row of a
  *      same-transaction tie instead of the latest. No amount of prose catches this reliably —
  *      only a structural same-direction check does.
+ *   4. a reader compares `auditEvents.seq` with a Drizzle SCALAR comparison helper (`lt`/`lte`/
+ *      `gt`/`gte`/`eq`/`ne`) in a WHERE clause instead of `auditTrailKeysetBefore`'s raw `sql`
+ *      ROW-VALUE tuple — BAL-426 residual 3 (BAL-555), assertion (c) below. `seq` has exactly
+ *      one purpose (breaking a same-transaction tie), so any scalar comparison on it can only be
+ *      a WRONG keyset predicate; `and(lt(createdAt, x), lt(seq, y))` silently drops rows that
+ *      are older but carry a higher `seq`.
+ *
+ * ⚠⚠ ACCEPTED LIMITATIONS — four still-open blind spots in this mechanism, not closed by
+ * BAL-555 or any turn since; documented rather than fixed because closing them needs a real
+ * lexer/AST pass over the source for a marginal remaining defect surface. Three of these mirror
+ * ADR-1030's 2026-09-08 amendment (they are generic hazards of every indexOf + paren-depth
+ * `_source-scan`-style invariant in this package, not specific to this file); the fourth is
+ * fresh to this file and is NOT in the ADR:
+ *
+ *   (a) AN ALIASED IMPORT evades every check here. `import { auditEvents as ae }` then writing
+ *       `ae.seq` / `ae.createdAt` never contains the literal substring `auditEvents.`, so neither
+ *       the `.orderBy(` extractor nor the WHERE-comparison extractor (assertion (c)) ever sees
+ *       the site — "cannot be reintroduced under any name" would overstate what a source-text
+ *       check proves.
+ *   (b) A SPREAD ORDER LIST evades the `.orderBy(` extractor. `.orderBy(...SOME_ORDER_CONST)`,
+ *       where `SOME_ORDER_CONST` is `[desc(auditEvents.createdAt), desc(auditEvents.seq)]`
+ *       defined elsewhere, never puts the literal column reference inside the `.orderBy(...)`
+ *       argument list this file extracts — the extractor sees only `...SOME_ORDER_CONST`, which
+ *       does not contain the substring `auditEvents.` and is silently dropped by the
+ *       `AUDIT_ORDERBY_SITES` filter.
+ *   (c) THE RELATIONAL `orderBy:` KEY evades the `.orderBy(` extractor entirely. Drizzle's
+ *       relational query builder (`db.query.auditEvents.findMany({ orderBy: (fields, { asc }) =>
+ *       [...] })`) orders via an object KEY, not a chained `.orderBy(...)` call — the literal
+ *       marker this file searches for never appears, so a relational read of `audit_events`
+ *       (were one ever added) is invisible to every assertion in this file.
+ *   (d) THE `.orderBy(` EXTRACTOR STRUCTURALLY NEVER INSPECTS `WHERE` — NOT in the ADR amendment,
+ *       written fresh here. Assertions (AC #2 and the direction check) walk only the argument
+ *       list of `.orderBy(...)` calls, so a WRONG keyset predicate hidden inside a `.where(...)`
+ *       clause was invisible to BOTH of them from the day this file shipped (BAL-426) — that gap
+ *       is exactly why residual 3 / assertion (c) had to be a SEPARATE extractor (generalising
+ *       `balancedArguments` to `COMPARISON_MARKERS`) rather than a tweak to the existing one.
+ *       Assertion (c) closes this SPECIFICALLY for `auditEvents.seq` scalar comparisons — the one
+ *       shape a keyset cursor on this table could wrongly take — but it does not generalise to
+ *       every possible WHERE-clause defect, and limitations (a)-(c) above apply to it exactly as
+ *       they apply to the `.orderBy(` extractor.
  *
  * ⚠ THIS FILE IS NAMED BY PATH FROM `schema/audit-events.ts`'s `seq` docblock. If it moves,
  * update that docblock's path too — it forward-references this exact file.
@@ -60,6 +102,21 @@ import { stripComments } from '@balo/shared/testing';
  * files total, find at least 20 files whose raw source mentions `auditEvents`, resolve at least
  * one audit `.orderBy(` site from `repositories/audit-events.ts` (the one production reader),
  * and extract at least 5 audit `.orderBy(` sites overall.
+ *
+ * ⚠⚠ BAL-426 RESIDUAL 3 (BAL-555) — A FOURTH ASSERTION, ON `WHERE`, NOT `orderBy(`. §(c) below:
+ * no source file passes `auditEvents.seq` to a Drizzle SCALAR comparison helper (`lt`, `lte`,
+ * `gt`, `gte`, `eq`, `ne`). `seq` has exactly one purpose — breaking a same-transaction tie —
+ * so a comparison on it can only be a keyset cursor, and a keyset cursor on this table must be
+ * a raw `sql` ROW-VALUE tuple (`auditTrailKeysetBefore`, `repositories/audit-events.ts`). The
+ * `and`-joined pair silently drops rows; the expanded `or`/`and` form is equivalent but easy to
+ * mis-nest. This is precisely the shape the `.orderBy(` scan could never see — it never
+ * inspects `WHERE` at all, which is why this fourth assertion is written FRESH here rather than
+ * lifted from ADR-1030's amendment (which only documents the first three).
+ *
+ * Deliberately NARROW: a comparison on `auditEvents.createdAt` stays LEGAL, because
+ * `countByActorAndActionSince` uses `gte(auditEvents.createdAt, input.since)` as a legitimate
+ * WINDOW filter, not a cursor — and that site is this fourth assertion's own positive control
+ * (a broken extractor that resolves nothing must fail, not pass silently).
  */
 
 // ── Walk ───────────────────────────────────────────────────────────────
@@ -129,17 +186,21 @@ const AUDIT_MENTIONING_FILES: ScannedFile[] = ALL_SOURCE_FILES.filter((abs) =>
 // ── Extraction ─────────────────────────────────────────────────────────
 
 /**
- * Extract the balanced-paren argument LIST of every `.orderBy(` call in `source`. indexOf +
- * paren-depth counting, never a regex (S5852) — mirrors `onConflictArguments` in
+ * Extract the balanced-paren argument LIST of every `marker`-prefixed call in `source`.
+ * indexOf + paren-depth counting, never a regex (S5852) — mirrors `onConflictArguments` in
  * `calendar-connection-cardinality.test.ts`, brace-counting swapped for paren-counting.
  *
  * Not a lexer: a `)` inside a string or template literal inside the argument list would close
- * early. No caller in this codebase puts one there (every `.orderBy(` argument is `asc(...)` /
- * `desc(...)` column references) — the same accepted limitation `stripComments` itself
- * documents.
+ * early. No caller in this codebase puts one there (every argument here is an `asc(...)` /
+ * `desc(...)` / `lt(...)` / etc. column reference) — the same accepted limitation
+ * `stripComments` itself documents.
+ *
+ * ⚠ BAL-555 (BAL-426 residual 3) — GENERALISED from the original `orderBy(`-only extractor so
+ * assertion (c) below can reuse it for `lt(`/`lte(`/`gt(`/`gte(`/`eq(`/`ne(` too, on the SAME
+ * indexOf + paren-depth algorithm. `orderByArguments` keeps its name and signature as a thin
+ * wrapper so nothing else in this file (or a future consumer) needs to change.
  */
-function orderByArguments(source: string): string[] {
-  const marker = '.orderBy(';
+function balancedArguments(source: string, marker: string): string[] {
   const results: string[] = [];
   let cursor = source.indexOf(marker);
   while (cursor !== -1) {
@@ -164,6 +225,19 @@ function orderByArguments(source: string): string[] {
   return results;
 }
 
+/** Thin wrapper — kept so `.orderBy(`'s own extraction reads the same as it always has. */
+function orderByArguments(source: string): string[] {
+  return balancedArguments(source, '.orderBy(');
+}
+
+/**
+ * BAL-555 (BAL-426 residual 3) — every Drizzle SCALAR comparison helper that could (wrongly)
+ * be applied to `auditEvents.seq` as a keyset predicate. Deliberately EXCLUDES `lt`/`gt`
+ * called on `createdAt` used as a window filter — the filter below narrows to sites that
+ * actually MENTION `auditEvents.seq`, not to the marker set itself.
+ */
+const COMPARISON_MARKERS: readonly string[] = ['lt(', 'lte(', 'gt(', 'gte(', 'eq(', 'ne('];
+
 /** Whitespace-normalised — survives a Prettier rewrap of a multi-line `.orderBy(...)`. */
 function normalize(text: string): string {
   return text.replace(/\s+/g, ' ');
@@ -185,6 +259,41 @@ const AUDIT_ORDERBY_SITES: AuditOrderBySite[] = AUDIT_MENTIONING_FILES.flatMap((
     .map(normalize)
     .filter((argText) => argText.includes('auditEvents.'))
     .map((argText) => ({ file: file.displayPath, argText }))
+);
+
+interface AuditComparisonSite {
+  readonly file: string;
+  readonly marker: string;
+  readonly argText: string;
+}
+
+/**
+ * BAL-555 (BAL-426 residual 3) — every `COMPARISON_MARKERS` call site, from every
+ * audit-mentioning file, whose argument list mentions ANY `auditEvents.` column. Unfiltered
+ * by column so the extractor's own positive control (a legitimate `auditEvents.createdAt`
+ * window filter) is drawn from the SAME set assertion (c) filters down from — a broken
+ * extractor that resolves nothing would otherwise make BOTH the guard and (c) pass silently
+ * together.
+ */
+const AUDIT_COMPARISON_SITES: AuditComparisonSite[] = AUDIT_MENTIONING_FILES.flatMap((file) =>
+  COMPARISON_MARKERS.flatMap((marker) =>
+    balancedArguments(file.source, marker)
+      .map(normalize)
+      .filter((argText) => argText.includes('auditEvents.'))
+      .map((argText) => ({ file: file.displayPath, marker, argText }))
+  )
+);
+
+/**
+ * The WHERE fence itself — every comparison site whose argument list mentions
+ * `auditEvents.seq` specifically. `seq` has exactly one purpose (breaking a
+ * same-transaction tie), so any scalar comparison on it can only be a (WRONG) keyset
+ * predicate — a keyset cursor on this table must be `auditTrailKeysetBefore`'s raw `sql`
+ * ROW-VALUE tuple instead. `auditEvents.createdAt` comparisons are NOT in this set —
+ * `countByActorAndActionSince`'s `gte(auditEvents.createdAt, …)` window filter stays legal.
+ */
+const AUDIT_SEQ_COMPARISON_SITES: AuditComparisonSite[] = AUDIT_COMPARISON_SITES.filter((site) =>
+  site.argText.includes('auditEvents.seq')
 );
 
 describe('INVARIANT: the audit trail ordering contract (BAL-426) — created_at then seq, same direction, never id', () => {
@@ -226,9 +335,10 @@ describe('INVARIANT: the audit trail ordering contract (BAL-426) — created_at 
     expect(
       AUDIT_ORDERBY_SITES.length,
       `Only extracted ${AUDIT_ORDERBY_SITES.length} audit .orderBy( site(s) across the whole ` +
-        'walk. BAL-426 touches at least: the one production reader, the seven ' +
+        'walk. BAL-426/BAL-555 touch at least: the two production readers ' +
+        "(findLatestByEntityAndAction and BAL-555's listTrailForEntity), the seven " +
         '`auditEventsForEntity`-shaped test helpers, the request-shared-files helper, and the ' +
-        'new audit-events.integration.test.ts trailFor — ten sites. A count this low means the ' +
+        'audit-events.integration.test.ts trailFor — eleven sites. A count this low means the ' +
         'extraction is broken and the two rule assertions below are not exercising the codebase.'
     ).toBeGreaterThanOrEqual(5);
   });
@@ -267,6 +377,37 @@ describe('INVARIANT: the audit trail ordering contract (BAL-426) — created_at 
         'and never one without the other. A mismatched pair (e.g. `desc(createdAt), ' +
         'asc(seq)`) pasted into a `DESC … LIMIT 1` reader silently returns the EARLIEST row of ' +
         'a same-transaction tie instead of the latest.'
+    ).toEqual([]);
+  });
+
+  // ── BAL-555 (BAL-426 residual 3) — the WHERE fence ──────────────────
+
+  it('resolves at least one audit comparison site mentioning auditEvents.createdAt (positive control)', () => {
+    const positiveControl = AUDIT_COMPARISON_SITES.filter(
+      (site) =>
+        site.file.endsWith('repositories/audit-events.ts') &&
+        site.argText.includes('auditEvents.createdAt')
+    );
+    expect(
+      positiveControl.length,
+      'No comparison site mentioning auditEvents.createdAt was found in ' +
+        "repositories/audit-events.ts — countByActorAndActionSince's `gte(auditEvents.createdAt, " +
+        'input.since)` window filter. If that call moved, was renamed, or the comparison ' +
+        'extractor broke, assertion (c) below is scanning the wrong (or an empty) set and would ' +
+        'pass vacuously.'
+    ).toBeGreaterThan(0);
+  });
+
+  it('AC #2 residual 3 — no source file compares auditEvents.seq with a Drizzle scalar helper', () => {
+    expect(
+      AUDIT_SEQ_COMPARISON_SITES.map((site) => `${site.file}: ${site.marker}${site.argText})`),
+      'A reader passes `auditEvents.seq` to a scalar comparison helper (lt/lte/gt/gte/eq/ne). ' +
+        '`seq` has exactly one purpose — breaking a same-transaction tie — so a comparison on ' +
+        'it can only be a keyset cursor, and a keyset cursor on this table MUST be a raw `sql` ' +
+        'ROW-VALUE tuple (`auditTrailKeysetBefore`, repositories/audit-events.ts). ' +
+        '`and(lt(createdAt, x), lt(seq, y))` silently drops rows that are older but carry a ' +
+        'higher seq; the expanded `or(lt(createdAt,x), and(eq(createdAt,x), lt(seq,y)))` form ' +
+        'is equivalent but easy to mis-nest. Use `auditTrailKeysetBefore` instead.'
     ).toEqual([]);
   });
 });

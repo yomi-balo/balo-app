@@ -27,12 +27,15 @@ import { db } from '../client';
 import {
   agencies,
   agencyMembers,
+  caseEngagements,
   companies,
   companyMembers,
   creditSessions,
   creditWallets,
+  engagements,
   expertProfiles,
   partyDomains,
+  projectEngagements,
   projectRequests,
   users,
 } from '../schema';
@@ -46,23 +49,25 @@ import {
  * nothing (the `admin-lookup-never-writes` invariant in `apps/web` pins that at the route
  * level as well).
  *
- * ── SHAPE: SIX PARALLEL READS, MERGED IN TYPESCRIPT. NOT A SQL `UNION`. ─────────────────
+ * ── SHAPE: SEVEN PARALLEL READS, MERGED IN TYPESCRIPT. NOT A SQL `UNION`. ────────────────
  *
- * Six independent `db.select({…})` reads issued together via `Promise.all`, then merged
+ * Seven independent `db.select({…})` reads issued together via `Promise.all`, then merged
  * round-robin in TypeScript. Four reasons, and none of them is taste:
  *
  *  1. There is NO cross-entity `UNION` precedent in this package and the one place it was
  *     considered it was REFUSED — `repositories/representations.ts:192-193`: *"The
  *     `or(...)` IS the … read — one index-friendly predicate, no SQL `UNION`, no second
  *     query."* The first one does not get introduced in a support surface.
- *  2. A `UNION` forces a lowest-common-denominator column list. These six arms have
+ *  2. A `UNION` forces a lowest-common-denominator column list. These seven arms have
  *     genuinely different join graphs (users → nothing; companies → `credit_wallets`;
  *     agencies → `party_domains`; expert profiles → `users` + `agencies`; project requests
- *     → `companies`; credit sessions → `companies` + `expert_profiles` + `users`), so
- *     unioning them would push every sub-line's STRING CONSTRUCTION into SQL, where it is
- *     unreadable, untestable and un-internationalisable. Composed in TS, each sub-line is
- *     a pure exported function with unit tests.
- *  3. Parallel beats both sequential and `UNION` for latency: six small concurrent scans
+ *     → `companies`; engagements → `companies` + `expert_profiles`/`users` +
+ *     `case_engagements`/`project_engagements`/`project_requests`; credit sessions →
+ *     `companies` + `expert_profiles` + `users`), so unioning them would push every
+ *     sub-line's STRING CONSTRUCTION into SQL, where it is unreadable, untestable and
+ *     un-internationalisable. Composed in TS, each sub-line is a pure exported function
+ *     with unit tests.
+ *  3. Parallel beats both sequential and `UNION` for latency: seven small concurrent scans
  *     over the `postgres-js` pool cost roughly the slowest one; a `UNION` serialises them
  *     into one plan on one connection.
  *  4. Per-type chip counts fall out for free from per-arm results — no extra `COUNT(*)`.
@@ -94,8 +99,8 @@ import {
  *
  * WHY THAT IS FINE TODAY: this surface is platform-staff only, behind
  * `VIEW_PLATFORM_ADMIN`, capped at 20 results, minimum query length 2, and every arm is a
- * small table at pre-PMF volume. Six concurrent small seq scans cost less than the schema
- * churn and the write amplification of six trigram indexes.
+ * small table at pre-PMF volume. Seven concurrent small seq scans cost less than the
+ * schema churn and the write amplification of seven trigram indexes.
  *
  * WHEN TO REVISIT: when any single arm's table passes ~50k live rows, or when p95 for
  * `platformLookupRepository.search` exceeds ~300ms in Axiom. The fix is then a `pg_trgm`
@@ -105,7 +110,7 @@ import {
  * it is deliberately NOT this ticket (BAL-551 scope ruling, B3).
  *
  * ⚠ NO `id::text LIKE 'abc%'` PREFIX MATCH ANYWHERE. A uuid PK btree cannot serve an
- * expression over the column under a non-C collation, and casting six tables' primary keys
+ * expression over the column under a non-C collation, and casting seven tables' primary keys
  * on every keystroke is a materially worse cost class than one ILIKE on one text column. A
  * uuid is matched with `eq()` when — and ONLY when — the query parses as a FULL uuid.
  *
@@ -511,6 +516,44 @@ export function buildCreditSessionSub(input: {
 }
 
 /**
+ * BAL-555 — `CPQ implementation — replace legacy quoting tool`, else `Untitled project` /
+ * `Untitled case`. Not `UNTITLED_ENGAGEMENT_LABEL` (`reviews.ts` = `'your project'`) — that
+ * string is second-person email copy and reads wrong here.
+ */
+export function buildEngagementTitle(input: {
+  readonly engagementType: string;
+  readonly caseTitle: string | null;
+  readonly requestTitle: string | null;
+}): string {
+  if (input.caseTitle !== null) return input.caseTitle;
+  if (input.requestTitle !== null) return input.requestTitle;
+  return input.engagementType === 'case' ? 'Untitled case' : 'Untitled project';
+}
+
+/**
+ * BAL-555 — `Project · Northwind Industrial × Priya Nair · active · started 12 Jun`.
+ * `× expert unavailable` when the name is null, mirroring `buildCreditSessionSub`.
+ */
+export function buildEngagementSub(input: {
+  readonly engagementType: string;
+  readonly companyName: string;
+  readonly expertFirstName: string | null;
+  readonly expertLastName: string | null;
+  readonly status: string;
+  readonly createdAt: Date;
+}): string {
+  const expertName = joinNameParts(input.expertFirstName, input.expertLastName);
+  const parties = `${input.companyName} × ${expertName ?? 'expert unavailable'}`;
+  const typeLabel = input.engagementType.charAt(0).toUpperCase() + input.engagementType.slice(1);
+  return joinSegments([
+    typeLabel,
+    parties,
+    humanizeEnumLabel(input.status),
+    `started ${formatShortDate(input.createdAt)}`,
+  ]);
+}
+
+/**
  * `"{first} {last}"` with the nullable halves handled, or `null` when both are absent.
  * `users` has NO `name` column — nullable `first_name` / `last_name` — which is why this
  * exists and why the SQL-side match uses the same `coalesce … || ' ' || coalesce …` shape
@@ -566,7 +609,7 @@ function partyDomainMatches(
   );
 }
 
-// ── The six arms ─────────────────────────────────────────────────────────────────────
+// ── The seven arms ───────────────────────────────────────────────────────────────────
 //
 // Soft-delete reality, VERIFIED against the schema — do not guess these:
 //   users            YES  (schema/users.ts:56)
@@ -578,6 +621,8 @@ function partyDomainMatches(
 //   project_requests YES
 //   credit_sessions  YES
 //   party_domains    YES
+//   engagements      YES  (schema/engagements.ts)
+//   case_engagements / project_engagements  YES (both)
 //   company_members / agency_members  YES (both)
 //
 // ⚠ Every soft-delete guard on a JOINED table sits in the JOIN CONDITION, never the WHERE
@@ -788,6 +833,81 @@ function searchCreditSessions(pattern: string, uuidValue: string | null) {
   );
 }
 
+/**
+ * BAL-555 — the seventh arm: engagements.
+ *
+ * Matchable, and only these: the engagement uuid (`eq`, full uuid only — no `id::text
+ * LIKE`), the case title (`case_engagements.title`), the originating project-request title
+ * (`project_requests.title` via `project_engagements.project_request_id`), the client
+ * company name, and the delivering expert's name (`nameConcatMatches`, resolved against the
+ * expert's `users` row in this arm's join graph).
+ *
+ * ⚠ A DELIBERATE ASYMMETRY WITH THE SESSION ARM, STATED NOT HIDDEN. `searchCreditSessions`
+ * matches only on an id, because a session is an instant a support person identifies by a
+ * pasted id. An engagement is a durable object people NAME ("the Northwind CPQ
+ * engagement"), so it matches on parties and titles.
+ *
+ * ⚠⚠ THE PROJECTION IS A FEE-SAFE ALLOW-LIST, the `searchCreditSessions` rule applied to
+ * this arm. Explicitly ABSENT and required to stay absent: `engagements.baloFeeBps`,
+ * `engagements.currency`, `project_engagements.priceCents` / `depositCents` / `rateCents`,
+ * and every other `project_engagements` commercial column. Pinned by an integration
+ * key-set assertion.
+ */
+function searchEngagements(pattern: string, uuidValue: string | null) {
+  return (
+    db
+      .select({
+        id: engagements.id,
+        engagementType: engagements.engagementType,
+        status: engagements.status,
+        createdAt: engagements.createdAt,
+        companyName: companies.name,
+        expertFirstName: users.firstName,
+        expertLastName: users.lastName,
+        caseTitle: caseEngagements.title,
+        requestTitle: projectRequests.title,
+      })
+      .from(engagements)
+      .innerJoin(companies, eq(companies.id, engagements.companyId))
+      .leftJoin(expertProfiles, eq(expertProfiles.id, engagements.expertProfileId))
+      // Guard in the JOIN CONDITION: a soft-deleted expert user nulls the NAME, never drops
+      // the row.
+      .leftJoin(users, and(eq(users.id, expertProfiles.userId), isNull(users.deletedAt)))
+      .leftJoin(
+        caseEngagements,
+        and(eq(caseEngagements.engagementId, engagements.id), isNull(caseEngagements.deletedAt))
+      )
+      .leftJoin(
+        projectEngagements,
+        and(
+          eq(projectEngagements.engagementId, engagements.id),
+          isNull(projectEngagements.deletedAt)
+        )
+      )
+      .leftJoin(
+        projectRequests,
+        and(
+          eq(projectRequests.id, projectEngagements.projectRequestId),
+          isNull(projectRequests.deletedAt)
+        )
+      )
+      .where(
+        and(
+          isNull(engagements.deletedAt),
+          or(
+            ilike(caseEngagements.title, pattern),
+            ilike(projectRequests.title, pattern),
+            ilike(companies.name, pattern),
+            nameConcatMatches(pattern),
+            uuidValue === null ? undefined : eq(engagements.id, uuidValue)
+          )
+        )
+      )
+      .orderBy(desc(engagements.createdAt), asc(engagements.id))
+      .limit(LOOKUP_ARM_LIMIT)
+  );
+}
+
 // ── Enrichment: four bounded follow-up reads, each keyed on ≤20 ids ───────────────────
 //
 // The `projects-inbox.ts` "one batched follow-up, never N+1" pattern. Each returns early
@@ -925,7 +1045,7 @@ export interface PlatformLookupSearchInput {
 
 export const platformLookupRepository = {
   /**
-   * Search all six entity types at once. Returns at most `LOOKUP_RESULT_CAP` results,
+   * Search all seven entity types at once. Returns at most `LOOKUP_RESULT_CAP` results,
    * round-robin merged; `truncated` says the arms held more than fitted; `tooShort` says
    * the query was refused before any table was touched.
    *
@@ -942,15 +1062,23 @@ export const platformLookupRepository = {
     const pattern = toContainsPattern(normalized);
     const uuidValue = isLookupUuid(normalized) ? normalized : null;
 
-    const [userRows, companyRows, agencyRows, expertRows, requestRows, sessionRows] =
-      await Promise.all([
-        searchUsers(pattern, uuidValue),
-        searchCompanies(pattern, uuidValue),
-        searchAgencies(pattern, uuidValue),
-        searchExpertProfiles(pattern, uuidValue),
-        searchProjectRequests(pattern, uuidValue),
-        searchCreditSessions(pattern, uuidValue),
-      ]);
+    const [
+      userRows,
+      companyRows,
+      agencyRows,
+      expertRows,
+      requestRows,
+      engagementRows,
+      sessionRows,
+    ] = await Promise.all([
+      searchUsers(pattern, uuidValue),
+      searchCompanies(pattern, uuidValue),
+      searchAgencies(pattern, uuidValue),
+      searchExpertProfiles(pattern, uuidValue),
+      searchProjectRequests(pattern, uuidValue),
+      searchEngagements(pattern, uuidValue),
+      searchCreditSessions(pattern, uuidValue),
+    ]);
 
     const agencyIds = agencyRows.map((row) => row.id);
     const [userMemberships, companyMemberCounts, agencyMemberCounts, agencyDomains] =
@@ -970,6 +1098,7 @@ export const platformLookupRepository = {
           title: joinNameParts(row.firstName, row.lastName) ?? row.email,
           sub: buildUserSub(row.activeMode, userMemberships.get(row.id)),
           publicExpertUsername: null,
+          engagementType: null,
         })),
       ],
       [
@@ -992,6 +1121,7 @@ export const platformLookupRepository = {
             row.username !== null && row.searchable && row.approvedAt !== null
               ? row.username
               : null,
+          engagementType: null,
         })),
       ],
       [
@@ -1008,6 +1138,7 @@ export const platformLookupRepository = {
             walletCurrency: row.walletCurrency,
           }),
           publicExpertUsername: null,
+          engagementType: null,
         })),
       ],
       [
@@ -1021,6 +1152,7 @@ export const platformLookupRepository = {
             domain: agencyDomains.get(row.id) ?? null,
           }),
           publicExpertUsername: null,
+          engagementType: null,
         })),
       ],
       [
@@ -1035,6 +1167,29 @@ export const platformLookupRepository = {
             createdAt: row.createdAt,
           }),
           publicExpertUsername: null,
+          engagementType: null,
+        })),
+      ],
+      [
+        'engagement',
+        engagementRows.map((row) => ({
+          id: row.id,
+          type: 'engagement' as const,
+          title: buildEngagementTitle({
+            engagementType: row.engagementType,
+            caseTitle: row.caseTitle,
+            requestTitle: row.requestTitle,
+          }),
+          sub: buildEngagementSub({
+            engagementType: row.engagementType,
+            companyName: row.companyName,
+            expertFirstName: row.expertFirstName,
+            expertLastName: row.expertLastName,
+            status: row.status,
+            createdAt: row.createdAt,
+          }),
+          publicExpertUsername: null,
+          engagementType: row.engagementType,
         })),
       ],
       [
@@ -1057,6 +1212,7 @@ export const platformLookupRepository = {
             settlementStatus: row.settlementStatus,
           }),
           publicExpertUsername: null,
+          engagementType: null,
         })),
       ],
     ]);

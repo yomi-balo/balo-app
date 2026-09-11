@@ -5,6 +5,7 @@ import { DollarSign } from 'lucide-react';
 import { formatAud } from '@/lib/credit/display-constants';
 import type { AdminSessionMoneyResult } from '@/lib/api/admin-session-money-block';
 import { fetchLookupMoneyBlockAction } from '../_actions/fetch-lookup-money-block';
+import { LookupSectionRetryNotice } from './lookup-section-retry-notice';
 
 /**
  * BAL-551 — the drill-in's Money section, credit sessions only. Fetch-on-select via the
@@ -12,12 +13,21 @@ import { fetchLookupMoneyBlockAction } from '../_actions/fetch-lookup-money-bloc
  * prop, no per-row lock line, and no fee-less projection. The D5 bundle split is where a
  * fee-blind staff viewer becomes reachable — not this ticket.
  *
- * A single labelled SECTION, not a tab bar (with the Timeline tab cut, one tab would remain,
- * and a one-tab tab bar is a defect).
+ * Rendered as a TAB when the drill-in has two (credit sessions), and never alone: a one-tab
+ * tab bar is still a defect, so every other type renders its Timeline as a labelled SECTION
+ * with no tab bar at all (BAL-555 C2).
+ *
+ * BAL-555 fix round F10 — `labelled` mirrors `LookupTimelineSection`'s prop of the same name:
+ * `false` (the drill-in's only call site today, since credit sessions are the only two-tab
+ * type) suppresses the box treatment and the "Money" eyebrow, so switching tabs doesn't visibly
+ * jump between a boxed card (Money) and bare content (Timeline). The prop exists — rather than
+ * hard-deleting the box — so the two sections' state machines read identically and either could
+ * ship as a standalone labelled SECTION again without a second implementation.
  */
 
 interface LookupMoneySectionProps {
   readonly sessionId: string;
+  readonly labelled: boolean;
 }
 
 function MoneyRow({ label, value }: Readonly<{ label: string; value: string }>): React.JSX.Element {
@@ -33,10 +43,7 @@ function MoneyRow({ label, value }: Readonly<{ label: string; value: string }>):
 
 function LoadingSkeleton(): React.JSX.Element {
   return (
-    <output
-      aria-busy="true"
-      className="border-warning/30 bg-warning/5 block rounded-xl border p-3.5"
-    >
+    <output aria-busy="true" className="block">
       <span className="sr-only">Loading money details…</span>
       <div className="space-y-2">
         <div className="bg-muted h-3.5 w-16 animate-pulse rounded" />
@@ -46,10 +53,6 @@ function LoadingSkeleton(): React.JSX.Element {
       </div>
     </output>
   );
-}
-
-function ReasonNotice({ text }: Readonly<{ text: string }>): React.JSX.Element {
-  return <p className="text-muted-foreground text-xs">{text}</p>;
 }
 
 const REASON_COPY: Record<'forbidden' | 'not_found' | 'unavailable', string> = {
@@ -63,6 +66,7 @@ const REASON_COPY: Record<'forbidden' | 'not_found' | 'unavailable', string> = {
 
 export function LookupMoneySection({
   sessionId,
+  labelled,
 }: Readonly<LookupMoneySectionProps>): React.JSX.Element {
   const [state, setState] = useState<AdminSessionMoneyResult | 'loading'>('loading');
   const requestIdRef = useRef(0);
@@ -89,37 +93,45 @@ export function LookupMoneySection({
       });
   }, [sessionId, retryToken]);
 
-  if (state === 'loading') return <LoadingSkeleton />;
+  const containerClassName = labelled
+    ? 'border-warning/30 bg-warning/5 rounded-xl border p-3.5'
+    : '';
+
+  if (state === 'loading') {
+    return (
+      <div className={containerClassName}>
+        <LoadingSkeleton />
+      </div>
+    );
+  }
 
   if (!state.ok) {
     return (
-      <div className="border-warning/30 bg-warning/5 rounded-xl border p-3.5">
-        <ReasonNotice text={REASON_COPY[state.reason]} />
-        {state.reason === 'unavailable' && (
-          <button
-            type="button"
-            onClick={() => setRetryToken((token) => token + 1)}
-            className="text-warning focus-visible:ring-ring mt-2 inline-flex min-h-[44px] items-center rounded px-1 text-xs font-semibold underline underline-offset-2 focus-visible:ring-2 focus-visible:outline-none"
-          >
-            Retry
-          </button>
-        )}
-      </div>
+      <LookupSectionRetryNotice
+        containerClassName={containerClassName}
+        message={REASON_COPY[state.reason]}
+        showRetry={state.reason === 'unavailable'}
+        onRetry={() => setRetryToken((token) => token + 1)}
+      />
     );
   }
 
   const { block } = state;
   const isPending = block.state === 'pending';
 
+  const eyebrow = labelled ? (
+    <div className="mb-2 flex items-center gap-1.5">
+      <DollarSign className="text-warning size-3" aria-hidden="true" />
+      <span className="text-warning text-[11px] font-bold tracking-wide uppercase">Money</span>
+      <span className="text-muted-foreground text-[11px]">
+        · from the rate snapshots on the row
+      </span>
+    </div>
+  ) : null;
+
   return (
-    <div className="border-warning/30 bg-warning/5 rounded-xl border p-3.5">
-      <div className="mb-2 flex items-center gap-1.5">
-        <DollarSign className="text-warning size-3" aria-hidden="true" />
-        <span className="text-warning text-[11px] font-bold tracking-wide uppercase">Money</span>
-        <span className="text-muted-foreground text-[11px]">
-          · from the rate snapshots on the row
-        </span>
-      </div>
+    <div className={containerClassName}>
+      {eyebrow}
       {isPending ? (
         <p className="text-muted-foreground text-xs">Not settled yet</p>
       ) : (

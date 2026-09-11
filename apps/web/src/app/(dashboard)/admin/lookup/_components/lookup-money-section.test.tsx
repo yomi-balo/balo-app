@@ -35,13 +35,27 @@ beforeEach(() => {
 describe('LookupMoneySection', () => {
   it('renders a loading skeleton while the action is in flight', () => {
     mockAction.mockReturnValue(new Promise(() => {})); // never resolves
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     expect(screen.getByRole('status')).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('BAL-555 fix round F10 — labelled={false} renders no "Money" eyebrow (tab-panel mode)', async () => {
+    mockAction.mockResolvedValue({ ok: true, block: block() });
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
+    await waitFor(() => expect(screen.getByText('A$168.75')).toBeInTheDocument());
+    expect(screen.queryByText('Money')).not.toBeInTheDocument();
+  });
+
+  it('BAL-555 fix round F10 — labelled={true} renders the "Money" eyebrow (standalone-section mode)', async () => {
+    mockAction.mockResolvedValue({ ok: true, block: block() });
+    render(<LookupMoneySection sessionId="session-1" labelled />);
+    await waitFor(() => expect(screen.getByText('A$168.75')).toBeInTheDocument());
+    expect(screen.getByText('Money')).toBeInTheDocument();
   });
 
   it('ok: renders the money grid with all figures, no per-row lock', async () => {
     mockAction.mockResolvedValue({ ok: true, block: block() });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
 
     await waitFor(() => expect(screen.getByText('A$168.75')).toBeInTheDocument());
     expect(screen.getByText('A$135.00')).toBeInTheDocument();
@@ -55,7 +69,7 @@ describe('LookupMoneySection', () => {
       ok: true,
       block: block({ state: 'pending', clientChargeAudMinor: 0, expertEarningsAudMinor: 0 }),
     });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() => expect(screen.getByText('Not settled yet')).toBeInTheDocument());
     expect(screen.queryByText('Client all-in')).not.toBeInTheDocument();
   });
@@ -65,21 +79,21 @@ describe('LookupMoneySection', () => {
       ok: true,
       block: block({ overdraftSettledMinor: 6240 }),
     });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() => expect(screen.getByText('Overdraft settled')).toBeInTheDocument());
     expect(screen.getByText('A$62.40')).toBeInTheDocument();
   });
 
   it('forbidden: renders the copy with NO figures rendered', async () => {
     mockAction.mockResolvedValue({ ok: false, reason: 'forbidden' });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() => expect(screen.getByText(/need fee visibility/i)).toBeInTheDocument());
     expect(screen.queryByText(/A\$/)).not.toBeInTheDocument();
   });
 
   it('not_found: renders the not-found copy', async () => {
     mockAction.mockResolvedValue({ ok: false, reason: 'not_found' });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() =>
       expect(screen.getByText(/money record isn.t available/i)).toBeInTheDocument()
     );
@@ -87,14 +101,14 @@ describe('LookupMoneySection', () => {
 
   it('unavailable: renders the unavailable copy with a Retry button', async () => {
     mockAction.mockResolvedValue({ ok: false, reason: 'unavailable' });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() => expect(screen.getByText(/nothing was changed/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
   });
 
   it('forbidden and not_found: render NO Retry button (retrying cannot help)', async () => {
     mockAction.mockResolvedValue({ ok: false, reason: 'forbidden' });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() => expect(screen.getByText(/need fee visibility/i)).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
   });
@@ -104,7 +118,7 @@ describe('LookupMoneySection', () => {
     mockAction.mockResolvedValueOnce({ ok: false, reason: 'unavailable' });
     mockAction.mockResolvedValueOnce({ ok: true, block: block() });
 
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() => expect(screen.getByText(/nothing was changed/i)).toBeInTheDocument());
     expect(mockAction).toHaveBeenCalledTimes(1);
 
@@ -119,7 +133,7 @@ describe('LookupMoneySection', () => {
 
   it('BAL-551 R3 — billingFloorApplied false renders the single unchanged row', async () => {
     mockAction.mockResolvedValue({ ok: true, block: block({ billingFloorApplied: false }) });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() => expect(screen.getByText('45 min')).toBeInTheDocument());
     expect(screen.queryByText(/billed at the/i)).not.toBeInTheDocument();
   });
@@ -134,7 +148,7 @@ describe('LookupMoneySection', () => {
         billingFloorMinutes: 15,
       }),
     });
-    render(<LookupMoneySection sessionId="session-1" />);
+    render(<LookupMoneySection sessionId="session-1" labelled={false} />);
     await waitFor(() =>
       expect(
         screen.getByText('15 min (actual 6 min — billed at the 15-minute minimum)')
@@ -152,8 +166,8 @@ describe('LookupMoneySection', () => {
     );
     mockAction.mockResolvedValueOnce({ ok: true, block: block({ sessionId: 'session-2' }) });
 
-    const { rerender } = render(<LookupMoneySection sessionId="session-1" />);
-    rerender(<LookupMoneySection sessionId="session-2" />);
+    const { rerender } = render(<LookupMoneySection sessionId="session-1" labelled={false} />);
+    rerender(<LookupMoneySection sessionId="session-2" labelled={false} />);
 
     await waitFor(() => expect(screen.getByText('A$168.75')).toBeInTheDocument());
 

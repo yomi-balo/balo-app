@@ -71,8 +71,8 @@ export default async function AdminLookupPage({
         <h2 className="text-foreground text-2xl font-semibold">Lookup</h2>
         <p className="text-muted-foreground max-w-2xl text-sm">
           {/* pending-MJ */}
-          Find a user, company, agency, expert, project request or credit session — the support
-          entry point.
+          Find a user, company, agency, expert, project request, engagement or credit session — the
+          support entry point.
         </p>
       </div>
       <LookupShell

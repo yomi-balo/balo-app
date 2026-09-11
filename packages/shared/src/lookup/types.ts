@@ -19,7 +19,7 @@
  */
 
 /**
- * The six entity types Lookup searches. **This tuple's ORDER is load-bearing**: it is the
+ * The seven entity types Lookup searches. **This tuple's ORDER is load-bearing**: it is the
  * round-robin order `mergeLookupResults` (`@balo/db`) walks when it fills the result cap,
  * so a non-empty arm earlier in this list contributes its first row before any arm
  * contributes a second.
@@ -27,6 +27,12 @@
  * There is deliberately no `meeting` member — `meetings` has no title, no parties and zero
  * FKs (ADR-1045, machine-enforced by `meetings-no-context-column.test.ts`), so it is not
  * searchable at all (BAL-551 scope ruling, cut 1).
+ *
+ * ⚠ BAL-555 — `engagement`'S PLACEMENT IS A DECISION, NOT A DEFAULT: it sits AFTER
+ * `project_request` and BEFORE `credit_session` so the request → engagement → session
+ * lifecycle chain reads in lifecycle order in the round-robin merge, and because the
+ * session arm is id-only-matchable (so when it is non-empty it holds ~one row and loses
+ * nothing by being last).
  */
 export const LOOKUP_ENTITY_TYPES = [
   'user',
@@ -34,6 +40,7 @@ export const LOOKUP_ENTITY_TYPES = [
   'company',
   'agency',
   'project_request',
+  'engagement',
   'credit_session',
 ] as const;
 
@@ -41,7 +48,7 @@ export const LOOKUP_ENTITY_TYPES = [
 export type LookupEntityType = (typeof LOOKUP_ENTITY_TYPES)[number];
 
 /**
- * The five type chips, in render order. FIVE, not six: `people` folds `user` + `expert`
+ * The six type chips, in render order. SIX, not seven: `people` folds `user` + `expert`
  * (which keep DISTINCT badges in the row), and `orgs` folds `company` + `agency`.
  *
  * ⚠ `'orgs'` IS A SHIPPED WIRE VALUE. It crosses into PostHog as the `type_filter`
@@ -50,8 +57,19 @@ export type LookupEntityType = (typeof LOOKUP_ENTITY_TYPES)[number];
  * (`.claude/design-references/admin-home.jsx:1360`); the chip's user-facing LABEL is
  * "Companies & agencies" and lives with the other view vocabulary in the web app, never
  * here.
+ *
+ * ⚠ BAL-555 — `'engagements'` IS APPENDED, NOT INSERTED after `requests`. Every shipped
+ * key AND its position is a wire value already crossed into PostHog history; appending
+ * leaves them all untouched.
  */
-export const LOOKUP_TYPE_FILTERS = ['all', 'people', 'orgs', 'sessions', 'requests'] as const;
+export const LOOKUP_TYPE_FILTERS = [
+  'all',
+  'people',
+  'orgs',
+  'sessions',
+  'requests',
+  'engagements',
+] as const;
 
 /** One chip filter key. */
 export type LookupTypeFilter = (typeof LOOKUP_TYPE_FILTERS)[number];
@@ -81,13 +99,23 @@ export interface LookupResult {
   /** Line 2 — the one-line sub, pre-composed by the repository. */
   readonly sub: string;
   /**
-   * The username of an expert whose PUBLIC profile currently resolves, else `null`. The
-   * ONLY type-specific field on this DTO, and it exists because the Open-link policy needs
-   * it: `(marketing)/experts/[username]/page.tsx` 404s unless the profile is approved AND
-   * searchable AND its user is live. `null` for every other type, and `null` for an
-   * unapproved / unsearchable / username-less expert.
+   * The username of an expert whose PUBLIC profile currently resolves, else `null`. One of
+   * the TWO type-specific fields on this DTO, and it exists because the Open-link policy
+   * needs it: `(marketing)/experts/[username]/page.tsx` 404s unless the profile is
+   * approved AND searchable AND its user is live. `null` for every other type, and `null`
+   * for an unapproved / unsearchable / username-less expert.
    */
   readonly publicExpertUsername: string | null;
+  /**
+   * BAL-555 — the engagement's supertype discriminator, or `null` for every other type —
+   * the SECOND type-specific field on this DTO, and it exists for the same reason as
+   * `publicExpertUsername`: the Open-link policy needs it. `/engagements/[id]` is the
+   * PROJECT delivery workspace and 404s a CASE id
+   * (`app/(dashboard)/engagements/[id]/page.tsx`), and `/cases/[engagementId]` has NO
+   * ADMIN LENS at all (`app/(dashboard)/cases/[engagementId]/page.tsx`) — so only a
+   * `project` engagement has a staff destination.
+   */
+  readonly engagementType: 'project' | 'case' | 'package' | 'retainer' | null;
 }
 
 /** What one `platformLookupRepository.search(...)` call returns. */

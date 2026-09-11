@@ -8,6 +8,8 @@ import {
   buildCompanySub,
   buildCreditSessionSub,
   buildCreditSessionTitle,
+  buildEngagementSub,
+  buildEngagementTitle,
   buildExpertSub,
   buildProjectRequestSub,
   buildUserSub,
@@ -130,6 +132,7 @@ function row(type: LookupEntityType, n: number): LookupResult {
     title: `${type} ${n}`,
     sub: 'sub',
     publicExpertUsername: null,
+    engagementType: null,
   };
 }
 
@@ -470,6 +473,81 @@ describe('buildCreditSessionSub', () => {
         settlementStatus: 'not_required',
       })
     ).toBe('Northwind Industrial × expert unavailable · ended · not required');
+  });
+});
+
+describe('buildEngagementTitle', () => {
+  it('prefers the case title', () => {
+    expect(
+      buildEngagementTitle({
+        engagementType: 'case',
+        caseTitle: 'Fix the CPQ bug',
+        requestTitle: null,
+      })
+    ).toBe('Fix the CPQ bug');
+  });
+
+  it('falls back to the originating request title for a project', () => {
+    expect(
+      buildEngagementTitle({
+        engagementType: 'project',
+        caseTitle: null,
+        requestTitle: 'CPQ implementation — replace legacy quoting tool',
+      })
+    ).toBe('CPQ implementation — replace legacy quoting tool');
+  });
+
+  it('a case with neither title reads "Untitled case"', () => {
+    expect(
+      buildEngagementTitle({ engagementType: 'case', caseTitle: null, requestTitle: null })
+    ).toBe('Untitled case');
+  });
+
+  it('a project with neither title reads "Untitled project"', () => {
+    expect(
+      buildEngagementTitle({ engagementType: 'project', caseTitle: null, requestTitle: null })
+    ).toBe('Untitled project');
+  });
+
+  it('a package/retainer with neither title also reads "Untitled project" (the non-case default)', () => {
+    expect(
+      buildEngagementTitle({ engagementType: 'package', caseTitle: null, requestTitle: null })
+    ).toBe('Untitled project');
+  });
+});
+
+describe('buildEngagementSub', () => {
+  const BASE = {
+    engagementType: 'project',
+    companyName: 'Northwind Industrial',
+    expertFirstName: 'Priya',
+    expertLastName: 'Nair',
+    status: 'active',
+    createdAt: new Date('2026-06-12T00:00:00.000Z'),
+  };
+
+  it('names the type, both parties, status and start date', () => {
+    expect(buildEngagementSub(BASE)).toBe(
+      'Project · Northwind Industrial × Priya Nair · active · started 12 Jun'
+    );
+  });
+
+  it('capitalises the case type too', () => {
+    expect(buildEngagementSub({ ...BASE, engagementType: 'case' })).toBe(
+      'Case · Northwind Industrial × Priya Nair · active · started 12 Jun'
+    );
+  });
+
+  it('says the expert is unavailable rather than dropping the row', () => {
+    expect(buildEngagementSub({ ...BASE, expertFirstName: null, expertLastName: null })).toBe(
+      'Project · Northwind Industrial × expert unavailable · active · started 12 Jun'
+    );
+  });
+
+  it('humanizes a multi-word status (a synthetic value — the real enum is single-word today)', () => {
+    expect(buildEngagementSub({ ...BASE, status: 'on_hold' })).toBe(
+      'Project · Northwind Industrial × Priya Nair · on hold · started 12 Jun'
+    );
   });
 });
 

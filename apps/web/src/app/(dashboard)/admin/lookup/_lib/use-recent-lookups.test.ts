@@ -8,7 +8,13 @@ const RECENT_KEY = 'balo:admin-lookup-recent';
 function result(
   overrides: Partial<LookupResult> & Pick<LookupResult, 'id' | 'type'>
 ): LookupResult {
-  return { title: 'Title', sub: 'Sub', publicExpertUsername: null, ...overrides };
+  return {
+    title: 'Title',
+    sub: 'Sub',
+    publicExpertUsername: null,
+    engagementType: null,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -26,9 +32,13 @@ describe('useRecentLookups', () => {
     act(() => {
       hook.current.remember(result({ id: 'u1', type: 'user', title: 'Dana', sub: 'Owner' }));
     });
-    expect(hook.current.recent).toEqual([{ type: 'user', id: 'u1', title: 'Dana', sub: 'Owner' }]);
+    expect(hook.current.recent).toEqual([
+      { type: 'user', id: 'u1', title: 'Dana', sub: 'Owner', engagementType: null },
+    ]);
     const stored = JSON.parse(globalThis.localStorage.getItem(RECENT_KEY) ?? '[]');
-    expect(stored).toEqual([{ type: 'user', id: 'u1', title: 'Dana', sub: 'Owner' }]);
+    expect(stored).toEqual([
+      { type: 'user', id: 'u1', title: 'Dana', sub: 'Owner', engagementType: null },
+    ]);
   });
 
   it('moves an existing entry to the front instead of duplicating it', () => {
@@ -67,5 +77,38 @@ describe('useRecentLookups', () => {
     );
     const { result: hook } = renderHook(() => useRecentLookups());
     expect(hook.current.recent).toEqual([{ type: 'user', id: 'u1', title: 'Dana', sub: 'x' }]);
+  });
+
+  it('accepts a legacy stored entry with no engagementType (reads as undefined, not dropped)', () => {
+    globalThis.localStorage.setItem(
+      RECENT_KEY,
+      JSON.stringify([{ type: 'engagement', id: 'e1', title: 'CPQ', sub: 'x' }])
+    );
+    const { result: hook } = renderHook(() => useRecentLookups());
+    expect(hook.current.recent).toEqual([{ type: 'engagement', id: 'e1', title: 'CPQ', sub: 'x' }]);
+  });
+
+  it('drops a stored entry with an invalid engagementType', () => {
+    globalThis.localStorage.setItem(
+      RECENT_KEY,
+      JSON.stringify([
+        { type: 'engagement', id: 'e1', title: 'CPQ', sub: 'x', engagementType: 'not_a_real_type' },
+        { type: 'user', id: 'u1', title: 'Dana', sub: 'x' },
+      ])
+    );
+    const { result: hook } = renderHook(() => useRecentLookups());
+    expect(hook.current.recent).toEqual([{ type: 'user', id: 'u1', title: 'Dana', sub: 'x' }]);
+  });
+
+  it('round-trips a valid engagementType through storage', () => {
+    const { result: hook } = renderHook(() => useRecentLookups());
+    act(() => {
+      hook.current.remember(
+        result({ id: 'e1', type: 'engagement', title: 'CPQ', sub: 'x', engagementType: 'project' })
+      );
+    });
+    expect(hook.current.recent).toEqual([
+      { type: 'engagement', id: 'e1', title: 'CPQ', sub: 'x', engagementType: 'project' },
+    ]);
   });
 });

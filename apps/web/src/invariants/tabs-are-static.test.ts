@@ -99,6 +99,16 @@ const CONTROLS: readonly TabControl[] = [
     // present.
     present: 'aria-label="Balo admin sections"',
   },
+  {
+    label: 'admin lookup drill-in tabs (BAL-555)',
+    path: resolveRouteDir([
+      'src/app/(dashboard)/admin/lookup/_components/lookup-drill-in-tabs.tsx',
+      'apps/web/src/app/(dashboard)/admin/lookup/_components/lookup-drill-in-tabs.tsx',
+    ]),
+    // Unlike the two navs above, this one IS the ARIA tabs pattern — in-page panels, not route
+    // links — so the non-vacuity anchor is `role="tablist"` itself.
+    present: 'role="tablist"',
+  },
 ];
 
 /** Every token that reintroduces tab motion, including the import that would carry a new one in. */

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { LOOKUP_ENTITY_TYPES, type LookupResult } from '@balo/shared/lookup';
+import { LOOKUP_ENTITY_TYPES, LOOKUP_TYPE_FILTERS, type LookupResult } from '@balo/shared/lookup';
 import {
   LOOKUP_FILTER_LABEL,
+  LOOKUP_FILTER_TYPES,
+  LOOKUP_TYPE_ICON,
   LOOKUP_TYPE_LABEL,
   classifyLookupQuery,
   countsByFilter,
@@ -18,6 +20,7 @@ function result(
     title: 'Title',
     sub: 'Sub',
     publicExpertUsername: null,
+    engagementType: null,
     ...overrides,
   };
 }
@@ -47,8 +50,27 @@ describe('resolveOpenTarget', () => {
     }
   });
 
-  it('covers all six LOOKUP_ENTITY_TYPES', () => {
-    expect(LOOKUP_ENTITY_TYPES).toHaveLength(6);
+  it('resolves for a PROJECT engagement (BAL-555 C1)', () => {
+    const target = resolveOpenTarget(
+      result({ id: 'e1', type: 'engagement', engagementType: 'project' })
+    );
+    expect(target).toEqual({ href: '/engagements/e1', label: 'Open' });
+  });
+
+  it('returns NULL for a CASE engagement — no admin lens exists (BAL-555 C1)', () => {
+    expect(
+      resolveOpenTarget(result({ id: 'e2', type: 'engagement', engagementType: 'case' }))
+    ).toBeNull();
+  });
+
+  it('returns null for an engagement with a null engagementType', () => {
+    expect(
+      resolveOpenTarget(result({ id: 'e3', type: 'engagement', engagementType: null }))
+    ).toBeNull();
+  });
+
+  it('covers all seven LOOKUP_ENTITY_TYPES', () => {
+    expect(LOOKUP_ENTITY_TYPES).toHaveLength(7);
   });
 });
 
@@ -59,6 +81,7 @@ describe('filterByType / countsByFilter', () => {
     result({ id: 'co1', type: 'company' }),
     result({ id: 'ag1', type: 'agency' }),
     result({ id: 'r1', type: 'project_request' }),
+    result({ id: 'e1', type: 'engagement', engagementType: 'project' }),
     result({ id: 's1', type: 'credit_session' }),
   ];
 
@@ -82,13 +105,18 @@ describe('filterByType / countsByFilter', () => {
     expect(filterByType(results, 'requests').map((r) => r.id)).toEqual(['r1']);
   });
 
+  it('"engagements" keeps engagement only', () => {
+    expect(filterByType(results, 'engagements').map((r) => r.id)).toEqual(['e1']);
+  });
+
   it('countsByFilter reports a live count per chip', () => {
     expect(countsByFilter(results)).toEqual({
-      all: 6,
+      all: 7,
       people: 2,
       orgs: 2,
       sessions: 1,
       requests: 1,
+      engagements: 1,
     });
   });
 
@@ -99,19 +127,37 @@ describe('filterByType / countsByFilter', () => {
       orgs: 0,
       sessions: 0,
       requests: 0,
+      engagements: 0,
     });
   });
 });
 
-describe('LOOKUP_TYPE_LABEL / LOOKUP_FILTER_LABEL', () => {
+describe('LOOKUP_TYPE_LABEL / LOOKUP_TYPE_ICON / LOOKUP_FILTER_LABEL / LOOKUP_FILTER_TYPES', () => {
   it('has a label for every entity type', () => {
     for (const type of LOOKUP_ENTITY_TYPES) {
       expect(LOOKUP_TYPE_LABEL[type]).toBeTruthy();
     }
   });
 
+  it('has an icon for every entity type', () => {
+    for (const type of LOOKUP_ENTITY_TYPES) {
+      expect(LOOKUP_TYPE_ICON[type]).toBeDefined();
+    }
+  });
+
+  it('has a filter-types entry for every LOOKUP_TYPE_FILTERS key', () => {
+    for (const filter of LOOKUP_TYPE_FILTERS) {
+      expect(filter in LOOKUP_FILTER_TYPES).toBe(true);
+      expect(LOOKUP_FILTER_LABEL[filter]).toBeTruthy();
+    }
+  });
+
   it('the orgs chip label is "Companies & agencies"', () => {
     expect(LOOKUP_FILTER_LABEL.orgs).toBe('Companies & agencies');
+  });
+
+  it('the engagements chip label is "Engagements"', () => {
+    expect(LOOKUP_FILTER_LABEL.engagements).toBe('Engagements');
   });
 });
 
@@ -150,8 +196,16 @@ describe('selectionFromResult / selectionFromRecent', () => {
       title: 'Priya',
       sub: 'x',
       publicExpertUsername: 'priya',
+      engagementType: null,
       via: 'search',
     });
+  });
+
+  it('selectionFromResult carries the live engagementType through', () => {
+    const selection = selectionFromResult(
+      result({ id: 'e1', type: 'engagement', title: 'CPQ', sub: 'x', engagementType: 'project' })
+    );
+    expect(selection.engagementType).toBe('project');
   });
 
   it('selectionFromRecent always carries publicExpertUsername: null (no live Open link from Recent — BAL-551 F12: usernames can be renamed)', () => {
@@ -164,5 +218,26 @@ describe('selectionFromResult / selectionFromRecent', () => {
     expect(selection.publicExpertUsername).toBeNull();
     expect(selection.key).toBe('expert:x1');
     expect(selection.via).toBe('recent');
+  });
+
+  it('selectionFromRecent carries a stored engagementType through', () => {
+    const selection = selectionFromRecent({
+      type: 'engagement',
+      id: 'e1',
+      title: 'CPQ',
+      sub: 'x',
+      engagementType: 'project',
+    });
+    expect(selection.engagementType).toBe('project');
+  });
+
+  it('selectionFromRecent normalises a legacy entry with no engagementType to null (BAL-555 — NOT the F12 staleness case: engagement_type is immutable)', () => {
+    const selection = selectionFromRecent({
+      type: 'engagement',
+      id: 'e1',
+      title: 'CPQ',
+      sub: 'x',
+    });
+    expect(selection.engagementType).toBeNull();
   });
 });

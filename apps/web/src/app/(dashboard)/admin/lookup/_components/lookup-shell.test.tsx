@@ -9,9 +9,15 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn() }),
 }));
 
-const { mockAction } = vi.hoisted(() => ({ mockAction: vi.fn() }));
+const { mockAction, mockTimelineAction } = vi.hoisted(() => ({
+  mockAction: vi.fn(),
+  mockTimelineAction: vi.fn(),
+}));
 vi.mock('../_actions/fetch-lookup-money-block', () => ({
   fetchLookupMoneyBlockAction: mockAction,
+}));
+vi.mock('../_actions/fetch-lookup-timeline', () => ({
+  fetchLookupTimelineAction: mockTimelineAction,
 }));
 
 const trackMock = vi.mocked(track);
@@ -19,12 +25,19 @@ const trackMock = vi.mocked(track);
 function result(
   overrides: Partial<LookupResult> & Pick<LookupResult, 'id' | 'type'>
 ): LookupResult {
-  return { title: 'Title', sub: 'Sub', publicExpertUsername: null, ...overrides };
+  return {
+    title: 'Title',
+    sub: 'Sub',
+    publicExpertUsername: null,
+    engagementType: null,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
   globalThis.localStorage.clear();
   mockAction.mockReturnValue(new Promise(() => {}));
+  mockTimelineAction.mockReturnValue(new Promise(() => {}));
   trackMock.mockClear();
 });
 
@@ -146,5 +159,41 @@ describe('LookupShell', () => {
       ADMIN_LOOKUP_EVENTS.SEARCHED,
       expect.objectContaining({ type_filter: 'all' })
     );
+  });
+
+  it('BAL-555 — selecting a credit_session result then switching to the Money tab fires TAB_SELECTED with the entity type', async () => {
+    const user = userEvent.setup();
+    const results = [
+      result({ id: 'cs1', type: 'credit_session', title: 'Session with Northwind' }),
+    ];
+    render(<LookupShell query="northwind" results={results} truncated={false} tooShort={false} />);
+
+    await user.click(screen.getByText('Session with Northwind'));
+    trackMock.mockClear();
+
+    await user.click(screen.getByRole('tab', { name: /money/i }));
+
+    expect(trackMock).toHaveBeenCalledWith(
+      ADMIN_LOOKUP_EVENTS.TAB_SELECTED,
+      expect.objectContaining({ entity_type: 'credit_session', tab: 'money' })
+    );
+  });
+
+  it('a Recent entry with no saved engagementType is remembered as null (pre-BAL-555 entries)', async () => {
+    const user = userEvent.setup();
+    const results = [
+      result({ id: 'e1', type: 'engagement', title: 'Engagement with Dana', engagementType: null }),
+    ];
+    const { rerender } = render(
+      <LookupShell query="dana" results={results} truncated={false} tooShort={false} />
+    );
+    await user.click(screen.getByText('Engagement with Dana'));
+
+    rerender(<LookupShell query="" results={[]} truncated={false} tooShort={false} />);
+    await user.click(screen.getByRole('button', { name: /Engagement with Dana/ }));
+
+    // Re-selecting from Recent doesn't throw and keeps the drill-in mounted for this entity —
+    // proof `selectRecent`'s `engagementType: entry.engagementType ?? null` ran without error.
+    expect(screen.getAllByText('Engagement with Dana').length).toBeGreaterThanOrEqual(1);
   });
 });

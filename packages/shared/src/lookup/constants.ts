@@ -37,3 +37,10 @@ export const LOOKUP_ARM_LIMIT = LOOKUP_RESULT_CAP + 1;
  * `{ results: [], truncated: false, tooShort: true }` and issues NO query at all.
  */
 export const LOOKUP_MIN_QUERY_LENGTH = 2;
+
+/**
+ * BAL-555 — the Timeline's page size. One page covers every entity type's whole trail
+ * today (the richest, `engagement`, has 11 write sites) so "Load earlier" is a
+ * correctness affordance, not the normal path.
+ */
+export const LOOKUP_TIMELINE_PAGE_SIZE = 25;

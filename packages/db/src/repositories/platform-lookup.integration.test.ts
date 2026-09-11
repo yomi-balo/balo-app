@@ -2,13 +2,15 @@ import { describe, it, expect, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import * as client from '../client';
 import { db } from '../client';
-import { creditSessions, expertProfiles, partyDomains, users } from '../schema';
+import { creditSessions, engagements, expertProfiles, partyDomains, users } from '../schema';
 import {
   agencyFactory,
   agencyMemberFactory,
+  caseEngagementFactory,
   companyFactory,
   companyMemberFactory,
   creditWalletFactory,
+  engagementFactory,
   expertDraftFactory,
   expertFactory,
   projectRequestFactory,
@@ -396,7 +398,14 @@ describe('platformLookupRepository.search — credit sessions', () => {
 
     // MUTATION: widen the arm's projection (or map one more field onto the DTO) and this
     // fails. No fee, no rate, no accrual and no PaymentIntent id may cross this boundary.
-    expect(Object.keys(row)).toEqual(['id', 'type', 'title', 'sub', 'publicExpertUsername']);
+    expect(Object.keys(row)).toEqual([
+      'id',
+      'type',
+      'title',
+      'sub',
+      'publicExpertUsername',
+      'engagementType',
+    ]);
     expect(JSON.stringify(row)).not.toContain('pi_3');
   });
 
@@ -438,6 +447,122 @@ describe('platformLookupRepository.search — credit sessions', () => {
 
     const result = await search(token);
     expect(result.results.map((r) => r.id)).not.toContain(sessionId);
+  });
+});
+
+// ── 12b: engagements (BAL-555) ────────────────────────────────────────────────────────
+
+describe('platformLookupRepository.search — engagements', () => {
+  it('matches on the engagement uuid', async () => {
+    const { engagement } = await engagementFactory();
+    const result = await search(engagement.id);
+    const hit = result.results.find((r) => r.id === engagement.id);
+    expect(hit).toBeDefined();
+    expect(hit?.type).toBe('engagement');
+  });
+
+  it('matches a case on its title', async () => {
+    const token = uniqueToken('casetitle');
+    const { engagement } = await caseEngagementFactory({
+      caseValues: { title: `${token} bug fix` },
+    });
+
+    const result = await search(token);
+    const hit = result.results.find((r) => r.type === 'engagement' && r.id === engagement.id);
+    expect(hit).toBeDefined();
+    expect(hit?.title).toBe(`${token} bug fix`);
+    expect(hit?.engagementType).toBe('case');
+  });
+
+  it('matches a project on its ORIGINATING project-request title', async () => {
+    const token = uniqueToken('reqtitle');
+    const request = await projectRequestFactory({ title: `${token} implementation` });
+    const { engagement } = await engagementFactory({
+      projectValues: { projectRequestId: request.id },
+    });
+
+    const result = await search(token);
+    const hit = result.results.find((r) => r.type === 'engagement' && r.id === engagement.id);
+    expect(hit).toBeDefined();
+    expect(hit?.title).toBe(`${token} implementation`);
+    expect(hit?.engagementType).toBe('project');
+  });
+
+  it('matches on the client company name', async () => {
+    const token = uniqueToken('engco');
+    const company = await companyFactory({ name: `${token} Industrial` });
+    const { engagement } = await engagementFactory({ companyId: company.id });
+
+    const result = await search(token);
+    const hit = result.results.find((r) => r.type === 'engagement' && r.id === engagement.id);
+    expect(hit).toBeDefined();
+    expect(hit?.sub).toContain(`${token} Industrial`);
+  });
+
+  it('matches on the delivering expert name', async () => {
+    const token = uniqueToken('engexpert');
+    const user = await userFactory({ firstName: 'Priya', lastName: token });
+    const profile = await expertDraftFactory({ userId: user.id });
+    const { engagement } = await engagementFactory({ expertProfileId: profile.id });
+
+    const result = await search(token);
+    const hit = result.results.find((r) => r.type === 'engagement' && r.id === engagement.id);
+    expect(hit).toBeDefined();
+    expect(hit?.sub).toContain(`Priya ${token}`);
+  });
+
+  it('excludes a soft-deleted engagement', async () => {
+    const { engagement } = await engagementFactory();
+    await db
+      .update(engagements)
+      .set({ deletedAt: new Date() })
+      .where(eq(engagements.id, engagement.id));
+
+    const result = await search(engagement.id);
+    expect(result.results.map((r) => r.id)).not.toContain(engagement.id);
+  });
+
+  it('still finds an engagement whose delivering expert user is soft-deleted, naming them unavailable', async () => {
+    const token = uniqueToken('enggone');
+    const user = await userFactory({ firstName: 'Ghost', lastName: token });
+    const profile = await expertDraftFactory({ userId: user.id });
+    const company = await companyFactory({ name: `${token} Co` });
+    const { engagement } = await engagementFactory({
+      companyId: company.id,
+      expertProfileId: profile.id,
+    });
+    await db.update(users).set({ deletedAt: new Date() }).where(eq(users.id, user.id));
+
+    const result = await search(token);
+    const hit = result.results.find((r) => r.type === 'engagement' && r.id === engagement.id);
+    expect(hit).toBeDefined();
+    expect(hit?.sub).toContain('× expert unavailable');
+  });
+
+  it('resolves NOTHING from a TRUNCATED uuid — there is no prefix match', async () => {
+    const { engagement } = await engagementFactory();
+    const result = await search(engagement.id.slice(0, 18));
+    expect(result.results.map((r) => r.id)).not.toContain(engagement.id);
+  });
+
+  it('projects a FEE-SAFE allow-list — no commercial column crosses this boundary', async () => {
+    const { engagement } = await engagementFactory();
+    const result = await search(engagement.id);
+    const hit = result.results.find((r) => r.id === engagement.id);
+    expect(hit).toBeDefined();
+    // MUTATION: widen the arm's projection (or map a commercial field onto the DTO) and
+    // this fails.
+    expect(Object.keys(hit ?? {})).toEqual([
+      'id',
+      'type',
+      'title',
+      'sub',
+      'publicExpertUsername',
+      'engagementType',
+    ]);
+    const serialized = JSON.stringify(hit);
+    expect(serialized).not.toContain('500000'); // the fixture's priceCents
+    expect(serialized).not.toContain('2500'); // baloFeeBps default
   });
 });
 
