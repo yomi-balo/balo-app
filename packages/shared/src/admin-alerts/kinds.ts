@@ -96,8 +96,16 @@ function targetMeetingViaTargetId(input: AdminAlertTargetInput): AdminAlertTarge
   return { label: 'the meeting', href: `/meetings/${input.detail.targetId ?? input.entityId}` };
 }
 
+/**
+ * `calendar.subscription_lapse` — `/expert/settings?tab=schedule` loads calendar data from
+ * the VIEWER's own session profile, not the expert the alert names. For a staff viewer that
+ * is a dead link dressed as a live one (their own unrelated settings, or an empty page).
+ * Same rule as `targetExpertApplication` / `targetCompanyCatalogue`: coarse-but-live beats a
+ * dead link. Falls back to the admin catalogue.
+ * // BAL-549 ships an admin-side expert/calendar surface — the eventual target.
+ */
 function targetCalendarSettings(): AdminAlertTarget {
-  return { label: 'the calendar connection', href: '/expert/settings?tab=schedule' };
+  return { label: 'the calendar connection', href: '/admin/catalogue' };
 }
 
 /**

@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { usersRepository } from '@balo/db';
 import { getSession, type SessionUser } from '@/lib/auth/session';
+import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
+import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 import { log } from '@/lib/logging';
 
 export const dynamic = 'force-dynamic';
@@ -259,6 +261,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       companyName: resolved.companyName,
       companyRole: resolved.companyRole,
     };
+
+    // ⚠⚠ BAL-494 / ADR-1053 — HYDRATE THE WORKSPACE POINTER BEFORE SEALING. NOT OPTIONAL, AND
+    // NOT COSMETIC: without it this route mints a session shape NO REAL LOGIN PRODUCES, and the
+    // harness is then testing a state the app never reaches.
+    //
+    // `checkSessionDrift` treats an ABSENT `activeWorkspace` as the pre-BAL-494 bootstrap case
+    // and returns `sync-needed`, so a session sealed without it is DRIFTED THE INSTANT IT IS
+    // WRITTEN. `(dashboard)/layout.tsx` then spends the very first navigation after seeding on a
+    // `/api/auth/session-sync` round-trip — and that layout's `returnTo` reads
+    // `headers().get('x-invoke-path')`, a header that DOES NOT EXIST IN NEXT 16, so it always
+    // falls back to `/dashboard`. Net effect: `seedSession()` followed by `page.goto('/admin/…')`
+    // landed on `/dashboard` no matter what role was sealed, which read exactly like a failing
+    // capability gate (BAL-548 — three staff arms of `e2e/admin-shell.spec.ts`, CI-only because
+    // no local harness ran the production `(dashboard)` layout). The cookie was always correct;
+    // the session was merely incomplete.
+    //
+    // This is the SAME two-line hydration `api/auth/callback/route.ts` performs (see its
+    // BAL-494 comment) and it goes through the ONE writer, `applyWorkspaceDerivationToSessionUser`
+    // — never a hand-rolled `activeWorkspace` literal, which would fork the projection rule.
+    // `derived === null` (no company membership at all) is unreachable here — `resolveTestUser`
+    // throws above if the resolved user has no membership — but is handled rather than asserted,
+    // exactly as the callback does.
+    const derived = await deriveWorkspacesForUser(resolved.user.id);
+    if (derived !== null) {
+      applyWorkspaceDerivationToSessionUser(sessionUser, derived);
+    }
 
     const session = await getSession();
     session.user = sessionUser;

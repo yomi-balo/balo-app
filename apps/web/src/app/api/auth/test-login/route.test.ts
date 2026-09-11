@@ -11,6 +11,8 @@ const {
   mockCreateWithWorkspace,
   mockSave,
   mockGetSession,
+  mockFindForSessionSync,
+  mockDeriveWorkspacesForUser,
   fakeSession,
 } = vi.hoisted(() => {
   const save = vi.fn();
@@ -22,6 +24,8 @@ const {
     mockCreateWithWorkspace: vi.fn(),
     mockSave: save,
     mockGetSession: vi.fn(),
+    mockFindForSessionSync: vi.fn(),
+    mockDeriveWorkspacesForUser: vi.fn(),
     fakeSession: session,
   };
 });
@@ -32,6 +36,9 @@ vi.mock('@balo/db', () => ({
     update: mockUpdate,
     findWithCompany: mockFindWithCompany,
     createWithWorkspace: mockCreateWithWorkspace,
+    // BAL-548 fix — `checkSessionDrift` (exercised by the "not drifted at birth" suite at the
+    // bottom of this file) reads the row through this method, not `findByEmail`.
+    findForSessionSync: (...args: unknown[]) => mockFindForSessionSync(...args),
   },
 }));
 
@@ -39,7 +46,15 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: mockGetSession,
 }));
 
+// BAL-494 — the workspace hydration seam the route now shares with `api/auth/callback`. Same
+// mock shape as `callback/route.test.ts` and `lib/auth/session-sync.test.ts`; `checkSessionDrift`
+// reads it through the SAME mock, which is what lets the two halves be compared below.
+vi.mock('@/lib/workspaces/derive-workspaces', () => ({
+  deriveWorkspacesForUser: (...args: unknown[]) => mockDeriveWorkspacesForUser(...args),
+}));
+
 import { POST, PERSONA_PLATFORM_ROLE } from './route';
+import { checkSessionDrift } from '@/lib/auth/session-sync';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -91,6 +106,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   fakeSession.user = undefined;
   mockGetSession.mockResolvedValue(fakeSession);
+  // Default `null` (no company workspace derivable) so every pre-existing test's minted
+  // `SessionUser` shape is byte-identical to before the BAL-548 hydration fix; the
+  // "not drifted at birth" suite below opts IN to a real derivation. Same default as
+  // `callback/route.test.ts`.
+  mockDeriveWorkspacesForUser.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -398,5 +418,117 @@ describe('POST /api/auth/test-login — persona seam (BAL-548)', () => {
     expect(Object.keys(PERSONA_PLATFORM_ROLE).sort()).toEqual(['member', 'staff']);
     expect(new Set(Object.values(PERSONA_PLATFORM_ROLE))).toEqual(new Set(['user', 'admin']));
     expect(Object.values(PERSONA_PLATFORM_ROLE)).not.toContain('super_admin');
+  });
+});
+
+/**
+ * ⚠⚠ BAL-548 — THE SEEDED SESSION MUST NOT BE DRIFTED THE INSTANT IT IS SEALED.
+ *
+ * This suite exists because every OTHER test in this file passed while CI's E2E job was red.
+ * They all assert what the route PUTS in the session; none asked whether the app ACCEPTS that
+ * session. It does not, if `activeWorkspace` is missing: `checkSessionDrift` classifies an
+ * absent pointer as the pre-BAL-494 bootstrap case and returns `sync-needed`, so
+ * `(dashboard)/layout.tsx` burns the first navigation after `seedSession()` on a
+ * `/api/auth/session-sync` round-trip that lands on `/dashboard` (that layout's `returnTo` reads
+ * `headers().get('x-invoke-path')`, a header which does not exist in Next 16, so it always falls
+ * back to `/dashboard`). Three staff arms of `e2e/admin-shell.spec.ts` therefore landed on
+ * `/dashboard` and read as a broken `VIEW_PLATFORM_ADMIN` gate — while the sealed cookie had
+ * carried `platformRole: 'admin'` correctly the whole time.
+ *
+ * ⚠ IT IS DELIBERATELY A CROSS-SEAM TEST, AND THAT IS THE POINT. It runs the REAL
+ * `checkSessionDrift` against the REAL session object the REAL `POST` just wrote, through the
+ * one `deriveWorkspacesForUser` mock both halves read. A test that only asserted
+ * "`activeWorkspace` is set" would pin the SYMPTOM, and could be satisfied by a hand-rolled
+ * literal that forks the projection rule; this one pins the CONTRACT — a session this route
+ * mints is one the app will not immediately bounce — so it also fails for any future field the
+ * drift gate learns to compare.
+ */
+describe('POST /api/auth/test-login — the seeded session is not drifted at birth (BAL-548)', () => {
+  const COMPANY_WORKSPACE = {
+    type: 'company' as const,
+    key: 'company:company-1',
+    companyId: 'company-1',
+    name: 'Workspace',
+    via: 'membership' as const,
+    isPersonal: false,
+  };
+
+  /** What `deriveWorkspacesForUser` yields for the personal workspace `membershipRow` describes. */
+  function derivation() {
+    return {
+      workspaces: [COMPANY_WORKSPACE],
+      activeWorkspace: COMPANY_WORKSPACE,
+      session: {
+        activeMode: 'client' as const,
+        companyId: 'company-1',
+        companyName: 'Workspace',
+        companyRole: 'owner' as const,
+      },
+    };
+  }
+
+  /** The `findForSessionSync` projection of the same row — what the drift gate compares against. */
+  function sessionSyncRow(platformRole: 'user' | 'admin') {
+    return {
+      status: 'active',
+      activeMode: 'client',
+      platformRole,
+      onboardingCompleted: true,
+      deletedAt: null,
+      expertProfileId: null,
+      activeCompanyId: 'company-1',
+      expertApprovedAt: null,
+      verticalId: null,
+    };
+  }
+
+  function arrange(expectedRole: 'user' | 'admin'): void {
+    enableSecret();
+    mockDeriveWorkspacesForUser.mockResolvedValue(derivation());
+    mockFindByEmail.mockResolvedValue(userRow({ platformRole: expectedRole }));
+    mockUpdate.mockResolvedValue(
+      userRow({ platformRole: expectedRole, onboardingCompleted: true })
+    );
+    mockFindWithCompany.mockResolvedValue({ companyMemberships: [membershipRow] });
+  }
+
+  it.each([
+    ['staff', 'admin'],
+    ['member', 'user'],
+  ] as const)(
+    'persona "%s" seals a session checkSessionDrift accepts — no sync round-trip',
+    async (persona, expectedRole) => {
+      arrange(expectedRole);
+
+      const res = await POST(makeRequest({ onboardingCompleted: true, persona }, TEST_SECRET));
+      expect(res.status).toBe(200);
+      expect(mintedRole()).toBe(expectedRole);
+
+      // ── The half that was missing. The route sealed a session; now ask the app about it. ──
+      mockFindForSessionSync.mockResolvedValue(sessionSyncRow(expectedRole));
+
+      // `checkSessionDrift` reads the session through the SAME mocked `getSession`, so it sees
+      // exactly the object `POST` just wrote — no re-derivation, no hand-built fixture.
+      await expect(checkSessionDrift()).resolves.toEqual({ action: 'ok' });
+    }
+  );
+
+  it('routes the hydration through applyWorkspaceDerivationToSessionUser, not a hand-rolled literal', async () => {
+    // The pointer is a NARROW projection of the full `Workspace` (BAL-507): `via` and
+    // `isPersonal` are dropped. Pinning the exact key set is what stops a future edit assigning
+    // `derived.activeWorkspace` raw — structurally assignable, so the compiler would not object,
+    // and it would re-inflate the 4096-byte cookie budget `session-cookie-size.test.ts` guards.
+    arrange('admin');
+
+    await POST(makeRequest({ onboardingCompleted: true, persona: 'staff' }, TEST_SECRET));
+
+    const user = fakeSession.user as { activeWorkspace?: Record<string, unknown> };
+    expect(user.activeWorkspace).toBeDefined();
+    expect(Object.keys(user.activeWorkspace ?? {}).sort()).toEqual([
+      'companyId',
+      'key',
+      'name',
+      'type',
+    ]);
   });
 });

@@ -167,10 +167,16 @@ export const transcripts = pgTable(
      * `failure_reason`) on a DEGRADED-BUT-COMPLETED path, leaving `status` untouched, so a
      * `ready` row can carry a `failed_stage`.
      *
-     * ⚠⚠ WHICH IS WHY `transcriptsRepository.listFailedSince` MUST CARRY AN EXPLICIT
-     * `status = 'failed'` TERM AND MAY NEVER BE "SIMPLIFIED" ONTO THIS PREDICATE ALONE —
-     * doing so would surface every recorded stage SKIP in the admin queue as a failure. The
-     * index is the superset; the READ narrows.
+     * ⚠⚠ `transcriptsRepository.listFailedSince` CARRIES `status = 'failed'` **AND**
+     * `failed_stage IS NOT NULL` — INSTEAD of `status = 'failed'` alone, not additionally to
+     * some other narrowing. Postgres cannot prove `status = 'failed'` implies
+     * `failed_stage IS NOT NULL`, so a read carrying only the status term is not provably a
+     * subset of this predicate and the planner will not use this index — it seq-scans
+     * `transcripts` instead. The read needs BOTH terms: `failed_stage IS NOT NULL` so the read
+     * is provably a subset of this index's predicate (making the index usable), and
+     * `status = 'failed'` so a `recordStageSkip`ped-but-`ready` row (which satisfies this
+     * index's predicate but is not a failure) is excluded from the finder's result. The index
+     * stays the columns-only superset; the read narrows it on both axes.
      */
     index('transcript_failed_idx')
       .on(t.createdAt)

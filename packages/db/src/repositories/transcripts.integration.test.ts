@@ -325,6 +325,14 @@ describe('transcriptsRepository.findByMeetingIds', () => {
  * DEGRADED-BUT-COMPLETED row. Without the read's explicit `status = 'failed'` term every
  * recorded skip would surface in the admin queue as a failure — so that case is not colour,
  * it is the reason the term exists.
+ *
+ * ⚠⚠ THE READ ALSO CARRIES `failed_stage IS NOT NULL` — a SECOND term, not a stand-in for the
+ * first. Without it, Postgres cannot prove `status = 'failed'` implies the index's predicate
+ * and will not use `transcript_failed_idx` (a correctness-invisible perf regression: a
+ * `status = 'failed'`-only read still returns the right rows, it just seq-scans to get them).
+ * No production writer leaves `status = 'failed'` with a null `failed_stage` today
+ * (`markFailed` always stamps both together), so the case below is a synthetic row seeded
+ * directly, proving the read's own predicate — not just today's writer behaviour.
  */
 describe('transcriptsRepository.listFailedSince', () => {
   async function seedFailed(createdAt: Date) {
@@ -381,6 +389,52 @@ describe('transcriptsRepository.listFailedSince', () => {
     expect(raw?.failedStage).toBe('action_items');
     expect(raw?.status).toBe('ready');
     expect(rows.map((row) => row.transcriptId)).not.toContain(transcript.id);
+  });
+
+  it('⚠ EXCLUDES a status=failed row with a NULL failed_stage — the added index-usability term', async () => {
+    // No real writer produces this shape today (`markFailed` always stamps both together),
+    // but the read's own `failed_stage IS NOT NULL` predicate must hold it out regardless —
+    // seeded directly rather than through the repository to prove the read, not the writer.
+    const { transcript } = await transcriptFactory({
+      values: {
+        status: 'failed',
+        failedStage: null,
+        failureReason: 'seeded without a stage',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+
+    const rows = await transcriptsRepository.listFailedSince(
+      new Date('2026-02-01T00:00:00.000Z'),
+      50
+    );
+
+    expect(rows.map((row) => row.transcriptId)).not.toContain(transcript.id);
+  });
+
+  it('includes only rows carrying BOTH status=failed and a non-null failed_stage', async () => {
+    const both = await seedFailed(new Date('2026-01-01T00:00:00.000Z'));
+    const { transcript: statusOnly } = await transcriptFactory({
+      values: {
+        status: 'failed',
+        failedStage: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    const { transcript: stageOnly } = await transcriptFactory({
+      values: { status: 'ready', createdAt: new Date('2026-01-01T00:00:00.000Z') },
+    });
+    await transcriptsRepository.recordStageSkip(stageOnly.id, 'action_items', 'skipped');
+
+    const rows = await transcriptsRepository.listFailedSince(
+      new Date('2026-02-01T00:00:00.000Z'),
+      50
+    );
+    const ids = rows.map((row) => row.transcriptId);
+
+    expect(ids).toContain(both.transcriptId);
+    expect(ids).not.toContain(statusOnly.id);
+    expect(ids).not.toContain(stageOnly.id);
   });
 
   it('excludes soft-deleted transcripts and transcripts of a soft-deleted meeting', async () => {
