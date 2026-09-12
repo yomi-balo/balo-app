@@ -182,10 +182,11 @@ describe('ExpertApplyPage — authenticated', () => {
   /**
    * FIX ROUND F1 — `'rejected'` IS HANDLED EXPLICITLY, AND CARRIES NO DECISION METADATA.
    *
-   * A declined applicant lands here by design (the decline email's CTA points at
-   * `/expert/apply`, and re-applying is allowed), which is why this used to be an unremarked
-   * FALL-THROUGH — and why it was the leak's last hop: the wizard is a `'use client'` boundary,
-   * so everything on `draft` is serialised into the applicant's own browser payload.
+   * A declined applicant can still REACH this page — nothing redirects them — which is why this
+   * used to be an unremarked FALL-THROUGH, and why it was the leak's last hop: the wizard is a
+   * `'use client'` boundary, so everything on `draft` is serialised into the applicant's own
+   * browser payload. (Re-applying itself is NOT supported: web-review fix round W1. Both writes
+   * refuse a `'rejected'` profile, and the decline email no longer links here.)
    *
    * The repository allow-list is the fix; this is the second layer. MUTATION: drop the
    * `applicantDraft` branch and pass `draft` straight through → red.
@@ -204,12 +205,12 @@ describe('ExpertApplyPage — authenticated', () => {
 
     render(await ExpertApplyPage());
 
-    // Re-applying is allowed, so the wizard renders rather than redirecting.
+    // Nothing redirects a declined applicant away, so the wizard renders (the writes refuse).
     expect(screen.getByTestId('draft').textContent).toBe('has-draft');
     expect(mockRedirect).not.toHaveBeenCalled();
 
     const payload = screen.getByTestId('draft-json').textContent ?? '';
-    expect(payload).toContain('rejected'); // the status itself is kept — it IS a re-application
+    expect(payload).toContain('rejected'); // the status is kept — the wizard needs to know
     expect(payload).not.toContain('credentials_unverified');
     expect(payload).not.toContain('staffer-secret-id');
     expect(payload).not.toContain('2026-02-02');

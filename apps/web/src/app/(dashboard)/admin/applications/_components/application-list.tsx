@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronRight, UserPlus, CheckCheck } from 'lucide-react';
 import type { ApplicationReviewFilter } from '@balo/db';
+import { LocalDate } from '@/components/local-date';
 import { ApplicationFilterChips } from './application-filter-chips';
 import type { ApplicationListRowView } from '../_lib/application-list-view';
 
@@ -106,6 +107,13 @@ export function ApplicationList({
               </div>
               <span className="text-muted-foreground shrink-0 text-xs font-medium whitespace-nowrap">
                 {row.statusLine}
+                {/* W4 — the decision DATE in the viewer's zone; see `formatDecisionAttribution`. */}
+                {row.decidedAtIso !== null && (
+                  <>
+                    {' · '}
+                    <LocalDate iso={row.decidedAtIso} />
+                  </>
+                )}
               </span>
               <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
             </Link>

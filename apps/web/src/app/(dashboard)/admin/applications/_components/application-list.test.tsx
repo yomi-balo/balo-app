@@ -17,6 +17,7 @@ function row(overrides: Partial<ApplicationListRowView> = {}): ApplicationListRo
     email: 'priya@example.com',
     agencyLabel: 'Independent',
     statusLine: 'waiting 6d',
+    decidedAtIso: null,
     daysWaiting: 6,
     ...overrides,
   };
@@ -93,6 +94,40 @@ describe('ApplicationList', () => {
       '/admin/applications/p1'
     );
     expect(screen.getByText('CloudPeak')).toBeInTheDocument();
+  });
+
+  /**
+   * WEB-REVIEW FIX ROUND W4 — the decided row's DATE is a `<time>`, in the viewer's own zone.
+   *
+   * MUTATION-PROVEN: drop the `{row.decidedAtIso !== null && …}` block and this goes red — the
+   * row then shows an attribution with no date at all, which is how the surface lost the "when"
+   * it exists to report.
+   */
+  it('renders a decided row as the attribution plus a viewer-local <time> date', () => {
+    render(
+      <ApplicationList
+        filter="approved"
+        rows={[
+          row({
+            statusLine: 'Approved by Dana @ Balo',
+            decidedAtIso: '2026-09-03T09:00:00.000Z',
+          }),
+        ]}
+        counts={{ ...COUNTS, approved: 1 }}
+        truncated={false}
+      />
+    );
+    expect(screen.getByText(/Approved by Dana @ Balo/)).toBeInTheDocument();
+    const when = screen.getByText('3 Sep');
+    expect(when.tagName).toBe('TIME');
+    expect(when).toHaveAttribute('datetime', '2026-09-03T09:00:00.000Z');
+  });
+
+  it('renders no <time> on a pending row', () => {
+    const { container } = render(
+      <ApplicationList filter="pending" rows={[row()]} counts={COUNTS} truncated={false} />
+    );
+    expect(container.querySelector('time')).toBeNull();
   });
 
   /**

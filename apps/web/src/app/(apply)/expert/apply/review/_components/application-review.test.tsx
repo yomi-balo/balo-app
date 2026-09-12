@@ -242,6 +242,30 @@ describe('ApplicationReview', () => {
   });
 
   /**
+   * WEB-REVIEW FIX ROUND W5 — THE APPLICANT-FACING OUTPUT THIS PR MUST NOT CHANGE.
+   *
+   * The pre-PR de-duplication replaced this page's local `PROJECT_RANGE_MAP[x ?? 0] ?? '—'` with
+   * the shared `projectRangeLabel(x)`, which renders `'—'` for a nullish value. That silently
+   * changed a SHIPPED applicant-facing surface: an unanswered project-count question used to read
+   * "None". The `?? 0` at both call sites in `application-review.tsx` restores it.
+   *
+   * MUTATION-PROVEN: drop either `?? 0` and this goes red ("—" in place of "None"), while every
+   * populated-fixture test above stays green.
+   */
+  it('renders "None" — not "—" — for an unanswered project count (the shipped output)', () => {
+    const app = buildApplication();
+    const unanswered = {
+      ...app,
+      profile: { ...app.profile, projectCountMin: null, projectLeadCountMin: null },
+    } as unknown as ApplicationWithRelations;
+
+    renderReview({ application: unanswered });
+
+    // Both rows: "Projects involved in" and "Projects as Lead".
+    expect(screen.getAllByText('None')).toHaveLength(2);
+  });
+
+  /**
    * BAL-549 plan §7.6 / FIX ROUND F18 — THE CONTAINMENT PROOF AT THE APPLICANT'S UI LAYER.
    *
    * This is the APPLICANT'S OWN review component and it receives the whole application object,

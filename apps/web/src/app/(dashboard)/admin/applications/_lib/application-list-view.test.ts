@@ -4,8 +4,7 @@ import {
   APPLICATION_LIST_LIMIT,
   DECIDED_WINDOW_DAYS,
   formatWaitingLabel,
-  formatShortDate,
-  formatDecisionLine,
+  formatDecisionAttribution,
   resolveApplicationFilter,
   toApplicationListRowView,
 } from './application-list-view';
@@ -63,71 +62,48 @@ describe('formatWaitingLabel', () => {
   });
 });
 
-describe('formatShortDate', () => {
-  it('formats as "D Mon"', () => {
-    expect(formatShortDate(new Date('2026-09-03T00:00:00.000Z'))).toBe('3 Sep');
-  });
-
-  /**
-   * FIX ROUND F15 — THE DETERMINISM PIN. The assertion above passes under either implementation
-   * when the suite happens to run in UTC (CI's default, and nothing in `vitest.config.ts` or any
-   * workflow sets `TZ`), so on its own it pins nothing.
-   *
-   * `2026-09-03T23:30Z` is the discriminating instant: in `Pacific/Kiritimati` (+14) its LOCAL
-   * date is the 4th. MUTATION-PROVEN: swap `getUTCDate()`/`getUTCMonth()` back to
-   * `getDate()`/`getMonth()` and this goes red — `'4 Sep'` — while every other test stays green.
-   *
-   * Node re-reads `process.env.TZ` on assignment, so this is a real timezone switch, restored in
-   * `finally` so no later test inherits it.
-   */
-  it('renders the SAME date in a non-UTC deployment timezone', () => {
-    // The `zoned-grid.test.ts` read-then-restore precedent, disables and all.
-    // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
-    const originalTz = process.env.TZ;
-    try {
-      // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
-      process.env.TZ = 'Pacific/Kiritimati'; // UTC+14 — the widest positive offset there is
-      expect(formatShortDate(new Date('2026-09-03T23:30:00.000Z'))).toBe('3 Sep');
-      // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
-      process.env.TZ = 'Pacific/Niue'; // UTC−11, the other direction
-      expect(formatShortDate(new Date('2026-09-03T00:30:00.000Z'))).toBe('3 Sep');
-    } finally {
-      // eslint-disable-next-line turbo/no-undeclared-env-vars -- read-then-restore, test-only
-      process.env.TZ = originalTz;
-    }
-  });
-});
-
-describe('formatDecisionLine', () => {
-  it('names the person @ Balo, retrospectively, for an approve', () => {
-    const line = formatDecisionLine({
+/**
+ * WEB-REVIEW FIX ROUND W4 — `formatShortDate` AND ITS TESTS ARE GONE ON PURPOSE.
+ *
+ * Fix-round F15 made that formatter DETERMINISTIC (`getUTC*`, never `getMonth()`/`getDate()`, so
+ * the same instant prints the same label on every host) and pinned it with a +14/−11 timezone
+ * switch. The determinism was right; the READING was wrong — for Melbourne staff, a decision
+ * recorded before ~10am AEST rendered as the previous calendar day on the one surface that
+ * answers "when was this decided".
+ *
+ * The date now renders through the shipped `<LocalDate>`, in the VIEWER's timezone, so the
+ * assertion moved to where the date is: `decision-outcome-banner.test.tsx` pins the viewer-local
+ * label under a pinned non-UTC `TZ` (the same discriminating instant, `2026-09-03T23:30Z`), and
+ * `local-date.test.ts` still pins the UTC first paint. NOTHING here reads a local getter
+ * server-side any more, which is the property F15 actually cared about.
+ */
+describe('formatDecisionAttribution', () => {
+  it('names the person @ Balo, retrospectively, for an approve — and carries NO date', () => {
+    const line = formatDecisionAttribution({
       decision: 'approved',
       decidedByFirstName: 'Dana',
       decidedByLastName: null,
-      decidedAt: new Date('2026-09-03T00:00:00.000Z'),
     });
-    expect(line).toBe('Approved by Dana @ Balo · 3 Sep');
+    expect(line).toBe('Approved by Dana @ Balo');
   });
 
   it('says Declined, never Rejected, for a decline (D2)', () => {
-    const line = formatDecisionLine({
+    const line = formatDecisionAttribution({
       decision: 'declined',
       decidedByFirstName: 'Dana',
       decidedByLastName: 'K',
-      decidedAt: new Date('2026-09-03T00:00:00.000Z'),
     });
-    expect(line).toBe('Declined by Dana K @ Balo · 3 Sep');
+    expect(line).toBe('Declined by Dana K @ Balo');
     expect(line).not.toContain('Rejected');
   });
 
   it('falls back to a neutral label when no decider name is available', () => {
-    const line = formatDecisionLine({
+    const line = formatDecisionAttribution({
       decision: 'approved',
       decidedByFirstName: null,
       decidedByLastName: null,
-      decidedAt: new Date('2026-09-03T00:00:00.000Z'),
     });
-    expect(line).toBe('Approved by A Balo staff member @ Balo · 3 Sep');
+    expect(line).toBe('Approved by A Balo staff member @ Balo');
   });
 });
 
@@ -159,8 +135,26 @@ describe('toApplicationListRowView', () => {
     expect(row.daysWaiting).toBe(6);
   });
 
-  it('renders the retrospective decision line on the decided arms, not the waiting label', () => {
-    const decidedAt = new Date('2026-01-10T00:00:00.000Z');
+  /** W4 — a pending row has no decision, so there is no date for `<LocalDate>` to render. */
+  it('carries no decidedAtIso on a pending row', () => {
+    const row = toApplicationListRowView(
+      baseRow({ decidedAt: new Date('2026-01-10T00:00:00.000Z') }),
+      'pending',
+      NOW
+    );
+    expect(row.decidedAtIso).toBeNull();
+    expect(row.statusLine).toContain('waiting');
+  });
+
+  /**
+   * W4 — a decided row hands the raw INSTANT to the view, never a formatted date: the label is
+   * the attribution only, and `<LocalDate>` renders the day in the viewer's own zone.
+   *
+   * MUTATION-PROVEN: put the date back inside `formatDecisionAttribution` and this goes red on
+   * the `statusLine` assertion; drop `decidedAtIso` from the mapper and it goes red on the ISO.
+   */
+  it('renders the retrospective attribution plus the raw ISO instant on the decided arms', () => {
+    const decidedAt = new Date('2026-01-10T22:45:00.000Z');
     const row = toApplicationListRowView(
       baseRow({
         applicationStatus: 'approved',
@@ -171,8 +165,20 @@ describe('toApplicationListRowView', () => {
       'approved',
       NOW
     );
-    expect(row.statusLine).toContain('Approved by Dana @ Balo');
+    expect(row.statusLine).toBe('Approved by Dana @ Balo');
     expect(row.statusLine).not.toContain('waiting');
+    expect(row.decidedAtIso).toBe('2026-01-10T22:45:00.000Z');
+  });
+
+  /** A decided filter with a null `decided_at` (hand-written data only) keeps the old fallback. */
+  it('falls back to the waiting label when a decided filter meets a null decided_at', () => {
+    const row = toApplicationListRowView(
+      baseRow({ applicationStatus: 'approved', decidedAt: null }),
+      'approved',
+      NOW
+    );
+    expect(row.statusLine).toBe('waiting today');
+    expect(row.decidedAtIso).toBeNull();
   });
 
   it('renders "Declined by …", never "Rejected by …", on the declined arm', () => {

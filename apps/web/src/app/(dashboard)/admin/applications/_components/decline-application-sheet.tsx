@@ -22,6 +22,7 @@ import {
   DECLINE_REASONS,
   declineNotePlaceholderFor,
 } from '../_lib/decline-copy';
+import { decisionOutcomeIsStale } from '../_lib/decision-staleness';
 import { declineExpertApplicationAction } from '../_actions/decline-expert-application';
 
 /**
@@ -79,13 +80,20 @@ export function DeclineApplicationSheet({
 
         if (!result.success) {
           toast.error(result.error);
+          // W3 — a lost race means this page is stale; re-render it into its decided state.
+          if (decisionOutcomeIsStale(result.code)) router.refresh();
           return;
         }
 
         track(ADMIN_APPLICATIONS_EVENTS.REVIEWED, result.analytics);
 
-        // pending-MJ
-        toast.success(`Declined — ${firstName} has been told why`);
+        /*
+          pending-MJ — W6. This used to say "{firstName} has been told why", which was not true
+          at the instant it appeared: the email goes out through `after()` + BullMQ, so at toast
+          time it is in flight at best. The copy now claims only what has actually happened —
+          the decision is recorded — and describes the email as on its way.
+        */
+        toast.success(`Declined — recorded, and ${firstName}'s email is on its way`);
         handleOpenChange(false);
         router.refresh();
       } catch {
@@ -104,9 +112,17 @@ export function DeclineApplicationSheet({
           {/* pending-MJ */}
           <SheetTitle>Decline {firstName}&apos;s application?</SheetTitle>
           {/* pending-MJ */}
+          {/*
+            ⚠ NO RE-APPLICATION PROMISE HERE EITHER (web-review fix round, W1). This said "They
+            can apply again later; nothing here is permanent" — the same false promise the
+            applicant email carried, told to the staffer who would repeat it. Re-submitting is
+            refused (`submitApplication` accepts `'draft'` only) and a follow-up ticket owns the
+            transition, so the sheet now says what declining actually does.
+          */}
           <SheetDescription>
-            {firstName} is emailed with the reason category below — never this note. They can apply
-            again later; nothing here is permanent.
+            {firstName} is emailed with the reason category below — never this note. This is the
+            final call on this application: nothing re-opens it from here, and {firstName}{' '}
+            can&apos;t submit it again.
           </SheetDescription>
         </SheetHeader>
 

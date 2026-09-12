@@ -60,6 +60,7 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import { saveDraftAction } from './save-draft';
+import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -205,6 +206,54 @@ describe('saveDraftAction', () => {
       });
       expect(result).toEqual({ success: false, expertProfileId: '', error: 'Unauthorized' });
       expect(mockSaveProfileStep).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * WEB-REVIEW FIX ROUND W1 — A DECLINED APPLICATION IS NOT EDITABLE EITHER.
+   *
+   * This action read NO status at all, so a declined applicant's edits saved happily and only the
+   * final submit refused — after they had retyped the lot. The refusal now lands at the first
+   * server-bound keystroke, with the same honest message the submit gives.
+   *
+   * MUTATION-PROVEN: remove the `'declined'` arm of `classifyDraftWrite` and the first test goes
+   * red (the save succeeds); widen it to every non-draft status and the second goes red.
+   */
+  describe('declined applications', () => {
+    it('refuses a write to a DECLINED application, with the honest message', async () => {
+      mockFindApplicationWithRelations.mockResolvedValue({
+        profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'rejected' },
+      });
+      const result = await saveDraftAction({
+        step: 'profile',
+        data: validProfileData(),
+        expertProfileId: PROFILE_ID,
+      });
+      expect(result).toEqual({
+        success: false,
+        expertProfileId: PROFILE_ID,
+        error: DECLINED_APPLICATION_ERROR,
+      });
+      expect(mockSaveProfileStep).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠ ONLY `'rejected'` IS REFUSED, DELIBERATELY. A `sendBeacon` autosave can land just AFTER a
+     * successful submit; refusing every non-draft status would turn that harmless late write into
+     * an error the applicant never caused.
+     */
+    it('still saves against a SUBMITTED application — the trailing-beacon path is untouched', async () => {
+      mockFindApplicationWithRelations.mockResolvedValue({
+        profile: { id: PROFILE_ID, userId: USER_ID, applicationStatus: 'submitted' },
+      });
+      setupDraftCreation();
+      const result = await saveDraftAction({
+        step: 'profile',
+        data: validProfileData(),
+        expertProfileId: PROFILE_ID,
+      });
+      expect(result).toEqual({ success: true, expertProfileId: PROFILE_ID });
+      expect(mockSaveProfileStep).toHaveBeenCalled();
     });
   });
 

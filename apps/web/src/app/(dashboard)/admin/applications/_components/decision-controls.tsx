@@ -7,6 +7,7 @@ import { Check, Loader2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { track, ADMIN_APPLICATIONS_EVENTS } from '@/lib/analytics';
 import { approveExpertApplicationAction } from '../_actions/approve-expert-application';
+import { decisionOutcomeIsStale } from '../_lib/decision-staleness';
 import { ApproveApplicationConfirm } from './approve-application-confirm';
 import { DeclineApplicationSheet } from './decline-application-sheet';
 
@@ -52,6 +53,8 @@ export function DecisionControls({
 
         if (!result.success) {
           toast.error(result.error);
+          // W3 — a lost race means this page is stale; re-render it into its decided state.
+          if (decisionOutcomeIsStale(result.code)) router.refresh();
           return;
         }
 

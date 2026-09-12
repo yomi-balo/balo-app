@@ -29,6 +29,7 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 import { submitApplicationAction } from './submit-application';
+import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -113,6 +114,32 @@ describe('submitApplicationAction', () => {
       setupValidApplication({ profileOverrides: { applicationStatus: 'approved' } });
       const result = await submitApplicationAction(PROFILE_ID);
       expect(result).toEqual({ success: false, error: 'Application already submitted' });
+    });
+
+    /**
+     * WEB-REVIEW FIX ROUND W1 — A DECLINED APPLICANT GETS AN HONEST ANSWER.
+     *
+     * One branch used to answer every non-draft status with "Application already submitted",
+     * which for a `rejected` profile was simply false: that application was reviewed and
+     * declined. The refusal itself is unchanged — `submitApplication` accepts `'draft'` only, and
+     * a follow-up ticket owns the `rejected → submitted` transition — but the applicant is now
+     * told what actually happened, and where a person can help.
+     *
+     * The FULL literal is asserted (the exported constant AND its verbatim text), so neither a
+     * softened rewrite nor a re-added "you can apply again" slips through unnoticed.
+     *
+     * MUTATION-PROVEN: delete the `'rejected'` branch and this goes red with "Application
+     * already submitted".
+     */
+    it('answers a DECLINED application honestly, never "already submitted"', async () => {
+      setupValidApplication({ profileOverrides: { applicationStatus: 'rejected' } });
+      const result = await submitApplicationAction(PROFILE_ID);
+      expect(result).toEqual({ success: false, error: DECLINED_APPLICATION_ERROR });
+      expect(DECLINED_APPLICATION_ERROR).toBe(
+        "We've already reviewed this application, so it can't be changed or submitted again. " +
+          'Email support@getbalo.com and a person will pick it up from there.'
+      );
+      expect(mockSubmitApplication).not.toHaveBeenCalled();
     });
   });
 

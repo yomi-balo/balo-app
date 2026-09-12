@@ -1,4 +1,4 @@
-import { Award, Briefcase, Building2, Globe, Sparkles } from 'lucide-react';
+import { Award, Briefcase, Building2, Clock, Globe, Sparkles } from 'lucide-react';
 import type {
   ApplicationWithRelations,
   ProductsByCategory,
@@ -6,6 +6,7 @@ import type {
 } from '@balo/db';
 import type { SupportType } from '@balo/db';
 import { projectRangeLabel } from '@balo/shared/experts';
+import { formatPeriod } from '@/lib/expert-profile/profile-view';
 import {
   buildProductCategoryMap,
   buildProductNamesByCategory,
@@ -24,6 +25,14 @@ import {
  *
  * ⚠⚠ THIS COMPONENT NEVER RENDERS `application.profile.declineNote` — that is staff-only and
  * rendered exactly once, by `DecisionOutcomeBanner`. Do not thread it through here.
+ *
+ * ⚠ DATES HERE ARE UTC MONTH-YEAR, AND THAT DOES NOT CONTRADICT THE VIEWER-LOCAL DECISION
+ * TIMESTAMP (web-review fix round, W2/W4). A work-history tenure is a MONTH-GRANULARITY fact the
+ * applicant typed ("Nov 2017 — Apr 2020"), so it is rendered by the SHIPPED `formatPeriod`, which
+ * reads `getUTC*` — one label for every reader, and never the deployment's timezone (fix-round
+ * F15's point). `decided_at` is a different question — an INSTANT a staffer compares against
+ * their own "today" — so `DecisionOutcomeBanner` renders it through `<LocalDate>`, in the
+ * viewer's zone. Neither reads a local getter server-side, which is the property F15 pinned.
  *
  * Server Component: presentational only, no I/O, no interactivity.
  */
@@ -264,7 +273,18 @@ export function ApplicationSections({
         </section>
       )}
 
-      {/* Work history */}
+      {/*
+        Work history — ROLE, COMPANY, **TENURE** AND **RESPONSIBILITIES** (web-review fix round,
+        W2). The first two were all this section rendered, and the missing pair is exactly what a
+        reviewer needs in order to choose the `experience_depth` decline reason: "Solutions
+        Architect at Acme" says nothing about whether it lasted four months or six years, or what
+        the person actually did. The applicant's own review page has rendered both since day one,
+        and the ticket requires this page show the application AS THE APPLICANT WROTE IT.
+
+        No read widening was needed: `findApplicationForStaffReview`'s `workHistory` relation
+        carries no `columns:` allow-list, so `started_at`, `ended_at` and `responsibilities` are
+        already on the row (`WorkHistoryType`), and all three are the applicant's own words.
+      */}
       {workHistory.length > 0 && (
         <section>
           <SectionHeading icon={Briefcase}>Work history</SectionHeading>
@@ -282,6 +302,15 @@ export function ApplicationSections({
                     </span>
                   )}
                 </div>
+                <p className="text-muted-foreground mt-2 flex items-center gap-1.5 text-xs">
+                  <Clock className="size-3" aria-hidden="true" />
+                  {formatPeriod(entry.startedAt, entry.endedAt, entry.isCurrent)}
+                </p>
+                {entry.responsibilities !== null && entry.responsibilities.length > 0 && (
+                  <p className="text-foreground border-border mt-3 border-t pt-3 text-[13px] leading-relaxed">
+                    {entry.responsibilities}
+                  </p>
+                )}
               </div>
             ))}
           </div>

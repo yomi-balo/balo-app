@@ -99,7 +99,7 @@ describe('DecisionControls', () => {
     expect(refresh).toHaveBeenCalled();
   });
 
-  it('shows an error toast and does NOT refresh on approve failure', async () => {
+  it('shows an error toast and does NOT refresh on a codeless approve failure', async () => {
     const user = userEvent.setup();
     approveExpertApplicationAction.mockResolvedValue({
       success: false,
@@ -114,6 +114,53 @@ describe('DecisionControls', () => {
 
     await waitFor(() =>
       expect(mockToast.error).toHaveBeenCalledWith('That application has already been decided.')
+    );
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  /**
+   * WEB-REVIEW FIX ROUND W3 — A LOST RACE MUST RE-RENDER THE PAGE.
+   *
+   * Both actions return `code: 'not_pending' | 'gone'` specifically so the UI can react, and this
+   * component only toasted: the staffer who lost the race kept looking at live Approve / Decline
+   * controls until a manual reload, and their next click failed the same way.
+   *
+   * MUTATION-PROVEN: remove the `decisionOutcomeIsStale(result.code)` refresh and both rows below
+   * go red, while the `'denied'` and codeless cases stay green.
+   */
+  it.each([
+    ['not_pending', 'That application has already been decided.'],
+    ['gone', 'That application no longer exists.'],
+  ] as const)('refreshes the page when the approve lost the race (%s)', async (code, error) => {
+    const user = userEvent.setup();
+    approveExpertApplicationAction.mockResolvedValue({ success: false, error, code });
+    render(<DecisionControls expertProfileId={PROFILE_ID} firstName="Priya" />);
+
+    await user.click(screen.getByRole('button', { name: /^approve$/i }));
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Approve' })
+    );
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith(error));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT refresh on a capability denial — a re-render cannot change it', async () => {
+    const user = userEvent.setup();
+    approveExpertApplicationAction.mockResolvedValue({
+      success: false,
+      error: 'You do not have access to that.',
+      code: 'denied',
+    });
+    render(<DecisionControls expertProfileId={PROFILE_ID} firstName="Priya" />);
+
+    await user.click(screen.getByRole('button', { name: /^approve$/i }));
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Approve' })
+    );
+
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith('You do not have access to that.')
     );
     expect(refresh).not.toHaveBeenCalled();
   });

@@ -95,6 +95,34 @@ describe('DeclineApplicationSheet', () => {
     expect(document.getElementById(String(describedBy))?.textContent).toContain('never this note');
   });
 
+  /**
+   * WEB-REVIEW FIX ROUND W1 — THE SHEET MUST NOT PROMISE A RE-APPLICATION EITHER.
+   *
+   * It said "They can apply again later; nothing here is permanent" — the same false promise the
+   * applicant email carried, told to the staffer who would repeat it on a call. Re-submitting is
+   * refused (`submitApplication` accepts `'draft'` only) and a follow-up ticket owns the
+   * transition, so the description now says what declining actually does. The FULL literal is
+   * asserted, not a fragment: a re-added promise cannot hide beside a matching phrase.
+   *
+   * MUTATION-PROVEN: restore either sentence of the old copy and this goes red.
+   */
+  it('describes the decline as final, with no re-application promise', () => {
+    render(
+      <DeclineApplicationSheet
+        open
+        onOpenChange={vi.fn()}
+        expertProfileId={PROFILE_ID}
+        firstName="Priya"
+      />
+    );
+    const dialog = screen.getByRole('dialog');
+    const description = document.getElementById(String(dialog.getAttribute('aria-describedby')));
+    expect(description?.textContent).toBe(
+      'Priya is emailed with the reason category below — never this note. This is the final call ' +
+        "on this application: nothing re-opens it from here, and Priya can't submit it again."
+    );
+  });
+
   it('calls declineExpertApplicationAction with the picked reason and trimmed note, then toasts, tracks and refreshes', async () => {
     const user = userEvent.setup();
     declineExpertApplicationAction.mockResolvedValue(SUCCESS);
@@ -117,12 +145,74 @@ describe('DeclineApplicationSheet', () => {
         note: 'Not enough demand right now.',
       })
     );
-    expect(mockToast.success).toHaveBeenCalledWith('Declined — Priya has been told why');
+    /*
+      W6 — the toast claims only what has happened. It used to say "Priya has been told why",
+      which was untrue at that instant: the email leaves through `after()` + BullMQ, so at toast
+      time it is in flight at best. MUTATION-PROVEN: restore the old string → red.
+    */
+    expect(mockToast.success).toHaveBeenCalledWith(
+      "Declined — recorded, and Priya's email is on its way"
+    );
+    expect(mockToast.success).not.toHaveBeenCalledWith('Declined — Priya has been told why');
     expect(mockTrack).toHaveBeenCalledWith(ADMIN_APPLICATIONS_EVENTS.REVIEWED, SUCCESS.analytics);
     expect(refresh).toHaveBeenCalled();
   });
 
-  it('shows an error toast and does NOT refresh on failure', async () => {
+  /**
+   * W3 — the decline sheet reacts to a lost race too, not just the Approve control.
+   *
+   * MUTATION-PROVEN: remove the `decisionOutcomeIsStale(result.code)` refresh from
+   * `decline-application-sheet.tsx` and both rows below go red.
+   */
+  it.each([
+    ['not_pending', 'That application has already been decided.'],
+    ['gone', 'That application no longer exists.'],
+  ] as const)('refreshes the page when the decline lost the race (%s)', async (code, error) => {
+    const user = userEvent.setup();
+    declineExpertApplicationAction.mockResolvedValue({ success: false, error, code });
+    render(
+      <DeclineApplicationSheet
+        open
+        onOpenChange={vi.fn()}
+        expertProfileId={PROFILE_ID}
+        firstName="Priya"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: /^Not a fit right now/ }));
+    await user.type(screen.getByLabelText(/Balo-only note/i), 'Not enough demand right now.');
+    await user.click(screen.getByRole('button', { name: /decline application/i }));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith(error));
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
+  it('does NOT refresh on a capability denial', async () => {
+    const user = userEvent.setup();
+    declineExpertApplicationAction.mockResolvedValue({
+      success: false,
+      error: 'You do not have access to that.',
+      code: 'denied',
+    });
+    render(
+      <DeclineApplicationSheet
+        open
+        onOpenChange={vi.fn()}
+        expertProfileId={PROFILE_ID}
+        firstName="Priya"
+      />
+    );
+    await user.click(screen.getByRole('button', { name: /^Not a fit right now/ }));
+    await user.type(screen.getByLabelText(/Balo-only note/i), 'Not enough demand right now.');
+    await user.click(screen.getByRole('button', { name: /decline application/i }));
+
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith('You do not have access to that.')
+    );
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('shows an error toast and does NOT refresh on a codeless failure', async () => {
     const user = userEvent.setup();
     declineExpertApplicationAction.mockResolvedValue({
       success: false,

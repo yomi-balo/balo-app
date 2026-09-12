@@ -5,6 +5,7 @@ import { expertsRepository, referenceDataRepository, isUniqueViolation } from '@
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, EXPERT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { z } from 'zod';
+import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
 import {
   STEP_DRAFT_SCHEMAS,
   type ProfileStepDraftData,
@@ -78,9 +79,15 @@ export const saveDraftAction = withAuth(
       const draftSchema = STEP_DRAFT_SCHEMAS[input.step];
       const parsed = draftSchema.parse(input.data);
 
-      // 3. Verify ownership when an id was provided.
-      if (profileId && !(await ownsProfile(profileId, session.user.id))) {
-        return { success: false, expertProfileId: '', error: 'Unauthorized' };
+      // 3. Verify ownership — and refuse a DECLINED application — when an id was provided.
+      if (profileId) {
+        const verdict = await classifyDraftWrite(profileId, session.user.id);
+        if (verdict === 'unauthorized') {
+          return { success: false, expertProfileId: '', error: 'Unauthorized' };
+        }
+        if (verdict === 'declined') {
+          return { success: false, expertProfileId: profileId, error: DECLINED_APPLICATION_ERROR };
+        }
       }
 
       // 4. The profile step creates (or reuses) the draft; all other DB-writing
@@ -132,10 +139,31 @@ export const saveDraftAction = withAuth(
   }
 );
 
-/** True when `userId` owns the given draft (ownership guard for the autosave). */
-async function ownsProfile(profileId: string, userId: string): Promise<boolean> {
+/** The three answers to "may this user write to this draft right now?". */
+type DraftWriteVerdict = 'ok' | 'unauthorized' | 'declined';
+
+/**
+ * The autosave's ownership guard, plus the DECLINED refusal (web-review fix round, W1).
+ *
+ * ⚠⚠ THIS FILE PREVIOUSLY READ NO STATUS AT ALL, which made the failure order the worst one
+ * available: a declined applicant's edits SAVED happily and only the final submit refused, after
+ * they had retyped the lot. `'rejected'` is refused here instead, at the first keystroke that
+ * reaches the server, with the same honest message the submit gives.
+ *
+ * ⚠ ONLY `'rejected'`, DELIBERATELY — NOT every non-draft status. The wizard page redirects
+ * `submitted` / `under_review` / `approved` away, so the only status reachable here besides
+ * `draft` is `rejected`; refusing the others too would also refuse the trailing `sendBeacon`
+ * autosave that can land just AFTER a successful submit (memory
+ * `project_bal342_per_step_save_baselines`), turning a harmless late write into an error the
+ * applicant never caused. Narrow on purpose.
+ *
+ * ⚠ NOT THE RE-APPLICATION TRANSITION. Nothing here opens `rejected → draft`; a follow-up ticket
+ * owns that. See `DECLINED_APPLICATION_ERROR`.
+ */
+async function classifyDraftWrite(profileId: string, userId: string): Promise<DraftWriteVerdict> {
   const existing = await expertsRepository.findApplicationWithRelations(profileId);
-  return existing?.profile.userId === userId;
+  if (existing?.profile.userId !== userId) return 'unauthorized';
+  return existing.profile.applicationStatus === 'rejected' ? 'declined' : 'ok';
 }
 
 /**

@@ -372,13 +372,23 @@ export function ApplicationReview({
           <Card className="px-6 py-5">
             <div className="grid grid-cols-1 gap-x-8 gap-y-0.5 sm:grid-cols-2">
               <DataRow label="Year started" value={profile.yearStartedSalesforce ?? '—'} />
+              {/*
+                ⚠ `?? 0` IS LOAD-BEARING — IT PRESERVES THIS PAGE'S SHIPPED OUTPUT (web-review fix
+                round, W5). The pre-PR de-duplication swapped a local `PROJECT_RANGE_MAP[x ?? 0] ??
+                '—'` for the shared `projectRangeLabel(x)`, and in doing so changed what an
+                UNANSWERED question renders on an APPLICANT-FACING surface: "None" became "—".
+                Arguably more correct, but unrequested and outside BAL-549's scope, so the `?? 0`
+                restores the original reading (nullish ⇒ the `min: 0` "None" range) while keeping
+                the one shared helper. The STAFF page deliberately passes the raw value, where "—"
+                (never answered) and "None" (answered "None") are worth telling apart.
+              */}
               <DataRow
                 label="Projects involved in"
-                value={projectRangeLabel(profile.projectCountMin)}
+                value={projectRangeLabel(profile.projectCountMin ?? 0)}
               />
               <DataRow
                 label="Projects as Lead"
-                value={projectRangeLabel(profile.projectLeadCountMin)}
+                value={projectRangeLabel(profile.projectLeadCountMin ?? 0)}
               />
             </div>
             {profile.linkedinUrl && (

@@ -28,12 +28,17 @@ marketplace.
 
 ## If your application isn't approved
 
-We'll email you, and we'll say which of the four things above it came down to. This isn't
-the end of the road — you're welcome to apply again once things have moved on, and your
-application is saved, so you won't start from scratch.
+We'll email you, and we'll say which of the four things above it came down to. It isn't a
+judgement on your work — it's where things stand today, against what clients are asking us
+for right now.
 
-There's no waiting period enforced — it's simply on you to decide when you're ready to try
-again.
+Nothing further is needed from you, and your Balo account stays exactly as it is: you can
+keep using Balo to find experts of your own whenever you need one.
+
+Submitting the same application again isn't something you can do from your account today.
+Experience, certifications and the mix of work clients ask us for all move over time, so if
+yours change we'd like to hear about it — write to us at
+[support@getbalo.com](mailto:support@getbalo.com) and a person will pick it up.
 
 ## Questions?
 

@@ -66,56 +66,35 @@ export function formatWaitingLabel(days: number): string {
   return `waiting ${days}d`; // pending-MJ
 }
 
-const SHORT_MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-] as const;
-
 /**
- * "3 Sep" — the shape both the list row and the decision banner use. A fixed lookup, not
- * `Intl`/`toLocaleDateString('en-GB', …)`: ICU's `en-GB` "short" month for September is "Sept"
- * (4 letters), not "Sep" — locale-dependent and would silently vary by Node/ICU build.
+ * The retrospective decision ATTRIBUTION ("Approved by Dana @ Balo" / "Declined by Dana @ Balo")
+ * — CLAUDE.md's attribution rule: retrospective copy names the PERSON with "@ org" on first
+ * mention. Balo staff always decide as "@ Balo" — there is no other org on this axis.
  *
- * ⚠⚠ `getUTC*`, NEVER `getMonth()`/`getDate()` (fix round, F15). This renders SERVER-SIDE in a
- * Server Component, so the plain getters would read the DEPLOYMENT's timezone: the same
- * `decided_at` would print "3 Sep" on one host and "4 Sep" on another, and the tests pinning
- * "3 Sep" for a UTC-midnight instant were green only because CI runners happen to default to
- * UTC. UTC is the one reading that is the same everywhere, and it is the instant the column
- * stores.
+ * ⚠⚠ THE DATE IS NO LONGER PART OF THIS STRING (web-review fix round, W4). This used to append
+ * `· 3 Sep` from a local `formatShortDate` reading `getUTC*`. That was DETERMINISTIC (fix-round
+ * F15's point, and worth keeping) but it was wrong for the reader: for Melbourne staff a decision
+ * recorded before ~10am AEST rendered as the PREVIOUS calendar day, on the one surface that
+ * answers "when was this decided".
+ *
+ * The date is now rendered beside this label by the SHIPPED `<LocalDate>`
+ * (`components/local-date.tsx`) — the VIEWER's timezone, with a UTC first paint so hydration
+ * never mismatches. That is the house mechanism for exactly this problem, so `formatShortDate`
+ * and its month table are DELETED rather than reimplemented: no second spelling to drift, and
+ * nothing server-side reads a local getter. Callers render
+ * `{attribution} · <LocalDate iso={decidedAtIso} />`.
  */
-export function formatShortDate(date: Date): string {
-  const month = SHORT_MONTHS[date.getUTCMonth()];
-  return `${date.getUTCDate()} ${month ?? ''}`.trim();
-}
-
-/**
- * The retrospective decision line ("Approved by Dana @ Balo · 3 Sep" / "Declined by Dana @
- * Balo · 3 Sep") — CLAUDE.md's attribution rule: retrospective copy names the PERSON with
- * "@ org" on first mention. Balo staff always decide as "@ Balo" — there is no other org on
- * this axis.
- */
-export function formatDecisionLine(input: {
+export function formatDecisionAttribution(input: {
   readonly decision: 'approved' | 'declined';
   readonly decidedByFirstName: string | null;
   readonly decidedByLastName: string | null;
-  readonly decidedAt: Date;
 }): string {
   const personName = [input.decidedByFirstName, input.decidedByLastName]
     .filter((part): part is string => Boolean(part))
     .join(' ');
   const label = personWithOrgLabel(personName || 'A Balo staff member', 'Balo');
   const verb = input.decision === 'approved' ? 'Approved' : 'Declined'; // pending-MJ (D2)
-  return `${verb} by ${label} · ${formatShortDate(input.decidedAt)}`;
+  return `${verb} by ${label}`;
 }
 
 /** One list row, ready to render. */
@@ -125,8 +104,14 @@ export interface ApplicationListRowView {
   readonly email: string;
   /** The agency the applicant applies under, or the independent-expert label. */
   readonly agencyLabel: string;
-  /** The waiting label (pending) or the retrospective decision line (decided). */
+  /** The waiting label (pending) or the retrospective decision attribution (decided). */
   readonly statusLine: string;
+  /**
+   * W4 — `decided_at` as an ISO string for `<LocalDate>`, or `null` on a pending row (which has
+   * no decision to date). ISO, not a `Date`: `<LocalDate>` is a client component and takes the
+   * string it puts in `dateTime`.
+   */
+  readonly decidedAtIso: string | null;
   readonly daysWaiting: number;
 }
 
@@ -145,14 +130,18 @@ export function toApplicationListRowView(
   // from disagreeing by a day (orchestrator O7).
   const daysWaiting = applicationWaitingDays(row.submittedAt, now);
 
+  // W4 — the PENDING arm has no decision to date, and neither does a decided row whose
+  // `decided_at` is null (only hand-written data reaches that). Both fall back to the waiting
+  // label with no date beside it, exactly as before.
+  const decidedAt = filter === 'pending' ? null : row.decidedAt;
+
   const statusLine =
-    filter === 'pending' || row.decidedAt === null
+    decidedAt === null
       ? formatWaitingLabel(daysWaiting)
-      : formatDecisionLine({
+      : formatDecisionAttribution({
           decision: filter === 'approved' ? 'approved' : 'declined',
           decidedByFirstName: row.decidedByFirstName,
           decidedByLastName: row.decidedByLastName,
-          decidedAt: row.decidedAt,
         });
 
   return {
@@ -161,6 +150,7 @@ export function toApplicationListRowView(
     email: row.email,
     agencyLabel,
     statusLine,
+    decidedAtIso: decidedAt?.toISOString() ?? null,
     daysWaiting,
   };
 }

@@ -1,6 +1,7 @@
 import { Lock } from 'lucide-react';
 import type { ExpertDeclineReason } from '@balo/shared/experts';
-import { formatDecisionLine } from '../_lib/application-list-view';
+import { LocalDate } from '@/components/local-date';
+import { formatDecisionAttribution } from '../_lib/application-list-view';
 import { DECLINE_REASON_LABEL } from '../_lib/decline-copy';
 
 /**
@@ -10,6 +11,11 @@ import { DECLINE_REASON_LABEL } from '../_lib/decline-copy';
  *
  * ⚠⚠ `declineNote` IS STAFF-ONLY. This is the ONE place on this surface it is read back — never
  * pass it anywhere applicant-facing.
+ *
+ * ⚠ THE DATE IS A `<LocalDate>` CHILD, NOT PART OF THE ATTRIBUTION STRING (web-review fix round,
+ * W4): it renders in the VIEWER's timezone, because the previous UTC label showed Melbourne staff
+ * the PREVIOUS calendar day for any decision recorded before ~10am AEST. See
+ * `formatDecisionAttribution` for the full ruling.
  */
 
 interface DecisionOutcomeBannerProps {
@@ -29,7 +35,11 @@ export function DecisionOutcomeBanner({
   declineReason,
   declineNote,
 }: Readonly<DecisionOutcomeBannerProps>): React.JSX.Element {
-  const line = formatDecisionLine({ decision, decidedByFirstName, decidedByLastName, decidedAt });
+  const attribution = formatDecisionAttribution({
+    decision,
+    decidedByFirstName,
+    decidedByLastName,
+  });
   const reasonLabel = declineReason === null ? null : DECLINE_REASON_LABEL[declineReason];
 
   return (
@@ -41,7 +51,9 @@ export function DecisionOutcomeBanner({
       }
     >
       <p className="text-foreground text-sm font-semibold">
-        {line}
+        {attribution}
+        {' · '}
+        <LocalDate iso={decidedAt.toISOString()} />
         {reasonLabel !== null && <span className="text-muted-foreground"> — {reasonLabel}</span>}
       </p>
       {declineNote !== null && declineNote.length > 0 && (
