@@ -30,7 +30,7 @@ import { withDeadline } from './with-deadline.js';
  * to find and re-drive the row by hand.
  */
 export async function enqueueBestEffort(
-  enqueue: () => Promise<void>,
+  enqueue: () => Promise<unknown>,
   context: Record<string, unknown>,
   log: ReturnType<typeof createLogger>,
   message: string

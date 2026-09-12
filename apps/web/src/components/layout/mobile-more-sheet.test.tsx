@@ -175,7 +175,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
     });
   });
 
-  it('BAL-534/BAL-548/BAL-551/BAL-549: the six admin rows appear for a staff context, after the member rows, in registry order', () => {
+  it('BAL-534/BAL-548/BAL-551/BAL-549/BAL-550: the seven admin rows appear for a staff context, after the member rows, in registry order', () => {
     renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: false, isStaff: true }));
     expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual([
       '/projects',
@@ -186,6 +186,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       '/engagements',
       '/promo-codes',
       '/admin/catalogue',
+      '/admin/health/capture',
       '/admin/lookup',
     ]);
   });
@@ -213,6 +214,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       '/engagements',
       '/promo-codes',
       '/admin/catalogue',
+      '/admin/health/capture',
       '/admin/lookup',
     ]);
   });

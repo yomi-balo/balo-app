@@ -79,7 +79,7 @@ try {
   }
   if (!process.env.MUX_TOKEN_ID || !process.env.MUX_TOKEN_SECRET) {
     app.log.warn(
-      'MUX_TOKEN_ID / MUX_TOKEN_SECRET are not set — every `recording-ingest` job will fail and meeting recordings will stall at `source_ready` (the Daily source is retained, so they are re-drivable)'
+      'MUX_TOKEN_ID / MUX_TOKEN_SECRET are not set — every `recording-ingest` job will fail and meeting recordings will stall at `source_ready` (the Daily source is retained, so they are re-drivable via POST /admin/redrive/recording-ingest/:id — BAL-550)'
     );
   }
   const shutdown = async () => {

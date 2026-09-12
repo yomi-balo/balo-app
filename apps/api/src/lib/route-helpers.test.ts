@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { parseBodyOr400, resolveUserId } from './route-helpers.js';
+import { parseBodyOr400, parseParamsOr400, resolveUserId } from './route-helpers.js';
 
 /**
  * These two helpers were extracted from `routes/sessions` and `routes/meetings` by BAL-129.
@@ -97,5 +97,46 @@ describe('parseBodyOr400', () => {
     parseBodyOr400(schema, { body: { name: 'a', count: 2 } } as FastifyRequest, reply);
 
     expect(code).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-550 — the `parseBodyOr400` sibling for `request.params`, extracted for the admin re-drive
+ * route (the first PARAMS-validated route). Same house shape, tested the same way.
+ */
+describe('parseParamsOr400', () => {
+  const schema = z.object({
+    kind: z.enum(['recording-ingest', 'transcript-pipeline']),
+    id: z.uuid(),
+  });
+  const validId = '11111111-1111-4111-8111-111111111111';
+
+  it('returns the parsed params on a valid request', () => {
+    const reply = replyStub();
+    const request = { params: { kind: 'recording-ingest', id: validId } } as FastifyRequest;
+
+    expect(parseParamsOr400(schema, request, reply)).toEqual({
+      kind: 'recording-ingest',
+      id: validId,
+    });
+    expect(reply.sent.status).toBeUndefined();
+  });
+
+  it('sends 400 invalid_request with Zod issue messages and returns null', () => {
+    const reply = replyStub();
+    const request = { params: { kind: 'unknown-kind', id: 'not-a-uuid' } } as FastifyRequest;
+
+    expect(parseParamsOr400(schema, request, reply)).toBeNull();
+    expect(reply.sent.status).toBe(400);
+    expect(reply.sent.body).toMatchObject({ error: 'invalid_request' });
+    const body = reply.sent.body as { details: string[] };
+    expect(body.details.length).toBeGreaterThan(0);
+  });
+
+  it('handles missing params without throwing', () => {
+    const reply = replyStub();
+
+    expect(parseParamsOr400(schema, {} as FastifyRequest, reply)).toBeNull();
+    expect(reply.sent.status).toBe(400);
   });
 });

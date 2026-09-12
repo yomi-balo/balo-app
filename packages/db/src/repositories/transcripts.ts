@@ -1,13 +1,52 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '../client';
 import {
   transcripts,
   meetings,
   type Transcript,
+  type NewTranscript,
   type TranscriptVendor,
   type CanonicalTranscript,
   type ExtractedActionItem,
 } from '../schema';
+import type { DbExecutor } from './_shared/db-executor';
+
+/** Compiles only while `T` is exactly `never` — the `engagement-capability-disjoint.ts` idiom. */
+type AssertNever<T extends never> = T;
+
+/**
+ * BAL-550 (D5) — THE TYPE-LEVEL BRACE BEHIND {@link transcriptsRepository.claimRecapResume}.
+ *
+ * The ticket requires the recap re-drive to be STRUCTURALLY unable to touch a
+ * `transcript_job_*` column — the BAL-483 batch-transcription state, which lives on
+ * `meeting_recordings` and is NOT this re-drive's business. That is a COMPILER fact, not a
+ * runtime check: `transcripts` has no such column, so `NewTranscript` has no such key, so
+ * naming one in `claimRecapResume`'s `satisfies Partial<NewTranscript>` payload is a compile
+ * error. These two aliases pin that fact so it cannot be quietly undone by adding the columns
+ * to this table.
+ *
+ * ⚠⚠ WHICH GATE HOLDS THIS, AND WHY IT IS **NOT** IN A `*.test.ts`. `@balo/db` has NO
+ * `typecheck` script (memory `reference_db_shared_no_typecheck_lint_scripts`), and vitest's
+ * esbuild strips types WITHOUT checking them — so the same assertion in
+ * `transcripts.redrive-type.test.ts` (where the plan placed it) would be VACUOUSLY GREEN
+ * twice over. It lives in this module instead because `apps/api/src` imports
+ * `transcriptsRepository`, and `apps/api`'s `tsc --noEmit` type-checks every file it reaches,
+ * including this one. The plan's test file still ships — with the RUNTIME half (the real
+ * `transcripts` column list), which is the part vitest can actually hold.
+ *
+ * ⚠ NON-VACUITY PROOF (under a minute): add
+ * `transcriptJobFinishedAt: timestamp('transcript_job_finished_at', { withTimezone: true }),`
+ * to `schema/transcripts.ts`, then run `pnpm --filter api typecheck` (api's task is
+ * `typecheck`; web's is `check-types` — memory `reference_turbo_typecheck_task_is_check_types`).
+ * It MUST fail with TS2344 on `_TranscriptsCarryNoTranscriptJobColumn` AND TS2578 "Unused
+ * '@ts-expect-error' directive" below. Revert and it MUST pass again.
+ */
+export type _TranscriptsCarryNoTranscriptJobColumn = AssertNever<
+  Extract<keyof NewTranscript, `transcriptJob${string}`>
+>;
+
+// @ts-expect-error — `transcript_job_*` lives on `meeting_recordings`, never on `transcripts`.
+export type _TranscriptJobWriteIsUnrepresentable = Pick<NewTranscript, 'transcriptJobFinishedAt'>;
 
 /**
  * Input for persisting the raw canonical transcript (pipeline stage "persist raw"). The
@@ -189,9 +228,18 @@ export const transcriptsRepository = {
     return byMeetingId;
   },
 
-  /** ONE live transcript by id. `undefined` when missing or soft-deleted. */
-  async findById(id: string): Promise<Transcript | undefined> {
-    const [row] = await db
+  /**
+   * ONE live transcript by id. `undefined` when missing or soft-deleted.
+   *
+   * ⚠ TAKES AN OPTIONAL EXECUTOR (defaulting to the base client — the
+   * {@link meetingRecordingsRepository.findById} shape). BAL-550's re-drive pre-reads the row
+   * INSIDE its one transaction, immediately before {@link transcriptsRepository.claimRecapResume}
+   * NULLs `failed_stage` / `failure_reason`, so the `audit_events` row can record the prior
+   * state that the CAS's `RETURNING` (a POST-update row) no longer carries. Passing the base
+   * client there would read outside the transaction's snapshot.
+   */
+  async findById(id: string, exec: DbExecutor = db): Promise<Transcript | undefined> {
+    const [row] = await exec
       .select()
       .from(transcripts)
       .where(and(eq(transcripts.id, id), isNull(transcripts.deletedAt)))
@@ -282,6 +330,90 @@ export const transcriptsRepository = {
     if (updated === undefined) {
       throw new Error(`Failed to record stage skip on transcript: ${id}`);
     }
+  },
+
+  /**
+   * BAL-550 (D5) — CLAIM A FAILED RECAP FOR THE ADMIN RE-DRIVE. `failed → processing`.
+   *
+   * CAS: `id = $ AND deleted_at IS NULL AND status = 'failed' AND failed_stage IS NOT NULL
+   *       AND EXISTS (live meeting)`.
+   * SET: `status='processing'`, `failed_stage=NULL`, `failure_reason=NULL`.
+   *
+   * ⚠⚠ IT ALSO REQUIRES A LIVE MEETING. The `EXISTS` term is the row's SECOND soft-delete
+   * filter and it guards a different table: the segment's own `deleted_at` says nothing about
+   * the MEETING having been deleted underneath it. Such a row is never rendered — the page's
+   * windowed read joins `meetings` with `deleted_at IS NULL` — so this closes a hand-crafted
+   * request, the only way to reach it. It matters because a successful re-drive ends in
+   * `stagePublishRecap` firing `recap.ready` to BOTH PARTIES: a user-visible notification
+   * about a consultation the platform considers deleted.
+   *
+   * ⚠⚠ IT RESETS NO STAGE GATE, AND THAT IS THE WHOLE POINT. `transcript_artifacts`
+   * (`cleaned`, `summary`), `extracted_action_items`, `action_items_extracted_at` and
+   * `recap_ready_published_at` are ALL untouched, so BAL-387's per-stage gates still
+   * short-circuit on the re-run: no LLM budget is re-spent, no action item is re-created, no
+   * second `recap.ready` is published. "The pipeline converges on the row as it is" stays
+   * literally true.
+   *
+   * ⚠ THE THREE COLUMNS IT DOES WRITE ARE THE CLAIM, NOT A RESET (plan §13 D5a). Three
+   * reasons it is required rather than optional:
+   *   1. the design reference puts the recap chip at `processing` immediately after confirm,
+   *      which IS `transcripts.status = 'processing'`;
+   *   2. without a CAS this kind has NO idempotency — the ticket's "a double-click produces
+   *      ONE job" cannot hold, because the job id is derived from the audit row (D2) and two
+   *      clicks would mint two audit rows and two genuinely distinct jobs;
+   *   3. leaving `failed_stage` set would make a SUCCESSFUL re-run land on the PARTIAL
+   *      predicate (`status='ready' AND failed_stage IS NOT NULL`) and render as
+   *      "Ready · action items skipped" — the one conflation this lens forbids.
+   * Precedent for clearing a stale reason on a fresh attempt:
+   * `meetingRecordingsRepository.markTranscriptJobSubmitted`.
+   *
+   * ⚠ `failed_stage IS NOT NULL` IS NOT DECORATION. It is the second half of the partial-recap
+   * discipline this file already states at {@link transcriptsRepository.listFailedSince}: the
+   * read must carry BOTH terms or `transcript_failed_idx` (predicated on `failed_stage IS NOT
+   * NULL` alone) is not provably a superset and the planner will not use it. Here it ALSO
+   * refuses a row that is `failed` with no recorded stage — nothing to resume from.
+   *
+   * ⚠⚠ STRUCTURALLY UNABLE TO TOUCH `transcript_job_*`. Those four columns live on
+   * `meeting_recordings`; this module imports only `transcripts` + `meetings` from the schema,
+   * and the payload below is `satisfies Partial<NewTranscript>`, which HAS NO SUCH KEY —
+   * naming one is a COMPILE ERROR, not a runtime check. Pinned by
+   * {@link _TranscriptsCarryNoTranscriptJobColumn} above.
+   *
+   * `undefined` = not a resumable failed recap (already claimed, never failed, a PARTIAL
+   * `ready` row, soft-deleted) ⇒ the caller answers `409 not_redrivable`, writes NO audit row
+   * and enqueues NO job.
+   *
+   * ⚠ REQUIRES AN EXECUTOR — it runs inside the re-drive route's ONE transaction alongside the
+   * `audit_events` insert. It is the ONE mutator in this repository that takes one:
+   * the BAL-387 pipeline writers are single-statement stage stamps with no row to pair with,
+   * while this write is meaningless without the audit row committed beside it.
+   */
+  async claimRecapResume(id: string, exec: DbExecutor): Promise<Transcript | undefined> {
+    const claim = {
+      status: 'processing',
+      failedStage: null,
+      failureReason: null,
+    } satisfies Partial<NewTranscript>;
+
+    const [updated] = await exec
+      .update(transcripts)
+      .set(claim)
+      .where(
+        and(
+          eq(transcripts.id, id),
+          isNull(transcripts.deletedAt),
+          eq(transcripts.status, 'failed'),
+          isNotNull(transcripts.failedStage),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(meetings)
+              .where(and(eq(meetings.id, transcripts.meetingId), isNull(meetings.deletedAt)))
+          )
+        )
+      )
+      .returning();
+    return updated;
   },
 
   /**

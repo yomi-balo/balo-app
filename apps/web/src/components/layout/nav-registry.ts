@@ -16,6 +16,7 @@ import {
   ScanSearch,
   Inbox,
   UserPlus,
+  Activity,
 } from 'lucide-react';
 import type { Workspace } from '@balo/shared/workspaces';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
@@ -389,6 +390,20 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     label: 'Config & catalogue',
     icon: Layers,
     href: '/admin/catalogue',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
+  {
+    // BAL-550 — the capture-health detail lens, after `admin_catalogue` per the design's
+    // `ADMIN_NAV` order. ⚠ Gated on `VIEW_PLATFORM_ADMIN`, NOT `REDRIVE_JOB` — the page is
+    // readable by any staff member; only the re-drive button is not.
+    key: 'admin_health',
+    label: 'Capture health',
+    icon: Activity,
+    href: '/admin/health/capture',
     section: 'admin',
     workspaceTypes: ['company', 'expert'],
     requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),

@@ -4,12 +4,18 @@ import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import {
   transcripts,
+  transcriptArtifacts,
   engagements,
   meetings,
   projectEngagements,
   type CanonicalTranscript,
 } from '../schema';
-import { engagementFactory, meetingFactory, transcriptFactory } from '../test/factories';
+import {
+  engagementFactory,
+  meetingFactory,
+  transcriptArtifactFactory,
+  transcriptFactory,
+} from '../test/factories';
 import { transcriptsRepository } from './transcripts';
 
 /** A minimal, valid canonical transcript for insertRaw. */
@@ -477,5 +483,144 @@ describe('transcriptsRepository.listFailedSince', () => {
       1
     );
     expect(bounded).toHaveLength(1);
+  });
+});
+
+// ── claimRecapResume (BAL-550 / D5) ──────────────────────────────────────────
+
+/**
+ * THE RECAP RE-DRIVE'S CLAIM. `failed → processing`, clearing the stage + reason.
+ *
+ * ⚠ THE HARNESS `db` **IS** THE PER-TEST TRANSACTION, so it satisfies the `DbExecutor` this
+ * mutator demands. That is not a loophole: the executor is required so a PRODUCTION caller
+ * cannot commit the state change outside the `audit_events` row's transaction, and a test
+ * handing over the transaction it is already inside is exactly the intended usage (the
+ * `meeting-recordings.integration.test.ts` note, restated).
+ *
+ * ⚠ EVERY REFUSAL RETURNS `undefined` RATHER THAN THROWING, so several can share one `it`
+ * without aborting the harness transaction (`25P02`).
+ */
+describe('transcriptsRepository.claimRecapResume', () => {
+  it('moves failed → processing and NULLs failed_stage / failure_reason', async () => {
+    const { transcript } = await transcriptFactory({
+      values: { status: 'failed', failedStage: 'summarize', failureReason: 'llm timed out' },
+    });
+
+    const claimed = await transcriptsRepository.claimRecapResume(transcript.id, db);
+
+    expect(claimed).toBeDefined();
+    expect(claimed?.status).toBe('processing');
+    expect(claimed?.failedStage).toBeNull();
+    expect(claimed?.failureReason).toBeNull();
+  });
+
+  it('⚠⚠ RESETS NO STAGE GATE — artifacts, extraction and publish stamps survive verbatim', async () => {
+    const publishedAt = new Date('2026-03-01T10:00:00.000Z');
+    const extractedAt = new Date('2026-03-01T09:00:00.000Z');
+    const { transcript } = await transcriptFactory({
+      values: {
+        status: 'failed',
+        failedStage: 'publish_recap',
+        failureReason: 'engine refused',
+        extractedActionItems: [
+          { body: 'Send the migration plan', assigneeParty: 'expert', dueAt: null },
+        ],
+        actionItemsExtractedAt: extractedAt,
+        recapReadyPublishedAt: publishedAt,
+      },
+    });
+    await transcriptArtifactFactory({ transcriptId: transcript.id, values: { kind: 'cleaned' } });
+    await transcriptArtifactFactory({
+      transcriptId: transcript.id,
+      values: { kind: 'summary', content: 'A summary.' },
+    });
+
+    const claimed = await transcriptsRepository.claimRecapResume(transcript.id, db);
+
+    // The three columns the CLAIM writes.
+    expect(claimed?.status).toBe('processing');
+    expect(claimed?.failedStage).toBeNull();
+    expect(claimed?.failureReason).toBeNull();
+    // ⚠ EVERYTHING BAL-387's PER-STAGE GATES READ IS UNTOUCHED — this is what makes "a re-run
+    // re-spends no LLM budget and re-creates no action item" true rather than aspirational.
+    expect(claimed?.recapReadyPublishedAt?.toISOString()).toBe(publishedAt.toISOString());
+    expect(claimed?.actionItemsExtractedAt?.toISOString()).toBe(extractedAt.toISOString());
+    expect(claimed?.extractedActionItems).toEqual(transcript.extractedActionItems);
+    const artifacts = await db
+      .select()
+      .from(transcriptArtifacts)
+      .where(eq(transcriptArtifacts.transcriptId, transcript.id));
+    expect(artifacts.map((row) => row.kind).sort((a, b) => a.localeCompare(b))).toEqual([
+      'cleaned',
+      'summary',
+    ]);
+  });
+
+  it('REFUSES every wrong prior state: processing, ready, and a `failed` row with no stage', async () => {
+    const { transcript: processing } = await transcriptFactory({
+      values: { status: 'processing' },
+    });
+    const { transcript: ready } = await transcriptFactory({ values: { status: 'ready' } });
+    // `failed` with NO recorded stage — there is nothing to resume from, and the read that
+    // finds these rows carries `failed_stage IS NOT NULL` for the same reason.
+    const { transcript: stageless } = await transcriptFactory({ values: { status: 'failed' } });
+
+    expect(await transcriptsRepository.claimRecapResume(processing.id, db)).toBeUndefined();
+    expect(await transcriptsRepository.claimRecapResume(ready.id, db)).toBeUndefined();
+    expect(await transcriptsRepository.claimRecapResume(stageless.id, db)).toBeUndefined();
+  });
+
+  it('⚠⚠ REFUSES A PARTIAL RECAP (`ready` + failed_stage) — a skip is not a failure', async () => {
+    // `recordStageSkip` writes exactly this shape on a DEGRADED-BUT-COMPLETED path. Re-driving
+    // it would re-enter a pipeline that already published, and the lens never shows it as
+    // failed in the first place.
+    const { transcript } = await transcriptFactory({ values: { status: 'ready' } });
+    await transcriptsRepository.recordStageSkip(transcript.id, 'action_items', 'engagement ended');
+
+    expect(await transcriptsRepository.claimRecapResume(transcript.id, db)).toBeUndefined();
+  });
+
+  it('REFUSES a soft-deleted transcript', async () => {
+    const { transcript } = await transcriptFactory({
+      values: {
+        status: 'failed',
+        failedStage: 'cleanup',
+        failureReason: 'x',
+        deletedAt: new Date(),
+      },
+    });
+
+    expect(await transcriptsRepository.claimRecapResume(transcript.id, db)).toBeUndefined();
+  });
+
+  /**
+   * ⚠⚠ A LIVE TRANSCRIPT ON A SOFT-DELETED MEETING. Its own `deleted_at` is null, so every
+   * other term of the CAS passes — the `EXISTS` on `meetings` is the only thing refusing it.
+   * Such a row is never rendered (the lens's windowed read filters `meetings.deleted_at`), so
+   * a hand-crafted request is the only way to reach it; it matters because a successful resume
+   * ends in `stagePublishRecap` firing `recap.ready` to BOTH PARTIES about a consultation the
+   * platform considers deleted.
+   */
+  it('REFUSES a live transcript whose MEETING has been soft-deleted', async () => {
+    const { transcript } = await transcriptFactory({
+      values: { status: 'failed', failedStage: 'summarize', failureReason: 'llm timed out' },
+    });
+    await db
+      .update(meetings)
+      .set({ deletedAt: new Date() })
+      .where(eq(meetings.id, transcript.meetingId));
+
+    expect(await transcriptsRepository.claimRecapResume(transcript.id, db)).toBeUndefined();
+  });
+
+  it('THE DOUBLE-CLICK GUARD: the second claim against the same row matches nothing', async () => {
+    const { transcript } = await transcriptFactory({
+      values: { status: 'failed', failedStage: 'summarize', failureReason: 'boom' },
+    });
+
+    expect(await transcriptsRepository.claimRecapResume(transcript.id, db)).toBeDefined();
+    // The row is `processing` now, so the CAS matches zero rows — which is what makes the
+    // route write ONE audit row and enqueue ONE job for two clicks.
+    expect(await transcriptsRepository.claimRecapResume(transcript.id, db)).toBeUndefined();
   });
 });

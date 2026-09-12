@@ -9,7 +9,10 @@ import {
   type OpenReceivableAlertRow,
   type AdminAlertFinding,
 } from '@balo/db';
-import type { AdminAlertDetail } from '@balo/shared/admin-alerts';
+import {
+  TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS,
+  type AdminAlertDetail,
+} from '@balo/shared/admin-alerts';
 import { resolveWebhookBaseUrl } from '../services/calendar/webhook-url.js';
 import {
   SUBSCRIPTION_EXPIRY_ALERT_MS,
@@ -85,8 +88,12 @@ export const SESSION_SETTLED_NO_LEDGER_CREDIT_CUTOFF_MS = 60 * MS_PER_MINUTE;
 export const RECORDING_FAILED_CUTOFF_MS = 15 * MS_PER_MINUTE;
 /** Past the pipeline retry ladder. */
 export const TRANSCRIPT_FAILED_CUTOFF_MS = 15 * MS_PER_MINUTE;
-/** A batch job that answers in minutes is not withheld. */
-export const TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS = 24 * MS_PER_HOUR;
+/** A batch job that answers in minutes is not withheld.
+ *  BAL-550 — the VALUE is hoisted to `@balo/shared/admin-alerts`'s
+ *  `TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS` (one definition for this finder's cutoff and the
+ *  capture-health lens's `withheld` chip threshold); this export's NAME and every reference to
+ *  it stay untouched (D1). */
+export const TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS = TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS;
 
 // ── expert.application_pending ──────────────────────────────────────────
 

@@ -37,6 +37,24 @@ export function personDisplayName(
 }
 
 /**
+ * `"{first} {last}"` with the nullable halves handled, or `null` when both are absent.
+ *
+ * BAL-550 — hoisted VERBATIM from `packages/db/src/repositories/platform-lookup.ts:519`
+ * (zero behaviour change), so `@balo/db` and the capture-health view layer share ONE
+ * definition instead of two. `platform-lookup.ts` re-imports and re-exports this name so its
+ * own test file's import (`import { joinNameParts } from './platform-lookup'`) keeps working.
+ *
+ * ⚠ NOT `personDisplayName` above — that one takes a `fallback` string and is used where a
+ * displayed name is always required; this one answers `null` when both halves are absent,
+ * which callers like `platform-lookup.ts`'s `?? 'expert unavailable'` and the capture-health
+ * view depend on to pick their OWN fallback copy.
+ */
+export function joinNameParts(firstName: string | null, lastName: string | null): string | null {
+  const joined = `${firstName ?? ''} ${lastName ?? ''}`.trim();
+  return joined === '' ? null : joined;
+}
+
+/**
  * Party-vs-person convention (BAL-329): an agency shows its agency name; a
  * freelancer — or an agency whose name is blank — shows the person's name.
  * Falls back to a neutral "An expert" when no name resolves. Shared by D6 (inbox)

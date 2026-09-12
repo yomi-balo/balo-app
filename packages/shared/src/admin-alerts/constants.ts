@@ -26,3 +26,14 @@ export const ADMIN_ALERT_NOTE_MAX = 2000;
 
 /** Per-finder batch bound. The caller MUST warn when a finder fills it — "no silent caps". */
 export const ADMIN_ALERT_FINDER_BATCH_LIMIT = 200;
+
+/**
+ * BAL-550 — hoisted from `apps/api/src/jobs/admin-alert-finders.ts`'s
+ * `TRANSCRIPT_CAPTURE_WITHHELD_SOURCE_CUTOFF_MS` (zero behaviour change: same 24h value). ONE
+ * definition now serves BOTH the `transcript_capture.withheld_source` finder's cutoff AND the
+ * capture-health lens's `withheld` chip threshold (`meeting_recordings.transcript_job_submitted_at
+ * <= now - this`) — the same "has the batch job been quiet too long" question, asked from two
+ * surfaces. The finder keeps its own exported name and every call site untouched; only its
+ * right-hand side becomes this import.
+ */
+export const TRANSCRIPT_SOURCE_WITHHELD_AFTER_MS = 24 * 60 * 60 * 1000;

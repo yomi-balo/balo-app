@@ -2,18 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { ADMIN_SECTION_ORDER, resolveActiveAdminSection } from './admin-sections';
 
 describe('ADMIN_SECTION_ORDER', () => {
-  it('is the design-reference order: Home, Applications, Lookup, Config & catalogue', () => {
+  it('is the design-reference order: Home, Applications, Lookup, Config & catalogue, Capture health', () => {
     expect(ADMIN_SECTION_ORDER.map((s) => s.key)).toEqual([
       'home',
       'applications',
       'lookup',
       'catalogue',
+      'health',
     ]);
     expect(ADMIN_SECTION_ORDER.map((s) => s.label)).toEqual([
       'Home',
       'Applications',
       'Lookup',
       'Config & catalogue',
+      'Capture health',
     ]);
   });
 
@@ -23,6 +25,7 @@ describe('ADMIN_SECTION_ORDER', () => {
       '/admin/applications',
       '/admin/lookup',
       '/admin/catalogue',
+      '/admin/health/capture',
     ]);
   });
 
@@ -39,6 +42,7 @@ describe('resolveActiveAdminSection', () => {
     ['/admin/applications', 'applications'],
     ['/admin/applications/0000-1111-2222-3333', 'applications'],
     ['/admin/lookup', 'lookup'],
+    ['/admin/health/capture', 'health'],
   ] as const)('%s → %s', (pathname, expected) => {
     expect(resolveActiveAdminSection(pathname)).toBe(expected);
   });

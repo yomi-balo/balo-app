@@ -99,6 +99,9 @@ export {
   // BAL-549 — the admin expert-applications surface's event constant. ⚠ THE RE-EXPORT
   // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
   ADMIN_APPLICATIONS_EVENTS,
+  // BAL-550 — the `/admin/health/capture` lens's event constant. ⚠ THE RE-EXPORT ALLOWLIST.
+  // Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  ADMIN_CAPTURE_HEALTH_EVENTS,
 } from '../events';
 
 export type {
@@ -221,4 +224,9 @@ export type {
   // BAL-549 — the admin expert-applications surface's event payload and its decision vocabulary.
   AdminApplicationsEventMap,
   AdminApplicationDecision,
+  // BAL-550 — the `/admin/health/capture` lens's event payload and its vocabularies.
+  AdminCaptureHealthEventMap,
+  CaptureHealthQueueFilter,
+  AdminRedriveKind,
+  AdminRedriveOutcome,
 } from '../events';

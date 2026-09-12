@@ -105,6 +105,23 @@ describe('recording-ingest job — enqueue', () => {
     );
   });
 
+  it('BAL-550 (D2) — a jobIdSuffix mints a DISJOINT id from the stable one, never a wrapped id', async () => {
+    await enqueueRecordingIngest({ recordingId: RECORDING_ID, jobIdSuffix: 'redrive-audit-1' });
+
+    expect(queueAdd).toHaveBeenCalledWith(
+      'ingest',
+      { recordingId: RECORDING_ID },
+      {
+        jobId: `recording-ingest--${RECORDING_ID}--redrive-audit-1`,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 10_000 },
+      }
+    );
+
+    const [, , opts] = queueAdd.mock.calls[0] as [unknown, unknown, { jobId: string }];
+    expect(opts.jobId).not.toBe(`recording-ingest--${RECORDING_ID}`);
+  });
+
   it('exposes the queue name', () => {
     expect(RECORDING_INGEST_QUEUE).toBe('recording-ingest');
   });

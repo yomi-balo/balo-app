@@ -79,6 +79,8 @@ export {
   ADMIN_ALERTS_EVENTS,
   /** BAL-549 — the admin expert-applications surface's event constant. */
   ADMIN_APPLICATIONS_EVENTS,
+  /** BAL-550 — the `/admin/health/capture` lens's event constant. */
+  ADMIN_CAPTURE_HEALTH_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -167,4 +169,9 @@ export type {
   /** BAL-549 — the admin expert-applications surface's event payload and its decision vocabulary. */
   AdminApplicationsEventMap,
   AdminApplicationDecision,
+  /** BAL-550 — the `/admin/health/capture` lens's event payload and its vocabularies. */
+  AdminCaptureHealthEventMap,
+  CaptureHealthQueueFilter,
+  AdminRedriveKind,
+  AdminRedriveOutcome,
 } from '@balo/analytics/client';

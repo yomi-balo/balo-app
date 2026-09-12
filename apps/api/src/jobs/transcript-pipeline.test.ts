@@ -2,8 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const queueAdd = vi.hoisted(() => vi.fn());
 const findByCaptureId = vi.hoisted(() => vi.fn());
+// BAL-550 — the resume arm's read, keyed on transcriptId. ADDED, not a change to any existing
+// arm: no existing test names `findById`.
+const findById = vi.hoisted(() => vi.fn());
 const markFailed = vi.hoisted(() => vi.fn());
 const runTranscriptPipeline = vi.hoisted(() => vi.fn());
+const resumeTranscriptRecap = vi.hoisted(() => vi.fn());
 const createLlmClient = vi.hoisted(() => vi.fn(() => ({ client: true })));
 const trackServer = vi.hoisted(() => vi.fn());
 const logError = vi.hoisted(() => vi.fn());
@@ -78,6 +82,7 @@ vi.mock('../lib/redis.js', () => ({ createRedisConnection: vi.fn(() => ({ conn: 
 vi.mock('bullmq', () => ({ Worker: WorkerMock, UnrecoverableError: MockUnrecoverableError }));
 vi.mock('../services/transcript/pipeline.js', () => ({
   runTranscriptPipeline,
+  resumeTranscriptRecap,
   TranscriptStageError: MockStageError,
 }));
 vi.mock('../services/transcript/llm/anthropic-client.js', () => ({
@@ -85,7 +90,7 @@ vi.mock('../services/transcript/llm/anthropic-client.js', () => ({
   LlmOutputTruncatedError: MockTruncatedError,
 }));
 vi.mock('@balo/db', () => ({
-  transcriptsRepository: { findByCaptureId, markFailed },
+  transcriptsRepository: { findByCaptureId, findById, markFailed },
 }));
 vi.mock('@balo/analytics/server', () => ({
   trackServer,
@@ -100,6 +105,7 @@ vi.mock('@balo/shared/logging', () => ({ createLogger: () => ({ error: logError 
 
 import {
   enqueueTranscriptPipeline,
+  enqueueTranscriptRecapResume,
   startTranscriptPipelineWorker,
   UnrecoverableTranscriptStageError,
   TRANSCRIPT_PIPELINE_QUEUE,
@@ -257,7 +263,10 @@ describe('transcript-pipeline job', () => {
       'cleanup',
       new MockTruncatedError('truncated at cap')
     );
-    runTranscriptPipeline.mockRejectedValue(stageErr);
+    // `…Once`, not a persistent rejection: `beforeEach`'s `vi.clearAllMocks()` clears call
+    // history but NOT implementations, so a persistent one leaks into every later test in this
+    // file — it broke BAL-550's worker-routing case, which needs this mock to resolve.
+    runTranscriptPipeline.mockRejectedValueOnce(stageErr);
     startTranscriptPipelineWorker();
 
     let thrown: unknown;
@@ -316,5 +325,97 @@ describe('transcript-pipeline job', () => {
         process.env.ANTHROPIC_API_KEY = originalKey;
       }
     }
+  });
+
+  // ── BAL-550 (D2, D5) — the admin re-drive's resume job ──────────────────────
+  describe('enqueueTranscriptRecapResume', () => {
+    it('adds a job with the DISJOINT jobId (re-stated parts, never a wrapped id)', async () => {
+      await enqueueTranscriptRecapResume({ transcriptId: 'tr-1', auditEventId: 'audit-1' });
+
+      expect(queueAdd).toHaveBeenCalledWith(
+        'resume',
+        { resume: true, transcriptId: 'tr-1', auditEventId: 'audit-1' },
+        {
+          jobId: 'transcript-pipeline--tr-1--redrive-audit-1',
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: true,
+          removeOnFail: { count: 10 },
+        }
+      );
+    });
+
+    it('the resulting jobId is disjoint from the capture-id shape', async () => {
+      await enqueueTranscriptRecapResume({ transcriptId: 'cap-abc', auditEventId: 'audit-1' });
+      const [, , opts] = queueAdd.mock.calls[0] as [unknown, unknown, { jobId: string }];
+      // The capture enqueue for the SAME id would be 'transcript-pipeline--cap-abc' — never
+      // equal to the resume shape, so a retained failed capture job cannot swallow a re-drive.
+      expect(opts.jobId).not.toBe('transcript-pipeline--cap-abc');
+    });
+  });
+
+  describe('worker routing — compiler-narrowed on job.data', () => {
+    it('a resume payload routes to resumeTranscriptRecap, never runTranscriptPipeline', async () => {
+      startTranscriptPipelineWorker();
+      await wired.processor?.({
+        data: { resume: true, transcriptId: 'tr-1', auditEventId: 'audit-1' },
+      });
+      expect(resumeTranscriptRecap).toHaveBeenCalledWith(
+        { resume: true, transcriptId: 'tr-1', auditEventId: 'audit-1' },
+        expect.objectContaining({ llm: expect.anything() })
+      );
+      expect(runTranscriptPipeline).not.toHaveBeenCalled();
+    });
+
+    it('a capture payload (no `resume` key) still routes to runTranscriptPipeline unchanged', async () => {
+      startTranscriptPipelineWorker();
+      await wired.processor?.({ data: { captureId: 'cap-1', engagementId: 'e1' } });
+      expect(runTranscriptPipeline).toHaveBeenCalledWith(
+        { captureId: 'cap-1', engagementId: 'e1' },
+        expect.objectContaining({ llm: expect.anything() })
+      );
+      expect(resumeTranscriptRecap).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the resume arm terminal-failure handler', () => {
+    it('marks the transcript failed (keyed on transcriptId) and emits transcript_failed with the row vendor', async () => {
+      findById.mockResolvedValue({ id: 't-9', vendor: 'daily_deepgram' });
+      startTranscriptPipelineWorker();
+      wired.failedHandler?.(
+        {
+          data: { resume: true, transcriptId: 't-9', auditEventId: 'audit-9' },
+          opts: { attempts: 3 },
+          attemptsMade: 3,
+        },
+        new MockStageError('summarize failed', 'summarize')
+      );
+      await vi.waitFor(() =>
+        expect(markFailed).toHaveBeenCalledWith('t-9', 'summarize', 'summarize failed')
+      );
+      expect(trackServer).toHaveBeenCalledWith('transcript_failed', {
+        stage: 'summarize',
+        vendor: 'daily_deepgram',
+        distinct_id: 'system:transcript-pipeline',
+      });
+      // Never the capture-arm read for a resume payload.
+      expect(findByCaptureId).not.toHaveBeenCalled();
+    });
+
+    it('no-ops (no analytic) when the transcript row cannot be resolved', async () => {
+      findById.mockResolvedValue(undefined);
+      startTranscriptPipelineWorker();
+      wired.failedHandler?.(
+        {
+          data: { resume: true, transcriptId: 't-missing', auditEventId: 'audit-9' },
+          opts: { attempts: 3 },
+          attemptsMade: 3,
+        },
+        new Error('generic')
+      );
+      await vi.waitFor(() => expect(findById).toHaveBeenCalledWith('t-missing'));
+      expect(markFailed).not.toHaveBeenCalled();
+      expect(trackServer).not.toHaveBeenCalled();
+    });
   });
 });

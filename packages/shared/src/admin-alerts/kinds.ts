@@ -87,12 +87,30 @@ function targetMeeting(input: AdminAlertTargetInput): AdminAlertTarget {
 }
 
 /**
- * `recording.failed` / `transcript.failed` / `transcript_capture.withheld_source` — the
- * finding's `entity_id` is the recording/transcript id, not a meeting id. The producer carries
- * the routable meeting id in `detail.targetId` (never parsed out of `facts`).
+ * `session.settled_no_ledger_credit` — the finding's `entity_id` is `credit_sessions.id`, not a
+ * meeting id. The producer carries a best-effort routable meeting id in `detail.targetId` (never
+ * parsed out of `facts`); absent that, it falls back to `entity_id` (a dead link is accepted for
+ * this kind — see the finder's own docblock).
  */
 function targetMeetingViaTargetId(input: AdminAlertTargetInput): AdminAlertTarget {
   return { label: 'the meeting', href: `/meetings/${input.detail.targetId ?? input.entityId}` };
+}
+
+/**
+ * BAL-550 / D3 — the three capture kinds land on the detail lens, keyed on the MEETING id
+ * (`detail.targetId`), the only identifier all three share: `transcript.failed` carries
+ * `entityId = transcripts.id`, so the ticket's `?row=<meeting_recording_id>` is unimplementable.
+ * ⚠ NO `?? input.entityId` FALLBACK, unlike `targetMeetingViaTargetId` — that fallback is already
+ * wrong for `transcript.failed`, and here it would deep-link to a row that cannot exist. With no
+ * `targetId` the unfiltered lens opens instead.
+ */
+function targetCaptureHealthViaTargetId(input: AdminAlertTargetInput): AdminAlertTarget {
+  const targetId = input.detail.targetId;
+  return {
+    label: 'capture health',
+    href:
+      targetId === undefined ? '/admin/health/capture' : `/admin/health/capture?row=${targetId}`,
+  };
 }
 
 /**
@@ -179,21 +197,21 @@ export const ADMIN_ALERT_KINDS: Readonly<Record<AdminAlertKind, AdminAlertKindMe
     finder: 'recordingFailed',
     cadence: '5m',
     closes: 'Closes itself when a playable recording exists',
-    target: targetMeetingViaTargetId,
+    target: targetCaptureHealthViaTargetId,
   },
   'transcript.failed': {
     group: 'capture',
     finder: 'transcriptFailed',
     cadence: '5m',
     closes: 'Closes itself when the recap reaches ready',
-    target: targetMeetingViaTargetId,
+    target: targetCaptureHealthViaTargetId,
   },
   'transcript_capture.withheld_source': {
     group: 'capture',
     finder: 'transcriptCaptureWithheldSource',
     cadence: '5m',
     closes: 'Closes itself when the batch job answers or the source is released',
-    target: targetMeetingViaTargetId,
+    target: targetCaptureHealthViaTargetId,
   },
   'calendar.subscription_lapse': {
     group: 'meetings',

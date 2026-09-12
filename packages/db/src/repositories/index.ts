@@ -700,6 +700,8 @@ export {
   // HERE, not on `transcriptsRepository`: the condition is a `meeting_recordings` predicate.
   type FailedRecordingAlertRow,
   type WithheldSourceAlertRow,
+  // BAL-550 (D6) — the admin re-drive's net-new CAS input.
+  type ReopenRecordingForIngestRedriveInput,
 } from './meeting-recordings';
 /**
  * The judgement-free "who owns this meeting context" READ (BAL-423). Exported because BOTH
@@ -830,3 +832,18 @@ export {
   type AdminAlertKindCount,
 } from './admin-alerts';
 export type { AdminAlert, NewAdminAlert, AdminSweepTick, NewAdminSweepTick } from '../schema';
+// ── Capture health (BAL-550) — the three-ladder admin lens over `/admin/health/capture` ──
+// ⚠ EVERY EXPORT HERE READS. The lens's two MUTATIONS are
+// `meetingRecordingsRepository.reopenForIngestRedrive` and
+// `transcriptsRepository.claimRecapResume`, exported with their own repositories above.
+export {
+  captureHealthRepository,
+  type CaptureHealthWindow,
+  type CaptureHealthCursor,
+  type CaptureHealthMeetingRow,
+  type CaptureHealthRecordingDetail,
+  type CaptureHealthRecapDetail,
+  type CaptureHealthExpertDetail,
+  type CaptureHealthPartyDetail,
+  type CaptureHealthDetails,
+} from './capture-health';

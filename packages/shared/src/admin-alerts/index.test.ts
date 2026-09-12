@@ -70,19 +70,35 @@ describe('ADMIN_ALERT_KINDS — the registry', () => {
     }
   });
 
-  it('the recording/transcript kinds honour detail.targetId over entity_id', () => {
-    const target = ADMIN_ALERT_KINDS['recording.failed'].target({
-      entityId: 'recording-id',
-      detail: {
-        title: 't',
-        entityLabel: 'e',
-        evidence: 'ev',
-        facts: [],
-        targetId: 'meeting-id',
-      },
-    });
-    expect(target.href).toBe('/meetings/meeting-id');
-  });
+  /**
+   * BAL-550 / D3 — retargeted to the capture-health detail lens, keyed on the meeting id.
+   * `targetMeetingViaTargetId` (still used by `session.settled_no_ledger_credit`) is covered by
+   * its own kind's test elsewhere; this one pins the NEW `targetCaptureHealthViaTargetId`
+   * behaviour for all three capture kinds, including the no-`targetId` fallback (D3: no `??
+   * entityId`, deliberately — the unfiltered lens opens instead of a dead-end row).
+   */
+  it.each(['recording.failed', 'transcript.failed', 'transcript_capture.withheld_source'] as const)(
+    '%s targets the capture-health lens, keyed on detail.targetId',
+    (kind) => {
+      const target = ADMIN_ALERT_KINDS[kind].target({
+        entityId: 'recording-or-transcript-id',
+        detail: {
+          title: 't',
+          entityLabel: 'e',
+          evidence: 'ev',
+          facts: [],
+          targetId: 'meeting-id',
+        },
+      });
+      expect(target.href).toBe('/admin/health/capture?row=meeting-id');
+
+      const withoutTargetId = ADMIN_ALERT_KINDS[kind].target({
+        entityId: 'recording-or-transcript-id',
+        detail: { title: 't', entityLabel: 'e', evidence: 'ev', facts: [] },
+      });
+      expect(withoutTargetId.href).toBe('/admin/health/capture');
+    }
+  );
 
   it('DOES NOT stub a deferred kind', () => {
     const deferred = [

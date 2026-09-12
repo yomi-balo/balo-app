@@ -23,6 +23,7 @@ import {
   type LookupResult,
   type LookupSearchResult,
 } from '@balo/shared/lookup';
+import { joinNameParts } from '@balo/shared/parties';
 import { db } from '../client';
 import {
   agencies,
@@ -561,11 +562,13 @@ export function buildEngagementSub(input: {
  * `users` has NO `name` column — nullable `first_name` / `last_name` — which is why this
  * exists and why the SQL-side match uses the same `coalesce … || ' ' || coalesce …` shape
  * `expert-search.ts:263` already uses.
+ *
+ * BAL-550 — hoisted to `@balo/shared/parties` (zero behaviour change, one definition for both
+ * `@balo/db` and the capture-health view layer). Re-exported under the SAME name here so this
+ * module's own test (`platform-lookup.test.ts`) keeps importing it from `./platform-lookup`
+ * unchanged.
  */
-export function joinNameParts(firstName: string | null, lastName: string | null): string | null {
-  const joined = `${firstName ?? ''} ${lastName ?? ''}`.trim();
-  return joined === '' ? null : joined;
-}
+export { joinNameParts };
 
 // ── SQL fragments ────────────────────────────────────────────────────────────────────
 

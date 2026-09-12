@@ -1,12 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EngagementNotActiveError } from '@balo/db';
-import { runTranscriptPipeline, type TranscriptPipelineJobInput } from './pipeline.js';
+import {
+  runTranscriptPipeline,
+  resumeTranscriptRecap,
+  type TranscriptPipelineJobInput,
+} from './pipeline.js';
 import type { LlmAudit, LlmClient } from './llm/types.js';
 import { dailyMultiSpeaker } from './normalizers/__fixtures__/daily-deepgram.js';
+import { normalizeVendorPayload } from './normalizers/index.js';
 
 // ── Hoisted mock fns ───────────────────────────────────────────────────────────
 const db = vi.hoisted(() => ({
   findByCaptureId: vi.fn(),
+  // BAL-550 — the resume entry's read. ADDED, not a change to any existing arm: no existing
+  // test names `findById`, so this is pure additive surface.
+  findById: vi.fn(),
   insertRaw: vi.fn(),
   setExtractedActionItems: vi.fn(),
   markActionItemsExtracted: vi.fn(),
@@ -27,6 +35,7 @@ vi.mock('@balo/db', () => {
   return {
     transcriptsRepository: {
       findByCaptureId: db.findByCaptureId,
+      findById: db.findById,
       insertRaw: db.insertRaw,
       setExtractedActionItems: db.setExtractedActionItems,
       markActionItemsExtracted: db.markActionItemsExtracted,
@@ -43,6 +52,13 @@ vi.mock('@balo/db', () => {
     companiesRepository: { findOwnerUserIdByCompanyId: db.findOwnerUserIdByCompanyId },
     EngagementNotActiveError,
   };
+});
+
+// BAL-550 — spies on the REAL implementation (never replaces it), so every existing test's
+// behaviour is byte-identical; only `resumeTranscriptRecap`'s tests assert on call count.
+vi.mock('./normalizers/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./normalizers/index.js')>();
+  return { ...actual, normalizeVendorPayload: vi.fn(actual.normalizeVendorPayload) };
 });
 
 vi.mock('../../notifications/index.js', () => ({ notificationEvents: { publish } }));
@@ -376,5 +392,129 @@ describe('runTranscriptPipeline', () => {
       expect.objectContaining({ summaryHeadline: undefined })
     );
     expect(trackServer).not.toHaveBeenCalledWith('summary_headline_suppressed', expect.anything());
+  });
+});
+
+// ── BAL-550 (D5) — the resume entry ─────────────────────────────────────────────
+const CANONICAL = {
+  schemaVersion: 1,
+  vendor: 'daily_deepgram',
+  language: 'en',
+  fillerWords: false,
+  speakers: [],
+  segments: [],
+  durationMs: 12500,
+};
+
+function makeResumedTranscript(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...makeTranscript(),
+    captureId: 'cap1',
+    canonical: CANONICAL,
+    ...overrides,
+  };
+}
+
+describe('resumeTranscriptRecap', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a missing/soft-deleted transcript is a logged no-op, never a throw', async () => {
+    db.findById.mockResolvedValue(undefined);
+
+    await expect(
+      resumeTranscriptRecap({ transcriptId: 'tr-gone', auditEventId: 'audit1' }, { llm: fakeLlm })
+    ).resolves.toBeUndefined();
+
+    expect(fakeLlm.cleanupTranscript).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('never calls normalizeVendorPayload — the row is the input, not a vendor payload', async () => {
+    setupFreshRun();
+    const resumed = makeResumedTranscript();
+    db.findById.mockResolvedValue(resumed as never);
+    db.findByTranscriptAndKind.mockResolvedValue(undefined);
+
+    await resumeTranscriptRecap({ transcriptId: 'tr1', auditEventId: 'audit1' }, { llm: fakeLlm });
+
+    expect(normalizeVendorPayload).not.toHaveBeenCalled();
+    expect(db.insertRaw).not.toHaveBeenCalled();
+  });
+
+  it('a row whose cleaned + summary artifacts exist never calls the LLM and publishes once', async () => {
+    setupFreshRun();
+    const resumed = makeResumedTranscript({
+      extractedActionItems: [{ body: 'Do X', assigneeParty: 'client', dueAt: null }],
+    });
+    db.findById.mockResolvedValue(resumed as never);
+    db.findByTranscriptAndKind.mockResolvedValue({ content: 'existing' } as never);
+
+    await resumeTranscriptRecap({ transcriptId: 'tr1', auditEventId: 'audit1' }, { llm: fakeLlm });
+
+    expect(fakeLlm.cleanupTranscript).not.toHaveBeenCalled();
+    expect(fakeLlm.summarize).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(db.markRecapPublished).toHaveBeenCalledWith('tr1');
+  });
+
+  it('a row with recap_ready_published_at set publishes nothing further', async () => {
+    setupFreshRun();
+    const resumed = makeResumedTranscript({
+      extractedActionItems: [{ body: 'Do X', assigneeParty: 'client', dueAt: null }],
+      actionItemsExtractedAt: new Date(),
+      recapReadyPublishedAt: new Date(),
+    });
+    db.findById.mockResolvedValue(resumed as never);
+    db.findByTranscriptAndKind.mockResolvedValue({ content: 'existing' } as never);
+
+    await resumeTranscriptRecap({ transcriptId: 'tr1', auditEventId: 'audit1' }, { llm: fakeLlm });
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(db.markRecapPublished).not.toHaveBeenCalled();
+  });
+
+  it('a row with action_items_extracted_at set never calls createFromExtraction', async () => {
+    setupFreshRun();
+    const resumed = makeResumedTranscript({
+      extractedActionItems: [{ body: 'Do X', assigneeParty: 'client', dueAt: null }],
+      actionItemsExtractedAt: new Date(),
+    });
+    db.findById.mockResolvedValue(resumed as never);
+    db.findByTranscriptAndKind.mockResolvedValue({ content: 'existing' } as never);
+
+    await resumeTranscriptRecap({ transcriptId: 'tr1', auditEventId: 'audit1' }, { llm: fakeLlm });
+
+    expect(db.createFromExtraction).not.toHaveBeenCalled();
+  });
+
+  it('a stage throw surfaces as TranscriptStageError with the right stage', async () => {
+    setupFreshRun();
+    const resumed = makeResumedTranscript();
+    db.findById.mockResolvedValue(resumed as never);
+    db.findByTranscriptAndKind.mockResolvedValue(undefined);
+    db.upsert.mockRejectedValue(new Error('db down'));
+
+    await expect(
+      resumeTranscriptRecap({ transcriptId: 'tr1', auditEventId: 'audit1' }, { llm: fakeLlm })
+    ).rejects.toMatchObject({ name: 'TranscriptStageError', stage: 'cleanup' });
+  });
+
+  it('a fresh resume (nothing done yet) runs stages 3-6 and publishes', async () => {
+    setupFreshRun();
+    const resumed = makeResumedTranscript();
+    db.findById.mockResolvedValue(resumed as never);
+    db.findByTranscriptAndKind.mockResolvedValue(undefined);
+
+    await resumeTranscriptRecap({ transcriptId: 'tr1', auditEventId: 'audit1' }, { llm: fakeLlm });
+
+    expect(fakeLlm.cleanupTranscript).toHaveBeenCalledTimes(1);
+    expect(fakeLlm.summarize).toHaveBeenCalledTimes(1);
+    expect(db.createFromExtraction).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      'recap.ready',
+      expect.objectContaining({ transcriptId: 'tr1' })
+    );
   });
 });

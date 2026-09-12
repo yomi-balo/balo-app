@@ -174,6 +174,23 @@ export const PLATFORM_CAPABILITIES = {
    * this token themselves and must never lean on the layout gate.
    */
   REVIEW_EXPERT_APPLICATIONS: 'review_expert_applications',
+  /**
+   * BAL-550 — re-drive a stuck capture-pipeline job (`recording-ingest` or
+   * `transcript-pipeline`) from the `/admin/health/capture` lens. `super_admin` ONLY.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST / ASSIGN_ANY_REQUEST_OWNER argument verbatim.
+   * In particular it is NOT `VIEW_PLATFORM_ADMIN`: that token's own docblock says it gates
+   * REACHABILITY and "IS NOT A PER-SURFACE GRANT", so gating a MUTATION on it would make this
+   * map lie about what it grants — the one thing a capability map must never do.
+   *
+   * ⚠ DELIBERATELY OUTSIDE `PLATFORM_STAFF_BUNDLE`, following the `DELETE_ANY_INTERNAL_NOTE` /
+   * `IMPERSONATE_USER` precedent. A re-drive spends real vendor budget (a Mux ingest, an
+   * Anthropic pass) and re-enters a pipeline that publishes to both parties on a row that has
+   * already failed once; `admin` (support) sees the page and the disabled button with "Needs
+   * an engineer" copy, and cannot enqueue.
+   */
+  REDRIVE_JOB: 'redrive_job',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -237,6 +254,7 @@ export const PLATFORM_ROLE_CAPABILITIES: Record<string, readonly PlatformCapabil
     ...PLATFORM_STAFF_BUNDLE,
     PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE,
     PLATFORM_CAPABILITIES.IMPERSONATE_USER,
+    PLATFORM_CAPABILITIES.REDRIVE_JOB,
   ],
 };
 
