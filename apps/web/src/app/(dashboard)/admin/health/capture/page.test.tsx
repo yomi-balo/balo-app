@@ -118,6 +118,91 @@ describe('CaptureHealthPage — true-zero empty state', () => {
   });
 });
 
+/**
+ * BAL-550 web-review blocker — the client components below seed `useState` from server props, so
+ * React MUST be told to remount them when the server read changes. Both the tiles and the window
+ * control navigate within this route, which re-renders the page without unmounting anything.
+ *
+ * This asserts the KEY rather than the rendered output because the damage is invisible in a
+ * single render: it only appears on the SECOND navigation, when `HealthList` would still hold
+ * the previous filter's rows and — the part that corrupts data rather than just confusing —
+ * the previous filter's CURSOR, paging one filter's rows into another.
+ */
+describe('CaptureHealthPage — client state is keyed to the server read', () => {
+  /** Every `key` in the returned element tree, in render order. */
+  function keysOf(node: unknown, found: string[] = []): string[] {
+    if (Array.isArray(node)) {
+      for (const child of node) keysOf(child, found);
+      return found;
+    }
+    if (node === null || typeof node !== 'object') return found;
+    const element = node as { key?: string | null; props?: { children?: unknown } };
+    if (typeof element.key === 'string') found.push(element.key);
+    if (element.props?.children !== undefined) keysOf(element.props.children, found);
+    return found;
+  }
+
+  /** A row is required: with none, the page renders the filtered-empty state INSTEAD of the
+   *  list, and the list's key — the one that matters most — would never be asserted at all. */
+  const ROW = {
+    meetingId: '11111111-1111-4111-8111-111111111111',
+    title: 'Consultation 28 Aug 2026',
+    parties: 'Bright Foods × Aisha Bello',
+    when: '28 Aug',
+    durationLabel: '42 min',
+    contextLabel: 'case',
+    recording: { state: 'ready' },
+    transcription: { state: 'finished' },
+    recap: { state: 'ready' },
+    category: 'healthy',
+    action: { kind: 'none' },
+  };
+
+  async function keysFor(searchParams: Record<string, string>, windowOverride: object) {
+    mockGetCurrentUser.mockResolvedValue(user());
+    mockLoadCaptureHealth.mockResolvedValue(
+      emptyDto({ rows: [ROW], isTrueZero: false, window: windowOverride })
+    );
+    const ui = await CaptureHealthPage({ searchParams: Promise.resolve(searchParams) });
+    return keysOf(ui);
+  }
+
+  const AUG = { fromIso: '2026-08-01', toIso: '2026-08-31', days: 31 };
+  /** A DIFFERENT month of the SAME length — the case a `days`-based key cannot tell apart. */
+  const JUL = { fromIso: '2026-07-01', toIso: '2026-07-31', days: 31 };
+
+  it('changing the category changes the key, so the list cannot keep the old rows or cursor', async () => {
+    const recording = await keysFor(
+      { category: 'recording', from: '2026-08-01', to: '2026-08-31' },
+      AUG
+    );
+    const recap = await keysFor({ category: 'recap', from: '2026-08-01', to: '2026-08-31' }, AUG);
+
+    expect(recording).toContain('recording:2026-08-01:2026-08-31');
+    expect(recap).toContain('recap:2026-08-01:2026-08-31');
+    expect(recording).not.toEqual(recap);
+  });
+
+  it('two DIFFERENT windows of equal length get different keys (a `days` key would collide)', async () => {
+    const august = await keysFor({ from: '2026-08-01', to: '2026-08-31' }, AUG);
+    const july = await keysFor({ from: '2026-07-01', to: '2026-07-31' }, JUL);
+
+    expect(august).toContain('all:2026-08-01:2026-08-31');
+    expect(july).toContain('all:2026-07-01:2026-07-31');
+    expect(august).not.toEqual(july);
+  });
+
+  it('all three stateful client components carry that key, not just one of them', async () => {
+    const keys = await keysFor(
+      { category: 'recording', from: '2026-08-01', to: '2026-08-31' },
+      AUG
+    );
+    const viewKeys = keys.filter((k) => k === 'recording:2026-08-01:2026-08-31');
+    // analytics + window control + list. A lower count means one was left unkeyed.
+    expect(viewKeys).toHaveLength(3);
+  });
+});
+
 describe('CaptureHealthPage — success state', () => {
   const HEALTHY_ROW = {
     meetingId: '11111111-1111-4111-8111-111111111111',

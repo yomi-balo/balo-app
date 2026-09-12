@@ -88,11 +88,26 @@ export default async function CaptureHealthPage({
   const actorLabel = joinNameParts(user.firstName, user.lastName) ?? user.email;
   const isFilteredEmpty = dto.rows.length === 0 && dto.pinned === null && !dto.isTrueZero;
 
+  /**
+   * ⚠⚠ EVERY CLIENT COMPONENT BELOW SEEDS `useState` FROM SERVER PROPS, WHICH REACT KEEPS ACROSS
+   * A RE-RENDER OF THE SAME ELEMENT POSITION. Both the tiles (`<Link>`) and the window control
+   * (`router.push`) navigate WITHIN this route, so the server re-renders with new props while
+   * React reuses the same instances and their state. Unkeyed, `HealthList` would show the
+   * previous filter's rows under the new active tile — and worse, "Load more" would send the
+   * PREVIOUS filter's cursor with the NEW category, paging one filter's rows into another.
+   *
+   * The key is the exact input set of the server read (`listPage`'s category + window), so the
+   * components remount precisely when that read changes and never on an unrelated re-render.
+   * ⚠ NOT `window.days`: two DIFFERENT windows of equal length share a `days`, which would
+   * suppress the second view event and keep the stale list.
+   */
+  const viewKey = `${category ?? 'all'}:${window.fromIso}:${window.toIso}`;
+
   return (
     <div className="flex flex-col gap-6">
       <Heading />
       <CaptureHealthAnalytics
-        key={`${category ?? 'all'}:${window.days}`}
+        key={viewKey}
         windowDays={window.days}
         filter={category ?? 'all'}
         issueCount={dto.issueCount}
@@ -102,8 +117,10 @@ export default async function CaptureHealthPage({
 
       <div className="flex items-center justify-between gap-3">
         <HealthWindowControl
+          key={viewKey}
           fromIso={window.fromIso}
           toIso={window.toIso}
+          days={window.days}
           fellBack={window.fellBack}
         />
         <span className="text-muted-foreground text-xs">Issues first</span>
@@ -123,6 +140,7 @@ export default async function CaptureHealthPage({
       {isFilteredEmpty && <CaptureHealthFilteredEmpty hasCategoryFilter={category !== null} />}
       {!dto.isTrueZero && !isFilteredEmpty && (
         <HealthList
+          key={viewKey}
           initialRows={dto.rows}
           initialHasMore={dto.hasMore}
           initialCursor={dto.nextCursor}
