@@ -191,6 +191,53 @@ export const PLATFORM_CAPABILITIES = {
    * an engineer" copy, and cannot enqueue.
    */
   REDRIVE_JOB: 'redrive_job',
+  /**
+   * BAL-404 / ADR-1035 — cancel ANY delivery engagement, on any tenant: the support-mediated
+   * override that ends a live `active | pending_acceptance` engagement permanently and notifies
+   * BOTH parties (`engagement.cancelled`).
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST argument verbatim. In particular it is NOT
+   * `CANCEL_ANY_MEETING` (that is BAL-410's booked CONSULTATION override — one call, not a
+   * delivery relationship) and NOT `CLOSE_ANY_REQUEST` (that is BAL-540's SOURCING request,
+   * explicitly not delivery). Authorizing "end somebody's paid delivery" with either would make
+   * this map lie about what it grants — the one thing a capability map must never do.
+   *
+   * The PLATFORM axis is right because the Balo arm holds no membership on either party by
+   * construction: the client arm has no cancel right at all today, and the expert arm is the
+   * engagement axis (ADR-1046). It REPLACES a `lens !== 'admin'` read, not a role read — the
+   * lens keeps gating VIEW (`resolve-engagement-lens.ts`), this token gates the MUTATION.
+   *
+   * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`, so `admin` (support) holds
+   * it — exactly the set that could cancel before this token existed. BAL-404 is a consistency
+   * migration, NOT an escalation or a narrowing; moving it out of the bundle would silently
+   * remove a right `admin` has today.
+   */
+  CANCEL_ANY_ENGAGEMENT: 'cancel_any_engagement',
+  /**
+   * BAL-404 / ADR-1035 — create, assign, edit, re-status or remove an action item on ANY
+   * delivery engagement, on any tenant. The Balo-staff arm of `gateEngagementParticipant`.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST argument verbatim. In particular it is NOT
+   * `CANCEL_ANY_ENGAGEMENT` above: ending somebody's delivery and nudging a task on it are
+   * different acts with different consequences, and one token across both would make this map
+   * lie about what it grants. It is also NOT `VIEW_PLATFORM_ADMIN` — that token's own docblock
+   * says it gates REACHABILITY and "IS NOT A PER-SURFACE GRANT", so gating a MUTATION on it is
+   * the same lie. Named for the ENGAGEMENT's action item because `action_items.engagement_id`
+   * is NOT NULL and is, per its own schema comment, "the capability scope".
+   *
+   * ⚠ IT REPLACES NO EXISTING BRANCH — it makes an IMPLICIT one explicit. Before BAL-404 the
+   * admin arm of `gateEngagementParticipant` passed by FALL-THROUGH: the client arm had a
+   * membership check, the expert arm had the lens equality, and admin had nothing, so the real
+   * decision was made upstream inside `resolveEngagementLens`'s `platformRole` set read. That
+   * is the shape ADR-1029 bans. The write right itself is unchanged and shipped (an admin's
+   * action items already attribute to "Balo" in notifications).
+   *
+   * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`, so `admin` (support) holds
+   * it — exactly the set that could write before. A consistency migration, not an escalation.
+   */
+  MANAGE_ANY_ENGAGEMENT_ACTION_ITEM: 'manage_any_engagement_action_item',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -235,6 +282,8 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES,
   PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS,
   PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS,
+  PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT,
+  PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM,
 ];
 
 /**

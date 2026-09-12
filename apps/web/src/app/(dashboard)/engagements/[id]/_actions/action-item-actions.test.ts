@@ -233,12 +233,27 @@ describe('createActionItemAction — gate + validation', () => {
     expect(mockCreateManual).not.toHaveBeenCalled();
   });
 
-  it('allows the admin (observer) lens to write (no capability check)', async () => {
+  it('allows a Balo-staff writer via MANAGE_ANY_ENGAGEMENT_ACTION_ITEM (no membership check)', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'user-1',
+      firstName: 'Dana',
+      lastName: 'Okafor',
+      platformRole: 'admin',
+    });
     mockResolveLens.mockReturnValue({ lens: 'admin' });
     const result = await createActionItemAction(INPUT);
     expect(result).toEqual({ success: true, actionItemId: ACTION_ITEM_ID });
     expect(mockHasCapability).not.toHaveBeenCalled();
     expect(mockCreateManual).toHaveBeenCalled();
+  });
+
+  it('denies a lens-admin caller who does not hold MANAGE_ANY_ENGAGEMENT_ACTION_ITEM — the fail-closed arm', async () => {
+    mockResolveLens.mockReturnValue({ lens: 'admin' });
+    expect(await createActionItemAction(INPUT)).toEqual({
+      success: false,
+      error: 'Only people on this project can do that.',
+    });
+    expect(mockCreateManual).not.toHaveBeenCalled();
   });
 });
 
@@ -301,6 +316,12 @@ describe('createActionItemAction — create + analytics + notify', () => {
   });
 
   it('create-with-assignee (expert) by the admin lens publishes to the expert, actor "Balo"', async () => {
+    mockRequireUser.mockResolvedValue({
+      id: 'user-1',
+      firstName: 'Dana',
+      lastName: 'Okafor',
+      platformRole: 'admin',
+    });
     mockResolveLens.mockReturnValue({ lens: 'admin' });
     mockCreateManual.mockResolvedValue(actionItem({ assigneeParty: 'expert' }));
     await createActionItemAction({

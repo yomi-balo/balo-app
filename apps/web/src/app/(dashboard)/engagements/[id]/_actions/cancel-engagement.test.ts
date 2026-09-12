@@ -99,12 +99,29 @@ describe('cancelEngagementAction', () => {
     expect(mockCancel).not.toHaveBeenCalled();
   });
 
-  it('returns ONLY_ADMIN for a non-admin lens', async () => {
-    mockResolveLens.mockReturnValue({ lens: 'expert', archetype: 'participant' });
+  it('returns ONLY_BALO for a caller without CANCEL_ANY_ENGAGEMENT', async () => {
+    mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    mockResolveLens.mockReturnValue({ lens: 'client', archetype: 'participant' });
     expect(await cancelEngagementAction(INPUT)).toEqual({
       success: false,
       error: 'Only Balo can cancel an engagement.',
     });
+  });
+
+  it('cancels for a super_admin', async () => {
+    mockRequireUser.mockResolvedValue({ id: 'su-1', platformRole: 'super_admin' });
+    expect(await cancelEngagementAction(INPUT)).toEqual({ success: true });
+    expect(mockCancel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'su-1' }));
+  });
+
+  it('returns NOT_FOUND for a stranger, even though the capability check follows the load', async () => {
+    mockRequireUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    mockResolveLens.mockReturnValue(null);
+    expect(await cancelEngagementAction(INPUT)).toEqual({
+      success: false,
+      error: 'This engagement could not be found.',
+    });
+    expect(mockCancel).not.toHaveBeenCalled();
   });
 
   it('returns ENGAGEMENT_CLOSED for a terminal engagement', async () => {

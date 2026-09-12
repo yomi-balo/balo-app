@@ -51,8 +51,17 @@ describe('resolveCatalogueRows (D10)', () => {
 
   it('an empty held set gates every row that HAS a capability, and no others', () => {
     const resolved = resolveCatalogueRows(ADMIN_CATALOGUE_ROWS, []);
+    // ⚠ BAL-404 ADDED 'engagements' HERE. Its row went from `requiredCapability: null` (gated by
+    // nothing — a leftover from when the page itself gated on the `isPlatformAdmin` role set) to
+    // `VIEW_PLATFORM_ADMIN` (C3), so it now joins every other capability-gated row in this set.
+    // ⚠ STRUCTURALLY INERT, same as the pre-existing 'lookup' row: `admin/layout.tsx:47` already
+    // requires `VIEW_PLATFORM_ADMIN` to reach the catalogue page at all, so no viewer who can see
+    // this row can ever lack the capability its own row asks for — `isViewOnly` can never be
+    // `true` for 'engagements' in production. This synthetic empty-held-set input is the only way
+    // the branch is exercised at all (mirrors the SYNTHETIC HELD SET test above).
     expect(resolved.filter((r) => r.isViewOnly).map((r) => r.key)).toEqual([
       'promo_codes',
+      'engagements',
       'lookup',
     ]);
     expect(resolved.filter((r) => r.requiredCapability === null).every((r) => !r.isViewOnly)).toBe(

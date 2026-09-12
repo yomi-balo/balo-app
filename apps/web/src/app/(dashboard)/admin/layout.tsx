@@ -19,10 +19,13 @@ import { AdminSectionNav } from './_components/admin-section-nav';
  * which middleware already redirects for on page navigations (workos-auth skill). Throwing here
  * would surface an error boundary instead of the onboarding wizard.
  *
- * ⚠ THE CAPABILITY, NOT `isPlatformAdmin`. `/promo-codes` and `/engagements` still gate on the
- * `isPlatformAdmin` ROLE SET — that is out of scope here and deliberately untouched — but every
- * NEW admin surface gates on the ADR-1029 capability axis, exactly as the promo-code Server
- * Actions already do (`create-promo-code.ts:37`).
+ * ⚠ THE CAPABILITY, NOT `isPlatformAdmin`. `/promo-codes` still gates on the `isPlatformAdmin`
+ * ROLE SET — a different domain, out of scope and deliberately untouched. `/engagements` was on
+ * that role set too until BAL-404 moved it to `VIEW_PLATFORM_ADMIN`; the sentence that used to
+ * name it here is deliberately removed rather than left to rot. Every NEW admin surface gates on
+ * a capability, exactly as the promo-code Server Actions already do (`create-promo-code.ts:37`)
+ * — "NEW" is deliberate: `/promo-codes` itself, named two sentences up, still doesn't, so an
+ * unqualified "every" here would contradict this same paragraph.
  *
  * ⚠ LAYERED, NOT REDUNDANT. Middleware bounces a non-staff viewer to `/dashboard` before this
  * ever runs; this is the second line, and each page under it carries a third.

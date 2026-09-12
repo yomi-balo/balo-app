@@ -42,6 +42,8 @@ import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
 
 const USER = { id: 'user-1', platformRole: 'user' } as never;
+const BALO_USER = { id: 'balo-1', platformRole: 'admin' } as never;
+const SUPER_USER = { id: 'su-1', platformRole: 'super_admin' } as never;
 
 function engagement(status = 'active') {
   return { id: ENGAGEMENT_ID, status, milestones: [] };
@@ -90,8 +92,8 @@ describe('gateExpertEngagement', () => {
 });
 
 describe('gateAdminEngagement', () => {
-  it('returns ONLY_ADMIN for a non-admin lens', async () => {
-    mockResolveLens.mockReturnValue({ lens: 'expert' });
+  it('returns ONLY_BALO for a caller without CANCEL_ANY_ENGAGEMENT', async () => {
+    mockResolveLens.mockReturnValue({ lens: 'client' });
     const res = await gateAdminEngagement(USER, ENGAGEMENT_ID);
     expect(res).toEqual({ ok: false, error: 'Only Balo can cancel an engagement.' });
   });
@@ -99,7 +101,7 @@ describe('gateAdminEngagement', () => {
   it('returns ENGAGEMENT_CLOSED for a terminal engagement', async () => {
     mockResolveLens.mockReturnValue({ lens: 'admin' });
     mockFindEngagement.mockResolvedValue(engagement('cancelled'));
-    const res = await gateAdminEngagement(USER, ENGAGEMENT_ID);
+    const res = await gateAdminEngagement(BALO_USER, ENGAGEMENT_ID);
     expect(res).toEqual({ ok: false, error: 'This engagement is already closed.' });
   });
 
@@ -108,10 +110,22 @@ describe('gateAdminEngagement', () => {
     async (status) => {
       mockResolveLens.mockReturnValue({ lens: 'admin' });
       mockFindEngagement.mockResolvedValue(engagement(status));
-      const res = await gateAdminEngagement(USER, ENGAGEMENT_ID);
+      const res = await gateAdminEngagement(BALO_USER, ENGAGEMENT_ID);
       expect(res.ok).toBe(true);
     }
   );
+
+  it('denies a lens-admin caller who does not hold the capability — the gate reads the TOKEN, not the lens', async () => {
+    mockResolveLens.mockReturnValue({ lens: 'admin' });
+    const res = await gateAdminEngagement(USER, ENGAGEMENT_ID);
+    expect(res).toEqual({ ok: false, error: 'Only Balo can cancel an engagement.' });
+  });
+
+  it('passes for super_admin', async () => {
+    mockResolveLens.mockReturnValue({ lens: 'admin' });
+    const res = await gateAdminEngagement(SUPER_USER, ENGAGEMENT_ID);
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe('runEngagementLifecycleAction', () => {
