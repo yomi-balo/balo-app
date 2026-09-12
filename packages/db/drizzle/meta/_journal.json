@@ -631,6 +631,13 @@
       "when": 1788860405683,
       "tag": "0089_bal548_admin_alerts",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1789095614100,
+      "tag": "0090_bal549_expert_application_decision",
+      "breakpoints": true
     }
   ]
 }

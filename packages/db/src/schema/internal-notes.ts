@@ -84,8 +84,9 @@ export const internalNotes = pgTable(
       .where(sql`${t.deletedAt} IS NULL`),
 
     // The `restrict` FK's delete-time scan (drizzle-schema skill: index every FK column). On
-    // the `meeting_files` reasoning: a restrict FK whose scan can actually run needs an index,
-    // and `admin-dev/_actions/delete-user.ts` proves users really are hard-deleted.
+    // the `meeting_files` reasoning: a restrict FK whose scan can actually run needs an index —
+    // a hard-delete path existed at `admin-dev/_actions/delete-user.ts` until BAL-549 deleted
+    // it, proving users really are hard-deleted.
     index('internal_notes_author_idx').on(t.authorUserId),
   ]
 );

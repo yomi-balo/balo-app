@@ -1237,6 +1237,22 @@ describe('notificationRules', () => {
     });
   });
 
+  /**
+   * BAL-549 — the WHOLE array, not `objectContaining`: a stray channel/recipient/template change
+   * must go red here, exactly the `meeting.expert_absent` form above.
+   */
+  it('expert.application_declined has exactly one email rule, recipient self, template expert-application-declined', () => {
+    expect(notificationRules['expert.application_declined']).toEqual([
+      {
+        channel: 'email',
+        recipient: 'self',
+        template: 'expert-application-declined',
+        timing: 'immediate',
+        priority: 'critical',
+      },
+    ]);
+  });
+
   it('all rules use timing immediate', () => {
     for (const [, rules] of Object.entries(notificationRules)) {
       for (const rule of rules) {

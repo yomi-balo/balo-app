@@ -54,6 +54,7 @@ import type { SettingsEventMap } from './events/settings';
 import type { CommandPaletteEventMap } from './events/command-palette';
 import type { StripeRedirectEventMap } from './events/stripe-redirect';
 import type { AdminLookupEventMap } from './events/admin-lookup';
+import type { AdminApplicationsEventMap } from './events/admin-applications';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -120,7 +121,10 @@ export type AllEvents = AuthEventMap &
   // BAL-548 / ADR-1055 — the admin pending-actions queue's CLIENT family. `AdminQueueAnalytics`
   // and `AlertRow` (apps/web) are the dispatch points; no server events (see the family's own
   // header).
-  AdminAlertsEventMap;
+  AdminAlertsEventMap &
+  // BAL-549 — the admin expert-applications surface's CLIENT family. Both events are
+  // browser-emitted; there is no server family.
+  AdminApplicationsEventMap;
 
 export type EventName = keyof AllEvents;
 

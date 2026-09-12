@@ -87,6 +87,13 @@ describe('isPublicRoute', () => {
     expect(isPublicRoute('/v2x')).toBe(false);
   });
 
+  // BAL-549 — `/admin-dev` sat in `PUBLIC_PATHS` alongside an unauthenticated cascading
+  // hard-delete of any user. The route was deleted wholesale in this ticket; the public-path
+  // grant must never come back on its own.
+  it('/admin-dev is NOT public — the route was deleted in BAL-549', () => {
+    expect(PUBLIC_PATHS.has('/admin-dev')).toBe(false);
+  });
+
   it('does not match similar-but-different paths', () => {
     // /experts is exact match, /experts/ is prefix — /expertsx should not match
     expect(isPublicRoute('/expertsx')).toBe(false);

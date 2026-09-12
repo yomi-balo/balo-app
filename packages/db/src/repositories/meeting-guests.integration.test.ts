@@ -1768,11 +1768,12 @@ describe('meeting_guests — the CHECK backstops', () => {
   it('PERMITS a stamp whose actor is gone — the residue of a hard user delete', async () => {
     // ⚠ THE OTHER DIRECTION IS DELIBERATELY LEGAL, and this test is why the two CHECKs are
     // implications rather than biconditionals. `revoked_by_user_id` / `admitted_by_user_id`
-    // are ADR-1030 `restrict` FKs, so `admin-dev/_actions/delete-user.ts` NULLs them to let
-    // an operator hard-delete a user — which produces exactly these two rows. A
-    // biconditional would turn that shipped operator action into a 23514 that no local gate
-    // catches. Losing the ACTOR while keeping the FACT is the trade
-    // `meeting_presence.user_id` already makes.
+    // are ADR-1030 `restrict` FKs, and a hard-delete path existed at `admin-dev/_actions/
+    // delete-user.ts` until BAL-549 deleted it, which NULLed them to let an operator
+    // hard-delete a user — which produces exactly these two rows. A biconditional would turn
+    // any future operator action of that shape into a 23514 that no local gate catches.
+    // Losing the ACTOR while keeping the FACT is the trade `meeting_presence.user_id` already
+    // makes.
     const { meeting } = await meetingFactory();
     const inviter = await userFactory();
 
@@ -1866,9 +1867,10 @@ describe('meeting_guests — the CHECK backstops', () => {
 describe('meeting_guests — FK behaviour', () => {
   it('the inviter is ON DELETE RESTRICT — a hard user delete is BLOCKED while a guest row names them', async () => {
     // ⚠ THIS IS THE BEHAVIOUR CHANGE 0061 MAKES (BAL-418 left `invited_by_id` at NO ACTION)
-    // and the reason `admin-dev/_actions/delete-user.ts` Phase 4 had to be patched: it now
-    // NULLs `admitted_by_user_id` / `revoked_by_user_id` as well, AFTER deleting the rows
-    // it invited. ADR-1030: attribution must survive the actor's own departure.
+    // and the reason the hard-delete path that existed at `admin-dev/_actions/delete-user.ts`
+    // (until BAL-549 deleted it) Phase 4 had to be patched: it NULLed `admitted_by_user_id` /
+    // `revoked_by_user_id` as well, AFTER deleting the rows it invited. ADR-1030: attribution
+    // must survive the actor's own departure.
     const inviter = await userFactory();
     await meetingGuestFactory({ invitedById: inviter.id });
 
@@ -1877,7 +1879,7 @@ describe('meeting_guests — FK behaviour', () => {
     );
   });
 
-  it('`revoked_by` and `admitted_by` are ALSO restrict — the two FKs delete-user.ts did not know about', async () => {
+  it('`revoked_by` and `admitted_by` are ALSO restrict — the two FKs the deleted admin-dev/_actions/delete-user.ts did not know about', async () => {
     const inviterOne = await userFactory();
     const revoker = await userFactory();
     const seeded = await meetingGuestFactory({ invitedById: inviterOne.id });
@@ -1886,8 +1888,9 @@ describe('meeting_guests — FK behaviour', () => {
       revokedByUserId: revoker.id,
     });
 
-    // `revoker` invited nobody, so `delete-user.ts`'s `delete(... invitedById)` would not
-    // have removed this row — which is exactly how the 23503 got reached in production.
+    // `revoker` invited nobody, so the deleted `admin-dev/_actions/delete-user.ts`'s
+    // `delete(... invitedById)` would not have removed this row — which is exactly how the
+    // 23503 got reached in production.
     await expectConstraintViolation('23503', (tx) =>
       tx.delete(users).where(eq(users.id, revoker.id))
     );

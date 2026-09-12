@@ -225,8 +225,9 @@ export const representations = pgTable(
 
     /**
      * The FK delete-time scans, on the `reschedule_proposal_proposed_by_idx` reasoning: users
-     * really are hard-deleted (`admin-dev/_actions/delete-user.ts`), `restrict` makes the
-     * delete FAIL and `set null` makes it WRITE — either way Postgres scans this table.
+     * really are hard-deleted — a hard-delete path existed at `admin-dev/_actions/
+     * delete-user.ts` until BAL-549 deleted it — so `restrict` makes the delete FAIL and
+     * `set null` makes it WRITE — either way Postgres scans this table.
      * ⚠ NOT partial on `deleted_at`: a soft-deleted row still holds the FK.
      */
     index('representation_granted_by_idx').on(t.grantedByUserId),

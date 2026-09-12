@@ -114,6 +114,47 @@ describe('publishBodySchema', () => {
     });
   });
 
+  describe('expert.application_declined (BAL-549)', () => {
+    it('accepts a compound, colon-free correlationId (D5)', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_declined',
+        payload: {
+          correlationId:
+            'expert-application-declined.550e8400-e29b-41d4-a716-446655440000.550e8400-e29b-41d4-a716-446655440001',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          reason: 'not_a_fit',
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an invented reason', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_declined',
+        payload: {
+          correlationId: 'expert-application-declined.a.b',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          expertProfileId: '550e8400-e29b-41d4-a716-446655440000',
+          reason: 'not-a-real-reason',
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a bare-uuid correlationId with no expertProfileId', () => {
+      const result = publishBodySchema.safeParse({
+        event: 'expert.application_declined',
+        payload: {
+          correlationId: 'expert-application-declined.a.b',
+          userId: '550e8400-e29b-41d4-a716-446655440002',
+          reason: 'not_a_fit',
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('expert.referral_invited', () => {
     const validPayload = {
       correlationId: '550e8400-e29b-41d4-a716-446655440090',

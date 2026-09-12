@@ -22,8 +22,16 @@ export type {
   TransferOwnershipInput,
 } from './agencies';
 export { expertsRepository, isUniqueViolation } from './experts';
+// BAL-549 — the application-decision value exports. `PENDING_APPLICATION_STATUSES` is the ONE
+// definition of "pending" both Server Actions and the list read share (orchestrator D4);
+// `APPLICATION_REVIEW_FILTERS` is the `/admin/applications` chip vocabulary.
+export { PENDING_APPLICATION_STATUSES, APPLICATION_REVIEW_FILTERS } from './experts';
 export type {
   ApplicationWithRelations,
+  // BAL-549 FIX ROUND (F1) — the allow-listed applicant projection and the staff-only read that
+  // is the sole carrier of `decline_note`.
+  ApplicationProfile,
+  StaffApplicationWithRelations,
   ApplicationCompetencyWithRelations,
   ApplicationCertWithRelations,
   ApplicationLanguageWithRelations,
@@ -33,7 +41,22 @@ export type {
   ProfileStepWrite,
   // BAL-548 — the `expert.application_pending` finder's projected row.
   PendingApplicationAlertRow,
+  // BAL-549 — the applicant + agency projections `findApplicationWithRelations` was widened by.
+  ApplicationApplicant,
+  ApplicationAgency,
+  // BAL-549 — `decideApplication`'s server-derived input and its discriminated outcome.
+  PendingApplicationStatus,
+  DecideApplicationInput,
+  DecideApplicationResult,
+  // BAL-549 — the `/admin/applications` list read.
+  ApplicationReviewFilter,
+  ApplicationReviewRow,
+  ApplicationReviewList,
 } from './experts';
+// BAL-549 — the schema-derived unions the decision surfaces name. `ExpertDeclineReason` is
+// pinned at compile time to `@balo/shared/experts`' client-safe restatement; `ApplicationStatus`
+// is what `DecideApplicationResult`'s `not_pending` arm reports.
+export type { ApplicationStatus, ExpertDeclineReason } from '../schema';
 /**
  * BAL-414 — the ONLY reader of the six checklist inputs and the ONLY writer of
  * `expert_profiles.searchable` outside seeds. Both apps go through it: `apps/api`'s

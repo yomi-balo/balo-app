@@ -35,7 +35,8 @@ function row(overrides: Partial<AdminQueueRowView> = {}): AdminQueueRowView {
     closes: 'Closes itself once the application is approved or rejected',
     selfCloses: true,
     noteCloseable: false,
-    target: { label: 'the expert', href: '/admin/catalogue' },
+    // BAL-549 re-point — the id-keyed application review page, not the /admin/catalogue fallback.
+    target: { label: 'the application', href: '/admin/applications/expert-profile-1' },
     cursor: { firstSeenAtIso: '2026-09-05T12:00:00.000Z', id: 'alert-1' },
     ...overrides,
   };
@@ -127,9 +128,9 @@ describe('AlertRow', () => {
       <AlertRow row={row()} index={0} last expanded onToggle={noop} canResolve onClosed={noop} />
     );
     expect(screen.getByText('Submitted')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open the expert/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Open the application/ })).toHaveAttribute(
       'href',
-      '/admin/catalogue'
+      '/admin/applications/expert-profile-1'
     );
     expect(
       screen.getByText(/No manual close — a sweep closes this when the condition clears\./)
@@ -273,7 +274,7 @@ describe('AlertRow', () => {
     render(
       <AlertRow row={row()} index={0} last expanded onToggle={noop} canResolve onClosed={noop} />
     );
-    await user.click(screen.getByRole('link', { name: /Open the expert/ }));
+    await user.click(screen.getByRole('link', { name: /Open the application/ }));
     expect(track).toHaveBeenCalledWith(ADMIN_ALERTS_EVENTS.ALERT_OPENED, {
       kind: 'expert.application_pending',
       age_bucket: '3_7d',

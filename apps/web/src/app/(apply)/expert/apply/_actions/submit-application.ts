@@ -1,14 +1,44 @@
 'use server';
 import 'server-only';
 import { withAuth } from '@/lib/auth/with-auth';
-import { expertsRepository } from '@balo/db';
+import { expertsRepository, type ApplicationWithRelations } from '@balo/db';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { DECLINED_APPLICATION_ERROR } from './declined-application-copy';
 
 interface SubmitResult {
   success: boolean;
   error?: string;
   failingStep?: string;
+}
+
+/**
+ * The user-facing refusal for a non-`draft` application, or `null` when the submit may proceed.
+ *
+ * ⚠ THE DECLINED ARM ANSWERS FOR ITSELF (web-review fix round, W1). One branch used to cover
+ * every non-draft status with "Application already submitted" — true for
+ * `submitted`/`under_review`/`approved`, FALSE for `rejected`: that applicant's application was
+ * reviewed and DECLINED, not "already submitted", and the message left them with no idea what had
+ * happened or what to do. The `rejected` case now gets the honest message, and a `log.warn` so we
+ * can see how often a declined applicant tries (the follow-up ticket's demand signal).
+ *
+ * ⚠ THIS IS NOT THE RE-APPLICATION TRANSITION and must not become it — see
+ * `DECLINED_APPLICATION_ERROR`'s docblock. The refusal stays; only the explanation changed.
+ *
+ * ⚠ EXTRACTED ONLY TO SHED COGNITIVE COMPLEXITY. Inlining the second branch put
+ * `submitApplicationAction` at 16 against SonarCloud's cap of 15 (`pnpm lint:sonar:diff`). The
+ * behaviour is exactly what the two inline `if`s did, in the same order.
+ */
+function refusalForStatus(
+  status: ApplicationWithRelations['profile']['applicationStatus'],
+  context: { readonly userId: string; readonly expertProfileId: string }
+): string | null {
+  if (status === 'draft') return null;
+  if (status === 'rejected') {
+    log.warn('Declined expert application attempted a re-submit', context);
+    return DECLINED_APPLICATION_ERROR;
+  }
+  return 'Application already submitted';
 }
 
 export const submitApplicationAction = withAuth(
@@ -25,9 +55,13 @@ export const submitApplicationAction = withAuth(
         return { success: false, error: 'Unauthorized' };
       }
 
-      // 3. Verify status is draft
-      if (application.profile.applicationStatus !== 'draft') {
-        return { success: false, error: 'Application already submitted' };
+      // 3. Verify status is draft (see `refusalForStatus` for the two refusals).
+      const statusRefusal = refusalForStatus(application.profile.applicationStatus, {
+        userId: session.user.id,
+        expertProfileId,
+      });
+      if (statusRefusal !== null) {
+        return { success: false, error: statusRefusal };
       }
 
       // 4. Server-side validation of all required data

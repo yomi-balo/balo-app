@@ -58,18 +58,17 @@ export interface AdminAlertKindMeta {
 // ── Shared target builders ───────────────────────────────────────────────
 
 /**
- * ⚠ `/experts/[username]` (the only live expert-profile route) is keyed on `username`, NOT
- * `expert_profiles.id` — verified against `apps/web/src/app/(marketing)/experts/[username]/
- * page.tsx`. `expertsRepository.listPendingApplicationsForAlerts` (B1, as shipped) does not
- * project `username`, and a freshly-submitted applicant may not have set one at all, so this
- * kind's `entityId` cannot be turned into a live profile URL. **This is a correction against
- * rulings addendum §A4**, whose "target the live expert profile" premise assumed an
- * id-keyed route that does not exist. Per the same addendum's own rule ("a coarse-but-live
- * landing beats a 404"), this targets the admin catalogue instead.
- * // BAL-549 ships `/admin/applications/[id]` — the eventual target.
+ * BAL-549 — the expert-application review page. Keyed on `expert_profiles.id`, which IS this
+ * kind's `entity_id` (`apps/api/src/jobs/admin-alert-finders.ts:105`), so the deep link lands on
+ * exactly the application the row is about.
+ *
+ * ⚠ SUPERSEDES the prior `/admin/catalogue` FALLBACK, and the reasoning that forced it. That
+ * fallback existed because the only live expert route, `/experts/[username]`, is keyed on
+ * `username` — which the finder does not project and a fresh applicant may not have set at all.
+ * `/admin/applications/[profileId]` is id-keyed, so the coarse landing is no longer needed.
  */
-function targetExpertApplication(): AdminAlertTarget {
-  return { label: 'the expert', href: '/admin/catalogue' };
+function targetExpertApplication(input: AdminAlertTargetInput): AdminAlertTarget {
+  return { label: 'the application', href: `/admin/applications/${input.entityId}` };
 }
 
 /**
@@ -100,9 +99,11 @@ function targetMeetingViaTargetId(input: AdminAlertTargetInput): AdminAlertTarge
  * `calendar.subscription_lapse` — `/expert/settings?tab=schedule` loads calendar data from
  * the VIEWER's own session profile, not the expert the alert names. For a staff viewer that
  * is a dead link dressed as a live one (their own unrelated settings, or an empty page).
- * Same rule as `targetExpertApplication` / `targetCompanyCatalogue`: coarse-but-live beats a
- * dead link. Falls back to the admin catalogue.
- * // BAL-549 ships an admin-side expert/calendar surface — the eventual target.
+ * Same rule as `targetCompanyCatalogue`: coarse-but-live beats a dead link. Falls back to the
+ * admin catalogue.
+ *
+ * ⚠ NO admin-side expert/calendar surface is shipped yet — unlike `targetExpertApplication`
+ * above, which BAL-549 gave a real id-keyed target, this one still has none to point to.
  */
 function targetCalendarSettings(): AdminAlertTarget {
   return { label: 'the calendar connection', href: '/admin/catalogue' };

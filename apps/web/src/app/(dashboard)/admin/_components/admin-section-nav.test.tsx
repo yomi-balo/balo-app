@@ -14,11 +14,21 @@ beforeEach(() => {
 });
 
 describe('AdminSectionNav', () => {
-  it('renders both chips with the expected hrefs and labels', () => {
+  it('renders all four chips with the expected hrefs and labels', () => {
     render(<AdminSectionNav />);
     const links = screen.getAllByRole('link');
-    expect(links.map((l) => l.textContent?.trim())).toEqual(['Home', 'Config & catalogue']);
-    expect(links.map((l) => l.getAttribute('href'))).toEqual(['/admin', '/admin/catalogue']);
+    expect(links.map((l) => l.textContent?.trim())).toEqual([
+      'Home',
+      'Applications',
+      'Lookup',
+      'Config & catalogue',
+    ]);
+    expect(links.map((l) => l.getAttribute('href'))).toEqual([
+      '/admin',
+      '/admin/applications',
+      '/admin/lookup',
+      '/admin/catalogue',
+    ]);
   });
 
   it('marks exactly the active chip with aria-current="page"', () => {

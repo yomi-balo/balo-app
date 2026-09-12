@@ -41,6 +41,8 @@ vi.mock('./_components/expert-application-wizard', () => ({
     <div data-testid="wizard">
       <span data-testid="user">{user ? JSON.stringify(user) : 'null'}</span>
       <span data-testid="draft">{draft ? 'has-draft' : 'null'}</span>
+      {/* The WHOLE prop, serialised — this is what the RSC flight payload carries. */}
+      <span data-testid="draft-json">{draft === null ? 'null' : JSON.stringify(draft)}</span>
       <span data-testid="vertical">{referenceData.vertical.id}</span>
     </div>
   ),
@@ -175,5 +177,42 @@ describe('ExpertApplyPage — authenticated', () => {
     render(await ExpertApplyPage());
 
     expect(screen.getByTestId('draft').textContent).toBe('has-draft');
+  });
+
+  /**
+   * FIX ROUND F1 — `'rejected'` IS HANDLED EXPLICITLY, AND CARRIES NO DECISION METADATA.
+   *
+   * A declined applicant can still REACH this page — nothing redirects them — which is why this
+   * used to be an unremarked FALL-THROUGH, and why it was the leak's last hop: the wizard is a
+   * `'use client'` boundary, so everything on `draft` is serialised into the applicant's own
+   * browser payload. (Re-applying itself is NOT supported: web-review fix round W1. Both writes
+   * refuse a `'rejected'` profile, and the decline email no longer links here.)
+   *
+   * The repository allow-list is the fix; this is the second layer. MUTATION: drop the
+   * `applicantDraft` branch and pass `draft` straight through → red.
+   */
+  it('renders the wizard for a DECLINED application, stripped of every decision column', async () => {
+    mockGetCurrentUser.mockResolvedValue(buildUser());
+    mockLoadDraftAction.mockResolvedValue({
+      draft: buildDraft({
+        applicationStatus: 'rejected',
+        declineReason: 'credentials_unverified',
+        decidedAt: new Date('2026-02-02T00:00:00.000Z'),
+        decidedByUserId: 'staffer-secret-id',
+      }),
+      referenceData,
+    });
+
+    render(await ExpertApplyPage());
+
+    // Nothing redirects a declined applicant away, so the wizard renders (the writes refuse).
+    expect(screen.getByTestId('draft').textContent).toBe('has-draft');
+    expect(mockRedirect).not.toHaveBeenCalled();
+
+    const payload = screen.getByTestId('draft-json').textContent ?? '';
+    expect(payload).toContain('rejected'); // the status is kept — the wizard needs to know
+    expect(payload).not.toContain('credentials_unverified');
+    expect(payload).not.toContain('staffer-secret-id');
+    expect(payload).not.toContain('2026-02-02');
   });
 });

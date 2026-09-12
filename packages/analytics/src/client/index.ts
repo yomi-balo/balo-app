@@ -96,6 +96,9 @@ export {
   // BAL-548 / ADR-1055 — the admin pending-actions queue's event constant. ⚠ THE RE-EXPORT
   // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
   ADMIN_ALERTS_EVENTS,
+  // BAL-549 — the admin expert-applications surface's event constant. ⚠ THE RE-EXPORT
+  // ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
+  ADMIN_APPLICATIONS_EVENTS,
 } from '../events';
 
 export type {
@@ -215,4 +218,7 @@ export type {
   AdminAlertsEventMap,
   AdminAlertAgeBucket,
   AdminAlertQueueFilter,
+  // BAL-549 — the admin expert-applications surface's event payload and its decision vocabulary.
+  AdminApplicationsEventMap,
+  AdminApplicationDecision,
 } from '../events';

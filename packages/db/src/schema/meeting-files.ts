@@ -116,8 +116,9 @@ export const meetingFiles = pgTable(
       .where(sql`${t.deletedAt} IS NULL`),
 
     // The `restrict` FK's delete-time scan. Indexed on the `meeting_guests` reasoning: a
-    // `restrict` FK whose scan can actually run needs an index, and
-    // `admin-dev/_actions/delete-user.ts` proves users really are hard-deleted.
+    // `restrict` FK whose scan can actually run needs an index — a hard-delete path existed at
+    // `admin-dev/_actions/delete-user.ts` until BAL-549 deleted it, proving users really are
+    // hard-deleted.
     index('meeting_file_uploaded_by_idx').on(t.uploadedByUserId),
 
     // Two-sided, by CHECK — see the enum decision on the docblock. THREE-VALUED-LOGIC

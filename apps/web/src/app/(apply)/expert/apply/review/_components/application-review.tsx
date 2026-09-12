@@ -25,6 +25,15 @@ import type {
   CertificationsByCategory,
 } from '@balo/db';
 import type { SupportType } from '@balo/db';
+import { projectRangeLabel } from '@balo/shared/experts';
+import {
+  buildProductCategoryMap,
+  buildProductNamesByCategory,
+  buildAssessmentMap,
+  buildCertCategoryMap,
+  buildDistinctions,
+  formatSubmittedDate,
+} from '@/lib/expert/application-derived-data';
 
 // ── Design Tokens (matching design reference) ──────────────────
 
@@ -71,14 +80,6 @@ const SECTION_COLORS: Record<string, { text: string; bg: string }> = {
   emerald: { text: '#059669', bg: 'rgba(5,150,105,0.1)' },
   pink: { text: '#DB2777', bg: 'rgba(219,39,119,0.1)' },
   indigo: { text: '#4F46E5', bg: 'rgba(79,70,229,0.1)' },
-};
-
-const PROJECT_RANGE_MAP: Record<number, string> = {
-  0: 'None',
-  1: '1–9',
-  10: '10–25',
-  26: '26–50',
-  50: '50+',
 };
 
 const SUPPORT_TYPE_CONFIG: Record<string, { icon: LucideIcon; color: string }> = {
@@ -193,12 +194,13 @@ function Card({
 }
 
 function Chip({ label, color }: Readonly<{ label: string; color?: string }>): React.JSX.Element {
+  const borderColor = color ? `${color}30` : colors.border;
   return (
     <span
       className="inline-block rounded-[20px] px-3.5 py-1.5 text-[13px] font-medium"
       style={{
         background: color ? `${color}08` : colors.surfaceSubtle,
-        border: `1.5px solid ${color ? `${color}30` : colors.border}`,
+        border: `1.5px solid ${borderColor}`,
         color: color ?? colors.textSecondary,
       }}
     >
@@ -284,57 +286,15 @@ export function ApplicationReview({
 }: Readonly<ApplicationReviewProps>): React.JSX.Element {
   const { profile, competencies, certifications, languages, industries, workHistory } = application;
 
-  // Build a product-to-category map from reference data
-  const productCategoryMap = new Map<string, string>();
-  for (const cat of productsByCategory) {
-    for (const product of cat.products) {
-      productCategoryMap.set(product.id, cat.category.name);
-    }
-  }
-
-  // Group selected products by category for products section
-  const uniqueProductIds = [...new Set(competencies.map((c) => c.productId))];
-  const productNamesByCategory = new Map<string, string[]>();
-  for (const productId of uniqueProductIds) {
-    const categoryName = productCategoryMap.get(productId) ?? 'Other';
-    const productName = competencies.find((c) => c.productId === productId)?.product.name ?? '';
-    if (!productNamesByCategory.has(categoryName)) {
-      productNamesByCategory.set(categoryName, []);
-    }
-    productNamesByCategory.get(categoryName)!.push(productName);
-  }
-
-  // Group competencies for assessment: { productName → { supportTypeSlug → proficiency } }
-  const assessmentMap = new Map<string, { name: string; ratings: Map<string, number> }>();
-  for (const c of competencies) {
-    if (!assessmentMap.has(c.productId)) {
-      assessmentMap.set(c.productId, { name: c.product.name, ratings: new Map() });
-    }
-    assessmentMap.get(c.productId)!.ratings.set(c.supportType.slug, c.proficiency);
-  }
-
-  // Build cert-to-category map
-  const certCategoryMap = new Map<string, string>();
-  for (const cat of certificationsByCategory) {
-    for (const cert of cat.certifications) {
-      certCategoryMap.set(cert.id, cat.category.name);
-    }
-  }
-
-  // Build distinctions list
-  const distinctions: string[] = [];
-  if (profile.isSalesforceMvp) distinctions.push('Salesforce MVP');
-  if (profile.isSalesforceCta) distinctions.push('Salesforce CTA');
-  if (profile.isCertifiedTrainer) distinctions.push('Certified Trainer');
-
-  const submittedDate = profile.submittedAt
-    ? new Date(profile.submittedAt).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      })
-    : 'N/A';
-
+  const productCategoryMap = buildProductCategoryMap(productsByCategory);
+  const { productNamesByCategory, uniqueProductIds } = buildProductNamesByCategory(
+    competencies,
+    productCategoryMap
+  );
+  const assessmentMap = buildAssessmentMap(competencies);
+  const certCategoryMap = buildCertCategoryMap(certificationsByCategory);
+  const distinctions = buildDistinctions(profile);
+  const submittedDate = formatSubmittedDate(profile.submittedAt);
   const totalProducts = uniqueProductIds.length;
 
   return (
@@ -412,13 +372,23 @@ export function ApplicationReview({
           <Card className="px-6 py-5">
             <div className="grid grid-cols-1 gap-x-8 gap-y-0.5 sm:grid-cols-2">
               <DataRow label="Year started" value={profile.yearStartedSalesforce ?? '—'} />
+              {/*
+                ⚠ `?? 0` IS LOAD-BEARING — IT PRESERVES THIS PAGE'S SHIPPED OUTPUT (web-review fix
+                round, W5). The pre-PR de-duplication swapped a local `PROJECT_RANGE_MAP[x ?? 0] ??
+                '—'` for the shared `projectRangeLabel(x)`, and in doing so changed what an
+                UNANSWERED question renders on an APPLICANT-FACING surface: "None" became "—".
+                Arguably more correct, but unrequested and outside BAL-549's scope, so the `?? 0`
+                restores the original reading (nullish ⇒ the `min: 0` "None" range) while keeping
+                the one shared helper. The STAFF page deliberately passes the raw value, where "—"
+                (never answered) and "None" (answered "None") are worth telling apart.
+              */}
               <DataRow
                 label="Projects involved in"
-                value={PROJECT_RANGE_MAP[profile.projectCountMin ?? 0] ?? '—'}
+                value={projectRangeLabel(profile.projectCountMin ?? 0)}
               />
               <DataRow
                 label="Projects as Lead"
-                value={PROJECT_RANGE_MAP[profile.projectLeadCountMin ?? 0] ?? '—'}
+                value={projectRangeLabel(profile.projectLeadCountMin ?? 0)}
               />
             </div>
             {profile.linkedinUrl && (
@@ -550,7 +520,7 @@ export function ApplicationReview({
                   border: `1px solid ${colors.accentBorder}`,
                 }}
               >
-                {totalProducts} product{totalProducts !== 1 ? 's' : ''}
+                {totalProducts} product{totalProducts === 1 ? '' : 's'}
               </span>
             </div>
             <Card className="px-6 py-5">

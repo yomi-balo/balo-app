@@ -15,6 +15,7 @@ import {
   Layers,
   ScanSearch,
   Inbox,
+  UserPlus,
 } from 'lucide-react';
 import type { Workspace } from '@balo/shared/workspaces';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
@@ -333,6 +334,28 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     label: 'Home',
     icon: Inbox,
     href: '/admin',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
+  // BAL-549 — 'admin_applications' is authored right after 'admin_home' (the block's authored
+  // order is pinned; `admin_home` stays first). Without a row here, `/admin/applications` is
+  // the only `/admin/*` surface with no entry in the "Balo admin" sidebar/More-sheet group
+  // (catalogue and lookup both have one) — approved as a deliberate scope addition alongside
+  // the plan's own ruling. It also makes `resolveBreadcrumbTrail('/admin/applications')`
+  // resolve to `Applications` for free via `exactCrumbLabelFor` — THE ONE `<h1>` the list page
+  // otherwise would not have.
+  //
+  // ⚠ Gated on `VIEW_PLATFORM_ADMIN`, NOT `REVIEW_EXPERT_APPLICATIONS` — see the trailing note
+  // below: nav entries here gate REACHABILITY, not the per-surface token. Both staff roles hold
+  // both tokens today, so there is no visible difference; the consistency is the point.
+  {
+    key: 'admin_applications',
+    label: 'Applications',
+    icon: UserPlus,
+    href: '/admin/applications',
     section: 'admin',
     workspaceTypes: ['company', 'expert'],
     requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),

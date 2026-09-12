@@ -110,8 +110,9 @@ export const reviewInviteTokens = pgTable(
     // Bonus: this table thereby dodges the soft-delete/partial-unique trap entirely.
     index('review_invite_token_engagement_reviewer_idx').on(t.engagementId, t.reviewerUserId),
 
-    // The cascade FK's delete-time scan (admin-dev hard-deletes users — see the matching
-    // note on `reviews.reviewer_user_id`).
+    // The cascade FK's delete-time scan (a hard-delete path existed at `admin-dev/_actions/
+    // delete-user.ts` until BAL-549 deleted it — see the matching note on
+    // `reviews.reviewer_user_id`).
     index('review_invite_token_reviewer_idx').on(t.reviewerUserId),
 
     check('review_invite_token_access_count_nonneg', sql`${t.accessCount} >= 0`),

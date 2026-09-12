@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { EventPayloadMap, PublishableNotificationEvent } from '../../notifications/events.js';
-import { EXPERT_CHECKLIST_ITEM_KEYS } from '@balo/shared/experts';
+import { EXPERT_CHECKLIST_ITEM_KEYS, EXPERT_DECLINE_REASONS } from '@balo/shared/experts';
 import { MILESTONE_CHANGE_KINDS } from '@balo/shared/notifications';
 import {
   DECLINABLE_RELATIONSHIP_STATUSES,
@@ -33,6 +33,20 @@ const expertApprovedPayload = z.object({
   correlationId: z.uuid(),
   userId: z.uuid(),
   expertProfileId: z.uuid(),
+});
+
+/**
+ * BAL-549 (D5) — `correlationId` is NOT `z.uuid()`. It is a COMPOUND, colon-free id of shape
+ * `expert-application-declined.{expertProfileId}.{auditEventId}` — a re-decline of the same
+ * profile must not be deduped away against a retained BullMQ job (a bare `expertProfileId`
+ * would be). `.min(1).max(200)` erases under `z.infer`, so this still key-for-key matches
+ * `ExpertApplicationDeclinedPayload` (`AssertPublishPayloadShapesMatch`'s documented limit L1).
+ */
+const expertApplicationDeclinedPayload = z.object({
+  correlationId: z.string().min(1).max(200),
+  userId: z.uuid(),
+  expertProfileId: z.uuid(),
+  reason: z.enum(EXPERT_DECLINE_REASONS),
 });
 
 // BAL-325 referral invite (expert → EXTERNAL email). `correlationId` is the
@@ -731,6 +745,10 @@ export const publishBodySchema = z.discriminatedUnion('event', [
     payload: expertApplicationSubmittedPayload,
   }),
   z.object({ event: z.literal('expert.approved'), payload: expertApprovedPayload }),
+  z.object({
+    event: z.literal('expert.application_declined'),
+    payload: expertApplicationDeclinedPayload,
+  }),
   z.object({
     event: z.literal('expert.referral_invited'),
     payload: expertReferralInvitedPayload,

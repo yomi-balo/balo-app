@@ -33,6 +33,7 @@ describe('NAV_ITEM_KEYS', () => {
       'account',
       'help',
       'admin_home',
+      'admin_applications',
       'admin_engagements',
       'admin_promo_codes',
       'admin_catalogue',
@@ -40,9 +41,9 @@ describe('NAV_ITEM_KEYS', () => {
     ]);
   });
 
-  it('has 16 entries with no duplicates', () => {
-    expect(NAV_ITEM_KEYS.length).toBe(16);
-    expect(new Set(NAV_ITEM_KEYS).size).toBe(16);
+  it('has 17 entries with no duplicates', () => {
+    expect(NAV_ITEM_KEYS.length).toBe(17);
+    expect(new Set(NAV_ITEM_KEYS).size).toBe(17);
   });
 });
 

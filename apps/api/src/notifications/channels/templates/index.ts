@@ -4,6 +4,8 @@ import { personWithOrgLabel } from '@balo/shared/parties';
 import { WelcomeEmail } from './welcome.js';
 import { ApplicationSubmittedEmail } from './application-submitted.js';
 import { ExpertApprovedEmail } from './expert-approved.js';
+import { ExpertApplicationDeclinedEmail } from './expert-application-declined.js';
+import { readExpertDeclineReason } from './expert-decline-reason-label.js';
 import { ExpertReferralInvitedEmail } from './expert-referral-invited.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
@@ -394,6 +396,19 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
       baseUrl: BASE_URL,
     }),
     subject: `You're approved, ${(data.recipientName as string) ?? 'there'}!`,
+  }),
+
+  // BAL-549 — the applicant's application was declined. Renders the reason CATEGORY only; the
+  // staff-only `decline_note` is not in the payload and can never reach here.
+  'expert-application-declined': (data) => ({
+    component: React.createElement(ExpertApplicationDeclinedEmail, {
+      firstName: (data.recipientName as string) ?? 'there',
+      reason: readExpertDeclineReason(data.reason),
+      baseUrl: BASE_URL,
+    }),
+    // ⚠ NO user-authored string in the subject ⇒ no `sanitizeSubjectTitle` needed, and the
+    // template is therefore NOT added to `components.test.ts`'s header-injection sweep list.
+    subject: 'An update on your Balo expert application', // pending-MJ
   }),
 
   // BAL-325: the resolver hydrates nothing for this event (no userId/expertProfileId/

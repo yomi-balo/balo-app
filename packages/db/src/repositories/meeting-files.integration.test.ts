@@ -176,8 +176,10 @@ describe('meeting_files FK behaviour', () => {
   /**
    * ATTRIBUTION IS `restrict` (ADR-1030). The uploader must survive their own departure
    * from the company or agency — rights sit on MEMBERSHIP and are re-derived at every gate
-   * call, while this column records who actually shared the file. `delete-user.ts` must
-   * therefore sweep or reassign, exactly as it already does for the guest attribution FKs.
+   * call, while this column records who actually shared the file. Any future operator
+   * hard-delete path must therefore sweep or reassign it, exactly as the hard-delete path
+   * that existed at `admin-dev/_actions/delete-user.ts` (until BAL-549 deleted it) already
+   * did for the guest attribution FKs.
    */
   it('`restrict` blocks hard-deleting an uploader who still owns a live file', async () => {
     const { meetingId, uploaderId } = await seedMeetingAndUploader();

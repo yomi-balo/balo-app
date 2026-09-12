@@ -159,8 +159,9 @@ export const requestSharedFiles = pgTable(
     index('request_shared_file_request_all_idx').on(t.projectRequestId),
 
     // The RESTRICT FKs' delete-time scans. Indexed on the `meeting_guests` reasoning: a
-    // RESTRICT FK whose scan can actually run needs an index, and
-    // `admin-dev/_actions/delete-user.ts` proves users really are hard-deleted.
+    // RESTRICT FK whose scan can actually run needs an index — a hard-delete path existed at
+    // `admin-dev/_actions/delete-user.ts` until BAL-549 deleted it, proving users really are
+    // hard-deleted.
     index('request_shared_file_uploaded_by_idx').on(t.uploadedByUserId),
     index('request_shared_file_deleted_by_idx').on(t.deletedByUserId),
 

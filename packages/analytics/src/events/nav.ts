@@ -22,6 +22,9 @@ export const NAV_ITEM_KEYS = [
   // every other nav key, so a registry entry and an analytics `item` value cannot drift.
   // BAL-548 — 'admin_home' leads the group (the queue is the lane's entry point).
   'admin_home',
+  // BAL-549 — the expert-application review queue, authored right after 'admin_home' (the
+  // registry's own authored order).
+  'admin_applications',
   'admin_engagements',
   'admin_promo_codes',
   'admin_catalogue',

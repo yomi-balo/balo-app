@@ -240,4 +240,66 @@ describe('ApplicationReview', () => {
     renderReview({ application: noCompetencies });
     expect(screen.queryByText(/product expertise/i)).not.toBeInTheDocument();
   });
+
+  /**
+   * WEB-REVIEW FIX ROUND W5 — THE APPLICANT-FACING OUTPUT THIS PR MUST NOT CHANGE.
+   *
+   * The pre-PR de-duplication replaced this page's local `PROJECT_RANGE_MAP[x ?? 0] ?? '—'` with
+   * the shared `projectRangeLabel(x)`, which renders `'—'` for a nullish value. That silently
+   * changed a SHIPPED applicant-facing surface: an unanswered project-count question used to read
+   * "None". The `?? 0` at both call sites in `application-review.tsx` restores it.
+   *
+   * MUTATION-PROVEN: drop either `?? 0` and this goes red ("—" in place of "None"), while every
+   * populated-fixture test above stays green.
+   */
+  it('renders "None" — not "—" — for an unanswered project count (the shipped output)', () => {
+    const app = buildApplication();
+    const unanswered = {
+      ...app,
+      profile: { ...app.profile, projectCountMin: null, projectLeadCountMin: null },
+    } as unknown as ApplicationWithRelations;
+
+    renderReview({ application: unanswered });
+
+    // Both rows: "Projects involved in" and "Projects as Lead".
+    expect(screen.getAllByText('None')).toHaveLength(2);
+  });
+
+  /**
+   * BAL-549 plan §7.6 / FIX ROUND F18 — THE CONTAINMENT PROOF AT THE APPLICANT'S UI LAYER.
+   *
+   * This is the APPLICANT'S OWN review component and it receives the whole application object,
+   * so the staff-only decline note is in reach of any future edit here. The repository no longer
+   * projects the column (F1) — this pins the component itself, so the two layers fail closed
+   * independently, and the fixture deliberately CARRIES a note to make the assertion real.
+   *
+   * MUTATION: render `application.profile.declineNote` (or the reason) anywhere in
+   * `application-review.tsx` → red.
+   */
+  it('never renders decline_note — nor the decline reason — even when handed one', () => {
+    const app = buildApplication();
+    const declined = {
+      ...app,
+      profile: {
+        ...app.profile,
+        applicationStatus: 'rejected',
+        declineReason: 'credentials_unverified',
+        declineNote: 'Staff-only: the certifications could not be verified with the issuer.',
+      },
+    } as unknown as ApplicationWithRelations;
+
+    const { container } = render(
+      <ApplicationReview
+        application={declined}
+        email="jane@example.com"
+        productsByCategory={productsByCategory}
+        supportTypes={supportTypes}
+        certificationsByCategory={certificationsByCategory}
+      />
+    );
+
+    expect(container.innerHTML).not.toContain('Staff-only');
+    expect(container.innerHTML).not.toContain('could not be verified with the issuer');
+    expect(container.innerHTML).not.toContain('credentials_unverified');
+  });
 });

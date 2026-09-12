@@ -153,6 +153,27 @@ export const PLATFORM_CAPABILITIES = {
    * it — working the queue IS the support role. It is not a `super_admin` privilege.
    */
   RESOLVE_ADMIN_ALERTS: 'resolve_admin_alerts',
+  /**
+   * BAL-549 — decide an expert APPLICATION (approve or decline) on any tenant, and read the
+   * staff-only `decline_note`.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST / RESOLVE_ADMIN_ALERTS argument verbatim.
+   * In particular it is NOT `VIEW_PLATFORM_ADMIN`: that token's own docblock says it gates
+   * REACHABILITY and "IS NOT A PER-SURFACE GRANT", so gating a MUTATION on it would make this
+   * map lie about what it grants. Admitting somebody to the marketplace — or refusing them —
+   * is a consequential cross-tenant act with no membership-axis expression: the applicant holds
+   * no membership Balo is a party to.
+   *
+   * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`, so `admin` (support) holds
+   * it — working the application queue IS the support role, exactly like RESOLVE_ADMIN_ALERTS.
+   * It is not a `super_admin` privilege.
+   *
+   * ⚠ THE PAGE READ IS **NOT** GATED ON THIS. `/admin/applications` is reachable on
+   * `VIEW_PLATFORM_ADMIN` (middleware + `admin/layout.tsx`); both ACTIONS additionally resolve
+   * this token themselves and must never lean on the layout gate.
+   */
+  REVIEW_EXPERT_APPLICATIONS: 'review_expert_applications',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -196,6 +217,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER,
   PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES,
   PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS,
+  PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS,
 ];
 
 /**

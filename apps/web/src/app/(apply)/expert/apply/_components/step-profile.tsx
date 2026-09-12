@@ -38,16 +38,19 @@ import { profileStepSchema, type ProfileStepData } from '../_actions/schemas';
 import { useWizard } from './expert-application-context';
 import { ChipPicker } from './chip-picker';
 import { StepHeading, SectionLabel, slideUpVariant, stagger } from './design-system';
+import { PROJECT_COUNT_RANGES } from '@balo/shared/experts';
 
 // ── Data-driven config ───────────────────────────────────────────
 
-const PROJECT_COUNT_OPTIONS = [
-  { value: '0', label: 'None' },
-  { value: '1', label: '1-9' },
-  { value: '10', label: '10-25' },
-  { value: '26', label: '26-50' },
-  { value: '50', label: '50+' },
-] as const;
+/**
+ * BAL-549 FIX ROUND (F13) — DERIVED, not restated. The `value` is the stored lower bound as a
+ * string (this is a `<Select>`), so the picker, the applicant's review page and the staff review
+ * page now read one vocabulary: `@balo/shared/experts`' `PROJECT_COUNT_RANGES`.
+ */
+const PROJECT_COUNT_OPTIONS = PROJECT_COUNT_RANGES.map((range) => ({
+  value: String(range.min),
+  label: range.label,
+}));
 
 const PROFICIENCY_BADGE_STYLES: Record<string, string> = {
   native: 'border-success/30 bg-success/10 text-success',
