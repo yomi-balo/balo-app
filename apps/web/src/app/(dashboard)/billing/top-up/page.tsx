@@ -10,6 +10,7 @@ import {
   resolveBillingAdminLabel,
   UNPROVISIONED_WALLET,
   projectWalletSnapshot,
+  walletHasEverHeldCredit,
 } from '@/lib/credit/wallet-read';
 
 /**
@@ -46,6 +47,7 @@ export default async function TopUpPage() {
           balanceMinor={wallet?.balanceMinor ?? 0}
           adminLabel={adminLabel}
           fx={fx}
+          hasEverHeldCredit={walletHasEverHeldCredit(wallet)}
         />
       </div>
     );

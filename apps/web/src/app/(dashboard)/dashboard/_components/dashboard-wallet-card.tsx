@@ -83,6 +83,7 @@ export function DashboardWalletCard({
         balanceMinor={data.balanceMinor}
         adminLabel={data.adminLabel}
         fx={null}
+        hasEverHeldCredit={data.hasEverHeldCredit}
         onNudgeClick={handleNudgeClick}
       />
     );

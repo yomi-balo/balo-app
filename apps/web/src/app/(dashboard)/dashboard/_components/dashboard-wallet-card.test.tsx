@@ -80,7 +80,14 @@ describe('DashboardWalletCard — holder lens', () => {
 describe('DashboardWalletCard — member lens', () => {
   it('renders the team-balance nudge and fires wallet_widget_viewed with the member lens', () => {
     render(
-      <DashboardWalletCard data={{ kind: 'member', balanceMinor: 1_820, adminLabel: 'Sam' }} />
+      <DashboardWalletCard
+        data={{
+          kind: 'member',
+          balanceMinor: 1_820,
+          adminLabel: 'Sam',
+          hasEverHeldCredit: true,
+        }}
+      />
     );
 
     expect(screen.getByText('Team balance')).toBeInTheDocument();
@@ -92,7 +99,11 @@ describe('DashboardWalletCard — member lens', () => {
 
   it('fires wallet_nudge_clicked with the state when the nudge is pressed', async () => {
     mockNudge.mockResolvedValue({ ok: true });
-    render(<DashboardWalletCard data={{ kind: 'member', balanceMinor: 0, adminLabel: 'Sam' }} />);
+    render(
+      <DashboardWalletCard
+        data={{ kind: 'member', balanceMinor: 0, adminLabel: 'Sam', hasEverHeldCredit: true }}
+      />
+    );
 
     await userEvent.click(screen.getByRole('button', { name: /Ask Sam to top up/i }));
 
@@ -116,7 +127,7 @@ describe('DashboardWalletCard — accessibility', () => {
   it('has no violations on each lens', async () => {
     const cases = [
       { kind: 'holder', balanceMinor: 34_700, fx: null },
-      { kind: 'member', balanceMinor: 1_820, adminLabel: 'Sam' },
+      { kind: 'member', balanceMinor: 1_820, adminLabel: 'Sam', hasEverHeldCredit: true },
       { kind: 'error' },
     ] as const;
     for (const data of cases) {

@@ -9,10 +9,15 @@
  *
  * `deriveDrawdownState` maps a session snapshot + the live wallet balance into the six
  * presentational keys (healthy | low | grace | near | wrap | end) across the client and
- * member lenses, with/without an active mandate (BAL-552: the `end` key's copy branches on
- * `DrawdownInputs.mandateActive`). Copy ORIGINATES from the two design prototypes
- * (`in-session-sequence.jsx`, `member-variant.jsx`), except where a later truthfulness fix
- * superseded them (BAL-535 R3 on `low`, BAL-552 on `end`). Tone rules honoured:
+ * member lenses, with/without an active mandate (BAL-552 + BAL-405: the `wrap` AND `end` keys'
+ * copy branches on `DrawdownInputs.mandateActive`). Copy ORIGINATES from the two design
+ * prototypes (`in-session-sequence.jsx`, `member-variant.jsx`), except where a later
+ * truthfulness fix superseded them (BAL-535 R3 on `low`, BAL-552 on `end`, BAL-405 on `low`'s
+ * `graceAvailable` arm, `near`, `wrap` and `end`). Those four keys' prototype wording is an
+ * ACCEPTED GAP, not drift: the shipped strings state presence-path truth (ADR-1052 D2 /
+ * ADR-1040 Amendment 6 §H — the call never stops), and re-syncing the prototypes (including
+ * `in-session-sequence.jsx`'s "at the ceiling the session pauses warmly" rationale) is its own
+ * task. Tone rules honoured:
  *  - `elapsed` is session time, NEVER a countdown;
  *  - `minutesRemaining` / grace-room surface only when actionable;
  *  - SMS fires only on entering grace + nearing the wrap;
@@ -57,7 +62,6 @@ export interface DrawdownState {
   status: CreditSessionStatus;
   /** "HH:MM:SS" session time — NEVER remaining. */
   elapsed: string;
-  paused: boolean;
   meter: DrawdownMeter;
   tone: 'none' | 'amber' | 'keep' | 'wrap';
   title?: string;
@@ -194,7 +198,8 @@ function deriveKey(inputs: DrawdownInputs, minutesRemaining: number): DrawdownKe
     case 'grace':
       return isNearWrap(inputs) ? 'near' : 'grace';
     case 'wrapped':
-      // Grace history ⇒ the ceiling/30-min pause (`wrap`); none ⇒ balance-used (`end`). ⚠ R9:
+      // Grace history ⇒ past the ceiling/30-min bound (`wrap`); none ⇒ balance-used (`end`).
+      // ⚠ BAL-405 — NEITHER key pauses anything on the presence path; see `KEY_BASE`. ⚠ R9:
       // "no-mandate" is stale — since BAL-523 grace is withheld for a card-backed-MODE failure
       // too, so `end` is now reached by either an absent mandate or "Just notify me". Which of
       // the two it was is now carried explicitly by `DrawdownInputs.mandateActive`, and the
@@ -243,37 +248,28 @@ function clampPct(pct: number): number {
 // ── Structural (lens-independent) per-key descriptor ──────────────────────
 interface KeyBase {
   tone: DrawdownState['tone'];
-  paused: boolean;
   meterMode: DrawdownMeter['mode'];
   meterTone: DrawdownMeter['tone'];
   channels: Array<'in-app' | 'sms'>;
 }
 
+/**
+ * ⚠ BAL-405 — THERE IS NO `paused` FLAG, deliberately. On the PRESENCE path the call never
+ * stops (ADR-1052 D2 / ADR-1040 Amendment 6 §H): at `wrap` and `end` the meter changes and Balo
+ * stops advancing, but the expert stays, the minutes keep accruing and
+ * `settleSessionFromPresence` posts every one of them at meeting end. A `paused: true` here
+ * rendered a literal "Paused" pill over a live, billing call. (The `live_capture` path DOES
+ * stop metering at `wrapped` and is auto-ended by the reaper — but it cannot reach this panel,
+ * so no copy here may claim a pause.) If a future key ever DOES pause a call (BAL-477,
+ * concurrent sessions — unmerged), add the flag back for that key alone.
+ */
 const KEY_BASE: Record<DrawdownKey, KeyBase> = {
-  healthy: { tone: 'none', paused: false, meterMode: 'balance', meterTone: 'blue', channels: [] },
-  low: {
-    tone: 'amber',
-    paused: false,
-    meterMode: 'balance',
-    meterTone: 'amber',
-    channels: ['in-app'],
-  },
-  grace: {
-    tone: 'keep',
-    paused: false,
-    meterMode: 'grace',
-    meterTone: 'grad',
-    channels: ['in-app', 'sms'],
-  },
-  near: {
-    tone: 'amber',
-    paused: false,
-    meterMode: 'grace',
-    meterTone: 'grad',
-    channels: ['in-app', 'sms'],
-  },
-  wrap: { tone: 'wrap', paused: true, meterMode: 'grace', meterTone: 'grad', channels: ['in-app'] },
-  end: { tone: 'wrap', paused: true, meterMode: 'empty', meterTone: 'faint', channels: ['in-app'] },
+  healthy: { tone: 'none', meterMode: 'balance', meterTone: 'blue', channels: [] },
+  low: { tone: 'amber', meterMode: 'balance', meterTone: 'amber', channels: ['in-app'] },
+  grace: { tone: 'keep', meterMode: 'grace', meterTone: 'grad', channels: ['in-app', 'sms'] },
+  near: { tone: 'amber', meterMode: 'grace', meterTone: 'grad', channels: ['in-app', 'sms'] },
+  wrap: { tone: 'wrap', meterMode: 'grace', meterTone: 'grad', channels: ['in-app'] },
+  end: { tone: 'wrap', meterMode: 'empty', meterTone: 'faint', channels: ['in-app'] },
 };
 
 // ── Lens copy ─────────────────────────────────────────────────────────────
@@ -304,12 +300,36 @@ interface Copy {
  * wallet with a LIVE mandate reads `graceAvailable: false` — and settlement charges it anyway
  * (Amendment 6 §A.1, permanent). Branching on `graceAvailable` would tell exactly that client
  * they will not be charged. Neither arm promises a pause or any enforcement.
+ *
+ * BAL-405 — `wrap` consumes these too. It previously promised "We'll settle the extra time used
+ * to your card" UNCONDITIONALLY, which is the same defect BAL-552 removed from `end`. The rule
+ * these four strings tell: the extra time is charged iff the wallet's mandate is LIVE AT
+ * SETTLEMENT TIME — `settleOverdraft` (`end-session.ts`) re-reads the wallet and, when
+ * `!isWalletMandateActive(wallet)`, opens a receivable + dunning instead of charging (ADR-1040
+ * Amendment 5 §C / Amendment 6 §E); the pinned instrument is evidence and preference, never
+ * authority. A live mandate CAN disappear mid-grace via Stripe's `payment_method.detached`
+ * webhook (`clearSavedCard`), so a `wrap` with `mandateActive: false` is reachable, not
+ * theoretical.
  */
 const EXTRA_TIME_FROM_HERE = 'Extra time from here';
-const END_SETTLES_TO_CARD_CLIENT = `${EXTRA_TIME_FROM_HERE} settles to your card afterward.`;
-const END_SETTLES_TO_CARD_MEMBER = `${EXTRA_TIME_FROM_HERE} settles to your team's card afterward.`;
-const END_NEEDS_SETTLING_CLIENT = `${EXTRA_TIME_FROM_HERE} still needs settling — your next top-up covers it.`;
-const END_NEEDS_SETTLING_MEMBER = `${EXTRA_TIME_FROM_HERE} still needs settling — the next top-up covers it.`;
+const SETTLES_TO_CARD_CLIENT = `${EXTRA_TIME_FROM_HERE} settles to your card afterward.`;
+const SETTLES_TO_CARD_MEMBER = `${EXTRA_TIME_FROM_HERE} settles to your team's card afterward.`;
+const NEEDS_SETTLING_CLIENT = `${EXTRA_TIME_FROM_HERE} still needs settling — your next top-up covers it.`;
+const NEEDS_SETTLING_MEMBER = `${EXTRA_TIME_FROM_HERE} still needs settling — the next top-up covers it.`;
+
+/**
+ * BAL-405 — THE CALL NEVER STOPS on the presence path (ADR-1052 D2 / ADR-1040 Amendment 6 §H):
+ * the expert stays, the minutes keep accruing, and `settleSessionFromPresence` posts every one
+ * of them at meeting end. `wrap` and `end` share this sentence because nothing user-visible
+ * differs between them — `grace` already stated the settlement fact, so the ONLY thing `wrap`
+ * adds over `end` is which title and meter describe how the client got there.
+ */
+const CALL_CONTINUES_CLIENT =
+  'Your call keeps going — top up whenever you like to bring your balance back up.';
+
+function callContinuesMember(adminName: string): string {
+  return `Your call keeps going — ask ${adminName} to top up to bring your team's balance back up.`;
+}
 
 /** Client-lens copy (from `in-session-sequence.jsx`). */
 const CLIENT_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
@@ -317,13 +337,13 @@ const CLIENT_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
   low: (ctx) => ({
     meterLabel: 'Running low',
     title: `About ${ctx.minutesRemaining} minutes of balance left`,
-    // ⚠ FIX ROUND 2 (R3) — the `false` branch no longer builds its nudge on "interruption".
-    // Nothing interrupts the session on the presence path either way (the presence finalizer is
+    // ⚠ FIX ROUND 2 (R3) + BAL-405 — NEITHER branch builds its nudge on "interruption". Nothing
+    // interrupts the session on the presence path either way (the presence finalizer is
     // mode-blind — BAL-535), so a promise phrased around being interrupted was shaky in both
     // directions. What IS true is the runway: the balance is nearly out, and topping up keeps you
     // ahead of it. No pause promised, no no-charge promised.
     body: ctx.graceAvailable
-      ? 'Want to top up so nothing interrupts you? You can also keep going — any extra time settles to your card when you wrap up.'
+      ? 'Want to top up to stay ahead of it? You can also keep going — any extra time settles to your card when you wrap up.'
       : "You're near the end of your balance — top up whenever you like to stay ahead of it.",
     cta: ctx.graceAvailable
       ? { kind: 'client_topup', label: 'Top up', secondaryLabel: 'Keep going' }
@@ -339,23 +359,24 @@ const CLIENT_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
   near: (ctx) => ({
     meterLabel: 'Wrapping soon',
     title: 'Coming up on a good place to wrap',
-    body: `About ${ctx.remainingBeforeWrap} more minutes before we'll pause to settle up. Want to top up to keep going without a break?`,
+    body: `About ${ctx.remainingBeforeWrap} more minutes of the extra time we set aside. Want to top up to stay ahead of it?`,
     cta: { kind: 'client_topup', label: 'Top up to keep going', secondaryLabel: 'Dismiss' },
-    sms: "You're nearing the end of this session's extra time — top up to keep going without a break.",
+    sms: "You're nearing the end of this session's extra time — top up any time to stay ahead of it.",
   }),
-  wrap: () => ({
-    meterLabel: 'Paused',
-    title: "Let's pause here for now",
-    body: "We've reached the extra time we can cover this session. Top up to pick right back up — your expert can rejoin in a moment. We'll settle the extra time used to your card.",
-    cta: { kind: 'client_topup', label: 'Top up to continue' },
+  // ⚠ BAL-552 + BAL-405 — `wrap` and `end` branch on `ctx.mandateActive`, NEVER on
+  // `ctx.graceAvailable`. See the clause constants' docblock above for why the two are not
+  // interchangeable, and why neither key may claim the call stopped.
+  wrap: (ctx) => ({
+    meterLabel: 'Still going',
+    title: "You're past the extra time we set aside",
+    body: `${CALL_CONTINUES_CLIENT} ${ctx.mandateActive ? SETTLES_TO_CARD_CLIENT : NEEDS_SETTLING_CLIENT}`,
+    cta: { kind: 'client_topup', label: 'Top up' },
   }),
-  // ⚠ BAL-552 — branch on `ctx.mandateActive`, NEVER on `ctx.graceAvailable`. See the clause
-  // constants' docblock above for why the two are not interchangeable here.
   end: (ctx) => ({
     meterLabel: 'Balance used',
     title: "You're at the end of your balance",
-    body: `Top up to keep going — your expert can pick right back up whenever you're ready. ${ctx.mandateActive ? END_SETTLES_TO_CARD_CLIENT : END_NEEDS_SETTLING_CLIENT}`,
-    cta: { kind: 'client_topup', label: 'Top up to continue' },
+    body: `${CALL_CONTINUES_CLIENT} ${ctx.mandateActive ? SETTLES_TO_CARD_CLIENT : NEEDS_SETTLING_CLIENT}`,
+    cta: { kind: 'client_topup', label: 'Top up' },
   }),
 };
 
@@ -371,11 +392,11 @@ const MEMBER_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
     // promise the meter refuses at zero. Both branches keep the nudge CTA — the member can act
     // either way.
     //
-    // ⚠ FIX ROUND 2 (R3) — the `false` branch said "and then we'll pause to settle up". Only the
-    // METER pauses. The call does not stop, and the billing does not stop either: on the presence
-    // path the finalizer posts every billable minute at meeting end regardless of the mode and
-    // settles off-session (BAL-535). So the branch now flags the runway and nudges, and promises
-    // neither a pause nor a no-charge.
+    // ⚠ FIX ROUND 2 (R3) + BAL-405 — the `false` branch said "and then we'll pause to settle up".
+    // NOTHING pauses: not the call, not the billing (on the presence path the finalizer posts
+    // every billable minute at meeting end regardless of the mode and settles off-session —
+    // BAL-535), and since BAL-405 not even the meter label (`wrap` reads "Still going"). So the
+    // branch flags the runway and nudges, and promises neither a pause nor a no-charge.
     body: ctx.graceAvailable
       ? `About ${ctx.minutesRemaining} minutes left. Your session won't be interrupted — extra time settles to your team's card afterward. Want to let ${ctx.adminName} know?`
       : `About ${ctx.minutesRemaining} minutes left on your team's balance. Want to let ${ctx.adminName} know?`,
@@ -390,22 +411,23 @@ const MEMBER_COPY: Record<DrawdownKey, (ctx: CopyCtx) => Copy> = {
   near: (ctx) => ({
     meterLabel: 'Wrapping soon',
     title: 'Coming up on a good place to wrap',
-    body: `About ${ctx.remainingBeforeWrap} more minutes before we pause to settle up. Want ${ctx.adminName} to top up so you can keep going?`,
+    body: `About ${ctx.remainingBeforeWrap} more minutes of the extra time we set aside. Want ${ctx.adminName} to top up to stay ahead of it?`,
     cta: { kind: 'member_nudge', label: `Ask ${ctx.adminName} to top up` },
     sms: 'Your session is nearing the end of its extra time — ask your admin to top up to keep going.',
   }),
+  // ⚠ BAL-552 + BAL-405 — `wrap` and `end` branch on `ctx.mandateActive`, NEVER on
+  // `ctx.graceAvailable`. See the clause constants' docblock above for why the two are not
+  // interchangeable, and why neither key may claim the call stopped.
   wrap: (ctx) => ({
-    meterLabel: 'Paused',
-    title: "Let's pause here for now",
-    body: `We've reached the extra time we can cover this session. Ask ${ctx.adminName} to top up to pick right back up.`,
+    meterLabel: 'Still going',
+    title: "You're past the extra time we set aside",
+    body: `${callContinuesMember(ctx.adminName)} ${ctx.mandateActive ? SETTLES_TO_CARD_MEMBER : NEEDS_SETTLING_MEMBER}`,
     cta: { kind: 'member_nudge', label: `Ask ${ctx.adminName} to top up` },
   }),
-  // ⚠ BAL-552 — branch on `ctx.mandateActive`, NEVER on `ctx.graceAvailable`. See the clause
-  // constants' docblock above for why the two are not interchangeable here.
   end: (ctx) => ({
     meterLabel: 'Team balance used',
     title: "Your team's balance is used up",
-    body: `Ask ${ctx.adminName} to top up to keep going — your expert can pick right back up. ${ctx.mandateActive ? END_SETTLES_TO_CARD_MEMBER : END_NEEDS_SETTLING_MEMBER}`,
+    body: `${callContinuesMember(ctx.adminName)} ${ctx.mandateActive ? SETTLES_TO_CARD_MEMBER : NEEDS_SETTLING_MEMBER}`,
     cta: { kind: 'member_nudge', label: `Ask ${ctx.adminName} to top up` },
   }),
 };
@@ -445,7 +467,6 @@ export function deriveDrawdownState(inputs: DrawdownInputs): DrawdownState {
     key,
     status: inputs.status,
     elapsed: formatElapsed(inputs.connectedAt, inputs.now),
-    paused: base.paused,
     meter: {
       mode: base.meterMode,
       pct: deriveMeterPct(key, inputs, minutesRemaining),

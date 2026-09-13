@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Clock, Gift, Radio, RotateCw, Wallet } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatIndicative } from '@/lib/credit/display-constants';
+import { formatIndicative, WALLET_CARD_CHROME } from '@/lib/credit/display-constants';
 import type { DisplayFxSnapshot } from '@/components/billing/top-up/types';
 
 /**
@@ -61,8 +61,7 @@ function restingBorderClass(state: WalletWidgetState): string {
   return 'border-border';
 }
 
-const CARD_CLASS =
-  'bg-card relative w-full max-w-[380px] overflow-hidden rounded-2xl border p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04),0_6px_20px_rgba(15,23,41,0.04)]';
+const CARD_CLASS = cn(WALLET_CARD_CHROME, 'relative overflow-hidden');
 
 /** AUD-minor → "A$1,234.00". AUD is always the real, invoice-matching figure. */
 function formatAud(minor: number): string {

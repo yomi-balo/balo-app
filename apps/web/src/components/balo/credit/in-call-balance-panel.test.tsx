@@ -177,7 +177,7 @@ describe('InCallBalancePanel — the client lens suppresses the primary CTA (OQ1
 
   it('renders the notice body but no top-up button for wrap', () => {
     renderPanel(STATES.wrap ?? null);
-    expect(screen.getByText("Let's pause here for now")).toBeInTheDocument();
+    expect(screen.getByText("You're past the extra time we set aside")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /top up/i })).not.toBeInTheDocument();
   });
 });
