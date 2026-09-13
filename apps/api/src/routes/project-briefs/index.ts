@@ -62,13 +62,14 @@ export async function projectBriefRoutes(fastify: FastifyInstance): Promise<void
       try {
         await enqueueProjectBriefParse({ parseId: body.parseId });
       } catch (error) {
+        // ⚠ `err`, NOT a hand-flattened `{ error: message, stack }` (BAL-254 W6). Pino's default
+        // `err` serializer keeps type/message/stack/cause; the flattened form collapsed a
+        // non-`Error` rejection — which ioredis/BullMQ can and do produce — to the string
+        // `[object Object]` with `stack: undefined`, i.e. to nothing actionable at all. Nothing
+        // leaks here: the payload this throws over is `{ parseId }` and carries no R2 key and
+        // no model output, and `REDACT_PATHS` covers `err.*` credential shapes regardless.
         log.error(
-          {
-            parseId: body.parseId,
-            userId,
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-          },
+          { err: error, parseId: body.parseId, userId },
           'Failed to enqueue project brief parse'
         );
         reply.code(503).send({ error: 'enqueue_failed' });

@@ -30,6 +30,19 @@
 export const MAX_PARSE_INPUT_BYTES = 10 * 1024 * 1024;
 
 /**
+ * Bytes in ONE source document (BAL-254 W9/W3). THE single definition of the uploader's 5 MB
+ * per-file cap: `actions/schemas.ts` and `lib/storage/project-document.ts` both re-export their
+ * `MAX_DOCUMENT_BYTES` from here, and the worker enforces it against R2's OWN `ContentLength`.
+ *
+ * ⚠⚠ THE WORKER MUST CHECK IT PER FILE, NOT ONLY AS A RUNNING TOTAL. The declared `sizeBytes`
+ * is client-supplied and the presigned PUT carries no `ContentLength` condition, so a single
+ * real 9 MB object under a declared 1 KB key cleared BOTH the per-file zod bound (which sees
+ * only the declaration) and the 10 MB running total. Memory stayed bounded — this is cost and
+ * abuse, not DoS — but the 5 MB cap the product promises was simply not enforced against bytes.
+ */
+export const MAX_PARSE_DOCUMENT_BYTES = 5 * 1024 * 1024;
+
+/**
  * Per-user parses per rolling hour. Enforced web-side as a DB count
  * (`projectBriefParsesRepository.countCreatedSince`) AND api-side as a Redis rate limit —
  * two independent counters, because the web count is the one a user can see the effect of and
@@ -48,8 +61,27 @@ export const PARSE_DEADLINE_MS = 3 * 60 * 1000;
 
 /** Matches `actions/schemas.ts`' `title` max, so a parsed title can never fail submit. */
 export const MAX_BRIEF_TITLE_LENGTH = 120;
-/** → ≤20000 HTML after conversion, comfortably inside `schemas.ts`' description cap. */
+/**
+ * Bound on the model's `descriptionMarkdown`.
+ *
+ * ⚠ THIS DOES **NOT** BOUND THE CONVERTED HTML, AND USED TO CLAIM IT DID (BAL-254 W7). The
+ * markdown→HTML conversion both wraps text in tags AND escapes it, and escaping alone expands
+ * up to 5× (`&` → `&amp;`), so 8000 markdown characters cannot be shown to stay inside
+ * `schemas.ts`' 20000-character `description` cap. Pathological input is unreachable in
+ * practice, but the failure mode — a brief that generates cleanly and then cannot be
+ * SUBMITTED — is silent and terminal, so the real bound is enforced where the conversion
+ * happens: `getProjectBriefParseAction` measures the OUTPUT against
+ * {@link MAX_BRIEF_DESCRIPTION_HTML_LENGTH} and refuses the draft rather than delivering an
+ * unsubmittable one.
+ */
 export const MAX_BRIEF_MARKDOWN_LENGTH = 8000;
+
+/**
+ * ⚠⚠ MUST EQUAL `actions/schemas.ts`' `description` max — it IS the submit gate, restated here
+ * because the poll action has to measure against it BEFORE handing the client a draft. Pinned by
+ * `apps/web/src/lib/project-request/actions/schemas.test.ts`.
+ */
+export const MAX_BRIEF_DESCRIPTION_HTML_LENGTH = 20000;
 /** How many "we saw this concept but it is not in the taxonomy" labels may reach a human. */
 export const MAX_UNMATCHED_LABELS = 8;
 /** Each such label is a short noun phrase, never a sentence the model wrote. */
@@ -145,9 +177,16 @@ export interface ProjectBriefParseSourceDocument {
  * always passes through the existing `sanitizeProjectHtml` boundary before it reaches a client.
  *
  * ⚠ `tagIds` / `productIds` HOLD LIVE TAXONOMY IDS THE **SERVER** RESOLVED (D5). The model
- * emits slugs; an unrecognised slug is DROPPED and its human label appended to the matching
- * `unmatched*Labels`. An id can therefore never originate from the model — which matters
- * because submit REJECTS unknown ids rather than dropping them.
+ * emits slugs; an unrecognised slug is DROPPED. An id can therefore never originate from the
+ * model — which matters because submit REJECTS unknown ids rather than dropping them.
+ *
+ * ⚠ `unmatched*Labels` ARE DERIVED SERVER-SIDE FROM TWO SOURCES (BAL-254 W4), in this order:
+ * (1) the slugs that ACTUALLY failed to map, de-slugged into a short label, and (2) the model's
+ * own "I saw this but could not match it" labels. Source 1 is what makes a hallucinated or
+ * stale slug visible instead of silently dropped; source 2 is what covers a concept the model
+ * recognised without emitting any slug for it. Bounded to `MAX_UNMATCHED_LABELS` ×
+ * `MAX_UNMATCHED_LABEL_LENGTH`, de-duplicated case-insensitively, and DISPLAY-ONLY — they reach
+ * a human as inert React text and never enter the submitted request.
  */
 export interface ProjectBriefParseResult {
   readonly title: string;

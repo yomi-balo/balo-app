@@ -3,8 +3,10 @@ import {
   buildTaxonomyChoices,
   renderTaxonomyChoices,
   mapSlugsToIds,
+  deriveUnmatchedLabels,
   type TaxonomyChoice,
 } from './taxonomy-mapping.js';
+import { MAX_UNMATCHED_LABELS, MAX_UNMATCHED_LABEL_LENGTH } from '@balo/shared/project-requests';
 import type { ProjectTagsByGroup, ProductsByCategory } from '@balo/db';
 
 describe('buildTaxonomyChoices', () => {
@@ -93,5 +95,60 @@ describe('mapSlugsToIds', () => {
     for (const id of result.ids) {
       expect(liveIds.has(id)).toBe(true);
     }
+  });
+});
+
+/**
+ * BAL-254 W4 — the review footnote. `unmatchedSlugs` was computed and thrown away while the
+ * persisted labels came straight from the model's self-report, so a slug that missed the live
+ * taxonomy and was not self-reported vanished silently.
+ */
+describe('deriveUnmatchedLabels', () => {
+  it('⚠ surfaces a slug that missed the taxonomy even when the model reported nothing', () => {
+    expect(deriveUnmatchedLabels(['crm-analytics'], [])).toEqual(['Crm analytics']);
+  });
+
+  it("keeps the model's self-reported labels — a concept with no slug emits nothing under source 1", () => {
+    expect(deriveUnmatchedLabels([], ['Sandbox refresh'])).toEqual(['Sandbox refresh']);
+  });
+
+  it('unions both sources, mapping failures first', () => {
+    expect(deriveUnmatchedLabels(['crm-analytics'], ['Sandbox refresh'])).toEqual([
+      'Crm analytics',
+      'Sandbox refresh',
+    ]);
+  });
+
+  it('de-duplicates case-insensitively across the two sources', () => {
+    expect(deriveUnmatchedLabels(['crm-analytics'], ['crm analytics', 'CRM Analytics'])).toEqual([
+      'Crm analytics',
+    ]);
+  });
+
+  it('de-slugs separators into single spaces', () => {
+    expect(deriveUnmatchedLabels(['marketing_cloud--personalization'], [])).toEqual([
+      'Marketing cloud personalization',
+    ]);
+  });
+
+  it('drops a slug that de-slugs to nothing', () => {
+    expect(deriveUnmatchedLabels(['---', '  '], [])).toEqual([]);
+  });
+
+  it(`bounds every label to ${MAX_UNMATCHED_LABEL_LENGTH} characters`, () => {
+    const [derived] = deriveUnmatchedLabels(['a'.repeat(200)], []);
+    const [reported] = deriveUnmatchedLabels([], ['b'.repeat(200)]);
+    expect(derived).toHaveLength(MAX_UNMATCHED_LABEL_LENGTH);
+    expect(reported).toHaveLength(MAX_UNMATCHED_LABEL_LENGTH);
+  });
+
+  it(`bounds the list to ${MAX_UNMATCHED_LABELS} labels`, () => {
+    const slugs = Array.from({ length: 12 }, (_, i) => `slug-${i}`);
+    const reported = Array.from({ length: 12 }, (_, i) => `Reported ${i}`);
+    expect(deriveUnmatchedLabels(slugs, reported)).toHaveLength(MAX_UNMATCHED_LABELS);
+  });
+
+  it('empty in, empty out', () => {
+    expect(deriveUnmatchedLabels([], [])).toEqual([]);
   });
 });

@@ -49,6 +49,13 @@ export interface UseAiBriefFlowResult {
   regenerateConfirmOpen: boolean;
   setRegenerateConfirmOpen: (open: boolean) => void;
   handleSelectAi: () => void;
+  /**
+   * ⚠ BAL-254 W2 — ABANDON any in-flight generation. The panel calls this from
+   * `handleSelectManual` ("I'll write it myself" on the start step); this hook calls it itself
+   * from {@link UseAiBriefFlowResult.handleWriteItMyself}. Both are "the user has left the AI
+   * path", and a parse that lands afterwards must never write the four AI fields.
+   */
+  cancelGeneration: () => void;
   handleGenerateClick: () => void;
   handleRetryGenerate: () => void;
   handleWriteItMyself: () => void;
@@ -204,8 +211,15 @@ export function useAiBriefFlow({
     handleGenerateClick();
   }, [briefGeneration, handleGenerateClick]);
 
+  // ⚠ `cancel`, NOT `dismissFailure` (BAL-254 W2). `dismissFailure` only resets the phase; it
+  // leaves the interval running and `parseIdRef` set, so the generation this hook is walking away
+  // from could still land and overwrite the draft the user is about to type by hand.
+  const cancelGeneration = useCallback(() => {
+    briefGeneration.cancel();
+  }, [briefGeneration]);
+
   const handleWriteItMyself = useCallback(() => {
-    briefGeneration.dismissFailure();
+    briefGeneration.cancel();
     setField('source', 'manual');
     setStep('manual');
   }, [briefGeneration, setField, setStep]);
@@ -246,6 +260,7 @@ export function useAiBriefFlow({
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,
+    cancelGeneration,
     handleGenerateClick,
     handleRetryGenerate,
     handleWriteItMyself,

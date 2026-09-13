@@ -4,9 +4,12 @@ import 'server-only';
 import { z } from 'zod';
 import { withAuth } from '@/lib/auth/with-auth';
 import { projectBriefParsesRepository } from '@balo/db';
-import { MAX_PARSE_INPUT_BYTES, MAX_PARSES_PER_HOUR } from '@balo/shared/project-requests';
+import {
+  isSessionOwnedProjectDocumentKey,
+  MAX_PARSE_INPUT_BYTES,
+  MAX_PARSES_PER_HOUR,
+} from '@balo/shared/project-requests';
 import { postBaloApiJson } from '@/lib/api/balo-api-client';
-import { isSessionOwnedProjectDocumentKey } from '@/lib/storage/project-document-key';
 import { log } from '@/lib/logging';
 import { documentRefSchema, MAX_DOCUMENTS } from './schemas';
 

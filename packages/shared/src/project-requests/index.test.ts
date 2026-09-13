@@ -8,6 +8,8 @@ import {
   PROJECT_BRIEF_FAILURE_REASONS,
   narrowToProjectBriefFailureReason,
   MAX_PARSE_INPUT_BYTES,
+  MAX_PARSE_DOCUMENT_BYTES,
+  MAX_BRIEF_DESCRIPTION_HTML_LENGTH,
   PARSE_DEADLINE_MS,
 } from './index';
 
@@ -102,5 +104,16 @@ describe('brief-parse caps (BAL-254)', () => {
 
   it('MAX_PARSE_INPUT_BYTES is 10 MiB', () => {
     expect(MAX_PARSE_INPUT_BYTES).toBe(10 * 1024 * 1024);
+  });
+
+  /** BAL-254 W3 — the uploader's promised per-file cap, now enforced against real R2 bytes. */
+  it('MAX_PARSE_DOCUMENT_BYTES is 5 MiB and is strictly below the whole-parse ceiling', () => {
+    expect(MAX_PARSE_DOCUMENT_BYTES).toBe(5 * 1024 * 1024);
+    expect(MAX_PARSE_DOCUMENT_BYTES).toBeLessThan(MAX_PARSE_INPUT_BYTES);
+  });
+
+  /** BAL-254 W7 — must equal `actions/schemas.ts`' `description` max; it IS the submit gate. */
+  it('MAX_BRIEF_DESCRIPTION_HTML_LENGTH is the 20000-character submit cap', () => {
+    expect(MAX_BRIEF_DESCRIPTION_HTML_LENGTH).toBe(20000);
   });
 });

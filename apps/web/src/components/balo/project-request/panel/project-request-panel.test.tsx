@@ -47,24 +47,52 @@ vi.mock('@/lib/project-request/actions/get-project-brief-parse', () => ({
 // BAL-254 — the real DocumentUploader drives a presigned-upload + XHR flow that is out of
 // scope for this panel-level suite (covered by `document-uploader.test.tsx`). A single button
 // stand-in lets the AI-flow tests attach a document without re-exercising that machinery.
+//
+// ⚠ THE STAND-IN HONOURS `initialDocuments` (BAL-254 W1). The real component's seeding is tested
+// in `document-uploader.test.tsx`; what THIS suite has to prove is the other half — that the
+// panel actually hands it `draft.documents` on every mount, including the remount that
+// "Change source documents" causes. So the mock renders what it was seeded with and APPENDS on
+// attach, exactly as the real one now does.
+interface MockDoc {
+  r2Key: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+}
 vi.mock('@/components/balo/document-uploader', () => ({
-  DocumentUploader: ({ onDocumentsChange }: { onDocumentsChange: (docs: unknown[]) => void }) => (
-    <button
-      type="button"
-      onClick={() =>
-        onDocumentsChange([
-          {
-            r2Key: 'project-documents/c/u/k',
-            fileName: 'rfp.pdf',
-            contentType: 'application/pdf',
-            sizeBytes: 1024,
-          },
-        ])
-      }
-    >
-      Attach test file
-    </button>
-  ),
+  DocumentUploader: ({
+    initialDocuments,
+    onDocumentsChange,
+  }: {
+    initialDocuments?: readonly MockDoc[];
+    onDocumentsChange: (docs: MockDoc[]) => void;
+  }) => {
+    const seeded = initialDocuments ?? [];
+    return (
+      <div>
+        <p>{`seeded: ${seeded.length}`}</p>
+        {seeded.map((doc) => (
+          <p key={doc.r2Key}>{doc.fileName}</p>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            onDocumentsChange([
+              ...seeded,
+              {
+                r2Key: `project-documents/c/u/k${seeded.length}`,
+                fileName: `rfp-${seeded.length}.pdf`,
+                contentType: 'application/pdf',
+                sizeBytes: 1024,
+              },
+            ])
+          }
+        >
+          Attach test file
+        </button>
+      </div>
+    );
+  },
 }));
 
 // The real RichTextEditor is a code-split TipTap (ProseMirror) component that
@@ -521,6 +549,30 @@ describe('ProjectRequestPanel', () => {
       unmatchedProductLabels: [],
     };
 
+    /**
+     * start → the AI card → the `upload` step. Extracted so the BAL-254 W1/W2 tests below do not
+     * add a fourth and fifth verbatim copy of this preamble (SonarCloud's new-code duplication
+     * gate is <3%, and this block was already repeated across the existing AI tests).
+     */
+    async function openAiUploadStep(): Promise<ReturnType<typeof userEvent.setup>> {
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      return user;
+    }
+
+    /** Attach the stand-in's file and click Generate (no waiting — the caller decides). */
+    async function attachAndClickGenerate(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+    }
+
+    /** …and wait for the `review` step's AI banner. */
+    async function attachAndGenerate(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+      await attachAndClickGenerate(user);
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+    }
+
     it('the Generate brief CTA is disabled with 0 files', async () => {
       const user = userEvent.setup();
       renderPanel();
@@ -694,6 +746,80 @@ describe('ProjectRequestPanel', () => {
         await screen.findByText(/this is taking longer than expected/i, {}, { timeout: 6000 })
       ).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /attach test file/i })).toBeInTheDocument();
+    }, 12000);
+
+    // ── W1 — "Change source documents" must not land on an empty dropzone ─────────────────
+    it('⚠ "Change source documents" re-seeds the uploader from the draft, and a new file APPENDS', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = await openAiUploadStep();
+      expect(screen.getByText('seeded: 0')).toBeInTheDocument();
+      await attachAndGenerate(user);
+
+      // Back to `upload` — which UNMOUNTS and remounts the uploader. It used to come back empty
+      // while the draft still held the file, and the next attach REPLACED rather than appended,
+      // silently dropping the original from the parse input and the request's attachments.
+      await user.click(screen.getByRole('button', { name: /change source documents/i }));
+      expect(await screen.findByText('seeded: 1')).toBeInTheDocument();
+      expect(screen.getByText('rfp-0.pdf')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+
+      await waitFor(() =>
+        expect(mockStartBrief).toHaveBeenLastCalledWith({
+          documents: [
+            expect.objectContaining({ r2Key: 'project-documents/c/u/k0' }),
+            expect.objectContaining({ r2Key: 'project-documents/c/u/k1' }),
+          ],
+        })
+      );
+    }, 12000);
+
+    it("the manual step's uploader is seeded too (review → Edit keeps the attachments)", async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = await openAiUploadStep();
+      await attachAndGenerate(user);
+
+      await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0] as HTMLElement);
+
+      expect(await screen.findByText('seeded: 1')).toBeInTheDocument();
+    }, 12000);
+
+    // ── W2 — leaving the AI path must abandon the generation ──────────────────────────────
+    it('⚠ a LATE success cannot overwrite a hand-typed draft after the user switched to manual', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      // The first poll HANGS — it is still in flight when the user walks away, and only resolves
+      // once the test releases it. That is the exact shape of the race: `isFlowActive` (F5) is
+      // still true here, because the drawer is open and the step is not `done`.
+      let releasePoll: ((value: unknown) => void) | undefined;
+      const pending = new Promise((resolve) => {
+        releasePoll = resolve;
+      });
+      mockGetBrief.mockReturnValueOnce(pending);
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+
+      const user = await openAiUploadStep();
+      await attachAndClickGenerate(user);
+      await screen.findByText(/reading your documents/i, {}, { timeout: 4000 });
+      await waitFor(() => expect(mockGetBrief).toHaveBeenCalled(), { timeout: 4000 });
+
+      // Leave the AI path: back to `start`, then "I'll write it myself".
+      await user.click(screen.getByRole('button', { name: /change entry method/i }));
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.type(screen.getByLabelText(/project title/i), 'My own title');
+
+      // …and only NOW does the parse land.
+      releasePoll?.({ status: 'succeeded', draft: AI_DRAFT });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Still on `manual`, still the hand-typed draft, no forced navigation to `review`.
+      expect(screen.getByLabelText(/project title/i)).toHaveValue('My own title');
+      expect(screen.queryByTestId('rt-viewer')).not.toBeInTheDocument();
+      expect(screen.queryByText(/ai-drafted from your documents/i)).not.toBeInTheDocument();
     }, 12000);
 
     // ── F5 — submit is not live while a regenerate is rewriting the draft ─────────────────

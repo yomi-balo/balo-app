@@ -2,6 +2,7 @@ import 'server-only';
 
 import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { MAX_PARSE_DOCUMENT_BYTES } from '@balo/shared/project-requests';
 import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
 import { log } from '@/lib/logging';
 
@@ -14,7 +15,8 @@ export const ALLOWED_CONTENT_TYPES = new Set<string>([
   'image/webp',
 ]);
 const PRESIGN_TTL_SECONDS = 60;
-export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024; // 5 MB
+/** ⚠ ONE definition, in `@balo/shared` — the worker enforces the same cap (BAL-254 W3). */
+export const MAX_DOCUMENT_BYTES = MAX_PARSE_DOCUMENT_BYTES;
 /** Key prefix all project documents live under. */
 export const PROJECT_DOCUMENT_PREFIX = 'project-documents/';
 

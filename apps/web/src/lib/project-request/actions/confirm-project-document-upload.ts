@@ -9,7 +9,7 @@ import {
   ALLOWED_CONTENT_TYPES,
   MAX_DOCUMENT_BYTES,
 } from '@/lib/storage/project-document';
-import { isSessionOwnedProjectDocumentKey } from '@/lib/storage/project-document-key';
+import { isSessionOwnedProjectDocumentKey } from '@balo/shared/project-requests';
 import { log } from '@/lib/logging';
 
 export interface ConfirmProjectDocumentUploadInput {

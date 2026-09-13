@@ -25,6 +25,11 @@
 // the failure vocabulary — three consumers with nothing to do with the lifecycle unions below.
 export * from './brief-parse';
 
+// BAL-254 W9 — the draft-stage document-key boundary (Ruling A). Its own file, and here rather
+// than in `apps/web`, because `apps/api`'s worker re-asserts the SAME predicate against the
+// persisted row and cannot import from `apps/web`. See `document-key.ts`'s docblock.
+export * from './document-key';
+
 /**
  * The relationship statuses a track can actually be declined FROM — i.e. exactly the sources
  * whose `RELATIONSHIP_STATUS_TRANSITIONS` entry carries a `'declined'` edge. NOT `accepted`

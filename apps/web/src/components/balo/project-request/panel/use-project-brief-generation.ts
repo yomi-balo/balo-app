@@ -28,6 +28,19 @@ export interface UseProjectBriefGenerationResult {
   failureReason: ProjectBriefFailureReason | null;
   start: (documents: ProjectDocumentRef[]) => Promise<void>;
   dismissFailure: () => void;
+  /**
+   * ⚠⚠ BAL-254 W2 — ABANDON THE CURRENT GENERATION. Stops the interval AND clears
+   * `parseIdRef`, which is what invalidates any poll already in flight (see the generation
+   * identity below), then returns the hook to `idle`.
+   *
+   * Call it whenever the user LEAVES the AI path — "I'll write it myself", or picking the
+   * manual card after going Back. `isFlowActive` covers drawer-close and submit, but a user
+   * who backs out to `start` and chooses to type the brief by hand is still an active flow, so
+   * a late success would write all four AI fields over their hand-typed draft and force-
+   * navigate them to `review`. Cancelling is the explicit answer, and it also stops the wasted
+   * polling rather than merely ignoring its result.
+   */
+  cancel: () => void;
 }
 
 /**
@@ -72,6 +85,18 @@ export function useProjectBriefGeneration(
     setPhase('idle');
     setFailureReason(null);
   }, []);
+
+  /** @see UseProjectBriefGenerationResult.cancel */
+  const cancel = useCallback(() => {
+    clearPolling();
+    // ⚠ CLEARING THE ID IS THE POINT. `clearPolling` only stops FUTURE ticks; the poll whose
+    // promise is already in flight still resolves, and its `isCurrentGeneration()` guard is what
+    // makes it a no-op. Same mechanism `start` relies on (fix round F4).
+    parseIdRef.current = null;
+    setPhase('idle');
+    setFailureReason(null);
+    setHeadingIndex(0);
+  }, [clearPolling]);
 
   const start = useCallback(
     async (documents: ProjectDocumentRef[]) => {
@@ -165,5 +190,5 @@ export function useProjectBriefGeneration(
     [clearPolling]
   );
 
-  return { phase, headingIndex, failureReason, start, dismissFailure };
+  return { phase, headingIndex, failureReason, start, dismissFailure, cancel };
 }

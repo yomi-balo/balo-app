@@ -198,6 +198,33 @@ describe('getProjectBriefParseAction', () => {
     expect(result.draft.productIds).toEqual([]);
   });
 
+  /**
+   * BAL-254 W7 — `MAX_BRIEF_MARKDOWN_LENGTH` (8000) claimed "→ ≤20000 HTML", which the conversion
+   * does not guarantee: escaping alone expands up to 5× (`&` → `&amp;`). Unreachable in practice,
+   * but the failure mode is silent and terminal — the brief generates cleanly, prefills review,
+   * and `submitProjectRequestAction` then rejects it on the `description` max with nothing on
+   * screen explaining why. Refusing here gives the recoverable failure banner instead.
+   */
+  it('⚠ a brief whose CONVERTED HTML exceeds the submit cap is refused, not delivered unsubmittable', async () => {
+    // 7000 bare ampersands: inside `MAX_BRIEF_MARKDOWN_LENGTH`, but each becomes `&amp;`
+    // (5 chars) plus the `<p>…</p>` wrapper — comfortably past the 20000-character cap.
+    mockFindForOwner.mockResolvedValue(succeededRow('&'.repeat(7000)));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result).toEqual({ status: 'failed', failureReason: 'invalid_output' });
+  });
+
+  it('a brief whose converted HTML fits the cap is delivered normally', async () => {
+    mockFindForOwner.mockResolvedValue(succeededRow('&'.repeat(3000)));
+    mockLoadTaxonomies.mockResolvedValue(liveTaxonomies);
+
+    const result = await getProjectBriefParseAction({ parseId: PARSE_ID });
+
+    expect(result.status).toBe('succeeded');
+  });
+
   it('an invalid parseId shape resolves to not_found (never throws)', async () => {
     const result = await getProjectBriefParseAction({ parseId: 'not-a-uuid' });
     expect(result).toEqual({ status: 'failed', failureReason: 'not_found' });

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { withAuth } from '@/lib/auth/with-auth';
 import { projectBriefParsesRepository, toProjectBriefParseState } from '@balo/db';
 import {
+  MAX_BRIEF_DESCRIPTION_HTML_LENGTH,
   PARSE_DEADLINE_MS,
   narrowToProjectBriefFailureReason,
   type ProjectBriefFailureReason,
@@ -78,6 +79,24 @@ export const getProjectBriefParseAction = withAuth(
       const descriptionHtml = sanitizeProjectHtml(
         markdownToProjectHtml(state.result.descriptionMarkdown)
       );
+
+      // ⚠⚠ BAL-254 W7 — THE HTML BOUND, MEASURED RATHER THAN ASSUMED. `MAX_BRIEF_MARKDOWN_LENGTH`
+      // (8000) was commented as "→ ≤20000 HTML", which is not a property the conversion has:
+      // escaping alone expands up to 5× (`&` → `&amp;`) before a single tag is added. The
+      // consequence of being wrong is silent and terminal — the brief generates cleanly, prefills
+      // the review step, and then `submitProjectRequestAction` rejects it on the `description`
+      // max with no way for the user to tell what is too long. Refusing HERE means the failure
+      // banner and Try again / Write it myself, which is a recoverable screen. Pathological in
+      // practice; the row is untouched and still holds the real result.
+      if (descriptionHtml.length > MAX_BRIEF_DESCRIPTION_HTML_LENGTH) {
+        log.error('Project brief parse — converted HTML exceeds the submit cap', {
+          userId: session.user.id,
+          parseId: row.id,
+          htmlLength: descriptionHtml.length,
+          limit: MAX_BRIEF_DESCRIPTION_HTML_LENGTH,
+        });
+        return { status: 'failed', failureReason: 'invalid_output' };
+      }
 
       const taxonomies = await loadProjectRequestTaxonomies();
       // ⚠⚠ FIX ROUND F17 — A TAXONOMY BLIP MUST NOT SILENTLY STRIP THE BRIEF. That loader never

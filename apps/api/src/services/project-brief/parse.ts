@@ -1,6 +1,8 @@
 import { NoObjectGeneratedError, TypeValidationError } from 'ai';
 import { projectBriefParsesRepository, referenceDataRepository } from '@balo/db';
 import {
+  isSessionOwnedProjectDocumentKey,
+  MAX_PARSE_DOCUMENT_BYTES,
   MAX_PARSE_INPUT_BYTES,
   type ProjectBriefFailureReason,
 } from '@balo/shared/project-requests';
@@ -13,15 +15,10 @@ import {
   PROJECT_BRIEF_BUDGET_INPUT_TOKENS,
 } from './config.js';
 import { briefParsePrompt, briefParseOutputSchema, type BriefParseOutput } from './prompts.js';
-import { buildTaxonomyChoices, mapSlugsToIds } from './taxonomy-mapping.js';
+import { buildTaxonomyChoices, deriveUnmatchedLabels, mapSlugsToIds } from './taxonomy-mapping.js';
 import { projectBriefNoopResult } from './noop-fallback.js';
 
 const log = createLogger('project-brief-parse');
-
-/** The `project-documents/{companyId}/{userId}/` prefix a source document key must start with. */
-function ownerPrefix(companyId: string, requestedByUserId: string): string {
-  return `project-documents/${companyId}/${requestedByUserId}/`;
-}
 
 /**
  * Log an R2 failure WITHOUT any chance of an `r2Key` reaching Axiom (plan §12.10; fix round F6).
@@ -68,11 +65,19 @@ interface ParseFilePart {
  * Gate 3 (Ruling A, worker-side re-guard). Every key must sit under
  * `project-documents/{row.companyId}/{row.requestedByUserId}/` — derived from the ROW, never
  * from a payload (there is none; the job carries only `{ parseId }`).
+ *
+ * ⚠⚠ BAL-254 W9 — THE **SHARED** PREDICATE, NOT A LOCAL ONE. This used to be a hand-rolled
+ * prefix string plus `startsWith`, with no shape check — i.e. exactly the "third definition of
+ * the tenant boundary" that `@balo/shared`'s `document-key.ts` docblock warns is a cross-tenant
+ * R2 read waiting to happen. One definition now serves both apps, and `apps/web`'s
+ * `project-brief-boundaries-single-caller.test.ts` (which walks `apps/api/src` too) pins this
+ * call site. Note the shape check is a genuine TIGHTENING here: a key must now BE a
+ * `project-documents/{uuid}/{uuid}/{uuid}`, not merely start with the owner prefix.
  */
 function assertOwnerScopedKeys(row: ParseRow, parseId: string): void {
-  const prefix = ownerPrefix(row.companyId, row.requestedByUserId);
+  const owner = { companyId: row.companyId, userId: row.requestedByUserId };
   for (const doc of row.sourceDocuments) {
-    if (!doc.r2Key.startsWith(prefix)) {
+    if (!isSessionOwnedProjectDocumentKey(doc.r2Key, owner)) {
       log.error(
         { parseId },
         'Project brief parse rejected — source document key outside owner scope'
@@ -93,9 +98,15 @@ function assertOwnerScopedKeys(row: ParseRow, parseId: string): void {
  * really is yours) and this worker — which shares a process with payments, notifications and
  * meetings, at concurrency 3 — buffers 2 GB per file.
  *
- * Pass 2 therefore HEADs every key and accumulates R2's OWN `ContentLength`, refusing on the
- * RUNNING total BEFORE any `GetObject`. This mirrors the guard `confirm-project-document-upload.ts`
- * already applies at upload time; it is here because confirm is skippable and this is not.
+ * Pass 2 therefore HEADs every key and accumulates R2's OWN `ContentLength`, refusing on BOTH
+ * the PER-FILE cap and the RUNNING total, BEFORE any `GetObject`. This mirrors the guard
+ * `confirm-project-document-upload.ts` already applies at upload time; it is here because
+ * confirm is skippable and this is not.
+ *
+ * ⚠ BAL-254 W3 — THE PER-FILE CHECK IS NOT REDUNDANT WITH THE TOTAL. Only the running total was
+ * checked, so a single object of any size up to 10 MB passed both gates while DECLARING a
+ * kilobyte — the 5 MB per-file cap the uploader promises, and `documentRefSchema` bounds against
+ * the DECLARATION, was never enforced against real bytes anywhere.
  */
 async function assertRealBytesWithinCap(row: ParseRow, parseId: string): Promise<void> {
   const declaredTotal = row.sourceDocuments.reduce((sum, doc) => sum + doc.sizeBytes, 0);
@@ -114,6 +125,12 @@ async function assertRealBytesWithinCap(row: ParseRow, parseId: string): Promise
         'unreadable',
         'Failed to stat a source document in R2',
         error
+      );
+    }
+    if (size > MAX_PARSE_DOCUMENT_BYTES) {
+      throw new ProjectBriefParseError(
+        'too_large',
+        'A source document exceeds the per-file byte cap'
       );
     }
     headTotal += size;
@@ -231,6 +248,17 @@ async function generateBrief(input: {
 }
 
 /**
+ * Re-read the row and answer whether it is still un-completed (BAL-254 W8).
+ *
+ * A missing row counts as NOT claimable: it was soft-deleted or never existed, and either way
+ * there is nothing left to spend a model call on.
+ */
+async function isStillClaimable(parseId: string): Promise<boolean> {
+  const row = await projectBriefParsesRepository.findById(parseId);
+  return row !== undefined && row.completedAt === null;
+}
+
+/**
  * BAL-254 — the worker's orchestration. Steps, in order, per the plan's §8.5:
  *  1. Load the row (idempotent no-op if already terminal).
  *  2. Gate 3 (Ruling A) — re-assert every source document's key against the ROW's
@@ -239,10 +267,11 @@ async function generateBrief(input: {
  *  3. Byte cap.
  *  4. Read bytes from R2, re-checking the real total.
  *  5. Load the live taxonomy.
- *  6. Call the model (multimodal, schema-bound).
- *  7. Usable-output floor.
- *  8. Slug → id mapping (D5).
- *  9. Persist the outcome.
+ *  6. Re-check the row is still claimable (W8 — never spend a paid call on a settled row).
+ *  7. Call the model (multimodal, schema-bound).
+ *  8. Usable-output floor.
+ *  9. Slug → id mapping (D5) + the unmatched-label footnote.
+ * 10. Persist the outcome.
  *
  * Non-retryable classifications (mapped by the CALLER — `jobs/project-brief-parse.ts` — to
  * BullMQ's `UnrecoverableError`) are thrown as `ProjectBriefParseError`; a transient/stochastic
@@ -274,6 +303,21 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   const productChoices = buildTaxonomyChoices(productCats);
 
   // ── The model call ────────────────────────────────────────────────────────────────────────
+  // ⚠⚠ BAL-254 W8 — LAST CHANCE TO NOT SPEND AN OPUS CALL. The row was claimable when this job
+  // started, but the web action races us: if `postBaloApiJson` times out AFTER the api enqueued,
+  // `startProjectBriefParseAction` wins the CAS with `enqueue_failed` while this job is already
+  // reading R2. The parse then ran to completion and `markSucceeded` no-op'd on the CAS — the
+  // user saw an error and the paid call was spent anyway. One SELECT here is orders of magnitude
+  // cheaper than the call it can avoid.
+  //
+  // ⚠ Not a lock and not a claim — the row can still go terminal DURING the call. This narrows
+  // the window from "the whole parse" to "the model call"; it does not close it, and it does not
+  // need to (the CAS is what keeps the outcome correct either way).
+  if (!(await isStillClaimable(parseId))) {
+    log.info({ parseId }, 'Project brief parse abandoned before the model call — row is terminal');
+    return;
+  }
+
   const fileNames = files.map((f) => f.filename);
   const prompt = briefParsePrompt({ tagChoices, productChoices, fileNames });
 
@@ -294,6 +338,20 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
   const tagMapping = mapSlugsToIds(value.tagSlugs, tagChoices);
   const productMapping = mapSlugsToIds(value.productSlugs, productChoices);
 
+  // ⚠⚠ BAL-254 W4 — THE FOOTNOTE IS DERIVED FROM THE ACTUAL MAPPING FAILURES, not from the
+  // model's self-report alone. `unmatchedSlugs` used to be computed and discarded while the
+  // persisted labels came straight from `value.unmatched*Labels`, so a slug that missed the live
+  // taxonomy and was NOT self-reported disappeared without trace — the exact silent drop this
+  // footnote exists to prevent. Both sources are unioned; see `deriveUnmatchedLabels`.
+  const unmatchedTagLabels = deriveUnmatchedLabels(
+    tagMapping.unmatchedSlugs,
+    value.unmatchedTagLabels
+  );
+  const unmatchedProductLabels = deriveUnmatchedLabels(
+    productMapping.unmatchedSlugs,
+    value.unmatchedProductLabels
+  );
+
   if (usage.inputTokens !== null && usage.inputTokens > PROJECT_BRIEF_BUDGET_INPUT_TOKENS) {
     log.warn(
       { parseId, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
@@ -308,8 +366,8 @@ export async function runProjectBriefParse(parseId: string, deps: ParseDeps): Pr
       descriptionMarkdown: value.descriptionMarkdown,
       tagIds: tagMapping.ids,
       productIds: productMapping.ids,
-      unmatchedTagLabels: value.unmatchedTagLabels,
-      unmatchedProductLabels: value.unmatchedProductLabels,
+      unmatchedTagLabels,
+      unmatchedProductLabels,
     },
     audit,
     usage,

@@ -269,6 +269,78 @@ describe('useProjectBriefGeneration', () => {
     expect(result.current.failureReason).toBeNull();
   });
 
+  // ── W2 — cancel() abandons the generation, not merely its phase ─────────────────────────
+  describe('cancel (BAL-254 W2)', () => {
+    /** start() a generation and let exactly ONE poll fire. Shared by both cancel tests. */
+    async function startAndPollOnce(
+      onSucceeded: () => void
+    ): Promise<
+      ReturnType<typeof renderHook<ReturnType<typeof useProjectBriefGeneration>, unknown>>
+    > {
+      mockStart.mockResolvedValue({ success: true, parseId: 'p1' });
+      const rendered = renderHook(() => useProjectBriefGeneration({ onSucceeded }));
+      await act(async () => {
+        await rendered.result.current.start(DOCS);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(mockPoll).toHaveBeenCalledTimes(1);
+      return rendered;
+    }
+
+    it('stops the interval and returns the hook to idle', async () => {
+      mockPoll.mockResolvedValue({ status: 'pending' });
+      const { result } = await startAndPollOnce(vi.fn());
+
+      act(() => result.current.cancel());
+      expect(result.current.phase).toBe('idle');
+      expect(result.current.failureReason).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(mockPoll).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * ⚠⚠ THE ASSERTION THAT MATTERS. Clearing the interval alone is not enough: the poll whose
+     * promise was ALREADY in flight when the user walked away still resolves. Cancelling clears
+     * `parseIdRef`, which is what makes that resolution a no-op — the same generation-identity
+     * mechanism `start` relies on (fix round F4).
+     */
+    it('⚠ a poll already IN FLIGHT at cancel() time cannot call onSucceeded', async () => {
+      let releasePoll: ((value: unknown) => void) | undefined;
+      mockPoll.mockReturnValueOnce(
+        new Promise((resolve) => {
+          releasePoll = resolve;
+        })
+      );
+      const onSucceeded = vi.fn();
+      const { result } = await startAndPollOnce(onSucceeded);
+
+      act(() => result.current.cancel());
+
+      await act(async () => {
+        releasePoll?.({
+          status: 'succeeded',
+          draft: {
+            title: 'T',
+            descriptionHtml: '<p>d</p>',
+            tagIds: [],
+            productIds: [],
+            unmatchedTagLabels: [],
+            unmatchedProductLabels: [],
+          },
+        });
+        await Promise.resolve();
+      });
+
+      expect(onSucceeded).not.toHaveBeenCalled();
+      expect(result.current.phase).toBe('idle');
+    });
+  });
+
   it('dismissFailure resets to idle', async () => {
     mockStart.mockResolvedValue({ success: false, error: 'nope' });
     const { result } = renderHook(() => useProjectBriefGeneration({ onSucceeded: vi.fn() }));

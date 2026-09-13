@@ -320,22 +320,6 @@ export function ProjectRequestPanel({
 
   const handleClose = useCallback(() => onClose(), [onClose]);
 
-  const handleSelectManual = useCallback(() => {
-    if (expertProfileId !== undefined) {
-      track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
-        expert_id: expertProfileId,
-        method: 'manual',
-      });
-    }
-    // ⚠ FIX ROUND F14 — RESET `source`. Picking "I'll write it myself" from the start step is a
-    // claim about THIS draft, and it has to overwrite an earlier `'ai'` choice: a user who tried
-    // the AI path, went Back, and then typed the brief by hand was being recorded as `source:
-    // 'ai'` at submit, silently corrupting the AI-vs-manual metric this ticket exists to measure
-    // (and rendering the AI provenance banner over a hand-typed brief).
-    setField('source', 'manual');
-    setStep('manual');
-  }, [expertProfileId, setField]);
-
   const {
     briefGeneration,
     isGenerating,
@@ -344,6 +328,7 @@ export function ProjectRequestPanel({
     regenerateConfirmOpen,
     setRegenerateConfirmOpen,
     handleSelectAi,
+    cancelGeneration,
     handleGenerateClick,
     handleRetryGenerate,
     handleWriteItMyself,
@@ -358,6 +343,28 @@ export function ProjectRequestPanel({
     // user has closed it, or after they have submitted, must write nothing.
     isFlowActive: open && step !== 'done',
   });
+
+  const handleSelectManual = useCallback(() => {
+    if (expertProfileId !== undefined) {
+      track(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
+        expert_id: expertProfileId,
+        method: 'manual',
+      });
+    }
+    // ⚠⚠ BAL-254 W2 — CANCEL ANY IN-FLIGHT GENERATION FIRST. `isFlowActive` (F5) is false only
+    // once the drawer is closed or the request is submitted — a user who started a generate, went
+    // Back to `start`, and picked "I'll write it myself" is still an ACTIVE flow, so the parse
+    // kept polling and a late success wrote all four AI fields over their hand-typed draft and
+    // force-navigated them to `review`. Cancelling is explicit and also stops the wasted polling.
+    cancelGeneration();
+    // ⚠ FIX ROUND F14 — RESET `source`. Picking "I'll write it myself" from the start step is a
+    // claim about THIS draft, and it has to overwrite an earlier `'ai'` choice: a user who tried
+    // the AI path, went Back, and then typed the brief by hand was being recorded as `source:
+    // 'ai'` at submit, silently corrupting the AI-vs-manual metric this ticket exists to measure
+    // (and rendering the AI provenance banner over a hand-typed brief).
+    setField('source', 'manual');
+    setStep('manual');
+  }, [expertProfileId, setField, cancelGeneration]);
 
   const handleJump = useCallback((key: string) => {
     if (key === 'start' || key === 'upload' || key === 'manual' || key === 'review') setStep(key);
@@ -541,6 +548,7 @@ export function ProjectRequestPanel({
       productsLoading={retrying && taxonomies.products.groups.length === 0}
       productsError={productsError}
       onRetryTaxonomies={handleRetryTaxonomies}
+      documents={draft.documents}
       onDocumentsChange={handleDocumentsChange}
       onUploadingChange={setUploading}
       budgetMinCents={budgetMinCents}
@@ -598,7 +606,6 @@ export function ProjectRequestPanel({
           isUploadFailed={isUploadFailed}
           headingIndex={briefGeneration.headingIndex}
           failureReason={briefGeneration.failureReason}
-          documentCount={draft.documents.length}
           onDocumentsChange={handleDocumentsChange}
           onUploadingChange={setUploading}
           onRetryGenerate={handleRetryGenerate}
@@ -671,7 +678,6 @@ interface ProjectRequestDrawerBodyProps {
   isUploadFailed: boolean;
   headingIndex: 0 | 1 | 2;
   failureReason: ProjectBriefFailureReason | null;
-  documentCount: number;
   onDocumentsChange: (docs: ProjectDraft['documents']) => void;
   onUploadingChange: (uploading: boolean) => void;
   onRetryGenerate: () => void;
@@ -709,7 +715,6 @@ function ProjectRequestDrawerBody({
   isUploadFailed,
   headingIndex,
   failureReason,
-  documentCount,
   onDocumentsChange,
   onUploadingChange,
   onRetryGenerate,
@@ -767,7 +772,7 @@ function ProjectRequestDrawerBody({
           <UploadStepBody
             isGenerating={isGenerating}
             headingIndex={headingIndex}
-            documentCount={documentCount}
+            documents={draft.documents}
             onDocumentsChange={onDocumentsChange}
             onUploadingChange={onUploadingChange}
             isUploadFailed={isUploadFailed}
@@ -833,7 +838,7 @@ function ProjectRequestDrawerBody({
 function UploadStepBody({
   isGenerating,
   headingIndex,
-  documentCount,
+  documents,
   onDocumentsChange,
   onUploadingChange,
   isUploadFailed,
@@ -843,7 +848,7 @@ function UploadStepBody({
 }: Readonly<{
   isGenerating: boolean;
   headingIndex: 0 | 1 | 2;
-  documentCount: number;
+  documents: ProjectDraft['documents'];
   onDocumentsChange: (docs: ProjectDraft['documents']) => void;
   onUploadingChange: (uploading: boolean) => void;
   isUploadFailed: boolean;
@@ -881,13 +886,18 @@ function UploadStepBody({
 
       {/*
         ⚠⚠ HIDDEN WHILE GENERATING, NEVER UNMOUNTED (fix round F16). `DocumentUploader` owns its
-        file rows in its OWN state and is deliberately NOT seeded from `draft.documents` (plan §2
-        — a pre-existing gap on the manual step too). So swapping it out for the spinner and back
-        emptied the list: on a failure the user saw a bare dropzone directly underneath a banner
-        promising "Your files are still attached." The files WERE still attached — the draft
-        never lost them — but the screen said otherwise, which is the worse of the two failures.
-        Keeping the subtree mounted makes the copy true again, and costs only the exit animation
-        on the swap (the spinner still replaces it visually, as the design asks).
+        file rows in its OWN state, so swapping it out for the spinner and back emptied the list:
+        on a failure the user saw a bare dropzone directly underneath a banner promising "Your
+        files are still attached." Keeping the subtree mounted makes the copy true again, and
+        costs only the exit animation on the swap (the spinner still replaces it visually, as the
+        design asks).
+
+        ⚠⚠ AND IT IS **SEEDED** FROM `draft.documents` (BAL-254 W1). Staying mounted only covers
+        the generating toggle WITHIN this step; the whole step unmounts on a step change, so
+        review → "Change source documents" landed on an empty dropzone despite the draft holding
+        files — and because `handleDocumentsChange` REPLACES rather than merges, adding one file
+        there silently dropped the originals from both the parse input and the request's
+        attachments. Seeding fixes that here and on the manual step's uploader alike.
       */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
@@ -905,6 +915,7 @@ function UploadStepBody({
           </p>
         </div>
         <DocumentUploader
+          initialDocuments={documents}
           onDocumentsChange={onDocumentsChange}
           onUploadingChange={onUploadingChange}
         />
@@ -912,7 +923,7 @@ function UploadStepBody({
           These become both the draft&apos;s source material and your request&apos;s attachments —
           nothing else to upload later.
         </p>
-        {documentCount === 0 && (
+        {documents.length === 0 && (
           <p className="text-muted-foreground text-xs leading-relaxed">
             Add at least one file to generate a brief.
           </p>
@@ -1064,6 +1075,8 @@ interface ManualStepFieldsProps {
   productsLoading: boolean;
   productsError: boolean;
   onRetryTaxonomies: () => void;
+  /** BAL-254 W1 — seeds the uploader's rows so review → Edit → manual keeps the attachments. */
+  documents: ProjectDraft['documents'];
   onDocumentsChange: (docs: ProjectDraft['documents']) => void;
   onUploadingChange: (uploading: boolean) => void;
   budgetMinCents: number | null;
@@ -1111,6 +1124,7 @@ function ManualStepFields({
   productsLoading,
   productsError,
   onRetryTaxonomies,
+  documents,
   onDocumentsChange,
   onUploadingChange,
   budgetMinCents,
@@ -1238,6 +1252,7 @@ function ManualStepFields({
           PDF, PNG, JPEG or WEBP · up to 4 files · 5 MB each.
         </p>
         <DocumentUploader
+          initialDocuments={documents}
           onDocumentsChange={onDocumentsChange}
           onUploadingChange={onUploadingChange}
         />
@@ -1303,19 +1318,27 @@ function AiProvenanceBanner({
           ? 'Regenerating your brief…'
           : 'AI-drafted from your documents — check over everything below.'}
       </p>
+      {/*
+        ⚠ 44px MINIMUM HIT AREA + A VISIBLE FOCUS RING ON BOTH CONTROLS (BAL-254 W5). Same rule
+        F13 applied to the uploader's Retry/Remove in this PR, and the same reason: this is a
+        touch-first surface. "Change source documents" additionally removed the NATIVE ring
+        (`focus-visible:outline-none`) and named a ring COLOUR with no `focus-visible:ring-2` to
+        draw — i.e. it had no visible focus indicator at all. The glyph and type scale are
+        unchanged; only the tappable box grows.
+      */}
       {!isGenerating && (
         <div className="flex shrink-0 items-center gap-3">
           <button
             type="button"
             onClick={onRegenerate}
-            className="border-border bg-card text-foreground hover:bg-muted focus-visible:ring-ring inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            className="border-border bg-card text-foreground hover:bg-muted focus-visible:ring-ring inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <RotateCw className="h-3.5 w-3.5" aria-hidden="true" /> Regenerate
           </button>
           <button
             type="button"
             onClick={onChangeSourceDocuments}
-            className="text-primary hover:text-primary/80 focus-visible:ring-ring text-xs font-semibold focus-visible:outline-none"
+            className="text-primary hover:text-primary/80 focus-visible:ring-ring inline-flex min-h-11 items-center rounded-md px-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
           >
             Change source documents
           </button>

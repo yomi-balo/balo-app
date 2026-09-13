@@ -103,11 +103,13 @@ export function startProjectBriefParseWorker(): Worker<ProjectBriefParseJobData>
     projectBriefParsesRepository
       .markFailed({ parseId: job.data.parseId, failureReason: reason })
       .catch((markErr: unknown) => {
+        // ⚠ `err`, NOT a hand-flattened message (BAL-254 W6). This is the log line that explains
+        // why a row is stuck `pending` until the client's own deadline derivation rescues it, so
+        // it is the one that most needs the driver's error type and stack. `String(markErr)` gave
+        // `[object Object]` for any non-`Error` rejection. The write is `{ parseId,
+        // failureReason }` — a closed literal — so there is nothing sensitive to leak.
         log.error(
-          {
-            parseId: job.data.parseId,
-            error: markErr instanceof Error ? markErr.message : String(markErr),
-          },
+          { err: markErr, parseId: job.data.parseId },
           'Project brief parse — failed to persist the terminal failure'
         );
       });
