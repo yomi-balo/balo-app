@@ -69,22 +69,26 @@ export async function closeRequestAction(
   }
   const { requestId } = parsed.data;
 
-  // ⚠ THE READ MUST PRECEDE THE GATE (it supplies `companyId`) — SO THE DENIAL MUST COLLAPSE.
-  // "Missing" and "not yours" leave here as ONE opaque literal: a distinguishable `gone` would
-  // be a pre-authorization existence oracle, telling any authenticated user holding a stale
-  // request UUID whether that request still exists. Same discipline as `request-proposal.ts`'s
-  // uniform non-leaking copy and `get-request-file-download.ts`'s byte-identical tombstone.
-  // (The ADMIN arms keep their `gone` arm legitimately — they resolve `hasPlatformCapability`
-  // BEFORE the read, so their distinction is post-authorization.)
-  const request = await projectRequestsRepository.findByIdWithRelations(requestId);
-  if (
-    request === undefined ||
-    !(await hasCapability(user, CAPABILITIES.MANAGE_REQUESTS, { companyId: request.companyId }))
-  ) {
-    return { success: false, error: PERMISSION_DENIED, code: 'denied' };
-  }
-
   try {
+    // ⚠ THE READ MUST PRECEDE THE GATE (it supplies `companyId`) — SO THE DENIAL MUST COLLAPSE.
+    // "Missing" and "not yours" leave here as ONE opaque literal: a distinguishable `gone` would
+    // be a pre-authorization existence oracle, telling any authenticated user holding a stale
+    // request UUID whether that request still exists. Same discipline as `request-proposal.ts`'s
+    // uniform non-leaking copy and `get-request-file-download.ts`'s byte-identical tombstone.
+    // (The ADMIN arms keep their `gone` arm legitimately — they resolve `hasPlatformCapability`
+    // BEFORE the read, so their distinction is post-authorization.)
+    //
+    // BAL-546 (D4) — the read AND this `hasCapability` await were PREVIOUSLY outside this try: a
+    // rejection from either (e.g. a connection reset) threw an unhandled rejection instead of
+    // the generic failure below.
+    const request = await projectRequestsRepository.findByIdWithRelations(requestId);
+    if (
+      request === undefined ||
+      !(await hasCapability(user, CAPABILITIES.MANAGE_REQUESTS, { companyId: request.companyId }))
+    ) {
+      return { success: false, error: PERMISSION_DENIED, code: 'denied' };
+    }
+
     const result = await projectRequestsRepository.close({
       requestId,
       actorUserId: user.id,
@@ -130,11 +134,15 @@ export async function closeRequestAction(
     if (error instanceof InvalidStatusTransitionError) {
       return { success: false, error: NOT_CLOSABLE, code: 'not_closable' };
     }
-    // The cascade locks BOTH open proposal statuses on its way to the relationship row, which
-    // bridges `accept`'s and `promoteToSubmit`'s otherwise-disjoint lock worlds and completes
-    // an AB/BA cycle (see `projectRequestsRepository.close`'s LOCK ORDER block). Postgres
-    // aborts one side with 40P01: expected-rare, self-healing, nothing written ⇒ WARN and
-    // retryable copy. No new `code` value — the result union is unchanged.
+    // BAL-546 fix round (F6) — the AB/BA cycle this comment used to describe as LIVE can no
+    // longer form: the cascade takes the per-request advisory lock
+    // (`projectRequestsRepository.close`'s LOCK ORDER block) as its first statement, and so
+    // does every other multi-table request-domain writer, including `promoteToSubmit` — they
+    // can never interleave their row-lock acquisition on this request. The 40P01 mapping is
+    // kept as a cheap backstop over the strictly smaller residual left by writers outside that
+    // serialised set (orchestrator D6), not because this cascade can still deadlock against
+    // `promoteToSubmit`. Expected-rare and self-healing either way — nothing was written ⇒
+    // WARN and retryable copy. No new `code` value — the result union is unchanged.
     const deadlock = deadlockFailure(
       error,
       'Project request close aborted by a Postgres deadlock (40P01) — retryable',

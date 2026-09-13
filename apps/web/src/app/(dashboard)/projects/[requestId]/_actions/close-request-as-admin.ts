@@ -73,12 +73,14 @@ export async function closeRequestAsAdminAction(
   }
   const { requestId, reason, note } = parsed.data;
 
-  const request = await projectRequestsRepository.findByIdWithRelations(requestId);
-  if (request === undefined) {
-    return { success: false, error: REQUEST_GONE, code: 'gone' };
-  }
-
   try {
+    // BAL-546 (D4) — this pre-flight read was PREVIOUSLY outside this try: a rejection (e.g. a
+    // connection reset) threw an unhandled rejection instead of the generic failure below.
+    const request = await projectRequestsRepository.findByIdWithRelations(requestId);
+    if (request === undefined) {
+      return { success: false, error: REQUEST_GONE, code: 'gone' };
+    }
+
     const result = await projectRequestsRepository.close({
       requestId,
       actorUserId: user.id,
@@ -125,8 +127,10 @@ export async function closeRequestAsAdminAction(
     if (error instanceof InvalidStatusTransitionError) {
       return { success: false, error: NOT_CLOSABLE, code: 'not_closable' };
     }
-    // See `close-request.ts` — the cascade's lock set can complete an AB/BA cycle against
-    // `promoteToSubmit`, so Postgres may abort this side with 40P01.
+    // See `close-request.ts` (F6) — BAL-546's per-request advisory lock makes the AB/BA cycle
+    // this used to describe against `promoteToSubmit` unreachable; the mapping stays as a
+    // cheap backstop over the residual left by writers outside the serialised set
+    // (orchestrator D6).
     const deadlock = deadlockFailure(
       error,
       'Project request close aborted by a Postgres deadlock (40P01) — retryable',

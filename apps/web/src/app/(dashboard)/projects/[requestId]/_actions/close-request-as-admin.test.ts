@@ -247,4 +247,18 @@ describe('closeRequestAsAdminAction', () => {
       expect.objectContaining({ requestId: REQUEST_ID, error: 'db exploded' })
     );
   });
+
+  it('a rejected pre-flight read (findByIdWithRelations) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockFindByIdWithRelations.mockRejectedValue(new Error('connection reset'));
+    const result = await closeRequestAsAdminAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not close the request. Please try again.',
+    });
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to close project request as admin',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'connection reset' })
+    );
+  });
 });

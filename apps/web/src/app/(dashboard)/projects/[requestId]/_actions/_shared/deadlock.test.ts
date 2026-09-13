@@ -6,7 +6,12 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-import { isDeadlockDetected, deadlockFailure, CONCURRENT_RETRY_MESSAGE } from './deadlock';
+import {
+  isDeadlockDetected,
+  isLockNotAvailable,
+  deadlockFailure,
+  CONCURRENT_RETRY_MESSAGE,
+} from './deadlock';
 import { log } from '@/lib/logging';
 
 describe('isDeadlockDetected', () => {
@@ -26,11 +31,39 @@ describe('isDeadlockDetected', () => {
     expect(isDeadlockDetected({ code: '40001' })).toBe(false);
   });
 
+  it("does NOT swallow 55P03 — that is `isLockNotAvailable`'s job, not this one's", () => {
+    expect(isDeadlockDetected({ code: '55P03' })).toBe(false);
+  });
+
   it('is false for anything without a code', () => {
     expect(isDeadlockDetected(new Error('db exploded'))).toBe(false);
     expect(isDeadlockDetected(null)).toBe(false);
     expect(isDeadlockDetected(undefined)).toBe(false);
     expect(isDeadlockDetected('40P01')).toBe(false);
+  });
+});
+
+describe('isLockNotAvailable (fix round F1)', () => {
+  it('recognises a postgres-js 55P03 rejection', () => {
+    expect(isLockNotAvailable(Object.assign(new Error('lock timeout'), { code: '55P03' }))).toBe(
+      true
+    );
+    // postgres-js also rejects with plain objects on some paths.
+    expect(isLockNotAvailable({ code: '55P03' })).toBe(true);
+  });
+
+  it('does NOT swallow a different SQLSTATE — 40P01 stays a deadlock, not a lock timeout', () => {
+    expect(
+      isLockNotAvailable(Object.assign(new Error('deadlock detected'), { code: '40P01' }))
+    ).toBe(false);
+    expect(isLockNotAvailable({ code: '23505' })).toBe(false);
+  });
+
+  it('is false for anything without a code', () => {
+    expect(isLockNotAvailable(new Error('db exploded'))).toBe(false);
+    expect(isLockNotAvailable(null)).toBe(false);
+    expect(isLockNotAvailable(undefined)).toBe(false);
+    expect(isLockNotAvailable('55P03')).toBe(false);
   });
 });
 
@@ -47,6 +80,22 @@ describe('deadlockFailure', () => {
       // rejection becomes a user-facing string and is never re-thrown, so the original is
       // lost unless it is logged here (CLAUDE.md's caught-error-boundary rule).
       error: 'deadlock detected',
+      stack: error.stack,
+    });
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('warns and returns the retryable failure on a 55P03 (fix round F1)', () => {
+    const error = Object.assign(new Error('canceling statement due to lock timeout'), {
+      code: '55P03',
+    });
+    const result = deadlockFailure(error, 'Something aborted — retryable', { requestId: 'req-1' });
+
+    expect(result).toEqual({ success: false, error: CONCURRENT_RETRY_MESSAGE });
+    // ⚠ WARN, never ERROR: nothing was written and a retry succeeds — same as a 40P01.
+    expect(log.warn).toHaveBeenCalledWith('Something aborted — retryable', {
+      requestId: 'req-1',
+      error: 'canceling statement due to lock timeout',
       stack: error.stack,
     });
     expect(log.error).not.toHaveBeenCalled();
@@ -104,6 +153,9 @@ describe('deadlockFailure', () => {
   it('returns null (and logs nothing) for any other error, so the caller falls through', () => {
     expect(deadlockFailure(new Error('db exploded'), 'msg', {})).toBeNull();
     expect(deadlockFailure({ code: '23505' }, 'msg', {})).toBeNull();
+    // 40001 is serialization_failure, a DIFFERENT class deliberately not mapped alongside
+    // 40P01 / 55P03.
+    expect(deadlockFailure({ code: '40001' }, 'msg', {})).toBeNull();
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -111,5 +163,9 @@ describe('deadlockFailure', () => {
     const result = deadlockFailure({ code: '40P01' }, 'msg', {});
     expect(result).not.toBeNull();
     expect(Object.keys(result ?? {}).sort()).toEqual(['error', 'success']);
+
+    const lockTimeoutResult = deadlockFailure({ code: '55P03' }, 'msg', {});
+    expect(lockTimeoutResult).not.toBeNull();
+    expect(Object.keys(lockTimeoutResult ?? {}).sort()).toEqual(['error', 'success']);
   });
 });

@@ -15,6 +15,7 @@ import {
 import { UNTITLED_ENGAGEMENT_LABEL, type RatingNudgeCandidate } from './reviews';
 import type { PricingMethod, ProposalCadence } from './proposal-types';
 import { isAllowedTransition, InvalidStatusTransitionError } from './project-requests';
+import { acquireRequestLock } from './_shared/request-lock';
 // BAL-431 (Ruling 2) — award closure fires from THIS hook, in THIS transaction, alongside the
 // §5 lineage it is paired with. One hook, both effects.
 import { markNotSelectedByAward } from './request-expert-relationships';
@@ -932,6 +933,22 @@ export const projectEngagementsRepository = {
    * (snapshotting the passed terms). Locks the request FOR UPDATE first (serialising
    * concurrent approvals — the second caller sees `kickoff_approved` and is rejected).
    *
+   * ⚠ BAL-546 — LOCK ORDER: request row FIRST (`FOR UPDATE` below), then the losing
+   * relationships via `markNotSelectedByAward` as an unordered bulk `UPDATE … WHERE
+   * projectRequestId = …` with NO `ORDER BY` and no `FOR UPDATE` pre-pass. This is the FOURTH
+   * lock order in the package and the INVERSE of `advanceRelationshipStatus`'s documented
+   * "relationship FIRST, request LAST" rule — it predates BAL-540 and was named nowhere before
+   * this ticket. It formed a live AB/BA against every writer routed through
+   * `advanceRelationshipStatus` (`submit`, `promoteToSubmit`, `accept`, `declineTrack`, `close`,
+   * `expressionsOfInterestRepository.submit`) — reachable example: an award being approved while
+   * a different invited expert on the same request submits an EOI. It is now serialised by the
+   * per-request advisory lock (`acquireRequestLock`, `_shared/request-lock.ts`), taken as this
+   * transaction's first statement, before the request row is even read. This is also the SINGLE
+   * LARGEST transaction of the serialised set (orchestrator D3), so it is the worst-case hold
+   * time any other writer on the same request can queue behind. The bulk `UPDATE`'s unordered
+   * row acquisition is still unordered — the advisory lock is what makes that not matter, not an
+   * `ORDER BY` that does not exist.
+   *
    * Guards, in order:
    *  - missing/soft-deleted request → `Error`
    *  - status is not `accepted` (or the edge to `kickoff_approved` is illegal) →
@@ -974,6 +991,9 @@ export const projectEngagementsRepository = {
     closedRelationshipIds: string[];
   }> {
     return db.transaction(async (tx) => {
+      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      await acquireRequestLock(tx, input.requestId);
+
       const [current] = await tx
         .select()
         .from(projectRequests)

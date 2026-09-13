@@ -238,4 +238,18 @@ describe('declineTrackAsAdminAction', () => {
       expect.objectContaining({ requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID })
     );
   });
+
+  it('a rejected pre-flight read (findByIdWithRelations) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockFindByIdWithRelations.mockRejectedValue(new Error('connection reset'));
+    const result = await declineTrackAsAdminAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not decline this track. Please try again.',
+    });
+    expect(mockDeclineTrack).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to decline request track as admin',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'connection reset' })
+    );
+  });
 });

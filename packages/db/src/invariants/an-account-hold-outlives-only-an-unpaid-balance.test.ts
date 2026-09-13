@@ -418,33 +418,113 @@ describe('INVARIANT: both late-open (R3b) transactions serialise against the cre
     expect(openIdx).toBeGreaterThan(lockIdx);
   });
 
-  it('there is exactly ONE advisory-lock class in the whole data layer, so no lock-ordering cycle can exist', () => {
-    // The deadlock-freedom argument in both docblocks rests on this: one lock, one key per
-    // wallet, taken before any row is touched. A second advisory lock landing ANYWHERE in the
-    // repositories would invalidate it and needs its own ordering analysis — so this scans the
-    // whole directory, not just the helper. Comments are stripped, so the several docblocks that
-    // reference the lock by name neither break this nor satisfy it.
-    const helper = normalize(
-      codeOnly(
-        readScannedSourceOrFail(
-          'packages/db/src/repositories/_shared/wallet-lock.ts',
-          new URL('../repositories/_shared/wallet-lock.ts', import.meta.url)
+  /**
+   * ⚠⚠ BAL-546 AMENDED THIS CASE FROM "exactly ONE advisory-lock class" TO "exactly TWO NAMED
+   * classes" (orchestrator D1). The one-class argument was already disavowed in prose at
+   * `apps/api/src/services/credit-session/end-session.ts` ("that OVERSTATES the proof: ROW locks
+   * … are locks too, so this is not a single-lock-class system") before this ticket — amending
+   * here is a reconciliation with that admission, not a weakening of the invariant. What now
+   * holds: the two classes are disjoint (this cascade's request-domain money fan-out is provably
+   * empty, and the request class is package-private to `@balo/db` — see the two cases below), and
+   * if a transaction ever needs both locks, the wallet lock goes first. The residual the
+   * mechanical checks below do NOT cover: a transaction spanning TWO FILES, one taking each
+   * class — the file-grain disjointness check is coarser than transaction-grain, and this is
+   * named rather than implied covered.
+   *
+   * ⚠ D10's placement trap, resolved without an allowlist (D15). The concurrency suite proving
+   * serialization (`request-domain-serialization.concurrency.integration.test.ts`) lives under
+   * `repositories/` alongside the pre-existing concurrency suites and deliberately contains the
+   * literal `pg_advisory` NOWHERE IN CODE — it reaches the lock only through the imported
+   * `acquireRequestLock` symbol and observes blocking via `pg_blocking_pids` (a different
+   * string). So the carrier set below stays exactly the two lock-implementation files, asserted
+   * by SET-EQUALITY over an UNFILTERED walk (no `.filter()` removes a file before the
+   * comparison) — never a filtered/allowlisted walk, which would be vacuous.
+   */
+  it('there are exactly TWO advisory-lock classes in the data layer, each with its key derivation pinned', () => {
+    const ADVISORY_LOCK_CLASSES: ReadonlyArray<{ readonly file: string; readonly keySql: string }> =
+      [
+        {
+          file: `_shared${sep}request-lock.ts`,
+          keySql:
+            "SELECT pg_advisory_xact_lock(hashtextextended('project_request:' || ${requestId}, 0))",
+        },
+        {
+          file: `_shared${sep}wallet-lock.ts`,
+          keySql: 'SELECT pg_advisory_xact_lock(hashtextextended(${walletId}, 0))',
+        },
+      ];
+
+    const repoDir = fileURLToPath(new URL('../repositories/', import.meta.url));
+    const all = listTsFilesRecursive(repoDir); // ⚠ UNFILTERED — includes *.test.ts
+    expect(all.length).toBeGreaterThan(0);
+
+    const carriers = all
+      .filter((abs) => codeOnly(readFileSync(abs, 'utf8')).includes('pg_advisory'))
+      .map((abs) => abs.slice(repoDir.length))
+      .sort((a, b) => a.localeCompare(b));
+
+    expect(carriers).toEqual(
+      ADVISORY_LOCK_CLASSES.map((c) => c.file).sort((a, b) => a.localeCompare(b))
+    );
+
+    for (const cls of ADVISORY_LOCK_CLASSES) {
+      const src = normalize(
+        codeOnly(
+          readScannedSourceOrFail(
+            `packages/db/src/repositories/${cls.file}`,
+            new URL(`../repositories/${cls.file}`, import.meta.url)
+          )
         )
+      );
+      expect(src.match(/pg_advisory/g) ?? []).toHaveLength(1);
+      expect(src).toContain(cls.keySql);
+    }
+  });
+
+  it('no repository file can take BOTH classes — the call-site sets are disjoint', () => {
+    const repoDir = fileURLToPath(new URL('../repositories/', import.meta.url));
+    const files = listTsFilesRecursive(repoDir).map((abs) => ({
+      rel: abs.slice(repoDir.length),
+      src: codeOnly(readFileSync(abs, 'utf8')),
+    }));
+    // Positive controls — without these the offender list is vacuously empty.
+    expect(files.some((f) => f.src.includes('acquireWalletLock'))).toBe(true);
+    expect(files.some((f) => f.src.includes('acquireRequestLock'))).toBe(true);
+
+    const both = files
+      .filter((f) => f.src.includes('acquireWalletLock') && f.src.includes('acquireRequestLock'))
+      .map((f) => f.rel);
+    expect(both).toEqual([]);
+  });
+
+  it('the request lock class is package-private — no apps/* transaction can take it', () => {
+    const index = codeOnly(
+      readScannedSourceOrFail(
+        'packages/db/src/repositories/index.ts',
+        new URL('../repositories/index.ts', import.meta.url)
       )
     );
-    expect(helper.match(/pg_advisory/g) ?? []).toHaveLength(1);
-    expect(helper).toContain('SELECT pg_advisory_xact_lock(hashtextextended(${walletId}, 0))');
+    expect(index).toContain('acquireWalletLock'); // positive control
+    expect(index).not.toContain('acquireRequestLock');
+  });
 
-    // …and NO other repository issues one directly.
-    const repoDir = fileURLToPath(new URL('../repositories/', import.meta.url));
-    const others = listTsFilesRecursive(repoDir).filter(
-      (abs) => !abs.endsWith(`_shared${sep}wallet-lock.ts`)
+  /**
+   * ⚠⚠ fix round F4 — THE PACKAGE'S PUBLIC ENTRY IS `packages/db/src/index.ts`, NOT
+   * `repositories/index.ts`. `package.json`'s `exports` map only `.` to the former, so the check
+   * above (which the previous round relied on alone) proves nothing about what `apps/*` can
+   * actually import: a future re-export added DIRECTLY to `packages/db/src/index.ts` — bypassing
+   * `repositories/index.ts` entirely — would make `acquireRequestLock` reachable from `apps/*`
+   * without ever touching the file the check above scans, and that check would stay green. This
+   * scans the real public entry too.
+   */
+  it('acquireRequestLock is not reachable through the package public entry (packages/db/src/index.ts) either', () => {
+    const packageIndex = codeOnly(
+      readScannedSourceOrFail('packages/db/src/index.ts', new URL('../index.ts', import.meta.url))
     );
-    expect(others.length).toBeGreaterThan(0);
-    const offenders = others.filter((abs) =>
-      codeOnly(readFileSync(abs, 'utf8')).includes('pg_advisory')
-    );
-    expect(offenders.map((abs) => abs.slice(repoDir.length))).toEqual([]);
+    // Positive control — proves this file is the live re-export channel for repositories, so an
+    // absent `acquireRequestLock` below means genuinely unreachable, not an unscanned file.
+    expect(packageIndex).toContain("export * from './repositories'");
+    expect(packageIndex).not.toContain('acquireRequestLock');
   });
 });
 

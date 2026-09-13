@@ -26,9 +26,10 @@ import {
   type ProjectRequestStatus,
 } from './project-requests';
 import { meetingsRepository } from './meetings';
-import { proposalsRepository } from './proposals';
+import { InvalidProposalTransitionError, proposalsRepository } from './proposals';
 import { usersRepository } from './users';
 import {
+  InvalidRelationshipTransitionError,
   requestExpertRelationshipsRepository,
   RequestClosedError,
   type RelationshipStatus,
@@ -654,5 +655,132 @@ describe('close() — §9 revokes request-grain representations, and only this t
       .from(representations)
       .where(eq(representations.id, orgGrant.id));
     expect(untouched?.status).toBe('active');
+  });
+});
+
+// ── §10 — sequential determinism (BAL-546) ──────────────────────────────────────────────
+//
+// The AC's "deterministic either way the race lands" — proved here for the SEQUENTIAL case
+// (whichever writer commits first), complementing Group B's concurrent, order-independent
+// proof in `request-domain-serialization.concurrency.integration.test.ts`.
+
+describe('close() — §10 sequential determinism: whichever writer commits first, the outcome is deterministic', () => {
+  it('a close committed first refuses a later promoteToSubmit on the same track', async () => {
+    const seeded = await seedRequestWithTrack({
+      requestStatus: 'proposal_requested',
+      relationshipStatus: 'proposal_requested',
+    });
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: seeded.relationshipId,
+      overview: '<p>Ready to submit.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+
+    await closeAsBalo(seeded.requestId);
+
+    await expect(
+      proposalsRepository.promoteToSubmit({
+        proposalId: draft.id,
+        relationshipId: seeded.relationshipId,
+        actorUserId: await seedActorId(),
+      })
+    ).rejects.toBeInstanceOf(InvalidRelationshipTransitionError);
+
+    // Nothing the failed promote could have written landed.
+    const relationship = await readRelationship(seeded.relationshipId);
+    expect(relationship?.status).toBe('declined');
+    const reloadedDraft = await proposalsRepository.findById(draft.id);
+    expect(reloadedDraft?.status).toBe('withdrawn');
+  });
+
+  it('a promoteToSubmit committed first has its proposal withdrawn by the later close', async () => {
+    const seeded = await seedRequestWithTrack({
+      requestStatus: 'proposal_requested',
+      relationshipStatus: 'proposal_requested',
+    });
+    const draft = await proposalsRepository.createDraft({
+      relationshipId: seeded.relationshipId,
+      overview: '<p>Ready to submit.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+
+    const promoted = await proposalsRepository.promoteToSubmit({
+      proposalId: draft.id,
+      relationshipId: seeded.relationshipId,
+      actorUserId: await seedActorId(),
+    });
+    expect(promoted.status).toBe('submitted');
+
+    const result = await closeAsBalo(seeded.requestId);
+
+    expect(result.withdrawnProposalIds).toEqual([draft.id]);
+    const relationship = await readRelationship(seeded.relationshipId);
+    expect(relationship?.status).toBe('declined');
+    const reloadedProposal = await proposalsRepository.findById(draft.id);
+    expect(reloadedProposal?.status).toBe('withdrawn');
+  });
+
+  it('a close committed first refuses a later invite', async () => {
+    const request = await projectRequestFactory();
+    if (request.expertProfileId === null) throw new Error('seeded request has no expertProfileId');
+
+    await closeAsBalo(request.id);
+
+    await expect(
+      requestExpertRelationshipsRepository.invite({
+        projectRequestId: request.id,
+        expertProfileId: request.expertProfileId,
+        invitedByUserId: await seedActorId(),
+      })
+    ).rejects.toBeInstanceOf(RequestClosedError);
+  });
+
+  it('a close committed first refuses a later resubmit', async () => {
+    const seeded = await seedRequestWithTrack({
+      requestStatus: 'proposal_requested',
+      relationshipStatus: 'proposal_requested',
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: seeded.relationshipId,
+      actorUserId: await seedActorId(),
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25_000,
+      rateCents: 18_000,
+      cadence: 'monthly',
+    });
+    // `resubmit` is legal only from `changes_requested` — request it so the proposal is in the
+    // right state for a resubmit that will never get to run.
+    await proposalsRepository.requestChanges({
+      proposalId: proposal.id,
+      requestedByUserId: await seedActorId(),
+      note: 'Please revise the scope.',
+    });
+
+    await closeAsBalo(seeded.requestId);
+
+    // `withdrawn` has no `resubmitted` edge (`PROPOSAL_STATUS_TRANSITIONS.withdrawn = []`).
+    await expect(
+      proposalsRepository.resubmit({
+        relationshipId: seeded.relationshipId,
+        overview: '<p>Revised.</p>',
+        pricingMethod: 'tm',
+        priceCents: 0,
+        depositCents: 25_000,
+        rateCents: 18_000,
+        cadence: 'monthly',
+        milestones: [],
+        installments: [],
+      })
+    ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
   });
 });

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 // BAL-541 — the ONE place a platform role string may be interpreted (ADR-1029). `assignOwner`
 // asks it whether a CANDIDATE owner is Balo staff; it never spells the role set itself.
 import { platformRoleIsStaff } from '@balo/shared/authz';
@@ -9,7 +9,6 @@ import {
   projectRequestTags,
   projectRequestProducts,
   projectRequestDocuments,
-  requestExpertRelationships,
   users,
   type ProjectRequest,
   type ProjectRequestCloseReason,
@@ -20,12 +19,15 @@ import { auditEventsRepository } from './audit-events';
 import { conversationsRepository } from './conversations';
 import { cancelMeetingTx } from './_shared/cancel-meeting-tx';
 import type { DbExecutor } from './_shared/db-executor';
+import { acquireRequestLock } from './_shared/request-lock';
+import { unionById } from './_shared/union-by-id';
 import { meetingContextsRepository } from './meeting-contexts';
 import { advanceProposalStatus, lockOpenProposalsForRequestTx } from './proposals';
 import { representationsRepository } from './representations';
 import {
   advanceRelationshipStatus,
   isAllowedRelationshipTransition,
+  lockLiveRelationshipsForRequestTx,
 } from './request-expert-relationships';
 
 export type ProjectRequestStatus = ProjectRequest['status'];
@@ -757,6 +759,34 @@ export const projectRequestsRepository = {
    * `project_request.closed` audit row. Modelled on {@link updateBaloFeeBps} — the shipped
    * "lock FOR UPDATE + write + audit row in ONE transaction" precedent — scaled up.
    *
+   * ══ BAL-546 — THE OUTER SERIALIZATION. ═════════════════════════════════════════════
+   * This transaction takes the per-request advisory lock (`acquireRequestLock`,
+   * `_shared/request-lock.ts`) as its FIRST statement. Every `@balo/db` transaction that writes
+   * two or more of `proposals` / `request_expert_relationships` / `project_requests` for the SAME
+   * request takes the identical lock first — ELEVEN writers in total (orchestrator D13):
+   * `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`, `.accept`, `.resubmit`;
+   * this method; `requestExpertRelationshipsRepository.invite`, `.declineTrack`,
+   * `.transitionStatus`; `expressionsOfInterestRepository.submit`; and
+   * `projectEngagementsRepository.materializeFromKickoff`. Because all of them queue on one
+   * per-request gate, no two of them ever interleave their row-lock acquisition on this request —
+   * which makes the AB/BA cycle described below UNREACHABLE rather than merely detected-and-
+   * retried. Both existing row-lock orders (`accept`'s and `promoteToSubmit`'s) stand unchanged;
+   * the cycle they used to form together cannot occur.
+   *
+   * ⚠ WHAT IS NOT CLAIMED. Not global deadlock-freedom — row locks are still locks. The five
+   * writers listed as deliberately OUT of the serialised set (single-row request writers;
+   * `proposalsRepository.updateDraft` / `.transitionStatus` / `.requestChanges`;
+   * `stampAvailabilityShared`; `expressionsOfInterestRepository.resubmit`;
+   * `requestSharedFilesRepository.share`) take trio row locks WITHOUT this advisory lock and can
+   * still BLOCK a serialised writer; none can DEADLOCK one, because none of them waits on a
+   * second trio row while holding a first. This is a property of the CALLERS, not of the lock,
+   * and it stays true only for as long as every new multi-table request-domain writer keeps
+   * taking this lock first. D9: there is no read-side gate — a reader must not infer one.
+   *
+   * ⚠ TWO ADVISORY-LOCK CLASSES NOW EXIST in the data layer (this one and `wallet-lock.ts`'s
+   * per-wallet class). They are disjoint: this cascade's money fan-out is provably empty (see
+   * below), so no transaction here ever needs both. If one ever does, wallet lock FIRST.
+   *
    * ══ LOCK ORDER: PROPOSALS → RELATIONSHIPS → REQUEST. ══════════════════════════════
    * ⚠ THIS IS THE LOAD-BEARING DECISION OF THE WHOLE METHOD and it is a DELIBERATE DEVIATION
    * from the plan's step order (which locked relationships first and reached the proposals at
@@ -771,39 +801,33 @@ export const projectRequestsRepository = {
    * order. Within each set, rows are ordered by `id` so two concurrent cascades queue rather
    * than deadlock.
    *
-   * ⚠⚠ "SATISFIES BOTH RULES" IS NOT "DEADLOCK-FREE", AND THE EARLIER WORDING OVERSTATED IT.
-   * There is a THIRD documented order in this package, and it is the OPPOSITE of `accept`'s:
+   * ⚠⚠ THIS USED TO SAY "SATISFIES BOTH RULES IS NOT DEADLOCK-FREE", AND NAMED A FOLLOW-UP
+   * TICKET THAT IS NOW THIS ONE. There IS a third documented order in this package, the OPPOSITE
+   * of `accept`'s:
    *   - `proposalsRepository.accept`:          proposal → relationship → request
    *   - `proposalsRepository.promoteToSubmit`: relationship → request → proposal
-   * Those two have never deadlocked EACH OTHER only because they touch DISJOINT proposal
-   * statuses — `accept` locks a `submitted` proposal, `promoteToSubmit` a `draft` one — so no
-   * single proposal row is ever contended between them. They live in two separate worlds.
-   *
-   * THE CASCADE BRIDGES THOSE WORLDS. `lockOpenProposalsForRequestTx` locks every OPEN
-   * proposal, and `OPEN_PROPOSAL_STATUSES` is `draft | submitted | changes_requested` — BOTH
-   * statuses at once. That completes the AB/BA cycle `promoteToSubmit` had been safe from:
+   * Those two never deadlocked EACH OTHER only because they touch DISJOINT proposal statuses —
+   * `accept` locks a `submitted` proposal, `promoteToSubmit` a `draft` one. THE CASCADE BRIDGES
+   * THOSE WORLDS: `lockOpenProposalsForRequestTx` locks every OPEN proposal at once (`draft` AND
+   * `submitted`), which used to complete a live AB/BA cycle against `promoteToSubmit`:
    *
    *     close()          holds: draft proposal P      waits on: relationship R
    *     promoteToSubmit  holds: relationship R        waits on: that same draft P
    *
-   * NO SINGLE LOCK ORDER CAN FIX THIS FROM HERE. Reversing the cascade to
-   * relationship-first only re-creates the original AB/BA against `accept`; there is no
-   * ordering of {proposal, relationship, request} that agrees with both `accept` and
-   * `promoteToSubmit` at once, because those two disagree with each other.
-   *
-   * WHAT ACTUALLY HAPPENS, AND WHY IT IS TOLERABLE FOR NOW: Postgres DETECTS the cycle after
-   * `deadlock_timeout` (1s by default), aborts ONE side with SQLSTATE 40P01, and the other
-   * commits. The aborted transaction wrote NOTHING — this whole method is one `db.transaction`
-   * — so the state is consistent and a RETRY succeeds. All four BAL-540 Server Actions map
-   * 40P01 to a `log.warn` plus retryable copy (`_actions/_shared/deadlock.ts`) rather than
-   * letting it surface as a generic failure. The proper fix is to serialise all five writers
-   * (`close`, `declineTrack`, `accept`, `promoteToSubmit`, `submit`) on a single advisory lock
-   * keyed on `requestId`, so no two of them ever interleave their row locks at all — a
-   * follow-up ticket, deliberately not attempted inside BAL-540.
+   * NO SINGLE ROW-LOCK ORDER COULD FIX THIS — there is no ordering of {proposal, relationship,
+   * request} that agrees with both `accept` and `promoteToSubmit` at once, because those two
+   * disagree with each other. The BAL-546 advisory lock above is the actual fix: it makes the two
+   * transactions unable to interleave their row-lock acquisition on this request at all, so the
+   * cycle cannot form. Postgres's SQLSTATE 40P01 detection is retained by the four BAL-540 Server
+   * Actions (`_actions/_shared/deadlock.ts`) as a cheap backstop over a now much smaller residual
+   * (orchestrator D6) — it is not the primary defence any more.
    *
    * ══ THE SEQUENCE, ALL ON ONE `tx` ═════════════════════════════════════════════════
-   *   1. Lock the request's open proposals (`lockOpenProposalsForRequestTx`, ordered by id).
-   *   2. Lock its live relationship rows, ordered by id.
+   *   0. BAL-546 — acquire the per-request advisory lock (see above).
+   *   1. Lock the request's open proposals (`lockOpenProposalsForRequestTx`, ordered by id) —
+   *      the pre-lock SNAPSHOT.
+   *   2. Lock its live relationship rows, ordered by id (`lockLiveRelationshipsForRequestTx`) —
+   *      the pre-lock SNAPSHOT.
    *   3. Lock the request row. Missing/soft-deleted ⇒ throw.
    *   4. REFUSE, FOR FREE: `isAllowedTransition(current.status, 'closed')`. `STATUS_TRANSITIONS`
    *      gives `closed` no edge from `accepted` / `kickoff_approved` (the AC's refusal) and
@@ -813,6 +837,11 @@ export const projectRequestsRepository = {
    *      `advanceRelationshipStatus` below re-derives the parent status, and with `closed`
    *      already on disk `deriveRequestStatus`'s rule 1 short-circuits — so no intermediate
    *      status can ever be written, not even transiently inside this transaction.
+   *   5b. BAL-546 — THE UNION RE-READ. Defence-in-depth against any writer that does NOT take
+   *      the advisory lock: re-read both open sets NOW, under the request lock, and act on the
+   *      UNION of the pre-lock snapshot and this re-read (`unionById`, deduplicated by `id` —
+   *      see its own docblock for why the dedupe is load-bearing, not tidiness). See §"THE UNION
+   *      RE-READ IS NOT LOCK-ORDER-NEUTRAL" below for the safety argument this depends on.
    *   6. Meetings. `project_discovery`@requestId ∪ `request_interaction`@each-relationship-id,
    *      in ONE batched read, then `cancelMeetingTx` per meeting.
    *   7. Tracks → `declined`, reason `request_closed` (each writes its own audit row).
@@ -820,6 +849,16 @@ export const projectRequestsRepository = {
    *   9. Request-grain representations → `revoked`.
    *  10. The `project_request.closed` audit row, LAST — an audit row must never outlive a
    *      rolled-back close.
+   *
+   * ⚠⚠ THE UNION RE-READ IS NOT LOCK-ORDER-NEUTRAL, AND A SENTENCE THAT USED TO CLAIM OTHERWISE
+   * IS DELETED, NOT SUPPLEMENTED (orchestrator D14). Rows found only by the re-read take their
+   * proposal row lock (via the re-read's own `FOR UPDATE`, and again inside
+   * `advanceProposalStatus`) and their relationship row lock AFTER the request lock — inverting
+   * BOTH `accept`'s documented "proposal → relationship → request" order AND
+   * `advanceRelationshipStatus`'s "relationship FIRST, request LAST" rule. The re-read is safe
+   * ONLY because the advisory lock above is held for the whole transaction and every serialised
+   * writer takes it first. The two parts — the advisory lock and this re-read — ship together and
+   * must never be separated: shipping the re-read alone would introduce a NEW AB/BA class.
    *
    * ⚠⚠ NEVER CALL A REPOSITORY METHOD THAT OPENS ITS OWN `db.transaction` FROM IN HERE
    * (orchestrator D4). `meetingsRepository.cancel`, `proposalsRepository.transitionStatus` and
@@ -853,70 +892,50 @@ export const projectRequestsRepository = {
    * a permanent way to lose the expert notices on a close that had already landed. It now has
    * none.
    *
-   * ⚠ KNOWN RESIDUAL, STATED RATHER THAN HIDDEN: a relationship inserted between step 2's
-   * snapshot and COMMIT is not declined. `invite()` is guarded against exactly this (it refuses
-   * a `closed` request under the request lock, `RequestClosedError`), and the request can never
-   * un-close (derivation rule 1), so it takes an admin invite landing inside a narrow window —
-   * `invite()` sees a not-yet-closed status, commits, and this cascade's pre-taken snapshot
-   * never saw the new row.
+   * ⚠ THE RESIDUALS NAMED BELOW ARE CLOSED FOR EVERY WRITER IN THE SERIALISED SET (BAL-546). The
+   * two paragraphs below used to describe an OPEN race — a relationship or proposal committed
+   * between this cascade's pre-lock snapshot and the request lock, surviving un-declined /
+   * un-withdrawn. That race is now closed by the combination of (a) the advisory lock, which
+   * every serialised writer (`invite`, `submit`, `resubmit`, `promoteToSubmit`, …) takes before
+   * this cascade can proceed past its own lock acquisition, and (b) the union re-read (step 5b
+   * above), which catches anything committed by a writer that does not take the lock. The
+   * history is kept below because it explains WHY the union re-read exists; read it as CLOSED,
+   * not as a live residual.
    *
-   * ⚠ NAMING THE CONSEQUENCE HONESTLY, because "one stray live track" understated it: that
-   * relationship is NOT `declined`, so `resolveRequestLens` still resolves the invited expert
-   * to the `expert` participant lens — brief + client contact + LIVE (not historical-read)
-   * file access on a request that is supposed to be terminal. Booking is still refused
-   * (`closed` is in `POST_DECISION_REQUEST_STATUSES`) and the request stays closed, so nothing
-   * escalates; the track is visible to admin and declinable by hand. The closing fix is to
-   * re-read the relationship id set AFTER step 3's request lock and decline the union of both
-   * reads (no lock-order risk: same `id` order, request lock already held) — deliberately NOT
-   * done in BAL-540, which is already a wide change, and left as a follow-up rather than
-   * hidden here.
+   * `invite()` is guarded against a closed request (it refuses under the request lock,
+   * `RequestClosedError`), and the request can never un-close (derivation rule 1) — so before
+   * BAL-546 it took an admin invite landing inside a narrow window between this cascade's step-2
+   * snapshot and COMMIT for a relationship to slip through un-declined, which left the invited
+   * expert resolved to the `expert` participant lens (brief + client contact + LIVE file access)
+   * on a request that was supposed to be terminal, even though booking and re-opening stayed
+   * refused. The union re-read closes this: a relationship committed after the snapshot is caught
+   * by the post-lock re-read and declined in the same pass as everything else.
    *
-   * ⚠ THE SAME RESIDUAL EXISTS FOR PROPOSALS, and the paragraph above used to name only
-   * relationships. Step 1's proposal set is a SNAPSHOT taken before this transaction owns
-   * anything, and `proposalsRepository.submit` is INSERT-based: it creates a `submitted` row
-   * that no `FOR UPDATE` taken in step 1 could possibly have covered. So a proposal committed
-   * between step 1 and this cascade acquiring the relationship lock survives the close
-   * UN-WITHDRAWN. `promoteToSubmit` cannot slip through the same gap — its draft predecessor
-   * IS in step 1's set, so it either loses the lock race or deadlocks (see the LOCK ORDER
-   * block) — but `submit()` inserts from nothing and has no predecessor row to lock.
-   * `declineTrack` has the identical gap on its per-relationship snapshot.
-   *
-   * CONSEQUENCE, NAMED: a `submitted` proposal sitting on a `closed` request (or on a
-   * `declined` track). It is INERT — `accept()` refuses it because the relationship's
-   * `expectedFrom` no longer matches, and booking refuses because the request is `closed` —
-   * but it is CLIENT-VISIBLE: the request detail view renders a live proposal on a request
-   * the client just closed. Same fix, same follow-up ticket as the relationship residual
-   * above: re-read the open-proposal set after step 3's request lock and withdraw the UNION
-   * of both reads. `createDraft` now refuses outright once the close has COMMITTED
-   * (`ProposalTrackNotOpenError`), which removes the stale-autosave half of this — but not
-   * the race half, and it does nothing for `submit()`.
+   * The identical shape existed for proposals: `resubmit()` (orchestrator D3 — not `submit()`,
+   * which has zero production callers) is INSERT-based, so a proposal it committed between step
+   * 1's snapshot and this cascade winning the relationship/request locks used to survive the
+   * close UN-WITHDRAWN — inert (`accept()` refuses via the relationship's `expectedFrom`, and
+   * booking refuses because the request is `closed`) but CLIENT-VISIBLE. The union re-read closes
+   * this the same way. `createDraft` also now takes the advisory lock (D7), closing the
+   * autosave-race half from the writer side as well as the `ProposalTrackNotOpenError` guard
+   * closing the post-commit half.
    *
    * Throws `InvalidStatusTransitionError` (already closed, or past `proposal_submitted`) and
    * `Error` for a missing/soft-deleted request. Nothing is written on either.
    */
   async close(input: CloseRequestInput): Promise<CloseRequestResult> {
     return db.transaction(async (tx) => {
+      // 0. BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      await acquireRequestLock(tx, input.requestId);
+
       const now = new Date();
 
-      // 1. PROPOSAL ROWS FIRST — see the LOCK ORDER block.
-      const openProposals = await lockOpenProposalsForRequestTx(tx, input.requestId);
+      // 1. PROPOSAL ROWS FIRST — see the LOCK ORDER block. Pre-lock SNAPSHOT (re-read at 5b).
+      const snapshotProposals = await lockOpenProposalsForRequestTx(tx, input.requestId);
 
       // 2. Relationship rows, ordered by id (two concurrent cascades queue, never deadlock).
-      const relationships = await tx
-        .select({
-          id: requestExpertRelationships.id,
-          status: requestExpertRelationships.status,
-          expertProfileId: requestExpertRelationships.expertProfileId,
-        })
-        .from(requestExpertRelationships)
-        .where(
-          and(
-            eq(requestExpertRelationships.projectRequestId, input.requestId),
-            isNull(requestExpertRelationships.deletedAt)
-          )
-        )
-        .orderBy(asc(requestExpertRelationships.id))
-        .for('update');
+      //    Pre-lock SNAPSHOT (re-read at 5b).
+      const snapshotRelationships = await lockLiveRelationshipsForRequestTx(tx, input.requestId);
 
       // 3. The request row LAST among the locks.
       const [current] = await tx
@@ -951,6 +970,16 @@ export const projectRequestsRepository = {
       if (updated === undefined) {
         throw new Error(`Failed to update project request: ${input.requestId}`);
       }
+
+      // 5b. UNION RE-READ (BAL-546). Steps 1 and 2 snapshotted BEFORE this transaction owned the
+      //     request row. Re-read both id sets now that the request lock is held and act on the
+      //     UNION — see the docblock for why this is defence-in-depth, and why it is safe ONLY
+      //     because the advisory lock is held for the whole transaction.
+      const reReadProposals = await lockOpenProposalsForRequestTx(tx, input.requestId);
+      const reReadRelationships = await lockLiveRelationshipsForRequestTx(tx, input.requestId);
+
+      const openProposals = unionById(snapshotProposals, reReadProposals);
+      const relationships = unionById(snapshotRelationships, reReadRelationships);
 
       // 6. Meetings. `project_discovery` is keyed on the REQUEST; `request_interaction` on
       //    each RELATIONSHIP (`@balo/shared/meetings/context-owner.ts`) — hence the batch.

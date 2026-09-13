@@ -5,6 +5,7 @@ import {
   requestExpertRelationships,
   type ExpressionOfInterest,
 } from '../schema';
+import { acquireRequestLockViaRelationshipTx } from './_shared/request-lock';
 import {
   advanceRelationshipStatus,
   InvalidRelationshipTransitionError,
@@ -32,6 +33,11 @@ export const expressionsOfInterestRepository = {
     actorUserId: string;
   }): Promise<ExpressionOfInterest> {
     return db.transaction(async (tx) => {
+      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction. This is a
+      // multi-table request-domain writer (relationship + EOI insert) by the same test as every
+      // other writer in the serialised set.
+      await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
+
       // Lock + validate-advance the relationship; throws if it isn't `invited`
       // (or is missing/soft-deleted) → whole txn rolls back, no orphan EOI.
       const { relationship } = await advanceRelationshipStatus(tx, {
