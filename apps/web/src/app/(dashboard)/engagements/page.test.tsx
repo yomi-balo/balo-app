@@ -78,7 +78,7 @@ describe('EngagementsPage (RSC) — auth gate', () => {
     expect(mockLoad).not.toHaveBeenCalled();
   });
 
-  it('notFound() for a non-admin viewer (no existence leak; loads nothing)', async () => {
+  it('notFound() for a viewer without VIEW_PLATFORM_ADMIN (no existence leak; loads nothing)', async () => {
     mockGetCurrentUser.mockResolvedValue(user({ platformRole: 'user' }));
 
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');

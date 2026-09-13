@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { PLATFORM_STAFF_ROLES } from '@balo/shared/authz';
 import type { SessionUser } from '@/lib/auth/session';
 import { resolveEngagementLens } from './resolve-engagement-lens';
 
@@ -156,4 +157,35 @@ describe('resolveEngagementLens', () => {
     );
     expect(ctx?.lens).toBe('client');
   });
+
+  /**
+   * BAL-404 fix round F7 — `ADMIN_ROLES` in `resolve-engagement-lens.ts` is a THIRD, independent
+   * spelling of the platform-staff set (`packages/shared/src/authz/platform.ts`'s
+   * `PLATFORM_STAFF_ROLES` is the ADR-1035 canonical one; `require-admin.ts`'s `isPlatformAdmin`
+   * is the second). `ADMIN_ROLES` is not exported, and this file may not edit the resolver (R5
+   * — it is a hard guardrail), so it cannot be imported and compared directly. This pins the two
+   * sets BEHAVIORALLY instead, from a test file only: every `PLATFORM_STAFF_ROLES` role must
+   * resolve the admin observer lens (below), and a role that ISN'T in that set must not (the
+   * `platformRole: 'user'` cases already above, `'returns null for a stranger'` included).
+   *
+   * ⚠ THIS PINS ONE DIRECTION ONLY (external review, pre-merge — the earlier wording, "a role
+   * added to one set and not the other fails one of these", overclaimed). A role added to
+   * `PLATFORM_STAFF_ROLES` but NOT to the resolver's `ADMIN_ROLES` fails here. The REVERSE — a
+   * role added to `ADMIN_ROLES` only — trips nothing, because this test never enumerates
+   * `ADMIN_ROLES` (it can't; it is unexported). That gap is deliberate and it fails CLOSED: such
+   * a role would receive the admin observer LENS but hold no platform capability, so every
+   * migrated gate in this PR still denies it. An accepted gap, not coverage — closing it needs
+   * the resolver to export its set, which R5 forbids here. Fold into BAL-316.
+   */
+  it.each([...PLATFORM_STAFF_ROLES])(
+    'every PLATFORM_STAFF_ROLES role (%s) resolves the admin observer lens',
+    (role) => {
+      const ctx = resolveEngagementLens(
+        makeUser({ platformRole: role, companyId: 'company-other' }),
+        makeEngagement()
+      );
+      expect(ctx?.lens).toBe('admin');
+      expect(ctx?.archetype).toBe('observer');
+    }
+  );
 });

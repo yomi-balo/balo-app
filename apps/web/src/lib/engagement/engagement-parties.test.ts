@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ProjectEngagementWithMilestones } from '@balo/db';
 import {
+  deriveActorLabel,
   deriveEngagementParties,
   engagementHeaderLine,
   personAtCompany,
@@ -117,6 +118,36 @@ describe('personAtCompany', () => {
 
   it('falls back to the company alone when the person is unnamed', () => {
     expect(personAtCompany({ firstName: null, lastName: null }, 'Northwind Industrial')).toBe(
+      'Northwind Industrial'
+    );
+  });
+});
+
+describe('deriveActorLabel', () => {
+  it('returns "Balo" for the admin lens (the platform actor label)', () => {
+    const engagement = makeEngagement({ agency: null });
+    expect(deriveActorLabel(engagement, 'admin', { firstName: 'Dana', lastName: 'Lee' })).toBe(
+      'Balo'
+    );
+  });
+
+  it('returns the expert retro first-mention for the expert lens (agency)', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    expect(deriveActorLabel(engagement, 'expert', { firstName: 'Priya', lastName: 'Sharma' })).toBe(
+      'Priya @ CloudPeak Consulting'
+    );
+  });
+
+  it('names the acting person "@ company" for the client lens', () => {
+    const engagement = makeEngagement({ agency: null, companyName: 'Northwind Industrial' });
+    expect(deriveActorLabel(engagement, 'client', { firstName: 'Dana', lastName: 'Lee' })).toBe(
+      'Dana @ Northwind Industrial'
+    );
+  });
+
+  it('falls back to the company alone for the client lens when the person is unnamed', () => {
+    const engagement = makeEngagement({ agency: null, companyName: 'Northwind Industrial' });
+    expect(deriveActorLabel(engagement, 'client', { firstName: null, lastName: null })).toBe(
       'Northwind Industrial'
     );
   });

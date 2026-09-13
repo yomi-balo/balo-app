@@ -14,8 +14,9 @@ import {
   resolveEngagementLens,
   type EngagementLens,
 } from '@/lib/engagement/resolve-engagement-lens';
-import { deriveEngagementParties, personAtCompany } from '@/lib/engagement/engagement-parties';
+import { deriveActorLabel, deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
+import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -80,10 +81,13 @@ export type ActionItemGateResult =
  *      needed for parties + notify).
  *   2. `resolveEngagementLens` — a stranger (`null`) or a missing row both yield the
  *      SAME `NOT_FOUND` (existence never leaks); denials are `log.warn`ed.
- *   3. Per-lens authorization: `client` → LIVE `hasCapability(PARTICIPATE)`
- *      (defense-in-depth beyond the cached cookie; a removed member fails closed);
- *      `expert` → the `lens === 'expert'` `expertProfileId` equality IS the check
- *      (the house pattern); `admin` → allowed (observer — confirmed product decision).
+ *   3. Per-ARM authorization, each on its own axis: `Balo staff` → the PLATFORM capability
+ *      `MANAGE_ANY_ENGAGEMENT_ACTION_ITEM` (ADR-1035 — EXPLICIT since BAL-404; it used to pass
+ *      by fall-through, leaving the decision inside the lens resolver); `client` → LIVE
+ *      `hasCapability(PARTICIPATE)` (defense-in-depth beyond the cached cookie; a removed
+ *      member fails closed); `expert` → the `lens === 'expert'` `expertProfileId` equality IS
+ *      the check (house pattern, ADR-1029/ADR-1046 axis — BAL-316, not this ticket). Anything
+ *      else fails closed.
  *   4. `status !== 'active'` → `NOT_ACTIVE` (writes only on live engagements).
  *   5. When `opts.actionItemId` is set: `findById` → miss / not-in-this-engagement /
  *      soft-removed → `ACTION_ITEM_GONE` (a forged id from another engagement is
@@ -115,16 +119,27 @@ export async function gateEngagementParticipant(
     return deny('not_a_participant', NOT_FOUND);
   }
 
-  // Per-lens authorization beyond the lens resolution itself:
-  //  - client: defense-in-depth — re-check LIVE membership (a stale cookie fails closed);
-  //  - expert: the `lens === 'expert'` expertProfileId equality IS the check (house pattern);
-  //  - admin:  allowed (observer; confirmed product decision).
-  if (ctx.lens === 'client') {
-    const allowed = await hasCapability(user, CAPABILITIES.PARTICIPATE, {
-      companyId: engagement.companyId,
-    });
-    if (!allowed) {
-      return deny('no_capability', NOT_A_PARTICIPANT);
+  // Per-ARM authorization beyond the lens resolution itself. THREE ARMS, EACH ON ITS OWN AXIS —
+  // and BAL-404 made the BALO arm EXPLICIT (it used to pass by fall-through, so the decision
+  // was really being made upstream inside `resolveEngagementLens`'s platformRole set read):
+  //  - Balo staff → the PLATFORM capability MANAGE_ANY_ENGAGEMENT_ACTION_ITEM (ADR-1035).
+  //  - client     → defense-in-depth: re-check LIVE membership (a stale cookie fails closed).
+  //  - expert     → the `lens === 'expert'` expertProfileId equality IS the check (house
+  //                 pattern; ADR-1029/ADR-1046 axis, deliberately NOT migrated here — BAL-316).
+  // The trailing deny is the FAIL-CLOSED default: an observer who does NOT hold the token is
+  // refused. UNREACHABLE TODAY AND NOT DEAD CODE — the token sits in PLATFORM_STAFF_BUNDLE,
+  // whose holders are exactly `resolveEngagementLens`'s ADMIN_ROLES — and it becomes reachable
+  // the day the D5 bundle split lands, which is precisely when a fall-through would be a hole.
+  if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM)) {
+    if (ctx.lens === 'client') {
+      const allowed = await hasCapability(user, CAPABILITIES.PARTICIPATE, {
+        companyId: engagement.companyId,
+      });
+      if (!allowed) {
+        return deny('no_capability', NOT_A_PARTICIPANT);
+      }
+    } else if (ctx.lens !== 'expert') {
+      return deny('no_platform_capability', NOT_A_PARTICIPANT);
     }
   }
 
@@ -216,28 +231,6 @@ export async function deriveAssigneeNotifyTargets(
     return { recipientId: await resolveClientRecipientId(engagement.company.id) };
   }
   return { expertProfileId: engagement.expertProfileId };
-}
-
-/**
- * The retrospective person who assigned the item (BAL-329): `expert` → the expert's
- * "@ agency" first-mention; `client` → the acting person "@ company"; `admin` → 'Balo'
- * (the platform actor label).
- */
-export function deriveActorLabel(
-  engagement: ProjectEngagementWithMilestones,
-  lens: EngagementLens,
-  user: SessionUser
-): string {
-  if (lens === 'admin') {
-    return 'Balo';
-  }
-  if (lens === 'expert') {
-    return deriveEngagementParties(engagement).expertRetroFirstMention;
-  }
-  return personAtCompany(
-    { firstName: user.firstName, lastName: user.lastName },
-    engagement.company.name
-  );
 }
 
 /**

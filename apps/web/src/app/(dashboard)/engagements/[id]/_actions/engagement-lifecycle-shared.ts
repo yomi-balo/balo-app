@@ -11,6 +11,7 @@ import {
 } from '@balo/db';
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
+import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { DAY_MS, GENERIC_FAILURE, NOT_FOUND } from './milestone-action-shared';
@@ -36,7 +37,7 @@ export type EngagementActionResult = { success: true } | { success: false; error
 
 // ── Friendly, non-leaking copy (returned verbatim; the client toasts it) ─────
 export const ONLY_EXPERT = 'Only the delivering expert can do that.';
-export const ONLY_ADMIN = 'Only Balo can cancel an engagement.';
+export const ONLY_BALO = 'Only Balo can cancel an engagement.';
 export const ONLY_CLIENT = 'Only the client can do that.';
 export const NOT_ACTIVE = "This project isn't active.";
 export const NOT_UNDER_REVIEW = "This project isn't under review.";
@@ -169,9 +170,21 @@ export async function gateExpertEngagement(
 }
 
 /**
- * The ADMIN-lens gate for cancel. Requires the admin (observer) lens and a
- * cancellable status (`active | pending_acceptance`); a terminal engagement →
- * `ENGAGEMENT_CLOSED`. The repo re-validates the legal `from` status under its lock.
+ * The BALO-STAFF gate for cancel. Requires the PLATFORM capability
+ * `CANCEL_ANY_ENGAGEMENT` (ADR-1035) and a cancellable status
+ * (`active | pending_acceptance`); a terminal engagement → `ENGAGEMENT_CLOSED`. The
+ * repo re-validates the legal `from` status under its lock.
+ *
+ * ⚠ THE CAPABILITY, NOT THE LENS (BAL-404). This used to read `loaded.lens !== 'admin'`.
+ * `resolveEngagementLens` still produces that lens and still gates VIEW — the category
+ * distinction ADR-1035 draws — but no write in this module reads it for the Balo arm any more.
+ * Holder sets are identical today (`PLATFORM_STAFF_BUNDLE` = the resolver's `ADMIN_ROLES`), so
+ * this migration changes nothing a user can observe.
+ *
+ * ⚠ THE CAPABILITY RESOLVES *AFTER* `loadEngagementLens`, UNLIKE `close-request-as-admin.ts`
+ * AND ITS SIBLINGS, DELIBERATELY. The load is what turns a STRANGER (`ctx === null`) into the
+ * same `NOT_FOUND` a missing row returns — this gate's no-existence-leak contract. Resolving
+ * the token first would hand a stranger `ONLY_BALO` instead. Do not "tidy" the order.
  */
 export async function gateAdminEngagement(
   user: SessionUser,
@@ -181,13 +194,13 @@ export async function gateAdminEngagement(
   if (!loaded.ok) {
     return loaded;
   }
-  if (loaded.lens !== 'admin') {
+  if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT)) {
     log.warn('Engagement lifecycle denied', {
       engagementId,
       userId: user.id,
-      reason: 'wrong_lens',
+      reason: 'no_platform_capability',
     });
-    return { ok: false, error: ONLY_ADMIN };
+    return { ok: false, error: ONLY_BALO };
   }
   const { status } = loaded.engagement;
   if (status !== 'active' && status !== 'pending_acceptance') {

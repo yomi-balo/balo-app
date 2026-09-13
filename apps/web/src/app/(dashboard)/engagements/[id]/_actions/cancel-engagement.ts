@@ -29,8 +29,9 @@ const cancelSchema = z
 
 /**
  * Balo (admin) cancels an engagement (active | pending_acceptance → cancelled),
- * ending delivery permanently. Auth/lens/status via {@link gateAdminEngagement} (admin
- * observer lens; terminal engagement → ENGAGEMENT_CLOSED). A non-empty `reason` is
+ * ending delivery permanently. Authorization via {@link gateAdminEngagement} — the PLATFORM
+ * capability `CANCEL_ANY_ENGAGEMENT` (ADR-1035), never the admin lens (BAL-404); terminal
+ * engagement → `ENGAGEMENT_CLOSED`. A non-empty `reason` is
  * required (the client also disables submit until non-empty). Then
  * `projectEngagementsRepository.cancelEngagement` (D0 captures the `from` status under its
  * lock). Fires `CANCELLED` (server) and publishes `engagement.cancelled` (client owner

@@ -140,3 +140,34 @@ export function engagementHeaderLine(lens: EngagementLens, p: EngagementParties)
     ? `Delivered by ${p.expertPerson} — ${p.expertHeadline}`
     : `Delivered by ${p.expertPerson}`;
 }
+
+/**
+ * The retrospective person who performed an action-item write (BAL-329 attribution):
+ *  - Balo staff → `'Balo'` (the platform actor label — Balo acts as a party, not a person);
+ *  - expert     → the expert's "@ agency" first-mention;
+ *  - client     → the acting person "@ company".
+ *
+ * ⚠ MOVED HERE FROM `_actions/action-item-action-shared.ts` BY BAL-404, AND THAT MOVE IS THE
+ * POINT. It is PRESENTATION — a notification label, not an authorization decision — and it is
+ * the only reason that Server-Action module still named the admin lens after its write gate
+ * moved to the platform-capability axis. This repo's established answer for a file that must
+ * name a lens is AVOIDANCE (put it where lens reads belong), never a per-file token exemption
+ * in the invariant scan — see `request-close-capability-gated.test.ts`'s docblock. This module
+ * is where per-lens copy belongs: `engagementHeaderLine` above makes the same choice.
+ *
+ * The person parameter is STRUCTURAL (`{ firstName, lastName }`), not `SessionUser` — matching
+ * `personAtCompany` below it, and keeping this module free of an auth-session import.
+ */
+export function deriveActorLabel(
+  engagement: ProjectEngagementWithMilestones,
+  lens: EngagementLens,
+  person: { firstName: string | null; lastName: string | null }
+): string {
+  if (lens === 'admin') {
+    return 'Balo';
+  }
+  if (lens === 'expert') {
+    return deriveEngagementParties(engagement).expertRetroFirstMention;
+  }
+  return personAtCompany(person, engagement.company.name);
+}

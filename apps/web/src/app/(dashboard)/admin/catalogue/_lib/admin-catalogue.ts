@@ -80,7 +80,7 @@ export const ADMIN_CATALOGUE_ROWS: readonly AdminCatalogueRow[] = [
     description: 'Delivery oversight — in flight, in review, gone quiet.', // pending-MJ
     href: '/engagements',
     icon: Briefcase,
-    requiredCapability: null,
+    requiredCapability: PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
     status: 'Shipped', // pending-MJ
     tone: 'success',
     isShipped: true,

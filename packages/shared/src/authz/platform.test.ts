@@ -181,6 +181,13 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
     );
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES);
   });
+
+  it('bundle includes the two BAL-404 engagement tokens for the staff roles', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT);
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(
+      PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM
+    );
+  });
 });
 
 /**
@@ -384,6 +391,57 @@ describe('platformRoleHasCapability — REVIEW_EXPERT_APPLICATIONS', () => {
 
   it('maps REVIEW_EXPERT_APPLICATIONS to its snake_case token', () => {
     expect(PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS).toBe('review_expert_applications');
+  });
+});
+
+/**
+ * BAL-404 — the engagement-cancel override token. Same allow/deny table as its siblings: a
+ * cancel that bypasses BOTH party axes is Balo-staff-only, and a plain `user` must never hold it.
+ */
+describe('platformRoleHasCapability — CANCEL_ANY_ENGAGEMENT', () => {
+  it.each(['admin', 'super_admin'])('grants CANCEL_ANY_ENGAGEMENT to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT)).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies CANCEL_ANY_ENGAGEMENT to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT)).toBe(
+        false
+      );
+    }
+  );
+
+  it('maps CANCEL_ANY_ENGAGEMENT to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT).toBe('cancel_any_engagement');
+  });
+});
+
+/**
+ * BAL-404 — the engagement action-item write token. Same allow/deny table as its siblings: the
+ * Balo-staff arm of `gateEngagementParticipant`, made explicit where it used to pass by
+ * fall-through.
+ */
+describe('platformRoleHasCapability — MANAGE_ANY_ENGAGEMENT_ACTION_ITEM', () => {
+  it.each(['admin', 'super_admin'])('grants MANAGE_ANY_ENGAGEMENT_ACTION_ITEM to %s', (role) => {
+    expect(
+      platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM)
+    ).toBe(true);
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies MANAGE_ANY_ENGAGEMENT_ACTION_ITEM to %s',
+    (role) => {
+      expect(
+        platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM)
+      ).toBe(false);
+    }
+  );
+
+  it('maps MANAGE_ANY_ENGAGEMENT_ACTION_ITEM to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM).toBe(
+      'manage_any_engagement_action_item'
+    );
   });
 });
 
