@@ -43,6 +43,7 @@ const mockStartRecordingCleanupSource = vi.fn();
 const mockStartTranscriptCapture = vi.fn();
 const mockStartAdminAlertSweep = vi.fn();
 const mockRegisterAdminAlertSweepCron = vi.fn().mockResolvedValue(undefined);
+const mockStartProjectBriefParse = vi.fn();
 
 vi.mock('./verify-beneficiary.js', () => ({
   startVerifyBeneficiaryWorker: () => mockStartVerifyBeneficiary(),
@@ -179,6 +180,14 @@ vi.mock('./admin-alert-sweep.js', () => ({
   startAdminAlertSweepWorker: () => mockStartAdminAlertSweep(),
   registerAdminAlertSweepCron: () => mockRegisterAdminAlertSweepCron(),
 }));
+// BAL-254: mocking this is MANDATORY — otherwise the REDIS_URL-set test loads the real module,
+// which constructs a Worker on a live Redis connection and HANGS at the 5s CI timeout. It stays
+// GREEN LOCALLY whenever a dev Redis happens to be running, which is exactly how it slipped
+// through in every ticket named above. Must land in the SAME COMMIT as the `worker.ts`
+// registration.
+vi.mock('./project-brief-parse.js', () => ({
+  startProjectBriefParseWorker: () => mockStartProjectBriefParse(),
+}));
 vi.mock('../notifications/engine/worker.js', () => ({
   startNotificationEventWorker: () => mockStartNotificationEvent(),
 }));
@@ -226,6 +235,7 @@ describe('startWorkers', () => {
     expect(mockStartTranscriptCapture).not.toHaveBeenCalled();
     expect(mockStartAdminAlertSweep).not.toHaveBeenCalled();
     expect(mockRegisterAdminAlertSweepCron).not.toHaveBeenCalled();
+    expect(mockStartProjectBriefParse).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('REDIS_URL not set — BullMQ workers not started');
   });
 
@@ -276,6 +286,7 @@ describe('startWorkers', () => {
     expect(mockStartTranscriptCapture).toHaveBeenCalled();
     expect(mockStartAdminAlertSweep).toHaveBeenCalled();
     expect(mockRegisterAdminAlertSweepCron).toHaveBeenCalled();
+    expect(mockStartProjectBriefParse).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('BullMQ workers started');
 
     delete process.env.REDIS_URL;

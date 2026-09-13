@@ -381,11 +381,18 @@ export function DocumentUploader({
                     <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" /> Attached
                   </span>
                 )}
+                {/*
+                  ⚠ 44px MINIMUM HIT AREA on both controls (BAL-254 fix round F13). The AI brief
+                  path is the first touch-first surface in the product — people attach photos of
+                  a whiteboard from a phone — and Retry/Remove sit millimetres apart on a row.
+                  The GLYPH stays at h-3.5; only the tappable box grows, so the density is
+                  unchanged while the target clears the WCAG 2.5.5 / platform 44px guidance.
+                */}
                 {failed && (
                   <button
                     type="button"
                     onClick={() => handleRetry(row.id)}
-                    className="text-destructive hover:bg-destructive/10 focus-visible:ring-ring inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
+                    className="text-destructive hover:bg-destructive/10 focus-visible:ring-ring inline-flex min-h-11 items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
                   >
                     <RotateCw className="h-3.5 w-3.5" aria-hidden="true" /> Retry
                   </button>
@@ -394,7 +401,7 @@ export function DocumentUploader({
                   type="button"
                   onClick={() => handleRemove(row.id)}
                   aria-label={`Remove ${row.file.name}`}
-                  className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                  className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-11 w-11 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>

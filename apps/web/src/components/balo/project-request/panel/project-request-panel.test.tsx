@@ -32,6 +32,41 @@ vi.mock('@/lib/project-request/actions/remove-project-document', () => ({
   removeProjectDocumentAction: vi.fn(),
 }));
 
+// BAL-254 — the AI brief-parse Server Actions the polling hook calls.
+const { mockStartBrief, mockGetBrief } = vi.hoisted(() => ({
+  mockStartBrief: vi.fn(),
+  mockGetBrief: vi.fn(),
+}));
+vi.mock('@/lib/project-request/actions/start-project-brief-parse', () => ({
+  startProjectBriefParseAction: mockStartBrief,
+}));
+vi.mock('@/lib/project-request/actions/get-project-brief-parse', () => ({
+  getProjectBriefParseAction: mockGetBrief,
+}));
+
+// BAL-254 — the real DocumentUploader drives a presigned-upload + XHR flow that is out of
+// scope for this panel-level suite (covered by `document-uploader.test.tsx`). A single button
+// stand-in lets the AI-flow tests attach a document without re-exercising that machinery.
+vi.mock('@/components/balo/document-uploader', () => ({
+  DocumentUploader: ({ onDocumentsChange }: { onDocumentsChange: (docs: unknown[]) => void }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onDocumentsChange([
+          {
+            r2Key: 'project-documents/c/u/k',
+            fileName: 'rfp.pdf',
+            contentType: 'application/pdf',
+            sizeBytes: 1024,
+          },
+        ])
+      }
+    >
+      Attach test file
+    </button>
+  ),
+}));
+
 // The real RichTextEditor is a code-split TipTap (ProseMirror) component that
 // can't mount in jsdom. Mock the public module with a controlled textarea that
 // emits the same HTML contract, plus pass-through validation helpers.
@@ -143,22 +178,19 @@ describe('ProjectRequestPanel', () => {
     expect(screen.getByRole('button', { name: /upload docs/i })).toBeInTheDocument();
   });
 
-  it('renders the AI card disabled and does not transition on click', async () => {
+  it('the AI card is enabled and routes to the upload step, firing PROJECT_ENTRY_SELECTED', async () => {
     const user = userEvent.setup();
     renderPanel();
     const aiCard = screen.getByRole('button', { name: /upload docs/i });
-    expect(aiCard).toBeDisabled();
-    expect(screen.getByText('AI')).toBeInTheDocument();
-    expect(screen.getByText('Coming soon')).toBeInTheDocument();
+    expect(aiCard).not.toBeDisabled();
 
     await user.click(aiCard);
-    expect(
-      screen.getByRole('heading', { name: /start a project with priya sharma/i })
-    ).toBeInTheDocument();
-    expect(mockTrack).not.toHaveBeenCalledWith(
-      PROJECT_EVENTS.PROJECT_ENTRY_SELECTED,
-      expect.anything()
-    );
+
+    expect(screen.getByRole('heading', { name: /upload your project docs/i })).toBeInTheDocument();
+    expect(mockTrack).toHaveBeenCalledWith(PROJECT_EVENTS.PROJECT_ENTRY_SELECTED, {
+      expert_id: EXPERT_PROFILE_ID,
+      method: 'ai',
+    });
   });
 
   it('advances to the form and fires PROJECT_ENTRY_SELECTED on selecting manual', async () => {
@@ -472,6 +504,223 @@ describe('ProjectRequestPanel', () => {
   it('has no accessibility violations', async () => {
     const { baseElement } = renderPanel();
     expect(await axe(baseElement)).toHaveNoViolations();
+  });
+
+  // ── BAL-254: the AI brief path ──────────────────────────────────────────
+  // Real timers throughout (the 2s poll interval is a real setInterval) — fake timers plus
+  // userEvent's internal async waits proved unreliable together in this suite, so each test
+  // waits on the real 2s tick via `waitFor`/`findBy*` with a generous per-test timeout instead.
+
+  describe('AI brief path', () => {
+    const AI_DRAFT = {
+      title: 'AI-drafted title',
+      descriptionHtml: '<p>AI-drafted description</p>',
+      tagIds: ['11111111-1111-1111-1111-111111111111'],
+      productIds: ['33333333-3333-3333-3333-333333333333'],
+      unmatchedTagLabels: ['sandbox refresh'],
+      unmatchedProductLabels: [],
+    };
+
+    it('the Generate brief CTA is disabled with 0 files', async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      expect(screen.getByRole('button', { name: /generate brief/i })).toBeDisabled();
+      expect(screen.getByText(/add at least one file to generate a brief/i)).toBeInTheDocument();
+    });
+
+    it('a successful generate prefills all four fields and lands on review with the AI banner', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+
+      expect(
+        await screen.findByText(
+          /ai-drafted from your documents — check over everything below/i,
+          {},
+          { timeout: 4000 }
+        )
+      ).toBeInTheDocument();
+      expect(await screen.findByTestId('rt-viewer')).toHaveTextContent('AI-drafted description');
+      expect(screen.getByText(/sandbox refresh/i)).toBeInTheDocument();
+    }, 8000);
+
+    it('a failed generate shows the failure banner with Try again / Write it myself instead', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'unreadable' });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+
+      expect(
+        await screen.findByText(
+          /we couldn't draft a brief from these files/i,
+          {},
+          { timeout: 4000 }
+        )
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+      const writeItMyself = screen.getByRole('button', { name: /write it myself instead/i });
+      expect(writeItMyself).toBeInTheDocument();
+
+      await user.click(writeItMyself);
+      // Advances to the manual (fields) screen with documents untouched.
+      expect(screen.getByLabelText(/project title/i)).toBeInTheDocument();
+    }, 8000);
+
+    it('Regenerate without edits runs immediately (no confirm dialog)', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      mockStartBrief.mockClear();
+      await user.click(screen.getByRole('button', { name: /regenerate/i }));
+
+      expect(screen.queryByText(/regenerate the brief\?/i)).not.toBeInTheDocument();
+      expect(mockStartBrief).toHaveBeenCalled();
+    }, 8000);
+
+    it('Regenerate with edits opens the confirm dialog, and confirming re-runs it', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      // Edit the title via the shared fields screen, then come back to review.
+      await user.click(screen.getAllByRole('button', { name: /^edit$/i })[0] as HTMLElement);
+      await user.clear(screen.getByLabelText(/project title/i));
+      await user.type(screen.getByLabelText(/project title/i), 'A human-edited title');
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+
+      mockStartBrief.mockClear();
+      await user.click(screen.getByRole('button', { name: /regenerate/i }));
+
+      expect(screen.getByText(/regenerate the brief\?/i)).toBeInTheDocument();
+      expect(mockStartBrief).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole('button', { name: /^regenerate$/i }));
+      expect(mockStartBrief).toHaveBeenCalled();
+    }, 8000);
+
+    it('submit sends source: "ai" for a request generated via the AI path', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ source: 'ai' }));
+      });
+    }, 8000);
+
+    // ── F14 — `source` must follow the path the user ACTUALLY took ────────────────────────
+    it('⚠ trying the AI path and then writing it by hand submits source: "manual"', async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      // Into the AI path…
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      expect(
+        screen.getByRole('heading', { name: /upload your project docs/i })
+      ).toBeInTheDocument();
+
+      // …then back out and write it by hand. `handleSelectManual` used to leave `source` at
+      // 'ai', so this draft was recorded as AI-generated and rendered the AI provenance banner.
+      await user.click(screen.getByRole('button', { name: /^back$/i }));
+      await user.click(screen.getByRole('button', { name: /describe it yourself/i }));
+      await user.type(screen.getByLabelText(/project title/i), 'Lead routing rebuild');
+      await user.type(
+        screen.getByLabelText(/project description/i),
+        'Rebuild our lead routing in Flow.'
+      );
+      await user.click(screen.getByRole('button', { name: /^review/i }));
+
+      expect(screen.queryByText(/ai-drafted from your documents/i)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /send to priya/i }));
+      await waitFor(() => {
+        expect(mockSubmit).toHaveBeenCalledWith(expect.objectContaining({ source: 'manual' }));
+      });
+    }, 8000);
+
+    // ── F16 — the attached files stay on screen, so the failure copy stays true ────────────
+    it('⚠ the uploader stays mounted while generating, and is still there after a failure', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+
+      // The wait state is showing…
+      expect(
+        await screen.findByText(/reading your documents/i, {}, { timeout: 4000 })
+      ).toBeInTheDocument();
+      // …and the uploader is STILL MOUNTED behind it. Unmounting it dropped its internal row
+      // state, so the post-failure screen showed an empty dropzone under a banner that says
+      // "Your files are still attached."
+      expect(screen.getByRole('button', { name: /attach test file/i })).toBeInTheDocument();
+
+      mockGetBrief.mockResolvedValue({ status: 'failed', failureReason: 'timed_out' });
+      expect(
+        await screen.findByText(/this is taking longer than expected/i, {}, { timeout: 6000 })
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /attach test file/i })).toBeInTheDocument();
+    }, 12000);
+
+    // ── F5 — submit is not live while a regenerate is rewriting the draft ─────────────────
+    it('⚠ Submit is disabled during a regenerate', async () => {
+      mockStartBrief.mockResolvedValue({ success: true, parseId: 'parse-1' });
+      mockGetBrief.mockResolvedValue({ status: 'succeeded', draft: AI_DRAFT });
+
+      const user = userEvent.setup();
+      renderPanel();
+      await user.click(screen.getByRole('button', { name: /upload docs/i }));
+      await user.click(screen.getByRole('button', { name: /attach test file/i }));
+      await user.click(screen.getByRole('button', { name: /generate brief/i }));
+      await screen.findByText(/ai-drafted from your documents/i, {}, { timeout: 4000 });
+
+      expect(screen.getByRole('button', { name: /send to priya/i })).not.toBeDisabled();
+
+      // Regenerate, and keep the second parse pending.
+      mockGetBrief.mockResolvedValue({ status: 'pending' });
+      await user.click(screen.getByRole('button', { name: /regenerate/i }));
+
+      // Submitting here used to reach `done`, and the late success then repopulated the
+      // just-cleared draft and dragged the user back to `review`.
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /send to priya/i })).toBeDisabled();
+      });
+      expect(mockSubmit).not.toHaveBeenCalled();
+    }, 12000);
   });
 
   // ── AC#6: contract + mount-mode coverage ──────────────────────────────

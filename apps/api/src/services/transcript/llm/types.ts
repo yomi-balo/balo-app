@@ -1,4 +1,5 @@
 import type { CanonicalTranscript, ExtractedActionItem } from '@balo/db';
+import type { LlmAudit } from '../../ai/index.js';
 
 // Single source of truth for the extraction item shape — re-export `@balo/db`'s
 // `ExtractedActionItem` (the jsonb `$type` owner) rather than redefine it here, so the
@@ -6,18 +7,12 @@ import type { CanonicalTranscript, ExtractedActionItem } from '@balo/db';
 export type { ExtractedActionItem } from '@balo/db';
 
 /**
- * Provenance persisted per LLM-derived artifact (ADR-1013: "store cleanup model id + version
- * + prompt" so cleaned-vs-raw stays auditable). Mapped 1:1 onto `transcript_artifacts` audit
- * columns by the pipeline.
+ * BAL-254 (ADR-1022 amendment) — MOVED to the shared AI seam (`services/ai/types.ts`). Re-exported
+ * here, byte-identical shape, so every downstream import (`pipeline.ts`, `transcript_artifacts`
+ * mapping) is untouched. Provenance persisted per LLM-derived artifact (ADR-1013: "store cleanup
+ * model id + version + prompt" so cleaned-vs-raw stays auditable).
  */
-export interface LlmAudit {
-  provider: 'anthropic';
-  modelId: string; // e.g. 'claude-sonnet-5' (or 'noop' on the absent-key path)
-  modelVersion: string | null; // resolved model/snapshot if surfaced
-  promptId: string; // 'transcript.cleanup' | 'transcript.summary' | 'transcript.extract'
-  promptVersion: string; // 'v1'
-  prompt: string; // exact rendered prompt (persisted to transcript_artifacts.prompt)
-}
+export type { LlmAudit };
 
 /**
  * The swappable, INJECTABLE LLM seam (ADR-1013 mandates a provider-agnostic layer). The

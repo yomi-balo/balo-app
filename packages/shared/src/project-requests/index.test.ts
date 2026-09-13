@@ -5,6 +5,10 @@ import {
   PROJECT_REQUEST_CLOSE_REASONS,
   BALO_CLOSE_REASONS,
   narrowToProjectRequestCloseReason,
+  PROJECT_BRIEF_FAILURE_REASONS,
+  narrowToProjectBriefFailureReason,
+  MAX_PARSE_INPUT_BYTES,
+  PARSE_DEADLINE_MS,
 } from './index';
 
 /**
@@ -61,5 +65,42 @@ describe('BALO_CLOSE_REASONS', () => {
 
   it('never includes withdrawn', () => {
     expect(BALO_CLOSE_REASONS).not.toContain('withdrawn');
+  });
+});
+
+describe('narrowToProjectBriefFailureReason (BAL-254)', () => {
+  it.each(PROJECT_BRIEF_FAILURE_REASONS)('accepts %s', (reason) => {
+    expect(narrowToProjectBriefFailureReason(reason)).toBe(reason);
+  });
+
+  it('returns null for a non-string value', () => {
+    expect(narrowToProjectBriefFailureReason(undefined)).toBeNull();
+    expect(narrowToProjectBriefFailureReason(null)).toBeNull();
+    expect(narrowToProjectBriefFailureReason(42)).toBeNull();
+    expect(narrowToProjectBriefFailureReason({})).toBeNull();
+  });
+
+  /**
+   * `project_brief_parses.failure_reason` is `text`, not a pgEnum (D3), so a row written by an
+   * older deploy really can hold a string outside the tuple. It must degrade to the generic
+   * banner, not throw on a display path.
+   */
+  it('returns null for an unrecognised string', () => {
+    expect(narrowToProjectBriefFailureReason('anthropic_overloaded_529')).toBeNull();
+  });
+});
+
+describe('brief-parse caps (BAL-254)', () => {
+  /**
+   * ⚠ THE DEADLINE MUST EXCEED THE CLIENT'S 2-MINUTE POLL CAP. `timed_out` is DERIVED at read
+   * from `created_at`; if the derivation fired first the panel would show "timed out" for a
+   * parse it was still actively polling.
+   */
+  it('PARSE_DEADLINE_MS is longer than the 2-minute client poll window', () => {
+    expect(PARSE_DEADLINE_MS).toBeGreaterThan(2 * 60 * 1000);
+  });
+
+  it('MAX_PARSE_INPUT_BYTES is 10 MiB', () => {
+    expect(MAX_PARSE_INPUT_BYTES).toBe(10 * 1024 * 1024);
   });
 });

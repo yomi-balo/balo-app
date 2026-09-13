@@ -847,3 +847,21 @@ export {
   type CaptureHealthPartyDetail,
   type CaptureHealthDetails,
 } from './capture-health';
+// ── AI-assisted brief parse (BAL-254) — the ONLY access path to `project_brief_parses` ────
+// ⚠ `create` IS THE ONLY WRITER OF `source_documents`, AND ITS CALLER MUST HAVE VALIDATED
+// EVERY `r2Key` AGAINST THE SESSION FIRST (Ruling A / §12 Gate 1). `findForOwner` carries BOTH
+// ownership columns (Gate 4); `findById` carries NEITHER and is the worker's read alone.
+export {
+  projectBriefParsesRepository,
+  toProjectBriefParseState,
+  type ProjectBriefParseAudit,
+  type ProjectBriefParseUsage,
+  type ProjectBriefParseState,
+  type CreateProjectBriefParseInput,
+  type FindProjectBriefParseForOwnerInput,
+  type FindProjectBriefParseForRequesterInput,
+  type MarkProjectBriefParseSucceededInput,
+  type MarkProjectBriefParseFailedInput,
+  type CountProjectBriefParsesInput,
+} from './project-brief-parses';
+export type { ProjectBriefParse, NewProjectBriefParse } from '../schema';

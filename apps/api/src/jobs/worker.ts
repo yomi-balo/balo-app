@@ -36,6 +36,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     { startRecordingCleanupSourceWorker },
     { startTranscriptCaptureWorker },
     { startAdminAlertSweepWorker, registerAdminAlertSweepCron },
+    { startProjectBriefParseWorker },
   ] = await Promise.all([
     import('./verify-beneficiary.js'),
     import('../notifications/engine/worker.js'),
@@ -63,6 +64,7 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
     import('./recording-cleanup-source.js'),
     import('./transcript-capture.js'),
     import('./admin-alert-sweep.js'),
+    import('./project-brief-parse.js'),
   ]);
 
   startVerifyBeneficiaryWorker();
@@ -139,5 +141,9 @@ export async function startWorkers(logger?: { info: (msg: string) => void }): Pr
   // free knob.
   startAdminAlertSweepWorker();
   await registerAdminAlertSweepCron();
+  // BAL-254 (ADR-1022 amendment): the AI-assisted project-brief parse worker — event-triggered
+  // (no cron), enqueued from `POST /project-briefs/parse` right after the web action writes the
+  // row.
+  startProjectBriefParseWorker();
   logger?.info('BullMQ workers started');
 }

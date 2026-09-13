@@ -1,9 +1,8 @@
 import { Pencil, Sparkles, type LucideIcon } from 'lucide-react';
 
 /**
- * Entry paths shown on the `start` step. `manual` is wired (clickable); `ai`
- * renders as a present-but-disabled "Coming soon" card with an `AI` badge — it
- * has no click handler and never transitions (BAL-253 ships the manual path).
+ * Entry paths shown on the `start` step. Both are wired (clickable) — BAL-254 un-disables `ai`:
+ * it routes to the new `upload` step instead of the shared `manual` fields screen.
  */
 export interface ProjectPath {
   readonly key: 'manual' | 'ai';
@@ -33,8 +32,6 @@ export const PROJECT_PATHS: readonly ProjectPath[] = [
     title: "Upload docs — we'll draft it",
     desc: 'Add an RFP, email, or notes. AI writes a short brief you approve.',
     badge: 'AI',
-    disabled: true,
-    comingSoonLabel: 'Coming soon',
   },
 ] as const;
 
@@ -42,5 +39,16 @@ export const PROJECT_PATHS: readonly ProjectPath[] = [
 export const PROJECT_STEPS = [
   { key: 'start', label: 'Start' },
   { key: 'manual', label: 'Describe' },
+  { key: 'review', label: 'Review' },
+] as const;
+
+/**
+ * BAL-254 — the AI branch's stepper: same three dots, middle one relabelled + rekeyed to
+ * `upload`. Needs no `FlowStepper` change — `current` just has to match one of the keys it was
+ * given (`components/flow/stepper.tsx`).
+ */
+export const PROJECT_STEPS_AI = [
+  { key: 'start', label: 'Start' },
+  { key: 'upload', label: 'Upload' },
   { key: 'review', label: 'Review' },
 ] as const;
