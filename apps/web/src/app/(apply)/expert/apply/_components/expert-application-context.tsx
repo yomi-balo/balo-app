@@ -33,13 +33,13 @@ import {
   writeAnonymousDraft,
   clearAnonymousDraft,
   type AnonymousApplicationDraftV1,
+  type StepStatus,
 } from '@/lib/expert-apply/anonymous-draft';
 import { flushAnonymousDraft } from '@/lib/expert-apply/flush-anonymous-draft';
 import { reloadWithToast, consumePendingToast } from '@/lib/expert-apply/reload-with-toast';
 
 // ── Types ────────────────────────────────────────────────────────
 
-type StepStatus = 'pending' | 'completed' | 'skipped';
 type AutoSaveState = 'idle' | 'saving' | 'saved' | 'error';
 type Direction = 'forward' | 'backward';
 export type SubmitState = 'idle' | 'submitting' | 'success';
@@ -345,8 +345,9 @@ const FLUSH_FAILED_TOAST = "We couldn't restore your saved progress. Please try 
 
 /**
  * BAL-502 FIX round (WARNING 6) — an anonymous envelope carries no identity of its
- * own; any session that shows up in this tab can claim it. `authGateAt` (stamped
- * once, only at the submit gate) bounds how long a draft stays claimable: a window
+ * own; any session that shows up in this tab can claim it. `authGateAt` (stamped only
+ * where the visitor deliberately crosses an auth boundary) bounds how long a draft
+ * stays claimable: a window
  * this generous covers the slowest realistic path (fill the wizard, hit Submit,
  * complete a WorkOS OAuth round-trip including a provider login) with margin, while
  * still meaningfully narrowing the shared/kiosk-browser hazard where a draft could
@@ -419,6 +420,10 @@ export function ExpertApplicationProvider({
 
   // Idle auto-save
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Anonymous debounced save (§22.3). Declared up here with its authenticated
+  // sibling — not beside `scheduleAnonymousSave` below — because `saveAnonymousDraftNow`
+  // is defined earlier in this body and has to be able to cancel it (BAL-562).
+  const anonSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-step saved snapshots (BAL-342). A single shared baseline held only the
   // last-saved step's data, so every hop after the first looked dirty and re-saved.
   const lastSavedByStepRef = useRef<Partial<Record<StepKey, string>>>({});
@@ -527,6 +532,83 @@ export function ExpertApplicationProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // BAL-562 — ANONYMOUS RESUME. The envelope was being WRITTEN on every edit and read
+  // back by nothing except the post-auth flush below (which returns early unless a
+  // session exists), so an anonymous visitor who reloaded the tab — or followed a link
+  // and came back — met an empty wizard while their whole application sat intact in
+  // sessionStorage, and the very next keystroke overwrote it. `currentStep` /
+  // `maxReachedStep` were likewise written and never read: the tell that resume was
+  // designed and then never wired up.
+  //
+  // A post-mount effect is the only correct shape. The authenticated path resumes
+  // through the `useState(() => hydrate*(draft))` lazy initializers, which cannot be
+  // reused here: `sessionStorage` does not exist during SSR, so an initializer that
+  // read it would render one tree on the server and a different one on the client and
+  // trip a hydration mismatch.
+  //
+  // POSITION comes from the envelope, NOT from `?step=`. `resolveInitialStep` computes
+  // `maxStep = draft ? findFirstIncompleteStep(draft) : 0`, so on the anonymous path —
+  // where `draft` is always null — every `?step=` is clamped to `Math.min(index, 0)`.
+  // The URL therefore cannot restore an anonymous visitor's position at all, and the
+  // envelope is the only record of it. Clamping to the furthest step actually reached
+  // keeps that honest: a restore can never advance someone past their own progress,
+  // which is the same guarantee the `?step=` clamp was there to make.
+  //
+  // The restore lands one commit after the first paint (a lazy initializer can't read
+  // `sessionStorage` without mismatching SSR), so a resumed visitor may see a single
+  // frame of step 1 before the wizard jumps to where they left off. Accepted: the
+  // alternative on the table was showing them an empty form and overwriting their
+  // application on the next keystroke.
+  const hasHydratedAnonymousRef = useRef(false);
+  useEffect(() => {
+    if (!isAnonymous) return;
+    if (hasHydratedAnonymousRef.current) return;
+    hasHydratedAnonymousRef.current = true;
+
+    const envelope = readAnonymousDraft();
+    if (!envelope) return;
+
+    // `terms` is absent BY DESIGN — its omission is the statement that consent is
+    // re-affirmed on every visit and never restored from storage. The authenticated
+    // path agrees: `termsData` is the one slice with no `hydrate*` initializer.
+    const setters: Partial<Record<StepKey, (d: unknown) => void>> = {
+      agency: (d) => setAgencyData(d as Partial<AgencyStepData>),
+      profile: (d) => setProfileData(d as Partial<ProfileStepData>),
+      products: (d) => setProductsData(d as Partial<ProductsStepData>),
+      assessment: (d) => setAssessmentData(d as Partial<AssessmentStepData>),
+      certifications: (d) => setCertificationsData(d as Partial<CertificationsStepData>),
+      'work-history': (d) => setWorkHistoryData(d as Partial<WorkHistoryStepData>),
+    };
+
+    for (const step of STEP_CONFIG) {
+      const setter = setters[step.key];
+      if (setter === undefined) continue; // `terms` — see above.
+      const restored = envelope.steps[step.key];
+      if (restored === undefined) continue;
+
+      setter(restored);
+      // Re-seed this step's baseline from the SERIALIZED envelope value rather than
+      // from live state, which has not re-rendered yet. The eager seed above ran
+      // against the empty pre-restore data, so without this every restored step would
+      // look dirty and re-save itself on first departure (BAL-342's defect, inverted).
+      lastSavedByStepRef.current[step.key] = JSON.stringify(restored);
+    }
+
+    const restoredStatuses = envelope.stepStatuses;
+    if (restoredStatuses) {
+      // Positional merge, never a wholesale replace: an envelope written before
+      // `stepStatuses` existed, or one written when `STEP_CONFIG` was shorter, must
+      // leave today's extra steps on their own default rather than truncate the rail.
+      setStepStatuses((prev) => prev.map((status, i) => restoredStatuses[i] ?? status));
+    }
+
+    const lastIndex = STEP_CONFIG.length - 1;
+    const furthest = Math.min(Math.max(envelope.maxReachedStep, envelope.currentStep), lastIndex);
+    setMaxReachedStep((prev) => Math.max(prev, furthest));
+    setCurrentStep(Math.min(Math.max(envelope.currentStep, 0), furthest));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // BAL-502 §22.3 — the full-envelope snapshot written to sessionStorage. Every key
   // is populated unconditionally from live state (cheap, local, idempotent) so a
   // single call always captures the whole wizard, not just the step being left.
@@ -540,16 +622,35 @@ export function ExpertApplicationProvider({
       savedAt: new Date().toISOString(),
       currentStep,
       maxReachedStep,
+      // BAL-562 — the rail is navigation-derived, so nothing else in the envelope
+      // implies it. Without persisting it an anonymous resume restores every field
+      // but shows all seven steps as untouched.
+      stepStatuses,
       steps,
     };
-  }, [getStepData, currentStep, maxReachedStep]);
+  }, [getStepData, currentStep, maxReachedStep, stepStatuses]);
 
   const saveAnonymousDraftNow = useCallback((): boolean => {
     // WARNING 6 — `authGateAt` is stamped ONLY here (the submit-gate call site),
-    // never by the 800ms background debounce (`scheduleAnonymousSave` below) —
+    // never by the 800ms background debounce (`scheduleAnonymousSave` below). Note
+    // this is one of TWO stampers since BAL-562 — the other is `stampAuthGate`, used
+    // by the apply header's "Log in" — but both mean the same thing: intent, not
+    // activity.
     // that timestamp means "the visitor deliberately hit Submit", not "some field
     // changed". WARNING 7 — the write's success is returned (not discarded) so the
     // caller (step-terms) can tell the visitor before they commit to signing up.
+    //
+    // BAL-562 — cancel any debounce still in flight FIRST. It would otherwise land
+    // ~800ms later with an envelope rebuilt from live state, leaving a write this
+    // function never made as the last one to touch storage. `writeAnonymousDraft`
+    // now carries the stamp forward regardless, so this is the second line of
+    // defence rather than the fix — but it keeps the boolean returned below an
+    // honest report of the final state of storage, and stops a timer firing into a
+    // page that is already mid-auth-transition.
+    if (anonSaveTimerRef.current) {
+      clearTimeout(anonSaveTimerRef.current);
+      anonSaveTimerRef.current = null;
+    }
     return writeAnonymousDraft({
       ...buildAnonymousEnvelope(),
       authGateAt: new Date().toISOString(),
@@ -613,7 +714,6 @@ export function ExpertApplicationProvider({
   // BAL-502 §22.3 — the anonymous mirror of `scheduleIdleSave`, debounced to
   // sessionStorage instead of the server. A short debounce is fine (unlike the
   // 30s server debounce) because a local write has no network cost.
-  const anonSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleAnonymousSave = useCallback((): void => {
     if (anonSaveTimerRef.current) clearTimeout(anonSaveTimerRef.current);
     anonSaveTimerRef.current = setTimeout(() => {
@@ -925,12 +1025,13 @@ export function ExpertApplicationProvider({
     // signing in right now (shared/kiosk browser: a draft that has sat untouched
     // for hours belongs to whoever left the tab open, not necessarily to the
     // person currently authenticating in it). `authGateAt` is stamped only at the
-    // deliberate submit-gate moment (`saveAnonymousDraftNow`); its absence or age
+    // deliberate auth-crossing moments (`saveAnonymousDraftNow` at the Terms gate, or
+    // `stampAuthGate` from the apply header); its absence or age
     // beyond the window means this session never proved the draft is its own.
     // A NEGATIVE age (future-dated `authGateAt`) is rejected too, not just an
     // over-window one: clock skew aside, a future stamp would otherwise keep an
     // envelope "fresh" indefinitely and re-open the exact window this guard
-    // bounds. Only a stamp in the past can have been made by a real submit gate.
+    // bounds. Only a stamp in the past can have been made by a real auth crossing.
     const gateAgeMs = envelope.authGateAt
       ? Date.now() - Date.parse(envelope.authGateAt)
       : Number.NaN;

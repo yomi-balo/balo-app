@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { UserMenu } from '@/components/layout/user-menu';
 import { useAuthModal } from '@/hooks/use-auth-modal';
+import { stampAuthGate } from '@/lib/expert-apply/anonymous-draft';
 import type { MarketingViewer } from '@/components/marketing/marketing-viewer';
 
 interface ApplyHeaderActionsProps {
@@ -30,6 +31,19 @@ export function ApplyHeaderActions({
   // session and swaps to the signed-in UserMenu — the same server-driven pattern
   // as the marketing header (`marketing-header.tsx`).
   const handleLogIn = useCallback(() => {
+    // BAL-562 — stamp the auth gate BEFORE opening the modal. This control is the
+    // ONLY auth affordance on six of the wizard's seven steps, and the post-auth
+    // flush refuses any envelope it cannot see a deliberate gate crossing on
+    // (WARNING 6's freshness window) — so signing in from here used to discard the
+    // visitor's entire in-progress application, silently and with no toast.
+    //
+    // Storage is the only channel available: this header is rendered by
+    // `(apply)/layout.tsx`, outside the wizard's provider, so there is no context to
+    // call into. A no-op wherever no anonymous envelope exists — which is every
+    // `(apply)` route except the wizard itself. The boolean is not surfaced: a
+    // `false` here overwhelmingly means "nothing to stamp" rather than a failure,
+    // and a store that cannot be written to never held an envelope to lose.
+    stampAuthGate();
     authModal.open({ onSuccess: () => router.refresh() });
   }, [authModal, router]);
 

@@ -3,6 +3,11 @@ import { render, screen } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { ApplyHeaderActions } from './apply-header-actions';
 import type { MarketingViewer } from '@/components/marketing/marketing-viewer';
+import {
+  ANON_DRAFT_KEY,
+  writeAnonymousDraft,
+  readAnonymousDraft,
+} from '@/lib/expert-apply/anonymous-draft';
 
 const routerRefresh = vi.fn();
 vi.mock('next/navigation', () => ({
@@ -20,7 +25,18 @@ function makeViewer(overrides: Partial<MarketingViewer> = {}): MarketingViewer {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  globalThis.sessionStorage.clear();
 });
+
+function seedAnonymousEnvelope(): void {
+  writeAnonymousDraft({
+    v: 1,
+    savedAt: new Date().toISOString(),
+    currentStep: 3,
+    maxReachedStep: 4,
+    steps: { profile: { yearStartedSalesforce: 2015 } },
+  });
+}
 
 describe('ApplyHeaderActions — anonymous (viewer null)', () => {
   it('renders a "Log in" control, no UserMenu, no "Log out" item, no User/U fallback', () => {
@@ -54,5 +70,59 @@ describe('ApplyHeaderActions — signed in (viewer present)', () => {
     expect(screen.getByRole('button', { name: /user menu for dana okafor/i })).toBeInTheDocument();
     expect(screen.getByText('DO')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Log in' })).not.toBeInTheDocument();
+  });
+});
+
+describe('BAL-562 — the header auth gate stamps the anonymous draft', () => {
+  /**
+   * THE REGRESSION PROBE. This control is the only auth affordance on six of the
+   * wizard's seven steps. Remove `stampAuthGate()` from `handleLogIn` and the envelope
+   * reaching the post-auth flush carries no gate crossing, so the freshness guard
+   * discards the visitor's whole in-progress application — silently, with no toast.
+   */
+  it('stamps a pending envelope BEFORE opening the modal', async () => {
+    seedAnonymousEnvelope();
+    const stampedAtOpen: (string | undefined)[] = [];
+    authModalOpen.mockImplementation(() => {
+      stampedAtOpen.push(readAnonymousDraft()?.authGateAt);
+    });
+
+    const user = userEvent.setup();
+    render(<ApplyHeaderActions viewer={null} />);
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
+
+    // Ordering matters: by the time the modal is open the stamp must already be
+    // durable, because the OAuth arm navigates the page away immediately.
+    expect(stampedAtOpen).toHaveLength(1);
+    expect(stampedAtOpen[0]).toEqual(expect.any(String));
+  });
+
+  it('leaves the envelope content untouched — it stamps, it does not rewrite', async () => {
+    seedAnonymousEnvelope();
+
+    const user = userEvent.setup();
+    render(<ApplyHeaderActions viewer={null} />);
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
+
+    const stored = readAnonymousDraft();
+    expect(stored?.steps.profile).toEqual({ yearStartedSalesforce: 2015 });
+    expect(stored?.currentStep).toBe(3);
+    expect(stored?.maxReachedStep).toBe(4);
+  });
+
+  it('writes nothing when there is no envelope — every (apply) route except the wizard', async () => {
+    const user = userEvent.setup();
+    render(<ApplyHeaderActions viewer={null} />);
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
+
+    expect(globalThis.sessionStorage.getItem(ANON_DRAFT_KEY)).toBeNull();
+    expect(authModalOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('a signed-in viewer has no Log in control, so nothing is ever stamped on their behalf', () => {
+    seedAnonymousEnvelope();
+    render(<ApplyHeaderActions viewer={makeViewer()} />);
+
+    expect(readAnonymousDraft()?.authGateAt).toBeUndefined();
   });
 });

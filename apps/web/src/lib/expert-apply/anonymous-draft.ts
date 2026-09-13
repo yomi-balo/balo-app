@@ -21,6 +21,14 @@ import { STEP_CONFIG, type StepKey } from '@/app/(apply)/expert/apply/_actions/s
 export const ANON_DRAFT_KEY = 'balo.expert-apply.anon-draft.v1';
 export const ANON_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Per-step progress marker, mirrored from the wizard's own rail. Declared HERE
+ * rather than in the provider because this module owns the serialized contract —
+ * the provider imports it, so there is exactly one definition of the union that
+ * ever reaches storage.
+ */
+export type StepStatus = 'pending' | 'completed' | 'skipped';
+
 /** The SERIALIZED artifact, not the in-memory wizard state. Validated on every read. */
 export interface AnonymousApplicationDraftV1 {
   v: 1;
@@ -29,9 +37,22 @@ export interface AnonymousApplicationDraftV1 {
   maxReachedStep: number;
   steps: Partial<Record<StepKey, unknown>>;
   /**
-   * BAL-502 FIX round (WARNING 6) — ISO timestamp stamped ONLY at the submit gate
-   * (`saveAnonymousDraftNow`, the sole caller), never by the 800ms background
-   * debounce. The envelope carries no identity of its own — any session that shows
+   * BAL-562 — per-step progress, positionally parallel to `STEP_CONFIG`. Persisted
+   * so an anonymous reload restores the progress rail and not merely the field
+   * values: these statuses are produced by NAVIGATION (`goNext` / `skipStep`), so
+   * unlike the authenticated path there is no server draft to re-derive them from
+   * and nothing else in the envelope implies them. Optional, so an envelope written
+   * before this field existed still validates and simply restores without markers.
+   */
+  stepStatuses?: StepStatus[];
+  /**
+   * BAL-502 FIX round (WARNING 6) — ISO timestamp stamped only where the visitor
+   * deliberately crosses an auth boundary, never by the 800ms background debounce.
+   * BAL-562 added the second such place, so there are now exactly TWO stampers and
+   * they are the two auth entry points: the Terms submit gate
+   * (`saveAnonymousDraftNow`) and the apply header's "Log in" (`stampAuthGate`, used
+   * by `ApplyHeaderActions`). Nothing else may stamp — a stamp asserts intent, not
+   * activity. The envelope carries no identity of its own — any session that shows
    * up in this tab can claim it (shared/kiosk browser: person A's CV attributed to
    * person B). `authGateAt` doesn't fix that on its own, but it bounds the blast
    * radius: the post-auth flush only trusts an envelope stamped within a short
@@ -51,6 +72,7 @@ const envelopeSchema = z.object({
   currentStep: z.number().int().min(0),
   maxReachedStep: z.number().int().min(0),
   steps: z.record(z.enum(STEP_KEYS), z.unknown()),
+  stepStatuses: z.array(z.enum(['pending', 'completed', 'skipped'])).optional(),
   authGateAt: z.string().optional(),
 });
 
@@ -62,6 +84,34 @@ function resolveStore(store: Storage | undefined): Storage | null {
     // Some hosts throw merely on ACCESSING the property (private-mode Safari,
     // historically). Degrade to "no store" rather than let the throw escape.
     return null;
+  }
+}
+
+/**
+ * Minimal, side-effect-FREE read of just the stored stamp.
+ *
+ * Deliberately not `readAnonymousDraft`: that one CLEARS an over-age envelope as a
+ * side effect, and a write must never mutate storage as a consequence of looking
+ * something up. No age check either — freshness is the post-auth flush's decision to
+ * make (`AUTH_GATE_FLUSH_WINDOW_MS`), not this carry-forward's.
+ */
+function readStoredAuthGateAt(store: Storage): string | undefined {
+  let raw: string | null;
+  try {
+    raw = store.getItem(ANON_DRAFT_KEY);
+  } catch {
+    return undefined;
+  }
+  if (raw === null) return undefined;
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    // A non-object payload (`null`, a bare number) either throws on the property
+    // access or yields a non-string — both land on `undefined`, never a bad stamp.
+    const stamp = (parsed as { authGateAt?: unknown }).authGateAt;
+    return typeof stamp === 'string' ? stamp : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -116,12 +166,53 @@ export function writeAnonymousDraft(draft: AnonymousApplicationDraftV1, store?: 
   const resolved = resolveStore(store);
   if (!resolved) return false;
 
+  // BAL-562 — the stamp is STICKY. `authGateAt` is set once, at an auth gate, but the
+  // envelope is rebuilt WHOLESALE from live wizard state by the 800ms debounce, which
+  // has no way to know a gate was ever crossed. Without this carry-forward a single
+  // field change within 800ms of hitting the gate silently strips the stamp; the
+  // post-auth flush then fails its freshness check and discards the visitor's entire
+  // application with no toast. Carrying it here rather than at each call site makes
+  // the invariant hold for EVERY writer — including `ApplyHeaderActions`, which is
+  // rendered by `(apply)/layout.tsx`, outside the wizard provider, and can reach
+  // nothing but storage. An explicit `authGateAt` on the incoming draft still wins,
+  // so a fresh stamp always moves the window forward.
+  const merged: AnonymousApplicationDraftV1 =
+    draft.authGateAt === undefined
+      ? { ...draft, authGateAt: readStoredAuthGateAt(resolved) }
+      : draft;
+
   try {
-    resolved.setItem(ANON_DRAFT_KEY, JSON.stringify(draft));
+    // `JSON.stringify` drops an `undefined` value, so the no-prior-stamp case
+    // serializes identically to an envelope that never carried the field.
+    resolved.setItem(ANON_DRAFT_KEY, JSON.stringify(merged));
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Stamps "whoever is at this tab deliberately asked to authenticate" onto the stored
+ * envelope.
+ *
+ * Separate from `writeAnonymousDraft` because the two call sites that cross an auth
+ * boundary sit on OPPOSITE sides of the wizard provider: the Terms submit gate holds
+ * live state and writes a whole fresh envelope, while the apply header's "Log in"
+ * control can only reach storage. Both are a deliberate act by the person sitting at
+ * this tab, which is exactly the thing the flush's freshness window is defined
+ * against (WARNING 6) — so both must stamp, and neither widens the kiosk hazard.
+ *
+ * Returns `false` when there is nothing to stamp (no envelope — the ordinary case on
+ * every `(apply)` route except the wizard) or the write failed.
+ */
+export function stampAuthGate(store?: Storage): boolean {
+  const resolved = resolveStore(store);
+  if (!resolved) return false;
+
+  const existing = readAnonymousDraft(resolved);
+  if (!existing) return false;
+
+  return writeAnonymousDraft({ ...existing, authGateAt: new Date().toISOString() }, resolved);
 }
 
 /** Best-effort clear. Never throws. */

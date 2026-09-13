@@ -40,7 +40,11 @@ vi.mock('@/lib/expert-apply/reload-with-toast', () => ({
 }));
 
 import { ExpertApplicationProvider, useWizard } from './expert-application-context';
-import { writeAnonymousDraft, readAnonymousDraft } from '@/lib/expert-apply/anonymous-draft';
+import {
+  writeAnonymousDraft,
+  readAnonymousDraft,
+  stampAuthGate,
+} from '@/lib/expert-apply/anonymous-draft';
 import { saveDraftAction } from '../_actions/save-draft';
 import { track, EXPERT_EVENTS } from '@/lib/analytics';
 import { toast } from 'sonner';
@@ -53,18 +57,36 @@ const saveDraftActionMock = vi.mocked(saveDraftAction);
 // ── Harness ──────────────────────────────────────────────────────
 
 function Harness(): React.JSX.Element {
-  const { isAnonymous, currentStep, expertProfileId, profileData, updateStepData } = useWizard();
+  const {
+    isAnonymous,
+    currentStep,
+    maxReachedStep,
+    stepStatuses,
+    expertProfileId,
+    profileData,
+    productsData,
+    termsData,
+    updateStepData,
+    saveAnonymousDraftNow,
+  } = useWizard();
   return (
     <div>
       <span data-testid="anon">{String(isAnonymous)}</span>
       <span data-testid="current">{currentStep}</span>
+      <span data-testid="max-reached">{maxReachedStep}</span>
+      <span data-testid="statuses">{stepStatuses.join(',')}</span>
       <span data-testid="epid">{expertProfileId ?? 'null'}</span>
       <span data-testid="year">{profileData.yearStartedSalesforce ?? 'unset'}</span>
+      <span data-testid="products">{(productsData.productIds ?? []).join(',') || 'none'}</span>
+      <span data-testid="terms">{String(termsData.termsAccepted ?? false)}</span>
       <button
         type="button"
         onClick={() => updateStepData('profile', { yearStartedSalesforce: 2021 })}
       >
         edit-profile
+      </button>
+      <button type="button" onClick={() => saveAnonymousDraftNow()}>
+        cross-auth-gate
       </button>
     </div>
   );
@@ -488,5 +510,240 @@ describe('anonymous unload beacon is a no-op (BAL-502 §22 — no anonymous writ
     globalThis.dispatchEvent(new Event('pagehide'));
 
     expect(sendBeacon).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-562 ──────────────────────────────────────────────────────
+
+/**
+ * The anonymous→signed-in transition the BAL-562 probes share: render with no session,
+ * then hand back a `signIn()` that re-renders the SAME mount with one — which is what
+ * `router.refresh()` does after the email auth modal succeeds.
+ */
+function renderAnonymousThenSignIn(): { signIn: () => void } {
+  const { rerender } = render(
+    <ExpertApplicationProvider draft={null} referenceData={referenceData} user={null}>
+      <Harness />
+    </ExpertApplicationProvider>
+  );
+  return {
+    signIn: () =>
+      rerender(
+        <ExpertApplicationProvider
+          draft={null}
+          referenceData={referenceData}
+          user={{ id: 'user-1' }}
+        >
+          <Harness />
+        </ExpertApplicationProvider>
+      ),
+  };
+}
+
+describe('BAL-562 — the auth-gate stamp survives the debounce that lands after it', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * THE REGRESSION PROBE. Revert either half of the fix — the sticky carry-forward in
+   * `writeAnonymousDraft`, or the `clearTimeout` in `saveAnonymousDraftNow` — and the
+   * envelope reaching the flush has no `authGateAt`, the freshness gate clears it, and
+   * `flushAnonymousDraft` is never called: seven steps of work discarded in silence.
+   *
+   * The trigger is the ORDINARY interaction, not an edge case — the last thing a
+   * visitor does before crossing the gate is touch a field on the Terms step, which
+   * arms the very 800ms timer that used to strip the stamp.
+   */
+  it('an edit within 800ms of crossing the gate does not cost the visitor their application', () => {
+    mockFlushAnonymousDraft.mockResolvedValue({ outcome: 'flushed', stepsFlushed: 1 });
+
+    const { signIn } = renderAnonymousThenSignIn();
+
+    // The visitor edits a field — arming the anonymous debounce...
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    // ...and crosses the submit gate before it fires.
+    fireEvent.click(screen.getByRole('button', { name: 'cross-auth-gate' }));
+
+    const stamped = JSON.parse(
+      globalThis.sessionStorage.getItem('balo.expert-apply.anon-draft.v1') ?? '{}'
+    ) as Record<string, unknown>;
+    expect(stamped.authGateAt).toEqual(expect.any(String));
+
+    // The debounce's window elapses while the auth modal is open.
+    vi.advanceTimersByTime(800);
+
+    const afterDebounce = JSON.parse(
+      globalThis.sessionStorage.getItem('balo.expert-apply.anon-draft.v1') ?? '{}'
+    ) as Record<string, unknown>;
+    expect(afterDebounce.authGateAt).toBe(stamped.authGateAt);
+
+    // Sign-in completes and `router.refresh()` re-renders this same mount WITH a session.
+    signIn();
+
+    expect(mockFlushAnonymousDraft).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Isolates the STICKY half of the fix. The header's "Log in" (`ApplyHeaderActions`)
+   * stamps through storage and never touches `saveAnonymousDraftNow`, so the
+   * `clearTimeout` there cannot save this path — only the carry-forward in
+   * `writeAnonymousDraft` can. Revert that carry-forward and this fails while the
+   * probe above still passes.
+   */
+  it('a stamp made from outside the provider survives the debounce that lands after it', () => {
+    mockFlushAnonymousDraft.mockResolvedValue({ outcome: 'flushed', stepsFlushed: 1 });
+
+    const { signIn } = renderAnonymousThenSignIn();
+
+    // Establish an envelope, then stamp it the way the apply header does.
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    vi.advanceTimersByTime(800);
+    expect(stampAuthGate()).toBe(true);
+
+    // The visitor edits once more before the redirect — arming a fresh debounce that
+    // rebuilds the envelope from live state, with no knowledge of the stamp.
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    vi.advanceTimersByTime(800);
+
+    expect(readAnonymousDraft()?.authGateAt).toEqual(expect.any(String));
+
+    signIn();
+
+    expect(mockFlushAnonymousDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the pending debounce outright, so the gate write is the last to touch storage', () => {
+    renderAnonymousThenSignIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'cross-auth-gate' }));
+
+    const atGate = globalThis.sessionStorage.getItem('balo.expert-apply.anon-draft.v1');
+    vi.advanceTimersByTime(800);
+
+    expect(globalThis.sessionStorage.getItem('balo.expert-apply.anon-draft.v1')).toBe(atGate);
+  });
+});
+
+describe('BAL-562 — anonymous resume from sessionStorage', () => {
+  function seedResumableEnvelope(): void {
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: new Date().toISOString(),
+      currentStep: 4,
+      maxReachedStep: 5,
+      stepStatuses: [
+        'completed',
+        'completed',
+        'completed',
+        'skipped',
+        'pending',
+        'pending',
+        'pending',
+      ],
+      steps: {
+        profile: { yearStartedSalesforce: 2016 },
+        products: { productIds: ['11111111-1111-1111-1111-111111111111'] },
+        terms: { termsAccepted: true },
+      },
+    });
+  }
+
+  it('restores field data across a reload instead of showing an empty wizard', () => {
+    seedResumableEnvelope();
+    renderHarness(null, null);
+
+    expect(screen.getByTestId('year').textContent).toBe('2016');
+    expect(screen.getByTestId('products').textContent).toBe('11111111-1111-1111-1111-111111111111');
+  });
+
+  it('restores position and the furthest step reached — the URL cannot, since ?step= is clamped to 0 while draft is null', () => {
+    seedResumableEnvelope();
+    renderHarness(null, null);
+
+    expect(screen.getByTestId('current').textContent).toBe('4');
+    expect(screen.getByTestId('max-reached').textContent).toBe('5');
+  });
+
+  it('restores the progress rail, which is navigation-derived and implied by nothing else in the envelope', () => {
+    seedResumableEnvelope();
+    renderHarness(null, null);
+
+    expect(screen.getByTestId('statuses').textContent).toBe(
+      'completed,completed,completed,skipped,pending,pending,pending'
+    );
+  });
+
+  it('never restores terms acceptance — consent is re-affirmed on every visit', () => {
+    seedResumableEnvelope();
+    renderHarness(null, null);
+
+    expect(screen.getByTestId('terms').textContent).toBe('false');
+  });
+
+  it('does not overwrite the restored envelope on the next keystroke', async () => {
+    seedResumableEnvelope();
+    renderHarness(null, null);
+
+    // Two clicks, per the `scheduleAnonymousSave` note above: the first schedules an
+    // envelope closing over PRE-edit state, the second closes over the committed edit.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+
+    // Wait for the debounce to actually LAND first. Asserting survival before the
+    // write happens would pass against the seeded envelope and prove nothing —
+    // this is the difference between pinning the fix and pinning the fixture.
+    await waitFor(
+      () => {
+        expect(readAnonymousDraft()?.steps.profile).toEqual({ yearStartedSalesforce: 2021 });
+      },
+      { timeout: 3000 }
+    );
+
+    // Only now is the assertion meaningful: the rewritten envelope was built from
+    // RESTORED state, so a step the visitor never returned to is still in it.
+    expect(readAnonymousDraft()?.steps.products).toEqual({
+      productIds: ['11111111-1111-1111-1111-111111111111'],
+    });
+  });
+
+  it('clamps a position that exceeds the current STEP_CONFIG length (an envelope from an older build)', () => {
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: new Date().toISOString(),
+      currentStep: 99,
+      maxReachedStep: 99,
+      steps: { profile: { yearStartedSalesforce: 2016 } },
+    });
+    renderHarness(null, null);
+
+    expect(Number(screen.getByTestId('current').textContent)).toBeLessThanOrEqual(6);
+    expect(Number(screen.getByTestId('max-reached').textContent)).toBeLessThanOrEqual(6);
+  });
+
+  it('leaves the wizard pristine when there is no envelope at all', () => {
+    renderHarness(null, null);
+
+    expect(screen.getByTestId('year').textContent).toBe('unset');
+    expect(screen.getByTestId('current').textContent).toBe('0');
+  });
+
+  it('never rehydrates for a SIGNED-IN visitor — the server draft is the only source there', () => {
+    seedResumableEnvelope();
+    mockFlushAnonymousDraft.mockResolvedValue({ outcome: 'nothing_to_flush', stepsFlushed: 0 });
+
+    renderHarness({ id: 'user-1' }, serverDraft);
+
+    // 2018 is the SERVER draft's value; 2016 is the anonymous envelope's.
+    expect(screen.getByTestId('year').textContent).toBe('2018');
   });
 });
