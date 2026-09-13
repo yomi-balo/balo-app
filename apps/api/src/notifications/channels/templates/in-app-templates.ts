@@ -1040,7 +1040,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // Low balance — the in-session member (self).
   'session-low-balance': (data) => ({
     title: 'Balance running low',
-    body: `About ${numberOrZero(data.minutesRemaining)} minutes of balance left — top up so nothing interrupts you.`,
+    body: `About ${numberOrZero(data.minutesRemaining)} minutes of balance left — top up any time to stay ahead of it.`,
     actionUrl: '/settings/billing',
   }),
 
@@ -1061,7 +1061,7 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
   // Nearing the wrap — the in-session member (self).
   'session-near-wrap': (data) => ({
     title: 'Coming up on a good place to wrap',
-    body: `About ${numberOrZero(data.graceRemainingMinutes)} more minutes before we pause to settle up.`,
+    body: `About ${numberOrZero(data.graceRemainingMinutes)} more minutes of the extra time we set aside.`,
     actionUrl: '/settings/billing',
   }),
 
