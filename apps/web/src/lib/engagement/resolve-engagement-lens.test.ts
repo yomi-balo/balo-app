@@ -166,9 +166,16 @@ describe('resolveEngagementLens', () => {
    * — it is a hard guardrail), so it cannot be imported and compared directly. This pins the two
    * sets BEHAVIORALLY instead, from a test file only: every `PLATFORM_STAFF_ROLES` role must
    * resolve the admin observer lens (below), and a role that ISN'T in that set must not (the
-   * `platformRole: 'user'` cases already above, `'returns null for a stranger'` included). A role
-   * added to one set and not the other fails one of these — the cheapest guard available without
-   * touching the resolver.
+   * `platformRole: 'user'` cases already above, `'returns null for a stranger'` included).
+   *
+   * ⚠ THIS PINS ONE DIRECTION ONLY (external review, pre-merge — the earlier wording, "a role
+   * added to one set and not the other fails one of these", overclaimed). A role added to
+   * `PLATFORM_STAFF_ROLES` but NOT to the resolver's `ADMIN_ROLES` fails here. The REVERSE — a
+   * role added to `ADMIN_ROLES` only — trips nothing, because this test never enumerates
+   * `ADMIN_ROLES` (it can't; it is unexported). That gap is deliberate and it fails CLOSED: such
+   * a role would receive the admin observer LENS but hold no platform capability, so every
+   * migrated gate in this PR still denies it. An accepted gap, not coverage — closing it needs
+   * the resolver to export its set, which R5 forbids here. Fold into BAL-316.
    */
   it.each([...PLATFORM_STAFF_ROLES])(
     'every PLATFORM_STAFF_ROLES role (%s) resolves the admin observer lens',

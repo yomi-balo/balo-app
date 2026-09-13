@@ -129,6 +129,24 @@ const PINNED_FILES: readonly string[] = [
  * → `isPlatformAdmin`, and it leaves no other banned substring in the calling file; the sibling
  * `projects/[requestId]/_actions` has SEVEN `requireAdmin()` call sites, making copy-paste into
  * this directory the most likely reintroduction vector).
+ *
+ * ⚠ `platformRole` IS BANNED BARE, NOT AS `platformRole ===` (external review, pre-merge). A
+ * COMPARISON is only one way to read the property. The likeliest reintroduction of all is a
+ * copy-paste of the resolver's OWN line — `ADMIN_ROLES.has(user.platformRole)`
+ * (`resolve-engagement-lens.ts:70`) — which carries no comparison operator and would have
+ * sailed past `platformRole ===`, `isPlatformAdmin`, `PLATFORM_ADMIN_ROLES` and `requireAdmin(`
+ * alike. So would `PLATFORM_STAFF_ROLES.has(...)`, `switch (user.platformRole)`, and an inline
+ * `['admin', 'super_admin'].includes(...)`. The rule this encodes: **a mutation gate in this
+ * tree has no business reading the property at all** — `hasPlatformCapability(user, TOKEN)`
+ * takes the whole user and resolves the role internally, so a scanned file never needs to name
+ * `platformRole`. The role-set NAMES (`ADMIN_ROLES`, `PLATFORM_STAFF_ROLES`) and the bare
+ * `'super_admin'` literal are banned for the same reason: each spells the staff set without
+ * comparing the property.
+ *
+ * Verified safe to ban bare: no scanned source reads `platformRole` in CODE. The two mentions
+ * in this tree (`action-item-action-shared.ts`, `engagement-lifecycle-shared.ts`) sit inside
+ * docblocks, which `codeLinesOf` strips — the same reason the file that quotes
+ * `loaded.lens !== 'admin'` in its own docblock still passes this scan.
  */
 const ADMIN_GATE_TOKENS: readonly string[] = [
   "lens === 'admin'",
@@ -139,11 +157,13 @@ const ADMIN_GATE_TOKENS: readonly string[] = [
   'lens !== `admin`',
   'archetype ===',
   'archetype !==',
-  'platformRole ===',
-  'platformRole !==',
+  'platformRole',
   'isPlatformAdmin',
   'isPlatformAdminRole',
   'PLATFORM_ADMIN_ROLES',
+  'PLATFORM_STAFF_ROLES',
+  'ADMIN_ROLES',
+  'super_admin',
   'requireAdmin(',
 ];
 
@@ -250,6 +270,31 @@ describe('invariant: BAL-404 engagement admin write-gates resolve a PLATFORM CAP
       {
         rel: 'actions/cancel-engagement.ts',
         code: 'const admin = await requireAdmin();',
+        raw: '',
+      },
+      // ── The comparison-free role-set reads (external review, pre-merge) ──────────
+      // The resolver's own line, copy-pasted. No comparison operator anywhere: caught
+      // only because `platformRole` is banned BARE, and again by `ADMIN_ROLES`.
+      {
+        rel: 'actions/engagement-lifecycle-shared.ts',
+        code: 'if (!ADMIN_ROLES.has(user.platformRole)) {',
+        raw: '',
+      },
+      {
+        rel: 'actions/action-item-action-shared.ts',
+        code: 'if (!PLATFORM_STAFF_ROLES.has(actor.platformRole)) {',
+        raw: '',
+      },
+      {
+        rel: 'actions/cancel-engagement.ts',
+        code: 'switch (user.platformRole) {',
+        raw: '',
+      },
+      // An inline staff set that names neither a helper nor the property on the same
+      // line — caught by the bare `'super_admin'` literal alone.
+      {
+        rel: 'engagements/page.tsx',
+        code: "if (!['admin', 'super_admin'].includes(role)) {",
         raw: '',
       },
     ];
