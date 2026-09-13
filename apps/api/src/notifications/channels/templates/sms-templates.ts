@@ -15,7 +15,7 @@ const templates: Record<string, (data: Record<string, unknown>) => string> = {
   },
 
   'session-near-wrap-sms': () => {
-    return 'Balo: Your session is nearing the end of its extra time — top up to keep going without a break.';
+    return 'Balo: Your session is nearing the end of its extra time — top up any time to stay ahead of it.';
   },
 
   // BAL-411 — the expert proposed alternative times AND the original start is under 2h away

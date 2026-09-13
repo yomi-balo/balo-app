@@ -59,8 +59,18 @@ import {
   projectSavedCard,
   projectWalletSnapshot,
   projectBillingEmail,
+  walletHasEverHeldCredit,
   UNPROVISIONED_WALLET,
 } from './wallet-read';
+
+/**
+ * ⚠ BAL-405 FIXTURE HONESTY — `expires_at` is stamped by the FIRST ledger entry and never
+ * cleared, so it is the "has this wallet ever held credit" signal. The mock is untyped, so an
+ * OMITTED `expiresAt` reads as `undefined` — which is `!== null`, i.e. a silent "funded". Every
+ * wallet mock in this file therefore states it explicitly: `FUNDED_AT` for a wallet that has
+ * held credit, `null` for one that never has.
+ */
+const FUNDED_AT = new Date('2027-02-01T00:00:00.000Z');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -126,7 +136,7 @@ describe('loadDashboardWalletData', () => {
   it('returns the holder branch with fx passed through when the actor can manage billing', async () => {
     mockHasCapability.mockResolvedValue(true);
     mockResolveDisplayQuote.mockReturnValue('USD');
-    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 34_700 });
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 34_700, expiresAt: FUNDED_AT });
     mockGetLatest.mockResolvedValue({ asOf: new Date(), rate: '0.642' });
     mockIsFxRateStale.mockReturnValue(false);
 
@@ -144,7 +154,7 @@ describe('loadDashboardWalletData', () => {
 
   it('holder gets fx=null for an AUD buyer (the inert default today)', async () => {
     mockHasCapability.mockResolvedValue(true);
-    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 12_000 });
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 12_000, expiresAt: FUNDED_AT });
 
     const data = await loadDashboardWalletData({ id: 'u-1' }, 'co-1');
 
@@ -164,13 +174,18 @@ describe('loadDashboardWalletData', () => {
 
   it('returns the member branch with the resolved admin label when the actor cannot manage billing', async () => {
     mockHasCapability.mockResolvedValue(false);
-    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820, expiresAt: FUNDED_AT });
     mockListBillingUserIds.mockResolvedValue(['admin-1']);
     mockFindById.mockResolvedValue({ firstName: 'Sam', lastName: null });
 
     const data = await loadDashboardWalletData({ id: 'u-9' }, 'co-1');
 
-    expect(data).toEqual({ kind: 'member', balanceMinor: 1_820, adminLabel: 'Sam' });
+    expect(data).toEqual({
+      kind: 'member',
+      balanceMinor: 1_820,
+      adminLabel: 'Sam',
+      hasEverHeldCredit: true,
+    });
   });
 
   it('member branch falls back to the generic admin label when unresolved', async () => {
@@ -180,14 +195,73 @@ describe('loadDashboardWalletData', () => {
 
     const data = await loadDashboardWalletData({ id: 'u-9' }, 'co-1');
 
-    expect(data).toEqual({ kind: 'member', balanceMinor: 0, adminLabel: 'your billing admin' });
+    expect(data).toEqual({
+      kind: 'member',
+      balanceMinor: 0,
+      adminLabel: 'your billing admin',
+      hasEverHeldCredit: false,
+    });
+  });
+
+  // ⚠ BAL-405 — the member nudge's zero-balance copy branches on this. A wallet ROW is not proof
+  // of funding: `ensureForCompany` mints one with balance 0 when a company only adds a card, so
+  // `wallet !== undefined` would tell exactly those companies their balance was "used up".
+  const everHeldCases: Array<[string, Record<string, unknown> | undefined, boolean]> = [
+    ['NO wallet row at all (never funded)', undefined, false],
+    [
+      'a card-first row with expiresAt NULL (never funded)',
+      { balanceMinor: 0, expiresAt: null },
+      false,
+    ],
+    [
+      'a row drawn to zero AFTER funding (genuinely used up)',
+      { balanceMinor: 0, expiresAt: FUNDED_AT },
+      true,
+    ],
+  ];
+
+  it.each(everHeldCases)('member + %s ⇒ hasEverHeldCredit %s', async (_label, wallet, expected) => {
+    mockHasCapability.mockResolvedValue(false);
+    mockFindByCompanyId.mockResolvedValue(wallet);
+    mockListBillingUserIds.mockResolvedValue(['admin-1']);
+    mockFindById.mockResolvedValue({ firstName: 'Sam', lastName: null });
+
+    const data = await loadDashboardWalletData({ id: 'u-9' }, 'co-1');
+
+    expect(data).toEqual({
+      kind: 'member',
+      balanceMinor: 0,
+      adminLabel: 'Sam',
+      hasEverHeldCredit: expected,
+    });
+  });
+});
+
+describe('walletHasEverHeldCredit', () => {
+  it('is false for an unprovisioned wallet (no row at all)', () => {
+    expect(walletHasEverHeldCredit(undefined)).toBe(false);
+  });
+
+  it('is false for a row whose expiresAt is still NULL (no ledger entry has ever landed)', () => {
+    expect(walletHasEverHeldCredit({ expiresAt: null } as unknown as CreditWallet)).toBe(false);
+  });
+
+  it('is true for a row with a stamped expiresAt — even one already in the past', () => {
+    expect(walletHasEverHeldCredit({ expiresAt: FUNDED_AT } as unknown as CreditWallet)).toBe(true);
+    // A dormancy-expired wallet keeps its (past) expires_at: the `expiry` entry is the one entry
+    // type that does not roll it. They DID once hold credit, so "used up" is the correct arm.
+    expect(
+      walletHasEverHeldCredit({
+        expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+      } as unknown as CreditWallet)
+    ).toBe(true);
   });
 });
 
 describe('loadTopBarWalletData', () => {
   it('holder → the balance plus canTopUp: true', async () => {
     mockHasCapability.mockResolvedValue(true);
-    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 42_000 });
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 42_000, expiresAt: FUNDED_AT });
 
     const data = await loadTopBarWalletData('u-1', 'co-1');
 
@@ -199,7 +273,7 @@ describe('loadTopBarWalletData', () => {
 
   it('member → the SAME balance, canTopUp: false (D8 — no narrower money-visibility policy)', async () => {
     mockHasCapability.mockResolvedValue(false);
-    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820, expiresAt: FUNDED_AT });
 
     const data = await loadTopBarWalletData('u-9', 'co-1');
 
@@ -217,7 +291,7 @@ describe('loadTopBarWalletData', () => {
 
   it('never reads the billing-admin label or the indicative FX — the Q3 cost mitigation', async () => {
     mockHasCapability.mockResolvedValue(false);
-    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820, expiresAt: FUNDED_AT });
 
     await loadTopBarWalletData('u-9', 'co-1');
 
@@ -396,7 +470,7 @@ describe('projectBillingEmail', () => {
 describe('loadBillingSettingsWallet', () => {
   it('returns null for a member — no company read is issued', async () => {
     mockHasCapability.mockResolvedValue(false);
-    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820 });
+    mockFindByCompanyId.mockResolvedValue({ balanceMinor: 1_820, expiresAt: FUNDED_AT });
 
     const result = await loadBillingSettingsWallet({ id: 'u-9' }, 'co-1');
 
@@ -432,6 +506,7 @@ describe('loadBillingSettingsWallet', () => {
     mockFindByCompanyId.mockResolvedValue({
       id: 'wallet-1',
       balanceMinor: 12_000,
+      expiresAt: FUNDED_AT,
       lowBalanceMode: 'notify_only',
       topupReloadMinor: 30_000,
       topupThresholdMinor: 5_000,

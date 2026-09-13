@@ -6,7 +6,12 @@ import { Users, Bell, Check, ShieldCheck, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { nudgeBillingAdminAction } from '@/lib/credit/actions';
-import { formatAud, formatIndicative, LOW_BALANCE_MINOR } from '@/lib/credit/display-constants';
+import {
+  formatAud,
+  formatIndicative,
+  LOW_BALANCE_MINOR,
+  WALLET_CARD_CHROME,
+} from '@/lib/credit/display-constants';
 import type { DisplayFxSnapshot } from './types';
 
 interface MemberWalletNudgeProps {
@@ -15,25 +20,49 @@ interface MemberWalletNudgeProps {
   readonly adminLabel: string;
   readonly fx: DisplayFxSnapshot | null;
   /**
+   * BAL-405 — has credit ever moved through this team's wallet? REQUIRED (never optional with a
+   * default): a default would silently restore the "your balance is used up" lie at any future
+   * call site. Resolved server-side by `walletHasEverHeldCredit` — never re-derived here.
+   */
+  readonly hasEverHeldCredit: boolean;
+  /**
    * BAL-402 — optional analytics hook, invoked with the resting state on the nudge press (on
    * intent, before the async action). Omitted on the `/billing/top-up` route + `TopUpLauncher`,
    * which keep firing no analytics; the dashboard passes it to emit `wallet_nudge_clicked`.
+   * Both zero arms still emit `'zero'` — the copy variant is not an analytics distinction.
    */
   readonly onNudgeClick?: (state: 'low' | 'zero') => void;
 }
 
 /**
+ * The zero-balance body, in two arms. A team whose wallet has never held credit had nothing to
+ * use up, so the shipped "used up" sentence was a factual lie for them (BAL-405).
+ *
+ * ⚠ The never-funded arm LEADS WITH THE ACTION, never with the absence — `balo-ui-skill` forbids
+ * defining a section the reader can act from by what it lacks. Both arms use "top up": it is the
+ * platform's own verb for the purchase, and it is the word on the button directly beneath.
+ */
+function zeroBodyCopy(adminLabel: string, hasEverHeldCredit: boolean): string {
+  return hasEverHeldCredit
+    ? `Your team's balance is used up. Ask ${adminLabel} to top up to start a consultation.`
+    : `Ask ${adminLabel} to top up and your team can start a consultation.`;
+}
+
+/**
  * BAL-381 member variant — a company member WITHOUT MANAGE_BILLING sees and spends the shared
- * team balance but can't top up. Their constructive action is to NUDGE the billing holder(s).
- * Team-framed copy ("your team's balance"), never "top up"; "overdraft" never appears. The
- * `LOW_BALANCE_MINOR` floor is shared with the holder resting states (single source of truth).
+ * team balance but can't top up themselves. Their constructive action is to NUDGE the billing
+ * holder(s), so the copy is team-framed ("your team's balance") and names the holder who will
+ * press Top up; "overdraft" never appears. The `LOW_BALANCE_MINOR` floor is shared with the
+ * holder resting states, and {@link WALLET_CARD_CHROME} is the chrome the holder widget uses —
+ * both single sources of truth, so the two lenses agree in the slot they share.
  */
 export function MemberWalletNudge({
   balanceMinor,
   adminLabel,
   fx,
+  hasEverHeldCredit,
   onNudgeClick,
-}: Readonly<MemberWalletNudgeProps>) {
+}: Readonly<MemberWalletNudgeProps>): React.JSX.Element {
   const [requested, setRequested] = useState(false);
   const [pending, setPending] = useState(false);
 
@@ -96,12 +125,7 @@ export function MemberWalletNudge({
   }
 
   return (
-    <div
-      className={cn(
-        'bg-card w-full max-w-sm rounded-2xl border p-5 shadow-sm',
-        isLow ? 'border-warning/40' : 'border-border'
-      )}
-    >
+    <div className={cn(WALLET_CARD_CHROME, isLow ? 'border-warning/40' : 'border-border')}>
       <div className="flex items-center justify-between">
         <span className="text-muted-foreground inline-flex items-center gap-1.5 text-[11px] font-bold tracking-wide uppercase">
           <Users className="size-3.5" strokeWidth={2.4} aria-hidden="true" /> Team balance
@@ -131,7 +155,7 @@ export function MemberWalletNudge({
 
       <p className="text-muted-foreground mt-2 text-xs leading-relaxed font-medium">
         {isZero
-          ? `Your team's balance is used up. Ask ${adminLabel} to top up to start a consultation.`
+          ? zeroBodyCopy(adminLabel, hasEverHeldCredit)
           : `Shared across your team · ${adminLabel} manages top-ups.`}
       </p>
 

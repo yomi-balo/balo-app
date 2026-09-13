@@ -36,6 +36,7 @@ describe('CreditsSummary — click analytics', () => {
       kind: 'member',
       balanceMinor: 0,
       adminLabel: 'Dana Lee',
+      hasEverHeldCredit: true,
     };
     render(<CreditsSummary data={data} />);
     const nudge = screen.getByRole('button');
@@ -81,6 +82,7 @@ describe('CreditsSummary — member lens', () => {
       kind: 'member',
       balanceMinor: 25_000,
       adminLabel: 'Dana Lee',
+      hasEverHeldCredit: true,
     };
     render(<CreditsSummary data={data} />);
     expect(screen.getByText(/Team balance/i)).toBeInTheDocument();
@@ -93,6 +95,7 @@ describe('CreditsSummary — member lens', () => {
       kind: 'member',
       balanceMinor: 0,
       adminLabel: 'Dana Lee',
+      hasEverHeldCredit: true,
     };
     const { container } = render(<CreditsSummary data={data} />);
     expect(await axe(container)).toHaveNoViolations();

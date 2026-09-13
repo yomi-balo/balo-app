@@ -94,6 +94,7 @@ describe('CreditsBillingPage', () => {
       kind: 'member',
       balanceMinor: 0,
       adminLabel: 'Dana Lee',
+      hasEverHeldCredit: true,
     });
 
     const ui = await CreditsBillingPage();
@@ -206,6 +207,7 @@ describe('CreditsBillingPage', () => {
       kind: 'member',
       balanceMinor: 0,
       adminLabel: 'Dana Lee',
+      hasEverHeldCredit: true,
     });
     mockLoadBillingSettingsWallet.mockResolvedValue(null);
 

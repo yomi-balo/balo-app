@@ -21,6 +21,11 @@ interface TopUpLauncherProps {
   readonly balanceMinor: number;
   /** The billing holder's display name for the member nudge copy. */
   readonly adminLabel: string;
+  /**
+   * BAL-405 — forwarded to the member-variant surface. REQUIRED, not defaulted: a default would
+   * silently reinstate the "your balance is used up" lie for a never-funded team here.
+   */
+  readonly hasEverHeldCredit: boolean;
 }
 
 /**
@@ -38,7 +43,8 @@ export function TopUpLauncher({
   fx,
   balanceMinor,
   adminLabel,
-}: Readonly<TopUpLauncherProps>) {
+  hasEverHeldCredit,
+}: Readonly<TopUpLauncherProps>): React.JSX.Element {
   if (canManageBilling && wallet) {
     return <TopUpDialog trigger={trigger} wallet={wallet} fx={fx} />;
   }
@@ -49,7 +55,14 @@ export function TopUpLauncher({
       title="Team balance"
       description="View your team balance and nudge a billing admin to top up."
     >
-      {() => <MemberWalletNudge balanceMinor={balanceMinor} adminLabel={adminLabel} fx={fx} />}
+      {() => (
+        <MemberWalletNudge
+          balanceMinor={balanceMinor}
+          adminLabel={adminLabel}
+          fx={fx}
+          hasEverHeldCredit={hasEverHeldCredit}
+        />
+      )}
     </ResponsiveModal>
   );
 }

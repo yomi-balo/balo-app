@@ -106,6 +106,26 @@ const resolveWalletAudience = cache(
 );
 
 /**
+ * BAL-405 — has credit ever MOVED THROUGH this company's wallet (a purchase, a promo grant, or
+ * card-settled consumption)? `expires_at` is stamped by `applyLedgerEntry` (credit-ledger.ts
+ * step 5) on every ledger entry except `entry_type = 'expiry'`, and is never written back to
+ * NULL — so a non-null value means money has moved through this wallet at least once. An
+ * `expiry` entry can never be the first (it needs `balance_minor > 0`), so there is no false
+ * positive.
+ *
+ * ⚠ A WALLET ROW IS NOT PROOF OF FUNDING. `ensureForCompany` mints a row with balance 0 for a
+ * company that only added a card (the design's empty-state flow) or began a purchase that never
+ * settled. Testing `wallet !== undefined` alone would tell exactly those companies their balance
+ * was "used up".
+ *
+ * ⚠ THE ONLY DEFINITION. Never re-derive "has ever held credit" at a call site.
+ */
+export function walletHasEverHeldCredit(wallet: CreditWallet | undefined): boolean {
+  if (wallet === undefined) return false;
+  return wallet.expiresAt !== null;
+}
+
+/**
  * The projected, serialisable wallet read for the dashboard card — a discriminated union keyed
  * on the capability lens (ADR-1029: resolved via `hasCapability`, never `role ===` / `activeMode
  * ===`). The `holder` branch carries the indicative FX (inert `null` today — AUD buyer); the
@@ -113,7 +133,18 @@ const resolveWalletAudience = cache(
  */
 export type DashboardWalletData =
   | { kind: 'holder'; balanceMinor: number; fx: DisplayFxSnapshot | null }
-  | { kind: 'member'; balanceMinor: number; adminLabel: string };
+  | {
+      kind: 'member';
+      balanceMinor: number;
+      adminLabel: string;
+      /**
+       * BAL-405 — false ⇒ credit has never moved through this wallet (the nudge then leads with
+       * the action alone), true ⇒ it has, and was drawn to zero ("used up"). Member arm only: the
+       * holder's `zero` state is already invitation-only ("Top up to start a consultation") and
+       * makes no retrospective claim.
+       */
+      hasEverHeldCredit: boolean;
+    };
 
 /**
  * Resolve the dashboard wallet card's data for `actor` within `companyId`: the capability lens,
@@ -124,6 +155,9 @@ export type DashboardWalletData =
  * BAL-499: the capability + balance pair is now `resolveWalletAudience` (shared with the top-bar
  * chip) — signature and returned union are unchanged; the existing tests are the
  * behaviour-preservation evidence.
+ *
+ * BAL-405: the member arm also carries {@link walletHasEverHeldCredit} off the SAME already-read
+ * row (no extra query), so the nudge can tell a never-funded team apart from a depleted one.
  */
 export async function loadDashboardWalletData(
   actor: { id: string },
@@ -131,7 +165,7 @@ export async function loadDashboardWalletData(
 ): Promise<DashboardWalletData> {
   // AUD buyer → no indicative FX (charged in their own currency); non-AUD → fetch the quote.
   const quote = resolveDisplayQuote(resolveBuyerCurrency());
-  const [{ canManageBilling, balanceMinor }, fx] = await Promise.all([
+  const [{ canManageBilling, balanceMinor, wallet }, fx] = await Promise.all([
     resolveWalletAudience(actor.id, companyId),
     quote ? resolveDisplayFx(quote) : Promise.resolve(null),
   ]);
@@ -141,7 +175,12 @@ export async function loadDashboardWalletData(
   }
 
   const adminLabel = await resolveBillingAdminLabel(companyId);
-  return { kind: 'member', balanceMinor, adminLabel };
+  return {
+    kind: 'member',
+    balanceMinor,
+    adminLabel,
+    hasEverHeldCredit: walletHasEverHeldCredit(wallet),
+  };
 }
 
 /**

@@ -41,6 +41,7 @@ export function CreditsSummary({ data }: Readonly<CreditsSummaryProps>): React.J
         balanceMinor={data.balanceMinor}
         adminLabel={data.adminLabel}
         fx={null}
+        hasEverHeldCredit={data.hasEverHeldCredit}
         onNudgeClick={(state) => track(WALLET_EVENTS.NUDGE_CLICKED, { state })}
       />
     );

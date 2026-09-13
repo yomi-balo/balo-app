@@ -103,6 +103,24 @@ describe('getInAppTemplate — session notices', () => {
     });
   }
 
+  /**
+   * ⚠ BAL-405 — VERBATIM body pins. These two moments fire alongside the in-session panel, and
+   * before this ticket they promised an interruption / a pause that never happens on the
+   * presence path (ADR-1052 D2). Nothing pinned either body, so the wording could drift back
+   * silently. `toBe`, never `toContain`.
+   */
+  it('⚠ session-low-balance stays ahead of the balance instead of promising no interruption', () => {
+    const out = getInAppTemplate('session-low-balance', { minutesRemaining: 8 });
+    expect(out.body).toBe('About 8 minutes of balance left — top up any time to stay ahead of it.');
+    expect(out.body).not.toContain('interrupt');
+  });
+
+  it('⚠ session-near-wrap names the extra time instead of promising a pause', () => {
+    const out = getInAppTemplate('session-near-wrap', { graceRemainingMinutes: 10 });
+    expect(out.body).toBe('About 10 more minutes of the extra time we set aside.');
+    expect(out.body).not.toContain('pause');
+  });
+
   it('session-settled shows the amount when there was extra time', () => {
     const out = getInAppTemplate('session-settled', {
       overdraftSettledMinor: 1200,
@@ -150,4 +168,12 @@ describe('getSmsTemplate — session SMS', () => {
       expect(sms.startsWith('Balo:')).toBe(true);
     });
   }
+
+  // ⚠ BAL-405 — a VERBATIM pin, not just the ≤160 sweep above: this SMS fires at the same moment
+  // as the `near` panel copy, and previously promised a "break" the presence path never takes.
+  it('⚠ session-near-wrap-sms promises no break — verbatim', () => {
+    expect(getSmsTemplate('session-near-wrap-sms', {})).toBe(
+      'Balo: Your session is nearing the end of its extra time — top up any time to stay ahead of it.'
+    );
+  });
 });

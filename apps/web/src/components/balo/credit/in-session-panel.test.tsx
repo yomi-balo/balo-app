@@ -56,6 +56,14 @@ const STATES = {
     graceEnteredAt: new Date('2026-07-16T11:30:00.000Z'),
     balanceMinor: -15000,
   }),
+  // BAL-405 — `wrap` gained a `mandateActive` branch; this is its no-mandate arm.
+  wrapNoMandate: build({
+    status: 'wrapped',
+    graceEnteredAt: new Date('2026-07-16T11:30:00.000Z'),
+    balanceMinor: -15000,
+    graceAvailable: false,
+    mandateActive: false,
+  }),
   endNoGrace: build({
     status: 'wrapped',
     graceEnteredAt: null,
@@ -103,11 +111,12 @@ describe('InSessionPanel — call stage', () => {
     expect(screen.getByText('00:42:00')).toBeInTheDocument();
   });
 
-  it('shows the Paused pill for a wrapped session', () => {
+  // ⚠ BAL-405 — the call NEVER pauses on the presence path (ADR-1052 D2), so a "Paused" pill
+  // over a wrapped session was a visible false status on a live, still-billing call.
+  it('keeps the live In consultation pill for a wrapped session — the call never pauses', () => {
     renderPanel(STATES.wrapClient);
-    // "Paused" appears on both the status pill and the meter label — both correct.
-    expect(screen.getAllByText('Paused').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText('In consultation')).not.toBeInTheDocument();
+    expect(screen.getByText('In consultation')).toBeInTheDocument();
+    expect(screen.queryByText('Paused')).not.toBeInTheDocument();
   });
 });
 
@@ -134,10 +143,27 @@ describe('InSessionPanel — client lens', () => {
     expect(screen.getByText('Notifies')).toBeInTheDocument();
   });
 
-  it('wrap: pauses warmly with a Top up to continue CTA', () => {
+  it('wrap: says the call keeps going, with a Top up CTA', () => {
     renderPanel(STATES.wrapClient);
-    expect(screen.getByText("Let's pause here for now")).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Top up to continue' })).toBeInTheDocument();
+    expect(screen.getByText("You're past the extra time we set aside")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Your call keeps going — top up whenever you like to bring your balance back up. Extra time from here settles to your card afterward.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Top up' })).toBeInTheDocument();
+  });
+
+  // BAL-405 — the member twin of the `endNoGrace` / `endLiveMandate` pair: `wrap` now branches
+  // on `mandateActive` too, so the no-mandate clause must reach this surface.
+  it('wrap (no live mandate): states the extra time still needs settling', () => {
+    renderPanel(STATES.wrapNoMandate);
+    expect(screen.getByText("You're past the extra time we set aside")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Your call keeps going — top up whenever you like to bring your balance back up. Extra time from here still needs settling — your next top-up covers it.'
+      )
+    ).toBeInTheDocument();
   });
 
   // ⚠ R9 — renamed from `endNoMandate`. Since BAL-523 `graceAvailable: false` is reached by an
@@ -148,6 +174,10 @@ describe('InSessionPanel — client lens', () => {
     expect(
       screen.getByText(/still needs settling — your next top-up covers it/)
     ).toBeInTheDocument();
+    // BAL-405 — the old body promised the expert could "pick right back up", implying a stop.
+    expect(screen.queryByText(/pick right back up/)).not.toBeInTheDocument();
+    // BAL-405 — the CTA shortened from "Top up to continue" (which implied a stop to resume).
+    expect(screen.getByRole('button', { name: 'Top up' })).toBeInTheDocument();
   });
 
   // BAL-552 — `notify_only` + a LIVE mandate must render the settles-to-card sentence, not the
@@ -157,6 +187,8 @@ describe('InSessionPanel — client lens', () => {
     expect(screen.getByText("You're at the end of your balance")).toBeInTheDocument();
     expect(screen.getByText(/settles to your card afterward/)).toBeInTheDocument();
     expect(screen.queryByText(/needs settling/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pick right back up/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Top up' })).toBeInTheDocument();
   });
 });
 
@@ -176,7 +208,7 @@ describe('InSessionPanel — member lens', () => {
 });
 
 describe('InSessionPanel — BAL-403, variant="embedded"', () => {
-  it('renders NO expert name, NO live/paused pill, NO elapsed clock', () => {
+  it('renders NO expert name, NO live pill, NO elapsed clock', () => {
     render(<InSessionPanel variant="embedded" state={STATES.healthyClient} sessionId="sess-1" />);
     expect(screen.queryByText('Jordan Ellis')).not.toBeInTheDocument();
     expect(screen.queryByText('In consultation')).not.toBeInTheDocument();
@@ -205,7 +237,7 @@ describe('InSessionPanel — BAL-403, variant="embedded"', () => {
 
   it('F3 — gives the client-lens dead end a plain top-up link, opened in a new tab', () => {
     render(<InSessionPanel variant="embedded" state={STATES.wrapClient} sessionId="sess-1" />);
-    const link = screen.getByRole('link', { name: /top up to continue/i });
+    const link = screen.getByRole('link', { name: 'Top up' });
     expect(link).toHaveAttribute('href', '/billing/top-up');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));

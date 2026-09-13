@@ -14,7 +14,6 @@ function stateFor(overrides: Partial<DrawdownState> = {}): DrawdownState {
     key: 'healthy',
     status: 'active',
     elapsed: '00:05:00',
-    paused: false,
     meter: { mode: 'balance', pct: 80, tone: 'blue', label: 'Balance healthy' },
     tone: 'none',
     channels: [],

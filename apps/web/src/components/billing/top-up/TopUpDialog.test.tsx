@@ -61,6 +61,7 @@ describe('TopUpDialog / TopUpLauncher', () => {
         fx={null}
         balanceMinor={50_000}
         adminLabel="Dana"
+        hasEverHeldCredit
       />
     );
     await userEvent.click(screen.getByRole('button', { name: /Top up/i }));
@@ -77,6 +78,7 @@ describe('TopUpDialog / TopUpLauncher', () => {
         fx={null}
         balanceMinor={50_000}
         adminLabel="Dana"
+        hasEverHeldCredit
       />
     );
     await userEvent.click(screen.getByRole('button', { name: /Balance/i }));

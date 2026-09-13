@@ -24,6 +24,20 @@ export const RATE_PER_MIN_MINOR = 300;
  */
 export const LOW_BALANCE_MINOR = 5_000;
 
+/**
+ * BAL-405 — THE ONE wallet-card chrome, shared by the holder widget (`WalletWidget`, incl. its
+ * loading skeleton and error state), the member nudge (`MemberWalletNudge`) and therefore the
+ * dashboard Suspense fallback. Holder and member never render together (the capability lens is
+ * XOR) but they render into the SAME slot on `/dashboard` and `/settings/billing`, so a
+ * divergent max-width or elevation reads as two different components in one place.
+ *
+ * Surface + width + radius + border + padding + elevation ONLY. The BORDER COLOUR is NOT here —
+ * each lens applies its own (`restingBorderClass` / the nudge's `isLow` amber), and the widget
+ * adds `relative overflow-hidden` for its `session` gradient rail.
+ */
+export const WALLET_CARD_CHROME =
+  'bg-card w-full max-w-[380px] rounded-2xl border p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04),0_6px_20px_rgba(15,23,41,0.04)]';
+
 /** The holder wallet resting-state discriminant, derived purely from the AUD-minor balance. */
 export type WalletRestingState = 'healthy' | 'low' | 'zero';
 

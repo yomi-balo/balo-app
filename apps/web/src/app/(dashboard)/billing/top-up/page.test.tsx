@@ -74,16 +74,19 @@ vi.mock('@/components/billing/top-up/MemberWalletNudge', () => ({
     balanceMinor,
     adminLabel,
     fx,
+    hasEverHeldCredit,
   }: {
     balanceMinor: number;
     adminLabel: string;
     fx: DisplayFxSnapshot | null;
+    hasEverHeldCredit: boolean;
   }) => (
     <div
       data-testid="nudge"
       data-balance={String(balanceMinor)}
       data-admin={adminLabel}
       data-fx={fx ? fx.currency : 'none'}
+      data-everheld={String(hasEverHeldCredit)}
     />
   ),
 }));
@@ -94,6 +97,9 @@ import TopUpPage from './page';
 const WALLET = {
   id: 'wallet-1',
   balanceMinor: 25000,
+  // ⚠ BAL-405 fixture honesty — an omitted `expiresAt` is `undefined`, which reads as "funded".
+  // This buyer holds A$250, so a stamped `expires_at` is what the real row would carry.
+  expiresAt: new Date('2027-02-01T00:00:00.000Z'),
   lowBalanceMode: 'off',
   mandateStatus: 'active',
   topupReloadMinor: 10000,
@@ -144,6 +150,9 @@ describe('TopUpPage (RSC) — member (no MANAGE_BILLING) nudge branch', () => {
     const nudge = screen.getByTestId('nudge');
     expect(nudge).toHaveAttribute('data-admin', 'Dana Lee');
     expect(nudge).toHaveAttribute('data-balance', '25000');
+    // BAL-405 — a funded wallet (expires_at stamped) gets the "used up" arm, not "hasn't added
+    // credit yet".
+    expect(nudge).toHaveAttribute('data-everheld', 'true');
     expect(screen.queryByTestId('composer')).not.toBeInTheDocument();
   });
 
@@ -157,7 +166,21 @@ describe('TopUpPage (RSC) — member (no MANAGE_BILLING) nudge branch', () => {
     const nudge = screen.getByTestId('nudge');
     expect(nudge).toHaveAttribute('data-admin', 'your billing admin');
     expect(nudge).toHaveAttribute('data-balance', '0');
+    // ⚠ BAL-405 — no wallet row at all ⇒ never funded ⇒ the nudge must not claim anything was
+    // "used up".
+    expect(nudge).toHaveAttribute('data-everheld', 'false');
     expect(mockFindUserById).not.toHaveBeenCalled();
+  });
+
+  it('⚠ BAL-405 — a card-first wallet row (expiresAt NULL) is still never-funded', async () => {
+    mockHasCapability.mockResolvedValue(false);
+    mockFindWallet.mockResolvedValue({ ...WALLET, balanceMinor: 0, expiresAt: null });
+    mockListBillingUserIds.mockResolvedValue(['admin-1']);
+    mockFindUserById.mockResolvedValue({ firstName: 'Dana', lastName: 'Lee' });
+
+    await renderPage();
+
+    expect(screen.getByTestId('nudge')).toHaveAttribute('data-everheld', 'false');
   });
 
   it('falls back to "your billing admin" when the holder has no name', async () => {

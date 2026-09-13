@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import {
+  Clock,
   ExternalLink,
   MessageSquare,
-  PauseCircle,
   Phone,
   Plus,
   ShieldCheck,
@@ -22,11 +22,17 @@ import { NudgeButton } from './nudge-button';
  * BAL-378 (ADR-1040 Lane 2) — the in-session shell (§9), rendering BOTH lenses off one
  * pre-derived {@link DrawdownState} (from `in-session-sequence.jsx` / `member-variant.jsx`).
  *
- * A dark call stage (elapsed time — NEVER a countdown — a live/paused pill, the
+ * A dark call stage (elapsed time — NEVER a countdown — a live pill, the
  * {@link SessionMeter}) over a warm notice card whose CTA is the client's Top up OR the
  * member's {@link NudgeButton}. The word "overdraft" never appears — grace is
  * "keeping you going". Fires the `low_balance_warning_shown` client analytics impression, once
  * per mount — **in the `'card'` variant only**.
+ *
+ * ⚠ BAL-405 removed the "Paused" arm of that pill (the call never stops on the presence path —
+ * ADR-1052 D2). Production mounts ONLY `variant="embedded"`, which omits `CallStageHeader`, so
+ * the pill change is exercised by tests rather than seen; what users actually see change is the
+ * `meter.label` ("Paused" → "Still going"), the dropped stage dimming, the `wrap` tone icon
+ * (`PauseCircle` → {@link Clock}, which DOES render in the embedded notice card) and the copy.
  *
  * ⚠ BAL-466 (D7) — `session_started` NO LONGER FIRES FROM THIS COMPONENT. It moved server-side
  * to the real connect seam. See the effect below for why.
@@ -43,9 +49,10 @@ import { NudgeButton } from './nudge-button';
  * UNCHANGED in both variants.
  *
  * ⚠⚠ BAL-466 (F3, review fix round) — the CLIENT-lens escalation copy (`CLIENT_COPY` in
- * `@balo/shared/credit/drawdown-state.ts`, e.g. "Top up to pick right back up") instructs an
+ * `@balo/shared/credit/drawdown-state.ts`, e.g. "Top up") instructs an
  * action that D9.2's deny-by-default CTA suppression left with NOTHING clickable in `'embedded'`
- * — a dead end for a client whose session has literally paused. `NoticeCard` now renders a
+ * — a dead end for a client who is past their balance. **The call itself never pauses**
+ * (ADR-1052 D2); the dead end is about the affordance, not the call. `NoticeCard` now renders a
  * PLAIN navigation link (`EmbeddedTopUpLink`, opens `/billing/top-up` in a new tab) for that one
  * arm — NOT the `TopUpLauncher` modal, and NOT `CtaArea`'s primary button (which needs
  * `onTopUp`, never wired in `'embedded'`). It surfaces no wallet figures and no money payload,
@@ -59,8 +66,8 @@ import { NudgeButton } from './nudge-button';
  * member without `MANAGE_BILLING` — they keep the existing {@link NudgeButton} affordance
  * (BAL-381) instead, exactly as F3 requires.
  *
- * ⚠ REUSES SHIPPED WORDING ONLY — the link's visible text is `cta.label` (e.g. "Top up",
- * "Top up to continue"), the exact string the `'card'` variant's button already renders for the
+ * ⚠ REUSES SHIPPED WORDING ONLY — the link's visible text is `cta.label` (e.g. "Top up"),
+ * the exact string the `'card'` variant's button already renders for the
  * same state; `dashboard-wallet-card.tsx`'s existing `/billing/top-up` link ships the same "Top
  * up" wording for the plain case. No new money copy was written for this fix (MJ checkpoint).
  */
@@ -128,7 +135,7 @@ const TONE_CONFIG: Record<NoticeTone, ToneConfig> = {
     card: 'border-border bg-muted',
     iconWrap: 'border-border bg-card border',
     iconColor: 'text-foreground',
-    icon: PauseCircle,
+    icon: Clock,
     hairline: false,
   },
 };
@@ -149,9 +156,8 @@ function reassuranceCopy(lens: DrawdownState['lens']): string {
 // ── Call-stage header ──────────────────────────────────────────────────────
 function CallStageHeader({
   expert,
-  paused,
   elapsed,
-}: Readonly<{ expert: ExpertSummary; paused: boolean; elapsed: string }>): React.JSX.Element {
+}: Readonly<{ expert: ExpertSummary; elapsed: string }>): React.JSX.Element {
   return (
     <>
       <div className="flex items-center justify-between">
@@ -169,23 +175,12 @@ function CallStageHeader({
             ) : null}
           </div>
         </div>
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-semibold',
-            paused
-              ? 'border-white/15 bg-white/10 text-white/70'
-              : 'border-emerald-400/30 bg-emerald-500/15 text-emerald-300'
-          )}
-        >
-          {paused ? (
-            <PauseCircle className="size-3" strokeWidth={2.6} aria-hidden />
-          ) : (
-            <span
-              className="size-[7px] rounded-full bg-emerald-400 motion-safe:animate-pulse"
-              aria-hidden
-            />
-          )}
-          {paused ? 'Paused' : 'In consultation'}
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-500/15 px-2.5 py-1 text-[11.5px] font-semibold text-emerald-300">
+          <span
+            className="size-[7px] rounded-full bg-emerald-400 motion-safe:animate-pulse"
+            aria-hidden
+          />
+          In consultation
         </span>
       </div>
 
@@ -461,13 +456,10 @@ export function InSessionPanel(props: Readonly<InSessionPanelProps>): React.JSX.
       <div
         className={cn(
           'bg-gradient-to-br from-slate-900 to-slate-800',
-          isEmbedded ? 'rounded-2xl px-4 py-4' : 'px-6 pt-[22px] pb-6',
-          state.paused && 'opacity-90'
+          isEmbedded ? 'rounded-2xl px-4 py-4' : 'px-6 pt-[22px] pb-6'
         )}
       >
-        {card === null ? null : (
-          <CallStageHeader expert={card.expert} paused={state.paused} elapsed={state.elapsed} />
-        )}
+        {card === null ? null : <CallStageHeader expert={card.expert} elapsed={state.elapsed} />}
         <SessionMeter meter={state.meter} />
       </div>
 

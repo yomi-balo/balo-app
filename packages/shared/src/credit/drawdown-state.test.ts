@@ -109,6 +109,12 @@ describe('deriveDrawdownState — client lens copy', () => {
     });
     expect(state.minutesRemaining).toBe(5);
     expect(state.channels).toEqual(['in-app']);
+    // ⚠ BAL-405 — the nudge no longer leans on "so nothing interrupts you". Nothing interrupts
+    // the call on the presence path, so that clause promised a mechanism that never fires.
+    expect(state.body).toBe(
+      'Want to top up to stay ahead of it? You can also keep going — any extra time settles to your card when you wrap up.'
+    );
+    expect(state.body).not.toContain('interrupt');
   });
 
   /**
@@ -138,34 +144,69 @@ describe('deriveDrawdownState — client lens copy', () => {
     expect(state.ceilingRoomMinor).toBe(13_000);
   });
 
-  it('near is amber with a wrap CTA + SMS', () => {
+  // ⚠ BAL-405 — `near` leads into `wrap`, so it may not promise the pause `wrap` no longer
+  // claims. Body + SMS are pinned verbatim for exactly that reason.
+  it('near is amber with a wrap CTA + SMS, and promises no pause or break', () => {
     const state = deriveDrawdownState(base({ ...KEY_INPUTS.near, lens: 'client' }));
     expect(state.title).toBe('Coming up on a good place to wrap');
     expect(state.cta?.label).toBe('Top up to keep going');
     expect(state.channels).toEqual(['in-app', 'sms']);
     expect(state.graceRemainingMinutes).toBe(5);
+    expect(state.body).toBe(
+      'About 5 more minutes of the extra time we set aside. Want to top up to stay ahead of it?'
+    );
+    expect(state.sms).toBe(
+      "You're nearing the end of this session's extra time — top up any time to stay ahead of it."
+    );
+    expect(state.body).not.toContain('pause');
+    expect(state.body).not.toContain('break');
+    expect(state.sms).not.toContain('break');
   });
 
-  it('wrap is a warm pause (paused, in-app only)', () => {
+  it('wrap keeps the call going and says what happens to the extra time (in-app only)', () => {
     const state = deriveDrawdownState(base({ ...KEY_INPUTS.wrap, lens: 'client' }));
-    expect(state.paused).toBe(true);
-    expect(state.title).toBe("Let's pause here for now");
+    expect(state.title).toBe("You're past the extra time we set aside");
     expect(state.channels).toEqual(['in-app']);
     expect(state.meter.pct).toBe(100);
+    expect(state.meter.label).toBe('Still going');
+    // `base()` defaults to `mandateActive: true` — the card arm.
+    expect(state.cta).toEqual({ kind: 'client_topup', label: 'Top up' });
+    expect(state.body).toBe(
+      'Your call keeps going — top up whenever you like to bring your balance back up. Extra time from here settles to your card afterward.'
+    );
+    expect(state.body).not.toContain('pause');
   });
 
-  it('end (no live mandate): balance-used pause that says the extra time still needs settling', () => {
+  // BAL-405 (§5.3.4) — `wrap` used to promise a card settlement UNCONDITIONALLY. A mandate can
+  // be revoked between grace opening and this read (Stripe's `payment_method.detached` webhook),
+  // and `settleOverdraft` refuses to charge a wallet whose mandate is not live at settlement
+  // time — so the promise was reachable and wrong. `wrap` now branches exactly like `end`.
+  it('⚠ wrap with NO live mandate says the extra time still needs settling', () => {
+    const state = deriveDrawdownState(
+      base({ ...KEY_INPUTS.wrap, lens: 'client', mandateActive: false })
+    );
+    expect(state.title).toBe("You're past the extra time we set aside");
+    expect(state.body).toBe(
+      'Your call keeps going — top up whenever you like to bring your balance back up. Extra time from here still needs settling — your next top-up covers it.'
+    );
+    expect(state.body).not.toContain('settles to your card');
+    expect(state.body).not.toContain('pause');
+    expect(state.cta).toEqual({ kind: 'client_topup', label: 'Top up' });
+  });
+
+  it('end (no live mandate): the call keeps going and the extra time still needs settling', () => {
     const state = deriveDrawdownState(
       base({ ...KEY_INPUTS.end, lens: 'client', graceAvailable: false, mandateActive: false })
     );
     expect(state.title).toBe("You're at the end of your balance");
     expect(state.meter).toMatchObject({ mode: 'empty', pct: 0, tone: 'faint' });
     expect(state.body).toBe(
-      "Top up to keep going — your expert can pick right back up whenever you're ready. Extra time from here still needs settling — your next top-up covers it."
+      'Your call keeps going — top up whenever you like to bring your balance back up. Extra time from here still needs settling — your next top-up covers it.'
     );
     expect(state.body).not.toContain('settles to your card');
     expect(state.body).not.toContain('pause');
     expect(state.body).not.toContain('interrupt');
+    expect(state.cta).toEqual({ kind: 'client_topup', label: 'Top up' });
   });
 
   // BAL-552 (ADR-1040 Amendment 6 §A.1/§D) — `notify_only` + a LIVE mandate reads
@@ -177,11 +218,12 @@ describe('deriveDrawdownState — client lens copy', () => {
     );
     expect(state.title).toBe("You're at the end of your balance");
     expect(state.body).toBe(
-      "Top up to keep going — your expert can pick right back up whenever you're ready. Extra time from here settles to your card afterward."
+      'Your call keeps going — top up whenever you like to bring your balance back up. Extra time from here settles to your card afterward.'
     );
     expect(state.body).not.toContain('needs settling');
     expect(state.body).not.toContain('pause');
     expect(state.body).not.toContain('interrupt');
+    expect(state.cta).toEqual({ kind: 'client_topup', label: 'Top up' });
   });
 });
 
@@ -209,10 +251,10 @@ describe('deriveDrawdownState — member lens copy', () => {
       base({ ...KEY_INPUTS.low, lens: 'member', adminName: 'Sam', graceAvailable: false })
     );
     expect(state.title).toBe("Your team's balance is running low");
-    // ⚠ FIX ROUND 2 (R3) — round 1 said "and then we'll pause to settle up". Only the METER
-    // pauses; the call does not stop and the billing does not stop (the presence finalizer posts
-    // every billable minute at meeting end regardless of the mode — BAL-535). So the branch flags
-    // the runway and nudges, and claims neither outcome.
+    // ⚠ FIX ROUND 2 (R3) + BAL-405 — round 1 said "and then we'll pause to settle up". NOTHING
+    // pauses: not the call, not the billing (the presence finalizer posts every billable minute
+    // at meeting end regardless of the mode — BAL-535), and since BAL-405 not even the meter
+    // label. So the branch flags the runway and nudges, and claims neither outcome.
     expect(state.body).toBe("About 5 minutes left on your team's balance. Want to let Sam know?");
     expect(state.body).not.toContain('interrupted');
     expect(state.body).not.toContain('card');
@@ -225,6 +267,47 @@ describe('deriveDrawdownState — member lens copy', () => {
     const state = deriveDrawdownState(base({ ...KEY_INPUTS.near, lens: 'member' }));
     expect(state.cta?.label).toBe('Ask your admin to top up');
     expect(state.adminName).toBeUndefined();
+  });
+
+  // ⚠ BAL-405 — the member twin of the client `near` pin: it leads into `wrap`, so it may not
+  // promise the pause `wrap` no longer claims.
+  it('near names the admin and promises no pause or break', () => {
+    const state = deriveDrawdownState(
+      base({ ...KEY_INPUTS.near, lens: 'member', adminName: 'Sam' })
+    );
+    expect(state.body).toBe(
+      'About 5 more minutes of the extra time we set aside. Want Sam to top up to stay ahead of it?'
+    );
+    expect(state.body).not.toContain('pause');
+    expect(state.body).not.toContain('break');
+  });
+
+  // BAL-405 — the member `wrap` arm had no copy test at all before this, and it now carries a
+  // settlement clause chosen by `mandateActive`. One test per arm, verbatim.
+  it('⚠ wrap with a LIVE mandate keeps the call going and settles to the team card', () => {
+    const state = deriveDrawdownState(
+      base({ ...KEY_INPUTS.wrap, lens: 'member', adminName: 'Sam', mandateActive: true })
+    );
+    expect(state.title).toBe("You're past the extra time we set aside");
+    expect(state.meter.label).toBe('Still going');
+    expect(state.body).toBe(
+      "Your call keeps going — ask Sam to top up to bring your team's balance back up. Extra time from here settles to your team's card afterward."
+    );
+    expect(state.body).not.toContain('needs settling');
+    expect(state.body).not.toContain('pause');
+  });
+
+  it('⚠ wrap with NO live mandate says the extra time still needs settling', () => {
+    const state = deriveDrawdownState(
+      base({ ...KEY_INPUTS.wrap, lens: 'member', adminName: 'Sam', mandateActive: false })
+    );
+    expect(state.title).toBe("You're past the extra time we set aside");
+    expect(state.meter.label).toBe('Still going');
+    expect(state.body).toBe(
+      "Your call keeps going — ask Sam to top up to bring your team's balance back up. Extra time from here still needs settling — the next top-up covers it."
+    );
+    expect(state.body).not.toContain("team's card");
+    expect(state.body).not.toContain('pause');
   });
 
   it('grace protects the member on the company mandate (no nudge, SMS present)', () => {
@@ -257,7 +340,7 @@ describe('deriveDrawdownState — member lens copy', () => {
     );
     expect(state.title).toBe("Your team's balance is used up");
     expect(state.body).toBe(
-      "Ask Sam to top up to keep going — your expert can pick right back up. Extra time from here settles to your team's card afterward."
+      "Your call keeps going — ask Sam to top up to bring your team's balance back up. Extra time from here settles to your team's card afterward."
     );
     expect(state.body).not.toContain('needs settling');
     expect(state.body).not.toContain('pause');
@@ -276,7 +359,7 @@ describe('deriveDrawdownState — member lens copy', () => {
     );
     expect(state.title).toBe("Your team's balance is used up");
     expect(state.body).toBe(
-      'Ask Sam to top up to keep going — your expert can pick right back up. Extra time from here still needs settling — the next top-up covers it.'
+      "Your call keeps going — ask Sam to top up to bring your team's balance back up. Extra time from here still needs settling — the next top-up covers it."
     );
     expect(state.body).not.toContain("team's card");
     expect(state.body).not.toContain('your next top-up');
@@ -325,9 +408,12 @@ describe('deriveDrawdownState — the word "overdraft" never appears', () => {
   });
 });
 
-describe('deriveDrawdownState — BAL-552: mandateActive reaches ONLY the `end` key', () => {
+// BAL-405 STRENGTHENS this: `wrap` moved OUT of the byte-identical set because it now branches
+// on `mandateActive` too (§5.3.4). The two new `wrap` mandate-arm tests above replace `wrap`'s
+// coverage here. Never loosen the `toEqual` instead.
+describe('deriveDrawdownState — mandateActive reaches ONLY the `wrap` and `end` keys', () => {
   it('every other key is byte-identical regardless of mandateActive', () => {
-    for (const key of ['healthy', 'low', 'grace', 'near', 'wrap'] as const) {
+    for (const key of ['healthy', 'low', 'grace', 'near'] as const) {
       for (const lens of ['client', 'member'] as const) {
         const withMandate = deriveDrawdownState(
           base({ ...KEY_INPUTS[key], lens, mandateActive: true, adminName: 'Sam' })
