@@ -140,10 +140,12 @@ export async function declineTrackAsAdminAction(
     // See `decline-track.ts` (F6) — BAL-546's per-request advisory lock makes the AB/BA cycle
     // this used to describe against `promoteToSubmit` unreachable; the mapping stays as a
     // cheap backstop over the residual left by writers outside the serialised set
-    // (orchestrator D6). Expected-rare, self-healing, nothing written.
+    // (orchestrator D6). Expected-rare, self-healing, nothing written. Neutral "lock contention"
+    // message, not a hardcoded SQLSTATE (fix round R5) — the actual code is logged as its own
+    // `sqlstate` field instead.
     const deadlock = deadlockFailure(
       error,
-      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      'Request track decline aborted by lock contention — retryable',
       { requestId, relationshipId, actorUserId: user.id }
     );
     if (deadlock !== null) return deadlock;

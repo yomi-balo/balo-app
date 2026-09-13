@@ -136,16 +136,19 @@ export async function closeRequestAction(
     }
     // BAL-546 fix round (F6) — the AB/BA cycle this comment used to describe as LIVE can no
     // longer form: the cascade takes the per-request advisory lock
-    // (`projectRequestsRepository.close`'s LOCK ORDER block) as its first statement, and so
-    // does every other multi-table request-domain writer, including `promoteToSubmit` — they
-    // can never interleave their row-lock acquisition on this request. The 40P01 mapping is
-    // kept as a cheap backstop over the strictly smaller residual left by writers outside that
-    // serialised set (orchestrator D6), not because this cascade can still deadlock against
-    // `promoteToSubmit`. Expected-rare and self-healing either way — nothing was written ⇒
-    // WARN and retryable copy. No new `code` value — the result union is unchanged.
+    // (`projectRequestsRepository.close`'s LOCK ORDER block) as the transaction's first LOCK
+    // (not literally its first statement — fix round R6), and so does every other multi-table
+    // request-domain writer, including `promoteToSubmit` — they can never interleave their
+    // row-lock acquisition on this request. The 40P01 mapping is kept as a cheap backstop over
+    // the strictly smaller residual left by writers outside that serialised set (orchestrator
+    // D6), not because this cascade can still deadlock against `promoteToSubmit`. Expected-rare
+    // and self-healing either way — nothing was written ⇒ WARN and retryable copy. No new
+    // `code` value — the result union is unchanged. The message text is a NEUTRAL "lock
+    // contention" phrase, not a hardcoded SQLSTATE (fix round R5) — `deadlockFailure` now also
+    // catches 55P03, and the actual code is logged as its own `sqlstate` field instead.
     const deadlock = deadlockFailure(
       error,
-      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      'Project request close aborted by lock contention — retryable',
       { requestId, actorUserId: user.id }
     );
     if (deadlock !== null) return deadlock;

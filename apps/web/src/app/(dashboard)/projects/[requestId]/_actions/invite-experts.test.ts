@@ -32,6 +32,7 @@ vi.mock('@/lib/notifications/publish', () => ({
 
 import { inviteExpertsAction } from './invite-experts';
 import { revalidatePath } from 'next/cache';
+import { log } from '@/lib/logging';
 
 function requestRow(status: string) {
   return {
@@ -199,6 +200,28 @@ describe('inviteExpertsAction', () => {
     });
     // A failed batch performs no request-level transition.
     expect(mockTransitionStatus).not.toHaveBeenCalled();
+  });
+
+  // fix round R1 — `requestExpertRelationshipsRepository.invite` is one of the eleven writers
+  // serialised on the per-request advisory lock (`_shared/request-lock.ts`) — the racer named
+  // in `close()`'s own KNOWN RESIDUAL block.
+  it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
+    mockInvite.mockRejectedValue(
+      Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    );
+    const result = await inviteExpertsAction({
+      requestId: REQUEST_ID,
+      expertProfileIds: [EXPERT_A],
+    });
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Expert invite aborted by lock contention — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, adminUserId: 'admin-1' })
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('returns a generic error on an unexpected failure', async () => {

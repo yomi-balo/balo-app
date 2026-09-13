@@ -15,6 +15,7 @@ import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { isDescriptionEmpty } from '@/components/balo/rich-text-editor';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { lockContentionFailure } from './_shared/deadlock';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -210,6 +211,17 @@ export async function submitEoiAction(
       timeToEoiMs: Date.now() - rel.invitedAt.getTime(),
     };
   } catch (error) {
+    // ⚠ fix round R1 — `expressionsOfInterestRepository.submit` is one of the eleven writers
+    // serialised on the per-request advisory lock (`_shared/request-lock.ts`); a 55P03 here
+    // means the EOI never wrote anything and a retry queues again. WARN + retryable copy,
+    // checked BEFORE the log.error below — never `log.error` for an expected-rare, self-healing
+    // event.
+    const lockContention = lockContentionFailure(
+      error,
+      'EOI submit aborted by lock contention — retryable',
+      { requestId, userId: user.id }
+    );
+    if (lockContention !== null) return lockContention;
     log.error('Failed to submit EOI', {
       requestId,
       error: error instanceof Error ? error.message : String(error),

@@ -152,16 +152,19 @@ export async function declineTrackAction(
     if (error instanceof InvalidRelationshipTransitionError) {
       return { success: false, error: NOT_DECLINABLE, code: 'not_declinable' };
     }
-    // BAL-546 fix round (F6) — the per-request advisory lock `declineTrack` takes as its first
-    // statement (`request-expert-relationships.ts`) makes the AB/BA cycle this used to describe
-    // against `promoteToSubmit` unreachable: both take the identical lock first, so they can
-    // never interleave their row-lock acquisition on this request. The 40P01 mapping is kept
-    // as a cheap backstop over the residual left by writers outside that serialised set
-    // (orchestrator D6). Expected-rare and self-healing either way (nothing was written) ⇒
-    // WARN, and retryable copy. No new `code` value: the result union is unchanged.
+    // BAL-546 fix round (F6) — the per-request advisory lock `declineTrack` takes as the
+    // transaction's first LOCK (not literally its first statement — fix round R6;
+    // `request-expert-relationships.ts`) makes the AB/BA cycle this used to describe against
+    // `promoteToSubmit` unreachable: both take the identical lock first, so they can never
+    // interleave their row-lock acquisition on this request. The 40P01 mapping is kept as a
+    // cheap backstop over the residual left by writers outside that serialised set (orchestrator
+    // D6). Expected-rare and self-healing either way (nothing was written) ⇒ WARN, and retryable
+    // copy. No new `code` value: the result union is unchanged. Neutral "lock contention"
+    // message, not a hardcoded SQLSTATE (fix round R5) — the actual code is logged as its own
+    // `sqlstate` field instead.
     const deadlock = deadlockFailure(
       error,
-      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      'Request track decline aborted by lock contention — retryable',
       { requestId, relationshipId, actorUserId: user.id }
     );
     if (deadlock !== null) return deadlock;

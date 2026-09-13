@@ -761,9 +761,12 @@ export const projectRequestsRepository = {
    *
    * ══ BAL-546 — THE OUTER SERIALIZATION. ═════════════════════════════════════════════
    * This transaction takes the per-request advisory lock (`acquireRequestLock`,
-   * `_shared/request-lock.ts`) as its FIRST statement. Every `@balo/db` transaction that writes
-   * two or more of `proposals` / `request_expert_relationships` / `project_requests` for the SAME
-   * request takes the identical lock first — ELEVEN writers in total (orchestrator D13):
+   * `_shared/request-lock.ts`) as the transaction's FIRST LOCK — not literally its first
+   * statement (fix round R6; see that file's own docblock for exactly what precedes it).
+   * Every `@balo/db` transaction that writes two or more of `proposals` /
+   * `request_expert_relationships` / `project_requests` for the SAME request, or inserts an
+   * open proposal onto one (fix round R3), takes the identical lock first — ELEVEN writers in
+   * total (orchestrator D13):
    * `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`, `.accept`, `.resubmit`;
    * this method; `requestExpertRelationshipsRepository.invite`, `.declineTrack`,
    * `.transitionStatus`; `expressionsOfInterestRepository.submit`; and
@@ -925,7 +928,7 @@ export const projectRequestsRepository = {
    */
   async close(input: CloseRequestInput): Promise<CloseRequestResult> {
     return db.transaction(async (tx) => {
-      // 0. BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      // 0. BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
       await acquireRequestLock(tx, input.requestId);
 
       const now = new Date();

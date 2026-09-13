@@ -25,6 +25,7 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { validateProposalReadiness } from './proposal-readiness';
 import { proposalDraftBaseFields } from './proposal-schema';
+import { lockContentionFailure } from './_shared/deadlock';
 
 // The composer payload — same shape as `save-proposal-draft.ts` (shared via
 // `proposal-schema.ts` so revise mode sends the EXACT same body), PLUS the
@@ -359,6 +360,17 @@ export async function resubmitProposalAction(
       analytics: { priceCents: v2.priceCents, currency: v2.currency },
     };
   } catch (error) {
+    // ⚠ fix round R1 — `proposalsRepository.resubmit` is one of the eleven writers serialised
+    // on the per-request advisory lock (`_shared/request-lock.ts`); a 55P03 here means the
+    // resubmit never wrote anything and a retry queues again. WARN + retryable copy, checked
+    // BEFORE the generic fallback below — never `log.error` for an expected-rare, self-healing
+    // event.
+    const lockContention = lockContentionFailure(
+      error,
+      'Proposal resubmit aborted by lock contention — retryable',
+      { requestId, relationshipId, fromProposalId, userId: user.id }
+    );
+    if (lockContention !== null) return lockContention;
     log.error('Resubmit proposal failed', {
       requestId,
       relationshipId,

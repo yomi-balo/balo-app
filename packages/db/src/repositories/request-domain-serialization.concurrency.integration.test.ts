@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import postgres from 'postgres';
 import * as schema from '../schema';
 import { _setDb, type Database } from '../client';
@@ -493,11 +493,15 @@ async function insertCommittedProposal(input: {
   return row.id;
 }
 
+// ⚠ fix round R7 (Qodo) — all three readers below select from soft-deletable tables and now
+// filter `deletedAt IS NULL`, matching the production repositories they stand in for. Without
+// it, a fixture or a concurrently-affected row that got soft-deleted mid-race would still come
+// back and skew the assertion built on top of it — Qodo's "Deleted rows skew race assertions".
 async function readRequest(id: string) {
   const [row] = await wardenDb
     .select()
     .from(schema.projectRequests)
-    .where(eq(schema.projectRequests.id, id));
+    .where(and(eq(schema.projectRequests.id, id), isNull(schema.projectRequests.deletedAt)));
   return row;
 }
 
@@ -505,27 +509,46 @@ async function readRelationship(id: string) {
   const [row] = await wardenDb
     .select()
     .from(schema.requestExpertRelationships)
-    .where(eq(schema.requestExpertRelationships.id, id));
+    .where(
+      and(
+        eq(schema.requestExpertRelationships.id, id),
+        isNull(schema.requestExpertRelationships.deletedAt)
+      )
+    );
   return row;
 }
 
 async function readProposal(id: string) {
-  const [row] = await wardenDb.select().from(schema.proposals).where(eq(schema.proposals.id, id));
+  const [row] = await wardenDb
+    .select()
+    .from(schema.proposals)
+    .where(and(eq(schema.proposals.id, id), isNull(schema.proposals.deletedAt)));
   return row;
 }
 
+// ⚠ fix round R7 (Qodo) — BOTH helpers below are named "live"/were missing the `deletedAt`
+// filter their names promise. Every production read this suite compares against filters
+// `deletedAt IS NULL` (the soft-delete convention, CLAUDE.md); a test helper that doesn't would
+// silently pass a soft-deleted row through as "live" and could mask a real regression.
 async function liveRelationshipsForRequest(requestId: string) {
   return wardenDb
     .select()
     .from(schema.requestExpertRelationships)
-    .where(eq(schema.requestExpertRelationships.projectRequestId, requestId));
+    .where(
+      and(
+        eq(schema.requestExpertRelationships.projectRequestId, requestId),
+        isNull(schema.requestExpertRelationships.deletedAt)
+      )
+    );
 }
 
 async function openProposalsForRequest(requestId: string) {
   const rows = await wardenDb
     .select()
     .from(schema.proposals)
-    .where(eq(schema.proposals.projectRequestId, requestId));
+    .where(
+      and(eq(schema.proposals.projectRequestId, requestId), isNull(schema.proposals.deletedAt))
+    );
   return rows.filter((row) => (OPEN_PROPOSAL_STATUSES as readonly string[]).includes(row.status));
 }
 

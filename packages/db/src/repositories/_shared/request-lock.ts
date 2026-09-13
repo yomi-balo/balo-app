@@ -18,21 +18,38 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * Acquire the per-`projectRequestId` transaction-scoped advisory lock (BAL-546). Held from the
- * FIRST statement of the caller's transaction to COMMIT/ROLLBACK, released automatically, and
- * re-entrant within the transaction (a nested re-take is free).
+ * transaction's FIRST LOCK ACQUISITION to COMMIT/ROLLBACK, released automatically, and re-entrant
+ * within the transaction (a nested re-take is free).
+ *
+ * ⚠ fix round R6 — "FIRST LOCK", NOT "first statement" (the docblock used to say the latter, and
+ * it was untrue twice over). Two things can precede this call within the caller's transaction,
+ * and neither takes a lock of any kind: (1) this function's own internal `SET LOCAL
+ * lock_timeout` session-setting statement, issued immediately before the `pg_advisory_xact_lock`
+ * call below; (2) in the two resolver wrappers further down this file
+ * (`acquireRequestLockViaRelationshipTx` / `acquireRequestLockViaProposalTx`), one plain,
+ * UNLOCKED `SELECT` of the denormalised `projectRequestId` (D8) that resolves the id this
+ * function needs. Because that read takes no `FOR UPDATE` and no advisory lock, the claim that
+ * survives is narrower but still true: this is the transaction's first LOCK, of any kind —
+ * never its first statement.
  *
  * ⚠ WHAT THIS SERIALISES, NAMED EXACTLY. Every `@balo/db` transaction that writes TWO OR MORE
- * of `proposals` / `request_expert_relationships` / `project_requests` for ONE request takes
- * this as its first statement: `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`,
- * `.accept`, `.resubmit`; `projectRequestsRepository.close`;
- * `requestExpertRelationshipsRepository.invite`, `.declineTrack`, `.transitionStatus`;
- * `expressionsOfInterestRepository.submit`; `projectEngagementsRepository.materializeFromKickoff`
- * — ELEVEN writers (orchestrator D13). Because all of them queue on one per-request gate, no two
- * of them ever interleave their row-lock acquisition on the same request, so the documented
- * row-lock orders (`accept`: proposal → relationship → request; `promoteToSubmit`: relationship
- * → request → proposal; `close` / `declineTrack`: proposals → relationships → request;
- * `materializeFromKickoff`: request → relationships) can never form the AB/BA cycle that made
- * them individually deadlock-prone.
+ * of `proposals` / `request_expert_relationships` / `project_requests` for ONE request, OR
+ * INSERTS AN OPEN PROPOSAL onto a request, takes this as the transaction's first lock (fix
+ * round R3 — the rule used to state only the first arm, and then named eleven writers including
+ * two, `resubmit` and `createDraft`, that satisfy only the second: both are insert-based
+ * producers of a live `proposals` row and nothing else in the same transaction, so a
+ * membership test that checked only "two or more tables" would have wrongly excluded them —
+ * which is the exact bug this ticket exists to fix, repeated at the rule's own definition).
+ * The eleven: `proposalsRepository.submit`, `.createDraft`, `.promoteToSubmit`, `.accept`,
+ * `.resubmit`; `projectRequestsRepository.close`; `requestExpertRelationshipsRepository.invite`,
+ * `.declineTrack`, `.transitionStatus`; `expressionsOfInterestRepository.submit`;
+ * `projectEngagementsRepository.materializeFromKickoff` — ELEVEN writers (orchestrator D13).
+ * Because all of them queue on one per-request gate, no two of them ever interleave their
+ * row-lock acquisition on the same request, so the documented row-lock orders (`accept`:
+ * proposal → relationship → request; `promoteToSubmit`: relationship → request → proposal;
+ * `close` / `declineTrack`: proposals → relationships → request; `materializeFromKickoff`:
+ * request → relationships) can never form the AB/BA cycle that made them individually
+ * deadlock-prone.
  *
  * ⚠ WHAT THIS DOES NOT PROVE. Not "the system is deadlock-free" — row locks are still locks.
  * What holds is narrower: all row-lock acquisition on a given request's proposals /
@@ -67,7 +84,7 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * `pg_advisory_xact_lock(bigint)` key space.
  *
  * ⚠ LONG-HOLD WARNING. `close()` is the longest holder of this lock — it holds it from its
- * first statement to COMMIT across ~10 steps. `materializeFromKickoff` is the single largest
+ * first lock acquisition to COMMIT across ~10 steps. `materializeFromKickoff` is the single largest
  * transaction of the serialised set. Contention is per-`requestId`, so cross-request throughput
  * is unaffected. NEVER hold this lock across an external call
  * (`apps/api/src/services/credit/auto-topup.ts:23-24` is the explicit precedent for why not).
@@ -112,14 +129,28 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * shows either spurious 55P03s (raise it) or connections pinned near the ceiling under load
  * (lower it).
  *
- * ⚠ `SET LOCAL` SCOPES TO THE WHOLE TRANSACTION, DELIBERATELY. Once set, `lock_timeout` bounds
- * EVERY subsequent lock acquisition in this transaction, not just this one `pg_advisory_xact_lock`
- * call — including every row lock the caller takes afterwards (`FOR UPDATE` reads, `UPDATE`s,
- * etc.). That is intended: a transaction that has already queued behind this advisory lock and
- * then stalls on a row lock is the same pooled-connection-pinning problem this fix exists to
- * solve. Note also that `lock_timeout` is PER LOCK ACQUISITION, not cumulative across the
- * transaction — a transaction that acquires ten locks, each within budget, can still run well
- * past 3 seconds in total; only a single stalled acquisition is bounded.
+ * ⚠⚠ fix round R1(a) — THE TIMEOUT IS NARROWED TO THE GATE WAIT ONLY, NOT THE WHOLE TRANSACTION.
+ * THIS SUPERSEDES an earlier version of this docblock that argued whole-transaction bounding was
+ * the intended design — that argument is RETRACTED here, not kept alongside this one (a comment
+ * that vouches for an invariant the code does not hold is worse than no comment). This function
+ * resets `lock_timeout` back to `0` — Postgres's own built-in default, and the value already in
+ * effect everywhere in this repo today since nothing else sets it — immediately after the
+ * advisory lock is acquired. So the 3s bound applies ONLY to the wait for THIS one
+ * `pg_advisory_xact_lock` call; it never reaches any row lock the caller takes afterwards.
+ *
+ * WHY NARROWED. The MEDIUM availability finding this fix answers is about writers QUEUING AT
+ * THE GATE pinning a pooled connection — `createDraft`'s un-rate-limited autosave path
+ * (`save-proposal-draft.ts`) waiting behind `close()`'s ~10-step cascade is the driving example.
+ * That is what needs bounding, and only that. Bounding every subsequent row lock too (the
+ * original, now-retracted shape of this fix) was broader than the ticket's mandate and had two
+ * real side effects the narrowing removes:
+ *   1. `close()`'s cascade would abort if ANY of its later row locks stalled past 3s — including
+ *      behind writers this ticket does not serialise at all, like `updateDraft` or
+ *      `requestSharedFilesRepository.share`, which can legitimately hold a row longer than 3s
+ *      under ordinary load with no bug involved.
+ *   2. A transaction that reached `acquireWalletLock` through another file (the residual,
+ *      not-mechanically-covered case D16 names) would have run the WALLET lock itself under this
+ *      3s bound — a credit-system behaviour change this ticket has no mandate to make (D1/D16).
  *
  * A timeout here raises Postgres SQLSTATE `55P03` (`lock_not_available`), mapped to the same
  * user-facing `CONCURRENT_RETRY_MESSAGE` as a `40P01` deadlock in
@@ -133,6 +164,11 @@ export async function acquireRequestLock(tx: RequestLockTx, requestId: string): 
   await tx.execute(
     sql`SELECT pg_advisory_xact_lock(hashtextextended('project_request:' || ${requestId}, 0))`
   );
+  // ⚠⚠ fix round R1(a) — RESET IMMEDIATELY, so the 3s bound covers ONLY the wait for the
+  // advisory lock above and never any row lock the caller takes afterwards. `0` is Postgres's
+  // own default (disabled) — see the docblock's R1(a) section for why that is the correct value
+  // and why it restores this transaction to the pre-PR behaviour exactly.
+  await tx.execute(sql`SET LOCAL lock_timeout = 0`);
 }
 
 /**

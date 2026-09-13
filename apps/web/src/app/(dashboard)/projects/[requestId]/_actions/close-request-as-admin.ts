@@ -130,10 +130,11 @@ export async function closeRequestAsAdminAction(
     // See `close-request.ts` (F6) — BAL-546's per-request advisory lock makes the AB/BA cycle
     // this used to describe against `promoteToSubmit` unreachable; the mapping stays as a
     // cheap backstop over the residual left by writers outside the serialised set
-    // (orchestrator D6).
+    // (orchestrator D6). Neutral "lock contention" message, not a hardcoded SQLSTATE (fix round
+    // R5) — the actual code is logged as its own `sqlstate` field instead.
     const deadlock = deadlockFailure(
       error,
-      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      'Project request close aborted by lock contention — retryable',
       { requestId, actorUserId: user.id }
     );
     if (deadlock !== null) return deadlock;

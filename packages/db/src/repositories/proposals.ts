@@ -367,7 +367,7 @@ export const proposalsRepository = {
     cadence?: ProposalCadence;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction (see
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6; see
       // `_shared/request-lock.ts`). Moves the pure `assertProposalCoherent` guard below to AFTER
       // the lock — harmless, it is in-memory with no I/O.
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
@@ -453,8 +453,9 @@ export const proposalsRepository = {
    * on a terminal request, which every downstream reader treats as live work.
    *
    * ⚠ BAL-546 — THE RACE HALF IS NOW CLOSED ON BOTH SIDES; THE PARAGRAPH BELOW USED TO SAY IT
-   * WAS NOT, AND THAT IS NOW WRONG. `createDraft` takes the per-request advisory lock (D7) as its
-   * first statement, so it can no longer run WHILE `close()`/`declineTrack` hold it. And the
+   * WAS NOT, AND THAT IS NOW WRONG. `createDraft` takes the per-request advisory lock (D7) as
+   * the transaction's FIRST LOCK (not literally its first statement — fix round R6), so it can
+   * no longer run WHILE `close()`/`declineTrack` hold it. And the
    * cascade's union re-read (`project-requests.ts`'s step 5b) catches an insert from any writer
    * that does not take the lock. What it stops is an autosave that ARRIVES AFTER the
    * close/decline has COMMITTED (by far the common case — a stale tab, a debounced save in
@@ -479,7 +480,7 @@ export const proposalsRepository = {
     cadence?: ProposalCadence;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
 
       const [relationship] = await tx
@@ -627,8 +628,9 @@ export const proposalsRepository = {
    * and advances the spine. Takes only ids.
    *
    * STRICT order inside the tx (matches `submit()`: relationship spine first):
-   *   0. BAL-546 — `acquireRequestLockViaRelationshipTx`, the per-request advisory lock. Every
-   *      other multi-table request-domain writer takes this same lock first, so this
+   *   0. BAL-546 — `acquireRequestLockViaRelationshipTx`, the per-request advisory lock — the
+   *      transaction's FIRST LOCK (R6). Every other multi-table request-domain writer takes
+   *      this same lock first, so this
    *      transaction's row-lock order below is observed under a gate no other serialised writer
    *      can be inside; a future writer that locks both must still preserve it.
    *   1. `advanceRelationshipStatus(tx, { id: relationshipId, to:'proposal_submitted',
@@ -660,7 +662,7 @@ export const proposalsRepository = {
     actorUserId: string;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
-      // 0. BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      // 0. BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
 
       // 1. Advance the relationship spine first (locks + validates).
@@ -793,8 +795,9 @@ export const proposalsRepository = {
    * no longer caller-owned. Still creates NO delivery/engagement record (A6.5 owns
    * that).
    *
-   * BAL-546 — this transaction takes the per-request advisory lock FIRST
-   * (`acquireRequestLockViaProposalTx`), so the row-lock order below is observed under a gate no
+   * BAL-546 — this transaction takes the per-request advisory lock as its FIRST LOCK (not
+   * literally its first statement — fix round R6; `acquireRequestLockViaProposalTx` resolves
+   * the request id via one unlocked read first), so the row-lock order below is observed under a gate no
    * other serialised request-domain writer can be inside; a future writer that locks both proposal
    * and relationship rows must still preserve it.
    *
@@ -808,7 +811,7 @@ export const proposalsRepository = {
     actorUserId: string;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
       await acquireRequestLockViaProposalTx(tx, input.id);
 
       // Lock the proposal first and capture its relationship id (also validates
@@ -945,7 +948,7 @@ export const proposalsRepository = {
     installments: ProposalPaymentInstallmentInput[];
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction. `resubmit`
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6). `resubmit`
       // is the LIVE insert-based producer of open proposals (orchestrator D3) — the writer the
       // close/decline cascades' union re-read exists to defend against, so it must take this lock
       // like every other serialised writer.

@@ -243,7 +243,7 @@ describe('closeRequestAction', () => {
       error: 'Something ran at the same moment — please try again.',
     });
     expect(log.warn).toHaveBeenCalledWith(
-      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      'Project request close aborted by lock contention — retryable',
       expect.objectContaining({ requestId: REQUEST_ID, actorUserId: USER.id })
     );
     expect(log.error).not.toHaveBeenCalled();

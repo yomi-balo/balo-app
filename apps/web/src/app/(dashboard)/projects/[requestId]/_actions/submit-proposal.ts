@@ -28,6 +28,7 @@ import { log } from '@/lib/logging';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { validateProposalReadiness } from './proposal-readiness';
+import { lockContentionFailure } from './_shared/deadlock';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -275,6 +276,17 @@ export async function submitProposalAction(
   try {
     return await runSubmit(user, parsed.data);
   } catch (error) {
+    // ⚠ fix round R1 — `proposalsRepository.promoteToSubmit` is one of the eleven writers
+    // serialised on the per-request advisory lock (`_shared/request-lock.ts`); a 55P03 here
+    // means the submit never wrote anything and a retry queues again. WARN + retryable copy,
+    // checked BEFORE the generic fallback below — never `log.error` for an expected-rare,
+    // self-healing event.
+    const lockContention = lockContentionFailure(
+      error,
+      'Proposal submit aborted by lock contention — retryable',
+      { requestId, relationshipId, proposalId, userId: user.id }
+    );
+    if (lockContention !== null) return lockContention;
     log.error('Failed to submit proposal', {
       requestId,
       relationshipId,

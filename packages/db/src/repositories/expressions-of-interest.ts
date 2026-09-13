@@ -33,7 +33,7 @@ export const expressionsOfInterestRepository = {
     actorUserId: string;
   }): Promise<ExpressionOfInterest> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction. This is a
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6). This is a
       // multi-table request-domain writer (relationship + EOI insert) by the same test as every
       // other writer in the serialised set.
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);

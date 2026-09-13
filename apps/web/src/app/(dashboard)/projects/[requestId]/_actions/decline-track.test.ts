@@ -236,7 +236,7 @@ describe('declineTrackAction', () => {
       error: 'Something ran at the same moment — please try again.',
     });
     expect(log.warn).toHaveBeenCalledWith(
-      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      'Request track decline aborted by lock contention — retryable',
       expect.objectContaining({ requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID })
     );
     expect(log.error).not.toHaveBeenCalled();

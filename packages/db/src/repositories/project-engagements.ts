@@ -943,7 +943,8 @@ export const projectEngagementsRepository = {
    * `expressionsOfInterestRepository.submit`) — reachable example: an award being approved while
    * a different invited expert on the same request submits an EOI. It is now serialised by the
    * per-request advisory lock (`acquireRequestLock`, `_shared/request-lock.ts`), taken as this
-   * transaction's first statement, before the request row is even read. This is also the SINGLE
+   * transaction's FIRST LOCK — not literally its first statement (fix round R6) — before the
+   * request row is even read. This is also the SINGLE
    * LARGEST transaction of the serialised set (orchestrator D3), so it is the worst-case hold
    * time any other writer on the same request can queue behind. The bulk `UPDATE`'s unordered
    * row acquisition is still unordered — the advisory lock is what makes that not matter, not an
@@ -991,7 +992,7 @@ export const projectEngagementsRepository = {
     closedRelationshipIds: string[];
   }> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
       await acquireRequestLock(tx, input.requestId);
 
       const [current] = await tx

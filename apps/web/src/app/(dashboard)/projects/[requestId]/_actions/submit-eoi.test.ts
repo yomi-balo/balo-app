@@ -48,6 +48,7 @@ vi.mock('@/lib/notifications/publish', () => ({
 
 import { submitEoiAction } from './submit-eoi';
 import { revalidatePath } from 'next/cache';
+import { log } from '@/lib/logging';
 
 interface RequestGraphOptions {
   requestStatus?: string;
@@ -275,6 +276,24 @@ describe('submitEoiAction', () => {
       success: false,
       error: 'Could not submit your interest. Please try again.',
     });
+  });
+
+  // fix round R1 — `expressionsOfInterestRepository.submit` is one of the eleven writers
+  // serialised on the per-request advisory lock (`_shared/request-lock.ts`).
+  it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
+    mockSubmit.mockRejectedValue(
+      Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    );
+    const result = await submitEoiAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'EOI submit aborted by lock contention — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, userId: EXPERT_USER.id })
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('concurrent double-submit (partial-unique 23505 race) → friendly active-EOI copy', async () => {

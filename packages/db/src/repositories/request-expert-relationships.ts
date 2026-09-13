@@ -453,7 +453,7 @@ export const requestExpertRelationshipsRepository = {
     invitedByUserId: string;
   }): Promise<RequestExpertRelationship | undefined> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction. `invite` is
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6). `invite` is
       // the racer named in `close()`'s own KNOWN RESIDUAL block: this lock is what makes that
       // residual unreachable rather than merely narrowed.
       await acquireRequestLock(tx, input.projectRequestId);
@@ -636,8 +636,9 @@ export const requestExpertRelationshipsRepository = {
    * and appends the audit row), then each locked proposal is flipped to `declined`.
    *
    * ⚠ BAL-546 — THE ADVISORY LOCK MAKES THE OLD DEADLOCK CYCLE UNREACHABLE. This transaction
-   * takes the per-request advisory lock (`acquireRequestLockViaRelationshipTx`) as its FIRST
-   * statement, and every other multi-table request-domain writer (the eleven named in
+   * takes the per-request advisory lock (`acquireRequestLockViaRelationshipTx`) as the
+   * transaction's FIRST LOCK — not literally its first statement (fix round R6) — and every
+   * other multi-table request-domain writer (the eleven named in
    * `_shared/request-lock.ts`) takes the identical lock first. So the paragraph that used to sit
    * here — "this path CAN still deadlock against `promoteToSubmit`" — is RETRACTED: that AB/BA
    * cycle can no longer form, because the two transactions can never interleave their row-lock
@@ -688,7 +689,7 @@ export const requestExpertRelationshipsRepository = {
     reason: Exclude<RelationshipDeclineReason, 'request_closed'>;
   }): Promise<DeclineTrackResult> {
     return db.transaction(async (tx) => {
-      // BAL-546 — the per-request advisory lock, FIRST statement of the transaction.
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
       await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
 
       // 1. Proposal rows FIRST (lock order — see the docblock).
