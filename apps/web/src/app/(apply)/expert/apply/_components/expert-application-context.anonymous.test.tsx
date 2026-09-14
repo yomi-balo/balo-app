@@ -889,6 +889,26 @@ describe('BAL-562 — a malformed stored slice cannot crash the restored wizard'
    * pollution — spreading `['not','an','object']` mints keys `0`,`1`,`2`, and those
    * then serialize into the envelope and POST to `saveDraftAction` on flush.
    */
+  it('drops a single key whose type contradicts the initializer, keeping the rest of the slice', () => {
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: new Date().toISOString(),
+      currentStep: 0,
+      maxReachedStep: 0,
+      steps: {
+        // `languages` is an array in every real slice. A string here is what turns
+        // `languages.map(...)` into a crash — the field is dropped, the good sibling
+        // value beside it is not.
+        profile: { yearStartedSalesforce: 2016, languages: 'not-an-array' },
+      },
+    });
+
+    renderHarness(null, null);
+
+    expect(screen.getByTestId('year').textContent).toBe('2016');
+    expect(screen.getByTestId('languages').textContent).toBe('0');
+  });
+
   it('drops a slice that is not a plain object rather than spreading index keys into state', () => {
     writeAnonymousDraft({
       v: 1,

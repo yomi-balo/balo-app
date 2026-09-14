@@ -309,6 +309,28 @@ function hydrateWorkHistoryData(
   };
 }
 
+/**
+ * BAL-562 — merge a restored slice over the initializer's state, dropping any key whose
+ * shape contradicts what is already there. Specifically: an array replaced by a
+ * non-array, which is the thing that actually crashes a step (`.map` on a string).
+ *
+ * Validating the whole slice against `STEP_DRAFT_SCHEMAS` was considered and rejected.
+ * `profileStepDraftSchema` REQUIRES `languages` and `industryIds` (they are `.extend`ed
+ * onto the partial, not optional), so a slice written by a build that predates a field
+ * would fail outright and lose the ENTIRE step — strictly worse than the narrow gap it
+ * would close. Merging supplies the missing keys from `hydrate*(null)` instead, and this
+ * guard covers the only shape mismatch that turns into a crash rather than a bad value.
+ */
+function mergeRestoredSlice<T extends object>(prev: T, incoming: Record<string, unknown>): T {
+  const safe: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(incoming)) {
+    const existing = (prev as Record<string, unknown>)[key];
+    if (Array.isArray(existing) && !Array.isArray(value)) continue;
+    safe[key] = value;
+  }
+  return { ...prev, ...safe };
+}
+
 // ── Provider ─────────────────────────────────────────────────────
 
 interface ExpertApplicationProviderProps {
@@ -595,19 +617,12 @@ export function ExpertApplicationProvider({
     // hours and survive deploys, so a slice written by an older build is a real case,
     // not a hypothetical.
     const setters: Partial<Record<StepKey, (d: Record<string, unknown>) => void>> = {
-      agency: (d) => setAgencyData((prev) => ({ ...prev, ...(d as Partial<AgencyStepData>) })),
-      profile: (d) => setProfileData((prev) => ({ ...prev, ...(d as Partial<ProfileStepData>) })),
-      products: (d) =>
-        setProductsData((prev) => ({ ...prev, ...(d as Partial<ProductsStepData>) })),
-      assessment: (d) =>
-        setAssessmentData((prev) => ({ ...prev, ...(d as Partial<AssessmentStepData>) })),
-      certifications: (d) =>
-        setCertificationsData((prev) => ({
-          ...prev,
-          ...(d as Partial<CertificationsStepData>),
-        })),
-      'work-history': (d) =>
-        setWorkHistoryData((prev) => ({ ...prev, ...(d as Partial<WorkHistoryStepData>) })),
+      agency: (d) => setAgencyData((prev) => mergeRestoredSlice(prev, d)),
+      profile: (d) => setProfileData((prev) => mergeRestoredSlice(prev, d)),
+      products: (d) => setProductsData((prev) => mergeRestoredSlice(prev, d)),
+      assessment: (d) => setAssessmentData((prev) => mergeRestoredSlice(prev, d)),
+      certifications: (d) => setCertificationsData((prev) => mergeRestoredSlice(prev, d)),
+      'work-history': (d) => setWorkHistoryData((prev) => mergeRestoredSlice(prev, d)),
     };
 
     for (const step of STEP_CONFIG) {
