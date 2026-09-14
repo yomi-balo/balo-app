@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { ALL_SOURCE_FILES, readRaw, codeLines } from './_source-scan.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ALL_SOURCE_FILES, readRaw, codeLines, collectSourceFiles } from './_source-scan.js';
 
 /**
  * INVARIANT — no bare `require(` anywhere in `apps/api/src`.
@@ -34,24 +37,46 @@ import { ALL_SOURCE_FILES, readRaw, codeLines } from './_source-scan.js';
  * one character-class test below runs over a SINGLE character, never over input.
  */
 function isBareRequireCall(line: string): boolean {
-  const idx = line.indexOf('require(');
-  if (idx === -1) return false;
-  if (idx === 0) return true;
-  const prev = line.charAt(idx - 1);
-  const isIdentChar =
-    (prev >= 'a' && prev <= 'z') ||
-    (prev >= 'A' && prev <= 'Z') ||
-    (prev >= '0' && prev <= '9') ||
-    prev === '_' ||
-    prev === '$' ||
-    prev === '.';
-  return !isIdentChar;
+  // ⚠ EVERY occurrence, not just the first. `indexOf` returns one position, so a line like
+  // `foo.require('a'); require('b');` was judged by its NAMED first match and reported clean
+  // while carrying a bare call. Walk them all; one bare call condemns the line.
+  for (let idx = line.indexOf('require('); idx !== -1; idx = line.indexOf('require(', idx + 1)) {
+    if (idx === 0) return true;
+    const prev = line.charAt(idx - 1);
+    const isIdentChar =
+      (prev >= 'a' && prev <= 'z') ||
+      (prev >= 'A' && prev <= 'Z') ||
+      (prev >= '0' && prev <= '9') ||
+      prev === '_' ||
+      prev === '$' ||
+      prev === '.';
+    if (!isIdentChar) return true;
+  }
+  return false;
 }
 
 function bareRequireLines(rel: string): string[] {
-  return codeLines(readRaw(rel))
-    .split('\n')
-    .filter((line) => isBareRequireCall(line));
+  return linesOf(codeLines(readRaw(rel)));
+}
+
+function linesOf(code: string): string[] {
+  return code.split('\n').filter((line) => isBareRequireCall(line));
+}
+
+/**
+ * ⚠ THE BAN EXTENDS PAST `apps/api/src`. These workspace packages are ALSO `"type": "module"`
+ * and are `noExternal`'d into the api bundle (`tsup.config.ts`), so in dev they are loaded by
+ * the same `tsx` process with the same missing `require` — a bare call in any of them fails
+ * identically. `packages/ui` and `packages/typescript-config` are commonjs and excluded.
+ *
+ * ⚠ Paths from `import.meta.url`, never `process.cwd()`: CI runs vitest from the REPO ROOT
+ * while developers run it from `apps/api`.
+ */
+const ESM_WORKSPACE_PACKAGES = ['db', 'shared', 'analytics'] as const;
+
+function packageSourceFiles(pkg: string): { dir: string; files: string[] } {
+  const dir = fileURLToPath(new URL(`../../../../packages/${pkg}/src/`, import.meta.url));
+  return { dir, files: collectSourceFiles(dir, '') };
 }
 
 describe('apps/api uses no bare require()', () => {
@@ -64,6 +89,21 @@ describe('apps/api uses no bare require()', () => {
 
   // ── non-vacuity ──────────────────────────────────────────────────────────────
   // An absence assertion is worthless if the walk is empty or the matcher never fires.
+
+  it.each(ESM_WORKSPACE_PACKAGES)(
+    'has no bare require( in packages/%s/src either (same tsx + ESM shape)',
+    (pkg) => {
+      const { dir, files } = packageSourceFiles(pkg);
+      // Non-vacuity: an empty or mis-pathed walk would pass this suite for nothing.
+      expect(files.length).toBeGreaterThan(0);
+      const offenders = files.flatMap((rel) =>
+        linesOf(codeLines(readFileSync(path.join(dir, rel), 'utf8'))).map(
+          (line) => `packages/${pkg}/src/${rel}: ${line.trim()}`
+        )
+      );
+      expect(offenders).toEqual([]);
+    }
+  );
 
   it('scans a real, non-trivial source surface that includes the file this came from', () => {
     expect(ALL_SOURCE_FILES.length).toBeGreaterThan(100);
@@ -88,5 +128,15 @@ describe('apps/api uses no bare require()', () => {
 
   it('negative control — a line with no require at all is NOT flagged', () => {
     expect(isBareRequireCall("import { usersRepository } from '@balo/db';")).toBe(false);
+  });
+
+  it('⚠ a bare call HIDING BEHIND a named one on the same line is still caught', () => {
+    // The first match is `sdkRequire(`; judging the line by it alone reported clean.
+    expect(isBareRequireCall("const a = sdkRequire('a'); const b = require('b');")).toBe(true);
+    expect(isBareRequireCall("createRequire(import.meta.url); require('x');")).toBe(true);
+    // ...and a line of ONLY named requirers still is not.
+    expect(isBareRequireCall("const a = sdkRequire('a'); const b = localRequire('b');")).toBe(
+      false
+    );
   });
 });

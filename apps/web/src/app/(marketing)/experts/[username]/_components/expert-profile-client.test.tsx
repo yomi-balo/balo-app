@@ -1,3 +1,4 @@
+import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
@@ -518,6 +519,19 @@ describe('ExpertProfileClient — CTA handlers', () => {
     if (startProject) await user.click(startProject);
   }
 
+  /** What `router.refresh()` produces: the same tree re-rendered with a signed-in viewer. */
+  function rerenderSignedIn(rerender: (ui: React.ReactElement) => void): void {
+    rerender(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+  }
+
   it('opens the auth modal instead of the ProjectRequestPanel for a signed-out visitor', async () => {
     const user = userEvent.setup();
     renderProfile(false);
@@ -545,18 +559,34 @@ describe('ExpertProfileClient — CTA handlers', () => {
     await clickStartProject(user);
     expect(screen.queryByRole('heading', { name: PANEL_HEADING })).not.toBeInTheDocument();
 
-    // What `router.refresh()` produces: the same tree re-rendered with a signed-in viewer.
-    rerender(
-      <ExpertProfileClient
-        view={makeView()}
-        portraitUrl={null}
-        isLoggedIn
-        projectTaxonomies={EMPTY_TAXONOMIES}
-        {...bookingProps}
-      />
-    );
+    rerenderSignedIn(rerender);
 
     expect(await screen.findByRole('heading', { name: PANEL_HEADING })).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠⚠ TWO ARMED INTENTS, ONE AUTH FLIP. A signed-out visitor can click Book, dismiss the auth
+   * modal, then click Start a project before signing in. Nothing clears a pending ref on
+   * dismiss, so with one boolean per surface BOTH were still set when `router.refresh()`
+   * flipped `isLoggedIn`, and the booking dialog and the request panel opened on top of each
+   * other. One `pendingOpenRef` slot makes the LAST intent win.
+   */
+  it('⚠ Book then Start-a-project while signed out opens ONLY the panel after auth', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderProfile(false);
+
+    // Intent 1: Book. The modal opens; dismissing it clears nothing.
+    await user.click(screen.getByRole('button', { name: /book a consultation/i }));
+    // Intent 2: Start a project, which supersedes it.
+    await clickStartProject(user);
+
+    // Auth lands.
+    rerenderSignedIn(rerender);
+
+    // The panel opened...
+    expect(await screen.findByRole('heading', { name: PANEL_HEADING })).toBeInTheDocument();
+    // ...and the booking wrapper did NOT open underneath it.
+    expect(screen.queryByText('Book a consultation with Anil Pilania')).not.toBeInTheDocument();
   });
 
   it('jumps to a section (and stays green despite scrollIntoView) when a nav tab is clicked', async () => {

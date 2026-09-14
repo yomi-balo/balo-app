@@ -42,8 +42,11 @@ class MockXhr {
   open = vi.fn();
   setRequestHeader = vi.fn();
   abort = vi.fn();
+  /** ⚠ SEVERAL ticks, like a real upload — one tick cannot show a per-tick publish. */
   send = vi.fn(() => {
-    this.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 } as ProgressEvent);
+    for (const loaded of [10, 40, 70, 100]) {
+      this.upload.onprogress?.({ lengthComputable: true, loaded, total: 100 } as ProgressEvent);
+    }
     this.onload?.();
   });
 }
@@ -248,6 +251,39 @@ describe('DocumentUploader', () => {
 
     expect(mockRemove).toHaveBeenCalledWith({ key: 'project-documents/c/u/k' });
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([]));
+  });
+
+  /**
+   * ⚠ PROGRESS IS THIS COMPONENT'S BUSINESS, NOT THE PARENT'S. Every XHR `upload.onprogress`
+   * tick calls `patchRow(id, {progress})`, which reaches `publish`. Without a guard a 5 MB file
+   * drove one `onDocumentsChange` + `ProjectRequestPanel` re-render PER TICK, each carrying an
+   * identical confirmed-ref list.
+   *
+   * The mock fires four ticks per upload, so an unguarded publish is plainly visible in the
+   * call count: this asserts the parent hears only the transitions that mean something —
+   * attached (uploading true), then confirmed (uploading false).
+   */
+  it('⚠ does not bubble a publish per progress tick', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onUploading = vi.fn();
+    const { container } = render(
+      <DocumentUploader onDocumentsChange={onChange} onUploadingChange={onUploading} />
+    );
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+    await user.upload(input, makeFile('spec.pdf', 'application/pdf', 1000));
+    await waitFor(() => expect(screen.getByText('Attached')).toBeInTheDocument());
+
+    // Two meaningful transitions, not two-plus-four-ticks.
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onUploading).toHaveBeenCalledTimes(2);
+    expect(onUploading).toHaveBeenNthCalledWith(1, true);
+    expect(onUploading).toHaveBeenLastCalledWith(false);
+    // ...and the confirmed ref still arrived.
+    expect(onChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ r2Key: 'project-documents/c/u/k' }),
+    ]);
   });
 
   /**

@@ -200,28 +200,42 @@ describe('ProjectRequestSubmittedAdminEmail (direct request → triage)', () => 
   });
 
   it('omits the selection line when nothing was selected', async () => {
-    const html = await render(
-      ProjectRequestSubmittedAdminEmail({
-        projectTitle: 'Marketing Cloud migration',
-        companyName: 'Northwind Industrial',
-        baseUrl: 'https://app.balo.expert',
-      })
+    const withCounts = readable(await render(ProjectRequestSubmittedAdminEmail(props)));
+    const without = readable(
+      await render(
+        ProjectRequestSubmittedAdminEmail({
+          projectTitle: 'Marketing Cloud migration',
+          companyName: 'Northwind Industrial',
+          baseUrl: 'https://app.balo.expert',
+        })
+      )
     );
 
-    expect(html).toContain('New direct request needs triage.');
-    expect(readable(html)).toContain('From Northwind Industrial');
+    // ⚠ ASSERT THE ABSENCE, which is what the name claims. Checking only what is present
+    // passes just as well when the line is still there.
+    expect(withCounts).toContain('2 project types');
+    expect(without).not.toContain('project types');
+    expect(without).not.toContain('documents attached');
+    // The card itself still renders.
+    expect(without).toContain('From Northwind Industrial');
   });
 
   it('falls back to a neutral party name and title', async () => {
-    const html = await render(
-      ProjectRequestSubmittedAdminEmail({
-        projectTitle: 'a new project',
-        companyName: 'A client',
-        baseUrl: 'https://app.balo.expert',
-      })
+    // ⚠ `undefined`, NOT the fallback values spelled out. Passing 'A client' / 'a new project'
+    // explicitly means the default parameters never execute — the test would pass against a
+    // component with no defaults at all.
+    const html = readable(
+      await render(
+        ProjectRequestSubmittedAdminEmail({
+          projectTitle: undefined as unknown as string,
+          companyName: undefined as unknown as string,
+          baseUrl: 'https://app.balo.expert',
+        })
+      )
     );
 
-    expect(readable(html)).toContain('From A client');
+    expect(html).toContain('From A client');
+    expect(html).toContain('a new project');
   });
 
   it('⚠ the two ops emails stay distinguishable (shared LAYOUT, not shared COPY)', async () => {

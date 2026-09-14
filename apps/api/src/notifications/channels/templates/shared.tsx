@@ -348,10 +348,16 @@ export function SupportFooter({ prefix = 'Questions?' }: SupportFooterProps) {
 // ── Project status email (shared body for A2 notification emails) ─
 
 /**
- * ⚠ EXPORTED, NOT PRIVATE. These four were re-declared verbatim in every ops/project email that
- * renders a "project card" — `project-match-requested.tsx` had a byte-for-byte copy of all of
- * them, and a third copy in `project-request-submitted-admin.tsx` measured 20.3% duplicated
- * lines on `jscpd`, well over SonarCloud's 3% new-code gate. One definition, imported.
+ * ⚠ EXPORTED, NOT PRIVATE. These five back every ops/project email that renders a "project
+ * card". `project-match-requested.tsx` had its own copy of all of them and
+ * `project-request-submitted-admin.tsx` made a third, measuring 20.3% duplicated lines on
+ * `jscpd` — well over SonarCloud's 3% new-code gate. One definition, imported.
+ *
+ * ⚠ THE VALUES ARE THE ONES THE LIVE EMAIL ALREADY RENDERED. The first extraction quietly
+ * swapped the heading and meta styles for the new template's invented ones — dropping
+ * `lineHeight` from both and `fontWeight` from the meta, and changing both margins — which
+ * would have restyled a shipping ops email under a change described as pure de-duplication.
+ * If these need to change, change them deliberately, not as a side effect of hoisting.
  */
 export const heroPillStyle = {
   ...shared.statusPillBase,
@@ -378,32 +384,24 @@ export const projectCardLabelStyle = {
 } as const;
 
 /**
- * ⚠ The card-with-meta heading. Distinct from the private `projectCardTitle` below, which
- * `ProjectStatusEmail` uses with `margin: 0` + a line-height because nothing follows it.
- * Here a meta line does, hence the bottom margin. Two real variants, not an oversight.
+ * ⚠ ONE title style, not two. The earlier extraction invented a second "heading" variant on the
+ * theory that a card with a meta line beneath needs a bottom margin — but the shipping email
+ * never had one: `project-match-requested`'s own title was byte-identical to the
+ * `ProjectStatusEmail` title below it. There was only ever one.
  */
-export const projectCardHeadingStyle = {
-  fontSize: '16px',
-  fontWeight: '600',
-  color: colors.text,
-  margin: '0 0 6px',
-} as const;
-
-export const projectCardMetaStyle = {
-  fontSize: '13px',
-  color: colors.textSecondary,
-  margin: '0 0 4px',
-} as const;
-
-const heroPill = heroPillStyle;
-const projectCard = projectCardStyle;
-const projectCardLabel = projectCardLabelStyle;
-
-const projectCardTitle = {
+export const projectCardTitleStyle = {
   fontSize: '16px',
   fontWeight: '600',
   color: colors.text,
   margin: 0,
+  lineHeight: '1.5',
+} as const;
+
+export const projectCardMetaStyle = {
+  fontSize: '13px',
+  fontWeight: '500',
+  color: colors.textSecondary,
+  margin: '8px 0 0',
   lineHeight: '1.5',
 } as const;
 
@@ -421,6 +419,26 @@ const projectCardTitle = {
  * ⚠ `ctaHref` is passed whole, not built from an id: these CTAs point at ops surfaces
  * (`/projects?lens=admin`), not at `/projects/{id}` the way `ProjectStatusEmail` does.
  */
+/**
+ * The dark small-hero both shared email bodies open with — identical markup in
+ * `OpsRequestEmail` and `ProjectStatusEmail`, which made a 14-line clone between them once the
+ * style names converged. Only the three strings differ.
+ */
+function SmallHero({
+  pillLabel,
+  heroHeading,
+  heroSubtext,
+}: Readonly<{ pillLabel: string; heroHeading: string; heroSubtext: string }>) {
+  return (
+    <Section style={shared.smallHero}>
+      <LogoRow size="small" />
+      <StatusPill label={pillLabel} style={heroPillStyle} />
+      <Heading style={shared.smallHeroHeading}>{heroHeading}</Heading>
+      <Text style={shared.smallHeroSubtext}>{heroSubtext}</Text>
+    </Section>
+  );
+}
+
 export interface OpsRequestEmailProps {
   readonly previewText: string;
   readonly baseUrl: string;
@@ -459,13 +477,7 @@ export function OpsRequestEmail({
 }: Readonly<OpsRequestEmailProps>) {
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
-      {/* ── Hero ── */}
-      <Section style={shared.smallHero}>
-        <LogoRow size="small" />
-        <StatusPill label={pillLabel} style={heroPillStyle} />
-        <Heading style={shared.smallHeroHeading}>{heroHeading}</Heading>
-        <Text style={shared.smallHeroSubtext}>{heroSubtext}</Text>
-      </Section>
+      <SmallHero pillLabel={pillLabel} heroHeading={heroHeading} heroSubtext={heroSubtext} />
 
       {/* ── Body card ── */}
       <Section style={shared.card}>
@@ -475,7 +487,7 @@ export function OpsRequestEmail({
         {/* Project summary */}
         <Section style={projectCardStyle}>
           <p style={projectCardLabelStyle}>{cardLabel}</p>
-          <p style={projectCardHeadingStyle}>{projectTitle}</p>
+          <p style={projectCardTitleStyle}>{projectTitle}</p>
           <p style={projectCardMetaStyle}>From {companyName}</p>
           {summary ? <p style={projectCardMetaStyle}>{summary}</p> : null}
         </Section>
@@ -548,13 +560,7 @@ export function ProjectStatusEmail({
 }: ProjectStatusEmailProps) {
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
-      {/* ── Hero ── */}
-      <Section style={shared.smallHero}>
-        <LogoRow size="small" />
-        <StatusPill label={pillLabel} style={heroPill} />
-        <Heading style={shared.smallHeroHeading}>{heroHeading}</Heading>
-        <Text style={shared.smallHeroSubtext}>{heroSubtext}</Text>
-      </Section>
+      <SmallHero pillLabel={pillLabel} heroHeading={heroHeading} heroSubtext={heroSubtext} />
 
       {/* ── Body card ── */}
       <Section style={shared.card}>
@@ -562,9 +568,9 @@ export function ProjectStatusEmail({
         <Text style={shared.bodyText}>{bodyText}</Text>
 
         {/* Project summary */}
-        <Section style={projectCard}>
-          <p style={projectCardLabel}>{summaryLabel}</p>
-          <p style={projectCardTitle}>{projectTitle}</p>
+        <Section style={projectCardStyle}>
+          <p style={projectCardLabelStyle}>{summaryLabel}</p>
+          <p style={projectCardTitleStyle}>{projectTitle}</p>
         </Section>
 
         <Callout

@@ -106,9 +106,6 @@ export function ExpertProfileClient({
   // the BookingCard and the QuickStarts empty-state. The trigger + analytics stay
   // here (profile-specific); the panel itself is a Projects-owned reusable module.
   const [projectOpen, setProjectOpen] = useState(false);
-  // Set when a signed-out visitor clicks the CTA; the effect below opens the panel for real
-  // once auth lands. Mirrors `pendingBookingOpenRef`.
-  const pendingProjectOpenRef = useRef(false);
 
   // Suppress scroll-spy updates briefly while a programmatic smooth-scroll runs.
   const jumpingRef = useRef(false);
@@ -173,14 +170,23 @@ export function ExpertProfileClient({
   // ── BAL-400 — booking wrapper (entry points 1/2/4, D4a) ──
   const [bookingOpen, setBookingOpen] = useState(false);
   const [bookingSource, setBookingSource] = useState<BookingSource>('profile');
-  const pendingBookingOpenRef = useRef(false);
+  /**
+   * ⚠⚠ ONE ref for BOTH surfaces, not one each. A signed-out visitor can arm more than one
+   * intent before authenticating — click Book, dismiss the modal, click Start a project, sign
+   * in — and neither ref is cleared on dismiss. Two independent booleans would both still be
+   * set when `router.refresh()` flips `isLoggedIn`, so BookingFlowDialog and
+   * ProjectRequestPanel would open on top of each other. A single slot makes the LAST intent
+   * win, which is what the visitor actually asked for, and cures the stale-after-dismiss case
+   * for both at once.
+   */
+  const pendingOpenRef = useRef<'book' | 'project' | null>(null);
   const autoOpenFiredRef = useRef(false);
 
   const openBookingFlow = useCallback(
     (openSource: BookingSource) => {
       track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'book' });
       if (!isLoggedIn) {
-        pendingBookingOpenRef.current = true;
+        pendingOpenRef.current = 'book';
         setBookingSource(openSource);
         authModal.open({ onSuccess: () => router.refresh() });
         return;
@@ -193,12 +199,16 @@ export function ExpertProfileClient({
 
   const onBook = useCallback(() => openBookingFlow('profile'), [openBookingFlow]);
 
-  // A signed-out visitor who completes auth (via `openBookingFlow`'s `onSuccess`) lands back
-  // here once `router.refresh()` re-resolves `isLoggedIn` + `bookingContext` server-side.
+  // A signed-out visitor who completes auth (via the CTA's `onSuccess`) lands back here once
+  // `router.refresh()` re-resolves `isLoggedIn` + `bookingContext` server-side. ONE effect for
+  // both surfaces — see `pendingOpenRef`: exactly one intent is armed, so exactly one opens.
   useEffect(() => {
-    if (!pendingBookingOpenRef.current || !isLoggedIn) return;
-    pendingBookingOpenRef.current = false;
-    setBookingOpen(true);
+    if (!isLoggedIn) return;
+    const pending = pendingOpenRef.current;
+    if (pending === null) return;
+    pendingOpenRef.current = null;
+    if (pending === 'book') setBookingOpen(true);
+    else setProjectOpen(true);
   }, [isLoggedIn]);
 
   // `?book=1` deep link (entry points 2/4) — auto-opens once bookingContext (or auth) resolves.
@@ -237,20 +247,12 @@ export function ExpertProfileClient({
   const onStartProject = useCallback(() => {
     track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'project' });
     if (!isLoggedIn) {
-      pendingProjectOpenRef.current = true;
+      pendingOpenRef.current = 'project';
       authModal.open({ onSuccess: () => router.refresh() });
       return;
     }
     setProjectOpen(true);
   }, [view.expertId, isLoggedIn, authModal, router]);
-
-  // The signed-out visitor who just completed auth lands back here once `router.refresh()`
-  // re-resolves `isLoggedIn` server-side — then the panel opens, as they asked.
-  useEffect(() => {
-    if (!pendingProjectOpenRef.current || !isLoggedIn) return;
-    pendingProjectOpenRef.current = false;
-    setProjectOpen(true);
-  }, [isLoggedIn]);
 
   const analyticsSections = useMemo<ExpertProfileSection[]>(
     () => sections.map((s) => s.key),

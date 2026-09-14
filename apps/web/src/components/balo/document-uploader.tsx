@@ -139,14 +139,41 @@ export function DocumentUploader({
   const xhrRefs = useRef<Record<string, XMLHttpRequest>>({});
   const rejectionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  // Recompute + bubble confirmed refs + uploading flag from the latest rows.
+  /**
+   * What was last bubbled, so an unchanged publish can be skipped. Identity of the `docs` array
+   * is NOT the signal — a fresh array is built on every call — so this records the confirmed
+   * keys plus the uploading flag, which together are everything the parent consumes.
+   */
+  const lastPublishedRef = useRef<{ keys: string; uploading: boolean } | null>(null);
+
+  /**
+   * Recompute + bubble confirmed refs + uploading flag from the latest rows.
+   *
+   * ⚠ SKIPS A PUBLISH THAT WOULD SAY NOTHING NEW. `runUpload` calls `patchRow(id, {progress})`
+   * on every XHR `upload.onprogress` tick, and each one reaches here — so a 5 MB file drove a
+   * `setField('documents', …)` and a full `ProjectRequestPanel` re-render per tick, every one
+   * of them carrying an identical confirmed-ref list. Progress belongs to this component's own
+   * row state; the parent only ever needed the confirmed set and the in-flight flag.
+   *
+   * ⚠ The volume predates this branch, but it used to happen during RENDER, where React
+   * coalesced it. These are real commits now, which is exactly why the guard is worth its
+   * few lines on the surface the whole branch is about.
+   */
   const publish = useCallback(
     (next: UploadRow[]) => {
       const docs = next
         .filter((r): r is UploadRow & { ref: ProjectDocumentRef } => r.ref !== null)
         .map((r) => r.ref);
+      const uploading = next.some((r) => r.status === 'uploading');
+      // \u0000 cannot occur in an R2 key, so no key set can collide with another.
+      const keys = docs.map((d) => d.r2Key).join('\u0000');
+
+      const last = lastPublishedRef.current;
+      if (last !== null && last.keys === keys && last.uploading === uploading) return;
+      lastPublishedRef.current = { keys, uploading };
+
       onDocumentsChange(docs);
-      onUploadingChange?.(next.some((r) => r.status === 'uploading'));
+      onUploadingChange?.(uploading);
     },
     [onDocumentsChange, onUploadingChange]
   );
