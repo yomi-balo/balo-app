@@ -100,26 +100,35 @@ describe('acquireRequestLockViaProposalTx', () => {
  * test) — `SHOW lock_timeout` is a plain session-state read, so no second connection is needed
  * to observe it.
  */
-describe('acquireRequestLock — lock_timeout scoping (fix round R1(a)/R2)', () => {
-  it('sets lock_timeout for the gate wait, then resets it to 0 immediately after acquiring', async () => {
+describe('acquireRequestLock — lock_timeout scoping (fix round R1(a)/R2/R7)', () => {
+  it('sets lock_timeout for the gate wait, then resets it to the value in effect before acquiring', async () => {
     const requestId = randomUUID();
 
-    const shownAfter = await db.transaction(async (tx) => {
-      await acquireRequestLock(tx, requestId);
-      // ⚠ THIS IS THE R2 MUTATION TARGET. Delete `_shared/request-lock.ts`'s trailing
-      // `SET LOCAL lock_timeout = 0` (the R1(a) reset) and `shownAfter` below reads back `'3s'`
-      // instead of `'0'` — this assertion goes RED.
-      const rows = (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
+    const { shownBefore, shownAfter } = await db.transaction(async (tx) => {
+      // Captured BEFORE `acquireRequestLock` runs, so this test pins the PROPERTY the R7 fix
+      // docblock claims — "restores whatever was in effect before this function ran" — rather
+      // than an incidentally-correct literal. On this harness that value is '0' today, but the
+      // assertion below does not hardcode that; it compares against this capture.
+      const beforeRows = (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
         lock_timeout: string;
       }>;
-      const [row] = rows;
-      if (row === undefined) throw new Error('SHOW lock_timeout returned no row');
-      return row.lock_timeout;
+      const [beforeRow] = beforeRows;
+      if (beforeRow === undefined) throw new Error('SHOW lock_timeout returned no row');
+
+      await acquireRequestLock(tx, requestId);
+      // ⚠ THIS IS THE R2 MUTATION TARGET. Delete `_shared/request-lock.ts`'s trailing
+      // `SET LOCAL lock_timeout = DEFAULT` (the R1(a)/R7 reset) and `shownAfter` below reads back
+      // `'3s'` instead of matching `shownBefore` — this assertion goes RED.
+      const afterRows = (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
+        lock_timeout: string;
+      }>;
+      const [afterRow] = afterRows;
+      if (afterRow === undefined) throw new Error('SHOW lock_timeout returned no row');
+
+      return { shownBefore: beforeRow.lock_timeout, shownAfter: afterRow.lock_timeout };
     });
 
-    // '0' is Postgres's own "disabled" value (R1(a)'s docblock) — the pre-PR default, since
-    // nothing else in this repo sets `lock_timeout`.
-    expect(shownAfter).toBe('0');
+    expect(shownAfter).toBe(shownBefore);
   });
 });
 

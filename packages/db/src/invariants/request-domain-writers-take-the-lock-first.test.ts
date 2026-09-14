@@ -9,7 +9,11 @@ import { stripComments } from '@balo/shared/testing';
  *
  * `_shared/request-lock.ts`'s docblock names ELEVEN writers that must take
  * `acquireRequestLock` / `acquireRequestLockViaRelationshipTx` / `acquireRequestLockViaProposalTx`
- * as the very first statement of their `db.transaction(` body. Before this file, that claim was
+ * as their transaction's FIRST LOCK — not necessarily its first statement (fix round R6; see
+ * `_shared/request-lock.ts`'s own docblock for why those two are not the same claim). For every
+ * one of the eleven, taking the lock call as the literal first statement of their `db.transaction(`
+ * body is how that first-lock requirement is met in practice, and it is exactly that source-text
+ * position this scan checks below. Before this file, that claim was
  * enforced only by a reviewer re-reading five source files and counting by eye — Group A of the
  * concurrency suite covers 5 of the 11, and the ticket this fix round answers exists BECAUSE a
  * membership rule stated in prose (D3/D13) missed a writer (`resubmit`) on its first pass. A
@@ -42,6 +46,33 @@ import { stripComments } from '@balo/shared/testing';
  * also lives under `invariants/`, not `repositories/`, so it is outside the two-lock-class
  * scan's walk regardless — but the discipline is followed anyway, for the same reason the
  * concurrency suite follows it: so a future copy-paste into `repositories/` doesn't trip it.)
+ *
+ * ⚠⚠ THE RESIDUAL, NAMED (fix round R8) — `TARGET_FILES` IS A HARDCODED FIVE-FILE LIST, NOT A
+ * WALK OF `repositories/`. Unlike `an-account-hold-outlives-only-an-unpaid-balance.test.ts`'s
+ * two-lock-class check (which walks EVERY `.ts` file under `repositories/` unfiltered, because it
+ * only needs to grep for the literal `pg_advisory`), this scan is METHOD-GRAIN WITHIN FIVE NAMED
+ * FILES. A brand-new SIXTH repository file containing a multi-table request-domain writer — one
+ * that writes two-or-more of `proposals` / `request_expert_relationships` / `project_requests`
+ * for one request, or inserts an open proposal — is INVISIBLE to this scan until a human adds its
+ * filename to `TARGET_FILES`. Within the five named files, the coverage is real: a new or renamed
+ * METHOD that skips the lock is caught by the set-equality check below. A wholly new FILE joining
+ * the serialised set is not.
+ *
+ * ⚠ WHY THE STRONGER OPTION (an unfiltered discovery of "files that write the trio tables") WAS
+ * TRIED AND REJECTED, NOT SKIPPED. The trio's writes are not always LEXICALLY LOCAL to the writing
+ * file: `expressionsOfInterestRepository.submit` (`expressions-of-interest.ts`) writes
+ * `request_expert_relationships` ONLY by calling `advanceRelationshipStatus`, an exported helper
+ * DEFINED IN `request-expert-relationships.ts` — that file itself contains no
+ * `.update(requestExpertRelationships)` / `.insert(requestExpertRelationships)` call site of its
+ * own inside `submit`. A source-text scan for "which files call `.update(`/`.insert(` naming the
+ * trio's schema symbols" would therefore MISS `expressions-of-interest.ts` entirely and disagree
+ * with the (correct) hardcoded list — a false negative in the very direction this fix round exists
+ * to close. Closing that gap for real needs either a full call graph (out of scope for a
+ * source-text scan) or a curated list of known cross-file writer helpers to treat as proxies for
+ * the tables they touch — which is itself just another hand-maintained list, no more
+ * self-updating than `TARGET_FILES` is today. Given that, the hardcoded list plus this explicit
+ * residual note is the more honest artifact than a "stronger-looking" scan that is quietly wrong
+ * about a real writer that ships in this same file.
  */
 
 const TARGET_FILES: readonly string[] = [
@@ -77,6 +108,33 @@ interface WriterRecord {
  * an opening paren directly after the captured identifier and the pattern fails to match at that
  * position — those helpers are correctly invisible to this scan, which only cares about
  * TRANSACTION-OPENING repository methods (`async submit(`, never `async function foo(`).
+ *
+ * ⚠⚠ THE CONSEQUENCE, NAMED — NOT JUST THE CAUSE (fix round R9). "Invisible" above understates
+ * what happens if a `db.transaction(` call site is ever placed INSIDE a module-level
+ * `async function <name>(` helper: this function does not throw for that call site. The `throw`
+ * a few lines below only fires when NO preceding `async <name>(` header exists anywhere earlier
+ * in the file — which will not happen in any of these five populated files, since a repository
+ * method always precedes any later helper. Instead, `best` silently resolves to whichever NAMED
+ * `async <method>(` header happens to be the NEAREST ONE PRECEDING that call site by index — the
+ * `db.transaction(` call gets SILENTLY MISATTRIBUTED to that unrelated method's name, not
+ * flagged as unscanned. A hand-rolled multi-table write hidden inside such a helper (called from
+ * a transaction that does NOT open with the lock) could therefore pass this invariant by lending
+ * its lock-taking (or lock-omitting) verdict to whatever method happens to sit above it in the
+ * file, rather than being judged — or even counted — on its own.
+ *
+ * ⚠ NOT HYPOTHETICAL — THE SHAPE ALREADY EXISTS. `proposals.ts`'s `readRequestBaloFeeBpsTx` and
+ * `lockOpenProposalsForRequestTx` are exactly this shape today (module-level `async function`
+ * helpers called from inside the repository's `db.transaction(` bodies). Neither currently
+ * contains a `db.transaction(` call site of its own, so no misattribution occurs on `main` right
+ * now — but nothing in this file's mechanics would catch it if one of them, or a future helper
+ * like them, ever grew one.
+ *
+ * Detecting `async function <name>(` and attributing its body's call sites correctly (or
+ * throwing on them) was considered and deliberately NOT done here: the two known helpers above
+ * never themselves open a transaction, so a detector would have nothing to exercise today, and a
+ * regex reliably distinguishing "this call site is lexically inside helper X's body" from
+ * "helper X merely precedes it in the file" needs brace-depth tracking, not another one-line
+ * pattern — a real cost for a residual that is documented, not silent, as of this fix round.
  */
 function enclosingMethodName(stripped: string, beforeIndex: number): string {
   const pattern = /\basync\s+([A-Za-z_$][\w$]*)\s*\(/g;

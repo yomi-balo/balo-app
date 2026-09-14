@@ -97,8 +97,9 @@ export class InvalidRelationshipTransitionError extends Error {
  *
  * ⚠ BAL-546 — THE OUTER SERIALIZATION. Every caller of this function reaches it from a
  * transaction that ALREADY holds the per-request advisory lock (`_shared/request-lock.ts`) as
- * its first statement, so the row-lock orders below are all observed under one per-request gate
- * no other serialised writer can be inside at the same time.
+ * the transaction's FIRST LOCK — not literally its first statement (fix round R6) — so the
+ * row-lock orders below are all observed under one per-request gate no other serialised writer
+ * can be inside at the same time.
  *
  * LOCK ORDER (BAL-295) — relationship row FIRST, then request row LAST. The
  * request (the shared aggregate every relationship rolls up into) is acquired as

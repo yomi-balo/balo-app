@@ -133,10 +133,26 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * THIS SUPERSEDES an earlier version of this docblock that argued whole-transaction bounding was
  * the intended design — that argument is RETRACTED here, not kept alongside this one (a comment
  * that vouches for an invariant the code does not hold is worse than no comment). This function
- * resets `lock_timeout` back to `0` — Postgres's own built-in default, and the value already in
- * effect everywhere in this repo today since nothing else sets it — immediately after the
- * advisory lock is acquired. So the 3s bound applies ONLY to the wait for THIS one
- * `pg_advisory_xact_lock` call; it never reaches any row lock the caller takes afterwards.
+ * resets `lock_timeout` to `DEFAULT` immediately after the advisory lock is acquired, so the 3s
+ * bound applies ONLY to the wait for THIS one `pg_advisory_xact_lock` call; it never reaches any
+ * row lock the caller takes afterwards.
+ *
+ * ⚠⚠ fix round R7 — `DEFAULT`, NOT THE LITERAL `0`. An earlier version of this function reset with
+ * `SET LOCAL lock_timeout = 0`, reasoning that `0` is Postgres's own built-in default. That
+ * reasoning was the defect: `0` is the COMPILED-IN default, not necessarily the EFFECTIVE one for
+ * this session — `postgresql.conf`, `ALTER DATABASE … SET`, `ALTER ROLE … SET`, or a connection
+ * pooler (plausible on Supabase, where the pooler is shared across tenants) can all set a
+ * non-zero `lock_timeout` ahead of this transaction. Had any of those been in play, `= 0` would
+ * not have RESTORED a protection — it would have SILENTLY DISABLED one, for the remainder of
+ * every serialised writer's transaction, and this docblock would have been the thing vouching for
+ * an invariant the code did not hold (the exact defect class this ticket exists to fix).
+ * `SET LOCAL lock_timeout = DEFAULT` (equivalently, per Postgres semantics, `RESET lock_timeout`)
+ * instead restores the value that was in effect at the START of this transaction/session — i.e.
+ * the value `postgresql.conf` / `ALTER DATABASE` / `ALTER ROLE` / the pooler put there — accounting
+ * for every one of those sources, not merely coinciding with them today. The claim that this
+ * function "restores pre-PR behaviour" is therefore true of the PROPERTY (whatever `lock_timeout`
+ * was before this function ran, it is that again after), not merely true of this repo's current
+ * config (where nothing else happens to set `lock_timeout`, so `DEFAULT` and `0` coincide today).
  *
  * WHY NARROWED. The MEDIUM availability finding this fix answers is about writers QUEUING AT
  * THE GATE pinning a pooled connection — `createDraft`'s un-rate-limited autosave path
@@ -164,11 +180,12 @@ export async function acquireRequestLock(tx: RequestLockTx, requestId: string): 
   await tx.execute(
     sql`SELECT pg_advisory_xact_lock(hashtextextended('project_request:' || ${requestId}, 0))`
   );
-  // ⚠⚠ fix round R1(a) — RESET IMMEDIATELY, so the 3s bound covers ONLY the wait for the
-  // advisory lock above and never any row lock the caller takes afterwards. `0` is Postgres's
-  // own default (disabled) — see the docblock's R1(a) section for why that is the correct value
-  // and why it restores this transaction to the pre-PR behaviour exactly.
-  await tx.execute(sql`SET LOCAL lock_timeout = 0`);
+  // ⚠⚠ fix round R1(a)/R7 — RESET IMMEDIATELY, so the 3s bound covers ONLY the wait for the
+  // advisory lock above and never any row lock the caller takes afterwards. `DEFAULT`, never the
+  // literal `0` — see the docblock's R7 section for why `0` is the wrong value (it is Postgres's
+  // compiled-in default, not necessarily this session's EFFECTIVE one) and why `DEFAULT` is what
+  // actually restores the value in effect before this function ran.
+  await tx.execute(sql`SET LOCAL lock_timeout = DEFAULT`);
 }
 
 /**
