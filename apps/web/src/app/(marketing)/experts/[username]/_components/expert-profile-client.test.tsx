@@ -489,6 +489,76 @@ describe('ExpertProfileClient — CTA handlers', () => {
     expect(mockToast).not.toHaveBeenCalled();
   });
 
+  // ⚠⚠ Sentry BALO-WEB-19 — this page is PUBLIC and every action behind the panel is
+  // `withAuth`. Before the gate, a signed-out visitor reached the panel and the presign threw
+  // `Error: Unauthorized` the moment they attached a file. Same rule as Book.
+  it('opens the auth modal instead of the ProjectRequestPanel for a signed-out visitor', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+        bookingContext={null}
+      />
+    );
+
+    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
+    if (startProject) await user.click(startProject);
+
+    expect(mockAuthModalOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+    // The panel stayed shut — no action behind it can fire.
+    expect(
+      screen.queryByRole('heading', { name: /start a project with anil pilania/i })
+    ).not.toBeInTheDocument();
+    // The click itself is still measured.
+    expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+      expert_id: 'expert-1',
+      cta: 'project',
+    });
+  });
+
+  // The gate defers the panel, it does not discard the intent: `router.refresh()` re-resolves
+  // `isLoggedIn` server-side, and the panel then opens without a second click.
+  it('opens the ProjectRequestPanel once auth resolves after a signed-out click', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn={false}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+        bookingContext={null}
+      />
+    );
+
+    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
+    if (startProject) await user.click(startProject);
+    expect(
+      screen.queryByRole('heading', { name: /start a project with anil pilania/i })
+    ).not.toBeInTheDocument();
+
+    // What `router.refresh()` produces: the same tree re-rendered with a signed-in viewer.
+    rerender(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: /start a project with anil pilania/i })
+    ).toBeInTheDocument();
+  });
+
   it('jumps to a section (and stays green despite scrollIntoView) when a nav tab is clicked', async () => {
     const user = userEvent.setup();
     render(

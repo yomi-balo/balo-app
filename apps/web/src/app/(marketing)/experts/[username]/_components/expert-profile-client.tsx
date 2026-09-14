@@ -106,6 +106,9 @@ export function ExpertProfileClient({
   // the BookingCard and the QuickStarts empty-state. The trigger + analytics stay
   // here (profile-specific); the panel itself is a Projects-owned reusable module.
   const [projectOpen, setProjectOpen] = useState(false);
+  // Set when a signed-out visitor clicks the CTA; the effect below opens the panel for real
+  // once auth lands. Mirrors `pendingBookingOpenRef`.
+  const pendingProjectOpenRef = useRef(false);
 
   // Suppress scroll-spy updates briefly while a programmatic smooth-scroll runs.
   const jumpingRef = useRef(false);
@@ -223,10 +226,31 @@ export function ExpertProfileClient({
 
   // `project` is wired (BAL-253): keep the profile-level CTA event, then open
   // the ProjectRequestPanel instead of the "Coming soon" toast.
+  //
+  // ⚠⚠ AUTH GATE — every server action behind this panel (`request-`/`confirm-project-document
+  // -upload`, `start-`/`get-project-brief-parse`, `submit-project-request`) is `withAuth` with
+  // no `allowUnonboarded`. This page is PUBLIC, so without the gate a signed-out visitor could
+  // open the panel and fill it in, and the first action — the presign, fired the moment a file
+  // is attached — threw `Error: Unauthorized` (Sentry BALO-WEB-19). Gate HERE, before the panel
+  // opens, not inside it: there is no draft yet at this point, so auth costs the visitor
+  // nothing. A gate placed after the panel opens would have to survive `router.refresh()`.
   const onStartProject = useCallback(() => {
     track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'project' });
+    if (!isLoggedIn) {
+      pendingProjectOpenRef.current = true;
+      authModal.open({ onSuccess: () => router.refresh() });
+      return;
+    }
     setProjectOpen(true);
-  }, [view.expertId]);
+  }, [view.expertId, isLoggedIn, authModal, router]);
+
+  // The signed-out visitor who just completed auth lands back here once `router.refresh()`
+  // re-resolves `isLoggedIn` server-side — then the panel opens, as they asked.
+  useEffect(() => {
+    if (!pendingProjectOpenRef.current || !isLoggedIn) return;
+    pendingProjectOpenRef.current = false;
+    setProjectOpen(true);
+  }, [isLoggedIn]);
 
   const analyticsSections = useMemo<ExpertProfileSection[]>(
     () => sections.map((s) => s.key),
