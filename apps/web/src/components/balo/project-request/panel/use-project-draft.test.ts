@@ -53,6 +53,35 @@ describe('useProjectDraft — hydration narrowing', () => {
     expect(result.current.draft.title).toBe('');
     expect(result.current.draft.timeline).toBeNull();
   });
+
+  // BAL-254 — `source` round-trip: without this an AI draft silently reverts to 'manual' on
+  // reload and the review step's AI provenance banner vanishes.
+  it('defaults source to manual when nothing is persisted', () => {
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.source).toBe('manual');
+  });
+
+  it('hydrates a persisted source of "ai"', () => {
+    seed({ source: 'ai' });
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.source).toBe('ai');
+  });
+
+  it('round-trips a persisted "ai" source through setField + reload', async () => {
+    const { result, unmount } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    act(() => result.current.setField('source', 'ai'));
+    await waitFor(() => expect(globalThis.localStorage.getItem(KEY)).toContain('"source":"ai"'));
+    unmount();
+
+    const { result: reloaded } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(reloaded.current.draft.source).toBe('ai');
+  });
+
+  it('a corrupt/unrecognised source value falls back to manual', () => {
+    seed({ source: 'not-a-real-source' });
+    const { result } = renderHook(() => useProjectDraft(EXPERT_ID, ENTRY));
+    expect(result.current.draft.source).toBe('manual');
+  });
 });
 
 describe('useProjectDraft — default routing + autosave key', () => {

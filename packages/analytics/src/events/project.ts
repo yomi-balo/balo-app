@@ -6,6 +6,7 @@
 import type {
   DeclinableRelationshipStatus,
   ProjectRequestCloseReason,
+  ProjectBriefFailureReason,
 } from '@balo/shared/project-requests';
 
 export const PROJECT_EVENTS = {
@@ -87,6 +88,12 @@ export const PROJECT_EVENTS = {
   // Fired CLIENT-side from `balo-panel.tsx` after the Server Action returns success.
   REQUEST_OWNER_ASSIGNED: 'project_request_owner_assigned',
   INTERNAL_NOTE_CREATED: 'project_internal_note_created',
+  // BAL-254 — the AI brief path. `project_` prefix like every constant in this file.
+  PROJECT_AI_GENERATE_STARTED: 'project_ai_generate_started',
+  PROJECT_AI_GENERATE_SUCCEEDED: 'project_ai_generate_succeeded',
+  PROJECT_AI_GENERATE_FAILED: 'project_ai_generate_failed',
+  PROJECT_AI_REGENERATE_CLICKED: 'project_ai_regenerate_clicked',
+  PROJECT_AI_FIELDS_EDITED: 'project_ai_fields_edited',
 } as const;
 
 /**
@@ -97,7 +104,12 @@ export const PROJECT_EVENTS = {
 export type InternalNoteEntityType = 'project_request';
 
 export type ProjectEntryMethod = 'manual' | 'ai';
-export type ProjectStep = 'start' | 'manual' | 'review' | 'done';
+// BAL-254 — WIDENED, not replaced: `'upload'` added for the AI branch's new step. Every
+// existing manual-path event/test keeps its exact `'start' | 'manual' | 'review' | 'done'`
+// meaning; `step_viewed` on the AI path additionally fires with `step: 'upload'`.
+export type ProjectStep = 'start' | 'upload' | 'manual' | 'review' | 'done';
+/** BAL-254 — which of the four AI-owned fields diverged from the last generated snapshot. */
+export type ProjectAiField = 'title' | 'description' | 'tags' | 'products';
 export type ProjectActor = 'client' | 'expert' | 'admin';
 /** Viewer lens on the request-detail page (admin is the observer archetype). */
 export type ProjectRequestLens = 'client' | 'expert' | 'admin';
@@ -304,6 +316,26 @@ export interface ProjectEventMap {
     entity_type: InternalNoteEntityType;
     entity_id: string;
   };
+  // BAL-254 — the AI brief path. ⚠ None of these carry `expert_id`: the AI path exists in both
+  // mount modes and the panel only fires `expert_id`-keyed events when expert-bound.
+  [PROJECT_EVENTS.PROJECT_AI_GENERATE_STARTED]: { document_count: number; is_regenerate: boolean };
+  [PROJECT_EVENTS.PROJECT_AI_GENERATE_SUCCEEDED]: {
+    document_count: number;
+    is_regenerate: boolean;
+    tag_count: number;
+    product_count: number;
+    unmatched_tag_count: number;
+    unmatched_product_count: number;
+    duration_ms: number;
+  };
+  [PROJECT_EVENTS.PROJECT_AI_GENERATE_FAILED]: {
+    document_count: number;
+    is_regenerate: boolean;
+    /** The closed literal set (@balo/shared/project-requests) — never a raw model/vendor message. */
+    failure_reason: ProjectBriefFailureReason;
+  };
+  [PROJECT_EVENTS.PROJECT_AI_REGENERATE_CLICKED]: { had_edits: boolean };
+  [PROJECT_EVENTS.PROJECT_AI_FIELDS_EDITED]: { field: ProjectAiField };
 }
 
 /**

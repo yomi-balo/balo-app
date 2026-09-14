@@ -21,6 +21,21 @@ interface ReviewSummaryProps {
   productNameMap: Record<string, string>;
   /** Jump back to the manual step to edit. */
   onEdit: () => void;
+  /**
+   * BAL-254 — the AI provenance banner, rendered above the routing block when
+   * `draft.source === 'ai'`. Absent renders byte-identical to the manual path.
+   */
+  aiBanner?: React.ReactNode;
+  /** BAL-254 — display-only concept labels the parse could not map to a live taxonomy id. */
+  unmatchedTagLabels?: string[];
+  unmatchedProductLabels?: string[];
+  /** BAL-254 — the Regenerate sub-state: swaps each block's content for a skeleton pulse. */
+  skeleton?: boolean;
+}
+
+/** BAL-254 — the skeleton-pulse treatment for the Regenerate sub-state (`layouts-states.md`). */
+function SkeletonBar({ className }: Readonly<{ className: string }>): React.JSX.Element {
+  return <div className={`bg-muted animate-pulse rounded ${className}`} aria-hidden="true" />;
 }
 
 interface SummaryBlockProps {
@@ -84,6 +99,10 @@ export function ReviewSummary({
   tagNameMap,
   productNameMap,
   onEdit,
+  aiBanner,
+  unmatchedTagLabels,
+  unmatchedProductLabels,
+  skeleton = false,
 }: Readonly<ReviewSummaryProps>): React.JSX.Element {
   // Direct routing only resolves to a named expert when one is bound; a
   // context-free Direct selection still renders neutral "an expert" copy.
@@ -127,6 +146,7 @@ export function ReviewSummary({
 
   return (
     <div className="space-y-3">
+      {aiBanner}
       {/* Routing block (emphasised) */}
       <div className="border-primary/30 bg-primary/[0.04] flex items-center gap-3 rounded-xl border p-4">
         {routingMedia}
@@ -143,19 +163,57 @@ export function ReviewSummary({
       </div>
 
       <SummaryBlock label="Project title" onEdit={onEdit}>
-        <p className="text-foreground text-sm">{draft.title.trim() || 'Untitled'}</p>
+        {skeleton ? (
+          <SkeletonBar className="h-5 w-3/4" />
+        ) : (
+          <p className="text-foreground text-sm">{draft.title.trim() || 'Untitled'}</p>
+        )}
       </SummaryBlock>
 
       <SummaryBlock label="Description" onEdit={onEdit}>
-        <RichTextViewer value={draft.descriptionHtml} />
+        {skeleton ? (
+          <div className="space-y-2">
+            <SkeletonBar className="h-3.5 w-full" />
+            <SkeletonBar className="h-3.5 w-full" />
+            <SkeletonBar className="h-3.5 w-2/3" />
+          </div>
+        ) : (
+          <RichTextViewer value={draft.descriptionHtml} />
+        )}
       </SummaryBlock>
 
       <SummaryBlock label="Project type" onEdit={onEdit}>
-        <ReadOnlyChips ids={draft.tagIds} nameMap={tagNameMap} />
+        {skeleton ? (
+          <div className="flex flex-wrap gap-2">
+            <SkeletonBar className="h-6 w-16 rounded-full" />
+            <SkeletonBar className="h-6 w-16 rounded-full" />
+          </div>
+        ) : (
+          <ReadOnlyChips ids={draft.tagIds} nameMap={tagNameMap} />
+        )}
+        {!skeleton && unmatchedTagLabels !== undefined && unmatchedTagLabels.length > 0 && (
+          <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
+            Also mentioned but not in our list: {unmatchedTagLabels.join(', ')}. Add these in the
+            brief text if they matter, or pick the closest match above.
+          </p>
+        )}
       </SummaryBlock>
 
       <SummaryBlock label="Salesforce products" onEdit={onEdit}>
-        <ReadOnlyChips ids={draft.productIds} nameMap={productNameMap} />
+        {skeleton ? (
+          <div className="flex flex-wrap gap-2">
+            <SkeletonBar className="h-6 w-16 rounded-full" />
+            <SkeletonBar className="h-6 w-16 rounded-full" />
+          </div>
+        ) : (
+          <ReadOnlyChips ids={draft.productIds} nameMap={productNameMap} />
+        )}
+        {!skeleton && unmatchedProductLabels !== undefined && unmatchedProductLabels.length > 0 && (
+          <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
+            Also mentioned but not in our list: {unmatchedProductLabels.join(', ')}. Add these in
+            the brief text if they matter, or pick the closest match above.
+          </p>
+        )}
       </SummaryBlock>
 
       <SummaryBlock label="Budget & timeline" onEdit={onEdit}>

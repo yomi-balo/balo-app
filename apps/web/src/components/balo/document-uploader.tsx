@@ -51,7 +51,17 @@ type FileStatus = 'uploading' | 'success' | 'failed';
 interface UploadRow {
   /** Stable client id for the row (also the React key). */
   id: string;
-  file: File;
+  /**
+   * The source `File`, or `null` for a row SEEDED from an already-confirmed ref (BAL-254 W1).
+   * A seeded row has nothing local to re-upload, so it can never enter `uploading`/`failed` and
+   * therefore never offers Retry — which is why every read of the display metadata below goes
+   * through the row's own fields rather than through `file`.
+   */
+  file: File | null;
+  /** Display metadata, carried on the row so a seeded row renders identically to an uploaded one. */
+  fileName: string;
+  sizeBytes: number;
+  contentType: string;
   status: FileStatus;
   progress: number;
   /** Confirmed R2 ref — present only when `status === 'success'`. */
@@ -60,6 +70,19 @@ interface UploadRow {
 }
 
 interface DocumentUploaderProps {
+  /**
+   * ⚠⚠ BAL-254 W1 — THE ROWS THIS UPLOADER STARTS WITH. Read ONCE, on mount, into the
+   * component's own row state; it is not a controlled value and later changes are ignored.
+   *
+   * Why it exists: this component owns its rows, and `onDocumentsChange` REPLACES the caller's
+   * document list wholesale. Every caller that unmounts and remounts it while a draft already
+   * holds documents — the review step's "Change source documents" link, and review → Edit →
+   * the manual step's own uploader — therefore landed on an EMPTY dropzone, and the first file
+   * added there emitted a one-element list that silently dropped the originals from both the
+   * parse input and the request's attachments. Seeding closes that: the remount shows what the
+   * draft holds, and adding a file appends to it.
+   */
+  initialDocuments?: readonly ProjectDocumentRef[];
   /** Bubbles the current set of CONFIRMED document refs (for submit + draft). */
   onDocumentsChange: (docs: ProjectDocumentRef[]) => void;
   /** Bubbles whether any upload is still in flight (gates submit). */
@@ -71,6 +94,24 @@ function isImageType(type: string): boolean {
 }
 
 /**
+ * Already-confirmed refs → already-`success` rows. ⚠ NOT published back to the parent: the caller
+ * is where these came from, and re-emitting them on mount would write the same list back through
+ * `onDocumentsChange` for no reason.
+ */
+function seedRows(documents: readonly ProjectDocumentRef[]): UploadRow[] {
+  return documents.map((doc) => ({
+    id: crypto.randomUUID(),
+    file: null,
+    fileName: doc.fileName,
+    sizeBytes: doc.sizeBytes,
+    contentType: doc.contentType,
+    status: 'success' as const,
+    progress: 100,
+    ref: doc,
+  }));
+}
+
+/**
  * Multi-file project-document uploader. Generalises the avatar `photo-upload`
  * presign→PUT→confirm flow to many files with per-file state + real per-file
  * progress (XHR `upload.onprogress`). Client guards (type/size/count) run BEFORE
@@ -79,11 +120,15 @@ function isImageType(type: string): boolean {
  * persisted.
  */
 export function DocumentUploader({
+  initialDocuments,
   onDocumentsChange,
   onUploadingChange,
 }: Readonly<DocumentUploaderProps>): React.JSX.Element {
   const reduce = useReducedMotion();
-  const [rows, setRows] = useState<UploadRow[]>([]);
+  // ⚠ LAZY INITIALISER — `initialDocuments` is read exactly once, on mount (see the prop's
+  // docblock). A `useEffect` sync would fight the parent, because every publish from here
+  // changes the very array that would feed back in.
+  const [rows, setRows] = useState<UploadRow[]>(() => seedRows(initialDocuments ?? []));
   const [rejections, setRejections] = useState<FileRejection[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -196,9 +241,14 @@ export function DocumentUploader({
         if (rejected.length > 0) setRejections((r) => [...r, ...rejected]);
         if (accepted.length === 0) return prev;
 
-        const newRows: UploadRow[] = accepted.map((file) => ({
+        // ⚠ `& { file: File }` — every row created HERE has a local `File` (only a SEEDED row
+        // does not), which is what lets the `runUpload` loop below stay assertion-free.
+        const newRows: (UploadRow & { file: File })[] = accepted.map((file) => ({
           id: crypto.randomUUID(),
           file,
+          fileName: file.name,
+          sizeBytes: file.size,
+          contentType: file.type,
           status: 'uploading',
           progress: 0,
           ref: null,
@@ -254,7 +304,9 @@ export function DocumentUploader({
   const handleRetry = useCallback(
     (id: string) => {
       const row = rows.find((r) => r.id === id);
-      if (row) runUpload(id, row.file).catch(() => {});
+      // A seeded row carries no `File` — it is already confirmed and can never be `failed`, so
+      // Retry is not rendered for it. The guard keeps that structural fact type-safe.
+      if (row?.file) runUpload(id, row.file).catch(() => {});
     },
     [rows, runUpload]
   );
@@ -331,7 +383,7 @@ export function DocumentUploader({
       {/* File rows */}
       <AnimatePresence initial={false}>
         {rows.map((row) => {
-          const Glyph = isImageType(row.file.type) ? ImageIcon : FileText;
+          const Glyph = isImageType(row.contentType) ? ImageIcon : FileText;
           const failed = row.status === 'failed';
           return (
             <motion.div
@@ -347,9 +399,9 @@ export function DocumentUploader({
             >
               <Glyph className="text-muted-foreground h-5 w-5 shrink-0" aria-hidden="true" />
               <div className="min-w-0 flex-1">
-                <p className="text-foreground truncate text-sm font-medium">{row.file.name}</p>
+                <p className="text-foreground truncate text-sm font-medium">{row.fileName}</p>
                 <p className="text-muted-foreground font-mono text-xs tabular-nums">
-                  {formatBytes(row.file.size)}
+                  {formatBytes(row.sizeBytes)}
                 </p>
                 {row.status === 'uploading' && (
                   <div
@@ -358,7 +410,7 @@ export function DocumentUploader({
                     aria-valuenow={row.progress}
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-label={`Uploading ${row.file.name}`}
+                    aria-label={`Uploading ${row.fileName}`}
                   >
                     <div
                       className="bg-primary h-full transition-[width] duration-150"
@@ -381,11 +433,18 @@ export function DocumentUploader({
                     <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" /> Attached
                   </span>
                 )}
+                {/*
+                  ⚠ 44px MINIMUM HIT AREA on both controls (BAL-254 fix round F13). The AI brief
+                  path is the first touch-first surface in the product — people attach photos of
+                  a whiteboard from a phone — and Retry/Remove sit millimetres apart on a row.
+                  The GLYPH stays at h-3.5; only the tappable box grows, so the density is
+                  unchanged while the target clears the WCAG 2.5.5 / platform 44px guidance.
+                */}
                 {failed && (
                   <button
                     type="button"
                     onClick={() => handleRetry(row.id)}
-                    className="text-destructive hover:bg-destructive/10 focus-visible:ring-ring inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
+                    className="text-destructive hover:bg-destructive/10 focus-visible:ring-ring inline-flex min-h-11 items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:outline-none"
                   >
                     <RotateCw className="h-3.5 w-3.5" aria-hidden="true" /> Retry
                   </button>
@@ -393,8 +452,8 @@ export function DocumentUploader({
                 <button
                   type="button"
                   onClick={() => handleRemove(row.id)}
-                  aria-label={`Remove ${row.file.name}`}
-                  className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                  aria-label={`Remove ${row.fileName}`}
+                  className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-11 w-11 items-center justify-center rounded-md transition-colors focus-visible:ring-2 focus-visible:outline-none"
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>

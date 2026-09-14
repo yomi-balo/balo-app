@@ -68,3 +68,7 @@ export * from './internal-notes';
 // file, and POLYMORPHIC (`entity_type` + an FK-less `entity_id`), so it belongs to no single
 // domain file — the `internal-notes.ts` / `meeting-contexts.ts` precedent.
 export * from './admin-alerts';
+// BAL-254 / ADR-1022 amendment — the AI-assisted brief parse's async handoff row. Its own file:
+// it belongs to the project-request DOMAIN but not to `project-requests.ts`, because a parse is
+// a pre-request work item that may never become a request at all.
+export * from './project-brief-parses';

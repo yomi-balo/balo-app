@@ -14,6 +14,7 @@ import { meetingsRoutes } from './routes/meetings/index.js';
 import { dailyRoutes } from './routes/daily/index.js';
 import { muxRoutes } from './routes/mux/index.js';
 import { adminRoutes } from './routes/admin/index.js';
+import { projectBriefRoutes } from './routes/project-briefs/index.js';
 
 export async function buildApp(opts?: { logger?: boolean }) {
   // `trustProxy: 1` trusts exactly one proxy hop (the Railway edge), so
@@ -81,6 +82,8 @@ export async function buildApp(opts?: { logger?: boolean }) {
   // BAL-550 — the admin re-drive route (REDRIVE_JOB, super_admin only). Its own plugin: the
   // money-block admin route predates `routes/admin/` and is deliberately left where it is.
   await fastify.register(adminRoutes);
+  // BAL-254 — the AI-assisted project-brief parse enqueue route.
+  await fastify.register(projectBriefRoutes);
 
   // Dev-only seed routes (BAL-239). Guarded dynamic import so the seed service
   // and @faker-js/faker never load in production.

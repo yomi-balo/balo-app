@@ -167,4 +167,37 @@ describe('createLlmClient', () => {
     process.env.NODE_ENV = 'production';
     expect(() => createLlmClient()).toThrow(/ANTHROPIC_API_KEY is required in production/);
   });
+
+  // BAL-254 (Ruling D) — added, not modified: extraction now rejects on truncation too.
+  it('extraction REJECTS when the structured output is truncated (finishReason=length)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    vi.mocked(generateObject).mockResolvedValue({
+      object: { items: [] },
+      finishReason: 'length',
+      response: { modelId: 'claude-sonnet-5' },
+    } as never);
+
+    const client = createLlmClient();
+    await expect(
+      client.extractActionItems({ cleanedText: 'CLEANED', summary: 'S' })
+    ).rejects.toThrow(LlmOutputTruncatedError);
+  });
+
+  // BAL-254 — added, not modified: proves the transcript path is the TEXT-ONLY branch of the
+  // shared seam's generateObject (never the multimodal `messages` branch).
+  it('extraction calls generateObject WITHOUT `messages` (text-only branch, unchanged)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    vi.mocked(generateObject).mockResolvedValue({
+      object: { items: [] },
+      finishReason: 'stop',
+      response: { modelId: 'claude-sonnet-5' },
+    } as never);
+
+    const client = createLlmClient();
+    await client.extractActionItems({ cleanedText: 'CLEANED', summary: 'S' });
+
+    const call = vi.mocked(generateObject).mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call).not.toHaveProperty('messages');
+    expect(call.prompt).toEqual(expect.stringContaining('CLEANED'));
+  });
 });

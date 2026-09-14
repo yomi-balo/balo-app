@@ -8,13 +8,9 @@ import {
   deleteProjectDocumentFromR2,
   ALLOWED_CONTENT_TYPES,
   MAX_DOCUMENT_BYTES,
-  PROJECT_DOCUMENT_PREFIX,
 } from '@/lib/storage/project-document';
+import { isSessionOwnedProjectDocumentKey } from '@balo/shared/project-requests';
 import { log } from '@/lib/logging';
-
-// project-documents/{companyId uuid}/{userId uuid}/{uuid}
-const PROJECT_DOCUMENT_KEY_PATTERN =
-  /^project-documents\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/;
 
 export interface ConfirmProjectDocumentUploadInput {
   key: string;
@@ -48,12 +44,14 @@ export const confirmProjectDocumentUploadAction = withAuth(
     input: ConfirmProjectDocumentUploadInput
   ): Promise<ConfirmProjectDocumentUploadResult> => {
     try {
-      // 1. Validate key shape + scope (company/user from session, never client).
-      if (!PROJECT_DOCUMENT_KEY_PATTERN.test(input.key)) {
-        return { success: false, error: 'Invalid upload key.' };
-      }
-      const expectedPrefix = `${PROJECT_DOCUMENT_PREFIX}${session.user.companyId}/${session.user.id}/`;
-      if (!input.key.startsWith(expectedPrefix)) {
+      // 1. Validate key shape + scope (company/user from session, never client) — the Ruling A
+      //    gate, ONE definition shared with `startProjectBriefParseAction`.
+      if (
+        !isSessionOwnedProjectDocumentKey(input.key, {
+          companyId: session.user.companyId,
+          userId: session.user.id,
+        })
+      ) {
         return { success: false, error: 'Invalid upload key.' };
       }
 

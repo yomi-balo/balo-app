@@ -142,6 +142,97 @@ describe('DocumentUploader', () => {
     await waitFor(() => expect(screen.getByText('Attached')).toBeInTheDocument());
   });
 
+  // ── BAL-254 W1 — seeding from already-confirmed refs ─────────────────────────────────────
+  describe('initialDocuments (BAL-254 W1)', () => {
+    const SEEDED = [
+      {
+        r2Key: 'project-documents/c/u/k1',
+        fileName: 'rfp.pdf',
+        contentType: 'application/pdf' as const,
+        sizeBytes: 1000,
+      },
+      {
+        r2Key: 'project-documents/c/u/k2',
+        fileName: 'notes.png',
+        contentType: 'image/png' as const,
+        sizeBytes: 2000,
+      },
+      {
+        r2Key: 'project-documents/c/u/k3',
+        fileName: 'scope.pdf',
+        contentType: 'application/pdf' as const,
+        sizeBytes: 3000,
+      },
+    ];
+
+    /**
+     * ⚠⚠ THE BUG THIS CLOSES. The component owns its rows and `onDocumentsChange` REPLACES the
+     * caller's list, so every remount over a draft that already held documents (review →
+     * "Change source documents", review → Edit → manual) landed on an EMPTY dropzone and the
+     * first file added there emitted a ONE-element list — silently dropping the originals from
+     * both the parse input and the request's attachments.
+     */
+    it('⚠ renders three seeded rows as already-attached, and a fourth file yields FOUR refs, not one', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      const { container } = render(
+        <DocumentUploader initialDocuments={SEEDED} onDocumentsChange={onChange} />
+      );
+
+      // The three rows are on screen, already confirmed (no re-upload, no network call).
+      expect(screen.getByText('rfp.pdf')).toBeInTheDocument();
+      expect(screen.getByText('notes.png')).toBeInTheDocument();
+      expect(screen.getByText('scope.pdf')).toBeInTheDocument();
+      expect(screen.getAllByText('Attached')).toHaveLength(3);
+      expect(mockRequest).not.toHaveBeenCalled();
+      expect(mockConfirm).not.toHaveBeenCalled();
+      // Seeding does NOT publish — the caller is where these came from.
+      expect(onChange).not.toHaveBeenCalled();
+
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await user.upload(input, makeFile('spec.pdf', 'application/pdf', 1000));
+
+      await waitFor(() => expect(screen.getAllByText('Attached')).toHaveLength(4));
+      expect(onChange).toHaveBeenLastCalledWith([
+        expect.objectContaining({ r2Key: 'project-documents/c/u/k1' }),
+        expect.objectContaining({ r2Key: 'project-documents/c/u/k2' }),
+        expect.objectContaining({ r2Key: 'project-documents/c/u/k3' }),
+        expect.objectContaining({ r2Key: 'project-documents/c/u/k' }),
+      ]);
+    });
+
+    it('Remove still works on a seeded row (and best-effort deletes the R2 object)', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(<DocumentUploader initialDocuments={SEEDED} onDocumentsChange={onChange} />);
+
+      await user.click(screen.getByRole('button', { name: /remove notes\.png/i }));
+
+      expect(mockRemove).toHaveBeenCalledWith({ key: 'project-documents/c/u/k2' });
+      await waitFor(() =>
+        expect(onChange).toHaveBeenLastCalledWith([
+          expect.objectContaining({ r2Key: 'project-documents/c/u/k1' }),
+          expect.objectContaining({ r2Key: 'project-documents/c/u/k3' }),
+        ])
+      );
+      // ⚠ No DOM-absence assertion — `AnimatePresence`'s exit transition keeps the node mounted
+      // in jsdom. The published ref list is the contract, and it is what the panel persists.
+    });
+
+    it('seeded rows count against the 4-file cap', () => {
+      const fourth = {
+        r2Key: 'project-documents/c/u/k4',
+        fileName: 'extra.pdf',
+        contentType: 'application/pdf' as const,
+        sizeBytes: 4000,
+      };
+      render(
+        <DocumentUploader initialDocuments={[...SEEDED, fourth]} onDocumentsChange={vi.fn()} />
+      );
+      expect(screen.getByText('4 of 4 attached')).toBeInTheDocument();
+    });
+  });
+
   it('removes a confirmed file (best-effort R2 delete) and updates the parent', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

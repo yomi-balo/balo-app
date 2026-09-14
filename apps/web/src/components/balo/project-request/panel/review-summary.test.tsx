@@ -27,6 +27,7 @@ const DRAFT: ProjectDraft = {
   budgetMinCents: 4500000,
   budgetMaxCents: 7000000,
   timeline: 'Target go-live: end of Q3',
+  source: 'manual',
 };
 
 const BASE = {

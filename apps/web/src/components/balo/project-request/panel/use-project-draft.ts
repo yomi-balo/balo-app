@@ -21,6 +21,15 @@ export interface ProjectDraft {
   budgetMaxCents: number | null;
   /** Optional free-text timeline. Null = not specified. */
   timeline: string | null;
+  /**
+   * BAL-254 — which entry path produced this draft; threaded into
+   * `submitProjectRequestAction`'s payload (replacing the old hardcoded `'manual'` literal at
+   * submit) and drives the `review` step's AI provenance banner. Persisted through the same
+   * localStorage autosave as every other field, so a page refresh mid-AI-flow doesn't silently
+   * forget it came from AI. ⚠ The AI-owned unmatched-tag/product labels are NOT part of this
+   * draft — they live in `ProjectRequestPanel` component state only (never persisted).
+   */
+  source: 'manual' | 'ai';
 }
 
 /** Draft shape minus its routing — routing is computed from the bound expert. */
@@ -35,6 +44,7 @@ const EMPTY_DRAFT_WITHOUT_ROUTING: DraftWithoutRouting = {
   budgetMinCents: null,
   budgetMaxCents: null,
   timeline: null,
+  source: 'manual',
 };
 
 const DEBOUNCE_MS = 400;
@@ -78,6 +88,14 @@ function readStringArray(value: unknown): string[] {
 /** Narrow an unknown to a non-negative integer, else null. */
 function readNullableCents(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Narrow a persisted `source` value. BAL-254 — without this an AI-generated draft silently
+ * reverts to `'manual'` on reload and the `review` step's AI provenance banner vanishes.
+ */
+function readSource(value: unknown): 'manual' | 'ai' {
+  return value === 'ai' ? 'ai' : 'manual';
 }
 
 /** Narrow an unknown to a non-empty trimmed string, else null. */
@@ -138,7 +156,7 @@ function readDraft(
   defaultRouting: ProjectRouting
 ): ProjectDraft {
   const emptyDraft: ProjectDraft = { routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING };
-  if (typeof globalThis.window === 'undefined') return emptyDraft;
+  if (globalThis.window === undefined) return emptyDraft;
   try {
     const raw = globalThis.localStorage.getItem(draftKey(expertProfileId, entryPoint));
     if (raw === null) return emptyDraft;
@@ -155,6 +173,7 @@ function readDraft(
       budgetMinCents: readNullableCents(record.budgetMinCents),
       budgetMaxCents: readNullableCents(record.budgetMaxCents),
       timeline: readNullableTimeline(record.timeline),
+      source: readSource(record.source),
     };
   } catch {
     // Corrupt or inaccessible storage — start fresh.
@@ -198,7 +217,7 @@ export function useProjectDraft(
       writeTimer.current = null;
     }
     setDraft({ routing: defaultRouting, ...EMPTY_DRAFT_WITHOUT_ROUTING });
-    if (typeof globalThis.window === 'undefined') return;
+    if (globalThis.window === undefined) return;
     try {
       globalThis.localStorage.removeItem(draftKey(expertProfileId, entryPoint));
     } catch {
@@ -209,7 +228,7 @@ export function useProjectDraft(
   // Debounced persist on change. Skipped immediately after a clear so we don't
   // re-write an empty draft over the removed key.
   useEffect(() => {
-    if (typeof globalThis.window === 'undefined') return;
+    if (globalThis.window === undefined) return;
     if (clearedRef.current) return;
     if (writeTimer.current) clearTimeout(writeTimer.current);
     writeTimer.current = setTimeout(() => {

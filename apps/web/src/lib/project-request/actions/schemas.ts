@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  MAX_BRIEF_DESCRIPTION_HTML_LENGTH,
+  MAX_PARSE_DOCUMENT_BYTES,
+} from '@balo/shared/project-requests';
 
 /**
  * Canonical project-request contract.
@@ -23,8 +27,12 @@ export const PROJECT_DOCUMENT_CONTENT_TYPES = [
   'image/webp',
 ] as const;
 
-/** Max document size in bytes (mirrors `MAX_DOCUMENT_BYTES` in storage). */
-export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+/**
+ * Max document size in bytes. ⚠ RE-EXPORTED, NOT RESTATED (BAL-254 W3) — the worker enforces
+ * the same cap against R2's own `ContentLength`, and `apps/api` cannot import from `apps/web`,
+ * so the number lives in `@balo/shared/project-requests`.
+ */
+export const MAX_DOCUMENT_BYTES = MAX_PARSE_DOCUMENT_BYTES;
 
 /** Max number of documents per request. */
 export const MAX_DOCUMENTS = 4;
@@ -44,7 +52,11 @@ export const MAX_TIMELINE_LENGTH = 120;
 const baseProjectRequestFields = {
   title: z.string().trim().min(3, 'Give your project a title').max(120),
   // Raw HTML from the editor. Bounded generously; sanitised server-side before persist.
-  description: z.string().trim().min(1, 'Add a few words about what you need').max(20000),
+  description: z
+    .string()
+    .trim()
+    .min(1, 'Add a few words about what you need')
+    .max(MAX_BRIEF_DESCRIPTION_HTML_LENGTH),
   tagIds: z.array(z.string().uuid()).max(19).default([]),
   productIds: z.array(z.string().uuid()).max(50).default([]),
   documents: z.array(documentRefSchema).max(MAX_DOCUMENTS).default([]),
