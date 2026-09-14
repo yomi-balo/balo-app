@@ -1001,6 +1001,61 @@ describe('BAL-562 — bookkeeping writes must not count as activity (savedAt is 
     expect(stampAuthGate()).toBe(false);
   });
 
+  /**
+   * `performSave`'s anonymous branch writes unconditionally, with no dirty check, so
+   * `goNext`/`skipStep` reach it even when nothing was typed. Narrower than the reload
+   * path — it takes engaging with the form — but the same shape: click Continue, then
+   * Log in, and the idle check passes without any work having happened.
+   *
+   * This also depends on the restore seeding `lastSavedByStepRef` from the MERGED
+   * value: seed it from the raw envelope slice and every restored step looks dirty
+   * forever, so the clean-Continue path never recognises itself as clean.
+   */
+  it('a Continue that changes nothing does not count as work either', async () => {
+    seedAbandonedEnvelope();
+    renderHarness(null, null);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'next' }));
+    });
+
+    const stored = readAnonymousDraft();
+    expect(stored?.currentStep).toBe(5); // the navigation happened (restored at 4)
+    expect(stored?.savedAt).toBe(ABANDONED_AT); // but it was not activity
+    expect(stampAuthGate()).toBe(false);
+  });
+
+  /**
+   * The Continue above lands on `certifications` (STEP_CONFIG[4]), which the envelope
+   * never carried — so its baseline came from the clean mount seed and the test passes
+   * however the RESTORED steps were seeded. This one leaves from step 0, `profile`,
+   * which the envelope did carry, so it exercises the baseline seeding directly: seed
+   * from the raw slice instead of the merged value and the step looks dirty forever
+   * (the merge adds `languages`, `industryIds`, the three booleans), the clean-Continue
+   * check never matches, and the clock is refreshed by a navigation that did no work.
+   */
+  it('a clean Continue OFF A RESTORED STEP is still not work — the baseline must match live state', async () => {
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: ABANDONED_AT,
+      currentStep: 0,
+      maxReachedStep: 5,
+      steps: { profile: { yearStartedSalesforce: 2016 } },
+    });
+
+    renderHarness(null, null);
+    expect(screen.getByTestId('current').textContent).toBe('0');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'next' }));
+    });
+
+    const stored = readAnonymousDraft();
+    expect(stored?.currentStep).toBe(1); // the navigation happened
+    expect(stored?.savedAt).toBe(ABANDONED_AT); // and it was not activity
+    expect(stampAuthGate()).toBe(false);
+  });
+
   it('but real work DOES refresh the clock, so an active applicant is never locked out of their own draft', async () => {
     seedAbandonedEnvelope();
     renderHarness(null, null);

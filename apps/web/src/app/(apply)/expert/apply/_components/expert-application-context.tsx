@@ -610,12 +610,12 @@ export function ExpertApplicationProvider({
     // hours and survive deploys, so a slice written by an older build is a real case,
     // not a hypothetical.
     const setters: Partial<Record<StepKey, (d: Record<string, unknown>) => void>> = {
-      agency: (d) => setAgencyData((prev) => mergeRestoredSlice(prev, d)),
-      profile: (d) => setProfileData((prev) => mergeRestoredSlice(prev, d)),
-      products: (d) => setProductsData((prev) => mergeRestoredSlice(prev, d)),
-      assessment: (d) => setAssessmentData((prev) => mergeRestoredSlice(prev, d)),
-      certifications: (d) => setCertificationsData((prev) => mergeRestoredSlice(prev, d)),
-      'work-history': (d) => setWorkHistoryData((prev) => mergeRestoredSlice(prev, d)),
+      agency: (d) => setAgencyData(d as Partial<AgencyStepData>),
+      profile: (d) => setProfileData(d as Partial<ProfileStepData>),
+      products: (d) => setProductsData(d as Partial<ProductsStepData>),
+      assessment: (d) => setAssessmentData(d as Partial<AssessmentStepData>),
+      certifications: (d) => setCertificationsData(d as Partial<CertificationsStepData>),
+      'work-history': (d) => setWorkHistoryData(d as Partial<WorkHistoryStepData>),
     };
 
     for (const step of STEP_CONFIG) {
@@ -628,12 +628,21 @@ export function ExpertApplicationProvider({
       // that is not a plain object cannot be merged and is dropped rather than spread.
       if (typeof restored !== 'object' || restored === null || Array.isArray(restored)) continue;
 
-      setter(restored as Record<string, unknown>);
-      // Re-seed this step's baseline from the SERIALIZED envelope value rather than
-      // from live state, which has not re-rendered yet. The eager seed above ran
-      // against the empty pre-restore data, so without this every restored step would
-      // look dirty and re-save itself on first departure (BAL-342's defect, inverted).
-      lastSavedByStepRef.current[step.key] = JSON.stringify(restored);
+      const current = getStepData(step.key);
+      const merged = mergeRestoredSlice(
+        (typeof current === 'object' && current !== null ? current : {}) as Record<string, unknown>,
+        restored as Record<string, unknown>
+      );
+      setter(merged);
+      // Seed this step's baseline from the MERGED value — the exact object the wizard
+      // will now report for this step. The eager seed above ran against empty
+      // pre-restore data, so without a re-seed every restored step looks dirty and
+      // re-saves on first departure (BAL-342's defect, inverted). Seeding from the raw
+      // `restored` slice instead is just as wrong in the other direction: the merge adds
+      // the initializer's keys, so the baseline would never match live state and the step
+      // would look dirty FOREVER — which, since `savedAt` became the kiosk activity
+      // signal, would refresh the clock on a navigation that did no work.
+      lastSavedByStepRef.current[step.key] = JSON.stringify(merged);
     }
 
     const restoredStatuses = envelope.stepStatuses;
@@ -673,10 +682,17 @@ export function ExpertApplicationProvider({
   // has been committed.
   //
   // Known and accepted: a forward navigation writes TWICE — once when `currentStep`
-  // changes, once when the `maxReachedStep` tracker below catches up. Both writes are
-  // local, and byte-identical now that `savedAt` is carried forward, so the second is a
-  // no-op in effect. Deduping would cost a read-and-compare on every transition to save
-  // one `sessionStorage.setItem`.
+  // changes, once when the `maxReachedStep` tracker catches up. The two writes are NOT
+  // byte-identical, and an earlier version of this comment wrongly claimed they were:
+  // that tracker is declared ABOVE this effect, so its `setMaxReachedStep` is still
+  // queued when this effect runs, and write #1 therefore carries the PRE-advance
+  // `maxReachedStep` (0 on a 0→1 navigation) while write #2 carries the raised one.
+  //
+  // Accepted anyway: nothing reads storage between two effects in the same commit
+  // cycle, so the transient is unobservable in-process, and even if the tab died
+  // between them the restore above takes `Math.max(maxReachedStep, currentStep)` and
+  // heals it. Deduping would cost a read-and-compare on every transition to save one
+  // `sessionStorage.setItem`.
   const hasSkippedInitialPositionWriteRef = useRef(false);
   useEffect(() => {
     if (!isAnonymous) return;
@@ -755,8 +771,22 @@ export function ExpertApplicationProvider({
       // would just 401. sessionStorage is the persistence layer for this path; a
       // synchronous write here keeps goNext/skipStep/goPrevious safe to call
       // unconditionally without branching at every call site.
-      writeAnonymousDraft(buildAnonymousEnvelope());
-      lastSavedByStepRef.current[stepKey] = JSON.stringify(data);
+      //
+      // BAL-562 — this branch writes UNCONDITIONALLY, with no dirty check, so `goNext`
+      // and `skipStep` reach it even when the visitor changed nothing. `savedAt` means
+      // "last worked on" and is the activity signal `stampAuthGate` reads, so a clean
+      // Continue must not refresh it: otherwise a second person at this tab could click
+      // Continue, then Log in, and pass the idle check without ever doing any work.
+      // Narrower than the reload path — it takes engaging with the form — but the same
+      // shape. `saveIfDirty` already gates this way before calling; `goNext`/`skipStep`
+      // call straight through, so the comparison belongs here too.
+      const serialized = JSON.stringify(data);
+      const unchanged = serialized === lastSavedByStepRef.current[stepKey];
+      const stored = unchanged ? readAnonymousDraft() : null;
+      const envelope = buildAnonymousEnvelope();
+      // `stored` is null on the first save of a brand-new envelope, which SHOULD stamp.
+      writeAnonymousDraft(stored ? { ...envelope, savedAt: stored.savedAt } : envelope);
+      lastSavedByStepRef.current[stepKey] = serialized;
       return true;
     }
 
