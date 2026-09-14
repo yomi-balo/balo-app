@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useState } from 'react';
 import { render, screen, waitFor, fireEvent } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
@@ -21,6 +22,7 @@ vi.mock('@/lib/project-request/actions/remove-project-document', () => ({
 }));
 
 import { DocumentUploader } from './document-uploader';
+import type { ProjectDocumentRef } from '@/lib/project-request/actions/schemas';
 
 const mockToast = vi.mocked(toast);
 
@@ -246,5 +248,54 @@ describe('DocumentUploader', () => {
 
     expect(mockRemove).toHaveBeenCalledWith({ key: 'project-documents/c/u/k' });
     await waitFor(() => expect(onChange).toHaveBeenLastCalledWith([]));
+  });
+
+  /**
+   * ⚠⚠ REGRESSION PIN — `publish` must run in the event/async callback, NEVER inside a
+   * `setRows` updater. An updater runs during the RENDER phase, so publishing from there
+   * reached the parent's setState mid-render and React logged "Cannot update a component
+   * (`Parent`) while rendering a different component (`DocumentUploader`)".
+   *
+   * The parent here is the real shape that broke it: `onDocumentsChange` writes parent state
+   * (ProjectRequestPanel's `setField('documents', …)`). Asserting on React's own console.error
+   * is what pins it — every assertion on the bubbled refs alone stayed green THROUGH the bug.
+   */
+  describe('parent updates never happen during render', () => {
+    function Parent(): React.JSX.Element {
+      const [docs, setDocs] = useState<ProjectDocumentRef[]>([]);
+      const [uploading, setUploading] = useState(false);
+      return (
+        <div>
+          <span data-testid="doc-count">{docs.length}</span>
+          <span data-testid="uploading">{String(uploading)}</span>
+          <DocumentUploader onDocumentsChange={setDocs} onUploadingChange={setUploading} />
+        </div>
+      );
+    }
+
+    it('does not update the parent while rendering (attach → upload → remove)', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const user = userEvent.setup();
+      const { container } = render(<Parent />);
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+
+      // Attach — this is the exact call path that threw: handleFiles → publish → parent setState.
+      await user.upload(input, makeFile('spec.pdf', 'application/pdf', 1000));
+      await waitFor(() => expect(screen.getByText('Attached')).toBeInTheDocument());
+      expect(screen.getByTestId('doc-count')).toHaveTextContent('1');
+      expect(screen.getByTestId('uploading')).toHaveTextContent('false');
+
+      // Remove — the other `commitRows` caller.
+      await user.click(screen.getByRole('button', { name: /remove spec\.pdf/i }));
+      await waitFor(() => expect(screen.getByTestId('doc-count')).toHaveTextContent('0'));
+
+      const setStateInRender = errorSpy.mock.calls.filter((args) =>
+        args.some(
+          (a) => typeof a === 'string' && a.includes('while rendering a different component')
+        )
+      );
+      errorSpy.mockRestore();
+      expect(setStateInRender).toEqual([]);
+    });
   });
 });
