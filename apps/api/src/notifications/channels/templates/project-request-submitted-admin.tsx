@@ -1,19 +1,4 @@
-import { Button, Heading, Section, Text } from '@react-email/components';
-import {
-  colors,
-  shared,
-  EmailShell,
-  LogoRow,
-  StatusPill,
-  Callout,
-  SupportFooter,
-  buildSelectionSummary,
-  heroPillStyle,
-  projectCardStyle,
-  projectCardLabelStyle,
-  projectCardHeadingStyle,
-  projectCardMetaStyle,
-} from './shared.js';
+import { OpsRequestEmail, buildSelectionSummary } from './shared.js';
 
 interface ProjectRequestSubmittedAdminEmailProps {
   readonly projectTitle: string;
@@ -27,10 +12,10 @@ interface ProjectRequestSubmittedAdminEmailProps {
 /**
  * Internal/ops email — a buyer submitted a DIRECT request (they chose the expert themselves).
  *
- * ⚠ NOT the same message as `project-match-requested`, and deliberately not a reuse of it: that
- * one says "unrouted brief needs a match", which would be FALSE here. This request already has
- * an expert; what Balo owes it is triage. Both arms land on the same admin board, by different
- * routes, and the copy has to say which.
+ * ⚠ NOT the same message as `project-match-requested`, and deliberately not a reuse of its copy:
+ * that one says "unrouted brief needs a match", which would be FALSE here. This request already
+ * has an expert; what Balo owes it is triage. Both land on the same board by different routes,
+ * and the copy has to say which. The LAYOUT is shared (`OpsRequestEmail`); the words are not.
  *
  * ⚠ Names the COMPANY, never a person — the submitting user is not on the payload and
  * `data.expert` carries an id with no name, so there is nobody to attribute this to without
@@ -47,54 +32,23 @@ export function ProjectRequestSubmittedAdminEmail({
   productCount = 0,
   documentCount = 0,
 }: Readonly<ProjectRequestSubmittedAdminEmailProps>) {
-  const previewText = `New direct request from ${companyName}: ${projectTitle}`;
-  const summary = buildSelectionSummary({ tagCount, productCount, documentCount });
-
   return (
-    <EmailShell previewText={previewText} baseUrl={baseUrl}>
-      {/* ── Hero ── */}
-      <Section style={shared.smallHero}>
-        <LogoRow size="small" />
-        <StatusPill label="⚡ Needs triage" style={heroPillStyle} />
-        <Heading style={shared.smallHeroHeading}>New direct request needs triage.</Heading>
-        <Text style={shared.smallHeroSubtext}>
-          A client submitted a project and chose their own expert.
-        </Text>
-      </Section>
-
-      {/* ── Body card ── */}
-      <Section style={shared.card}>
-        <Text style={shared.greeting}>Hi team,</Text>
-        <Text style={shared.bodyText}>
-          {companyName} submitted a project brief directly to an expert. The expert has been
-          notified too — this one is on the board so we can keep an eye on it while it moves.
-        </Text>
-
-        {/* Project summary */}
-        <Section style={projectCardStyle}>
-          <p style={projectCardLabelStyle}>Direct request</p>
-          <p style={projectCardHeadingStyle}>{projectTitle}</p>
-          <p style={projectCardMetaStyle}>From {companyName}</p>
-          {summary ? <p style={projectCardMetaStyle}>{summary}</p> : null}
-        </Section>
-
-        <Callout
-          emoji="⚡"
-          heading="Needs triage"
-          text="Open the board to read the brief and triage it. The expert already has it, so this is oversight rather than routing."
-          bg={colors.accentLight}
-          borderColor={colors.accentBorder}
-          headingColor={colors.accent}
-        />
-
-        <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
-          <Button style={shared.smallCtaButton} href={`${baseUrl}/projects?lens=admin`}>
-            Open triage board →
-          </Button>
-        </Section>
-
-        <SupportFooter prefix="Questions about this request?" />
-      </Section>
-    </EmailShell>
+    <OpsRequestEmail
+      previewText={`New direct request from ${companyName}: ${projectTitle}`}
+      baseUrl={baseUrl}
+      pillLabel="⚡ Needs triage"
+      heroHeading="New direct request needs triage."
+      heroSubtext="A client submitted a project and chose their own expert."
+      bodyText={`${companyName} submitted a project brief directly to an expert. The expert has been notified too — this one is on the board so we can keep an eye on it while it moves.`}
+      cardLabel="Direct request"
+      projectTitle={projectTitle}
+      companyName={companyName}
+      summary={buildSelectionSummary({ tagCount, productCount, documentCount })}
+      calloutHeading="Needs triage"
+      calloutText="Open the board to read the brief and triage it. The expert already has it, so this is oversight rather than routing."
+      ctaLabel="Open triage board →"
+      ctaHref={`${baseUrl}/projects?lens=admin`}
+      supportPrefix="Questions about this request?"
+    />
   );
 }

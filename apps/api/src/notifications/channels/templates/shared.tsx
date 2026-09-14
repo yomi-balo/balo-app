@@ -407,6 +407,100 @@ const projectCardTitle = {
   lineHeight: '1.5',
 } as const;
 
+/**
+ * ⚠ THE SHARED BODY FOR THE OPS/INTERNAL REQUEST EMAILS (`project-match-requested`,
+ * `project-request-submitted-admin`). Same shape as {@link ProjectStatusEmail} and for the same
+ * reason: the two callers differed ONLY in copy and CTA href, and duplicating the layout put
+ * SonarCloud's new-code duplication at 5.2% against a 3% gate.
+ *
+ * ⚠ COPY IS NOT SHARED, ONLY LAYOUT. The two emails say materially different things — one is an
+ * UNROUTED brief needing a match, the other a DIRECT request needing triage — and collapsing
+ * them into one message would tell Balo the wrong thing about half its requests. Every string
+ * is a prop for exactly that reason.
+ *
+ * ⚠ `ctaHref` is passed whole, not built from an id: these CTAs point at ops surfaces
+ * (`/projects?lens=admin`), not at `/projects/{id}` the way `ProjectStatusEmail` does.
+ */
+export interface OpsRequestEmailProps {
+  readonly previewText: string;
+  readonly baseUrl: string;
+  readonly pillLabel: string;
+  readonly heroHeading: string;
+  readonly heroSubtext: string;
+  readonly bodyText: string;
+  readonly cardLabel: string;
+  readonly projectTitle: string;
+  readonly companyName: string;
+  /** `buildSelectionSummary(...)` output, or an empty string to omit the line. */
+  readonly summary: string;
+  readonly calloutHeading: string;
+  readonly calloutText: string;
+  readonly ctaLabel: string;
+  readonly ctaHref: string;
+  readonly supportPrefix: string;
+}
+
+export function OpsRequestEmail({
+  previewText,
+  baseUrl,
+  pillLabel,
+  heroHeading,
+  heroSubtext,
+  bodyText,
+  cardLabel,
+  projectTitle,
+  companyName,
+  summary,
+  calloutHeading,
+  calloutText,
+  ctaLabel,
+  ctaHref,
+  supportPrefix,
+}: Readonly<OpsRequestEmailProps>) {
+  return (
+    <EmailShell previewText={previewText} baseUrl={baseUrl}>
+      {/* ── Hero ── */}
+      <Section style={shared.smallHero}>
+        <LogoRow size="small" />
+        <StatusPill label={pillLabel} style={heroPillStyle} />
+        <Heading style={shared.smallHeroHeading}>{heroHeading}</Heading>
+        <Text style={shared.smallHeroSubtext}>{heroSubtext}</Text>
+      </Section>
+
+      {/* ── Body card ── */}
+      <Section style={shared.card}>
+        <Text style={shared.greeting}>Hi team,</Text>
+        <Text style={shared.bodyText}>{bodyText}</Text>
+
+        {/* Project summary */}
+        <Section style={projectCardStyle}>
+          <p style={projectCardLabelStyle}>{cardLabel}</p>
+          <p style={projectCardHeadingStyle}>{projectTitle}</p>
+          <p style={projectCardMetaStyle}>From {companyName}</p>
+          {summary ? <p style={projectCardMetaStyle}>{summary}</p> : null}
+        </Section>
+
+        <Callout
+          emoji="⚡"
+          heading={calloutHeading}
+          text={calloutText}
+          bg={colors.accentLight}
+          borderColor={colors.accentBorder}
+          headingColor={colors.accent}
+        />
+
+        <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
+          <Button style={shared.smallCtaButton} href={ctaHref}>
+            {ctaLabel}
+          </Button>
+        </Section>
+
+        <SupportFooter prefix={supportPrefix} />
+      </Section>
+    </EmailShell>
+  );
+}
+
 /** Recipient/project props shared by the A2 project notification emails. */
 export interface ProjectEmailRecipientProps {
   readonly firstName: string;
