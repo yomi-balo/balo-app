@@ -185,6 +185,22 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       priority: 'normal',
     },
   ],
+  // A DIRECT request: the client picked this expert. Two audiences, and BOTH must be told.
+  //
+  // ⚠ The expert is the one who has to act, so they get email + in-app (the
+  // `project.expert_invited` pairing). Balo gets the same pair because this request lands on
+  // the admin triage board (`/projects?lens=admin`, "Needs triage") the instant it is created
+  // — before this rule, staff were never told a request existed, while the MATCH arm
+  // (`project.match_requested`) did notify them. That asymmetry was unintentional: both arms
+  // need triage, only one announced itself.
+  //
+  // ⚠ `admin_users`, NOT `admin`. `admin` resolves to OPS_NOTIFICATION_EMAIL, which is
+  // SILENTLY SKIPPED when the env var is unset — the failure mode the api warns about at boot.
+  // `admin_users` fans out to real `admin`/`super_admin` accounts, resolved at DISPATCH time,
+  // so it also reaches staff promoted after the rule was written.
+  // ⚠⚠ Adding an `admin_users` rule is NOT enough on its own — the event must also be listed
+  // in `ADMIN_FANOUT_EVENTS` (resolver.ts) or `data.adminUserIds` is never hydrated and the
+  // fan-out resolves to nobody, silently. See BAL-468's note there.
   'project.request_submitted': [
     {
       channel: 'email',
@@ -192,6 +208,25 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       template: 'project-request-submitted',
       timing: 'immediate',
       priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'expert',
+      template: 'project-request-submitted',
+      timing: 'immediate',
+    },
+    {
+      channel: 'email',
+      recipient: 'admin_users',
+      template: 'project-request-submitted-admin',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+    {
+      channel: 'in-app',
+      recipient: 'admin_users',
+      template: 'project-request-submitted-admin',
+      timing: 'immediate',
     },
   ],
   'project.match_requested': [

@@ -127,6 +127,62 @@ describe('getInAppTemplate', () => {
     });
   });
 
+  /**
+   * ⚠ `getInAppTemplate` does NOT throw on an unknown name — it returns a generic
+   * "You have a new notification". So these assert the REAL title and body: a missing or
+   * misnamed template would otherwise ship meaningless copy with green CI.
+   */
+  describe('project-request-submitted (the expert copy)', () => {
+    it('returns the title, body, and action url', () => {
+      const result = getInAppTemplate('project-request-submitted', {
+        title: 'Marketing Cloud migration',
+        projectRequestId: 'req-9',
+      });
+      expect(result).toEqual({
+        title: 'New project request for you',
+        body: 'A client sent you a direct request for "Marketing Cloud migration"',
+        actionUrl: '/projects/req-9',
+      });
+    });
+
+    it('falls back when the title is missing and omits the url without an id', () => {
+      const result = getInAppTemplate('project-request-submitted', {});
+      expect(result.body).toBe('A client sent you a direct request for "a new project"');
+      expect(result.actionUrl).toBeUndefined();
+    });
+  });
+
+  describe('project-request-submitted-admin (the Balo staff copy)', () => {
+    it('names the company, says TRIAGE, and links to the admin board', () => {
+      const result = getInAppTemplate('project-request-submitted-admin', {
+        title: 'Marketing Cloud migration',
+        company: { name: 'Northwind Industrial' },
+        projectRequestId: 'req-9',
+      });
+      expect(result).toEqual({
+        title: 'New request needs triage',
+        body: 'Northwind Industrial sent a direct request: "Marketing Cloud migration"',
+        // ⚠ NOT /admin/project-requests — that route does not exist.
+        actionUrl: '/projects?lens=admin',
+      });
+    });
+
+    it('⚠ differs from the expert copy — a shared template would misaddress one audience', () => {
+      const data = { title: 'Marketing Cloud migration', company: { name: 'Northwind' } };
+      const expert = getInAppTemplate('project-request-submitted', data);
+      const admin = getInAppTemplate('project-request-submitted-admin', data);
+      expect(admin.title).not.toBe(expert.title);
+      expect(admin.body).not.toBe(expert.body);
+    });
+
+    it('degrades to a neutral party name when the company is absent', () => {
+      const result = getInAppTemplate('project-request-submitted-admin', {
+        title: 'Marketing Cloud migration',
+      });
+      expect(result.body).toBe('A client sent a direct request: "Marketing Cloud migration"');
+    });
+  });
+
   describe('project-expert-invited', () => {
     it('returns the title, body, and action url', () => {
       const result = getInAppTemplate('project-expert-invited', {

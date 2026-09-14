@@ -57,7 +57,7 @@ function expectClientRulesGatedOnRecipientId(
 }
 
 describe('notificationRules', () => {
-  it.each(['user.welcome', 'expert.application_submitted', 'project.request_submitted'] as const)(
+  it.each(['user.welcome', 'expert.application_submitted'] as const)(
     'has rules for %s event',
     (event) => {
       const rules = notificationRules[event];
@@ -65,6 +65,38 @@ describe('notificationRules', () => {
       expect(rules).toHaveLength(1);
     }
   );
+
+  /**
+   * A DIRECT request has TWO audiences. The expert must respond; Balo must triage, because the
+   * request lands on the admin board the moment it is created. Before this, only the expert was
+   * told — while the MATCH arm did notify staff. The asymmetry was unintentional.
+   */
+  describe('project.request_submitted — both audiences, both channels', () => {
+    const rules = notificationRules['project.request_submitted']!;
+
+    it('notifies the expert on email AND in-app', () => {
+      const expertRules = rules.filter((r) => r.recipient === 'expert');
+      expect(expertRules.map((r) => r.channel).sort()).toEqual(['email', 'in-app']);
+      expect(expertRules.every((r) => r.template === 'project-request-submitted')).toBe(true);
+    });
+
+    it('notifies Balo staff on email AND in-app, with the staff-specific template', () => {
+      const adminRules = rules.filter((r) => r.recipient === 'admin_users');
+      expect(adminRules.map((r) => r.channel).sort()).toEqual(['email', 'in-app']);
+      // ⚠ NOT `project-request-submitted` — staff get a triage-framed message, not the
+      // expert's "a client chose you".
+      expect(adminRules.every((r) => r.template === 'project-request-submitted-admin')).toBe(true);
+    });
+
+    it('⚠ uses `admin_users`, never `admin` (OPS_NOTIFICATION_EMAIL is silently skipped when unset)', () => {
+      expect(rules.some((r) => r.recipient === 'admin')).toBe(false);
+      expect(rules.some((r) => r.recipient === 'admin_users')).toBe(true);
+    });
+
+    it('fires immediately for every audience (a triage queue is not a digest)', () => {
+      expect(rules.every((r) => r.timing === 'immediate')).toBe(true);
+    });
+  });
 
   it('user.welcome rule has correct config', () => {
     const [rule] = notificationRules['user.welcome']!;

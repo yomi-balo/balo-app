@@ -9,6 +9,7 @@ import { readExpertDeclineReason } from './expert-decline-reason-label.js';
 import { ExpertReferralInvitedEmail } from './expert-referral-invited.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
+import { ProjectRequestSubmittedAdminEmail } from './project-request-submitted-admin.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
@@ -436,6 +437,26 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     }),
     subject: `New project request: ${sanitizeSubjectTitle((data.title as string) ?? 'a new project')}`,
   }),
+
+  // The BALO STAFF counterpart to `project-request-submitted` (the expert's copy). Same event,
+  // different audience: the expert is asked to respond, staff are asked to TRIAGE. Deliberately
+  // NOT a reuse of `project-match-requested`, whose "unrouted brief" framing is false for a
+  // request that already names its expert.
+  'project-request-submitted-admin': (data) => {
+    const company = data.company as { name?: string } | undefined;
+    const companyName = company?.name ?? 'A client';
+    return {
+      component: React.createElement(ProjectRequestSubmittedAdminEmail, {
+        projectTitle: (data.title as string) ?? 'a new project',
+        companyName,
+        baseUrl: BASE_URL,
+        tagCount: arrayLength(data.tagIds),
+        productCount: arrayLength(data.productIds),
+        documentCount: numberCount(data.documentCount),
+      }),
+      subject: `New direct request: ${sanitizeSubjectTitle((data.title as string) ?? 'a new project')}`,
+    };
+  },
 
   'project-match-requested': (data) => {
     const company = data.company as { name?: string } | undefined;

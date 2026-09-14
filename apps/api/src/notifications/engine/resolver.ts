@@ -31,6 +31,10 @@ const ADMIN_FANOUT_EVENTS = new Set<string>([
   // BAL-468 — the daily calendar-subscription monitor's alert. Without this the rule resolves
   // to nobody and the alert is silently dropped.
   'calendar.subscription_lapse',
+  // A direct project request lands on the admin triage board the instant it is created, so
+  // staff get the same email + in-app pair the target expert does. Same silent-drop hazard as
+  // the line above: the `admin_users` rules in rules.ts do nothing without this entry.
+  'project.request_submitted',
 ]);
 
 /**
