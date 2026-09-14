@@ -8,50 +8,12 @@ import {
   Callout,
   SupportFooter,
   buildSelectionSummary,
+  heroPillStyle,
+  projectCardStyle,
+  projectCardLabelStyle,
+  projectCardHeadingStyle,
+  projectCardMetaStyle,
 } from './shared.js';
-
-// ── Match-request-specific styles ────────────────────────────────
-const matchPillStyle = {
-  ...shared.statusPillBase,
-  background: 'rgba(255,255,255,0.12)',
-  border: '1px solid rgba(255,255,255,0.2)',
-  color: 'rgba(255,255,255,0.85)',
-};
-
-const projectCardStyle = {
-  margin: '24px 0',
-  padding: '18px 20px',
-  borderRadius: '12px',
-  border: `1px solid ${colors.border}`,
-  background: colors.bg,
-} as const;
-
-const projectLabelStyle = {
-  fontSize: '11px',
-  fontWeight: '700',
-  color: colors.textTertiary,
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.07em',
-  margin: '0 0 6px',
-} as const;
-
-const projectTitleStyle = {
-  fontSize: '16px',
-  fontWeight: '600',
-  color: colors.text,
-  margin: 0,
-  lineHeight: '1.5',
-} as const;
-
-const projectMetaStyle = {
-  fontSize: '13px',
-  fontWeight: '500',
-  color: colors.textSecondary,
-  margin: '8px 0 0',
-  lineHeight: '1.5',
-} as const;
-
-// ── Template ─────────────────────────────────────────────────────
 
 interface ProjectMatchRequestedEmailProps {
   readonly projectTitle: string;
@@ -83,7 +45,7 @@ export function ProjectMatchRequestedEmail({
       {/* ── Hero ── */}
       <Section style={shared.smallHero}>
         <LogoRow size="small" />
-        <StatusPill label="🔍 Needs a match" style={matchPillStyle} />
+        <StatusPill label="🔍 Needs a match" style={heroPillStyle} />
         <Heading style={shared.smallHeroHeading}>New unrouted brief needs a match.</Heading>
         <Text style={shared.smallHeroSubtext}>
           A client submitted a project without choosing an expert.
@@ -100,10 +62,10 @@ export function ProjectMatchRequestedEmail({
 
         {/* Project summary */}
         <Section style={projectCardStyle}>
-          <p style={projectLabelStyle}>Unrouted project</p>
-          <p style={projectTitleStyle}>{projectTitle}</p>
-          <p style={projectMetaStyle}>From {companyName}</p>
-          {summary ? <p style={projectMetaStyle}>{summary}</p> : null}
+          <p style={projectCardLabelStyle}>Unrouted project</p>
+          <p style={projectCardHeadingStyle}>{projectTitle}</p>
+          <p style={projectCardMetaStyle}>From {companyName}</p>
+          {summary ? <p style={projectCardMetaStyle}>{summary}</p> : null}
         </Section>
 
         <Callout

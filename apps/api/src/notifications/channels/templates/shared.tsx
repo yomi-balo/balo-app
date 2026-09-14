@@ -347,14 +347,20 @@ export function SupportFooter({ prefix = 'Questions?' }: SupportFooterProps) {
 
 // ── Project status email (shared body for A2 notification emails) ─
 
-const heroPill = {
+/**
+ * ⚠ EXPORTED, NOT PRIVATE. These four were re-declared verbatim in every ops/project email that
+ * renders a "project card" — `project-match-requested.tsx` had a byte-for-byte copy of all of
+ * them, and a third copy in `project-request-submitted-admin.tsx` measured 20.3% duplicated
+ * lines on `jscpd`, well over SonarCloud's 3% new-code gate. One definition, imported.
+ */
+export const heroPillStyle = {
   ...shared.statusPillBase,
   background: 'rgba(255,255,255,0.12)',
   border: '1px solid rgba(255,255,255,0.2)',
   color: 'rgba(255,255,255,0.85)',
 };
 
-const projectCard = {
+export const projectCardStyle = {
   margin: '24px 0',
   padding: '18px 20px',
   borderRadius: '12px',
@@ -362,7 +368,7 @@ const projectCard = {
   background: colors.bg,
 } as const;
 
-const projectCardLabel = {
+export const projectCardLabelStyle = {
   fontSize: '11px',
   fontWeight: '700',
   color: colors.textTertiary,
@@ -370,6 +376,28 @@ const projectCardLabel = {
   letterSpacing: '0.07em',
   margin: '0 0 6px',
 } as const;
+
+/**
+ * ⚠ The card-with-meta heading. Distinct from the private `projectCardTitle` below, which
+ * `ProjectStatusEmail` uses with `margin: 0` + a line-height because nothing follows it.
+ * Here a meta line does, hence the bottom margin. Two real variants, not an oversight.
+ */
+export const projectCardHeadingStyle = {
+  fontSize: '16px',
+  fontWeight: '600',
+  color: colors.text,
+  margin: '0 0 6px',
+} as const;
+
+export const projectCardMetaStyle = {
+  fontSize: '13px',
+  color: colors.textSecondary,
+  margin: '0 0 4px',
+} as const;
+
+const heroPill = heroPillStyle;
+const projectCard = projectCardStyle;
+const projectCardLabel = projectCardLabelStyle;
 
 const projectCardTitle = {
   fontSize: '16px',
