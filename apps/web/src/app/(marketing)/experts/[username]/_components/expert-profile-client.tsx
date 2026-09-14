@@ -170,14 +170,23 @@ export function ExpertProfileClient({
   // ── BAL-400 — booking wrapper (entry points 1/2/4, D4a) ──
   const [bookingOpen, setBookingOpen] = useState(false);
   const [bookingSource, setBookingSource] = useState<BookingSource>('profile');
-  const pendingBookingOpenRef = useRef(false);
+  /**
+   * ⚠⚠ ONE ref for BOTH surfaces, not one each. A signed-out visitor can arm more than one
+   * intent before authenticating — click Book, dismiss the modal, click Start a project, sign
+   * in — and neither ref is cleared on dismiss. Two independent booleans would both still be
+   * set when `router.refresh()` flips `isLoggedIn`, so BookingFlowDialog and
+   * ProjectRequestPanel would open on top of each other. A single slot makes the LAST intent
+   * win, which is what the visitor actually asked for, and cures the stale-after-dismiss case
+   * for both at once.
+   */
+  const pendingOpenRef = useRef<'book' | 'project' | null>(null);
   const autoOpenFiredRef = useRef(false);
 
   const openBookingFlow = useCallback(
     (openSource: BookingSource) => {
       track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'book' });
       if (!isLoggedIn) {
-        pendingBookingOpenRef.current = true;
+        pendingOpenRef.current = 'book';
         setBookingSource(openSource);
         authModal.open({ onSuccess: () => router.refresh() });
         return;
@@ -190,12 +199,16 @@ export function ExpertProfileClient({
 
   const onBook = useCallback(() => openBookingFlow('profile'), [openBookingFlow]);
 
-  // A signed-out visitor who completes auth (via `openBookingFlow`'s `onSuccess`) lands back
-  // here once `router.refresh()` re-resolves `isLoggedIn` + `bookingContext` server-side.
+  // A signed-out visitor who completes auth (via the CTA's `onSuccess`) lands back here once
+  // `router.refresh()` re-resolves `isLoggedIn` + `bookingContext` server-side. ONE effect for
+  // both surfaces — see `pendingOpenRef`: exactly one intent is armed, so exactly one opens.
   useEffect(() => {
-    if (!pendingBookingOpenRef.current || !isLoggedIn) return;
-    pendingBookingOpenRef.current = false;
-    setBookingOpen(true);
+    if (!isLoggedIn) return;
+    const pending = pendingOpenRef.current;
+    if (pending === null) return;
+    pendingOpenRef.current = null;
+    if (pending === 'book') setBookingOpen(true);
+    else setProjectOpen(true);
   }, [isLoggedIn]);
 
   // `?book=1` deep link (entry points 2/4) — auto-opens once bookingContext (or auth) resolves.
@@ -223,10 +236,23 @@ export function ExpertProfileClient({
 
   // `project` is wired (BAL-253): keep the profile-level CTA event, then open
   // the ProjectRequestPanel instead of the "Coming soon" toast.
+  //
+  // ⚠⚠ AUTH GATE — every server action behind this panel (`request-`/`confirm-project-document
+  // -upload`, `start-`/`get-project-brief-parse`, `submit-project-request`) is `withAuth` with
+  // no `allowUnonboarded`. This page is PUBLIC, so without the gate a signed-out visitor could
+  // open the panel and fill it in, and the first action — the presign, fired the moment a file
+  // is attached — threw `Error: Unauthorized` (Sentry BALO-WEB-19). Gate HERE, before the panel
+  // opens, not inside it: there is no draft yet at this point, so auth costs the visitor
+  // nothing. A gate placed after the panel opens would have to survive `router.refresh()`.
   const onStartProject = useCallback(() => {
     track(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, { expert_id: view.expertId, cta: 'project' });
+    if (!isLoggedIn) {
+      pendingOpenRef.current = 'project';
+      authModal.open({ onSuccess: () => router.refresh() });
+      return;
+    }
     setProjectOpen(true);
-  }, [view.expertId]);
+  }, [view.expertId, isLoggedIn, authModal, router]);
 
   const analyticsSections = useMemo<ExpertProfileSection[]>(
     () => sections.map((s) => s.key),

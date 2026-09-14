@@ -1,3 +1,4 @@
+import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
@@ -487,6 +488,105 @@ describe('ExpertProfileClient — CTA handlers', () => {
     });
     // No "Coming soon" toast for the project CTA.
     expect(mockToast).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ Sentry BALO-WEB-19 — this page is PUBLIC and every action behind the panel is
+   * `withAuth`. Before the gate, a signed-out visitor reached the panel and the presign threw
+   * `Error: Unauthorized` the moment they attached a file. Same rule as Book.
+   *
+   * ⚠ The render + click is a helper, not a copy in each test. Written out twice it was a
+   * 15-line clone between these two cases and a 12-line clone against the Book equivalent
+   * above — enough new duplicated lines on its own to fail SonarCloud's 3% new-code gate.
+   */
+  const PANEL_HEADING = /start a project with anil pilania/i;
+
+  function renderProfile(isLoggedIn: boolean) {
+    return render(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn={isLoggedIn}
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+        {...(isLoggedIn ? {} : { bookingContext: null })}
+      />
+    );
+  }
+
+  async function clickStartProject(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
+    if (startProject) await user.click(startProject);
+  }
+
+  /** What `router.refresh()` produces: the same tree re-rendered with a signed-in viewer. */
+  function rerenderSignedIn(rerender: (ui: React.ReactElement) => void): void {
+    rerender(
+      <ExpertProfileClient
+        view={makeView()}
+        portraitUrl={null}
+        isLoggedIn
+        projectTaxonomies={EMPTY_TAXONOMIES}
+        {...bookingProps}
+      />
+    );
+  }
+
+  it('opens the auth modal instead of the ProjectRequestPanel for a signed-out visitor', async () => {
+    const user = userEvent.setup();
+    renderProfile(false);
+
+    await clickStartProject(user);
+
+    expect(mockAuthModalOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+    // The panel stayed shut — no action behind it can fire.
+    expect(screen.queryByRole('heading', { name: PANEL_HEADING })).not.toBeInTheDocument();
+    // The click itself is still measured.
+    expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
+      expert_id: 'expert-1',
+      cta: 'project',
+    });
+  });
+
+  // The gate defers the panel, it does not discard the intent: `router.refresh()` re-resolves
+  // `isLoggedIn` server-side, and the panel then opens without a second click.
+  it('opens the ProjectRequestPanel once auth resolves after a signed-out click', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderProfile(false);
+
+    await clickStartProject(user);
+    expect(screen.queryByRole('heading', { name: PANEL_HEADING })).not.toBeInTheDocument();
+
+    rerenderSignedIn(rerender);
+
+    expect(await screen.findByRole('heading', { name: PANEL_HEADING })).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠⚠ TWO ARMED INTENTS, ONE AUTH FLIP. A signed-out visitor can click Book, dismiss the auth
+   * modal, then click Start a project before signing in. Nothing clears a pending ref on
+   * dismiss, so with one boolean per surface BOTH were still set when `router.refresh()`
+   * flipped `isLoggedIn`, and the booking dialog and the request panel opened on top of each
+   * other. One `pendingOpenRef` slot makes the LAST intent win.
+   */
+  it('⚠ Book then Start-a-project while signed out opens ONLY the panel after auth', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderProfile(false);
+
+    // Intent 1: Book. The modal opens; dismissing it clears nothing.
+    await user.click(screen.getByRole('button', { name: /book a consultation/i }));
+    // Intent 2: Start a project, which supersedes it.
+    await clickStartProject(user);
+
+    // Auth lands.
+    rerenderSignedIn(rerender);
+
+    // The panel opened...
+    expect(await screen.findByRole('heading', { name: PANEL_HEADING })).toBeInTheDocument();
+    // ...and the booking wrapper did NOT open underneath it.
+    expect(screen.queryByText('Book a consultation with Anil Pilania')).not.toBeInTheDocument();
   });
 
   it('jumps to a section (and stays green despite scrollIntoView) when a nav tab is clicked', async () => {

@@ -354,6 +354,34 @@ describe('resolveContext', () => {
     });
   });
 
+  /**
+   * ⚠⚠ THE LOAD-BEARING HALF OF THE ADMIN FAN-OUT. An `admin_users` rule in `rules.ts` does
+   * NOTHING unless the event is also in `ADMIN_FANOUT_EVENTS` here — `data.adminUserIds` stays
+   * undefined, the dispatcher resolves the fan-out to nobody, and the notification is dropped
+   * SILENTLY with green CI. BAL-468's comment records the same trap.
+   */
+  describe('project.request_submitted admin fan-out hydration', () => {
+    it('hydrates adminUserIds AND the expert (both audiences are addressable)', async () => {
+      mockFindIdsByPlatformRoles.mockResolvedValue(['admin-1', 'admin-2']);
+      const expert = { user: { id: 'expert-user-1' } };
+      mockFindUserIdByProfileId.mockResolvedValue(expert);
+
+      const context = await resolveContext('project.request_submitted', {
+        correlationId: '550e8400-e29b-41d4-a716-446655440010',
+        projectRequestId: '550e8400-e29b-41d4-a716-446655440010',
+        expertProfileId: '550e8400-e29b-41d4-a716-446655440004',
+        companyId: '550e8400-e29b-41d4-a716-446655440011',
+        title: 'Marketing Cloud migration',
+      });
+
+      // Balo staff — resolved at DISPATCH time, so staff promoted later are included.
+      expect(mockFindIdsByPlatformRoles).toHaveBeenCalledWith(['admin', 'super_admin']);
+      expect(context.data.adminUserIds).toEqual(['admin-1', 'admin-2']);
+      // The chosen expert still resolves for recipient:'expert'.
+      expect(context.data.expert).toEqual(expert);
+    });
+  });
+
   // ── BAL-332 admin fan-out hydration for the milestone delivery events ──
   describe('milestone delivery events hydration', () => {
     it.each(['engagement.milestone_completed', 'engagement.milestone_reverted'] as const)(

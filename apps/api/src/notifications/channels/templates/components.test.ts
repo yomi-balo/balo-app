@@ -6,6 +6,7 @@ import { ExpertApprovedEmail } from './expert-approved.js';
 import { ExpertReferralInvitedEmail } from './expert-referral-invited.js';
 import { ProjectRequestSubmittedEmail } from './project-request-submitted.js';
 import { ProjectMatchRequestedEmail } from './project-match-requested.js';
+import { ProjectRequestSubmittedAdminEmail } from './project-request-submitted-admin.js';
 import { ProjectExploratoryRequestedEmail } from './project-exploratory-requested.js';
 import { ProjectExpertInvitedEmail } from './project-expert-invited.js';
 import { ProjectEoiSubmittedEmail } from './project-eoi-submitted.js';
@@ -152,6 +153,111 @@ describe('ProjectMatchRequestedEmail', () => {
 
     expect(element).toBeDefined();
     expect(element.type).toBeDefined();
+  });
+});
+
+/**
+ * ⚠⚠ RENDERED, NOT JUST CONSTRUCTED. The sibling suites assert `element.type` is defined, which
+ * a template returning the WRONG BODY still satisfies. These two emails share one layout
+ * (`OpsRequestEmail`) and differ only in copy, so "it rendered" is precisely the assertion that
+ * cannot tell them apart — and telling Balo "unrouted, needs a match" about a request that
+ * already has an expert is the actual failure being guarded.
+ */
+describe('ProjectRequestSubmittedAdminEmail (direct request → triage)', () => {
+  /**
+   * ⚠ React splits a static string and an interpolated value into separate text nodes, and the
+   * renderer emits `<!-- -->` between them — so the HTML reads `From <!-- -->Northwind`, not
+   * `From Northwind`. Strip the markers so assertions can name the copy a human would read.
+   * `split/join`, not a regex (SonarCloud S5852).
+   */
+  const readable = (html: string): string => html.split('<!-- -->').join('');
+
+  const props = {
+    projectTitle: 'Marketing Cloud migration',
+    companyName: 'Northwind Industrial',
+    baseUrl: 'https://app.balo.expert',
+    tagCount: 2,
+    productCount: 1,
+    documentCount: 3,
+  };
+
+  it('renders triage copy, the company, and the admin-board CTA', async () => {
+    const html = await render(ProjectRequestSubmittedAdminEmail(props));
+
+    expect(html).toContain('New direct request needs triage.');
+    expect(html).toContain('Northwind Industrial');
+    expect(html).toContain('Marketing Cloud migration');
+    expect(html).toContain('Direct request');
+    // ⚠ The real board. NOT /admin/project-requests, which does not exist.
+    expect(html).toContain('/projects?lens=admin');
+  });
+
+  it('⚠ never claims the brief is unrouted — that is the OTHER email', async () => {
+    const html = await render(ProjectRequestSubmittedAdminEmail(props));
+
+    expect(html).not.toContain('unrouted');
+    expect(html).not.toContain('Needs a match');
+  });
+
+  it('omits the selection line when nothing was selected', async () => {
+    const withCounts = readable(await render(ProjectRequestSubmittedAdminEmail(props)));
+    const without = readable(
+      await render(
+        ProjectRequestSubmittedAdminEmail({
+          projectTitle: 'Marketing Cloud migration',
+          companyName: 'Northwind Industrial',
+          baseUrl: 'https://app.balo.expert',
+        })
+      )
+    );
+
+    // ⚠ ASSERT THE ABSENCE, which is what the name claims. Checking only what is present
+    // passes just as well when the line is still there.
+    expect(withCounts).toContain('2 project types');
+    expect(without).not.toContain('project types');
+    expect(without).not.toContain('documents attached');
+    // The card itself still renders.
+    expect(without).toContain('From Northwind Industrial');
+  });
+
+  it('falls back to a neutral party name and title', async () => {
+    // ⚠ `undefined`, NOT the fallback values spelled out. Passing 'A client' / 'a new project'
+    // explicitly means the default parameters never execute — the test would pass against a
+    // component with no defaults at all.
+    const html = readable(
+      await render(
+        ProjectRequestSubmittedAdminEmail({
+          projectTitle: undefined as unknown as string,
+          companyName: undefined as unknown as string,
+          baseUrl: 'https://app.balo.expert',
+        })
+      )
+    );
+
+    expect(html).toContain('From A client');
+    expect(html).toContain('a new project');
+  });
+
+  it('⚠ the two ops emails stay distinguishable (shared LAYOUT, not shared COPY)', async () => {
+    const direct = await render(ProjectRequestSubmittedAdminEmail(props));
+    const match = await render(ProjectMatchRequestedEmail(props));
+
+    expect(direct).not.toEqual(match);
+    expect(match).toContain('unrouted');
+    expect(direct).not.toContain('unrouted');
+  });
+
+  it('is wired into the email registry with a direct-request subject', () => {
+    const template = getEmailTemplate('project-request-submitted-admin', {
+      title: 'Marketing Cloud migration',
+      company: { name: 'Northwind Industrial' },
+      tagIds: ['t1', 't2'],
+      productIds: ['p1'],
+      documentCount: 3,
+    });
+
+    expect(template).toBeDefined();
+    expect(template!.subject).toBe('New direct request: Marketing Cloud migration');
   });
 });
 

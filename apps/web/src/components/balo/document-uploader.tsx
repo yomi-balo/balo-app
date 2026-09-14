@@ -129,40 +129,81 @@ export function DocumentUploader({
   // docblock). A `useEffect` sync would fight the parent, because every publish from here
   // changes the very array that would feed back in.
   const [rows, setRows] = useState<UploadRow[]>(() => seedRows(initialDocuments ?? []));
+  // Mirror of `rows` for event handlers + async upload callbacks. Seeded from the SAME lazy
+  // initialiser so a seeded row is visible to the very first `commitRows`. Every write goes
+  // through `commitRows`, which updates state and mirror together.
+  const rowsRef = useRef<UploadRow[]>(rows);
   const [rejections, setRejections] = useState<FileRejection[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const xhrRefs = useRef<Record<string, XMLHttpRequest>>({});
   const rejectionTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  // Recompute + bubble confirmed refs + uploading flag from the latest rows.
+  /**
+   * What was last bubbled, so an unchanged publish can be skipped. Identity of the `docs` array
+   * is NOT the signal — a fresh array is built on every call — so this records the confirmed
+   * keys plus the uploading flag, which together are everything the parent consumes.
+   */
+  const lastPublishedRef = useRef<{ keys: string; uploading: boolean } | null>(null);
+
+  /**
+   * Recompute + bubble confirmed refs + uploading flag from the latest rows.
+   *
+   * ⚠ SKIPS A PUBLISH THAT WOULD SAY NOTHING NEW. `runUpload` calls `patchRow(id, {progress})`
+   * on every XHR `upload.onprogress` tick, and each one reaches here — so a 5 MB file drove a
+   * `setField('documents', …)` and a full `ProjectRequestPanel` re-render per tick, every one
+   * of them carrying an identical confirmed-ref list. Progress belongs to this component's own
+   * row state; the parent only ever needed the confirmed set and the in-flight flag.
+   *
+   * ⚠ The volume predates this branch, but it used to happen during RENDER, where React
+   * coalesced it. These are real commits now, which is exactly why the guard is worth its
+   * few lines on the surface the whole branch is about.
+   */
   const publish = useCallback(
     (next: UploadRow[]) => {
       const docs = next
         .filter((r): r is UploadRow & { ref: ProjectDocumentRef } => r.ref !== null)
         .map((r) => r.ref);
+      const uploading = next.some((r) => r.status === 'uploading');
+      // \u0000 cannot occur in an R2 key, so no key set can collide with another.
+      const keys = docs.map((d) => d.r2Key).join('\u0000');
+
+      const last = lastPublishedRef.current;
+      if (last !== null && last.keys === keys && last.uploading === uploading) return;
+      lastPublishedRef.current = { keys, uploading };
+
       onDocumentsChange(docs);
-      onUploadingChange?.(next.some((r) => r.status === 'uploading'));
+      onUploadingChange?.(uploading);
     },
     [onDocumentsChange, onUploadingChange]
   );
 
-  const setRowsAndPublish = useCallback(
+  /**
+   * ⚠⚠ THE ONLY WRITE PATH FOR `rows`. The next value is derived from `rowsRef` and published
+   * HERE, in the event/async callback — never from inside a `setRows` updater.
+   *
+   * Why: React runs a state updater during the RENDER phase. Calling `publish` in there reached
+   * `onDocumentsChange` → the parent's `setField` mid-render, which React reports as "Cannot
+   * update a component (`ProjectRequestPanel`) while rendering a different component
+   * (`DocumentUploader`)", and StrictMode's double-invoke fired every parent write twice.
+   * Reading the ref also sequences back-to-back patches in one tick correctly (each sees the
+   * previous one's result), which a functional update could not do once `publish` moved out.
+   */
+  const commitRows = useCallback(
     (updater: (prev: UploadRow[]) => UploadRow[]) => {
-      setRows((prev) => {
-        const next = updater(prev);
-        publish(next);
-        return next;
-      });
+      const next = updater(rowsRef.current);
+      rowsRef.current = next;
+      setRows(next);
+      publish(next);
     },
     [publish]
   );
 
   const patchRow = useCallback(
     (id: string, patch: Partial<UploadRow>) => {
-      setRowsAndPublish((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+      commitRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
     },
-    [setRowsAndPublish]
+    [commitRows]
   );
 
   // Run the presign → PUT(progress) → confirm pipeline for a single row.
@@ -228,40 +269,36 @@ export function DocumentUploader({
   // Validate + queue an incoming selection.
   const handleFiles = useCallback(
     (incoming: File[]) => {
-      setRows((prev) => {
-        const { accepted, rejected } = partitionFiles(incoming, prev.length);
+      const { accepted, rejected } = partitionFiles(incoming, rowsRef.current.length);
 
-        for (const rej of rejected) {
-          toast.error(rej.message);
-          // Auto-dismiss the inline row after ~4s, keyed by the SAME composite
-          // identity as the render key so it removes exactly this row.
-          const key = rejectionKey(rej);
-          rejectionTimers.current[key] = setTimeout(() => dismissRejection(key), 4000);
-        }
-        if (rejected.length > 0) setRejections((r) => [...r, ...rejected]);
-        if (accepted.length === 0) return prev;
+      for (const rej of rejected) {
+        toast.error(rej.message);
+        // Auto-dismiss the inline row after ~4s, keyed by the SAME composite
+        // identity as the render key so it removes exactly this row.
+        const key = rejectionKey(rej);
+        rejectionTimers.current[key] = setTimeout(() => dismissRejection(key), 4000);
+      }
+      if (rejected.length > 0) setRejections((r) => [...r, ...rejected]);
+      if (accepted.length === 0) return;
 
-        // ⚠ `& { file: File }` — every row created HERE has a local `File` (only a SEEDED row
-        // does not), which is what lets the `runUpload` loop below stay assertion-free.
-        const newRows: (UploadRow & { file: File })[] = accepted.map((file) => ({
-          id: crypto.randomUUID(),
-          file,
-          fileName: file.name,
-          sizeBytes: file.size,
-          contentType: file.type,
-          status: 'uploading',
-          progress: 0,
-          ref: null,
-        }));
-        const next = [...prev, ...newRows];
-        publish(next);
-        // Kick off uploads after state commits. runUpload never rejects (it
-        // catches internally + patches the row); .catch keeps it floating-safe.
-        for (const row of newRows) runUpload(row.id, row.file).catch(() => {});
-        return next;
-      });
+      // ⚠ `& { file: File }` — every row created HERE has a local `File` (only a SEEDED row
+      // does not), which is what lets the `runUpload` loop below stay assertion-free.
+      const newRows: (UploadRow & { file: File })[] = accepted.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        fileName: file.name,
+        sizeBytes: file.size,
+        contentType: file.type,
+        status: 'uploading',
+        progress: 0,
+        ref: null,
+      }));
+      commitRows((prev) => [...prev, ...newRows]);
+      // runUpload never rejects (it catches internally + patches the row);
+      // .catch keeps it floating-safe.
+      for (const row of newRows) runUpload(row.id, row.file).catch(() => {});
     },
-    [publish, runUpload, dismissRejection, rejectionKey]
+    [commitRows, runUpload, dismissRejection, rejectionKey]
   );
 
   const handleInputChange = useCallback(
@@ -285,7 +322,7 @@ export function DocumentUploader({
 
   const handleRemove = useCallback(
     (id: string) => {
-      const row = rows.find((r) => r.id === id);
+      const row = rowsRef.current.find((r) => r.id === id);
       // Abort an in-flight upload.
       const xhr = xhrRefs.current[id];
       if (xhr) {
@@ -296,19 +333,19 @@ export function DocumentUploader({
       if (row?.ref) {
         removeProjectDocumentAction({ key: row.ref.r2Key }).catch(() => {});
       }
-      setRowsAndPublish((prev) => prev.filter((r) => r.id !== id));
+      commitRows((prev) => prev.filter((r) => r.id !== id));
     },
-    [rows, setRowsAndPublish]
+    [commitRows]
   );
 
   const handleRetry = useCallback(
     (id: string) => {
-      const row = rows.find((r) => r.id === id);
+      const row = rowsRef.current.find((r) => r.id === id);
       // A seeded row carries no `File` — it is already confirmed and can never be `failed`, so
       // Retry is not rendered for it. The guard keeps that structural fact type-safe.
       if (row?.file) runUpload(id, row.file).catch(() => {});
     },
-    [rows, runUpload]
+    [runUpload]
   );
 
   const atCap = rows.length >= MAX_DOCUMENTS;

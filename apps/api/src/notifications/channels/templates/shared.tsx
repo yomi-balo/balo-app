@@ -347,14 +347,26 @@ export function SupportFooter({ prefix = 'Questions?' }: SupportFooterProps) {
 
 // ── Project status email (shared body for A2 notification emails) ─
 
-const heroPill = {
+/**
+ * ⚠ EXPORTED, NOT PRIVATE. These five back every ops/project email that renders a "project
+ * card". `project-match-requested.tsx` had its own copy of all of them and
+ * `project-request-submitted-admin.tsx` made a third, measuring 20.3% duplicated lines on
+ * `jscpd` — well over SonarCloud's 3% new-code gate. One definition, imported.
+ *
+ * ⚠ THE VALUES ARE THE ONES THE LIVE EMAIL ALREADY RENDERED. The first extraction quietly
+ * swapped the heading and meta styles for the new template's invented ones — dropping
+ * `lineHeight` from both and `fontWeight` from the meta, and changing both margins — which
+ * would have restyled a shipping ops email under a change described as pure de-duplication.
+ * If these need to change, change them deliberately, not as a side effect of hoisting.
+ */
+export const heroPillStyle = {
   ...shared.statusPillBase,
   background: 'rgba(255,255,255,0.12)',
   border: '1px solid rgba(255,255,255,0.2)',
   color: 'rgba(255,255,255,0.85)',
 };
 
-const projectCard = {
+export const projectCardStyle = {
   margin: '24px 0',
   padding: '18px 20px',
   borderRadius: '12px',
@@ -362,7 +374,7 @@ const projectCard = {
   background: colors.bg,
 } as const;
 
-const projectCardLabel = {
+export const projectCardLabelStyle = {
   fontSize: '11px',
   fontWeight: '700',
   color: colors.textTertiary,
@@ -371,13 +383,135 @@ const projectCardLabel = {
   margin: '0 0 6px',
 } as const;
 
-const projectCardTitle = {
+/**
+ * ⚠ ONE title style, not two. The earlier extraction invented a second "heading" variant on the
+ * theory that a card with a meta line beneath needs a bottom margin — but the shipping email
+ * never had one: `project-match-requested`'s own title was byte-identical to the
+ * `ProjectStatusEmail` title below it. There was only ever one.
+ */
+export const projectCardTitleStyle = {
   fontSize: '16px',
   fontWeight: '600',
   color: colors.text,
   margin: 0,
   lineHeight: '1.5',
 } as const;
+
+export const projectCardMetaStyle = {
+  fontSize: '13px',
+  fontWeight: '500',
+  color: colors.textSecondary,
+  margin: '8px 0 0',
+  lineHeight: '1.5',
+} as const;
+
+/**
+ * ⚠ THE SHARED BODY FOR THE OPS/INTERNAL REQUEST EMAILS (`project-match-requested`,
+ * `project-request-submitted-admin`). Same shape as {@link ProjectStatusEmail} and for the same
+ * reason: the two callers differed ONLY in copy and CTA href, and duplicating the layout put
+ * SonarCloud's new-code duplication at 5.2% against a 3% gate.
+ *
+ * ⚠ COPY IS NOT SHARED, ONLY LAYOUT. The two emails say materially different things — one is an
+ * UNROUTED brief needing a match, the other a DIRECT request needing triage — and collapsing
+ * them into one message would tell Balo the wrong thing about half its requests. Every string
+ * is a prop for exactly that reason.
+ *
+ * ⚠ `ctaHref` is passed whole, not built from an id: these CTAs point at ops surfaces
+ * (`/projects?lens=admin`), not at `/projects/{id}` the way `ProjectStatusEmail` does.
+ */
+/**
+ * The dark small-hero both shared email bodies open with — identical markup in
+ * `OpsRequestEmail` and `ProjectStatusEmail`, which made a 14-line clone between them once the
+ * style names converged. Only the three strings differ.
+ */
+function SmallHero({
+  pillLabel,
+  heroHeading,
+  heroSubtext,
+}: Readonly<{ pillLabel: string; heroHeading: string; heroSubtext: string }>) {
+  return (
+    <Section style={shared.smallHero}>
+      <LogoRow size="small" />
+      <StatusPill label={pillLabel} style={heroPillStyle} />
+      <Heading style={shared.smallHeroHeading}>{heroHeading}</Heading>
+      <Text style={shared.smallHeroSubtext}>{heroSubtext}</Text>
+    </Section>
+  );
+}
+
+export interface OpsRequestEmailProps {
+  readonly previewText: string;
+  readonly baseUrl: string;
+  readonly pillLabel: string;
+  readonly heroHeading: string;
+  readonly heroSubtext: string;
+  readonly bodyText: string;
+  readonly cardLabel: string;
+  readonly projectTitle: string;
+  readonly companyName: string;
+  /** `buildSelectionSummary(...)` output, or an empty string to omit the line. */
+  readonly summary: string;
+  readonly calloutHeading: string;
+  readonly calloutText: string;
+  readonly ctaLabel: string;
+  readonly ctaHref: string;
+  readonly supportPrefix: string;
+}
+
+export function OpsRequestEmail({
+  previewText,
+  baseUrl,
+  pillLabel,
+  heroHeading,
+  heroSubtext,
+  bodyText,
+  cardLabel,
+  projectTitle,
+  companyName,
+  summary,
+  calloutHeading,
+  calloutText,
+  ctaLabel,
+  ctaHref,
+  supportPrefix,
+}: Readonly<OpsRequestEmailProps>) {
+  return (
+    <EmailShell previewText={previewText} baseUrl={baseUrl}>
+      <SmallHero pillLabel={pillLabel} heroHeading={heroHeading} heroSubtext={heroSubtext} />
+
+      {/* ── Body card ── */}
+      <Section style={shared.card}>
+        <Text style={shared.greeting}>Hi team,</Text>
+        <Text style={shared.bodyText}>{bodyText}</Text>
+
+        {/* Project summary */}
+        <Section style={projectCardStyle}>
+          <p style={projectCardLabelStyle}>{cardLabel}</p>
+          <p style={projectCardTitleStyle}>{projectTitle}</p>
+          <p style={projectCardMetaStyle}>From {companyName}</p>
+          {summary ? <p style={projectCardMetaStyle}>{summary}</p> : null}
+        </Section>
+
+        <Callout
+          emoji="⚡"
+          heading={calloutHeading}
+          text={calloutText}
+          bg={colors.accentLight}
+          borderColor={colors.accentBorder}
+          headingColor={colors.accent}
+        />
+
+        <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
+          <Button style={shared.smallCtaButton} href={ctaHref}>
+            {ctaLabel}
+          </Button>
+        </Section>
+
+        <SupportFooter prefix={supportPrefix} />
+      </Section>
+    </EmailShell>
+  );
+}
 
 /** Recipient/project props shared by the A2 project notification emails. */
 export interface ProjectEmailRecipientProps {
@@ -426,13 +560,7 @@ export function ProjectStatusEmail({
 }: ProjectStatusEmailProps) {
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
-      {/* ── Hero ── */}
-      <Section style={shared.smallHero}>
-        <LogoRow size="small" />
-        <StatusPill label={pillLabel} style={heroPill} />
-        <Heading style={shared.smallHeroHeading}>{heroHeading}</Heading>
-        <Text style={shared.smallHeroSubtext}>{heroSubtext}</Text>
-      </Section>
+      <SmallHero pillLabel={pillLabel} heroHeading={heroHeading} heroSubtext={heroSubtext} />
 
       {/* ── Body card ── */}
       <Section style={shared.card}>
@@ -440,9 +568,9 @@ export function ProjectStatusEmail({
         <Text style={shared.bodyText}>{bodyText}</Text>
 
         {/* Project summary */}
-        <Section style={projectCard}>
-          <p style={projectCardLabel}>{summaryLabel}</p>
-          <p style={projectCardTitle}>{projectTitle}</p>
+        <Section style={projectCardStyle}>
+          <p style={projectCardLabelStyle}>{summaryLabel}</p>
+          <p style={projectCardTitleStyle}>{projectTitle}</p>
         </Section>
 
         <Callout

@@ -1,17 +1,5 @@
-import {
-  Calendar,
-  Check,
-  Clock,
-  FileText,
-  Lock,
-  type LucideIcon,
-  MessageSquare,
-  Plus,
-  Send,
-  Sparkles,
-  Users,
-} from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { NUDGE_ICONS, type NudgeIconName } from './nudge-icons';
 import type { RequestLens, ProjectRequestStatus } from '@/lib/project-request/resolve-request-lens';
 import type { RelationshipStatus } from '@/lib/project-request/conversation-view-types';
 import { RequestCard } from './request-card';
@@ -21,12 +9,14 @@ type NudgeVariant = 'action' | 'waiting' | 'done' | 'commit';
 
 interface NudgeButton {
   label: string;
-  icon: LucideIcon;
+  /** ⚠ A TOKEN, never a component — this object crosses into `NudgeActions` ('use client'). */
+  icon: NudgeIconName;
 }
 
 export interface NudgeContent {
   variant: NudgeVariant;
-  icon: LucideIcon;
+  /** ⚠ A TOKEN, never a component. See `./nudge-icons`. */
+  icon: NudgeIconName;
   headline: string;
   sub?: string;
   primary?: NudgeButton;
@@ -99,7 +89,8 @@ export function NudgeBar({
   requestId,
   viewerRelationshipId = null,
 }: Readonly<NudgeBarProps>): React.JSX.Element {
-  const { variant, icon: Icon, headline, sub, primary, secondary } = nudge;
+  const { variant, icon: iconName, headline, sub, primary, secondary } = nudge;
+  const Icon = NUDGE_ICONS[iconName];
   const a = accentClasses(variant);
   const glow = variant === 'action' || variant === 'commit';
 
@@ -150,24 +141,24 @@ type NudgeMap = Partial<Record<ProjectRequestStatus, NudgeContent>>;
 const CLIENT_NUDGES: NudgeMap = {
   requested: {
     variant: 'waiting',
-    icon: Clock,
+    icon: 'clock',
     headline: "We're reviewing your request",
     sub: 'Balo is checking your brief and lining up the right experts — usually within one business day.',
-    secondary: { label: 'Add more detail', icon: Plus },
+    secondary: { label: 'Add more detail', icon: 'plus' },
   },
   exploratory_meeting_requested: {
     variant: 'action',
-    icon: Calendar,
+    icon: 'calendar',
     headline: 'Book your exploratory call with Balo',
     sub: 'A 20-minute call helps us match you precisely. Pick a time that suits you.',
-    primary: { label: 'Book exploratory call', icon: Calendar },
+    primary: { label: 'Book exploratory call', icon: 'calendar' },
   },
   experts_invited: {
     variant: 'waiting',
-    icon: Clock,
+    icon: 'clock',
     headline: 'Experts are reviewing your request',
     sub: "We've invited specialists. You'll be notified the moment one expresses interest.",
-    secondary: { label: 'Message Balo', icon: MessageSquare },
+    secondary: { label: 'Message Balo', icon: 'messageSquare' },
   },
   // accepted / kickoff_approved: the KickoffBoard (BAL-291) owns ALL kickoff
   // messaging + actions for the client, so no global nudge here would conflict.
@@ -176,33 +167,33 @@ const CLIENT_NUDGES: NudgeMap = {
 const EXPERT_NUDGES: NudgeMap = {
   experts_invited: {
     variant: 'action',
-    icon: Send,
+    icon: 'send',
     headline: "You're invited — submit your expression of interest",
     sub: "Balo thinks you're a strong fit. A short, specific EOI starts the conversation.",
-    primary: { label: 'Write your EOI', icon: Send },
-    secondary: { label: 'Re-read the brief', icon: FileText },
+    primary: { label: 'Write your EOI', icon: 'send' },
+    secondary: { label: 'Re-read the brief', icon: 'fileText' },
   },
   eoi_submitted: {
     variant: 'action',
-    icon: Calendar,
+    icon: 'calendar',
     headline: 'Offer the client a time to talk',
     sub: "Clients don't share calendars — propose a couple of times to get ahead.",
-    primary: { label: 'Propose meeting times', icon: Calendar },
-    secondary: { label: 'Send a message', icon: MessageSquare },
+    primary: { label: 'Propose meeting times', icon: 'calendar' },
+    secondary: { label: 'Send a message', icon: 'messageSquare' },
   },
   proposal_requested: {
     variant: 'action',
-    icon: FileText,
+    icon: 'fileText',
     headline: 'Your proposal was requested — build it',
     sub: 'Lay out scope, milestones and pricing. You can save a draft and submit when ready.',
-    primary: { label: 'Build proposal', icon: FileText },
+    primary: { label: 'Build proposal', icon: 'fileText' },
   },
   proposal_submitted: {
     variant: 'waiting',
-    icon: Clock,
+    icon: 'clock',
     headline: 'Your proposal is with the client',
     sub: "They're reviewing it alongside others. Keep the conversation warm.",
-    secondary: { label: 'Send a message', icon: MessageSquare },
+    secondary: { label: 'Send a message', icon: 'messageSquare' },
   },
   // accepted / kickoff_approved: the KickoffBoard (BAL-291) owns ALL kickoff
   // messaging + actions for the winning expert, so no global nudge here.
@@ -211,7 +202,7 @@ const EXPERT_NUDGES: NudgeMap = {
 /** Gated-expert nudge (before invite) — shown alongside the lock card. */
 export const EXPERT_GATED_NUDGE: NudgeContent = {
   variant: 'waiting',
-  icon: Lock,
+  icon: 'lock',
   headline: 'Not yet visible to you',
   sub: "This request is still with the client and Balo admin. You'll be notified by email if you're invited.",
 };
@@ -219,43 +210,43 @@ export const EXPERT_GATED_NUDGE: NudgeContent = {
 const ADMIN_NUDGES: NudgeMap = {
   requested: {
     variant: 'action',
-    icon: Sparkles,
+    icon: 'sparkles',
     headline: 'Triage this new request',
     sub: 'Invite experts now, or request an exploratory call to sharpen scope first.',
-    primary: { label: 'Invite experts', icon: Users },
-    secondary: { label: 'Request exploratory call', icon: Calendar },
+    primary: { label: 'Invite experts', icon: 'users' },
+    secondary: { label: 'Request exploratory call', icon: 'calendar' },
   },
   exploratory_meeting_requested: {
     variant: 'action',
-    icon: Calendar,
+    icon: 'calendar',
     headline: 'Exploratory call requested — awaiting client booking',
     sub: 'Once scope is clear, invite experts.',
-    primary: { label: 'Invite experts', icon: Users },
-    secondary: { label: 'Mark call complete', icon: Check },
+    primary: { label: 'Invite experts', icon: 'users' },
+    secondary: { label: 'Mark call complete', icon: 'check' },
   },
   experts_invited: {
     variant: 'waiting',
-    icon: Clock,
+    icon: 'clock',
     headline: 'Experts invited — awaiting EOIs',
     sub: 'Nudge a quiet expert or invite an alternate.',
-    secondary: { label: 'Invite another', icon: Plus },
+    secondary: { label: 'Invite another', icon: 'plus' },
   },
   eoi_submitted: {
     variant: 'waiting',
-    icon: Clock,
+    icon: 'clock',
     headline: 'Client & experts are connecting',
     sub: 'Step back in at proposals.',
-    secondary: { label: 'View activity', icon: MessageSquare },
+    secondary: { label: 'View activity', icon: 'messageSquare' },
   },
   proposal_requested: {
     variant: 'waiting',
-    icon: Clock,
+    icon: 'clock',
     headline: 'Proposals requested',
     sub: 'Awaiting submissions.',
   },
   proposal_submitted: {
     variant: 'waiting',
-    icon: Clock,
+    icon: 'clock',
     headline: 'Client is reviewing proposals',
     sub: 'The acceptance + kickoff chase lands with you next.',
   },

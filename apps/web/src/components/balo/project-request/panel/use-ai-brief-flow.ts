@@ -157,6 +157,36 @@ export function useAiBriefFlow({
 
   const briefGeneration = useProjectBriefGeneration({ onSucceeded: handleGenerationSucceeded });
 
+  const { cancel: cancelBriefGeneration } = briefGeneration;
+
+  /**
+   * ⚠⚠ ABANDONING THE FLOW CLEARS ITS FAILURE, not just its success.
+   *
+   * `isFlowActive` already declares the flow abandoned the moment the drawer closes (or the
+   * request is submitted), and `handleGenerationSucceeded` discards a parse that lands after
+   * that point. The FAILURE phase had no matching reset, so a failed generate survived
+   * close→reopen: the user reopened the drawer, re-picked the AI path, and met the banner from
+   * the previous attempt — over an empty dropzone, still claiming "Your files are still
+   * attached". `cancel` (not `dismissFailure`) because an abandoned flow should also stop
+   * polling, not merely hide its banner.
+   */
+  useEffect(() => {
+    if (isFlowActive) return;
+    cancelBriefGeneration();
+  }, [isFlowActive, cancelBriefGeneration]);
+
+  /**
+   * ⚠ The banner's copy asserts "Your files are still attached" — false once the last one is
+   * removed, which is exactly what a user does to recover from a failure. Removing the final
+   * document retires the failure with it; `documentCount > 0` is left alone so removing one of
+   * several keeps the banner (its copy is still true, and Try again still has input).
+   */
+  const documentCount = draft.documents.length;
+  useEffect(() => {
+    if (documentCount > 0) return;
+    cancelBriefGeneration();
+  }, [documentCount, cancelBriefGeneration]);
+
   // `PROJECT_AI_GENERATE_FAILED` fires once per failure occurrence (never once per re-render).
   useEffect(() => {
     if (briefGeneration.phase === 'failed' && briefGeneration.failureReason !== null) {

@@ -2,7 +2,6 @@
 
 import { useCallback, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
@@ -10,10 +9,16 @@ import type { RequestLens } from '@/lib/project-request/resolve-request-lens';
 import { requestExploratoryMeetingAction } from '@/app/(dashboard)/projects/[requestId]/_actions/request-exploratory-meeting';
 import { bookExploratoryMeetingAction } from '@/app/(dashboard)/projects/[requestId]/_actions/book-exploratory';
 import { ExpertInviteDialog } from './expert-invite-dialog';
+import { NUDGE_ICONS, type NudgeIconName } from './nudge-icons';
 
 export interface NudgeButtonDescriptor {
   label: string;
-  icon: LucideIcon;
+  /**
+   * ⚠ A TOKEN, NOT A COMPONENT. This descriptor is built in a Server Component and handed
+   * across the RSC boundary into this `'use client'` island; a Lucide icon is a `forwardRef`
+   * object and crashed the render. See `./nudge-icons` for the full account.
+   */
+  icon: NudgeIconName;
 }
 
 interface NudgeActionsProps {
@@ -122,10 +127,13 @@ export function NudgeActions({
 
   const primaryHandler = handlerFor(wired.primary);
   const secondaryHandler = handlerFor(wired.secondary);
+  // Token → component on THIS side of the boundary (the descriptor carries only a name).
+  const PrimaryIcon = primary ? NUDGE_ICONS[primary.icon] : null;
+  const SecondaryIcon = secondary ? NUDGE_ICONS[secondary.icon] : null;
 
   return (
     <div className="mt-3.5 ml-8 flex flex-wrap items-center gap-2.5">
-      {primary && (
+      {primary && PrimaryIcon && (
         <button
           type="button"
           disabled={primaryHandler === undefined || isPending}
@@ -136,11 +144,11 @@ export function NudgeActions({
             isPending && 'opacity-70'
           )}
         >
-          <primary.icon className="h-3.5 w-3.5" aria-hidden="true" />
+          <PrimaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {primary.label}
         </button>
       )}
-      {secondary && (
+      {secondary && SecondaryIcon && (
         <button
           type="button"
           disabled={secondaryHandler === undefined || isPending}
@@ -151,7 +159,7 @@ export function NudgeActions({
             isPending && 'opacity-70'
           )}
         >
-          <secondary.icon className="h-3.5 w-3.5" aria-hidden="true" />
+          <SecondaryIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {secondary.label}
         </button>
       )}

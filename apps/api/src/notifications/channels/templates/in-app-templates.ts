@@ -430,6 +430,47 @@ const templates: Record<string, (data: Record<string, unknown>) => InAppOutput> 
     };
   },
 
+  /**
+   * ⚠ LOAD-BEARING. `getInAppTemplate` does NOT throw on an unknown name — it silently returns
+   * the generic "You have a new notification". An absent entry therefore ships a meaningless
+   * nudge with green CI, which is why `in-app-templates.test.ts` asserts the REAL title + body.
+   *
+   * The EXPERT's copy: they were chosen by name, and they are the one who has to act.
+   */
+  'project-request-submitted': (data) => {
+    const title = (data.title as string) ?? 'a new project';
+    const projectRequestId = data.projectRequestId as string | undefined;
+    return {
+      title: 'New project request for you',
+      body: `A client sent you a direct request for "${title}"`,
+      actionUrl: projectRequestId ? `/projects/${projectRequestId}` : undefined,
+    };
+  },
+
+  /**
+   * The BALO STAFF copy for the same event — a different audience needs a different verb.
+   * The expert is asked to respond; Balo is asked to TRIAGE, which is the word the admin board
+   * uses ("Needs triage").
+   *
+   * ⚠ Names the COMPANY, not a person. `data.company` is hydrated (name only, BAL-530); the
+   * submitting user is NOT on the payload, and `data.expert` carries `{ user: { id } }` with no
+   * name — so there is no person to attribute this to without widening the resolver's
+   * hydration. Naming the party is the correct fallback per the copy rules.
+   *
+   * ⚠ Links to the admin triage board, NOT `/admin/project-requests` — that route does not
+   * exist (the `project-match-requested` EMAIL still points at it, a separate dead link).
+   */
+  'project-request-submitted-admin': (data) => {
+    const company = data.company as { name?: string } | undefined;
+    const companyName = company?.name ?? 'A client';
+    const title = (data.title as string) ?? 'a new project';
+    return {
+      title: 'New request needs triage',
+      body: `${companyName} sent a direct request: "${title}"`,
+      actionUrl: '/projects?lens=admin',
+    };
+  },
+
   'project-expert-invited': (data) => {
     const title = (data.title as string) ?? 'a new project';
     const projectRequestId = data.projectRequestId as string | undefined;

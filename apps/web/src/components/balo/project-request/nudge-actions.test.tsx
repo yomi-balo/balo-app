@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@/test/utils';
-import { FileText } from 'lucide-react';
 
 // The island imports these server actions — mock so it renders without network.
 vi.mock('@/app/(dashboard)/projects/[requestId]/_actions/request-exploratory-meeting', () => ({
@@ -28,7 +27,7 @@ import { NudgeActions } from './nudge-actions';
 
 const REQUEST_ID = 'req-1';
 const RELATIONSHIP_ID = 'rel-build-1';
-const BUILD_PRIMARY = { label: 'Build proposal', icon: FileText };
+const BUILD_PRIMARY = { label: 'Build proposal', icon: 'fileText' } as const;
 
 describe('NudgeActions — A6.2 build-proposal CTA', () => {
   beforeEach(() => {
