@@ -333,6 +333,25 @@ describe('approveKickoffAction', () => {
     expect(log.error).toHaveBeenCalledWith('Failed to approve kickoff', expect.any(Object));
   });
 
+  // fix round R1 — `projectEngagementsRepository.materializeFromKickoff` is one of the eleven
+  // writers serialised on the per-request advisory lock (`_shared/request-lock.ts`) — the
+  // single LARGEST transaction of that set.
+  it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
+    mockMaterializeFromKickoff.mockRejectedValue(
+      Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    );
+    const result = await approveKickoffAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Kickoff approval aborted by lock contention — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, relationshipId: REL_ID, userId: ADMIN.id })
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('does not fail the action when the notification publish rejects', async () => {
     mockPublish.mockRejectedValue(new Error('engine down'));
     const result = await approveKickoffAction(VALID_INPUT);

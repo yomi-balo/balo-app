@@ -390,6 +390,28 @@ describe('submitProposalAction', () => {
     });
   });
 
+  // fix round R1 — `proposalsRepository.promoteToSubmit` is one of the eleven writers
+  // serialised on the per-request advisory lock (`_shared/request-lock.ts`).
+  it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
+    mockPromote.mockRejectedValue(
+      Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    );
+    const result = await submitProposalAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Proposal submit aborted by lock contention — retryable',
+      expect.objectContaining({
+        requestId: REQUEST_ID,
+        relationshipId: REL_ID,
+        proposalId: PROPOSAL_ID,
+      })
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('maps a repo coherence rejection to generic copy + an analytics coherence payload', async () => {
     // The @balo/db guard (defence-in-depth) throws on incoherent committed terms.
     mockPromote.mockRejectedValue(new ProposalCoherenceError('installments_not_100'));

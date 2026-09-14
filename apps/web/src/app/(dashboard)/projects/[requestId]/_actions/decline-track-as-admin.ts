@@ -71,18 +71,21 @@ export async function declineTrackAsAdminAction(
   }
   const { requestId, relationshipId } = parsed.data;
 
-  const request = await projectRequestsRepository.findByIdWithRelations(requestId);
-  if (request === undefined) {
-    return { success: false, error: REQUEST_GONE, code: 'gone' };
-  }
-
-  // IDOR guard — the relationship must belong to THIS request, even for the Balo proxy arm.
-  const relationship = request.relationships.find((r) => r.id === relationshipId);
-  if (relationship === undefined) {
-    return { success: false, error: NOT_DECLINABLE, code: 'not_declinable' };
-  }
-
   try {
+    // BAL-546 (D4) — the read and the IDOR guard below were PREVIOUSLY outside this try: a
+    // rejected read (e.g. a connection reset) threw an unhandled rejection instead of the
+    // generic failure below.
+    const request = await projectRequestsRepository.findByIdWithRelations(requestId);
+    if (request === undefined) {
+      return { success: false, error: REQUEST_GONE, code: 'gone' };
+    }
+
+    // IDOR guard — the relationship must belong to THIS request, even for the Balo proxy arm.
+    const relationship = request.relationships.find((r) => r.id === relationshipId);
+    if (relationship === undefined) {
+      return { success: false, error: NOT_DECLINABLE, code: 'not_declinable' };
+    }
+
     const result = await requestExpertRelationshipsRepository.declineTrack({
       relationshipId,
       actorUserId: user.id,
@@ -134,11 +137,15 @@ export async function declineTrackAsAdminAction(
     if (error instanceof InvalidRelationshipTransitionError) {
       return { success: false, error: NOT_DECLINABLE, code: 'not_declinable' };
     }
-    // See `decline-track.ts` — the cascade's lock set bridges `promoteToSubmit`'s order, so
-    // Postgres can abort this side with 40P01. Expected-rare, self-healing, nothing written.
+    // See `decline-track.ts` (F6) — BAL-546's per-request advisory lock makes the AB/BA cycle
+    // this used to describe against `promoteToSubmit` unreachable; the mapping stays as a
+    // cheap backstop over the residual left by writers outside the serialised set
+    // (orchestrator D6). Expected-rare, self-healing, nothing written. Neutral "lock contention"
+    // message, not a hardcoded SQLSTATE (fix round R5) — the actual code is logged as its own
+    // `sqlstate` field instead.
     const deadlock = deadlockFailure(
       error,
-      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      'Request track decline aborted by lock contention — retryable',
       { requestId, relationshipId, actorUserId: user.id }
     );
     if (deadlock !== null) return deadlock;

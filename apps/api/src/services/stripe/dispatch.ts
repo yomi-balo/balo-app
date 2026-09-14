@@ -933,12 +933,26 @@ async function applyCredit(
  * an open receivable plus dunning against a company that had paid in full. Taking the same
  * advisory lock T2 takes makes the two transactions strictly ordered on this wallet.
  *
- * ⚠ DEADLOCK-FREE, and here is why: `pg_advisory_xact_lock(hashtextextended(walletId, 0))` is
- * the ONLY advisory lock any money path takes, exactly one per transaction (distinct wallets
- * hash to distinct keys and never contend), and it is taken BEFORE any row is touched. With one
- * lock and no second lock class there is no ordering cycle to form; re-taking it inside
- * `applyLedgerEntry` later in the same transaction is a no-op (advisory locks are re-entrant
- * within a session).
+ * ⚠ ON DEADLOCK-FREEDOM, STATED HONESTLY (BAL-546 correction). This comment used to claim "With
+ * one lock and no second lock class there is no ordering cycle to form" — that OVERSTATES the
+ * proof, because ROW locks on `credit_sessions` / `credit_wallets` are locks too, so this was
+ * never a single-lock-class system. It is also no longer even true that there is no second
+ * ADVISORY lock class: BAL-546 added a per-request class,
+ * `packages/db/src/repositories/_shared/request-lock.ts`. What actually holds: the wallet lock
+ * is the only advisory lock any MONEY path takes, at most one per transaction (distinct wallets
+ * hash to distinct keys and never contend), and every writer that touches those rows takes it
+ * BEFORE its first row write. So all row-lock acquisition on a wallet happens underneath one
+ * globally-ordered gate, and two such transactions cannot hold row locks the other needs while
+ * waiting on each other — a property of the CALLERS, not of the lock, true only for as long as
+ * every new writer keeps taking the wallet lock first. The two advisory-lock classes are
+ * disjoint TODAY — no repository FILE takes both (mechanically checked,
+ * `packages/db/src/invariants/an-account-hold-outlives-only-an-unpaid-balance.test.ts`), and
+ * `acquireRequestLock` is not exported from `repositories/index.ts`, so no `apps/*` transaction
+ * can reach it at all. That disjointness is a proof about FILES, not about transactions that
+ * might span two files, one taking each class — that residual case is not mechanically covered.
+ * Should a future transaction ever need both locks: wallet lock FIRST, then request lock.
+ * Re-taking within a transaction is still a no-op (advisory locks are re-entrant within a
+ * session).
  */
 async function handleOverdraftChargeFailed(
   tx: DbTx,

@@ -236,10 +236,38 @@ describe('declineTrackAction', () => {
       error: 'Something ran at the same moment — please try again.',
     });
     expect(log.warn).toHaveBeenCalledWith(
-      'Request track decline aborted by a Postgres deadlock (40P01) — retryable',
+      'Request track decline aborted by lock contention — retryable',
       expect.objectContaining({ requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID })
     );
     expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('a rejected pre-flight read (findByIdWithRelations) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockFindByIdWithRelations.mockRejectedValue(new Error('connection reset'));
+    const result = await declineTrackAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not decline this track. Please try again.',
+    });
+    expect(mockDeclineTrack).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to decline request track',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'connection reset' })
+    );
+  });
+
+  it('a rejected capability read (getMemberRole) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockGetMemberRole.mockRejectedValue(new Error('membership read failed'));
+    const result = await declineTrackAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not decline this track. Please try again.',
+    });
+    expect(mockDeclineTrack).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to decline request track',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'membership read failed' })
+    );
   });
 
   it('a generic thrown error is logged and returns a generic failure', async () => {

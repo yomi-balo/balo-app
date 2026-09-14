@@ -243,7 +243,7 @@ describe('closeRequestAction', () => {
       error: 'Something ran at the same moment — please try again.',
     });
     expect(log.warn).toHaveBeenCalledWith(
-      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      'Project request close aborted by lock contention — retryable',
       expect.objectContaining({ requestId: REQUEST_ID, actorUserId: USER.id })
     );
     expect(log.error).not.toHaveBeenCalled();
@@ -259,6 +259,34 @@ describe('closeRequestAction', () => {
     expect(log.error).toHaveBeenCalledWith(
       'Failed to close project request',
       expect.objectContaining({ requestId: REQUEST_ID, error: 'db exploded' })
+    );
+  });
+
+  it('a rejected pre-flight read (findByIdWithRelations) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockFindByIdWithRelations.mockRejectedValue(new Error('connection reset'));
+    const result = await closeRequestAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not close the request. Please try again.',
+    });
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to close project request',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'connection reset' })
+    );
+  });
+
+  it('a rejected capability read (getMemberRole) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockGetMemberRole.mockRejectedValue(new Error('membership read failed'));
+    const result = await closeRequestAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not close the request. Please try again.',
+    });
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to close project request',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'membership read failed' })
     );
   });
 });

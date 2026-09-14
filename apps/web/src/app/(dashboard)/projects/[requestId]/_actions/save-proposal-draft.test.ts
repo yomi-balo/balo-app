@@ -231,4 +231,23 @@ describe('saveProposalDraftAction', () => {
     });
     expect(log.error).toHaveBeenCalledWith('Failed to save proposal draft', expect.any(Object));
   });
+
+  // ── fix round R1 — 55P03 on the per-request advisory lock's gate wait ─────────────
+  // `createDraft` is THE named driving example for the lock-timeout fix: the un-rate-limited
+  // autosave path queuing behind another writer's held lock.
+  it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
+    mockCreateDraft.mockRejectedValue(
+      Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    );
+    const result = await saveProposalDraftAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Proposal draft autosave aborted by lock contention — retryable',
+      expect.objectContaining({ requestId: REQUEST_ID, relationshipId: REL_ID, userId: USER.id })
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
 });

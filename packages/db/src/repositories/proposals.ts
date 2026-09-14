@@ -8,6 +8,10 @@ import {
   type Proposal,
   type ProposalChangeRequest,
 } from '../schema';
+import {
+  acquireRequestLockViaProposalTx,
+  acquireRequestLockViaRelationshipTx,
+} from './_shared/request-lock';
 import { advanceRelationshipStatus } from './request-expert-relationships';
 import {
   insertMilestonesTx,
@@ -363,6 +367,11 @@ export const proposalsRepository = {
     cadence?: ProposalCadence;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6; see
+      // `_shared/request-lock.ts`). Moves the pure `assertProposalCoherent` guard below to AFTER
+      // the lock — harmless, it is in-memory with no I/O.
+      await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
+
       // Coherence guard — supplied header, no children (legacy header-only insert).
       assertProposalCoherent(
         toCoherenceSnapshot(
@@ -443,22 +452,20 @@ export const proposalsRepository = {
    * a fresh `draft` onto a track the close / decline cascade had just ended — an open proposal
    * on a terminal request, which every downstream reader treats as live work.
    *
-   * ⚠ THIS CLOSES THE POST-COMMIT HALF ONLY. IT DOES NOT CLOSE THE RACE, AND MUST NOT BE READ
-   * AS DOING SO. What it stops is an autosave that ARRIVES AFTER the close/decline has
-   * COMMITTED (by far the common case — a stale tab, a debounced save in flight when the client
-   * clicks close). The genuine race remains OPEN: if `createDraft` holds the relationship lock
-   * while `close()` sits between its step-1 proposal snapshot and its step-2 relationship lock,
-   * `close()` has ALREADY taken its snapshot, so the draft this method is about to insert is
-   * still missed by the cascade and survives the close un-withdrawn. Same window for
-   * `declineTrack` (whose step-1 snapshot is per-relationship). Taking the request lock
-   * `FOR UPDATE` here instead of a plain read would NOT close it either — the cascade's proposal
-   * snapshot precedes both locks — while adding a lock edge for nothing. The real fix is the
-   * cascade re-reading the open-proposal set after its request lock; see the KNOWN RESIDUAL
-   * paragraph on `projectRequestsRepository.close` and its follow-up ticket.
+   * ⚠ BAL-546 — THE RACE HALF IS NOW CLOSED ON BOTH SIDES; THE PARAGRAPH BELOW USED TO SAY IT
+   * WAS NOT, AND THAT IS NOW WRONG. `createDraft` takes the per-request advisory lock (D7) as
+   * the transaction's FIRST LOCK (not literally its first statement — fix round R6), so it can
+   * no longer run WHILE `close()`/`declineTrack` hold it. And the
+   * cascade's union re-read (`project-requests.ts`'s step 5b) catches an insert from any writer
+   * that does not take the lock. What it stops is an autosave that ARRIVES AFTER the
+   * close/decline has COMMITTED (by far the common case — a stale tab, a debounced save in
+   * flight when the client clicks close) via the `ProposalTrackNotOpenError` guard above; what
+   * used to remain open — a draft inserted WHILE the cascade sat between its snapshot and its
+   * lock — is now unreachable, because both paths queue on the same advisory lock.
    *
-   * The request status read is a PLAIN select on `tx`, not `FOR UPDATE`: it adds no lock edge,
-   * so it introduces no new deadlock class. Were it ever locked, the order would have to stay
-   * relationship → request (`advanceRelationshipStatus`'s documented order), never the reverse.
+   * The request status read below is a PLAIN select on `tx`, not `FOR UPDATE`: it adds no lock
+   * edge of its own, and it does not need one — the whole transaction already runs under the
+   * per-request advisory lock, which is what actually orders it against the cascade.
    */
   async createDraft(input: {
     relationshipId: string;
@@ -473,6 +480,9 @@ export const proposalsRepository = {
     cadence?: ProposalCadence;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
+      await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
+
       const [relationship] = await tx
         .select()
         .from(requestExpertRelationships)
@@ -618,6 +628,11 @@ export const proposalsRepository = {
    * and advances the spine. Takes only ids.
    *
    * STRICT order inside the tx (matches `submit()`: relationship spine first):
+   *   0. BAL-546 — `acquireRequestLockViaRelationshipTx`, the per-request advisory lock — the
+   *      transaction's FIRST LOCK (R6). Every other multi-table request-domain writer takes
+   *      this same lock first, so this
+   *      transaction's row-lock order below is observed under a gate no other serialised writer
+   *      can be inside; a future writer that locks both must still preserve it.
    *   1. `advanceRelationshipStatus(tx, { id: relationshipId, to:'proposal_submitted',
    *      expectedFrom:'proposal_requested' })` — locks + validates the spine.
    *   2. update the proposal: status `draft → submitted` guarded via the shared
@@ -647,6 +662,9 @@ export const proposalsRepository = {
     actorUserId: string;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
+      // 0. BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
+      await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
+
       // 1. Advance the relationship spine first (locks + validates).
       await advanceRelationshipStatus(tx, {
         id: input.relationshipId,
@@ -663,7 +681,10 @@ export const proposalsRepository = {
       // coherence snapshot is provably the row that advanceProposalStatus then flips
       // — no plain-read TOCTOU window before the lock. (Lock order is unchanged: the
       // relationship is already locked above, and advanceProposalStatus re-locks this
-      // same row, so no new deadlock hazard.)
+      // same row, so no new deadlock hazard — narrower than it reads, since it was only ever
+      // about this header FOR UPDATE relative to promoteToSubmit's own pre-existing shape, never
+      // a claim of global freedom. BAL-546 is the real reason it is now moot: this whole
+      // transaction runs under the per-request advisory lock.)
       const [header] = await tx
         .select()
         .from(proposals)
@@ -774,6 +795,12 @@ export const proposalsRepository = {
    * no longer caller-owned. Still creates NO delivery/engagement record (A6.5 owns
    * that).
    *
+   * BAL-546 — this transaction takes the per-request advisory lock as its FIRST LOCK (not
+   * literally its first statement — fix round R6; `acquireRequestLockViaProposalTx` resolves
+   * the request id via one unlocked read first), so the row-lock order below is observed under a gate no
+   * other serialised request-domain writer can be inside; a future writer that locks both proposal
+   * and relationship rows must still preserve it.
+   *
    * LOCK ORDER: proposal row first (FOR UPDATE), then the relationship row (via
    * `advanceRelationshipStatus`). Any future writer that locks both must preserve
    * this order to avoid a deadlock cycle.
@@ -784,6 +811,9 @@ export const proposalsRepository = {
     actorUserId: string;
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6).
+      await acquireRequestLockViaProposalTx(tx, input.id);
+
       // Lock the proposal first and capture its relationship id (also validates
       // the proposal is live + currently `submitted` before we touch the spine).
       const [current] = await tx
@@ -918,6 +948,12 @@ export const proposalsRepository = {
     installments: ProposalPaymentInstallmentInput[];
   }): Promise<Proposal> {
     return db.transaction(async (tx) => {
+      // BAL-546 — the per-request advisory lock, the transaction's FIRST LOCK (R6). `resubmit`
+      // is the LIVE insert-based producer of open proposals (orchestrator D3) — the writer the
+      // close/decline cascades' union re-read exists to defend against, so it must take this lock
+      // like every other serialised writer.
+      await acquireRequestLockViaRelationshipTx(tx, input.relationshipId);
+
       // COHERENCE (BAL-293): the caller supplies the full v2 header + children, so
       // assert at the TOP of the tx, BEFORE the flip-then-insert. Throw → tx rolls
       // back: v1 keeps `is_current`/`changes_requested`, no v2 row, no child writes.

@@ -229,7 +229,7 @@ describe('closeRequestAsAdminAction', () => {
       error: 'Something ran at the same moment — please try again.',
     });
     expect(log.warn).toHaveBeenCalledWith(
-      'Project request close aborted by a Postgres deadlock (40P01) — retryable',
+      'Project request close aborted by lock contention — retryable',
       expect.objectContaining({ requestId: REQUEST_ID, actorUserId: ADMIN.id })
     );
     expect(log.error).not.toHaveBeenCalled();
@@ -245,6 +245,20 @@ describe('closeRequestAsAdminAction', () => {
     expect(log.error).toHaveBeenCalledWith(
       'Failed to close project request as admin',
       expect.objectContaining({ requestId: REQUEST_ID, error: 'db exploded' })
+    );
+  });
+
+  it('a rejected pre-flight read (findByIdWithRelations) is caught and returns the generic failure result, not an unhandled rejection', async () => {
+    mockFindByIdWithRelations.mockRejectedValue(new Error('connection reset'));
+    const result = await closeRequestAsAdminAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Could not close the request. Please try again.',
+    });
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to close project request as admin',
+      expect.objectContaining({ requestId: REQUEST_ID, error: 'connection reset' })
     );
   });
 });

@@ -339,6 +339,28 @@ describe('acceptProposalAction', () => {
     expect(log.error).toHaveBeenCalledWith('Failed to accept proposal', expect.any(Object));
   });
 
+  // fix round R1 — `proposalsRepository.accept` is one of the eleven writers serialised on the
+  // per-request advisory lock (`_shared/request-lock.ts`).
+  it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
+    mockAccept.mockRejectedValue(
+      Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    );
+    const result = await acceptProposalAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Proposal accept aborted by lock contention — retryable',
+      expect.objectContaining({
+        requestId: REQUEST_ID,
+        relationshipId: REL_ID,
+        proposalId: PROPOSAL_ID,
+      })
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('keeps the accept committed (success, transitioned:false) when the best-effort status re-read throws', async () => {
     // A failure on the analytics-only re-read is logged and swallowed — the
     // already-committed accept must still succeed (BAL-295).

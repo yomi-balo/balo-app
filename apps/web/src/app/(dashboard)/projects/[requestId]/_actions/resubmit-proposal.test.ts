@@ -487,6 +487,29 @@ describe('resubmitProposalAction', () => {
     expect(log.error).toHaveBeenCalledWith('Resubmit proposal failed', expect.any(Object));
   });
 
+  // fix round R1 — `proposalsRepository.resubmit` is one of the eleven writers serialised on
+  // the per-request advisory lock (`_shared/request-lock.ts`) — the LIVE insert-based producer
+  // of open proposals (orchestrator D3).
+  it('maps a Postgres lock timeout (55P03) to retryable copy and a WARN, not an error', async () => {
+    mockResubmit.mockRejectedValue(
+      Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    );
+    const result = await resubmitProposalAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'Something ran at the same moment — please try again.',
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Proposal resubmit aborted by lock contention — retryable',
+      expect.objectContaining({
+        requestId: REQUEST_ID,
+        relationshipId: REL_ID,
+        fromProposalId: V1_ID,
+      })
+    );
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('logs the business event after the version bump', async () => {
     await resubmitProposalAction(VALID_INPUT);
     expect(log.info).toHaveBeenCalledWith('Proposal resubmitted', expect.any(Object));

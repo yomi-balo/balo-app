@@ -8,6 +8,7 @@ import { projectRequestsRepository, requestExpertRelationshipsRepository } from 
 import { requireAdmin } from '@/lib/auth/require-admin';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { lockContentionFailure } from './_shared/deadlock';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -161,6 +162,17 @@ export async function inviteExpertsAction(
       invited,
     };
   } catch (error) {
+    // ⚠ fix round R1 — `requestExpertRelationshipsRepository.invite` is one of the eleven
+    // writers serialised on the per-request advisory lock (`_shared/request-lock.ts`) — it is
+    // the racer named in `close()`'s own KNOWN RESIDUAL block. A 55P03 here means the invite
+    // never wrote anything and a retry queues again. WARN + retryable copy, checked BEFORE the
+    // generic fallback below — never `log.error` for an expected-rare, self-healing event.
+    const lockContention = lockContentionFailure(
+      error,
+      'Expert invite aborted by lock contention — retryable',
+      { requestId, adminUserId: admin.id }
+    );
+    if (lockContention !== null) return lockContention;
     log.error('Failed to invite experts', {
       requestId,
       error: error instanceof Error ? error.message : String(error),

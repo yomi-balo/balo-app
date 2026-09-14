@@ -16,6 +16,7 @@ import { requireOnboardedUser } from '@/lib/auth/session';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { log } from '@/lib/logging';
 import { proposalDraftBaseFields } from './proposal-schema';
+import { lockContentionFailure } from './_shared/deadlock';
 
 /**
  * Autosave payload (A6.2 / BAL-288). The composer sends its FULL current draft
@@ -186,6 +187,19 @@ export async function saveProposalDraftAction(
       });
       return { success: false, error: STALE_DRAFT };
     }
+    // ⚠ fix round R1 — `createDraft` is THE named driving example for this ticket's per-request
+    // advisory lock timeout (`_shared/request-lock.ts`'s R1(a) docblock): this is the
+    // un-rate-limited autosave path, so it is the writer most likely to queue behind another
+    // writer's held lock and hit 55P03. Before this fix, that landed here as `log.error` +
+    // Sentry noise for an event the lock's own docblock defines as expected-rare and
+    // self-healing — never write-then-nothing, since a 55P03 means the transaction never wrote
+    // anything at all. WARN, retryable copy, checked BEFORE the generic fallback below.
+    const lockContention = lockContentionFailure(
+      error,
+      'Proposal draft autosave aborted by lock contention — retryable',
+      { requestId, relationshipId, userId: user.id }
+    );
+    if (lockContention !== null) return lockContention;
     log.error('Failed to save proposal draft', {
       requestId,
       relationshipId,
