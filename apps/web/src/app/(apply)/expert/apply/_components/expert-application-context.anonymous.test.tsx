@@ -70,6 +70,7 @@ function Harness(): React.JSX.Element {
     updateStepData,
     saveAnonymousDraftNow,
     goNext,
+    goToStep,
   } = useWizard();
   return (
     <div>
@@ -101,6 +102,9 @@ function Harness(): React.JSX.Element {
       </button>
       <button type="button" onClick={() => void goNext()}>
         next
+      </button>
+      <button type="button" onClick={() => goToStep(0)}>
+        rail-click-first
       </button>
     </div>
   );
@@ -926,5 +930,91 @@ describe('BAL-562 — a malformed stored slice cannot crash the restored wizard'
     expect(screen.getByTestId('year').textContent).toBe('unset');
     expect(screen.getByTestId('languages').textContent).toBe('0');
     expect(screen.getByTestId('products').textContent).toBe('none');
+  });
+});
+
+describe('BAL-562 — bookkeeping writes must not count as activity (savedAt is the kiosk signal)', () => {
+  // Older than AUTH_GATE_FLUSH_WINDOW_MS, younger than ANON_DRAFT_MAX_AGE_MS: an
+  // application abandoned in this tab a while ago, still on disk.
+  const ABANDONED_AT = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+
+  function seedAbandonedEnvelope(): void {
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: ABANDONED_AT,
+      currentStep: 4,
+      maxReachedStep: 5,
+      stepStatuses: [
+        'completed',
+        'completed',
+        'completed',
+        'completed',
+        'pending',
+        'pending',
+        'pending',
+      ],
+      steps: { profile: { yearStartedSalesforce: 2016 } },
+    });
+  }
+
+  /**
+   * THE REGRESSION PROBE for the interaction between the two fixes. The transition
+   * effect fires on every restoring mount — the rail restore hands `setStepStatuses` a
+   * freshly-allocated array, so its dep identity always changes — and it writes
+   * `buildAnonymousEnvelope()`, which mints a new `savedAt`. That is the exact field
+   * `stampAuthGate` measures. Let it mint, and a second person at this tab need only
+   * reload before clicking "Log in" for the idle check to pass and the flush to hand
+   * them the first person's application.
+   */
+  it('a restoring mount does not reset the idle clock', () => {
+    seedAbandonedEnvelope();
+
+    renderHarness(null, null);
+
+    expect(screen.getByTestId('current').textContent).toBe('4'); // the restore ran
+    expect(readAnonymousDraft()?.savedAt).toBe(ABANDONED_AT);
+  });
+
+  it('the draft therefore stays unclaimable after a reload — the mitigation survives', () => {
+    seedAbandonedEnvelope();
+
+    renderHarness(null, null);
+
+    expect(stampAuthGate()).toBe(false);
+    expect(readAnonymousDraft()?.authGateAt).toBeUndefined();
+  });
+
+  /**
+   * A rail click routes through `saveIfDirty`, which writes nothing when the step is
+   * clean — so the ONLY write here is the transition effect. Storage moving to step 0
+   * proves it fired, which is what stops this test passing vacuously.
+   */
+  it('a rail click records the new position without counting as work', () => {
+    seedAbandonedEnvelope();
+    renderHarness(null, null);
+
+    fireEvent.click(screen.getByRole('button', { name: 'rail-click-first' }));
+
+    const stored = readAnonymousDraft();
+    expect(stored?.currentStep).toBe(0); // the transition write definitely ran
+    expect(stored?.savedAt).toBe(ABANDONED_AT); // and it was not treated as activity
+    expect(stampAuthGate()).toBe(false);
+  });
+
+  it('but real work DOES refresh the clock, so an active applicant is never locked out of their own draft', async () => {
+    seedAbandonedEnvelope();
+    renderHarness(null, null);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+    await user.click(screen.getByRole('button', { name: 'edit-profile' }));
+
+    await waitFor(
+      () => {
+        expect(readAnonymousDraft()?.savedAt).not.toBe(ABANDONED_AT);
+      },
+      { timeout: 3000 }
+    );
+    expect(stampAuthGate()).toBe(true);
   });
 });

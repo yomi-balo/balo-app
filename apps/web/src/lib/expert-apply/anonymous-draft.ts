@@ -42,13 +42,35 @@ export type StepStatus = (typeof STEP_STATUS_VALUES)[number];
  * measure against it: `stampAuthGate` refuses to stamp a draft nobody has touched
  * within it, and the wizard's post-auth flush refuses to adopt a draft not stamped
  * within it. Two constants would let those halves drift apart silently.
+ *
+ * BAL-502 FIX round (WARNING 6) — an anonymous envelope carries no identity of its own,
+ * so any session that shows up in this tab can claim it. A window this generous covers
+ * the slowest realistic path — fill the wizard, hit Submit, complete a WorkOS OAuth
+ * round-trip including a provider login — with margin, while still narrowing the
+ * shared/kiosk-browser hazard where a draft could otherwise sit claimable indefinitely.
+ * A stricter per-visitor confirmation ("We found an application in progress — is this
+ * yours?") was considered and deferred as a full UI surface for a hazard needing the
+ * SAME tab open AND a second person signing in inside the window. ⚠ BAL-562 narrowed
+ * that argument — a one-click "Log in" now sits on all seven steps and also stamps — so
+ * the deferral is re-opened on BAL-562 rather than silently inherited.
  */
 export const AUTH_GATE_FLUSH_WINDOW_MS = 30 * 60 * 1000;
 
 /** The SERIALIZED artifact, not the in-memory wizard state. Validated on every read. */
 export interface AnonymousApplicationDraftV1 {
   v: 1;
-  savedAt: string; // ISO
+  /**
+   * ISO. "When was this application last WORKED ON" — not "last serialized".
+   *
+   * BAL-562 — load-bearing twice over: it ages the envelope out at
+   * `ANON_DRAFT_MAX_AGE_MS`, and `stampAuthGate` reads it as the activity signal that
+   * decides whether a draft is still claimable. Any write that is not the visitor
+   * entering or saving data must therefore CARRY THE STORED VALUE FORWARD rather than
+   * mint a fresh one — see the wizard's transition write, which persists position and
+   * rail only. Refreshing it there would let a mere page load or a rail click reset
+   * the idle clock and hand the whole mitigation back.
+   */
+  savedAt: string;
   currentStep: number;
   maxReachedStep: number;
   steps: Partial<Record<StepKey, unknown>>;
@@ -253,8 +275,17 @@ export function stampAuthGate(store?: Storage): boolean {
   // passes even after a long read of the terms; one abandoned on a shared machine does
   // not. The submit gate needs no equivalent check — reaching it means filling the
   // final step, which refreshes `savedAt` on the way.
+  // A NEGATIVE age is rejected as well as an over-window one, mirroring the flush
+  // guard's reasoning exactly: a future-dated `savedAt` would otherwise keep a draft
+  // "freshly worked on" indefinitely and re-open the very window this bounds. Only a
+  // timestamp in the past can describe work that has actually happened.
+  //
+  // `Number.isFinite` is belt-and-braces: an unparseable `savedAt` is already cleared
+  // upstream by `readAnonymousDraft`, so that arm is not independently reachable here.
   const idleMs = Date.now() - Date.parse(existing.savedAt);
-  if (!Number.isFinite(idleMs) || idleMs > AUTH_GATE_FLUSH_WINDOW_MS) return false;
+  if (!Number.isFinite(idleMs) || idleMs < 0 || idleMs > AUTH_GATE_FLUSH_WINDOW_MS) {
+    return false;
+  }
 
   return writeAnonymousDraft({ ...existing, authGateAt: new Date().toISOString() }, resolved);
 }

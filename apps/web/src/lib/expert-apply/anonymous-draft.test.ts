@@ -379,11 +379,30 @@ describe('BAL-562 — stampAuthGate refuses an abandoned draft (the window must 
     expect(readAnonymousDraft(store)?.authGateAt).toEqual(expect.any(String));
   });
 
-  it('refuses an unparseable savedAt rather than treating it as fresh', () => {
+  it('refuses a FUTURE-dated savedAt — a forward stamp must not buy unlimited stampability', () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: future })),
+    });
+
+    // `readAnonymousDraft` lets this through (its age check only rejects OLD envelopes),
+    // so unlike the unparseable case below, this arm is genuinely reached here.
+    expect(readAnonymousDraft(store)).not.toBeNull();
+    expect(stampAuthGate(store)).toBe(false);
+  });
+
+  /**
+   * Retained, but honestly labelled: this passes because `readAnonymousDraft` already
+   * clears an unparseable `savedAt` and returns null, so `stampAuthGate` exits at the
+   * `!existing` guard and never evaluates its own `Number.isFinite` arm. It pins the
+   * end-to-end behaviour, NOT that clause — deleting the clause leaves it green.
+   */
+  it('refuses an unparseable savedAt (guarded upstream by readAnonymousDraft, not by the idle check)', () => {
     const store = makeFakeStorage({
       [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: 'not-a-date' })),
     });
 
+    expect(readAnonymousDraft(store)).toBeNull();
     expect(stampAuthGate(store)).toBe(false);
   });
 

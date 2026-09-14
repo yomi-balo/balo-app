@@ -318,8 +318,13 @@ function hydrateWorkHistoryData(
  * `profileStepDraftSchema` REQUIRES `languages` and `industryIds` (they are `.extend`ed
  * onto the partial, not optional), so a slice written by a build that predates a field
  * would fail outright and lose the ENTIRE step — strictly worse than the narrow gap it
- * would close. Merging supplies the missing keys from `hydrate*(null)` instead, and this
- * guard covers the only shape mismatch that turns into a crash rather than a bad value.
+ * would close. Merging supplies the missing keys from `hydrate*(null)` instead.
+ *
+ * ⚠ SHALLOW BY DESIGN, and the residual is real: this catches an array replaced by a
+ * non-array, not an array whose ELEMENTS are wrong. `languages: [null]` still reaches
+ * `l.languageId` and crashes exactly as a string would. Guarding element shape means
+ * per-field schemas, which is the option rejected above; the trade is deliberate, so do
+ * not read this helper as closing the crash class outright.
  */
 function mergeRestoredSlice<T extends object>(prev: T, incoming: Record<string, unknown>): T {
   const safe: Record<string, unknown> = {};
@@ -366,23 +371,11 @@ const FLUSH_SUPERSEDED_TOAST =
   "What you just entered here wasn't added to your account, so nothing gets overwritten.";
 const FLUSH_FAILED_TOAST = "We couldn't restore your saved progress. Please try again.";
 
-/**
- * BAL-502 FIX round (WARNING 6) — an anonymous envelope carries no identity of its own;
- * any session that shows up in this tab can claim it. `AUTH_GATE_FLUSH_WINDOW_MS` (now
- * owned by `@/lib/expert-apply/anonymous-draft`, so the stamp guard and this flush guard
- * cannot drift) bounds how long a draft stays claimable. A window this generous covers
- * the slowest realistic path — fill the wizard, hit Submit, complete a WorkOS OAuth
- * round-trip including a provider login — with margin, while still narrowing the
- * shared/kiosk-browser hazard where a draft could otherwise sit claimable indefinitely.
- *
- * A stricter per-visitor confirmation ("We found an application in progress — is this
- * yours?") was considered and deferred: it adds a full UI surface + copy for a hazard
- * that requires the SAME tab to still be open AND a second person signing in within the
- * window. ⚠ BAL-562 narrowed that argument — a one-click "Log in" now sits on all seven
- * steps and also stamps, which is more reachable by a second person than the submit gate
- * was. `stampAuthGate` mitigates with an idle check; the deferral itself is re-opened on
- * BAL-562 rather than silently inherited.
- */
+// WARNING 6's rationale — why an anonymous envelope needs a claimability window at all,
+// and why the per-visitor "is this yours?" confirmation was deferred — lives with
+// `AUTH_GATE_FLUSH_WINDOW_MS` in `@/lib/expert-apply/anonymous-draft`, beside the artifact
+// it describes. It was a JSDoc block here until BAL-562 moved the constant out, which left
+// it dangling onto the provider below as if it documented that.
 
 export function ExpertApplicationProvider({
   children,
@@ -678,6 +671,12 @@ export function ExpertApplicationProvider({
   // persisting — this must not be what brings an envelope into being. The first run is
   // skipped so it can never clobber the resume effect above before the restored state
   // has been committed.
+  //
+  // Known and accepted: a forward navigation writes TWICE — once when `currentStep`
+  // changes, once when the `maxReachedStep` tracker below catches up. Both writes are
+  // local, and byte-identical now that `savedAt` is carried forward, so the second is a
+  // no-op in effect. Deduping would cost a read-and-compare on every transition to save
+  // one `sessionStorage.setItem`.
   const hasSkippedInitialPositionWriteRef = useRef(false);
   useEffect(() => {
     if (!isAnonymous) return;
@@ -685,8 +684,18 @@ export function ExpertApplicationProvider({
       hasSkippedInitialPositionWriteRef.current = true;
       return;
     }
-    if (readAnonymousDraft() === null) return;
-    writeAnonymousDraft(buildAnonymousEnvelope());
+    const stored = readAnonymousDraft();
+    if (stored === null) return;
+    // ⚠ CARRY `savedAt` FORWARD — do not let `buildAnonymousEnvelope`'s fresh stamp
+    // stand. This effect fires on every restoring mount (the rail restore hands
+    // `setStepStatuses` a newly-allocated array, so the dep identity always changes)
+    // and on every rail click. `savedAt` is the activity signal `stampAuthGate` reads
+    // to decide whether a draft is still claimable, so minting a new one here would
+    // mean a mere page load — including arriving from the marketing header's "For
+    // experts" link — reset the idle clock and hand the whole mitigation back: a
+    // second person at this tab could reload, click "Log in", and carry off the
+    // first person's application. Position and rail are bookkeeping, not work.
+    writeAnonymousDraft({ ...buildAnonymousEnvelope(), savedAt: stored.savedAt });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, maxReachedStep, stepStatuses, isAnonymous]);
 
