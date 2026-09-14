@@ -835,12 +835,30 @@ describe('Group B — concurrent writers on the same request never see 40P01', (
     expect(await openProposalsForRequest(seed.requestId)).toEqual([]);
   });
 
-  it('concurrent invite × close: no live track survives a committed close', async () => {
+  // ⚠⚠ fix round — SPLIT FROM ONE AMBIGUOUS "concurrent invite × close" TEST INTO TWO
+  // DETERMINISTIC ONES, EMPIRICALLY, NOT BY ASSUMPTION. The prior single test issued `close`'s
+  // blocking call before `invite`'s and then branched on `inviteOutcome.status`, as if the winner
+  // were genuinely random. It is not: `issueContenderBlockedOnGate` only returns once
+  // `waitUntilBlockedBy` confirms, AT THE DATABASE, that the session is already parked in
+  // Postgres's advisory-lock wait queue — so whichever side's blocking call is issued (and
+  // confirmed) FIRST is first in that FIFO queue and reliably wins the race once the gate
+  // releases. Measured directly: swapping the issuance order 10/10 times flips the winner
+  // 10/10 times (never once split) — this is deterministic-by-construction, not a coin flip.
+  // Consequently the OLD single test's fixed order (close first) could ONLY ever reach the
+  // close-won branch — `seedBareRequest()` seeds no relationship, so its
+  // `relationships.every(…)` ran on an empty array on every real run, which is exactly the
+  // vacuous-assertion defect this fix round exists to close. The two tests below issue each
+  // side first in turn, so each branch is exercised for real, every run, and each gets its own
+  // non-vacuous row-count assertion (mirroring Group C's `toHaveLength(2)` discipline) rather
+  // than a `.every()` that would pass trivially on an empty array either way.
+  it('concurrent invite × close, close wins the gate: invite is refused under the lock, before any row is inserted', async () => {
     const seed = await seedBareRequest();
     const actorUserId = await seedActorId();
 
     const held = await holdOpen(gateDb, (tx) => acquireRequestLock(tx, seed.requestId));
 
+    // close's blocking call is issued (and confirmed blocked) FIRST — see the fix-round note
+    // above for why that deterministically makes close win the gate once it is released.
     const { closing } = await issueCloseBlockedOnGate(aDb, aPid, seed.requestId, actorUserId);
 
     const { contender: inviting } = await issueContenderBlockedOnGate(bDb, bPid, () =>
@@ -856,11 +874,50 @@ describe('Group B — concurrent writers on the same request never see 40P01', (
       closing,
       inviting
     );
+
+    expect(inviteOutcome.status).toBe('rejected');
     if (inviteOutcome.status === 'rejected') {
       expect(inviteOutcome.reason).toBeInstanceOf(RequestClosedError);
     }
 
+    // MUTATION TARGET (this branch): remove `invite`'s `if (request?.status === 'closed') throw
+    // new RequestClosedError(…)` guard in `request-expert-relationships.ts` and this goes RED —
+    // a relationship would be inserted despite the request already being closed.
     const relationships = await liveRelationshipsForRequest(seed.requestId);
+    expect(relationships).toHaveLength(0);
+  });
+
+  it('concurrent invite × close, invite wins the gate: its relationship is created, then declined by close’s cascade', async () => {
+    const seed = await seedBareRequest();
+    const actorUserId = await seedActorId();
+
+    const held = await holdOpen(gateDb, (tx) => acquireRequestLock(tx, seed.requestId));
+
+    // invite's blocking call is issued (and confirmed blocked) FIRST this time — the mirror
+    // image of the sibling test above, so invite reliably wins the gate instead of close.
+    const { contender: inviting } = await issueContenderBlockedOnGate(bDb, bPid, () =>
+      requestExpertRelationshipsRepository.invite({
+        projectRequestId: seed.requestId,
+        expertProfileId: seed.expertProfileId,
+        invitedByUserId: actorUserId,
+      })
+    );
+
+    const { closing } = await issueCloseBlockedOnGate(aDb, aPid, seed.requestId, actorUserId);
+
+    const { contenderOutcome: inviteOutcome } = await settleRaceAgainstGate(
+      held,
+      closing,
+      inviting
+    );
+
+    expect(inviteOutcome.status).toBe('fulfilled');
+
+    // MUTATION TARGET (this branch): confirmed RED when `invite`'s insert is forced to a no-op
+    // (see the fix-round report) — `toHaveLength(1)` catches the empty-array shape that a bare
+    // `.every()` would have passed vacuously.
+    const relationships = await liveRelationshipsForRequest(seed.requestId);
+    expect(relationships).toHaveLength(1);
     expect(relationships.every((r) => r.status === 'declined')).toBe(true);
   });
 

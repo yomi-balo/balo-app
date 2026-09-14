@@ -111,19 +111,22 @@ describe('acquireRequestLock — lock_timeout scoping (fix round R1(a)/R2/R9)', 
       // value is '0' today, but the assertion below does not hardcode that; it compares against
       // this capture.
       //
-      // ⚠ BAL-559 INTERACTION (see `_shared/request-lock.ts`'s R9 docblock section for the full
-      // argument). This capture is taken from the SAME production client module (`../../client`)
-      // that BAL-559's proposed global `lock_timeout` would configure. If BAL-559 adds
-      // `lock_timeout` to the connection options, `shownBefore` here starts reflecting that
-      // connection-level value too — and so would `shownAfter`, since `DEFAULT` only restores the
-      // CONFIGURED default, not a connection-option value set at connect time. In that world this
-      // assertion is expected to keep passing only if `DEFAULT` happens to coincide with the
-      // connection-option value; the more likely failure is that `shownAfter` stops matching
-      // `shownBefore` and this test goes RED. That red is EXPECTED and CORRECT — it is this test
-      // doing its job, not a regression — and the fix at that point is to switch the reset in
-      // `acquireRequestLock` from `SET LOCAL lock_timeout = DEFAULT` to a captured-and-restored
-      // `set_config('lock_timeout', <captured value>, true)`, which (unlike `SET`) accepts a bind
-      // parameter, so the actual prior value can be restored rather than the configured default.
+      // ⚠ BAL-559 INTERACTION — CORRECTED (see `_shared/request-lock.ts`'s "WHAT `DEFAULT` DOES
+      // NOT COVER" section for the full, empirically-settled argument; the sibling
+      // `describe('acquireRequestLock — DEFAULT vs startup-packet and mid-session SET …')` block
+      // below is where that measurement is pinned as a real assertion). This capture is taken
+      // from the SAME production client module (`../../client`) that a future BAL-559 global
+      // `lock_timeout` would configure. IF BAL-559 lands it via `connection: { lock_timeout: … }`
+      // startup-packet options — the natural idiom — `shownBefore` would start reflecting that
+      // value, and `shownAfter` would too, because `DEFAULT` DOES restore a startup-packet value
+      // (measured: it becomes `reset_val`). This assertion would keep passing. It would only go
+      // RED if BAL-559 (or a future pooler) instead sets `lock_timeout` via a mid-session
+      // `onconnect`/on-checkout `SET` issued after connect — that shape does NOT update
+      // `reset_val`, so `DEFAULT` would defeat it silently. That red would be EXPECTED and
+      // CORRECT — proof the reset no longer restores the connection's real prior value — and the
+      // fix at that point is to switch the reset in `acquireRequestLock` from `SET LOCAL
+      // lock_timeout = DEFAULT` to a captured-and-restored `set_config('lock_timeout', <captured
+      // value>, true)`, which (unlike `SET`) accepts a bind parameter.
       const beforeRows = (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
         lock_timeout: string;
       }>;
@@ -144,6 +147,110 @@ describe('acquireRequestLock — lock_timeout scoping (fix round R1(a)/R2/R9)', 
     });
 
     expect(shownAfter).toBe(shownBefore);
+  });
+});
+
+/**
+ * ⚠⚠ SETTLES, EMPIRICALLY, THE "WHAT `DEFAULT` DOES NOT COVER" QUESTION IN `_shared/request-
+ * lock.ts`'s docblock — this question has had four prose-only revisions across three commits with
+ * no test behind any of them; this block is that test. A reviewer argued from GUC semantics
+ * (`RESET`'s docs list "command-line options" as a `reset_val` source, and postgres-js sends
+ * `connection: {…}` options in the StartupMessage, which Postgres treats the same as a `-c`
+ * option) that a prior revision of the docblock was wrong to claim a startup-packet value is
+ * "reset PAST, not restored" by `SET LOCAL … = DEFAULT`. The reviewer was explicit they had not
+ * run it. This measures both halves directly, against a real Postgres instance via
+ * `createConcurrentDb` (a second, genuinely separate connection from the standard harness's
+ * single-tx pool, matching how a real `connection: {…}` option or `onconnect` hook would apply).
+ *
+ * Uses `pg_settings` (`setting`, `reset_val`, `source`), not just `SHOW`, because `reset_val` is
+ * the actual mechanism `RESET`/`SET … = DEFAULT` reads from — inspecting it directly is what makes
+ * this a measurement of the mechanism, not just an assertion about this one call's outcome.
+ */
+describe('acquireRequestLock — DEFAULT vs startup-packet and mid-session SET (fix round, empirical)', () => {
+  it('a startup-packet (connection option) lock_timeout IS restored by DEFAULT', async () => {
+    const url = process.env.TEST_DATABASE_URL;
+    if (url === undefined || url.length === 0) {
+      throw new Error(
+        'TEST_DATABASE_URL is not set. Integration tests must be run via "pnpm test:integration".'
+      );
+    }
+    const { db: cfgDb, client } = createConcurrentDb(url, { connection: { lock_timeout: '7s' } });
+    try {
+      const settingRows = (await cfgDb.execute(
+        sql`SELECT setting, reset_val, source FROM pg_settings WHERE name = 'lock_timeout'`
+      )) as unknown as Array<{ setting: string; reset_val: string; source: string }>;
+      const [settingRow] = settingRows;
+      if (settingRow === undefined) throw new Error('pg_settings returned no row');
+
+      // MEASURED: a startup-packet value becomes `reset_val`, with `source = 'client'` — Postgres
+      // treats it exactly like a `-c` command-line option, per `RESET`'s own documented sources.
+      expect(settingRow.setting).toBe('7000');
+      expect(settingRow.reset_val).toBe('7000');
+      expect(settingRow.source).toBe('client');
+
+      const requestId = randomUUID();
+      const afterRows = await cfgDb.transaction(async (tx) => {
+        await acquireRequestLock(tx, requestId);
+        // ⚠ MUTATION TARGET. Delete `_shared/request-lock.ts`'s trailing `SET LOCAL
+        // lock_timeout = DEFAULT` line and this reads back `'3s'` (the gate's own bound, never
+        // reset) instead of `'7s'`.
+        return (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
+          lock_timeout: string;
+        }>;
+      });
+      const [afterRow] = afterRows;
+      if (afterRow === undefined) throw new Error('SHOW lock_timeout returned no row');
+
+      // MEASURED: RESTORED, not defeated — the startup-packet value survives the DEFAULT reset.
+      expect(afterRow.lock_timeout).toBe('7s');
+    } finally {
+      await client.end({ timeout: 5 });
+    }
+  });
+
+  it('an explicit mid-session SET (onconnect-hook / pooler-checkout analog) is NOT restored by DEFAULT', async () => {
+    const url = process.env.TEST_DATABASE_URL;
+    if (url === undefined || url.length === 0) {
+      throw new Error(
+        'TEST_DATABASE_URL is not set. Integration tests must be run via "pnpm test:integration".'
+      );
+    }
+    const { db: cfgDb, client } = createConcurrentDb(url, {});
+    try {
+      // Simulates a postgres-js `onconnect` hook or a pooler's on-checkout `SET`: an explicit SET
+      // issued on the connection AFTER connect, outside any transaction — the ONE mechanism the
+      // docblock now names as genuinely uncovered.
+      await cfgDb.execute(sql`SET lock_timeout = '9s'`);
+
+      const settingRows = (await cfgDb.execute(
+        sql`SELECT setting, reset_val, source FROM pg_settings WHERE name = 'lock_timeout'`
+      )) as unknown as Array<{ setting: string; reset_val: string; source: string }>;
+      const [settingRow] = settingRows;
+      if (settingRow === undefined) throw new Error('pg_settings returned no row');
+
+      // MEASURED: a mid-session SET does NOT update `reset_val` — it reverts to Postgres's
+      // compiled-in default (`0`), not the `9s` this session actually has in effect.
+      expect(settingRow.setting).toBe('9000');
+      expect(settingRow.reset_val).toBe('0');
+      expect(settingRow.source).toBe('session');
+
+      const requestId = randomUUID();
+      const afterRows = await cfgDb.transaction(async (tx) => {
+        await acquireRequestLock(tx, requestId);
+        return (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
+          lock_timeout: string;
+        }>;
+      });
+      const [afterRow] = afterRows;
+      if (afterRow === undefined) throw new Error('SHOW lock_timeout returned no row');
+
+      // MEASURED: DEFEATED — the session's real `9s` is silently lost, replaced by the compiled-in
+      // default. This is the residual gap the docblock's `set_config` remedy exists for, and it
+      // stays inert only because nothing in this codebase issues a mid-session SET today.
+      expect(afterRow.lock_timeout).toBe('0');
+    } finally {
+      await client.end({ timeout: 5 });
+    }
   });
 });
 
