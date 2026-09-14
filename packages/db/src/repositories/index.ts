@@ -185,6 +185,8 @@ export {
   // BAL-540 fix round — `createDraft`'s track-still-open guard, branched on by
   // `apps/web`'s `save-proposal-draft` autosave action.
   ProposalTrackNotOpenError,
+  // BAL-432 / ADR-1030 — `transitionStatus`'s attributed-transition guard.
+  ProposalAcceptanceRequiresActorError,
   type ProposalStatus,
 } from './proposals';
 export {
