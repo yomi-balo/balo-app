@@ -5,6 +5,9 @@ import {
   readAnonymousDraft,
   writeAnonymousDraft,
   clearAnonymousDraft,
+  stampAuthGate,
+  STEP_STATUS_VALUES,
+  AUTH_GATE_FLUSH_WINDOW_MS,
   type AnonymousApplicationDraftV1,
 } from './anonymous-draft';
 
@@ -169,5 +172,247 @@ describe('clearAnonymousDraft', () => {
       throw new Error('boom');
     };
     expect(() => clearAnonymousDraft(store)).not.toThrow();
+  });
+});
+
+// ── BAL-562 ──────────────────────────────────────────────────────
+
+describe('BAL-562 — authGateAt survives a later envelope write (the sticky stamp)', () => {
+  it('carries a stored stamp forward when the incoming envelope has none — the debounce can no longer strip it', () => {
+    const stamp = new Date('2026-09-14T10:00:00.000Z').toISOString();
+    const store = makeFakeStorage();
+
+    // The submit gate stamps...
+    writeAnonymousDraft(fullDraft({ authGateAt: stamp }), store);
+    // ...then the 800ms debounce lands with an envelope rebuilt from live state,
+    // which has no idea a gate was ever crossed.
+    writeAnonymousDraft(fullDraft({ steps: { profile: { yearStartedSalesforce: 2019 } } }), store);
+
+    const stored = readAnonymousDraft(store);
+    expect(stored?.authGateAt).toBe(stamp);
+    // ...and the debounce's fresher payload is still what got written.
+    expect(stored?.steps.profile).toEqual({ yearStartedSalesforce: 2019 });
+  });
+
+  it('an explicit stamp on the incoming envelope OVERRIDES the stored one, so a fresh gate always moves the window forward', () => {
+    const older = new Date('2026-09-14T10:00:00.000Z').toISOString();
+    const newer = new Date('2026-09-14T10:20:00.000Z').toISOString();
+    const store = makeFakeStorage();
+
+    writeAnonymousDraft(fullDraft({ authGateAt: older }), store);
+    writeAnonymousDraft(fullDraft({ authGateAt: newer }), store);
+
+    expect(readAnonymousDraft(store)?.authGateAt).toBe(newer);
+  });
+
+  it('writes no authGateAt key at all when there was never a stamp to carry (undefined is not serialized)', () => {
+    const store = makeFakeStorage();
+    writeAnonymousDraft(fullDraft(), store);
+
+    const raw = JSON.parse(store.getItem(ANON_DRAFT_KEY) ?? '{}') as Record<string, unknown>;
+    expect('authGateAt' in raw).toBe(false);
+  });
+
+  it('does not break, and does not invent a stamp, when the stored payload is corrupt', () => {
+    const store = makeFakeStorage({ [ANON_DRAFT_KEY]: '{not json' });
+    expect(writeAnonymousDraft(fullDraft(), store)).toBe(true);
+    expect(readAnonymousDraft(store)?.authGateAt).toBeUndefined();
+  });
+
+  it('does not break, and does not invent a stamp, when the stored payload is a bare JSON null', () => {
+    const store = makeFakeStorage({ [ANON_DRAFT_KEY]: 'null' });
+    expect(writeAnonymousDraft(fullDraft(), store)).toBe(true);
+    expect(readAnonymousDraft(store)?.authGateAt).toBeUndefined();
+  });
+
+  it('ignores a non-string stored stamp rather than carrying garbage forward', () => {
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify({ ...fullDraft(), authGateAt: 12345 }),
+    });
+    writeAnonymousDraft(fullDraft(), store);
+    expect(readAnonymousDraft(store)?.authGateAt).toBeUndefined();
+  });
+
+  it('the carry-forward read never clears an over-age envelope as a side effect', () => {
+    const stale = new Date(Date.now() - ANON_DRAFT_MAX_AGE_MS - 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: stale, authGateAt: stale })),
+    });
+
+    // A fresh write replaces it wholesale; the point is that the lookup itself did
+    // not remove the key out from under the write.
+    expect(writeAnonymousDraft(fullDraft(), store)).toBe(true);
+    expect(store.getItem(ANON_DRAFT_KEY)).not.toBeNull();
+  });
+});
+
+describe('BAL-562 — stampAuthGate', () => {
+  it('stamps an existing envelope in place and leaves its content untouched', () => {
+    const store = makeFakeStorage({ [ANON_DRAFT_KEY]: JSON.stringify(fullDraft()) });
+
+    expect(stampAuthGate(store)).toBe(true);
+
+    const stored = readAnonymousDraft(store);
+    expect(typeof stored?.authGateAt).toBe('string');
+    expect(stored?.steps).toEqual(fullDraft().steps);
+    expect(stored?.maxReachedStep).toBe(3);
+  });
+
+  it('returns false and writes nothing when there is no envelope — the ordinary case on every (apply) route except the wizard', () => {
+    const store = makeFakeStorage();
+    expect(stampAuthGate(store)).toBe(false);
+    expect(store.getItem(ANON_DRAFT_KEY)).toBeNull();
+  });
+
+  it('refuses to resurrect an envelope past ANON_DRAFT_MAX_AGE_MS', () => {
+    const stale = new Date(Date.now() - ANON_DRAFT_MAX_AGE_MS - 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: stale })),
+    });
+
+    expect(stampAuthGate(store)).toBe(false);
+    expect(store.getItem(ANON_DRAFT_KEY)).toBeNull(); // readAnonymousDraft cleared it
+  });
+
+  it('returns false (never throws) when the write fails', () => {
+    const store = makeFakeStorage({ [ANON_DRAFT_KEY]: JSON.stringify(fullDraft()) });
+    store.setItem = () => {
+      throw new Error('QuotaExceededError');
+    };
+    expect(stampAuthGate(store)).toBe(false);
+  });
+
+  it('moves an existing stamp forward rather than leaving the first one in place', () => {
+    const older = new Date('2020-01-01T00:00:00.000Z').toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ authGateAt: older })),
+    });
+
+    stampAuthGate(store);
+    expect(readAnonymousDraft(store)?.authGateAt).not.toBe(older);
+  });
+});
+
+describe('BAL-562 — stepStatuses on the envelope', () => {
+  it('round-trips the progress rail', () => {
+    const store = makeFakeStorage();
+    writeAnonymousDraft(
+      fullDraft({ stepStatuses: ['completed', 'completed', 'skipped', 'pending'] }),
+      store
+    );
+    expect(readAnonymousDraft(store)?.stepStatuses).toEqual([
+      'completed',
+      'completed',
+      'skipped',
+      'pending',
+    ]);
+  });
+
+  it('an envelope written before the field existed still validates (optional, backward-compatible)', () => {
+    const store = makeFakeStorage({ [ANON_DRAFT_KEY]: JSON.stringify(fullDraft()) });
+    const stored = readAnonymousDraft(store);
+    expect(stored).not.toBeNull();
+    expect(stored?.stepStatuses).toBeUndefined();
+  });
+
+  /**
+   * This test previously asserted the OPPOSITE — that an unknown status rejects the
+   * whole envelope — pinning a defect as though it were the design. A hard-failing
+   * rail meant `readAnonymousDraft` returned null, the restore bailed, and the next
+   * keystroke overwrote seven steps of work: the exact failure mode `stepStatuses`
+   * was added in service of removing, reintroduced through a cosmetic field.
+   */
+  it('drops an unrecognised rail but KEEPS the application — a cosmetic field must never cost someone their work', () => {
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify({ ...fullDraft(), stepStatuses: ['completed', 'bogus'] }),
+    });
+
+    const stored = readAnonymousDraft(store);
+    expect(stored).not.toBeNull();
+    expect(stored?.steps.profile).toEqual({ yearStartedSalesforce: 2018 });
+    expect(stored?.stepStatuses).toBeUndefined();
+  });
+
+  it('drops a rail that is not an array at all, same reasoning', () => {
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify({ ...fullDraft(), stepStatuses: 'completed' }),
+    });
+
+    const stored = readAnonymousDraft(store);
+    expect(stored).not.toBeNull();
+    expect(stored?.stepStatuses).toBeUndefined();
+  });
+
+  it('the zod enum is derived from STEP_STATUS_VALUES, so widening the union cannot silently start rejecting envelopes', () => {
+    for (const status of STEP_STATUS_VALUES) {
+      const store = makeFakeStorage();
+      writeAnonymousDraft(fullDraft({ stepStatuses: [status] }), store);
+      expect(readAnonymousDraft(store)?.stepStatuses).toEqual([status]);
+    }
+  });
+});
+
+describe('BAL-562 — stampAuthGate refuses an abandoned draft (the window must stay falsifiable)', () => {
+  /**
+   * Without this, the header stamp makes the flush window unfalsifiable: the same click
+   * that opens the modal sets the timestamp it is later measured against, so `gateAgeMs`
+   * is ~0 at flush time and the guard passes by construction. The effective bound would
+   * silently become ANON_DRAFT_MAX_AGE_MS — 24 hours, not 30 minutes.
+   */
+  it('refuses to stamp a draft nobody has touched within the window', () => {
+    const idle = new Date(Date.now() - AUTH_GATE_FLUSH_WINDOW_MS - 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: idle })),
+    });
+
+    expect(stampAuthGate(store)).toBe(false);
+    expect(readAnonymousDraft(store)?.authGateAt).toBeUndefined();
+  });
+
+  it('still stamps a draft being actively worked on — a long read of the terms must not cost the author their application', () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: recent })),
+    });
+
+    expect(stampAuthGate(store)).toBe(true);
+    expect(readAnonymousDraft(store)?.authGateAt).toEqual(expect.any(String));
+  });
+
+  it('refuses a FUTURE-dated savedAt — a forward stamp must not buy unlimited stampability', () => {
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: future })),
+    });
+
+    // `readAnonymousDraft` lets this through (its age check only rejects OLD envelopes),
+    // so unlike the unparseable case below, this arm is genuinely reached here.
+    expect(readAnonymousDraft(store)).not.toBeNull();
+    expect(stampAuthGate(store)).toBe(false);
+  });
+
+  /**
+   * Retained, but honestly labelled: this passes because `readAnonymousDraft` already
+   * clears an unparseable `savedAt` and returns null, so `stampAuthGate` exits at the
+   * `!existing` guard and never evaluates its own `Number.isFinite` arm. It pins the
+   * end-to-end behaviour, NOT that clause — deleting the clause leaves it green.
+   */
+  it('refuses an unparseable savedAt (guarded upstream by readAnonymousDraft, not by the idle check)', () => {
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: 'not-a-date' })),
+    });
+
+    expect(readAnonymousDraft(store)).toBeNull();
+    expect(stampAuthGate(store)).toBe(false);
+  });
+
+  it('leaves an already-stamped abandoned draft exactly as it was, rather than refreshing its window', () => {
+    const idle = new Date(Date.now() - AUTH_GATE_FLUSH_WINDOW_MS - 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: idle, authGateAt: idle })),
+    });
+
+    expect(stampAuthGate(store)).toBe(false);
+    expect(readAnonymousDraft(store)?.authGateAt).toBe(idle);
   });
 });
