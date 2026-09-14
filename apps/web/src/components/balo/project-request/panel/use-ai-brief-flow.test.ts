@@ -12,6 +12,7 @@ vi.mock('server-only', () => ({}));
 const captured: { onSucceeded?: (patch: ProjectBriefDraftPatch) => void } = {};
 const mockStart = vi.fn();
 const mockDismissFailure = vi.fn();
+const mockCancel = vi.fn();
 
 vi.mock('./use-project-brief-generation', () => ({
   useProjectBriefGeneration: (options: {
@@ -24,6 +25,7 @@ vi.mock('./use-project-brief-generation', () => ({
       failureReason: null,
       start: mockStart,
       dismissFailure: mockDismissFailure,
+      cancel: mockCancel,
     };
   },
 }));
@@ -44,6 +46,20 @@ const DRAFT: ProjectDraft = {
   source: 'ai',
 };
 
+/** ⚠ DRAFT.documents is EMPTY, which is itself a reset trigger. Use this where the test is
+ *  about something other than the empty-documents reset. */
+const DRAFT_WITH_DOC: ProjectDraft = {
+  ...DRAFT,
+  documents: [
+    {
+      r2Key: 'project-documents/c/u/k',
+      fileName: 'spec.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1000,
+    },
+  ],
+};
+
 const PATCH: ProjectBriefDraftPatch = {
   title: '  AI-drafted title  ',
   descriptionHtml: '<p>drafted</p>',
@@ -53,17 +69,19 @@ const PATCH: ProjectBriefDraftPatch = {
   unmatchedProductLabels: [],
 };
 
-function renderFlow(isFlowActive: boolean) {
+function renderFlow(isFlowActive: boolean, draft: ProjectDraft = DRAFT) {
   const setField = vi.fn();
   const setStep = vi.fn();
-  const view = renderHook(() =>
-    useAiBriefFlow({
-      expertProfileId: undefined,
-      draft: DRAFT,
-      setField,
-      setStep,
-      isFlowActive,
-    })
+  const view = renderHook(
+    ({ active, currentDraft }: { active: boolean; currentDraft: ProjectDraft }) =>
+      useAiBriefFlow({
+        expertProfileId: undefined,
+        draft: currentDraft,
+        setField,
+        setStep,
+        isFlowActive: active,
+      }),
+    { initialProps: { active: isFlowActive, currentDraft: draft } }
   );
   return { setField, setStep, view };
 }
@@ -92,6 +110,61 @@ describe('useAiBriefFlow — the abandoned-flow guard (fix round F5)', () => {
 
     expect(setField).not.toHaveBeenCalled();
     expect(setStep).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ⚠⚠ THE STALE-FAILURE BUG. `isFlowActive` already declared the flow abandoned on close, and a
+ * late SUCCESS was discarded — but nothing retired a FAILURE. Reported from the running app:
+ * generate failed, the user removed the file, closed the drawer, reopened it, re-picked the AI
+ * path, and met the previous attempt's banner over an empty dropzone — still claiming "Your
+ * files are still attached".
+ */
+describe('useAiBriefFlow — a failed generate does not outlive its flow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captured.onSucceeded = undefined;
+  });
+
+  it('⚠ retires the generation when the flow is abandoned (drawer closed / submitted)', () => {
+    const { view } = renderFlow(true, DRAFT_WITH_DOC);
+    expect(mockCancel).not.toHaveBeenCalled();
+
+    // Closing the drawer flips `isFlowActive` — the panel is NOT unmounted.
+    act(() => view.rerender({ active: false, currentDraft: DRAFT_WITH_DOC }));
+
+    expect(mockCancel).toHaveBeenCalled();
+  });
+
+  it('⚠ retires the generation when the LAST document is removed', () => {
+    const { view } = renderFlow(true, DRAFT_WITH_DOC);
+    expect(mockCancel).not.toHaveBeenCalled();
+
+    // The X on the only attached file — the banner's "Your files are still attached" is now false.
+    act(() => view.rerender({ active: true, currentDraft: DRAFT }));
+
+    expect(mockCancel).toHaveBeenCalled();
+  });
+
+  it('keeps the generation while the flow is active and a document remains', () => {
+    const twoDocs: ProjectDraft = {
+      ...DRAFT_WITH_DOC,
+      documents: [
+        ...DRAFT_WITH_DOC.documents,
+        {
+          r2Key: 'project-documents/c/u/k2',
+          fileName: 'notes.pdf',
+          contentType: 'application/pdf',
+          sizeBytes: 2000,
+        },
+      ],
+    };
+    const { view } = renderFlow(true, twoDocs);
+
+    // Removing ONE of several leaves the banner's copy true and Try again with input.
+    act(() => view.rerender({ active: true, currentDraft: DRAFT_WITH_DOC }));
+
+    expect(mockCancel).not.toHaveBeenCalled();
   });
 });
 
