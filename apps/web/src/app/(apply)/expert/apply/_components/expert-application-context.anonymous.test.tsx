@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
 import { render, screen, waitFor, fireEvent } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 import type { ReferenceData } from '../_actions/load-draft';
@@ -68,6 +69,7 @@ function Harness(): React.JSX.Element {
     termsData,
     updateStepData,
     saveAnonymousDraftNow,
+    goNext,
   } = useWizard();
   return (
     <div>
@@ -78,6 +80,15 @@ function Harness(): React.JSX.Element {
       <span data-testid="epid">{expertProfileId ?? 'null'}</span>
       <span data-testid="year">{profileData.yearStartedSalesforce ?? 'unset'}</span>
       <span data-testid="products">{(productsData.productIds ?? []).join(',') || 'none'}</span>
+      {/* `undefined` here (rather than 0) means a restore REPLACED state instead of
+          merging, dropping the `languages: []` guarantee `hydrateProfileData(null)` makes
+          and handing the step a non-array to map over. */}
+      <span data-testid="languages">{String(profileData.languages?.length ?? 'undefined')}</span>
+      {/* Spreading a string or array into a slice mints numeric index keys ({0:'n',
+          1:'o', …}) which then serialize back into the envelope and POST to
+          `saveDraftAction`. The merge alone does NOT prevent that — only the
+          plain-object guard does. */}
+      <span data-testid="profile-keys">{Object.keys(profileData).sort().join(',')}</span>
       <span data-testid="terms">{String(termsData.termsAccepted ?? false)}</span>
       <button
         type="button"
@@ -87,6 +98,9 @@ function Harness(): React.JSX.Element {
       </button>
       <button type="button" onClick={() => saveAnonymousDraftNow()}>
         cross-auth-gate
+      </button>
+      <button type="button" onClick={() => void goNext()}>
+        next
       </button>
     </div>
   );
@@ -745,5 +759,152 @@ describe('BAL-562 — anonymous resume from sessionStorage', () => {
 
     // 2018 is the SERVER draft's value; 2016 is the anonymous envelope's.
     expect(screen.getByTestId('year').textContent).toBe('2018');
+  });
+});
+
+describe('BAL-562 — what actually lands in storage when the wizard is DRIVEN', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function clickAndFlush(name: string): Promise<void> {
+    return act(async () => {
+      fireEvent.click(screen.getByRole('button', { name }));
+    });
+  }
+
+  /**
+   * THE REGRESSION PROBE for the stale-transition defect. Every other restore test
+   * hand-seeds the envelope via `writeAnonymousDraft`, so none of them can see what the
+   * wizard itself writes — by this PR's own standard they pin the fixture.
+   *
+   * `goNext` calls `performSave()` (which writes) and only THEN marks the step complete
+   * and advances, and nothing wrote on arrival. Revert the transition effect and storage
+   * holds `currentStep: 0` with the profile step still `pending` — a visitor who clicks
+   * through and reloads lands a step back, on a rail that denies what they just did.
+   */
+  it('records the step ARRIVED at, not the step departed from', async () => {
+    renderAnonymousThenSignIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    vi.advanceTimersByTime(800);
+    expect(readAnonymousDraft()?.currentStep).toBe(0);
+
+    await clickAndFlush('next');
+
+    expect(screen.getByTestId('current').textContent).toBe('1');
+    expect(readAnonymousDraft()?.currentStep).toBe(1);
+  });
+
+  it('records the completed step on the rail, so a resumed visitor is not told they skipped it', async () => {
+    renderAnonymousThenSignIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    vi.advanceTimersByTime(800);
+
+    await clickAndFlush('next');
+
+    expect(readAnonymousDraft()?.stepStatuses?.[0]).toBe('completed');
+  });
+
+  it('raises maxReachedStep in storage, so the restored wizard keeps the step navigable', async () => {
+    renderAnonymousThenSignIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    vi.advanceTimersByTime(800);
+
+    await clickAndFlush('next');
+
+    expect(readAnonymousDraft()?.maxReachedStep).toBe(1);
+  });
+
+  /**
+   * The same defect shape as the auth-gate stamp, one call site over: the `[currentStep]`
+   * cleanup used to clear only `idleTimerRef`, so a debounce armed just before Continue
+   * fired ~800ms later with a closure over pre-edit, pre-advance state and overwrote the
+   * good write. Revert that cancel and `currentStep` collapses back to 0.
+   */
+  it('a debounce armed just before Continue cannot overwrite the arrival with stale state', async () => {
+    renderAnonymousThenSignIn();
+
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    vi.advanceTimersByTime(800);
+
+    // Edit once more, then navigate INSIDE the debounce window.
+    fireEvent.click(screen.getByRole('button', { name: 'edit-profile' }));
+    await clickAndFlush('next');
+
+    // The stale timer's window elapses after the navigation has been recorded.
+    vi.advanceTimersByTime(800);
+
+    const stored = readAnonymousDraft();
+    expect(stored?.currentStep).toBe(1);
+    expect(stored?.stepStatuses?.[0]).toBe('completed');
+  });
+
+  /**
+   * The transition effect must never be what CREATES an envelope — otherwise every
+   * anonymous page view leaves a claimable (if empty) draft in the tab for
+   * `stampAuthGate` to stamp. Note the envelope genuinely does appear on a Continue
+   * click even with nothing typed, because `performSave`'s anonymous branch writes
+   * unconditionally; that is pre-existing behaviour and not this effect's doing.
+   */
+  it('does not bring an envelope into being on mount — creation still belongs to the first real save', () => {
+    renderAnonymousThenSignIn();
+
+    expect(globalThis.sessionStorage.getItem('balo.expert-apply.anon-draft.v1')).toBeNull();
+  });
+});
+
+describe('BAL-562 — a malformed stored slice cannot crash the restored wizard', () => {
+  it('keeps the initializer shape guarantees when a stored slice is missing fields', () => {
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: new Date().toISOString(),
+      currentStep: 0,
+      maxReachedStep: 0,
+      // An envelope from an older build: no `languages`, no `industryIds`, no booleans.
+      steps: { profile: { yearStartedSalesforce: 2016 } },
+    });
+
+    renderHarness(null, null);
+
+    // Restored value present, and the array the step maps over survived the merge.
+    expect(screen.getByTestId('year').textContent).toBe('2016');
+    expect(screen.getByTestId('languages').textContent).toBe('0');
+  });
+
+  /**
+   * Rewritten after mutation-testing showed the first version was vacuous: it asserted
+   * `languages`/`products` survived, which the MERGE already guarantees on its own, so
+   * removing the guard left it green. What the guard uniquely prevents is state
+   * pollution — spreading `['not','an','object']` mints keys `0`,`1`,`2`, and those
+   * then serialize into the envelope and POST to `saveDraftAction` on flush.
+   */
+  it('drops a slice that is not a plain object rather than spreading index keys into state', () => {
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: new Date().toISOString(),
+      currentStep: 0,
+      maxReachedStep: 0,
+      steps: { profile: ['not', 'an', 'object'], products: 'nonsense' },
+    });
+
+    renderHarness(null, null);
+
+    const keys = screen.getByTestId('profile-keys').textContent ?? '';
+    expect(keys.split(',').filter((k) => /^\d+$/.test(k))).toEqual([]);
+    // And the initializer's shape is untouched.
+    expect(screen.getByTestId('year').textContent).toBe('unset');
+    expect(screen.getByTestId('languages').textContent).toBe('0');
+    expect(screen.getByTestId('products').textContent).toBe('none');
   });
 });

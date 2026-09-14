@@ -6,6 +6,8 @@ import {
   writeAnonymousDraft,
   clearAnonymousDraft,
   stampAuthGate,
+  STEP_STATUS_VALUES,
+  AUTH_GATE_FLUSH_WINDOW_MS,
   type AnonymousApplicationDraftV1,
 } from './anonymous-draft';
 
@@ -313,10 +315,85 @@ describe('BAL-562 — stepStatuses on the envelope', () => {
     expect(stored?.stepStatuses).toBeUndefined();
   });
 
-  it('rejects an envelope carrying an unknown status rather than half-hydrating the rail', () => {
+  /**
+   * This test previously asserted the OPPOSITE — that an unknown status rejects the
+   * whole envelope — pinning a defect as though it were the design. A hard-failing
+   * rail meant `readAnonymousDraft` returned null, the restore bailed, and the next
+   * keystroke overwrote seven steps of work: the exact failure mode `stepStatuses`
+   * was added in service of removing, reintroduced through a cosmetic field.
+   */
+  it('drops an unrecognised rail but KEEPS the application — a cosmetic field must never cost someone their work', () => {
     const store = makeFakeStorage({
       [ANON_DRAFT_KEY]: JSON.stringify({ ...fullDraft(), stepStatuses: ['completed', 'bogus'] }),
     });
-    expect(readAnonymousDraft(store)).toBeNull();
+
+    const stored = readAnonymousDraft(store);
+    expect(stored).not.toBeNull();
+    expect(stored?.steps.profile).toEqual({ yearStartedSalesforce: 2018 });
+    expect(stored?.stepStatuses).toBeUndefined();
+  });
+
+  it('drops a rail that is not an array at all, same reasoning', () => {
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify({ ...fullDraft(), stepStatuses: 'completed' }),
+    });
+
+    const stored = readAnonymousDraft(store);
+    expect(stored).not.toBeNull();
+    expect(stored?.stepStatuses).toBeUndefined();
+  });
+
+  it('the zod enum is derived from STEP_STATUS_VALUES, so widening the union cannot silently start rejecting envelopes', () => {
+    for (const status of STEP_STATUS_VALUES) {
+      const store = makeFakeStorage();
+      writeAnonymousDraft(fullDraft({ stepStatuses: [status] }), store);
+      expect(readAnonymousDraft(store)?.stepStatuses).toEqual([status]);
+    }
+  });
+});
+
+describe('BAL-562 — stampAuthGate refuses an abandoned draft (the window must stay falsifiable)', () => {
+  /**
+   * Without this, the header stamp makes the flush window unfalsifiable: the same click
+   * that opens the modal sets the timestamp it is later measured against, so `gateAgeMs`
+   * is ~0 at flush time and the guard passes by construction. The effective bound would
+   * silently become ANON_DRAFT_MAX_AGE_MS — 24 hours, not 30 minutes.
+   */
+  it('refuses to stamp a draft nobody has touched within the window', () => {
+    const idle = new Date(Date.now() - AUTH_GATE_FLUSH_WINDOW_MS - 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: idle })),
+    });
+
+    expect(stampAuthGate(store)).toBe(false);
+    expect(readAnonymousDraft(store)?.authGateAt).toBeUndefined();
+  });
+
+  it('still stamps a draft being actively worked on — a long read of the terms must not cost the author their application', () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: recent })),
+    });
+
+    expect(stampAuthGate(store)).toBe(true);
+    expect(readAnonymousDraft(store)?.authGateAt).toEqual(expect.any(String));
+  });
+
+  it('refuses an unparseable savedAt rather than treating it as fresh', () => {
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: 'not-a-date' })),
+    });
+
+    expect(stampAuthGate(store)).toBe(false);
+  });
+
+  it('leaves an already-stamped abandoned draft exactly as it was, rather than refreshing its window', () => {
+    const idle = new Date(Date.now() - AUTH_GATE_FLUSH_WINDOW_MS - 1000).toISOString();
+    const store = makeFakeStorage({
+      [ANON_DRAFT_KEY]: JSON.stringify(fullDraft({ savedAt: idle, authGateAt: idle })),
+    });
+
+    expect(stampAuthGate(store)).toBe(false);
+    expect(readAnonymousDraft(store)?.authGateAt).toBe(idle);
   });
 });

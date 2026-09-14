@@ -26,8 +26,24 @@ export const ANON_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * rather than in the provider because this module owns the serialized contract —
  * the provider imports it, so there is exactly one definition of the union that
  * ever reaches storage.
+ *
+ * The runtime list is the source and the type is derived from it, never the other way
+ * round: a hand-written `z.enum([...])` beside a hand-written union lets someone widen
+ * the union and, with no type error anywhere, start silently REJECTING every envelope
+ * carrying the new value.
  */
-export type StepStatus = 'pending' | 'completed' | 'skipped';
+export const STEP_STATUS_VALUES = ['pending', 'completed', 'skipped'] as const;
+export type StepStatus = (typeof STEP_STATUS_VALUES)[number];
+
+/**
+ * How long a stamped envelope stays claimable by whoever authenticates in this tab.
+ *
+ * Lives here, with the artifact it describes, because BOTH halves of the trust model
+ * measure against it: `stampAuthGate` refuses to stamp a draft nobody has touched
+ * within it, and the wizard's post-auth flush refuses to adopt a draft not stamped
+ * within it. Two constants would let those halves drift apart silently.
+ */
+export const AUTH_GATE_FLUSH_WINDOW_MS = 30 * 60 * 1000;
 
 /** The SERIALIZED artifact, not the in-memory wizard state. Validated on every read. */
 export interface AnonymousApplicationDraftV1 {
@@ -72,7 +88,13 @@ const envelopeSchema = z.object({
   currentStep: z.number().int().min(0),
   maxReachedStep: z.number().int().min(0),
   steps: z.record(z.enum(STEP_KEYS), z.unknown()),
-  stepStatuses: z.array(z.enum(['pending', 'completed', 'skipped'])).optional(),
+  // `.catch(undefined)` is load-bearing, not defensive noise. Without it an
+  // unrecognised status fails the whole `safeParse`, `readAnonymousDraft` returns
+  // null, the restore bails and the next keystroke overwrites seven steps of work —
+  // the exact failure mode this field was added in service of removing. The rail is
+  // cosmetic; it must never be able to cost someone their application. The restore
+  // merges positionally with `?? status`, so dropping it degrades to "no markers".
+  stepStatuses: z.array(z.enum(STEP_STATUS_VALUES)).optional().catch(undefined),
   authGateAt: z.string().optional(),
 });
 
@@ -200,7 +222,14 @@ export function writeAnonymousDraft(draft: AnonymousApplicationDraftV1, store?: 
  * live state and writes a whole fresh envelope, while the apply header's "Log in"
  * control can only reach storage. Both are a deliberate act by the person sitting at
  * this tab, which is exactly the thing the flush's freshness window is defined
- * against (WARNING 6) — so both must stamp, and neither widens the kiosk hazard.
+ * against (WARNING 6) — so both must stamp.
+ *
+ * ⚠ This DOES move the kiosk hazard, and the idle check below is the mitigation, not a
+ * refutation: any stamper restarts the window, so a low-friction control that stamps is
+ * strictly more reachable by a second person than the submit gate is. BAL-502 deferred
+ * the "is this application yours?" confirmation on the strength of the time bound, and
+ * that trade is worth re-examining now that a one-click control sits on all seven
+ * steps — recorded on BAL-562.
  *
  * Returns `false` when there is nothing to stamp (no envelope — the ordinary case on
  * every `(apply)` route except the wizard) or the write failed.
@@ -211,6 +240,21 @@ export function stampAuthGate(store?: Storage): boolean {
 
   const existing = readAnonymousDraft(resolved);
   if (!existing) return false;
+
+  // ⚠ A stamp RESTARTS the flush window, so an unconditional stamp here would make the
+  // window unfalsifiable: the same click that opens the modal would set the timestamp
+  // it is later measured against, `gateAgeMs` would be ~0 at flush time, and the only
+  // remaining bound would be `ANON_DRAFT_MAX_AGE_MS` — 24 hours instead of 30 minutes.
+  // Person B sitting at Person A's open tab and clicking "Log in" to make their OWN
+  // account would take A's CV with them.
+  //
+  // So this gate stamps INTENT only over a draft someone is actually still working on.
+  // `savedAt` is rewritten by every debounce tick, so an actively-edited application
+  // passes even after a long read of the terms; one abandoned on a shared machine does
+  // not. The submit gate needs no equivalent check — reaching it means filling the
+  // final step, which refreshes `savedAt` on the way.
+  const idleMs = Date.now() - Date.parse(existing.savedAt);
+  if (!Number.isFinite(idleMs) || idleMs > AUTH_GATE_FLUSH_WINDOW_MS) return false;
 
   return writeAnonymousDraft({ ...existing, authGateAt: new Date().toISOString() }, resolved);
 }

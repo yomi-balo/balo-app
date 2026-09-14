@@ -119,10 +119,40 @@ describe('BAL-562 — the header auth gate stamps the anonymous draft', () => {
     expect(authModalOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('a signed-in viewer has no Log in control, so nothing is ever stamped on their behalf', () => {
+  /**
+   * Rewritten — it used to render a SIGNED-IN viewer and assert no stamp, which passes
+   * under every possible reversion of the fix because that variant has no control to
+   * click. This version renders the ANONYMOUS variant and still clicks nothing, so it
+   * genuinely fails if `stampAuthGate()` ever migrates out of the click handler into
+   * the component body: stamping is an act of intent and must cost a deliberate click,
+   * never a render.
+   */
+  it('does not stamp on render — only a deliberate click may claim a draft', () => {
     seedAnonymousEnvelope();
-    render(<ApplyHeaderActions viewer={makeViewer()} />);
 
+    render(<ApplyHeaderActions viewer={null} />);
+
+    expect(screen.getByRole('button', { name: 'Log in' })).toBeInTheDocument();
+    expect(readAnonymousDraft()?.authGateAt).toBeUndefined();
+  });
+
+  it('refuses to stamp an abandoned draft, so a second person at this tab cannot claim it', async () => {
+    // Older than AUTH_GATE_FLUSH_WINDOW_MS — nobody has touched it in a long while.
+    writeAnonymousDraft({
+      v: 1,
+      savedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+      currentStep: 3,
+      maxReachedStep: 4,
+      steps: { profile: { yearStartedSalesforce: 2015 } },
+    });
+
+    const user = userEvent.setup();
+    render(<ApplyHeaderActions viewer={null} />);
+    await user.click(screen.getByRole('button', { name: 'Log in' }));
+
+    // The modal still opens — the person wanting their own account is not blocked...
+    expect(authModalOpen).toHaveBeenCalledTimes(1);
+    // ...but the draft is not claimable by them.
     expect(readAnonymousDraft()?.authGateAt).toBeUndefined();
   });
 });

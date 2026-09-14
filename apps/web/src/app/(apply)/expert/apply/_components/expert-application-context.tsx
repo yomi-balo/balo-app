@@ -32,6 +32,7 @@ import {
   readAnonymousDraft,
   writeAnonymousDraft,
   clearAnonymousDraft,
+  AUTH_GATE_FLUSH_WINDOW_MS,
   type AnonymousApplicationDraftV1,
   type StepStatus,
 } from '@/lib/expert-apply/anonymous-draft';
@@ -344,20 +345,22 @@ const FLUSH_SUPERSEDED_TOAST =
 const FLUSH_FAILED_TOAST = "We couldn't restore your saved progress. Please try again.";
 
 /**
- * BAL-502 FIX round (WARNING 6) — an anonymous envelope carries no identity of its
- * own; any session that shows up in this tab can claim it. `authGateAt` (stamped only
- * where the visitor deliberately crosses an auth boundary) bounds how long a draft
- * stays claimable: a window
- * this generous covers the slowest realistic path (fill the wizard, hit Submit,
- * complete a WorkOS OAuth round-trip including a provider login) with margin, while
- * still meaningfully narrowing the shared/kiosk-browser hazard where a draft could
- * otherwise sit claimable indefinitely. A stricter per-visitor confirmation
- * ("We found an application in progress — is this yours?") was considered and
- * deferred: it adds a full UI surface + copy for a hazard that requires the SAME
- * tab to still be open AND a second person signing in within the window — narrow
- * enough that the time bound alone is a reasonable first line of defense.
+ * BAL-502 FIX round (WARNING 6) — an anonymous envelope carries no identity of its own;
+ * any session that shows up in this tab can claim it. `AUTH_GATE_FLUSH_WINDOW_MS` (now
+ * owned by `@/lib/expert-apply/anonymous-draft`, so the stamp guard and this flush guard
+ * cannot drift) bounds how long a draft stays claimable. A window this generous covers
+ * the slowest realistic path — fill the wizard, hit Submit, complete a WorkOS OAuth
+ * round-trip including a provider login — with margin, while still narrowing the
+ * shared/kiosk-browser hazard where a draft could otherwise sit claimable indefinitely.
+ *
+ * A stricter per-visitor confirmation ("We found an application in progress — is this
+ * yours?") was considered and deferred: it adds a full UI surface + copy for a hazard
+ * that requires the SAME tab to still be open AND a second person signing in within the
+ * window. ⚠ BAL-562 narrowed that argument — a one-click "Log in" now sits on all seven
+ * steps and also stamps, which is more reachable by a second person than the submit gate
+ * was. `stampAuthGate` mitigates with an idle check; the deferral itself is re-opened on
+ * BAL-562 rather than silently inherited.
  */
-const AUTH_GATE_FLUSH_WINDOW_MS = 30 * 60 * 1000;
 
 export function ExpertApplicationProvider({
   children,
@@ -456,12 +459,24 @@ export function ExpertApplicationProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Clear stale idle-save timer on step change to prevent old closures
-  // from re-saving a previous step's data (which can wipe assessment ratings)
+  // Clear stale save timers on step change to prevent old closures from re-saving a
+  // previous step's data (which can wipe assessment ratings).
+  //
+  // BAL-562 — this used to clear ONLY `idleTimerRef`, leaving the anonymous debounce
+  // armed across a navigation. Its callback closes over the `buildAnonymousEnvelope`
+  // of the render that scheduled it, so it would land ~800ms later and overwrite the
+  // good write with pre-edit data at the PREVIOUS step — the same shape as the
+  // auth-gate stamp defect, one call site over. Safe to cancel: every navigation path
+  // persists on its own (`goNext`/`skipStep` via `performSave`, `goPrevious`/`goToStep`
+  // via `saveIfDirty`) and the transition effect below then writes the new position.
   useEffect(() => {
     if (idleTimerRef.current) {
       clearTimeout(idleTimerRef.current);
       idleTimerRef.current = null;
+    }
+    if (anonSaveTimerRef.current) {
+      clearTimeout(anonSaveTimerRef.current);
+      anonSaveTimerRef.current = null;
     }
   }, [currentStep]);
 
@@ -571,22 +586,41 @@ export function ExpertApplicationProvider({
     // `terms` is absent BY DESIGN — its omission is the statement that consent is
     // re-affirmed on every visit and never restored from storage. The authenticated
     // path agrees: `termsData` is the one slice with no `hydrate*` initializer.
-    const setters: Partial<Record<StepKey, (d: unknown) => void>> = {
-      agency: (d) => setAgencyData(d as Partial<AgencyStepData>),
-      profile: (d) => setProfileData(d as Partial<ProfileStepData>),
-      products: (d) => setProductsData(d as Partial<ProductsStepData>),
-      assessment: (d) => setAssessmentData(d as Partial<AssessmentStepData>),
-      certifications: (d) => setCertificationsData(d as Partial<CertificationsStepData>),
-      'work-history': (d) => setWorkHistoryData(d as Partial<WorkHistoryStepData>),
+    //
+    // Every setter MERGES into previous state rather than replacing it. The
+    // `hydrate*(null)` initializers establish shape guarantees the steps rely on —
+    // `languages: []`, `industryIds: []`, `productIds: []`, the three distinction
+    // booleans — and a replace would drop any the stored slice happens to lack,
+    // handing a component `undefined` where it maps over an array. Envelopes live 24
+    // hours and survive deploys, so a slice written by an older build is a real case,
+    // not a hypothetical.
+    const setters: Partial<Record<StepKey, (d: Record<string, unknown>) => void>> = {
+      agency: (d) => setAgencyData((prev) => ({ ...prev, ...(d as Partial<AgencyStepData>) })),
+      profile: (d) => setProfileData((prev) => ({ ...prev, ...(d as Partial<ProfileStepData>) })),
+      products: (d) =>
+        setProductsData((prev) => ({ ...prev, ...(d as Partial<ProductsStepData>) })),
+      assessment: (d) =>
+        setAssessmentData((prev) => ({ ...prev, ...(d as Partial<AssessmentStepData>) })),
+      certifications: (d) =>
+        setCertificationsData((prev) => ({
+          ...prev,
+          ...(d as Partial<CertificationsStepData>),
+        })),
+      'work-history': (d) =>
+        setWorkHistoryData((prev) => ({ ...prev, ...(d as Partial<WorkHistoryStepData>) })),
     };
 
     for (const step of STEP_CONFIG) {
       const setter = setters[step.key];
       if (setter === undefined) continue; // `terms` — see above.
       const restored = envelope.steps[step.key];
-      if (restored === undefined) continue;
+      // Step slices are `z.unknown()` in the envelope schema, and this restore is the
+      // first code to put one straight into React state — the authenticated path only
+      // ever handed them to `saveDraftAction`, which validates server-side. Anything
+      // that is not a plain object cannot be merged and is dropped rather than spread.
+      if (typeof restored !== 'object' || restored === null || Array.isArray(restored)) continue;
 
-      setter(restored);
+      setter(restored as Record<string, unknown>);
       // Re-seed this step's baseline from the SERIALIZED envelope value rather than
       // from live state, which has not re-rendered yet. The eager seed above ran
       // against the empty pre-restore data, so without this every restored step would
@@ -608,6 +642,38 @@ export function ExpertApplicationProvider({
     setCurrentStep(Math.min(Math.max(envelope.currentStep, 0), furthest));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // BAL-562 — persist the TRANSITION, not just the departure.
+  //
+  // `goNext`/`skipStep` call `performSave()` (which writes the envelope) and only THEN
+  // mark the step complete and advance `currentStep`; `goPrevious`/`goToStep` route
+  // through `saveIfDirty`, which writes nothing at all when the step is clean. Nothing
+  // wrote on ARRIVAL. Storage therefore held a position and a rail that were one
+  // transition stale, and the anonymous-resume effect above is the first code that ever
+  // reads them back: a visitor who clicked through and reloaded without typing landed a
+  // step behind, looking at a rail claiming they had not finished the step they just
+  // finished. Deterministic, not a race.
+  //
+  // Keyed on position and rail only — deliberately NOT on `buildAnonymousEnvelope`,
+  // whose identity changes with every keystroke; routing field edits through here would
+  // bypass the 800ms debounce and write on every character.
+  //
+  // Only ever UPDATES an envelope that already exists. The first real edit creates it
+  // (debounce or `performSave`), and a visitor who has typed nothing has nothing worth
+  // persisting — this must not be what brings an envelope into being. The first run is
+  // skipped so it can never clobber the resume effect above before the restored state
+  // has been committed.
+  const hasSkippedInitialPositionWriteRef = useRef(false);
+  useEffect(() => {
+    if (!isAnonymous) return;
+    if (!hasSkippedInitialPositionWriteRef.current) {
+      hasSkippedInitialPositionWriteRef.current = true;
+      return;
+    }
+    if (readAnonymousDraft() === null) return;
+    writeAnonymousDraft(buildAnonymousEnvelope());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep, maxReachedStep, stepStatuses, isAnonymous]);
 
   // BAL-502 §22.3 — the full-envelope snapshot written to sessionStorage. Every key
   // is populated unconditionally from live state (cheap, local, idempotent) so a
@@ -631,14 +697,13 @@ export function ExpertApplicationProvider({
   }, [getStepData, currentStep, maxReachedStep, stepStatuses]);
 
   const saveAnonymousDraftNow = useCallback((): boolean => {
-    // WARNING 6 — `authGateAt` is stamped ONLY here (the submit-gate call site),
-    // never by the 800ms background debounce (`scheduleAnonymousSave` below). Note
-    // this is one of TWO stampers since BAL-562 — the other is `stampAuthGate`, used
-    // by the apply header's "Log in" — but both mean the same thing: intent, not
-    // activity.
-    // that timestamp means "the visitor deliberately hit Submit", not "some field
-    // changed". WARNING 7 — the write's success is returned (not discarded) so the
-    // caller (step-terms) can tell the visitor before they commit to signing up.
+    // WARNING 6 — `authGateAt` is stamped here, at the submit gate, and never by the
+    // 800ms background debounce (`scheduleAnonymousSave` below): the timestamp means
+    // "the visitor deliberately crossed an auth boundary", not "some field changed".
+    // Since BAL-562 there are exactly TWO stampers — this one and `stampAuthGate`,
+    // used by the apply header's "Log in" — and both carry that same meaning.
+    // WARNING 7 — the write's success is returned (not discarded) so the caller
+    // (step-terms) can tell the visitor before they commit to signing up.
     //
     // BAL-562 — cancel any debounce still in flight FIRST. It would otherwise land
     // ~800ms later with an envelope rebuilt from live state, leaving a write this
