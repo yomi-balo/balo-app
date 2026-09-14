@@ -489,32 +489,46 @@ describe('ExpertProfileClient — CTA handlers', () => {
     expect(mockToast).not.toHaveBeenCalled();
   });
 
-  // ⚠⚠ Sentry BALO-WEB-19 — this page is PUBLIC and every action behind the panel is
-  // `withAuth`. Before the gate, a signed-out visitor reached the panel and the presign threw
-  // `Error: Unauthorized` the moment they attached a file. Same rule as Book.
-  it('opens the auth modal instead of the ProjectRequestPanel for a signed-out visitor', async () => {
-    const user = userEvent.setup();
-    render(
+  /**
+   * ⚠⚠ Sentry BALO-WEB-19 — this page is PUBLIC and every action behind the panel is
+   * `withAuth`. Before the gate, a signed-out visitor reached the panel and the presign threw
+   * `Error: Unauthorized` the moment they attached a file. Same rule as Book.
+   *
+   * ⚠ The render + click is a helper, not a copy in each test. Written out twice it was a
+   * 15-line clone between these two cases and a 12-line clone against the Book equivalent
+   * above — enough new duplicated lines on its own to fail SonarCloud's 3% new-code gate.
+   */
+  const PANEL_HEADING = /start a project with anil pilania/i;
+
+  function renderProfile(isLoggedIn: boolean) {
+    return render(
       <ExpertProfileClient
         view={makeView()}
         portraitUrl={null}
-        isLoggedIn={false}
+        isLoggedIn={isLoggedIn}
         projectTaxonomies={EMPTY_TAXONOMIES}
         {...bookingProps}
-        bookingContext={null}
+        {...(isLoggedIn ? {} : { bookingContext: null })}
       />
     );
+  }
 
+  async function clickStartProject(user: ReturnType<typeof userEvent.setup>): Promise<void> {
     const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
     if (startProject) await user.click(startProject);
+  }
+
+  it('opens the auth modal instead of the ProjectRequestPanel for a signed-out visitor', async () => {
+    const user = userEvent.setup();
+    renderProfile(false);
+
+    await clickStartProject(user);
 
     expect(mockAuthModalOpen).toHaveBeenCalledWith(
       expect.objectContaining({ onSuccess: expect.any(Function) })
     );
     // The panel stayed shut — no action behind it can fire.
-    expect(
-      screen.queryByRole('heading', { name: /start a project with anil pilania/i })
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: PANEL_HEADING })).not.toBeInTheDocument();
     // The click itself is still measured.
     expect(mockTrack).toHaveBeenCalledWith(EXPERT_PROFILE_EVENTS.PROFILE_CTA_CLICKED, {
       expert_id: 'expert-1',
@@ -526,22 +540,10 @@ describe('ExpertProfileClient — CTA handlers', () => {
   // `isLoggedIn` server-side, and the panel then opens without a second click.
   it('opens the ProjectRequestPanel once auth resolves after a signed-out click', async () => {
     const user = userEvent.setup();
-    const { rerender } = render(
-      <ExpertProfileClient
-        view={makeView()}
-        portraitUrl={null}
-        isLoggedIn={false}
-        projectTaxonomies={EMPTY_TAXONOMIES}
-        {...bookingProps}
-        bookingContext={null}
-      />
-    );
+    const { rerender } = renderProfile(false);
 
-    const [startProject] = screen.getAllByRole('button', { name: /start a project/i });
-    if (startProject) await user.click(startProject);
-    expect(
-      screen.queryByRole('heading', { name: /start a project with anil pilania/i })
-    ).not.toBeInTheDocument();
+    await clickStartProject(user);
+    expect(screen.queryByRole('heading', { name: PANEL_HEADING })).not.toBeInTheDocument();
 
     // What `router.refresh()` produces: the same tree re-rendered with a signed-in viewer.
     rerender(
@@ -554,9 +556,7 @@ describe('ExpertProfileClient — CTA handlers', () => {
       />
     );
 
-    expect(
-      await screen.findByRole('heading', { name: /start a project with anil pilania/i })
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: PANEL_HEADING })).toBeInTheDocument();
   });
 
   it('jumps to a section (and stays green despite scrollIntoView) when a nav tab is clicked', async () => {
