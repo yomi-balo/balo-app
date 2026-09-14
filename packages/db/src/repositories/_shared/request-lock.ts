@@ -137,7 +137,7 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * bound applies ONLY to the wait for THIS one `pg_advisory_xact_lock` call; it never reaches any
  * row lock the caller takes afterwards.
  *
- * ⚠⚠ fix round R7 — `DEFAULT`, NOT THE LITERAL `0`. An earlier version of this function reset with
+ * ⚠⚠ fix round R9 — `DEFAULT`, NOT THE LITERAL `0`. An earlier version of this function reset with
  * `SET LOCAL lock_timeout = 0`, reasoning that `0` is Postgres's own built-in default. That
  * reasoning was the defect: `0` is the COMPILED-IN default, not necessarily the EFFECTIVE one for
  * this session — `postgresql.conf`, `ALTER DATABASE … SET`, `ALTER ROLE … SET`, or a connection
@@ -147,12 +147,36 @@ type RequestLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * every serialised writer's transaction, and this docblock would have been the thing vouching for
  * an invariant the code did not hold (the exact defect class this ticket exists to fix).
  * `SET LOCAL lock_timeout = DEFAULT` (equivalently, per Postgres semantics, `RESET lock_timeout`)
- * instead restores the value that was in effect at the START of this transaction/session — i.e.
- * the value `postgresql.conf` / `ALTER DATABASE` / `ALTER ROLE` / the pooler put there — accounting
- * for every one of those sources, not merely coinciding with them today. The claim that this
- * function "restores pre-PR behaviour" is therefore true of the PROPERTY (whatever `lock_timeout`
- * was before this function ran, it is that again after), not merely true of this repo's current
- * config (where nothing else happens to set `lock_timeout`, so `DEFAULT` and `0` coincide today).
+ * instead restores the CONFIGURED default — the reset value sourced from `postgresql.conf`,
+ * `ALTER DATABASE … SET`, `ALTER ROLE … SET`, or server start-up (a pooler that injects one of
+ * those `ALTER … SET` forms ahead of the session counts here too) — accounting for every one of
+ * those sources, not merely coinciding with them today. The claim that this function "restores
+ * pre-PR behaviour" is therefore true of the PROPERTY (whatever the CONFIGURED default was before
+ * this function ran, it is that again after), not merely true of this repo's current config (where
+ * nothing else happens to set `lock_timeout`, so `DEFAULT` and `0` coincide today).
+ *
+ * ⚠ WHAT `DEFAULT` DOES NOT COVER, NAMED PRECISELY — AND WHY BAL-559 IS THE THING MOST LIKELY TO
+ * EXPOSE IT. `DEFAULT` restores the CONFIGURED default above; it does NOT restore a SESSION-LEVEL
+ * `SET lock_timeout` issued mid-session on this connection, nor a value supplied via postgres-js
+ * CONNECTION OPTIONS at connect time — either of those is reset PAST, not restored, by this line.
+ * That distinction is academic today because nothing in this codebase sets `lock_timeout` at
+ * either of those two layers. It stops being academic the moment **BAL-559** — the named
+ * follow-up for adding a global `lock_timeout` at the db client (`packages/db/src/client.ts`) —
+ * ships, because a client-level `lock_timeout` is set via exactly those connection options this
+ * reset does not restore. Should that land: every serialised writer's transaction would have its
+ * BAL-559 `lock_timeout` silently defeated for the remainder of the transaction after this
+ * function returns — the identical defect class the `0`→`DEFAULT` fix above exists to close,
+ * recurring one layer up. **The fence already holds.** `request-lock.integration.test.ts`'s
+ * `shownBefore` capture reads `SHOW lock_timeout` from the same production client module this
+ * function runs against, so if BAL-559 adds `lock_timeout` to the connection options, `shownAfter`
+ * stops matching `shownBefore` and that test goes RED. That red is EXPECTED and CORRECT — proof
+ * the reset no longer restores the connection's real prior value, not a flake to silence. The fix
+ * at that point: capture the PRE-ACQUISITION value (`SHOW lock_timeout`, or the row already read
+ * in that test) and restore it explicitly via `set_config('lock_timeout', <captured>, true)`
+ * instead of `SET LOCAL … = DEFAULT` — `set_config`, unlike `SET`, DOES accept a bind parameter,
+ * so the actual prior value (session-level or connection-option included) can be restored rather
+ * than the configured default. Not done pre-emptively here because it costs one extra round trip
+ * per lock acquisition (the capture read) for a case that, absent BAL-559, cannot occur.
  *
  * WHY NARROWED. The MEDIUM availability finding this fix answers is about writers QUEUING AT
  * THE GATE pinning a pooled connection — `createDraft`'s un-rate-limited autosave path
@@ -180,11 +204,12 @@ export async function acquireRequestLock(tx: RequestLockTx, requestId: string): 
   await tx.execute(
     sql`SELECT pg_advisory_xact_lock(hashtextextended('project_request:' || ${requestId}, 0))`
   );
-  // ⚠⚠ fix round R1(a)/R7 — RESET IMMEDIATELY, so the 3s bound covers ONLY the wait for the
+  // ⚠⚠ fix round R1(a)/R9 — RESET IMMEDIATELY, so the 3s bound covers ONLY the wait for the
   // advisory lock above and never any row lock the caller takes afterwards. `DEFAULT`, never the
-  // literal `0` — see the docblock's R7 section for why `0` is the wrong value (it is Postgres's
-  // compiled-in default, not necessarily this session's EFFECTIVE one) and why `DEFAULT` is what
-  // actually restores the value in effect before this function ran.
+  // literal `0` — see the docblock's R9 section for why `0` is the wrong value (it is Postgres's
+  // compiled-in default, not necessarily this session's EFFECTIVE one) and why `DEFAULT` restores
+  // the CONFIGURED default, not any session-level/connection-option value — see the docblock's
+  // "WHAT `DEFAULT` DOES NOT COVER" section (BAL-559) for the gap that leaves open.
   await tx.execute(sql`SET LOCAL lock_timeout = DEFAULT`);
 }
 

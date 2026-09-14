@@ -100,15 +100,30 @@ describe('acquireRequestLockViaProposalTx', () => {
  * test) — `SHOW lock_timeout` is a plain session-state read, so no second connection is needed
  * to observe it.
  */
-describe('acquireRequestLock — lock_timeout scoping (fix round R1(a)/R2/R7)', () => {
+describe('acquireRequestLock — lock_timeout scoping (fix round R1(a)/R2/R9)', () => {
   it('sets lock_timeout for the gate wait, then resets it to the value in effect before acquiring', async () => {
     const requestId = randomUUID();
 
     const { shownBefore, shownAfter } = await db.transaction(async (tx) => {
-      // Captured BEFORE `acquireRequestLock` runs, so this test pins the PROPERTY the R7 fix
-      // docblock claims — "restores whatever was in effect before this function ran" — rather
-      // than an incidentally-correct literal. On this harness that value is '0' today, but the
-      // assertion below does not hardcode that; it compares against this capture.
+      // Captured BEFORE `acquireRequestLock` runs, so this test pins the PROPERTY the R9 fix
+      // docblock claims — that `DEFAULT` restores the CONFIGURED default `lock_timeout` in effect
+      // for this session — rather than an incidentally-correct literal. On this harness that
+      // value is '0' today, but the assertion below does not hardcode that; it compares against
+      // this capture.
+      //
+      // ⚠ BAL-559 INTERACTION (see `_shared/request-lock.ts`'s R9 docblock section for the full
+      // argument). This capture is taken from the SAME production client module (`../../client`)
+      // that BAL-559's proposed global `lock_timeout` would configure. If BAL-559 adds
+      // `lock_timeout` to the connection options, `shownBefore` here starts reflecting that
+      // connection-level value too — and so would `shownAfter`, since `DEFAULT` only restores the
+      // CONFIGURED default, not a connection-option value set at connect time. In that world this
+      // assertion is expected to keep passing only if `DEFAULT` happens to coincide with the
+      // connection-option value; the more likely failure is that `shownAfter` stops matching
+      // `shownBefore` and this test goes RED. That red is EXPECTED and CORRECT — it is this test
+      // doing its job, not a regression — and the fix at that point is to switch the reset in
+      // `acquireRequestLock` from `SET LOCAL lock_timeout = DEFAULT` to a captured-and-restored
+      // `set_config('lock_timeout', <captured value>, true)`, which (unlike `SET`) accepts a bind
+      // parameter, so the actual prior value can be restored rather than the configured default.
       const beforeRows = (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
         lock_timeout: string;
       }>;
@@ -117,7 +132,7 @@ describe('acquireRequestLock — lock_timeout scoping (fix round R1(a)/R2/R7)', 
 
       await acquireRequestLock(tx, requestId);
       // ⚠ THIS IS THE R2 MUTATION TARGET. Delete `_shared/request-lock.ts`'s trailing
-      // `SET LOCAL lock_timeout = DEFAULT` (the R1(a)/R7 reset) and `shownAfter` below reads back
+      // `SET LOCAL lock_timeout = DEFAULT` (the R1(a)/R9 reset) and `shownAfter` below reads back
       // `'3s'` instead of matching `shownBefore` — this assertion goes RED.
       const afterRows = (await tx.execute(sql`SHOW lock_timeout`)) as unknown as Array<{
         lock_timeout: string;

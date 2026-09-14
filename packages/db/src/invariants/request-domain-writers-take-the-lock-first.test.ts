@@ -47,7 +47,7 @@ import { stripComments } from '@balo/shared/testing';
  * scan's walk regardless — but the discipline is followed anyway, for the same reason the
  * concurrency suite follows it: so a future copy-paste into `repositories/` doesn't trip it.)
  *
- * ⚠⚠ THE RESIDUAL, NAMED (fix round R8) — `TARGET_FILES` IS A HARDCODED FIVE-FILE LIST, NOT A
+ * ⚠⚠ THE RESIDUAL, NAMED (fix round R10) — `TARGET_FILES` IS A HARDCODED FIVE-FILE LIST, NOT A
  * WALK OF `repositories/`. Unlike `an-account-hold-outlives-only-an-unpaid-balance.test.ts`'s
  * two-lock-class check (which walks EVERY `.ts` file under `repositories/` unfiltered, because it
  * only needs to grep for the literal `pg_advisory`), this scan is METHOD-GRAIN WITHIN FIVE NAMED
@@ -109,7 +109,7 @@ interface WriterRecord {
  * position — those helpers are correctly invisible to this scan, which only cares about
  * TRANSACTION-OPENING repository methods (`async submit(`, never `async function foo(`).
  *
- * ⚠⚠ THE CONSEQUENCE, NAMED — NOT JUST THE CAUSE (fix round R9). "Invisible" above understates
+ * ⚠⚠ THE CONSEQUENCE, NAMED — NOT JUST THE CAUSE (fix round R11). "Invisible" above understates
  * what happens if a `db.transaction(` call site is ever placed INSIDE a module-level
  * `async function <name>(` helper: this function does not throw for that call site. The `throw`
  * a few lines below only fires when NO preceding `async <name>(` header exists anywhere earlier
