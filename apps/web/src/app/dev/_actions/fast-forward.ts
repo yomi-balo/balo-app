@@ -45,8 +45,42 @@ import {
  * affordance for either party (§7's `markThreadRead` row).
  *
  * Every capability gate runs at full strength, every repository writer takes the BAL-546
- * advisory lock, every notification / analytics / audit / `revalidatePath` fires exactly as
- * production fires it — nothing here manufactures a row a real handler never produces. Four of
+ * advisory lock, and every notification / audit row / attribution column / `revalidatePath` fires
+ * exactly as production fires it — nothing here manufactures a row a real handler never produces.
+ *
+ * ⚠ ANALYTICS ARE THE ONE EXCEPTION. A fast-forwarded request is NOT a valid PostHog fixture.
+ * Balo's origination analytics are split by AUDIENCE (BAL-357): only the two money-bearing events
+ * are emitted server-side, from inside the cores this file calls, so only those two fire here —
+ *   • `PROJECT_PROPOSAL_SUBMITTED` — `_shared/submit-proposal-core.ts`
+ *   • `PROJECT_PROPOSAL_ACCEPTED`  — `_shared/accept-proposal-core.ts`
+ * both via `trackServerAndFlush` (itself a no-op without `POSTHOG_API_KEY`, the dev default) and
+ * both attributed to the DERIVED party as `distinct_id`, never to the dev operator.
+ *
+ * EVERY other origination event is fired CLIENT-side by the surface that reacts to the action's
+ * return value. This file discards those payloads, so a fast-forward produces NONE of:
+ *   • invite            → `PROJECT_EXPERT_INVITED` + `PROJECT_REQUEST_STATUS_TRANSITIONED`
+ *                          (`expert-invite-dialog.tsx`; drops `firstAdminActionMs`)
+ *   • eoi               → `PROJECT_EOI_SUBMITTED` (`eoi-entry.tsx`; drops `timeToEoiMs`)
+ *   • request_proposal  → `PROJECT_PROPOSAL_REQUESTED` + `PROJECT_REQUEST_STATUS_TRANSITIONED`
+ *                          (`admin-health-panel.tsx`)
+ *   • submit_proposal   → `MILESTONE_EFFORT_ESTIMATED` + `PROJECT_REQUEST_STATUS_TRANSITIONED`
+ *                          (`submit-proposal-dialog.tsx`)
+ *   • accept            → `PROJECT_REQUEST_STATUS_TRANSITIONED` (`accept-confirm-modal.tsx`)
+ *   • close             → `PROJECT_REQUEST_CLOSED` (`close-request-sheet.tsx`)
+ *   • decline_track     → `PROJECT_TRACK_DECLINED` (`decline-track-dialog.tsx`)
+ * `markThreadRead` loses nothing — neither path emits analytics; the real surface's
+ * `CONVERSATION_THREAD_SELECTED` (`conversation-stage.tsx`) belongs to TAB SELECTION, not to the
+ * mark-read write.
+ *
+ * Dropping the client half is deliberate and correct for a headless fixture tool (there is no
+ * browser and no viewer whose `distinct_id` those events would carry), but it means
+ * `PROJECT_REQUEST_STATUS_TRANSITIONED` — the canonical transition stream — is ABSENT for every
+ * step a fast-forward performs. Never validate a PostHog funnel, conversion rate or
+ * time-to-transition metric against fast-forwarded data. Do NOT "fix" this by emitting those
+ * events from here: that would mint server-side duplicates of client-only events under a
+ * synthetic `distinct_id`, poisoning the very funnels this paragraph warns about.
+ *
+ * Four of
  * the seven targets (`experts_invited`, `proposal_requested`, `closed`, track-`declined`) run the
  * shipped ADMIN Server Action UNMODIFIED, on the dev operator's OWN session (they are staff by
  * construction of the entry token below). Only three spine steps plus `markThreadRead` are
@@ -380,7 +414,16 @@ async function runFastForwardRequest(
     return { success: false, error: 'This request no longer exists.' };
   }
 
-  const plan = planFastForward(initialRequest.status, target);
+  // F1 — every spine step below acts on the SELECTED TRACK, so they must be planned from that
+  // track's own status, never from `request.status` (a max-progress rollup over every live track:
+  // on a multi-track request it reports the FURTHEST track, not the picked one). Left `undefined`
+  // when no track was picked, or when the id is not on this request — the plan then falls back to
+  // request grain, and the per-step runners refuse on their own terms ("Pick a track…" /
+  // "Could not find that track on the request.").
+  const selectedTrackStatus =
+    relationshipId === undefined ? undefined : findTrack(initialRequest, relationshipId)?.status;
+
+  const plan = planFastForward(initialRequest.status, target, selectedTrackStatus);
   if (!plan.ok) {
     return { success: false, error: refusalCopy(plan.refusal) };
   }

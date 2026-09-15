@@ -11,26 +11,16 @@ beforeAll(() => {
   Element.prototype.releasePointerCapture = vi.fn();
 });
 
-// Mock motion to a plain div — framer-motion misbehaves in jsdom (mirrors seed-panel.test.tsx).
-const MOTION_ONLY_PROPS = new Set(['whileHover', 'whileTap', 'transition', 'initial', 'animate']);
-vi.mock('motion/react', () => ({
-  useReducedMotion: () => false,
-  motion: new Proxy(
-    {},
-    {
-      get: () => {
-        return ({ children, ...props }: { children?: React.ReactNode }) => {
-          const rest = Object.fromEntries(
-            Object.entries(props as Record<string, unknown>).filter(
-              ([key]) => !MOTION_ONLY_PROPS.has(key)
-            )
-          );
-          return <div {...rest}>{children}</div>;
-        };
-      },
-    }
-  ),
-}));
+// ONE cached-per-tag motion stub (`@/test/motion-stub`). Never hand-roll a bare `get` Proxy here:
+// an uncached handler returns a NEW component TYPE on every property access, so React remounts the
+// whole subtree on every re-render. Both cards below are `motion.div`s wrapping Radix Selects, and
+// `isPending` flips back to false in a commit AFTER the one that opened the listbox — so the
+// uncached mock tore the open Select down mid-interaction. That was the "unexplained" flake this
+// file used to paper over with a 4-attempt retry.
+vi.mock('motion/react', async () => {
+  const { createMotionStub } = await import('@/test/motion-stub');
+  return createMotionStub();
+});
 
 const { mockToast } = vi.hoisted(() => ({
   mockToast: { success: vi.fn(), error: vi.fn() },
@@ -77,6 +67,19 @@ async function loadRequest(user: ReturnType<typeof userEvent.setup>): Promise<vo
   await waitFor(() => expect(screen.getByText('proposal_submitted')).toBeInTheDocument());
 }
 
+/** Type an id into the load row, inspect, and wait for a marker only that fixture renders. */
+async function inspectId(
+  user: ReturnType<typeof userEvent.setup>,
+  requestId: string,
+  settledMarker: string | RegExp
+): Promise<void> {
+  const input = screen.getByLabelText('Project request id');
+  await user.clear(input);
+  await user.type(input, requestId);
+  await user.click(screen.getByRole('button', { name: 'Inspect' }));
+  await waitFor(() => expect(screen.getByText(settledMarker)).toBeInTheDocument());
+}
+
 /** R3 — the last element of a (possibly empty) list, or an explicit throw. Never an index-position `!`. */
 function lastOrThrow<T>(items: readonly T[]): T {
   const item = items.at(-1);
@@ -87,42 +90,18 @@ function lastOrThrow<T>(items: readonly T[]): T {
 }
 
 /**
- * BAL-275 fix round (R2) — this flake is PANEL-SPECIFIC and its root cause is NOT IDENTIFIED.
- * Reproduced directly: 1-3 of 7 one-shot `user.click` attempts fail to open the Radix listbox
- * under contended CPU (jsdom's `pointerdown`-driven open handler never fires), and no amount of
- * WAITING helps — the option genuinely never renders, only re-clicking the trigger does.
- *
- * This is NOT the generic `reference_web_timer_tests_flake_under_local_load` CPU-load flake: the
- * shipped `balo-panel.test.tsx` exercises the same Radix Select pattern and passed 19/19 one-shot
- * at the same load average (562); a "disabled" race on the trigger was also probed and disproved.
- * Nothing else shipped in `apps/web/src` needs this retry shape today.
- *
- * The retry is retained DELIBERATELY, not removed — mutation-proven non-vacuous: the helper
- * contains no `expect()`, only returns after a genuine option click, and throws on the 4th failed
- * attempt; mutating `onValueChange` to a no-op turns these tests RED. A follow-up ticket is owed
- * to find the actual root cause — an unexplained retry over a genuine failure could be masking a
- * real defect.
+ * One click opens the listbox, one click takes the option. The 4-attempt retry this replaced was
+ * never about Radix or CPU load — it survived the uncached `motion/react` mock remounting the card
+ * out from under an open Select (see the `vi.mock` at the top). With the cached stub, a single
+ * click is stable.
  */
 async function openSelectAndChoose(
   user: ReturnType<typeof userEvent.setup>,
   comboboxName: string,
   optionName: string
 ): Promise<void> {
-  const MAX_ATTEMPTS = 4;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    await user.click(screen.getByRole('combobox', { name: comboboxName }));
-    try {
-      const option = await screen.findByRole(
-        'option',
-        { name: optionName },
-        { timeout: attempt === MAX_ATTEMPTS ? 3000 : 500 }
-      );
-      await user.click(option);
-      return;
-    } catch (error) {
-      if (attempt === MAX_ATTEMPTS) throw error;
-    }
-  }
+  await user.click(screen.getByRole('combobox', { name: comboboxName }));
+  await user.click(await screen.findByRole('option', { name: optionName }));
 }
 
 describe('RequestFastForwardPanel', () => {
@@ -357,6 +336,168 @@ describe('RequestFastForwardPanel', () => {
         expect(mockToast.success).toHaveBeenCalled();
       },
       { timeout: 5000 }
+    );
+  });
+
+  it('F1(a) — selecting a LAGGING track widens the target list to the steps that track still needs', async () => {
+    const user = userEvent.setup();
+    mockInspect.mockResolvedValue({
+      success: true,
+      requestId: 'req-3',
+      status: 'proposal_submitted',
+      clientContactName: 'Dana Lee',
+      tracks: [
+        {
+          relationshipId: 'rel-1',
+          expertProfileId: 'exp-1',
+          expertName: 'Sam Ortiz',
+          status: 'proposal_submitted',
+        },
+        {
+          relationshipId: 'rel-2',
+          expertProfileId: 'exp-2',
+          expertName: 'Ade Nakamura',
+          status: 'eoi_submitted',
+        },
+      ],
+    });
+    render(<RequestFastForwardPanel />);
+    await inspectId(user, 'req-3', /Ade Nakamura \(eoi_submitted\)/);
+
+    // REQUEST grain: the rollup is already `proposal_submitted`, so `proposal_requested` is past
+    // and must not be offered — this is the pre-fix behaviour, and it is still correct here.
+    await user.click(screen.getByRole('combobox', { name: 'Target status' }));
+    expect(await screen.findByRole('option', { name: 'accepted' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'proposal_requested' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    // TRACK grain: the selected track is only at `eoi_submitted`, so `proposal_requested` is a
+    // step it genuinely still needs — and the plan previewed is the track's, not the rollup's.
+    await openSelectAndChoose(user, 'Track', 'Ade Nakamura · eoi_submitted');
+    await openSelectAndChoose(user, 'Target status', 'proposal_requested');
+
+    await user.click(screen.getByRole('button', { name: 'Fast-forward' }));
+    expect(screen.getByText(/Will run: request_proposal/)).toBeInTheDocument();
+  });
+
+  it('F1(b) — "Invite a new expert" is reachable while a live track exists, and sends expertProfileId with NO relationshipId', async () => {
+    const user = userEvent.setup();
+    mockInspect.mockResolvedValue({
+      success: true,
+      requestId: 'req-4',
+      status: 'eoi_submitted',
+      clientContactName: 'Dana Lee',
+      tracks: [
+        {
+          relationshipId: 'rel-1',
+          expertProfileId: 'exp-1',
+          expertName: 'Sam Ortiz',
+          status: 'eoi_submitted',
+        },
+      ],
+    });
+    mockSearchExperts.mockResolvedValue({
+      success: true,
+      experts: [{ id: 'exp-9', name: 'Rio Vance', headline: null, avatarUrl: null }],
+    });
+    render(<RequestFastForwardPanel />);
+    await inspectId(user, 'req-4', /Sam Ortiz \(eoi_submitted\)/);
+
+    await openSelectAndChoose(user, 'Track to act on', 'Invite a new expert');
+
+    await user.type(screen.getByLabelText('Expert to invite'), 'rio');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    await openSelectAndChoose(user, 'Expert', 'Rio Vance');
+
+    await openSelectAndChoose(user, 'Target status', 'experts_invited');
+
+    await user.click(screen.getByRole('button', { name: 'Fast-forward' }));
+    const confirmButtons = await screen.findAllByRole('button', { name: 'Fast-forward' });
+    await user.click(lastOrThrow(confirmButtons));
+
+    // The `relationshipId` must be absent, not merely ignored: sending it would make the server
+    // plan at TRACK grain and refuse the very second invite the operator asked for.
+    await waitFor(() => {
+      expect(mockFastForward).toHaveBeenCalledWith({
+        requestId: 'req-4',
+        target: 'experts_invited',
+        expertProfileId: 'exp-9',
+        relationshipId: undefined,
+        closeReason: undefined,
+      });
+    });
+  });
+
+  it('F5 — a declined track is absent from the fast-forward Track picker, but still markable-read', async () => {
+    const user = userEvent.setup();
+    mockInspect.mockResolvedValue({
+      success: true,
+      requestId: 'req-6',
+      status: 'proposal_submitted',
+      clientContactName: 'Dana Lee',
+      tracks: [
+        {
+          relationshipId: 'rel-1',
+          expertProfileId: 'exp-1',
+          expertName: 'Sam Ortiz',
+          status: 'proposal_submitted',
+        },
+        {
+          relationshipId: 'rel-2',
+          expertProfileId: 'exp-2',
+          expertName: 'Ade Nakamura',
+          status: 'declined',
+        },
+      ],
+    });
+    render(<RequestFastForwardPanel />);
+    await inspectId(user, 'req-6', /Ade Nakamura \(declined\)/);
+
+    // The planner refuses a declined track outright, so offering it could only produce a refusal.
+    await user.click(screen.getByRole('combobox', { name: 'Track' }));
+    expect(
+      await screen.findByRole('option', { name: 'Sam Ortiz · proposal_submitted' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: 'Ade Nakamura · declined' })
+    ).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    // Mark-read is not a spine act — it reads every track, declined ones included.
+    await user.click(screen.getByRole('combobox', { name: 'Mark-read track' }));
+    expect(
+      await screen.findByRole('option', { name: 'Ade Nakamura · declined' })
+    ).toBeInTheDocument();
+  });
+
+  it('F5 — inspecting a DIFFERENT request clears the target picked for the previous one', async () => {
+    const user = userEvent.setup();
+    render(<RequestFastForwardPanel />);
+    await loadRequest(user);
+
+    await openSelectAndChoose(user, 'Target status', 'accepted');
+    expect(screen.getByRole('combobox', { name: 'Target status' })).toHaveTextContent('accepted');
+
+    mockInspect.mockResolvedValue({
+      success: true,
+      requestId: 'req-7',
+      status: 'proposal_submitted',
+      clientContactName: 'Dana Lee',
+      tracks: [
+        {
+          relationshipId: 'rel-9',
+          expertProfileId: 'exp-9',
+          expertName: 'Lee Park',
+          status: 'proposal_submitted',
+        },
+      ],
+    });
+    await inspectId(user, 'req-7', /Lee Park \(proposal_submitted\)/);
+
+    // Cards are keyed by requestId — a stale pick from the PREVIOUS request must not survive and
+    // travel to the server.
+    expect(screen.getByRole('combobox', { name: 'Target status' })).toHaveTextContent(
+      'Choose a target status'
     );
   });
 });

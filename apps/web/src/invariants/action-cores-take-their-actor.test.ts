@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRouteDir, scanRouteSources, type ScannedFile } from './_source-scan';
+import {
+  codeLinesOf,
+  hasUseServerDirective,
+  resolveRouteDir,
+  scanRouteSources,
+  type ScannedFile,
+} from './_source-scan';
 
 /**
  * BAL-275 §9.2 (N10) — structural invariant for the five behaviour-preserving extractions in
@@ -31,9 +37,23 @@ import { resolveRouteDir, scanRouteSources, type ScannedFile } from './_source-s
  * the walk and fails the set-equality assertion loudly; it cannot be filtered out before the scan
  * runs, because nothing filters the scan itself.
  *
+ * ⚠⚠ AND A CORE MUST NEVER BE A `'use server'` MODULE (F2). Everything above assumes a core is
+ * reachable ONLY through its Server Action, which gates first. A `'use server'` directive would
+ * make the core itself POST-addressable: Next registers every exported async function in such a
+ * module as an action endpoint, so `runSubmitEoi(user, input)` would become directly callable with
+ * a CALLER-SUPPLIED `user` — the actor parameter that exists precisely so the FAST-FORWARD can
+ * choose it. That is this PR's threat model exactly, and the one gate that would notice is
+ * accidental: `use-server-exports-only-async.test.ts` only flags a `'use server'` module that also
+ * exports a literal VALUE, so the three cores exporting `NOT_SIGNED_IN` are covered by luck while
+ * `submit-eoi-core.ts` and `mark-thread-read-core.ts` — types and one async function each — would
+ * take the directive and COMPILE, lint, typecheck and build clean. The ban is asserted here, on
+ * purpose, rather than left to that coincidence.
+ *
  * If this test fails:
  *   - a core references one of the banned identity primitives → move whatever needs the REAL caller
  *     back into the Server Action (the gate), or reconsider whether this extraction should exist;
+ *   - a core carries a `'use server'` directive (module-level OR inline in a function body) → delete
+ *     it; the Server Action that imports the core is the ONLY thing that may carry it;
  *   - a core lost its `run<X>(user: SessionUser, …)` shape → the action can no longer delegate the
  *     actor the fast-forward derives;
  *   - one of the five actions stopped calling `requireOnboardedUser()` or stopped importing its core
@@ -100,6 +120,40 @@ const RUN_EXPORT_TOKEN = 'export async function run';
 const ACTOR_PARAM_TOKEN = 'user: SessionUser';
 const GATE_TOKEN = 'requireOnboardedUser()';
 
+/**
+ * The `'use server'` directive text, both quote styles — checked literally, per this directory's
+ * no-regex convention (Prettier normalises to single quotes, but nothing type-checks a
+ * hand-written directive).
+ *
+ * ⚠ SCANNED OVER THE WHOLE FILE, not only its first statement, because an INLINE directive is
+ * equally fatal: `'use server'` as the first statement of an exported async function body makes
+ * that ONE function an action endpoint, with no module-level directive anywhere. The strict
+ * first-statement test (`hasUseServerDirective`) cannot see that, so the substring scan is a
+ * SEPARATE assertion rather than a redundant one — the decoy test below proves the difference.
+ */
+const USE_SERVER_DIRECTIVES: readonly string[] = ["'use server'", '"use server"'];
+
+/**
+ * Every way a `'use server'` directive can appear in one core, as human-readable offence labels.
+ *
+ * Reads BOTH views the scanner exposes. `code` (comment lines stripped) is what the substring scan
+ * uses: the directive is a STRING LITERAL on its own line, so `codeLinesOf` keeps it, while a
+ * docblock that merely MENTIONS `'use server'` while explaining that the file deliberately is not
+ * one is dropped — a false alarm avoided without weakening anything. `raw` (verbatim) is checked
+ * too, with the strict first-statement test only: `hasUseServerDirective` does its own comment
+ * skipping, so running it on both views means a block-comment shape either helper mishandles still
+ * has to get past the other one. Both directions are cheap; a false PASS here is not affordable.
+ */
+function serverDirectiveOffencesIn(file: ScannedFile): string[] {
+  const offences: string[] = [];
+  if (hasUseServerDirective(file.code)) offences.push('module directive (comment-stripped view)');
+  if (hasUseServerDirective(file.raw)) offences.push('module directive (verbatim view)');
+  for (const directive of USE_SERVER_DIRECTIVES) {
+    if (file.code.includes(directive)) offences.push(`directive text ${directive}`);
+  }
+  return offences;
+}
+
 function scanSharedTree(): ScannedFile[] {
   // UNFILTERED — every file `_actions/_shared/` contains, not a pre-narrowed allow-list.
   return scanRouteSources(SHARED_DIR, 'shared', []);
@@ -163,11 +217,101 @@ describe('invariant: BAL-275 action cores take their actor as a parameter, never
     }
     expect(
       offenders,
+      // F9: the banned-name list in this message is DERIVED from the array that is actually
+      // scanned, never re-typed. It used to name five primitives by hand while the array had
+      // grown to seven (S4 added `cookies(` / `headers(`), so the failure text told whoever hit
+      // it that two of the checked names were not checked. Deriving it makes that drift
+      // unrepresentable.
       `These BAL-275 core modules reference a primitive that could re-acquire the caller's ` +
-        `identity instead of trusting the passed-in actor. A core must NEVER call ` +
-        `requireOnboardedUser / requireUser / getSession / getCurrentUser / withAuth:\n  ` +
+        `identity instead of trusting the passed-in actor. A core must NEVER call any of: ` +
+        `${FORBIDDEN_IDENTITY_PRIMITIVES.join(' / ')}\n  ` +
         offenders.join('\n  ')
     ).toEqual([]);
+    // Non-vacuity: the loop above is over the real five cores, not an empty set.
+    expect(coreFiles).toHaveLength(5);
+  });
+
+  it('no core carries a `use server` directive — a core must never be POST-addressable (F2)', () => {
+    const offenders: string[] = [];
+    for (const file of coreFiles) {
+      for (const offence of serverDirectiveOffencesIn(file)) {
+        offenders.push(`${file.rel} → ${offence}`);
+      }
+    }
+    expect(
+      offenders,
+      `These BAL-275 core modules carry a 'use server' directive, which makes their exported ` +
+        `async functions action endpoints in their own right — callable over POST with a ` +
+        `caller-supplied actor, bypassing the Server Action gate entirely. Delete the directive: ` +
+        `only the Server Action that imports the core may carry one:\n  ` +
+        offenders.join('\n  ')
+    ).toEqual([]);
+    // Non-vacuity: the loop above is over the real five cores, not an empty set.
+    expect(coreFiles).toHaveLength(5);
+  });
+
+  it('⚠ guards the guard: a module-level directive decoy AND an inline-directive decoy are both flagged, and a comment mentioning the directive is not', () => {
+    const moduleLevel = [
+      "'use server';",
+      '',
+      "import type { SessionUser } from '@/lib/auth/session';",
+      '',
+      'export async function runDecoy(user: SessionUser): Promise<unknown> {',
+      '  return user;',
+      '}',
+    ].join('\n');
+    const moduleLevelOffences = serverDirectiveOffencesIn({
+      rel: 'shared/module-level-decoy-core.ts',
+      code: codeLinesOf(moduleLevel),
+      raw: moduleLevel,
+    });
+    expect(moduleLevelOffences, `module-level decoy not caught: ${moduleLevel}`).toEqual([
+      'module directive (comment-stripped view)',
+      'module directive (verbatim view)',
+      `directive text 'use server'`,
+    ]);
+
+    // The inline form carries NO module-level directive, so the strict first-statement test says
+    // nothing — this is the case the substring scan exists for, and the reason it is a separate
+    // assertion rather than a redundant one.
+    const inline = [
+      "import type { SessionUser } from '@/lib/auth/session';",
+      '',
+      'export async function runDecoy(user: SessionUser): Promise<unknown> {',
+      "  'use server';",
+      '  return user;',
+      '}',
+    ].join('\n');
+    expect(hasUseServerDirective(inline), 'the strict test must NOT see the inline form').toBe(
+      false
+    );
+    const inlineOffences = serverDirectiveOffencesIn({
+      rel: 'shared/inline-decoy-core.ts',
+      code: codeLinesOf(inline),
+      raw: inline,
+    });
+    expect(inlineOffences, `inline decoy not caught: ${inline}`).toEqual([
+      `directive text 'use server'`,
+    ]);
+
+    // …and a docblock that merely NAMES the directive while explaining the file deliberately is
+    // not one must stay clean, or every honest core would be unable to document itself.
+    const documented = [
+      '/**',
+      " * Server-only, NOT a `'use server'` module — the action that imports it carries the gate.",
+      ' */',
+      "import type { SessionUser } from '@/lib/auth/session';",
+      '',
+      'export async function runDecoy(user: SessionUser): Promise<unknown> {',
+      '  return user;',
+      '}',
+    ].join('\n');
+    const documentedOffences = serverDirectiveOffencesIn({
+      rel: 'shared/documented-decoy-core.ts',
+      code: codeLinesOf(documented),
+      raw: documented,
+    });
+    expect(documentedOffences, `false alarm on a documenting comment: ${documented}`).toEqual([]);
   });
 
   it('each pinned action gates with requireOnboardedUser() AND imports its own core', () => {

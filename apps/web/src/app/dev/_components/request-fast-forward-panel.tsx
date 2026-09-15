@@ -47,6 +47,7 @@ import {
   reachableTargets,
   planFastForward,
   refusalCopy,
+  FAST_FORWARD_TARGETS,
   type FastForwardTarget,
   type PlanRefusal,
 } from '../_lib/fast-forward-plan';
@@ -65,6 +66,9 @@ import {
 type LoadedRequest = Extract<InspectFastForwardRequestResult, { success: true }>;
 type FastForwardSuccess = Extract<FastForwardRequestResult, { success: true }>;
 type MarkReadSuccess = Extract<MarkThreadReadAsPartyResult, { success: true }>;
+
+/** Which track the spine steps act on: one already on the request, or one this run creates. */
+type TrackChoice = 'existing' | 'new';
 
 type MutationState<TSuccess> =
   | { status: 'idle' }
@@ -211,34 +215,67 @@ function FastForwardCard({
   const [closeReason, setCloseReason] = useState<BaloCloseReason>('unfilled');
   const reduceMotion = useReducedMotion();
 
-  const targets = useMemo(
-    () => (loaded === null ? [] : reachableTargets(loaded.status, loaded.tracks.length > 0)),
-    [loaded]
-  );
-  // U4/R4 — when the target Select would otherwise be empty (only reachable when the request is
-  // `closed`, terminal for every target), surface WHY instead of an unexplained empty picker.
-  const blockingRefusal = useMemo<PlanRefusal | undefined>(() => {
-    if (loaded === null || targets.length > 0) return undefined;
-    const result = planFastForward(loaded.status, 'declined_track');
-    return result.ok ? undefined : result.refusal;
-  }, [loaded, targets]);
   // U7 — "no LIVE track" (plan §11), not raw `tracks.length`: a request whose only track is
   // `declined` should still offer the expert-invite picker, not an unusable declined-only track
-  // picker.
+  // picker. It is also the OPTION list for the track picker below (fix round): the planner refuses
+  // a declined track outright, so offering one could only ever produce a refusal.
   const liveTracks = useMemo(
     () => (loaded === null ? [] : loaded.tracks.filter((t) => t.status !== 'declined')),
     [loaded]
   );
-  const needsExpertPicker = loaded !== null && liveTracks.length === 0;
-  const needsTrackPicker = loaded !== null && liveTracks.length > 0 && target !== 'closed';
+
+  /**
+   * F1(b) — an EXPLICIT operator choice, never one derived from `liveTracks.length === 0`.
+   * `inviteExpertsAction` permits inviting ANOTHER expert while earlier tracks are live
+   * (`INVITE_WINDOW_STATUSES`), and that is the only way to build a two-proposal comparison
+   * fixture; deriving the picker from "there are no tracks yet" made a second invite unreachable.
+   * With zero live tracks there is nothing to pick, so the choice collapses to `new` on its own.
+   */
+  const [trackChoice, setTrackChoice] = useState<TrackChoice>('existing');
+  const effectiveTrackChoice: TrackChoice = liveTracks.length === 0 ? 'new' : trackChoice;
+
+  /**
+   * F1 — the SELECTED track's status, the grain every spine step actually runs at.
+   * `loaded.status` is a max-progress rollup over every live track, so planning from it alone
+   * makes a lagging track unreachable and silently drops steps it still needs. `undefined` while
+   * no track is picked (or when inviting a new expert): the planner then falls back to request
+   * grain, which is correct for the pre-invite path and for the invite window.
+   */
+  const selectedTrackStatus =
+    effectiveTrackChoice === 'existing'
+      ? liveTracks.find((track) => track.relationshipId === relationshipId)?.status
+      : undefined;
+
+  const targets = useMemo(
+    () =>
+      loaded === null
+        ? []
+        : reachableTargets(loaded.status, liveTracks.length > 0, selectedTrackStatus),
+    [loaded, liveTracks, selectedTrackStatus]
+  );
+  // U4/R4 — when the target Select would otherwise be empty, surface WHY instead of an
+  // unexplained empty picker. The reason is whichever refusal the first refusing target gives —
+  // `request_closed` on a closed request, `track_declined` on a declined track, and so on — never
+  // a single hardcoded probe target, which can itself come back `ok` and leave the picker mute.
+  const blockingRefusal = useMemo<PlanRefusal | undefined>(() => {
+    if (loaded === null || targets.length > 0) return undefined;
+    for (const candidate of FAST_FORWARD_TARGETS) {
+      const result = planFastForward(loaded.status, candidate, selectedTrackStatus);
+      if (!result.ok) return result.refusal;
+    }
+    return undefined;
+  }, [loaded, targets, selectedTrackStatus]);
+  const needsExpertPicker = loaded !== null && effectiveTrackChoice === 'new';
+  const needsTrackPicker =
+    loaded !== null && effectiveTrackChoice === 'existing' && target !== 'closed';
   const loading = state.status === 'loading' || isPending;
   // U8 — the steps this target will run, previewed in the confirm dialog (computed client-side,
   // for free, by the same pure planner that drives `targets` above).
   const previewSteps = useMemo(() => {
     if (loaded === null || target === '') return [];
-    const result = planFastForward(loaded.status, target);
+    const result = planFastForward(loaded.status, target, selectedTrackStatus);
     return result.ok ? result.steps : [];
-  }, [loaded, target]);
+  }, [loaded, target, selectedTrackStatus]);
 
   const onSearchExperts = useCallback(() => {
     setExpertSearchPending(true);
@@ -255,13 +292,24 @@ function FastForwardCard({
 
   const handleConfirm = useCallback(() => {
     if (loaded === null || target === '') return;
+    // Exactly one of the two ids travels, chosen by the same flag that chose the picker — sending
+    // a stale `relationshipId` alongside an invite would make the server plan at TRACK grain and
+    // refuse the very invite the operator asked for.
     onConfirm({
       target,
-      expertProfileId: expertProfileId || undefined,
-      relationshipId: relationshipId || undefined,
+      expertProfileId: effectiveTrackChoice === 'new' ? expertProfileId || undefined : undefined,
+      relationshipId: effectiveTrackChoice === 'existing' ? relationshipId || undefined : undefined,
       closeReason: target === 'closed' ? closeReason : undefined,
     });
-  }, [loaded, target, expertProfileId, relationshipId, closeReason, onConfirm]);
+  }, [
+    loaded,
+    target,
+    effectiveTrackChoice,
+    expertProfileId,
+    relationshipId,
+    closeReason,
+    onConfirm,
+  ]);
 
   return (
     <motion.div
@@ -328,6 +376,31 @@ function FastForwardCard({
             </p>
           )}
 
+          {loaded !== null && liveTracks.length > 0 && (
+            <div className="space-y-2">
+              <Label htmlFor="ff-track-choice">Track to act on</Label>
+              <Select
+                value={trackChoice}
+                onValueChange={(value) => setTrackChoice(value as TrackChoice)}
+              >
+                <SelectTrigger id="ff-track-choice" aria-label="Track to act on" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="existing">An existing track</SelectItem>
+                  <SelectItem value="new">Invite a new expert</SelectItem>
+                </SelectContent>
+              </Select>
+              {effectiveTrackChoice === 'new' && (
+                <p className="text-muted-foreground text-xs">
+                  Adds a second track to this request — how a two-proposal comparison fixture gets
+                  built. Aim at <span className="font-mono">experts_invited</span> to stop at the
+                  invite, then pick the new track and drive it on its own.
+                </p>
+              )}
+            </div>
+          )}
+
           {needsExpertPicker && (
             <div className="space-y-2">
               <Label htmlFor="ff-expert-query">Expert to invite</Label>
@@ -377,7 +450,7 @@ function FastForwardCard({
                   <SelectValue placeholder="Choose a track" />
                 </SelectTrigger>
                 <SelectContent>
-                  {loaded?.tracks.map((track: FastForwardTrack) => (
+                  {liveTracks.map((track: FastForwardTrack) => (
                     <SelectItem key={track.relationshipId} value={track.relationshipId}>
                       {track.expertName} · {track.status}
                     </SelectItem>
@@ -431,7 +504,7 @@ function FastForwardCard({
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {target === 'closed'
-                    ? `This permanently closes the request, cancels any live meetings on it, and notifies the client — it can't be reopened from here.`
+                    ? `This permanently closes the request, cancels every meeting still scheduled on it (a call already under way keeps running — the cascade only cancels scheduled meetings), and notifies the client — it can't be reopened from here.`
                     : `This runs the real handler for every step between the request's current status and the target you chose, each as the party that step genuinely requires.`}
                 </AlertDialogDescription>
                 {target !== 'closed' && previewSteps.length > 0 && (
@@ -720,14 +793,24 @@ export function RequestFastForwardPanel(): React.JSX.Element {
         isPending={isPending}
       />
 
+      {/*
+        Fix round — KEYED BY REQUEST ID, deliberately. Both cards hold picker state (target,
+        chosen track, chosen expert, close reason) that belongs to ONE request: inspecting a
+        DIFFERENT request left a `relationshipId` from the previous one selected, which then
+        travelled to the server and refused with "Could not find that track on the request." The
+        key changes only when the loaded request changes, so a post-mutation refresh of the SAME
+        request (U1) still preserves everything the operator picked.
+      */}
       <div className="grid gap-4 md:grid-cols-2">
         <FastForwardCard
+          key={`fast-forward-${loaded?.requestId ?? 'no-request'}`}
           loaded={loaded}
           state={fastForwardState}
           isPending={isPending}
           onConfirm={onFastForwardConfirm}
         />
         <MarkReadCard
+          key={`mark-read-${loaded?.requestId ?? 'no-request'}`}
           loaded={loaded}
           state={markReadState}
           isPending={isPending}

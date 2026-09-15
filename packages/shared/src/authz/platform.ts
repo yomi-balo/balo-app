@@ -242,8 +242,16 @@ export const PLATFORM_CAPABILITIES = {
    * BAL-275 — drive a project request forward along the real origination spine from the dev
    * surface, by invoking each real handler with that step's derived actor. DEV-ONLY: the sole
    * consumer is `apps/web/src/app/dev/_actions/fast-forward.ts`, which refuses before it resolves
-   * this token when `NODE_ENV === 'production'`, and whose page `notFound()`s there. Pinned by
-   * `apps/web/src/invariants/fast-forward-capability-dev-only.test.ts`.
+   * this token unless `NODE_ENV` is in that file's `FAST_FORWARD_ALLOWED_NODE_ENVS` ALLOW-list
+   * (`['development', 'test']` — an allow-list, never a `!== 'production'` deny-list, which fails
+   * OPEN on an unset or misspelt var), and whose page `notFound()`s outside those environments.
+   *
+   * "Sole consumer" is a claim about the WHOLE MONOREPO, and it is pinned as one by
+   * `apps/web/src/invariants/fast-forward-capability-dev-only.test.ts`, whose walk covers every
+   * non-test `.ts`/`.tsx` file under `apps/*` and `packages/*` — not merely `apps/web`, which is
+   * what it used to scan. The scope matters because this token lives in `@balo/shared` and is
+   * importable by every workspace, and `apps/api` is ALWAYS a production process: a Fastify route
+   * resolving this token would sit behind neither the `NODE_ENV` refusal nor the `notFound()`.
    *
    * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY. The nearest shipped token in kind is
    * `IMPERSONATE_USER` ("operate the product AS another user"), and it is the wrong one for
@@ -260,7 +268,8 @@ export const PLATFORM_CAPABILITIES = {
    * six other states as three other users), and NOT `ASSIGN_ANY_REQUEST_OWNER`.
    *
    * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`. It confers nothing in
-   * production — no reachable call site resolves it there.
+   * production — no reachable call site resolves it there, which is exactly the workspace-wide
+   * single-consumer pin above, not an assertion made on trust.
    */
   FAST_FORWARD_REQUEST: 'fast_forward_request',
 } as const;
