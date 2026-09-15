@@ -37,6 +37,7 @@ const {
   mockFindById,
   mockAccept,
   mockFindRequestById,
+  mockEnsureBillingGate,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   ProposalCoherenceError,
@@ -55,6 +56,7 @@ const {
     mockFindById: vi.fn(),
     mockAccept: vi.fn(),
     mockFindRequestById: vi.fn(),
+    mockEnsureBillingGate: vi.fn(),
     InvalidProposalTransitionError,
     InvalidRelationshipTransitionError,
     ProposalCoherenceError,
@@ -71,6 +73,11 @@ vi.mock('@balo/db', () => ({
     // the stored status via findById to source `transitioned` (best-effort).
     findById: (...a: unknown[]) => mockFindRequestById(...a),
   },
+  // BAL-343: the acceptance-time `client_billing` gate confirm. This factory is a
+  // FULL module replacement — omitting this export would make the symbol
+  // `undefined` at call time and the best-effort wrapper would silently swallow
+  // the resulting TypeError.
+  ensureClientBillingGateConfirmed: (...a: unknown[]) => mockEnsureBillingGate(...a),
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   ProposalCoherenceError,
@@ -83,6 +90,12 @@ import { log } from '@/lib/logging';
 const USER = { id: 'user-client', firstName: 'Grace', lastName: 'Hopper' };
 
 const VALID_INPUT = { requestId: REQUEST_ID, relationshipId: REL_ID, proposalId: PROPOSAL_ID };
+
+/**
+ * BAL-343 — the acceptance-time gate-confirm WARN, pinned as a FULL literal (never
+ * `stringContaining`) so a reworded message fails here rather than drifting silently.
+ */
+const GATE_WARN_MESSAGE = 'Client billing gate auto-confirm failed after accept commit';
 
 const PROPOSAL = {
   id: PROPOSAL_ID,
@@ -121,6 +134,9 @@ describe('acceptProposalAction', () => {
     // pre-op floor is `proposal_submitted`), so `transitioned` is true.
     mockFindRequestById.mockResolvedValue({ id: REQUEST_ID, status: 'accepted' });
     mockPublish.mockResolvedValue(undefined);
+    // `clearAllMocks` clears calls but KEEPS implementations — re-set the default
+    // resolution every test, same as mockAccept / mockFindById above.
+    mockEnsureBillingGate.mockResolvedValue(undefined);
   });
 
   it('rejects when not signed in', async () => {
@@ -384,5 +400,130 @@ describe('acceptProposalAction', () => {
     if (result.success) expect(result.transitioned).toBe(true);
     // BAL-540 / ADR-1030 — the accepting client attributes the relationship's audit row.
     expect(mockAccept).toHaveBeenCalledWith({ id: PROPOSAL_ID, actorUserId: USER.id });
+  });
+
+  // ── BAL-343: the acceptance-time `client_billing` gate confirm ──────────────
+
+  it('confirms the client_billing kickoff gate AFTER the accept commits (BAL-343)', async () => {
+    const result = await acceptProposalAction(VALID_INPUT);
+    expect(result.success).toBe(true);
+    expect(mockEnsureBillingGate).toHaveBeenCalledWith(REQUEST_ID);
+    expect(mockEnsureBillingGate).toHaveBeenCalledTimes(1);
+
+    // ORDERING — the gate confirm must run AFTER the commit, never before it (a
+    // pre-commit call reads pre-transaction status on its own connection and
+    // silently no-ops).
+    expect(mockAccept.mock.invocationCallOrder).toHaveLength(1);
+    expect(mockEnsureBillingGate.mock.invocationCallOrder).toHaveLength(1);
+    const [acceptOrder] = mockAccept.mock.invocationCallOrder;
+    const [gateOrder] = mockEnsureBillingGate.mock.invocationCallOrder;
+    if (acceptOrder === undefined) throw new Error('no accept call recorded');
+    if (gateOrder === undefined) throw new Error('no gate-confirm call recorded');
+    expect(gateOrder).toBeGreaterThan(acceptOrder);
+  });
+
+  it('does NOT confirm the gate when the accept is stale (typed transition error)', async () => {
+    mockAccept.mockRejectedValue(new InvalidProposalTransitionError());
+    expect(await acceptProposalAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: 'This proposal can no longer be accepted.',
+    });
+    expect(mockEnsureBillingGate).not.toHaveBeenCalled();
+  });
+
+  it('does NOT confirm the gate when the accept is coherence-rejected', async () => {
+    mockAccept.mockRejectedValue(new ProposalCoherenceError('tm_missing_rate'));
+    const result = await acceptProposalAction(VALID_INPUT);
+    expect(result.success).toBe(false);
+    expect(mockEnsureBillingGate).not.toHaveBeenCalled();
+  });
+
+  it('does NOT confirm the gate when access is denied, nor for a non-client lens', async () => {
+    mockResolveAccess.mockResolvedValue({
+      ok: false,
+      error: 'You do not have access to this conversation.',
+    });
+    expect((await acceptProposalAction(VALID_INPUT)).success).toBe(false);
+    expect(mockEnsureBillingGate).not.toHaveBeenCalled();
+
+    mockResolveAccess.mockResolvedValue(accessOk({ ctx: { lens: 'expert' } }));
+    expect((await acceptProposalAction(VALID_INPUT)).success).toBe(false);
+    expect(mockEnsureBillingGate).not.toHaveBeenCalled();
+  });
+
+  it('a rejected gate confirm does NOT fail an already-committed accept — success plus a WARN', async () => {
+    const gateError = new Error('locked');
+    mockEnsureBillingGate.mockRejectedValue(gateError);
+    const result = await acceptProposalAction(VALID_INPUT);
+
+    // The accept COMMITTED — the client must never be told it failed.
+    expect(result).toEqual({
+      success: true,
+      proposalId: PROPOSAL_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      transitioned: true,
+    });
+    expect(log.warn).toHaveBeenCalledWith(GATE_WARN_MESSAGE, {
+      requestId: REQUEST_ID,
+      error: 'locked',
+      // The unexpected class has a generic message, so the stack is the only
+      // thing naming the failing query path. Pinned to the thrown error's OWN
+      // stack, not `expect.any(String)`.
+      stack: gateError.stack,
+    });
+    // Pins the LEVEL: recoverable, self-healing → WARN, never ERROR.
+    expect(log.error).not.toHaveBeenCalled();
+    // The swallow must not short-circuit the rest of the post-commit body.
+    expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+    expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}/proposal/${REL_ID}`);
+  });
+
+  it('treats a benign InvalidKickoffStateError exactly like any other failure — one arm, same WARN', async () => {
+    // The documented benign race: `ensureClientBillingGateConfirmed`'s unlocked
+    // step-4 status check vs. `confirmKickoffGate`'s own FOR UPDATE read.
+    // Deliberately NOT given its own catch arm — the consequence is identical
+    // (gate stays open, accept still succeeds).
+    const raceError = Object.assign(
+      new Error('Kickoff gate cannot be set while request is kickoff_approved'),
+      { name: 'InvalidKickoffStateError' }
+    );
+    mockEnsureBillingGate.mockRejectedValue(raceError);
+    const result = await acceptProposalAction(VALID_INPUT);
+    expect(result.success).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(GATE_WARN_MESSAGE, {
+      requestId: REQUEST_ID,
+      error: 'Kickoff gate cannot be set while request is kickoff_approved',
+      stack: raceError.stack,
+    });
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('AWAITS the gate confirm before returning, so the client cannot re-render before the write lands', async () => {
+    let release: (() => void) | undefined;
+    mockEnsureBillingGate.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+
+    let settled = false;
+    const pending = acceptProposalAction(VALID_INPUT).then((r) => {
+      settled = true;
+      return r;
+    });
+
+    // Wait until the gate confirm has actually been entered…
+    await vi.waitFor(() => expect(mockEnsureBillingGate).toHaveBeenCalledTimes(1));
+    // …and prove the action has NOT resolved while it is still in flight. A
+    // fire-and-forget call would have fallen through to the two revalidatePath
+    // calls and the return by now — `vi.waitFor` has already yielded the event
+    // loop several times.
+    expect(settled).toBe(false);
+
+    expect(release).toBeDefined();
+    release?.();
+    const result = await pending;
+    expect(result.success).toBe(true);
   });
 });
