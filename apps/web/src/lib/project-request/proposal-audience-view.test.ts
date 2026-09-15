@@ -38,6 +38,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     cadence: 'monthly',
     submittedAt: NOW,
     acceptedAt: null,
+    acceptedByUserId: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,

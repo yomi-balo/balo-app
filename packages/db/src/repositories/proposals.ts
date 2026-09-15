@@ -12,6 +12,7 @@ import {
   acquireRequestLockViaProposalTx,
   acquireRequestLockViaRelationshipTx,
 } from './_shared/request-lock';
+import { recordProposalAccepted } from './_shared/proposal-audit';
 import { advanceRelationshipStatus } from './request-expert-relationships';
 import {
   insertMilestonesTx,
@@ -140,6 +141,42 @@ export class ProposalTrackNotOpenError extends Error {
         : `Relationship ${relationshipId} belongs to a closed request: no proposal draft may be created on it.`
     );
     this.name = 'ProposalTrackNotOpenError';
+  }
+}
+
+/**
+ * BAL-432 / ADR-1030 — thrown by `transitionStatus` when asked to move a proposal INTO
+ * `accepted`. Acceptance is an ATTRIBUTED transition: it stamps `accepted_by_user_id`, advances
+ * the relationship spine (which writes its own `request_expert_relationship.accepted` audit
+ * row), and writes a `proposal.accepted` audit row — all in one transaction, all needing an
+ * actor. `transitionStatus` has no actor to give, so it may not perform this transition at all.
+ *
+ * ⚠ A SIBLING OF {@link ProposalNotDraftError} AND {@link ProposalTrackNotOpenError}, NOT A
+ * REUSE OF {@link InvalidProposalTransitionError} — and the distinction is the whole point.
+ * `submitted → accepted` IS A LEGAL EDGE (`PROPOSAL_STATUS_TRANSITIONS.submitted` includes
+ * `'accepted'`). "The state machine forbids this edge" and "this ENTRY POINT may not perform an
+ * attributed transition" are different claims about different things, and collapsing them into
+ * one error type would make a caller that catches `InvalidProposalTransitionError` (as
+ * `apps/web`'s accept action does, to render "this proposal has moved on" copy) silently absorb
+ * a programming error as a stale-state message.
+ *
+ * ⚠ THE TYPE ALREADY EXCLUDES `'accepted'` FROM `transitionStatus`'s `to`. This error exists
+ * because TYPESCRIPT ERASES: a plain-JS caller, an `as any`, a `satisfies`-dodge, or a value
+ * widened through `ProposalStatus` at some call site would all still arrive here at runtime.
+ * Belt and braces, not redundancy — the type makes the AC true by construction, the guard makes
+ * it true in fact.
+ *
+ * The message names the only attributed path so a developer who hits this knows where to go.
+ */
+export class ProposalAcceptanceRequiresActorError extends Error {
+  constructor(public readonly proposalId: string) {
+    super(
+      `Proposal ${proposalId} cannot be moved to 'accepted' through transitionStatus: ` +
+        'acceptance is an attributed transition. Use accept({ id, actorUserId }), which stamps ' +
+        'accepted_by_user_id, advances the relationship, and writes the proposal.accepted audit ' +
+        'row in one transaction.'
+    );
+    this.name = 'ProposalAcceptanceRequiresActorError';
   }
 }
 
@@ -705,7 +742,10 @@ export const proposalsRepository = {
       });
 
       // Re-stamp submittedAt to the actual submit instant (local update — never
-      // mutate the shared advanceProposalStatus, which accept/resubmit reuse).
+      // mutate the shared advanceProposalStatus, which `accept` and `requestChanges` reuse).
+      // ⚠ NOT `resubmit` — it does NOT route through `advanceProposalStatus`; it flips the row
+      // with its own direct `tx.update` (see `resubmit`'s "FLIP FIRST"). This comment named it
+      // for a long time and was wrong (BAL-432).
       const [stamped] = await tx
         .update(proposals)
         .set({ submittedAt: new Date() })
@@ -789,6 +829,14 @@ export const proposalsRepository = {
    * (routed through `advanceProposalStatus`, which validates submitted→accepted
    * and stamps `acceptedAt`) AND relationship `proposal_submitted`→`accepted`.
    *
+   * BAL-432 / ADR-1030 — TWO MORE STEPS now follow the status flip, in the SAME transaction:
+   * a LOCAL update stamps `accepted_by_user_id = actorUserId` (never through the shared
+   * `advanceProposalStatus`, which has no actor to give), and a `proposal.accepted` audit row is
+   * written LAST, once the transition has fully succeeded. The method now returns the
+   * RE-STAMPED row (capture-and-restamp, mirroring `promoteToSubmit`) rather than
+   * `advanceProposalStatus`'s pre-stamp read, which would come back with
+   * `accepted_by_user_id: null`.
+   *
    * BOUNDARY (ADR-1025 / BAL-295): advancing the relationship to `accepted` ALSO
    * advances the request-level status via `deriveRequestStatus` inside
    * `advanceRelationshipStatus`, in this SAME transaction — the request rollup is
@@ -845,11 +893,48 @@ export const proposalsRepository = {
       });
 
       // Proposal status write goes THROUGH the guarded transition writer.
-      return advanceProposalStatus(tx, {
+      const advanced = await advanceProposalStatus(tx, {
         id: input.id,
         to: 'accepted',
         expectedFrom: 'submitted',
       });
+
+      // BAL-432 — stamp the ACTOR in a LOCAL update, exactly as promoteToSubmit re-stamps
+      // `submittedAt`. Never widen the shared `advanceProposalStatus`. Of its six callers only
+      // `transitionStatus` has no actor at all; the blocker is the OTHER shape — `declineTrack`
+      // and `close` carry a REQUEST-level actor that fans out over N proposals, so a widened
+      // signature would attribute every cascaded proposal to whoever closed the request. That is
+      // not the same claim as "this person accepted this proposal", and this column makes exactly
+      // that claim.
+      const [stamped] = await tx
+        .update(proposals)
+        .set({ acceptedByUserId: input.actorUserId })
+        .where(eq(proposals.id, advanced.id))
+        .returning();
+      if (stamped === undefined) {
+        throw new Error(`Failed to stamp acceptedByUserId on proposal: ${input.id}`);
+      }
+
+      // BAL-432 — the proposal-grain audit row, LAST, on THIS transaction. Last so it records a
+      // transition that has fully succeeded; on THIS tx so an audit-insert failure rolls the
+      // whole acceptance back (proved by proposals.integration.test.ts). All four metadata
+      // values come from `current` — the row locked FOR UPDATE above — so this costs NO
+      // additional read, and `proposalVersion` is the version at acceptance (the status flip
+      // does not change it).
+      await recordProposalAccepted(tx, {
+        actorUserId: input.actorUserId,
+        proposalId: stamped.id,
+        relationshipId: current.relationshipId,
+        projectRequestId: current.projectRequestId,
+        expertProfileId: current.expertProfileId,
+        proposalVersion: current.version,
+      });
+
+      // BAL-432 (D6) — return the RE-STAMPED row. `advanced` was read BEFORE the actor was
+      // written and would come back with `accepted_by_user_id: null` — precisely the lie this
+      // ticket exists to remove. Same capture-and-restamp shape as promoteToSubmit, including
+      // its `undefined` guard.
+      return stamped;
     });
   },
 
@@ -857,13 +942,44 @@ export const proposalsRepository = {
    * Guarded proposal status write. Wraps `advanceProposalStatus` in its own
    * transaction. Throws `InvalidProposalTransitionError` for illegal moves /
    * `expectedFrom` mismatch.
+   *
+   * ⚠ BAL-432 — `to` EXCLUDES `'accepted'`, AT THE TYPE LEVEL AND AT RUNTIME. This method takes
+   * no actor, so reaching `accepted` through it would flip a proposal terminal with no
+   * `accepted_by_user_id`, no `proposal.accepted` audit row, AND without advancing the
+   * relationship — skipping BAL-540's `request_expert_relationship.accepted` row too. It was the
+   * last unattributed path to `accepted` in the codebase. `accept({ id, actorUserId })` is the
+   * only attributed path; see {@link ProposalAcceptanceRequiresActorError}.
+   *
+   * ⚠ THE `db.transaction(` WRAPPER STAYS, AND THIS METHOD MUST NOT TAKE THE ADVISORY LOCK.
+   * `invariants/request-domain-writers-take-the-lock-first.test.ts` names this exact method as
+   * its NEGATIVE CONTROL: it asserts the method is still DISCOVERABLE as a `db.transaction(`
+   * call site AND that it does NOT open with one of the three `acquireRequestLock*` helpers.
+   * Deleting the method, or making it lock-first, fails that control — and locking would
+   * additionally break the eleven-writer set-equality alongside it. The guard below is placed
+   * OUTSIDE the transaction, which satisfies both.
    */
   async transitionStatus(input: {
     id: string;
-    to: ProposalStatus;
+    to: Exclude<ProposalStatus, 'accepted'>;
     expectedFrom?: ProposalStatus;
   }): Promise<Proposal> {
-    return db.transaction((tx) => advanceProposalStatus(tx, input));
+    // ⚠ AN EXPLICIT TYPE ASSERTION, NOT A PLAIN WIDENING ASSIGNMENT — verified by hand (§9.1):
+    // `const to: ProposalStatus = input.to` still leaves TypeScript's control-flow narrowing
+    // tracking `input.to`'s NARROWER initializer type for the comparison below (it uses the
+    // declared annotation only as an upper bound on later reassignment, not as the type used to
+    // check `to === 'accepted'`), so `to === 'accepted'` is STILL a compile error ("no overlap")
+    // even with the wider annotation in place — confirmed with an isolated repro. The `as
+    // ProposalStatus` assertion is what actually escapes the narrowing; TypeScript erases it at
+    // runtime, so a plain-JS caller or an `as any` can still deliver `'accepted'` here — this is
+    // the guard that refuses it, before any transaction is opened.
+    const to = input.to as ProposalStatus;
+    if (to === 'accepted') {
+      throw new ProposalAcceptanceRequiresActorError(input.id);
+    }
+    // Forward the ALREADY-READ `to` rather than re-reading `input.to` downstream: for a
+    // getter-backed input the two reads need not agree, and the guard above must be the
+    // value that is actually acted on. Free to do, and closes a read-twice gap.
+    return db.transaction((tx) => advanceProposalStatus(tx, { ...input, to }));
   },
 
   /**

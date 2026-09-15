@@ -306,6 +306,49 @@ export const proposals = pgTable(
     cadence: proposalCadenceEnum('cadence'),
     submittedAt: timestamp('submitted_at', { withTimezone: true }).defaultNow().notNull(),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    /**
+     * WHO accepted (BAL-432 / ADR-1030). Written ONLY by `proposalsRepository.accept`, in a
+     * local `tx.update` inside that method's existing transaction — never by the shared
+     * `advanceProposalStatus`, which `promoteToSubmit`, `transitionStatus`, `requestChanges`,
+     * `declineTrack` and `close` also route through. Of those, only `transitionStatus` has no
+     * actor at all — the reason the shared writer stays un-widened is `declineTrack` / `close`,
+     * whose actor is REQUEST-level and fans out over N proposals; attributing each cascaded
+     * proposal to the closer would make this column assert something untrue.
+     *
+     * ⚠ THIS IS THE `proposals` TABLE'S FIRST `users` FOREIGN KEY OF ANY KIND. Every other uuid
+     * column here points at `request_expert_relationships`, `project_requests` or
+     * `expert_profiles`. The sibling tables in this file already carry actor FKs
+     * (`proposal_documents.uploaded_by_user_id`, `proposal_change_requests.requested_by_user_id`),
+     * so the convention is established — it simply had never reached this table.
+     *
+     * NULLABLE, AND THE NULLS ARE THE POINT. Every proposal accepted before BAL-432 has
+     * `accepted_at` set and no actor; there is no source to backfill them from, and inventing
+     * one would be a fabricated audit trail. NULL here means "accepted before attribution
+     * existed", NOT "accepted by nobody". Post-BAL-432 `accept` is the only writer of
+     * `accepted_at` and it always supplies an actor, so a row with `accepted_at IS NOT NULL AND
+     * accepted_by_user_id IS NULL` is either historical or a bug. That coherence is NOT a CHECK
+     * constraint — it cannot be, because the historical rows would violate it.
+     *
+     * `restrict` on the user FK — preserve attribution, matching
+     * `project_requests.closed_by_user_id`, `request_expert_relationships.declined_by_user_id`
+     * and `expert_profiles.decided_by_user_id`.
+     *
+     * ⚠ NAME COLLISION WITH `project_engagements.accepted_by_user_id` — READ THIS BEFORE
+     * CONFLATING THEM. Both columns mean "a client accepted something", at OPPOSITE ENDS of the
+     * lifecycle. THIS one is acceptance of the PROPOSAL (kickoff: the commercial terms are
+     * agreed and the engagement can be materialised). THAT one
+     * (`schema/project-engagements.ts:123-132`) is acceptance of the DELIVERED WORK
+     * (`pending_acceptance → completed`), written by `acceptCompletion` on
+     * `projectEngagementsRepository` and left NULL on the auto path. They are never the same
+     * moment and neither substitutes for the other.
+     *
+     * NO `acceptedBy: one(users)` RELATION (see `proposalsRelations` below) — BAL-540 added none
+     * for `declined_by_user_id` either. Keeping the column out of every relational `with:` graph
+     * also keeps it clear of the full-`users`-row hydration hazard (`workos_id` and PII).
+     */
+    acceptedByUserId: uuid('accepted_by_user_id').references(() => users.id, {
+      onDelete: 'restrict',
+    }),
     ...timestamps,
     ...softDelete,
   },
@@ -313,6 +356,8 @@ export const proposals = pgTable(
     index('proposal_relationship_idx').on(t.relationshipId),
     index('proposal_request_idx').on(t.projectRequestId),
     index('proposal_expert_idx').on(t.expertProfileId),
+    // FK-column rule (drizzle-schema skill: index every foreign key column).
+    index('proposal_accepted_by_idx').on(t.acceptedByUserId),
     // Versioning invariant — exactly one LIVE current proposal per relationship.
     // PARTIAL on `deleted_at IS NULL AND is_current` so superseded live versions
     // (`is_current=false`) and soft-deleted versions are unconstrained — the full

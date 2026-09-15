@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../client';
 import {
   proposals,
@@ -8,6 +8,8 @@ import {
   projectRequests,
   expertProfiles,
   requestExpertRelationships,
+  auditEvents,
+  type AuditEvent,
 } from '../schema';
 import {
   proposalFactory,
@@ -21,6 +23,7 @@ import {
   InvalidProposalTransitionError,
   ProposalNotDraftError,
   ProposalTrackNotOpenError,
+  ProposalAcceptanceRequiresActorError,
   PROPOSAL_STATUS_TRANSITIONS,
   isAllowedProposalTransition,
 } from './proposals';
@@ -31,6 +34,22 @@ import {
 } from './request-expert-relationships';
 import { proposalMilestonesRepository } from './proposal-milestones';
 import { proposalPaymentInstallmentsRepository } from './proposal-payment-installments';
+import { auditEventsRepository } from './audit-events';
+
+/**
+ * Audit rows for one entity (BAL-344 generic table), copied verbatim from
+ * `meetings.integration.test.ts`'s helper — including its BAL-426 ordering (`created_at` then
+ * `seq`, both ASCENDING, NEVER `id`). `invariants/audit-trail-ordering.test.ts` scans every
+ * audit `.orderBy(` across `packages/db/src` and fails a pair that is not `createdAt` + `seq` in
+ * the same direction, so this helper must not diverge from that shape.
+ */
+async function auditEventsForEntity(entityId: string): Promise<AuditEvent[]> {
+  return db
+    .select()
+    .from(auditEvents)
+    .where(eq(auditEvents.entityId, entityId))
+    .orderBy(asc(auditEvents.createdAt), asc(auditEvents.seq));
+}
 
 /**
  * BAL-540 / ADR-1030 — every relationship advance now carries an ACTOR (attribution columns +
@@ -276,6 +295,163 @@ describe('proposalsRepository.accept', () => {
   });
 });
 
+describe('proposalsRepository.accept — BAL-432 / ADR-1030 attribution + audit row', () => {
+  it('ROLLS BACK THE WHOLE ACCEPTANCE when the proposal.accepted audit insert fails', async () => {
+    // ⚠ D9 — do NOT use the orphan-actor-id trick `meetings.integration.test.ts` uses for its
+    // own rollback proof. Copied here it would be VACUOUS: `advanceRelationshipStatus` (accept's
+    // step BEFORE the proposal flip) writes BAL-540's `request_expert_relationship.accepted`
+    // audit row with the SAME actor, so an orphan actor would fail the transaction AT THAT
+    // EARLIER STEP — before `advanceProposalStatus`, before the stamp, before the
+    // `proposal.accepted` row this test exists to prove rolls back. The test would then pass
+    // even with all of BAL-432 reverted. `audit_events` also has no unique constraint (only
+    // plain indexes), so there is no 23505 route either.
+    //
+    // Inject the failure at exactly the seam under test instead: an action-conditional spy that
+    // throws ONLY for `proposal.accepted`, passing every other action (including BAL-540's
+    // relationship row) through to the real implementation.
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
+    });
+    const acceptActorId = await seedActorId(); // DISTINCT from submit's actor.
+
+    // ⚠ Captured OUTSIDE the mock's closure and read AFTER `mockRestore()`, deliberately —
+    // `spy.mockRestore()` clears `spy.mock.calls` (it does everything `mockReset()` does), so the
+    // non-vacuity anchor below must read this array, not the spy's own call history.
+    const capturedActions: string[] = [];
+    const realRecord = auditEventsRepository.record;
+    const spy = vi
+      .spyOn(auditEventsRepository, 'record')
+      .mockImplementation(async (input, exec) => {
+        capturedActions.push(input.action);
+        if (input.action === 'proposal.accepted') {
+          throw new Error('audit insert failed');
+        }
+        return realRecord(input, exec);
+      });
+
+    try {
+      await expect(
+        proposalsRepository.accept({ id: proposal.id, actorUserId: acceptActorId })
+      ).rejects.toThrow('audit insert failed');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // ⚠ NON-VACUITY ANCHOR — we really got as far as the proposal audit row, in the right order:
+    // BAL-540's relationship row first, then OURS (the one that threw).
+    expect(capturedActions).toEqual(['request_expert_relationship.accepted', 'proposal.accepted']);
+
+    // …and the whole acceptance is undone.
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect(raw?.status).toBe('submitted');
+    expect(raw?.acceptedAt).toBeNull();
+    expect(raw?.acceptedByUserId).toBeNull();
+    // Qodo #1 (lighter form): the read above is deliberately UNFILTERED — this is a
+    // "the row is untouched" check, so it must see the row even if something soft-deleted it.
+    // Assert liveness explicitly rather than filtering it out and silently matching nothing.
+    expect(raw?.deletedAt).toBeNull();
+
+    const rel = await requestExpertRelationshipsRepository.findById(relationship.id);
+    expect(rel?.status).toBe('proposal_submitted');
+
+    // Not even the relationship audit row survived — one transaction, one fate.
+    const surviving = await db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.actorUserId, acceptActorId));
+    expect(surviving).toEqual([]);
+  });
+
+  it('names the SAME user in accepted_by_user_id, the proposal.accepted row, and the relationship.accepted row', async () => {
+    const { relationship } = await requestExpertRelationshipFactory({
+      values: { status: 'proposal_requested' },
+    });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
+    });
+    const acceptor = await seedActorId();
+    const accepted = await proposalsRepository.accept({ id: proposal.id, actorUserId: acceptor });
+
+    // (1) the floor column — on the RETURNED row (this is D6's proof) …
+    expect(accepted.acceptedByUserId).toBe(acceptor);
+    // … and on disk
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, proposal.id));
+    expect(raw?.acceptedByUserId).toBe(acceptor);
+
+    // (2) the proposal-grain audit row
+    const proposalRows = (await auditEventsForEntity(proposal.id)).filter(
+      (r) => r.action === 'proposal.accepted'
+    );
+    expect(proposalRows).toHaveLength(1); // ⚠ NON-VACUITY ANCHOR
+    expect(proposalRows[0]?.entityType).toBe('proposal');
+    expect(proposalRows[0]?.actorUserId).toBe(acceptor);
+
+    // (3) BAL-540's relationship-grain audit row
+    const relRows = (await auditEventsForEntity(relationship.id)).filter(
+      (r) => r.action === 'request_expert_relationship.accepted'
+    );
+    expect(relRows).toHaveLength(1); // ⚠ NON-VACUITY ANCHOR
+    expect(relRows[0]?.actorUserId).toBe(acceptor);
+
+    // the three-way claim, as one assertion
+    expect(
+      new Set([raw?.acceptedByUserId, proposalRows[0]?.actorUserId, relRows[0]?.actorUserId])
+    ).toEqual(new Set([acceptor]));
+  });
+
+  it('the proposal.accepted metadata carries ids + version ONLY — no money fields', async () => {
+    const { relationship, projectRequestId, expertProfileId } =
+      await requestExpertRelationshipFactory({ values: { status: 'proposal_requested' } });
+    const proposal = await proposalsRepository.submit({
+      relationshipId: relationship.id,
+      actorUserId: await seedActorId(),
+      overview: '<p>Scope.</p>',
+      pricingMethod: 'tm',
+      priceCents: 0,
+      depositCents: 25000,
+      rateCents: 18000,
+      cadence: 'monthly',
+    });
+    await proposalsRepository.accept({ id: proposal.id, actorUserId: await seedActorId() });
+
+    const [row] = (await auditEventsForEntity(proposal.id)).filter(
+      (r) => r.action === 'proposal.accepted'
+    );
+    expect(row).toBeDefined(); // ⚠ NON-VACUITY ANCHOR
+    const metadata = row?.metadata as Record<string, unknown>;
+    expect(Object.keys(metadata)).toHaveLength(4); // ⚠ NON-VACUITY ANCHOR
+    expect(Object.keys(metadata).sort()).toEqual([
+      'expertProfileId',
+      'projectRequestId',
+      'proposalVersion',
+      'relationshipId',
+    ]);
+    expect(metadata).toEqual({
+      relationshipId: relationship.id,
+      projectRequestId,
+      expertProfileId,
+      proposalVersion: 1,
+    });
+  });
+});
+
 describe('proposal status transition map', () => {
   it('encodes the lifecycle (submitted out-edges, terminal states)', () => {
     expect(isAllowedProposalTransition('draft', 'submitted')).toBe(true);
@@ -288,6 +464,10 @@ describe('proposal status transition map', () => {
     expect(PROPOSAL_STATUS_TRANSITIONS.withdrawn).toHaveLength(0);
     expect(PROPOSAL_STATUS_TRANSITIONS.resubmitted).toHaveLength(0);
     // An illegal jump.
+    //
+    // ⚠ BAL-432 — KEEP. transitionStatus can no longer reach `accepted` at all, so this is the
+    // map's own coverage of the illegal edge. Do not delete it as "already covered by
+    // transitionStatus"; it no longer is.
     expect(isAllowedProposalTransition('draft', 'accepted')).toBe(false);
   });
 });
@@ -315,7 +495,7 @@ describe('proposalsRepository.transitionStatus', () => {
     expect(moved.status).toBe('changes_requested');
   });
 
-  it('rejects an illegal draft→accepted move', async () => {
+  it('refuses ANY → accepted move through transitionStatus, and leaves the row untouched', async () => {
     const { relationship, projectRequestId, expertProfileId } =
       await requestExpertRelationshipFactory({ values: { status: 'proposal_submitted' } });
     const [draft] = await db
@@ -333,8 +513,21 @@ describe('proposalsRepository.transitionStatus', () => {
     if (draft === undefined) throw new Error('draft insert failed');
 
     await expect(
+      // @ts-expect-error — BAL-432 narrows `to` to Exclude<ProposalStatus,'accepted'>. This
+      // suppression IS the type-level assertion: if the Exclude is ever dropped, the directive
+      // becomes unused and tsc reports TS2578 here. The runtime assertion below proves the
+      // guard is real rather than erased.
       proposalsRepository.transitionStatus({ id: draft.id, to: 'accepted' })
-    ).rejects.toBeInstanceOf(InvalidProposalTransitionError);
+    ).rejects.toBeInstanceOf(ProposalAcceptanceRequiresActorError);
+
+    const [raw] = await db.select().from(proposals).where(eq(proposals.id, draft.id));
+    expect(raw?.status).toBe('draft');
+    expect(raw?.acceptedAt).toBeNull();
+    expect(raw?.acceptedByUserId).toBeNull();
+    // Qodo #1 (lighter form): the read above is deliberately UNFILTERED — this is a
+    // "the row is untouched" check, so it must see the row even if something soft-deleted it.
+    // Assert liveness explicitly rather than filtering it out and silently matching nothing.
+    expect(raw?.deletedAt).toBeNull();
   });
 
   it('rejects an expectedFrom mismatch', async () => {
@@ -384,8 +577,8 @@ describe('proposalsRepository.transitionStatus', () => {
 
   it('throws for an unknown id', async () => {
     await expect(
-      proposalsRepository.transitionStatus({ id: randomUUID(), to: 'accepted' })
-    ).rejects.toThrow();
+      proposalsRepository.transitionStatus({ id: randomUUID(), to: 'changes_requested' })
+    ).rejects.toThrow(/Proposal not found/);
   });
 
   it('throws for a soft-deleted row and leaves its status untouched', async () => {
