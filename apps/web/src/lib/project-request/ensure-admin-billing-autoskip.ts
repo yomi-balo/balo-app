@@ -27,9 +27,16 @@ import { log } from '@/lib/logging';
  * the original request — a best-effort read-path convenience must never break the
  * page render.
  *
- * Scope is admin board load only (deliberate — see BAL-324). A repeat-company
- * CLIENT still sees a stale outstanding gate until an admin opens the board; that
- * limitation is accepted for this ticket.
+ * ⚠ THIS IS NOW THE BACKSTOP, NOT THE PRIMARY PATH (BAL-343). The gate is confirmed at
+ * PROPOSAL-ACCEPTANCE time, inside `runAcceptProposal`
+ * (`projects/[requestId]/_actions/_shared/accept-proposal-core.ts`), so a repeat-company
+ * CLIENT now sees the settled gate on its own request immediately. Two reasons this path
+ * is RETAINED rather than deleted as redundant: (1) the acceptance-time call is
+ * deliberately best-effort — it swallows every failure so it can never fail an accept
+ * that already committed — and this path is what makes that swallowing acceptable; (2) it
+ * is the ONLY confirm path for requests accepted BEFORE BAL-343 shipped, so a historical
+ * row with billing on file and an outstanding gate is settled the first time an admin
+ * opens it. Do not delete it.
  */
 export async function ensureAdminBillingAutoskip(
   request: ProjectRequestWithRelations,
