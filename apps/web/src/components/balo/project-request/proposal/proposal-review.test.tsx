@@ -9,6 +9,23 @@ function switcher(): HTMLElement {
   return screen.getByRole('group', { name: 'Choose a proposal to review' });
 }
 
+/**
+ * The `<dd>` PAIRED with a `<dt>` label inside `scope`. Anchored to the term rather than
+ * looked up as bare text, so swapping two values inside the same list cannot pass.
+ *
+ * Both the summary grid (`proposal-doc.tsx`) and the sticky card
+ * (`review-summary-card.tsx`) nest each `<dt>`/`<dd>` pair in a shared wrapper, so the
+ * value is the wrapper's `<dd>`.
+ */
+function definitionValue(scope: HTMLElement, label: string): string {
+  const term = within(scope).getByText(label);
+  const value = term.parentElement?.querySelector('dd');
+  if (value === null || value === undefined) {
+    throw new Error(`No <dd> paired with the <dt> "${label}"`);
+  }
+  return value.textContent ?? '';
+}
+
 // ProposalDoc renders a ssr:false Tiptap viewer — swap the viewer for a plain div.
 vi.mock('@/components/balo/rich-text-editor', () => ({
   RichTextViewer: ({ value }: { value: string }) => <div data-testid="rt-viewer">{value}</div>,
@@ -126,6 +143,69 @@ describe('ProposalReview', () => {
     renderReview([doc()]);
     // The lone expert name still renders (in the summary card), but no switcher chip set.
     expect(screen.queryByText('Marcus')).not.toBeInTheDocument();
+  });
+
+  /**
+   * BAL-392 — the authenticated review surface is where the client ACCEPTS, so it cannot
+   * be the one client surface left on the old two-item banner. Desktop and mobile each
+   * render a `ProposalDoc`, so both grids are in the DOM.
+   */
+  it('renders the client summary cells on both the desktop and mobile doc', () => {
+    renderReview([doc()]);
+
+    const grids = screen.getAllByTestId('proposal-summary-cells');
+    expect(grids).toHaveLength(2);
+    for (const grid of grids) {
+      expect(within(grid).getByText('Pricing')).toBeInTheDocument();
+      expect(within(grid).getByText('40% upfront')).toBeInTheDocument();
+    }
+    expect(screen.queryByText('Est. timeframe')).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ BAL-392 F1 — ONE MONEY CLAIM PER VIEWPORT. The sticky card renders side by side with
+   * the summary grid on this surface, and the card used to derive PAYMENT itself off
+   * `cadence`, assuming a deposit unconditionally. On the doc below — T&M, NO deposit, a
+   * rate, a monthly cadence — the grid said `Rate only` while the card said
+   * `Deposit + monthly`: two contradictory statements about when money is due, in one
+   * viewport, on the page the client presses Accept.
+   *
+   * This test fails if EITHER derivation is forked again: the literal catches a re-forked
+   * card, the cross-surface equality catches a re-forked grid.
+   */
+  it('renders ONE payment claim: the sticky card and both summary grids agree', () => {
+    renderReview([
+      doc({
+        pricingMethod: 'tm',
+        depositCents: null,
+        rateCents: 25_000,
+        cadence: 'monthly',
+        installments: [],
+      }),
+    ]);
+
+    const card = screen.getByTestId('review-summary-card');
+    const grids = screen.getAllByTestId('proposal-summary-cells');
+    expect(grids).toHaveLength(2);
+
+    const cardPayment = definitionValue(card, 'Payment');
+    // The canonical string for deposit-null + rate-present (`buildProposalSummaryCells`).
+    expect(cardPayment).toBe('Rate only');
+    // …and NOT a word of the derivation the card used to invent for itself.
+    expect(card.textContent).not.toContain('monthly');
+    for (const grid of grids) {
+      expect(definitionValue(grid, 'Payment')).toBe(cardPayment);
+    }
+
+    // The same one-definition rule over the pricing-method pair (F2): the card rendered
+    // capital-M `Time & Materials` beside the grid's canonical lower-case cell. Capital-M
+    // is now retired everywhere on this surface — the doc header pill reads the shared
+    // helper too — so every query for the string must be scoped to ONE region.
+    const cardPricing = definitionValue(card, 'Pricing');
+    expect(cardPricing).toBe('Time & materials');
+    for (const grid of grids) {
+      expect(definitionValue(grid, 'Pricing')).toBe(cardPricing);
+    }
   });
 
   it('shows a switcher with a changes_requested status dot for >1 proposals', () => {

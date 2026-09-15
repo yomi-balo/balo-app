@@ -51,8 +51,14 @@ vi.mock('@/lib/project-request/proposal-audience-view', () => ({
   hydrateReviewDoc: () => ({ id: PROPOSAL_ID, version: 3 }),
 }));
 
+// Prop-capturing (BAL-392): the recipient route is a CLIENT-audience surface, so it must
+// opt into the summary cells. Capturing is how that is asserted without rendering the doc.
+const mockProposalDocProps = vi.fn();
 vi.mock('@/components/balo/project-request/proposal/proposal-doc', () => ({
-  ProposalDoc: () => <div data-testid="proposal-doc" />,
+  ProposalDoc: (props: Readonly<{ showSummaryCells?: boolean }>) => {
+    mockProposalDocProps(props);
+    return <div data-testid="proposal-doc" />;
+  },
 }));
 
 const mockTrack = vi.fn();
@@ -127,6 +133,10 @@ describe('SharedProposalPage', () => {
       first_open: true,
       distinct_id: `share_${LINK_ID}`,
     });
+    // BAL-392 — the recipient is the CLIENT audience, so the summary cells are on.
+    expect(mockProposalDocProps).toHaveBeenCalledWith(
+      expect.objectContaining({ showSummaryCells: true })
+    );
     // Access is stamped once the proposal is confirmed renderable.
     expect(mockRecordAccess).toHaveBeenCalledWith(LINK_ID);
   });

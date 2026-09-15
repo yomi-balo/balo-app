@@ -202,7 +202,7 @@ export function ProposalReview({
             <div>
               <ProposalSectionNav proposalId={active.id} sections={presentSections(active)} />
               <div className="border-border bg-card mt-2 rounded-2xl border p-6 sm:p-7">
-                <ProposalDoc doc={active} sectionIdPrefix={`sec-${active.id}-`} />
+                <ProposalDoc doc={active} sectionIdPrefix={`sec-${active.id}-`} showSummaryCells />
               </div>
             </div>
             <ReviewSummaryCard
@@ -216,7 +216,7 @@ export function ProposalReview({
           <div className="lg:hidden">
             <ProposalSectionNav proposalId={active.id} sections={presentSections(active)} />
             <div className="border-border bg-card mt-2 rounded-2xl border p-5">
-              <ProposalDoc doc={active} sectionIdPrefix={`sec-${active.id}-`} />
+              <ProposalDoc doc={active} sectionIdPrefix={`sec-${active.id}-`} showSummaryCells />
             </div>
             {isAccepted && (
               <div className="border-success/30 bg-success/10 text-success mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[10px] border px-4 text-sm font-semibold">

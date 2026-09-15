@@ -128,6 +128,7 @@ describe('AcceptConfirmModal', () => {
     expect(screen.getByText('A$6,000')).toBeInTheDocument();
     expect(screen.getByText('40% upfront')).toBeInTheDocument();
     expect(screen.getByText('on delivery')).toBeInTheDocument();
+    expect(screen.getByText('Fixed price')).toBeInTheDocument();
   });
 
   it('computes the T&M money summary (deposit now, billed against time)', () => {
@@ -137,6 +138,21 @@ describe('AcceptConfirmModal', () => {
     expect(screen.getByText('A$5,000')).toBeInTheDocument();
     expect(screen.getByText('deposit')).toBeInTheDocument();
     expect(screen.getByText(/billed against time at A\$250\/hr/)).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ BAL-392 F2 — the Total row's sub-label is `pricingMethodLabel`, not a hardcoded arm.
+   * This modal sits on the SAME accept surface as the summary grid, and used to read
+   * capital-M `Time & Materials` against the grid's canonical lower-case cell.
+   *
+   * The negative assertion stayed true and got STRONGER: capital-M is now retired on the
+   * proposal header pills too, so `Time & Materials` is no longer rendered anywhere a
+   * client can see. The modal renders neither pill, so this query needs no scoping.
+   */
+  it('labels the Total row with the canonical lower-case "Time & materials" for T&M', () => {
+    renderModal(tmDoc());
+    expect(screen.getByText('Time & materials')).toBeInTheDocument();
+    expect(screen.queryByText('Time & Materials')).not.toBeInTheDocument();
   });
 
   it('falls back to the full amount with nothing outstanding when a Fixed doc has no installments', () => {

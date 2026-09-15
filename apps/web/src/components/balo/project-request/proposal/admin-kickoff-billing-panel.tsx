@@ -4,6 +4,7 @@ import { getTaxIdLabel } from '@/lib/billing/tax-id-labels';
 import type { AdminKickoffBillingView } from '@/lib/project-request/admin-kickoff-billing-view';
 import { RequestCard } from '../request-card';
 import { RemindClientButton } from './remind-client-button';
+import { pricingMethodLabel } from './proposal-summary-cells';
 
 interface AdminKickoffBillingPanelProps {
   view: AdminKickoffBillingView | null;
@@ -12,12 +13,6 @@ interface AdminKickoffBillingPanelProps {
   /** The client-billing kickoff gate — drives the reminder affordance visibility. */
   clientBillingConfirmed: boolean;
 }
-
-/** Human label for a pricing method. */
-const PRICING_METHOD_LABEL: Record<'fixed' | 'tm', string> = {
-  fixed: 'Fixed price',
-  tm: 'Time & materials',
-};
 
 /** Human label for a billing cadence. */
 const CADENCE_LABEL: Record<'monthly' | 'fortnightly', string> = {
@@ -195,7 +190,7 @@ function TermsSection({ terms }: Readonly<TermsSectionProps>): React.JSX.Element
         </p>
       ) : (
         <div className="flex flex-col gap-2.5">
-          <DetailRow label="Pricing method" value={PRICING_METHOD_LABEL[terms.pricingMethod]} />
+          <DetailRow label="Pricing method" value={pricingMethodLabel(terms.pricingMethod)} />
           {terms.pricingMethod === 'tm' ? (
             <TimeAndMaterialsTerms terms={terms} />
           ) : (

@@ -108,6 +108,25 @@ describe('SubmittedView', () => {
     );
     expect(screen.getByText('Overview body text')).toBeInTheDocument();
   });
+
+  /**
+   * ⚠ BAL-392's direct pin. PRICING / PAYMENT / DELIVERABLES is client-commercial framing
+   * on an expert screen, so this surface stays on the shipped two-item banner by riding
+   * the prop's OFF default — `submitted-view.tsx` is not edited at all.
+   */
+  it('leaves the expert surface on the two-item banner, with no client summary cells', () => {
+    render(
+      <SubmittedView
+        lens="expert"
+        requestId="req-1"
+        doc={doc()}
+        clientName="Dana"
+        otherProposalCount={0}
+      />
+    );
+    expect(screen.queryByTestId('proposal-summary-cells')).not.toBeInTheDocument();
+    expect(screen.getByText('Est. timeframe')).toBeInTheDocument();
+  });
 });
 
 /** A populated admin pricing breakdown; deposit/rate are FIXED-null unless overridden. */

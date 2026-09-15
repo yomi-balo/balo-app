@@ -101,7 +101,7 @@ export function previewOfHtmlBody(bodyHtml: string): string {
 // room for others without breaking existing carriers.
 export interface EmailAttachmentSpec {
   source: 'r2';
-  key: string; // R2 object key, e.g. proposals/{proposalId}/client.pdf
+  key: string; // R2 object key, e.g. proposals/{proposalId}/client-{layoutVersion}.pdf
   filename: string; // download filename shown to the recipient
 }
 

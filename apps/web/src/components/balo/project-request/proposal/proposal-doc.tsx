@@ -20,6 +20,11 @@ import { formatWholeCurrency } from '@/lib/utils/currency';
 import { formatBytes } from '@/components/balo/document-uploader/upload-file';
 import { RichTextViewer, isDescriptionEmpty } from '@/components/balo/rich-text-editor';
 import { STANDARD_TERMS } from './proposal-standard-terms';
+import {
+  buildProposalSummaryCells,
+  pricingMethodLabel,
+  proposalTotalLabel,
+} from './proposal-summary-cells';
 import type {
   ProposalReviewAttachment,
   ProposalReviewDoc,
@@ -34,6 +39,16 @@ interface ProposalDocProps {
    * expert/admin waiting view, which renders the same content without ids.
    */
   sectionIdPrefix?: string;
+  /**
+   * CLIENT-audience treatment (BAL-392): replaces the two-item money banner with the
+   * summary box — the total on top, then the four-cell detail grid mirroring the PDF
+   * (PRICING · EST. TIMELINE · PAYMENT · DELIVERABLES), from one shared derivation.
+   *
+   * DEFAULT OFF, and off is the shipped two-item banner — which is what the EXPERT
+   * submitted view renders. PRICING / PAYMENT / DELIVERABLES is client-commercial
+   * framing on an expert screen and the ticket never scopes it. Do not turn it on there.
+   */
+  showSummaryCells?: boolean;
 }
 
 /** Props that anchor a section for the nav, or `{}` when un-anchored. */
@@ -75,6 +90,7 @@ function FileTile(): React.JSX.Element {
 export function ProposalDoc({
   doc,
   sectionIdPrefix,
+  showSummaryCells = false,
 }: Readonly<ProposalDocProps>): React.JSX.Element {
   const isTM = doc.pricingMethod === 'tm';
 
@@ -128,30 +144,41 @@ export function ProposalDoc({
           </span>
         )}
         <span className="border-primary/30 bg-primary/10 text-primary inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold whitespace-nowrap">
-          {isTM ? 'Time & Materials' : 'Fixed price'}
+          {/*
+            ⚠ THE HELPER, NOT A HARDCODED ARM. This pill sits directly above the summary
+            box's PRICING cell whenever `showSummaryCells` is on, and used to read
+            capital-M `Time & Materials` stacked over the cell's canonical
+            `Time & materials`. Capital-M is RETIRED on both client surfaces (BAL-392);
+            reading the shared helper is what stops the pair drifting apart again.
+          */}
+          {pricingMethodLabel(doc.pricingMethod)}
         </span>
       </div>
 
-      {/* 2 — Money / timeframe banner */}
-      <div className="border-border from-primary/[0.07] to-primary/[0.02] flex items-end justify-between gap-3 rounded-2xl border bg-gradient-to-br p-[18px]">
-        <div>
-          <p className="text-muted-foreground text-[11px] font-bold tracking-[0.05em] uppercase">
-            {isTM ? 'Estimated total' : 'Fixed price'}
-          </p>
-          <p className="text-foreground mt-0.5 text-[30px] leading-none font-extrabold tabular-nums">
-            {formatWholeCurrency(doc.priceCents, doc.currency)}
-            {isTM && <span className="text-muted-foreground text-sm font-semibold"> est.</span>}
-          </p>
+      {/* 2 — Money / timeframe banner (default), or the client summary box (BAL-392) */}
+      {showSummaryCells ? (
+        <SummaryCells doc={doc} />
+      ) : (
+        <div className="border-border from-primary/[0.07] to-primary/[0.02] flex items-end justify-between gap-3 rounded-2xl border bg-gradient-to-br p-[18px]">
+          <div>
+            <p className="text-muted-foreground text-[11px] font-bold tracking-[0.05em] uppercase">
+              {isTM ? 'Estimated total' : 'Fixed price'}
+            </p>
+            <p className="text-foreground mt-0.5 text-[30px] leading-none font-extrabold tabular-nums">
+              {formatWholeCurrency(doc.priceCents, doc.currency)}
+              {isTM && <span className="text-muted-foreground text-sm font-semibold"> est.</span>}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-muted-foreground text-[11px] font-bold tracking-[0.05em] uppercase">
+              Est. timeframe
+            </p>
+            <p className="text-foreground mt-0.5 text-base font-semibold">
+              {doc.timeframeWeeks === null ? '—' : `~${doc.timeframeWeeks} weeks`}
+            </p>
+          </div>
         </div>
-        <div className="text-right">
-          <p className="text-muted-foreground text-[11px] font-bold tracking-[0.05em] uppercase">
-            Est. timeframe
-          </p>
-          <p className="text-foreground mt-0.5 text-base font-semibold">
-            {doc.timeframeWeeks === null ? '—' : `~${doc.timeframeWeeks} weeks`}
-          </p>
-        </div>
-      </div>
+      )}
 
       {/* 3 — Overview */}
       <section {...anchor('overview')}>
@@ -258,6 +285,53 @@ export function ProposalDoc({
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+/**
+ * The client summary box (BAL-392) — the same four cells, labels, order and derivation as
+ * the PDF, so the document a client may sign against and the page they accept on cannot
+ * make different statements about the deal.
+ *
+ * Hairlines come from `gap-px` + `bg-border` on the `<dl>` with `bg-card` cells rather
+ * than per-cell borders: it reflows correctly between 4-up and 2×2 with no index
+ * arithmetic, and draws the inter-row hairline on mobile too. The `title` on a truncated
+ * value is a supplement, never the only explanation — the full schedule is in PAYMENT
+ * TERMS below.
+ */
+function SummaryCells({ doc }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.Element {
+  const isTM = doc.pricingMethod === 'tm';
+  const cells = buildProposalSummaryCells(doc);
+  return (
+    <div className="border-border overflow-hidden rounded-2xl border">
+      <div className="from-primary/[0.07] to-primary/[0.02] border-border flex items-end justify-between gap-3 border-b bg-gradient-to-br px-4 py-[14px]">
+        <p className="text-muted-foreground truncate text-[11px] font-bold tracking-[0.05em] uppercase">
+          {proposalTotalLabel(doc.pricingMethod)}
+        </p>
+        <p className="text-foreground text-[30px] leading-none font-extrabold whitespace-nowrap tabular-nums">
+          {formatWholeCurrency(doc.priceCents, doc.currency)}
+          {isTM && <span className="text-muted-foreground text-sm font-semibold"> est.</span>}
+        </p>
+      </div>
+      <dl
+        data-testid="proposal-summary-cells"
+        className="bg-border grid grid-cols-2 gap-px sm:grid-cols-4"
+      >
+        {cells.map((cell) => (
+          <div key={cell.key} className="bg-card px-3.5 py-2.5">
+            <dt className="text-muted-foreground text-[10px] font-bold tracking-[0.06em] uppercase">
+              {cell.label}
+            </dt>
+            <dd
+              className="text-foreground mt-1 truncate text-[13.5px] font-semibold"
+              title={cell.value}
+            >
+              {cell.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

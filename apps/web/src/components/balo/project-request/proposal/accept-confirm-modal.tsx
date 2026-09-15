@@ -20,6 +20,7 @@ import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta'
 import { track, PROJECT_EVENTS } from '@/lib/analytics';
 import { acceptProposalAction } from '@/app/(dashboard)/projects/[requestId]/_actions/accept-proposal';
 import { firstName } from './proposal-name';
+import { pricingMethodLabel } from './proposal-summary-cells';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
 /** Copy the action returns when the proposal can no longer be accepted (stale UI). */
@@ -56,7 +57,11 @@ function moneyRows(doc: ProposalReviewDoc): MoneyRow[] {
         ? 'billed against time'
         : `billed against time at ${formatWholeCurrency(doc.rateCents, doc.currency)}/hr`;
     return [
-      { label: 'Total', value: total, sub: 'Time & Materials' },
+      // ⚠ The helper, NOT a hardcoded arm: this modal sits on the same accept surface as
+      // the summary grid, and used to say capital-M `Time & Materials` next to the grid's
+      // canonical lower-case cell (BAL-392 F2). Capital-M is retired on every client
+      // surface — the proposal header pills read this same helper.
+      { label: 'Total', value: total, sub: pricingMethodLabel(doc.pricingMethod) },
       { label: 'Due now', value: formatWholeCurrency(dueNowCents, doc.currency), sub: 'deposit' },
       { label: 'Then', value: '—', sub: thenSub },
     ];
@@ -65,7 +70,7 @@ function moneyRows(doc: ProposalReviewDoc): MoneyRow[] {
   const [upfront] = doc.installments;
   if (upfront === undefined) {
     return [
-      { label: 'Total', value: total, sub: 'Fixed price' },
+      { label: 'Total', value: total, sub: pricingMethodLabel(doc.pricingMethod) },
       { label: 'Due now', value: total, sub: 'full amount' },
       { label: 'Then', value: '—', sub: 'nothing outstanding' },
     ];
@@ -74,7 +79,7 @@ function moneyRows(doc: ProposalReviewDoc): MoneyRow[] {
   const dueNowCents = Math.round((doc.priceCents * upfront.pct) / 100);
   const thenCents = doc.priceCents - dueNowCents;
   return [
-    { label: 'Total', value: total, sub: 'Fixed price' },
+    { label: 'Total', value: total, sub: pricingMethodLabel(doc.pricingMethod) },
     {
       label: 'Due now',
       value: formatWholeCurrency(dueNowCents, doc.currency),

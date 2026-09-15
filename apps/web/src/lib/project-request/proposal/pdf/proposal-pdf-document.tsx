@@ -1,6 +1,11 @@
 import { Document, Page, StyleSheet, Text, View, renderToBuffer } from '@react-pdf/renderer';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { STANDARD_TERMS } from '@/components/balo/project-request/proposal/proposal-standard-terms';
+import {
+  buildProposalSummaryCells,
+  pricingMethodLabel,
+  proposalTotalLabel,
+} from '@/components/balo/project-request/proposal/proposal-summary-cells';
 import type {
   ProposalReviewAttachment,
   ProposalReviewDoc,
@@ -74,27 +79,52 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   partyValue: { fontSize: PDF_TYPE.body, fontWeight: 600, color: PDF_COLORS.text },
-  banner: {
+  summaryBox: {
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: PDF_COLORS.border,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  summaryTotalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
-    borderWidth: 1,
-    borderColor: PDF_COLORS.brandBorder,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     backgroundColor: PDF_COLORS.brandSoft,
-    borderRadius: 10,
-    padding: 16,
-    marginTop: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: PDF_COLORS.brandBorder,
   },
-  bannerLabel: {
+  summaryTotalLabel: {
     fontSize: PDF_TYPE.label,
     fontWeight: 700,
     color: PDF_COLORS.muted,
     letterSpacing: 0.6,
-    marginBottom: 3,
+    textTransform: 'uppercase',
+  },
+  summaryGrid: { flexDirection: 'row' },
+  summaryCell: { flex: 1, paddingVertical: 10, paddingHorizontal: 14 },
+  summaryCellDivider: { borderRightWidth: 1, borderRightColor: PDF_COLORS.hair },
+  summaryCellLabel: {
+    fontSize: PDF_TYPE.microLabel,
+    fontWeight: 700,
+    color: PDF_COLORS.muted,
+    letterSpacing: 0.45,
+    textTransform: 'uppercase',
+  },
+  summaryCellValue: {
+    fontSize: PDF_TYPE.body,
+    fontWeight: 600,
+    color: PDF_COLORS.text,
+    marginTop: 3,
+    // The composed PAYMENT string can still exceed the 95.32 pt cell even under the
+    // shared char threshold — clamp rather than wrap, so the box geometry never breaks.
+    maxLines: 1,
+    textOverflow: 'ellipsis',
   },
   money: { fontSize: PDF_TYPE.money, fontWeight: 700, color: PDF_COLORS.text },
   moneyEst: { fontSize: PDF_TYPE.body, fontWeight: 600, color: PDF_COLORS.muted },
-  timeframe: { fontSize: PDF_TYPE.h3, fontWeight: 600, color: PDF_COLORS.text },
   section: { marginTop: 18 },
   sectionLabel: {
     fontSize: PDF_TYPE.label,
@@ -197,22 +227,43 @@ function Parties({
   );
 }
 
-function MoneyBanner({ doc }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.Element {
+/**
+ * The at-a-glance summary box (BAL-392): the total on top, then the four-cell detail
+ * grid. Page 1 only and deliberately NOT `fixed` — it sits in normal flow under the
+ * parties block. react-pdf has no CSS grid, so the row is nested `flexDirection: 'row'`
+ * views with `flex: 1` children and a hairline `borderRight` on every cell but the last.
+ *
+ * ⚠ HOOK-FREE ON PURPOSE. The test harness's `collectText()` invokes function components
+ * directly to reach their text; a hook here would break every PDF branch test. Do not add
+ * `useMemo` — `buildProposalSummaryCells` is a plain call.
+ */
+function SummaryBox({ doc }: Readonly<{ doc: ProposalReviewDoc }>): React.JSX.Element {
   const isTM = doc.pricingMethod === 'tm';
+  const cells = buildProposalSummaryCells(doc);
+  const lastIndex = cells.length - 1;
   return (
-    <View style={styles.banner}>
-      <View>
-        <Text style={styles.bannerLabel}>{isTM ? 'ESTIMATED TOTAL' : 'FIXED PRICE'}</Text>
+    <View style={styles.summaryBox}>
+      <View style={styles.summaryTotalRow}>
+        <Text style={styles.summaryTotalLabel}>{proposalTotalLabel(doc.pricingMethod)}</Text>
         <Text style={styles.money}>
           {formatWholeCurrency(doc.priceCents, doc.currency)}
           {isTM ? <Text style={styles.moneyEst}> est.</Text> : null}
         </Text>
       </View>
-      <View>
-        <Text style={styles.bannerLabel}>EST. TIMEFRAME</Text>
-        <Text style={styles.timeframe}>
-          {doc.timeframeWeeks === null ? '—' : `~${doc.timeframeWeeks} weeks`}
-        </Text>
+      <View style={styles.summaryGrid}>
+        {cells.map((cell, index) => (
+          <View
+            key={cell.key}
+            style={
+              index < lastIndex
+                ? [styles.summaryCell, styles.summaryCellDivider]
+                : styles.summaryCell
+            }
+          >
+            <Text style={styles.summaryCellLabel}>{cell.label}</Text>
+            <Text style={styles.summaryCellValue}>{cell.value}</Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -346,7 +397,14 @@ export function ProposalPdfDocument({
       <Page size="A4" style={styles.page} wrap>
         <View style={styles.header} fixed>
           <Text style={styles.wordmark}>Balo</Text>
-          <Text style={styles.pill}>{isTM ? 'Time & Materials' : 'Fixed price'}</Text>
+          {/*
+            ⚠ THE HELPER, NOT A HARDCODED ARM — the same rule as the web pill. This
+            header pill prints on every page of the very document whose SummaryBox
+            carries the canonical PRICING cell; it used to read capital-M
+            `Time & Materials` against that cell's `Time & materials`. Capital-M is
+            RETIRED on both client surfaces (BAL-392).
+          */}
+          <Text style={styles.pill}>{pricingMethodLabel(doc.pricingMethod)}</Text>
         </View>
 
         <Text style={styles.title}>{title}</Text>
@@ -354,7 +412,7 @@ export function ProposalPdfDocument({
 
         <Parties clientCompanyName={clientCompanyName} preparedBy={preparedBy} />
 
-        <MoneyBanner doc={doc} />
+        <SummaryBox doc={doc} />
 
         {overview.length > 0 ? (
           <View style={styles.section}>

@@ -243,6 +243,25 @@ describe('ProposalPdfDocument — render smoke', () => {
     });
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
   });
+
+  /**
+   * The summary-box value cell is clamped with `maxLines: 1` + `textOverflow: 'ellipsis'`
+   * (BAL-392). This proves the clamp survives real layout at the pinned react-pdf version
+   * with an over-long installment label and an em-dash timeline.
+   */
+  it('renders a summary box with an over-long payment label and no timeframe', async () => {
+    const buffer = await renderProposalPdfToBuffer({
+      doc: clientDoc(
+        { timeframeWeeks: null },
+        { installments: [makeInstallment({ label: 'On contract signature', pct: 30 })] }
+      ),
+      title: 'CRM Cleanup',
+      clientCompanyName: 'Northwind Industrial',
+      preparedByOrgName: 'CloudPeak',
+      generatedAtIso: '2026-07-15T00:00:00.000Z',
+    });
+    expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+  });
 });
 
 describe('ProposalPdfDocument — conditional branches', () => {
@@ -278,5 +297,123 @@ describe('ProposalPdfDocument — conditional branches', () => {
     expect(text).toContain('Full amount:');
     expect(text).toContain('due in full');
     expect(text).toContain('$1,250');
+  });
+
+  // ── Summary box (BAL-392) ──────────────────────────────────────────────────────
+  //
+  // ⚠ `collectText` sees the RAW source strings, so the cell labels assert as
+  // sentence-case ('Est. timeline'); both surfaces uppercase them presentationally.
+  //
+  // ⚠ Each cell's label and value are ADJACENT `Text` siblings, so `collectText`
+  // concatenates them. Asserting the pair (`Est. timeline—`) pins a value to ITS OWN
+  // cell — a bare `toContain('—')` would also match the installment row's em dash and
+  // pass vacuously.
+
+  it('renders all four summary cells, in the reference order', () => {
+    const text = renderTree(clientDoc());
+    expect(text).toContain('PricingFixed price');
+    expect(text).toContain('Est. timeline~8 weeks');
+    expect(text).toContain('Payment40% upfront');
+    // Bounded on BOTH sides: `Deliverables1 item` alone is a prefix match that the
+    // plural `1 items` would also satisfy, so the singular would not be pinned here.
+    // DELIVERABLES is the last cell, so its right boundary is the next section label.
+    expect(text).toContain('Deliverables1 itemOVERVIEW');
+  });
+
+  it('labels the Fixed total row "Total amount" and retires the old banner labels', () => {
+    const text = renderTree(clientDoc());
+    expect(text).toContain('Total amount');
+    // The method moved to the PRICING cell, so the old total label is gone…
+    expect(text).not.toContain('FIXED PRICE');
+    // …as is the two-item banner's timeframe label.
+    expect(text).not.toContain('EST. TIMEFRAME');
+  });
+
+  it('keeps the T&M total treatment — "Estimated total" plus the est. suffix', () => {
+    const text = renderTree(
+      clientDoc({ pricingMethod: 'tm', depositCents: 20_000, rateCents: 30_000 })
+    );
+    expect(text).toContain('Estimated total');
+    expect(text).toContain(' est.');
+    // Lower-case `m` in the PRICING cell — and, since BAL-392, in the header pill too.
+    expect(text).toContain('PricingTime & materials');
+  });
+
+  /**
+   * ⚠ THE PILL, NOT THE CELL. The every-page header pill prints on the same document as
+   * the SummaryBox, so it reads `pricingMethodLabel` — a client can no longer read
+   * `Time & Materials` in the header against `Time & materials` in the box. Capital-M is
+   * RETIRED here.
+   *
+   * Anchoring on the wordmark (`Balo` + pill) and counting occurrences is what makes this
+   * fail if the pill is hardcoded back; the cell assertion above would pass either way.
+   */
+  it('spells the header pill with the canonical lower-case "Time & materials"', () => {
+    const text = renderTree(clientDoc({ pricingMethod: 'tm' }));
+
+    expect(text).toContain('BaloTime & materials');
+    expect(text.split('Time & materials')).toHaveLength(3); // the pill + the PRICING cell
+    expect(text).not.toContain('Time & Materials');
+  });
+
+  it('falls back to an em dash in the timeline cell when no timeframe was given', () => {
+    expect(renderTree(clientDoc({ timeframeWeeks: null }))).toContain('Est. timeline—');
+  });
+
+  it('counts deliverables from the milestone list', () => {
+    const three = clientDoc(
+      {},
+      {
+        milestones: [
+          makeMilestone({ id: 'ms-1' }),
+          makeMilestone({ id: 'ms-2', title: 'Build' }),
+          makeMilestone({ id: 'ms-3', title: 'Handover' }),
+        ],
+      }
+    );
+    expect(renderTree(three)).toContain('Deliverables3 items');
+    expect(renderTree(clientDoc({}, { milestones: [] }))).toContain('Deliverables—');
+  });
+
+  it('derives the Fixed payment cell from the first installment', () => {
+    // No schedule at all → the price is due in full.
+    expect(renderTree(clientDoc({}, { installments: [] }))).toContain('PaymentDue in full');
+
+    // A blank label cannot be composed → the neutral count, pluralised.
+    const blank = clientDoc(
+      {},
+      {
+        installments: [
+          makeInstallment({ label: '   ' }),
+          makeInstallment({ id: 'inst-2', label: 'Final', pct: 60 }),
+        ],
+      }
+    );
+    expect(renderTree(blank)).toContain('Payment2 payments');
+
+    // Too long for one line → the count, SINGULARISED for a lone installment. Bounded on
+    // both sides by the neighbouring labels: `Payment1 payment` alone is a prefix match
+    // that `1 payments` would also satisfy, which would leave the singular unpinned.
+    const long = clientDoc(
+      {},
+      { installments: [makeInstallment({ label: 'On contract signature', pct: 30 })] }
+    );
+    expect(renderTree(long)).toContain('Payment1 paymentDeliverables');
+  });
+
+  it('adapts the T&M payment cell to whichever of deposit / rate exists', () => {
+    // All four D5 states — the cell must never assert money is due that isn't.
+    const both = clientDoc({ pricingMethod: 'tm', depositCents: 20_000, rateCents: 30_000 });
+    expect(renderTree(both)).toContain('PaymentDeposit + rate');
+
+    const rateOnly = clientDoc({ pricingMethod: 'tm', depositCents: null, rateCents: 30_000 });
+    expect(renderTree(rateOnly)).toContain('PaymentRate only');
+
+    const depositOnly = clientDoc({ pricingMethod: 'tm', depositCents: 20_000, rateCents: null });
+    expect(renderTree(depositOnly)).toContain('PaymentDeposit only');
+
+    // Neither figure given → the same em dash the TIMELINE cell uses for "not specified".
+    const neither = clientDoc({ pricingMethod: 'tm', depositCents: null, rateCents: null });
+    expect(renderTree(neither)).toContain('Payment—');
   });
 });

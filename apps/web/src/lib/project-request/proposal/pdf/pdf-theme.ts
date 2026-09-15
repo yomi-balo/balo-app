@@ -19,6 +19,8 @@ export const PDF_COLORS = {
   muted: '#64748b',
   faint: '#94a3b8',
   border: '#e2e8f0',
+  /** Hairline divider between the summary-box detail cells — lighter than `border`. */
+  hair: '#eef1f5',
   subtleBg: '#f8fafc',
   successText: '#15803d',
 } as const;
@@ -31,5 +33,7 @@ export const PDF_TYPE = {
   body: 10,
   small: 9,
   label: 8,
+  /** Summary-box cell labels — the smallest readable uppercase micro-label. */
+  microLabel: 7.5,
   money: 24,
 } as const;

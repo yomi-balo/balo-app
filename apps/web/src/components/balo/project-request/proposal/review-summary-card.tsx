@@ -7,6 +7,8 @@ import { formatWholeCurrency } from '@/lib/utils/currency';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { BackChannel } from './back-channel';
 import { firstName } from './proposal-name';
+import { buildProposalSummaryCells, SUMMARY_EMPTY_VALUE } from './proposal-summary-cells';
+import type { ProposalSummaryCell, ProposalSummaryCellKey } from './proposal-summary-cells';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
 interface ReviewSummaryCardProps {
@@ -22,13 +24,23 @@ interface SummaryRow {
   value: string;
 }
 
-/** Payment summary line: installment percents (Fixed) or deposit + cadence (T&M). */
-function paymentSummary(doc: ProposalReviewDoc): string {
-  if (doc.pricingMethod === 'tm') {
-    return doc.cadence === null ? 'Deposit' : `Deposit + ${doc.cadence}`;
-  }
-  if (doc.installments.length === 0) return '—';
-  return doc.installments.map((installment) => `${installment.pct}%`).join(' / ');
+/**
+ * Read one cell out of {@link buildProposalSummaryCells}.
+ *
+ * ⚠ This card renders SIDE BY SIDE with the summary grid on the desktop accept surface
+ * (`proposal-review.tsx`), so its Pricing / Timeframe / Payment rows MUST read that one
+ * definition. The card used to derive payment itself and assumed a deposit
+ * unconditionally — it said `Deposit + monthly` beside a grid saying `Rate only`, two
+ * contradictory money claims in one viewport on the page the client presses Accept. Do
+ * not re-fork it. Only the DERIVATION is shared: the card keeps its own row labels
+ * (`Timeframe`, not the grid's `Est. timeline`) and its own Total / Milestones rows.
+ *
+ * The fallback is unreachable — the helper always returns all four keys — and exists only
+ * so the lookup is total.
+ */
+function cellValue(cells: ProposalSummaryCell[], key: ProposalSummaryCellKey): string {
+  const cell = cells.find((candidate) => candidate.key === key);
+  return cell === undefined ? SUMMARY_EMPTY_VALUE : cell.value;
 }
 
 /**
@@ -46,25 +58,27 @@ export function ReviewSummaryCard({
   const isTM = doc.pricingMethod === 'tm';
   const expertFirst = firstName(doc.expert.name);
 
+  const cells = buildProposalSummaryCells(doc);
+
   const rows: SummaryRow[] = [
-    { label: 'Pricing', value: isTM ? 'Time & Materials' : 'Fixed price' },
+    { label: 'Pricing', value: cellValue(cells, 'pricing') },
     {
       label: isTM ? 'Estimate' : 'Total',
       value: formatWholeCurrency(doc.priceCents, doc.currency) + (isTM ? ' est.' : ''),
     },
     { label: 'Milestones', value: String(doc.milestones.length) },
-    {
-      label: 'Timeframe',
-      value: doc.timeframeWeeks === null ? '—' : `~${doc.timeframeWeeks} weeks`,
-    },
-    { label: 'Payment', value: paymentSummary(doc) },
+    { label: 'Timeframe', value: cellValue(cells, 'timeline') },
+    { label: 'Payment', value: cellValue(cells, 'payment') },
   ];
 
   const isSubmitted = doc.status === 'submitted';
   const isAccepted = doc.status === 'accepted';
 
   return (
-    <div className="border-border bg-card sticky top-[76px] rounded-2xl border p-5">
+    <div
+      data-testid="review-summary-card"
+      className="border-border bg-card sticky top-[76px] rounded-2xl border p-5"
+    >
       {/* At-a-glance identity */}
       <div className="mb-3.5 flex items-center gap-2.5">
         <span className="bg-primary/10 text-primary flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-xl text-[13px] font-semibold">

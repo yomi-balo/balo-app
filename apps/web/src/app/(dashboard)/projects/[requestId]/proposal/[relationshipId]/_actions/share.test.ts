@@ -41,7 +41,7 @@ vi.mock('@/lib/project-request/proposal/pdf/ensure-client-pdf', () => ({
 }));
 
 vi.mock('@/lib/storage/proposal-pdf', () => ({
-  proposalPdfKey: (id: string) => `proposals/${id}/client.pdf`,
+  proposalPdfKey: (id: string) => `proposals/${id}/client-v2.pdf`,
 }));
 
 const mockPublish = vi.fn();
@@ -175,7 +175,7 @@ describe('shareProposalWithColleague', () => {
     expect(payload.attachments).toEqual([
       {
         source: 'r2',
-        key: `proposals/${PROPOSAL_ID}/client.pdf`,
+        key: `proposals/${PROPOSAL_ID}/client-v2.pdf`,
         filename: 'Balo-Proposal-x-v3.pdf',
       },
     ]);

@@ -54,7 +54,7 @@ vi.mock('@/lib/project-request/proposal-audience-view', () => ({
 }));
 
 vi.mock('@/lib/storage/proposal-pdf', () => ({
-  proposalPdfKey: (id: string) => `proposals/${id}/client.pdf`,
+  proposalPdfKey: (id: string) => `proposals/${id}/client-v2.pdf`,
   getProposalPdfFromR2: (...args: unknown[]) => mockGetPdfFromR2(...args),
   putProposalPdfToR2: (...args: unknown[]) => mockPutPdfToR2(...args),
 }));
@@ -247,7 +247,7 @@ describe('GET proposal PDF — read-through cache', () => {
     expect(res.status).toBe(200);
     expect(mockRenderPdf).toHaveBeenCalledTimes(1);
     expect(mockPutPdfToR2).toHaveBeenCalledWith(
-      'proposals/proposal-1/client.pdf',
+      'proposals/proposal-1/client-v2.pdf',
       expect.anything()
     );
     expect(mockLog.info).toHaveBeenCalledWith('Proposal client PDF generated', expect.any(Object));
