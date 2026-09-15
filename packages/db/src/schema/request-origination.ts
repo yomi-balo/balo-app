@@ -309,8 +309,11 @@ export const proposals = pgTable(
     /**
      * WHO accepted (BAL-432 / ADR-1030). Written ONLY by `proposalsRepository.accept`, in a
      * local `tx.update` inside that method's existing transaction — never by the shared
-     * `advanceProposalStatus`, which `transitionStatus`, `requestChanges`, `declineTrack` and
-     * `close` also route through and which has no actor to give.
+     * `advanceProposalStatus`, which `promoteToSubmit`, `transitionStatus`, `requestChanges`,
+     * `declineTrack` and `close` also route through. Of those, only `transitionStatus` has no
+     * actor at all — the reason the shared writer stays un-widened is `declineTrack` / `close`,
+     * whose actor is REQUEST-level and fans out over N proposals; attributing each cascaded
+     * proposal to the closer would make this column assert something untrue.
      *
      * ⚠ THIS IS THE `proposals` TABLE'S FIRST `users` FOREIGN KEY OF ANY KIND. Every other uuid
      * column here points at `request_expert_relationships`, `project_requests` or

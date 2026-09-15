@@ -742,7 +742,10 @@ export const proposalsRepository = {
       });
 
       // Re-stamp submittedAt to the actual submit instant (local update — never
-      // mutate the shared advanceProposalStatus, which accept/resubmit reuse).
+      // mutate the shared advanceProposalStatus, which `accept` and `requestChanges` reuse).
+      // ⚠ NOT `resubmit` — it does NOT route through `advanceProposalStatus`; it flips the row
+      // with its own direct `tx.update` (see `resubmit`'s "FLIP FIRST"). This comment named it
+      // for a long time and was wrong (BAL-432).
       const [stamped] = await tx
         .update(proposals)
         .set({ submittedAt: new Date() })
@@ -897,9 +900,12 @@ export const proposalsRepository = {
       });
 
       // BAL-432 — stamp the ACTOR in a LOCAL update, exactly as promoteToSubmit re-stamps
-      // `submittedAt`. Never widen the shared `advanceProposalStatus`: four of its six callers
-      // have no actor, and two of them (`declineTrack`, `close`) are actorless fan-outs that
-      // would have to fabricate one.
+      // `submittedAt`. Never widen the shared `advanceProposalStatus`. Of its six callers only
+      // `transitionStatus` has no actor at all; the blocker is the OTHER shape — `declineTrack`
+      // and `close` carry a REQUEST-level actor that fans out over N proposals, so a widened
+      // signature would attribute every cascaded proposal to whoever closed the request. That is
+      // not the same claim as "this person accepted this proposal", and this column makes exactly
+      // that claim.
       const [stamped] = await tx
         .update(proposals)
         .set({ acceptedByUserId: input.actorUserId })

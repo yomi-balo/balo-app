@@ -20,11 +20,12 @@ import type { DbExecutor } from './db-executor';
  * writer of that column. Proposals have no such choke point: `advanceProposalStatus` has SIX
  * production callers (`promoteToSubmit`, `accept`, `transitionStatus`, `requestChanges`,
  * `requestExpertRelationshipsRepository.declineTrack`, `projectRequestsRepository.close`), and
- * `resubmit` bypasses it entirely with a direct `tx.update`. Two of the six (`declineTrack`,
- * `close`) are ACTORLESS FAN-OUTS: the actor is the closer/decliner acting on the whole request,
- * not a per-proposal human, so `actorUserId` (below) cannot be satisfied uniformly across a
- * widened vocabulary — a wider vocabulary would force either a fabricated actor or a nullable
- * one, and ADR-1030's whole point is that neither is acceptable on a path that has a human.
+ * `resubmit` bypasses it entirely with a direct `tx.update`. Of the six, only `transitionStatus`
+ * has NO actor at all. The blocker is the other shape: two of them (`declineTrack`, `close`) are
+ * REQUEST-GRAIN FAN-OUTS — they do carry an actor, but it is the closer/decliner acting on the
+ * whole request, not a per-proposal human, and it fans out over N proposals. A widened vocabulary
+ * would attribute each cascaded proposal to that one actor, which asserts something stronger and
+ * different from "this person accepted this proposal" — the claim `actorUserId` (below) makes.
  * Those two branches are already in the audit stream at REQUEST grain — BAL-540's
  * `project_request.closed` row names the actor and carries `counts.proposalsWithdrawn` plus
  * `declinedRelationshipIds` (`project-requests.ts`). ⚠ It records HOW MANY proposals were

@@ -356,6 +356,10 @@ describe('proposalsRepository.accept — BAL-432 / ADR-1030 attribution + audit 
     expect(raw?.status).toBe('submitted');
     expect(raw?.acceptedAt).toBeNull();
     expect(raw?.acceptedByUserId).toBeNull();
+    // Qodo #1 (lighter form): the read above is deliberately UNFILTERED — this is a
+    // "the row is untouched" check, so it must see the row even if something soft-deleted it.
+    // Assert liveness explicitly rather than filtering it out and silently matching nothing.
+    expect(raw?.deletedAt).toBeNull();
 
     const rel = await requestExpertRelationshipsRepository.findById(relationship.id);
     expect(rel?.status).toBe('proposal_submitted');
@@ -520,6 +524,10 @@ describe('proposalsRepository.transitionStatus', () => {
     expect(raw?.status).toBe('draft');
     expect(raw?.acceptedAt).toBeNull();
     expect(raw?.acceptedByUserId).toBeNull();
+    // Qodo #1 (lighter form): the read above is deliberately UNFILTERED — this is a
+    // "the row is untouched" check, so it must see the row even if something soft-deleted it.
+    // Assert liveness explicitly rather than filtering it out and silently matching nothing.
+    expect(raw?.deletedAt).toBeNull();
   });
 
   it('rejects an expectedFrom mismatch', async () => {
