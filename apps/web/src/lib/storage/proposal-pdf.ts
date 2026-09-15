@@ -11,17 +11,30 @@ import { r2Client, R2_BUCKET } from '@/lib/storage/r2';
  * Handler, never via `R2_PUBLIC_URL` (same privacy posture as proposal documents:
  * the PDF carries a specific client↔expert engagement's scope + marked-up pricing).
  *
- * Cache immutability: a proposal's content is immutable within its version, and a
+ * Cache immutability: a proposal's CONTENT is immutable within its version, and a
  * revision creates a NEW `proposals` row (new id → new key), so the current
- * version always maps to a fresh key and no explicit invalidation is needed.
+ * version always maps to a fresh key and no content-driven invalidation is needed.
+ * The PDF's LAYOUT is not covered by that argument — the template can change under
+ * an unchanged proposal id — so the key also carries
+ * {@link PROPOSAL_PDF_LAYOUT_VERSION}.
  */
 
 /** Key prefix every cached proposal PDF lives under. */
 export const PROPOSAL_PDF_PREFIX = 'proposals/';
 
-/** Deterministic cache key for a proposal's client PDF: `proposals/{id}/client.pdf`. */
+/**
+ * Layout generation baked into the cache key. **Bump this whenever the rendered
+ * PDF's layout changes.** The download route is a read-through cache, so without a
+ * bump every proposal whose PDF was already generated would keep serving the OLD
+ * layout forever. `v2` = BAL-392's four-cell summary box (replacing BAL-385's
+ * two-item money/timeframe banner). Objects under a superseded version are
+ * orphaned in R2; that is accepted — there is no purge job.
+ */
+export const PROPOSAL_PDF_LAYOUT_VERSION = 'v2';
+
+/** Deterministic cache key for a proposal's client PDF: `proposals/{id}/client-v2.pdf`. */
 export function proposalPdfKey(proposalId: string): string {
-  return `${PROPOSAL_PDF_PREFIX}${proposalId}/client.pdf`;
+  return `${PROPOSAL_PDF_PREFIX}${proposalId}/client-${PROPOSAL_PDF_LAYOUT_VERSION}.pdf`;
 }
 
 /** True when an AWS/R2 error signals the object is simply absent (cache miss). */

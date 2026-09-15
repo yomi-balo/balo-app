@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { PROPOSAL_CTA_GRADIENT_CLASS } from '@/lib/project-request/proposal-cta';
 import { PayoutAssuranceNote } from './payout-assurance-note';
+import { pricingMethodLabel } from './proposal-summary-cells';
 import type { ProposalDraftState, ReadinessResult } from './proposal-composer-state';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -61,7 +62,7 @@ export function ProposalSummaryCard({
   const submitLabel = reviseMode ? `Resubmit as v${nextVersion}` : `Submit to ${clientFirstName}`;
 
   const rows: SummaryRow[] = [
-    { label: 'Pricing', value: isFixed ? 'Fixed price' : 'Time & materials' },
+    { label: 'Pricing', value: pricingMethodLabel(state.pricingMethod) },
     {
       label: isFixed ? 'Total' : 'Estimate',
       value: formatWholeCurrency(totalCents, state.currency),

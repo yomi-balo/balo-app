@@ -56,7 +56,9 @@ describe('ReviewSummaryCard', () => {
     expect(screen.getByText('Fixed price')).toBeInTheDocument();
     expect(screen.getByText('A$58,000')).toBeInTheDocument();
     expect(screen.getByText('~8 weeks')).toBeInTheDocument();
-    expect(screen.getByText('40% / 60%')).toBeInTheDocument();
+    // ⚠ BAL-392 F1 — Payment is `buildProposalSummaryCells`' derivation, NOT the card's old
+    // `40% / 60%` percent join. The card must never restate money in its own words.
+    expect(screen.getByText('40% upfront')).toBeInTheDocument();
   });
 
   it('fires onAccept when the accept CTA is clicked', async () => {
@@ -98,17 +100,25 @@ describe('ReviewSummaryCard', () => {
   it('labels the row Estimate and appends " est." for T&M', () => {
     render(
       <ReviewSummaryCard
-        doc={doc({ pricingMethod: 'tm', installments: [], cadence: 'monthly' })}
+        doc={doc({
+          pricingMethod: 'tm',
+          installments: [],
+          cadence: 'monthly',
+          depositCents: 500_000,
+          rateCents: 25_000,
+        })}
         onAccept={vi.fn()}
         onRequestChanges={vi.fn()}
       />
     );
     expect(screen.getByText('Estimate')).toBeInTheDocument();
     expect(screen.getByText('A$58,000 est.')).toBeInTheDocument();
-    expect(screen.getByText('Deposit + monthly')).toBeInTheDocument();
+    // ⚠ BAL-392 F1 — `Deposit + rate`, NOT the card's old `Deposit + {cadence}`. Cadence is
+    // not an input to the shared derivation at all: what is DUE is what the row may claim.
+    expect(screen.getByText('Deposit + rate')).toBeInTheDocument();
   });
 
-  it('shows a "—" Payment row for a Fixed doc with no installments', () => {
+  it('shows "Due in full" for a Fixed doc with no installments', () => {
     render(
       <ReviewSummaryCard
         doc={doc({ installments: [] })}
@@ -117,20 +127,41 @@ describe('ReviewSummaryCard', () => {
       />
     );
     expect(screen.getByText('Payment')).toBeInTheDocument();
-    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.getByText('Due in full')).toBeInTheDocument();
   });
 
-  it('shows a bare "Deposit" Payment row for a T&M doc with no cadence', () => {
-    render(
-      <ReviewSummaryCard
-        doc={doc({ pricingMethod: 'tm', installments: [], cadence: null })}
-        onAccept={vi.fn()}
-        onRequestChanges={vi.fn()}
-      />
-    );
-    expect(screen.getByText('Deposit')).toBeInTheDocument();
-    expect(screen.queryByText(/Deposit \+/)).not.toBeInTheDocument();
-  });
+  /**
+   * ⚠ BAL-392 F1 — the four T&M payment states, on the CARD. Its predecessor asserted a
+   * deposit unconditionally (`Deposit` / `Deposit + {cadence}`) off `cadence` alone, so a
+   * proposal carrying NO deposit had the card claiming money was due that wasn't — beside
+   * a grid saying otherwise, in one viewport, on the accept surface.
+   */
+  it.each([
+    { deposit: 500_000, rate: 25_000, expected: 'Deposit + rate' },
+    { deposit: null, rate: 25_000, expected: 'Rate only' },
+    { deposit: 500_000, rate: null, expected: 'Deposit only' },
+    { deposit: null, rate: null, expected: '—' },
+  ])(
+    'renders the T&M Payment row as "$expected" (deposit $deposit / rate $rate)',
+    ({ deposit, rate, expected }) => {
+      render(
+        <ReviewSummaryCard
+          doc={doc({
+            pricingMethod: 'tm',
+            installments: [],
+            // ⚠ `cadence` stays SET in every row: it must not move the Payment string.
+            cadence: 'monthly',
+            depositCents: deposit,
+            rateCents: rate,
+          })}
+          onAccept={vi.fn()}
+          onRequestChanges={vi.fn()}
+        />
+      );
+      expect(screen.getByText(expected)).toBeInTheDocument();
+      expect(screen.queryByText(/monthly/)).not.toBeInTheDocument();
+    }
+  );
 
   it('appends a "· v2" pill to the heading for a revised (version 2) doc', () => {
     render(

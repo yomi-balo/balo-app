@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { centsToDollars, dollarsToCents, formatWholeCurrency } from '@/lib/utils/currency';
 import { minutesToHoursLabel } from './proposal-format';
 import { STANDARD_TERMS } from './proposal-standard-terms';
+import { pricingMethodLabel } from './proposal-summary-cells';
 import { ProposalDocumentUploader } from './proposal-document-uploader';
 import type { ProposalDocumentView } from '@/app/(dashboard)/projects/[requestId]/_actions/confirm-proposal-document-upload';
 import type {
@@ -133,10 +134,8 @@ export function PaymentTermsTab({
     <div className="space-y-6">
       <p className="text-muted-foreground text-[13px]">
         Pricing method:{' '}
-        <span className="text-foreground font-semibold">
-          {isFixed ? 'Fixed price' : 'Time & materials'}
-        </span>{' '}
-        — change it in the Overview tab.
+        <span className="text-foreground font-semibold">{pricingMethodLabel(pricingMethod)}</span> —
+        change it in the Overview tab.
       </p>
 
       {isFixed ? (

@@ -149,6 +149,22 @@ describe('mapEngagementToWorkspaceView — terms strip', () => {
     expect(kicked?.value).toBe('Kicked off 12 Jun');
   });
 
+  it('pricing pill: the tm arm reads "Time & materials" — lower-case m, as shipped', () => {
+    // BAL-392 (F5): this strip now reads the SHARED `pricingMethodLabel`, so a copy change
+    // made "for the proposal" would silently restate an ACCEPTED engagement's terms. Both
+    // arms are pinned so such a change cannot land unnoticed. The lower-case `m` is the
+    // ONE spelling — the proposal header pills read the same helper, so nothing on a
+    // client surface still says capital-M `Time & Materials`.
+    const view = mapEngagementToWorkspaceView(
+      makeEngagement({ pricingMethod: 'tm' }),
+      ctxFor('client'),
+      NOW
+    );
+    const [pricing] = view.header.terms;
+    expect(pricing?.label).toBe('Pricing');
+    expect(pricing?.value).toBe('Time & materials · A$58,000');
+  });
+
   it('timeframe: retainer cadence humanises to "Monthly retainer"', () => {
     const view = mapEngagementToWorkspaceView(
       makeEngagement({ cadence: 'monthly', pricingMethod: 'tm' }),

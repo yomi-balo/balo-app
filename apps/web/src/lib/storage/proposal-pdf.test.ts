@@ -26,6 +26,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
 }));
 
 import {
+  PROPOSAL_PDF_LAYOUT_VERSION,
   PROPOSAL_PDF_PREFIX,
   proposalPdfKey,
   getProposalPdfFromR2,
@@ -39,10 +40,19 @@ beforeEach(() => {
 });
 
 describe('proposalPdfKey', () => {
-  it('is a deterministic client.pdf key under the proposals prefix', () => {
+  it('is a deterministic layout-versioned key under the proposals prefix', () => {
     const key = proposalPdfKey(PROPOSAL_ID);
-    expect(key).toBe(`proposals/${PROPOSAL_ID}/client.pdf`);
+    expect(key).toBe(`proposals/${PROPOSAL_ID}/client-v2.pdf`);
     expect(key.startsWith(PROPOSAL_PDF_PREFIX)).toBe(true);
+  });
+
+  it('carries the layout version, so a layout change orphans the old object instead of serving it', () => {
+    // BAL-392 (F3): the download route is a read-through cache. If the key did not
+    // move with the layout, every already-generated PDF would serve the retired
+    // two-item banner forever.
+    expect(PROPOSAL_PDF_LAYOUT_VERSION).toBe('v2');
+    expect(proposalPdfKey(PROPOSAL_ID)).toContain(`/client-${PROPOSAL_PDF_LAYOUT_VERSION}.pdf`);
+    expect(proposalPdfKey(PROPOSAL_ID)).not.toBe(`proposals/${PROPOSAL_ID}/client.pdf`);
   });
 });
 
@@ -96,7 +106,7 @@ describe('putProposalPdfToR2', () => {
     const command = mockSend.mock.calls[0]?.[0] as { input: Record<string, unknown> };
     expect(command.input).toMatchObject({
       Bucket: 'test-bucket',
-      Key: `proposals/${PROPOSAL_ID}/client.pdf`,
+      Key: `proposals/${PROPOSAL_ID}/client-v2.pdf`,
       Body: body,
       ContentType: 'application/pdf',
     });

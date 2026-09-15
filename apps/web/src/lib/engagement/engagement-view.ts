@@ -9,6 +9,7 @@ import { applyBaloFee } from '@balo/shared/pricing';
 import { formatWholeCurrency } from '@/lib/utils/currency';
 import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { htmlToPlainText } from '@/components/balo/rich-text/plain-text';
+import { pricingMethodLabel } from '@/components/balo/project-request/proposal/proposal-summary-cells';
 // The single-source "start a new project" front door (BAL-274). Currently expert
 // discovery; when BAL-253's generic match front door lands, that ONE constant repoints
 // and this completed-banner CTA follows with no change here.
@@ -331,10 +332,6 @@ function deriveStatusChip(status: EngagementWorkspaceStatus): StatusChipView {
   }
 }
 
-function pricingLabel(pricingMethod: ProjectEngagementWithMilestones['pricingMethod']): string {
-  return pricingMethod === 'fixed' ? 'Fixed price' : 'Time & materials';
-}
-
 function cadenceLabel(cadence: NonNullable<ProjectEngagementWithMilestones['cadence']>): string {
   return cadence === 'monthly' ? 'Monthly retainer' : 'Fortnightly retainer';
 }
@@ -378,7 +375,10 @@ function deriveTermsStrip(
     {
       icon: 'DollarSign',
       label: 'Pricing',
-      value: `${pricingLabel(engagement.pricingMethod)} · ${formatWholeCurrency(
+      // `pricingMethodLabel` is the shared definition (BAL-392): the same strings over
+      // the same `pricing_method` enum have ONE home, read by the proposal PDF, the
+      // proposal doc, and this post-acceptance terms strip.
+      value: `${pricingMethodLabel(engagement.pricingMethod)} · ${formatWholeCurrency(
         priceCents,
         engagement.currency
       )}`,

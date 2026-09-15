@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@/test/utils';
+import { render, screen, within } from '@/test/utils';
 import { ProposalDoc } from './proposal-doc';
 import type { ProposalReviewDoc } from './proposal-review-types';
 
@@ -226,6 +226,124 @@ describe('ProposalDoc — attachments split + exclusions', () => {
 
     rerender(<ProposalDoc doc={baseDoc({ exclusionsHtml: null })} />);
     expect(screen.queryByText('Not included')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProposalDoc — client summary cells (BAL-392)', () => {
+  function grid(): HTMLElement {
+    return screen.getByTestId('proposal-summary-cells');
+  }
+
+  /**
+   * The value rendered inside ONE NAMED cell, reached through its own label.
+   *
+   * `within(grid()).getByText('—')` is NOT anchored to a cell: it matches the em dash
+   * wherever in the grid it appears, so swapping two cells' values still passes. Pairing
+   * the `<dt>` label with the `<dd>` in the same cell wrapper is what makes the
+   * assertion fail when a value lands in the wrong cell.
+   */
+  function cellValue(label: string): string {
+    const term = within(grid()).getByText(label);
+    const cell = term.closest('div');
+    if (cell === null) throw new Error(`No cell wrapper for the "${label}" label`);
+    return within(cell).getByRole('definition').textContent ?? '';
+  }
+
+  it('renders the four cells, with the same labels and derivations as the PDF', () => {
+    render(<ProposalDoc doc={baseDoc()} showSummaryCells />);
+
+    const cells = grid();
+    for (const label of ['Pricing', 'Est. timeline', 'Payment', 'Deliverables']) {
+      expect(within(cells).getByText(label)).toBeInTheDocument();
+    }
+    // baseDoc: fixed, 6 weeks, installments[0] = 30% Upfront, 2 milestones. Each value is
+    // read through ITS OWN label, so a value rendered in the wrong cell fails here rather
+    // than passing on mere presence somewhere in the grid.
+    expect(cellValue('Pricing')).toBe('Fixed price');
+    expect(cellValue('Est. timeline')).toBe('~6 weeks');
+    expect(cellValue('Payment')).toBe('30% upfront');
+    expect(cellValue('Deliverables')).toBe('2 items');
+  });
+
+  /** The two-item banner is REPLACED, not supplemented — and its label retires with it. */
+  it('swaps the total label to "Total amount" and drops the timeframe item', () => {
+    render(<ProposalDoc doc={baseDoc()} showSummaryCells />);
+
+    expect(screen.getByText('Total amount')).toBeInTheDocument();
+    expect(screen.getByText('A$10,000')).toBeInTheDocument();
+    expect(screen.queryByText('Est. timeframe')).not.toBeInTheDocument();
+  });
+
+  /**
+   * Still TWO 'Fixed price' nodes with the prop on — the header pill plus the PRICING
+   * cell — because the total row now reads 'Total amount'. Pin WHICH nodes, so the count
+   * matching the default path is not a coincidence.
+   */
+  it('renders "Fixed price" in the header pill and the PRICING cell, nowhere else', () => {
+    render(<ProposalDoc doc={baseDoc()} showSummaryCells />);
+
+    expect(screen.getAllByText('Fixed price')).toHaveLength(2);
+    expect(within(grid()).getAllByText('Fixed price')).toHaveLength(1);
+  });
+
+  it('falls back to an em dash in the timeline cell when no timeframe was given', () => {
+    render(<ProposalDoc doc={baseDoc({ timeframeWeeks: null })} showSummaryCells />);
+    expect(cellValue('Est. timeline')).toBe('—');
+    // …and the dash belongs to THAT cell: pinning a neighbour too is what makes a
+    // swapped pair of values fail here instead of passing silently.
+    expect(cellValue('Deliverables')).toBe('2 items');
+  });
+
+  it('keeps the T&M total treatment and derives the T&M payment cell', () => {
+    render(
+      <ProposalDoc
+        doc={baseDoc({
+          pricingMethod: 'tm',
+          depositCents: 600_000,
+          rateCents: 25_000,
+          cadence: 'monthly',
+        })}
+        showSummaryCells
+      />
+    );
+
+    expect(screen.getByText('Estimated total')).toBeInTheDocument();
+    expect(screen.getByText('est.')).toBeInTheDocument();
+    // ⚠ SCOPED TO THE GRID because the header pill now renders the SAME string (BAL-392) —
+    // an unscoped `getByText` would throw on two matches. The pill itself is pinned by the
+    // next test; this one is about the cell.
+    expect(within(grid()).getByText('Time & materials')).toBeInTheDocument();
+    expect(within(grid()).getByText('Deposit + rate')).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ THE PILL, NOT THE CELL. The header pill stacks directly above the PRICING cell on
+   * this surface, so it reads `pricingMethodLabel` too — a client can no longer see
+   * `Time & Materials` above `Time & materials`. Capital-M is RETIRED here.
+   *
+   * The count is what makes this fail if the pill is hardcoded back: a grid-scoped query
+   * would pass either way.
+   */
+  it('spells the header pill with the canonical lower-case "Time & materials"', () => {
+    render(<ProposalDoc doc={baseDoc({ pricingMethod: 'tm' })} showSummaryCells />);
+
+    const matches = screen.getAllByText('Time & materials');
+    expect(matches).toHaveLength(2); // the pill + the PRICING cell
+    // …and exactly one of them is the pill, i.e. OUTSIDE the grid.
+    expect(matches.filter((node) => !grid().contains(node))).toHaveLength(1);
+    expect(screen.queryByText('Time & Materials')).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ THE REGRESSION PIN THAT KEEPS THE EXPERT SURFACE SAFE WITH NO EDIT TO
+   * `submitted-view.tsx`. Default OFF must stay today's two-item banner.
+   */
+  it('renders the shipped two-item banner and no grid by default', () => {
+    render(<ProposalDoc doc={baseDoc()} />);
+
+    expect(screen.queryByTestId('proposal-summary-cells')).not.toBeInTheDocument();
+    expect(screen.getByText('Est. timeframe')).toBeInTheDocument();
+    expect(screen.queryByText('Total amount')).not.toBeInTheDocument();
   });
 });
 

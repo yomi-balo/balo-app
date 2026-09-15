@@ -23,7 +23,7 @@ vi.mock('@/lib/project-request/proposal/pdf/proposal-pdf-document', () => ({
 
 const mockPut = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/storage/proposal-pdf', () => ({
-  proposalPdfKey: (id: string) => `proposals/${id}/client.pdf`,
+  proposalPdfKey: (id: string) => `proposals/${id}/client-v2.pdf`,
   putProposalPdfToR2: (...a: unknown[]) => mockPut(...a),
 }));
 
@@ -56,7 +56,7 @@ describe('ensureClientProposalPdf', () => {
   it('force-writes the rendered bytes to the proposal PDF key', async () => {
     await ensureClientProposalPdf(TARGET);
     expect(mockPut).toHaveBeenCalledWith(
-      `proposals/${PROPOSAL_ID}/client.pdf`,
+      `proposals/${PROPOSAL_ID}/client-v2.pdf`,
       new Uint8Array([1, 2, 3])
     );
   });
