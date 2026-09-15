@@ -452,7 +452,8 @@ describe('acceptProposalAction', () => {
   });
 
   it('a rejected gate confirm does NOT fail an already-committed accept — success plus a WARN', async () => {
-    mockEnsureBillingGate.mockRejectedValue(new Error('locked'));
+    const gateError = new Error('locked');
+    mockEnsureBillingGate.mockRejectedValue(gateError);
     const result = await acceptProposalAction(VALID_INPUT);
 
     // The accept COMMITTED — the client must never be told it failed.
@@ -465,6 +466,10 @@ describe('acceptProposalAction', () => {
     expect(log.warn).toHaveBeenCalledWith(GATE_WARN_MESSAGE, {
       requestId: REQUEST_ID,
       error: 'locked',
+      // The unexpected class has a generic message, so the stack is the only
+      // thing naming the failing query path. Pinned to the thrown error's OWN
+      // stack, not `expect.any(String)`.
+      stack: gateError.stack,
     });
     // Pins the LEVEL: recoverable, self-healing → WARN, never ERROR.
     expect(log.error).not.toHaveBeenCalled();
@@ -478,16 +483,17 @@ describe('acceptProposalAction', () => {
     // step-4 status check vs. `confirmKickoffGate`'s own FOR UPDATE read.
     // Deliberately NOT given its own catch arm — the consequence is identical
     // (gate stays open, accept still succeeds).
-    mockEnsureBillingGate.mockRejectedValue(
-      Object.assign(new Error('Kickoff gate cannot be set while request is kickoff_approved'), {
-        name: 'InvalidKickoffStateError',
-      })
+    const raceError = Object.assign(
+      new Error('Kickoff gate cannot be set while request is kickoff_approved'),
+      { name: 'InvalidKickoffStateError' }
     );
+    mockEnsureBillingGate.mockRejectedValue(raceError);
     const result = await acceptProposalAction(VALID_INPUT);
     expect(result.success).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(GATE_WARN_MESSAGE, {
       requestId: REQUEST_ID,
       error: 'Kickoff gate cannot be set while request is kickoff_approved',
+      stack: raceError.stack,
     });
     expect(log.error).not.toHaveBeenCalled();
   });

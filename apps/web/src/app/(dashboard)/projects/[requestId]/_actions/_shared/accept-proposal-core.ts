@@ -109,7 +109,9 @@ async function didRequestAdvance(requestId: string, beforeStatus: string): Promi
  * not ERROR: recoverable by three routes (the backstop, the client's own capture
  * form, the next accept on this request). ONE catch arm deliberately — a benign
  * `InvalidKickoffStateError` status race and a real DB failure have identical
- * consequences here, and the logged `error.message` names which one it was.
+ * consequences here, and the logged `error.message` names which one it was. The stack is
+ * carried for the unexpected class, whose message (`Failed to update project request`)
+ * does not identify the failing query path.
  */
 async function confirmClientBillingGateBestEffort(requestId: string): Promise<void> {
   try {
@@ -118,6 +120,7 @@ async function confirmClientBillingGateBestEffort(requestId: string): Promise<vo
     log.warn('Client billing gate auto-confirm failed after accept commit', {
       requestId,
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
   }
 }
