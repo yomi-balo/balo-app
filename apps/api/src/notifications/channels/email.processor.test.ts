@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Job } from 'bullmq';
 import type { DeliveryPayload } from './types.js';
 
@@ -39,7 +39,9 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 
 // Must use resetModules to clear the cached brevoClient between tests
-import { processEmailJob } from './email.adapter.js';
+import { processEmailJob, devEmailSendIsBlocked } from './email.adapter.js';
+
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
 function makeJob(data: DeliveryPayload): Job<DeliveryPayload> {
   return { data } as unknown as Job<DeliveryPayload>;
@@ -57,6 +59,12 @@ describe('processEmailJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.BREVO_API_KEY = 'test-key';
+    process.env.DEV_ALLOW_REAL_EMAIL = 'true'; // BAL-275: these nine cases exercise the SEND path
+  });
+
+  afterEach(() => {
+    delete process.env.DEV_ALLOW_REAL_EMAIL;
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV; // the guard tests below mutate it
   });
 
   it('renders template, sends via Brevo, and logs success', async () => {
@@ -223,5 +231,98 @@ describe('processEmailJob', () => {
     expect(mockGetR2ObjectBytes).not.toHaveBeenCalled();
     const sentArgs = mockSendTransacEmail.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(sentArgs).not.toHaveProperty('attachment');
+  });
+
+  // -- BAL-275 (D6) dev email send guard ---------------------------------------
+
+  it('blocks in non-production with no opt-in, and resolves without throwing', async () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.DEV_ALLOW_REAL_EMAIL;
+
+    await expect(processEmailJob(makeJob(basePayload))).resolves.toBeUndefined();
+
+    expect(mockSendTransacEmail).not.toHaveBeenCalled();
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'skipped',
+        error: 'Blocked outside production',
+      })
+    );
+  });
+
+  it('a non-"true" value still blocks', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.DEV_ALLOW_REAL_EMAIL = '1';
+
+    await processEmailJob(makeJob(basePayload));
+
+    expect(mockSendTransacEmail).not.toHaveBeenCalled();
+  });
+
+  it('sends when opted in', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.DEV_ALLOW_REAL_EMAIL = 'true';
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'alice@example.com',
+      firstName: 'Alice',
+    });
+
+    await processEmailJob(makeJob(basePayload));
+
+    expect(mockSendTransacEmail).toHaveBeenCalled();
+  });
+
+  it('⚠ is inert in production — sends with the flag unset', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.DEV_ALLOW_REAL_EMAIL;
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'alice@example.com',
+      firstName: 'Alice',
+    });
+
+    await processEmailJob(makeJob(basePayload));
+
+    expect(mockSendTransacEmail).toHaveBeenCalled();
+  });
+
+  it('⚠ is inert in production — a stray "false" does not block', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.DEV_ALLOW_REAL_EMAIL = 'false';
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      email: 'alice@example.com',
+      firstName: 'Alice',
+    });
+
+    await processEmailJob(makeJob(basePayload));
+
+    expect(mockSendTransacEmail).toHaveBeenCalled();
+  });
+});
+
+describe('devEmailSendIsBlocked', () => {
+  afterEach(() => {
+    delete process.env.DEV_ALLOW_REAL_EMAIL;
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  });
+
+  it('returns false in production regardless of DEV_ALLOW_REAL_EMAIL', () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.DEV_ALLOW_REAL_EMAIL;
+    expect(devEmailSendIsBlocked()).toBe(false);
+
+    process.env.DEV_ALLOW_REAL_EMAIL = 'false';
+    expect(devEmailSendIsBlocked()).toBe(false);
+  });
+
+  it('returns true outside production unless DEV_ALLOW_REAL_EMAIL is exactly "true"', () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.DEV_ALLOW_REAL_EMAIL;
+    expect(devEmailSendIsBlocked()).toBe(true);
+
+    process.env.DEV_ALLOW_REAL_EMAIL = 'true';
+    expect(devEmailSendIsBlocked()).toBe(false);
   });
 });

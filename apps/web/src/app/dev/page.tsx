@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { SeedPanel } from './_components/seed-panel';
+import { RequestFastForwardPanel } from './_components/request-fast-forward-panel';
 
 export const dynamic = 'force-dynamic';
 
@@ -115,6 +116,10 @@ export default function DevDashboardPage() {
 
         <div className="mb-10">
           <SeedPanel />
+        </div>
+
+        <div className="mb-10">
+          <RequestFastForwardPanel />
         </div>
 
         <div className="flex flex-col gap-8">

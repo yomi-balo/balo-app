@@ -74,9 +74,35 @@ async function resolveAttachments(
   return resolved;
 }
 
+/**
+ * BAL-275 (D6) — non-production refuses to send REAL mail unless deliberately opted in.
+ *
+ * ⚠ PRODUCTION-INERT BY CONSTRUCTION. The first clause returns `false` when
+ * `NODE_ENV === 'production'`, so production never reads `DEV_ALLOW_REAL_EMAIL` at all: a stray
+ * value of that variable in a production environment cannot change one byte of behaviour.
+ * Pinned by `email.processor.test.ts`'s two production-inertness cases.
+ *
+ * ⚠ FAILS CLOSED. Absent an exact `'true'`, non-production does NOT send. An unset, empty,
+ * misspelt or `'false'` value all block.
+ */
+export function devEmailSendIsBlocked(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  return process.env.DEV_ALLOW_REAL_EMAIL !== 'true';
+}
+
 /** Exported for testability — called by the BullMQ worker. */
 export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> {
   const payload = job.data;
+
+  if (devEmailSendIsBlocked()) {
+    // ⚠ NEVER log an address — we return BEFORE `toEmail` is resolved, so structurally we cannot.
+    log.info(
+      { template: payload.template, recipientId: payload.recipientId },
+      'Email send blocked outside production (set DEV_ALLOW_REAL_EMAIL=true to allow)'
+    );
+    await logNotification(payload, 'email', 'skipped', 'Blocked outside production');
+    return; // ⚠ RETURN, never throw — a throw would make BullMQ retry this forever.
+  }
 
   // 1. Resolve recipient email + display name.
   //    A literal `recipientEmail` (e.g. the ops/admin inbox) bypasses the user
