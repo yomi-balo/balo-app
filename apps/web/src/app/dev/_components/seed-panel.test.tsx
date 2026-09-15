@@ -2,27 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@/test/utils';
 import userEvent from '@testing-library/user-event';
 
-// Mock motion to a plain div — framer-motion misbehaves in jsdom.
-const MOTION_ONLY_PROPS = new Set(['whileHover', 'whileTap', 'transition', 'initial', 'animate']);
-vi.mock('motion/react', () => ({
-  useReducedMotion: () => false,
-  motion: new Proxy(
-    {},
-    {
-      get: () => {
-        return ({ children, ...props }: { children?: React.ReactNode }) => {
-          // Strip motion-only props that React would warn about on a plain div.
-          const rest = Object.fromEntries(
-            Object.entries(props as Record<string, unknown>).filter(
-              ([key]) => !MOTION_ONLY_PROPS.has(key)
-            )
-          );
-          return <div {...rest}>{children}</div>;
-        };
-      },
-    }
-  ),
-}));
+// ONE cached-per-tag motion stub (`@/test/motion-stub`). A hand-rolled bare `get` Proxy hands back
+// a NEW component TYPE on every property access, so every re-render remounts the card — harmless
+// here today (this panel has no Select and no autoFocus), but it is the defect that made the
+// sibling `request-fast-forward-panel.test.tsx` flake. Use the shared stub, not a local copy.
+vi.mock('motion/react', async () => {
+  const { createMotionStub } = await import('@/test/motion-stub');
+  return createMotionStub();
+});
 
 const { mockToast } = vi.hoisted(() => ({
   mockToast: { success: vi.fn(), error: vi.fn() },

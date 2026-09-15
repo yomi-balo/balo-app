@@ -238,6 +238,40 @@ export const PLATFORM_CAPABILITIES = {
    * it — exactly the set that could write before. A consistency migration, not an escalation.
    */
   MANAGE_ANY_ENGAGEMENT_ACTION_ITEM: 'manage_any_engagement_action_item',
+  /**
+   * BAL-275 — drive a project request forward along the real origination spine from the dev
+   * surface, by invoking each real handler with that step's derived actor. DEV-ONLY: the sole
+   * consumer is `apps/web/src/app/dev/_actions/fast-forward.ts`, which refuses before it resolves
+   * this token unless `NODE_ENV` is in that file's `FAST_FORWARD_ALLOWED_NODE_ENVS` ALLOW-list
+   * (`['development', 'test']` — an allow-list, never a `!== 'production'` deny-list, which fails
+   * OPEN on an unset or misspelt var), and whose page `notFound()`s outside those environments.
+   *
+   * "Sole consumer" is a claim about the WHOLE MONOREPO, and it is pinned as one by
+   * `apps/web/src/invariants/fast-forward-capability-dev-only.test.ts`, whose walk covers every
+   * non-test `.ts`/`.tsx` file under `apps/*` and `packages/*` — not merely `apps/web`, which is
+   * what it used to scan. The scope matters because this token lives in `@balo/shared` and is
+   * importable by every workspace, and `apps/api` is ALWAYS a production process: a Fastify route
+   * resolving this token would sit behind neither the `NODE_ENV` refusal nor the `notFound()`.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY. The nearest shipped token in kind is
+   * `IMPERSONATE_USER` ("operate the product AS another user"), and it is the wrong one for
+   * three reasons:
+   *   1. its own name says "start a Balo-local impersonated session" — this tool never starts a
+   *      session, it acts in-process, so gating on it would make the map lie about what it grants;
+   *   2. it is `super_admin`-ONLY and deliberately outside `PLATFORM_STAFF_BUNDLE`, which would
+   *      put a dev affordance out of reach of the support-role engineers who need it;
+   *   3. it would couple a dev tool's reachability to a production security token — a later
+   *      narrowing of impersonation would silently break the dev surface, and a later widening of
+   *      the dev surface would be argued as a widening of impersonation.
+   * It is also NOT `VIEW_PLATFORM_ADMIN` (that token's own docblock says it gates REACHABILITY and
+   * "IS NOT A PER-SURFACE GRANT"), NOT `CLOSE_ANY_REQUEST` (ending a request ≠ driving it through
+   * six other states as three other users), and NOT `ASSIGN_ANY_REQUEST_OWNER`.
+   *
+   * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`. It confers nothing in
+   * production — no reachable call site resolves it there, which is exactly the workspace-wide
+   * single-consumer pin above, not an assertion made on trust.
+   */
+  FAST_FORWARD_REQUEST: 'fast_forward_request',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -284,6 +318,7 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS,
   PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT,
   PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM,
+  PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST,
 ];
 
 /**

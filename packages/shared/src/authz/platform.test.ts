@@ -188,6 +188,17 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
       PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM
     );
   });
+
+  it('maps FAST_FORWARD_REQUEST to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST).toBe('fast_forward_request');
+  });
+
+  it('bundle includes FAST_FORWARD_REQUEST for the staff roles', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toContain(PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST);
+    expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toContain(
+      PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST
+    );
+  });
 });
 
 /**
