@@ -3,7 +3,7 @@ import 'server-only';
 import { getIronSession } from 'iron-session';
 import { cookies } from 'next/headers';
 import type { ActiveWorkspacePointer } from '@balo/shared/workspaces';
-import type { PlatformCapability } from '@balo/shared/authz';
+import type { SealedPlatformCapabilityIndexes } from '@balo/shared/authz';
 import { sessionConfig } from './config';
 import { impersonatedSessionConfig } from './session-config';
 import { isImpersonatedSession } from './impersonation';
@@ -24,8 +24,8 @@ export interface SessionUser {
   // ⚠ ABSENT MEANS "NO OVERRIDE — INHERIT THE ROLE BUNDLE" (D4). Encoded as the field being
   // missing from the sealed payload, never as an explicit `null`: NULL is the state of every
   // row until BAL-561 ships a writer, and an absent field costs ZERO bytes. Sealing the
-  // RESOLVED set instead would cost 426-533 bytes on EVERY staff session even with no override
-  // (measured: 3243-3350 vs a 2817 baseline).
+  // RESOLVED set instead would cost hundreds of bytes on EVERY staff session even with no
+  // override.
   //
   // ⚠ OPTIONAL FOR A SECOND REASON: seven-day cookies sealed before BAL-560 carry it not at
   // all, exactly like `activeWorkspace` — a required field would be a runtime lie
@@ -33,29 +33,44 @@ export interface SessionUser {
   // BAL-507 `ActiveWorkspacePointer` lesson). Absent is a legal, self-healing state: it reads
   // as "inherit", which is what every row means today.
   //
+  // ⚠⚠ BAL-558 — CARRIES SEAL-ORDER INDEXES (`number[]`), NOT TOKEN STRINGS. `users
+  // .platform_capabilities` (the DB column) keeps token STRINGS; this field carries INDEXES
+  // into `PLATFORM_CAPABILITY_SEAL_ORDER` (`packages/shared/src/authz/platform.ts`), produced
+  // by `encodeSealedPlatformCapabilities` and consumed by `decodeSealedPlatformCapabilities`.
+  // Token strings cost ~490 bytes more than indexes on the tightest cookie
+  // (`balo_admin_session`, full staff axis) — enough to push a 19-token axis past the
+  // 3500-byte safe budget. An unknown index (out of range, negative, fractional, NaN, or a
+  // legacy token string left over from before this encoding) is DROPPED on decode, never
+  // granted — fail closed.
+  //
   // ⚠ BOUNDED, unlike the workspace list that was removed in BAL-494 fix round 2 — but bounded
-  // BY THREE EXPLICIT MECHANISMS, not by the axis being small. The axis has 17 distinct tokens,
-  // yet jsonb will happily store the same token 40 times, and 26 copies of the longest token
-  // seal to 4097 bytes: past the 4096-byte browser cliff, where the `Set-Cookie` is SILENTLY
-  // DISCARDED and the user is locked out with no server-side error. That was a real, reachable
-  // lockout until fix round 1 (security F1). What actually bounds it now:
-  //   1. `sealedPlatformCapabilities` (`./session-platform-capabilities.ts`) DE-DUPLICATES and
-  //      filters, so the sealed value is always a subset of the 17 distinct tokens. This is the
-  //      binding one — it bounds the value that reaches the cookie regardless of the column.
+  // BY THREE EXPLICIT MECHANISMS, not by the axis being small. The axis has only a small fixed
+  // set of distinct tokens, yet jsonb will happily store the same token 40 times, and a
+  // duplicate-heavy raw-string array can still overrun the 4096-byte browser cliff, where the
+  // `Set-Cookie` is SILENTLY DISCARDED and the user is locked out with no server-side error.
+  // That was a real, reachable lockout until fix round 1 (security F1). What actually bounds it
+  // now:
+  //   1. `sealedPlatformCapabilities` (`./session-platform-capabilities.ts`) DE-DUPLICATES,
+  //      filters, and encodes to indexes, so the sealed value is always a subset of the axis's
+  //      distinct tokens. This is the binding one — it bounds the value that reaches the
+  //      cookie regardless of the column.
   //   2. The `users_platform_capabilities_staff_array` CHECK bounds the COLUMN at 64 entries,
   //      so a pathological row cannot be stored at all. ⚠ 64 is DELIBERATE SLACK, not the axis
-  //      size (fix round 3, R8): the bound was 17 — the axis count — which made every new
+  //      size (fix round 3, R8): a bound pinned to the axis count would make every new
   //      platform token a silent migration obligation. Mechanism 1 is what actually bounds the
   //      cookie; this one is belt-and-braces against a pathological row.
   //   3. The same CHECK confines a non-NULL value to staff rows (D1).
-  // MEASURED worst case — a staff session with all 17 DISTINCT tokens — is 3393 bytes against
-  // the 3500-byte safe budget and the 4096-byte browser cliff. See `session-cookie-size.test.ts`,
-  // which pins the bound AND seals a duplicate-heavy array raw to show the cliff it avoids.
+  // MEASURED worst case — a staff session with the full axis sealed as indexes — is 2902 bytes
+  // (`balo_session`), well under the 3500-byte safe budget and the 4096-byte browser cliff. The
+  // retired string encoding was the one that came close: 3457 on the same cookie, and 3527 on
+  // `balo_admin_session` — past the safe budget on a 19-token axis, which is the reason this
+  // encoding exists. See `session-cookie-size.test.ts`, which re-measures and pins the bound AND
+  // seals a duplicate-heavy array raw to show the cliff it avoids.
   //
-  // ⚠ NEVER READ THIS FIELD DIRECTLY. `hasPlatformCapability` (`@/lib/authz/platform`) is the
-  // one reader; `session-platform-capabilities.ts` is the one WRITER. Pinned by
-  // `invariants/platform-capability-single-resolution-point.test.ts`.
-  platformCapabilities?: PlatformCapability[];
+  // ⚠ NEVER READ THIS FIELD DIRECTLY. `hasPlatformCapability` (`@/lib/authz/platform`) decodes
+  // it via `decodeSealedPlatformCapabilities` before reading; `session-platform-capabilities.ts`
+  // is the one WRITER. Pinned by `invariants/platform-capability-single-resolution-point.test.ts`.
+  platformCapabilities?: SealedPlatformCapabilityIndexes;
 
   // BAL-350: coarse auth method for onboarding analytics. Optional — pre-existing
   // sessions and unknown providers are undefined.

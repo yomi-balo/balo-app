@@ -53,7 +53,8 @@ async function resolveOwnerDisplay(
 /**
  * Assign (or clear, or reassign) a request's Balo owner (BAL-541). Gated on the platform
  * capability `ASSIGN_ANY_REQUEST_OWNER` (D1/D7) — the shape is `close-request-as-admin.ts`'s
- * (`requireOnboardedUser` in try/catch, then `hasPlatformCapability`), NOT `requireAdmin()`.
+ * (`requireOnboardedUser` in try/catch, then `hasPlatformCapability`), NOT the since-deleted
+ * `requireAdmin()` (BAL-558).
  *
  * Clearing (`ownerUserId: null`) is the SAME act as assigning — one column, one audit action,
  * three affordances (D7's docblock). The repository enforces staff eligibility in-transaction;

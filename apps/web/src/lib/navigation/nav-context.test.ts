@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CAPABILITIES, PLATFORM_CAPABILITIES, rolesWithCapability } from '@balo/shared/authz';
+import {
+  CAPABILITIES,
+  PLATFORM_CAPABILITIES,
+  encodeSealedPlatformCapabilities,
+  rolesWithCapability,
+} from '@balo/shared/authz';
 import type { SessionUser } from '@/lib/auth/session';
 
 vi.mock('@balo/db', () => ({
@@ -102,7 +107,12 @@ describe('buildNavContext (BAL-347 → BAL-495 equivalence)', () => {
    */
   it('BAL-560: an override that OMITS view_platform_admin withholds the Balo-admin nav group', async () => {
     const context = await buildNavContext(
-      makeUser({ platformRole: 'super_admin', platformCapabilities: ['manage_platform_fees'] })
+      makeUser({
+        platformRole: 'super_admin',
+        platformCapabilities: encodeSealedPlatformCapabilities([
+          PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
+        ]),
+      })
     );
     expect(context.capabilities).toEqual([]);
   });
@@ -116,7 +126,12 @@ describe('buildNavContext (BAL-347 → BAL-495 equivalence)', () => {
 
   it('BAL-560: an override that NAMES view_platform_admin still grants the nav group', async () => {
     const context = await buildNavContext(
-      makeUser({ platformRole: 'admin', platformCapabilities: ['view_platform_admin'] })
+      makeUser({
+        platformRole: 'admin',
+        platformCapabilities: encodeSealedPlatformCapabilities([
+          PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
+        ]),
+      })
     );
     expect(context.capabilities).toEqual([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
   });

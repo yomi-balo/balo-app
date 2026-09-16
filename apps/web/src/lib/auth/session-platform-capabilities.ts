@@ -1,9 +1,16 @@
-import { isPlatformCapability, type PlatformCapability } from '@balo/shared/authz';
+import {
+  decodeSealedPlatformCapabilities,
+  encodeSealedPlatformCapabilities,
+  isPlatformCapability,
+  type PlatformCapability,
+  type SealedPlatformCapabilityIndexes,
+} from '@balo/shared/authz';
 import type { SessionUser } from './session';
 
 /**
- * BAL-560 — the THREE operations on `SessionUser.platformCapabilities`, and the only code in
- * `apps/web` that names the field outside the one read seam.
+ * BAL-560 — the operations on `SessionUser.platformCapabilities` (seal, patch, and the two
+ * drift keyers below), and the only code in `apps/web` that names the field outside the one
+ * read seam.
  *
  * ⚠ WHY A MODULE RATHER THAN A LINE AT EACH SEAL POINT. Six `SessionUser` constructions plus a
  * drift comparison plus a sync patch have to agree on ONE encoding (absent ⇔ no override). A
@@ -34,23 +41,30 @@ interface CarriesPlatformCapabilities {
  * it on the read path regardless — so sealing it spends cookie bytes on a value that cannot
  * grant anything.
  *
- * DE-DUPLICATE: this is the one that closes a real LOCKOUT. The axis holds 17 distinct tokens,
- * but nothing stopped a row from carrying `['view_platform_admin', 'view_platform_admin', …]`
- * any number of times; a measured 26-entry override seals to 4097 bytes — ONE byte past the
- * 4096-byte browser cliff (30 entries is 4289) — at which point the browser SILENTLY DISCARDS
- * the `Set-Cookie` and the user is locked out with no server-side error. The measurements are
- * computed in `session-cookie-size.test.ts:244-245`; everywhere else quotes them. The DB CHECK
+ * DE-DUPLICATE: this is the one that closes a real LOCKOUT. The axis holds a small fixed set of
+ * distinct tokens, but nothing stopped a row from carrying `['view_platform_admin', 'view_platform_admin', …]`
+ * any number of times; a measured 26-entry RAW-STRING override seals to 4097 bytes — one byte
+ * past the 4096-byte browser cliff — at which point the browser SILENTLY DISCARDS the
+ * `Set-Cookie` and the user is locked out with no server-side error. The measurement is in
+ * `session-cookie-size.test.ts`, the test titled "PROOF OF THE REASON (F1): a DUPLICATE-heavy
+ * override blows the cliff RAW, and is bounded by the encoder". The DB CHECK
  * `users_platform_capabilities_staff_array` bounds the column at 64 entries — deliberate slack
  * rather than the axis size (fix round 3, R8) — and THIS is the mechanism that actually bounds
  * the value reaching the cookie, because it collapses to a subset of the distinct tokens
  * whatever the column holds.
  *
- * ⚠⚠ **IT IS SHARED WITH `platformOverrideKeyOf` ON PURPOSE, AND FILTERING WITHOUT THAT WOULD BE
- * A REGRESSION, NOT A FIX.** `checkSessionDrift` compares the key of the SEALED session against
- * the key of the RAW DB row. If the seal path normalised and the key path did not, a row holding
- * a duplicate or an unknown token would produce a key that the session it was sealed from can
- * never match — `sync-needed` on every render, forever: an infinite redirect storm traded for
- * the lockout. Routing both through this one function is what makes the two sides converge.
+ * ⚠⚠ **THIS NORMALISER FEEDS BOTH THE SEAL PATH AND (VIA `storedPlatformOverrideKeyOf`) THE
+ * STORED-ROW DRIFT KEY, ON PURPOSE, AND FILTERING WITHOUT THAT WOULD BE A REGRESSION, NOT A
+ * FIX.** `checkSessionDrift` compares `sealedPlatformOverrideKeyOf(session.user)` — which keys
+ * through `decodeSealedPlatformCapabilities`, NOT through this function — against
+ * `storedPlatformOverrideKeyOf(dbUser)`, which keys through THIS function. The two sides
+ * converge not because they share a normaliser (they no longer do — BAL-558 split the keyer in
+ * two), but because SEAL→DECODE IS AN EXACT ROUND TRIP: encoding a normalised set of tokens and
+ * decoding it back yields the same set, pinned by the round-trip and convergence tests in
+ * `session-platform-capabilities.test.ts` and `platform-capability-seal.test.ts`. A row holding
+ * a duplicate or an unknown token is normalised HERE, on the way into the seal; the sealed
+ * cookie therefore never carries what the raw row would have keyed to, and the two keyers agree
+ * on the first render.
  */
 function normalizedOverrideOf(source: CarriesPlatformCapabilities): PlatformCapability[] | null {
   const stored = source.platformCapabilities;
@@ -62,15 +76,20 @@ function normalizedOverrideOf(source: CarriesPlatformCapabilities): PlatformCapa
  * The `SessionUser` fragment to SPREAD into a freshly-built session user. `{}` — the field
  * ABSENT — whenever the source has no usable array (D4). Never `{ platformCapabilities: null }`.
  *
- * The array it seals is NORMALISED (see `normalizedOverrideOf`), never the raw stored value.
- * No cast: the filter is a type guard, so the result is `PlatformCapability[]` by narrowing
- * rather than by assertion.
+ * ⚠ BAL-558 — SEALS SEAL-ORDER INDEXES, NOT TOKEN STRINGS. The array it seals is NORMALISED (see
+ * `normalizedOverrideOf`) and then run through `encodeSealedPlatformCapabilities`, never the raw
+ * stored value and never a token string: token strings cost ~490 bytes on the tightest cookie
+ * (`balo_admin_session`) and pushed a 19-token override past the 3500-byte safe budget. See
+ * `packages/shared/src/authz/platform.ts`'s `PLATFORM_CAPABILITY_SEAL_ORDER` docblock for the
+ * wire-format contract this encoding depends on.
  */
 export function sealedPlatformCapabilities(source: CarriesPlatformCapabilities): {
-  platformCapabilities?: PlatformCapability[];
+  platformCapabilities?: SealedPlatformCapabilityIndexes;
 } {
   const normalized = normalizedOverrideOf(source);
-  return normalized === null ? {} : { platformCapabilities: normalized };
+  return normalized === null
+    ? {}
+    : { platformCapabilities: encodeSealedPlatformCapabilities(normalized) };
 }
 
 /**
@@ -94,11 +113,8 @@ export function applyPlatformCapabilitiesToSessionUser(
 }
 
 /**
- * The comparison KEY for drift. Mirrors `activeWorkspaceKeyOf`
- * (`lib/workspaces/session-workspace.ts`) — the repo's own pattern for "the single reader of the
- * session's X shape": `checkSessionDrift` then compares two primitives and nothing
- * hand-destructures an array (it also yields a plain `string | null`, which narrows without a
- * non-null assertion — memory `reference_sonar_nonnull_false_positive`).
+ * The shared comparison-KEY primitive. Given a set of TOKENS (or `null` for "no override"),
+ * produces the canonical drift key.
  *
  * `null` for absent / SQL NULL / any non-array, so "the cookie has no field" and "the column is
  * NULL" are ONE state and a pre-BAL-560 cookie does not report permanent drift.
@@ -106,32 +122,54 @@ export function applyPlatformCapabilitiesToSessionUser(
  * SORTED: a pure REORDER is not drift. An order-sensitive comparison would still converge (the
  * sync route patches session←DB verbatim, so one round makes them identical), but it would
  * spend a redirect on a non-change.
- *
- * ⚠⚠ **NORMALISED THROUGH `normalizedOverrideOf`, THE SAME FUNCTION THE SEAL PATH USES — this is
- * what makes filtering at seal time SAFE (fix round 1, review finding 4).** One side is a SEALED
- * session (already normalised) and the other is a RAW DB row (not). Comparing a normalised
- * session against a raw row would report drift forever on any row carrying a duplicate or an
- * unknown token: sync → patch → still different → sync, an infinite redirect storm. Both sides
- * go through one normaliser, so the keys converge on the first render. Do not "simplify" either
- * side to read the raw value.
- *
- * ⚠ NAMED `platformOverrideKeyOf`, NOT `platformCapabilitiesKeyOf`, DELIBERATELY. The
- * invariant's field pin (`invariants/platform-capability-single-resolution-point.test.ts`,
- * PIN C) collects every non-test file whose CODE contains the lowercase substring
- * `platformCapabilities`. A keyer spelled with that substring would put `session-sync.ts` into
- * the pinned reader set for a purely cosmetic reason and blunt the pin's meaning ("who touches
- * the field"). The two sibling exports are safe for the same reason —
- * `sealedPlatformCapabilities` / `applyPlatformCapabilitiesToSessionUser` carry a CAPITAL `P`
- * and do not contain the substring. Do not rename any of the three without re-deriving PIN C.
  */
-export function platformOverrideKeyOf(source: CarriesPlatformCapabilities): string | null {
-  const normalized = normalizedOverrideOf(source);
-  if (normalized === null) return null;
+function overrideKeyOf(tokens: readonly PlatformCapability[] | null): string | null {
+  if (tokens === null) return null;
   // ⚠ THE COMPARATOR IS NOT OPTIONAL. A bare `.sort()` coerces every element to a string and
   // orders by UTF-16 code unit — SonarCloud rates that a RELIABILITY bug (S2871, "Provide a
   // compare function to avoid sorting elements alphabetically"), and ONE of them is enough to
   // drop the new-code reliability rating to D and fail the quality gate. These are lowercase
   // snake_case tokens, so `localeCompare` is stable and locale-independent over the alphabet.
   // Same shape as `sortIds` in `packages/db/src/repositories/_shared/consultation-projection.ts`.
-  return JSON.stringify([...normalized].sort((a, b) => a.localeCompare(b)));
+  return JSON.stringify([...tokens].sort((a, b) => a.localeCompare(b)));
+}
+
+/**
+ * BAL-558 — TWO KEYERS, NOT ONE. Before this ticket a single `platformOverrideKeyOf` keyed both
+ * the sealed session (strings) and the raw DB row (strings) through one normaliser. Now the
+ * sealed session carries INDEXES and the DB row still carries STRINGS, so each side needs its
+ * own normaliser feeding the same `overrideKeyOf` primitive:
+ *
+ *   - `storedPlatformOverrideKeyOf(row)` = `overrideKeyOf(normalizedOverrideOf(row))` — the DB
+ *     row side (strings).
+ *   - `sealedPlatformOverrideKeyOf(user)` = `overrideKeyOf(decodeSealedPlatformCapabilities(...))`
+ *     — the sealed session side (indexes, decoded back to tokens).
+ *
+ * ⚠⚠ WHY TWO KEYERS RATHER THAN ONE TOLERANT NORMALISER. A single keyer accepting both numbers
+ * and strings creates two failure modes: (1) it would decode a hand-edited `[5]` DB row as
+ * `view_platform_admin` on the key side while the seal side (strings-only) seals `[]` — the keys
+ * never converge, so every render redirects forever (the BAL-560 finding-4 storm, inverted); (2)
+ * it would key a legacy string-encoded cookie EQUAL to its row, so drift would never fire while
+ * the reader denies it — a staff member permanently stuck with no powers. Splitting the keyers
+ * by SOURCE makes each side use exactly the normaliser its reader uses, and the type signatures
+ * make a crossed argument a compile-time error: a DB row's `string[] | null` is not assignable
+ * to a sealed session's `number[] | undefined`.
+ *
+ * ⚠ NAMED WITHOUT THE LOWERCASE SUBSTRING `platformCapabilities`, DELIBERATELY, exactly like the
+ * retired `platformOverrideKeyOf`. The invariant's field pin
+ * (`invariants/platform-capability-single-resolution-point.test.ts`, PIN C) collects every
+ * non-test file whose CODE contains that substring. A keyer spelled with it would put
+ * `session-sync.ts` into the pinned reader set for a purely cosmetic reason and blunt the pin's
+ * meaning ("who touches the field"). Do not rename either keyer without re-deriving PIN C.
+ */
+export function storedPlatformOverrideKeyOf(source: CarriesPlatformCapabilities): string | null {
+  return overrideKeyOf(normalizedOverrideOf(source));
+}
+
+/** The sealed-session side of the drift comparison — decodes seal-order indexes back to tokens. */
+export function sealedPlatformOverrideKeyOf(
+  user: Pick<SessionUser, 'platformCapabilities'>
+): string | null {
+  const decoded = decodeSealedPlatformCapabilities(user.platformCapabilities);
+  return overrideKeyOf(decoded);
 }

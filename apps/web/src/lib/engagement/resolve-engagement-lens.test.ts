@@ -161,8 +161,9 @@ describe('resolveEngagementLens', () => {
   /**
    * BAL-404 fix round F7 — `ADMIN_ROLES` in `resolve-engagement-lens.ts` is a THIRD, independent
    * spelling of the platform-staff set (`packages/shared/src/authz/platform.ts`'s
-   * `PLATFORM_STAFF_ROLES` is the ADR-1035 canonical one; `require-admin.ts`'s `isPlatformAdmin`
-   * is the second). `ADMIN_ROLES` is not exported, and this file may not edit the resolver (R5
+   * `PLATFORM_STAFF_ROLES` is the ADR-1035 canonical one; `lib/auth/is-admin.ts`'s
+   * `isPlatformAdmin` (over `@balo/shared/parties`'s `PLATFORM_ADMIN_ROLES`) is the second).
+   * `ADMIN_ROLES` is not exported, and this file may not edit the resolver (R5
    * — it is a hard guardrail), so it cannot be imported and compared directly. This pins the two
    * sets BEHAVIORALLY instead, from a test file only: every `PLATFORM_STAFF_ROLES` role must
    * resolve the admin observer lens (below), and a role that ISN'T in that set must not (the

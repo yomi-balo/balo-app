@@ -35,6 +35,11 @@ import { codeLinesOf, namedImportsFrom, resolveRouteDir } from './_source-scan';
  * the new predicate with the override omitted behaves EXACTLY like the old one, which is
  * precisely the cosmetic-conversion failure the retarget exists to prevent. Without it this
  * invariant would stay green against a gate that is permanently blind to every override.
+ *
+ * ⚠⚠ BAL-558 — the sealed field carries seal-order INDEXES; the gate must DECODE, or every
+ * override silently resolves to `[]` (fail-closed, but a functional break). The gate now also
+ * imports and calls `decodeSealedPlatformCapabilities` before passing the result to the
+ * predicate.
  */
 
 const MIDDLEWARE_PATH = resolveRouteDir(['src/middleware.ts', 'apps/web/src/middleware.ts']);
@@ -74,6 +79,9 @@ describe('the /admin middleware gate is capability-resolved, never role-literal 
     // but passes no override is byte-identical in behaviour to the old one, and would leave the
     // Edge gate permanently blind to an override. Pin the ARGUMENT too.
     expect(source).toContain('user.platformCapabilities');
+    // BAL-558 — and it must DECODE that argument (seal-order indexes → tokens) before handing
+    // it to the predicate, or the gate silently denies every override.
+    expect(source).toContain('decodeSealedPlatformCapabilities(user.platformCapabilities)');
   });
 
   it('no longer resolves the ROLE-ONLY predicate — the override cannot be bypassed here', () => {
@@ -82,7 +90,11 @@ describe('the /admin middleware gate is capability-resolved, never role-literal 
 
   it('imports both the predicate and the token map by name from @balo/shared/authz', () => {
     expect(namedImportsFrom(source, '@balo/shared/authz')).toEqual(
-      expect.arrayContaining(['platformActorHasCapability', 'PLATFORM_CAPABILITIES'])
+      expect.arrayContaining([
+        'platformActorHasCapability',
+        'PLATFORM_CAPABILITIES',
+        'decodeSealedPlatformCapabilities',
+      ])
     );
   });
 

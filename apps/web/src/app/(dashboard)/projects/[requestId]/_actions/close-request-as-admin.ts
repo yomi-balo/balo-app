@@ -48,7 +48,8 @@ export type CloseRequestAsAdminActionResult =
 /**
  * Balo closes a request on the client's behalf (BAL-540). Gated on the platform capability
  * `CLOSE_ANY_REQUEST` (D7) — the shape is `override-balo-fee.ts`'s (`hasPlatformCapability` +
- * `PLATFORM_CAPABILITIES`), NOT `request-proposal-as-admin.ts`'s `requireAdmin()`.
+ * `PLATFORM_CAPABILITIES`), NOT a platform-role set read (the since-deleted `requireAdmin()`,
+ * which `request-proposal-as-admin.ts` used until BAL-558).
  *
  * The fan-out sets `recipientId = request.createdByUserId` — the client arm of the
  * `project.request_closed` rule is conditioned on it, so a Balo-initiated close is the ONLY

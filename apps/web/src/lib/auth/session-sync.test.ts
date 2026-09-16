@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { encodeSealedPlatformCapabilities } from '@balo/shared/authz';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -200,7 +201,9 @@ describe('checkSessionDrift', () => {
   });
 
   it('BAL-560: returns sync-needed when the override was REVOKED (session has one, DB is NULL)', async () => {
-    const session = createMockSession({ platformCapabilities: ['view_platform_admin'] });
+    const session = createMockSession({
+      platformCapabilities: encodeSealedPlatformCapabilities(['view_platform_admin']),
+    });
     mockGetSession.mockResolvedValue(session);
     mockFindForSessionSync.mockResolvedValue(createDbUser({ platformCapabilities: null }));
 
@@ -211,7 +214,12 @@ describe('checkSessionDrift', () => {
 
   it('BAL-560: returns ok when both carry the SAME override in a different ORDER (a reorder is not drift)', async () => {
     const session = createMockSession({
-      platformCapabilities: ['view_platform_admin', 'manage_platform_fees'],
+      // BAL-558 — the session side is sealed as INDEXES; encoding from the array order below
+      // pins the "order is not drift" claim against the reordered DB row (strings) that follows.
+      platformCapabilities: encodeSealedPlatformCapabilities([
+        'view_platform_admin',
+        'manage_platform_fees',
+      ]),
     });
     mockGetSession.mockResolvedValue(session);
     mockFindForSessionSync.mockResolvedValue(
@@ -221,6 +229,20 @@ describe('checkSessionDrift', () => {
     const result = await checkSessionDrift();
 
     expect(result).toEqual({ action: 'ok' });
+  });
+
+  it('BAL-558: a LEGACY string-encoded session against the same DB tokens self-repairs (sync-needed)', async () => {
+    const session = createMockSession({
+      platformCapabilities: ['view_platform_admin'] as never,
+    });
+    mockGetSession.mockResolvedValue(session);
+    mockFindForSessionSync.mockResolvedValue(
+      createDbUser({ platformCapabilities: ['view_platform_admin'] })
+    );
+
+    const result = await checkSessionDrift();
+
+    expect(result).toEqual({ action: 'sync-needed' });
   });
 
   it('BAL-560: returns ok when BOTH are absent — a pre-BAL-560 cookie against a NULL column (the rollout case)', async () => {

@@ -5,7 +5,10 @@ import { usersRepository } from '@balo/db';
 import { getSession } from './session';
 import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { activeWorkspaceKeyOf } from '@/lib/workspaces/session-workspace';
-import { platformOverrideKeyOf } from './session-platform-capabilities';
+import {
+  sealedPlatformOverrideKeyOf,
+  storedPlatformOverrideKeyOf,
+} from './session-platform-capabilities';
 
 type CheckResult = { action: 'ok' } | { action: 'sync-needed' };
 
@@ -41,7 +44,11 @@ export async function checkSessionDrift(): Promise<CheckResult> {
     // BAL-560 — the override must drift like the role does. Both sides reduce to the same
     // `string | null` key (absent ⇔ SQL NULL ⇔ any non-array), so a pre-BAL-560 cookie against
     // a NULL column compares null === null and reports NO drift — no redirect storm on rollout.
-    platformOverrideKeyOf(session.user) !== platformOverrideKeyOf(dbUser) ||
+    // BAL-558 — TWO keyers now: the sealed session carries seal-order INDEXES, the DB row
+    // carries token STRINGS. `sealedPlatformOverrideKeyOf` decodes the session side;
+    // `storedPlatformOverrideKeyOf` normalises the row side. See their shared docblock in
+    // `session-platform-capabilities.ts` for why one tolerant keyer would be a regression.
+    sealedPlatformOverrideKeyOf(session.user) !== storedPlatformOverrideKeyOf(dbUser) ||
     session.user.onboardingCompleted !== dbUser.onboardingCompleted ||
     session.user.expertProfileId !== (dbUser.expertProfileId ?? undefined)
   ) {

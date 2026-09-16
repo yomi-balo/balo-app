@@ -293,10 +293,12 @@ export const PLATFORM_CAPABILITIES = {
    * BAL-561 ships the Staff access surface that resolves this token and writes the column.
    * Nothing resolves it today, which is pinned as a fact rather than trusted — PIN E of
    * `apps/web/src/invariants/platform-capability-single-resolution-point.test.ts` asserts that
-   * exactly ONE non-test file in the whole monorepo names the CONSTANT (its own definition), and
-   * exactly TWO name the wire value `'manage_staff_capabilities'` — this file and the CHECK's SQL
-   * literal in `packages/db/src/schema/users.ts`, which is a STORAGE rule rather than a
-   * resolution (see the next paragraph, and that pin's own docblock).
+   * exactly ONE non-test file in the whole monorepo names the CONSTANT (its own definition, plus
+   * its `PLATFORM_CAPABILITY_SEAL_ORDER` slot below — a wire position, not a resolution, so it
+   * does not add a second namer), and exactly TWO name the wire value
+   * `'manage_staff_capabilities'` — this file and the CHECK's SQL literal in
+   * `packages/db/src/schema/users.ts`, which is a STORAGE rule rather than a resolution (see the
+   * next paragraph, and that pin's own docblock).
    *
    * ⚠⚠ **IT MAY APPEAR ONLY ON A `super_admin` ROW** (fix round 1, security F3; NARROWED in fix
    * round 3, R2). An override REPLACES the role bundle and is deliberately unclamped — it is
@@ -325,6 +327,61 @@ export const PLATFORM_CAPABILITIES = {
    * The hazard is narrow: the token on a NON-super_admin row.
    */
   MANAGE_STAFF_CAPABILITIES: 'manage_staff_capabilities',
+  /**
+   * BAL-558 / ADR-1035 — operate the SOURCING pipeline on ANY project request, on any tenant:
+   * search the marketplace for candidates, invite experts, remove an invited (pre-EOI) expert,
+   * move a request to an exploratory call, and request a formal proposal from an expert on the
+   * client's behalf — Balo's triage acts in `projects/[requestId]/_actions/`.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST / ASSIGN_ANY_REQUEST_OWNER argument verbatim. In
+   * particular it is NOT `CLOSE_ANY_REQUEST` (ending a request is not running it), NOT
+   * `ASSIGN_ANY_REQUEST_OWNER` (naming Balo's owner is not staffing the request with experts), and
+   * NOT `VIEW_PLATFORM_ADMIN` (that token gates REACHABILITY and "IS NOT A PER-SURFACE GRANT").
+   * Authorizing "invite somebody onto a client's request" with any of them would make this map
+   * lie about what it grants — the one thing a capability map must never do.
+   *
+   * ⚠ IT GATES ONE READ AS WELL AS FOUR MUTATIONS — the `VIEW_ANY_REQUEST_FILE` precedent. The
+   * invite picker's expert search (`search-experts-for-invite.ts`) is a read whose audience an
+   * override must be able to narrow along with the invite it feeds. That read is SESSION-gated
+   * only; the four mutations are also LIVE-gated. See the allowlist in
+   * `apps/web/src/invariants/platform-capability-live-gate.test.ts`.
+   *
+   * The PLATFORM axis is right because the Balo arm holds no membership on the client company by
+   * construction; the client's own proposal request (`request-proposal.ts`) is a separate arm and
+   * is untouched. It REPLACES a `requireAdmin()` role-set read (`isPlatformAdmin` over
+   * `PLATFORM_ADMIN_ROLES`), and BAL-558 deleted that helper.
+   *
+   * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`, so `admin` (support) holds it
+   * — exactly `{admin, super_admin}`, the set `requireAdmin()` admitted. A consistency migration,
+   * NOT an escalation or a narrowing; moving it out of the bundle would silently remove a right
+   * `admin` has today. Pinned by the actor-set test in `platform.test.ts`.
+   */
+  MANAGE_ANY_REQUEST_SOURCING: 'manage_any_request_sourcing',
+  /**
+   * BAL-558 / ADR-1035 — operate the KICKOFF GATE on ANY accepted project request, on any tenant:
+   * approve a kickoff (`accepted → kickoff_approved`, which MATERIALISES the paid delivery
+   * engagement from the accepted proposal's snapshotted terms) and remind the client to complete
+   * the billing-details prerequisite that approval waits on.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the same argument as its siblings. In
+   * particular it is NOT `MANAGE_ANY_REQUEST_SOURCING`: inviting a candidate and starting a paid
+   * engagement have materially different consequences, and a per-user override must be able to
+   * let someone run triage without letting them start delivery. It is also NOT
+   * `CANCEL_ANY_ENGAGEMENT` (ending delivery is not starting it) and NOT `VIEW_PLATFORM_ADMIN`.
+   *
+   * ⚠ THE BILLING REMINDER RIDES WITH THE APPROVAL, NOT WITH SOURCING. It exists only to unblock
+   * the `client_billing` gate the approval depends on — a kickoff-gate act.
+   *
+   * The PLATFORM axis is right because the Balo arm holds no membership on either party; the
+   * parties' own kickoff steps (`submit-billing-details.ts`, `complete-kickoff-task.ts`) are
+   * separate arms and untouched. It REPLACES a `requireAdmin()` role-set read (BAL-558).
+   *
+   * Granted to BOTH staff roles: `PLATFORM_STAFF_BUNDLE`, exactly `{admin, super_admin}` — the set
+   * `requireAdmin()` admitted. A consistency migration, NOT an escalation or a narrowing. Pinned by
+   * the actor-set test in `platform.test.ts`.
+   */
+  MANAGE_ANY_KICKOFF_GATE: 'manage_any_kickoff_gate',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -372,6 +429,8 @@ const PLATFORM_STAFF_BUNDLE: readonly PlatformCapability[] = [
   PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT,
   PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM,
   PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST,
+  PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING,
+  PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE,
 ];
 
 /**
@@ -523,4 +582,86 @@ export function platformActorHasCapability(
   const override = normalizePlatformOverride(role, storedOverride);
   if (override === null) return platformRoleHasCapability(role, capability);
   return override.includes(capability);
+}
+
+/**
+ * BAL-558 — THE SEAL ORDER. `SessionUser.platformCapabilities` carries INDEXES into this array,
+ * never token strings (the strings cost ~490 bytes on the tightest cookie, `balo_admin_session`,
+ * and a 19th token pushed it past the 3500-byte safe budget).
+ *
+ * ⚠⚠ APPEND-ONLY. NEVER REORDER, NEVER INSERT, NEVER DELETE. Index `i` in a cookie sealed up to
+ * seven days ago means `PLATFORM_CAPABILITY_SEAL_ORDER[i]` NOW — moving an entry silently re-maps
+ * every sealed override to different powers. A new token is APPENDED here in the same commit
+ * that adds it to `PLATFORM_CAPABILITIES`. Pinned by `platform-capability-seal.test.ts`.
+ *
+ * ⚠ RETIREMENT IS NOT SUPPORTED TODAY, AND THAT IS TRUTHFUL, NOT ASPIRATIONAL (fix round 1,
+ * REV-L1) — no token has been retired, and this is not a speculative feature. Removing a token
+ * from `PLATFORM_CAPABILITIES` is itself a WIRE-FORMAT CHANGE: this array's element type is
+ * `readonly PlatformCapability[]`, so a removed token can no longer appear here at all, and the
+ * exhaustiveness test (`[...ORDER].sort()` equals `Object.values(PLATFORM_CAPABILITIES).sort()`)
+ * would fail the moment the array stopped matching the map one-for-one — it cannot silently keep
+ * a dangling slot. There is currently no mechanism (a tombstone value, a reserved index) that
+ * lets a slot survive its token's removal — do NOT build one speculatively. A real retirement
+ * must first INTRODUCE such a mechanism (e.g. a sentinel the decoder drops) and must never
+ * delete or shift an existing entry when it does; the frozen-prefix check
+ * (`SEAL_ORDER_AS_SHIPPED`) is what fails loudly if a change tries to.
+ *
+ * ⚠ NOT the declaration order of `PLATFORM_CAPABILITIES`, deliberately: the map is organised for
+ * reading and may be regrouped; this array is a wire format.
+ */
+export const PLATFORM_CAPABILITY_SEAL_ORDER: readonly PlatformCapability[] = Object.freeze([
+  PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES, //                0
+  PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES, //                  1
+  PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING, //                  2
+  PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE, //               3
+  PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST, //                   4
+  PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN, //                 5
+  PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER, //            6
+  PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES, //                7
+  PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE, //            8
+  PLATFORM_CAPABILITIES.IMPERSONATE_USER, //                    9
+  PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS, //               10
+  PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS, //         11
+  PLATFORM_CAPABILITIES.REDRIVE_JOB, //                        12
+  PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT, //               13
+  PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM, //  14
+  PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST, //                15
+  PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES, //          16
+  PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING, //        17 (BAL-558)
+  PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE, //             18 (BAL-558)
+]);
+
+export type SealedPlatformCapabilityIndexes = number[];
+
+/** Tokens → seal indexes. De-duplicated; a token absent from the order is dropped (unreachable by type). */
+export function encodeSealedPlatformCapabilities(
+  tokens: readonly PlatformCapability[]
+): SealedPlatformCapabilityIndexes {
+  const indexes: number[] = [];
+  for (const token of tokens) {
+    const index = PLATFORM_CAPABILITY_SEAL_ORDER.indexOf(token);
+    if (index !== -1 && !indexes.includes(index)) {
+      indexes.push(index);
+    }
+  }
+  return indexes;
+}
+
+/**
+ * Sealed value → tokens, or `null` for a non-array (⇒ "inherit", exactly as today).
+ * FAIL CLOSED per element: keep only `typeof e === 'number' && Number.isInteger(e) && e >= 0`
+ * whose `PLATFORM_CAPABILITY_SEAL_ORDER[e]` is defined. Everything else is DROPPED:
+ * out-of-range, negative, fractional, NaN, strings (including legacy token strings), null, objects.
+ * De-duplicated, order of first appearance.
+ */
+export function decodeSealedPlatformCapabilities(sealed: unknown): PlatformCapability[] | null {
+  if (!Array.isArray(sealed)) return null;
+  const tokens: PlatformCapability[] = [];
+  for (const entry of sealed) {
+    if (typeof entry !== 'number' || !Number.isInteger(entry) || entry < 0) continue;
+    const token = PLATFORM_CAPABILITY_SEAL_ORDER[entry];
+    if (token === undefined) continue;
+    if (!tokens.includes(token)) tokens.push(token);
+  }
+  return tokens;
 }

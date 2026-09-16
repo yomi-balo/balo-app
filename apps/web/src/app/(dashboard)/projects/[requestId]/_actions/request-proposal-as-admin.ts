@@ -11,13 +11,14 @@ import {
   InvalidRelationshipTransitionError,
   type RelationshipStatus,
 } from '@balo/db';
-import { requireAdmin } from '@/lib/auth/require-admin';
+import { PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import {
   AT_OR_PAST_PROPOSAL_REQUEST,
   firstEoiSubmittedAt,
 } from './_shared/proposal-request-analytics';
+import { requireRequestStaffCapability } from './_shared/require-request-staff-capability';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -135,19 +136,21 @@ function precheckRelationshipStatus(
  * the admin client island, which fires `PROJECT_PROPOSAL_REQUESTED` after the
  * action resolves (mirroring the client path's transport).
  *
- * Authorization: platform `admin`/`super_admin` via `requireAdmin()`. IDOR-safe:
- * the relationship must belong to the request (else `NOT_ON_REQUEST`).
+ * Authorization: platform capability `MANAGE_ANY_REQUEST_SOURCING` — session, then the LIVE
+ * row — via `requireRequestStaffCapability` (BAL-558). IDOR-safe: the relationship must belong
+ * to the request (else `NOT_ON_REQUEST`).
  */
 export async function requestProposalAsAdmin(
   input: z.infer<typeof inputSchema>
 ): Promise<RequestProposalAsAdminResult> {
-  let admin;
-  try {
-    // TODO(BAL-314): replace the platformRole gate with canActOnBehalf(admin, request).
-    admin = await requireAdmin();
-  } catch {
-    return { success: false, error: 'You do not have permission to do this.' };
+  // TODO(BAL-314): add the representation (canActOnBehalf) arm alongside this platform-capability gate.
+  const auth = await requireRequestStaffCapability(
+    PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING
+  );
+  if (!auth.ok) {
+    return { success: false, error: auth.error };
   }
+  const admin = auth.user;
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {

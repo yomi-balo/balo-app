@@ -36,9 +36,10 @@ import {
  *    these literals are what make a bundle edit — or a renamed constant whose VALUE silently
  *    changed — fail CI by name. A `PLATFORM_CAPABILITIES.X` reference would still track a
  *    changed value silently.
- * 2. FIDELITY. These strings are what actually travels: jsonb stores them, the sealed cookie
- *    carries them, and the read-path filter compares them. Pinning the wire form pins the thing
- *    the database and the browser actually hold.
+ * 2. FIDELITY. These strings are what actually travels: the database stores them (the sealed
+ *    cookie carries their `PLATFORM_CAPABILITY_SEAL_ORDER` indexes since BAL-558), and the
+ *    read-path filter compares them. Pinning the wire form pins the thing the database and the
+ *    browser actually hold.
  */
 const ADMIN_BUNDLE: readonly PlatformCapability[] = [
   'manage_platform_fees',
@@ -54,6 +55,8 @@ const ADMIN_BUNDLE: readonly PlatformCapability[] = [
   'cancel_any_engagement',
   'manage_any_engagement_action_item',
   'fast_forward_request',
+  'manage_any_request_sourcing',
+  'manage_any_kickoff_gate',
 ];
 
 /** The four role-differentiated tokens, in the order the role map spreads them. */
@@ -65,7 +68,7 @@ const SUPER_ADMIN_BUNDLE: readonly PlatformCapability[] = [
   'manage_staff_capabilities',
 ];
 
-/** The whole axis — the largest override expressible (D10: 16 before this ticket, 17 after). */
+/** The whole axis — the largest override expressible (D10: 17 after BAL-560, 19 after BAL-558). */
 const FULL_AXIS: readonly PlatformCapability[] = Object.values(PLATFORM_CAPABILITIES);
 
 /** A strict subset — "an admin, minus everything but fees and the admin surface". */
@@ -137,7 +140,7 @@ const MATRIX: readonly MatrixCell[] = [
   },
   { label: '[] (holds NOTHING — a real state)', stored: [], admin: [], superAdmin: [] },
   { label: 'a strict subset', stored: SUBSET, admin: SUBSET, superAdmin: SUBSET },
-  { label: 'the full 17-token axis', stored: FULL_AXIS, admin: FULL_AXIS, superAdmin: FULL_AXIS },
+  { label: 'the full axis', stored: FULL_AXIS, admin: FULL_AXIS, superAdmin: FULL_AXIS },
   {
     label: 'an array containing an unknown token',
     stored: WITH_UNKNOWN_TOKEN,
@@ -166,9 +169,9 @@ const MATRIX: readonly MatrixCell[] = [
 
 describe('resolvePlatformCapabilities — the D3 role × override matrix', () => {
   it('the matrix fixtures are the sizes claimed (non-vacuity for every cell below)', () => {
-    expect(ADMIN_BUNDLE).toHaveLength(13);
-    expect(SUPER_ADMIN_BUNDLE).toHaveLength(17);
-    expect(FULL_AXIS).toHaveLength(17);
+    expect(ADMIN_BUNDLE).toHaveLength(15);
+    expect(SUPER_ADMIN_BUNDLE).toHaveLength(19);
+    expect(FULL_AXIS).toHaveLength(19);
     expect(SUBSET).toHaveLength(2);
     expect(MATRIX).toHaveLength(9);
     expect(NON_STAFF_ROLES).toHaveLength(7);
@@ -214,8 +217,8 @@ describe('platformActorHasCapability — a NULL override is byte-identical to to
   it('a NULL override resolves byte-identically to platformRoleHasCapability for EVERY role × EVERY token', () => {
     // ⚠ The two length assertions are not decoration. Without them a future refactor that
     // emptied `PLATFORM_CAPABILITIES` would make this loop run zero times and pass.
-    expect(EVERY_TOKEN).toHaveLength(17);
-    expect(EVERY_ROLE.length * EVERY_TOKEN.length).toBe(153);
+    expect(EVERY_TOKEN).toHaveLength(19);
+    expect(EVERY_ROLE.length * EVERY_TOKEN.length).toBe(171);
 
     for (const role of EVERY_ROLE) {
       for (const token of EVERY_TOKEN) {
@@ -300,14 +303,14 @@ describe('PLATFORM_ROLE_CAPABILITIES — the exact-set pins (D3)', () => {
    * fails CI by name. This is the hermetic delivery of the ticket's "every real staff account"
    * AC — see this file's header.
    */
-  it('admin holds exactly the 13-token staff bundle, in order', () => {
+  it('admin holds exactly the 15-token staff bundle, in order', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.admin).toEqual([...ADMIN_BUNDLE]);
-    expect(PLATFORM_ROLE_CAPABILITIES.admin).toHaveLength(13);
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).toHaveLength(15);
   });
 
-  it('super_admin holds exactly those 13 plus the four role-differentiated tokens, in order', () => {
+  it('super_admin holds exactly those 15 plus the four role-differentiated tokens, in order', () => {
     expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toEqual([...SUPER_ADMIN_BUNDLE]);
-    expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toHaveLength(17);
+    expect(PLATFORM_ROLE_CAPABILITIES.super_admin).toHaveLength(19);
   });
 
   it('user has no entry at all — a plain user holds nothing', () => {
@@ -318,7 +321,7 @@ describe('PLATFORM_ROLE_CAPABILITIES — the exact-set pins (D3)', () => {
 
 describe('isPlatformCapability', () => {
   it('accepts every token on the axis', () => {
-    expect(FULL_AXIS).toHaveLength(17);
+    expect(FULL_AXIS).toHaveLength(19);
     for (const token of FULL_AXIS) {
       expect(isPlatformCapability(token), token).toBe(true);
     }

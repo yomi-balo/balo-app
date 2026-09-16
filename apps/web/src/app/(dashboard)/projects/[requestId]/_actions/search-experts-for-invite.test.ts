@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PlatformCapability } from '@balo/shared/authz';
 
 vi.mock('server-only', () => ({}));
 
@@ -7,13 +8,30 @@ vi.mock('@/lib/search/search-data', () => ({
   searchExperts: (...args: unknown[]) => mockSearchExperts(...args),
 }));
 
-const mockRequireAdmin = vi.fn();
-vi.mock('@/lib/auth/require-admin', () => ({
-  requireAdmin: () => mockRequireAdmin(),
+const mockGetCurrentUser = vi.fn();
+vi.mock('@/lib/auth/session', () => ({
+  getCurrentUser: () => mockGetCurrentUser(),
+}));
+
+/**
+ * BAL-558 — this action is SESSION-gated only, deliberately NOT live-gated (a read over
+ * public marketplace data). The live gate is still mocked as a spy so the "capable caller
+ * searches WITHOUT consulting it" test below is non-vacuous in the direction that matters.
+ */
+const mockActorHoldsLive = vi.fn<
+  (userId: string, capability: PlatformCapability) => Promise<boolean>
+>(async () => true);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: PlatformCapability) =>
+    mockActorHoldsLive(userId, capability),
 }));
 
 import { searchExpertsForInviteAction } from './search-experts-for-invite';
 import { EMPTY_FILTERS } from '@/lib/search/filters';
+import { log } from '@/lib/logging';
+
+const ADMIN = { id: 'admin-1', platformRole: 'admin' as const };
+const PERMISSION_DENIED = 'You do not have permission to do this.';
 
 function expertRow(id: string, name: string) {
   return {
@@ -31,18 +49,50 @@ function expertRow(id: string, name: string) {
 describe('searchExpertsForInviteAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRequireAdmin.mockResolvedValue({ id: 'admin-1', platformRole: 'admin' });
+    mockGetCurrentUser.mockResolvedValue(ADMIN);
+    mockActorHoldsLive.mockImplementation(async () => true);
     mockSearchExperts.mockResolvedValue({
       experts: [expertRow('e-1', 'Priya Nair'), expertRow('e-2', 'Sofia Ruiz')],
       total: 2,
     });
   });
 
-  it('rejects a non-admin', async () => {
-    mockRequireAdmin.mockRejectedValue(new Error('Forbidden'));
+  it('denies an unauthenticated caller; the search is NOT called', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
     const result = await searchExpertsForInviteAction({ q: 'cpq' });
-    expect(result).toEqual({ success: false, error: 'You do not have permission to do this.' });
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
     expect(mockSearchExperts).not.toHaveBeenCalled();
+  });
+
+  it('denies a session-uncapable caller (platformRole "user")', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    const result = await searchExpertsForInviteAction({ q: 'cpq' });
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
+    expect(mockSearchExperts).not.toHaveBeenCalled();
+  });
+
+  it('ordering: an uncapable caller with INVALID input (q over 120 chars) gets the permission denial, not the validation message', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    const result = await searchExpertsForInviteAction({ q: 'x'.repeat(121) });
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
+  });
+
+  it('a thrown session read resolves to the permission denial and LOGS (D3)', async () => {
+    mockGetCurrentUser.mockRejectedValueOnce(new Error('bad seal'));
+    await expect(searchExpertsForInviteAction({ q: 'cpq' })).resolves.toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
+    expect(log.error).toHaveBeenCalledWith(
+      'Session read failed at the invite expert-search gate — denying',
+      expect.objectContaining({ error: 'bad seal' })
+    );
+  });
+
+  it('a capable caller searches WITHOUT consulting the live gate (a public read)', async () => {
+    const result = await searchExpertsForInviteAction({ q: 'cpq' });
+    expect(result.success).toBe(true);
+    expect(mockActorHoldsLive).not.toHaveBeenCalled();
   });
 
   it('searches with default filters + the query and maps minimal rows', async () => {

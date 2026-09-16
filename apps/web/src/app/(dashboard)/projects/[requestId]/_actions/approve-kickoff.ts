@@ -14,10 +14,11 @@ import {
   type Proposal,
   type ProjectRequestWithRelations,
 } from '@balo/db';
-import { requireAdmin } from '@/lib/auth/require-admin';
+import { PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { lockContentionFailure } from './_shared/deadlock';
+import { requireRequestStaffCapability } from './_shared/require-request-staff-capability';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -31,7 +32,6 @@ export type ApproveKickoffResult =
   | { success: true; engagementId: string }
   | { success: false; error: string };
 
-const NOT_ALLOWED = 'You do not have permission to do this.';
 const INVALID_REQUEST = 'Invalid request.';
 const STALE = 'This request is no longer awaiting kickoff approval.';
 const GATES_INCOMPLETE = 'Client and expert must complete their steps first.';
@@ -159,9 +159,9 @@ async function commitKickoff(
  * via the resolver, the delivering expert) is notified — fire-and-forget, AFTER
  * the commit.
  *
- * Control flow: requireAdmin → validate input → `loadApprovableKickoff` (request
- * `accepted`, claimed relationship is the accepted one, both gates confirmed,
- * accepted current proposal live) → `commitKickoff` (typed transition errors →
+ * Control flow: requireRequestStaffCapability(MANAGE_ANY_KICKOFF_GATE) → validate input →
+ * `loadApprovableKickoff` (request `accepted`, claimed relationship is the accepted one, both
+ * gates confirmed, accepted current proposal live) → `commitKickoff` (typed transition errors →
  * friendly copy) → log → notify → revalidate → return.
  *
  * Analytics are fired CLIENT-side by the component (PROJECT_KICKOFF_APPROVED);
@@ -170,12 +170,11 @@ async function commitKickoff(
 export async function approveKickoffAction(
   input: ApproveKickoffInput
 ): Promise<ApproveKickoffResult> {
-  let admin;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { success: false, error: NOT_ALLOWED };
+  const auth = await requireRequestStaffCapability(PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE);
+  if (!auth.ok) {
+    return { success: false, error: auth.error };
   }
+  const admin = auth.user;
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {

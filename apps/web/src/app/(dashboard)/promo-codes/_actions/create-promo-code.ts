@@ -35,7 +35,8 @@ export type CreatePromoCodeResult =
 
 /**
  * Admin promo-code mint (BAL-384). Authorization is the platform-capability axis
- * (`MANAGE_PROMO_CODES`), NOT `requireAdmin()`. Auth gates run BEFORE the input is
+ * (`MANAGE_PROMO_CODES`), NOT a platform-role set read (the since-deleted `requireAdmin()`).
+ * Auth gates run BEFORE the input is
  * parsed, and an unauthenticated / uncapable caller gets a generic permission error (no
  * existence leak). The repo normalizes + inserts the code; a duplicate (including a
  * concurrent-creation race, caught by the partial unique index) maps to a friendly

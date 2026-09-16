@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import type { ActiveWorkspacePointer } from '@balo/shared/workspaces';
-import type { PlatformCapability } from '@balo/shared/authz';
+import {
+  encodeSealedPlatformCapabilities,
+  type SealedPlatformCapabilityIndexes,
+} from '@balo/shared/authz';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -114,7 +117,8 @@ function createMockSession(userOverrides: Record<string, unknown> = {}) {
       // sealed field is an `ActiveWorkspacePointer`, not a `Workspace`.
       activeWorkspace: undefined as ActiveWorkspacePointer | undefined,
       // BAL-560 — typed (not left to inference) so the override patch assertions typecheck.
-      platformCapabilities: undefined as PlatformCapability[] | undefined,
+      // BAL-558 — carries seal-order INDEXES, not token strings.
+      platformCapabilities: undefined as SealedPlatformCapabilityIndexes | undefined,
       // BAL-553 — typed (not left to inference) so the AC 4 survival assertions typecheck.
       isImpersonating: undefined as boolean | undefined,
       impersonatorUserId: undefined as string | undefined,
@@ -274,14 +278,16 @@ describe('GET /api/auth/session-sync', () => {
 
       await GET(makeRequest('returnTo=/settings'));
 
-      expect(session.user.platformCapabilities).toEqual(['view_platform_admin']);
+      expect(session.user.platformCapabilities).toEqual(
+        encodeSealedPlatformCapabilities(['view_platform_admin'])
+      );
       expect(session.save).toHaveBeenCalled();
     });
 
     it('BAL-560: DELETES a revoked override — the column went back to NULL', async () => {
       const session = createMockSession({
         platformRole: 'admin',
-        platformCapabilities: ['view_platform_admin'],
+        platformCapabilities: encodeSealedPlatformCapabilities(['view_platform_admin']),
       });
       mockGetSession.mockResolvedValue(session);
       mockFindForSessionSync.mockResolvedValue(

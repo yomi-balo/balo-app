@@ -125,10 +125,11 @@ const PINNED_FILES: readonly string[] = [
  * forms are kept, since either is valid TypeScript), a backtick literal,
  * `archetype === 'observer'` (the lens's other name), a role-set helper (`isPlatformAdmin(...)`,
  * the widening `middleware-admin-capability-gated.test.ts` learned in its own fix round F5), and
- * `requireAdmin()` (fix round F1 — it IS a platform-role-set gate, `lib/auth/require-admin.ts:22`
- * → `isPlatformAdmin`, and it leaves no other banned substring in the calling file; the sibling
- * `projects/[requestId]/_actions` has SEVEN `requireAdmin()` call sites, making copy-paste into
- * this directory the most likely reintroduction vector).
+ * `requireAdmin()` (fix round F1 — it WAS a platform-role-set gate, `requireAdmin` →
+ * `isPlatformAdmin`. BAL-558 converted its seven `projects/[requestId]/_actions` call sites to
+ * `MANAGE_ANY_REQUEST_SOURCING` / `MANAGE_ANY_KICKOFF_GATE` and deleted the helper. The ban token
+ * stays so a resurrected copy — the likeliest reintroduction of a role-set gate — is still
+ * caught).
  *
  * ⚠ `platformRole` IS BANNED BARE, NOT AS `platformRole ===` (external review, pre-merge). A
  * COMPARISON is only one way to read the property. The likeliest reintroduction of all is a

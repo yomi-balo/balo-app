@@ -3,9 +3,11 @@ import {
   PLATFORM_CAPABILITIES,
   PLATFORM_ROLE_CAPABILITIES,
   PLATFORM_STAFF_ROLES,
+  platformActorHasCapability,
   platformRoleHasCapability,
   platformRoleIsStaff,
 } from './platform';
+import { PLATFORM_ADMIN_ROLES, type PlatformRole } from '../parties';
 
 /**
  * Unit tests for the platform-capability axis (BAL-358). Pure map — mocks nothing.
@@ -517,5 +519,78 @@ describe('platformRoleHasCapability — prototype-chain role names', () => {
       expect(() => platformRoleHasCapability(role, capability)).not.toThrow();
       expect(platformRoleHasCapability(role, capability)).toBe(false);
     }
+  });
+});
+
+describe('platformRoleHasCapability — MANAGE_ANY_REQUEST_SOURCING', () => {
+  it.each(['admin', 'super_admin'])('grants MANAGE_ANY_REQUEST_SOURCING to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING)).toBe(
+      true
+    );
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies MANAGE_ANY_REQUEST_SOURCING to %s',
+    (role) => {
+      expect(
+        platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING)
+      ).toBe(false);
+    }
+  );
+
+  it('maps MANAGE_ANY_REQUEST_SOURCING to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING).toBe('manage_any_request_sourcing');
+  });
+});
+
+describe('platformRoleHasCapability — MANAGE_ANY_KICKOFF_GATE', () => {
+  it.each(['admin', 'super_admin'])('grants MANAGE_ANY_KICKOFF_GATE to %s', (role) => {
+    expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE)).toBe(
+      true
+    );
+  });
+
+  it.each(['user', '', 'owner', 'member', 'expert'])(
+    'denies MANAGE_ANY_KICKOFF_GATE to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE)).toBe(
+        false
+      );
+    }
+  );
+
+  it('maps MANAGE_ANY_KICKOFF_GATE to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE).toBe('manage_any_kickoff_gate');
+  });
+});
+
+/**
+ * BAL-558 — "pinned by a test asserting exactly that" (the ticket's AC): the two new tokens are
+ * held by EXACTLY the actor set the deleted `requireAdmin()` admitted, `{admin, super_admin}` =
+ * `PLATFORM_ADMIN_ROLES`. Checked on both the role-only arm and the null-override actor arm, so
+ * a bundle move that only one of the two functions sees still fails here.
+ */
+const EVERY_PLATFORM_ROLE = [
+  'user',
+  'admin',
+  'super_admin',
+] as const satisfies readonly PlatformRole[];
+
+describe('BAL-558 — the two new tokens are held by EXACTLY the actor set requireAdmin() admitted', () => {
+  it.each([
+    PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING,
+    PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE,
+  ])('%s holders === PLATFORM_ADMIN_ROLES (role-only AND null-override arms)', (token) => {
+    const byRole = EVERY_PLATFORM_ROLE.filter((r) => platformRoleHasCapability(r, token));
+    const byActor = EVERY_PLATFORM_ROLE.filter((r) => platformActorHasCapability(r, null, token));
+    // SonarCloud S2871 — a bare `.sort()` coerces to string and orders by UTF-16 code unit;
+    // `localeCompare` is stable and locale-independent over these lowercase role names.
+    const roleComparator = (a: string, b: string): number => a.localeCompare(b);
+    expect([...byRole].sort(roleComparator)).toEqual(
+      [...PLATFORM_ADMIN_ROLES].sort(roleComparator)
+    );
+    expect(byRole).toHaveLength(2);
+    expect(byActor).toEqual(byRole);
+    expect(PLATFORM_ADMIN_ROLES.size).toBe(2); // non-vacuity: the comparison set is not empty
   });
 });

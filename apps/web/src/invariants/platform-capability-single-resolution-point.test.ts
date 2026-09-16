@@ -55,6 +55,12 @@ import {
  *                   argued-absent / pass-through entry. ⚠ The pin is LEXICAL and watches exactly
  *                   the five spellings in `SESSION_USER_CONSTRUCTION_TOKENS` — it is not, and
  *                   cannot be, a claim about every conceivable spelling.
+ *   · PIN F grew  → a second site DECODES sealed indexes back to tokens; route it through the ONE
+ *                   decoder (`decodeSealedPlatformCapabilities`) instead.
+ *   · PIN G grew  → a second site ENCODES tokens to sealed indexes, bypassing the ONE encoder's
+ *                   normalisation (filter + de-dupe); route it through `encodeSealedPlatformCapabilities`.
+ *   · PIN H grew  → something indexes `PLATFORM_CAPABILITY_SEAL_ORDER` directly instead of going
+ *                   through the codec — the wire order must stay a private implementation detail.
  */
 
 /** A — after BAL-560, NOTHING outside `@balo/shared` resolves the ROLE-ONLY predicate. */
@@ -78,8 +84,10 @@ const ACTOR_CALLERS: readonly string[] = [
  * C — the COLUMN / SESSION FIELD's exact reader+writer set.
  *
  * ⚠ EIGHT, and `session-sync.ts` is DELIBERATELY NOT AMONG THEM. It compares through
- * `platformOverrideKeyOf`, whose name carries no lowercase `platformCapabilities` substring —
- * see that function's docblock. The two sibling helpers (`sealedPlatformCapabilities`,
+ * `sealedPlatformOverrideKeyOf` / `storedPlatformOverrideKeyOf` (BAL-558 split the former
+ * `platformOverrideKeyOf` into two, one per source), neither of which carries a lowercase
+ * `platformCapabilities` substring — see their shared docblock in
+ * `session-platform-capabilities.ts`. The sibling helpers (`sealedPlatformCapabilities`,
  * `applyPlatformCapabilitiesToSessionUser`) carry a capital `P` for the same reason, which is why
  * the six seal points and gate #7 are absent from this set too: none of them NAMES the field,
  * they hand a ROW to the one encoder. That is the property this pin is measuring.
@@ -122,8 +130,10 @@ const OVERRIDE_COLUMN_NAMERS: readonly string[] = ['packages/db/src/schema/users
  * trusted" and points at THIS file. Before this pin that sentence was false: the invariant
  * contained zero references to the token. It is true now — exactly one non-test file names
  * `MANAGE_STAFF_CAPABILITIES`, and that file is its own definition plus the `super_admin` entry
- * of the role map. A second namer means something RESOLVES it, which is BAL-561's work and needs
- * the docblock's inertness claim re-argued rather than quietly widened.
+ * of the role map, plus its `PLATFORM_CAPABILITY_SEAL_ORDER` slot — a wire position, not a
+ * resolution, so it does not add a second namer. A second namer means something RESOLVES it,
+ * which is BAL-561's work and needs the docblock's inertness claim re-argued rather than
+ * quietly widened.
  */
 const NEW_TOKEN = 'MANAGE_STAFF_CAPABILITIES';
 const NEW_TOKEN_VALUE = 'manage_staff_capabilities';
@@ -154,6 +164,46 @@ const NEW_TOKEN_VALUE_NAMERS: readonly string[] = [
   'packages/shared/src/authz/platform.ts', // the definition
   'packages/db/src/schema/users.ts', // the CHECK's SQL literal — a storage rule
 ];
+
+/**
+ * F — the ONE DECODER's exact naming set (BAL-558). `decodeSealedPlatformCapabilities` turns
+ * sealed seal-order INDEXES back into tokens. A second site naming it means a second decode
+ * path exists — the wire format is a private implementation detail everywhere except here.
+ */
+const DECODER = 'decodeSealedPlatformCapabilities';
+const DECODER_NAMERS: readonly string[] = [
+  'packages/shared/src/authz/platform.ts', // the definition
+  'packages/shared/src/authz/index.ts', // the barrel re-export
+  'apps/web/src/lib/authz/platform.ts', // the web seam's read
+  'apps/web/src/middleware.ts', // the Edge gate
+  'apps/web/src/lib/auth/session-platform-capabilities.ts', // the sealed-session drift keyer
+];
+
+/**
+ * G — the ONE ENCODER's exact naming set (BAL-558). `encodeSealedPlatformCapabilities` turns
+ * normalised tokens into sealed seal-order INDEXES. A second namer means a second encode path
+ * bypassing the seal boundary's filter + de-dupe normalisation.
+ */
+const ENCODER = 'encodeSealedPlatformCapabilities';
+const ENCODER_NAMERS: readonly string[] = [
+  'packages/shared/src/authz/platform.ts', // the definition
+  'packages/shared/src/authz/index.ts', // the barrel re-export
+  'apps/web/src/lib/auth/session-platform-capabilities.ts', // the ONE seal point
+];
+
+/**
+ * H — the WIRE ORDER's exact naming set (BAL-558). `PLATFORM_CAPABILITY_SEAL_ORDER` is
+ * deliberately NOT re-exported from the barrel (PIN H's own reason to exist): only the codec in
+ * `platform.ts` reads it. A second namer means something indexes the wire order directly,
+ * bypassing the codec's fail-closed decoding.
+ */
+const SEAL_ORDER = 'PLATFORM_CAPABILITY_SEAL_ORDER';
+const SEAL_ORDER_NAMERS: readonly string[] = ['packages/shared/src/authz/platform.ts'];
+
+// SonarCloud S2871 — a bare `.sort()` coerces to string and orders by UTF-16 code unit; these
+// are POSIX-style relative file paths, so `localeCompare` is a stable, locale-independent
+// comparator. Scoped to the PIN F/G/H proofs added in this round.
+const FILE_REL_COMPARATOR = (a: string, b: string): number => a.localeCompare(b);
 
 /** D — the ROLE MAP's exact reader set (near-vacuous today; see the docblock). */
 const ROLE_MAP = 'PLATFORM_ROLE_CAPABILITIES';
@@ -235,19 +285,20 @@ const SEAL_POINTS_ARGUED_ABSENT: readonly string[] = [
  * nothing for them to seal and `sealedPlatformCapabilities` would be wrong in them:
  *   · `impersonation.ts`   — `markSessionAsImpersonated` SPREADS `...user` and adds three
  *                            impersonation fields; the override rides along untouched (plan S7).
- *   · `require-admin.ts`   — `requireAdmin()` returns the ALREADY-SEALED `session.user`.
  *   · `session.ts`         — `requireUser()` / `requireOnboardedUser()`, same.
  *
  * ⚠⚠ EACH ONE CARRIES A **POSITIVE, COUNT-PINNED PROOF** THAT IT IS STILL A PASS-THROUGH (fix
  * round 2, V1). An earlier cut asserted only that these files contain NO object-literal
  * construction, checked against the two `LITERAL_CONSTRUCTION_TOKENS` below — and that FAILED
- * OPEN, as the delta review demonstrated: replacing `require-admin.ts`'s `return session.user;`
- * with a row-shaped `return { … }` that seals no override left this suite 13/13 green.
+ * OPEN, as the delta review demonstrated: replacing the since-deleted `require-admin.ts`'s
+ * `return session.user;` with a row-shaped `return { … }` that seals no override left this suite
+ * 13/13 green (`require-admin.ts` itself is gone as of BAL-558 — its seven call sites moved to
+ * `requireRequestStaffCapability`, which is its OWN, separately-argued seam, not a pass-through).
  * TypeScript is no backstop, because `platformCapabilities` is OPTIONAL on `SessionUser`, so the
  * missing field compiles.
  *
- * Widening the negative list with `'return {'` would NOT work and was rejected: two of these
- * three files legitimately contain a return literal — `markSessionAsImpersonated` returns
+ * Widening the negative list with `'return {'` would NOT work and was rejected: both of these
+ * files legitimately contain a return literal — `markSessionAsImpersonated` returns
  * `{ ...user, … }` (a spread, which carries the override), and `getCompanyContext` in
  * `session.ts` returns a three-field object that is not a `SessionUser` at all. A ban list would
  * have to carve both out, and would still only catch spellings it already knows.
@@ -268,8 +319,6 @@ const SESSION_USER_PASS_THROUGH_PROOFS: readonly {
 }[] = [
   // Returns `{ ...user, isImpersonating, … }` — a SPREAD, so the override rides along untouched.
   { file: 'apps/web/src/lib/auth/impersonation.ts', proof: '...user,', count: 1 },
-  // `requireAdmin()` hands back the already-sealed `session.user`.
-  { file: 'apps/web/src/lib/auth/require-admin.ts', proof: 'return session.user;', count: 1 },
   // `requireUser()` AND `requireOnboardedUser()` — two of them, which is why the count matters.
   { file: 'apps/web/src/lib/auth/session.ts', proof: 'return user;', count: 2 },
 ];
@@ -296,7 +345,11 @@ const THREADING_SEAMS: readonly {
 }[] = [
   {
     file: 'apps/web/src/lib/authz/platform.ts',
-    mustContain: ['platformActorHasCapability(', 'user.platformCapabilities'],
+    mustContain: [
+      'platformActorHasCapability(',
+      'user.platformCapabilities',
+      'decodeSealedPlatformCapabilities(',
+    ],
   },
   {
     file: 'apps/api/src/authz/platform.ts',
@@ -304,17 +357,26 @@ const THREADING_SEAMS: readonly {
   },
   {
     file: 'apps/web/src/middleware.ts',
-    mustContain: ['platformActorHasCapability(', 'user.platformCapabilities'],
+    mustContain: [
+      'platformActorHasCapability(',
+      'user.platformCapabilities',
+      'decodeSealedPlatformCapabilities(',
+    ],
   },
   // The drift half: without these two the override goes stale for the full 7-day cookie
   // lifetime while the role stays in sync — worse than syncing neither.
   {
     file: 'apps/web/src/lib/auth/session-sync.ts',
-    mustContain: ['platformOverrideKeyOf('],
+    mustContain: ['sealedPlatformOverrideKeyOf(', 'storedPlatformOverrideKeyOf('],
   },
   {
     file: 'apps/web/src/app/api/auth/session-sync/route.ts',
     mustContain: ['applyPlatformCapabilitiesToSessionUser('],
+  },
+  // BAL-558 — the ONE encoder/decoder, threaded through the seal boundary and the drift keyers.
+  {
+    file: 'apps/web/src/lib/auth/session-platform-capabilities.ts',
+    mustContain: ['encodeSealedPlatformCapabilities(', 'decodeSealedPlatformCapabilities('],
   },
   // ⚠ THE TWO HAND-BUILT ACTORS. Every other seam above passes a whole `SessionUser`; these two
   // construct the actor object themselves from a LIVE row, so each must encode that row's
@@ -410,6 +472,24 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
     expect(byValue).toHaveLength(2);
   });
 
+  it('PIN F: the ONE decoder is named by exactly its definition + its four readers (both directions + length)', () => {
+    const found = filesNaming(DECODER).sort(FILE_REL_COMPARATOR);
+    expect(found).toEqual([...DECODER_NAMERS].sort(FILE_REL_COMPARATOR));
+    expect(found).toHaveLength(5);
+  });
+
+  it('PIN G: the ONE encoder is named by exactly its definition + its one seal point (both directions + length)', () => {
+    const found = filesNaming(ENCODER).sort(FILE_REL_COMPARATOR);
+    expect(found).toEqual([...ENCODER_NAMERS].sort(FILE_REL_COMPARATOR));
+    expect(found).toHaveLength(3);
+  });
+
+  it('PIN H: the wire order is named by exactly its own definition — nothing indexes it directly', () => {
+    const found = filesNaming(SEAL_ORDER).sort(FILE_REL_COMPARATOR);
+    expect(found).toEqual([...SEAL_ORDER_NAMERS].sort(FILE_REL_COMPARATOR));
+    expect(found).toHaveLength(1);
+  });
+
   it('PIN D: the role map has no production reader (near-vacuous, kept deliberately — see docblock)', () => {
     const found = filesNaming(ROLE_MAP).sort();
     expect(found).toEqual([...ROLE_MAP_READERS].sort());
@@ -418,7 +498,7 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
 
   it('every converted seam THREADS the override — the conversion is not cosmetic', () => {
     // Non-vacuity: the table is the size claimed, so an emptied table cannot pass this loop.
-    expect(THREADING_SEAMS).toHaveLength(7);
+    expect(THREADING_SEAMS).toHaveLength(8);
     for (const seam of THREADING_SEAMS) {
       const file = scanned.find((candidate) => candidate.rel === seam.file);
       expect(file, `${seam.file} must be in the scan set`).toBeDefined();
@@ -429,10 +509,10 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
     }
   });
 
-  it('SEAL POINTS: exactly nine files produce a SessionUser, and each one is classified', () => {
+  it('SEAL POINTS: exactly eight files produce a SessionUser, and each one is classified', () => {
     const producing = producingSessionUsers();
     expect(producing.sort()).toEqual([...EXPECTED_PRODUCERS].sort());
-    expect(producing).toHaveLength(9);
+    expect(producing).toHaveLength(8);
 
     for (const rel of SEAL_POINTS_ROW_BACKED) {
       const file = scanned.find((candidate) => candidate.rel === rel);
@@ -471,7 +551,7 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
     // pass-through, and would then owe a seal decision. The count-pinned positive proof is what
     // keeps the label honest — see this list's docblock for why the negative check alone failed
     // open (fix round 2, V1).
-    expect(SESSION_USER_PASS_THROUGH_PROOFS).toHaveLength(3);
+    expect(SESSION_USER_PASS_THROUGH_PROOFS).toHaveLength(2);
     for (const { file: rel, proof, count } of SESSION_USER_PASS_THROUGH_PROOFS) {
       const file = scanned.find((candidate) => candidate.rel === rel);
       expect(file, `${rel} must be in the scan set`).toBeDefined();
@@ -508,8 +588,11 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
         found: filesNaming(NEW_TOKEN_VALUE),
         expected: NEW_TOKEN_VALUE_NAMERS,
       },
+      { label: 'PIN F', found: filesNaming(DECODER), expected: DECODER_NAMERS },
+      { label: 'PIN G', found: filesNaming(ENCODER), expected: ENCODER_NAMERS },
+      { label: 'PIN H', found: filesNaming(SEAL_ORDER), expected: SEAL_ORDER_NAMERS },
     ];
-    expect(cases).toHaveLength(7);
+    expect(cases).toHaveLength(10);
 
     for (const leak of [
       'apps/api/src/routes/leaked-platform-capability.ts',
@@ -526,14 +609,14 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
     }
   });
 
-  it('⚠ guards the guard: a TENTH SessionUser producer breaks the seal-point pin', () => {
+  it('⚠ guards the guard: a NINTH SessionUser producer breaks the seal-point pin', () => {
     const decoy = [
       ...producingSessionUsers(),
       'apps/web/src/app/api/auth/leaked-seal-point.ts',
     ].sort();
 
     expect(decoy).not.toEqual([...EXPECTED_PRODUCERS].sort());
-    expect(decoy).toHaveLength(10);
+    expect(decoy).toHaveLength(9);
   });
 
   it('⚠ guards the guard: EVERY watched spelling is one the filter genuinely matches', () => {

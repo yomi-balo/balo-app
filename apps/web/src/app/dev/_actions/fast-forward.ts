@@ -245,7 +245,10 @@ async function runEoiStep(ctx: StepContext): Promise<StepOutcome> {
   });
 }
 
-/** `proposal_requested` — dev operator's own session (`requireAdmin()`). */
+/**
+ * `proposal_requested` — dev operator's own session (`requestProposalAsAdmin` re-resolves
+ * `MANAGE_ANY_REQUEST_SOURCING`, session + live).
+ */
 async function runRequestProposalStep(ctx: StepContext): Promise<StepOutcome> {
   return withRequiredRelationship(ctx, async (relationshipId) => {
     const result = await requestProposalAsAdmin({ requestId: ctx.requestId, relationshipId });

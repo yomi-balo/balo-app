@@ -232,8 +232,9 @@ async function hostContextForExpertProfile(
  * Guarded on `!== 'direct'` rather than `=== 'match'` so a future third routing value also
  * fails closed. A match request has no target expert BY CONSTRUCTION (CHECK
  * `project_requests_direct_requires_expert` makes `expert_profile_id` a biconditional on
- * `send_to`), and the exploratory call is `requireAdmin()`-gated triage that happens
- * UPSTREAM of `experts_invited` — normally before any expert is on the request at all.
+ * `send_to`), and the exploratory call is platform-staff triage (`MANAGE_ANY_REQUEST_SOURCING`,
+ * `request-exploratory-meeting.ts`) that happens UPSTREAM of `experts_invited` — normally
+ * before any expert is on the request at all.
  * Candidate-set resolution was considered and REJECTED (ADR-1046 amendment 2026-08-07):
  * the set is empty at call time and would grant meeting powers to non-winners. The admin
  * running triage is authorized on the PLATFORM axis, exactly as an `admin` context is.

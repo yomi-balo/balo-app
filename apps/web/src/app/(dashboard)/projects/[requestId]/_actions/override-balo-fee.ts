@@ -34,9 +34,10 @@ export type OverrideBaloFeeResult =
  * for ONE request; proposals already snapshot their fee at submit/accept, so this
  * only affects proposals submitted from now on.
  *
- * Authorization is the NEW platform-capability axis (`MANAGE_PLATFORM_FEES`), NOT
- * `requireAdmin()` — the observer LENS decides who can view the surface; this
- * capability decides who can mutate the fee. An unauthenticated or uncapable caller
+ * Authorization is the platform-capability axis (`MANAGE_PLATFORM_FEES`), NOT a
+ * platform-role set read (the since-deleted `requireAdmin()`, BAL-558) — the observer LENS
+ * decides who can view the surface; this capability decides who can mutate the fee. An
+ * unauthenticated or uncapable caller
  * gets a generic permission error (no existence leak). The mutation + its audit row
  * commit atomically in `updateBaloFeeBps`; a genuine no-op (`newBps === current`)
  * writes nothing and emits no analytics.

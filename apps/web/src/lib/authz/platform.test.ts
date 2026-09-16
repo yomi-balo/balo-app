@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SessionUser } from '@/lib/auth/session';
+import { encodeSealedPlatformCapabilities, type PlatformCapability } from '@balo/shared/authz';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from './platform';
 
 /**
@@ -11,13 +12,18 @@ import { hasPlatformCapability, PLATFORM_CAPABILITIES } from './platform';
  * override `platformCapabilities` (ADR-1035 §A1.2). The fixture widened with it; the three
  * original role cases are kept verbatim and pass an ABSENT override, which is what every
  * session carries today and what must resolve byte-identically to the role bundle.
+ *
+ * ⚠ BAL-558 — `platformCapabilities` on `SessionUser` now carries SEAL-ORDER INDEXES, not
+ * token strings. This fixture takes TOKENS (what a test wants to express) and encodes them
+ * through the real encoder, so a test reads as "this user's override names these tokens", not
+ * as raw wire indexes.
  */
 function user(
   platformRole: SessionUser['platformRole'],
-  platformCapabilities?: SessionUser['platformCapabilities']
+  tokens?: readonly PlatformCapability[]
 ): Pick<SessionUser, 'platformRole' | 'platformCapabilities'> {
-  if (platformCapabilities === undefined) return { platformRole };
-  return { platformRole, platformCapabilities };
+  if (tokens === undefined) return { platformRole };
+  return { platformRole, platformCapabilities: encodeSealedPlatformCapabilities(tokens) };
 }
 
 describe('hasPlatformCapability', () => {
@@ -72,11 +78,14 @@ describe('hasPlatformCapability — the per-user override (BAL-560)', () => {
     expect(hasPlatformCapability(viewer, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)).toBe(false);
   });
 
-  it('an UNKNOWN token in the override denies and the rest resolve — it does not throw', () => {
-    const viewer = user('admin', [
-      'a_token_that_no_longer_exists',
-      PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
-    ] as SessionUser['platformCapabilities']);
+  it('an UNKNOWN index in the sealed override is dropped and the rest resolve — it does not throw', () => {
+    const viewer: Pick<SessionUser, 'platformRole' | 'platformCapabilities'> = {
+      platformRole: 'admin',
+      platformCapabilities: [
+        999,
+        ...encodeSealedPlatformCapabilities([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]),
+      ],
+    };
     expect(() =>
       hasPlatformCapability(viewer, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
     ).not.toThrow();
@@ -87,5 +96,23 @@ describe('hasPlatformCapability — the per-user override (BAL-560)', () => {
   it('a NON-STAFF role ignores an override entirely (D1 defence in depth)', () => {
     const viewer = user('user', [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
     expect(hasPlatformCapability(viewer, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)).toBe(false);
+  });
+
+  it('BAL-558 — a LEGACY string-encoded cookie DENIES (fail closed, not inherit)', () => {
+    const viewer: Pick<SessionUser, 'platformRole' | 'platformCapabilities'> = {
+      platformRole: 'admin',
+      platformCapabilities: ['view_platform_admin'] as never,
+    };
+    expect(hasPlatformCapability(viewer, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)).toBe(false);
+    expect(hasPlatformCapability(viewer, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)).toBe(false);
+  });
+
+  it('BAL-558 — a fractional or negative index denies', () => {
+    const viewer: Pick<SessionUser, 'platformRole' | 'platformCapabilities'> = {
+      platformRole: 'admin',
+      platformCapabilities: [5.5, -1],
+    };
+    expect(hasPlatformCapability(viewer, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)).toBe(false);
+    expect(hasPlatformCapability(viewer, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)).toBe(false);
   });
 });
