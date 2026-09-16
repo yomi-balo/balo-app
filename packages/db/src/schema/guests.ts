@@ -520,9 +520,10 @@ export const meetingGuests = pgTable(
     // Three-valued-logic safe: both operands are total `IS NULL` tests, so the equality is never
     // UNKNOWN.
     //
-    // ⚠ SAFE TO ADD RETROACTIVELY, independent of the empty-container integration harness
-    // (`reference_db_migrations_tested_against_empty_db`): nothing has ever written either column,
-    // so every existing row is (NULL, NULL) and the validation scan cannot reject one.
+    // ⚠ SAFE TO ADD RETROACTIVELY, independent of the integration harness — which migrates an
+    // EMPTY database, so CI passing here proves nothing about a populated production table:
+    // nothing has ever written either column, so every existing row is (NULL, NULL) and the
+    // validation scan cannot reject one.
     check(
       'meeting_guest_conversion_paired',
       sql`(${t.convertedToUserId} IS NULL) = (${t.convertedAt} IS NULL)`

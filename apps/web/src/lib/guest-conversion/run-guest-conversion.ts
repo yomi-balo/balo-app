@@ -18,7 +18,9 @@ import { daysSinceMeeting } from '@/lib/analytics/days-since-meeting';
  * `guest_converted_to_member` ONCE, only if at least one row linked, with last-touch
  * `days_since_meeting` (R8/R9).
  *
- * The whole body is swallow-and-log (R10) — a linkage failure must NEVER break or delay signup.
+ * The whole body is swallow-and-log (R10). All four seams SCHEDULE this call with Next's
+ * `after()` rather than awaiting it inline, so it runs strictly AFTER the response is sent —
+ * it can neither fail nor delay signup by construction, not merely by the try/catch below.
  * No side effect runs inside a `db.transaction` (the repository self-wraps and commits before
  * returning; this helper runs strictly after).
  */

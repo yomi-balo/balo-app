@@ -8,9 +8,9 @@
 -- 0059_bal428_consultation_projection.sql, 0064_bal132_lobby_self_claim.sql.)
 --
 -- ── WHY BOTH ARE SAFE ON A POPULATED TABLE, WHICH CI CANNOT TELL YOU ───────────────────
--- ⚠ THE INTEGRATION HARNESS MIGRATES AN **EMPTY** CONTAINER (memory
--- `reference_db_migrations_tested_against_empty_db`), so it proves nothing about migrating
--- real data. Each statement therefore carries its own argument, independent of that harness:
+-- ⚠ THE INTEGRATION HARNESS MIGRATES AN **EMPTY** DATABASE, so CI passing on this migration
+-- proves nothing about running it against a populated production table. Each statement
+-- therefore carries its own argument, independent of that harness:
 --
 --   1. `CREATE INDEX` validates nothing and can reject no row. It is a plain (non-CONCURRENT)
 --      build because drizzle-kit migrations run inside a transaction; it holds a SHARE lock

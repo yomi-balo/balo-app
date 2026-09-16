@@ -2,13 +2,14 @@
 
 import 'server-only';
 
+import { after } from 'next/server';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
 import { usersRepository, type User } from '@balo/db';
 import { type AuthResult, mapWorkOSError, AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/auth/schemas';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
@@ -135,17 +136,25 @@ export async function verifyEmailAction(
         // publishNotificationEvent logs internally
       });
 
-      // BAL-345 + BAL-489 — the two post-commit new-user helpers, run INDEPENDENTLY: each
-      // swallows and logs its own failure, and each `.catch` is belt-and-suspenders, so
-      // neither can block the other or break auth. `true` is legitimately hardcoded here —
-      // the OTP flow PROVES the email is verified.
+      // BAL-345 + BAL-489 — two post-commit new-user helpers. `true` is
+      // legitimately hardcoded here — the OTP flow PROVES the email is verified.
+      // Domain-join runs INLINE with its own belt-and-suspenders
+      // `.catch` (it already logs internally). Guest-conversion is scheduled with
+      // `after()` so it runs strictly AFTER the response — it can neither fail nor
+      // delay signup — and its `.catch` covers a call that rejects inside that
+      // scheduled callback (never surfaced through the helper's own logger).
       const newUserIdentity = { userId: user.id, email: user.email, emailVerified: true };
       await runDomainJoinAndEmit(newUserIdentity).catch(() => {
         // runDomainJoinAndEmit already logs internally.
       });
-      await runGuestConversionAndEmit(newUserIdentity).catch(() => {
-        // runGuestConversionAndEmit already logs internally.
-      });
+      after(() =>
+        runGuestConversionAndEmit(newUserIdentity).catch((error: unknown) => {
+          log.warn('Guest conversion rejected after email verification (auth unaffected)', {
+            userId: newUserIdentity.userId,
+            error: errorMessage(error),
+          });
+        })
+      );
     }
 
     // BAL-362: also reached on the re-link / double-submit path (no user created),

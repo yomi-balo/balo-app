@@ -1914,7 +1914,12 @@ describe('meetingGuestsRepository.linkConvertedUser (BAL-489 — the guest→mem
 
     // The KELVIN SIGN "K" (U+212A) lowercases to ASCII "k" under `.toLowerCase()` — this must be
     // refused BEFORE any canonicalisation or DB I/O, so it never matches the stored ASCII row.
-    const kelvinSignEmail = `K${email.slice(1)}`;
+    // Written as an explicit `\u212A` ESCAPE, deliberately NOT the literal glyph: NFC
+    // normalisation maps U+212A to plain ASCII 'K', so a tool that normalises source text
+    // (an editor, a formatter, a copy/paste through a lossy pipe) would silently turn this
+    // literal character into the SAME ASCII 'K' the control below uses, collapsing the
+    // refusal case into a second control without leaving any visible diff.
+    const kelvinSignEmail = '\u212A' + email.slice(1);
     const refused = await meetingGuestsRepository.linkConvertedUser({
       convertedToUserId: user.id,
       verifiedEmail: kelvinSignEmail,
@@ -1928,7 +1933,7 @@ describe('meetingGuestsRepository.linkConvertedUser (BAL-489 — the guest→mem
     // Non-vacuity (control): the SAME row, addressed by a plain-ASCII case variant, WAS matchable.
     const links = await meetingGuestsRepository.linkConvertedUser({
       convertedToUserId: user.id,
-      verifiedEmail: `K${email.slice(1)}`,
+      verifiedEmail: 'K' + email.slice(1),
     });
     expect(linkedIds(links)).toEqual([guest.id]);
   });

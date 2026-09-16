@@ -1,6 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { log as mockLog } from '@/lib/logging';
 
 // ── Mocks ───────────────────────────────────────────────────────
+
+// BAL-489 — the guest-conversion call is scheduled with `after()`, not awaited
+// inline. Capture callbacks rather than running them, so the action
+// can be asserted NOT to have called the helper synchronously; tests run the captured
+// callback(s) explicitly. `@/lib/analytics/server` is mocked wholesale below (its own
+// `after()`-based flush never runs), so this array only ever holds our own scheduling.
+let capturedAfter: Array<() => unknown> = [];
+vi.mock('next/server', () => ({
+  after: (cb: () => unknown) => {
+    capturedAfter.push(cb);
+  },
+}));
+
+/** Run every callback captured via `after()` so far, awaiting each in turn. */
+async function runCapturedAfterCallbacks(): Promise<void> {
+  const callbacks = capturedAfter;
+  capturedAfter = [];
+  for (const cb of callbacks) {
+    await cb();
+  }
+}
 
 const mockAuthenticateWithPassword = vi.fn();
 vi.mock('@/lib/auth/config', () => ({
@@ -132,6 +154,7 @@ function setupHappyPath(userOverrides: Record<string, unknown> = {}) {
 describe('signInAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capturedAfter = [];
     mockSessionObj = { save: mockSave };
     mockTouch.mockResolvedValue(undefined);
     // BAL-362: default the email fallback to a miss so the create / findByWorkosId
@@ -477,9 +500,16 @@ describe('signInAction', () => {
 
   // BAL-489 — guest→member linkage seam wiring (orphan-recovery create branch only).
   describe('guest → member linkage wiring (BAL-489)', () => {
-    it('runs the helper with the SAME facts as domain-join, called once', async () => {
+    it('is not called synchronously; schedules exactly one callback that calls the helper once with the same facts as domain-join', async () => {
       setupOrphanRecovery({ emailVerified: true });
-      await signInAction(validInput());
+      const result = await signInAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
+
       expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
       expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith({
         userId: 'user-1',
@@ -491,29 +521,65 @@ describe('signInAction', () => {
     it('passes emailVerified: false when WorkOS reports it unverified (null → false)', async () => {
       setupOrphanRecovery({ emailVerified: null });
       await signInAction(validInput());
+      await runCapturedAfterCallbacks();
       expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith(
         expect.objectContaining({ emailVerified: false })
       );
     });
 
-    it('does NOT run for an existing (non-orphan) user', async () => {
+    it('does NOT schedule linkage for an existing (non-orphan) user', async () => {
       setupHappyPath();
       await signInAction(validInput());
+      await runCapturedAfterCallbacks();
       expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
     });
 
-    it('a linkage rejection is swallowed — sign-in still succeeds', async () => {
+    it('(BAL-362) does NOT schedule linkage on the re-link path either', async () => {
+      mockAuthenticateWithPassword.mockResolvedValue(
+        mockWorkOSAuthResponse({ emailVerified: true })
+      );
+      mockFindByWorkosId.mockResolvedValue(undefined);
+      mockFindByEmail.mockResolvedValue({
+        id: 'user-1',
+        workosId: 'W1',
+        email: 'user@example.com',
+        emailVerified: true,
+      });
+      mockRelinkWorkosId.mockResolvedValue(mockBaloUser());
+      mockFindWithCompany.mockResolvedValue(mockCompanyData());
+
+      await signInAction(validInput());
+      await runCapturedAfterCallbacks();
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('a linkage rejection inside the scheduled callback is swallowed — logged without the email', async () => {
       setupOrphanRecovery();
       mockRunGuestConversionAndEmit.mockRejectedValueOnce(new Error('linkage boom'));
       const result = await signInAction(validInput());
       expect(result.success).toBe(true);
+
+      await expect(runCapturedAfterCallbacks()).resolves.toBeUndefined();
+
+      const warnCall = vi
+        .mocked(mockLog.warn)
+        .mock.calls.find(
+          ([, data]) => (data as Record<string, unknown> | undefined)?.userId === 'user-1'
+        );
+      expect(warnCall).toBeDefined();
+      const serialized = JSON.stringify(warnCall);
+      expect(serialized).toContain('user-1');
+      expect(serialized).not.toContain('user@example.com');
     });
 
-    it('independence (R10): a domain-join rejection does not stop the linkage call, and sign-in still succeeds', async () => {
+    it('independence (R10): a domain-join rejection does not stop the linkage from being scheduled, and sign-in still succeeds', async () => {
       setupOrphanRecovery();
       mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('domain-join boom'));
       const result = await signInAction(validInput());
       expect(result.success).toBe(true);
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
       expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
     });
   });

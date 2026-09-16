@@ -2,10 +2,11 @@
 
 import 'server-only';
 
+import { after } from 'next/server';
 import { unifiedSignUpSchema, type UnifiedSignUpFormData } from '@/components/balo/auth/schemas';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { type AuthResult, mapWorkOSError } from '@/lib/auth/errors';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 
 interface SignUpResult {
   pendingAuthToken?: string;
@@ -115,30 +116,38 @@ export async function signUpAction(
     session.refreshToken = authResponse.refreshToken;
     await session.save();
 
-    // BAL-345 + BAL-489: run the two post-commit new-user helpers, INDEPENDENTLY. Dynamically
-    // imported (like @balo/db above) so they stay out of the primary bundle — this fallback
-    // path runs only when WorkOS email-verification is disabled. Pass the SAME real WorkOS
-    // emailVerified flag createWithWorkspace received, never true.
-    const { runDomainJoinAndEmit } = await import('@/lib/domain-join/run-domain-join');
+    // BAL-345 + BAL-489 — two post-commit new-user helpers, dynamically imported (like
+    // @balo/db above) so they stay out of the primary bundle; this fallback path runs only
+    // when WorkOS email-verification is disabled. Pass the SAME real WorkOS emailVerified
+    // flag createWithWorkspace received, never true. Each helper is CHAINED off its own
+    // dynamic import, so a rejected import (a failed chunk load, which never reaches the
+    // helper's own logger) is caught and warned, not just a rejected call: by this point
+    // the Balo user and session already exist, and neither helper may fail signup (R10).
+    // Domain-join is AWAITED; guest-conversion is scheduled with `after()`, so it runs
+    // after the response and can neither fail nor delay signup.
     const newUserIdentity = {
       userId: user.id,
       email: user.email,
       emailVerified: workosUser.emailVerified === true,
     };
-    // Each `.catch` is belt-and-suspenders (each helper swallows internally) so neither can
-    // block the other or break auth. The guest-conversion import is CHAINED into its own
-    // `.catch` so a rejected dynamic import (not just a rejected call) is swallowed too — by
-    // this point the Balo user and session already exist, and a linkage failure must never
-    // fail signup (R10). The domain-join import above carries the same pre-existing unguarded
-    // exposure; left as is here, out of scope for this fix.
-    await runDomainJoinAndEmit(newUserIdentity).catch(() => {
-      // runDomainJoinAndEmit already logs internally.
-    });
-    await import('@/lib/guest-conversion/run-guest-conversion')
-      .then(({ runGuestConversionAndEmit }) => runGuestConversionAndEmit(newUserIdentity))
-      .catch(() => {
-        // runGuestConversionAndEmit already logs internally; this also swallows a failed chunk import.
+    await import('@/lib/domain-join/run-domain-join')
+      .then(({ runDomainJoinAndEmit }) => runDomainJoinAndEmit(newUserIdentity))
+      .catch((error: unknown) => {
+        log.warn('Domain join failed after sign-up (auth unaffected)', {
+          userId: newUserIdentity.userId,
+          error: errorMessage(error),
+        });
       });
+    after(() =>
+      import('@/lib/guest-conversion/run-guest-conversion')
+        .then(({ runGuestConversionAndEmit }) => runGuestConversionAndEmit(newUserIdentity))
+        .catch((error: unknown) => {
+          log.warn('Guest conversion rejected after sign-up (auth unaffected)', {
+            userId: newUserIdentity.userId,
+            error: errorMessage(error),
+          });
+        })
+    );
 
     return {
       success: true,

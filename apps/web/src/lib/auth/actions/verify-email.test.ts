@@ -1,6 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { log as mockLog } from '@/lib/logging';
 
 // ── Mocks ───────────────────────────────────────────────────────
+
+// BAL-489 — the guest-conversion call is scheduled with `after()`, not awaited
+// inline. Capture callbacks rather than running them, so the action
+// can be asserted NOT to have called the helper synchronously; tests run the captured
+// callback(s) explicitly. `@/lib/analytics/server` is mocked wholesale below (its own
+// `after()`-based flush never runs), so this array only ever holds our own scheduling.
+let capturedAfter: Array<() => unknown> = [];
+vi.mock('next/server', () => ({
+  after: (cb: () => unknown) => {
+    capturedAfter.push(cb);
+  },
+}));
+
+/** Run every callback captured via `after()` so far, awaiting each in turn. */
+async function runCapturedAfterCallbacks(): Promise<void> {
+  const callbacks = capturedAfter;
+  capturedAfter = [];
+  for (const cb of callbacks) {
+    await cb();
+  }
+}
 
 const mockAuthenticateWithEmailVerification = vi.fn();
 vi.mock('@/lib/auth/config', () => ({
@@ -150,6 +172,7 @@ function setupHappyPath() {
 describe('verifyEmailAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capturedAfter = [];
     mockSessionObj = { save: mockSave };
     // BAL-362: default the email fallback to a miss so the create path is
     // unaffected. Re-link / conflict tests override per-case.
@@ -401,9 +424,16 @@ describe('verifyEmailAction', () => {
 
   // BAL-489 — guest→member linkage seam wiring.
   describe('guest → member linkage wiring (BAL-489)', () => {
-    it('runs the helper with the SAME facts as domain-join, called once', async () => {
+    it('is not called synchronously; schedules exactly one callback that calls the helper once with the same facts as domain-join', async () => {
       setupHappyPath();
-      await verifyEmailAction(validInput());
+      const result = await verifyEmailAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
+
       expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
       expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith({
         userId: 'user-1',
@@ -412,27 +442,43 @@ describe('verifyEmailAction', () => {
       });
     });
 
-    it('does NOT run for an existing user (race path)', async () => {
+    it('does NOT schedule linkage for an existing user (race path)', async () => {
       setupExistingUserRace();
 
       await verifyEmailAction(validInput());
+      await runCapturedAfterCallbacks();
       expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
     });
 
-    it('a linkage rejection is swallowed — the action still succeeds', async () => {
+    it('a linkage rejection inside the scheduled callback is swallowed — logged without the email', async () => {
       setupHappyPath();
       mockRunGuestConversionAndEmit.mockRejectedValueOnce(new Error('linkage boom'));
 
       const result = await verifyEmailAction(validInput());
       expect(result.success).toBe(true);
+
+      await expect(runCapturedAfterCallbacks()).resolves.toBeUndefined();
+
+      const warnCall = vi
+        .mocked(mockLog.warn)
+        .mock.calls.find(
+          ([, data]) => (data as Record<string, unknown> | undefined)?.userId === 'user-1'
+        );
+      expect(warnCall).toBeDefined();
+      const serialized = JSON.stringify(warnCall);
+      expect(serialized).toContain('user-1');
+      expect(serialized).not.toContain('jane@example.com');
     });
 
-    it('independence (R10): a domain-join rejection does not stop the linkage call, and the action still succeeds', async () => {
+    it('independence (R10): a domain-join rejection does not stop the linkage from being scheduled, and the action still succeeds', async () => {
       setupHappyPath();
       mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('domain-join boom'));
 
       const result = await verifyEmailAction(validInput());
       expect(result.success).toBe(true);
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
       expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
     });
   });
