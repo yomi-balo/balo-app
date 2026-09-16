@@ -7,6 +7,7 @@ const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const REVIEWER_ID = 'b0000000-0000-4000-8000-000000000002';
 const COMPANY_ID = 'c0000000-0000-4000-8000-000000000003';
 const EXPERT_PROFILE_ID = 'd0000000-0000-4000-8000-000000000004';
+const EXPERT_USER_ID = 'f0000000-0000-4000-8000-000000000005';
 
 vi.mock('server-only', () => ({}));
 
@@ -24,16 +25,18 @@ vi.mock('@/lib/authz', () => ({
   CAPABILITIES: { PARTICIPATE: 'participate' },
 }));
 
-const { mockFindToken, mockFindEngagement, mockUpsert } = vi.hoisted(() => ({
+const { mockFindToken, mockFindEngagement, mockUpsert, mockFindExpertUser } = vi.hoisted(() => ({
   mockFindToken: vi.fn(),
   mockFindEngagement: vi.fn(),
   mockUpsert: vi.fn(),
+  mockFindExpertUser: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   reviewInviteTokensRepository: { findLiveByTokenHash: (...a: unknown[]) => mockFindToken(...a) },
   engagementsRepository: { findById: (...a: unknown[]) => mockFindEngagement(...a) },
   reviewsRepository: { upsert: (...a: unknown[]) => mockUpsert(...a) },
+  expertsRepository: { findUserIdByProfileId: (...a: unknown[]) => mockFindExpertUser(...a) },
 }));
 
 const mockTrack = vi.fn();
@@ -45,6 +48,7 @@ vi.mock('@/lib/analytics/server', async () => {
   };
 });
 
+import { log } from '@/lib/logging';
 import { REVIEW_SUBMIT_FAILED } from '@/lib/reviews/messages';
 import { submitTokenReviewAction } from './submit-token-review';
 
@@ -69,6 +73,7 @@ function primeHappyPath(overrides: { engagementType?: string; created?: boolean 
     expertProfileId: EXPERT_PROFILE_ID,
   });
   mockHasCapability.mockResolvedValue(true);
+  mockFindExpertUser.mockResolvedValue({ user: { id: EXPERT_USER_ID } });
   mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: overrides.created ?? true });
 }
 
@@ -94,6 +99,7 @@ describe('submitTokenReviewAction', () => {
       surface: 'email',
       authMethod: 'magic_link',
     });
+    expect(mockFindExpertUser).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
   });
 
   it('resolves the token by HASH — the raw token never reaches the repository', async () => {
@@ -136,17 +142,61 @@ describe('submitTokenReviewAction', () => {
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
+    expect(mockFindExpertUser).not.toHaveBeenCalled();
   });
 
-  it('denies the delivering expert naturally — no membership in the client company', async () => {
+  it('denies a dual-role delivering expert — a client member reviewing themselves', async () => {
     primeHappyPath();
-    // The expert holds no `company_members` row, so getMemberRole → undefined → false.
-    mockHasCapability.mockResolvedValue(false);
+    // Dual role: they pass PARTICIPATE AND are the delivering expert's user.
+    mockHasCapability.mockResolvedValue(true);
+    mockFindExpertUser.mockResolvedValue({ user: { id: REVIEWER_ID } });
 
-    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 1 });
+    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5, body: 'Superb' });
+
+    expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
+    expect(mockHasCapability).toHaveBeenCalledWith({ id: REVIEWER_ID }, 'participate', {
+      companyId: COMPANY_ID,
+    });
+    expect(mockFindExpertUser).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Review write blocked: reviewer is the delivering expert',
+      {
+        engagementId: ENGAGEMENT_ID,
+        userId: REVIEWER_ID,
+        authMethod: 'magic_link',
+        surface: 'email',
+      }
+    );
+    expect(log.warn).toHaveBeenCalledWith('Review write refused on the magic-link path', {
+      engagementId: ENGAGEMENT_ID,
+      userId: REVIEWER_ID,
+      reason: 'forbidden',
+    });
+  });
+
+  it('fails closed when the delivering expert cannot be resolved — no write', async () => {
+    primeHappyPath();
+    mockFindExpertUser.mockResolvedValue(undefined);
+
+    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith('Review write blocked: delivering expert not found', {
+      engagementId: ENGAGEMENT_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      userId: REVIEWER_ID,
+      authMethod: 'magic_link',
+      surface: 'email',
+    });
+    expect(log.warn).toHaveBeenCalledWith('Review write refused on the magic-link path', {
+      engagementId: ENGAGEMENT_ID,
+      userId: REVIEWER_ID,
+      reason: 'not_found',
+    });
   });
 
   it('returns the SAME opaque failure for an unknown / expired / revoked token', async () => {
@@ -279,6 +329,7 @@ describe('submitTokenReviewAction', () => {
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
     expect(mockHasCapability).not.toHaveBeenCalled();
+    expect(mockFindExpertUser).not.toHaveBeenCalled();
   });
 
   it('degrades a repository fault to the same opaque failure', async () => {
@@ -288,6 +339,7 @@ describe('submitTokenReviewAction', () => {
     const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
 
     expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
+    expect(mockUpsert).toHaveBeenCalled();
     expect(mockTrack).not.toHaveBeenCalled();
   });
 });

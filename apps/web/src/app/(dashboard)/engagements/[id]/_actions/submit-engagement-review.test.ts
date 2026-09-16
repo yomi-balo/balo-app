@@ -4,6 +4,7 @@ const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';
 const VIEWER_ID = 'b0000000-0000-4000-8000-000000000002';
 const COMPANY_ID = 'c0000000-0000-4000-8000-000000000003';
 const EXPERT_PROFILE_ID = 'd0000000-0000-4000-8000-000000000004';
+const EXPERT_USER_ID = 'f0000000-0000-4000-8000-000000000005';
 
 vi.mock('server-only', () => ({}));
 
@@ -30,14 +31,16 @@ vi.mock('@/lib/rate-limit/memory-window', () => ({
   checkMemoryLimit: (...a: unknown[]) => mockCheckLimit(...a),
 }));
 
-const { mockFindEngagement, mockUpsert } = vi.hoisted(() => ({
+const { mockFindEngagement, mockUpsert, mockFindExpertUser } = vi.hoisted(() => ({
   mockFindEngagement: vi.fn(),
   mockUpsert: vi.fn(),
+  mockFindExpertUser: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
   engagementsRepository: { findById: (...a: unknown[]) => mockFindEngagement(...a) },
   reviewsRepository: { upsert: (...a: unknown[]) => mockUpsert(...a) },
+  expertsRepository: { findUserIdByProfileId: (...a: unknown[]) => mockFindExpertUser(...a) },
 }));
 
 const mockTrack = vi.fn();
@@ -67,6 +70,7 @@ function primeHappyPath(): void {
     expertProfileId: EXPERT_PROFILE_ID,
   });
   mockHasCapability.mockResolvedValue(true);
+  mockFindExpertUser.mockResolvedValue({ user: { id: EXPERT_USER_ID } });
   mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: true, ratingCount: 3 });
   mockCheckLimit.mockReturnValue(true);
 }
@@ -243,6 +247,33 @@ describe('submitEngagementReviewAction', () => {
     expect(denied).toEqual({ success: false, error: REVIEW_ENGAGEMENT_NOT_FOUND });
     expect(denied).toEqual(missing);
     expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('refuses a dual-role delivering expert reviewing themselves — same not-found copy, no write', async () => {
+    primeHappyPath();
+    mockHasCapability.mockResolvedValue(true);
+    mockFindExpertUser.mockResolvedValue({ user: { id: VIEWER_ID } });
+
+    const result = await submitEngagementReviewAction({
+      engagementId: ENGAGEMENT_ID,
+      rating: 5,
+      body: 'Superb',
+      surface: 'end_of_call',
+    });
+
+    expect(result).toEqual({ success: false, error: REVIEW_ENGAGEMENT_NOT_FOUND });
+    expect(mockFindExpertUser).toHaveBeenCalledWith(EXPERT_PROFILE_ID);
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Review write blocked: reviewer is the delivering expert',
+      {
+        engagementId: ENGAGEMENT_ID,
+        userId: VIEWER_ID,
+        authMethod: 'session',
+        surface: 'end_of_call',
+      }
+    );
   });
 
   it('surfaces a repository fault as the generic failure, distinct from not-found', async () => {
