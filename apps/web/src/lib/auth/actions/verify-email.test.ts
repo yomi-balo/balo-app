@@ -1,6 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { log as mockLog } from '@/lib/logging';
 
 // ── Mocks ───────────────────────────────────────────────────────
+
+// BAL-489 — the guest-conversion call is scheduled with `after()`, not awaited
+// inline. Capture callbacks rather than running them, so the action
+// can be asserted NOT to have called the helper synchronously; tests run the captured
+// callback(s) explicitly. `@/lib/analytics/server` is mocked wholesale below (its own
+// `after()`-based flush never runs), so this array only ever holds our own scheduling.
+let capturedAfter: Array<() => unknown> = [];
+vi.mock('next/server', () => ({
+  after: (cb: () => unknown) => {
+    capturedAfter.push(cb);
+  },
+}));
+
+/** Run every callback captured via `after()` so far, awaiting each in turn. */
+async function runCapturedAfterCallbacks(): Promise<void> {
+  const callbacks = capturedAfter;
+  capturedAfter = [];
+  for (const cb of callbacks) {
+    await cb();
+  }
+}
 
 const mockAuthenticateWithEmailVerification = vi.fn();
 vi.mock('@/lib/auth/config', () => ({
@@ -49,6 +71,16 @@ vi.mock('@/lib/analytics/server', () => ({
 const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
 vi.mock('@/lib/domain-join/run-domain-join', () => ({
   runDomainJoinAndEmit: (...args: unknown[]) => mockRunDomainJoinAndEmit(...args),
+}));
+
+// BAL-489 — the guest→member linkage helper. Mocked so this suite never loads the real
+// repository (the `@balo/db` factory mock above has no `meetingGuestsRepository`, and a
+// missing export would be swallowed by the helper's own catch — a silent false green).
+const mockRunGuestConversionAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() =>
+  Promise.resolve()
+);
+vi.mock('@/lib/guest-conversion/run-guest-conversion', () => ({
+  runGuestConversionAndEmit: (...a: unknown[]) => mockRunGuestConversionAndEmit(...a),
 }));
 
 import { verifyEmailAction } from './verify-email';
@@ -111,6 +143,22 @@ function mockFindWithCompanyResult() {
   };
 }
 
+// Shared by every "does NOT run for an existing user (race path)" case below — the
+// domain-join and guest-linkage wiring describes, plus the race-condition test itself,
+// all exercise the SAME race shape.
+function setupExistingUserRace() {
+  mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
+  mockFindByWorkosId.mockResolvedValue({
+    id: 'user-1',
+    email: 'jane@example.com',
+    firstName: null,
+    lastName: null,
+    activeMode: 'client',
+  });
+  mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
+  mockSave.mockResolvedValue(undefined);
+}
+
 function setupHappyPath() {
   mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
   mockFindByWorkosId.mockResolvedValue(null); // User doesn't exist yet
@@ -124,6 +172,7 @@ function setupHappyPath() {
 describe('verifyEmailAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capturedAfter = [];
     mockSessionObj = { save: mockSave };
     // BAL-362: default the email fallback to a miss so the create path is
     // unaffected. Re-link / conflict tests override per-case.
@@ -223,16 +272,7 @@ describe('verifyEmailAction', () => {
     });
 
     it('skips creation when user already exists (race condition)', async () => {
-      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
-      mockFindByWorkosId.mockResolvedValue({
-        id: 'user-1',
-        email: 'jane@example.com',
-        firstName: null,
-        lastName: null,
-        activeMode: 'client',
-      });
-      mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
-      mockSave.mockResolvedValue(undefined);
+      setupExistingUserRace();
 
       const result = await verifyEmailAction(validInput());
       expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
@@ -367,16 +407,7 @@ describe('verifyEmailAction', () => {
     });
 
     it('does NOT run the match engine when the user already exists (race path)', async () => {
-      mockAuthenticateWithEmailVerification.mockResolvedValue(mockAuthResponse());
-      mockFindByWorkosId.mockResolvedValue({
-        id: 'user-1',
-        email: 'jane@example.com',
-        firstName: null,
-        lastName: null,
-        activeMode: 'client',
-      });
-      mockFindWithCompany.mockResolvedValue(mockFindWithCompanyResult());
-      mockSave.mockResolvedValue(undefined);
+      setupExistingUserRace();
 
       await verifyEmailAction(validInput());
       expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
@@ -388,6 +419,67 @@ describe('verifyEmailAction', () => {
 
       const result = await verifyEmailAction(validInput());
       expect(result.success).toBe(true);
+    });
+  });
+
+  // BAL-489 — guest→member linkage seam wiring.
+  describe('guest → member linkage wiring (BAL-489)', () => {
+    it('is not called synchronously; schedules exactly one callback that calls the helper once with the same facts as domain-join', async () => {
+      setupHappyPath();
+      const result = await verifyEmailAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
+
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith({
+        userId: 'user-1',
+        email: 'jane@example.com',
+        emailVerified: true,
+      });
+    });
+
+    it('does NOT schedule linkage for an existing user (race path)', async () => {
+      setupExistingUserRace();
+
+      await verifyEmailAction(validInput());
+      await runCapturedAfterCallbacks();
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('a linkage rejection inside the scheduled callback is swallowed — logged without the email', async () => {
+      setupHappyPath();
+      mockRunGuestConversionAndEmit.mockRejectedValueOnce(new Error('linkage boom'));
+
+      const result = await verifyEmailAction(validInput());
+      expect(result.success).toBe(true);
+
+      await expect(runCapturedAfterCallbacks()).resolves.toBeUndefined();
+
+      const warnCall = vi
+        .mocked(mockLog.warn)
+        .mock.calls.find(
+          ([, data]) => (data as Record<string, unknown> | undefined)?.userId === 'user-1'
+        );
+      expect(warnCall).toBeDefined();
+      const serialized = JSON.stringify(warnCall);
+      expect(serialized).toContain('user-1');
+      expect(serialized).not.toContain('jane@example.com');
+    });
+
+    it('independence (R10): a domain-join rejection does not stop the linkage from being scheduled, and the action still succeeds', async () => {
+      setupHappyPath();
+      mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('domain-join boom'));
+
+      const result = await verifyEmailAction(validInput());
+      expect(result.success).toBe(true);
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -425,8 +517,9 @@ describe('verifyEmailAction', () => {
         emailVerified: true,
       });
       expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
-      // A re-linked user is NOT new — no welcome email / domain-join.
+      // A re-linked user is NOT new — no welcome email / domain-join / guest linkage.
       expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
       expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_relink', {
         distinct_id: 'user-1',
         method: 'otp',

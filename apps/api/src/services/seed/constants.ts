@@ -34,9 +34,10 @@ export const SEED_WORKOS_PREFIX = 'seed_';
  *
  * NO `domain` IS SET, deliberately. A company carrying `domain = 'seed.balo.dev'` with the
  * default `domain_join_mode = 'auto'` would make every seed user a domain auto-join
- * candidate (BAL-345). That machinery is inert today (it is gated behind `isPersonal`), so
- * this would be latent rather than live — which is exactly the kind of thing that wakes up
- * unnoticed. The seeder does not need a domain, so it does not set one.
+ * candidate (BAL-345). That machinery is LIVE, not inert: BAL-345's detect engine stands down
+ * only for an `isPersonal` workspace (`run-domain-join.ts` step 5a), and this company is
+ * `isPersonal: false` — so a seeded domain would make a real signup on that domain a live join
+ * candidate. The seeder does not need a domain, so it does not set one.
  */
 export const SEED_COMPANY_SLUG = 'balo-seed-co';
 export const SEED_COMPANY_NAME = 'Balo Seed Co';

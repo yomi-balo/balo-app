@@ -746,6 +746,8 @@ export {
   type DecideMeetingGuestAdmissionInput,
   type MeetingGuestWithMeeting,
   type MeetingGuestPublic,
+  type LinkConvertedUserInput,
+  type ConvertedGuestLink,
 } from './meeting-guests';
 export type {
   MeetingGuest,

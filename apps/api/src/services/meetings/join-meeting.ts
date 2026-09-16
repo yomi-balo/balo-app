@@ -74,6 +74,7 @@ import {
   MAX_LOBBY_QUEUE,
   MAX_MEETING_PARTICIPANTS,
   RESERVED_BASE_PARTICIPANTS,
+  canonicalGuestEmail,
   dailyParticipantIdFor,
   dailyRoomNameForMeeting,
   selectPrimaryMeetingContext,
@@ -99,7 +100,6 @@ import {
 } from './authorize-meeting-participation.js';
 import { resolveEndAuthority } from './authorize-end-meeting.js';
 import { assertMeetingJoinable } from './meeting-liveness.js';
-import { canonicalEmail } from './guest-participation.js';
 import { resolveMeetingContextLabel } from './resolve-meeting-context-label.js';
 import { resolveWaitingCounterparty } from './resolve-waiting-counterparty.js';
 import { raiseAdminAlert } from '../admin-alerts/raise.js';
@@ -971,11 +971,12 @@ function joinMethodFor(inviteChannel: MeetingGuest['inviteChannel']): GuestJoinM
  */
 export async function claimLobbyPlace(input: ClaimLobbyPlaceInput): Promise<ClaimLobbyPlaceResult> {
   const { meetingId } = input;
-  // ⚠ THROUGH THE SHARED `canonicalEmail`, NOT A SECOND DEFINITION. The partial unique index
-  // `meeting_guest_meeting_email_live_idx` matches the STORED BYTES, which is what makes ONE
-  // ADDRESS worth at most ONE queue row. It is NOT the only bound on a flood — `MAX_LOBBY_QUEUE`
-  // below bounds the queue across all addresses, and the route's windows bound the rate.
-  const email = canonicalEmail(input.email);
+  // ⚠ THROUGH THE SHARED `canonicalGuestEmail` (`@balo/shared/meetings`), NOT A SECOND
+  // DEFINITION. The partial unique index `meeting_guest_meeting_email_live_idx` matches the
+  // STORED BYTES, which is what makes ONE ADDRESS worth at most ONE queue row. It is NOT the
+  // only bound on a flood — `MAX_LOBBY_QUEUE` below bounds the queue across all addresses, and
+  // the route's windows bound the rate.
+  const email = canonicalGuestEmail(input.email);
   const name = input.name.trim();
 
   const meeting = await meetingsRepository.findById(meetingId);

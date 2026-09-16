@@ -54,9 +54,15 @@ vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 // ⚠ THE FACTORY MUST NAME EVERY EXPORT THE IMPORT GRAPH TOUCHES — a vitest factory mock
-// throws on any omitted one. `guest-participation.js` is loaded FOR REAL (we import the real
-// `canonicalEmail` from it rather than writing a second definition), so its repositories are
-// listed here too even though this suite never calls them.
+// throws on any omitted one. `guest-participation.js` is NO LONGER in this suite's import
+// graph (BAL-489 moved the shared email canonicaliser into `canonicalGuestEmail`
+// (`@balo/shared/meetings`), and `join-meeting.ts` no longer imports the apps/api file at
+// all). The repositories below are touched by the REAL modules still in the graph —
+// `resolve-meeting-context-label.ts`, `resolve-waiting-counterparty.ts`,
+// `meeting-liveness.ts`, `authorize-end-meeting.ts`, and `join-meeting.ts` itself.
+// `agenciesRepository`, `partyDomainsRepository` and `requestExpertRelationshipsRepository`
+// are LEFTOVER from when `guest-participation.js` was in the graph — kept rather than
+// pruned, since an unused factory key is harmless.
 vi.mock('@balo/db', () => ({
   meetingsRepository: { findById: mockMeetingFindById },
   meetingContextsRepository: { listByMeeting: mockListByMeeting },

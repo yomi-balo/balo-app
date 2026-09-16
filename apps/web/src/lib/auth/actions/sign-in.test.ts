@@ -1,6 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { log as mockLog } from '@/lib/logging';
 
 // ── Mocks ───────────────────────────────────────────────────────
+
+// BAL-489 — the guest-conversion call is scheduled with `after()`, not awaited
+// inline. Capture callbacks rather than running them, so the action
+// can be asserted NOT to have called the helper synchronously; tests run the captured
+// callback(s) explicitly. `@/lib/analytics/server` is mocked wholesale below (its own
+// `after()`-based flush never runs), so this array only ever holds our own scheduling.
+let capturedAfter: Array<() => unknown> = [];
+vi.mock('next/server', () => ({
+  after: (cb: () => unknown) => {
+    capturedAfter.push(cb);
+  },
+}));
+
+/** Run every callback captured via `after()` so far, awaiting each in turn. */
+async function runCapturedAfterCallbacks(): Promise<void> {
+  const callbacks = capturedAfter;
+  capturedAfter = [];
+  for (const cb of callbacks) {
+    await cb();
+  }
+}
 
 const mockAuthenticateWithPassword = vi.fn();
 vi.mock('@/lib/auth/config', () => ({
@@ -59,6 +81,16 @@ vi.mock('@/lib/analytics/server', () => ({
 const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
 vi.mock('@/lib/domain-join/run-domain-join', () => ({
   runDomainJoinAndEmit: (...args: unknown[]) => mockRunDomainJoinAndEmit(...args),
+}));
+
+// BAL-489 — the guest→member linkage helper. Mocked so this suite never loads the real
+// repository (the `@balo/db` factory mock above has no `meetingGuestsRepository`, and a
+// missing export would be swallowed by the helper's own catch — a silent false green).
+const mockRunGuestConversionAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() =>
+  Promise.resolve()
+);
+vi.mock('@/lib/guest-conversion/run-guest-conversion', () => ({
+  runGuestConversionAndEmit: (...a: unknown[]) => mockRunGuestConversionAndEmit(...a),
 }));
 
 import { signInAction } from './sign-in';
@@ -122,6 +154,7 @@ function setupHappyPath(userOverrides: Record<string, unknown> = {}) {
 describe('signInAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capturedAfter = [];
     mockSessionObj = { save: mockSave };
     mockTouch.mockResolvedValue(undefined);
     // BAL-362: default the email fallback to a miss so the create / findByWorkosId
@@ -420,17 +453,19 @@ describe('signInAction', () => {
     });
   });
 
+  // Shared by the two orphan-recovery wiring describes below (BAL-345 + BAL-489): both fire
+  // on the SAME create branch, so they share one setup rather than duplicating it.
+  function setupOrphanRecovery(workosOverrides: Record<string, unknown> = {}) {
+    mockAuthenticateWithPassword.mockResolvedValue(mockWorkOSAuthResponse(workosOverrides));
+    mockFindByWorkosId.mockResolvedValue(undefined);
+    mockCreateWithWorkspace.mockResolvedValue({ user: mockBaloUser() });
+    mockFindWithCompany.mockResolvedValue(mockCompanyData());
+    mockTouch.mockResolvedValue(undefined);
+    mockSave.mockResolvedValue(undefined);
+  }
+
   // BAL-345 — domain auto-join seam wiring (orphan-recovery create branch only).
   describe('domain auto-join wiring (BAL-345)', () => {
-    function setupOrphanRecovery(workosOverrides: Record<string, unknown> = {}) {
-      mockAuthenticateWithPassword.mockResolvedValue(mockWorkOSAuthResponse(workosOverrides));
-      mockFindByWorkosId.mockResolvedValue(undefined);
-      mockCreateWithWorkspace.mockResolvedValue({ user: mockBaloUser() });
-      mockFindWithCompany.mockResolvedValue(mockCompanyData());
-      mockTouch.mockResolvedValue(undefined);
-      mockSave.mockResolvedValue(undefined);
-    }
-
     it('runs the match engine with the WorkOS emailVerified flag (true)', async () => {
       setupOrphanRecovery({ emailVerified: true });
       await signInAction(validInput());
@@ -460,6 +495,92 @@ describe('signInAction', () => {
       mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('engine boom'));
       const result = await signInAction(validInput());
       expect(result.success).toBe(true);
+    });
+  });
+
+  // BAL-489 — guest→member linkage seam wiring (orphan-recovery create branch only).
+  describe('guest → member linkage wiring (BAL-489)', () => {
+    it('is not called synchronously; schedules exactly one callback that calls the helper once with the same facts as domain-join', async () => {
+      setupOrphanRecovery({ emailVerified: true });
+      const result = await signInAction(validInput());
+
+      expect(result.success).toBe(true);
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
+
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith({
+        userId: 'user-1',
+        email: 'user@example.com',
+        emailVerified: true,
+      });
+    });
+
+    it('passes emailVerified: false when WorkOS reports it unverified (null → false)', async () => {
+      setupOrphanRecovery({ emailVerified: null });
+      await signInAction(validInput());
+      await runCapturedAfterCallbacks();
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith(
+        expect.objectContaining({ emailVerified: false })
+      );
+    });
+
+    it('does NOT schedule linkage for an existing (non-orphan) user', async () => {
+      setupHappyPath();
+      await signInAction(validInput());
+      await runCapturedAfterCallbacks();
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('(BAL-362) does NOT schedule linkage on the re-link path either', async () => {
+      mockAuthenticateWithPassword.mockResolvedValue(
+        mockWorkOSAuthResponse({ emailVerified: true })
+      );
+      mockFindByWorkosId.mockResolvedValue(undefined);
+      mockFindByEmail.mockResolvedValue({
+        id: 'user-1',
+        workosId: 'W1',
+        email: 'user@example.com',
+        emailVerified: true,
+      });
+      mockRelinkWorkosId.mockResolvedValue(mockBaloUser());
+      mockFindWithCompany.mockResolvedValue(mockCompanyData());
+
+      await signInAction(validInput());
+      await runCapturedAfterCallbacks();
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('a linkage rejection inside the scheduled callback is swallowed — logged without the email', async () => {
+      setupOrphanRecovery();
+      mockRunGuestConversionAndEmit.mockRejectedValueOnce(new Error('linkage boom'));
+      const result = await signInAction(validInput());
+      expect(result.success).toBe(true);
+
+      await expect(runCapturedAfterCallbacks()).resolves.toBeUndefined();
+
+      const warnCall = vi
+        .mocked(mockLog.warn)
+        .mock.calls.find(
+          ([, data]) => (data as Record<string, unknown> | undefined)?.userId === 'user-1'
+        );
+      expect(warnCall).toBeDefined();
+      const serialized = JSON.stringify(warnCall);
+      expect(serialized).toContain('user-1');
+      expect(serialized).not.toContain('user@example.com');
+    });
+
+    it('independence (R10): a domain-join rejection does not stop the linkage from being scheduled, and sign-in still succeeds', async () => {
+      setupOrphanRecovery();
+      mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('domain-join boom'));
+      const result = await signInAction(validInput());
+      expect(result.success).toBe(true);
+      expect(capturedAfter).toHaveLength(1);
+
+      await runCapturedAfterCallbacks();
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -495,8 +616,9 @@ describe('signInAction', () => {
         emailVerified: true,
       });
       expect(mockCreateWithWorkspace).not.toHaveBeenCalled();
-      // A re-linked user is NOT new — no orphan-recovery domain-join runs.
+      // A re-linked user is NOT new — no orphan-recovery domain-join / guest linkage runs.
       expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
       expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_relink', {
         distinct_id: 'user-1',
         method: 'password',

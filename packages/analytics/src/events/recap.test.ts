@@ -194,7 +194,7 @@ describe('BAL-388 declares no event without a producer', () => {
     },
     {
       event: 'guest_converted_to_member',
-      why: 'D-A — still no guest lens (R5: BAL-439 opened the recap read-only to a guest via a SIBLING gate and view-model, never a fourth RecapLens value); undeclared because this PR has no producer (R7/R8) — BAL-489 owns the guest→user linkage writer',
+      why: 'D-A — not a recap event: still no guest lens (R5 — BAL-439 opened the recap to a guest via a SIBLING gate and view-model, never a fourth RecapLens value). It IS declared — in events/guest.ts, where BAL-489 landed it WITH its producer (the guest→member linkage at new-user creation) — so this pin only keeps it out of the RECAP_* families',
     },
   ];
 

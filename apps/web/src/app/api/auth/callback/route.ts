@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { mapWorkosAuthMethod } from '@/lib/auth/auth-method';
@@ -7,10 +7,11 @@ import { isValidReturnTo } from '@/lib/auth/validation';
 import { PENDING_APPLY_PATH } from '@/lib/auth/onboarding-return-to';
 import { AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser } from '@/lib/auth/resolve-identity';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
+import { runGuestConversionAndEmit } from '@/lib/guest-conversion/run-guest-conversion';
 import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 import { sealedPlatformCapabilities } from '@/lib/auth/session-platform-capabilities';
@@ -213,17 +214,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         // publishNotificationEvent already logs internally
       });
 
-      // BAL-345: run the domain auto-join match engine (post-commit). OAuth may
-      // return an UNVERIFIED email — pass the real WorkOS flag, never assume true.
-      // The engine's verified hard-gate stands down when it is false. The `.catch`
-      // is belt-and-suspenders so a domain-join failure can NEVER break auth.
-      await runDomainJoinAndEmit({
+      // BAL-345 + BAL-489 — two post-commit new-user helpers. OAuth may
+      // return an UNVERIFIED email — pass the real WorkOS flag, never assume true;
+      // both helpers' verified hard-gates stand down when it is false. Domain-join
+      // runs INLINE with its own belt-and-suspenders `.catch` (it
+      // already logs internally). Guest-conversion is scheduled with `after()` so it
+      // runs strictly AFTER the response — it can neither fail nor delay signup — and
+      // its `.catch` covers a call that rejects inside that scheduled callback.
+      const newUserIdentity = {
         userId: resolved.user.id,
         email: resolved.user.email,
         emailVerified: workosUser.emailVerified === true,
-      }).catch(() => {
+      };
+      await runDomainJoinAndEmit(newUserIdentity).catch(() => {
         // runDomainJoinAndEmit already logs internally.
       });
+      after(() =>
+        runGuestConversionAndEmit(newUserIdentity).catch((error: unknown) => {
+          log.warn('Guest conversion rejected after OAuth callback (auth unaffected)', {
+            userId: newUserIdentity.userId,
+            error: errorMessage(error),
+          });
+        })
+      );
     }
 
     log.info('OAuth callback succeeded', {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NextRequest } from 'next/server';
+import { log as mockLog } from '@/lib/logging';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -69,7 +70,21 @@ const { mockIsValidReturnTo } = vi.hoisted(() => ({
 vi.mock('@/lib/auth/validation', () => ({
   isValidReturnTo: (...a: unknown[]) => mockIsValidReturnTo(...a),
 }));
-vi.mock('@/lib/logging', () => ({ log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
+vi.mock('@/lib/logging', () => ({
+  log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+  // BAL-489 — route.ts imports `errorMessage` (used inside the `after()` linkage
+  // `.catch`). The REAL implementation, not a `vi.fn()` — see setup.ts's global
+  // mock for why: several assertions below check the exact serialized error string.
+  errorMessage: (err: unknown): string => {
+    if (err instanceof Error) return err.message;
+    if (typeof err === 'string') return err;
+    try {
+      return JSON.stringify(err) ?? 'Unknown error';
+    } catch {
+      return 'Unknown error';
+    }
+  },
+}));
 vi.mock('@/lib/notifications/publish', () => ({
   publishNotificationEvent: () => Promise.resolve(),
 }));
@@ -77,6 +92,16 @@ vi.mock('@/lib/notifications/publish', () => ({
 const mockRunDomainJoinAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve());
 vi.mock('@/lib/domain-join/run-domain-join', () => ({
   runDomainJoinAndEmit: (...a: unknown[]) => mockRunDomainJoinAndEmit(...a),
+}));
+
+// BAL-489 — the guest→member linkage helper. Mocked so this suite never loads the real
+// repository (the `@balo/db` factory mock above has no `meetingGuestsRepository`, and a
+// missing export would be swallowed by the helper's own catch — a silent false green).
+const mockRunGuestConversionAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() =>
+  Promise.resolve()
+);
+vi.mock('@/lib/guest-conversion/run-guest-conversion', () => ({
+  runGuestConversionAndEmit: (...a: unknown[]) => mockRunGuestConversionAndEmit(...a),
 }));
 
 // BAL-494 — the workspace hydration seam. Default to `null` (no company at all) so every
@@ -87,7 +112,25 @@ vi.mock('@/lib/workspaces/derive-workspaces', () => ({
 }));
 
 const mockRedirect = vi.fn((url: URL) => ({ url: url.toString(), cookies: { delete: vi.fn() } }));
-vi.mock('next/server', () => ({ NextResponse: { redirect: (url: URL) => mockRedirect(url) } }));
+// BAL-489 — the guest-conversion call is scheduled with `after()`, not awaited inline. Capture callbacks rather than running them, so a new-user request can be
+// asserted NOT to have called the helper synchronously; tests run the captured callback(s)
+// explicitly to exercise the scheduled work.
+let capturedAfter: Array<() => unknown> = [];
+vi.mock('next/server', () => ({
+  NextResponse: { redirect: (url: URL) => mockRedirect(url) },
+  after: (cb: () => unknown) => {
+    capturedAfter.push(cb);
+  },
+}));
+
+/** Run every callback captured via `after()` so far, awaiting each in turn. */
+async function runCapturedAfterCallbacks(): Promise<void> {
+  const callbacks = capturedAfter;
+  capturedAfter = [];
+  for (const cb of callbacks) {
+    await cb();
+  }
+}
 
 import { GET } from './route';
 
@@ -148,6 +191,7 @@ function setupNewUser(over: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  capturedAfter = [];
   mockSessionObj = { save: mockSave };
   mockDeriveWorkspacesForUser.mockResolvedValue(null);
   mockIsValidReturnTo.mockReturnValue(false);
@@ -214,6 +258,103 @@ describe('OAuth callback — domain auto-join wiring (BAL-345)', () => {
   });
 });
 
+describe('OAuth callback — guest → member linkage wiring (BAL-489)', () => {
+  // BAL-489 — linkage is SCHEDULED with `after()`, not awaited inline. These cases assert the helper is never called synchronously and that the
+  // scheduled callback carries the right identity when it eventually runs.
+  it('runs the helper with the SAME facts as domain-join, scheduled once, not called synchronously', async () => {
+    setupNewUser({ emailVerified: true });
+    await GET(makeReq('auth-code'));
+
+    expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+    expect(capturedAfter).toHaveLength(1);
+
+    await runCapturedAfterCallbacks();
+
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith({
+      userId: 'user-1',
+      email: 'jane@corp.io',
+      emailVerified: true,
+    });
+  });
+
+  it('passes emailVerified: false when WorkOS reports an unverified OAuth email', async () => {
+    setupNewUser({ emailVerified: false });
+    await GET(makeReq('auth-code'));
+    await runCapturedAfterCallbacks();
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith(
+      expect.objectContaining({ emailVerified: false })
+    );
+  });
+
+  it('does NOT run for an EXISTING user', async () => {
+    mockAuthenticateWithCode.mockResolvedValue({
+      user: workosUser(),
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    mockFindByWorkosId.mockResolvedValue({ id: 'user-1', email: 'jane@corp.io' });
+    mockUpdate.mockResolvedValue({
+      id: 'user-1',
+      email: 'jane@corp.io',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      avatarUrl: null,
+      activeMode: 'client',
+      onboardingCompleted: true,
+      platformRole: 'user',
+      emailVerified: true,
+    });
+    mockFindWithCompany.mockResolvedValue({
+      companyMemberships: [{ role: 'owner', company: { id: 'co-1', name: 'Corp' } }],
+    });
+    mockExpertFindFirst.mockResolvedValue(null);
+
+    await GET(makeReq('auth-code'));
+    await runCapturedAfterCallbacks();
+    expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+  });
+
+  it('a linkage rejection inside the scheduled callback is swallowed — logged without the email', async () => {
+    setupNewUser();
+    mockRunGuestConversionAndEmit.mockRejectedValueOnce(new Error('linkage boom'));
+
+    await GET(makeReq('auth-code'));
+
+    // The route already redirected before the scheduled callback ever runs.
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding');
+    expect(redirectedTo).not.toContain('error=auth_failed');
+
+    await expect(runCapturedAfterCallbacks()).resolves.toBeUndefined();
+
+    expect(vi.mocked(mockLog.warn)).toHaveBeenCalled();
+    const warnCall = vi
+      .mocked(mockLog.warn)
+      .mock.calls.find(
+        ([, data]) => (data as Record<string, unknown> | undefined)?.userId === 'user-1'
+      );
+    expect(warnCall).toBeDefined();
+    const serialized = JSON.stringify(warnCall);
+    expect(serialized).toContain('user-1');
+    expect(serialized).not.toContain('jane@corp.io');
+  });
+
+  it('independence (R10): a domain-join rejection does not stop the linkage from being scheduled', async () => {
+    setupNewUser();
+    mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('domain-join boom'));
+
+    await GET(makeReq('auth-code'));
+
+    expect(capturedAfter).toHaveLength(1);
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding');
+
+    await runCapturedAfterCallbacks();
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', () => {
   const returningMembership = {
     companyMemberships: [{ role: 'owner', company: { id: 'co-1', name: 'Corp' } }],
@@ -262,8 +403,9 @@ describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', 
       distinct_id: 'user-1',
       method: 'oauth',
     });
-    // Re-linked user is NOT a new user — no welcome email / domain-join.
+    // Re-linked user is NOT a new user — no welcome email / domain-join / guest linkage.
     expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+    expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
 
     const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
     expect(redirectedTo).not.toContain('error=account_exists');

@@ -15,6 +15,12 @@ import { describe, expect, it } from 'vitest';
  * the pinned seam+engine files — NOT the whole `lib/auth/actions` directory, because
  * the wizard consent actions legitimately write and must not be flagged.
  *
+ * ⚠ BAL-489 adds ONE durable signup-time write on these same seams — the guest→member
+ * LINKAGE (`runGuestConversionAndEmit` → `meetingGuestsRepository.linkConvertedUser`,
+ * stamping `meeting_guests.converted_to_user_id`). It is deliberately OUTSIDE this scan:
+ * it is an identity linkage on a guest row, not a membership or a join request, and no
+ * reader treats `converted_to_user_id` as an authorization input — it grants nothing.
+ *
  * Scan set (pinned):
  *   - `lib/domain-join/run-domain-join.ts`   — the detect engine + post-commit helper
  *   - `lib/auth/actions/sign-up.ts`          — password sign-up seam

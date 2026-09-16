@@ -360,8 +360,9 @@ function indexFromEmail(email: string): number | null {
  * them. If a future fixture must be actionable, add the membership rows THEN, knowingly.
  *
  * `isPersonal: false` because this is a shared workspace standing in for a client org, not
- * one user's private space — and because `isPersonal` is the flag BAL-345's (inert) domain
- * auto-join keys off. No `domain` is set at all; see `SEED_COMPANY_SLUG`'s docblock.
+ * one user's private space — and because `isPersonal` is the flag BAL-345's domain auto-join
+ * stands down on (it is live for every non-personal company with a claimed domain). No
+ * `domain` is set at all; see `SEED_COMPANY_SLUG`'s docblock.
  */
 async function ensureSeedCompanyId(): Promise<string> {
   const [existing] = await db

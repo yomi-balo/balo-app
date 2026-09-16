@@ -45,6 +45,7 @@ import {
   GUEST_TOKEN_TTL_AFTER_END_MS,
   MAX_MEETING_PARTICIPANTS,
   RESERVED_BASE_PARTICIPANTS,
+  canonicalGuestEmail,
   projectGuestForViewer,
   type GuestAccessScopeLabel,
   type GuestForViewer,
@@ -152,24 +153,6 @@ export type ResendGuestLinkResult =
 /** A Postgres unique violation — the concurrent-invite race, mapped rather than 500'd. */
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === '23505';
-}
-
-/**
- * ⚠ CANONICALISE BEFORE EVERYTHING. `@balo/db` never normalises input (the `party_domains` /
- * `proposal_share_links` convention), and `meeting_guest_meeting_email_live_idx` matches the
- * STORED BYTES — so a caller that skips this silently permits `Dana@x.com` alongside
- * `dana@x.com` as two live invites to one meeting. Lowercased + trimmed here, once, before
- * the domain read, before the unique index, and before the notification payload.
- *
- * ⚠ EXPORTED FOR BAL-132, NOT COPIED. `claimLobbyPlace` writes into the SAME partial unique
- * index (`meeting_guest_meeting_email_live_idx`), which is the only bound on one visitor
- * spamming N pending rows into a host's queue — and that index matches the STORED BYTES. A
- * second definition of "the same address" on the lobby path would let `Dana@x.com` and
- * `dana@x.com` both insert, turning the queue cap into a formality. One definition, two
- * writers.
- */
-export function canonicalEmail(email: string): string {
-  return email.trim().toLowerCase();
 }
 
 /**
@@ -317,7 +300,7 @@ function dedupeByEmail(guests: InviteGuestInput[]): InviteGuestInput[] {
   const seen = new Set<string>();
   const unique: InviteGuestInput[] = [];
   for (const guest of guests) {
-    const email = canonicalEmail(guest.email);
+    const email = canonicalGuestEmail(guest.email);
     if (seen.has(email)) continue;
     seen.add(email);
     unique.push({ ...guest, email });

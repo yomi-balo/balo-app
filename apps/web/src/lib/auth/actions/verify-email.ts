@@ -2,16 +2,18 @@
 
 import 'server-only';
 
+import { after } from 'next/server';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
 import { usersRepository, type User } from '@balo/db';
 import { type AuthResult, mapWorkOSError, AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
 import { verifyEmailSchema, type VerifyEmailFormData } from '@/components/balo/auth/schemas';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
+import { runGuestConversionAndEmit } from '@/lib/guest-conversion/run-guest-conversion';
 
 export type VerifyEmailInput = VerifyEmailFormData;
 
@@ -134,14 +136,24 @@ export async function verifyEmailAction(
         // publishNotificationEvent logs internally
       });
 
-      // BAL-345: run the domain auto-join match engine (post-commit). `true` is
+      // BAL-345 + BAL-489 — two post-commit new-user helpers. `true` is
       // legitimately hardcoded here — the OTP flow PROVES the email is verified.
-      // runDomainJoinAndEmit swallows its own failures; the `.catch` is
-      // belt-and-suspenders so a domain-join failure can NEVER break auth.
-      await runDomainJoinAndEmit({ userId: user.id, email: user.email, emailVerified: true }).catch(
-        () => {
-          // runDomainJoinAndEmit already logs internally.
-        }
+      // Domain-join runs INLINE with its own belt-and-suspenders
+      // `.catch` (it already logs internally). Guest-conversion is scheduled with
+      // `after()` so it runs strictly AFTER the response — it can neither fail nor
+      // delay signup — and its `.catch` covers a call that rejects inside that
+      // scheduled callback (never surfaced through the helper's own logger).
+      const newUserIdentity = { userId: user.id, email: user.email, emailVerified: true };
+      await runDomainJoinAndEmit(newUserIdentity).catch(() => {
+        // runDomainJoinAndEmit already logs internally.
+      });
+      after(() =>
+        runGuestConversionAndEmit(newUserIdentity).catch((error: unknown) => {
+          log.warn('Guest conversion rejected after email verification (auth unaffected)', {
+            userId: newUserIdentity.userId,
+            error: errorMessage(error),
+          });
+        })
       );
     }
 

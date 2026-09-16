@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { db } from '../client';
 import { auditEvents, meetingGuests, meetingPresence, meetings, users } from '../schema';
 import type { MeetingGuest, NewMeetingGuest } from '../schema';
@@ -9,6 +9,7 @@ import { auditEventsRepository } from './audit-events';
 import {
   meetingGuestsRepository,
   type ClaimLobbyPlaceInput,
+  type ConvertedGuestLink,
   type CreateMeetingGuestInput,
 } from './meeting-guests';
 
@@ -1681,6 +1682,488 @@ describe('meetingGuestsRepository.rotateToken (BAL-436 — the re-send)', () => 
   );
 });
 
+// ── 6b. THE GUEST→MEMBER LINKAGE (BAL-489) ───────────────────────────────────
+
+describe('meetingGuestsRepository.linkConvertedUser (BAL-489 — the guest→member linkage)', () => {
+  const CONVERTED = 'meeting_guest.converted';
+
+  /**
+   * One ELIGIBLE row on a FRESH meeting: `email` channel, `pre_admitted`, live, unconverted.
+   * `values` rides on top, so a refusal case can force exactly one state away from eligible.
+   */
+  async function seedGuest(
+    email: string,
+    values: Partial<NewMeetingGuest> = {}
+  ): Promise<MeetingGuest> {
+    const { guest } = await meetingGuestFactory({ values: { email, ...values } });
+    return guest;
+  }
+
+  /** The linked guest ids, comparator-sorted (a bare `.sort()` is SonarCloud S2871). */
+  function linkedIds(links: readonly ConvertedGuestLink[]): string[] {
+    return links.map((link) => link.guestId).sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * ⚠⚠ THE NON-VACUITY RULE FOR EVERY REFUSAL CASE. Each one seeds an ELIGIBLE CONTROL row with
+   * the SAME address on a DIFFERENT meeting, and the result must be EXACTLY that control row. A
+   * bare `toEqual([])` would pass just as happily if the email never matched at all (a broken
+   * canonicaliser, a typo in the fixture) — the control proves the address DID match, so the
+   * predicate under test is the only thing that can have excluded the refused row.
+   *
+   * It also discharges "a no-op writes zero audit rows" (case 15) against a paired positive: the
+   * control carries exactly one `meeting_guest.converted` row, the refused row carries none.
+   */
+  async function expectOnlyControlLinked(
+    links: readonly ConvertedGuestLink[],
+    control: MeetingGuest,
+    refusedGuestId: string,
+    userId: string
+  ): Promise<void> {
+    expect(linkedIds(links)).toEqual([control.id]);
+
+    const refused = await readGuest(refusedGuestId);
+    expect(refused.convertedToUserId).toBeNull();
+    expect(refused.convertedAt).toBeNull();
+    expect(await guestAuditActions(refusedGuestId)).not.toContain(CONVERTED);
+
+    const linkedControl = await readGuest(control.id);
+    expect(linkedControl.convertedToUserId).toBe(userId);
+    await expect(guestAuditRows(control.id, CONVERTED)).resolves.toHaveLength(1);
+  }
+
+  it('links an eligible `email`-channel row — stamps the conversion pair, leaves `user_id` NULL, returns the anchor', async () => {
+    const user = await userFactory();
+    const { meeting } = await meetingFactory();
+    const { guest } = await meetingGuestFactory({
+      meetingId: meeting.id,
+      values: { email: 'dana@link-eligible.test' },
+    });
+    expect(guest.inviteChannel).toBe('email');
+    expect(guest.admission).toBe('pre_admitted');
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: 'dana@link-eligible.test',
+    });
+
+    // ⚠ NARROW: exactly these keys, so a widened projection (token_hash, joinUrl, …) fails here.
+    expect(links).toEqual([
+      {
+        guestId: guest.id,
+        meeting: { id: meeting.id, startedAt: null, scheduledStart: meeting.scheduledStart },
+      },
+    ]);
+
+    const stored = await readGuest(guest.id);
+    expect(stored.convertedToUserId).toBe(user.id);
+    expect(stored.convertedAt).toBeInstanceOf(Date);
+    // ⚠ R7 — `user_id` means "the Balo user this guest is", including a PRE-EXISTING user, which
+    // a new-user seam cannot produce. The linkage must never write it.
+    expect(stored.userId).toBeNull();
+
+    const audits = await guestAuditRows(guest.id, CONVERTED);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(user.id);
+    // ⚠ EXACT metadata — an `email` key (or anything else) widens this and fails.
+    expect(audits[0]?.metadata).toEqual({
+      meetingId: meeting.id,
+      party: 'client',
+      inviteChannel: 'email',
+    });
+  });
+
+  it('links an EXPIRED row — `expires_at` bounds the token, not the person (R5)', async () => {
+    const user = await userFactory();
+    const expired = await seedGuest('dana@link-expired.test', {
+      expiresAt: new Date(Date.now() - DAY_MS),
+    });
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: 'dana@link-expired.test',
+    });
+
+    expect(linkedIds(links)).toEqual([expired.id]);
+    expect((await readGuest(expired.id)).convertedToUserId).toBe(user.id);
+  });
+
+  it('⚠ REFUSES a REMOVED row (`revoke` stamps `revoked_at` AND `deleted_at`)', async () => {
+    const user = await userFactory();
+    const host = await userFactory();
+    const email = 'dana@refuse-removed.test';
+    const removed = await seedGuest(email);
+    await meetingGuestsRepository.revoke({ guestId: removed.id, revokedByUserId: host.id });
+    const control = await seedGuest(email);
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+
+    await expectOnlyControlLinked(links, control, removed.id, user.id);
+  });
+
+  it('⚠ REFUSES a DENIED-shape row — `revoked_at` ONLY, `deleted_at` NULL (isolates the revoked_at predicate)', async () => {
+    const user = await userFactory();
+    const email = 'dana@refuse-denied.test';
+    const denied = await seedGuest(email, {
+      admission: 'denied',
+      admissionDecidedAt: new Date(),
+      revokedAt: new Date(),
+    });
+    // The isolation is the point: `deleted_at` is NULL, so ONLY `revoked_at IS NULL` can refuse it.
+    expect(denied.deletedAt).toBeNull();
+    expect(denied.revokedAt).not.toBeNull();
+    const control = await seedGuest(email);
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+
+    await expectOnlyControlLinked(links, control, denied.id, user.id);
+  });
+
+  it('⚠ REFUSES a SOFT-DELETED-but-not-revoked row (isolates the deleted_at predicate)', async () => {
+    const user = await userFactory();
+    const email = 'dana@refuse-deleted.test';
+    const deleted = await seedGuest(email, { deletedAt: new Date() });
+    expect(deleted.revokedAt).toBeNull();
+    expect(deleted.deletedAt).not.toBeNull();
+    const control = await seedGuest(email);
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+
+    await expectOnlyControlLinked(links, control, deleted.id, user.id);
+  });
+
+  it('⚠⚠ REFUSES a `link`-channel row with the same address, EVEN ONCE ADMITTED (R4 — a typed address is not a verified one)', async () => {
+    const user = await userFactory();
+    const host = await userFactory();
+    const email = 'dana@refuse-link.test';
+    const { meeting } = await meetingFactory();
+    const knock = await meetingGuestsRepository.claimLobbyPlace(claimInput(meeting.id, { email }));
+    if (knock === undefined) {
+      throw new Error('expected the knock to be inserted');
+    }
+    const admitted = await meetingGuestsRepository.decideAdmission({
+      guestId: knock.id,
+      decision: 'admitted',
+      deciderUserId: host.id,
+    });
+    // The isolation: LIVE, UNREVOKED and ADMITTED — only the channel predicate can refuse it.
+    expect(admitted?.inviteChannel).toBe('link');
+    expect(admitted?.admission).toBe('admitted');
+    expect(admitted?.revokedAt).toBeNull();
+    expect(admitted?.deletedAt).toBeNull();
+    const control = await seedGuest(email);
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+
+    await expectOnlyControlLinked(links, control, knock.id, user.id);
+  });
+
+  it('⚠ matches the address EXACTLY — no alias or plus-address reconciliation (R3)', async () => {
+    const user = await userFactory();
+    const guest = await seedGuest('dana@exact-match.test');
+
+    for (const alias of ['dana.chen@exact-match.test', 'dana+work@exact-match.test']) {
+      await expect(
+        meetingGuestsRepository.linkConvertedUser({
+          convertedToUserId: user.id,
+          verifiedEmail: alias,
+        })
+      ).resolves.toEqual([]);
+    }
+    const untouched = await readGuest(guest.id);
+    expect(untouched.convertedToUserId).toBeNull();
+    expect(untouched.convertedAt).toBeNull();
+    expect(await guestAuditActions(guest.id)).not.toContain(CONVERTED);
+
+    // Non-vacuity: the row WAS eligible all along — the exact address links it.
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: 'dana@exact-match.test',
+    });
+    expect(linkedIds(links)).toEqual([guest.id]);
+  });
+
+  it('canonicalises the lookup key — a mixed-case, padded verified address links the stored lowercase row', async () => {
+    const user = await userFactory();
+    const guest = await seedGuest('dana@canonical-key.test');
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: '  Dana@Canonical-Key.TEST ',
+    });
+
+    expect(linkedIds(links)).toEqual([guest.id]);
+  });
+
+  it('⚠ REFUSES a non-ASCII verified address — Unicode case-folding must not alias onto an ASCII lookalike', async () => {
+    const user = await userFactory();
+    const email = 'kate@nonascii-guard.test';
+    const guest = await seedGuest(email);
+
+    // The KELVIN SIGN "K" (U+212A) lowercases to ASCII "k" under `.toLowerCase()` — this must be
+    // refused BEFORE any canonicalisation or DB I/O, so it never matches the stored ASCII row.
+    // Written as an explicit `\u212A` ESCAPE, deliberately NOT the literal glyph: NFC
+    // normalisation maps U+212A to plain ASCII 'K', so a tool that normalises source text
+    // (an editor, a formatter, a copy/paste through a lossy pipe) would silently turn this
+    // literal character into the SAME ASCII 'K' the control below uses, collapsing the
+    // refusal case into a second control without leaving any visible diff.
+    const kelvinSignEmail = '\u212A' + email.slice(1);
+    const refused = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: kelvinSignEmail,
+    });
+    expect(refused).toEqual([]);
+
+    const untouched = await readGuest(guest.id);
+    expect(untouched.convertedToUserId).toBeNull();
+    expect(await guestAuditActions(guest.id)).not.toContain(CONVERTED);
+
+    // Non-vacuity (control): the SAME row, addressed by a plain-ASCII case variant, WAS matchable.
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: 'K' + email.slice(1),
+    });
+    expect(linkedIds(links)).toEqual([guest.id]);
+  });
+
+  it('is IDEMPOTENT — a re-run links nothing, writes no second audit row, and leaves `converted_at` alone', async () => {
+    const user = await userFactory();
+    const email = 'dana@idempotent.test';
+    const guest = await seedGuest(email);
+    const first = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+    expect(linkedIds(first)).toEqual([guest.id]);
+
+    // ⚠ `now()` is the TRANSACTION timestamp, and the harness runs this whole test in ONE
+    // transaction — so a re-stamp would write the SAME instant and "unchanged" would be vacuous.
+    // Back-date the stamp first (still CHECK-legal: both columns stay set) so a re-stamp shows.
+    const backdated = new Date(Date.now() - 30 * DAY_MS);
+    await db
+      .update(meetingGuests)
+      .set({ convertedAt: backdated })
+      .where(eq(meetingGuests.id, guest.id));
+
+    const second = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+
+    expect(second).toEqual([]);
+    const stored = await readGuest(guest.id);
+    expect(stored.convertedAt?.getTime()).toBe(backdated.getTime());
+    await expect(guestAuditRows(guest.id, CONVERTED)).resolves.toHaveLength(1);
+  });
+
+  it('⚠ NEVER RE-POINTS an already-converted row to a second user', async () => {
+    const userA = await userFactory();
+    const userB = await userFactory();
+    const email = 'dana@never-repoint.test';
+    const guest = await seedGuest(email);
+    await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: userA.id,
+      verifiedEmail: email,
+    });
+
+    await expect(
+      meetingGuestsRepository.linkConvertedUser({
+        convertedToUserId: userB.id,
+        verifiedEmail: email,
+      })
+    ).resolves.toEqual([]);
+
+    expect((await readGuest(guest.id)).convertedToUserId).toBe(userA.id);
+    const audits = await guestAuditRows(guest.id, CONVERTED);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.actorUserId).toBe(userA.id);
+  });
+
+  it('links EVERY eligible row one address holds — both parties, several meetings — with ONE exact audit row each (R8 cardinality)', async () => {
+    const user = await userFactory();
+    const inviter = await userFactory();
+    const email = 'dana@multi-row.test';
+    const { meeting: m1 } = await meetingFactory();
+    const { meeting: m2 } = await meetingFactory();
+    const seeded = [
+      await meetingGuestFactory({
+        meetingId: m1.id,
+        invitedById: inviter.id,
+        values: { email, party: 'client' },
+      }),
+      await meetingGuestFactory({
+        meetingId: m1.id,
+        invitedById: inviter.id,
+        values: { email, party: 'expert' },
+      }),
+      await meetingGuestFactory({
+        meetingId: m2.id,
+        invitedById: inviter.id,
+        values: { email, party: 'client' },
+      }),
+    ].map((result) => result.guest);
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+
+    expect(linkedIds(links)).toEqual(
+      seeded.map((guest) => guest.id).sort((a, b) => a.localeCompare(b))
+    );
+    for (const guest of seeded) {
+      const link = links.find((candidate) => candidate.guestId === guest.id);
+      expect(link?.meeting.id).toBe(guest.meetingId);
+
+      const audits = await guestAuditRows(guest.id, CONVERTED);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]?.actorUserId).toBe(user.id);
+      expect(audits[0]?.metadata).toEqual({
+        meetingId: guest.meetingId,
+        party: guest.party,
+        inviteChannel: 'email',
+      });
+    }
+  });
+
+  it('a MIXED batch links only the eligible row — the removed and `link` rows keep a NULL conversion', async () => {
+    const user = await userFactory();
+    const host = await userFactory();
+    const email = 'dana@mixed-batch.test';
+    const eligible = await seedGuest(email);
+    const removed = await seedGuest(email);
+    await meetingGuestsRepository.revoke({ guestId: removed.id, revokedByUserId: host.id });
+    const { meeting } = await meetingFactory();
+    const knock = await meetingGuestsRepository.claimLobbyPlace(claimInput(meeting.id, { email }));
+    if (knock === undefined) {
+      throw new Error('expected the knock to be inserted');
+    }
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+
+    expect(linkedIds(links)).toEqual([eligible.id]);
+    expect((await readGuest(eligible.id)).convertedToUserId).toBe(user.id);
+    for (const refusedId of [removed.id, knock.id]) {
+      const refused = await readGuest(refusedId);
+      expect(refused.convertedToUserId).toBeNull();
+      expect(refused.convertedAt).toBeNull();
+    }
+  });
+
+  it('returns the meeting `started_at` when the meeting has started', async () => {
+    const user = await userFactory();
+    const scheduledStart = new Date(Date.now() - 3 * DAY_MS);
+    const startedAt = new Date(scheduledStart.getTime() + 2 * 60_000);
+    const { meeting } = await meetingFactory({
+      values: {
+        scheduledStart,
+        scheduledEnd: new Date(scheduledStart.getTime() + 60 * 60_000),
+        startedAt,
+      },
+    });
+    const { guest } = await meetingGuestFactory({
+      meetingId: meeting.id,
+      values: { email: 'dana@started-at.test' },
+    });
+
+    const [link, ...rest] = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: 'dana@started-at.test',
+    });
+
+    expect(rest).toEqual([]);
+    expect(link?.guestId).toBe(guest.id);
+    expect(link?.meeting.startedAt?.getTime()).toBe(startedAt.getTime());
+    expect(link?.meeting.scheduledStart.getTime()).toBe(scheduledStart.getTime());
+  });
+
+  it('⚠ still links, and still returns the anchor, for a row on a CANCELLED + SOFT-DELETED meeting (the documented unfiltered join)', async () => {
+    // R5 does not gate on meeting state, and step 3 deliberately does not filter
+    // `meetings.deleted_at` — a filtered join would silently drop an ALREADY-LINKED row's anchor.
+    const user = await userFactory();
+    const { meeting } = await meetingFactory({
+      values: { status: 'cancelled', deletedAt: new Date() },
+    });
+    const { guest } = await meetingGuestFactory({
+      meetingId: meeting.id,
+      values: { email: 'dana@deleted-meeting.test' },
+    });
+
+    const links = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: 'dana@deleted-meeting.test',
+    });
+
+    expect(links).toEqual([
+      {
+        guestId: guest.id,
+        meeting: { id: meeting.id, startedAt: null, scheduledStart: meeting.scheduledStart },
+      },
+    ]);
+  });
+
+  it('is ATOMIC — a failing audit sink leaves the conversion pair unwritten', async () => {
+    const user = await userFactory();
+    const email = 'dana@atomic.test';
+    const guest = await seedGuest(email);
+
+    await expectAuditFailureRollsBack(() =>
+      meetingGuestsRepository.linkConvertedUser({
+        convertedToUserId: user.id,
+        verifiedEmail: email,
+      })
+    );
+
+    const afterFailure = await readGuest(guest.id);
+    expect(afterFailure.convertedToUserId).toBeNull();
+    expect(afterFailure.convertedAt).toBeNull();
+    expect(await guestAuditActions(guest.id)).not.toContain(CONVERTED);
+
+    // Non-vacuity: the rolled-back row is still eligible, so the rollback really undid a write.
+    const retried = await meetingGuestsRepository.linkConvertedUser({
+      convertedToUserId: user.id,
+      verifiedEmail: email,
+    });
+    expect(linkedIds(retried)).toEqual([guest.id]);
+  });
+
+  it('`meeting_guest_email_unconverted_idx` exists, leads on `email`, and is partial on the three row states — NOT on `invite_channel`', async () => {
+    const rows = await db.execute(sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'meeting_guests'
+        AND indexname = 'meeting_guest_email_unconverted_idx'
+    `);
+
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    if (row === undefined) {
+      throw new Error('expected meeting_guest_email_unconverted_idx to exist');
+    }
+    const indexdef = String(row.indexdef);
+    expect(indexdef).toContain('(email)');
+    expect(indexdef).toContain('converted_to_user_id IS NULL');
+    expect(indexdef).toContain('revoked_at IS NULL');
+    expect(indexdef).toContain('deleted_at IS NULL');
+    // ⚠ The literal is omitted on purpose — see the index comment in `schema/guests.ts`.
+    expect(indexdef).not.toContain('invite_channel');
+  });
+});
+
 // ── 7. EVERY CHECK REJECTS ITS VIOLATION ─────────────────────────────────────
 
 describe('meeting_guests — the CHECK backstops', () => {
@@ -1851,6 +2334,52 @@ describe('meeting_guests — the CHECK backstops', () => {
 
     expect(row?.invitedById).toBeNull();
     expect(row?.inviteChannel).toBe('link');
+  });
+
+  it('refuses a half-written conversion (meeting_guest_conversion_paired)', async () => {
+    // BAL-489 (R11) — BOTH directions. Every other column stays valid, so it is THIS check that
+    // fires and not a neighbour.
+    const { meeting } = await meetingFactory();
+    const inviter = await userFactory();
+    const convertedUser = await userFactory();
+
+    // "Converted to U, never."
+    await expectConstraintViolation('23514', (tx) =>
+      tx.insert(meetingGuests).values(
+        rawGuestRow(meeting.id, inviter.id, {
+          convertedToUserId: convertedUser.id,
+          convertedAt: null,
+        })
+      )
+    );
+    // "Converted at T, to nobody."
+    await expectConstraintViolation('23514', (tx) =>
+      tx.insert(meetingGuests).values(
+        rawGuestRow(meeting.id, inviter.id, {
+          convertedToUserId: null,
+          convertedAt: new Date(),
+        })
+      )
+    );
+  });
+
+  it('PERMITS a complete conversion pair (the conversion CHECK is not over-broad)', async () => {
+    const { meeting } = await meetingFactory();
+    const inviter = await userFactory();
+    const convertedUser = await userFactory();
+
+    const [row] = await db
+      .insert(meetingGuests)
+      .values(
+        rawGuestRow(meeting.id, inviter.id, {
+          convertedToUserId: convertedUser.id,
+          convertedAt: new Date(),
+        })
+      )
+      .returning();
+
+    expect(row?.convertedToUserId).toBe(convertedUser.id);
+    expect(row?.convertedAt).toBeInstanceOf(Date);
   });
 
   it('refuses a negative access_count', async () => {

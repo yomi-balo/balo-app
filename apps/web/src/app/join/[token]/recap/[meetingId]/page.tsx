@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { z } from 'zod';
 import { hashedClientIp } from '@/lib/magic-link';
 import { trackServerAndFlush, GUEST_SERVER_EVENTS } from '@/lib/analytics/server';
+import { daysSinceMeeting } from '@/lib/analytics/days-since-meeting';
 import { LinkNotActive } from '../../link-not-active';
 import { loadGuestRecap } from '../_lib/load-guest-recap';
 import { GuestRecapCard } from '../_components/guest-recap-card';
@@ -97,19 +98,12 @@ export default async function GuestRecapPage({
     // "how long after a call do guests open the recap" is unanswerable — the main question
     // `GUEST_RECAP_VIEWED` exists to answer. Integer days, floored, from the SAME timestamp
     // already resolved onto the view header (`access.meeting.startedAt ?? scheduledStart`).
+    // The formula itself is the shared `daysSinceMeeting` (`@/lib/analytics/days-since-meeting`),
+    // used identically by `guest_converted_to_member` (BAL-489 R9) — never a second derivation.
     days_since_meeting: daysSinceMeeting(result.view.header.occurredAtIso),
     // ⚠ `meeting_guests.id` — a guest has NO user id.
     distinct_id: result.guestId,
   });
 
   return <GuestRecapCard view={result.view} token={token} />;
-}
-
-const MS_PER_DAY = 86_400_000;
-
-/** Whole days between `occurredAtIso` and now, floored, never negative. */
-function daysSinceMeeting(occurredAtIso: string): number {
-  const occurredAtMs = new Date(occurredAtIso).getTime();
-  if (Number.isNaN(occurredAtMs)) return 0;
-  return Math.max(0, Math.floor((Date.now() - occurredAtMs) / MS_PER_DAY));
 }

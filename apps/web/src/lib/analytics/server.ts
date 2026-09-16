@@ -19,10 +19,13 @@ export {
   // Action, and there is deliberately NO landing-view event (Gmail's link proxy and
   // Safe Links detonation fetch `/review/{token}` unsolicited).
   REVIEW_SERVER_EVENTS,
-  // BAL-408 — server-only. `apps/web` emits exactly ONE of these, `GUEST_INVITE_OPENED`,
-  // from the `/join/{token}` RSC; the invite / remove / admit / deny events all fire in
-  // `apps/api`. ⚠ NOT in the client `@/lib/analytics` barrel and NOT in
-  // `src/test/setup.ts`'s client `vi.mock` list — that mock is client-only.
+  // BAL-408 — server-only. `apps/web` emits THREE: `GUEST_INVITE_OPENED` (the
+  // `/join/{token}` RSC), `GUEST_RECAP_VIEWED` (the guest recap RSC, BAL-439), and
+  // `GUEST_CONVERTED_TO_MEMBER` (the verified new-user signup seams via
+  // `lib/guest-conversion`, BAL-489); the invite / remove / admit / deny / joined /
+  // link-resent events all fire in `apps/api`. ⚠ NOT in the client `@/lib/analytics`
+  // barrel and NOT in `src/test/setup.ts`'s client `vi.mock` list — that mock is
+  // client-only.
   GUEST_SERVER_EVENTS,
   // BAL-388 — the recap page RSC fires RECAP_VIEWED; its two Server Actions fire
   // CASE_RESOLVED and CASE_RESOLUTION_REQUEST_DISMISSED. All three are emitted from

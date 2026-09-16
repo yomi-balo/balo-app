@@ -2,15 +2,17 @@
 
 import 'server-only';
 
+import { after } from 'next/server';
 import { signInSchema, type SignInFormData } from '@/components/balo/auth/schemas';
 import { getWorkOS, clientId } from '@/lib/auth/config';
 import { getSession } from '@/lib/auth/session';
 import { db, usersRepository, type User } from '@balo/db';
 import { type AuthResult, mapWorkOSError, AccountExistsError } from '@/lib/auth/errors';
 import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-identity';
-import { log } from '@/lib/logging';
+import { log, errorMessage } from '@/lib/logging';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
+import { runGuestConversionAndEmit } from '@/lib/guest-conversion/run-guest-conversion';
 import { sealedPlatformCapabilities } from '@/lib/auth/session-platform-capabilities';
 
 interface SignInResult {
@@ -67,17 +69,29 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       });
       user = result.user;
 
-      // BAL-345: run the domain auto-join match engine (post-commit). Pass the
-      // SAME WorkOS emailVerified flag createWithWorkspace received — never
-      // hardcode true; the engine's verified hard-gate stands down when false. The
-      // `.catch` is belt-and-suspenders so a domain-join failure can NEVER break auth.
-      await runDomainJoinAndEmit({
+      // BAL-345 + BAL-489 — two post-commit new-user helpers. Pass the SAME
+      // WorkOS emailVerified flag createWithWorkspace received — never hardcode true;
+      // both helpers' verified hard-gates stand down when it is false. Domain-join
+      // runs INLINE with its own belt-and-suspenders `.catch` (it
+      // already logs internally). Guest-conversion is scheduled with `after()` so it
+      // runs strictly AFTER the response — it can neither fail nor delay signup — and
+      // its `.catch` covers a call that rejects inside that scheduled callback.
+      const newUserIdentity = {
         userId: user.id,
         email: user.email,
         emailVerified: workosUser.emailVerified === true,
-      }).catch(() => {
+      };
+      await runDomainJoinAndEmit(newUserIdentity).catch(() => {
         // runDomainJoinAndEmit already logs internally.
       });
+      after(() =>
+        runGuestConversionAndEmit(newUserIdentity).catch((error: unknown) => {
+          log.warn('Guest conversion rejected after sign-in (auth unaffected)', {
+            userId: newUserIdentity.userId,
+            error: errorMessage(error),
+          });
+        })
+      );
     }
 
     // 4. Load company membership (always exists — created at signup or recovery above)

@@ -132,8 +132,15 @@ export const meetingGuests = pgTable(
       .references(() => meetings.id, { onDelete: 'cascade' }),
 
     /**
-     * The Balo user this guest turned out to be, when one exists. NULL for the ordinary
-     * case (a guest is by definition not-yet-a-user).
+     * The Balo user this guest turned out to be, when one exists — INCLUDING a person who was
+     * ALREADY a Balo user when they were invited (the invite path never checks the address against
+     * `users`). NULL for the ordinary case.
+     *
+     * ⚠ NOTHING WRITES THIS COLUMN, AND BAL-489 DELIBERATELY DID NOT (ruling R7). Its linkage writer
+     * fires only at NEW-USER creation, which structurally cannot produce the "already a user" half of
+     * this meaning — writing it there would give the column a second, narrower meaning. The
+     * acquisition loop's columns are `converted_to_user_id` / `converted_at` below. Projected in
+     * `PUBLIC_COLUMNS`, but no consumer reads it (verified for BAL-489).
      *
      * ⚠ FK left at NO ACTION, unchanged from BAL-418 and deliberately NOT `restrict`:
      * this is a SUBJECT pointer, not an ATTRIBUTION column, so ADR-1030's actor-FK
@@ -285,11 +292,21 @@ export const meetingGuests = pgTable(
     emailDomain: text('email_domain'),
 
     /**
-     * The acquisition loop. KEPT THOUGH NOTHING WRITES THEM: a hard-delete path existed at
-     * `admin-dev/_actions/delete-user.ts` (until BAL-549 deleted it) that read
-     * `converted_to_user_id`, and BAL-345's (currently inert) domain auto-join is their
-     * intended writer. No `guest_converted_to_member` analytics constant is declared
-     * anywhere — an event with no producer reads as 100% drop-off in a PostHog funnel.
+     * The acquisition loop (BAL-489): the NEW Balo user this guest became, and when.
+     *
+     * Written ONLY by `meetingGuestsRepository.linkConvertedUser`, called ONLY from the four
+     * verified new-user signup seams (via `runGuestConversionAndEmit`), and ONLY on an
+     * `email`-channel, non-revoked, non-deleted, not-yet-converted row whose stored address EXACTLY
+     * equals the new user's WorkOS-verified email (no alias reconciliation). Expired rows ARE
+     * linked — `expires_at` bounds the token, not the person. Both columns are stamped in one
+     * statement, and `meeting_guest_conversion_paired` makes a half-written pair unrepresentable.
+     *
+     * ⚠ DISTINCT FROM `user_id`, DELIBERATELY: this pair means "signed up AFTER being a guest",
+     * which is what `guest_converted_to_member` measures. A member invited as a guest after signing
+     * up is never "converted", and no reader treats this column as an authorization input.
+     *
+     * ⚠ FK NO ACTION — a SUBJECT pointer, like `user_id`. A future operator hard-delete of a
+     * converted user must NULL BOTH columns (see the CHECK's docblock).
      */
     convertedToUserId: uuid('converted_to_user_id').references(() => users.id),
     convertedAt: timestamp('converted_at', { withTimezone: true }),
@@ -350,6 +367,32 @@ export const meetingGuests = pgTable(
       .on(t.meetingId)
       .where(sql`${t.deletedAt} IS NULL AND ${t.revokedAt} IS NULL`),
 
+    // BAL-489 — THE GUEST→MEMBER LINKAGE LOOKUP (`meetingGuestsRepository.linkConvertedUser`).
+    // No index LEADS on `email` otherwise: `meeting_guest_meeting_email_live_idx` is
+    // (meeting_id, party, email), so a bare-email probe cannot use it.
+    //
+    // ⚠ PARTIAL, AND THE PREDICATE IS THE WRITER'S ROW-STATE PREDICATES VERBATIM. A converted,
+    // removed or denied row leaves the index, so the idempotent re-run is an empty probe.
+    //
+    // ⚠ `invite_channel = 'email'` IS DELIBERATELY **NOT** IN THE PREDICATE — a robustness
+    // choice, NOT a workaround for a live planner defect. The planner uses a partial index only
+    // when it can PROVE the query's WHERE implies the index predicate, and Drizzle's
+    // `eq(col, 'email')` emits a bind parameter. That is NOT a live hazard today: `client.ts`
+    // builds postgres-js with `prepare: false`, so statements go unnamed and are planned with
+    // their bound values (custom plans). Leaving the literal out means this index's usability does not depend on that
+    // driver setting or on plan-cache behaviour at all — the three `IS NULL` tests emit no
+    // parameter and are provable under ANY plan shape — and filtering `invite_channel` on the
+    // heap costs nothing over the handful of rows one address can hold.
+    //
+    // ⚠ NO HOT-PATH COST. `recordAccess` (the scanner-inflated landing stamp) writes none of
+    // `email` / `converted_to_user_id` / `revoked_at` / `deleted_at`, so its updates stay
+    // HOT-eligible; `converted_to_user_id` was already indexed (`meeting_guest_converted_to_user_idx`).
+    index('meeting_guest_email_unconverted_idx')
+      .on(t.email)
+      .where(
+        sql`${t.deletedAt} IS NULL AND ${t.revokedAt} IS NULL AND ${t.convertedToUserId} IS NULL`
+      ),
+
     // ── FK delete-time scans ─────────────────────────────────────────────────────────
     // ⚠ These are indexed on the SAME reasoning `reviews.reviewer_user_id` gives, and
     // AGAINST the BAL-417 actor-FK ruling: that ruling assumes users are never hard-deleted,
@@ -363,7 +406,7 @@ export const meetingGuests = pgTable(
     index('meeting_guest_admitted_by_idx').on(t.admittedByUserId),
 
     // ── CHECKs ───────────────────────────────────────────────────────────────────────
-    // ALL SIX ARE THREE-VALUED-LOGIC SAFE. Every operand is either a NOT NULL column
+    // EVERY CHECK BELOW IS THREE-VALUED-LOGIC SAFE. Every operand is either a NOT NULL column
     // compared to a literal (never NULL) or a total `IS NULL` / `IS NOT NULL` test — so none
     // of them can "pass by being unknown", the hole `meeting_outcome_requires_ended` calls
     // out. Naming enum literals here is safe because all four guest enums are standalone
@@ -444,7 +487,7 @@ export const meetingGuests = pgTable(
     // a migration nobody should have to write for a guarantee we never actually needed.
     // The implication captures the ACTUAL invariant and over-commits to nothing.
     //
-    // Three-valued-logic safe like the other five: `invite_channel` is NOT NULL and compared
+    // Three-valued-logic safe like every other CHECK here: `invite_channel` is NOT NULL and compared
     // to a literal, and `invited_by_id IS NOT NULL` is a total test — so the disjunction is
     // never UNKNOWN and cannot "pass by being unknown".
     //
@@ -458,6 +501,32 @@ export const meetingGuests = pgTable(
     check(
       'meeting_guest_self_claimed_is_link',
       sql`${t.invitedById} IS NOT NULL OR ${t.inviteChannel} = 'link'`
+    ),
+
+    // BAL-489 (R11) — THE CONVERSION IS STAMPED IFF IT HAS A SUBJECT. BOTH DIRECTIONS, in the
+    // style of `meeting_guest_admission_terminal_stamped`: `converted_to_user_id` and
+    // `converted_at` are both NULL or both set, so neither a "converted at T to nobody" row nor a
+    // "converted to U, never" row is representable. `linkConvertedUser` sets both in ONE statement.
+    //
+    // ⚠ WHY A BICONDITIONAL HERE WHEN `*_attributed` ABOVE ARE ONE-DIRECTIONAL. Those two pair a
+    // FACT with its ACTOR, and losing the actor to a hard user delete while keeping the fact is
+    // the trade `meeting_presence.user_id` makes. `converted_to_user_id` is not an actor column —
+    // it is the SUBJECT of the fact (the person the guest became). A conversion without its
+    // subject means nothing, and the durable history is the `meeting_guest.converted` audit row.
+    // So any FUTURE operator hard-delete of a converted user must NULL BOTH columns (the FK is NO
+    // ACTION and would otherwise block it). No such path exists today (admin-dev was deleted by
+    // BAL-549; `apps/api` seed truncation deletes only seed users, which never pass a signup seam).
+    //
+    // Three-valued-logic safe: both operands are total `IS NULL` tests, so the equality is never
+    // UNKNOWN.
+    //
+    // ⚠ SAFE TO ADD RETROACTIVELY, independent of the integration harness — which migrates an
+    // EMPTY database, so CI passing here proves nothing about a populated production table:
+    // nothing has ever written either column, so every existing row is (NULL, NULL) and the
+    // validation scan cannot reject one.
+    check(
+      'meeting_guest_conversion_paired',
+      sql`(${t.convertedToUserId} IS NULL) = (${t.convertedAt} IS NULL)`
     ),
 
     check('meeting_guest_access_count_nonneg', sql`${t.accessCount} >= 0`),
