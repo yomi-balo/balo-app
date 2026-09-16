@@ -1,4 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PlatformCapability } from '@balo/shared/authz';
+
+/**
+ * BAL-560 fix round 3 (R3) — the LIVE-ROW platform gate this action now runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them. The helper's
+ * own behaviour (override revoked / widened / row suspended / non-staff role / DB throw) is
+ * covered exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suite here pins
+ * is that the action CALLS it and honours a denial.
+ */
+const mockActorHoldsLive = vi.fn<
+  (userId: string, capability: PlatformCapability) => Promise<boolean>
+>(async () => true);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: PlatformCapability) =>
+    mockActorHoldsLive(userId, capability),
+}));
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 
@@ -14,10 +31,16 @@ vi.mock('@/lib/auth/session', () => ({
 // exercised end-to-end; only the session user's `platformRole` is controlled.
 const mockFindById = vi.fn();
 const mockUpdateBaloFeeBps = vi.fn();
+// `usersRepository` is here only for the R4 composition test at the bottom, which swaps the REAL
+// live-gate implementation in and makes this read throw.
+const mockFindForSessionSync = vi.fn();
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
     updateBaloFeeBps: (...a: unknown[]) => mockUpdateBaloFeeBps(...a),
+  },
+  usersRepository: {
+    findForSessionSync: (...a: unknown[]) => mockFindForSessionSync(...a),
   },
 }));
 
@@ -52,6 +75,16 @@ describe('overrideBaloFee', () => {
     expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
     expect(mockFindById).not.toHaveBeenCalled();
     expect(mockUpdateBaloFeeBps).not.toHaveBeenCalled();
+  });
+
+  it('BAL-560/R3: denies when the LIVE row has revoked the override, though the cookie still grants', async () => {
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+    const result = await overrideBaloFee(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockUpdateBaloFeeBps).not.toHaveBeenCalled();
+    expect(mockTrack).not.toHaveBeenCalled();
+    expect(mockActorHoldsLive).toHaveBeenCalledWith(ADMIN.id, 'manage_platform_fees');
   });
 
   it('denies a viewer without MANAGE_PLATFORM_FEES (plain user)', async () => {
@@ -116,6 +149,32 @@ describe('overrideBaloFee', () => {
     expect(log.info).not.toHaveBeenCalled();
     // Still revalidates so any stale render reconciles.
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+
+  /**
+   * ⚠ FIX ROUND 3 (R4) — THE COMPOSITION TEST, with the REAL live gate spliced in.
+   *
+   * The gate sits ABOVE this action's `try` on purpose (capability resolved BEFORE the input is
+   * parsed — no existence leak), so if the helper propagated a DB failure the action would reject
+   * unhandled instead of returning its normal message. The helper owns the `try` for that reason.
+   * Every other case in this file mocks the helper; this one runs the shipped implementation
+   * against a throwing `usersRepository` read.
+   */
+  it('R4: a DB failure inside the live gate returns the normal denial, not an unhandled crash', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/authz/live-platform-capability')>(
+      '@/lib/authz/live-platform-capability'
+    );
+    // `Once` on both: `vi.clearAllMocks()` clears CALLS but KEEPS implementations, so a
+    // persistent `mockImplementation` here would deny every later test in the file.
+    mockActorHoldsLive.mockImplementationOnce(actual.actorHoldsPlatformCapability);
+    mockFindForSessionSync.mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(overrideBaloFee(VALID_INPUT)).resolves.toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
+    expect(mockFindForSessionSync).toHaveBeenCalledWith(ADMIN.id);
+    expect(mockUpdateBaloFeeBps).not.toHaveBeenCalled();
   });
 
   it('maps a repo throw to the generic error and logs it', async () => {

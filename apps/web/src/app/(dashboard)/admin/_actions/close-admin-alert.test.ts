@@ -1,5 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+/**
+ * BAL-560 fix round 1 (security F2) — the LIVE-ROW platform gate this action now runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them. The helper's
+ * own behaviour (override revoked / widened / row suspended / non-staff role) is covered
+ * exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suites here pin is that
+ * the action CALLS it and honours a denial.
+ */
+const mockActorHoldsLive = vi.fn<(userId: string, capability: string) => Promise<boolean>>(
+  async () => true
+);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: string) =>
+    mockActorHoldsLive(userId, capability),
+}));
+
 const ALERT_ID = 'b0000000-0000-4000-8000-000000000001';
 
 vi.mock('server-only', () => ({}));
@@ -54,6 +70,16 @@ describe('closeAdminAlert', () => {
     const result = await closeAdminAlert({ alertId: ALERT_ID, note: VALID_NOTE });
     expect(result).toEqual({ success: true });
     expect(mockClose).toHaveBeenCalledTimes(1);
+  });
+
+  // ⚠ BAL-560/F2 — the cookie still grants; the LIVE row does not. A Server Action never runs
+  // `checkSessionDrift`, so this is the only thing enforcing a revoked override on this path.
+  it('BAL-560/F2: denies when the LIVE row has revoked the override', async () => {
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+    const result = await closeAdminAlert({ alertId: ALERT_ID, note: VALID_NOTE });
+    expect(result).toEqual({ success: false, reason: 'forbidden', error: PERMISSION_DENIED });
+    expect(mockClose).not.toHaveBeenCalled();
+    expect(mockActorHoldsLive).toHaveBeenCalledWith(ADMIN.id, 'resolve_admin_alerts');
   });
 
   it('rejects a note under 8 characters before hitting the repo', async () => {

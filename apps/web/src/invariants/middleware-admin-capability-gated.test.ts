@@ -26,6 +26,15 @@ import { codeLinesOf, namedImportsFrom, resolveRouteDir } from './_source-scan';
  * a template-literal comparison (`` role === `admin` ``) evades the single-quoted `'admin'`. The
  * list below additionally bans the helper-name shapes, the `platformRole ===` comparison, and
  * the backtick literal forms.
+ *
+ * ⚠⚠ BAL-560 RETARGETED THIS INVARIANT, IT DID NOT WEAKEN IT. The gate moved from
+ * `platformRoleHasCapability` (role only) to `platformActorHasCapability` (role + per-user
+ * override, ADR-1035 §A1.2). The ban list, the Edge-legality assertions and the non-vacuity
+ * anchors are unchanged. A THIRD assertion was ADDED — the gate must pass
+ * `user.platformCapabilities`, not merely call the new predicate — because a call that resolves
+ * the new predicate with the override omitted behaves EXACTLY like the old one, which is
+ * precisely the cosmetic-conversion failure the retarget exists to prevent. Without it this
+ * invariant would stay green against a gate that is permanently blind to every override.
  */
 
 const MIDDLEWARE_PATH = resolveRouteDir(['src/middleware.ts', 'apps/web/src/middleware.ts']);
@@ -58,14 +67,22 @@ describe('the /admin middleware gate is capability-resolved, never role-literal 
     expect(source).not.toContain(token);
   });
 
-  it('resolves the gate through the platform capability predicate', () => {
-    expect(source).toContain('platformRoleHasCapability');
+  it('resolves the gate through the platform capability predicate, AND threads the override', () => {
+    expect(source).toContain('platformActorHasCapability');
     expect(source).toContain('VIEW_PLATFORM_ADMIN');
+    // BAL-560 — the predicate is not enough on its own: a call that resolves the new predicate
+    // but passes no override is byte-identical in behaviour to the old one, and would leave the
+    // Edge gate permanently blind to an override. Pin the ARGUMENT too.
+    expect(source).toContain('user.platformCapabilities');
+  });
+
+  it('no longer resolves the ROLE-ONLY predicate — the override cannot be bypassed here', () => {
+    expect(source).not.toContain('platformRoleHasCapability');
   });
 
   it('imports both the predicate and the token map by name from @balo/shared/authz', () => {
     expect(namedImportsFrom(source, '@balo/shared/authz')).toEqual(
-      expect.arrayContaining(['platformRoleHasCapability', 'PLATFORM_CAPABILITIES'])
+      expect.arrayContaining(['platformActorHasCapability', 'PLATFORM_CAPABILITIES'])
     );
   });
 

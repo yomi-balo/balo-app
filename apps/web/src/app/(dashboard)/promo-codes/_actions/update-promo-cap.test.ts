@@ -1,5 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+/**
+ * BAL-560 fix round 1 (security F2) — the LIVE-ROW platform gate this action now runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them. The helper's
+ * own behaviour (override revoked / widened / row suspended / non-staff role) is covered
+ * exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suites here pin is that
+ * the action CALLS it and honours a denial.
+ */
+const mockActorHoldsLive = vi.fn<(userId: string, capability: string) => Promise<boolean>>(
+  async () => true
+);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: string) =>
+    mockActorHoldsLive(userId, capability),
+}));
+
 const PROMO_ID = 'b0000000-0000-4000-8000-000000000001';
 
 vi.mock('server-only', () => ({}));
@@ -53,6 +69,14 @@ describe('updatePromoCap', () => {
     const result = await updatePromoCap({ id: PROMO_ID, newCap: 250 });
     expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
     expect(mockUpdateCap).not.toHaveBeenCalled();
+  });
+
+  it('BAL-560/F2: denies when the LIVE row has revoked the override, though the cookie still grants', async () => {
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+    const result = await updatePromoCap({ id: PROMO_ID, newCap: 250 });
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
+    expect(mockUpdateCap).not.toHaveBeenCalled();
+    expect(mockActorHoldsLive).toHaveBeenCalledWith(ADMIN.id, 'manage_promo_codes');
   });
 
   it('denies a viewer without MANAGE_PROMO_CODES', async () => {

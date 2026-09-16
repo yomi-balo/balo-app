@@ -16,7 +16,7 @@ import {
 } from '@/lib/auth/route-config';
 import { COOKIE_NAME } from '@/lib/auth/session-config';
 import { redactSensitivePath } from '@balo/shared/redaction';
-import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { platformActorHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
@@ -126,10 +126,25 @@ function checkRouteGuards(
   // `postgres`, no `@balo/db`), so it is legal in Edge — the same property that lets
   // `@balo/shared/redaction` be imported above.
   //
-  // ⚠ RUNTIME-SAFE WITHOUT A `??`. `SessionUser.platformRole` is typed non-optional, but a
-  // stale sealed cookie can carry `undefined` (middleware.test.ts seeds exactly that).
-  // `PLATFORM_ROLE_CAPABILITIES[role] ?? []` inside the predicate denies any absent or unknown
-  // key, so a nullish coalesce here would be dead code that lint flags as unnecessary.
+  // ⚠ RUNTIME-SAFE WITHOUT A `??`, ON BOTH ARGUMENTS. `SessionUser.platformRole` is typed
+  // non-optional, but a stale sealed cookie can carry `undefined` (middleware.test.ts seeds
+  // exactly that). `PLATFORM_ROLE_CAPABILITIES[role] ?? []` inside the predicate denies any
+  // absent or unknown key, so a nullish coalesce here would be dead code that lint flags as
+  // unnecessary. BAL-560 — `user.platformCapabilities` is likewise safe ABSENT: every cookie
+  // sealed before BAL-560 carries it not at all, and a non-array (including `undefined`)
+  // normalises to "inherit the role bundle", which is byte-identically today's behaviour.
+  //
+  // ⚠ BAL-560 — THIS GATE STAYS ON THE DIRECT `@balo/shared/authz` IMPORT AND DOES NOT ADOPT
+  // THE WEB SEAM (`@/lib/authz/platform`). That seam IS technically Edge-legal today (its only
+  // `SessionUser` import is type-only), but routing the Edge gate through an `apps/web` module
+  // means a future runtime import added there breaks middleware at BUILD time with no local
+  // signal. `@balo/shared/authz` is pure and dependency-free by contract. This is the only
+  // app-level direct caller of the core, and it is argued.
+  //
+  // ⚠ IT IS ALSO THE ONLY GATE THAT CAN EVER HONOUR AN OVERRIDE AT THE `/admin` PREFIX — Edge
+  // cannot do a live read at all (see `invariants/middleware-admin-capability-gated.test.ts`),
+  // so the cookie is the only carrier. `admin/layout.tsx` is the second, defence-in-depth gate
+  // and already routes through `hasPlatformCapability`, so it picks the override up for free.
   // BAL-553 fix round 2, F3 — belt-and-braces: an impersonated session must never reach
   // `/admin`, independent of whatever `platformRole` the sync route may have just copied onto
   // it (e.g. a second super_admin promoting the target mid-impersonation — the sync route fails
@@ -137,7 +152,11 @@ function checkRouteGuards(
   if (
     isAdminRoute(pathname) &&
     (user.impersonatorUserId !== undefined ||
-      !platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN))
+      !platformActorHasCapability(
+        user.platformRole,
+        user.platformCapabilities,
+        PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN
+      ))
   ) {
     return redirectWithCookies(new URL('/dashboard', baseUrl), activeResponse);
   }

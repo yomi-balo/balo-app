@@ -103,6 +103,10 @@ export async function signUpAction(
       activeMode: user.activeMode,
       onboardingCompleted: false,
       platformRole: 'user',
+      // BAL-560 — NO `platformCapabilities`. A row minted here is `platform_role: 'user'`, and
+      // the `users_platform_capabilities_staff_array` CHECK forbids a non-staff row from
+      // carrying an override at all (D1). There is nothing to seal, and the resolver would
+      // ignore it if there were.
       companyId: company.id,
       companyName: company.name,
       companyRole: membership.role,

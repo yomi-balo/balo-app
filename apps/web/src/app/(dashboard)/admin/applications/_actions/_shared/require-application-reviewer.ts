@@ -2,6 +2,7 @@ import 'server-only';
 
 import { getCurrentUser, type SessionUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 
 /**
  * BAL-549 (orchestrator D7) — THE `/admin/*` AUTH IDIOM, in one place.
@@ -31,6 +32,20 @@ export async function requireApplicationReviewer(): Promise<
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: REVIEWER_DENIED };
   if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS)) {
+    return { ok: false, error: REVIEWER_DENIED };
+  }
+  // ⚠ BAL-560 fix round 1 (security F2) — THE SESSION GATE ABOVE IS NOT A REVOCATION BOUNDARY.
+  // `checkSessionDrift` only runs during a page RENDER; both callers are Server Actions that POST
+  // straight to their own endpoint, so a per-user override revoked days ago is still sealed in
+  // the cookie. Re-read the LIVE row — the same reason, and the same shape, as the impersonation
+  // entry point (`lib/auth/actions/impersonation.ts`). The cheap synchronous check above stays:
+  // it fails closed on an unauthenticated caller before this query is spent.
+  //
+  // Both mutating callers gate through here, so ONE live read covers both — which is the reason
+  // this preamble was extracted in the first place.
+  if (
+    !(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS))
+  ) {
     return { ok: false, error: REVIEWER_DENIED };
   }
   return { ok: true, user };

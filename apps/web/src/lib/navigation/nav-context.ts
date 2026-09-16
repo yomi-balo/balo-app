@@ -2,12 +2,8 @@ import 'server-only';
 
 import { cache } from 'react';
 import { companiesRepository } from '@balo/db';
-import {
-  CAPABILITIES,
-  PLATFORM_CAPABILITIES,
-  platformRoleHasCapability,
-  roleHasCapability,
-} from '@balo/shared/authz';
+import { CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
+import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import type { SessionUser } from '@/lib/auth/session';
 import type { NavCapability, NavContext, NavWorkspaceType } from '@/components/layout/nav-registry';
 import { log } from '@/lib/logging';
@@ -77,8 +73,10 @@ async function resolveMembershipNavCapabilities(
 
 /**
  * BAL-534 — THE PLATFORM CONTRIBUTION (ADR-1035 axis). Synchronous and I/O-free: it reads the
- * session's `platformRole` through the ONE platform predicate, so it cannot throw and cannot be
- * lost to the company read's `catch` above.
+ * session's platform role AND per-user override (BAL-560) through the ONE web seam, so it
+ * cannot throw and cannot be lost to the company read's `catch` above. This file is
+ * `server-only` and already holds the whole `SessionUser`, so there is no reason for it to
+ * reach past the seam to the core.
  *
  * ⚠ Every Balo user is provisioned into a PERSONAL company, and most staff are plain members of
  * it — which is exactly why this is a separate contribution and not another line inside the
@@ -86,7 +84,7 @@ async function resolveMembershipNavCapabilities(
  * `[]` for a staff member before this token was ever considered.
  */
 function resolvePlatformNavCapabilities(user: SessionUser): readonly NavCapability[] {
-  return platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
+  return hasPlatformCapability(user, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
     ? [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]
     : [];
 }

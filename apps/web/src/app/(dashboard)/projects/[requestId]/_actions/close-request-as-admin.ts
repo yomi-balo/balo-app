@@ -8,6 +8,7 @@ import { projectRequestsRepository, InvalidStatusTransitionError } from '@balo/d
 import { BALO_CLOSE_REASONS, type BaloCloseReason } from '@balo/shared/project-requests';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import { log } from '@/lib/logging';
 import { runCloseRequestFanout } from './_shared/close-request-fanout';
 import { deadlockFailure } from './_shared/deadlock';
@@ -64,6 +65,16 @@ export async function closeRequestAsAdminAction(
   }
 
   if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST)) {
+    return { success: false, error: PERMISSION_DENIED, code: 'denied' };
+  }
+  // ⚠ BAL-560 fix round 3 (R3) — THE SESSION GATE ABOVE IS NOT A REVOCATION BOUNDARY.
+  // `checkSessionDrift` only runs during a page RENDER; this action POSTs straight to its own
+  // endpoint, so a per-user override revoked days ago is still sealed in the cookie. Re-read the
+  // LIVE row before mutating — the same reason, and the same shape, as the eight actions
+  // converted in fix round 1 and as the impersonation entry point
+  // (`lib/auth/actions/impersonation.ts`). The cheap synchronous check above stays: it fails
+  // closed on an unauthenticated caller before this query is spent.
+  if (!(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST))) {
     return { success: false, error: PERMISSION_DENIED, code: 'denied' };
   }
 

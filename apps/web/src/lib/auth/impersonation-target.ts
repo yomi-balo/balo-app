@@ -4,6 +4,7 @@ import { usersRepository } from '@balo/db';
 import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 import type { SessionUser } from './session';
+import { sealedPlatformCapabilities } from './session-platform-capabilities';
 
 /** The `findForSessionSync` row shape this module builds a `SessionUser` from. */
 export type ImpersonationTargetRow = NonNullable<
@@ -73,6 +74,12 @@ export async function buildImpersonatedSessionUser(
     activeMode: derived.session.activeMode,
     onboardingCompleted: targetRow.onboardingCompleted,
     platformRole: targetRow.platformRole,
+    // BAL-560 ⟦R7b⟧ — the TARGET's own override, from the same row. Under D1 a target is never
+    // staff (`platformRoleIsStaff` refusal in `actions/impersonation.ts`) and a non-staff row
+    // cannot carry an override (`users_platform_capabilities_staff_array`), so this always seals
+    // ABSENT today. It is written anyway for the same self-consistency reason every other field
+    // here is: the alternative is a silent assumption about data this file does not control.
+    ...sealedPlatformCapabilities(targetRow),
     // `authMethod` is deliberately NOT carried — it describes how THIS BROWSER authenticated,
     // and nobody authenticated as the target.
     companyId: derived.session.companyId,

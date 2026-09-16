@@ -4,6 +4,7 @@ import 'server-only';
 
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import { log } from '@/lib/logging';
 import { requestAdminRedrive } from '@/lib/api/admin-redrive';
 import { requestRedriveSchema, type RequestRedriveResult } from './capture-health-schema';
@@ -35,6 +36,15 @@ export async function requestRedrive(input: {
 }): Promise<RequestRedriveResult> {
   const user = await requireOnboardedUser();
   if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.REDRIVE_JOB)) {
+    return { success: false, reason: 'forbidden', error: PERMISSION_DENIED };
+  }
+  // ⚠ BAL-560 fix round 1 (security F2) — THE SESSION GATE ABOVE IS NOT A REVOCATION BOUNDARY.
+  // `checkSessionDrift` only runs during a page RENDER; this action POSTs straight to its own
+  // endpoint, so a per-user override revoked days ago is still sealed in the cookie. Re-read the
+  // LIVE row before mutating — the same reason, and the same shape, as the impersonation entry
+  // point (`lib/auth/actions/impersonation.ts`). The cheap synchronous check above stays: it
+  // fails closed on an unauthenticated caller before this query is spent.
+  if (!(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.REDRIVE_JOB))) {
     return { success: false, reason: 'forbidden', error: PERMISSION_DENIED };
   }
 

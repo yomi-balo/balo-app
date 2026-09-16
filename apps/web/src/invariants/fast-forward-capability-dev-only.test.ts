@@ -1,7 +1,5 @@
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { scanRouteSources, type ScannedFile } from './_source-scan';
+import { findWorkspaceRoot, scanWorkspaceSources, WORKSPACE_TREES } from './_source-scan';
 
 /**
  * BAL-275 §9.2 (N9) — structural invariant: the platform capability token
@@ -56,46 +54,15 @@ import { scanRouteSources, type ScannedFile } from './_source-scan';
  */
 
 /**
- * The monorepo root: the nearest ancestor of the cwd (itself included) carrying
- * `pnpm-workspace.yaml`. CI runs web vitest from the REPO ROOT while a developer runs it from
- * `apps/web` (memory `reference_web_server_disk_asset_cwd`) — walking UP for a marker file
- * resolves both to the same directory, where a `['..', '../..']` candidate list would have to
- * guess, and could silently pick a directory OUTSIDE the checkout. Returns `''` when not found,
- * which the non-vacuity test below turns into a loud failure rather than an empty walk.
- *
- * Bounded rather than `while (true)`: a path has finitely many ancestors and `path.dirname`
- * reaches a fixpoint at the filesystem root, so the depth cap only ever stops a pathological
- * mount — the `parent === dir` check is what normally terminates it.
+ * ⚠⚠ THE WALK PRIMITIVES MOVED TO `_source-scan.ts` (BAL-560), VERBATIM AND WITH NO BEHAVIOUR
+ * CHANGE. `findWorkspaceRoot` / `WORKSPACE_TREES` / `GENERATED_DIRS` / the tree walk used to live
+ * in THIS file; `platform-capability-single-resolution-point.test.ts` is their second consumer,
+ * and a second verbatim copy of ~35 lines in the same directory is exactly the shape SonarCloud's
+ * >3% new-code duplication gate exists to catch. NOT ONE ASSERTION IN THIS FILE CHANGED as part
+ * of that move — this suite staying green with its original assertions IS the proof the
+ * extraction preserved behaviour.
  */
-function findWorkspaceRoot(): string {
-  let dir = path.resolve(process.cwd());
-  for (let depth = 0; depth < 32; depth += 1) {
-    if (existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return '';
-}
-
 const WORKSPACE_ROOT = findWorkspaceRoot();
-
-/** Exactly the globs `pnpm-workspace.yaml` declares (`apps/*`, `packages/*`), as their roots. */
-const WORKSPACE_TREES: readonly string[] = ['apps', 'packages'];
-
-/**
- * Build output and vendored dependencies — never first-party source, and present or absent
- * depending on what the machine last built. See the ⚠⚠ note above: this list exists to keep the
- * walk deterministic, not to excuse any source file from it.
- */
-const GENERATED_DIRS: readonly string[] = [
-  'node_modules',
-  '.next',
-  '.turbo',
-  'dist',
-  'build',
-  'coverage',
-];
 
 const TOKEN = 'FAST_FORWARD_REQUEST';
 
@@ -150,19 +117,8 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
-function scanFullTree(): ScannedFile[] {
-  if (WORKSPACE_ROOT === '') return [];
-  const found: ScannedFile[] = [];
-  for (const tree of WORKSPACE_TREES) {
-    // UNFILTERED over source — every non-test `.ts`/`.tsx` file in the tree, no allow-list; the
-    // only exclusions are generated/vendored directories (see GENERATED_DIRS).
-    found.push(...scanRouteSources(path.join(WORKSPACE_ROOT, tree), tree, GENERATED_DIRS));
-  }
-  return found;
-}
-
 describe('invariant: FAST_FORWARD_REQUEST has exactly one consumer, and it gates dev-only (BAL-275)', () => {
-  const scanned = scanFullTree();
+  const scanned = scanWorkspaceSources();
   const mentioningFiles = scanned
     .filter((file) => file.code.includes(TOKEN))
     .map((file) => file.rel);

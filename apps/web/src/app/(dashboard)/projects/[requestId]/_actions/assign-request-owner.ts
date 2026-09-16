@@ -8,6 +8,7 @@ import { projectRequestsRepository, usersRepository } from '@balo/db';
 import { personDisplayName } from '@balo/shared/parties';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import { log } from '@/lib/logging';
 import { runAssignOwnerFanout } from './_shared/assign-owner-fanout';
 
@@ -69,6 +70,18 @@ export async function assignRequestOwnerAction(
   }
 
   if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER)) {
+    return { success: false, error: PERMISSION_DENIED, code: 'denied' };
+  }
+  // ⚠ BAL-560 fix round 3 (R3) — THE SESSION GATE ABOVE IS NOT A REVOCATION BOUNDARY.
+  // `checkSessionDrift` only runs during a page RENDER; this action POSTs straight to its own
+  // endpoint, so a per-user override revoked days ago is still sealed in the cookie. Re-read the
+  // LIVE row before mutating — the same reason, and the same shape, as the eight actions
+  // converted in fix round 1 and as the impersonation entry point
+  // (`lib/auth/actions/impersonation.ts`). The cheap synchronous check above stays: it fails
+  // closed on an unauthenticated caller before this query is spent.
+  if (
+    !(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER))
+  ) {
     return { success: false, error: PERMISSION_DENIED, code: 'denied' };
   }
 

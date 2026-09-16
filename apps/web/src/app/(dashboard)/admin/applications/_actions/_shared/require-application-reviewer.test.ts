@@ -1,6 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PlatformCapability } from '@balo/shared/authz';
+
+/**
+ * BAL-560 fix round 1 (security F2) — the LIVE-ROW platform gate this action now runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them. The helper's
+ * own behaviour (override revoked / widened / row suspended / non-staff role) is covered
+ * exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suites here pin is that
+ * the action CALLS it and honours a denial.
+ */
+const mockActorHoldsLive = vi.fn<
+  (userId: string, capability: PlatformCapability) => Promise<boolean>
+>(async () => true);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: PlatformCapability) =>
+    mockActorHoldsLive(userId, capability),
+}));
 
 vi.mock('server-only', () => ({}));
+
+// Present only for the R4 composition test at the bottom, which splices the REAL live-gate
+// implementation in and makes this read throw.
+const mockFindForSessionSync = vi.fn();
+vi.mock('@balo/db', () => ({
+  usersRepository: { findForSessionSync: (...a: unknown[]) => mockFindForSessionSync(...a) },
+}));
 
 const { mockGetCurrentUser, mockHasPlatformCapability } = vi.hoisted(() => ({
   mockGetCurrentUser: vi.fn(),
@@ -62,6 +86,18 @@ describe('requireApplicationReviewer', () => {
     expect(result).toEqual({ ok: false, error: REVIEWER_DENIED });
   });
 
+  // ⚠ BAL-560/F2 — the cookie still grants; the LIVE row does not. A Server Action never runs
+  // `checkSessionDrift`, so this is the only thing enforcing a revoked override on this path.
+  it('BAL-560/F2: denies when the LIVE row has revoked the override', async () => {
+    mockGetCurrentUser.mockResolvedValue(ADMIN);
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+
+    const result = await requireApplicationReviewer();
+
+    expect(result).toEqual({ ok: false, error: REVIEWER_DENIED });
+    expect(mockActorHoldsLive).toHaveBeenCalledWith(ADMIN.id, 'review_expert_applications');
+  });
+
   it('grants the support role (platformRole "admin")', async () => {
     mockGetCurrentUser.mockResolvedValue(ADMIN);
     const result = await requireApplicationReviewer();
@@ -106,5 +142,29 @@ describe('requireApplicationReviewer', () => {
     mockHasPlatformCapability.mockReturnValue(false);
 
     expect(await requireApplicationReviewer()).toEqual({ ok: false, error: REVIEWER_DENIED });
+  });
+
+  /**
+   * ⚠ FIX ROUND 3 (R4) — THE COMPOSITION TEST for the shared-preamble shape, with the REAL live
+   * gate spliced in.
+   *
+   * The gate runs as the preamble's LAST statement and therefore ahead of every caller's own
+   * `try`; if the helper propagated a DB failure, both decision actions would reject unhandled
+   * instead of returning `{ ok: false }`. The helper owns the `try` for that reason.
+   */
+  it('R4: a DB failure inside the live gate returns the generic denial, not an unhandled crash', async () => {
+    mockGetCurrentUser.mockResolvedValue(ADMIN);
+    const actual = await vi.importActual<typeof import('@/lib/authz/live-platform-capability')>(
+      '@/lib/authz/live-platform-capability'
+    );
+    // `Once` on both: `vi.clearAllMocks()` clears CALLS but KEEPS implementations.
+    mockActorHoldsLive.mockImplementationOnce(actual.actorHoldsPlatformCapability);
+    mockFindForSessionSync.mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(requireApplicationReviewer()).resolves.toEqual({
+      ok: false,
+      error: REVIEWER_DENIED,
+    });
+    expect(mockFindForSessionSync).toHaveBeenCalledWith(ADMIN.id);
   });
 });

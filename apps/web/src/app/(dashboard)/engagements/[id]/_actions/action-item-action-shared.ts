@@ -17,6 +17,7 @@ import {
 import { deriveActorLabel, deriveEngagementParties } from '@/lib/engagement/engagement-parties';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import { requireOnboardedUser, type SessionUser } from '@/lib/auth/session';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { log } from '@/lib/logging';
@@ -130,7 +131,20 @@ export async function gateEngagementParticipant(
   // refused. UNREACHABLE TODAY AND NOT DEAD CODE — the token sits in PLATFORM_STAFF_BUNDLE,
   // whose holders are exactly `resolveEngagementLens`'s ADMIN_ROLES — and it becomes reachable
   // the day the D5 bundle split lands, which is precisely when a fall-through would be a hole.
-  if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM)) {
+  // ⚠ BAL-560 fix round 1 (security F2) — SESSION CHECK **AND** LIVE-ROW CHECK. `checkSessionDrift`
+  // only runs during a page RENDER; every caller of this gate is a Server Action that POSTs
+  // straight to its own endpoint, so a per-user override revoked days ago would still be sealed
+  // in the cookie. Same reason and same shape as the impersonation entry point
+  // (`lib/auth/actions/impersonation.ts`). The synchronous check stays FIRST and short-circuits,
+  // so a client- or expert-lens actor falls through to their own arm without spending a query.
+  // The arm ORDER and every branch below are unchanged.
+  if (
+    !hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM) ||
+    !(await actorHoldsPlatformCapability(
+      user.id,
+      PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM
+    ))
+  ) {
     if (ctx.lens === 'client') {
       const allowed = await hasCapability(user, CAPABILITIES.PARTICIPATE, {
         companyId: engagement.companyId,

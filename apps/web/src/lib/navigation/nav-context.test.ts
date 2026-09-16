@@ -95,6 +95,32 @@ describe('buildNavContext (BAL-347 → BAL-495 equivalence)', () => {
     expect(context.capabilities).toEqual([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
   });
 
+  /**
+   * BAL-560 — the nav contribution resolves through the web seam, so it honours the per-user
+   * override. A "fee-blind staff viewer" keeps the nav group; a staff member whose override
+   * drops `view_platform_admin` loses it.
+   */
+  it('BAL-560: an override that OMITS view_platform_admin withholds the Balo-admin nav group', async () => {
+    const context = await buildNavContext(
+      makeUser({ platformRole: 'super_admin', platformCapabilities: ['manage_platform_fees'] })
+    );
+    expect(context.capabilities).toEqual([]);
+  });
+
+  it('BAL-560: an EMPTY override withholds it too — "holds nothing" is a real state', async () => {
+    const context = await buildNavContext(
+      makeUser({ platformRole: 'admin', platformCapabilities: [] })
+    );
+    expect(context.capabilities).toEqual([]);
+  });
+
+  it('BAL-560: an override that NAMES view_platform_admin still grants the nav group', async () => {
+    const context = await buildNavContext(
+      makeUser({ platformRole: 'admin', platformCapabilities: ['view_platform_admin'] })
+    );
+    expect(context.capabilities).toEqual([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
+  });
+
   it('BAL-534: a non-staff owner of a real company gets manage_members and NOT the platform token', async () => {
     findById.mockResolvedValueOnce({ id: 'company_1', isPersonal: false } as never);
     const context = await buildNavContext(makeUser({ companyRole: 'owner', platformRole: 'user' }));

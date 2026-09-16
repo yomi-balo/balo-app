@@ -381,3 +381,71 @@ export function scanRouteSources(
   }
   return found;
 }
+
+/**
+ * The monorepo root: the nearest ancestor of the cwd (itself included) carrying
+ * `pnpm-workspace.yaml`. CI runs web vitest from the REPO ROOT while a developer runs it from
+ * `apps/web` (memory `reference_web_server_disk_asset_cwd`) — walking UP for a marker file
+ * resolves both to the same directory, where a `['..', '../..']` candidate list would have to
+ * guess, and could silently pick a directory OUTSIDE the checkout. Returns `''` when not found,
+ * which each caller's non-vacuity test turns into a loud failure rather than an empty walk.
+ *
+ * Bounded rather than `while (true)`: a path has finitely many ancestors and `path.dirname`
+ * reaches a fixpoint at the filesystem root, so the depth cap only ever stops a pathological
+ * mount — the `parent === dir` check is what normally terminates it.
+ *
+ * ⚠⚠ EXTRACTED FOR BAL-560's `platform-capability-single-resolution-point.test.ts`, ITS SECOND
+ * CONSUMER. `fast-forward-capability-dev-only.test.ts` shipped this (and `WORKSPACE_TREES` /
+ * `GENERATED_DIRS` / `scanWorkspaceSources`) inline first; a second verbatim copy of ~35 lines in
+ * the SAME DIRECTORY is exactly the shape SonarCloud's >3% new-code duplication gate exists to
+ * catch (memory `reference_sonar_duplication_not_caught_locally`). The bodies moved VERBATIM,
+ * docblocks included — behaviour is unchanged from the original, which is pinned by that
+ * invariant staying green with zero assertion changes.
+ */
+export function findWorkspaceRoot(): string {
+  let dir = path.resolve(process.cwd());
+  for (let depth = 0; depth < 32; depth += 1) {
+    if (existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return '';
+}
+
+/** Exactly the globs `pnpm-workspace.yaml` declares (`apps/*`, `packages/*`), as their roots. */
+export const WORKSPACE_TREES: readonly string[] = ['apps', 'packages'];
+
+/**
+ * Build output and vendored dependencies — never first-party source, and present or absent
+ * depending on what the machine last built. This list exists to keep the walk DETERMINISTIC, not
+ * to excuse any source file from it: a scan narrowed by an allow-list before its set-equality
+ * assertion can pass vacuously on a file the allow-list happened not to name.
+ */
+const GENERATED_DIRS: readonly string[] = [
+  'node_modules',
+  '.next',
+  '.turbo',
+  'dist',
+  'build',
+  'coverage',
+];
+
+/**
+ * Every non-test `.ts`/`.tsx` file in BOTH workspace trees — UNFILTERED over first-party source.
+ * Callers apply their own substring filter IN MEMORY, on the already-collected set, so a new
+ * consumer dropped in anywhere (a page, a component, a Server Action, a Fastify route, a
+ * repository) is collected by the walk and fails set equality loudly.
+ *
+ * Returns `[]` when the workspace root could not be found, which each caller's non-vacuity test
+ * turns into a loud failure.
+ */
+export function scanWorkspaceSources(): ScannedFile[] {
+  const root = findWorkspaceRoot();
+  if (root === '') return [];
+  const found: ScannedFile[] = [];
+  for (const tree of WORKSPACE_TREES) {
+    found.push(...scanRouteSources(path.join(root, tree), tree, GENERATED_DIRS));
+  }
+  return found;
+}

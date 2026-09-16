@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import type { ActiveWorkspacePointer } from '@balo/shared/workspaces';
+import type { PlatformCapability } from '@balo/shared/authz';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -112,6 +113,8 @@ function createMockSession(userOverrides: Record<string, unknown> = {}) {
       // `session.user.activeWorkspace` (asserted on below) typechecks. BAL-507 (R-A): the
       // sealed field is an `ActiveWorkspacePointer`, not a `Workspace`.
       activeWorkspace: undefined as ActiveWorkspacePointer | undefined,
+      // BAL-560 — typed (not left to inference) so the override patch assertions typecheck.
+      platformCapabilities: undefined as PlatformCapability[] | undefined,
       // BAL-553 — typed (not left to inference) so the AC 4 survival assertions typecheck.
       isImpersonating: undefined as boolean | undefined,
       impersonatorUserId: undefined as string | undefined,
@@ -255,6 +258,42 @@ describe('GET /api/auth/session-sync', () => {
       expect(session.save).toHaveBeenCalled();
       expect(response.status).toBe(307);
       expect(getRedirectLocation(response)).toBe('/settings');
+    });
+
+    /**
+     * BAL-560 — the patch is ASSIGN **OR DELETE**. The delete arm is the load-bearing one: a
+     * REVOKED override must LEAVE the cookie, or it survives the full seven days on a session
+     * that passes every other drift check.
+     */
+    it('BAL-560: SETS a fresh per-user override from the DB row', async () => {
+      const session = createMockSession({ platformRole: 'admin' });
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(
+        createDbUser({ platformRole: 'admin', platformCapabilities: ['view_platform_admin'] })
+      );
+
+      await GET(makeRequest('returnTo=/settings'));
+
+      expect(session.user.platformCapabilities).toEqual(['view_platform_admin']);
+      expect(session.save).toHaveBeenCalled();
+    });
+
+    it('BAL-560: DELETES a revoked override — the column went back to NULL', async () => {
+      const session = createMockSession({
+        platformRole: 'admin',
+        platformCapabilities: ['view_platform_admin'],
+      });
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(
+        createDbUser({ platformRole: 'admin', platformCapabilities: null })
+      );
+
+      await GET(makeRequest('returnTo=/settings'));
+
+      // The FIELD must be gone, not merely undefined — an absent field is the encoding, and a
+      // present `undefined` would re-seal a key that costs bytes and reads as a lie.
+      expect(session.user).not.toHaveProperty('platformCapabilities');
+      expect(session.save).toHaveBeenCalled();
     });
 
     it('sets expertProfileId to undefined when DB value is null', async () => {

@@ -98,21 +98,31 @@ describe('PLATFORM_CAPABILITIES / PLATFORM_ROLE_CAPABILITIES', () => {
    * this test was written to force — ⟦R3⟧ is the argument. `super_admin` now holds the admin
    * bundle plus `DELETE_ANY_INTERNAL_NOTE` and `IMPERSONATE_USER`, and nothing else.
    *
-   * ⚠ BAL-550 WIDENED IT AGAIN, SAME SHAPE — `REDRIVE_JOB` is the fourth role-differentiated
-   * token, argued for in its own docblock (a re-drive spends real vendor budget and re-enters a
+   * ⚠ BAL-550 WIDENED IT AGAIN, SAME SHAPE — `REDRIVE_JOB` is the THIRD role-differentiated
+   * token (this line said "fourth" until BAL-560 fix round 1; the assertion below has always
+   * proved it is the third), argued for in its own docblock (a re-drive spends real vendor budget and re-enters a
    * pipeline that publishes to both parties).
+   *
+   * ⚠ BAL-560 WIDENED IT AGAIN, SAME SHAPE — `MANAGE_STAFF_CAPABILITIES` is the FOURTH
+   * role-differentiated token. The argument this test demands (ADR-1035 §A1.3): GRANTING A POWER
+   * IS STRICTLY GREATER THAN THE POWER GRANTED. A holder can write any token on this axis —
+   * including this one — onto any staff row, so putting it in `PLATFORM_STAFF_BUNDLE` would make
+   * every `admin` a latent `super_admin`. That is a strictly stronger version of the
+   * `DELETE_ANY_INTERNAL_NOTE` / `IMPERSONATE_USER` / `REDRIVE_JOB` precedent, not a new kind of
+   * argument.
    */
-  it('gives super_admin the admin bundle plus exactly DELETE_ANY_INTERNAL_NOTE, IMPERSONATE_USER and REDRIVE_JOB, and omits user', () => {
+  it('gives super_admin the admin bundle plus exactly DELETE_ANY_INTERNAL_NOTE, IMPERSONATE_USER, REDRIVE_JOB and MANAGE_STAFF_CAPABILITIES, and omits user', () => {
     const admin = PLATFORM_ROLE_CAPABILITIES.admin ?? [];
     const superAdmin = PLATFORM_ROLE_CAPABILITIES.super_admin ?? [];
 
     // Containment: every admin token is a super_admin token.
     expect(superAdmin).toEqual(expect.arrayContaining([...admin]));
-    // The difference, in both directions, is exactly three tokens.
+    // The difference, in both directions, is exactly four tokens.
     expect(superAdmin.filter((c) => !admin.includes(c))).toEqual([
       PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE,
       PLATFORM_CAPABILITIES.IMPERSONATE_USER,
       PLATFORM_CAPABILITIES.REDRIVE_JOB,
+      PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES,
     ]);
     expect(admin.filter((c) => !superAdmin.includes(c))).toEqual([]);
     expect(PLATFORM_ROLE_CAPABILITIES.user).toBeUndefined();
@@ -306,6 +316,42 @@ describe('platformRoleHasCapability — REDRIVE_JOB', () => {
 
   it('maps REDRIVE_JOB to its snake_case token', () => {
     expect(PLATFORM_CAPABILITIES.REDRIVE_JOB).toBe('redrive_job');
+  });
+});
+
+/**
+ * BAL-560 — the per-user override WRITE token. Same shape as `DELETE_ANY_INTERNAL_NOTE` /
+ * `IMPERSONATE_USER` / `REDRIVE_JOB`: `super_admin` ONLY, `admin` on the DENY side deliberately.
+ * ADR-1035 §A1.3 — granting a power is strictly greater than the power granted, so a holder in
+ * the shared staff bundle would make every `admin` a latent `super_admin`.
+ */
+describe('platformRoleHasCapability — MANAGE_STAFF_CAPABILITIES', () => {
+  it('grants MANAGE_STAFF_CAPABILITIES to super_admin', () => {
+    expect(
+      platformRoleHasCapability('super_admin', PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES)
+    ).toBe(true);
+  });
+
+  it.each(['admin', 'user', '', 'owner', 'member', 'expert'])(
+    'denies MANAGE_STAFF_CAPABILITIES to %s',
+    (role) => {
+      expect(platformRoleHasCapability(role, PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES)).toBe(
+        false
+      );
+    }
+  );
+
+  it('maps MANAGE_STAFF_CAPABILITIES to its snake_case token', () => {
+    expect(PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES).toBe('manage_staff_capabilities');
+  });
+
+  // D13 — `PLATFORM_STAFF_BUNDLE` is module-private, so the "not in the bundle" claim is asserted
+  // via the role map exactly as the three sibling tokens above already do. Do NOT export the
+  // bundle to make this read more directly.
+  it('admin does NOT hold MANAGE_STAFF_CAPABILITIES', () => {
+    expect(PLATFORM_ROLE_CAPABILITIES.admin).not.toContain(
+      PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES
+    );
   });
 });
 

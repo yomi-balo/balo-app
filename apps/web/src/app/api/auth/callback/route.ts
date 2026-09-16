@@ -13,6 +13,7 @@ import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server'
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
+import { sealedPlatformCapabilities } from '@/lib/auth/session-platform-capabilities';
 
 export const dynamic = 'force-dynamic';
 
@@ -113,6 +114,10 @@ async function createSession(
     activeMode: resolved.user.activeMode,
     onboardingCompleted: resolved.user.onboardingCompleted,
     platformRole: resolved.user.platformRole,
+    // BAL-560 — the per-user platform-capability override, sealed from the SAME row the role
+    // came from. Absent whenever the column is NULL (every row today); `sealedPlatformCapabilities`
+    // is the one encoder, so no seal point spells the field itself.
+    ...sealedPlatformCapabilities(resolved.user),
     // BAL-350: coarse auth method from the WorkOS OAuth response, for onboarding
     // analytics. Undefined for non-OAuth / unknown providers (never mislabelled).
     authMethod: mapWorkosAuthMethod(authenticationMethod),

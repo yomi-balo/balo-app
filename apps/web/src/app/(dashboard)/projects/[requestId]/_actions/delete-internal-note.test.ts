@@ -1,5 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+/**
+ * BAL-560 fix round 1 (security F2) — the LIVE-ROW platform gate this action now runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them. The helper's
+ * own behaviour (override revoked / widened / row suspended / non-staff role) is covered
+ * exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suites here pin is that
+ * the action CALLS it and honours a denial.
+ */
+const mockActorHoldsLive = vi.fn<(userId: string, capability: string) => Promise<boolean>>(
+  async () => true
+);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: string) =>
+    mockActorHoldsLive(userId, capability),
+}));
+
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const NOTE_ID = 'b0000000-0000-4000-8000-000000000002';
 
@@ -49,6 +65,14 @@ describe('deleteInternalNoteAction', () => {
       code: 'denied',
     });
     expect(mockSoftDelete).not.toHaveBeenCalled();
+  });
+
+  // ⚠ BAL-560/F2 — the cookie still grants; the LIVE row does not. A Server Action never runs
+  // `checkSessionDrift`, so this is the only thing enforcing a revoked override on this path.
+  it('BAL-560/F2: denies when the LIVE row has revoked MANAGE_INTERNAL_NOTES', async () => {
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+    const result = await deleteInternalNoteAction({ requestId: REQUEST_ID, noteId: NOTE_ID });
+    expect(result).toMatchObject({ success: false, code: 'denied' });
   });
 
   it('rejects a malformed noteId', async () => {
