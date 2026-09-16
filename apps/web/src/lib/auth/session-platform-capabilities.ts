@@ -124,5 +124,11 @@ export function applyPlatformCapabilitiesToSessionUser(
 export function platformOverrideKeyOf(source: CarriesPlatformCapabilities): string | null {
   const normalized = normalizedOverrideOf(source);
   if (normalized === null) return null;
-  return JSON.stringify([...normalized].sort());
+  // ⚠ THE COMPARATOR IS NOT OPTIONAL. A bare `.sort()` coerces every element to a string and
+  // orders by UTF-16 code unit — SonarCloud rates that a RELIABILITY bug (S2871, "Provide a
+  // compare function to avoid sorting elements alphabetically"), and ONE of them is enough to
+  // drop the new-code reliability rating to D and fail the quality gate. These are lowercase
+  // snake_case tokens, so `localeCompare` is stable and locale-independent over the alphabet.
+  // Same shape as `sortIds` in `packages/db/src/repositories/_shared/consultation-projection.ts`.
+  return JSON.stringify([...normalized].sort((a, b) => a.localeCompare(b)));
 }
