@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateText, generateObject } from 'ai';
 import { createLlmClient, LlmOutputTruncatedError } from './anthropic-client.js';
+import { summaryPrompt } from './prompts.js';
 import type { SpeakerPartyHint } from './types.js';
 import { dailyMultiSpeaker } from '../normalizers/__fixtures__/daily-deepgram.js';
 import { normalizeDailyDeepgram } from '../normalizers/daily-deepgram.js';
+import { diarizedRef } from '../party-hint/__fixtures__/scenarios.js';
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn() }));
 
@@ -27,8 +29,8 @@ const canonical = normalizeDailyDeepgram(dailyMultiSpeaker);
 const ROSTER_ONLY_HINT: SpeakerPartyHint = {
   basis: 'roster_only',
   speakers: [
-    { ref: 'speaker-0', talkTimePercent: 40 },
-    { ref: 'speaker-1', talkTimePercent: 60 },
+    { ref: diarizedRef('speaker-0'), talkTimePercent: 40 },
+    { ref: diarizedRef('speaker-1'), talkTimePercent: 60 },
   ],
 };
 
@@ -249,6 +251,15 @@ describe('createLlmClient', () => {
       })
     );
     expect(summarized.audit.prompt).toContain('<speaker_party_hint>');
+    // A post-deploy measurement query reads `left(prompt, strpos(prompt, '<transcript>'))`,
+    // which only works because the persisted `audit.prompt` is the USER prompt alone, never
+    // system + user. Pin that exactly, not just the substring: the system prompt's
+    // `UNTRUSTED_CONTENT_CLAUSE` ALSO contains a literal `<transcript>` (before the hint
+    // clause), so if the audit prompt ever became system + user, every hinted transcript would
+    // silently mis-classify.
+    expect(summarized.audit.prompt).toBe(
+      summaryPrompt({ cleanedText: 'CLEANED', partyHint: ROSTER_ONLY_HINT }).user
+    );
 
     await client.extractActionItems({
       cleanedText: 'CLEANED',

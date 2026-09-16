@@ -109,6 +109,23 @@ const SUMMARY_PARTY_HINT_USE =
 const EXTRACTION_PARTY_HINT_USE =
   ' Use the hint only to help choose each "assigneeParty"; where the side is still unclear, use null.';
 
+/** Evidence + tentative-reading lines for a `presence_timing` hint, or the single "no cue" line
+ *  for `roster_only` — split out so `renderPartyHintBlock` builds its result as one array literal
+ *  (SonarCloud: prefer a single construction over repeated `Array#push()`). */
+function partyHintBasisLines(hint: SpeakerPartyHint): readonly string[] {
+  if (hint.basis === 'roster_only') {
+    return ['- Attendance timing gives no cue to which label is which side.'];
+  }
+  const evidenceLines = hint.evidence.map((entry) => {
+    const secs = Math.max(1, Math.round(entry.soleSpeechMs / 1000));
+    return `- Attendance timing (a stronger cue than talk time, but not proof): ${entry.speakerRef} spoke for about ${secs} seconds while the records show only the ${entry.side} side present.`;
+  });
+  return [
+    ...evidenceLines,
+    `${PARTY_HINT_TENTATIVE_READING_MARKER} from attendance timing: ${hint.expertRef} is probably the expert side and ${hint.clientRef} the client side.`,
+  ];
+}
+
 /**
  * BAL-517 — the descriptive `<speaker_party_hint>` block: the model is told what to do with it in
  * the system clause above; this block carries only the data. Never interpolates a name, id,
@@ -121,24 +138,10 @@ export function renderPartyHintBlock(hint: SpeakerPartyHint): string {
     PARTY_HINT_OPEN_TAG,
     'Weak prior derived from meeting attendance records and speaker diarization. It is not a verified identity and may be wrong.',
     `- Attendance records show exactly one expert-side participant and one client-side participant, and no one else, during this recording. Diarization found two voices: ${a.ref} and ${b.ref}. Each label is probably one side.`,
+    ...partyHintBasisLines(hint),
+    `- Talk time (a convention, not evidence; either side may talk more): ${a.ref} about ${a.talkTimePercent}%, ${b.ref} about ${b.talkTimePercent}%.`,
+    PARTY_HINT_CLOSE_TAG,
   ];
-  if (hint.basis === 'roster_only') {
-    lines.push('- Attendance timing gives no cue to which label is which side.');
-  } else {
-    for (const entry of hint.evidence) {
-      const secs = Math.max(1, Math.round(entry.soleSpeechMs / 1000));
-      lines.push(
-        `- Attendance timing (a stronger cue than talk time, but not proof): ${entry.speakerRef} spoke for about ${secs} seconds while the records show only the ${entry.side} side present.`
-      );
-    }
-    lines.push(
-      `${PARTY_HINT_TENTATIVE_READING_MARKER} from attendance timing: ${hint.expertRef} is probably the expert side and ${hint.clientRef} the client side.`
-    );
-  }
-  lines.push(
-    `- Talk time (a convention, not evidence; either side may talk more): ${a.ref} about ${a.talkTimePercent}%, ${b.ref} about ${b.talkTimePercent}%.`
-  );
-  lines.push(PARTY_HINT_CLOSE_TAG);
   return lines.join('\n');
 }
 

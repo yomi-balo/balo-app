@@ -12,29 +12,29 @@ import {
   renderPartyHintBlock,
   speakerLinePrefix,
 } from './prompts.js';
-import type { LlmClient, SpeakerPartyHint } from './types.js';
-import { diarizedCanonical } from '../party-hint/__fixtures__/scenarios.js';
+import type { LlmClient, SpeakerPartyHint, SpeakerTalkTime } from './types.js';
+import { diarizedCanonical, diarizedRef } from '../party-hint/__fixtures__/scenarios.js';
 
 const ROSTER_ONLY_HINT: SpeakerPartyHint = {
   basis: 'roster_only',
   speakers: [
-    { ref: 'speaker-0', talkTimePercent: 40 },
-    { ref: 'speaker-1', talkTimePercent: 60 },
+    { ref: diarizedRef('speaker-0'), talkTimePercent: 40 },
+    { ref: diarizedRef('speaker-1'), talkTimePercent: 60 },
   ],
 };
 
 const PRESENCE_TIMING_HINT: SpeakerPartyHint = {
   basis: 'presence_timing',
   speakers: [
-    { ref: 'speaker-0', talkTimePercent: 43 },
-    { ref: 'speaker-1', talkTimePercent: 57 },
+    { ref: diarizedRef('speaker-0'), talkTimePercent: 43 },
+    { ref: diarizedRef('speaker-1'), talkTimePercent: 57 },
   ],
   evidence: [
-    { side: 'expert', speakerRef: 'speaker-0', soleSpeechMs: 30_000 },
-    { side: 'client', speakerRef: 'speaker-1', soleSpeechMs: 40_000 },
+    { side: 'expert', speakerRef: diarizedRef('speaker-0'), soleSpeechMs: 30_000 },
+    { side: 'client', speakerRef: diarizedRef('speaker-1'), soleSpeechMs: 40_000 },
   ],
-  expertRef: 'speaker-0',
-  clientRef: 'speaker-1',
+  expertRef: diarizedRef('speaker-0'),
+  clientRef: diarizedRef('speaker-1'),
 };
 
 const SUMMARY_SYSTEM_V1 =
@@ -200,6 +200,17 @@ describe('measurement marker pins (used by an operator post-deploy query)', () =
     expect(renderPartyHintBlock(PRESENCE_TIMING_HINT)).toContain(
       PARTY_HINT_TENTATIVE_READING_MARKER
     );
+  });
+});
+
+describe('DiarizedRef branding is a compile-time guarantee', () => {
+  it("type pin: a plain string can't be assigned to SpeakerTalkTime['ref']", () => {
+    // @ts-expect-error — only `toDiarizedRef` (derive.ts, the sole `as DiarizedRef` cast site in
+    // production code) or the `diarizedRef` test helper may produce a `DiarizedRef`; a bare
+    // string literal must not type-check here. `pnpm --filter api typecheck` covers test files,
+    // so an unused `@ts-expect-error` below fails the build — this pin cannot silently rot.
+    const pinned: SpeakerTalkTime = { ref: 'speaker-0', talkTimePercent: 40 };
+    expect(pinned.ref).toBe('speaker-0');
   });
 });
 

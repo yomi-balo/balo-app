@@ -21,16 +21,25 @@ export type { LlmAudit };
  */
 export type SpeakerSide = NonNullable<ExtractedActionItem['assigneeParty']>;
 
+/**
+ * BAL-517 — a validated `speaker-N` diarization ref, branded so "no name/id/participant-entered
+ * string can reach the hint" is a COMPILE-TIME guarantee, not just a runtime check + a comment.
+ * The only way to produce one in production code is `derive.ts`'s `toDiarizedRef` (the sole
+ * cast site for this type); tests use the `diarizedRef` helper in
+ * `party-hint/__fixtures__/scenarios.ts` instead of casting.
+ */
+export type DiarizedRef = string & { readonly __brand: 'DiarizedRef' };
+
 export interface SpeakerTalkTime {
   /** A diarized ref, validated `speaker-N` — never a name, id or participant-entered string. */
-  readonly ref: string;
+  readonly ref: DiarizedRef;
   /** Integer percent of the two hinted voices' speech; the pair sums to 100. */
   readonly talkTimePercent: number;
 }
 
 export interface SpeakerPartyHintEvidence {
   readonly side: SpeakerSide;
-  readonly speakerRef: string;
+  readonly speakerRef: DiarizedRef;
   /** Speech ms fully inside a window where attendance records show only `side` present. */
   readonly soleSpeechMs: number;
 }
@@ -52,8 +61,8 @@ export type SpeakerPartyHint =
       readonly evidence:
         | readonly [SpeakerPartyHintEvidence]
         | readonly [SpeakerPartyHintEvidence, SpeakerPartyHintEvidence];
-      readonly expertRef: string;
-      readonly clientRef: string;
+      readonly expertRef: DiarizedRef;
+      readonly clientRef: DiarizedRef;
     };
 
 /**

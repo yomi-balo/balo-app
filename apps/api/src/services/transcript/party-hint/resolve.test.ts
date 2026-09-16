@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolvePartyHint, type ResolvePartyHintInput } from './resolve.js';
+import { derivePartyHint } from './derive.js';
 import {
   MEETING_ID,
   EXPERT_USER_ID,
@@ -27,6 +28,14 @@ vi.mock('@balo/db', () => ({
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => logger,
 }));
+
+// Spies on the REAL `derivePartyHint` (never replaces it), so every existing test's behaviour
+// is byte-identical; only the "derivation bug" test below overrides it once, to force the
+// pure-derivation-throws branch without touching `precheckPartyHint` or any repository mock.
+vi.mock('./derive.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./derive.js')>();
+  return { ...actual, derivePartyHint: vi.fn(actual.derivePartyHint) };
+});
 
 const transcript = { id: 'tr1', meetingId: MEETING_ID, vendor: 'daily_deepgram' as const };
 
@@ -114,25 +123,26 @@ describe('resolvePartyHint', () => {
     );
   });
 
-  it('never rejects: a findByTranscriptJobId failure degrades to null + a warn (never info)', async () => {
+  /** Shared by the three "never rejects, logs at error" tests below (jscpd). */
+  function expectErrorLog(message: string, errorText: string): void {
+    expect(logger.error).toHaveBeenCalledWith(
+      { transcriptId: 'tr1', meetingId: MEETING_ID, error: errorText, stack: expect.any(String) },
+      message
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.info).not.toHaveBeenCalled();
+  }
+
+  it('never rejects: a findByTranscriptJobId failure degrades to null + an error (never warn or info)', async () => {
     db.findByTranscriptJobId.mockRejectedValue(new Error('db down'));
 
     const hint = await resolvePartyHint(baseInput());
 
     expect(hint).toBeNull();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        transcriptId: 'tr1',
-        meetingId: MEETING_ID,
-        error: 'db down',
-        stack: expect.any(String),
-      }),
-      'Transcript party hint lookup failed — continuing without a hint'
-    );
-    expect(logger.info).not.toHaveBeenCalled();
+    expectErrorLog('Transcript party hint lookup failed — continuing without a hint', 'db down');
   });
 
-  it('never rejects: a listByMeeting failure degrades to null + a warn (never info)', async () => {
+  it('never rejects: a listByMeeting failure degrades to null + an error (never warn or info)', async () => {
     const waiting = expertWaitingInput();
     db.findByTranscriptJobId.mockResolvedValue(waiting.recording);
     db.listByMeeting.mockRejectedValue(new Error('db down'));
@@ -140,11 +150,66 @@ describe('resolvePartyHint', () => {
     const hint = await resolvePartyHint(baseInput());
 
     expect(hint).toBeNull();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ transcriptId: 'tr1', error: 'db down' }),
+    expectErrorLog('Transcript party hint lookup failed — continuing without a hint', 'db down');
+  });
+
+  it('a bug in the pure derivation (never a repository failure) degrades to null + a DIFFERENT error message, never warn', async () => {
+    const waiting = expertWaitingInput();
+    db.findByTranscriptJobId.mockResolvedValue(waiting.recording);
+    db.listByMeeting.mockResolvedValue(waiting.presence);
+    vi.mocked(derivePartyHint).mockImplementationOnce(() => {
+      throw new Error('derivation bug');
+    });
+
+    const hint = await resolvePartyHint(baseInput());
+
+    expect(hint).toBeNull();
+    expectErrorLog(
+      'Transcript party hint derivation threw — continuing without a hint',
+      'derivation bug'
+    );
+  });
+
+  it('a throw from the info log itself is treated as a derivation bug, never a rejection', async () => {
+    const waiting = expertWaitingInput();
+    db.findByTranscriptJobId.mockResolvedValue(waiting.recording);
+    db.listByMeeting.mockResolvedValue(waiting.presence);
+    logger.info.mockImplementationOnce(() => {
+      throw new Error('logger transport down');
+    });
+
+    const hint = await resolvePartyHint(baseInput());
+
+    expect(hint).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(
+      {
+        transcriptId: 'tr1',
+        meetingId: MEETING_ID,
+        error: 'logger transport down',
+        stack: expect.any(String),
+      },
+      'Transcript party hint derivation threw — continuing without a hint'
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('the lookup-failure log keeps the ORIGINAL repository error stack, not the wrapper class stack', async () => {
+    const original = new Error('db down');
+    original.stack = 'SENTINEL_STACK_FROM_THE_DRIVER';
+    db.findByTranscriptJobId.mockRejectedValue(original);
+
+    const hint = await resolvePartyHint(baseInput());
+
+    expect(hint).toBeNull();
+    expect(logger.error).toHaveBeenCalledWith(
+      {
+        transcriptId: 'tr1',
+        meetingId: MEETING_ID,
+        error: 'db down',
+        stack: 'SENTINEL_STACK_FROM_THE_DRIVER',
+      },
       'Transcript party hint lookup failed — continuing without a hint'
     );
-    expect(logger.info).not.toHaveBeenCalled();
   });
 
   it('log hygiene: no info/warn call carries a presence user or guest id', async () => {

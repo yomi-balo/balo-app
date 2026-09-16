@@ -1,5 +1,10 @@
 import type { CanonicalTranscript, TranscriptVendor, MeetingParticipantParty } from '@balo/db';
-import type { SpeakerPartyHint, SpeakerPartyHintEvidence, SpeakerTalkTime } from '../llm/types.js';
+import type {
+  DiarizedRef,
+  SpeakerPartyHint,
+  SpeakerPartyHintEvidence,
+  SpeakerTalkTime,
+} from '../llm/types.js';
 import { speakerLinePrefix } from '../llm/prompts.js';
 import { UNKNOWN_SPEAKER_REF } from '../normalizers/daily-deepgram.js';
 
@@ -16,10 +21,16 @@ import { UNKNOWN_SPEAKER_REF } from '../normalizers/daily-deepgram.js';
  *   looks like a tiny second ordinal; "two voices, two sides" needs both to have really spoken.
  * - `PRESENCE_SKEW_MARGIN_MS` (120s): covers the per-minute lifecycle sweep's repair lag for a
  *   dropped join webhook, webhook latency, and the `start_ts`→`event_ts`→`receivedAt` anchor
- *   fallback. A clamped `joined_at` (BAL-134 R10, early arrivals raised to `scheduled_start`) can
- *   only make a party look ABSENT earlier than they were, never present when they weren't — so it
- *   can hide evidence, never invent it.
- * - `MIN_SOLE_SPEECH_MS` (3s): a lone "hello?" or a mis-diarized word is not evidence.
+ *   fallback. For TIMING EVIDENCE (the dilated/own span arithmetic below), a clamped `joined_at`
+ *   (BAL-134 R10, early arrivals raised to `scheduled_start`) can only make a party look ABSENT
+ *   earlier than they were, never present when they weren't — so it can hide evidence, never
+ *   invent it. The HEADCOUNT gate is different: that same clamp (and `closeAllOpen`'s `GREATEST`
+ *   on the other end) can manufacture a ZERO-LENGTH presence row exactly at `scheduled_start`,
+ *   which usually still falls inside the segment — so the STRICT window requires POSITIVE-LENGTH
+ *   presence (`presentDuring`), while the EXPANDED window stays inclusive (`overlapsWindow`).
+ * - `MIN_SOLE_SPEECH_MS` (3s): a lone "hello?" or a mis-diarized word is not evidence — applied to
+ *   BOTH the window total AND the leader's OWN sole speech, so a leader can't clear the bar on the
+ *   back of the OTHER voice's spillover inside the same window.
  * - `SOLE_SPEECH_DOMINANCE` (90%): tolerates a stray word of diarization spill-over; genuine
  *   disagreement becomes a conflict, which drops the hint entirely.
  *
@@ -30,6 +41,12 @@ import { UNKNOWN_SPEAKER_REF } from '../normalizers/daily-deepgram.js';
  * misattributed as the remaining party's sole speech. The conflict gate catches this whenever the
  * remaining party also spoke in that window; otherwise it can yield a wrong `presence_timing`
  * mapping, framed as tentative with "the conversation wins" in the prompt.
+ *
+ * A second, undetectable residual: a SILENT party plus two people speaking under ONE client
+ * identity (e.g. a colleague on the booker's own device) is indistinguishable, from presence and
+ * diarization alone, from a genuine two-party call — nothing here can tell them apart. The hint
+ * can then name the wrong side, and only the prompt's "tentative; the conversation wins" framing
+ * mitigates it.
  */
 
 /** Exported so tests pin boundaries by name. */
@@ -39,9 +56,25 @@ export const MAX_UNKNOWN_SPEECH_SHARE = 0.05;
 export const PRESENCE_SKEW_MARGIN_MS = 120_000;
 export const MIN_SOLE_SPEECH_MS = 3_000;
 export const SOLE_SPEECH_DOMINANCE = 0.9;
+/** Presence proves attendance, not participation: a party recorded present for under half of
+ *  the two voices' total speech cannot anchor "one voice per side". */
+export const MIN_PARTY_SPEECH_COVERAGE = 0.5;
+/** A single mis-diarized word is typically well under a second; ≥1s of a voice heard ALONE is
+ *  enough to CONTRADICT a mapping, though never enough to make one (see `sideLeader`'s `weak`). */
+export const MIN_WEAK_SOLE_SPEECH_MS = 1_000;
 
 /** `speaker-N` only. Bounded, backtracking-free (S5852-safe). */
 const DIARIZED_REF_PATTERN = /^speaker-\d{1,4}$/;
+
+/**
+ * The ONLY production site that brands a plain string into the diarized-ref type: one
+ * sanctioned cast, gated on the same pattern `hasUnrecognisedRef` already enforces for every
+ * known ref. Returns `null` on a pattern miss so the caller can fall back to the existing
+ * `speaker_ref_unrecognised` reason — no new skip reason needed.
+ */
+export function toDiarizedRef(value: string): DiarizedRef | null {
+  return DIARIZED_REF_PATTERN.test(value) ? (value as DiarizedRef) : null;
+}
 
 export const PARTY_HINT_SKIP_REASONS = [
   // transcript-only (precheck) — evaluated before any DB read
@@ -51,6 +84,7 @@ export const PARTY_HINT_SKIP_REASONS = [
   'speaker_count_not_two',
   'unknown_speech_too_high',
   'speaker_share_too_low',
+  'cleaned_text_contains_hint_tag',
   'cleaned_labels_not_preserved',
   // wrapper-owned (resolve.ts) — need the capture id / a lookup
   'capture_id_unrecognised',
@@ -64,6 +98,8 @@ export const PARTY_HINT_SKIP_REASONS = [
   'presence_identity_on_both_sides',
   'expert_identity_count_not_one',
   'client_identity_count_not_one',
+  'expert_presence_too_brief',
+  'client_presence_too_brief',
   'presence_timing_conflict',
 ] as const;
 export type PartyHintSkipReason = (typeof PARTY_HINT_SKIP_REASONS)[number];
@@ -97,7 +133,7 @@ export interface DerivePartyHintInput extends PartyHintPrecheckInput {
 }
 
 export interface DiarizedSpeakerPair {
-  readonly refs: readonly [string, string]; // canonical first-appearance order
+  readonly refs: readonly [DiarizedRef, DiarizedRef]; // canonical first-appearance order
   readonly talkMs: readonly [number, number];
 }
 
@@ -188,6 +224,14 @@ function findLabel(line: string, knownRefs: ReadonlySet<string>): string | undef
  * of `refA` / `refB` is in that canonical order — catching both a partial relabel and a
  * wholesale swap at the opening turns. The Noop path (cleanup returns `renderTranscriptText`
  * verbatim) always passes.
+ *
+ * By design this checks ONLY first-appearance order, not the full turn sequence: verifying every
+ * turn would fail whenever cleanup legitimately drops or merges a filler turn, which is normal,
+ * lossy-but-safe cleanup behaviour, not a labelling bug. A LATER mid-transcript relabel (turn 1
+ * and turn 2 both start with the right label, but turn 5 is quietly swapped) goes undetected here.
+ * That is an existing, pre-hint exposure: such a relabel already misattributes that one line in
+ * the cleaned text handed to summary/extraction, with or without a party hint in play, so this
+ * gate does not need to (and does not try to) catch it.
  */
 function cleanedLabelsPreserved(
   cleanedText: string,
@@ -250,11 +294,29 @@ export function precheckPartyHint(input: PartyHintPrecheckInput): PartyHintPrech
   if (Math.min(a, b) < MIN_SPEAKER_SPEECH_MS || Math.min(a, b) / total < MIN_SPEAKER_SHARE) {
     return { kind: 'none', reason: 'speaker_share_too_low' };
   }
+  // A cheap guard against a forged hint block sitting beside a genuine one: any casing of the
+  // literal tag name anywhere in the cleaned text (opening, closing, or lifted out of context)
+  // means participant-authored content could be mistaken for — or could mask — the real
+  // `<speaker_party_hint>` block the summary/extraction prompts insert. Checked before the label
+  // gate below so the more specific reason wins.
+  if (cleanedText.toLowerCase().includes('speaker_party_hint')) {
+    return { kind: 'none', reason: 'cleaned_text_contains_hint_tag' };
+  }
   if (!cleanedLabelsPreserved(cleanedText, knownRefs, [refA, refB])) {
     return { kind: 'none', reason: 'cleaned_labels_not_preserved' };
   }
 
-  return { kind: 'ok', pair: { refs: [refA, refB], talkMs: [a, b] } };
+  // Brand the pair's refs here, at the single point where every earlier gate (in particular
+  // `hasUnrecognisedRef`, above) has already guaranteed both pass `DIARIZED_REF_PATTERN`. A
+  // `null` here is structurally unreachable, but handled the same way an unrecognised ref
+  // always has been rather than assumed away with a cast.
+  const brandedRefA = toDiarizedRef(refA);
+  const brandedRefB = toDiarizedRef(refB);
+  if (brandedRefA === null || brandedRefB === null) {
+    return { kind: 'none', reason: 'speaker_ref_unrecognised' };
+  }
+
+  return { kind: 'ok', pair: { refs: [brandedRefA, brandedRefB], talkMs: [a, b] } };
 }
 
 // ── Segment window ───────────────────────────────────────────────────────────────
@@ -306,11 +368,23 @@ function overlapsWindow(row: PartyHintPresenceInterval, w0: number, w1: number):
   return row.joinedAt.getTime() <= w1 && intervalEnd(row) >= w0;
 }
 
+/**
+ * POSITIVE-LENGTH overlap only — used ONLY for the STRICT window (`overlappingS`). A zero-length
+ * row (the BAL-134 R10 clamp, or `closeAllOpen`'s `GREATEST`, can manufacture one exactly at
+ * `scheduled_start`) must not count as "the one expert/client present" for the headcount gate,
+ * even though it still counts for the EXPANDED window's inclusive `overlapsWindow`. An open
+ * `leftAt` stays `+∞` via `intervalEnd`, so an ongoing row is always positive-length here.
+ */
+function presentDuring(row: PartyHintPresenceInterval, w0: number, w1: number): boolean {
+  return Math.min(intervalEnd(row), w1) > Math.max(row.joinedAt.getTime(), w0);
+}
+
 function hasInvalidInterval(presence: readonly PartyHintPresenceInterval[]): boolean {
   return presence.some(
     (row) =>
       !Number.isFinite(row.joinedAt.getTime()) ||
-      (row.leftAt !== null && !Number.isFinite(row.leftAt.getTime()))
+      (row.leftAt !== null &&
+        (!Number.isFinite(row.leftAt.getTime()) || row.leftAt.getTime() < row.joinedAt.getTime()))
   );
 }
 
@@ -352,9 +426,7 @@ function checkPresencePopulation(
   const x0 = window.segStart - PRESENCE_SKEW_MARGIN_MS;
   const x1 = window.segEnd + PRESENCE_SKEW_MARGIN_MS;
   const overlappingX = presence.filter((row) => overlapsWindow(row, x0, x1));
-  const overlappingS = presence.filter((row) =>
-    overlapsWindow(row, window.segStart, window.segEnd)
-  );
+  const overlappingS = presence.filter((row) => presentDuring(row, window.segStart, window.segEnd));
 
   if (overlappingX.some((row) => identityKey(row) === null)) {
     return { kind: 'none', reason: 'presence_identity_missing' };
@@ -398,7 +470,7 @@ function mergeSpans(spans: readonly Span[]): Span[] {
   const sorted = [...spans].sort((a, b) => a.start - b.start);
   const merged: Span[] = [];
   for (const span of sorted) {
-    const last = merged[merged.length - 1];
+    const last = merged.at(-1);
     if (last !== undefined && span.start <= last.end) {
       merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, span.end) };
       continue;
@@ -530,23 +602,123 @@ function computeSoleSpeechBySide(
   };
 }
 
+/** Overlap length, in ms, between two closed ranges — 0 when they don't overlap. */
+function overlapMs(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
+  return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+}
+
+/** Sum, over the pair's segments only (never `unknown`), of each segment's overlap with `spans` —
+ *  a segment straddling a span's edge counts only its overlapping part. */
+function coveredSpeechMs(
+  canonical: CanonicalTranscript,
+  refs: readonly [string, string],
+  spans: readonly Span[]
+): number {
+  let total = 0;
+  for (const segment of canonical.segments) {
+    if (segment.speakerRef !== refs[0] && segment.speakerRef !== refs[1]) {
+      continue;
+    }
+    for (const span of spans) {
+      total += overlapMs(segment.startMs, segment.endMs, span.start, span.end);
+    }
+  }
+  return total;
+}
+
+/** `speechTotalMs` is already `> 0` by the earlier speaker-share gate; guarded here anyway
+ *  (without a non-null assertion) so a coverage ratio is never computed against zero. */
+function coverageTooLow(coveredMs: number, speechTotalMs: number): boolean {
+  return speechTotalMs > 0 && coveredMs / speechTotalMs < MIN_PARTY_SPEECH_COVERAGE;
+}
+
+type PartyCoverage =
+  | { readonly kind: 'ok' }
+  | {
+      readonly kind: 'none';
+      readonly reason: 'expert_presence_too_brief' | 'client_presence_too_brief';
+    };
+
+/**
+ * Party speech-coverage gate: each of the one expert and the one client must be positively
+ * present (own spans, undilated, clipped to the segment) for at least half of the two hinted
+ * voices' total speech — otherwise "exactly one identity present" proved a row exists, not that
+ * the party took part in the conversation.
+ */
+function checkPartySpeechCoverage(
+  canonical: CanonicalTranscript,
+  refs: readonly [DiarizedRef, DiarizedRef],
+  speechTotalMs: number,
+  expertOwn: readonly Span[],
+  clientOwn: readonly Span[]
+): PartyCoverage {
+  const expertPositive = expertOwn.filter((span) => span.start < span.end);
+  if (coverageTooLow(coveredSpeechMs(canonical, refs, expertPositive), speechTotalMs)) {
+    return { kind: 'none', reason: 'expert_presence_too_brief' };
+  }
+  const clientPositive = clientOwn.filter((span) => span.start < span.end);
+  if (coverageTooLow(coveredSpeechMs(canonical, refs, clientPositive), speechTotalMs)) {
+    return { kind: 'none', reason: 'client_presence_too_brief' };
+  }
+  return { kind: 'ok' };
+}
+
 type SideLeader =
   | { readonly kind: 'none' }
   | { readonly kind: 'conflict' }
+  | { readonly kind: 'weak'; readonly index: 0 | 1 }
   | { readonly kind: 'leader'; readonly index: 0 | 1; readonly ms: number };
 
+/** The non-top voice's own ms, given the top index. */
+function nonTopMs(ms: readonly [number, number], topIndex: 0 | 1): number {
+  return topIndex === 0 ? ms[1] : ms[0];
+}
+
+/**
+ * Monotone by construction: adding MORE contrary speech never turns a mapping into something
+ * weaker than a conflict, and never turns a conflict/weak signal back into a clean mapping.
+ * Order:
+ * 1. no speech at all on this side → `none`;
+ * 2. the non-top voice alone already clears the sole-evidence floor → `conflict` (a window where
+ *    attendance shows only ONE party present cannot legitimately contain seconds of the OTHER
+ *    voice — shared device, unrecorded attendee, a diarization split);
+ * 3. the leader hasn't cleared the sole-evidence floor itself, but the non-top voice still clears
+ *    the lower WEAK floor → `conflict` (two voices each heard alone for a real stretch, with
+ *    neither a genuine leader, is still a contradiction — not something a topMs that hasn't
+ *    cleared its own floor can out-vote);
+ * 4. once the WINDOW TOTAL clears the sole-evidence floor, dominance must also hold, or it's a
+ *    `conflict` (tolerates a stray word of diarization spill-over; guarded on the total so a
+ *    handful of contrary ms can't out-vote a topMs that hasn't cleared the floor itself yet);
+ * 5. the leader's OWN evidence clears the floor → `leader` (a real mapping);
+ * 6. otherwise, if it clears the much lower WEAK floor → `weak` (too little to map from, but a
+ *    real voice on this side that still blocks a contradictory mapping elsewhere — see
+ *    `decideTiming`);
+ * 7. otherwise → `none`.
+ */
 function sideLeader(ms: readonly [number, number]): SideLeader {
   const [ms0, ms1] = ms;
   const total = ms0 + ms1;
-  if (total < MIN_SOLE_SPEECH_MS) {
+  if (total === 0) {
     return { kind: 'none' };
   }
   const index: 0 | 1 = ms0 >= ms1 ? 0 : 1;
   const topMs = index === 0 ? ms0 : ms1;
-  if (topMs / total < SOLE_SPEECH_DOMINANCE) {
+  if (nonTopMs(ms, index) >= MIN_SOLE_SPEECH_MS) {
     return { kind: 'conflict' };
   }
-  return { kind: 'leader', index, ms: topMs };
+  if (topMs < MIN_SOLE_SPEECH_MS && nonTopMs(ms, index) >= MIN_WEAK_SOLE_SPEECH_MS) {
+    return { kind: 'conflict' };
+  }
+  if (total >= MIN_SOLE_SPEECH_MS && topMs / total < SOLE_SPEECH_DOMINANCE) {
+    return { kind: 'conflict' };
+  }
+  if (topMs >= MIN_SOLE_SPEECH_MS) {
+    return { kind: 'leader', index, ms: topMs };
+  }
+  if (topMs >= MIN_WEAK_SOLE_SPEECH_MS) {
+    return { kind: 'weak', index };
+  }
+  return { kind: 'none' };
 }
 
 type TimingDecision =
@@ -554,8 +726,8 @@ type TimingDecision =
   | { readonly kind: 'roster_only' }
   | {
       readonly kind: 'mapped';
-      readonly expertRef: string;
-      readonly clientRef: string;
+      readonly expertRef: DiarizedRef;
+      readonly clientRef: DiarizedRef;
       // Non-empty by construction — built as an array LITERAL of 1 or 2 elements below, never
       // mutated, so no cast is needed to satisfy this tuple type.
       readonly evidence:
@@ -563,24 +735,29 @@ type TimingDecision =
         | readonly [SpeakerPartyHintEvidence, SpeakerPartyHintEvidence];
     };
 
+/** The index a `leader` or `weak` signal points at, else `null` — a MAPPING only ever comes from
+ *  a real `leader`, but a `weak` signal still counts for the same-index contradiction check. */
+function sideLeaderIndex(leader: SideLeader): 0 | 1 | null {
+  return leader.kind === 'leader' || leader.kind === 'weak' ? leader.index : null;
+}
+
 /**
- * Step 18: a contradiction (either side ambiguous on its own, or both sides point at the SAME
- * voice) proves presence timing / the recording offset / diarization is wrong for this segment,
- * so no hint is emitted at all — never a fallback to `roster_only`.
+ * Step 18: a contradiction (either side ambiguous on its own, or both sides — real or `weak` —
+ * point at the SAME voice) proves presence timing / the recording offset / diarization is wrong
+ * for this segment, so no hint is emitted at all — never a fallback to `roster_only`. A `weak`
+ * signal never supplies a mapping itself; two `weak` signals at different indices, or one `weak`
+ * signal alone, fall through to `roster_only` below.
  */
 function decideTiming(
-  refs: readonly [string, string],
+  refs: readonly [DiarizedRef, DiarizedRef],
   expertLeader: SideLeader,
   clientLeader: SideLeader
 ): TimingDecision {
   if (expertLeader.kind === 'conflict' || clientLeader.kind === 'conflict') {
     return { kind: 'conflict' };
   }
-  if (
-    expertLeader.kind === 'leader' &&
-    clientLeader.kind === 'leader' &&
-    expertLeader.index === clientLeader.index
-  ) {
+  const expertIndex = sideLeaderIndex(expertLeader);
+  if (expertIndex !== null && expertIndex === sideLeaderIndex(clientLeader)) {
     return { kind: 'conflict' };
   }
   if (expertLeader.kind === 'leader') {
@@ -672,6 +849,18 @@ export function derivePartyHint(input: DerivePartyHintInput): PartyHintDerivatio
 
   const expertOwn = ownSpans(presence, population.expertKey, segStart, window.segLengthMs);
   const clientOwn = ownSpans(presence, population.clientKey, segStart, window.segLengthMs);
+
+  const coverage = checkPartySpeechCoverage(
+    canonical,
+    pair.refs,
+    pair.talkMs[0] + pair.talkMs[1],
+    expertOwn,
+    clientOwn
+  );
+  if (coverage.kind === 'none') {
+    return coverage;
+  }
+
   const expertDilated = dilatedSpans(presence, population.expertKey, segStart);
   const clientDilated = dilatedSpans(presence, population.clientKey, segStart);
 

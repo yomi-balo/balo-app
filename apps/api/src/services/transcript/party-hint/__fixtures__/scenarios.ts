@@ -2,12 +2,26 @@ import type { CanonicalTranscript, MeetingParticipantParty } from '@balo/db';
 import type { DailyDeepgramTranscriptPayload } from '../../normalizers/types.js';
 import { normalizeDailyDeepgram } from '../../normalizers/daily-deepgram.js';
 import { renderTranscriptText } from '../../llm/prompts.js';
-import type { SpeakerPartyHint } from '../../llm/types.js';
-import type {
-  DerivePartyHintInput,
-  PartyHintPresenceInterval,
-  PartyHintRecordingSegment,
+import type { DiarizedRef, SpeakerPartyHint } from '../../llm/types.js';
+import {
+  toDiarizedRef,
+  type DerivePartyHintInput,
+  type PartyHintPresenceInterval,
+  type PartyHintRecordingSegment,
 } from '../derive.js';
+
+/**
+ * The ONLY sanctioned way for a TEST to produce a `DiarizedRef`: calls the real
+ * `toDiarizedRef` and throws on a pattern miss, so a typo in a fixture fails loudly instead of
+ * silently casting past the brand. Tests never cast to the branded type themselves.
+ */
+export function diarizedRef(value: string): DiarizedRef {
+  const ref = toDiarizedRef(value);
+  if (ref === null) {
+    throw new Error(`diarizedRef: "${value}" does not match the speaker-N pattern`);
+  }
+  return ref;
+}
 
 /**
  * BAL-517 — shared test-data builders for `derive.test.ts` and `resolve.test.ts`. A FIXED past
@@ -139,12 +153,12 @@ export function expertWaitingPayload(durationSeconds?: number): DailyDeepgramTra
 export const EXPERT_WAITING_HINT: SpeakerPartyHint = {
   basis: 'presence_timing',
   speakers: [
-    { ref: 'speaker-0', talkTimePercent: 44 },
-    { ref: 'speaker-1', talkTimePercent: 56 },
+    { ref: diarizedRef('speaker-0'), talkTimePercent: 44 },
+    { ref: diarizedRef('speaker-1'), talkTimePercent: 56 },
   ],
-  evidence: [{ side: 'expert', speakerRef: 'speaker-0', soleSpeechMs: 30_000 }],
-  expertRef: 'speaker-0',
-  clientRef: 'speaker-1',
+  evidence: [{ side: 'expert', speakerRef: diarizedRef('speaker-0'), soleSpeechMs: 30_000 }],
+  expertRef: diarizedRef('speaker-0'),
+  clientRef: diarizedRef('speaker-1'),
 };
 
 export function expertWaitingInput(

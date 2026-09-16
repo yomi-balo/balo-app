@@ -228,12 +228,16 @@ async function stageSummaryExtract(a: {
     return { summaryText: existing.content, extractedItems: transcript.extractedActionItems ?? [] };
   }
 
-  // BAL-517 — derived HERE, after the skip gate above and from persisted rows (never at ingest,
-  // never from job data), so the BAL-550 re-drive (`resumeTranscriptRecap`) gets the identical
-  // hint, and a short-circuited re-run (the `existing !== undefined` branch above) issues ZERO
-  // hint reads. Never rejects — a hint is an optional prior, so a lookup failure degrades to
-  // `null` rather than failing the stage. The hint reaches summary + extraction ONLY: `stageCleanup`
-  // ran above and never sees it — its signature has no `partyHint` parameter at all.
+  // BAL-517 — derived HERE, after the skip gate above, from this call's `canonical` +
+  // `captureId` params — never at ingest. On the CAPTURE path those params are the job's own
+  // values, which equal what `stagePersistRaw` already persisted onto the row (never a
+  // synthetic substitute); on the BAL-550 re-drive path (`resumeTranscriptRecap`) they are read
+  // back off that same persisted row. Either way the hint sees the same inputs, which is what
+  // gives the re-drive parity. A short-circuited re-run (the `existing !== undefined` branch
+  // above) issues ZERO hint reads. Never rejects — a hint is an optional prior, so a lookup
+  // failure degrades to `null` rather than failing the stage. The hint reaches summary +
+  // extraction ONLY: `stageCleanup` ran above and never sees it — its signature has no
+  // `partyHint` parameter at all.
   const partyHint = await resolvePartyHint({ transcript, canonical, cleanedText, captureId });
   const summarized = await llm.summarize({ cleanedText, partyHint });
   const extracted = await llm.extractActionItems({

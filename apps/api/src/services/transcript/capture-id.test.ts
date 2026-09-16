@@ -6,7 +6,7 @@ import {
 } from './capture-id.js';
 
 describe('capture-id (BAL-517 shared daily-batch: convention)', () => {
-  it('pins the prefix literal that jobs/transcript-capture.ts:388 depends on', () => {
+  it('pins the prefix literal that jobs/transcript-capture.ts depends on', () => {
     expect(DAILY_BATCH_CAPTURE_ID_PREFIX).toBe('daily-batch:');
   });
 

@@ -656,7 +656,7 @@ describe('BAL-517 party hint', () => {
 
     expect(hintLlm.summarize).toHaveBeenCalledWith(expect.objectContaining({ partyHint: null }));
     expect(publish).toHaveBeenCalledWith('recap.ready', expect.anything());
-    expect(logger.warn).toHaveBeenCalledWith(
+    expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ transcriptId: 'tr-hint' }),
       'Transcript party hint lookup failed — continuing without a hint'
     );
