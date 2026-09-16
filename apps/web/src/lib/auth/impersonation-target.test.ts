@@ -26,6 +26,10 @@ function targetRow(overrides: Partial<ImpersonationTargetRow> = {}): Impersonati
     status: 'active',
     activeMode: 'client',
     platformRole: 'user',
+    // BAL-560 — `findForSessionSync` now projects the per-user override. NULL here is not a
+    // convenience: under D1's `users_platform_capabilities_staff_array` CHECK a non-staff row
+    // cannot carry one, and an impersonation target is never staff.
+    platformCapabilities: null,
     onboardingCompleted: true,
     deletedAt: null,
     expertProfileId: null,
@@ -142,6 +146,26 @@ describe('buildImpersonatedSessionUser', () => {
 
     expect(result).not.toHaveProperty('expertProfileId');
     expect(result).not.toHaveProperty('verticalId');
+  });
+
+  /**
+   * BAL-560 (plan §9.6) — ⟦R7b⟧ seals the TARGET's own real DB values, and the override is one of
+   * them. Under D1 a target is never staff and a non-staff row cannot hold an override, so this
+   * is always the ABSENT case today — but the file does not control that data, so the ENCODING is
+   * asserted rather than assumed. Absent, never `platformCapabilities: null`: an explicit null
+   * would cost cookie bytes and read as "holds nothing" instead of "inherit".
+   */
+  it('does NOT carry platformCapabilities when the target row has none (BAL-560)', async () => {
+    mockFindById.mockResolvedValue(displayUser());
+    mockDeriveWorkspacesForUser.mockResolvedValue(COMPANY_DERIVATION);
+
+    const result = await buildImpersonatedSessionUser(
+      TARGET_ID,
+      targetRow({ platformCapabilities: null })
+    );
+
+    expect(result).not.toBeNull();
+    expect(result).not.toHaveProperty('platformCapabilities');
   });
 
   it('does NOT carry authMethod — nobody authenticated as the target', async () => {

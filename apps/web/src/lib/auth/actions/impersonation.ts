@@ -10,6 +10,7 @@ import { requireOnboardedUser, getSession } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { isImpersonatedSession, markSessionAsImpersonated } from '@/lib/auth/impersonation';
 import { buildImpersonatedSessionUser } from '@/lib/auth/impersonation-target';
+import { sealedPlatformCapabilities } from '@/lib/auth/session-platform-capabilities';
 import {
   sealPreservedAdminSession,
   unsealPreservedAdminSession,
@@ -161,7 +162,14 @@ export async function startImpersonationAction(input: {
       actorRow.deletedAt !== null ||
       actorRow.status !== 'active' ||
       !hasPlatformCapability(
-        { platformRole: actorRow.platformRole },
+        // BAL-560 (gate #7) — the LIVE row's OVERRIDE, not just its role. This is a deliberate
+        // live read (see above: the cookie can be seven days stale), and it is the ONLY
+        // `hasPlatformCapability` call site in the monorepo that hand-builds its actor rather
+        // than passing a whole `SessionUser` — so dropping the override here would make the
+        // most powerful gate in the product the one gate that ignores it.
+        // `sealedPlatformCapabilities` is the one encoder — the field is ABSENT when the column
+        // is NULL — so this actor is shaped exactly like a sealed `SessionUser`.
+        { platformRole: actorRow.platformRole, ...sealedPlatformCapabilities(actorRow) },
         PLATFORM_CAPABILITIES.IMPERSONATE_USER
       )
     ) {

@@ -1,4 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+/**
+ * BAL-560 fix round 1 (security F2) — the LIVE-ROW platform gate this action now runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them. The helper's
+ * own behaviour (override revoked / widened / row suspended / non-staff role) is covered
+ * exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suites here pin is that
+ * the action CALLS it and honours a denial.
+ */
+const mockActorHoldsLive = vi.fn<(userId: string, capability: string) => Promise<boolean>>(
+  async () => true
+);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: string) =>
+    mockActorHoldsLive(userId, capability),
+}));
+
 import type { ProjectEngagementWithMilestones } from '@balo/db';
 
 const ENGAGEMENT_ID = 'a0000000-0000-4000-8000-000000000001';

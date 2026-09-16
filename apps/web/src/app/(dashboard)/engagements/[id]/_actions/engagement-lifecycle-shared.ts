@@ -12,6 +12,7 @@ import {
 import { resolveEngagementLens } from '@/lib/engagement/resolve-engagement-lens';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import type { SessionUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { DAY_MS, GENERIC_FAILURE, NOT_FOUND } from './milestone-action-shared';
@@ -194,7 +195,17 @@ export async function gateAdminEngagement(
   if (!loaded.ok) {
     return loaded;
   }
-  if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT)) {
+  // ⚠ BAL-560 fix round 1 (security F2) — SESSION CHECK **AND** LIVE-ROW CHECK. `checkSessionDrift`
+  // only runs during a page RENDER; the callers of this gate are Server Actions that POST
+  // straight to their own endpoint, so a per-user override revoked days ago would still be sealed
+  // in the cookie. Same reason and same shape as the impersonation entry point
+  // (`lib/auth/actions/impersonation.ts`). The synchronous check stays FIRST and short-circuits,
+  // so no query is spent on a caller the cookie already refuses. The log line's key set and
+  // message are UNCHANGED.
+  if (
+    !hasPlatformCapability(user, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT) ||
+    !(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT))
+  ) {
     log.warn('Engagement lifecycle denied', {
       engagementId,
       userId: user.id,

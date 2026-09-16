@@ -15,11 +15,18 @@ import { db } from '../../client';
  * backstops with raw SQL share ONE implementation (a second copy is both a Sonar
  * new-code duplication finding and a copy that keeps passing after the original's
  * savepoint discipline is broken).
+ *
+ * `constraintName` is OPTIONAL but strongly preferred (BAL-560): asserting only `23514`
+ * passes when the statement trips a DIFFERENT check — e.g. a typo'd column name that
+ * violates some unrelated constraint — so the probe would keep passing after the
+ * constraint it means to pin is dropped. Pass it whenever exactly one constraint can fire.
  */
-export async function expectCheckViolation(statement: SQL): Promise<void> {
-  await expect(db.transaction(async (tx) => tx.execute(statement))).rejects.toMatchObject({
-    code: '23514',
-  });
+export async function expectCheckViolation(statement: SQL, constraintName?: string): Promise<void> {
+  await expect(db.transaction(async (tx) => tx.execute(statement))).rejects.toMatchObject(
+    constraintName === undefined
+      ? { code: '23514' }
+      : { code: '23514', constraint_name: constraintName }
+  );
 }
 
 /** The savepoint handle a probe runs on. Must be used INSTEAD of the module-level `db`. */
@@ -33,10 +40,16 @@ type ProbeTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * ⚠ `run` MUST issue its statements on the supplied `tx`, never on the module-level `db`.
  * `db` is the OUTER per-test transaction; a failure on it aborts that transaction and
  * every later statement in the test fails `25P02` instead of the code you meant to assert.
+ *
+ * `constraintName` is OPTIONAL — see the note on `expectCheckViolation` for why passing it
+ * matters whenever exactly one constraint can fire.
  */
 export async function expectConstraintViolation(
   code: string,
-  run: (tx: ProbeTx) => Promise<unknown>
+  run: (tx: ProbeTx) => Promise<unknown>,
+  constraintName?: string
 ): Promise<void> {
-  await expect(db.transaction(async (tx) => run(tx))).rejects.toMatchObject({ code });
+  await expect(db.transaction(async (tx) => run(tx))).rejects.toMatchObject(
+    constraintName === undefined ? { code } : { code, constraint_name: constraintName }
+  );
 }

@@ -39,8 +39,9 @@ vi.mock('./authorize-engagement-host.js', () => ({
   hasEngagementCapability: mockHasEngagementCapability,
 }));
 // ⚠ `@balo/shared/authz` and `@balo/shared/meetings` are deliberately NOT mocked — the real
-// `roleHasCapability` / `platformRoleHasCapability` maps and the real precedence rule ARE what
-// is under test at their steps.
+// `roleHasCapability` / `platformActorHasCapability` maps and the real precedence rule ARE what
+// is under test at their steps. BAL-560: the platform arm now resolves the LIVE row's per-user
+// override as well as its role, so these fixtures carry `platformCapabilities`.
 
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { authorizeMeetingCancel } from './authorize-meeting-cancel.js';
@@ -74,7 +75,11 @@ beforeEach(() => {
   // Default: no arm grants. Every allow below opts IN to exactly one.
   mockGetMemberRole.mockResolvedValue(undefined);
   mockHasEngagementCapability.mockResolvedValue(false);
-  mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'user' });
+  mockUserFindById.mockResolvedValue({
+    id: USER_ID,
+    platformRole: 'user',
+    platformCapabilities: null,
+  });
 });
 
 // ── The five denial shapes, all collapsing to ONE wire literal ─────────────────
@@ -136,7 +141,11 @@ describe('authorizeMeetingCancel — every denial is indistinguishable', () => {
       });
       mockGetMemberRole.mockResolvedValue(undefined);
       mockHasEngagementCapability.mockResolvedValue(false);
-      mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'user' });
+      mockUserFindById.mockResolvedValue({
+        id: USER_ID,
+        platformRole: 'user',
+        platformCapabilities: null,
+      });
       arrange();
       results.push(await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID }));
     }
@@ -249,7 +258,7 @@ describe('authorizeMeetingCancel — the EXPERT arm (engagement axis)', () => {
 
 describe('authorizeMeetingCancel — the ADMIN arm (platform axis)', () => {
   it.each(['admin', 'super_admin'])('allows platformRole %s', async (platformRole) => {
-    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole });
+    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole, platformCapabilities: null });
 
     const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
 
@@ -257,11 +266,44 @@ describe('authorizeMeetingCancel — the ADMIN arm (platform axis)', () => {
   });
 
   it('denies a plain `user` — the real PLATFORM_ROLE_CAPABILITIES map decides', async () => {
-    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'user' });
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'user',
+      platformCapabilities: null,
+    });
 
     const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
 
     expect(result).toEqual({ ok: false, code: 'meeting_not_found' });
+  });
+
+  /**
+   * BAL-560 — the admin arm resolves the LIVE row's per-user override. A staff member whose
+   * override omits `cancel_any_meeting` loses the support-mediated override the moment their
+   * column changes.
+   */
+  it('BAL-560: denies a staff member whose per-user override OMITS cancel_any_meeting', async () => {
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'super_admin',
+      platformCapabilities: ['view_platform_admin', 'manage_platform_fees'],
+    });
+
+    const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
+
+    expect(result).toEqual({ ok: false, code: 'meeting_not_found' });
+  });
+
+  it('BAL-560: an override that NAMES cancel_any_meeting still allows the admin arm', async () => {
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'admin',
+      platformCapabilities: ['cancel_any_meeting'],
+    });
+
+    const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
+
+    expect(result).toMatchObject({ ok: true, actorRole: 'admin' });
   });
 
   it('denies when the user row itself is missing or soft-deleted', async () => {
@@ -277,7 +319,11 @@ describe('authorizeMeetingCancel — the ADMIN arm (platform axis)', () => {
     // comes back `null`. Refusing here would make the override unreachable for exactly the
     // bookings it exists for.
     mockEngagementFindById.mockResolvedValue(undefined);
-    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'admin' });
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'admin',
+      platformCapabilities: null,
+    });
 
     const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
 
@@ -294,7 +340,11 @@ describe('authorizeMeetingCancel — the ADMIN arm (platform axis)', () => {
       { contextType: 'case', contextId: ENGAGEMENT_ID },
       { contextType: 'case', contextId: OTHER_ENGAGEMENT_ID },
     ]);
-    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'super_admin' });
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
 
     const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
 
@@ -305,7 +355,11 @@ describe('authorizeMeetingCancel — the ADMIN arm (platform axis)', () => {
     // `admin` scores precedence 0 and is unrepresentable as a primary context, so this is a
     // `no_context` denial, not an admin allow. Harmless: `admin` is not bookable.
     mockListByMeeting.mockResolvedValue([{ contextType: 'admin', contextId: null }]);
-    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'admin' });
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'admin',
+      platformCapabilities: null,
+    });
 
     const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
 
@@ -319,7 +373,11 @@ describe('authorizeMeetingCancel — arm precedence is client → expert → adm
   it('an actor holding ALL THREE resolves as `client` — the first match wins', async () => {
     mockGetMemberRole.mockResolvedValue('owner');
     mockHasEngagementCapability.mockResolvedValue(true);
-    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'super_admin' });
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
 
     const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
 
@@ -328,7 +386,11 @@ describe('authorizeMeetingCancel — arm precedence is client → expert → adm
 
   it('an expert who is also a platform admin resolves as `expert`', async () => {
     mockHasEngagementCapability.mockResolvedValue(true);
-    mockUserFindById.mockResolvedValue({ id: USER_ID, platformRole: 'admin' });
+    mockUserFindById.mockResolvedValue({
+      id: USER_ID,
+      platformRole: 'admin',
+      platformCapabilities: null,
+    });
 
     const result = await authorizeMeetingCancel({ meetingId: MEETING_ID, userId: USER_ID });
 

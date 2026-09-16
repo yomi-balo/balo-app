@@ -272,6 +272,42 @@ export const PLATFORM_CAPABILITIES = {
    * single-consumer pin above, not an assertion made on trust.
    */
   FAST_FORWARD_REQUEST: 'fast_forward_request',
+  /**
+   * BAL-560 / ADR-1035 Amendment 1 §A1.3 — set or clear ANOTHER staff member's per-user platform
+   * capability override (`users.platform_capabilities`), and set their `platform_role`.
+   * `super_admin` ONLY.
+   *
+   * ⚠ A NEW TOKEN RATHER THAN A REUSED ONE, DELIBERATELY — the CANCEL_ANY_MEETING /
+   * VIEW_ANY_REQUEST_FILE / CLOSE_ANY_REQUEST / REDRIVE_JOB argument verbatim. In particular it
+   * is NOT `VIEW_PLATFORM_ADMIN`: that token's own docblock says it gates REACHABILITY and "IS
+   * NOT A PER-SURFACE GRANT", so gating a MUTATION on it would make this map lie about what it
+   * grants — the one thing a capability map must never do.
+   *
+   * ⚠ DELIBERATELY OUTSIDE `PLATFORM_STAFF_BUNDLE`, following the `DELETE_ANY_INTERNAL_NOTE` /
+   * `IMPERSONATE_USER` / `REDRIVE_JOB` precedent, and for a strictly stronger reason than any of
+   * them: GRANTING A POWER IS GREATER THAN THE POWER GRANTED (§A1.3). A holder of this token can
+   * write itself — or any other token on this axis — onto any staff row, so putting it in the
+   * shared bundle would make every `admin` a latent `super_admin`. `admin` does not hold it.
+   *
+   * ⚠ IT IS INERT IN THIS TICKET. BAL-560 ships the token, the column and the resolution path;
+   * BAL-561 ships the Staff access surface that resolves this token and writes the column.
+   * Nothing resolves it today, which is pinned as a fact rather than trusted — PIN E of
+   * `apps/web/src/invariants/platform-capability-single-resolution-point.test.ts` asserts that
+   * exactly ONE non-test file in the whole monorepo names this token (its own definition), in
+   * BOTH spellings: the constant and the wire value `'manage_staff_capabilities'`.
+   *
+   * ⚠⚠ HARD REQUIREMENT ON BAL-561'S WRITER: **IT MUST REFUSE TO WRITE THIS TOKEN INTO ANY
+   * OVERRIDE** (fix round 1, security F3). An override REPLACES the role bundle and is
+   * deliberately unclamped — it is never intersected with what the role could hold, because an
+   * additive or clamped reading makes "an admin, minus promo codes" inexpressible, which is the
+   * whole reason the column exists. The direct consequence is that
+   * `platform_capabilities = ['manage_staff_capabilities']` on a `platform_role='admin'` row
+   * resolves to exactly that token, making a plain admin a latent `super_admin` who can then
+   * write any token onto any staff row — a one-row privilege escalation and a self-perpetuating
+   * one. The RESOLVER deliberately does not special-case it (that would reintroduce clamping);
+   * the WRITE path is the correct place to refuse, and it is the only place.
+   */
+  MANAGE_STAFF_CAPABILITIES: 'manage_staff_capabilities',
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
@@ -339,6 +375,7 @@ export const PLATFORM_ROLE_CAPABILITIES: Record<string, readonly PlatformCapabil
     PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE,
     PLATFORM_CAPABILITIES.IMPERSONATE_USER,
     PLATFORM_CAPABILITIES.REDRIVE_JOB,
+    PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES,
   ],
 };
 
@@ -358,4 +395,106 @@ export function platformRoleHasCapability(role: string, capability: PlatformCapa
   const capabilities = PLATFORM_ROLE_CAPABILITIES[role];
   if (capabilities === undefined) return false;
   return capabilities.includes(capability);
+}
+
+/**
+ * Runtime type guard over the platform axis — the read-path filter for
+ * `users.platform_capabilities` (jsonb, so Postgres validates nothing).
+ *
+ * Takes `unknown` on purpose: `$type<PlatformCapability[]>()` on a jsonb column is a
+ * compile-time claim the database does not enforce (memory `reference_jsonb_date_type_lie`),
+ * AND the same value arrives from a sealed cookie, which `getIronSession` type-asserts without
+ * validating. A retired token left in an old row must DENY, not throw — the
+ * `representations.ts:130-137` rule, and narrowing this axis later must take effect immediately
+ * rather than waiting for a backfill.
+ */
+export function isPlatformCapability(value: unknown): value is PlatformCapability {
+  return (
+    typeof value === 'string' &&
+    (Object.values(PLATFORM_CAPABILITIES) as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The stored override, normalised — or `null` meaning "INHERIT THE ROLE BUNDLE".
+ *
+ * Three states, and exactly three (ADR-1035 §A1.2):
+ *   · `null`  ⇒ inherit `PLATFORM_ROLE_CAPABILITIES[role]` (every row today).
+ *   · `[]`    ⇒ the person holds NOTHING. A real, meaningful state — NOT the same as NULL.
+ *   · `[...]` ⇒ the resolved set VERBATIM. It REPLACES the bundle; it never extends it, and it
+ *               is never clamped to what the role could hold (§A1.2 — an additive or clamped
+ *               reading makes "an admin, minus promo codes" inexpressible, which is the whole
+ *               reason the column exists).
+ *
+ * ⚠ D1 DEFENCE IN DEPTH — a NON-STAFF role IGNORES any override and inherits (which, for
+ * `user` and every unknown role, is the empty bundle). The table CHECK
+ * `users_platform_capabilities_staff_array` already forbids the row; this is the second lock,
+ * so a row that somehow predates or evades the constraint cannot produce a capability-only
+ * staff account. `platformRoleIsStaff` reads the ROLE ONLY and is a live gate in three places
+ * (`@balo/db` assignOwner, `impersonation.ts`, `session-sync/route.ts`) — two seams
+ * disagreeing about the same person is the failure this prevents. `platformRoleIsStaff` is NOT
+ * made capability-aware (D1).
+ *
+ * ⚠ A NON-ARRAY (SQL NULL, JSON `'null'`, a scalar, an object, an absent cookie field) MEANS
+ * INHERIT, NOT DENY-EVERYTHING. Deliberate, and the opposite of `storedCapabilities`
+ * (`repositories/representations.ts`, which returns `[]`): that column has no "inherit" state,
+ * so `[]` there is unambiguous. Here the tri-state makes a malformed value genuinely ambiguous,
+ * and an override may WIDEN as well as narrow relative to the role — so "inherit" is the
+ * conservative direction (never grants more than the role does today), while "[]" would strip a
+ * staff member's entire access on a hand-edit typo. Structurally unreachable either way: the
+ * CHECK rejects every non-array non-NULL value.
+ */
+function normalizePlatformOverride(
+  role: string,
+  storedOverride: unknown
+): readonly PlatformCapability[] | null {
+  if (!platformRoleIsStaff(role)) return null;
+  if (!Array.isArray(storedOverride)) return null;
+  return storedOverride.filter(isPlatformCapability);
+}
+
+/**
+ * BAL-560 — the RESOLVED platform-capability set for one actor. The single interpretation point
+ * for `(platform_role, platform_capabilities)` (ADR-1029): no call site anywhere reads
+ * `PLATFORM_ROLE_CAPABILITIES` or `users.platform_capabilities` itself.
+ *
+ * ⚠ TAKES TWO PRIMITIVES, NOT "THE USER". The ticket says "a sibling that takes the user"; that
+ * shape lives in the two APP SEAMS (`apps/web/src/lib/authz/platform.ts`,
+ * `apps/api/src/authz/platform.ts`), because web supplies the override from the SEALED SESSION
+ * and api supplies it from a LIVE ROW (D6) — two different object shapes over one rule. A core
+ * that named either shape would force the other app to fake it.
+ *
+ * PURE and SYNCHRONOUS, like everything else in this module — a hard constraint, not a
+ * preference: `hasPlatformCapability` is synchronous by contract across 48 production call sites
+ * in `apps/web`, several inside resolvers whose own docblocks promise it
+ * (`resolve-request-lens.ts` "Pure + synchronous — no I/O").
+ */
+export function resolvePlatformCapabilities(
+  role: string,
+  storedOverride: unknown
+): readonly PlatformCapability[] {
+  const override = normalizePlatformOverride(role, storedOverride);
+  if (override !== null) return override;
+  if (!Object.hasOwn(PLATFORM_ROLE_CAPABILITIES, role)) return [];
+  return PLATFORM_ROLE_CAPABILITIES[role] ?? [];
+}
+
+/**
+ * BAL-560 — does this actor hold `capability`, given their role AND their raw stored override?
+ * THE predicate both app seams delegate to.
+ *
+ * ⚠ THE NULL-OVERRIDE ARM IS A LITERAL CALL TO `platformRoleHasCapability`, ON PURPOSE. The
+ * migration's entire safety argument is "a NULL column resolves byte-identically to today for
+ * every role"; routing that arm through the UNCHANGED shipped function makes it true by
+ * construction rather than by review. Pinned exhaustively over role × token anyway
+ * (`resolve-platform-capabilities.test.ts`) so the two arms cannot drift.
+ */
+export function platformActorHasCapability(
+  role: string,
+  storedOverride: unknown,
+  capability: PlatformCapability
+): boolean {
+  const override = normalizePlatformOverride(role, storedOverride);
+  if (override === null) return platformRoleHasCapability(role, capability);
+  return override.includes(capability);
 }

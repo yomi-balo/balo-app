@@ -77,7 +77,8 @@ export const PUBLIC_PREFIXES: readonly string[] = [
 
 /**
  * Admin path prefix. BAL-534 — the gate is the `VIEW_PLATFORM_ADMIN` platform CAPABILITY,
- * resolved in `middleware.ts` via `platformRoleHasCapability` (ADR-1029/ADR-1035); this module
+ * resolved in `middleware.ts` via `platformActorHasCapability` (ADR-1029/ADR-1035 — BAL-560: the
+ * actor's platform role AND their per-user override); this module
  * only decides which paths the gate APPLIES to, never who passes it. The previous
  * "requires platformRole admin or super_admin" wording described the role-literal test that
  * middleware no longer performs.

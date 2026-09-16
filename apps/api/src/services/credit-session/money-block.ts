@@ -19,7 +19,8 @@ import {
   toAdminMoneyBlock,
 } from '@balo/db';
 import type { ClientMoneyBlock, ExpertMoneyBlock, AdminMoneyBlock } from '@balo/shared/credit';
-import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { userHasPlatformCapability, type PlatformCapabilityActor } from '../../authz/platform.js';
 import { createLogger } from '@balo/shared/logging';
 import { resolveSessionLens } from './resolve-session-lens.js';
 
@@ -73,16 +74,29 @@ export async function resolveSessionMoneyBlock(
  * Resolve the ADMIN (margin-bearing) money block. SELF-ASSERTS the platform capability
  * (`MANAGE_PLATFORM_FEES`, ADR-1035) before reading the margin-bearing view — defense-in-depth so
  * a future non-route caller can't leak margin even if it skips the route gate (the route also
- * pre-checks + logs; this is the safety net). `forbidden` when the role lacks the capability
+ * pre-checks + logs; this is the safety net). `forbidden` when the actor lacks the capability
  * (WITHOUT ever reading the session); `not_found` when the session is missing/soft-deleted.
+ *
+ * ⚠ BAL-560 (D11) — TAKES THE ACTOR, NOT A BARE `platformRole` STRING. The per-user override
+ * (`users.platform_capabilities`) is half of the answer, and a role string cannot carry it: a
+ * "fee-blind staff viewer" is an `admin` row whose override omits `MANAGE_PLATFORM_FEES`, and
+ * the old signature would have resolved them as a full admin. `PlatformCapabilityActor` makes
+ * `platformCapabilities` REQUIRED precisely so that a caller holding only a role string is a
+ * COMPILE ERROR rather than a silent bypass.
+ *
+ * ⚠ THE SELF-ASSERT STAYS A SELF-ASSERT — do NOT replace it with a pre-resolved boolean
+ * parameter. That would delete exactly the defense-in-depth property this docblock claims.
  */
 export async function resolveAdminMoneyBlock(
   sessionId: string,
-  platformRole: string
+  actor: PlatformCapabilityActor
 ): Promise<ResolveAdminMoneyBlockResult> {
-  if (!platformRoleHasCapability(platformRole, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)) {
+  if (!userHasPlatformCapability(actor, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)) {
+    // ⚠ LOG SHAPE PRESERVED BYTE-FOR-BYTE — the same `{ sessionId, platformRole }` key set and
+    // the same message string. Dashboards key on both (memory
+    // `feedback_monitor_strings_need_verbatim_pin`); BAL-560 widened the SIGNATURE, not the log.
     log.warn(
-      { sessionId, platformRole },
+      { sessionId, platformRole: actor.platformRole },
       'Admin money-block denied at the service boundary — role lacks MANAGE_PLATFORM_FEES'
     );
     return { ok: false, code: 'forbidden' };

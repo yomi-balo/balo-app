@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
+import { PLATFORM_CAPABILITIES, resolvePlatformCapabilities } from '@balo/shared/authz';
 import { db } from '../client';
 import { partyDomains, auditEvents, users, companies } from '../schema';
 import {
@@ -10,6 +11,10 @@ import {
   expertFactory,
   expertDraftFactory,
 } from '../test/factories';
+import {
+  expectCheckViolation,
+  expectConstraintViolation,
+} from '../test/helpers/expect-check-violation';
 import { usersRepository } from './users';
 
 describe('usersRepository.setPhoneVerified', () => {
@@ -709,8 +714,13 @@ describe('usersRepository.findEmailById — the PROJECTED actor-address read (BA
 
 // ── BAL-494: the workspace column + the widened session-sync projection ───────
 
-describe('usersRepository.findForSessionSync — widened projection (BAL-494 / BAL-553)', () => {
-  it('returns exactly the nine session-sync columns and NO PII (email / workosId / phone)', async () => {
+describe('usersRepository.findForSessionSync — widened projection (BAL-494 / BAL-553 / BAL-560)', () => {
+  // ⚠ BAL-560 DELIBERATELY WIDENED THIS FROM NINE COLUMNS TO TEN, and retitled the test with
+  // it. `platformCapabilities` is in the projection for the same reason `platformRole` is: the
+  // session SEALS it, so `checkSessionDrift` must be able to notice a revoked or changed
+  // override. Without it an override would go stale for the full 7-day cookie lifetime while
+  // the role stayed in sync — worse than syncing neither.
+  it('returns exactly the ten session-sync columns and NO PII (email / workosId / phone)', async () => {
     const user = await userFactory();
 
     const row = await usersRepository.findForSessionSync(user.id);
@@ -725,6 +735,7 @@ describe('usersRepository.findForSessionSync — widened projection (BAL-494 / B
       'expertApprovedAt',
       'expertProfileId',
       'onboardingCompleted',
+      'platformCapabilities',
       'platformRole',
       'status',
       'verticalId',
@@ -838,5 +849,288 @@ describe('users.active_company_id (BAL-494 schema)', () => {
     expect(reread).toBeDefined();
     expect(reread?.id).toBe(user.id);
     expect(reread?.activeCompanyId).toBeNull();
+  });
+});
+
+// ── BAL-560: the per-user platform-capability override column + its table CHECK ───────
+
+/**
+ * The FULL platform capability axis, taken from the one source of truth rather than
+ * retyped. 16 tokens before BAL-560 lands `MANAGE_STAFF_CAPABILITIES`, 17 after; the EXACT
+ * count is pinned in `packages/shared/src/authz/platform.test.ts` and in
+ * `apps/web/src/lib/auth/session-cookie-size.test.ts` (where it is the cookie budget's
+ * worst case). Here it only has to be a realistically large array that round-trips.
+ */
+const FULL_AXIS = Object.values(PLATFORM_CAPABILITIES);
+
+/** The one constraint every probe below must name — never merely "something threw 23514". */
+const STAFF_ARRAY_CHECK = 'users_platform_capabilities_staff_array';
+
+describe('users.platform_capabilities — the column (BAL-560)', () => {
+  it('defaults to NULL on a fresh row — the migration is a no-op for every existing user', async () => {
+    const user = await userFactory();
+
+    // NULL on the row itself…
+    expect(user.platformCapabilities).toBeNull();
+    // …and NULL through the session-sync projection, which is what seals the cookie.
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.platformCapabilities).toBeNull();
+  });
+
+  it('accepts and round-trips an EMPTY array on a staff row — "holds nothing", NOT the same as NULL', async () => {
+    // ⚠ THE DELIBERATE INVERSION OF THE `representations` PRECEDENT
+    // (`representation_capabilities_nonempty` REQUIRES non-empty). Here `[]` is a real,
+    // meaningful state and the CHECK must let it through, or the three-state encoding
+    // (NULL = inherit / [] = nothing / [...] = verbatim) collapses to two.
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await db.update(users).set({ platformCapabilities: [] }).where(eq(users.id, user.id));
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.platformCapabilities).toEqual([]);
+    // …and it is distinguishable from NULL, which is the entire point.
+    expect(row?.platformCapabilities).not.toBeNull();
+  });
+
+  it('round-trips the FULL axis on a super_admin row, in order and element-identical', async () => {
+    // Non-vacuity: an empty or one-element FULL_AXIS would make the toEqual below trivial.
+    expect(FULL_AXIS.length).toBeGreaterThanOrEqual(16);
+    const user = await userFactory({ platformRole: 'super_admin' });
+
+    await db
+      .update(users)
+      .set({ platformCapabilities: [...FULL_AXIS] })
+      .where(eq(users.id, user.id));
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    // jsonb preserves ARRAY order (unlike object key order), so this is an ordered pin.
+    expect(row?.platformCapabilities).toEqual([...FULL_AXIS]);
+    expect(row?.platformCapabilities).toHaveLength(FULL_AXIS.length);
+  });
+
+  it('stores an UNKNOWN token VERBATIM — the database does not filter elements, the read path does', async () => {
+    // ⚠ THIS IS THE POINT OF THE READ-PATH FILTER. `$type<PlatformCapability[]>()` is a
+    // compile-time claim Postgres does not enforce, and the CHECK pins only the SHAPE — so a
+    // hand edit, a script, or a token retired after the row was written all land here intact.
+    // `resolvePlatformCapabilities` (`@balo/shared/authz`) is what DENIES the unknown token
+    // and resolves the rest (the `representations.ts:130-137` rule); that half is pinned in
+    // the shared package, because narrowing the axis must take effect without a backfill.
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await db.execute(sql`
+      UPDATE users
+      SET platform_capabilities = '["view_platform_admin","a_token_that_no_longer_exists"]'::jsonb
+      WHERE id = ${user.id}::uuid
+    `);
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.platformCapabilities).toEqual([
+      'view_platform_admin',
+      'a_token_that_no_longer_exists',
+    ]);
+
+    // BAL-560 — the OTHER half, asserted here so the DB → resolver seam is covered end to end
+    // rather than each side being green in isolation: the read path DENIES the unknown token
+    // and resolves the rest, and does NOT throw on it.
+    expect(() => resolvePlatformCapabilities('admin', row?.platformCapabilities)).not.toThrow();
+    const resolved = resolvePlatformCapabilities('admin', row?.platformCapabilities);
+    expect(resolved).toEqual([PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]);
+    expect(resolved).toHaveLength(1);
+  });
+
+  it('can be cleared back to NULL on a staff row', async () => {
+    const user = await userFactory({ platformRole: 'admin' });
+    await db
+      .update(users)
+      .set({ platformCapabilities: [...FULL_AXIS] })
+      .where(eq(users.id, user.id));
+    expect(
+      (await usersRepository.findForSessionSync(user.id))?.platformCapabilities
+    ).not.toBeNull();
+
+    await db.update(users).set({ platformCapabilities: null }).where(eq(users.id, user.id));
+
+    expect((await usersRepository.findForSessionSync(user.id))?.platformCapabilities).toBeNull();
+  });
+});
+
+describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-560 / D1 + D7)`, () => {
+  // ⚠ EVERY probe below runs inside its OWN SAVEPOINT via the shared helpers. A raw
+  // constraint violation ABORTS the surrounding transaction (memory
+  // `reference_caught_23505_aborts_test_transaction` — same mechanism for any constraint
+  // class), and the integration harness holds every test inside ONE outer transaction.
+  // ⚠ Every probe also asserts the CONSTRAINT NAME, not merely `23514`: a typo'd column or a
+  // NOT NULL would otherwise satisfy a code-only assertion and the probe would keep passing
+  // after the constraint it means to pin is dropped.
+
+  it('PAIRING, on INSERT: a platform_role=user row carrying an override is rejected', async () => {
+    // D1 — a capability-only staff account must not exist. `platformRoleIsStaff` reads the
+    // ROLE ONLY and is a live gate in `assignOwner`, in the impersonation staff-target
+    // refusal, and in the session-sync promoted-target kill; a `user` row with an override
+    // would make those three seams disagree with the capability seam about one person.
+    await expectCheckViolation(
+      sql`
+        INSERT INTO users (workos_id, email, platform_role, platform_capabilities)
+        VALUES ('bal560-insert-probe', 'bal560-insert-probe@test.com', 'user', '["view_platform_admin"]'::jsonb)
+      `,
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('PAIRING, on INSERT: an EMPTY override on a platform_role=user row is rejected too', async () => {
+    // `[]` is allowed on a STAFF row and forbidden here — the pairing arm is about the
+    // column being non-NULL at all, not about it being non-empty.
+    await expectCheckViolation(
+      sql`
+        INSERT INTO users (workos_id, email, platform_role, platform_capabilities)
+        VALUES ('bal560-insert-empty', 'bal560-insert-empty@test.com', 'user', '[]'::jsonb)
+      `,
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('PAIRING, on UPDATE: writing an override onto an existing platform_role=user row is rejected', async () => {
+    const user = await userFactory();
+    expect(user.platformRole).toBe('user');
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx
+          .update(users)
+          .set({ platformCapabilities: [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN] })
+          .where(eq(users.id, user.id)),
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('DOWNGRADE: demoting a staff row that ALREADY carries an override is rejected — this is what proves it is a TABLE check', async () => {
+    // ⚠ THE LOAD-BEARING TEST FOR D1's "table CHECK, not a column CHECK". A column check
+    // over `platform_capabilities` alone would see nothing wrong with this UPDATE and would
+    // silently orphan the override on a non-staff row.
+    const user = await userFactory({ platformRole: 'admin' });
+    await db
+      .update(users)
+      .set({ platformCapabilities: [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN] })
+      .where(eq(users.id, user.id));
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) => tx.update(users).set({ platformRole: 'user' }).where(eq(users.id, user.id)),
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('DOWNGRADE is ALLOWED when the override is NULL — the CHECK does not over-reject', async () => {
+    // The counterpart to the test above: without this, a CHECK that rejected every downgrade
+    // would pass the suite and break a real, legitimate operation.
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await db.update(users).set({ platformRole: 'user' }).where(eq(users.id, user.id));
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.platformRole).toBe('user');
+    expect(row?.platformCapabilities).toBeNull();
+  });
+
+  // SHAPE (D7) — `jsonb_typeof(...) = 'array'`. A bare jsonb column happily stores any of
+  // these, and each one would make the three-state encoding ambiguous.
+  // ⚠ `jsonb_typeof` is used rather than `jsonb_array_length` precisely so these fail 23514
+  // instead of erroring 22023 — SQL does not guarantee AND short-circuits.
+  it.each([
+    ['JSON null (NOT the same as SQL NULL)', `'null'::jsonb`],
+    ['a number', `'42'::jsonb`],
+    ['a string', `'"view_platform_admin"'::jsonb`],
+    ['a boolean', `'true'::jsonb`],
+    ['an object', `'{"view_platform_admin":true}'::jsonb`],
+  ])('SHAPE: %s on a staff row is rejected', async (_label, literal) => {
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await expectCheckViolation(
+      sql`UPDATE users SET platform_capabilities = ${sql.raw(literal)} WHERE id = ${user.id}::uuid`,
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('SHAPE: a real jsonb ARRAY on a staff row is ACCEPTED — the shape arm does not over-reject', async () => {
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await db.execute(
+      sql`UPDATE users SET platform_capabilities = '["view_platform_admin"]'::jsonb WHERE id = ${user.id}::uuid`
+    );
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.platformCapabilities).toEqual(['view_platform_admin']);
+  });
+
+  // ── LENGTH (fix round 1, security F1) ────────────────────────────────────────────────────
+  //
+  // ⚠ THE COOKIE LOCKOUT THIS ARM CLOSES. `SessionUser.platformCapabilities` is SEALED into
+  // `balo_session`, and a browser SILENTLY DISCARDS a `Set-Cookie` over 4096 bytes — no error,
+  // no recovery, the user just bounces to /login forever. Nothing bounded this column before:
+  // the axis has only 17 DISTINCT tokens, but jsonb happily stores the same one 40 times, and a
+  // measured 26-entry override seals to 4289 bytes. The seal path de-duplicates and filters
+  // (`apps/web/src/lib/auth/session-platform-capabilities.ts`); this is the database half of the
+  // same bound, so a row cannot even hold a value that would overrun.
+
+  it('LENGTH: an 18-entry array on a staff row is rejected — one past the axis', async () => {
+    const user = await userFactory({ platformRole: 'admin' });
+    const eighteen = JSON.stringify([...FULL_AXIS, 'view_platform_admin']);
+    expect(JSON.parse(eighteen)).toHaveLength(18);
+
+    await expectCheckViolation(
+      sql`UPDATE users SET platform_capabilities = ${eighteen}::jsonb WHERE id = ${user.id}::uuid`,
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('LENGTH: a 40-entry DUPLICATE-ONLY array is rejected — the realistic lockout shape', async () => {
+    // Duplicates are what made the lockout reachable: every entry here is a VALID token, so
+    // neither the shape arm nor the read-path filter would have stopped it.
+    const user = await userFactory({ platformRole: 'admin' });
+    const duplicated = JSON.stringify(Array.from({ length: 40 }, () => 'view_platform_admin'));
+    expect(JSON.parse(duplicated)).toHaveLength(40);
+
+    await expectCheckViolation(
+      sql`UPDATE users SET platform_capabilities = ${duplicated}::jsonb WHERE id = ${user.id}::uuid`,
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('LENGTH: exactly 17 — the full axis, AT the bound — is ACCEPTED (the CHECK does not over-reject)', async () => {
+    // ⚠ THE PAIRED NON-OVER-REJECTION TEST. Without it, a CHECK bounded at (say) 16 would pass
+    // every rejection probe above while breaking a legitimate full-axis override.
+    // ⚠ 17 is `Object.keys(PLATFORM_CAPABILITIES).length` TODAY and the CHECK does NOT track it:
+    // adding an 18th platform token makes this test fail, and the fix is a MIGRATION bumping the
+    // bound — not a smaller fixture here.
+    const user = await userFactory({ platformRole: 'super_admin' });
+    expect(FULL_AXIS).toHaveLength(17);
+
+    await db
+      .update(users)
+      .set({ platformCapabilities: [...FULL_AXIS] })
+      .where(eq(users.id, user.id));
+
+    expect(await usersRepository.findForSessionSync(user.id)).toMatchObject({
+      platformCapabilities: [...FULL_AXIS],
+    });
+  });
+
+  it('LENGTH: the guard is a CASE, so a non-array still fails 23514 and never errors 22023', async () => {
+    // ⚠ THE EVALUATION-ORDER PROBE. `jsonb_array_length` on a scalar raises 22023 — a CRASH, not
+    // a clean constraint violation — so the length call must never reach one. SQL does not
+    // guarantee `AND` short-circuits left-to-right and Postgres may reorder the arms by cost, so
+    // the bare `jsonb_typeof(...) = 'array' AND jsonb_array_length(...) <= 17` form is a HAZARD.
+    // ⚠ It is NOT a reproducible failure: on PG16 the bare form also short-circuited and raised a
+    // clean 23514 (fix round 2, V2). That is one planner's choice on one query, not a guarantee —
+    // so this test pins the OUTCOME the `CASE` makes unconditional, and must not be read as
+    // evidence that the bare form fails. Asserting the CONSTRAINT NAME rather than "it threw" is
+    // what distinguishes a clean 23514 from a 22023 crash: `expectCheckViolation` requires 23514.
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await expectCheckViolation(
+      sql`UPDATE users SET platform_capabilities = '42'::jsonb WHERE id = ${user.id}::uuid`,
+      STAFF_ARRAY_CHECK
+    );
   });
 });

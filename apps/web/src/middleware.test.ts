@@ -4,6 +4,7 @@ import type { IronSession } from 'iron-session';
 import type { SessionData, SessionUser } from '@/lib/auth/session';
 import { COOKIE_NAME } from '@/lib/auth/session-config';
 import { middleware } from './middleware';
+import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -288,6 +289,65 @@ describe('middleware — admin routes', () => {
     setupAuthenticatedSession({ platformRole: 'super_admin' });
     const res = await middleware(createRequest('/admin'));
     expect(res.status).toBe(200);
+  });
+
+  /**
+   * BAL-560 / ADR-1035 §A1.2 — the per-user override rides the cookie and the EDGE gate honours
+   * it. This is the only gate that can, and it is the whole reason the override is sealed rather
+   * than read live (D5): `middleware.ts` cannot touch `@balo/db`.
+   */
+  it('redirects a staff member whose per-user override REVOKES view_platform_admin (BAL-560)', async () => {
+    setupAuthenticatedSession({ platformRole: 'admin', platformCapabilities: [] });
+    await expectRedirectTo('/admin/users', '/dashboard');
+  });
+
+  it('redirects a staff member whose override names OTHER tokens but not view_platform_admin', async () => {
+    setupAuthenticatedSession({
+      platformRole: 'super_admin',
+      platformCapabilities: ['manage_platform_fees', 'manage_promo_codes'],
+    });
+    await expectRedirectTo('/admin/users', '/dashboard');
+  });
+
+  it('ALLOWS a staff session whose override still NAMES view_platform_admin (narrowed, not revoked)', async () => {
+    // The paired non-over-rejection case: an override that drops most of the bundle but KEEPS
+    // this token must not lose /admin. (It narrows rather than widens — `admin` already holds
+    // `view_platform_admin` — so it is not the widening case; see the D1 arm below for the one
+    // place at this gate where an override could otherwise widen.)
+    setupAuthenticatedSession({
+      platformRole: 'admin',
+      platformCapabilities: ['view_platform_admin'],
+    });
+    const res = await middleware(createRequest('/admin/users'));
+    expect(res.status).toBe(200);
+  });
+
+  /**
+   * ⚠ BAL-560 / D1 AT THE EDGE — the arm the core covers but this gate did not (fix round 1,
+   * review finding 11). A non-staff role IGNORES any override, so a cookie claiming
+   * `platformRole: 'user'` plus `platformCapabilities: ['view_platform_admin']` must still be
+   * redirected off `/admin`.
+   *
+   * This is the surface where it matters most: the `users_platform_capabilities_staff_array`
+   * CHECK forbids that pairing in the DATABASE, but middleware reads a SEALED COOKIE, which can
+   * be seven days stale (sealed before a demotion) and is the one input an attacker would try to
+   * forge. The resolver's `platformRoleIsStaff` guard is the backstop, and this pins that the
+   * Edge gate actually gets it.
+   */
+  it('BAL-560/D1: a platformRole "user" cookie carrying an override naming view_platform_admin is STILL redirected', async () => {
+    setupAuthenticatedSession({
+      platformRole: 'user',
+      platformCapabilities: ['view_platform_admin'],
+    });
+    await expectRedirectTo('/admin/users', '/dashboard');
+  });
+
+  it('BAL-560/D1: the same holds for a cookie carrying the FULL axis on a non-staff role', async () => {
+    setupAuthenticatedSession({
+      platformRole: 'user',
+      platformCapabilities: Object.values(PLATFORM_CAPABILITIES),
+    });
+    await expectRedirectTo('/admin/users', '/dashboard');
   });
 
   it('redirects non-admin to /dashboard (not /login)', async () => {

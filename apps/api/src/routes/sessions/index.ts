@@ -12,7 +12,8 @@ import {
   usersRepository,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
-import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { userHasPlatformCapability } from '../../authz/platform.js';
 import { requireAuth } from '../../lib/require-auth.js';
 import { requireInternalAuth } from '../../lib/internal-auth.js';
 // BAL-129 extracted this out of THIS file — it was byte-identical to the meetings route's copy.
@@ -316,7 +317,7 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
       const user = await usersRepository.findById(userId);
       if (
         user === undefined ||
-        !platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)
+        !userHasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)
       ) {
         log.warn({ sessionId, userId }, 'Admin money-block denied — lacks platform capability');
         reply.code(403).send({ error: 'forbidden' });
@@ -326,7 +327,10 @@ export async function sessionsRoutes(fastify: FastifyInstance): Promise<void> {
       try {
         // The service self-asserts MANAGE_PLATFORM_FEES too (defense-in-depth); the route already
         // denied above, so `forbidden` here is only reachable if the two ever diverge.
-        const result = await resolveAdminMoneyBlock(sessionId, user.platformRole);
+        // BAL-560 (D11) — the whole ACTOR, not `user.platformRole`: the service self-asserts the
+        // capability and needs the per-user override to do it. `PlatformCapabilityActor` makes
+        // passing a bare role string a compile error.
+        const result = await resolveAdminMoneyBlock(sessionId, user);
         if (!result.ok) {
           reply
             .code(result.code === 'forbidden' ? 403 : 404)

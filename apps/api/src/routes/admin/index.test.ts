@@ -13,12 +13,13 @@ vi.mock('@balo/shared/logging', () => ({
 vi.mock('@balo/db', () => ({
   usersRepository: { findById: mockUsersFindById },
 }));
-// The real pure platform-authz map — ONLY `super_admin` holds REDRIVE_JOB (D7).
-vi.mock('@balo/shared/authz', () => ({
-  PLATFORM_CAPABILITIES: { REDRIVE_JOB: 'redrive_job' },
-  platformRoleHasCapability: (role: string, capability: string) =>
-    role === 'super_admin' && capability === 'redrive_job',
-}));
+// ⚠ `@balo/shared/authz` is deliberately NOT mocked — the real pure platform map and the real
+// per-user override resolution ARE what is under test at the capability step (the same
+// convention as `services/meetings/authorize-meeting-cancel.test.ts`). BAL-560 replaced a
+// hand-rolled two-line stub here: the gate now resolves a role AND an override through
+// `../../authz/platform.js`, and a stub would have to re-implement the override semantics and
+// could silently disagree with the shipped resolver. `super_admin`-only for REDRIVE_JOB (D7) is
+// still what the real map says, so every pre-existing case below is unchanged in meaning.
 vi.mock('@balo/shared/capture-health', () => ({
   REDRIVE_KINDS: ['recording-ingest', 'transcript-pipeline'],
 }));
@@ -59,7 +60,11 @@ describe('POST /admin/redrive/:kind/:id', () => {
   it('(a) capability refusal with a STALE COOKIE ROLE but a LIVE DEMOTED user — 403, log.warn, no service call', async () => {
     // `requireAuth`'s mock carries no role at all — the route reads the role off the LIVE
     // `usersRepository.findById` row, and THIS row says `admin` (demoted from `super_admin`).
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'admin' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'admin',
+      platformCapabilities: null,
+    });
 
     const res = await app.inject({
       method: 'POST',
@@ -75,8 +80,33 @@ describe('POST /admin/redrive/:kind/:id', () => {
     );
   });
 
+  /**
+   * BAL-560 — the LIVE row's per-user override, not just its role. A `super_admin` whose
+   * override omits `redrive_job` is refused here the moment the column changes, with no wait for
+   * a cookie to expire — the whole point of D6's api-side live read.
+   */
+  it('BAL-560: a super_admin whose per-user override OMITS redrive_job — 403, no service call', async () => {
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'super_admin',
+      platformCapabilities: ['view_platform_admin', 'manage_platform_fees'],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/admin/redrive/recording-ingest/${RECORDING_ID}`,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(mockPerformRedrive).not.toHaveBeenCalled();
+  });
+
   it('(b) super_admin is allowed — 200 with the outcome', async () => {
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
     mockPerformRedrive.mockResolvedValue({
       ok: true,
       kind: 'recording-ingest',
@@ -105,7 +135,11 @@ describe('POST /admin/redrive/:kind/:id', () => {
   });
 
   it('a plain `user` platform role is also refused', async () => {
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'user' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'user',
+      platformCapabilities: null,
+    });
 
     const res = await app.inject({
       method: 'POST',
@@ -129,7 +163,11 @@ describe('POST /admin/redrive/:kind/:id', () => {
   });
 
   it('400s on an unknown kind', async () => {
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
 
     const res = await app.inject({
       method: 'POST',
@@ -141,7 +179,11 @@ describe('POST /admin/redrive/:kind/:id', () => {
   });
 
   it('400s on a non-uuid id', async () => {
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
 
     const res = await app.inject({
       method: 'POST',
@@ -153,7 +195,11 @@ describe('POST /admin/redrive/:kind/:id', () => {
   });
 
   it('409s when the service reports not_redrivable', async () => {
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
     mockPerformRedrive.mockResolvedValue({ ok: false, code: 'not_redrivable' });
 
     const res = await app.inject({
@@ -166,7 +212,11 @@ describe('POST /admin/redrive/:kind/:id', () => {
   });
 
   it('502s when the service reports enqueue_failed, carrying the auditEventId', async () => {
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
     mockPerformRedrive.mockResolvedValue({
       ok: false,
       code: 'enqueue_failed',
@@ -183,7 +233,11 @@ describe('POST /admin/redrive/:kind/:id', () => {
   });
 
   it('503s on an unexpected throw, logging the error', async () => {
-    mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+    mockUsersFindById.mockResolvedValue({
+      id: 'user_1',
+      platformRole: 'super_admin',
+      platformCapabilities: null,
+    });
     mockPerformRedrive.mockRejectedValue(new Error('db down'));
 
     const res = await app.inject({

@@ -99,8 +99,9 @@ export const usersRepository = {
   /**
    * Find minimal user fields for session sync comparison.
    * Intentionally does NOT filter deletedAt — needs to detect deleted users.
-   * Returns: status, activeMode, platformRole, onboardingCompleted, deletedAt,
-   * expertProfileId, activeCompanyId, expertApprovedAt.
+   * Returns: status, activeMode, platformRole, platformCapabilities, onboardingCompleted,
+   * deletedAt, expertProfileId, activeCompanyId, expertApprovedAt, verticalId.
+   * (The list is pinned as an exact key SET by `users.integration.test.ts`.)
    *
    * The projection is EXPLICIT on purpose — never a relational `with:` hydration,
    * which would materialise `workosId` / `email` / `phone` into a session-bound
@@ -119,6 +120,21 @@ export const usersRepository = {
    * already produces it for free. The pre-BAL-553 "deliberately NOT selected, nothing consumes
    * it" reasoning no longer holds now that a real consumer exists.
    *
+   * BAL-560 widened it by a FOURTH column: `platformCapabilities` — the per-user platform
+   * capability override (ADR-1035 §A1.2). It is in this projection for the same reason
+   * `platformRole` is: the session SEALS it, so `checkSessionDrift` must be able to notice a
+   * revoked or changed override. Without it an override would go stale for the full 7-day
+   * cookie lifetime while the role stayed in sync — worse than syncing neither. The
+   * impersonation entry point (`apps/web/src/lib/auth/actions/impersonation.ts`) reads it from
+   * here too, precisely because that gate deliberately re-reads the ACTOR live rather than
+   * trusting a cookie that may be seven days stale.
+   *
+   * ⚠ Treat the value as UNKNOWN-shaped. `$type<PlatformCapability[]>()` on a jsonb column is a
+   * compile-time claim Postgres does not enforce; the table CHECK
+   * `users_platform_capabilities_staff_array` pins only the SHAPE (array-or-NULL) and the
+   * role pairing. The ELEMENTS are filtered on the read path by `resolvePlatformCapabilities`
+   * (`@balo/shared/authz`), so never hand this value to a gate without going through it.
+   *
    * ⚠ Known pre-existing wart, deliberately NOT fixed here: the left join +
    * `.limit(1)` picks an arbitrary profile when a user holds profiles in several
    * verticals. `expertProfileId` already inherits it; adding an ORDER BY would
@@ -130,6 +146,7 @@ export const usersRepository = {
         status: users.status,
         activeMode: users.activeMode,
         platformRole: users.platformRole,
+        platformCapabilities: users.platformCapabilities, // BAL-560
         onboardingCompleted: users.onboardingCompleted,
         deletedAt: users.deletedAt,
         expertProfileId: expertProfiles.id,

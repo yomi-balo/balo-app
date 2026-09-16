@@ -143,7 +143,7 @@ type ResolveResult =
       companyName: string;
       companyRole: 'owner' | 'admin' | 'member';
     }
-  | { ok: false; reason: 'role_mismatch' };
+  | { ok: false; reason: 'role_mismatch' | 'override_present' };
 
 /**
  * Upsert a deterministic test user keyed on a DERIVED email, reusing the standard
@@ -168,6 +168,22 @@ async function resolveTestUser(
     if (existing.platformRole !== expectedRole) {
       return { ok: false, reason: 'role_mismatch' };
     }
+    // ⚠⚠ BAL-560 (fix round 1, review finding 3) — THE SAME REFUSAL, FOR THE OTHER HALF OF THE
+    // AUTHORIZATION INPUT. The role check above is worthless on its own now that a per-user
+    // OVERRIDE can widen a staff row past its role: `platform_capabilities:
+    // ['impersonate_user']` on the `admin` fixture makes it a latent `super_admin` while
+    // `platformRole` still reads exactly `'admin'`.
+    //
+    // Refusing to SEAL one (see the seal site below) is NOT sufficient, and that is why this
+    // check exists rather than the comment alone: `checkSessionDrift` compares the session's
+    // override key against the ROW's on the very first dashboard render, and the sync route then
+    // patches the row's override onto the cookie — silently undoing the non-seal one render
+    // later. Refusing the whole login keeps both keys at `null === null`, which is the only
+    // state in which the persona map's compile-time guarantee actually holds end to end.
+    if (existing.platformCapabilities !== null && existing.platformCapabilities !== undefined) {
+      return { ok: false, reason: 'override_present' };
+    }
+
     const user = await usersRepository.update(existing.id, { onboardingCompleted });
     const withCompany = await usersRepository.findWithCompany(user.id);
     const membership = withCompany?.companyMemberships?.[0];
@@ -257,6 +273,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // above already proves the row agrees; reading the constant instead makes the minted
       // role provably a member of `{'user','admin'}` by TYPE, so no database state can widen it.
       platformRole: PERSONA_PLATFORM_ROLE[persona],
+      // BAL-560 — NO `platformCapabilities`, AND DELIBERATELY NOT READ FROM `resolved.user`.
+      // The ⚠ above is the whole argument: this route mints the role FROM THE CLOSED PERSONA
+      // MAP so that no database state can widen a test session. An override is an OPEN set that
+      // can WIDEN as well as narrow (an `admin` row carrying `['impersonate_user']` resolves to
+      // exactly that), so sealing it from the row would reintroduce precisely the widening the
+      // persona map exists to prevent.
+      //
+      // ⚠⚠ NOT SEALING IT IS ONLY HALF THE GUARANTEE, AND ON ITS OWN IT DOES NOT HOLD (fix round
+      // 1, review finding 3). `checkSessionDrift` compares this session's override key against
+      // the ROW's on the first dashboard render; the sync route then patches the row's override
+      // onto the cookie, undoing the omission one render later. `resolveTestUser` therefore
+      // REFUSES the login outright when the row carries a non-NULL override
+      // (`reason: 'override_present'`), which keeps both drift keys at `null === null`. With
+      // both halves in place a staff E2E session really does always resolve to the `admin`
+      // bundle — and stays there.
+      //
+      // See D14: `MANAGE_STAFF_CAPABILITIES` is `super_admin`-only and has NO E2E arm — do NOT
+      // weaken `PERSONA_PLATFORM_ROLE`'s compile-time
+      // `Extract<SessionUser['platformRole'], 'user' | 'admin'>` pin to manufacture one.
       companyId: resolved.companyId,
       companyName: resolved.companyName,
       companyRole: resolved.companyRole,

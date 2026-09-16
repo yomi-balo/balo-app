@@ -23,10 +23,12 @@
  * `hasCapability` and `hasPlatformCapability` are `apps/web`-only (`import 'server-only'`), so
  * the membership axis here is `partyMembershipsRepository.getMemberRole(...)` +
  * `roleHasCapability(...)` — exactly what `authorize-meeting-reschedule.ts` does — and the
- * platform axis is `platformRoleHasCapability(user.platformRole, …)` — exactly what
- * `routes/sessions/index.ts` does. Both read the SAME pure `@balo/shared/authz` maps. ⚠ There
- * is deliberately no `platformRole ===`, `role ===`, `lens ===` or `activeMode ===` anywhere in
- * this file.
+ * platform axis is `userHasPlatformCapability(user, …)` (the `apps/api` seam,
+ * `../../authz/platform.js`) — exactly what `routes/sessions/index.ts` does. BAL-560: that seam
+ * resolves the LIVE row's per-user override alongside its role, over the same pure
+ * `@balo/shared/authz` core `apps/web` uses from the sealed session (D6). Both axes read the
+ * SAME pure `@balo/shared/authz` maps. ⚠ There is deliberately no `platformRole ===`,
+ * `role ===`, `lens ===` or `activeMode ===` anywhere in this file.
  *
  * ── THE IDOR THIS GATE CLOSES ───────────────────────────────────────────────────────────────
  *
@@ -104,9 +106,9 @@ import {
   CAPABILITIES,
   ENGAGEMENT_CAPABILITIES,
   PLATFORM_CAPABILITIES,
-  platformRoleHasCapability,
   roleHasCapability,
 } from '@balo/shared/authz';
+import { userHasPlatformCapability } from '../../authz/platform.js';
 import { createLogger } from '@balo/shared/logging';
 import { selectPrimaryMeetingContext, type PrimaryMeetingContext } from '@balo/shared/meetings';
 import { hasEngagementCapability } from './authorize-engagement-host.js';
@@ -181,8 +183,7 @@ async function clientArmGrants(companyId: string, userId: string): Promise<boole
 async function adminArmGrants(userId: string): Promise<boolean> {
   const user = await usersRepository.findById(userId);
   return (
-    user !== undefined &&
-    platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING)
+    user !== undefined && userHasPlatformCapability(user, PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING)
   );
 }
 
