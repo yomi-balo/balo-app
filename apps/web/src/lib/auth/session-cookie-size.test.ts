@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { sealData } from 'iron-session';
 import type { ActiveWorkspacePointer, Workspace } from '@balo/shared/workspaces';
+import { PLATFORM_CAPABILITIES, type PlatformCapability } from '@balo/shared/authz';
 import { COOKIE_NAME } from './session-config';
 import type { SessionData, SessionUser } from './session';
+import { sealedPlatformCapabilities } from './session-platform-capabilities';
 
 // BAL-553 fix round 2, F6 — `sealPreservedAdminSession` reads `sessionConfig.password`, which
 // `session-config.ts` reads from `process.env.WORKOS_COOKIE_PASSWORD` at MODULE LOAD time. Set
@@ -124,6 +126,13 @@ function companyWorkspace(index: number): Workspace {
   };
 }
 
+/**
+ * BAL-560 — all 17 platform tokens: the largest override the axis can express (D10). Taken from
+ * the one source of truth rather than retyped, so a token added to the axis grows this fixture
+ * automatically and the budget is re-measured against the real worst case.
+ */
+const FULL_OVERRIDE: readonly PlatformCapability[] = Object.values(PLATFORM_CAPABILITIES);
+
 describe('balo_session cookie budget (BAL-494 R2)', () => {
   it('a fully-populated session with activeWorkspace seals well under the 4096-byte limit', async () => {
     const bytes = await sealedCookieBytes(sessionData);
@@ -165,6 +174,157 @@ describe('balo_session cookie budget (BAL-494 R2)', () => {
 
     expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
     expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
+  });
+
+  /**
+   * BAL-560 — THE TICKET'S FINAL AC: the actual sealed byte count for the worst REACHABLE case,
+   * an ordinary staff session carrying the whole axis as a per-user override.
+   */
+  it('a staff session carrying the FULL 17-token override seals under budget (BAL-560)', async () => {
+    // Non-vacuity: an empty or one-element override would seal tiny and prove nothing.
+    expect(FULL_OVERRIDE).toHaveLength(17);
+
+    const baseline = await sealedCookieBytes(sessionData);
+    const bytes = await sealedCookieBytes({
+      ...sessionData,
+      user: { ...user, platformRole: 'admin', platformCapabilities: [...FULL_OVERRIDE] },
+    });
+
+    // Measured 3393 bytes on iron-session@8.0.4 (baseline 2817). 107 bytes under the safe
+    // budget, 703 under the browser cliff. If this fails, do NOT raise the bound — work out
+    // what grew. The field NAME is part of the budget: `platformCapabilities` measures 3393;
+    // any name of 12 characters or fewer measures 3371 (AES block quantisation, not linear in
+    // name length). The long name was chosen deliberately (D4 / OBJ-4) — it matches the DB
+    // column, the repository projection and the api actor property, so no hand-off carries a
+    // rename, and a rename at a hand-off is exactly where the "one seal point forgot" bug hides.
+    expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
+    expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
+    // Non-vacuity: prove the override was actually SEALED, not silently dropped by the fixture.
+    expect(bytes - baseline).toBeGreaterThan(500);
+  });
+
+  /**
+   * BAL-560 — PROOF OF THE REASON FOR D1'S CHECK, at the cookie layer. This combination measures
+   * 3542 bytes — OVER the safe budget — and is unreachable ONLY because BOTH locks hold: an
+   * impersonation target cannot be staff (`lib/auth/actions/impersonation.ts`'s
+   * `platformRoleIsStaff` refusal) AND a non-staff row cannot carry an override (the
+   * `users_platform_capabilities_staff_array` table CHECK). If either is ever relaxed, the
+   * cookie budget is the thing that breaks — silently, as a non-self-healing lockout. This test
+   * is why D1 is a CHECK and not a convention.
+   */
+  it('PROOF OF THE REASON (D1): an IMPERSONATED session carrying the same override would BLOW the budget', async () => {
+    const bytes = await sealedCookieBytes({
+      ...sessionData,
+      user: {
+        ...user,
+        platformRole: 'admin',
+        platformCapabilities: [...FULL_OVERRIDE],
+        isImpersonating: true,
+        impersonatorUserId: '11111111-1111-4111-8111-111111111111',
+        impersonationExpiresAt: 1_700_000_000_000,
+      },
+    });
+
+    expect(bytes).toBeGreaterThan(SAFE_BUDGET_BYTES);
+    // Still under the hard cliff — a budget breach, not yet a lockout. The margin is the point.
+    expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
+  });
+
+  /**
+   * ⚠⚠ FIX ROUND 1, SECURITY F1 — **PROOF OF THE REASON FOR THE SEAL-PATH NORMALISATION.**
+   *
+   * Before the fix, `sealedPlatformCapabilities` sealed the column's RAW value. The axis has only
+   * 17 distinct tokens, so the array looked bounded — but nothing stopped a row from carrying the
+   * SAME token any number of times, and every entry is a valid token, so neither the shape CHECK
+   * nor the read-path filter would have caught it. This test seals the raw duplicate array to
+   * show the cliff being crossed, then seals the SAME array through the real encoder to show it
+   * collapsing to one entry.
+   *
+   * Measured with the LONGEST token on the axis (`manage_any_engagement_action_item`, 33 chars),
+   * which is the honest worst case: 17 copies = 3670, 24 = 3990, **26 = 4097 — past the
+   * 4096-byte browser cliff**, 30 = 4289, 40 = 4758. Past that line the browser silently
+   * discards the `Set-Cookie` and the user is locked out with no server-side error.
+   */
+  it('PROOF OF THE REASON (F1): a DUPLICATE-heavy override blows the cliff RAW, and is bounded by the encoder', async () => {
+    const longestToken = [...FULL_OVERRIDE].sort((a, b) => b.length - a.length)[0];
+    expect(longestToken, 'the axis must be non-empty').toBeDefined();
+    if (longestToken === undefined) return;
+    expect(longestToken).toBe('manage_any_engagement_action_item');
+
+    const twentySixCopies = Array.from({ length: 26 }, () => longestToken);
+    expect(twentySixCopies).toHaveLength(26);
+
+    // (a) RAW — what the seal path used to do. Over the HARD browser limit: a silent lockout.
+    const rawBytes = await sealedCookieBytes({
+      ...sessionData,
+      user: { ...user, platformRole: 'admin', platformCapabilities: twentySixCopies },
+    });
+    expect(rawBytes).toBeGreaterThan(BROWSER_COOKIE_LIMIT_BYTES);
+
+    // (b) THROUGH THE REAL ENCODER — de-duplicated to a single entry, far under budget.
+    const encodedBytes = await sealedCookieBytes({
+      ...sessionData,
+      user: {
+        ...user,
+        platformRole: 'admin',
+        ...sealedPlatformCapabilities({ platformCapabilities: twentySixCopies }),
+      },
+    });
+    expect(encodedBytes).toBeLessThan(SAFE_BUDGET_BYTES);
+    // Non-vacuity: the encoder really did collapse it, rather than dropping the field entirely.
+    expect(
+      sealedPlatformCapabilities({ platformCapabilities: twentySixCopies }).platformCapabilities
+    ).toEqual([longestToken]);
+  });
+
+  /**
+   * AT THE BOUND. After the fix the sealed value is always a DE-DUPLICATED subset of the axis, so
+   * the largest cookie any override can produce is the full 17 DISTINCT tokens — which is exactly
+   * the 3393-byte case pinned above. This test states that as a property rather than leaving it
+   * implicit: seal the whole axis twice over and the result is byte-identical to sealing it once.
+   */
+  it('AT THE BOUND: the whole axis twice over seals identically to the axis once (17 distinct IS the maximum)', async () => {
+    const axisOnce = { platformCapabilities: [...FULL_OVERRIDE] };
+    const axisTwice = { platformCapabilities: [...FULL_OVERRIDE, ...FULL_OVERRIDE] };
+    expect(axisTwice.platformCapabilities).toHaveLength(34);
+
+    const onceBytes = await sealedCookieBytes({
+      ...sessionData,
+      user: { ...user, platformRole: 'admin', ...sealedPlatformCapabilities(axisOnce) },
+    });
+    const twiceBytes = await sealedCookieBytes({
+      ...sessionData,
+      user: { ...user, platformRole: 'admin', ...sealedPlatformCapabilities(axisTwice) },
+    });
+
+    expect(twiceBytes).toBe(onceBytes);
+    expect(twiceBytes).toBeLessThan(SAFE_BUDGET_BYTES);
+  });
+
+  /**
+   * FIX ROUND 1, SECURITY F6 — the PRESERVED-ADMIN cookie carries the same payload and rides
+   * every request DURING an impersonation, alongside `balo_session`. The existing test below
+   * measures it with no override; this measures the worst case a real staff member can produce.
+   *
+   * Measured **3463 bytes** — only **37** under the safe budget, against `balo_session`'s 107 for
+   * the same override. It is the TIGHTER of the two cookies, which is exactly why it needs its
+   * own measurement rather than an inference from the session cookie's headroom.
+   */
+  it('the preserved-admin cookie with a super_admin + FULL 17-token override is still under budget (F6)', async () => {
+    expect(FULL_OVERRIDE).toHaveLength(17);
+
+    const sealed = await sealPreservedAdminSession({
+      ...sessionData,
+      user: { ...user, platformRole: 'super_admin', platformCapabilities: [...FULL_OVERRIDE] },
+    });
+    const bytes = `${PRESERVED_ADMIN_COOKIE}=${sealed}`.length;
+
+    expect(bytes).toBeLessThan(SAFE_BUDGET_BYTES);
+    expect(bytes).toBeLessThan(BROWSER_COOKIE_LIMIT_BYTES);
+    // Non-vacuity: prove the override was actually sealed into THIS cookie too.
+    const baseline = `${PRESERVED_ADMIN_COOKIE}=${await sealPreservedAdminSession(sessionData)}`
+      .length;
+    expect(bytes - baseline).toBeGreaterThan(500);
   });
 
   it('the SessionUser type carries no workspace LIST field — compile-time pin', () => {

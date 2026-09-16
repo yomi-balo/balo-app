@@ -14,6 +14,7 @@ import {
   type WorkspaceDerivationMaterials,
 } from '@/lib/workspaces/derive-workspaces';
 import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
+import { applyPlatformCapabilitiesToSessionUser } from '@/lib/auth/session-platform-capabilities';
 import { log } from '@/lib/logging';
 
 type SessionSyncDbUser = NonNullable<
@@ -130,6 +131,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // Patch session with fresh DB values
   session.user.activeMode = dbUser.activeMode;
   session.user.platformRole = dbUser.platformRole;
+  // BAL-560 — patch the override alongside the role. ASSIGN **OR DELETE** (the helper does
+  // both): a REVOKED override has to leave the cookie, or it survives the full seven days on a
+  // session that passes every other drift check.
+  applyPlatformCapabilitiesToSessionUser(session.user, dbUser);
   session.user.onboardingCompleted = dbUser.onboardingCompleted;
   session.user.expertProfileId = dbUser.expertProfileId ?? undefined;
 

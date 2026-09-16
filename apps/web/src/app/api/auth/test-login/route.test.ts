@@ -78,6 +78,8 @@ interface UserRowOverrides {
   id?: string;
   platformRole?: 'user' | 'admin' | 'super_admin';
   onboardingCompleted?: boolean;
+  /** BAL-560 — the per-user override. NULL on every real fixture row. */
+  platformCapabilities?: string[] | null;
 }
 
 function userRow(overrides: UserRowOverrides = {}): Record<string, unknown> {
@@ -90,6 +92,7 @@ function userRow(overrides: UserRowOverrides = {}): Record<string, unknown> {
     activeMode: 'client',
     onboardingCompleted: false,
     platformRole: 'user',
+    platformCapabilities: null,
     ...overrides,
   };
 }
@@ -326,6 +329,64 @@ describe('POST /api/auth/test-login — persona seam (BAL-548)', () => {
     expect(res.status).toBe(200);
     expect(mintedRole()).toBe('admin');
     expect(mintedRole()).not.toBe('super_admin');
+  });
+
+  /**
+   * ⚠⚠ BAL-560 (fix round 1, review finding 3) — THE OVERRIDE REFUSAL.
+   *
+   * The persona map guarantees the minted ROLE, but a per-user override can widen a staff row
+   * past its role while `platformRole` still reads exactly `'admin'`. Merely declining to SEAL
+   * the override is not enough: `checkSessionDrift` compares the session's override key against
+   * the ROW's on the first dashboard render, and the sync route patches the row's value onto the
+   * cookie — undoing the omission one render later. The whole login is refused instead, which
+   * keeps both drift keys at `null === null`.
+   */
+  it('BAL-560: REFUSES the staff persona when the row carries a non-NULL override', async () => {
+    enableSecret();
+    mockFindByEmail.mockResolvedValue(
+      userRow({ platformRole: 'admin', platformCapabilities: ['impersonate_user'] })
+    );
+
+    const res = await POST(
+      makeRequest({ persona: 'staff', onboardingCompleted: true }, TEST_SECRET)
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'refused' });
+    // Refused BEFORE any mutation, exactly like the role_mismatch arm.
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('BAL-560: REFUSES even an EMPTY override — `[]` is a real state, not "no override"', async () => {
+    enableSecret();
+    mockFindByEmail.mockResolvedValue(userRow({ platformRole: 'admin', platformCapabilities: [] }));
+
+    const res = await POST(
+      makeRequest({ persona: 'staff', onboardingCompleted: true }, TEST_SECRET)
+    );
+
+    expect(res.status).toBe(400);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('BAL-560: a NULL override is the normal case and is NOT refused', async () => {
+    // The paired non-over-rejection test: without it, a refusal that fired on every row would
+    // pass both probes above while breaking the entire E2E harness.
+    enableSecret();
+    mockFindByEmail.mockResolvedValue(
+      userRow({ platformRole: 'admin', platformCapabilities: null })
+    );
+    mockUpdate.mockResolvedValue(
+      userRow({ platformRole: 'admin', onboardingCompleted: true, platformCapabilities: null })
+    );
+    mockFindWithCompany.mockResolvedValue({ companyMemberships: [membershipRow] });
+
+    const res = await POST(
+      makeRequest({ persona: 'staff', onboardingCompleted: true }, TEST_SECRET)
+    );
+
+    expect(res.status).toBe(200);
+    expect(mintedRole()).toBe('admin');
   });
 
   it('the member persona still mints platformRole "user" (and is the default when persona is omitted)', async () => {

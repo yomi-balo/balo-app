@@ -663,8 +663,15 @@
     {
       "idx": 94,
       "version": "7",
-      "when": 1789557230868,
-      "tag": "0094_bal489_guest_conversion_linkage",
+      "when": 1789532825395,
+      "tag": "0094_bal560_user_platform_capabilities",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1789586032570,
+      "tag": "0095_bal489_guest_conversion_linkage",
       "breakpoints": true
     }
   ]

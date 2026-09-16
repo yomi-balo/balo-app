@@ -85,13 +85,13 @@ vi.mock('@balo/db', () => ({
   ExternalDurationConflictError,
   usersRepository: { findById: mockUsersFindById },
 }));
-// The real pure platform-authz map — an `admin`/`super_admin` platformRole holds
-// MANAGE_PLATFORM_FEES; a plain `user` (or undefined) holds nothing.
-vi.mock('@balo/shared/authz', () => ({
-  PLATFORM_CAPABILITIES: { MANAGE_PLATFORM_FEES: 'manage_platform_fees' },
-  platformRoleHasCapability: (role: string, capability: string) =>
-    (role === 'admin' || role === 'super_admin') && capability === 'manage_platform_fees',
-}));
+// ⚠ `@balo/shared/authz` is deliberately NOT mocked — the real pure platform map and the real
+// per-user override resolution ARE what is under test at the capability step. BAL-560 replaced a
+// hand-rolled stub here: this MONEY gate now resolves a role AND an override through
+// `../../authz/platform.js`, and a stub would have to re-implement the override semantics and
+// could silently disagree with the shipped resolver — unacceptable on a fee boundary.
+// `admin`/`super_admin` hold MANAGE_PLATFORM_FEES and a plain `user` holds nothing is still what
+// the real map says, so every pre-existing case below is unchanged in meaning.
 vi.mock('../../lib/require-auth.js', () => ({
   requireAuth: async (request: { userId?: string }) => {
     request.userId = 'user_1';
@@ -523,7 +523,11 @@ describe('sessions routes', () => {
 
   describe('GET /admin/sessions/:id/money-block (BAL-399)', () => {
     it('403s a non-staff user (lacks platform capability)', async () => {
-      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'user' });
+      mockUsersFindById.mockResolvedValue({
+        id: 'user_1',
+        platformRole: 'user',
+        platformCapabilities: null,
+      });
       const res = await app.inject({
         method: 'GET',
         url: `/admin/sessions/${SESSION_ID}/money-block`,
@@ -533,7 +537,11 @@ describe('sessions routes', () => {
     });
 
     it('200s the admin (margin-bearing) block for platform staff', async () => {
-      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'admin' });
+      mockUsersFindById.mockResolvedValue({
+        id: 'user_1',
+        platformRole: 'admin',
+        platformCapabilities: null,
+      });
       const block = {
         lens: 'admin',
         state: 'finalized',
@@ -547,12 +555,40 @@ describe('sessions routes', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual(block);
-      // The service receives the caller's platformRole (self-assert defense-in-depth).
-      expect(mockResolveAdminMoneyBlock).toHaveBeenCalledWith(SESSION_ID, 'admin');
+      // BAL-560 (D11) — the service receives the whole ACTOR, not a role string: it self-asserts
+      // the capability (defense-in-depth) and needs the per-user override to do it.
+      expect(mockResolveAdminMoneyBlock).toHaveBeenCalledWith(SESSION_ID, {
+        id: 'user_1',
+        platformRole: 'admin',
+        platformCapabilities: null,
+      });
+    });
+
+    /**
+     * BAL-560 — the route gate resolves the LIVE row's per-user override. A "fee-blind staff
+     * viewer" (an `admin` row whose override omits `manage_platform_fees`) is refused at the
+     * route, before the service is reached at all.
+     */
+    it('BAL-560: 403s a staff member whose per-user override OMITS manage_platform_fees', async () => {
+      mockUsersFindById.mockResolvedValue({
+        id: 'user_1',
+        platformRole: 'admin',
+        platformCapabilities: ['view_platform_admin'],
+      });
+      const res = await app.inject({
+        method: 'GET',
+        url: `/admin/sessions/${SESSION_ID}/money-block`,
+      });
+      expect(res.statusCode).toBe(403);
+      expect(mockResolveAdminMoneyBlock).not.toHaveBeenCalled();
     });
 
     it('404s for staff when the session is missing', async () => {
-      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'super_admin' });
+      mockUsersFindById.mockResolvedValue({
+        id: 'user_1',
+        platformRole: 'super_admin',
+        platformCapabilities: null,
+      });
       mockResolveAdminMoneyBlock.mockResolvedValue({ ok: false, code: 'not_found' });
       const res = await app.inject({
         method: 'GET',
@@ -562,7 +598,11 @@ describe('sessions routes', () => {
     });
 
     it('503s (sanitized) for staff when resolution throws', async () => {
-      mockUsersFindById.mockResolvedValue({ id: 'user_1', platformRole: 'admin' });
+      mockUsersFindById.mockResolvedValue({
+        id: 'user_1',
+        platformRole: 'admin',
+        platformCapabilities: null,
+      });
       mockResolveAdminMoneyBlock.mockRejectedValue(new Error('db down'));
       const res = await app.inject({
         method: 'GET',

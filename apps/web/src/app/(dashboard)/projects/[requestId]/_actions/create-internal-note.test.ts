@@ -1,5 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+/**
+ * BAL-560 fix round 3 (R3) — the LIVE-ROW platform gate this action now runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them. The helper's
+ * own behaviour (override revoked / widened / row suspended / non-staff role / DB throw) is
+ * covered exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suite here pins
+ * is that the action CALLS it and honours a denial.
+ */
+const mockActorHoldsLive = vi.fn<(userId: string, capability: string) => Promise<boolean>>(
+  async () => true
+);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: string) =>
+    mockActorHoldsLive(userId, capability),
+}));
+
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 
 vi.mock('server-only', () => ({}));
@@ -48,6 +64,19 @@ describe('createInternalNoteAction', () => {
     const result = await createInternalNoteAction(VALID_INPUT);
     expect(result).toEqual({ success: false, error: 'You are not signed in.' });
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('BAL-560/R3: denies when the LIVE row has revoked the override, though the cookie still grants', async () => {
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+    const result = await createInternalNoteAction(VALID_INPUT);
+    expect(result).toEqual({
+      success: false,
+      error: 'You do not have permission to do this.',
+      code: 'denied',
+    });
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockActorHoldsLive).toHaveBeenCalledWith(STAFF.id, 'manage_internal_notes');
   });
 
   it('denies a plain user (no platform capability) before touching the repo', async () => {

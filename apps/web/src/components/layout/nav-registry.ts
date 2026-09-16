@@ -66,7 +66,7 @@ export type NavBadgeSource = 'expertChecklist';
  * `VIEW_PLATFORM_ADMIN` is a PLATFORM token (ADR-1035). Mixing them here is acceptable ONLY
  * because this array is the nav-scoped UX grant set described below — never an authorization
  * source — and because each token is still resolved by its OWN axis's predicate in
- * `nav-context.ts` (`roleHasCapability` / `platformRoleHasCapability`), and every gated surface
+ * `nav-context.ts` (`roleHasCapability` / `hasPlatformCapability`), and every gated surface
  * hard-gates server-side. ADR-1035 bans overloading `hasCapability` with a platform scope; that
  * is a different thing and we are not doing it.
  *

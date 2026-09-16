@@ -8,6 +8,7 @@ import { projectRequestsRepository } from '@balo/db';
 import { MAX_BALO_FEE_BPS, MIN_BALO_FEE_BPS } from '@balo/shared/pricing';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import { trackServerAndFlush, PROJECT_SERVER_EVENTS } from '@/lib/analytics/server';
 import { log } from '@/lib/logging';
 
@@ -48,6 +49,16 @@ export async function overrideBaloFee(
     return { success: false, error: PERMISSION_DENIED };
   }
   if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)) {
+    return { success: false, error: PERMISSION_DENIED };
+  }
+  // ⚠ BAL-560 fix round 3 (R3) — THE SESSION GATE ABOVE IS NOT A REVOCATION BOUNDARY, AND THIS
+  // IS THE MONEY GATE. `checkSessionDrift` only runs during a page RENDER; this action POSTs
+  // straight to its own endpoint, so a per-user `manage_platform_fees` override revoked days ago
+  // is still sealed in the cookie and would still move a project's take rate. Re-read the LIVE
+  // row before mutating — same shape as the eight actions converted in fix round 1 and as the
+  // impersonation entry point (`lib/auth/actions/impersonation.ts`). The cheap synchronous check
+  // above stays: it fails closed on an unauthenticated caller before this query is spent.
+  if (!(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES))) {
     return { success: false, error: PERMISSION_DENIED };
   }
 

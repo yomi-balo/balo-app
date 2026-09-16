@@ -43,9 +43,11 @@ export async function fetchAdminSessionMoneyBlock(
   }
 
   if (result.status === 403) {
-    // A staff viewer with VIEW_PLATFORM_ADMIN but not MANAGE_PLATFORM_FEES cannot exist today
-    // (both are in PLATFORM_STAFF_BUNDLE) — firing means the bundle split shipped or something
-    // drifted. log.warn per CLAUDE.md's "recoverable issues / validation anomalies" guidance.
+    // A staff viewer with VIEW_PLATFORM_ADMIN but not MANAGE_PLATFORM_FEES cannot exist until a
+    // per-user override is WRITTEN (BAL-561). BAL-560 made a fee-blind staff viewer EXPRESSIBLE —
+    // `users.platform_capabilities` and the resolution path both ship — but nothing writes the
+    // column yet, so firing today still means the bundle split shipped or something drifted.
+    // log.warn per CLAUDE.md's "recoverable issues / validation anomalies" guidance.
     log.warn('Admin money block denied to a staff viewer', { sessionId });
     return { ok: false, reason: 'forbidden' };
   }

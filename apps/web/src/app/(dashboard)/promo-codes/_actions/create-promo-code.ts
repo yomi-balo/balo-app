@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { promoCodesRepository, DuplicatePromoCodeError } from '@balo/db';
 import { getCurrentUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import { trackServerAndFlush, PROMO_SERVER_EVENTS } from '@/lib/analytics/server';
 import { log } from '@/lib/logging';
 import { createPromoCodeSchema } from './promo-code-schema';
@@ -48,6 +49,16 @@ export async function createPromoCode(
     return { success: false, error: PERMISSION_DENIED };
   }
   if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES)) {
+    return { success: false, error: PERMISSION_DENIED };
+  }
+  // ⚠ BAL-560 fix round 3 (R3) — THE SESSION GATE ABOVE IS NOT A REVOCATION BOUNDARY.
+  // `checkSessionDrift` only runs during a page RENDER; this action POSTs straight to its own
+  // endpoint, so a per-user override revoked days ago is still sealed in the cookie. Re-read the
+  // LIVE row before mutating — the same reason, and the same shape, as the eight actions
+  // converted in fix round 1 and as the impersonation entry point
+  // (`lib/auth/actions/impersonation.ts`). The cheap synchronous check above stays: it fails
+  // closed on an unauthenticated caller before this query is spent.
+  if (!(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES))) {
     return { success: false, error: PERMISSION_DENIED };
   }
 

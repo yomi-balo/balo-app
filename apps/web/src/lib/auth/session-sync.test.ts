@@ -182,6 +182,67 @@ describe('checkSessionDrift', () => {
     expect(result).toEqual({ action: 'sync-needed' });
   });
 
+  /**
+   * BAL-560 — the per-user override must drift like the role does. Without this comparison an
+   * override would go stale for the full 7-day cookie lifetime while the role stayed in sync,
+   * which is worse than syncing neither.
+   */
+  it('BAL-560: returns sync-needed when the DB has an override and the session has none', async () => {
+    const session = createMockSession();
+    mockGetSession.mockResolvedValue(session);
+    mockFindForSessionSync.mockResolvedValue(
+      createDbUser({ platformCapabilities: ['view_platform_admin'] })
+    );
+
+    const result = await checkSessionDrift();
+
+    expect(result).toEqual({ action: 'sync-needed' });
+  });
+
+  it('BAL-560: returns sync-needed when the override was REVOKED (session has one, DB is NULL)', async () => {
+    const session = createMockSession({ platformCapabilities: ['view_platform_admin'] });
+    mockGetSession.mockResolvedValue(session);
+    mockFindForSessionSync.mockResolvedValue(createDbUser({ platformCapabilities: null }));
+
+    const result = await checkSessionDrift();
+
+    expect(result).toEqual({ action: 'sync-needed' });
+  });
+
+  it('BAL-560: returns ok when both carry the SAME override in a different ORDER (a reorder is not drift)', async () => {
+    const session = createMockSession({
+      platformCapabilities: ['view_platform_admin', 'manage_platform_fees'],
+    });
+    mockGetSession.mockResolvedValue(session);
+    mockFindForSessionSync.mockResolvedValue(
+      createDbUser({ platformCapabilities: ['manage_platform_fees', 'view_platform_admin'] })
+    );
+
+    const result = await checkSessionDrift();
+
+    expect(result).toEqual({ action: 'ok' });
+  });
+
+  it('BAL-560: returns ok when BOTH are absent — a pre-BAL-560 cookie against a NULL column (the rollout case)', async () => {
+    const session = createMockSession();
+    mockGetSession.mockResolvedValue(session);
+    mockFindForSessionSync.mockResolvedValue(createDbUser());
+
+    const result = await checkSessionDrift();
+
+    expect(result).toEqual({ action: 'ok' });
+  });
+
+  it('BAL-560: an EMPTY override IS drift against an absent one — "holds nothing" ≠ "inherit"', async () => {
+    const session = createMockSession();
+    mockGetSession.mockResolvedValue(session);
+    mockFindForSessionSync.mockResolvedValue(createDbUser({ platformCapabilities: [] }));
+
+    const result = await checkSessionDrift();
+
+    expect(result).toEqual({ action: 'sync-needed' });
+  });
+
   // 9. onboardingCompleted drift → sync-needed
   it('returns sync-needed when onboardingCompleted drifts', async () => {
     const session = createMockSession({ onboardingCompleted: false });

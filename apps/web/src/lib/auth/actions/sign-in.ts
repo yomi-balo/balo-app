@@ -12,6 +12,7 @@ import { log } from '@/lib/logging';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
 import { runGuestConversionAndEmit } from '@/lib/guest-conversion/run-guest-conversion';
+import { sealedPlatformCapabilities } from '@/lib/auth/session-platform-capabilities';
 
 interface SignInResult {
   needsOnboarding: boolean;
@@ -116,6 +117,9 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       activeMode: user.activeMode,
       onboardingCompleted: user.onboardingCompleted,
       platformRole: user.platformRole,
+      // BAL-560 — the per-user platform-capability override, sealed from the SAME row the role
+      // came from. Absent whenever the column is NULL (every row today).
+      ...sealedPlatformCapabilities(user),
       companyId: membership.company.id,
       companyName: membership.company.name,
       companyRole: membership.role,

@@ -6,8 +6,9 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { usersRepository } from '@balo/db';
-import { platformRoleHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
 import { createLogger } from '@balo/shared/logging';
+import { userHasPlatformCapability } from '../../authz/platform.js';
 import { requireAuth } from '../../lib/require-auth.js';
 import { parseParamsOr400, resolveUserId } from '../../lib/route-helpers.js';
 import { performRedrive } from '../../services/admin/redrive.js';
@@ -21,9 +22,15 @@ const log = createLogger('admin-routes');
  *
  * Authorization copies `GET /admin/sessions/:id/money-block` (`routes/sessions/index.ts`)
  * VERBATIM, only the token swapped: `requireAuth` → params parse → LIVE
- * `usersRepository.findById` → `platformRoleHasCapability(user.platformRole, REDRIVE_JOB)` →
- * `log.warn` + `403`. NEVER a cookie-carried role — the cookie's `platformRole` can be stale
- * for up to its session lifetime; a demoted admin must lose this the moment their row changes.
+ * `usersRepository.findById` → `userHasPlatformCapability(user, REDRIVE_JOB)` → `log.warn` +
+ * `403`. NEVER a cookie-carried role — the cookie's `platformRole` can be stale for up to its
+ * session lifetime; a demoted admin must lose this the moment their row changes.
+ *
+ * ⚠ BAL-560 — that sentence is now also the CHARTER for the D6 asymmetry. This gate resolves
+ * the per-user override (`users.platform_capabilities`) from the SAME live row, through
+ * `../../authz/platform.js`; `apps/web` resolves the identical rule from the sealed session,
+ * because its Edge middleware cannot read a row at all. Two sources, ONE pure core. Deliberate
+ * and permanent — see that module's docblock before "fixing" it.
  *
  * No rate limiter: the CAS is the real bound (a re-drive is not repeatable without a NEW
  * failure), the token is `super_admin`-only, and every attempt is audited.
@@ -42,7 +49,7 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
       const user = await usersRepository.findById(userId);
       if (
         user === undefined ||
-        !platformRoleHasCapability(user.platformRole, PLATFORM_CAPABILITIES.REDRIVE_JOB)
+        !userHasPlatformCapability(user, PLATFORM_CAPABILITIES.REDRIVE_JOB)
       ) {
         log.warn(
           { kind: params.kind, entityId: params.id, userId },

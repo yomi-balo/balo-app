@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { internalNotesRepository } from '@balo/db';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
+import { actorHoldsPlatformCapability } from '@/lib/authz/live-platform-capability';
 import { log } from '@/lib/logging';
 
 const inputSchema = z.object({ requestId: z.uuid(), noteId: z.uuid() }).strict();
@@ -44,6 +45,15 @@ export async function deleteInternalNoteAction(
   if (!hasPlatformCapability(user, PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES)) {
     return { success: false, error: PERMISSION_DENIED, code: 'denied' };
   }
+  // ⚠ BAL-560 fix round 1 (security F2) — THE SESSION GATE ABOVE IS NOT A REVOCATION BOUNDARY.
+  // `checkSessionDrift` only runs during a page RENDER; this action POSTs straight to its own
+  // endpoint, so a per-user override revoked days ago is still sealed in the cookie. Re-read the
+  // LIVE row before mutating — the same reason, and the same shape, as the impersonation entry
+  // point (`lib/auth/actions/impersonation.ts`). The cheap synchronous check above stays: it
+  // fails closed on an unauthenticated caller before this query is spent.
+  if (!(await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES))) {
+    return { success: false, error: PERMISSION_DENIED, code: 'denied' };
+  }
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
@@ -51,10 +61,13 @@ export async function deleteInternalNoteAction(
   }
   const { requestId, noteId } = parsed.data;
 
-  const allowAnyAuthor = hasPlatformCapability(
-    user,
-    PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE
-  );
+  // ⚠ THE SECOND TOKEN IS LIVE-CHECKED TOO, and it needs BOTH. It is the one that lets a
+  // `super_admin` delete SOMEBODY ELSE'S note, so resolving it from the cookie alone would leave
+  // the MORE powerful of the two decisions on the stale path — the inverse of the intent. The
+  // synchronous check stays first and short-circuits: a plain `admin` spends no query.
+  const allowAnyAuthor =
+    hasPlatformCapability(user, PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE) &&
+    (await actorHoldsPlatformCapability(user.id, PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE));
 
   try {
     const result = await internalNotesRepository.softDelete({

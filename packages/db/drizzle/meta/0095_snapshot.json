@@ -1,6 +1,6 @@
 {
-  "id": "cdd84f17-92e4-4fca-bbb9-f33337a2ddbd",
-  "prevId": "37f6b146-551d-4147-9781-c3e0a804499d",
+  "id": "dda61c42-acf3-44b9-a768-4d6d622ddcae",
+  "prevId": "cdd84f17-92e4-4fca-bbb9-f33337a2ddbd",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2703,6 +2703,22 @@
           "method": "btree",
           "with": {}
         },
+        "meeting_guest_email_unconverted_idx": {
+          "name": "meeting_guest_email_unconverted_idx",
+          "columns": [
+            {
+              "expression": "email",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"meeting_guests\".\"deleted_at\" IS NULL AND \"meeting_guests\".\"revoked_at\" IS NULL AND \"meeting_guests\".\"converted_to_user_id\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "meeting_guest_invited_by_idx": {
           "name": "meeting_guest_invited_by_idx",
           "columns": [
@@ -2862,6 +2878,10 @@
         "meeting_guest_self_claimed_is_link": {
           "name": "meeting_guest_self_claimed_is_link",
           "value": "\"meeting_guests\".\"invited_by_id\" IS NOT NULL OR \"meeting_guests\".\"invite_channel\" = 'link'"
+        },
+        "meeting_guest_conversion_paired": {
+          "name": "meeting_guest_conversion_paired",
+          "value": "(\"meeting_guests\".\"converted_to_user_id\" IS NULL) = (\"meeting_guests\".\"converted_at\" IS NULL)"
         },
         "meeting_guest_access_count_nonneg": {
           "name": "meeting_guest_access_count_nonneg",

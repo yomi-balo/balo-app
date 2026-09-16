@@ -81,6 +81,9 @@ function sessionSyncRow(overrides: Record<string, unknown> = {}) {
     status: 'active',
     activeMode: 'client',
     platformRole: 'super_admin',
+    // BAL-560 — `findForSessionSync` now projects the per-user override. NULL is every row
+    // today; the gate-#7 cases below override it.
+    platformCapabilities: null,
     onboardingCompleted: true,
     deletedAt: null,
     expertProfileId: null,
@@ -234,6 +237,35 @@ describe('startImpersonationAction', () => {
   it('returns denied when the fresh DB re-read shows the actor lost the capability (demoted since the cookie was sealed)', async () => {
     mockRequireOnboardedUser.mockResolvedValue(superAdminActor());
     mockFindForSessionSync.mockResolvedValueOnce(sessionSyncRow({ platformRole: 'admin' }));
+
+    const result = await startImpersonationAction({ targetUserId: TARGET_ID, reason: 'support' });
+
+    expect(result).toMatchObject({ success: false, code: 'denied' });
+    expect(mockFindForSessionSync).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * BAL-560 gate #7 (addendum A1) — this is the ONLY `hasPlatformCapability` call site that
+   * hand-builds its actor, and it is a deliberate LIVE read. Before BAL-560 it passed
+   * `{ platformRole }` alone, so a super_admin whose per-user override revoked
+   * `IMPERSONATE_USER` would still have been let through on the strength of their ROLE.
+   */
+  it('returns denied when the actor is super_admin but their live per-user override OMITS impersonate_user (BAL-560 gate #7)', async () => {
+    mockRequireOnboardedUser.mockResolvedValue(superAdminActor());
+    mockFindForSessionSync.mockResolvedValueOnce(
+      sessionSyncRow({ platformCapabilities: ['view_platform_admin', 'manage_platform_fees'] })
+    );
+
+    const result = await startImpersonationAction({ targetUserId: TARGET_ID, reason: 'support' });
+
+    expect(result).toMatchObject({ success: false, code: 'denied' });
+    // The refusal came from the OVERRIDE, not from an earlier arm: the live read did happen.
+    expect(mockFindForSessionSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns denied when the live override is EMPTY — "holds nothing" revokes the role bundle (BAL-560)', async () => {
+    mockRequireOnboardedUser.mockResolvedValue(superAdminActor());
+    mockFindForSessionSync.mockResolvedValueOnce(sessionSyncRow({ platformCapabilities: [] }));
 
     const result = await startImpersonationAction({ targetUserId: TARGET_ID, reason: 'support' });
 

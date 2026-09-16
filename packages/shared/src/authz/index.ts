@@ -103,6 +103,11 @@ export {
   PLATFORM_CAPABILITIES,
   PLATFORM_ROLE_CAPABILITIES,
   platformRoleHasCapability,
+  // BAL-560 / ADR-1035 §A1.2 — the per-user override resolution path. `platformRoleHasCapability`
+  // above stays the ROLE-ONLY predicate and is the NULL-override fallback these delegate to.
+  resolvePlatformCapabilities,
+  platformActorHasCapability,
+  isPlatformCapability,
   // BAL-541 — the staff-ROLE-SET seam, distinct from the capability seam above: "may this user
   // be NAMED as a request's Balo owner?" asks about a SUBJECT's eligibility, which no capability
   // token expresses. `@balo/db`'s `assignOwner` is the first consumer.
