@@ -471,9 +471,18 @@ function normalizePlatformOverride(
 }
 
 /**
- * BAL-560 — the RESOLVED platform-capability set for one actor. The single interpretation point
- * for `(platform_role, platform_capabilities)` (ADR-1029): no call site anywhere reads
+ * BAL-560 — the RESOLVED platform-capability set for one actor: THE rule for
+ * `(platform_role, platform_capabilities)` (ADR-1029). No call site anywhere reads
  * `PLATFORM_ROLE_CAPABILITIES` or `users.platform_capabilities` itself.
+ *
+ * ⚠ IT HAS **ZERO PRODUCTION CALL SITES**, AND THAT IS STRONGER THAN "THE SINGLE INTERPRETATION
+ * POINT", NOT WEAKER (fix round 3, R9 — the claim previously read the other way and was
+ * imprecise). Every gate in the product reaches this rule through `platformActorHasCapability`
+ * below, which is the SET-MEMBERSHIP question the gates actually ask; this function answers the
+ * WHOLE-SET question, which only `platformActorHasCapability` and the tests need. Exporting it is
+ * what lets `resolve-platform-capabilities.test.ts` pin the full role × override matrix directly
+ * rather than inferring it one token at a time. If a production caller ever appears, it wants a
+ * capability CHECK and should use the predicate.
  *
  * ⚠ TAKES TWO PRIMITIVES, NOT "THE USER". The ticket says "a sibling that takes the user"; that
  * shape lives in the two APP SEAMS (`apps/web/src/lib/authz/platform.ts`,
