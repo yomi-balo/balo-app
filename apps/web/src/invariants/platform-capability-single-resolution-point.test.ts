@@ -193,6 +193,31 @@ const SEAL_POINTS_ROW_BACKED: readonly string[] = [
 ];
 
 /**
+ * ⚠⚠ **THE PER-FILE COUNT (fix round 3, R6). "CONTAINS A SEAL" IS NOT "SEALS EVERY BUILD".**
+ *
+ * The row-backed check used to assert only that each of the three files CONTAINS
+ * `sealedPlatformCapabilities(` somewhere. A SECOND `SessionUser` construction added to any of
+ * them — a new branch in `callback/route.ts` for a different WorkOS flow, a second literal in
+ * `sign-in.ts` — would seal nothing and still pass, because the file's first construction keeps
+ * the needle present. That is the D9 failure this whole pin exists to prevent, wearing the one
+ * disguise the pin could not see: an override failing OPEN to the role bundle on exactly one
+ * sign-in path while the other five behave.
+ *
+ * So the claim is now numeric and per file: CONSTRUCTIONS === SEALS === the number written here.
+ * Same shape as `SESSION_USER_PASS_THROUGH_PROOFS` below, and for the same reason.
+ *
+ * ⚠ IF ONE OF THESE COUNTS CHANGES, A SESSION USER IS BEING BUILT IN A NEW PLACE. Do not bump the
+ * number to make the suite green — go and look at the new construction and give it the encoder.
+ * The equality is what carries the meaning; the literal is the non-vacuity guard that stops
+ * `0 === 0` passing for a file that builds nothing at all.
+ */
+const SEAL_POINT_BUILD_COUNTS: readonly { readonly file: string; readonly count: number }[] = [
+  { file: 'apps/web/src/app/api/auth/callback/route.ts', count: 1 },
+  { file: 'apps/web/src/lib/auth/actions/sign-in.ts', count: 1 },
+  { file: 'apps/web/src/lib/auth/impersonation-target.ts', count: 1 },
+];
+
+/**
  * Seal points that deliberately seal NOTHING, each with its argument written at the call site.
  * The first two mint `platform_role: 'user'`, which the `users_platform_capabilities_staff_array`
  * CHECK forbids from carrying an override at all. The third mints its role from a CLOSED persona
@@ -413,6 +438,26 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
       const file = scanned.find((candidate) => candidate.rel === rel);
       expect(file, `${rel} must be in the scan set`).toBeDefined();
       expect(file?.code, `${rel} is row-backed and MUST seal the override`).toContain(SEALER);
+    }
+    // ⚠ AND IT MUST SEAL **EVERY** BUILD, NOT JUST ONE (fix round 3, R6). See
+    // `SEAL_POINT_BUILD_COUNTS` for why "contains a seal" fails open on a second construction.
+    expect(SEAL_POINT_BUILD_COUNTS.map((entry) => entry.file)).toEqual([...SEAL_POINTS_ROW_BACKED]);
+    for (const { file: rel, count } of SEAL_POINT_BUILD_COUNTS) {
+      const file = scanned.find((candidate) => candidate.rel === rel);
+      expect(file, `${rel} must be in the scan set`).toBeDefined();
+      if (file === undefined) continue;
+      const builds = SESSION_USER_CONSTRUCTION_TOKENS.reduce(
+        (total, token) => total + occurrences(file.code, token),
+        0
+      );
+      const seals = occurrences(file.code, SEALER);
+      expect(builds, `${rel} must build exactly ${count} SessionUser(s)`).toBe(count);
+      expect(
+        seals,
+        `${rel} builds ${builds} SessionUser(s) but seals the override ${seals} time(s). ` +
+          `EVERY row-backed construction must spread sealedPlatformCapabilities(...) — a new ` +
+          `branch that omits it fails OPEN to the role bundle on exactly that one path.`
+      ).toBe(builds);
     }
     for (const rel of SEAL_POINTS_ARGUED_ABSENT) {
       const file = scanned.find((candidate) => candidate.rel === rel);
