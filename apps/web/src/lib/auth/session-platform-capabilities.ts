@@ -40,8 +40,10 @@ interface CarriesPlatformCapabilities {
  * 4096-byte browser cliff (30 entries is 4289) — at which point the browser SILENTLY DISCARDS
  * the `Set-Cookie` and the user is locked out with no server-side error. The measurements are
  * computed in `session-cookie-size.test.ts:244-245`; everywhere else quotes them. The DB CHECK
- * `users_platform_capabilities_staff_array` bounds the column at 17 entries; this is the same
- * bound enforced on the value that actually reaches the cookie.
+ * `users_platform_capabilities_staff_array` bounds the column at 64 entries — deliberate slack
+ * rather than the axis size (fix round 3, R8) — and THIS is the mechanism that actually bounds
+ * the value reaching the cookie, because it collapses to a subset of the distinct tokens
+ * whatever the column holds.
  *
  * ⚠⚠ **IT IS SHARED WITH `platformOverrideKeyOf` ON PURPOSE, AND FILTERING WITHOUT THAT WOULD BE
  * A REGRESSION, NOT A FIX.** `checkSessionDrift` compares the key of the SEALED session against

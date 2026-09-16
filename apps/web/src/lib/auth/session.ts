@@ -42,8 +42,11 @@ export interface SessionUser {
   //   1. `sealedPlatformCapabilities` (`./session-platform-capabilities.ts`) DE-DUPLICATES and
   //      filters, so the sealed value is always a subset of the 17 distinct tokens. This is the
   //      binding one — it bounds the value that reaches the cookie regardless of the column.
-  //   2. The `users_platform_capabilities_staff_array` CHECK bounds the COLUMN at 17 entries,
-  //      so a row cannot even hold a value that would overrun.
+  //   2. The `users_platform_capabilities_staff_array` CHECK bounds the COLUMN at 64 entries,
+  //      so a pathological row cannot be stored at all. ⚠ 64 is DELIBERATE SLACK, not the axis
+  //      size (fix round 3, R8): the bound was 17 — the axis count — which made every new
+  //      platform token a silent migration obligation. Mechanism 1 is what actually bounds the
+  //      cookie; this one is belt-and-braces against a pathological row.
   //   3. The same CHECK confines a non-NULL value to staff rows (D1).
   // MEASURED worst case — a staff session with all 17 DISTINCT tokens — is 3393 bytes against
   // the 3500-byte safe budget and the 4096-byte browser cliff. See `session-cookie-size.test.ts`,

@@ -1079,23 +1079,26 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
   // (`apps/web/src/lib/auth/session-platform-capabilities.ts`); this is the database half of the
   // same bound, so a row cannot even hold a value that would overrun.
 
-  it('LENGTH: an 18-entry array on a staff row is rejected — one past the axis', async () => {
+  it('LENGTH: a 65-entry array on a staff row is rejected — one past the bound', async () => {
     const user = await userFactory({ platformRole: 'admin' });
-    const eighteen = JSON.stringify([...FULL_AXIS, 'view_platform_admin']);
-    expect(JSON.parse(eighteen)).toHaveLength(18);
+    const sixtyFive = JSON.stringify(Array.from({ length: 65 }, () => 'view_platform_admin'));
+    expect(JSON.parse(sixtyFive)).toHaveLength(65);
 
     await expectCheckViolation(
-      sql`UPDATE users SET platform_capabilities = ${eighteen}::jsonb WHERE id = ${user.id}::uuid`,
+      sql`UPDATE users SET platform_capabilities = ${sixtyFive}::jsonb WHERE id = ${user.id}::uuid`,
       STAFF_ARRAY_CHECK
     );
   });
 
-  it('LENGTH: a 40-entry DUPLICATE-ONLY array is rejected — the realistic lockout shape', async () => {
+  it('LENGTH: a 400-entry DUPLICATE-ONLY array is rejected — the realistic lockout shape', async () => {
     // Duplicates are what made the lockout reachable: every entry here is a VALID token, so
     // neither the shape arm nor the read-path filter would have stopped it.
+    // ⚠ RE-AIMED FROM 40 IN FIX ROUND 3 (R8). 40 is now UNDER the bound and would be stored — not
+    // a regression, because seal-time de-duplication is what bounds the cookie and it collapses
+    // this to one entry. The probe therefore has to sit past the new bound to test anything.
     const user = await userFactory({ platformRole: 'admin' });
-    const duplicated = JSON.stringify(Array.from({ length: 40 }, () => 'view_platform_admin'));
-    expect(JSON.parse(duplicated)).toHaveLength(40);
+    const duplicated = JSON.stringify(Array.from({ length: 400 }, () => 'view_platform_admin'));
+    expect(JSON.parse(duplicated)).toHaveLength(400);
 
     await expectCheckViolation(
       sql`UPDATE users SET platform_capabilities = ${duplicated}::jsonb WHERE id = ${user.id}::uuid`,
@@ -1103,12 +1106,27 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
     );
   });
 
-  it('LENGTH: exactly 17 — the full axis, AT the bound — is ACCEPTED (the CHECK does not over-reject)', async () => {
-    // ⚠ THE PAIRED NON-OVER-REJECTION TEST. Without it, a CHECK bounded at (say) 16 would pass
-    // every rejection probe above while breaking a legitimate full-axis override.
-    // ⚠ 17 is `Object.keys(PLATFORM_CAPABILITIES).length` TODAY and the CHECK does NOT track it:
-    // adding an 18th platform token makes this test fail, and the fix is a MIGRATION bumping the
-    // bound — not a smaller fixture here.
+  it('LENGTH: exactly 64 — AT the bound — is ACCEPTED (the CHECK does not over-reject)', async () => {
+    // ⚠ THE PAIRED NON-OVER-REJECTION TEST. Without it, a CHECK bounded at (say) 63 would pass
+    // every rejection probe above while refusing a legal value.
+    const user = await userFactory({ platformRole: 'admin' });
+    const sixtyFour = JSON.stringify(Array.from({ length: 64 }, () => 'view_platform_admin'));
+    expect(JSON.parse(sixtyFour)).toHaveLength(64);
+
+    await db.execute(
+      sql`UPDATE users SET platform_capabilities = ${sixtyFour}::jsonb WHERE id = ${user.id}::uuid`
+    );
+
+    const stored = (await usersRepository.findForSessionSync(user.id))?.platformCapabilities;
+    expect(stored).toHaveLength(64);
+  });
+
+  it('LENGTH: the full 17-token axis is ACCEPTED — the bound has real slack above it', async () => {
+    // ⚠ 17 is `Object.keys(PLATFORM_CAPABILITIES).length` TODAY and the CHECK does NOT track it.
+    // Until fix round 3 (R8) the bound WAS 17, so an 18th platform token would have made this
+    // exact write fail with a mystifying 23514 — a silent migration obligation on every new
+    // token. 64 is deliberate slack so that stops being true. If the axis ever exceeds 64, the
+    // fix is a MIGRATION bumping the bound, not a smaller fixture here.
     const user = await userFactory({ platformRole: 'super_admin' });
     expect(FULL_AXIS).toHaveLength(17);
 
@@ -1126,7 +1144,7 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
     // ⚠ THE EVALUATION-ORDER PROBE. `jsonb_array_length` on a scalar raises 22023 — a CRASH, not
     // a clean constraint violation — so the length call must never reach one. SQL does not
     // guarantee `AND` short-circuits left-to-right and Postgres may reorder the arms by cost, so
-    // the bare `jsonb_typeof(...) = 'array' AND jsonb_array_length(...) <= 17` form is a HAZARD.
+    // the bare `jsonb_typeof(...) = 'array' AND jsonb_array_length(...) <= 64` form is a HAZARD.
     // ⚠ It is NOT a reproducible failure: on PG16 the bare form also short-circuited and raised a
     // clean 23514 (fix round 2, V2). That is one planner's choice on one query, not a guarantee —
     // so this test pins the OUTCOME the `CASE` makes unconditional, and must not be read as

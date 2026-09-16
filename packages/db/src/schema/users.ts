@@ -115,29 +115,39 @@ export const users = pgTable(
      * requires NON-EMPTY): here `[]` MUST be allowed — it is the meaningful "holds nothing"
      * state.
      *
-     * LENGTH (BAL-560 fix round 1, security F1): `jsonb_array_length(...) <= 17`. WITHOUT IT THE
-     * COOKIE IS UNBOUNDED AND A LONG ARRAY IS A SILENT, NON-SELF-HEALING LOCKOUT — a browser
-     * discards a `Set-Cookie` over 4096 bytes with no server-side error, and a measured 26-entry
-     * override seals to 4097 bytes — ONE byte past the cliff (30 entries is 4289; the figures are
-     * computed in `apps/web/src/lib/auth/session-cookie-size.test.ts:244-245`). Duplicates are
-     * what make that reachable: the axis has only 17 distinct tokens, but nothing stops
+     * LENGTH (BAL-560 fix round 1, security F1; RELAXED 17 → 64 in fix round 3, R8):
+     * `jsonb_array_length(...) <= 64`. WITHOUT IT THE COOKIE IS UNBOUNDED AND A LONG ARRAY IS A
+     * SILENT, NON-SELF-HEALING LOCKOUT — a browser discards a `Set-Cookie` over 4096 bytes with
+     * no server-side error, and a measured 26-entry override seals to 4097 bytes — ONE byte past
+     * the cliff (30 entries is 4289; the figures are computed in
+     * `apps/web/src/lib/auth/session-cookie-size.test.ts:244-245`). Duplicates are what make that
+     * reachable: the axis has only 17 distinct tokens, but nothing stops
      * `['view_platform_admin', 'view_platform_admin', …]`.
-     * The seal path de-duplicates and filters (`sealedPlatformCapabilities`), and this is the
-     * database-side half of the same bound.
      *
-     * ⚠⚠ **17 IS `Object.keys(PLATFORM_CAPABILITIES).length` TODAY, AND THIS CONSTRAINT DOES NOT
-     * TRACK IT.** Adding an 18th platform token makes a legitimate full-axis override fail this
-     * CHECK with a mystifying 23514. That is accepted — a new token already requires a
-     * migration-era decision — but the next person adding one MUST bump this bound in a
-     * migration at the same time. `packages/shared/src/authz/platform.test.ts` pins the axis
-     * count, so the axis and this number are both written down; they are not linked by code.
+     * ⚠⚠ **SEAL-TIME DE-DUPLICATION IS WHAT ACTUALLY BOUNDS THE COOKIE; THIS NUMBER IS
+     * BELT-AND-BRACES.** `sealedPlatformCapabilities` filters to the axis AND de-duplicates, so
+     * the value that reaches the cookie is always a SUBSET of the distinct tokens no matter what
+     * the column holds. That is the binding mechanism. This CHECK exists so a pathological row
+     * cannot be stored at all — not because the cookie depends on it.
+     *
+     * ⚠⚠ **64 IS DELIBERATE SLACK, NOT THE AXIS SIZE — AND IT STILL DOES NOT TRACK THE AXIS.**
+     * The bound used to be 17, `Object.keys(PLATFORM_CAPABILITIES).length` at the time, which
+     * made every new platform token a silent migration obligation: an 18th token would have made
+     * a legitimate full-axis override fail with a mystifying 23514. BAL-558 alone proposes one to
+     * three new tokens. 64 buys that headroom while still refusing the duplicate-heavy shapes the
+     * arm was added for (40 copies of one token is rejected by the resolver-side filter and by
+     * nothing here — see the note above; the 40-copy DB probe in `users.integration.test.ts` was
+     * therefore re-aimed at a count past this bound). It is NOT linked to the axis by code, and
+     * must not be read as claiming to be: if the axis ever exceeds 64, bump this in a migration.
+     * `packages/shared/src/authz/platform.test.ts` pins the axis count, so both numbers are
+     * written down.
      *
      * ⚠ THE `CASE` IS NOT STYLE — IT IS AN EVALUATION-ORDER GUARANTEE. `jsonb_typeof` is total
      * over any jsonb value, but `jsonb_array_length` on a non-array raises 22023 — a CRASH, not a
      * clean 23514 — so the length call must never reach a scalar. SQL does NOT guarantee that
      * `AND` short-circuits left-to-right, and Postgres explicitly reserves the right to reorder
      * the arms of an `AND` by estimated cost, so the bare
-     * `jsonb_typeof(...) = 'array' AND jsonb_array_length(...) <= 17` form is a HAZARD rather
+     * `jsonb_typeof(...) = 'array' AND jsonb_array_length(...) <= 64` form is a HAZARD rather
      * than a known failure.
      *
      * ⚠⚠ **DO NOT "VERIFY" THIS BY TRYING THE BARE FORM AND CONCLUDING THE `CASE` IS
@@ -204,7 +214,7 @@ export const users = pgTable(
      */
     check(
       'users_platform_capabilities_staff_array',
-      sql`${t.platformCapabilities} IS NULL OR (CASE WHEN jsonb_typeof(${t.platformCapabilities}) = 'array' THEN jsonb_array_length(${t.platformCapabilities}) <= 17 AND (${t.platformRole} = 'super_admin' OR NOT ${t.platformCapabilities} @> '["manage_staff_capabilities"]'::jsonb) ELSE false END AND ${t.platformRole} <> 'user')`
+      sql`${t.platformCapabilities} IS NULL OR (CASE WHEN jsonb_typeof(${t.platformCapabilities}) = 'array' THEN jsonb_array_length(${t.platformCapabilities}) <= 64 AND (${t.platformRole} = 'super_admin' OR NOT ${t.platformCapabilities} @> '["manage_staff_capabilities"]'::jsonb) ELSE false END AND ${t.platformRole} <> 'user')`
     ),
   ]
 );
