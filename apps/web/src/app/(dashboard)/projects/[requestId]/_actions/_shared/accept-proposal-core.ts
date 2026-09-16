@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import {
   proposalsRepository,
   projectRequestsRepository,
+  ensureClientBillingGateConfirmed,
   InvalidProposalTransitionError,
   InvalidRelationshipTransitionError,
   ProposalCoherenceError,
@@ -90,6 +91,37 @@ async function didRequestAdvance(requestId: string, beforeStatus: string): Promi
       stack: error instanceof Error ? error.stack : undefined,
     });
     return false;
+  }
+}
+
+/**
+ * BAL-343 — confirm the `client_billing` kickoff gate at ACCEPTANCE time, so a
+ * repeat-company client whose company already has billing on file sees the settled
+ * gate on its own request immediately instead of waiting for an admin to open the
+ * board (the BAL-324 admin-load path is retained as a backstop —
+ * `lib/project-request/ensure-admin-billing-autoskip.ts`). The delegated primitive
+ * self-guards every not-applicable case, so a new company with nothing captured
+ * still falls through to the BAL-323 capture flow untouched.
+ *
+ * Best-effort and NEVER throws: the accept is ALREADY COMMITTED by the time this
+ * runs, and the caller's boundary catch maps any throw to a user-facing "could not
+ * accept" — which would tell the client an accept that succeeded had failed. WARN,
+ * not ERROR: recoverable by three routes (the backstop, the client's own capture
+ * form, the next accept on this request). ONE catch arm deliberately — a benign
+ * `InvalidKickoffStateError` status race and a real DB failure have identical
+ * consequences here, and the logged `error.message` names which one it was. The stack is
+ * carried for the unexpected class, whose message (`Failed to update project request`)
+ * does not identify the failing query path.
+ */
+async function confirmClientBillingGateBestEffort(requestId: string): Promise<void> {
+  try {
+    await ensureClientBillingGateConfirmed(requestId);
+  } catch (error) {
+    log.warn('Client billing gate auto-confirm failed after accept commit', {
+      requestId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
   }
 }
 
@@ -239,6 +271,11 @@ export async function runAcceptProposal(
     }).catch(() => {
       // publishNotificationEvent logs internally.
     });
+
+    // BAL-343 — confirm the `client_billing` gate now the request is `accepted`.
+    // AWAITED: the very next render reads this row. Self-swallowing: it must never
+    // fail an accept that already committed. No-ops for a company with no billing.
+    await confirmClientBillingGateBestEffort(requestId);
 
     // Revalidate the request-detail page AND the proposal surface the client
     // accepted from, so back-navigation there doesn't serve a stale
