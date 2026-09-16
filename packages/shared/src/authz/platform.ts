@@ -293,19 +293,36 @@ export const PLATFORM_CAPABILITIES = {
    * BAL-561 ships the Staff access surface that resolves this token and writes the column.
    * Nothing resolves it today, which is pinned as a fact rather than trusted — PIN E of
    * `apps/web/src/invariants/platform-capability-single-resolution-point.test.ts` asserts that
-   * exactly ONE non-test file in the whole monorepo names this token (its own definition), in
-   * BOTH spellings: the constant and the wire value `'manage_staff_capabilities'`.
+   * exactly ONE non-test file in the whole monorepo names the CONSTANT (its own definition), and
+   * exactly TWO name the wire value `'manage_staff_capabilities'` — this file and the CHECK's SQL
+   * literal in `packages/db/src/schema/users.ts`, which is a STORAGE rule rather than a
+   * resolution (see the next paragraph, and that pin's own docblock).
    *
-   * ⚠⚠ HARD REQUIREMENT ON BAL-561'S WRITER: **IT MUST REFUSE TO WRITE THIS TOKEN INTO ANY
-   * OVERRIDE** (fix round 1, security F3). An override REPLACES the role bundle and is
-   * deliberately unclamped — it is never intersected with what the role could hold, because an
-   * additive or clamped reading makes "an admin, minus promo codes" inexpressible, which is the
-   * whole reason the column exists. The direct consequence is that
+   * ⚠⚠ **IT MAY APPEAR ONLY ON A `super_admin` ROW** (fix round 1, security F3; NARROWED in fix
+   * round 3, R2). An override REPLACES the role bundle and is deliberately unclamped — it is
+   * never intersected with what the role could hold, because an additive or clamped reading
+   * makes "an admin, minus promo codes" inexpressible, which is the whole reason the column
+   * exists. The direct consequence is that
    * `platform_capabilities = ['manage_staff_capabilities']` on a `platform_role='admin'` row
    * resolves to exactly that token, making a plain admin a latent `super_admin` who can then
    * write any token onto any staff row — a one-row privilege escalation and a self-perpetuating
    * one. The RESOLVER deliberately does not special-case it (that would reintroduce clamping);
-   * the WRITE path is the correct place to refuse, and it is the only place.
+   * the STORAGE rule is the correct place to refuse.
+   *
+   * ⚠ IT IS ENFORCED IN THE DATABASE, inside the `users_platform_capabilities_staff_array` CHECK
+   * (`packages/db/src/schema/users.ts`), so it holds against a script or a hand edit as well as
+   * against BAL-561's writer, and it holds on a later role change: a `super_admin` → `admin`
+   * UPDATE on a row whose override still names the token fails 23514 rather than completing into
+   * an escalated state. BAL-561 must therefore clear or re-state an override on ANY role change,
+   * not only on a demotion to `user`.
+   *
+   * ⚠ THE RULE IS "ONLY ON A `super_admin` ROW", **NOT** "never in an override" — the blanket
+   * form is incompatible with BAL-561's design. Switching a super_admin to a Custom override
+   * pre-fills from the current role bundle, which for a `super_admin` INCLUDES this token, and
+   * BAL-561's floor rule 3 requires a sole super_admin to keep `manage_staff_capabilities` while
+   * remaining a super admin. A blanket refusal would leave a sole super_admin unable to switch to
+   * Custom at all, and would silently strip staff management from any other super_admin who did.
+   * The hazard is narrow: the token on a NON-super_admin row.
    */
   MANAGE_STAFF_CAPABILITIES: 'manage_staff_capabilities',
 } as const;

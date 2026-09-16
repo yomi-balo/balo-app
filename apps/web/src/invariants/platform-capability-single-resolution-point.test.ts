@@ -129,6 +129,32 @@ const NEW_TOKEN = 'MANAGE_STAFF_CAPABILITIES';
 const NEW_TOKEN_VALUE = 'manage_staff_capabilities';
 const NEW_TOKEN_NAMERS: readonly string[] = ['packages/shared/src/authz/platform.ts'];
 
+/**
+ * ⚠⚠ **THE WIRE-VALUE SET IS TWO, AND THE SECOND ENTRY IS A STORAGE RULE, NOT A RESOLUTION**
+ * (fix round 3, R2).
+ *
+ * The CONSTANT spelling stays at ONE — that is the inertness claim, and it is what a resolver
+ * would reach for. The wire VALUE now has a second namer because the
+ * `users_platform_capabilities_staff_array` CHECK writes the literal into SQL:
+ *
+ *   NOT platform_capabilities @> '["manage_staff_capabilities"]'::jsonb
+ *
+ * ⚠ THAT IS DELIBERATELY NOT A WIDENING OF THE PIN'S MEANING. The pin asks "does anything
+ * RESOLVE this token — does anything ask what it GRANTS". A CHECK constraint asks the opposite
+ * question: which rows may STORE it (only a `super_admin` row may). It confers nothing, runs in
+ * Postgres rather than in any gate, and cannot make the token live. The schema is also the one
+ * place the rule CAN live: an override is deliberately unclamped on the read path, so refusing
+ * the escalation in the resolver would reintroduce clamping.
+ *
+ * ⚠ A THIRD wire-value namer, or a SECOND constant namer, still means something resolves it —
+ * BAL-561's work — and needs the docblock's inertness claim re-argued rather than quietly
+ * widened. Do not add an entry here for a `.ts` gate.
+ */
+const NEW_TOKEN_VALUE_NAMERS: readonly string[] = [
+  'packages/shared/src/authz/platform.ts', // the definition
+  'packages/db/src/schema/users.ts', // the CHECK's SQL literal — a storage rule
+];
+
 /** D — the ROLE MAP's exact reader set (near-vacuous today; see the docblock). */
 const ROLE_MAP = 'PLATFORM_ROLE_CAPABILITIES';
 const ROLE_MAP_READERS: readonly string[] = [
@@ -336,9 +362,12 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
     expect(byConstant).toEqual([...NEW_TOKEN_NAMERS].sort());
     expect(byConstant).toHaveLength(1);
 
+    // ⚠ TWO for the wire value, and the second is the CHECK's SQL literal — a STORAGE rule, not
+    // a resolution. See `NEW_TOKEN_VALUE_NAMERS` for why that does not weaken the inertness
+    // claim, and why a THIRD entry would.
     const byValue = filesNaming(NEW_TOKEN_VALUE).sort();
-    expect(byValue).toEqual([...NEW_TOKEN_NAMERS].sort());
-    expect(byValue).toHaveLength(1);
+    expect(byValue).toEqual([...NEW_TOKEN_VALUE_NAMERS].sort());
+    expect(byValue).toHaveLength(2);
   });
 
   it('PIN D: the role map has no production reader (near-vacuous, kept deliberately — see docblock)', () => {
@@ -414,7 +443,11 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
       { label: 'PIN D', found: filesNaming(ROLE_MAP), expected: ROLE_MAP_READERS },
       { label: 'PIN C2', found: filesNaming(OVERRIDE_COLUMN), expected: OVERRIDE_COLUMN_NAMERS },
       { label: 'PIN E', found: filesNaming(NEW_TOKEN), expected: NEW_TOKEN_NAMERS },
-      { label: 'PIN E (value)', found: filesNaming(NEW_TOKEN_VALUE), expected: NEW_TOKEN_NAMERS },
+      {
+        label: 'PIN E (value)',
+        found: filesNaming(NEW_TOKEN_VALUE),
+        expected: NEW_TOKEN_VALUE_NAMERS,
+      },
     ];
     expect(cases).toHaveLength(7);
 

@@ -939,7 +939,10 @@ describe('users.platform_capabilities — the column (BAL-560)', () => {
   });
 
   it('can be cleared back to NULL on a staff row', async () => {
-    const user = await userFactory({ platformRole: 'admin' });
+    // ⚠ `super_admin`, not `admin`: `FULL_AXIS` contains `manage_staff_capabilities`, which the
+    // CHECK's escalation arm (fix round 3, R2) permits ONLY on a super_admin row. The role is
+    // incidental to what this test is about — the clear-back-to-NULL path.
+    const user = await userFactory({ platformRole: 'super_admin' });
     await db
       .update(users)
       .set({ platformCapabilities: [...FULL_AXIS] })
@@ -1132,5 +1135,88 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
       sql`UPDATE users SET platform_capabilities = '42'::jsonb WHERE id = ${user.id}::uuid`,
       STAFF_ARRAY_CHECK
     );
+  });
+
+  // ── ESCALATION (fix round 3, R2) ─────────────────────────────────────────────────────────
+  //
+  // ⚠ THE ONE-ROW PRIVILEGE ESCALATION THIS ARM CLOSES. An override REPLACES the role bundle and
+  // is deliberately unclamped, so `platform_capabilities = ['manage_staff_capabilities']` on a
+  // `platform_role='admin'` row resolves to exactly that token — a plain admin who can then write
+  // any token onto any staff row, including onto themselves. The resolver must NOT special-case
+  // it (that would reintroduce clamping, which makes "an admin, minus promo codes"
+  // inexpressible), so the storage rule is where it is refused.
+  //
+  // ⚠ THE RULE IS "ONLY ON A `super_admin` ROW", NOT "never in an override" — BAL-561 pre-fills a
+  // Custom override from the current role bundle, which for a super_admin INCLUDES this token,
+  // and its floor rule 3 requires a sole super_admin to keep it. The accepted arm below is what
+  // stops the rule being silently re-broadened into the blanket form.
+
+  it('ESCALATION: manage_staff_capabilities in an override on an ADMIN row is rejected', async () => {
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await expectCheckViolation(
+      sql`UPDATE users SET platform_capabilities = '["manage_staff_capabilities"]'::jsonb WHERE id = ${user.id}::uuid`,
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('ESCALATION: it is rejected even when BURIED among legitimate tokens on an admin row', async () => {
+    // A one-element probe alone would also pass against a naive `= '["manage_staff_capabilities"]'`
+    // equality arm. `@>` is CONTAINMENT, and this is the probe that pins that.
+    const user = await userFactory({ platformRole: 'admin' });
+
+    await expectCheckViolation(
+      sql`UPDATE users SET platform_capabilities = '["view_platform_admin","manage_staff_capabilities","redrive_job"]'::jsonb WHERE id = ${user.id}::uuid`,
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('ESCALATION: the SAME override on a super_admin row is ACCEPTED — the arm does not over-reject', async () => {
+    // ⚠ THE PAIRED NON-OVER-REJECTION TEST, and it is load-bearing rather than decorative:
+    // without it, tightening the arm to the blanket "never in any override" form would pass every
+    // rejection probe above while making BAL-561's Custom pre-fill impossible for a sole
+    // super_admin — the exact incompatibility R2 exists to correct.
+    const user = await userFactory({ platformRole: 'super_admin' });
+
+    await db.execute(
+      sql`UPDATE users SET platform_capabilities = '["view_platform_admin","manage_staff_capabilities"]'::jsonb WHERE id = ${user.id}::uuid`
+    );
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.platformCapabilities).toEqual(['view_platform_admin', 'manage_staff_capabilities']);
+    expect(row?.platformCapabilities).toHaveLength(2);
+  });
+
+  it('ESCALATION: a super_admin → admin DEMOTION carrying the token is rejected — the table check holds on the ROLE side too', async () => {
+    // ⚠ The obligation this places on BAL-561: an override must be cleared or re-stated on ANY
+    // role change, not only on a demotion to `user`. Because an override REPLACES the role's set,
+    // a super_admin → admin demotion would otherwise leave every super_admin-only token in place.
+    const user = await userFactory({ platformRole: 'super_admin' });
+    await db.execute(
+      sql`UPDATE users SET platform_capabilities = '["manage_staff_capabilities"]'::jsonb WHERE id = ${user.id}::uuid`
+    );
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) => tx.update(users).set({ platformRole: 'admin' }).where(eq(users.id, user.id)),
+      STAFF_ARRAY_CHECK
+    );
+  });
+
+  it('ESCALATION: the same demotion IS allowed once the token is dropped from the override', async () => {
+    // The counterpart: the arm must reject the demotion for the TOKEN, not for being a demotion.
+    const user = await userFactory({ platformRole: 'super_admin' });
+    await db.execute(
+      sql`UPDATE users SET platform_capabilities = '["manage_staff_capabilities"]'::jsonb WHERE id = ${user.id}::uuid`
+    );
+
+    await db
+      .update(users)
+      .set({ platformRole: 'admin', platformCapabilities: [PLATFORM_CAPABILITIES.REDRIVE_JOB] })
+      .where(eq(users.id, user.id));
+
+    const row = await usersRepository.findForSessionSync(user.id);
+    expect(row?.platformRole).toBe('admin');
+    expect(row?.platformCapabilities).toEqual(['redrive_job']);
   });
 });

@@ -173,10 +173,36 @@ export const users = pgTable(
      * (`lib/auth/actions/impersonation.ts:198`) AND a non-staff row cannot hold an override
      * (this constraint). Both halves are load-bearing; see the proof-of-the-reason test in
      * `apps/web/src/lib/auth/session-cookie-size.test.ts`.
+     *
+     * ⚠⚠ **ESCALATION (fix round 3, R2): `manage_staff_capabilities` MAY APPEAR ONLY ON A
+     * `super_admin` ROW.** An override REPLACES the role bundle and is deliberately unclamped —
+     * it is never intersected with what the role could hold, because an additive or clamped
+     * reading makes "an admin, minus promo codes" inexpressible, which is the whole reason the
+     * column exists. The direct consequence is that
+     * `platform_capabilities = ['manage_staff_capabilities']` on a `platform_role='admin'` row
+     * resolves to exactly that token, making a plain admin a latent `super_admin` who can then
+     * write any token onto any staff row — a one-row privilege escalation, and a
+     * self-perpetuating one. The RESOLVER deliberately does not special-case it (that would
+     * reintroduce clamping), so the STORAGE rule is the place to refuse.
+     *
+     * ⚠ THE RULE IS "ONLY ON A `super_admin` ROW", **NOT** "never in an override". The narrower
+     * form is the only one compatible with BAL-561's design: switching a super_admin to a Custom
+     * override pre-fills from the current role bundle, which for a `super_admin` INCLUDES this
+     * token, and BAL-561's floor rule 3 requires a sole super_admin to keep
+     * `manage_staff_capabilities` while remaining a super admin. A blanket refusal would make a
+     * sole super_admin unable to switch to Custom at all, and would silently strip staff
+     * management from every other super_admin who did. The real hazard is narrow: the token on a
+     * NON-super_admin row.
+     *
+     * ⚠ IT LIVES INSIDE THE EXISTING `CASE` ARM, deliberately, so `@>` can never evaluate against
+     * a non-array — the same evaluation-order reasoning as the length bound above. A demotion
+     * (`super_admin` → `admin`) on a row whose override still names the token therefore fails
+     * 23514 rather than completing into an escalated state: an obligation on BAL-561's writer to
+     * clear or re-state the override on ANY role change, not only on a demotion to `user`.
      */
     check(
       'users_platform_capabilities_staff_array',
-      sql`${t.platformCapabilities} IS NULL OR (CASE WHEN jsonb_typeof(${t.platformCapabilities}) = 'array' THEN jsonb_array_length(${t.platformCapabilities}) <= 17 ELSE false END AND ${t.platformRole} <> 'user')`
+      sql`${t.platformCapabilities} IS NULL OR (CASE WHEN jsonb_typeof(${t.platformCapabilities}) = 'array' THEN jsonb_array_length(${t.platformCapabilities}) <= 17 AND (${t.platformRole} = 'super_admin' OR NOT ${t.platformCapabilities} @> '["manage_staff_capabilities"]'::jsonb) ELSE false END AND ${t.platformRole} <> 'user')`
     ),
   ]
 );
