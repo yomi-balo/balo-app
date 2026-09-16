@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PlatformCapability } from '@balo/shared/authz';
 
 /**
  * BAL-560 fix round 1 (security F2) — the LIVE-ROW platform gate this action now runs after its
@@ -8,11 +9,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * exhaustively in `lib/authz/live-platform-capability.test.ts`; what the suites here pin is that
  * the action CALLS it and honours a denial.
  */
-const mockActorHoldsLive = vi.fn<(userId: string, capability: string) => Promise<boolean>>(
-  async () => true
-);
+const mockActorHoldsLive = vi.fn<
+  (userId: string, capability: PlatformCapability) => Promise<boolean>
+>(async () => true);
 vi.mock('@/lib/authz/live-platform-capability', () => ({
-  actorHoldsPlatformCapability: (userId: string, capability: string) =>
+  actorHoldsPlatformCapability: (userId: string, capability: PlatformCapability) =>
     mockActorHoldsLive(userId, capability),
 }));
 
