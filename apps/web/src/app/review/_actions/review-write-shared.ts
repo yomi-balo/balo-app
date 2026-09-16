@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { engagementsRepository, reviewsRepository } from '@balo/db';
+import { engagementsRepository, expertsRepository, reviewsRepository } from '@balo/db';
 import type { Rating, ReviewAuthMethod, ReviewSurface } from '@balo/shared/reviews';
 import { hasCapability, CAPABILITIES } from '@/lib/authz';
 import { trackServerAndFlush, REVIEW_SERVER_EVENTS } from '@/lib/analytics/server';
@@ -19,9 +19,10 @@ import { log } from '@/lib/logging';
  * NOT `@balo/shared/authz`, which is the pure role→capability map with no membership
  * lookup. Never gate on `activeMode`, `platformRole` or a lens (ADR-1029).
  *
- * ⚠ THE DELIVERING EXPERT FAILS NATURALLY. They hold no membership in the CLIENT
- * company, so `getMemberRole` returns `undefined` and the gate denies. "An expert cannot
- * rate themselves" is structural here, not a special case — do not add one.
+ * ⚠ THE GATE DOES NOT EXCLUDE THE DELIVERING EXPERT. A user who is both the delivering
+ * expert and a live member of the client company passes `PARTICIPATE`, so an explicit
+ * identity check refuses a reviewer who IS the expert's user (BAL-443). Narrow by design:
+ * the expert's agency colleagues are not excluded. An unresolvable expert fails closed.
  *
  * ⚠ IDOR CLOSURE — none of the three identities is ever read from a form field:
  *   · `engagementId`    — from the resolved token row, or the gated action argument.
@@ -73,11 +74,12 @@ function reviewableKind(engagementType: string): ReviewableKind | undefined {
 /**
  * Write (or replace) `reviewerUserId`'s review of the engagement's delivering expert.
  *
- * Order of operations is load-bearing: resolve the engagement, THEN gate, THEN derive
- * the expert, THEN write. The gate runs on EVERY call — including every magic-link
+ * Order of operations is load-bearing: resolve the engagement, THEN gate membership, THEN
+ * refuse a self-review, THEN write. The gate runs on EVERY call — including every magic-link
  * submit — which is also this feature's revocation channel: a departed reviewer's
  * soft-deleted `company_members` row makes every one of their outstanding 30-day tokens
- * stop writing instantly, with no revocation step anywhere.
+ * stop writing instantly, with no revocation step anywhere. The self-review read sits AFTER
+ * the gate so its warn fires only for a genuine dual-role member, never a plain non-member.
  */
 export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewResult> {
   const engagement = await engagementsRepository.findById(input.engagementId);
@@ -98,6 +100,27 @@ export async function applyReview(input: ApplyReviewInput): Promise<ApplyReviewR
     companyId: engagement.companyId,
   });
   if (!allowed) {
+    return { ok: false, error: 'forbidden' };
+  }
+
+  const expert = await expertsRepository.findUserIdByProfileId(engagement.expertProfileId);
+  if (expert === undefined) {
+    log.warn('Review write blocked: delivering expert not found', {
+      engagementId: input.engagementId,
+      expertProfileId: engagement.expertProfileId,
+      userId: input.reviewerUserId,
+      authMethod: input.authMethod,
+      surface: input.surface,
+    });
+    return { ok: false, error: 'not_found' };
+  }
+  if (expert.user.id === input.reviewerUserId) {
+    log.warn('Review write blocked: reviewer is the delivering expert', {
+      engagementId: input.engagementId,
+      userId: input.reviewerUserId,
+      authMethod: input.authMethod,
+      surface: input.surface,
+    });
     return { ok: false, error: 'forbidden' };
   }
 
