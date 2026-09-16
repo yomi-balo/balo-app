@@ -18,6 +18,13 @@ vi.mock('@/lib/authz/live-platform-capability', () => ({
 
 vi.mock('server-only', () => ({}));
 
+// Present only for the R4 composition test at the bottom, which splices the REAL live-gate
+// implementation in and makes this read throw.
+const mockFindForSessionSync = vi.fn();
+vi.mock('@balo/db', () => ({
+  usersRepository: { findForSessionSync: (...a: unknown[]) => mockFindForSessionSync(...a) },
+}));
+
 const { mockGetCurrentUser, mockHasPlatformCapability } = vi.hoisted(() => ({
   mockGetCurrentUser: vi.fn(),
   mockHasPlatformCapability: vi.fn(),
@@ -134,5 +141,29 @@ describe('requireApplicationReviewer', () => {
     mockHasPlatformCapability.mockReturnValue(false);
 
     expect(await requireApplicationReviewer()).toEqual({ ok: false, error: REVIEWER_DENIED });
+  });
+
+  /**
+   * ⚠ FIX ROUND 3 (R4) — THE COMPOSITION TEST for the shared-preamble shape, with the REAL live
+   * gate spliced in.
+   *
+   * The gate runs as the preamble's LAST statement and therefore ahead of every caller's own
+   * `try`; if the helper propagated a DB failure, both decision actions would reject unhandled
+   * instead of returning `{ ok: false }`. The helper owns the `try` for that reason.
+   */
+  it('R4: a DB failure inside the live gate returns the generic denial, not an unhandled crash', async () => {
+    mockGetCurrentUser.mockResolvedValue(ADMIN);
+    const actual = await vi.importActual<typeof import('@/lib/authz/live-platform-capability')>(
+      '@/lib/authz/live-platform-capability'
+    );
+    // `Once` on both: `vi.clearAllMocks()` clears CALLS but KEEPS implementations.
+    mockActorHoldsLive.mockImplementationOnce(actual.actorHoldsPlatformCapability);
+    mockFindForSessionSync.mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(requireApplicationReviewer()).resolves.toEqual({
+      ok: false,
+      error: REVIEWER_DENIED,
+    });
+    expect(mockFindForSessionSync).toHaveBeenCalledWith(ADMIN.id);
   });
 });

@@ -30,10 +30,16 @@ vi.mock('@/lib/auth/session', () => ({
 // exercised end-to-end; only the session user's `platformRole` is controlled.
 const mockFindById = vi.fn();
 const mockUpdateBaloFeeBps = vi.fn();
+// `usersRepository` is here only for the R4 composition test at the bottom, which swaps the REAL
+// live-gate implementation in and makes this read throw.
+const mockFindForSessionSync = vi.fn();
 vi.mock('@balo/db', () => ({
   projectRequestsRepository: {
     findById: (...a: unknown[]) => mockFindById(...a),
     updateBaloFeeBps: (...a: unknown[]) => mockUpdateBaloFeeBps(...a),
+  },
+  usersRepository: {
+    findForSessionSync: (...a: unknown[]) => mockFindForSessionSync(...a),
   },
 }));
 
@@ -142,6 +148,32 @@ describe('overrideBaloFee', () => {
     expect(log.info).not.toHaveBeenCalled();
     // Still revalidates so any stale render reconciles.
     expect(revalidatePath).toHaveBeenCalledWith(`/projects/${REQUEST_ID}`);
+  });
+
+  /**
+   * ⚠ FIX ROUND 3 (R4) — THE COMPOSITION TEST, with the REAL live gate spliced in.
+   *
+   * The gate sits ABOVE this action's `try` on purpose (capability resolved BEFORE the input is
+   * parsed — no existence leak), so if the helper propagated a DB failure the action would reject
+   * unhandled instead of returning its normal message. The helper owns the `try` for that reason.
+   * Every other case in this file mocks the helper; this one runs the shipped implementation
+   * against a throwing `usersRepository` read.
+   */
+  it('R4: a DB failure inside the live gate returns the normal denial, not an unhandled crash', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/authz/live-platform-capability')>(
+      '@/lib/authz/live-platform-capability'
+    );
+    // `Once` on both: `vi.clearAllMocks()` clears CALLS but KEEPS implementations, so a
+    // persistent `mockImplementation` here would deny every later test in the file.
+    mockActorHoldsLive.mockImplementationOnce(actual.actorHoldsPlatformCapability);
+    mockFindForSessionSync.mockRejectedValueOnce(new Error('connection terminated'));
+
+    await expect(overrideBaloFee(VALID_INPUT)).resolves.toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
+    expect(mockFindForSessionSync).toHaveBeenCalledWith(ADMIN.id);
+    expect(mockUpdateBaloFeeBps).not.toHaveBeenCalled();
   });
 
   it('maps a repo throw to the generic error and logs it', async () => {

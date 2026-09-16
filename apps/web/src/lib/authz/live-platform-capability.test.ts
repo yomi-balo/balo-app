@@ -10,6 +10,7 @@ vi.mock('@balo/db', () => ({
 }));
 
 import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { log } from '@/lib/logging';
 import { actorHoldsPlatformCapability } from './live-platform-capability';
 
 /**
@@ -113,6 +114,59 @@ describe('actorHoldsPlatformCapability', () => {
     await expect(
       actorHoldsPlatformCapability(USER_ID, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)
     ).resolves.toBe(false);
+  });
+
+  /**
+   * ⚠ FIX ROUND 3 (R4). Every call site puts this gate ABOVE its own `try` — that placement is
+   * load-bearing (capability resolved BEFORE the input is parsed, so the error shape leaks no
+   * existence). The consequence is that a throwing read here would surface as an UNHANDLED
+   * rejection out of the Server Action, not as its normal failure message. So the `try` lives
+   * inside the helper: it logs and DENIES.
+   */
+  it('R4: a throwing DB read DENIES rather than propagating — the action cannot crash', async () => {
+    mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
+
+    await expect(
+      actorHoldsPlatformCapability(USER_ID, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)
+    ).resolves.toBe(false);
+  });
+
+  it('R4: the swallowed DB failure is LOGGED with the actor and the capability', async () => {
+    mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
+
+    await actorHoldsPlatformCapability(USER_ID, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES);
+
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith(
+      'Live platform-capability check failed — denying',
+      expect.objectContaining({
+        actorUserId: USER_ID,
+        capability: 'manage_platform_fees',
+        error: 'connection terminated',
+      })
+    );
+  });
+
+  it('R4: a NON-Error rejection is still denied and still logged (String-coerced)', async () => {
+    mockFindForSessionSync.mockRejectedValue('pool exhausted');
+
+    await expect(
+      actorHoldsPlatformCapability(USER_ID, PLATFORM_CAPABILITIES.REDRIVE_JOB)
+    ).resolves.toBe(false);
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith(
+      'Live platform-capability check failed — denying',
+      expect.objectContaining({ error: 'pool exhausted', stack: undefined })
+    );
+  });
+
+  it('R4: a SUCCESSFUL check logs nothing — the catch is not on the happy path', async () => {
+    mockFindForSessionSync.mockResolvedValue(row());
+
+    await expect(
+      actorHoldsPlatformCapability(USER_ID, PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES)
+    ).resolves.toBe(true);
+    expect(log.error).not.toHaveBeenCalled();
   });
 
   it('an unknown token in the live override denies and the rest resolve — it does not throw', async () => {
