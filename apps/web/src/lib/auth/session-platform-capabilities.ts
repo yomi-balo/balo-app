@@ -36,11 +36,12 @@ interface CarriesPlatformCapabilities {
  *
  * DE-DUPLICATE: this is the one that closes a real LOCKOUT. The axis holds 17 distinct tokens,
  * but nothing stopped a row from carrying `['view_platform_admin', 'view_platform_admin', …]`
- * any number of times; a measured 26-entry override seals to 4289 bytes, past the 4096-byte
- * browser cliff, at which point the browser SILENTLY DISCARDS the `Set-Cookie` and the user is
- * locked out with no server-side error. The DB CHECK `users_platform_capabilities_staff_array`
- * bounds the column at 17 entries; this is the same bound enforced on the value that actually
- * reaches the cookie.
+ * any number of times; a measured 26-entry override seals to 4097 bytes — ONE byte past the
+ * 4096-byte browser cliff (30 entries is 4289) — at which point the browser SILENTLY DISCARDS
+ * the `Set-Cookie` and the user is locked out with no server-side error. The measurements are
+ * computed in `session-cookie-size.test.ts:244-245`; everywhere else quotes them. The DB CHECK
+ * `users_platform_capabilities_staff_array` bounds the column at 17 entries; this is the same
+ * bound enforced on the value that actually reaches the cookie.
  *
  * ⚠⚠ **IT IS SHARED WITH `platformOverrideKeyOf` ON PURPOSE, AND FILTERING WITHOUT THAT WOULD BE
  * A REGRESSION, NOT A FIX.** `checkSessionDrift` compares the key of the SEALED session against

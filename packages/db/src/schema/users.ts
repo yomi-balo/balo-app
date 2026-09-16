@@ -118,8 +118,10 @@ export const users = pgTable(
      * LENGTH (BAL-560 fix round 1, security F1): `jsonb_array_length(...) <= 17`. WITHOUT IT THE
      * COOKIE IS UNBOUNDED AND A LONG ARRAY IS A SILENT, NON-SELF-HEALING LOCKOUT — a browser
      * discards a `Set-Cookie` over 4096 bytes with no server-side error, and a measured 26-entry
-     * override seals to 4289 bytes. Duplicates are what make that reachable: the axis has only
-     * 17 distinct tokens, but nothing stops `['view_platform_admin', 'view_platform_admin', …]`.
+     * override seals to 4097 bytes — ONE byte past the cliff (30 entries is 4289; the figures are
+     * computed in `apps/web/src/lib/auth/session-cookie-size.test.ts:244-245`). Duplicates are
+     * what make that reachable: the axis has only 17 distinct tokens, but nothing stops
+     * `['view_platform_admin', 'view_platform_admin', …]`.
      * The seal path de-duplicates and filters (`sealedPlatformCapabilities`), and this is the
      * database-side half of the same bound.
      *

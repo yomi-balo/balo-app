@@ -56,8 +56,10 @@ describe('sealedPlatformCapabilities', () => {
   /**
    * ⚠ FIX ROUND 1, SECURITY F1 — THE LOCKOUT. Nothing bounded the array before this: the axis has
    * 17 distinct tokens, but a row could carry the same one any number of times, and a measured
-   * 26-entry override seals to 4289 bytes — past the 4096-byte browser cliff, where the browser
-   * SILENTLY DISCARDS the `Set-Cookie` and the user is locked out with no server-side error.
+   * 26-entry override seals to 4097 bytes — ONE byte past the 4096-byte browser cliff, where the
+   * browser SILENTLY DISCARDS the `Set-Cookie` and the user is locked out with no server-side
+   * error. (30 entries is 4289. The measurements live in `session-cookie-size.test.ts:244-245`,
+   * which is the one place they are computed rather than quoted.)
    */
   it('DE-DUPLICATES — 40 copies of one token seal as exactly one (the lockout fix)', () => {
     const duplicated = Array.from({ length: 40 }, () => PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN);

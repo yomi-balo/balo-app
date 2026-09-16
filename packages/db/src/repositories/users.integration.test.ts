@@ -1072,7 +1072,10 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
   // `balo_session`, and a browser SILENTLY DISCARDS a `Set-Cookie` over 4096 bytes — no error,
   // no recovery, the user just bounces to /login forever. Nothing bounded this column before:
   // the axis has only 17 DISTINCT tokens, but jsonb happily stores the same one 40 times, and a
-  // measured 26-entry override seals to 4289 bytes. The seal path de-duplicates and filters
+  // measured 26-entry override seals to 4097 bytes — ONE byte past the cliff (30 entries is
+  // 4289). The figures are computed in
+  // `apps/web/src/lib/auth/session-cookie-size.test.ts:244-245`; everywhere else quotes them.
+  // The seal path de-duplicates and filters
   // (`apps/web/src/lib/auth/session-platform-capabilities.ts`); this is the database half of the
   // same bound, so a row cannot even hold a value that would overrun.
 
