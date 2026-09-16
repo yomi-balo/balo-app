@@ -291,10 +291,25 @@ const THREADING_SEAMS: readonly {
     file: 'apps/web/src/app/api/auth/session-sync/route.ts',
     mustContain: ['applyPlatformCapabilitiesToSessionUser('],
   },
-  // Gate #7 (addendum A1) — the only `hasPlatformCapability` call site that hand-builds its
-  // actor. It is a deliberate LIVE read, so it must encode the row's override itself.
+  // ⚠ THE TWO HAND-BUILT ACTORS. Every other seam above passes a whole `SessionUser`; these two
+  // construct the actor object themselves from a LIVE row, so each must encode that row's
+  // override itself or it silently resolves the role bundle alone — the conversion being
+  // cosmetic in the one place it matters most.
+  //
+  // Gate #7 (addendum A1) — the impersonation entry point, the original of the shape.
   {
     file: 'apps/web/src/lib/auth/actions/impersonation.ts',
+    mustContain: [SEALER],
+  },
+  // ⚠ ADDED IN FIX ROUND 3 (R5). `actorHoldsPlatformCapability` generalised gate #7's shape for
+  // the fourteen mutating Server Actions converted in fix rounds 1 and 3, and it builds its own
+  // actor object the same way — so it is a THREADING SEAM the pin was not watching. It is
+  // invisible to PIN C by design (it names `sealedPlatformCapabilities`, capital `P`, not the
+  // field), which is exactly why it needs an entry here: nothing else in this file would notice
+  // it dropping the override and falling back to the role bundle for every staff mutation in
+  // the app.
+  {
+    file: 'apps/web/src/lib/authz/live-platform-capability.ts',
     mustContain: [SEALER],
   },
 ];
@@ -378,7 +393,7 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
 
   it('every converted seam THREADS the override — the conversion is not cosmetic', () => {
     // Non-vacuity: the table is the size claimed, so an emptied table cannot pass this loop.
-    expect(THREADING_SEAMS).toHaveLength(6);
+    expect(THREADING_SEAMS).toHaveLength(7);
     for (const seam of THREADING_SEAMS) {
       const file = scanned.find((candidate) => candidate.rel === seam.file);
       expect(file, `${seam.file} must be in the scan set`).toBeDefined();

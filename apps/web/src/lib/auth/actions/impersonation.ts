@@ -163,10 +163,18 @@ export async function startImpersonationAction(input: {
       actorRow.status !== 'active' ||
       !hasPlatformCapability(
         // BAL-560 (gate #7) — the LIVE row's OVERRIDE, not just its role. This is a deliberate
-        // live read (see above: the cookie can be seven days stale), and it is the ONLY
-        // `hasPlatformCapability` call site in the monorepo that hand-builds its actor rather
-        // than passing a whole `SessionUser` — so dropping the override here would make the
-        // most powerful gate in the product the one gate that ignores it.
+        // live read (see above: the cookie can be seven days stale), so dropping the override
+        // here would make the most powerful gate in the product the one gate that ignores it.
+        //
+        // ⚠ IT IS NO LONGER THE ONLY HAND-BUILT ACTOR (fix round 3, R5). Fix round 1 generalised
+        // exactly this shape into `lib/authz/live-platform-capability.ts`, which now serves
+        // fourteen mutating Server Actions and builds its actor the same way. BOTH files are
+        // pinned as THREADING_SEAMS in
+        // `apps/web/src/invariants/platform-capability-single-resolution-point.test.ts`. This
+        // call site stays inline rather than routing through that helper because it needs the
+        // SAME row for the three liveness conditions checked alongside the capability, and it
+        // reports a distinct `code: 'denied'` log line rather than a plain boolean.
+        //
         // `sealedPlatformCapabilities` is the one encoder — the field is ABSENT when the column
         // is NULL — so this actor is shaped exactly like a sealed `SessionUser`.
         { platformRole: actorRow.platformRole, ...sealedPlatformCapabilities(actorRow) },
