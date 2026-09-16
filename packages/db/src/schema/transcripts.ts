@@ -17,16 +17,24 @@ import { timestamps, softDelete } from './helpers';
 
 // ── Canonical Transcript Schema + Normalizer Contracts (BAL-387 / ADR-1013) ──
 //
-// ONE canonical transcript shape both vendor normalizers (Daily/Deepgram authenticated-
-// `userId` attribution; Recall name-diarization) target. Co-located here so `@balo/db`
-// OWNS the jsonb `$type` and `apps/api` imports these TYPE-ONLY (no runtime bundle of
-// `@balo/db` — memory `reference_balo_db_client_bundle_footgun`). The single source of
-// truth for the pipeline's `canonical` / `extracted_action_items` columns.
+// ONE canonical transcript shape both vendor normalizers target (Daily/Deepgram: diarized
+// ordinals from the batch processor, or authenticated `userId` on the unbuilt real-time path;
+// Recall name-diarization). Co-located here so `@balo/db` OWNS the jsonb `$type` and `apps/api`
+// imports these TYPE-ONLY (no runtime bundle of `@balo/db` — memory
+// `reference_balo_db_client_bundle_footgun`). The single source of truth for the pipeline's
+// `canonical` / `extracted_action_items` columns.
 
 export interface CanonicalSpeaker {
-  ref: string; // stable within transcript: userId (Balo Video) or diarized label (Recall)
+  // Stable within the transcript. Daily batch (BAL-483 — the only live producer): the diarized
+  // ordinal label `speaker-N`, or `unknown`. Daily real-time (`authenticated` arm, no producer):
+  // the Balo user id. Recall: the diarization label.
+  ref: string;
   displayName: string | null;
-  userId: string | null; // authenticated Balo user (Daily) | null (Recall)
+  // ⚠ An AUTHENTICATED Balo user id and nothing else — set only on the `authenticated` arm. NULL on
+  // every `diarized` speaker, including every Daily batch transcript. Never write an INFERRED
+  // identity here: an ordinal is not a person, and BAL-517's party hint is a prompt input only,
+  // never persisted to this field or anywhere party-readable.
+  userId: string | null;
   source: 'authenticated' | 'diarized';
 }
 

@@ -16,6 +16,7 @@ import { trackServer, TRANSCRIPT_SERVER_EVENTS } from '@balo/analytics/server';
 import { notificationEvents } from '../../notifications/index.js';
 import { normalizeVendorPayload, type VendorTranscriptPayload } from './normalizers/index.js';
 import type { LlmAudit, LlmClient } from './llm/types.js';
+import { resolvePartyHint } from './party-hint/resolve.js';
 
 const log = createLogger('transcript-pipeline');
 
@@ -206,13 +207,19 @@ async function stageCleanup(
  * newly created. Ordering matters: the extracted items are persisted to the row BEFORE the
  * summary artifact is upserted, so the artifact (the skip gate) reliably implies the items are on
  * the row — a crash between the two writes just re-runs the stage on retry, never losing items.
+ *
+ * BAL-517 — object param so `canonical` + `captureId` can reach `resolvePartyHint` without
+ * threading two more positional args through every call site.
  */
-async function stageSummaryExtract(
-  transcript: Transcript,
-  cleanedText: string,
-  llm: LlmClient,
-  startedAt: number
-): Promise<{ summaryText: string; extractedItems: ExtractedActionItem[] }> {
+async function stageSummaryExtract(a: {
+  transcript: Transcript;
+  canonical: CanonicalTranscript;
+  cleanedText: string;
+  captureId: string;
+  llm: LlmClient;
+  startedAt: number;
+}): Promise<{ summaryText: string; extractedItems: ExtractedActionItem[] }> {
+  const { transcript, canonical, cleanedText, captureId, llm, startedAt } = a;
   const existing = await transcriptArtifactsRepository.findByTranscriptAndKind(
     transcript.id,
     'summary'
@@ -221,8 +228,19 @@ async function stageSummaryExtract(
     return { summaryText: existing.content, extractedItems: transcript.extractedActionItems ?? [] };
   }
 
-  const summarized = await llm.summarize({ cleanedText });
-  const extracted = await llm.extractActionItems({ cleanedText, summary: summarized.summary });
+  // BAL-517 — derived HERE, after the skip gate above and from persisted rows (never at ingest,
+  // never from job data), so the BAL-550 re-drive (`resumeTranscriptRecap`) gets the identical
+  // hint, and a short-circuited re-run (the `existing !== undefined` branch above) issues ZERO
+  // hint reads. Never rejects — a hint is an optional prior, so a lookup failure degrades to
+  // `null` rather than failing the stage. The hint reaches summary + extraction ONLY: `stageCleanup`
+  // ran above and never sees it — its signature has no `partyHint` parameter at all.
+  const partyHint = await resolvePartyHint({ transcript, canonical, cleanedText, captureId });
+  const summarized = await llm.summarize({ cleanedText, partyHint });
+  const extracted = await llm.extractActionItems({
+    cleanedText,
+    summary: summarized.summary,
+    partyHint,
+  });
   await transcriptsRepository.setExtractedActionItems(transcript.id, extracted.items);
   const summaryArtifact = await transcriptArtifactsRepository.upsert({
     transcriptId: transcript.id,
@@ -398,12 +416,14 @@ async function runRecapStages(a: {
     const cleanedText = await stageCleanup(a.transcript, a.canonical, a.deps.llm);
 
     stage = 'summarize';
-    const { summaryText, extractedItems } = await stageSummaryExtract(
-      a.transcript,
+    const { summaryText, extractedItems } = await stageSummaryExtract({
+      transcript: a.transcript,
+      canonical: a.canonical,
       cleanedText,
-      a.deps.llm,
-      a.startedAt
-    );
+      captureId: a.captureId,
+      llm: a.deps.llm,
+      startedAt: a.startedAt,
+    });
 
     stage = 'extract_action_items';
     await stagePromoteActionItems(a.transcript, extractedItems);

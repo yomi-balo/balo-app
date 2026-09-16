@@ -8,6 +8,19 @@ import {
 import type { LlmAudit, LlmClient } from './llm/types.js';
 import { dailyMultiSpeaker } from './normalizers/__fixtures__/daily-deepgram.js';
 import { normalizeVendorPayload } from './normalizers/index.js';
+import type { CanonicalTranscript } from '@balo/db';
+import { renderTranscriptText, summaryPrompt } from './llm/prompts.js';
+import {
+  MEETING_ID as PARTY_HINT_MEETING_ID,
+  EXPERT_USER_ID,
+  CLIENT_USER_ID,
+  EXPERT_WAITING_TURNS,
+  EXPERT_WAITING_HINT,
+  diarizedCanonical,
+  expertWaitingPayload,
+  presenceRow,
+  recordingSegment,
+} from './party-hint/__fixtures__/scenarios.js';
 
 // ── Hoisted mock fns ───────────────────────────────────────────────────────────
 const db = vi.hoisted(() => ({
@@ -26,9 +39,13 @@ const db = vi.hoisted(() => ({
   createFromExtraction: vi.fn(),
   findEngagementById: vi.fn(),
   findOwnerUserIdByCompanyId: vi.fn(),
+  // BAL-517 — the party-hint resolver's reads, real `resolvePartyHint` + real `derivePartyHint`.
+  findByTranscriptJobId: vi.fn(),
+  listByMeeting: vi.fn(),
 }));
 const publish = vi.hoisted(() => vi.fn());
 const trackServer = vi.hoisted(() => vi.fn());
+const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 
 vi.mock('@balo/db', () => {
   class EngagementNotActiveError extends Error {}
@@ -50,6 +67,8 @@ vi.mock('@balo/db', () => {
     actionItemsRepository: { createFromExtraction: db.createFromExtraction },
     engagementsRepository: { findById: db.findEngagementById },
     companiesRepository: { findOwnerUserIdByCompanyId: db.findOwnerUserIdByCompanyId },
+    meetingRecordingsRepository: { findByTranscriptJobId: db.findByTranscriptJobId },
+    meetingPresenceRepository: { listByMeeting: db.listByMeeting },
     EngagementNotActiveError,
   };
 });
@@ -75,7 +94,7 @@ vi.mock('@balo/analytics/server', () => ({
 }));
 
 vi.mock('@balo/shared/logging', () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => logger,
 }));
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -84,7 +103,7 @@ const makeAudit = (promptId: string): LlmAudit => ({
   modelId: 'noop',
   modelVersion: null,
   promptId,
-  promptVersion: 'v1',
+  promptVersion: 'v2',
   prompt: 'rendered',
 });
 
@@ -144,6 +163,11 @@ function setupFreshRun(): void {
   db.findOwnerUserIdByCompanyId.mockResolvedValue('owner1' as never);
   db.markRecapPublished.mockResolvedValue(makeTranscript() as never);
   publish.mockResolvedValue(undefined);
+  // BAL-517 — the party-hint resolver's reads. Defaulted so every EXISTING test (whose
+  // canonical is the AUTHENTICATED `dailyMultiSpeaker` fixture) short-circuits on the pure
+  // precheck and never reaches either mock; asserted explicitly below.
+  db.findByTranscriptJobId.mockResolvedValue(undefined);
+  db.listByMeeting.mockResolvedValue([]);
 }
 
 describe('runTranscriptPipeline', () => {
@@ -174,6 +198,16 @@ describe('runTranscriptPipeline', () => {
     // Stage 4 — summary + extraction + summary_ready
     expect(fakeLlm.summarize).toHaveBeenCalledTimes(1);
     expect(fakeLlm.extractActionItems).toHaveBeenCalledTimes(1);
+    // BAL-517 — the job's canonical (`dailyMultiSpeaker`) is the AUTHENTICATED arm, so the
+    // pure precheck gates it out with NO DB read at all: partyHint is null, and both prompts
+    // decide explicitly (never omitted).
+    expect(fakeLlm.summarize).toHaveBeenCalledWith({ cleanedText: 'CLEANED', partyHint: null });
+    expect(fakeLlm.extractActionItems).toHaveBeenCalledWith({
+      cleanedText: 'CLEANED',
+      summary: 'Recap headline\ndetails',
+      partyHint: null,
+    });
+    expect(db.findByTranscriptJobId).not.toHaveBeenCalled();
     expect(db.upsert).toHaveBeenCalledWith(expect.objectContaining({ kind: 'summary' }));
     expect(db.setExtractedActionItems).toHaveBeenCalledWith('tr1', [
       { body: 'Do X', assigneeParty: 'client', dueAt: null },
@@ -516,5 +550,175 @@ describe('resumeTranscriptRecap', () => {
       'recap.ready',
       expect.objectContaining({ transcriptId: 'tr1' })
     );
+  });
+});
+
+// ── BAL-517 — party hint wiring, using the REAL resolver + REAL derivation (only the DB mocked) ──
+describe('BAL-517 party hint', () => {
+  const EXPECTED_HINT = EXPERT_WAITING_HINT;
+
+  const hintJob: TranscriptPipelineJobInput = {
+    captureId: 'daily-batch:job-1',
+    engagementId: 'eng1',
+    meetingId: PARTY_HINT_MEETING_ID,
+    vendor: 'daily_deepgram',
+    payload: expertWaitingPayload(),
+    durationMs: null,
+  };
+
+  function makeHintTranscript(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'tr-hint',
+      engagementId: 'eng1',
+      meetingId: PARTY_HINT_MEETING_ID,
+      vendor: 'daily_deepgram',
+      extractedActionItems: null,
+      actionItemsExtractedAt: null,
+      recapReadyPublishedAt: null,
+      ...overrides,
+    };
+  }
+
+  // Cleanup returns the exact render (so `cleaned_labels_not_preserved` never trips). Summarize
+  // echoes `summaryPrompt(input).user` into `audit.prompt`, exactly as the real
+  // `TranscriptLlmClient` does — this is what lets test (e) observe the persisted audit prompt.
+  const hintLlm: LlmClient = {
+    cleanupTranscript: vi.fn(async (input: { transcript: CanonicalTranscript }) => ({
+      text: renderTranscriptText(input.transcript),
+      audit: makeAudit('transcript.cleanup'),
+    })),
+    summarize: vi.fn(async (input: Parameters<LlmClient['summarize']>[0]) => ({
+      summary: 'Recap headline\ndetails',
+      audit: { ...makeAudit('transcript.summary'), prompt: summaryPrompt(input).user },
+    })),
+    extractActionItems: vi.fn().mockResolvedValue({
+      items: [{ body: 'Do X', assigneeParty: 'client', dueAt: null }],
+      audit: makeAudit('transcript.extract'),
+    }),
+  };
+
+  function mockPresence(): void {
+    db.findByTranscriptJobId.mockResolvedValue(
+      recordingSegment({ meetingId: PARTY_HINT_MEETING_ID })
+    );
+    db.listByMeeting.mockResolvedValue([
+      presenceRow('expert', { userId: EXPERT_USER_ID }, -60, null),
+      presenceRow('client', { userId: CLIENT_USER_ID }, 300, null),
+    ]);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupFreshRun();
+    db.findByCaptureId.mockResolvedValue(undefined);
+    db.insertRaw.mockResolvedValue(makeHintTranscript() as never);
+    db.findByTranscriptAndKind.mockResolvedValue(undefined);
+  });
+
+  it('a) wired: summarize + extraction receive the SAME hint; cleanup never sees it', async () => {
+    mockPresence();
+
+    await runTranscriptPipeline(hintJob, { llm: hintLlm });
+
+    expect(hintLlm.summarize).toHaveBeenCalledWith(
+      expect.objectContaining({ partyHint: EXPECTED_HINT })
+    );
+    expect(hintLlm.extractActionItems).toHaveBeenCalledWith(
+      expect.objectContaining({ partyHint: EXPECTED_HINT })
+    );
+    // Exact equality: an extra `partyHint` key on the cleanup call would fail this — cleanup
+    // must never see the hint.
+    const [cleanupCall] = vi.mocked(hintLlm.cleanupTranscript).mock.calls;
+    expect(cleanupCall?.[0]).toEqual({ transcript: expect.anything() });
+  });
+
+  it('b) re-drive gets the same hint as the original run', async () => {
+    mockPresence();
+    const resumedCanonical = diarizedCanonical(EXPERT_WAITING_TURNS);
+    db.findById.mockResolvedValue(
+      makeHintTranscript({ captureId: 'daily-batch:job-1', canonical: resumedCanonical }) as never
+    );
+
+    await resumeTranscriptRecap(
+      { transcriptId: 'tr-hint', auditEventId: 'audit1' },
+      { llm: hintLlm }
+    );
+
+    expect(hintLlm.summarize).toHaveBeenCalledWith(
+      expect.objectContaining({ partyHint: EXPECTED_HINT })
+    );
+  });
+
+  it('c) a lookup failure degrades to no hint, and the recap still publishes', async () => {
+    db.findByTranscriptJobId.mockRejectedValue(new Error('db down'));
+
+    await runTranscriptPipeline(hintJob, { llm: hintLlm });
+
+    expect(hintLlm.summarize).toHaveBeenCalledWith(expect.objectContaining({ partyHint: null }));
+    expect(publish).toHaveBeenCalledWith('recap.ready', expect.anything());
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptId: 'tr-hint' }),
+      'Transcript party hint lookup failed — continuing without a hint'
+    );
+  });
+
+  it('d) short-circuit: an existing summary artifact means zero repository reads for the hint', async () => {
+    db.findByTranscriptAndKind.mockResolvedValue({ content: 'existing' } as never);
+
+    await runTranscriptPipeline(hintJob, { llm: hintLlm });
+
+    expect(db.findByTranscriptJobId).not.toHaveBeenCalled();
+    expect(db.listByMeeting).not.toHaveBeenCalled();
+  });
+
+  it('e) AC2: canonical carries no inferred identity, and only the summary audit prompt carries the hint', async () => {
+    mockPresence();
+
+    await runTranscriptPipeline(hintJob, { llm: hintLlm });
+
+    const [insertRawCall] = db.insertRaw.mock.calls;
+    if (insertRawCall === undefined) {
+      throw new Error('insertRaw was not called');
+    }
+    const insertRawArg = insertRawCall[0] as { canonical: CanonicalTranscript };
+    for (const speaker of insertRawArg.canonical.speakers) {
+      expect(speaker.userId).toBeNull();
+      expect(speaker.displayName).toBeNull();
+      expect(speaker.source).toBe('diarized');
+    }
+    expect(insertRawArg.canonical).toEqual(
+      structuredClone(diarizedCanonical(EXPERT_WAITING_TURNS))
+    );
+
+    const cleanedUpsert = db.upsert.mock.calls.find(
+      (call) => (call[0] as { kind: string }).kind === 'cleaned'
+    )?.[0];
+    const summaryUpsert = db.upsert.mock.calls.find(
+      (call) => (call[0] as { kind: string }).kind === 'summary'
+    )?.[0] as { content: string; prompt: string } | undefined;
+
+    const mustNotLeak: unknown[] = [
+      insertRawArg,
+      db.setExtractedActionItems.mock.calls[0],
+      db.createFromExtraction.mock.calls[0]?.[0],
+      db.markRecapPublished.mock.calls[0],
+      publish.mock.calls[0],
+      cleanedUpsert,
+      summaryUpsert?.content,
+    ];
+    // A paired existence assertion PLUS a length check: without them, a stage that stopped
+    // firing (or was renamed) would leave that entry `undefined`,
+    // `JSON.stringify(undefined) ?? ''` would be `''`, and the loop's `not.toContain` checks
+    // below would pass vacuously for that entry.
+    expect(mustNotLeak).toHaveLength(7);
+    for (const value of mustNotLeak) {
+      expect(value).toBeDefined();
+      const json = JSON.stringify(value) ?? '';
+      expect(json).not.toContain('speaker_party_hint');
+      expect(json).not.toContain('Tentative reading');
+    }
+
+    // The audit IS retained deliberately — the summary artifact's `prompt` column carries the tag.
+    expect(summaryUpsert?.prompt).toContain('<speaker_party_hint>');
   });
 });

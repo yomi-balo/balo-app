@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { generateText, generateObject } from 'ai';
 import { createLlmClient, LlmOutputTruncatedError } from './anthropic-client.js';
+import type { SpeakerPartyHint } from './types.js';
 import { dailyMultiSpeaker } from '../normalizers/__fixtures__/daily-deepgram.js';
 import { normalizeDailyDeepgram } from '../normalizers/daily-deepgram.js';
 
@@ -21,6 +22,15 @@ vi.mock('@ai-sdk/anthropic', () => ({
 }));
 
 const canonical = normalizeDailyDeepgram(dailyMultiSpeaker);
+
+/** Shared by the two BAL-517 hint-wiring tests below (SonarCloud new-code duplication). */
+const ROSTER_ONLY_HINT: SpeakerPartyHint = {
+  basis: 'roster_only',
+  speakers: [
+    { ref: 'speaker-0', talkTimePercent: 40 },
+    { ref: 'speaker-1', talkTimePercent: 60 },
+  ],
+};
 
 describe('createLlmClient', () => {
   const originalNodeEnv = process.env.NODE_ENV;
@@ -57,10 +67,14 @@ describe('createLlmClient', () => {
     expect(cleaned.audit.modelId).toBe('noop');
     expect(cleaned.audit.prompt.length).toBeGreaterThan(0); // audit prompt still persisted
 
-    const summarized = await client.summarize({ cleanedText: cleaned.text });
+    const summarized = await client.summarize({ cleanedText: cleaned.text, partyHint: null });
     expect(summarized.summary).toBe('');
 
-    const extracted = await client.extractActionItems({ cleanedText: cleaned.text, summary: '' });
+    const extracted = await client.extractActionItems({
+      cleanedText: cleaned.text,
+      summary: '',
+      partyHint: null,
+    });
     expect(extracted.items).toEqual([]);
     expect(vi.mocked(generateText)).not.toHaveBeenCalled();
   });
@@ -87,7 +101,7 @@ describe('createLlmClient', () => {
       modelId: 'claude-sonnet-5',
       modelVersion: 'claude-sonnet-5',
       promptId: 'transcript.cleanup',
-      promptVersion: 'v1',
+      promptVersion: 'v2',
     });
     expect(vi.mocked(generateText)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -97,11 +111,15 @@ describe('createLlmClient', () => {
       })
     );
 
-    const summarized = await client.summarize({ cleanedText: 'CLEANED' });
+    const summarized = await client.summarize({ cleanedText: 'CLEANED', partyHint: null });
     expect(summarized.summary).toBe('MODEL_OUTPUT');
     expect(summarized.audit.promptId).toBe('transcript.summary');
 
-    const extracted = await client.extractActionItems({ cleanedText: 'CLEANED', summary: 'S' });
+    const extracted = await client.extractActionItems({
+      cleanedText: 'CLEANED',
+      summary: 'S',
+      partyHint: null,
+    });
     expect(extracted.items).toHaveLength(1);
     expect(extracted.items[0]).toMatchObject({
       body: 'Send the migration plan',
@@ -130,7 +148,11 @@ describe('createLlmClient', () => {
     } as never);
 
     const client = createLlmClient();
-    const extracted = await client.extractActionItems({ cleanedText: 'C', summary: 'S' });
+    const extracted = await client.extractActionItems({
+      cleanedText: 'C',
+      summary: 'S',
+      partyHint: null,
+    });
     expect(extracted.items[0]?.dueAt).toBeNull();
     expect(extracted.items[1]?.dueAt).toBeNull();
   });
@@ -158,7 +180,7 @@ describe('createLlmClient', () => {
     } as never);
 
     const client = createLlmClient();
-    await expect(client.summarize({ cleanedText: 'CLEANED' })).rejects.toThrow(
+    await expect(client.summarize({ cleanedText: 'CLEANED', partyHint: null })).rejects.toThrow(
       LlmOutputTruncatedError
     );
   });
@@ -179,7 +201,7 @@ describe('createLlmClient', () => {
 
     const client = createLlmClient();
     await expect(
-      client.extractActionItems({ cleanedText: 'CLEANED', summary: 'S' })
+      client.extractActionItems({ cleanedText: 'CLEANED', summary: 'S', partyHint: null })
     ).rejects.toThrow(LlmOutputTruncatedError);
   });
 
@@ -194,10 +216,67 @@ describe('createLlmClient', () => {
     } as never);
 
     const client = createLlmClient();
-    await client.extractActionItems({ cleanedText: 'CLEANED', summary: 'S' });
+    await client.extractActionItems({ cleanedText: 'CLEANED', summary: 'S', partyHint: null });
 
     const call = vi.mocked(generateObject).mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(call).not.toHaveProperty('messages');
     expect(call.prompt).toEqual(expect.stringContaining('CLEANED'));
+  });
+
+  // BAL-517 — a hint reaches BOTH summary + extraction, and is retained in the summary audit,
+  // so an operator's post-deploy measurement query can rely on the tag surviving in
+  // `audit.prompt`.
+  it('present key → a hint reaches summary + extraction prompts and the summary audit', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'SUMMARY_OUTPUT',
+      response: { modelId: 'claude-sonnet-5' },
+    } as never);
+    vi.mocked(generateObject).mockResolvedValue({
+      object: { items: [] },
+      response: { modelId: 'claude-sonnet-5' },
+    } as never);
+
+    const client = createLlmClient();
+    const summarized = await client.summarize({
+      cleanedText: 'CLEANED',
+      partyHint: ROSTER_ONLY_HINT,
+    });
+    expect(vi.mocked(generateText)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        system: expect.stringContaining('speaker_party_hint'),
+        prompt: expect.stringContaining('<speaker_party_hint>'),
+      })
+    );
+    expect(summarized.audit.prompt).toContain('<speaker_party_hint>');
+
+    await client.extractActionItems({
+      cleanedText: 'CLEANED',
+      summary: 'S',
+      partyHint: ROSTER_ONLY_HINT,
+    });
+    expect(vi.mocked(generateObject)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining('<speaker_party_hint>'),
+      })
+    );
+  });
+
+  // Cleanup never receives the hint, and its model call never carries the tag, even
+  // immediately after a hinted summarize on the same client.
+  it("cleanup's model call never carries the hint", async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'OUTPUT',
+      response: { modelId: 'claude-sonnet-5' },
+    } as never);
+
+    const client = createLlmClient();
+    await client.summarize({ cleanedText: 'CLEANED', partyHint: ROSTER_ONLY_HINT });
+    await client.cleanupTranscript({ transcript: canonical });
+
+    const cleanupCall = vi.mocked(generateText).mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(cleanupCall.system).not.toContain('speaker_party_hint');
+    expect(cleanupCall.prompt).not.toContain('speaker_party_hint');
   });
 });

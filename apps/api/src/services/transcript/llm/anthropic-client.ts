@@ -1,6 +1,6 @@
 import type { CanonicalTranscript } from '@balo/db';
 import { createAiClient, type AiClient } from '../../ai/index.js';
-import type { ExtractedActionItem, LlmAudit, LlmClient } from './types.js';
+import type { ExtractedActionItem, LlmAudit, LlmClient, SpeakerPartyHint } from './types.js';
 import {
   cleanupPrompt,
   summaryPrompt,
@@ -65,8 +65,11 @@ class TranscriptLlmClient implements LlmClient {
     return { text: result.value, audit: result.audit };
   }
 
-  async summarize(input: { cleanedText: string }): Promise<{ summary: string; audit: LlmAudit }> {
-    const p = summaryPrompt(input.cleanedText);
+  async summarize(input: {
+    cleanedText: string;
+    partyHint: SpeakerPartyHint | null;
+  }): Promise<{ summary: string; audit: LlmAudit }> {
+    const p = summaryPrompt(input);
     const result = await this.ai.generateText({
       modelId: resolveSummaryModel(),
       system: p.system,
@@ -82,6 +85,7 @@ class TranscriptLlmClient implements LlmClient {
   async extractActionItems(input: {
     cleanedText: string;
     summary: string;
+    partyHint: SpeakerPartyHint | null;
   }): Promise<{ items: ExtractedActionItem[]; audit: LlmAudit }> {
     const p = extractionPrompt(input);
     const result = await this.ai.generateObject({

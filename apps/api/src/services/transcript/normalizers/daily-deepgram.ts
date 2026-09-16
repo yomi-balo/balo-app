@@ -2,8 +2,12 @@ import type { CanonicalTranscript } from '@balo/db';
 import type { DailyDeepgramTranscriptPayload, DailyDeepgramUtterance } from './types.js';
 import { assembleCanonical, type RawTurn } from './assemble.js';
 
-/** Synthetic speaker ref for an utterance with no attribution at all (either model). */
-const UNKNOWN_SPEAKER_REF = 'unknown';
+/**
+ * Synthetic speaker ref for an utterance with no attribution at all (either model).
+ * Exported (BAL-517) so `party-hint/derive.ts` can recognise it as the one non-`speaker-N`
+ * ref a diarized transcript may legitimately carry, without duplicating the literal.
+ */
+export const UNKNOWN_SPEAKER_REF = 'unknown';
 
 /**
  * The `attribution: 'authenticated'` (default) turn builder — the real-time capture path.
