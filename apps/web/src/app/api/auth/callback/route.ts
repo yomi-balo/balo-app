@@ -11,6 +11,7 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
+import { runGuestConversionAndEmit } from '@/lib/guest-conversion/run-guest-conversion';
 import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 
@@ -208,16 +209,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         // publishNotificationEvent already logs internally
       });
 
-      // BAL-345: run the domain auto-join match engine (post-commit). OAuth may
-      // return an UNVERIFIED email — pass the real WorkOS flag, never assume true.
-      // The engine's verified hard-gate stands down when it is false. The `.catch`
-      // is belt-and-suspenders so a domain-join failure can NEVER break auth.
-      await runDomainJoinAndEmit({
+      // BAL-345 + BAL-489 — the two post-commit new-user helpers, run INDEPENDENTLY: each
+      // swallows and logs its own failure, and each `.catch` is belt-and-suspenders, so
+      // neither can block the other or break auth. OAuth may return an UNVERIFIED email —
+      // pass the real WorkOS flag, never assume true; both helpers' verified hard-gates
+      // stand down when it is false.
+      const newUserIdentity = {
         userId: resolved.user.id,
         email: resolved.user.email,
         emailVerified: workosUser.emailVerified === true,
-      }).catch(() => {
+      };
+      await runDomainJoinAndEmit(newUserIdentity).catch(() => {
         // runDomainJoinAndEmit already logs internally.
+      });
+      await runGuestConversionAndEmit(newUserIdentity).catch(() => {
+        // runGuestConversionAndEmit already logs internally.
       });
     }
 

@@ -1,0 +1,32 @@
+-- BAL-489 — the guest→member conversion loop: an email lookup index for the linkage writer
+-- (`meetingGuestsRepository.linkConvertedUser`) and the CHECK pairing `converted_to_user_id`
+-- with `converted_at`.
+--
+-- HEADER-ONLY HAND EDIT after `drizzle-kit generate`: the two statements below are exactly
+-- what was generated, unreordered and unmodified. (Precedent for an explanatory header on
+-- generated SQL: 0055_bal417_engagement_supertype.sql, 0056_bal418_meetings_primitive.sql,
+-- 0059_bal428_consultation_projection.sql, 0064_bal132_lobby_self_claim.sql.)
+--
+-- ── WHY BOTH ARE SAFE ON A POPULATED TABLE, WHICH CI CANNOT TELL YOU ───────────────────
+-- ⚠ THE INTEGRATION HARNESS MIGRATES AN **EMPTY** CONTAINER (memory
+-- `reference_db_migrations_tested_against_empty_db`), so it proves nothing about migrating
+-- real data. Each statement therefore carries its own argument, independent of that harness:
+--
+--   1. `CREATE INDEX` validates nothing and can reject no row. It is a plain (non-CONCURRENT)
+--      build because drizzle-kit migrations run inside a transaction; it holds a SHARE lock
+--      (reads proceed, writes wait) for the duration of a build over a small, pre-launch table.
+--   2. `ADD CONSTRAINT … CHECK` DOES run a validation scan — but it cannot reject anything,
+--      because NOTHING has ever written either column: no writer existed before this
+--      migration's companion repository method, and no seed or app path sets them. Every
+--      existing row is therefore (NULL, NULL), which satisfies `(a IS NULL) = (b IS NULL)`.
+--
+-- ── WHY THE INDEX PREDICATE OMITS `invite_channel = 'email'` ───────────────────────────
+-- A robustness choice, NOT a workaround for a live planner defect. `packages/db/src/client.ts`
+-- builds postgres-js with `prepare: false`, so the writer's `invite_channel = $n` is planned
+-- with its bound value today. Leaving the literal out keeps the index's usability independent
+-- of that driver setting and of plan-cache behaviour: the three `IS NULL` tests carry no bind
+-- parameter and are provable under any plan shape, and the channel is filtered on the heap
+-- over the handful of rows one address can hold. Full reasoning lives on the index in
+-- `packages/db/src/schema/guests.ts`.
+CREATE INDEX "meeting_guest_email_unconverted_idx" ON "meeting_guests" USING btree ("email") WHERE "meeting_guests"."deleted_at" IS NULL AND "meeting_guests"."revoked_at" IS NULL AND "meeting_guests"."converted_to_user_id" IS NULL;--> statement-breakpoint
+ALTER TABLE "meeting_guests" ADD CONSTRAINT "meeting_guest_conversion_paired" CHECK (("meeting_guests"."converted_to_user_id" IS NULL) = ("meeting_guests"."converted_at" IS NULL));

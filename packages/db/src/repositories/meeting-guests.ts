@@ -1,4 +1,5 @@
 import { and, asc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { canonicalGuestEmail } from '@balo/shared/meetings';
 import { db } from '../client';
 import { meetingGuests, meetings } from '../schema';
 import type {
@@ -142,6 +143,38 @@ export interface ClaimLobbyPlaceInput {
   tokenHash: string;
   /** `meetings.scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`. There is NO SQL default. */
   expiresAt: Date;
+}
+
+/**
+ * BAL-489 — the guest→member linkage. Both fields come from the VERIFIED new-user signup seam;
+ * this repository authorizes nothing (see `linkConvertedUser`'s docblock for who may call it).
+ */
+export interface LinkConvertedUserInput {
+  /**
+   * The NEW `users.id`. Written to `converted_to_user_id` — ⚠ NEVER to `user_id` (ruling R7), and
+   * named so that nobody reaches for the wrong column.
+   */
+  convertedToUserId: string;
+  /**
+   * The new user's WorkOS-VERIFIED address, AS THE SEAM RECEIVED IT. ⚠ Canonicalised HERE via
+   * `canonicalGuestEmail` — see `linkConvertedUser`'s docblock for why this matcher departs from
+   * the "@balo/db never normalises" write convention.
+   */
+  verifiedEmail: string;
+}
+
+/**
+ * One linked guest row plus the two meeting timestamps the caller needs to anchor
+ * `days_since_meeting` (`started_at ?? scheduled_start`). ⚠ NARROW ON PURPOSE: never the full
+ * `MeetingGuest` (token_hash) nor the full `Meeting` (dailyRoomName / joinUrl).
+ */
+export interface ConvertedGuestLink {
+  guestId: string;
+  meeting: {
+    id: string;
+    startedAt: Date | null;
+    scheduledStart: Date;
+  };
 }
 
 /** A resolved live token: the guest AND the meeting it lets them into, in one round trip. */
@@ -957,6 +990,160 @@ export const meetingGuestsRepository = {
       );
 
       return row;
+    });
+  },
+
+  /**
+   * BAL-489 — THE GUEST→MEMBER LINKAGE. Stamp every eligible guest row held by a brand-new
+   * user's verified address with `converted_to_user_id` + `converted_at`.
+   *
+   * ── 1. WHAT IT IS ─────────────────────────────────────────────────────────────────────────
+   * The ONLY writer of `converted_to_user_id` / `converted_at`. ONE transaction, three steps:
+   *   (1) an `UPDATE … RETURNING` that IS the compare-and-set — every eligibility predicate is
+   *       IN the statement (`rotateToken`'s rule), never re-read in front of it;
+   *   (2) one `meeting_guest.converted` audit row PER LINKED GUEST ROW — and only when rows
+   *       actually changed;
+   *   (3) a NARROW anchor read (guest id + the meeting's `started_at` / `scheduled_start`).
+   * The rows and their audit trail commit or roll back together.
+   *
+   * ── 2. THE MATCH RULE (R3) — EXACT, ON THE CANONICAL ADDRESS ───────────────────────────────
+   * `email = canonicalGuestEmail(verifiedEmail)` — trim + lowercase, the SAME function the invite
+   * and lobby writers store through (`@balo/shared/meetings`). ⚠ NO ALIAS OR FUZZY
+   * RECONCILIATION, DELIBERATELY: `dana@northwind.com` vs `dana.chen@northwind.com` (or
+   * `dana+x@northwind.com`) is NOT linked. Nothing proves two addresses are one person, and a
+   * false link attributes somebody else's attendance to a member.
+   *
+   * ── 3. CHANNEL (R4) — `invite_channel = 'email'` ONLY ──────────────────────────────────────
+   * An `email` row's address was NAMED by an inviter, and the new user has just PROVED they own
+   * that mailbox. A `link` row's address was TYPED BY THE VISITOR at the lobby and never verified
+   * — the verified owner of that address may not be the person who knocked. This also excludes
+   * every `pending` row (only `claimLobbyPlace` produces one, always `link`). Precedent:
+   * `resolveLinkedUser` links on email only when BOTH sides are verified.
+   *
+   * ── 4. STATES (R5) ─────────────────────────────────────────────────────────────────────────
+   * NOT yet converted (`converted_to_user_id IS NULL`), NOT revoked (`revoked_at IS NULL` — which
+   * covers both a host REMOVE and a host DENY), NOT soft-deleted (`deleted_at IS NULL`).
+   * ⚠ EXPIRED ROWS ARE ELIGIBLE: `expires_at` bounds the TOKEN, not the person. ⚠ NO ATTENDANCE
+   * REQUIREMENT: `access_count` is scanner-inflated and proves nothing about a human.
+   *
+   * ── 5. COLUMNS (R7) ────────────────────────────────────────────────────────────────────────
+   * Writes `converted_to_user_id` + `converted_at` (+ `updated_at`) and NOTHING ELSE. ⚠ `user_id`
+   * STAYS NULL — it means "the Balo user this guest is", including a pre-existing user, which a
+   * new-user seam structurally cannot produce. `meeting_guest_conversion_paired` makes a
+   * half-written pair unrepresentable.
+   *
+   * ── 6. CALLER CONTRACT (R1 / R2 / R6) ──────────────────────────────────────────────────────
+   * ⚠ THIS METHOD AUTHORIZES NOTHING, like every method here. It must be called ONLY with a
+   * WorkOS-VERIFIED email, ONLY at NEW-USER creation (`runGuestConversionAndEmit`, from the four
+   * signup seams). Possessing a guest token is NOT evidence of owning its address, and an
+   * existing user or a relink never converts.
+   *
+   * ── 7. WHY THIS MATCHER CANONICALISES ─────────────────────────────────────────────────────
+   * The "@balo/db never normalises input" convention protects STORED BYTES under a unique index
+   * (`CreateMeetingGuestInput.email`). This method stores no address — it only MATCHES — and a
+   * caller that forgot to canonicalise would silently link nothing: an invisible false negative
+   * no log or test downstream would surface. So the lookup key is canonicalised HERE, exactly as
+   * `partyDomainsRepository.findActiveByDomain` normalises its own.
+   *
+   * ── 8. IDEMPOTENT ──────────────────────────────────────────────────────────────────────────
+   * A re-run (or a concurrent second run) returns `[]` and writes NO audit row: under READ
+   * COMMITTED the losing UPDATE blocks on the row lock, re-evaluates `converted_to_user_id IS
+   * NULL` against the committed row, and skips it. The CAS predicate is the whole guarantee — no
+   * `FOR UPDATE`, no advisory lock, and no 23505 handling (nothing unique is written).
+   *
+   * ── 9. RETURN VALUE ────────────────────────────────────────────────────────────────────────
+   * The linked rows, each with its meeting anchor, or `[]` when nothing linked. `@balo/db`
+   * returns FACTS: choosing the most recent meeting and deriving `days_since_meeting` is
+   * analytics policy and lives in the web helper.
+   *
+   * ⚠ THE AUDIT METADATA CARRIES NO EMAIL — the actor OWNS the address, and the
+   * `meeting_guest.invited` row already recorded it. Ids and labels only.
+   *
+   * ⚠ NON-ASCII INPUT IS REFUSED, BEFORE ANY DB I/O: `canonicalGuestEmail`'s `toLowerCase()` does
+   * full Unicode case folding, so e.g. the KELVIN SIGN "K" (U+212A) lowercases to ASCII "k" —
+   * a provider-verified `Kate@northwind.test` (with the Kelvin sign) would canonicalise onto a
+   * stored `kate@northwind.test` belonging to a different person. Fail closed: a non-ASCII
+   * verified address links nothing. Stored guest emails are zod-validated ASCII already, so no
+   * legitimate match is ever lost by this guard — only the look-alike false match is.
+   */
+  linkConvertedUser: async (input: LinkConvertedUserInput): Promise<ConvertedGuestLink[]> => {
+    const trimmed = input.verifiedEmail.trim();
+    for (let i = 0; i < trimmed.length; i++) {
+      const code = trimmed.charCodeAt(i);
+      if (code > 0x7e || code < 0x20) return [];
+    }
+    const email = canonicalGuestEmail(input.verifiedEmail);
+    return db.transaction(async (tx) => {
+      // (1) THE COMPARE-AND-SET. Every eligibility predicate is IN the statement.
+      const linked = await tx
+        .update(meetingGuests)
+        .set({
+          convertedToUserId: input.convertedToUserId,
+          convertedAt: sql`now()`,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(meetingGuests.email, email),
+            eq(meetingGuests.inviteChannel, 'email'),
+            isNull(meetingGuests.convertedToUserId),
+            isNull(meetingGuests.revokedAt),
+            isNull(meetingGuests.deletedAt)
+          )
+        )
+        .returning({
+          id: meetingGuests.id,
+          meetingId: meetingGuests.meetingId,
+          party: meetingGuests.party,
+          inviteChannel: meetingGuests.inviteChannel,
+        });
+
+      if (linked.length === 0) {
+        // ⚠ BEFORE any audit write — a no-op records nothing (the `revoke` / `decideAdmission` rule).
+        return [];
+      }
+
+      // (2) ONE audit row PER LINKED GUEST ROW, attributed to the new user — so the conversion
+      // appears on each guest's own entity trail.
+      for (const row of linked) {
+        await auditEventsRepository.record(
+          {
+            actorUserId: input.convertedToUserId,
+            action: 'meeting_guest.converted',
+            entityType: ENTITY_TYPE,
+            entityId: row.id,
+            metadata: {
+              meetingId: row.meetingId,
+              party: row.party,
+              inviteChannel: row.inviteChannel,
+            },
+          },
+          tx
+        );
+      }
+
+      // (3) The anchor facts, in the SAME transaction, narrow projection.
+      // ⚠ DELIBERATELY NO `meetings.deleted_at` FILTER — the one documented exception to the
+      // soft-delete query rule: these rows are ALREADY linked and R5 does not gate on meeting
+      // state, so the caller needs every linked row's anchor. `meeting_id` is NOT NULL with ON
+      // DELETE CASCADE, so the inner join always finds its meeting.
+      return tx
+        .select({
+          guestId: meetingGuests.id,
+          meeting: {
+            id: meetings.id,
+            startedAt: meetings.startedAt,
+            scheduledStart: meetings.scheduledStart,
+          },
+        })
+        .from(meetingGuests)
+        .innerJoin(meetings, eq(meetings.id, meetingGuests.meetingId))
+        .where(
+          inArray(
+            meetingGuests.id,
+            linked.map((row) => row.id)
+          )
+        );
     });
   },
 };

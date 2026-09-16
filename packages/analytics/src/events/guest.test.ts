@@ -13,6 +13,10 @@ describe('GUEST_SERVER_EVENTS', () => {
     // list below is the `localeCompare` order — do not "correct" it.
     expect(Object.keys(GUEST_SERVER_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'GUEST_ADMITTED',
+      // ⚠ BAL-489. Sorts here under BOTH ICU localeCompare and code-unit order — after
+      // GUEST_ADMITTED (A < C) and before GUEST_DENIED (C < D) — so its position is not
+      // collation-sensitive.
+      'GUEST_CONVERTED_TO_MEMBER',
       'GUEST_DENIED',
       'GUEST_INVITE_OPENED',
       'GUEST_INVITED',
@@ -36,6 +40,7 @@ describe('GUEST_SERVER_EVENTS', () => {
 
   it('maps each constant to its exact snake_case event name', () => {
     expect(GUEST_SERVER_EVENTS.GUEST_ADMITTED).toBe('guest_admitted');
+    expect(GUEST_SERVER_EVENTS.GUEST_CONVERTED_TO_MEMBER).toBe('guest_converted_to_member');
     expect(GUEST_SERVER_EVENTS.GUEST_DENIED).toBe('guest_denied');
     expect(GUEST_SERVER_EVENTS.GUEST_INVITE_OPENED).toBe('guest_invite_opened');
     expect(GUEST_SERVER_EVENTS.GUEST_INVITED).toBe('guest_invited');
@@ -51,24 +56,27 @@ describe('GUEST_SERVER_EVENTS', () => {
     }
   });
 
-  it('⚠ does NOT declare an event with no producer — `guest_converted_to_member` is still BAL-345’s', () => {
-    // A constant with no emitter reads as a 100% drop-off funnel step in PostHog. The shape
-    // is documented in the module docblock so the receiving ticket adds it verbatim; it may
-    // not be declared here until it can actually fire.
-    //
-    // ⚠ `guest_joined` WAS PINNED ABSENT HERE AND HAS NOW LANDED (BAL-132). Removing this
-    // assertion is the CORRECT amendment, not a weakening of the guard: the rule is "no
-    // constant without a producer", and `guest_joined` arrived in the same PR as
-    // `joinMeetingAsGuest`, which emits it on every successful Daily token mint. The
-    // exact-key-set case above is what keeps the set honest now.
+  it('⚠ `guest_converted_to_member` is DECLARED — the last reserved event arrived WITH its producer (BAL-489)', () => {
+    // This case used to pin the event ABSENT, because it had no producer. BAL-489 ships the
+    // producer (`runGuestConversionAndEmit`, fired from the verified new-user seams) in the
+    // same PR, so the guard FLIPS rather than being deleted: the rule "no constant without a
+    // producer" is now held by the exact-key-set case above. (`guest_joined` took the same
+    // path at BAL-132.)
     const values: readonly string[] = Object.values(GUEST_SERVER_EVENTS);
-    expect(values).not.toContain('guest_converted_to_member');
+    expect(values).toContain('guest_converted_to_member');
   });
 
-  it('BAL-345’s shape stays reserved in prose, not in code — the docblock is the hand-off', () => {
-    // Non-vacuity for the assertion above: prove the collection really is the one being
-    // guarded, so a future refactor that empties it cannot make the check pass for free.
-    expect(Object.values(GUEST_SERVER_EVENTS).length).toBeGreaterThan(0);
+  it('⚠ `guest_converted_to_member` landed VERBATIM — `{ days_since_meeting }` plus distinct_id, no PII', () => {
+    const converted: GuestServerEventMap['guest_converted_to_member'] = {
+      days_since_meeting: 21,
+      distinct_id: 'user-1',
+    };
+    // ⚠ EXACT KEY SET, WITH A COMPARATOR (a bare `.sort()` fails SonarCloud S2871). An email,
+    // domain, name, token or row count widens this set and fails here.
+    expect(Object.keys(converted).sort((a, b) => a.localeCompare(b))).toEqual([
+      'days_since_meeting',
+      'distinct_id',
+    ]);
   });
 
   /**
@@ -125,8 +133,9 @@ describe('GUEST_SERVER_EVENTS', () => {
 
   /**
    * ⚠⚠ BAL-439 (R12) — `guest_recap_viewed` ARRIVED WITH ITS PRODUCER, in the same PR
-   * (`app/join/[token]/recap/[meetingId]/page.tsx`). Unlike `guest_converted_to_member`, this
-   * event is emitted, so it is declared — the exact rule R8 cites approvingly and R12 restates.
+   * (`app/join/[token]/recap/[meetingId]/page.tsx`). Like `guest_converted_to_member` after it
+   * (BAL-489), this event arrived WITH its producer — the exact rule R8 cites approvingly and
+   * R12 restates.
    */
   it('⚠ `guest_recap_viewed` carries no PII and no counterparty identity', () => {
     const viewed: GuestServerEventMap['guest_recap_viewed'] = {
@@ -150,7 +159,9 @@ describe('GUEST_SERVER_EVENTS', () => {
 
   /**
    * ⚠⚠ fix-round-1 / S6 (R12) — `days_since_meeting` is a WHOLE, NON-NEGATIVE day count, never
-   * negative and never fractional at the type level (the runtime floor lives at the page).
+   * negative and never fractional at the type level (the runtime floor lives in the shared
+   * `daysSinceMeeting` (`apps/web/src/lib/analytics/days-since-meeting.ts`), called at the
+   * page — and shared with `guest_converted_to_member` (R9)).
    */
   it('⚠ `days_since_meeting` is a plain number — floored, non-negative, computed at the page', () => {
     const openedTheSameDay: GuestServerEventMap['guest_recap_viewed'] = {

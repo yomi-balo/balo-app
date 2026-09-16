@@ -79,6 +79,16 @@ vi.mock('@/lib/domain-join/run-domain-join', () => ({
   runDomainJoinAndEmit: (...a: unknown[]) => mockRunDomainJoinAndEmit(...a),
 }));
 
+// BAL-489 — the guest→member linkage helper. Mocked so this suite never loads the real
+// repository (the `@balo/db` factory mock above has no `meetingGuestsRepository`, and a
+// missing export would be swallowed by the helper's own catch — a silent false green).
+const mockRunGuestConversionAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() =>
+  Promise.resolve()
+);
+vi.mock('@/lib/guest-conversion/run-guest-conversion', () => ({
+  runGuestConversionAndEmit: (...a: unknown[]) => mockRunGuestConversionAndEmit(...a),
+}));
+
 // BAL-494 — the workspace hydration seam. Default to `null` (no company at all) so every
 // pre-existing test's `SessionUser` shape is untouched unless a test opts in.
 const mockDeriveWorkspacesForUser = vi.fn();
@@ -214,6 +224,76 @@ describe('OAuth callback — domain auto-join wiring (BAL-345)', () => {
   });
 });
 
+describe('OAuth callback — guest → member linkage wiring (BAL-489)', () => {
+  it('runs the helper with the SAME facts as domain-join, called once', async () => {
+    setupNewUser({ emailVerified: true });
+    await GET(makeReq('auth-code'));
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith({
+      userId: 'user-1',
+      email: 'jane@corp.io',
+      emailVerified: true,
+    });
+  });
+
+  it('passes emailVerified: false when WorkOS reports an unverified OAuth email', async () => {
+    setupNewUser({ emailVerified: false });
+    await GET(makeReq('auth-code'));
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith(
+      expect.objectContaining({ emailVerified: false })
+    );
+  });
+
+  it('does NOT run for an EXISTING user', async () => {
+    mockAuthenticateWithCode.mockResolvedValue({
+      user: workosUser(),
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    mockFindByWorkosId.mockResolvedValue({ id: 'user-1', email: 'jane@corp.io' });
+    mockUpdate.mockResolvedValue({
+      id: 'user-1',
+      email: 'jane@corp.io',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      avatarUrl: null,
+      activeMode: 'client',
+      onboardingCompleted: true,
+      platformRole: 'user',
+      emailVerified: true,
+    });
+    mockFindWithCompany.mockResolvedValue({
+      companyMemberships: [{ role: 'owner', company: { id: 'co-1', name: 'Corp' } }],
+    });
+    mockExpertFindFirst.mockResolvedValue(null);
+
+    await GET(makeReq('auth-code'));
+    expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+  });
+
+  it('a linkage rejection is swallowed — the callback still redirects to /onboarding, not error=auth_failed', async () => {
+    setupNewUser();
+    mockRunGuestConversionAndEmit.mockRejectedValueOnce(new Error('linkage boom'));
+
+    await GET(makeReq('auth-code'));
+
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding');
+    expect(redirectedTo).not.toContain('error=auth_failed');
+  });
+
+  it('independence (R10): a domain-join rejection does not stop the linkage call', async () => {
+    setupNewUser();
+    mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('domain-join boom'));
+
+    await GET(makeReq('auth-code'));
+
+    expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
+    const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
+    expect(redirectedTo).toContain('/onboarding');
+  });
+});
+
 describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', () => {
   const returningMembership = {
     companyMemberships: [{ role: 'owner', company: { id: 'co-1', name: 'Corp' } }],
@@ -262,8 +342,9 @@ describe('OAuth callback — identity re-link + conflict resolution (BAL-360)', 
       distinct_id: 'user-1',
       method: 'oauth',
     });
-    // Re-linked user is NOT a new user — no welcome email / domain-join.
+    // Re-linked user is NOT a new user — no welcome email / domain-join / guest linkage.
     expect(mockRunDomainJoinAndEmit).not.toHaveBeenCalled();
+    expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
 
     const redirectedTo = mockRedirect.mock.calls.at(-1)?.[0].toString() ?? '';
     expect(redirectedTo).not.toContain('error=account_exists');

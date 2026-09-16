@@ -36,6 +36,16 @@ vi.mock('@/lib/domain-join/run-domain-join', () => ({
   runDomainJoinAndEmit: (...args: unknown[]) => mockRunDomainJoinAndEmit(...args),
 }));
 
+// BAL-489 — the guest→member linkage helper. Mocked so this suite never loads the real
+// repository (the `@balo/db` factory mock above has no `meetingGuestsRepository`, and a
+// missing export would be swallowed by the helper's own catch — a silent false green).
+const mockRunGuestConversionAndEmit = vi.fn<(...a: unknown[]) => Promise<void>>(() =>
+  Promise.resolve()
+);
+vi.mock('@/lib/guest-conversion/run-guest-conversion', () => ({
+  runGuestConversionAndEmit: (...a: unknown[]) => mockRunGuestConversionAndEmit(...a),
+}));
+
 import { signUpAction } from './sign-up';
 import type { UnifiedSignUpFormData } from '@/components/balo/auth/schemas';
 
@@ -358,6 +368,54 @@ describe('signUpAction', () => {
       mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('engine boom'));
       const result = await signUpAction(validInput());
       expect(result.success).toBe(true);
+    });
+  });
+
+  // BAL-489 — guest→member linkage seam wiring (verification-disabled fallback path).
+  describe('guest → member linkage wiring (BAL-489)', () => {
+    it('runs the helper with the SAME facts as domain-join, called once', async () => {
+      setupFallbackPath({ emailVerified: true });
+      await signUpAction(validInput());
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith({
+        userId: 'user-1',
+        email: 'jane@example.com',
+        emailVerified: true,
+      });
+    });
+
+    it('passes emailVerified: false when WorkOS reports it unverified (never hardcoded)', async () => {
+      setupFallbackPath({ emailVerified: false });
+      await signUpAction(validInput());
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledWith(
+        expect.objectContaining({ emailVerified: false })
+      );
+    });
+
+    it('does NOT run on the verification-required path (no user created)', async () => {
+      mockCreateUser.mockResolvedValue(mockWorkOSUser());
+      mockAuthenticateWithPassword.mockResolvedValue({
+        pendingAuthenticationToken: 'pat_test_123',
+        user: mockWorkOSUser(),
+      });
+
+      await signUpAction(validInput());
+      expect(mockRunGuestConversionAndEmit).not.toHaveBeenCalled();
+    });
+
+    it('a linkage rejection is swallowed — sign-up still succeeds', async () => {
+      setupFallbackPath({ emailVerified: true });
+      mockRunGuestConversionAndEmit.mockRejectedValueOnce(new Error('linkage boom'));
+      const result = await signUpAction(validInput());
+      expect(result.success).toBe(true);
+    });
+
+    it('independence (R10): a domain-join rejection does not stop the linkage call, and sign-up still succeeds', async () => {
+      setupFallbackPath({ emailVerified: true });
+      mockRunDomainJoinAndEmit.mockRejectedValueOnce(new Error('domain-join boom'));
+      const result = await signUpAction(validInput());
+      expect(result.success).toBe(true);
+      expect(mockRunGuestConversionAndEmit).toHaveBeenCalledTimes(1);
     });
   });
 });

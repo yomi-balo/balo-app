@@ -2,7 +2,8 @@
  * BAL-408 / ADR-1044 — guest participation analytics.
  *
  * SERVER-ONLY. Every producer is a server surface: the `apps/api` invite / remove /
- * admit / deny routes, plus the `apps/web` `/join/[token]` landing, which is an RSC. They
+ * admit / deny routes, plus the `apps/web` `/join/[token]` landing, which is an RSC, the guest
+ * recap RSC, and the four `apps/web` new-user signup seams (`guest_converted_to_member`). They
  * MUST NOT be added to `AllEvents` (the client union) nor to the
  * `apps/web/src/test/setup.ts` client `vi.mock('@/lib/analytics')` export list — that mock
  * is client-only, and adding a server constant to it would be misleading rather than merely
@@ -28,19 +29,26 @@
  * records the domain itself, and this deliberately records less.
  *
  * ⚠ `guest_invite_opened`'s `distinct_id` IS `meeting_guests.id`, NOT A USER ID — a guest
- * has none. It is a stable pseudonymous handle that becomes joinable to a real person only
- * if BAL-345's (currently inert) domain auto-join ever writes `converted_to_user_id`.
+ * has none. It is a stable pseudonymous handle that becomes joinable to a real person when that
+ * person later SIGNS UP with the invited, WorkOS-verified address: BAL-489's linkage writer
+ * (`meetingGuestsRepository.linkConvertedUser`) stamps `converted_to_user_id` on the row and
+ * `guest_converted_to_member` fires under the new `users.id`. Only `email`-channel rows are ever
+ * linked, so a lobby-knock (`link`-channel) handle stays unjoinable by design. No PostHog `alias`
+ * is issued — the join is through the database column.
  *
- * ⚠ ONE EVENT IS DELIBERATELY **NOT** DECLARED HERE, because an analytics constant with no
+ * ⚠ NO CONSTANT IS DECLARED HERE WITHOUT ITS PRODUCER, because an analytics constant with no
  * producer is a FALSE PostHog signal — a funnel step that can never fire reads as 100%
- * drop-off, and the exact-key-set guard in `guest.test.ts` would pin it forever:
- *   · `guest_converted_to_member` `{ days_since_meeting }` → **BAL-489** (the guest→user
- *     linkage writer split out of BAL-439; re-pointed from BAL-345, which owned the inert
- *     domain-auto-join arm this constant originally reserved against). Nothing writes
- *     `converted_to_user_id` yet.
- * The shape is written out above so that ticket adds it verbatim.
+ * drop-off, and the exact-key-set guard in `guest.test.ts` would pin it forever.
  *
- * ⚠ `guest_joined` WAS ON THAT LIST UNTIL BAL-132 AND HAS NOW LANDED, VERBATIM — the shape
+ * ⚠ `guest_converted_to_member` WAS THE LAST EVENT RESERVED HERE AND HAS NOW LANDED, VERBATIM
+ * (BAL-489) — the shape this docblock reserved (`{ days_since_meeting }`) is exactly the shape
+ * declared below. It was deferred three times (BAL-408 → BAL-388 → BAL-439), and re-pointed off
+ * BAL-345's domain auto-join, which never wrote the column. Its producer is
+ * `runGuestConversionAndEmit`, called from the four verified new-user signup seams; it fires once
+ * per converting user, only when a row was actually linked. The discipline held again: the
+ * constant arrived WITH its producer, in the same PR.
+ *
+ * ⚠ `guest_joined` WAS RESERVED THE SAME WAY UNTIL BAL-132 AND HAS NOW LANDED, VERBATIM — the shape
  * this docblock reserved for it (`{ party, join_method, admitted }`) is exactly the shape
  * declared below, and it fires from `joinMeetingAsGuest` on every successful Daily token
  * mint. The discipline held: the constant arrived WITH its producer, in the same PR.
@@ -63,9 +71,16 @@ import type {
 } from '@balo/shared/meetings';
 
 export const GUEST_SERVER_EVENTS = {
-  /** A host admitted a waiting guest. ⚠ INERT until BAL-132 produces a `pending` row. */
+  /** A host admitted a waiting guest. Fires from apps/api's admit/deny service (live since BAL-132). */
   GUEST_ADMITTED: 'guest_admitted',
-  /** A host denied a waiting guest. ⚠ INERT for the same reason. */
+  /**
+   * BAL-489 — a brand-new Balo user's WorkOS-VERIFIED email linked ≥1 `email`-channel guest row
+   * (`meetingGuestsRepository.linkConvertedUser`). Fires ONCE per converting user, post-commit, from
+   * `runGuestConversionAndEmit` (`apps/web/src/lib/guest-conversion/run-guest-conversion.ts`) — its
+   * only producer; the constant arrives WITH it, per this module's discipline.
+   */
+  GUEST_CONVERTED_TO_MEMBER: 'guest_converted_to_member',
+  /** A host denied a waiting guest. Fires from apps/api's admit/deny service (live since BAL-132). */
   GUEST_DENIED: 'guest_denied',
   /** The `/join/{token}` landing resolved a LIVE token and rendered. */
   GUEST_INVITE_OPENED: 'guest_invite_opened',
@@ -261,6 +276,31 @@ export interface GuestServerEventMap {
      */
     days_since_meeting: number;
     /** ⚠ `meeting_guests.id` — a guest has NO user id. See the module docblock. */
+    distinct_id: string;
+  };
+  /**
+   * BAL-489 — the acquisition loop closing: a guest became a member.
+   *
+   * ⚠⚠ A PERSON-LEVEL EVENT, NOT A ROW-LEVEL ONE (R8). One person may hold several guest rows;
+   * every eligible row is linked, but this fires ONCE, and only when ≥1 row actually changed in
+   * that call — a re-run links nothing and emits nothing.
+   *
+   * ⚠ `distinct_id` IS THE NEW `users.id`, unlike every other event in this map (whose
+   * `distinct_id` is a `meeting_guests.id`). No PostHog `alias` is issued: the pseudonymous guest
+   * handle becomes joinable to this person through `meeting_guests.converted_to_user_id`.
+   *
+   * ⚠ NO PII — the shape is `{ days_since_meeting }` VERBATIM: no email, no domain, no name, no
+   * token, no row count, no meeting id.
+   */
+  [GUEST_SERVER_EVENTS.GUEST_CONVERTED_TO_MEMBER]: {
+    /**
+     * Whole days, floored, never negative, from the MOST RECENT linked meeting (last touch,
+     * `started_at ?? scheduled_start`) to the conversion — the SAME `daysSinceMeeting`
+     * (`apps/web/src/lib/analytics/days-since-meeting.ts`) `guest_recap_viewed` uses (R9). A
+     * conversion before that meeting has happened reads `0`.
+     */
+    days_since_meeting: number;
+    /** ⚠ The NEW MEMBER's `users.id` — NOT a `meeting_guests.id`. */
     distinct_id: string;
   };
 }

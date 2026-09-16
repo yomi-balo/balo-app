@@ -659,6 +659,13 @@
       "when": 1789396735310,
       "tag": "0093_bal432_proposal_accepted_by_user_id",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1789557230868,
+      "tag": "0094_bal489_guest_conversion_linkage",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,7 @@ import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
+import { runGuestConversionAndEmit } from '@/lib/guest-conversion/run-guest-conversion';
 
 export type VerifyEmailInput = VerifyEmailFormData;
 
@@ -130,15 +131,17 @@ export async function verifyEmailAction(
         // publishNotificationEvent logs internally
       });
 
-      // BAL-345: run the domain auto-join match engine (post-commit). `true` is
-      // legitimately hardcoded here — the OTP flow PROVES the email is verified.
-      // runDomainJoinAndEmit swallows its own failures; the `.catch` is
-      // belt-and-suspenders so a domain-join failure can NEVER break auth.
-      await runDomainJoinAndEmit({ userId: user.id, email: user.email, emailVerified: true }).catch(
-        () => {
-          // runDomainJoinAndEmit already logs internally.
-        }
-      );
+      // BAL-345 + BAL-489 — the two post-commit new-user helpers, run INDEPENDENTLY: each
+      // swallows and logs its own failure, and each `.catch` is belt-and-suspenders, so
+      // neither can block the other or break auth. `true` is legitimately hardcoded here —
+      // the OTP flow PROVES the email is verified.
+      const newUserIdentity = { userId: user.id, email: user.email, emailVerified: true };
+      await runDomainJoinAndEmit(newUserIdentity).catch(() => {
+        // runDomainJoinAndEmit already logs internally.
+      });
+      await runGuestConversionAndEmit(newUserIdentity).catch(() => {
+        // runGuestConversionAndEmit already logs internally.
+      });
     }
 
     // BAL-362: also reached on the re-link / double-submit path (no user created),

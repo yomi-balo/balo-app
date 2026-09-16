@@ -111,20 +111,30 @@ export async function signUpAction(
     session.refreshToken = authResponse.refreshToken;
     await session.save();
 
-    // BAL-345: run the domain auto-join match engine (post-commit). Dynamically
-    // imported (like @balo/db above) so it stays out of the primary bundle — this
-    // fallback path runs only when WorkOS email-verification is disabled. Pass the
-    // SAME real WorkOS emailVerified flag createWithWorkspace received, never true.
+    // BAL-345 + BAL-489: run the two post-commit new-user helpers, INDEPENDENTLY. Dynamically
+    // imported (like @balo/db above) so they stay out of the primary bundle — this fallback
+    // path runs only when WorkOS email-verification is disabled. Pass the SAME real WorkOS
+    // emailVerified flag createWithWorkspace received, never true.
     const { runDomainJoinAndEmit } = await import('@/lib/domain-join/run-domain-join');
-    // The `.catch` is belt-and-suspenders (runDomainJoinAndEmit swallows
-    // internally) so a domain-join failure can NEVER break auth.
-    await runDomainJoinAndEmit({
+    const newUserIdentity = {
       userId: user.id,
       email: user.email,
       emailVerified: workosUser.emailVerified === true,
-    }).catch(() => {
+    };
+    // Each `.catch` is belt-and-suspenders (each helper swallows internally) so neither can
+    // block the other or break auth. The guest-conversion import is CHAINED into its own
+    // `.catch` so a rejected dynamic import (not just a rejected call) is swallowed too — by
+    // this point the Balo user and session already exist, and a linkage failure must never
+    // fail signup (R10). The domain-join import above carries the same pre-existing unguarded
+    // exposure; left as is here, out of scope for this fix.
+    await runDomainJoinAndEmit(newUserIdentity).catch(() => {
       // runDomainJoinAndEmit already logs internally.
     });
+    await import('@/lib/guest-conversion/run-guest-conversion')
+      .then(({ runGuestConversionAndEmit }) => runGuestConversionAndEmit(newUserIdentity))
+      .catch(() => {
+        // runGuestConversionAndEmit already logs internally; this also swallows a failed chunk import.
+      });
 
     return {
       success: true,

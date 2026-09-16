@@ -11,6 +11,7 @@ import { resolveLinkedUser, ACCOUNT_EXISTS_MESSAGE } from '@/lib/auth/resolve-id
 import { log } from '@/lib/logging';
 import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { runDomainJoinAndEmit } from '@/lib/domain-join/run-domain-join';
+import { runGuestConversionAndEmit } from '@/lib/guest-conversion/run-guest-conversion';
 
 interface SignInResult {
   needsOnboarding: boolean;
@@ -66,16 +67,21 @@ export async function signInAction(input: SignInFormData): Promise<AuthResult<Si
       });
       user = result.user;
 
-      // BAL-345: run the domain auto-join match engine (post-commit). Pass the
-      // SAME WorkOS emailVerified flag createWithWorkspace received — never
-      // hardcode true; the engine's verified hard-gate stands down when false. The
-      // `.catch` is belt-and-suspenders so a domain-join failure can NEVER break auth.
-      await runDomainJoinAndEmit({
+      // BAL-345 + BAL-489 — the two post-commit new-user helpers, run INDEPENDENTLY: each
+      // swallows and logs its own failure, and each `.catch` is belt-and-suspenders, so
+      // neither can block the other or break auth. Pass the SAME WorkOS emailVerified flag
+      // createWithWorkspace received — never hardcode true; both helpers' verified hard-gates
+      // stand down when it is false.
+      const newUserIdentity = {
         userId: user.id,
         email: user.email,
         emailVerified: workosUser.emailVerified === true,
-      }).catch(() => {
+      };
+      await runDomainJoinAndEmit(newUserIdentity).catch(() => {
         // runDomainJoinAndEmit already logs internally.
+      });
+      await runGuestConversionAndEmit(newUserIdentity).catch(() => {
+        // runGuestConversionAndEmit already logs internally.
       });
     }
 

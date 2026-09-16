@@ -1,7 +1,7 @@
 /**
  * BAL-408 / ADR-1044 — the PURE core of the guest participation model.
  *
- * Four decisions live here rather than in `apps/api` or `apps/web`, because each is a RULE
+ * Five decisions live here rather than in `apps/api` or `apps/web`, because each is a RULE
  * that more than one layer must reach the same answer on, and because none of them needs
  * I/O:
  *
@@ -17,6 +17,9 @@
  *     **BAL-445 CALLS THIS to ENFORCE it**, from `apps/web/src/lib/meetings/authorize-meeting-file-access.ts`.
  *   · `projectGuestForViewer` — counterparty concealment: names cross the party boundary,
  *     email addresses NEVER.
+ *   · `canonicalGuestEmail` — THE ONE DEFINITION OF "THE SAME GUEST ADDRESS" (BAL-489): the
+ *     invite and lobby writers STORE through it and the guest→member linkage MATCHES through
+ *     it, so the three can never disagree on which bytes name one mailbox.
  *
  * PURE and dependency-free (no `@balo/db`, no `node:crypto`, no I/O) — the same rule the
  * rest of `@balo/shared/meetings` follows, so a client component can reach these without
@@ -699,4 +702,27 @@ export function projectGuestForViewer(
     displayName: guest.name ?? guest.email,
     accessScope: guest.accessScope,
   };
+}
+
+// ── Canonical address ─────────────────────────────────────────────────────────────────
+
+/**
+ * ⚠ THE ONE DEFINITION OF "THE SAME GUEST ADDRESS" — trim + lowercase. MOVED here from
+ * `apps/api/src/services/meetings/guest-participation.ts` (`canonicalEmail`) by BAL-489, because a
+ * THIRD consumer in a THIRD layer needs it and a copy would be a second definition.
+ *
+ * Consumers, all of which must agree byte-for-byte:
+ *   · `apps/api` invite path (`inviteGuests` → `dedupeByEmail`) — stores through it;
+ *   · `apps/api` lobby path (`claimLobbyPlace`) — stores through it;
+ *   · `@balo/db` `meetingGuestsRepository.linkConvertedUser` (BAL-489) — MATCHES through it.
+ * `@balo/db` never normalises what it STORES, and `meeting_guest_meeting_email_live_idx` matches
+ * the stored bytes — so a writer that skips this silently permits `Dana@x.com` beside `dana@x.com`,
+ * and a matcher that disagrees with it silently links nothing.
+ *
+ * ⚠ NO ALIAS RECONCILIATION, DELIBERATELY. `dana+work@x.com` and `dana.chen@x.com` are NOT
+ * `dana@x.com` here: nothing proves two addresses are one mailbox, and the linkage writer turns
+ * "the same address" into "the same person".
+ */
+export function canonicalGuestEmail(email: string): string {
+  return email.trim().toLowerCase();
 }

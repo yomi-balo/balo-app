@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  canonicalGuestEmail,
   computeMeetingClocks,
   findPrimaryMeetingContextRepoint,
   guestIsAdmittedForRead,
@@ -683,5 +684,30 @@ describe('participation constants', () => {
     // (wrong meeting, forwarded to the wrong team) and still admit a full room afterwards, so a
     // queue bound at 10 would be reachable in normal use.
     expect(MAX_LOBBY_QUEUE).toBeGreaterThan(MAX_MEETING_PARTICIPANTS);
+  });
+});
+
+describe('canonicalGuestEmail — the one definition of "the same guest address"', () => {
+  it('trims surrounding whitespace and lowercases', () => {
+    expect(canonicalGuestEmail('  Dana@NorthWind.COM ')).toBe('dana@northwind.com');
+  });
+
+  it('is idempotent — an already-canonical address comes back unchanged', () => {
+    const once = canonicalGuestEmail('\tDana@NorthWind.COM\n');
+    expect(once).toBe('dana@northwind.com');
+    expect(canonicalGuestEmail(once)).toBe(once);
+  });
+
+  /**
+   * ⚠ R3, PINNED AT THE DEFINITION. The guest→member linkage (`linkConvertedUser`) matches
+   * through this function, so any alias folding added here would silently start attributing one
+   * mailbox's guest attendance to the owner of ANOTHER. Nothing proves `dana+work@` or
+   * `dana.chen@` is the same person as `dana@`.
+   */
+  it('⚠ does NOT reconcile aliases — plus-addresses and dotted local parts survive apart from case/trim', () => {
+    expect(canonicalGuestEmail(' Dana+Work@NorthWind.com ')).toBe('dana+work@northwind.com');
+    expect(canonicalGuestEmail('Dana.Chen@NorthWind.com')).toBe('dana.chen@northwind.com');
+    expect(canonicalGuestEmail('dana+work@northwind.com')).not.toBe('dana@northwind.com');
+    expect(canonicalGuestEmail('dana.chen@northwind.com')).not.toBe('dana@northwind.com');
   });
 });
