@@ -1,21 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
 
-const { mockListConnections, mockWriteConsultationEvent, mockRecordIcsDelivery } = vi.hoisted(
-  () => ({
-    mockListConnections: vi.fn(),
-    mockWriteConsultationEvent: vi.fn(),
-    mockRecordIcsDelivery: vi.fn(),
-  })
-);
+const {
+  mockListConnections,
+  mockWriteConsultationEvent,
+  mockRecordIcsDelivery,
+  mockRecordProviderEvent,
+  mockReconcileByTag,
+} = vi.hoisted(() => ({
+  mockListConnections: vi.fn(),
+  mockWriteConsultationEvent: vi.fn(),
+  mockRecordIcsDelivery: vi.fn(),
+  mockRecordProviderEvent: vi.fn(),
+  mockReconcileByTag: vi.fn(),
+}));
 
 vi.mock('@balo/db', () => ({
   calendarRepository: { listConnectionsByExpertProfileId: mockListConnections },
-  meetingCalendarEventsRepository: { recordIcsDelivery: mockRecordIcsDelivery },
+  meetingCalendarEventsRepository: {
+    recordIcsDelivery: mockRecordIcsDelivery,
+    recordProviderEvent: mockRecordProviderEvent,
+  },
 }));
 
 vi.mock('./write-consultation-event.js', () => ({
   writeConsultationEvent: (...args: unknown[]) => mockWriteConsultationEvent(...args),
+}));
+
+vi.mock('./reconcile-by-tag.js', () => ({
+  reconcileByTag: mockReconcileByTag,
 }));
 
 import { projectBookingToExpertCalendar } from './project-booking-to-calendar.js';
@@ -128,6 +141,8 @@ describe('projectBookingToExpertCalendar (BAL-400 D2)', () => {
 
   it('a vendor throw from writeConsultationEvent resolves to an error-logged no-op, never rethrown', async () => {
     mockListConnections.mockResolvedValue([connection()]);
+    // A PLAIN Error (the id-substitution assertion's shape) — U3 must NOT record a fallback
+    // for this arm, because it fires AFTER a real vendor event already exists.
     mockWriteConsultationEvent.mockRejectedValue(new Error('Apiroc events.create failed'));
     const log = fakeLog();
 
@@ -139,16 +154,259 @@ describe('projectBookingToExpertCalendar (BAL-400 D2)', () => {
       party: 'expert',
       contextType: 'case',
       expertProfileId: 'expert-1',
+      providerCreateFailed: false,
     });
     // The failure line is the one an operator reads in Sentry — it must still carry the cause.
+    // ⚠ BAL-475 (U3) adds `providerCreateFailed` to this key set.
     expect(Object.keys(meta as object).sort()).toEqual([
       'contextType',
       'error',
       'expertProfileId',
       'meetingId',
       'party',
+      'providerCreateFailed',
       'stack',
     ]);
+    expect(mockRecordIcsDelivery).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-475 (U3) — ADR-1044 Ruling 1's SECOND amendment: an expert who HAS a writable connection
+ * falls back to the expert-party ICS when the VENDOR CREATE ITSELF fails, not only when there
+ * is no connection to write through.
+ */
+describe('projectBookingToExpertCalendar — U3: the failed provider-write fallback (BAL-475)', () => {
+  beforeEach(() => {
+    mockListConnections.mockReset();
+    mockWriteConsultationEvent.mockReset();
+    mockRecordIcsDelivery.mockReset();
+    mockRecordProviderEvent.mockReset();
+    mockReconcileByTag.mockReset();
+    mockRecordIcsDelivery.mockResolvedValue({ id: 'row-ics-1' });
+    mockRecordProviderEvent.mockResolvedValue({ id: 'row-provider-1' });
+    mockListConnections.mockResolvedValue([connection()]);
+  });
+
+  it('a DEFINITIVE ApirocError (validation) from writeConsultationEvent ⇒ records the expert-party ICS fallback immediately, returns "failed"', async () => {
+    // Import the REAL class so `instanceof` matches inside the module under test.
+    const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocError({ kind: 'validation', operation: 'events.create' })
+    );
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordIcsDelivery).toHaveBeenCalledWith({ meetingId: 'meeting-1', party: 'expert' });
+    expect(mockReconcileByTag).not.toHaveBeenCalled();
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.objectContaining({ providerCreateFailed: true }),
+      'Expert calendar projection failed'
+    );
+  });
+
+  it('an ApirocConfigError (before any call) ⇒ records the expert-party ICS fallback', async () => {
+    const { ApirocConfigError: RealApirocConfigError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocConfigError('APIROC_API_KEY is not set')
+    );
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordIcsDelivery).toHaveBeenCalledWith({ meetingId: 'meeting-1', party: 'expert' });
+  });
+
+  it('a plain Error (the id-substitution assertion, AFTER a real vendor event) ⇒ NOT called', async () => {
+    mockWriteConsultationEvent.mockRejectedValue(new Error('id mismatch'));
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordIcsDelivery).not.toHaveBeenCalled();
+  });
+
+  it('F21 (fix round 1, R21) — listConnectionsByExpertProfileId throwing an ApirocConfigError (no target ever selected) ⇒ NOT called, pinning the target !== undefined guard specifically', async () => {
+    // A PLAIN Error here would already fail `isVendorCreateFailure` on its own, leaving the
+    // `target !== undefined` guard's own contribution unpinned (R21). An `ApirocConfigError`
+    // makes `isVendorCreateFailure` TRUE, so the ONLY thing stopping the fallback is that
+    // `target` was never assigned — deleting the guard would make this test fail.
+    const { ApirocConfigError: RealApirocConfigError } = await import('../../lib/apiroc/errors.js');
+    mockListConnections.mockRejectedValue(new RealApirocConfigError('APIROC_API_KEY is not set'));
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordIcsDelivery).not.toHaveBeenCalled();
+    expect(mockReconcileByTag).not.toHaveBeenCalled();
+  });
+
+  it('a DEFINITIVE kind whose fallback recordIcsDelivery itself throws ⇒ log.error, still "failed", never rejects', async () => {
+    const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocError({ kind: 'validation', operation: 'events.create' })
+    );
+    mockRecordIcsDelivery.mockRejectedValue(new Error('db unavailable'));
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: 'meeting-1', party: 'expert' }),
+      'Failed to record the expert-party ICS fallback after a failed vendor create'
+    );
+  });
+});
+
+/**
+ * F17 (fix round 1, R16/S7) — the orchestrator's refinement of U3: a DEFINITIVE client-side
+ * refusal falls back to ICS immediately (already covered above); an AMBIGUOUS outcome
+ * (`server_error`, `network`, `unknown`) reconciles by the `baloBookingId` tag FIRST.
+ */
+describe('projectBookingToExpertCalendar — F17: ambiguous vendor-create outcomes reconcile before falling back', () => {
+  beforeEach(() => {
+    mockListConnections.mockReset();
+    mockWriteConsultationEvent.mockReset();
+    mockRecordIcsDelivery.mockReset();
+    mockRecordProviderEvent.mockReset();
+    mockReconcileByTag.mockReset();
+    mockRecordIcsDelivery.mockResolvedValue({ id: 'row-ics-1' });
+    mockRecordProviderEvent.mockResolvedValue({ id: 'row-provider-1' });
+    mockListConnections.mockResolvedValue([connection()]);
+  });
+
+  it.each(['server_error', 'network', 'unknown'] as const)(
+    'ambiguous kind %s calls reconcileByTag with the SAME endUserAccountId/calendarId/baloBookingId writeConsultationEvent would have used',
+    async (kind) => {
+      const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+      mockWriteConsultationEvent.mockRejectedValue(
+        new RealApirocError({ kind, operation: 'events.create' })
+      );
+      mockReconcileByTag.mockResolvedValue([]);
+      const log = fakeLog();
+
+      await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+      expect(mockReconcileByTag).toHaveBeenCalledWith({
+        endUserAccountId: 'eua-1',
+        calendarId: 'calendar-1',
+        baloBookingId: 'meeting-1',
+      });
+    }
+  );
+
+  it('ambiguous + reconcile finds EXACTLY ONE candidate ⇒ recordProviderEvent with that vendor id, NO ics', async () => {
+    const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocError({ kind: 'server_error', operation: 'events.create' })
+    );
+    mockReconcileByTag.mockResolvedValue([{ id: 'vendor-evt-reconciled' }]);
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordProviderEvent).toHaveBeenCalledWith({
+      meetingId: 'meeting-1',
+      party: 'expert',
+      connectionId: 'conn-1',
+      calendarId: 'calendar-1',
+      vendorEventId: 'vendor-evt-reconciled',
+      baloBookingId: 'meeting-1',
+    });
+    expect(mockRecordIcsDelivery).not.toHaveBeenCalled();
+  });
+
+  it('ambiguous + reconcile finds ZERO candidates ⇒ records the ICS fallback', async () => {
+    const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocError({ kind: 'unknown', operation: 'events.create' })
+    );
+    mockReconcileByTag.mockResolvedValue([]);
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordIcsDelivery).toHaveBeenCalledWith({ meetingId: 'meeting-1', party: 'expert' });
+    expect(mockRecordProviderEvent).not.toHaveBeenCalled();
+  });
+
+  it('ambiguous + reconcile itself THROWS ⇒ records the ICS fallback and warns (accepted residual)', async () => {
+    const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocError({ kind: 'network', operation: 'events.create' })
+    );
+    mockReconcileByTag.mockRejectedValue(new Error('events.list failed'));
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordIcsDelivery).toHaveBeenCalledWith({ meetingId: 'meeting-1', party: 'expert' });
+    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ apirocErrorKind: 'network' }),
+      'Ambiguous vendor create outcome — reconcile itself failed; recording the ICS fallback (accepted residual)'
+    );
+  });
+
+  it('ambiguous + reconcile finds MORE THAN ONE candidate ⇒ records the ICS fallback and warns with a COUNT only (accepted residual)', async () => {
+    const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocError({ kind: 'server_error', operation: 'events.create' })
+    );
+    mockReconcileByTag.mockResolvedValue([{ id: 'evt-1' }, { id: 'evt-2' }]);
+    const log = fakeLog();
+
+    await expect(projectBookingToExpertCalendar(BASE_INPUT, log)).resolves.toBe('failed');
+
+    expect(mockRecordIcsDelivery).toHaveBeenCalledWith({ meetingId: 'meeting-1', party: 'expert' });
+    expect(mockRecordProviderEvent).not.toHaveBeenCalled();
+    const [[meta]] = vi
+      .mocked(log.warn)
+      .mock.calls.filter(
+        ([, message]) =>
+          message ===
+          'Ambiguous vendor create outcome — reconcile found more than one candidate event; recording the ICS fallback (accepted residual)'
+      );
+    expect(meta).toEqual({
+      meetingId: 'meeting-1',
+      party: 'expert',
+      contextType: 'case',
+      expertProfileId: 'expert-1',
+      apirocErrorKind: 'server_error',
+      reconciledCount: 2,
+    });
+    // No vendor id, no address — a COUNT only.
+    expect(JSON.stringify(meta)).not.toContain('evt-1');
+    expect(JSON.stringify(meta)).not.toContain('evt-2');
+  });
+
+  it('apirocErrorKind logs error.kind, never error.name (R16)', async () => {
+    const { ApirocError: RealApirocError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocError({ kind: 'rate_limited', operation: 'events.create' })
+    );
+    const log = fakeLog();
+
+    await projectBookingToExpertCalendar(BASE_INPUT, log);
+
+    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ apirocErrorKind: 'rate_limited' }),
+      expect.any(String)
+    );
+  });
+
+  it("apirocErrorKind is 'config' for an ApirocConfigError", async () => {
+    const { ApirocConfigError: RealApirocConfigError } = await import('../../lib/apiroc/errors.js');
+    mockWriteConsultationEvent.mockRejectedValue(
+      new RealApirocConfigError('APIROC_API_KEY is not set')
+    );
+    const log = fakeLog();
+
+    await projectBookingToExpertCalendar(BASE_INPUT, log);
+
+    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
+      expect.objectContaining({ apirocErrorKind: 'config' }),
+      expect.any(String)
+    );
   });
 });
 

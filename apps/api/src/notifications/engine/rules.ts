@@ -24,7 +24,12 @@ export interface NotificationRule {
     // publisher-resolves-the-ids shape as `meeting_party_participants` (also over
     // `payload.recipientUserIds`) — a membership read has no place inside the notification
     // engine. A distinct KIND so the rules table stays legible about WHO it fans out to.
-    | 'request_track_experts';
+    | 'request_track_experts'
+    // BAL-475 — the single recipient named INSIDE `payload.calendarInvite.recipient` (a user OR
+    // a meeting guest), as an id. Resolved by the dispatcher, addressed by the email channel.
+    // Used by exactly one event — never a fan-out kind, because the ICS names exactly one
+    // attendee, the recipient, so one payload can never serve two people.
+    | 'calendar_invite_recipient';
   template: string;
   timing: 'immediate'; // No scheduling yet
   condition?: (context: RuleContext) => boolean;
@@ -526,6 +531,20 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       channel: 'email',
       recipient: 'email_address',
       template: 'meeting-guest-rescheduled',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
+
+  // BAL-475 — a Balo-organised ICS invite (ADR-1044 Rulings 1/3/4). EMAIL ONLY: the ICS is the
+  // product. ONE publish per recipient per write (see `calendarInviteCorrelationId`); never a
+  // fan-out kind — the ICS names exactly one attendee, the recipient, so one payload can never
+  // serve two people. No `condition` — a conditional rule is one an edit can silently disarm.
+  'meeting.calendar_invite': [
+    {
+      channel: 'email',
+      recipient: 'calendar_invite_recipient',
+      template: 'meeting-calendar-invite',
       timing: 'immediate',
       priority: 'normal',
     },
@@ -1131,7 +1150,9 @@ export const notificationRules: Record<string, NotificationRule[]> = {
 
   // That person, and only that person. Email only, same external path as the invite.
   // ⚠ This is the WHOLE of the shipped removal notice — the AC's `METHOD:CANCEL` half is
-  // deferred because no meeting has a calendar event to cancel. See
+  // deferred to BAL-476. ⚠ CORRECTED (BAL-475): "no meeting has a calendar event to cancel"
+  // is now FALSE — BAL-475 ships Balo-organised `METHOD:REQUEST` ICS invites, so a removed
+  // guest's calendar entry exists and is stale until BAL-476's `METHOD:CANCEL` ships. See
   // `MeetingGuestRemovedPayload`'s docblock for the verification.
   'meeting.guest_removed': [
     {

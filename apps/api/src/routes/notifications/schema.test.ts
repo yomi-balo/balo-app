@@ -1495,6 +1495,24 @@ describe('publishBodySchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects meeting.calendar_invite — a server-only event with no publish arm by design (BAL-475)', () => {
+    const result = publishBodySchema.safeParse({
+      event: 'meeting.calendar_invite',
+      payload: {
+        correlationId: 'booked:row-1:0:client:user:user-1',
+        calendarInvite: {
+          meetingId: '550e8400-e29b-41d4-a716-446655440000',
+          party: 'client',
+          calendarEventId: '550e8400-e29b-41d4-a716-446655440001',
+          method: 'REQUEST',
+          transition: 'booked',
+          recipient: { kind: 'user', userId: '550e8400-e29b-41d4-a716-446655440002' },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects missing event field', () => {
     const result = publishBodySchema.safeParse({
       payload: {

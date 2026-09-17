@@ -314,6 +314,44 @@ describe('meetingCalendarEventsRepository reads', () => {
     ).toBeUndefined();
   });
 
+  /**
+   * BAL-475, scoped since F24 (fix round 1, S4) — the send-time guard: a retired row must
+   * never be sent against, and the WHERE itself — not just the caller afterwards — must bind
+   * `id` to its own (meetingId, party).
+   */
+  it('findLiveById scopes to (id, meetingId, party) and excludes soft-deleted rows', async () => {
+    mockFindFirst.mockResolvedValue(PROVIDER_ROW);
+
+    expect(
+      await meetingCalendarEventsRepository.findLiveById({
+        id: 'mce-1',
+        meetingId: 'meeting-1',
+        party: 'expert',
+      })
+    ).toEqual(PROVIDER_ROW);
+
+    const [args] = mockFindFirst.mock.calls[0] as [{ where: unknown }];
+    const { sql, params } = render(args.where);
+    expect(sql).toContain('"id"');
+    expect(sql).toContain('"meeting_id"');
+    expect(sql).toContain('"party"');
+    expect(sql).toContain('"deleted_at" is null');
+    expect(params).toEqual(['mce-1', 'meeting-1', 'expert']);
+  });
+
+  it('listLiveByMeeting scopes to the meeting, excludes soft-deleted rows and orders deterministically', async () => {
+    mockFindMany.mockResolvedValue([{ id: 'mce-1' }, { id: 'mce-2' }]);
+
+    expect(await meetingCalendarEventsRepository.listLiveByMeeting('meeting-1')).toHaveLength(2);
+
+    const [args] = mockFindMany.mock.calls[0] as [{ where: unknown; orderBy: unknown[] }];
+    const { sql, params } = render(args.where);
+    expect(sql).toContain('"meeting_id"');
+    expect(sql).toContain('"deleted_at" is null');
+    expect(params).toEqual(['meeting-1']);
+    expect(args.orderBy).toHaveLength(2);
+  });
+
   it('listLiveByConnectionId scopes to the connection and orders deterministically', async () => {
     mockFindMany.mockResolvedValue([{ id: 'mce-1' }, { id: 'mce-2' }]);
 

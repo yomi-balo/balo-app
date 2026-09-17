@@ -22,6 +22,7 @@ const {
   mockCaseFindByEngagementId,
   mockProjectRequestFindById,
   mockRelationshipFindById,
+  mockPublishGuestAddedCalendarInvites,
 } = vi.hoisted(() => ({
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockHasEngagementCapability: vi.fn(),
@@ -44,6 +45,7 @@ const {
   mockCaseFindByEngagementId: vi.fn(),
   mockProjectRequestFindById: vi.fn(),
   mockRelationshipFindById: vi.fn(),
+  mockPublishGuestAddedCalendarInvites: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -95,6 +97,13 @@ vi.mock('./authorize-meeting-participation.js', () => ({
 }));
 vi.mock('./authorize-engagement-host.js', () => ({
   hasEngagementCapability: mockHasEngagementCapability,
+}));
+// BAL-475 — mocked at the PUBLISHER boundary (not `@balo/db`): `publishGuestAddedCalendarInvites`
+// has its own unit tests (`publish-calendar-invites.test.ts`); this file only proves
+// `announceInvites` calls it once, with the right ids and side, at the right point in the
+// sequence.
+vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
+  publishGuestAddedCalendarInvites: mockPublishGuestAddedCalendarInvites,
 }));
 /**
  * ⚠ `@balo/shared/meetings`, `@balo/shared/domains` AND `@balo/shared/authz` ARE DELIBERATELY
@@ -241,6 +250,7 @@ beforeEach(() => {
   mockHasEngagementCapability.mockResolvedValue(false);
   mockMintGuestInviteToken.mockImplementation(nextMint);
   mockPublish.mockResolvedValue(undefined);
+  mockPublishGuestAddedCalendarInvites.mockResolvedValue(undefined);
 
   mockCountLiveByMeeting.mockResolvedValue(0);
   mockCreateMany.mockImplementation((input: CreateManyArgs) =>
@@ -879,6 +889,69 @@ describe('inviteGuests — notifications and analytics are BEST-EFFORT over comm
     expect(result.ok).toBe(true);
     const [payload] = publishedPayloads('meeting.guest_invited');
     expect(payload?.meetingTitle).toBe('a consultation');
+  });
+});
+
+/** BAL-475 — the calendar-invite fan-out for newly invited guests. */
+describe('inviteGuests — BAL-475 publishGuestAddedCalendarInvites', () => {
+  it('one call with N guest ids and the actor’s side', async () => {
+    const result = await inviteGuests(
+      invite([{ email: 'a@northwind.example' }, { email: 'b@northwind.example' }])
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockPublishGuestAddedCalendarInvites).toHaveBeenCalledTimes(1);
+    expect(mockPublishGuestAddedCalendarInvites).toHaveBeenCalledWith(
+      {
+        meetingId: MEETING_ID,
+        party: 'client', // gateOk()'s default `side`
+        guestIds: ['guest-0', 'guest-1'],
+        contextType: 'case',
+      },
+      expect.anything()
+    );
+  });
+
+  it('is invoked AFTER every meeting.guest_invited publish and BEFORE any meeting.guest_added publish', async () => {
+    mockListAdminUserIds.mockResolvedValue([ADMIN_A]);
+    const order: string[] = [];
+    mockPublish.mockImplementation(async (event: string) => {
+      order.push(event);
+    });
+    mockPublishGuestAddedCalendarInvites.mockImplementation(async () => {
+      order.push('meeting.calendar_invite (guest_added fan-out)');
+    });
+
+    await inviteGuests(
+      invite([{ email: 'a@northwind.example' }, { email: 'b@northwind.example' }])
+    );
+
+    expect(order).toEqual([
+      'meeting.guest_invited',
+      'meeting.guest_invited',
+      'meeting.calendar_invite (guest_added fan-out)',
+      'meeting.guest_added',
+      'meeting.guest_added',
+    ]);
+  });
+
+  it('existing notificationEvents.publish call counts are unchanged', async () => {
+    mockListAdminUserIds.mockResolvedValue([ADMIN_A]);
+
+    await inviteGuests(
+      invite([{ email: 'a@northwind.example' }, { email: 'b@northwind.example' }])
+    );
+
+    expect(publishedPayloads('meeting.guest_invited')).toHaveLength(2);
+    expect(publishedPayloads('meeting.guest_added')).toHaveLength(2);
+  });
+
+  it('a throwing calendar-invite publisher does not fail the invite', async () => {
+    mockPublishGuestAddedCalendarInvites.mockRejectedValue(new Error('queue down'));
+
+    const result = await inviteGuests(invite([{ email: 'dana@northwind.example' }]));
+
+    expect(result).toMatchObject({ ok: true, participantCount: 3 });
   });
 });
 

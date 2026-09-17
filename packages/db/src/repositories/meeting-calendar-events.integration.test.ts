@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../client';
 import { calendarConnections, meetingCalendarEvents, meetings } from '../schema';
@@ -33,6 +34,10 @@ import {
  *
  *   · **23514 ON THE TWO-SIDED PARTY** — `meeting_participant_party` carries `observer`; this
  *     table does not accept it.
+ *
+ *   · **BAL-475: uid + sequence** — the NON-partial uid unique (23505 even against a
+ *     soft-deleted row), `sequence >= 0`, "provider_event ⇒ expert" (23514), and that neither
+ *     upsert arm ever rewrites `uid` / `sequence`.
  *
  * ⚠ SOME TESTS END ON A REJECTED CALL WITH NOTHING AFTER IT. Deliberate: the harness holds
  * each test in ONE outer transaction, so a statement that fails on the module-level `db`
@@ -352,25 +357,101 @@ describe('meeting_calendar_events — CHECK constraints', () => {
   it('rejects an ics row carrying a provider payload, and a provider row missing one (23514)', async () => {
     const seeded = await seedMeetingAndConnection();
 
-    await expectConstraintViolation('23514', (tx) =>
-      tx.insert(meetingCalendarEvents).values({
-        meetingId: seeded.meetingId,
-        party: 'expert',
-        deliveryMode: 'ics',
-        vendorEventId: 'vendor_should_not_exist',
-      })
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx.insert(meetingCalendarEvents).values({
+          meetingId: seeded.meetingId,
+          party: 'expert',
+          deliveryMode: 'ics',
+          vendorEventId: 'vendor_should_not_exist',
+        }),
+      'meeting_calendar_event_delivery_payload'
     );
 
-    await expectConstraintViolation('23514', (tx) =>
-      tx.insert(meetingCalendarEvents).values({
-        meetingId: seeded.meetingId,
-        party: 'client',
-        deliveryMode: 'provider_event',
-        connectionId: seeded.connectionId,
-        calendarId: 'cal_work',
-        vendorEventId: null,
-        baloBookingId: 'balo_tag',
-      })
+    // ⚠ `party: 'expert'`, and the constraint NAMED — since BAL-475 a client-party provider row
+    // also trips `meeting_calendar_event_provider_event_is_expert`, so a bare-23514 probe on a
+    // client row would keep passing with the biconditional dropped.
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx.insert(meetingCalendarEvents).values({
+          meetingId: seeded.meetingId,
+          party: 'expert',
+          deliveryMode: 'provider_event',
+          connectionId: seeded.connectionId,
+          calendarId: 'cal_work',
+          vendorEventId: null,
+          baloBookingId: 'balo_tag',
+        }),
+      'meeting_calendar_event_delivery_payload'
+    );
+  });
+
+  /**
+   * BAL-475 — "provider_event ⇒ expert" is a CONSTRAINT now, not a property of the writers.
+   * A FULL provider payload on the client party isolates this CHECK from the biconditional.
+   */
+  it('rejects a CLIENT-party provider_event row carrying a full payload (23514)', async () => {
+    const seeded = await seedMeetingAndConnection();
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx.insert(meetingCalendarEvents).values({
+          meetingId: seeded.meetingId,
+          party: 'client',
+          deliveryMode: 'provider_event',
+          connectionId: seeded.connectionId,
+          calendarId: 'cal_work',
+          vendorEventId: 'vendor_client',
+          baloBookingId: 'balo_client',
+        }),
+      'meeting_calendar_event_provider_event_is_expert'
+    );
+  });
+
+  it('rejects a negative SEQUENCE (23514)', async () => {
+    const { meeting } = await meetingFactory();
+    const row = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx
+          .update(meetingCalendarEvents)
+          .set({ sequence: -1 })
+          .where(eq(meetingCalendarEvents.id, row.id)),
+      'meeting_calendar_event_sequence_non_negative'
+    );
+  });
+
+  /**
+   * ⚠ THE UID UNIQUE IS NON-PARTIAL ON PURPOSE: a SOFT-DELETED row's uid is still taken. A reused
+   * UID on a rebook would resurrect a cancelled series in the recipient's calendar.
+   */
+  it("rejects reusing a uid — even a SOFT-DELETED row's (23505)", async () => {
+    const { meeting } = await meetingFactory();
+    const { meeting: other } = await meetingFactory();
+    const retired = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(meeting.id, 'client');
+
+    await expectConstraintViolation(
+      '23505',
+      (tx) =>
+        tx.insert(meetingCalendarEvents).values({
+          meetingId: other.id,
+          party: 'client',
+          deliveryMode: 'ics',
+          uid: retired.uid,
+        }),
+      'meeting_calendar_event_uid_uq'
     );
   });
 
@@ -389,6 +470,98 @@ describe('meeting_calendar_events — CHECK constraints', () => {
         deliveryMode: 'ics',
       })
     );
+  });
+});
+
+// ── uid + sequence (BAL-475) ─────────────────────────────────────
+
+describe('meeting_calendar_events — uid and sequence (BAL-475)', () => {
+  it('both writers mint a distinct uid and start the series at sequence 0', async () => {
+    const seeded = await seedMeetingAndConnection();
+
+    const expertRow = await meetingCalendarEventsRepository.recordProviderEvent(
+      providerInput(seeded)
+    );
+    const clientRow = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: seeded.meetingId,
+      party: 'client',
+    });
+
+    expect(expertRow.uid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(clientRow.uid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(clientRow.uid).not.toBe(expertRow.uid);
+    expect(expertRow.sequence).toBe(0);
+    expect(clientRow.sequence).toBe(0);
+  });
+
+  /**
+   * ⚠ A RETRIED WRITE MUST KEEP THE SERIES. Neither DO UPDATE arm sets `uid` or `sequence`; if
+   * one ever did, a retried booking write would fork the recipient's calendar entry (new UID)
+   * or rewind a rescheduled series (SEQUENCE back to 0, which calendar clients ignore).
+   */
+  it('a retried ICS fallback keeps uid and sequence', async () => {
+    const { meeting } = await meetingFactory();
+    const first = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'expert',
+    });
+    await db
+      .update(meetingCalendarEvents)
+      .set({ sequence: 3 })
+      .where(eq(meetingCalendarEvents.id, first.id));
+
+    const retried = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'expert',
+    });
+
+    expect(retried.id).toBe(first.id);
+    expect(retried.uid).toBe(first.uid);
+    expect(retried.sequence).toBe(3);
+  });
+
+  it('an ICS row upgraded to a provider write keeps uid and sequence', async () => {
+    const seeded = await seedMeetingAndConnection();
+    const fallback = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: seeded.meetingId,
+      party: 'expert',
+    });
+    await db
+      .update(meetingCalendarEvents)
+      .set({ sequence: 3 })
+      .where(eq(meetingCalendarEvents.id, fallback.id));
+
+    const provider = await meetingCalendarEventsRepository.recordProviderEvent(
+      providerInput(seeded)
+    );
+
+    expect(provider.id).toBe(fallback.id);
+    expect(provider.deliveryMode).toBe('provider_event');
+    expect(provider.uid).toBe(fallback.uid);
+    expect(provider.sequence).toBe(3);
+  });
+
+  /** A rebook is a NEW series: fresh row, fresh uid, SEQUENCE back at 0. */
+  it('soft-delete + rebook starts a NEW series — new uid, sequence 0', async () => {
+    const { meeting } = await meetingFactory();
+    const cancelled = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+    await db
+      .update(meetingCalendarEvents)
+      .set({ sequence: 2 })
+      .where(eq(meetingCalendarEvents.id, cancelled.id));
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(meeting.id, 'client');
+
+    const rebooked = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+
+    expect(rebooked.id).not.toBe(cancelled.id);
+    expect(rebooked.uid).not.toBe(cancelled.uid);
+    expect(rebooked.sequence).toBe(0);
   });
 });
 
@@ -432,17 +605,115 @@ describe('meetingCalendarEventsRepository reads', () => {
     ).toBeUndefined();
   });
 
-  it('findLiveExpertProviderEvent answers undefined for a CLIENT-party provider row', async () => {
-    const seeded = await seedMeetingAndConnection();
-    await meetingCalendarEventsRepository.recordProviderEvent(
-      providerInput(seeded, { party: 'client' })
-    );
+  /**
+   * BAL-475 REWORK. This used to write a CLIENT-party provider row to isolate the party filter;
+   * that row is now forbidden by `meeting_calendar_event_provider_event_is_expert` (probed in
+   * the CHECK block above, where a raw 23514 cannot abort this transaction). The party filter
+   * keeps its coverage here: the only live row on the meeting is the CLIENT's, and the read
+   * must not answer with it.
+   */
+  it('findLiveExpertProviderEvent answers undefined when only a CLIENT row exists', async () => {
+    const { meeting } = await meetingFactory();
+    await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
 
-    // The party filter, isolated from the delivery-mode filter: whose calendar the entry
-    // belongs to is a different question from what Balo can address at the vendor.
+    expect(await meetingCalendarEventsRepository.listLiveByMeeting(meeting.id)).toHaveLength(1);
     expect(
-      await meetingCalendarEventsRepository.findLiveExpertProviderEvent(seeded.meetingId)
+      await meetingCalendarEventsRepository.findLiveExpertProviderEvent(meeting.id)
     ).toBeUndefined();
+  });
+
+  it('findLiveById returns the live row scoped to (id, meetingId, party), and undefined once soft-deleted, for an unknown id, or on a meeting/party mismatch', async () => {
+    const { meeting } = await meetingFactory();
+    const { meeting: otherMeeting } = await meetingFactory();
+    const written = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+
+    const live = await meetingCalendarEventsRepository.findLiveById({
+      id: written.id,
+      meetingId: meeting.id,
+      party: 'client',
+    });
+    expect(live).toMatchObject({
+      id: written.id,
+      meetingId: meeting.id,
+      party: 'client',
+      uid: written.uid,
+      sequence: 0,
+    });
+
+    expect(
+      await meetingCalendarEventsRepository.findLiveById({
+        id: randomUUID(),
+        meetingId: meeting.id,
+        party: 'client',
+      })
+    ).toBeUndefined();
+
+    // F24 (fix round 1, S4) — the id alone is not a tenancy scope: a mismatched meetingId or
+    // party must collapse to `undefined` structurally, in the WHERE itself.
+    expect(
+      await meetingCalendarEventsRepository.findLiveById({
+        id: written.id,
+        meetingId: otherMeeting.id,
+        party: 'client',
+      })
+    ).toBeUndefined();
+    expect(
+      await meetingCalendarEventsRepository.findLiveById({
+        id: written.id,
+        meetingId: meeting.id,
+        party: 'expert',
+      })
+    ).toBeUndefined();
+
+    // A row retired between publish and send must never be sent against.
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(meeting.id, 'client');
+    expect(
+      await meetingCalendarEventsRepository.findLiveById({
+        id: written.id,
+        meetingId: meeting.id,
+        party: 'client',
+      })
+    ).toBeUndefined();
+  });
+
+  it('listLiveByMeeting returns both parties in (created_at, id) order, excluding soft-deleted rows and other meetings', async () => {
+    const seeded = await seedMeetingAndConnection();
+    const { meeting: other } = await meetingFactory();
+
+    const expertRow = await meetingCalendarEventsRepository.recordProviderEvent(
+      providerInput(seeded)
+    );
+    const clientRow = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: seeded.meetingId,
+      party: 'client',
+    });
+    await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: other.id,
+      party: 'client',
+    });
+
+    // Both rows share the harness transaction's `now()`, so `created_at` ties and the `id`
+    // tie-break decides — which is exactly the determinism the second ORDER BY key exists for.
+    const byId = [expertRow.id, clientRow.id].sort((a, b) => (a < b ? -1 : Number(a > b)));
+    const both = await meetingCalendarEventsRepository.listLiveByMeeting(seeded.meetingId);
+    expect(both.map((row) => row.id)).toEqual(byId);
+
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(seeded.meetingId, 'expert');
+
+    const remaining = await meetingCalendarEventsRepository.listLiveByMeeting(seeded.meetingId);
+    expect(remaining.map((row) => row.id)).toEqual([clientRow.id]);
+  });
+
+  it('listLiveByMeeting answers [] for a meeting with no calendar rows', async () => {
+    const { meeting } = await meetingFactory();
+
+    expect(await meetingCalendarEventsRepository.listLiveByMeeting(meeting.id)).toEqual([]);
   });
 
   it('findLiveExpertProviderEvent returns undefined for a meeting Balo never wrote an entry for', async () => {

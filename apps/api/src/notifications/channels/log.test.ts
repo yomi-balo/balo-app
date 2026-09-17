@@ -125,6 +125,86 @@ describe('logNotification — the three recipient shapes (BAL-341)', () => {
     });
   });
 
+  /**
+   * ⚠ `calendarInvite` LIVES AT THE TOP LEVEL OF THE DELIVERY PAYLOAD, a SIBLING of `payload`
+   * (the dispatcher forwards it as `{ ...base, calendarInvite }`) — never nested inside
+   * `payload` (which stays the ORIGINAL published payload for logging/rendering).
+   */
+  const GUEST_CALENDAR_INVITE = {
+    meetingId: 'meeting-1',
+    party: 'client' as const,
+    calendarEventId: 'row-1',
+    method: 'REQUEST' as const,
+    transition: 'guest_added' as const,
+    recipient: { kind: 'guest' as const, guestId: 'guest-1' },
+    contextType: null,
+  };
+  const USER_CALENDAR_INVITE = {
+    meetingId: 'meeting-1',
+    party: 'client' as const,
+    calendarEventId: 'row-1',
+    method: 'REQUEST' as const,
+    transition: 'booked' as const,
+    recipient: { kind: 'user' as const, userId: 'user-1' },
+    contextType: 'case' as const,
+  };
+
+  it('BAL-475 FOURTH SHAPE: a calendar-invite guest with an unresolved address writes NO ROW', async () => {
+    await logNotification(
+      {
+        recipientId: 'guest-1',
+        template: 'meeting-calendar-invite',
+        event: 'meeting.calendar_invite',
+        data: {},
+        payload: { correlationId: 'guest_added:guest-1' },
+        calendarInvite: GUEST_CALENDAR_INVITE,
+      },
+      'email',
+      'skipped'
+    );
+
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it('a calendar-invite USER recipient still writes the ordinary user shape', async () => {
+    await logNotification(
+      {
+        recipientId: 'user-1',
+        template: 'meeting-calendar-invite',
+        event: 'meeting.calendar_invite',
+        data: {},
+        payload: { correlationId: 'booked:row-1:0:client:user:user-1' },
+        calendarInvite: USER_CALENDAR_INVITE,
+      },
+      'email',
+      'sent'
+    );
+
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientId: 'user-1', recipientEmail: null })
+    );
+  });
+
+  it('a calendar-invite GUEST recipient with its address already resolved (recipientEmail set) writes the ordinary external shape', async () => {
+    await logNotification(
+      {
+        recipientId: 'guest-1',
+        recipientEmail: 'guest@example.test',
+        template: 'meeting-calendar-invite',
+        event: 'meeting.calendar_invite',
+        data: {},
+        payload: { correlationId: 'guest_added:guest-1' },
+        calendarInvite: GUEST_CALENDAR_INVITE,
+      },
+      'email',
+      'sent'
+    );
+
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientId: null, recipientEmail: 'guest@example.test' })
+    );
+  });
+
   it('an EMPTY recipientEmail falls back to the user shape rather than writing both as NULL', async () => {
     // Neither-set is a CHECK violation too, so a blank literal address must not be treated
     // as "a literal address is present".

@@ -17,6 +17,8 @@ export * from './scheduled-notifications';
 export * from './user-notifications';
 export * from './calendar';
 export * from './meeting-calendar-events';
+// BAL-475 — the per-recipient calendar-invite send ledger beside the (meeting, party) row.
+export * from './meeting-calendar-deliveries';
 export * from './availability';
 export * from './consultations';
 export * from './project-tags';

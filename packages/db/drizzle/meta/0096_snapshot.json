@@ -1,5 +1,5 @@
 {
-  "id": "e28f9969-0f61-43a9-9671-7db0f82b963f",
+  "id": "a3dbd3f4-b7ce-4c98-b3c9-b78a6bdfcdc9",
   "prevId": "dda61c42-acf3-44b9-a768-4d6d622ddcae",
   "version": "7",
   "dialect": "postgresql",
@@ -191,22 +191,6 @@
               "expression": "email",
               "isExpression": false,
               "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"users\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "users_email_lower_unique": {
-          "name": "users_email_lower_unique",
-          "columns": [
-            {
-              "expression": "lower(\"email\")",
-              "asc": true,
-              "isExpression": true,
               "nulls": "last"
             }
           ],
@@ -4648,6 +4632,20 @@
           "primaryKey": false,
           "notNull": false
         },
+        "uid": {
+          "name": "uid",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -4721,6 +4719,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "meeting_calendar_event_uid_uq": {
+          "name": "meeting_calendar_event_uid_uq",
+          "columns": [
+            {
+              "expression": "uid",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -4754,6 +4767,304 @@
         "meeting_calendar_event_delivery_payload": {
           "name": "meeting_calendar_event_delivery_payload",
           "value": "(\"meeting_calendar_events\".\"delivery_mode\" = 'provider_event' AND \"meeting_calendar_events\".\"connection_id\" IS NOT NULL AND \"meeting_calendar_events\".\"calendar_id\" IS NOT NULL AND \"meeting_calendar_events\".\"vendor_event_id\" IS NOT NULL AND \"meeting_calendar_events\".\"balo_booking_id\" IS NOT NULL) OR (\"meeting_calendar_events\".\"delivery_mode\" = 'ics' AND \"meeting_calendar_events\".\"connection_id\" IS NULL AND \"meeting_calendar_events\".\"calendar_id\" IS NULL AND \"meeting_calendar_events\".\"vendor_event_id\" IS NULL AND \"meeting_calendar_events\".\"balo_booking_id\" IS NULL)"
+        },
+        "meeting_calendar_event_sequence_non_negative": {
+          "name": "meeting_calendar_event_sequence_non_negative",
+          "value": "\"meeting_calendar_events\".\"sequence\" >= 0"
+        },
+        "meeting_calendar_event_provider_event_is_expert": {
+          "name": "meeting_calendar_event_provider_event_is_expert",
+          "value": "\"meeting_calendar_events\".\"delivery_mode\" <> 'provider_event' OR \"meeting_calendar_events\".\"party\" = 'expert'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.meeting_calendar_deliveries": {
+      "name": "meeting_calendar_deliveries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "calendar_event_id": {
+          "name": "calendar_event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recipient_user_id": {
+          "name": "recipient_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recipient_guest_id": {
+          "name": "recipient_guest_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "channel": {
+          "name": "channel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "method": {
+          "name": "method",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "meeting_calendar_delivery_outcome",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "claim_token": {
+          "name": "claim_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_attempted_at": {
+          "name": "last_attempted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_reason": {
+          "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_message_id": {
+          "name": "provider_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "meeting_calendar_delivery_user_send_uq": {
+          "name": "meeting_calendar_delivery_user_send_uq",
+          "columns": [
+            {
+              "expression": "calendar_event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "recipient_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "method",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"meeting_calendar_deliveries\".\"recipient_user_id\" IS NOT NULL AND \"meeting_calendar_deliveries\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_calendar_delivery_guest_send_uq": {
+          "name": "meeting_calendar_delivery_guest_send_uq",
+          "columns": [
+            {
+              "expression": "calendar_event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "recipient_guest_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sequence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "method",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"meeting_calendar_deliveries\".\"recipient_guest_id\" IS NOT NULL AND \"meeting_calendar_deliveries\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_calendar_delivery_calendar_event_idx": {
+          "name": "meeting_calendar_delivery_calendar_event_idx",
+          "columns": [
+            {
+              "expression": "calendar_event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_calendar_delivery_recipient_user_idx": {
+          "name": "meeting_calendar_delivery_recipient_user_idx",
+          "columns": [
+            {
+              "expression": "recipient_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "meeting_calendar_delivery_recipient_guest_idx": {
+          "name": "meeting_calendar_delivery_recipient_guest_idx",
+          "columns": [
+            {
+              "expression": "recipient_guest_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "meeting_calendar_deliveries_calendar_event_id_meeting_calendar_events_id_fk": {
+          "name": "meeting_calendar_deliveries_calendar_event_id_meeting_calendar_events_id_fk",
+          "tableFrom": "meeting_calendar_deliveries",
+          "tableTo": "meeting_calendar_events",
+          "columnsFrom": ["calendar_event_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "meeting_calendar_deliveries_recipient_user_id_users_id_fk": {
+          "name": "meeting_calendar_deliveries_recipient_user_id_users_id_fk",
+          "tableFrom": "meeting_calendar_deliveries",
+          "tableTo": "users",
+          "columnsFrom": ["recipient_user_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "meeting_calendar_deliveries_recipient_guest_id_meeting_guests_id_fk": {
+          "name": "meeting_calendar_deliveries_recipient_guest_id_meeting_guests_id_fk",
+          "tableFrom": "meeting_calendar_deliveries",
+          "tableTo": "meeting_guests",
+          "columnsFrom": ["recipient_guest_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "meeting_calendar_delivery_recipient_exactly_one": {
+          "name": "meeting_calendar_delivery_recipient_exactly_one",
+          "value": "(\"meeting_calendar_deliveries\".\"recipient_user_id\" IS NULL) <> (\"meeting_calendar_deliveries\".\"recipient_guest_id\" IS NULL)"
+        },
+        "meeting_calendar_delivery_channel_known": {
+          "name": "meeting_calendar_delivery_channel_known",
+          "value": "\"meeting_calendar_deliveries\".\"channel\" IN ('email')"
+        },
+        "meeting_calendar_delivery_method_known": {
+          "name": "meeting_calendar_delivery_method_known",
+          "value": "\"meeting_calendar_deliveries\".\"method\" IN ('REQUEST')"
+        },
+        "meeting_calendar_delivery_sequence_non_negative": {
+          "name": "meeting_calendar_delivery_sequence_non_negative",
+          "value": "\"meeting_calendar_deliveries\".\"sequence\" >= 0"
+        },
+        "meeting_calendar_delivery_attempt_count_positive": {
+          "name": "meeting_calendar_delivery_attempt_count_positive",
+          "value": "\"meeting_calendar_deliveries\".\"attempt_count\" >= 1"
+        },
+        "meeting_calendar_delivery_sent_at_paired": {
+          "name": "meeting_calendar_delivery_sent_at_paired",
+          "value": "(\"meeting_calendar_deliveries\".\"outcome\" = 'sent') = (\"meeting_calendar_deliveries\".\"sent_at\" IS NOT NULL)"
+        },
+        "meeting_calendar_delivery_failure_reason_paired": {
+          "name": "meeting_calendar_delivery_failure_reason_paired",
+          "value": "(\"meeting_calendar_deliveries\".\"outcome\" = 'failed') = (\"meeting_calendar_deliveries\".\"failure_reason\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
@@ -16051,6 +16362,11 @@
       "name": "meeting_calendar_delivery_mode",
       "schema": "public",
       "values": ["provider_event", "ics"]
+    },
+    "public.meeting_calendar_delivery_outcome": {
+      "name": "meeting_calendar_delivery_outcome",
+      "schema": "public",
+      "values": ["pending", "sent", "failed"]
     },
     "public.meeting_context_type": {
       "name": "meeting_context_type",

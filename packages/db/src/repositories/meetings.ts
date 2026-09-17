@@ -31,6 +31,10 @@ import {
   syncProjectionScheduleTx,
 } from './_shared/consultation-projection';
 import { cancelMeetingTx } from './_shared/cancel-meeting-tx';
+import {
+  bumpCalendarSequencesForMeetingTx,
+  type MeetingCalendarSequenceBump,
+} from './_shared/calendar-sequence';
 import type { DbExecutor } from './_shared/db-executor';
 import { extendGuestExpiryForMeetingTx } from './_shared/guest-expiry';
 import {
@@ -299,6 +303,13 @@ export interface RescheduleMutationResult extends MeetingMutationResult {
    * Keying on this id makes every successful move its own event.
    */
   rescheduleAuditId: string;
+  /**
+   * BAL-475 — every LIVE calendar row for this meeting (client first, then expert), AFTER its
+   * SEQUENCE bump in this same transaction. The ICS re-send fan-out keys on these rows. `[]`
+   * when the meeting has none (e.g. a pre-BAL-475 booking without a client row, or an expert
+   * row soft-deleted by the amend job's 404 arm).
+   */
+  calendarEvents: MeetingCalendarSequenceBump[];
 }
 
 /**
@@ -1125,6 +1136,9 @@ export const meetingsRepository = {
    *   2. The guarded compare-and-set, as above.
    *   3. `syncProjectionScheduleTx` — moves the `consultations` projection.
    *   4. `extendGuestExpiryForMeetingTx` — extends every live guest link (extend-only).
+   *   4b. `bumpCalendarSequencesForMeetingTx` (BAL-475) — +1 on the RFC 5545 SEQUENCE of every
+   *      live `meeting_calendar_events` row, returned as `calendarEvents`. Here, under step 1's
+   *      `FOR UPDATE`, so one committed move is exactly one bump and a rolled-back move is none.
    *   5. `recordMeetingRescheduled` — the `meeting.rescheduled` audit row, LAST among the
    *      writes: an audit row left behind by a rolled-back move would attest to a move that
    *      never happened.
@@ -1190,6 +1204,10 @@ export const meetingsRepository = {
         new Date(meeting.scheduledEnd.getTime() + GUEST_TOKEN_TTL_AFTER_END_MS)
       );
 
+      // 4b. BAL-475 — bump every live calendar row's SEQUENCE on the SAME tx, so the re-sent ICS
+      // and the moved window commit (or roll back) together.
+      const calendarEvents = await bumpCalendarSequencesForMeetingTx(tx, meeting.id);
+
       // 5. LAST — an audit row left behind by a rolled-back move would attest to a move that
       // never happened.
       const rescheduleAuditId = await recordMeetingRescheduled(tx, {
@@ -1202,7 +1220,14 @@ export const meetingsRepository = {
         guestLinksExtended,
       });
 
-      return { meeting, expertProfileId, previous: before, guestLinksExtended, rescheduleAuditId };
+      return {
+        meeting,
+        expertProfileId,
+        previous: before,
+        guestLinksExtended,
+        rescheduleAuditId,
+        calendarEvents,
+      };
     });
   },
 

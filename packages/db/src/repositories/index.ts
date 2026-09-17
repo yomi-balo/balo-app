@@ -127,6 +127,28 @@ export type {
   NewMeetingCalendarEvent,
   MeetingCalendarDeliveryMode,
 } from '../schema';
+// BAL-475 — the reschedule SEQUENCE bump's row shape (`RescheduleMutationResult.calendarEvents`).
+// The WRITER stays a `_shared/` internal of `meetingsRepository.updateSchedule`; only the type crosses.
+export type { MeetingCalendarSequenceBump } from './_shared/calendar-sequence';
+// ── Calendar-invite send ledger (BAL-475, decision O4) ───────────────────────────────────
+export {
+  meetingCalendarDeliveriesRepository,
+  CALENDAR_SEND_CLAIM_LEASE_MINUTES,
+} from './meeting-calendar-deliveries';
+export type {
+  CalendarSendRecipient,
+  ClaimCalendarSendInput,
+  ClaimCalendarSendResult,
+  MarkCalendarSendSentInput,
+  MarkCalendarSendFailedInput,
+} from './meeting-calendar-deliveries';
+export type {
+  MeetingCalendarDelivery,
+  NewMeetingCalendarDelivery,
+  MeetingCalendarDeliveryOutcome,
+  MeetingCalendarDeliveryChannel,
+  MeetingCalendarDeliveryMethod,
+} from '../schema';
 export { availabilityRulesRepository, type WeeklyRuleInput } from './availability-rules';
 export { availabilityOverridesRepository } from './availability-overrides';
 export type { CreateAvailabilityOverrideInput } from './availability-overrides';

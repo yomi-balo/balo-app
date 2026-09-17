@@ -55,6 +55,7 @@ import {
 } from '@balo/shared/meetings';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { notificationEvents } from '../../notifications/index.js';
+import { publishGuestAddedCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
 import { mintGuestInviteToken } from '../../lib/guest-token.js';
 import { hasEngagementCapability } from './authorize-engagement-host.js';
 import {
@@ -322,6 +323,10 @@ interface AnnounceInvitesParams {
   entryPoint: GuestInviteEntryPoint;
   actorUserId: string;
   contextType: PrimaryMeetingContext['contextType'];
+  /** BAL-475 — the calendar-invite fan-out needs the bare meeting id and the invited SIDE
+   *  (`meetingId` is not otherwise threaded through this params object). */
+  meetingId: string;
+  side: MeetingGuestSide;
 }
 
 /**
@@ -417,16 +422,50 @@ async function announceOneRosterChange(
 }
 
 /**
- * Publish the guest-facing invite email and the same-party roster FYI, then record
- * analytics. Best-effort: the rows are already committed (see the module docblock).
+ * Publish the guest-facing invite email, the BAL-475 calendar invite, and the same-party
+ * roster FYI, then record analytics. Best-effort: the rows are already committed (see the
+ * module docblock).
  *
- * ⚠ THE TWO PASSES ARE SEQUENTIAL AND SEPARATE, DELIBERATELY. Every guest's own invite goes
- * out before any roster FYI, so a queue failure part-way through cannot leave the party
- * notified about a colleague who never received their link.
+ * ⚠ THE PASSES ARE SEQUENTIAL AND SEPARATE, DELIBERATELY. Every guest's own invite email goes
+ * out before their calendar invite, which goes out before any roster FYI — so a queue failure
+ * part-way through cannot leave the party notified about a colleague who never received their
+ * join link.
+ *
+ * ⚠ THE CALENDAR-INVITE PUBLISH RUNS UNCONDITIONALLY (BEFORE the `samePartyUserIds.length ===
+ * 0` early return below), because that guard is specific to the roster FYI: the EXPERT side
+ * always resolves `samePartyUserIds` to `[]` (`resolveSamePartyRecipients`'s own docblock), so
+ * placing the calendar-invite call after the guard would silently skip every expert-side
+ * guest's calendar invite.
  */
 async function announceInvites(params: AnnounceInvitesParams): Promise<void> {
   for (const row of params.rows) {
     await announceOneInvite(params, row);
+  }
+
+  // ⚠ `publishGuestAddedCalendarInvites`'s own contract is "never throws" (each recipient
+  // publish is individually try/caught) — wrapped here anyway, matching this module's
+  // best-effort-over-committed-rows rule (see the module docblock), so a contract violation
+  // still cannot undo a committed invite.
+  try {
+    await publishGuestAddedCalendarInvites(
+      {
+        meetingId: params.meetingId,
+        party: params.side,
+        guestIds: params.rows.map((row) => row.id),
+        contextType: params.contextType,
+      },
+      log
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: params.meetingId,
+        side: params.side,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Calendar invite publish threw despite its never-throws contract — the guest invite already committed'
+    );
   }
 
   if (params.samePartyUserIds.length === 0) return;
@@ -727,6 +766,8 @@ export async function inviteGuests(input: InviteGuestsInput): Promise<InviteGues
     entryPoint: input.entryPoint,
     actorUserId: input.actorUserId,
     contextType: subject.contextType,
+    meetingId: input.meetingId,
+    side,
   });
 
   return {

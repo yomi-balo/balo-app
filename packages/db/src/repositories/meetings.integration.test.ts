@@ -6,6 +6,7 @@ import {
   auditEvents,
   consultations,
   engagements,
+  meetingCalendarEvents,
   meetingContexts,
   meetingGuests,
   meetings,
@@ -23,6 +24,7 @@ import {
 } from '../test/factories';
 import { expectConstraintViolation } from '../test/helpers/expect-check-violation';
 import { findProjectionForMeeting } from './_shared/consultation-projection';
+import { meetingCalendarEventsRepository } from './meeting-calendar-events';
 import { InvalidPresenceTimestampError, meetingPresenceRepository } from './meeting-presence';
 import {
   meetingsRepository,
@@ -552,6 +554,106 @@ describe('meetingsRepository.updateSchedule', () => {
     expect(audits.filter((row) => row.action === 'meeting.rescheduled')).toHaveLength(0);
     const [row] = await db.select().from(meetingGuests).where(eq(meetingGuests.id, guest.guest.id));
     expect(row?.expiresAt.getTime()).toBe(soon.getTime());
+  });
+
+  // ── BAL-475 — step 4b, the calendar SEQUENCE bump ─────────────────────────────────────
+
+  /** One live calendar row per party on `meetingId`, both at sequence 0. */
+  async function seedCalendarRows(
+    meetingId: string
+  ): Promise<{ clientId: string; expertId: string }> {
+    const client = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId,
+      party: 'client',
+    });
+    const expert = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId,
+      party: 'expert',
+    });
+    return { clientId: client.id, expertId: expert.id };
+  }
+
+  async function storedSequences(meetingId: string): Promise<number[]> {
+    const rows = await db
+      .select({ sequence: meetingCalendarEvents.sequence })
+      .from(meetingCalendarEvents)
+      .where(eq(meetingCalendarEvents.meetingId, meetingId));
+    return rows.map((row) => row.sequence);
+  }
+
+  it('bumps every live calendar row once per move and returns them as calendarEvents', async () => {
+    const { meeting } = await meetingFactory();
+    const { clientId, expertId } = await seedCalendarRows(meeting.id);
+
+    const first = await meetingsRepository.updateSchedule(meeting.id, schedule(48), {
+      actorUserId: null,
+    });
+
+    expect(first.calendarEvents).toEqual([
+      { id: clientId, party: 'client', deliveryMode: 'ics', sequence: 1 },
+      { id: expertId, party: 'expert', deliveryMode: 'ics', sequence: 1 },
+    ]);
+    expect(await storedSequences(meeting.id)).toEqual([1, 1]);
+
+    const second = await meetingsRepository.updateSchedule(meeting.id, schedule(72), {
+      actorUserId: null,
+    });
+
+    expect(second.calendarEvents.map((row) => row.sequence)).toEqual([2, 2]);
+    expect(await storedSequences(meeting.id)).toEqual([2, 2]);
+  });
+
+  it('answers calendarEvents: [] for a meeting with no calendar rows', async () => {
+    const { meeting } = await meetingFactory();
+
+    const result = await meetingsRepository.updateSchedule(meeting.id, schedule(48), {
+      actorUserId: null,
+    });
+
+    expect(result.calendarEvents).toEqual([]);
+  });
+
+  it('a REFUSED move (cancelled meeting) bumps no SEQUENCE', async () => {
+    const { meeting } = await meetingFactory();
+    await seedCalendarRows(meeting.id);
+    await db.update(meetings).set({ status: 'cancelled' }).where(eq(meetings.id, meeting.id));
+
+    await expect(
+      meetingsRepository.updateSchedule(meeting.id, schedule(48), { actorUserId: null })
+    ).rejects.toBeInstanceOf(MeetingNotReschedulableError);
+
+    expect(await storedSequences(meeting.id)).toEqual([0, 0]);
+  });
+
+  /**
+   * ⚠ THE ATOMICITY CLAIM: the bump runs on the move's `tx`, BEFORE the audit write (step 5).
+   * An actor id naming no user makes that LAST write fail 23503 AFTER step 4b has run, so the
+   * whole move — window AND SEQUENCE — must roll back. No upstream step touches the actor, so
+   * nothing earlier can kill the transaction first (the orphan-actor vacuity trap).
+   * `updateSchedule` is its own `db.transaction` (a SAVEPOINT under this harness), so the
+   * outer transaction survives the rollback and the reads below are valid.
+   *
+   * ⚠ F22 (fix round 1, R22) — A HARNESS LIMIT, STATED HONESTLY: this integration harness runs
+   * every statement through a single connection inside ONE outer transaction (max:1 pool —
+   * `reference_db_integration_harness_no_concurrency`), so a savepoint rollback here undoes a
+   * bump issued on the plain module `db` just as completely as one issued on `tx` — this test
+   * CANNOT distinguish "the bump runs inside the move's own transaction" from "the bump runs on
+   * the ambient module `db`". What this test actually proves is the OBSERVABLE atomicity (both
+   * roll back together); the STRUCTURAL guarantee — that `bumpCalendarSequencesForMeetingTx`
+   * is called with the move's own `tx`, never the bare `db` — is a unit-level property, pinned
+   * by the argument passed at each call site rather than by this integration behaviour.
+   */
+  it('a move that fails AFTER the bump (audit FK) rolls the SEQUENCE back with the window', async () => {
+    const { meeting } = await meetingFactory();
+    await seedCalendarRows(meeting.id);
+
+    await expect(
+      meetingsRepository.updateSchedule(meeting.id, schedule(48), { actorUserId: randomUUID() })
+    ).rejects.toMatchObject({ code: '23503' });
+
+    expect(await storedSequences(meeting.id)).toEqual([0, 0]);
+    const [row] = await db.select().from(meetings).where(eq(meetings.id, meeting.id));
+    expect(row?.scheduledStart.getTime()).toBe(meeting.scheduledStart.getTime());
   });
 });
 

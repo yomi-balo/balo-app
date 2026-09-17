@@ -235,16 +235,29 @@ export interface MeetingServerEventMap {
     meeting_id: string;
     context_type: MeetingBookingContextType;
     /**
-     * ⚠ ALWAYS `'expert'` IN SLICE 1, and typed as the pair anyway. `calendar_connections` is
-     * keyed on `expert_profile_id`, so the CLIENT party can only ever be delivered an ICS —
-     * BAL-475 emits this same event with `party: 'client'` rather than inventing a second one.
+     * `'expert'` IN SLICE 1 ONLY. Since BAL-475, `runPostCommitCalendarSteps`
+     * (`services/meetings/provision-meeting.ts`) emits this event TWICE per fresh booking —
+     * once per party — because `calendar_connections` is keyed on `expert_profile_id`, so the
+     * CLIENT party can only ever be delivered an ICS (`recordClientCalendarEntry`, always
+     * `'ics'` or `'failed'` — see `delivery` below), never a `provider_event`.
      */
     party: 'client' | 'expert';
     /**
-     * `provider_event` — written into a connected calendar. `ics` — ADR-1044 Ruling 1: no
-     * writable connection, so the condition is RECORDED and BAL-475 delivers. `skipped` — no
-     * expert, or no live context/company to describe. `failed` — the projection threw and was
-     * swallowed; the booking still stands.
+     * `provider_event` — written into a connected calendar (EXPERT party only). `ics` —
+     * ADR-1044 Ruling 1: no writable connection, so the condition is RECORDED and BAL-475
+     * delivers the ICS from it; also the ONLY value the CLIENT party ever reports on success.
+     * `skipped` — no expert, or no live context/company to describe (EXPERT party only; the
+     * client party never skips). `failed` — the projection (or `recordClientCalendarEntry`)
+     * threw and was swallowed; the booking still stands.
+     *
+     * ⚠ SINCE BAL-475 (U3, ADR-1044 Ruling 1 amendment), `failed` ALSO covers an EXPERT party
+     * whose writable connection existed but whose VENDOR CREATE ITSELF failed —
+     * `project-booking-to-calendar.ts` records an `ics` fallback ROW for that party (the
+     * expert still gets a Balo-organised invite) but DELIBERATELY still reports `'failed'`
+     * here, so this event keeps measuring the vendor failure rate rather than blending it into
+     * the same `'ics'` bucket a never-connected expert reports. The row and this event's
+     * `delivery` field can therefore disagree by design — read the row (via BAL-475's own
+     * `meeting_calendar_events` state, never this event) to know what was actually sent.
      */
     delivery: 'provider_event' | 'ics' | 'skipped' | 'failed';
     /** The BOOKING actor — the same `distinct_id` `meeting_provisioned` carries. */

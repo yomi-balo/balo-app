@@ -1,0 +1,368 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const {
+  mockListLiveByMeeting,
+  mockListByMeetingContexts,
+  mockPublish,
+  mockResolveRecipients,
+  mockCaptureException,
+} = vi.hoisted(() => ({
+  mockListLiveByMeeting: vi.fn(),
+  mockListByMeetingContexts: vi.fn(),
+  mockPublish: vi.fn(),
+  mockResolveRecipients: vi.fn(),
+  mockCaptureException: vi.fn(),
+}));
+
+// ⚠ ONLY `listLiveByMeeting` is exposed on `meetingCalendarEventsRepository` — a write call
+// from this module would be a TypeError, which is the structural proof that the publisher
+// never double-increments SEQUENCE (§4.5).
+vi.mock('@balo/db', () => ({
+  meetingCalendarEventsRepository: { listLiveByMeeting: mockListLiveByMeeting },
+  meetingContextsRepository: { listByMeeting: mockListByMeetingContexts },
+}));
+vi.mock('../../notifications/index.js', () => ({
+  notificationEvents: { publish: mockPublish },
+}));
+vi.mock('./resolve-calendar-invite-recipients.js', () => ({
+  resolveCalendarInviteRecipients: mockResolveRecipients,
+}));
+vi.mock('@sentry/node', () => ({ captureException: mockCaptureException }));
+vi.mock('@balo/shared/logging', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
+const {
+  publishBookingCalendarInvites,
+  publishRescheduleCalendarInvites,
+  publishGuestAddedCalendarInvites,
+} = await import('./publish-calendar-invites.js');
+
+function fakeLog() {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+}
+
+const MEETING_ID = 'meeting-1';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockPublish.mockResolvedValue(undefined);
+  mockListByMeetingContexts.mockResolvedValue([{ contextType: 'case', contextId: 'ctx-1' }]);
+});
+
+describe('publishBookingCalendarInvites', () => {
+  it('one publish per (row × recipient), with exact correlationIds', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 0 },
+      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+    ]);
+    mockResolveRecipients.mockImplementation(({ party }: { party: string }) =>
+      Promise.resolve(
+        party === 'client'
+          ? [{ kind: 'user', userId: 'booker-1' }]
+          : [{ kind: 'user', userId: 'expert-1' }]
+      )
+    );
+    const log = fakeLog();
+
+    await publishBookingCalendarInvites(
+      { meetingId: MEETING_ID, contextType: 'case', expertProfileId: 'ep-1' },
+      log
+    );
+
+    expect(mockPublish).toHaveBeenCalledTimes(2);
+    // F13 (fix round 1, R12) — the FULL spec, not a partial `objectContaining`: a publisher
+    // emitting the wrong `transition` or omitting `recipient` must fail this test.
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'booked:row-client:0:client:user:booker-1',
+      calendarInvite: {
+        meetingId: MEETING_ID,
+        party: 'client',
+        calendarEventId: 'row-client',
+        method: 'REQUEST',
+        transition: 'booked',
+        recipient: { kind: 'user', userId: 'booker-1' },
+        contextType: 'case',
+      },
+    });
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'booked:row-expert:0:expert:user:expert-1',
+      calendarInvite: {
+        meetingId: MEETING_ID,
+        party: 'expert',
+        calendarEventId: 'row-expert',
+        method: 'REQUEST',
+        transition: 'booked',
+        recipient: { kind: 'user', userId: 'expert-1' },
+        contextType: 'case',
+      },
+    });
+  });
+
+  it('F6 (fix round 1, R5/S9) — one row resolver rejecting does not abort the fan-out: the other row still publishes, Sentry is called, the function resolves', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 0 },
+      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+    ]);
+    mockResolveRecipients.mockImplementation(({ party }: { party: string }) => {
+      if (party === 'client') return Promise.reject(new Error('transient read failure'));
+      return Promise.resolve([{ kind: 'user', userId: 'expert-1' }]);
+    });
+    const log = fakeLog();
+
+    await expect(
+      publishBookingCalendarInvites(
+        { meetingId: MEETING_ID, contextType: 'case', expertProfileId: 'ep-1' },
+        log
+      )
+    ).resolves.toBeUndefined();
+
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith(
+      'meeting.calendar_invite',
+      expect.objectContaining({
+        calendarInvite: expect.objectContaining({ party: 'expert' }),
+      })
+    );
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        party: 'client',
+        step: 'resolveCalendarInviteRecipients',
+        error: 'transient read failure',
+        stack: expect.any(String),
+      }),
+      'Calendar invite publisher read failed'
+    );
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+
+  it('F6 — the top-level listLiveByMeeting rejecting logs + Sentry and resolves, publishing nothing', async () => {
+    mockListLiveByMeeting.mockRejectedValue(new Error('db down'));
+    const log = fakeLog();
+
+    await expect(
+      publishBookingCalendarInvites(
+        { meetingId: MEETING_ID, contextType: 'case', expertProfileId: 'ep-1' },
+        log
+      )
+    ).resolves.toBeUndefined();
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ step: 'listLiveByMeeting', error: 'db down' }),
+      'Calendar invite publisher read failed'
+    );
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+
+  it('the expert member is skipped for a provider_event row (no recipients) — logs the reason, publishes nothing for it', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-expert', party: 'expert', deliveryMode: 'provider_event', sequence: 0 },
+    ]);
+    mockResolveRecipients.mockResolvedValue([]);
+    const log = fakeLog();
+
+    await publishBookingCalendarInvites(
+      { meetingId: MEETING_ID, contextType: 'case', expertProfileId: 'ep-1' },
+      log
+    );
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'provider_event_party' }),
+      'Calendar invite not enqueued'
+    );
+  });
+
+  it('no live rows ⇒ one skip log, no publish', async () => {
+    mockListLiveByMeeting.mockResolvedValue([]);
+    const log = fakeLog();
+
+    await publishBookingCalendarInvites(
+      { meetingId: MEETING_ID, contextType: 'case', expertProfileId: 'ep-1' },
+      log
+    );
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'no_calendar_row' }),
+      'Calendar invite not enqueued'
+    );
+  });
+
+  it('one recipient publish throwing does not stop the next, and never rejects', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 0 },
+    ]);
+    mockResolveRecipients.mockResolvedValue([
+      { kind: 'user', userId: 'a' },
+      { kind: 'user', userId: 'b' },
+    ]);
+    mockPublish.mockRejectedValueOnce(new Error('queue down')).mockResolvedValueOnce(undefined);
+    const log = fakeLog();
+
+    await expect(
+      publishBookingCalendarInvites(
+        { meetingId: MEETING_ID, contextType: 'case', expertProfileId: 'ep-1' },
+        log
+      )
+    ).resolves.toBeUndefined();
+
+    expect(mockPublish).toHaveBeenCalledTimes(2);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'queue down' }),
+      'Calendar invite enqueue failed'
+    );
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+});
+
+describe('publishRescheduleCalendarInvites', () => {
+  it('uses the BUMPED rows passed in and never reads sequences itself', async () => {
+    mockResolveRecipients.mockResolvedValue([{ kind: 'user', userId: 'booker-1' }]);
+    const log = fakeLog();
+
+    await publishRescheduleCalendarInvites(
+      {
+        meetingId: MEETING_ID,
+        rescheduleAuditId: 'audit-1',
+        expertProfileId: 'ep-1',
+        calendarEvents: [{ id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 1 }],
+      },
+      log
+    );
+
+    expect(mockListLiveByMeeting).not.toHaveBeenCalled();
+    // F13 — the FULL spec.
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'rescheduled:audit-1:client:user:booker-1',
+      calendarInvite: {
+        meetingId: MEETING_ID,
+        party: 'client',
+        calendarEventId: 'row-client',
+        method: 'REQUEST',
+        transition: 'rescheduled',
+        recipient: { kind: 'user', userId: 'booker-1' },
+        contextType: 'case',
+      },
+    });
+  });
+
+  it('no calendar rows ⇒ skip, no publish', async () => {
+    const log = fakeLog();
+
+    await publishRescheduleCalendarInvites(
+      {
+        meetingId: MEETING_ID,
+        rescheduleAuditId: 'audit-1',
+        expertProfileId: null,
+        calendarEvents: [],
+      },
+      log
+    );
+
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('F6 — a row recipient-resolver rejecting is logged + Sentried and does not abort the other row', async () => {
+    mockResolveRecipients.mockImplementation(({ party }: { party: string }) => {
+      if (party === 'client') return Promise.reject(new Error('read blip'));
+      return Promise.resolve([{ kind: 'user', userId: 'expert-1' }]);
+    });
+    const log = fakeLog();
+
+    await expect(
+      publishRescheduleCalendarInvites(
+        {
+          meetingId: MEETING_ID,
+          rescheduleAuditId: 'audit-1',
+          expertProfileId: 'ep-1',
+          calendarEvents: [
+            { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 1 },
+            { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 1 },
+          ],
+        },
+        log
+      )
+    ).resolves.toBeUndefined();
+
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+
+  it('F6 — the context read (logs only) failing degrades contextType to null, publish still proceeds', async () => {
+    mockListByMeetingContexts.mockRejectedValue(new Error('context read down'));
+    mockResolveRecipients.mockResolvedValue([{ kind: 'user', userId: 'booker-1' }]);
+    const log = fakeLog();
+
+    await publishRescheduleCalendarInvites(
+      {
+        meetingId: MEETING_ID,
+        rescheduleAuditId: 'audit-1',
+        expertProfileId: 'ep-1',
+        calendarEvents: [{ id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 1 }],
+      },
+      log
+    );
+
+    expect(mockPublish).toHaveBeenCalledWith(
+      'meeting.calendar_invite',
+      expect.objectContaining({
+        calendarInvite: expect.objectContaining({ contextType: null }),
+      })
+    );
+    expect(mockCaptureException).toHaveBeenCalled();
+  });
+});
+
+describe('publishGuestAddedCalendarInvites', () => {
+  it('one publish per guest id, none for other recipients', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 2 },
+    ]);
+    const log = fakeLog();
+
+    await publishGuestAddedCalendarInvites(
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        guestIds: ['guest-1', 'guest-2'],
+        contextType: 'case',
+      },
+      log
+    );
+
+    expect(mockPublish).toHaveBeenCalledTimes(2);
+    // F13 — the FULL spec.
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'guest_added:guest-1',
+      calendarInvite: {
+        meetingId: MEETING_ID,
+        party: 'client',
+        calendarEventId: 'row-client',
+        method: 'REQUEST',
+        transition: 'guest_added',
+        recipient: { kind: 'guest', guestId: 'guest-1' },
+        contextType: 'case',
+      },
+    });
+  });
+
+  it('skips when the side has no live row', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+    ]);
+    const log = fakeLog();
+
+    await publishGuestAddedCalendarInvites(
+      { meetingId: MEETING_ID, party: 'client', guestIds: ['guest-1'], contextType: 'case' },
+      log
+    );
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'no_calendar_row' }),
+      'Calendar invite not enqueued'
+    );
+  });
+});

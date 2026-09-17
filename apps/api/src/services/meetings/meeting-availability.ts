@@ -21,6 +21,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { enqueueAvailabilityCacheRebuild } from '../../jobs/availability-cache.js';
 import { enqueueMeetingCalendarAmend } from '../../jobs/meeting-calendar-amend.js';
 import { notificationEvents } from '../../notifications/index.js';
+import { publishRescheduleCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
 import { dailyRoomTeardown } from '../daily/rooms.js';
 import { formatExpiryDate, resolveMeetingTitle } from './guest-participation.js';
 import { raiseAdminAlert } from '../admin-alerts/raise.js';
@@ -98,12 +99,20 @@ import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
  * actionable. Map each error to a status code and a fixed literal, the way `app.ts`'s error
  * handler does — do not pass the message to the client.
  *
- * ⚠ AND IT NOTIFIES NOTHING — still true after BAL-410, and for exactly the stated reason.
- * Booking confirmations are **BAL-400's** (amended by BAL-129, which built the booking route and
- * deliberately publishes nothing — see below), reschedules BAL-409/BAL-411's, and cancellations
- * BAL-410's — whose `booking.cancelled` publish lives in the cancel ROUTE, not in `cancelMeeting`
- * below, precisely because publishing from here WOULD fire on a dev seed run: the seeder is a
- * live caller of both `create` and `cancel`.
+ * ⚠ AND IT NOTIFIES NOTHING (of the CLIENT/EXPERT lifecycle mail) — still true after BAL-410,
+ * and for exactly the stated reason. Booking confirmations are **BAL-400's** (amended by
+ * BAL-129, which built the booking route and deliberately publishes nothing — see below),
+ * reschedules BAL-409/BAL-411's, and cancellations BAL-410's — whose `booking.cancelled` publish
+ * lives in the cancel ROUTE, not in `cancelMeeting` below, precisely because publishing from
+ * here WOULD fire on a dev seed run: the seeder is a live caller of both `create` and `cancel`.
+ *
+ * ⚠ THE ESTABLISHED EXCEPTION, WIDENED BY BAL-475: `rescheduleMeeting` already published
+ * `meeting.guest_rescheduled` directly from THIS post-commit block (never from
+ * `updateSchedule`, which is a bare repository transaction and cannot enqueue —
+ * `repositories-never-notify.test.ts`). BAL-475's `publishRescheduleCalendarInvites` follows
+ * the identical seam: it reads `result.calendarEvents` (the rows `updateSchedule` already
+ * bumped) and publishes from here, never from the repository. The seeder therefore never fires
+ * it either, for the same reason it never fires the guest notification.
  *
  * ⚠ THE `booking.confirmed` RULE IS A DOCUMENTED ORPHAN, AND IT IS BAL-400'S TO WIRE.
  * `apps/api/src/notifications/engine/rules.ts` already defines `'booking.confirmed'` with an
@@ -288,7 +297,10 @@ async function publishGuestRescheduledNotifications(
  *      with the WINDOW-SCOPED jobId, so a duplicate enqueue for the same target window is
  *      dropped and a second reschedule to a different window is never dropped.
  *   9. `publishGuestRescheduledNotifications` — one publish per live guest.
- * (`booking.rescheduled`, step 10, is published from `apps/web` AFTER this returns 200 — a
+ *   10. `publishRescheduleCalendarInvites` (BAL-475) — the Balo-organised ICS re-send, off the
+ *      SEQUENCE bump `updateSchedule`'s transaction already committed (`result.calendarEvents`).
+ *      Never re-reads or re-bumps SEQUENCE itself.
+ * (`booking.rescheduled`, step 11, is published from `apps/web` AFTER this returns 200 — a
  * different process, never awaited here.)
  */
 export async function rescheduleMeeting(
@@ -343,6 +355,33 @@ export async function rescheduleMeeting(
     result.rescheduleAuditId,
     log
   );
+
+  // BAL-475 — the Balo-organised ICS re-send. SEQUENCE was already bumped inside
+  // `updateSchedule`'s transaction (§4.4.3); this reads the ALREADY-BUMPED rows off `result`
+  // and never re-reads or re-bumps anything itself. `publishRescheduleCalendarInvites`'s own
+  // contract is "never throws" (each recipient publish is individually try/caught) — wrapped
+  // here anyway, matching this module's own rule that everything post-commit must be, so a
+  // contract violation still cannot turn an already-committed reschedule into a 500.
+  try {
+    await publishRescheduleCalendarInvites(
+      {
+        meetingId,
+        rescheduleAuditId: result.rescheduleAuditId,
+        expertProfileId: result.expertProfileId,
+        calendarEvents: result.calendarEvents,
+      },
+      log
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Calendar invite publish threw despite its never-throws contract — the reschedule already committed'
+    );
+  }
 
   return result;
 }

@@ -3,6 +3,7 @@ import { buildApp } from './app.js';
 import { startWorkers } from './jobs/worker.js';
 import { assertNoShowFloorOverrideUnsetInProduction } from './config/billing-floor.js';
 import { assertAppUrlSetInProduction } from './lib/app-url.js';
+import { readCalendarSmtpConfig } from './notifications/channels/calendar-smtp-config.js';
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -53,6 +54,23 @@ try {
     app.log.warn(
       'OPS_NOTIFICATION_EMAIL is not set — every `recipient: admin` notification will be SILENTLY SKIPPED, including the BAL-134 expert-absent salvage alert'
     );
+  }
+
+  // BAL-475 — the calendar-invite SMTP relay. Same posture as the two vendor-secret warnings
+  // in this file: a WARNING outside production (dev/staging routinely runs without it), an
+  // ERROR in production (so it surfaces in Axiom/Sentry immediately), and NEVER a throw —
+  // throwing here would crash-loop Railway on a missing vendor secret and take down every
+  // route to protect one notification. Absent config means every `meeting.calendar_invite`
+  // delivery is skipped and logged (`calendar-invite-delivery.ts`'s own `smtp_not_configured`
+  // skip); it never blocks a booking, a guest-add or a reschedule.
+  if (readCalendarSmtpConfig() === undefined) {
+    const message =
+      'Calendar invite SMTP relay is not configured — every meeting.calendar_invite will be SKIPPED';
+    if (process.env.NODE_ENV === 'production') {
+      app.log.error(message);
+    } else {
+      app.log.warn(message);
+    }
   }
 
   // BAL-134 — THE SYMMETRIC WARNING, and it is arguably the more urgent of the two. Unset,

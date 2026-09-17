@@ -1234,6 +1234,26 @@ export const meetingCalendarDeliveryModeEnum = pgEnum('meeting_calendar_delivery
   'ics',
 ]);
 
+/**
+ * BAL-475 — the state of ONE calendar-invite send in `meeting_calendar_deliveries` (one row
+ * per calendar event × recipient × SEQUENCE × method).
+ *
+ *  · `pending` — CLAIMED by a delivery job and not yet resolved. `claim_token` names the job
+ *                holding the claim; once the lease lapses another job may take it over (a
+ *                crashed holder).
+ *  · `sent`    — the transport ACCEPTED the message. Never re-claimed, which is what makes "no
+ *                duplicate ICS at the same SEQUENCE for the same recipient" hold.
+ *  · `failed`  — the transport REJECTED it. Re-claimable by any job.
+ *
+ * ⚠ APPEND-ONLY: a new label goes at the END, and must NOT be USED in the migration that adds
+ * it (memory `reference_enum_default_same_tx_migration_hazard`).
+ */
+export const meetingCalendarDeliveryOutcomeEnum = pgEnum('meeting_calendar_delivery_outcome', [
+  'pending',
+  'sent',
+  'failed',
+]);
+
 // ── BAL-313 — representations (schema/representations.ts) ───────────────────────────────
 
 /**

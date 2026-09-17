@@ -218,6 +218,27 @@ describe('notificationRules', () => {
     });
   });
 
+  it('meeting.calendar_invite: EMAIL ONLY, exactly one rule, to `calendar_invite_recipient`, no condition', () => {
+    const rules = notificationRules['meeting.calendar_invite'];
+    expect(rules).toEqual([
+      {
+        channel: 'email',
+        recipient: 'calendar_invite_recipient',
+        template: 'meeting-calendar-invite',
+        timing: 'immediate',
+        priority: 'normal',
+      },
+    ]);
+  });
+
+  it('⚠ `calendar_invite_recipient` is used by exactly one event', () => {
+    const users = Object.entries(notificationRules)
+      .filter(([, rules]) => rules.some((r) => r.recipient === 'calendar_invite_recipient'))
+      .map(([event]) => event);
+
+    expect(users).toEqual(['meeting.calendar_invite']);
+  });
+
   it('project.exploratory_requested has client email + in-app rules', () => {
     const rules = notificationRules['project.exploratory_requested'];
     expect(rules).toBeDefined();

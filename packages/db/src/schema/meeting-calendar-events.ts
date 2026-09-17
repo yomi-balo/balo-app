@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { meetingCalendarDeliveryModeEnum, meetingParticipantPartyEnum } from './enums';
 import { meetings } from './meetings';
@@ -38,20 +38,27 @@ import { timestamps, softDelete } from './helpers';
  * CHECK `meeting_calendar_event_delivery_payload` — so an `ics` row cannot carry a stale
  * vendor id, and a `provider_event` row cannot claim an event it cannot address.
  *
- * ⚠ SLICE 1 RECORDS THE ICS CONDITION AND SENDS NOTHING. Building and delivering the ICS is
- * BAL-475; cancellation (`METHOD:CANCEL`) is BAL-476. There is also NO VENDOR PATH FOR THE
- * CLIENT PARTY today — `calendar_connections` is keyed on `expert_profile_id` and no
- * client-side connection model exists anywhere in the repo — so NO WRITER PRODUCES a
- * client-party `provider_event` row. ⚠ THAT IS A PROPERTY OF THE WRITERS, NOT A CONSTRAINT:
- * nothing in this schema forbids one (`recordProviderEvent` takes a typed `party`, and the
- * integration suite deliberately writes such a row to isolate the party filter). Do not read
- * "provider_event ⇒ expert" as an invariant a query may rely on; scope the query.
+ * ── BAL-475: THE ICS IS DELIVERED FROM THIS ROW ───────────────────────────────────────
+ * An `ics` row is no longer a recorded condition only: BAL-475 builds and sends a
+ * Balo-organised ICS (METHOD:REQUEST) from it, reading `uid` and `sequence` below at send
+ * time. Cancellation (`METHOD:CANCEL`) is BAL-476. Each send is ledgered per RECIPIENT in
+ * `meeting_calendar_deliveries` — this row has no per-recipient grain (one party row fans
+ * out to its member AND that side's admitted guests), no sequence history and no outcome.
  *
- * ⚠ `id` IS THE PER-WRITE KEY. It is stable across retries of the same delivery (the
- * `DO UPDATE` arm keeps it) and FRESH after a soft-delete + rebook (the partial unique
- * INSERTs beside the old row). Any future `jobId` / `correlationId` / ICS `UID` seeds off
- * THIS, never off `meeting_id` — a key derived from a target state or a window reproduces
- * the A→B→C→B silent drop this repo has been bitten by twice
+ * ⚠ "provider_event ⇒ expert" IS NOW A CONSTRAINT (BAL-475), not a property of the writers:
+ * `meeting_calendar_event_provider_event_is_expert`. There is no vendor path for the CLIENT
+ * party — `calendar_connections` is keyed on `expert_profile_id` and no client-side
+ * connection model exists anywhere in the repo — so the client party is ICS-only. A client
+ * calendar connection later is a CHECK drop, with no enum hazard.
+ *
+ * ⚠ `id` IS NOT A RE-SEND KEY AND NOT THE ICS UID. It is stable across retries (the
+ * `DO UPDATE` arm keeps it), across reschedules and across guest-adds — so a `jobId` /
+ * `correlationId` seeded off `id` alone would collide with the booking send inside BullMQ's
+ * retained-completed dedup window and silently swallow the re-send. The ICS UID is the `uid`
+ * column; re-send correlation ids are PER WRITE (`rescheduleAuditId`, the guest row id,
+ * `(id, sequence)` at booking — see `services/calendar-invites/correlation-id.ts` in
+ * apps/api), never off `meeting_id` or a window, which would reproduce the A→B→C→B silent
+ * drop this repo has been bitten by twice
  * (`reference_bullmq_jobid_must_be_per_write_not_per_state`).
  *
  * ⚠ NO RLS, matching every other table in this package except `stripe_webhook_events`
@@ -135,6 +142,27 @@ export const meetingCalendarEvents = pgTable(
      */
     baloBookingId: text('balo_booking_id'),
 
+    /**
+     * BAL-475 (O2) — THE RFC 5545 UID of this party's calendar series. Persisted, never
+     * derived per send. A DB default (`gen_random_uuid()`) is CORRECT here, unlike 0076's
+     * refusal to default `party` / `delivery_mode`: a uid is an opaque identity with no
+     * semantic value to guess, exactly like `id`, and no writer may be able to forget it.
+     * Stable across the DO UPDATE arms of both writers (neither sets it); FRESH on a
+     * soft-delete + rebook (a new row). Globally unique — see `uidUq`.
+     */
+    uid: uuid('uid').notNull().defaultRandom(),
+
+    /**
+     * BAL-475 — the RFC 5545 SEQUENCE of this party's series. 0 at creation (RFC 5545
+     * §3.8.7.4).
+     *
+     * ⚠ ONE WRITER: `bumpCalendarSequencesForMeetingTx`
+     * (`repositories/_shared/calendar-sequence.ts`), inside `meetingsRepository.updateSchedule`'s
+     * transaction. No job, no delivery path and neither upsert arm touches it — which is what
+     * makes "no double increment on a BullMQ retry" structural rather than a convention.
+     */
+    sequence: integer('sequence').notNull().default(0),
+
     ...timestamps,
     ...softDelete,
   },
@@ -190,6 +218,33 @@ export const meetingCalendarEvents = pgTable(
     deliveryPayload: check(
       'meeting_calendar_event_delivery_payload',
       sql`(${table.deliveryMode} = 'provider_event' AND ${table.connectionId} IS NOT NULL AND ${table.calendarId} IS NOT NULL AND ${table.vendorEventId} IS NOT NULL AND ${table.baloBookingId} IS NOT NULL) OR (${table.deliveryMode} = 'ics' AND ${table.connectionId} IS NULL AND ${table.calendarId} IS NULL AND ${table.vendorEventId} IS NULL AND ${table.baloBookingId} IS NULL)`
+    ),
+
+    /**
+     * BAL-475 — a UID is NEVER reused, not even by a soft-deleted row: a reused UID on a
+     * rebook would resurrect a cancelled series in the recipient's calendar. Hence
+     * NON-PARTIAL, deliberately unlike `meetingPartyIdx` — the soft-delete footgun
+     * (`reference_softdelete_nonpartial_unique_recreate`) cannot bite because a rebook INSERTs
+     * a new row, which draws a fresh `gen_random_uuid()`.
+     */
+    uidUq: uniqueIndex('meeting_calendar_event_uid_uq').on(table.uid),
+
+    /** BAL-475 — RFC 5545 SEQUENCE is a non-negative integer. NOT NULL, so 3VL-safe. */
+    sequenceNonNegative: check(
+      'meeting_calendar_event_sequence_non_negative',
+      sql`${table.sequence} >= 0`
+    ),
+
+    /**
+     * BAL-475 — only the EXPERT party has a vendor path (`calendar_connections` is keyed on
+     * `expert_profile_id`); the client party is ICS-only in V1. Three docblocks asserted this
+     * as a property of the writers; now the database does. Relaxing it later (a client
+     * calendar connection) is a CHECK drop — no enum hazard. 3VL-safe: both operands are
+     * NOT NULL columns compared to literals.
+     */
+    providerEventIsExpert: check(
+      'meeting_calendar_event_provider_event_is_expert',
+      sql`${table.deliveryMode} <> 'provider_event' OR ${table.party} = 'expert'`
     ),
   })
 );
