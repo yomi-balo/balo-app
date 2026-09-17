@@ -10,6 +10,8 @@ const {
   mockFindByBookingIdempotencyKey,
   mockFindWithContexts,
   mockProjectBookingCalendarEvent,
+  mockRecordClientCalendarEntry,
+  mockPublishBookingCalendarInvites,
 } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockSetVenue: vi.fn(),
@@ -18,6 +20,8 @@ const {
   mockFindByBookingIdempotencyKey: vi.fn(),
   mockFindWithContexts: vi.fn(),
   mockProjectBookingCalendarEvent: vi.fn(),
+  mockRecordClientCalendarEntry: vi.fn(),
+  mockPublishBookingCalendarInvites: vi.fn(),
 }));
 
 /**
@@ -52,6 +56,10 @@ vi.mock('@balo/analytics/server', () => ({
 vi.mock('./meeting-availability.js', () => ({ bookMeeting: mockBookMeeting }));
 vi.mock('../consultation-events/booking-calendar-projection.js', () => ({
   projectBookingCalendarEvent: mockProjectBookingCalendarEvent,
+  recordClientCalendarEntry: mockRecordClientCalendarEntry,
+}));
+vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
+  publishBookingCalendarInvites: mockPublishBookingCalendarInvites,
 }));
 // `@balo/shared/meetings` is deliberately NOT mocked — the real `dailyRoomNameForMeeting` is
 // the arbiter the whole idempotency argument rests on, so the tests must see the real name.
@@ -136,6 +144,8 @@ beforeEach(() => {
     expertProfileId: 'expert_1',
   });
   mockProjectBookingCalendarEvent.mockResolvedValue('provider_event');
+  mockRecordClientCalendarEntry.mockResolvedValue('ics');
+  mockPublishBookingCalendarInvites.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -863,7 +873,7 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-433)',
   });
 
   it.each(['provider_event', 'ics', 'skipped', 'failed'] as const)(
-    'emits meeting_calendar_projected with delivery "%s", verbatim from the projection',
+    'emits meeting_calendar_projected with delivery "%s", verbatim from the EXPERT-side projection',
     async (delivery) => {
       mockProjectBookingCalendarEvent.mockResolvedValue(delivery);
 
@@ -872,14 +882,76 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-433)',
       expect(mockTrackServer).toHaveBeenCalledWith('meeting_calendar_projected', {
         meeting_id: MEETING_ID,
         context_type: 'case',
-        // Slice 1 writes the expert side only — `calendar_connections` is keyed on
-        // `expert_profile_id` and no client-side connection model exists.
         party: 'expert',
         delivery,
         distinct_id: USER_ID,
       });
     }
   );
+
+  /**
+   * BAL-475 — the CLIENT-side sibling. `bookAndProvisionMeeting` now emits the SAME event
+   * TWICE per fresh booking (once per party), and this is the CLIENT half's own outcome.
+   */
+  it.each(['ics', 'failed'] as const)(
+    'emits meeting_calendar_projected with delivery "%s", verbatim from the CLIENT-side projection',
+    async (delivery) => {
+      mockRecordClientCalendarEntry.mockResolvedValue(delivery);
+
+      await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
+
+      expect(mockTrackServer).toHaveBeenCalledWith('meeting_calendar_projected', {
+        meeting_id: MEETING_ID,
+        context_type: 'case',
+        party: 'client',
+        delivery,
+        distinct_id: USER_ID,
+      });
+      expect(mockRecordClientCalendarEntry).toHaveBeenCalledWith(
+        MEETING_ID,
+        'case',
+        CONTEXT_ID,
+        log
+      );
+    }
+  );
+
+  it('publishBookingCalendarInvites is called AFTER both party rows are recorded, with created.expertProfileId', async () => {
+    const order: string[] = [];
+    mockProjectBookingCalendarEvent.mockImplementation(async () => {
+      order.push('expert-projection');
+      return 'provider_event';
+    });
+    mockRecordClientCalendarEntry.mockImplementation(async () => {
+      order.push('client-projection');
+      return 'ics';
+    });
+    mockPublishBookingCalendarInvites.mockImplementation(async () => {
+      order.push('publish-invites');
+    });
+
+    await bookAndProvisionMeeting(bookInput('case'), log, { provisioner: fakeProvisioner() });
+
+    expect(order).toEqual(['expert-projection', 'client-projection', 'publish-invites']);
+    expect(mockPublishBookingCalendarInvites).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, contextType: 'case', expertProfileId: 'expert_1' },
+      log
+    );
+  });
+
+  it('a throwing invite publisher (a violation of its own never-throws contract) cannot reject the booking', async () => {
+    mockPublishBookingCalendarInvites.mockRejectedValue(new Error('queue down'));
+
+    const result = await bookAndProvisionMeeting(bookInput('case'), log, {
+      provisioner: fakeProvisioner(),
+    });
+
+    expect(result.meeting.id).toBe(MEETING_ID);
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, error: 'queue down' }),
+      'Calendar invite publish threw despite its never-throws contract — booking stands'
+    );
+  });
 
   it('a throwing projection call does NOT fail the booking, and still reports an outcome', async () => {
     // `projectBookingCalendarEvent`'s own contract is "never throws" (D2c) — but the CALL SITE
@@ -949,6 +1021,9 @@ describe('bookAndProvisionMeeting — the expert calendar projection (BAL-433)',
     expect(result.meeting.id).toBe(MEETING_ID);
     expect(mockBookMeeting).not.toHaveBeenCalled();
     expect(mockProjectBookingCalendarEvent).not.toHaveBeenCalled();
+    // BAL-475 — none of the three post-commit calendar steps re-run on a replay.
+    expect(mockRecordClientCalendarEntry).not.toHaveBeenCalled();
+    expect(mockPublishBookingCalendarInvites).not.toHaveBeenCalled();
     expect(mockTrackServer).not.toHaveBeenCalledWith(
       'meeting_calendar_projected',
       expect.anything()

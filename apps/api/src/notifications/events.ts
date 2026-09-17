@@ -65,6 +65,9 @@ import type {
   ProjectRequestOwnerAssignedPayload,
   ExpertApplicationDeclinedPayload,
 } from '@balo/shared/notifications';
+// BAL-475 — the calendar-invite engine contract lives in this app (not `@balo/shared`), since
+// it is server-only vocabulary (no publish-route Zod arm ever reads it).
+import type { CalendarInviteSpec } from './calendar-invite-spec.js';
 
 export interface UserWelcomePayload {
   correlationId: string; // userId
@@ -309,6 +312,23 @@ export interface MeetingGuestRescheduledPayload {
   scheduledEndIso: string;
   /** Pre-formatted UTC date. Helpful-fact framing, never a countdown. */
   expiresOn: string;
+}
+
+/**
+ * BAL-475 — ONE Balo-organised calendar invite to ONE recipient. SERVER-ONLY (see
+ * `ServerOnlyNotificationEvent` below) — published exclusively from apps/api post-commit
+ * blocks (booking, guest-add, reschedule).
+ *
+ * ⚠ NO ADDRESS (U1): `calendarInvite.recipient` is an id; the email channel resolves the
+ * address at delivery time and never before.
+ * ⚠ NO `userId` / `expertProfileId` / `companyId` TOP-LEVEL KEYS — `engine/resolver.ts`
+ * hydrates on those names, and nothing here needs hydration: the dispatcher resolves the
+ * single recipient directly off `calendarInvite.recipient`.
+ */
+export interface MeetingCalendarInvitePayload {
+  /** `calendarInviteCorrelationId(...)` — per write AND per recipient (O2). */
+  correlationId: string;
+  calendarInvite: CalendarInviteSpec;
 }
 
 /**
@@ -592,7 +612,12 @@ export type NotificationEvent =
   | 'credit.saved_card.detached'
   // BAL-522 — an explicit billing-email change from /settings/billing. Published from
   // `apps/api`'s `services/billing/set-billing-email.ts` — never from apps/web.
-  | 'billing.email_changed';
+  | 'billing.email_changed'
+  // BAL-475 — a Balo-organised ICS invite. SERVER-ONLY (see `ServerOnlyNotificationEvent`
+  // below): published exclusively from apps/api post-commit blocks (booking, guest-add,
+  // reschedule) — never from apps/web, so it has no `publishBodySchema` arm; adding one would
+  // be a `StraySchemaArm` and fail `tsc`.
+  | 'meeting.calendar_invite';
 
 /**
  * Events published only from WITHIN the API (the calendar webhook / Cronofy
@@ -701,7 +726,11 @@ export type ServerOnlyNotificationEvent =
   // BAL-522: published from `apps/api`'s `services/billing/set-billing-email.ts` — never from
   // apps/web, so it has NO `publishBodySchema` arm; adding one would be a `StraySchemaArm` and
   // fail `tsc`.
-  | 'billing.email_changed';
+  | 'billing.email_changed'
+  // BAL-475: published exclusively from apps/api post-commit blocks (booking, guest-add,
+  // reschedule) — never from apps/web, so it has NO `publishBodySchema` arm; adding one would
+  // be a `StraySchemaArm` and fail `tsc`.
+  | 'meeting.calendar_invite';
 
 /** Events accepted by the internal `/notifications/publish` route (published from apps/web). */
 export type PublishableNotificationEvent = Exclude<NotificationEvent, ServerOnlyNotificationEvent>;
@@ -859,4 +888,5 @@ export interface EventPayloadMap {
   'request_file.shared_with_client': RequestFileSharedWithClientPayload;
   'credit.saved_card.detached': CreditSavedCardDetachedPayload;
   'billing.email_changed': BillingEmailChangedPayload;
+  'meeting.calendar_invite': MeetingCalendarInvitePayload;
 }

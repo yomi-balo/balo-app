@@ -691,3 +691,123 @@ describe('dispatch — BAL-531 colon-bearing correlationIds no longer throw at q
     expect(opts.jobId).toBe('credit-session-low-balance--user-456--auto__topup_cwallet-a_centry-1');
   });
 });
+
+describe('BAL-475 — calendar_invite_recipient', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const calendarRule: NotificationRule = {
+    channel: 'email',
+    recipient: 'calendar_invite_recipient',
+    template: 'meeting-calendar-invite',
+    timing: 'immediate',
+  };
+
+  const userSpec = {
+    meetingId: 'meeting-1',
+    party: 'client' as const,
+    calendarEventId: 'row-1',
+    method: 'REQUEST' as const,
+    transition: 'booked' as const,
+    recipient: { kind: 'user' as const, userId: 'user-1' },
+    contextType: 'case' as const,
+  };
+
+  it('resolves recipientId = the userId, recipientEmail undefined, calendarInvite forwarded, NO attachments key', async () => {
+    await dispatch(calendarRule, {
+      event: 'meeting.calendar_invite',
+      payload: { correlationId: 'booked:row-1:0:client:user:user-1', calendarInvite: userSpec },
+      data: {},
+    });
+
+    expect(mockAdd).toHaveBeenCalledWith(
+      'meeting-calendar-invite',
+      {
+        recipientId: 'user-1',
+        template: 'meeting-calendar-invite',
+        event: 'meeting.calendar_invite',
+        data: {},
+        payload: {
+          correlationId: 'booked:row-1:0:client:user:user-1',
+          calendarInvite: userSpec,
+        },
+        calendarInvite: userSpec,
+      },
+      expect.objectContaining({ attempts: 3 })
+    );
+    const [, deliveryPayload] = mockAdd.mock.calls[0] as [string, Record<string, unknown>];
+    expect(deliveryPayload).not.toHaveProperty('attachments');
+  });
+
+  it('resolves recipientId = the guestId for a guest recipient', async () => {
+    const guestSpec = { ...userSpec, recipient: { kind: 'guest' as const, guestId: 'guest-1' } };
+
+    await dispatch(calendarRule, {
+      event: 'meeting.calendar_invite',
+      payload: { correlationId: 'guest_added:guest-1', calendarInvite: guestSpec },
+      data: {},
+    });
+
+    const [, deliveryPayload] = mockAdd.mock.calls[0] as [string, Record<string, unknown>];
+    expect(deliveryPayload.recipientId).toBe('guest-1');
+  });
+
+  it('a malformed spec resolves no recipient ⇒ no enqueue', async () => {
+    await dispatch(calendarRule, {
+      event: 'meeting.calendar_invite',
+      payload: { correlationId: 'x', calendarInvite: { bogus: true } },
+      data: {},
+    });
+
+    expect(mockAdd).not.toHaveBeenCalled();
+  });
+
+  it('a standard event carrying a stray calendarInvite-shaped junk value keeps the standard class unchanged', async () => {
+    const standardRule: NotificationRule = {
+      channel: 'email',
+      recipient: 'self',
+      template: 'welcome',
+      timing: 'immediate',
+    };
+
+    await dispatch(standardRule, {
+      event: 'user.welcome',
+      payload: { correlationId: 'corr-1', userId: 'user-1', calendarInvite: 'not-a-spec' },
+      data: { user: { id: 'user-1', email: 'a@example.test' } },
+    });
+
+    const [, deliveryPayload] = mockAdd.mock.calls[0] as [string, Record<string, unknown>];
+    expect(deliveryPayload).not.toHaveProperty('calendarInvite');
+    expect(deliveryPayload).toHaveProperty('attachments');
+  });
+
+  it('F25 (fix round 1, S12) — a WELL-FORMED calendarInvite spec on a DIFFERENT event never becomes the calendar class (gated on event name, not shape alone)', async () => {
+    const standardRule: NotificationRule = {
+      channel: 'email',
+      recipient: 'self',
+      template: 'welcome',
+      timing: 'immediate',
+    };
+
+    await dispatch(standardRule, {
+      event: 'user.welcome',
+      payload: { correlationId: 'corr-1', userId: 'user-1', calendarInvite: userSpec },
+      data: { user: { id: 'user-1', email: 'a@example.test' } },
+    });
+
+    const [, deliveryPayload] = mockAdd.mock.calls[0] as [string, Record<string, unknown>];
+    expect(deliveryPayload).not.toHaveProperty('calendarInvite');
+    expect(deliveryPayload).toHaveProperty('attachments');
+  });
+
+  it('F25 — calendar_invite_recipient on the correct event but with a NON-calendar recipient kind (rule table misconfiguration) still cannot enqueue without a valid spec', async () => {
+    await dispatch(calendarRule, {
+      event: 'meeting.calendar_invite',
+      payload: { correlationId: 'x' },
+      data: {},
+    });
+
+    expect(mockAdd).not.toHaveBeenCalled();
+  });
+});

@@ -156,6 +156,7 @@ describe('POST /meetings/:meetingId/reschedule (BAL-409)', () => {
       expertProfileId: EXPERT_PROFILE_ID,
       guestLinksExtended: 0,
       rescheduleAuditId: AUDIT_ID,
+      calendarEvents: [],
     });
     mockFindById.mockResolvedValue(meetingRow());
   });

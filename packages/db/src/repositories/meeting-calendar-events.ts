@@ -24,8 +24,12 @@ import type { MeetingCalendarEvent, MeetingParticipantParty } from '../schema';
  * TRANSITION OUTRIGHT rather than performing it: nulling those columns on a row that names a
  * real vendor event ORPHANS the event on the expert's calendar. See its docblock.
  *
- * ⚠ SLICE 1 RECORDS THE ICS CONDITION AND SENDS NOTHING. Building and delivering the ICS is
- * BAL-475; `METHOD:CANCEL` is BAL-476. Nothing in this file talks to a transport.
+ * ⚠ BAL-475 DELIVERS THE ICS FROM THESE ROWS, BUT NOT FROM THIS FILE. The email channel reads a
+ * row's `uid` and `sequence` at send time (`findLiveById`) and the booking / guest-add fan-outs
+ * read them via `listLiveByMeeting`; `METHOD:CANCEL` is BAL-476. Nothing in this file talks to
+ * a transport. ⚠ NEITHER UPSERT ARM EVER SETS `uid` OR `sequence`: a retried write keeps the
+ * series identity and its SEQUENCE. The only `sequence` writer is
+ * `_shared/calendar-sequence.ts`, inside a reschedule's transaction.
  *
  * ⚠ THIS REPOSITORY NEVER NOTIFIES. Its rows are written from booking and meeting-mutation
  * flows that DO notify — so the publish belongs at the call site, post-commit. Pinned by
@@ -55,18 +59,19 @@ export type MeetingCalendarProviderEvent = MeetingCalendarEvent & {
 export interface RecordProviderEventInput {
   meetingId: string;
   /**
-   * ⚠ STRUCTURAL, NEVER A REQUEST FIELD. Every provider event a WRITER produces today is the
-   * EXPERT's: `endUserAccountId` comes off a `calendar_connections` row and that table is
-   * keyed on `expert_profile_id`. Typed rather than hardcoded so the column stays honest
-   * about its grain.
+   * ⚠ STRUCTURAL, NEVER A REQUEST FIELD. Every provider event is the EXPERT's:
+   * `endUserAccountId` comes off a `calendar_connections` row and that table is keyed on
+   * `expert_profile_id`. Typed rather than hardcoded so the column stays honest about its
+   * grain.
    *
-   * ⚠ SO "provider_event ⇒ expert" IS A PROPERTY OF THE WRITERS, NOT A CONSTRAINT. Nothing
-   * enforces it — this parameter accepts either label, and the integration suite deliberately
-   * writes a client-party provider row to isolate `findLiveExpertProviderEvent`'s party
-   * filter. Any read that needs the expert's row must SAY `party = 'expert'`, which is
-   * exactly what that method does.
+   * ⚠ NARROWED TO `'expert'` BY BAL-475, MATCHING A CONSTRAINT. "provider_event ⇒ expert" is
+   * now the CHECK `meeting_calendar_event_provider_event_is_expert`, so a client-party provider
+   * row raises 23514 — this type makes that call unrepresentable instead. Relaxing both (a
+   * client calendar connection) is a CHECK drop plus this line. Reads that need the expert's
+   * row still SAY `party = 'expert'` (`findLiveExpertProviderEvent`) — the filter costs nothing
+   * and does not depend on the CHECK.
    */
-  party: MeetingCalendarEventParty;
+  party: Extract<MeetingCalendarEventParty, 'expert'>;
   connectionId: string;
   /**
    * The calendar actually written to, AT WRITE TIME — not
@@ -116,6 +121,9 @@ export const meetingCalendarEventsRepository = {
    * the partial index, so a cancelled-then-rebooked meeting INSERTs a second row and the old
    * one stays as history. `deletedAt` is deliberately NOT reset in the update arm: the only
    * row this arm can reach is already live, so resetting it would only ever mask a mistake.
+   *
+   * ⚠ BAL-475 — THE UPDATE ARM NEVER SETS `uid` OR `sequence`. An `ics` row upgraded to a
+   * provider write keeps its series identity and SEQUENCE.
    */
   async recordProviderEvent(input: RecordProviderEventInput): Promise<MeetingCalendarEvent> {
     const [result] = await db
@@ -155,10 +163,12 @@ export const meetingCalendarEventsRepository = {
   /**
    * Record the ICS-FALLBACK CONDITION for one (meeting, party) — ADR-1044 Ruling 1.
    *
-   * ⚠ THIS SENDS NOTHING AND PROMISES NOTHING. It persists the fact that this party has no
-   * writable provider calendar, so the delivery slice (BAL-475) has a durable row to work
-   * from instead of re-deriving the condition off `calendar_connections`. There is no
-   * `delivered_at`, no status and no reason column: a column with no reader is a stub.
+   * ⚠ THIS SENDS NOTHING. It persists the fact that this party is delivered by ICS, so the
+   * BAL-475 delivery path has a durable row (with its `uid` and `sequence`) to send from
+   * instead of re-deriving the condition off `calendar_connections`. Per-recipient send state
+   * lives in `meeting_calendar_deliveries`, not here — this row has no recipient grain.
+   *
+   * ⚠ BAL-475 — THE UPDATE ARM NEVER SETS `uid` OR `sequence`: a retried fallback keeps both.
    *
    * ⚠⚠ IT REFUSES TO OVERWRITE A LIVE `provider_event` ROW, AND THAT REFUSAL IS THE POINT OF
    * `setWhere`. The DO UPDATE arm nulls all four provider columns — it MUST, because a row
@@ -171,12 +181,12 @@ export const meetingCalendarEventsRepository = {
    * already being `ics`; a live `provider_event` row updates nothing, returns nothing, and
    * this method THROWS.
    *
-   * ⚠ UNREACHABLE TODAY, DELIBERATELY GUARDED ANYWAY. The single caller
-   * (`projectBookingToExpertCalendar`) runs once per FRESH booking, before any provider row
-   * for that (meeting, party) can exist, and its call is inside a `try` that degrades to
-   * `'failed'` plus an error log. It becomes reachable the moment BAL-475/476, a disconnect
-   * sweep, or any repair path records an ICS fallback for a meeting that already HAS a
-   * provider event.
+   * ⚠ STILL NEVER EXERCISED AGAINST A LIVE PROVIDER ROW, DELIBERATELY GUARDED ANYWAY. Since
+   * BAL-475 this is called for the CLIENT party on every fresh booking, and for the EXPERT
+   * party both when there is no writable connection and after a FAILED vendor create (decision
+   * U3) — in every case before any provider row for that (meeting, party) can exist. The
+   * refusal bites the moment BAL-476, a disconnect sweep, or any repair path records an ICS
+   * fallback for a meeting that already HAS a provider event.
    *
    * ⚠ THE SANCTIONED ORDER FOR THAT TRANSITION, when it is genuinely wanted: delete the event
    * at the vendor, `softDeleteByMeetingAndParty(meetingId, party)`, THEN record the ICS. The
@@ -259,6 +269,53 @@ export const meetingCalendarEventsRepository = {
       return undefined;
     }
     return row;
+  },
+
+  /**
+   * BAL-475 — the LIVE row with this id, SCOPED to the caller's own (meetingId, party), or
+   * `undefined` (soft-deleted, or a mismatch on either scope, ⇒ `undefined`).
+   *
+   * The send-time guard for a calendar invite: the email channel reads the row's `uid` and
+   * CURRENT `sequence` here, BEFORE it reads the meeting window, so a row retired between
+   * publish and send (a cancel, a rebook) is never sent against, and a SEQUENCE read before the
+   * window is never newer than the window (the bump and the move commit together).
+   *
+   * ⚠ F24 (fix round 1, S4) — ALL THREE FIELDS ARE IN THE WHERE, not just `id`. A bare
+   * `findById` on a table scoped by (meeting, party) is a house-rule deviation (`secure.md` §2:
+   * "a bare `findById` on a scoped table is an IDOR-containment finding") even when every
+   * caller re-checks the scope itself afterwards, as this one did — a future SECOND caller can
+   * forget to. A mismatch on either scope now collapses to `undefined` STRUCTURALLY.
+   */
+  async findLiveById(input: {
+    readonly id: string;
+    readonly meetingId: string;
+    readonly party: MeetingCalendarEventParty;
+  }): Promise<MeetingCalendarEvent | undefined> {
+    return db.query.meetingCalendarEvents.findFirst({
+      where: and(
+        eq(meetingCalendarEvents.id, input.id),
+        eq(meetingCalendarEvents.meetingId, input.meetingId),
+        eq(meetingCalendarEvents.party, input.party),
+        isNull(meetingCalendarEvents.deletedAt)
+      ),
+    });
+  },
+
+  /**
+   * BAL-475 — every LIVE row for one meeting (at most one per party), oldest first with `id`
+   * as the tie-break (`created_at` alone is not a total order inside one transaction).
+   *
+   * The booking and guest-add invite fan-outs read `uid` / `sequence` / `delivery_mode` from
+   * here. Soft-deleted rows are excluded: a retired series is never re-sent.
+   */
+  async listLiveByMeeting(meetingId: string): Promise<MeetingCalendarEvent[]> {
+    return db.query.meetingCalendarEvents.findMany({
+      where: and(
+        eq(meetingCalendarEvents.meetingId, meetingId),
+        isNull(meetingCalendarEvents.deletedAt)
+      ),
+      orderBy: [asc(meetingCalendarEvents.createdAt), asc(meetingCalendarEvents.id)],
+    });
   },
 
   /**

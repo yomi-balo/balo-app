@@ -111,7 +111,12 @@ async function resolveSubject(
  */
 export async function resolveExpertCalendarFacts(
   subject: ExpertCalendarFactsSubject,
-  log: FastifyBaseLogger
+  // ⚠ BAL-475 — WIDENED from `FastifyBaseLogger` to the two methods this function actually
+  // calls. `services/calendar-invites/resolve-calendar-invite-facts.ts` needs to pass its own
+  // narrower delivery-time logger (`Pick<FastifyBaseLogger, 'info' | 'warn' | 'error'>`); any
+  // `FastifyBaseLogger` still satisfies this narrower requirement, so every existing caller is
+  // unaffected. A safe widening, never a narrowing.
+  log: Pick<FastifyBaseLogger, 'info' | 'error'>
 ): Promise<ExpertCalendarFacts | undefined> {
   const { meetingId, contextType, contextId } = subject;
   const descriptor = CALENDAR_CONTEXT_REGISTRY[contextType];

@@ -662,7 +662,13 @@ returns **never retry, fail closed**. So on Google a derived-id retry surfaces a
    `writeConsultationEvent` does exactly this, via
    `meetingCalendarEventsRepository.recordProviderEvent`'s `onConflictDoUpdate` (a retry updates in
    place, keeping the same row id; a rebook after a soft-delete inserts a FRESH row beside it).
-   ⚠ That row id is the **per-write** key — BAL-475 should correlate on it, never on `meetingId`.
+   ⚠ CORRECTED (BAL-475, shipped, O2): the row id is stable across retries, reschedules AND
+   guest-adds, so it is **NOT** a per-write correlation key — using it alone would collide with
+   the retained-completed BullMQ dedup window on a second write for the same row. The ICS
+   `UID` is the row's own persisted `uid` column instead (never derived per send); the
+   per-write correlation id is `rescheduleAuditId` (reschedule), the guest row id (guest-add),
+   or `(calendarEventId, sequence)` (booking) — see
+   `apps/api/src/services/calendar-invites/correlation-id.ts`.
 3. **Never send `id`.** Let the vendor generate it. Shipped: `buildConsultationEvent` never sets
    `CreateEventInput.id`.
 4. **If a derived id is ever genuinely required**, assert the returned id equals the requested one
@@ -777,8 +783,9 @@ Verified with a negative control, which matters — a filter that was silently i
 ⚠ **SHIPPED, not a sketch.** `apps/api/src/lib/apiroc/paginate.ts`'s `paginateApiroc` is a real,
 generic, tested helper — and `reconcileByTag`
 (`apps/api/src/services/consultation-events/reconcile-by-tag.ts`) is its live consumer for exactly
-this "find Balo's tagged events" case, though `reconcileByTag` itself is INERT (no live caller yet
-— see the header table). Both are COMPLETE, not aspirational:
+this "find Balo's tagged events" case. `reconcileByTag` got its first LIVE caller in BAL-475 fix
+round 1 — `project-booking-to-calendar.ts`'s ambiguous vendor-create-failure branch — see the
+header table. Both are COMPLETE, not aspirational:
 
 ```typescript
 // apps/api/src/lib/apiroc/paginate.ts — SHIPPED. The shared "paginate TO EXHAUSTION" loop, used

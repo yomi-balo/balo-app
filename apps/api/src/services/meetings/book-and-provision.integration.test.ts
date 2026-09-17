@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import type { FastifyBaseLogger } from 'fastify';
 
 /**
@@ -43,17 +44,21 @@ vi.mock('../../lib/queue.js', async (importOriginal) => ({
 
 import {
   MatchModeDiscoveryNotBookableError,
+  and,
   auditEvents,
+  companyMembers,
   consultations,
   db,
   engagements,
   engagementsRepository,
   eq,
+  expertsRepository,
   findProjectionDrift,
   findProjectionForMeeting,
   meetingCalendarEvents,
   meetingCalendarEventsRepository,
   meetingContexts,
+  meetingGuestsRepository,
   meetings,
   meetingsRepository,
 } from '@balo/db';
@@ -61,6 +66,7 @@ import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import type { ProvisionedRoom, RoomProvisioner } from '../daily/rooms.js';
 import { seedBookingParties, type BookingParties } from '../../test/fixtures/booking-graph.js';
 import { authorizeMeetingBooking } from './authorize-meeting-booking.js';
+import { rescheduleMeeting } from './meeting-availability.js';
 import { bookAndProvisionMeeting, provisionMeeting } from './provision-meeting.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -537,12 +543,17 @@ describe('BAL-129 — book and provision, against a real database', () => {
       { provisioner: recordingProvisioner() }
     );
 
-    expect(mockQueueAdd).toHaveBeenCalledTimes(1);
-    expect(mockQueueAdd).toHaveBeenCalledWith(
-      'rebuild-availability-cache',
-      { expertProfileId: parties.expertProfileId },
-      expect.objectContaining({ jobId: `availability--${parties.expertProfileId}` })
+    // ⚠ BAL-475 — the booking now ALSO enqueues calendar invites on this SAME mocked queue
+    // (`getQueue` is mocked once, for every queue name). Filter by job NAME rather than
+    // counting every call.
+    const rebuildCalls = mockQueueAdd.mock.calls.filter(
+      (call) => call[0] === 'rebuild-availability-cache'
     );
+    expect(rebuildCalls).toHaveLength(1);
+    expect(rebuildCalls[0]?.[1]).toEqual({ expertProfileId: parties.expertProfileId });
+    expect(rebuildCalls[0]?.[2]).toMatchObject({
+      jobId: `availability--${parties.expertProfileId}`,
+    });
   });
 });
 
@@ -618,7 +629,7 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
   ] as const;
 
   it.each(CONTEXTS)(
-    'contextType "$contextType" → ONE live expert-party row, delivery_mode ics, no provider payload',
+    'contextType "$contextType" → ONE live expert-party row AND one live client-party row, both delivery_mode ics (BAL-475)',
     async ({ contextType, engagementType, idOf }) => {
       const parties = await seedBookingParties();
 
@@ -635,9 +646,19 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
         { provisioner: recordingProvisioner() }
       );
 
+      // ⚠ BAL-475 — every fresh booking now writes TWO live rows: the pre-existing EXPERT-party
+      // row (BAL-433) and the new CLIENT-party row (`recordClientCalendarEntry`).
       const rows = await calendarRowsFor(result.meeting.id);
-      expect(rows, `${contextType} produced no calendar row`).toHaveLength(1);
-      expect(rows[0]).toMatchObject({
+      expect(
+        rows,
+        `${contextType} produced ${rows.length} calendar row(s), expected 2`
+      ).toHaveLength(2);
+      const expertRow = rows.find((row) => row.party === 'expert');
+      const clientRow = rows.find((row) => row.party === 'client');
+      expect(expertRow, `${contextType} produced no expert-party row`).toBeDefined();
+      expect(clientRow, `${contextType} produced no client-party row`).toBeDefined();
+
+      expect(expertRow).toMatchObject({
         party: 'expert',
         deliveryMode: 'ics',
         // ⚠ ALL FOUR NULL, AND THE BICONDITIONAL CHECK ENFORCES IT. An `ics` row carrying a
@@ -648,6 +669,21 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
         baloBookingId: null,
         deletedAt: null,
       });
+      expect(clientRow).toMatchObject({
+        party: 'client',
+        deliveryMode: 'ics',
+        connectionId: null,
+        calendarId: null,
+        vendorEventId: null,
+        baloBookingId: null,
+        deletedAt: null,
+      });
+
+      // BAL-475 — both rows start at SEQUENCE 0, with DISTINCT uids (the RFC 5545 UID of each
+      // party's own series — never derived, never shared).
+      expect(expertRow?.sequence).toBe(0);
+      expect(clientRow?.sequence).toBe(0);
+      expect(expertRow?.uid).not.toBe(clientRow?.uid);
     }
   );
 
@@ -675,18 +711,24 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
     }
 
     expect(new Set(meetingIds).size).toBe(5);
+    // BAL-475 — each of the 5 bookings now writes 2 rows (client + expert) ⇒ 10 total, 10
+    // distinct ROW ids, and 10 distinct UIDs (each party's own RFC 5545 series identity).
     const rowIds: string[] = [];
+    const uids: string[] = [];
     for (const meetingId of meetingIds) {
       const rows = await calendarRowsFor(meetingId);
-      expect(rows).toHaveLength(1);
-      const [row] = rows;
-      if (row === undefined) throw new Error('unreachable: length was asserted above');
-      rowIds.push(row.id);
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        rowIds.push(row.id);
+        uids.push(row.uid);
+      }
     }
-    expect(new Set(rowIds).size).toBe(5);
+    expect(rowIds).toHaveLength(10);
+    expect(new Set(rowIds).size).toBe(10);
+    expect(new Set(uids).size).toBe(10);
   });
 
-  it('a rebook after the entry is retired INSERTS beside it — one live row, two total', async () => {
+  it('a rebook after the entry is retired INSERTS beside it — 2 live rows, 3 total (BAL-475: the client row is untouched)', async () => {
     // The partial unique ignores a soft-deleted row, which is what makes a cancelled-then-
     // rebooked meeting able to record a SECOND entry. Proved here through the real index
     // rather than only in the repository test, because this is the path a booking takes.
@@ -710,8 +752,317 @@ describe('BAL-433 — every bookable context projects, and the ICS fallback is p
       party: 'expert',
     });
 
+    // BAL-475 — the fresh booking already wrote a CLIENT row too, untouched by the expert-only
+    // soft-delete/rebook above: 3 rows total (client live, expert soft-deleted, expert live),
+    // 2 live (client + the new expert row).
     const rows = await calendarRowsFor(result.meeting.id);
-    expect(rows).toHaveLength(2);
-    expect(rows.filter((row) => row.deletedAt === null)).toHaveLength(1);
+    expect(rows).toHaveLength(3);
+    const live = rows.filter((row) => row.deletedAt === null);
+    expect(live).toHaveLength(2);
+    expect(live.map((row) => row.party).sort((a, b) => a.localeCompare(b))).toEqual([
+      'client',
+      'expert',
+    ]);
+  });
+});
+
+/**
+ * BAL-475 — CALENDAR INVITES, END TO END AGAINST A REAL POSTGRES.
+ *
+ * The unit tests (`publish-calendar-invites.test.ts`, `resolve-calendar-invite-recipients.test.ts`)
+ * prove the publisher's OWN logic with every repository mocked. NONE of them proves the claim
+ * this ticket is actually about: that a REAL booking, reschedule and guest set resolve to the
+ * RIGHT recipients and the RIGHT SEQUENCE, through the real `meeting.booked` audit row, the
+ * real `getMemberRole` company-membership read and the real SEQUENCE bump inside
+ * `updateSchedule`'s transaction. That claim spans `meetings` → `meeting_calendar_events` →
+ * `audit_events` → `company_members`, and only a real database can carry it.
+ *
+ * ⚠ THE `getQueue` MOCK (top of file) INTERCEPTS EVERY QUEUE BY NAME, including
+ * `notification-events` — so a `meeting.calendar_invite` publish lands in the SAME
+ * `mockQueueAdd` the availability-rebuild and calendar-amend enqueues already share.
+ * `calendarInviteEnqueues()` filters by the BullMQ job NAME (`queue.add`'s first argument,
+ * which `notificationEvents.publish` sets to the EVENT name) to isolate them.
+ *
+ * ⚠ `pnpm test:integration` PASSES VACUOUSLY WITHOUT DOCKER. Check the reported test COUNT.
+ */
+describe('BAL-475 — calendar invites against a real database', () => {
+  /** Every live calendar-entry row for one meeting. */
+  async function calendarRowsFor(
+    meetingId: string
+  ): Promise<(typeof meetingCalendarEvents.$inferSelect)[]> {
+    return db
+      .select()
+      .from(meetingCalendarEvents)
+      .where(eq(meetingCalendarEvents.meetingId, meetingId));
+  }
+
+  /** Every `meeting.calendar_invite` publish payload enqueued so far. */
+  function calendarInviteEnqueues(): {
+    correlationId: string;
+    calendarInvite: {
+      recipient: { kind: 'user'; userId: string } | { kind: 'guest'; guestId: string };
+    };
+  }[] {
+    return mockQueueAdd.mock.calls
+      .filter((call) => call[0] === 'meeting.calendar_invite')
+      .map(
+        (call) =>
+          (
+            call[1] as {
+              payload: {
+                correlationId: string;
+                calendarInvite: {
+                  recipient: { kind: 'user'; userId: string } | { kind: 'guest'; guestId: string };
+                };
+              };
+            }
+          ).payload
+      );
+  }
+
+  it('a fresh case booking enqueues exactly two calendar invites — the booker and the delivering expert — with no address anywhere in the payload', async () => {
+    const parties = await seedBookingParties();
+    const expertProfile = await expertsRepository.findDisplayProfileById(parties.expertProfileId);
+    if (expertProfile === undefined) throw new Error('fixture: expert profile not found');
+
+    await bookAndProvisionMeeting(
+      {
+        contextType: 'case',
+        contextId: parties.caseEngagementId,
+        scheduledStart: START,
+        scheduledEnd: END,
+        engagementType: 'case',
+        userId: parties.memberUserId,
+      },
+      log,
+      { provisioner: recordingProvisioner() }
+    );
+
+    const invites = calendarInviteEnqueues();
+    expect(invites).toHaveLength(2);
+    const recipients = invites.map((invite) => invite.calendarInvite.recipient);
+    expect(recipients).toContainEqual({ kind: 'user', userId: parties.memberUserId });
+    expect(recipients).toContainEqual({ kind: 'user', userId: expertProfile.userId });
+
+    // U1 — the payload carries IDS ONLY; no address of any kind anywhere in it.
+    expect(JSON.stringify(invites)).not.toContain('@');
+  });
+
+  it('a fresh request_interaction booking (the second producer) also enqueues two calendar invites', async () => {
+    const parties = await seedBookingParties();
+    const expertProfile = await expertsRepository.findDisplayProfileById(parties.expertProfileId);
+    if (expertProfile === undefined) throw new Error('fixture: expert profile not found');
+
+    await bookAndProvisionMeeting(
+      {
+        contextType: 'request_interaction',
+        contextId: parties.relationshipId,
+        scheduledStart: START,
+        scheduledEnd: END,
+        engagementType: null,
+        userId: parties.memberUserId,
+      },
+      log,
+      { provisioner: recordingProvisioner() }
+    );
+
+    const invites = calendarInviteEnqueues();
+    expect(invites).toHaveLength(2);
+    const recipients = invites.map((invite) => invite.calendarInvite.recipient);
+    expect(recipients).toContainEqual({ kind: 'user', userId: parties.memberUserId });
+    expect(recipients).toContainEqual({ kind: 'user', userId: expertProfile.userId });
+  });
+
+  it('an idempotent replay of the SAME booking enqueues NO further calendar invites', async () => {
+    const parties = await seedBookingParties();
+    const input = {
+      contextType: 'case' as const,
+      contextId: parties.caseEngagementId,
+      scheduledStart: START,
+      scheduledEnd: END,
+      engagementType: 'case' as const,
+      userId: parties.memberUserId,
+      // `meeting_booking_idempotency_key_format` requires a lowercase sha256 hex digest.
+      bookingIdempotencyKey: createHash('sha256')
+        .update(`replay-${parties.companyId}`)
+        .digest('hex'),
+    };
+
+    await bookAndProvisionMeeting(input, log, { provisioner: recordingProvisioner() });
+    expect(calendarInviteEnqueues()).toHaveLength(2);
+
+    await bookAndProvisionMeeting(input, log, { provisioner: recordingProvisioner() });
+    expect(calendarInviteEnqueues()).toHaveLength(2);
+  });
+
+  it('rescheduleMeeting bumps both rows to SEQUENCE 1, enqueues invites for the booker + expert with rescheduled:{auditId} correlationIds, includes an ADMITTED guest and EXCLUDES a PENDING one (U4)', async () => {
+    const parties = await seedBookingParties();
+    const expertProfile = await expertsRepository.findDisplayProfileById(parties.expertProfileId);
+    if (expertProfile === undefined) throw new Error('fixture: expert profile not found');
+
+    const booked = await bookAndProvisionMeeting(
+      {
+        contextType: 'case',
+        contextId: parties.caseEngagementId,
+        scheduledStart: START,
+        scheduledEnd: END,
+        engagementType: 'case',
+        userId: parties.memberUserId,
+      },
+      log,
+      { provisioner: recordingProvisioner() }
+    );
+
+    const guestExpiresAt = new Date(END.getTime() + 24 * 60 * 60 * 1000);
+    const [admittedGuest] = await meetingGuestsRepository.createMany({
+      meetingId: booked.meeting.id,
+      invitedById: parties.memberUserId,
+      guests: [
+        {
+          email: 'admitted-guest@example.test',
+          name: 'Admitted Guest',
+          emailDomain: 'example.test',
+          party: 'client',
+          participationRole: 'guest',
+          accessScope: 'meeting',
+          inviteChannel: 'email',
+          admission: 'pre_admitted',
+          tokenHash: 'a'.repeat(64),
+          expiresAt: guestExpiresAt,
+        },
+      ],
+    });
+    if (admittedGuest === undefined) throw new Error('fixture: admitted guest row missing');
+    await meetingGuestsRepository.decideAdmission({
+      guestId: admittedGuest.id,
+      decision: 'admitted',
+      deciderUserId: parties.memberUserId,
+    });
+
+    const [pendingGuest] = await meetingGuestsRepository.createMany({
+      meetingId: booked.meeting.id,
+      invitedById: parties.memberUserId,
+      guests: [
+        {
+          email: 'pending-guest@example.test',
+          name: 'Pending Guest',
+          emailDomain: 'example.test',
+          party: 'client',
+          participationRole: 'guest',
+          accessScope: 'meeting',
+          inviteChannel: 'link',
+          admission: 'pending',
+          tokenHash: 'b'.repeat(64),
+          expiresAt: guestExpiresAt,
+        },
+      ],
+    });
+    if (pendingGuest === undefined) throw new Error('fixture: pending guest row missing');
+
+    mockQueueAdd.mockClear();
+
+    const firstMove = await rescheduleMeeting(
+      booked.meeting.id,
+      { scheduledStart: LATER_START, scheduledEnd: LATER_END },
+      parties.memberUserId,
+      log
+    );
+
+    const rowsAfterFirstMove = await calendarRowsFor(booked.meeting.id);
+    // F7 (fix round 1, R6) — a length floor BEFORE the `.every()`: an empty array satisfies
+    // `.every()` vacuously, so a regression that dropped a row (or all of them) would still
+    // pass the sequence check below for the wrong reason.
+    expect(rowsAfterFirstMove).toHaveLength(2);
+    expect(rowsAfterFirstMove.every((row) => row.sequence === 1)).toBe(true);
+
+    const invites1 = calendarInviteEnqueues();
+    expect(invites1.length).toBeGreaterThan(0);
+    expect(
+      invites1.every((invite) =>
+        invite.correlationId.startsWith(`rescheduled:${firstMove.rescheduleAuditId}:`)
+      )
+    ).toBe(true);
+    const recipients1 = invites1.map((invite) => invite.calendarInvite.recipient);
+    expect(recipients1).toContainEqual({ kind: 'user', userId: parties.memberUserId });
+    expect(recipients1).toContainEqual({ kind: 'user', userId: expertProfile.userId });
+    expect(recipients1).toContainEqual({ kind: 'guest', guestId: admittedGuest.id });
+    expect(recipients1).not.toContainEqual({ kind: 'guest', guestId: pendingGuest.id });
+    const correlationIds1 = invites1.map((invite) => invite.correlationId);
+
+    // A SECOND move ⇒ SEQUENCE 2 and entirely NEW correlationIds (keyed on the new audit row).
+    mockQueueAdd.mockClear();
+    const secondMove = await rescheduleMeeting(
+      booked.meeting.id,
+      { scheduledStart: START, scheduledEnd: END },
+      parties.memberUserId,
+      log
+    );
+
+    const rowsAfterSecondMove = await calendarRowsFor(booked.meeting.id);
+    expect(rowsAfterSecondMove).toHaveLength(2);
+    expect(rowsAfterSecondMove.every((row) => row.sequence === 2)).toBe(true);
+
+    const invites2 = calendarInviteEnqueues();
+    // F7 (fix round 1, R6) — non-empty AND matching invites1's count: a regression that made
+    // the SECOND reschedule enqueue nothing at all previously passed "SECOND move ⇒ new
+    // correlationIds" (a `Set` of zero elements has the "right" size against zero, vacuously).
+    expect(invites2).toHaveLength(invites1.length);
+    expect(
+      invites2.every((invite) =>
+        invite.correlationId.startsWith(`rescheduled:${secondMove.rescheduleAuditId}:`)
+      )
+    ).toBe(true);
+    const correlationIds2 = invites2.map((invite) => invite.correlationId);
+    expect(secondMove.rescheduleAuditId).not.toBe(firstMove.rescheduleAuditId);
+    expect(new Set([...correlationIds1, ...correlationIds2]).size).toBe(
+      correlationIds1.length + correlationIds2.length
+    );
+  });
+
+  it('a booker who no longer holds participate on the company receives NO calendar invite on reschedule', async () => {
+    const parties = await seedBookingParties();
+    const booked = await bookAndProvisionMeeting(
+      {
+        contextType: 'case',
+        contextId: parties.caseEngagementId,
+        scheduledStart: START,
+        scheduledEnd: END,
+        engagementType: 'case',
+        userId: parties.memberUserId,
+      },
+      log,
+      { provisioner: recordingProvisioner() }
+    );
+    const expertProfile = await expertsRepository.findDisplayProfileById(parties.expertProfileId);
+    if (expertProfile === undefined) throw new Error('fixture: expert profile not found');
+
+    // Soft-remove the booker's company membership — the same predicate
+    // `resolveCalendarPartyMemberUserIds` checks via `getMemberRole`.
+    await db
+      .update(companyMembers)
+      .set({ deletedAt: new Date() })
+      .where(
+        and(
+          eq(companyMembers.companyId, parties.companyId),
+          eq(companyMembers.userId, parties.memberUserId)
+        )
+      );
+
+    mockQueueAdd.mockClear();
+    await rescheduleMeeting(
+      booked.meeting.id,
+      { scheduledStart: LATER_START, scheduledEnd: LATER_END },
+      parties.memberUserId,
+      log
+    );
+
+    const invites = calendarInviteEnqueues();
+    const recipients = invites.map((invite) => invite.calendarInvite.recipient);
+    expect(recipients).not.toContainEqual({ kind: 'user', userId: parties.memberUserId });
+    // F7 (fix round 1, R6) — the POSITIVE CONTROL: the departed booker's absence means
+    // something only if the reschedule fan-out otherwise ran normally. Without this, a
+    // regression that enqueued NOTHING AT ALL for the reschedule (e.g. `calendarEvents` empty
+    // on the move) would still pass "no booker" vacuously.
+    expect(recipients).toContainEqual({ kind: 'user', userId: expertProfile.userId });
   });
 });

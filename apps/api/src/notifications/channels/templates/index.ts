@@ -84,6 +84,12 @@ import {
   MeetingGuestRescheduledEmail,
 } from './meeting-guest-emails.js';
 import {
+  MeetingCalendarInviteEmail,
+  type CalendarInviteEmailAudience,
+  type CalendarInviteEmailTransition,
+  type MeetingCalendarInviteEmailProps,
+} from './meeting-calendar-invite.js';
+import {
   MeetingClientAbsentEmail,
   MeetingExpertAbsentAdminEmail,
 } from './meeting-absence-emails.js';
@@ -2110,6 +2116,38 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     }),
     subject: 'This call has moved',
   }),
+
+  // BAL-475 — the Balo-organised calendar invite, rendered per recipient by
+  // `channels/calendar-invite-delivery.ts` alongside the ICS attachment. Subject differs only
+  // for a reschedule; `summary` is pre-resolved by `resolveCalendarInviteFacts`.
+  'meeting-calendar-invite': (data) => {
+    const summary = (data.summary as string) ?? 'your call';
+    const transition = (data.transition as CalendarInviteEmailTransition) ?? 'booked';
+    const audience = (data.audience as CalendarInviteEmailAudience) ?? 'member';
+    const base = {
+      recipientName: (data.recipientName as string) ?? 'there',
+      summary,
+      startIso: (data.startIso as string) ?? '',
+      endIso: (data.endIso as string) ?? '',
+      transition,
+      baseUrl: BASE_URL,
+    };
+    // F29 (fix round 1, UX5) — the discriminated union is constructed HERE, at the one seam
+    // that turns untyped `data` into typed props: a `member` audience always carries a
+    // `memberJoinUrl` string (never `undefined`), matching what
+    // `resolveCalendarInviteFacts` already guarantees.
+    const props: MeetingCalendarInviteEmailProps =
+      audience === 'guest'
+        ? { ...base, audience: 'guest' }
+        : { ...base, audience: 'member', memberJoinUrl: (data.memberJoinUrl as string) ?? '' };
+    return {
+      component: React.createElement(MeetingCalendarInviteEmail, props),
+      subject:
+        transition === 'rescheduled'
+          ? `Updated calendar invite: ${sanitizeSubjectTitle(summary)}`
+          : `Calendar invite: ${sanitizeSubjectTitle(summary)}`,
+    };
+  },
 
   // BAL-522 — an explicit billing-email change, to the company's MANAGE_BILLING holders
   // (includes the actor, as confirmation). Copy comes from the ONE shared derivation

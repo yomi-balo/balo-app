@@ -124,9 +124,12 @@ export async function processMeetingCalendarAmend(
   //    (ADR-1044 Ruling 1), which names no vendor event at all.
   //
   //    ⚠ RE-SENDING AN UPDATED ICS ON RESCHEDULE IS **NOT THIS JOB'S**, exactly as the vendor
-  //    delete at step 2 is BAL-476's. Building and delivering the ICS is BAL-475; `METHOD:CANCEL` and
-  //    the re-send fan-out are BAL-476. The accepted residual, stated rather than hidden: a
-  //    rescheduled ICS-fallback expert currently holds a STALE calendar entry.
+  //    delete at step 2 is BAL-476's — and BAL-475 (O1) SHIPPED that re-send, correcting an
+  //    earlier version of this comment that called it a stale residual. `rescheduleMeeting`'s
+  //    post-commit block calls `publishRescheduleCalendarInvites`, off the SEQUENCE bump
+  //    `updateSchedule`'s transaction already committed (§4.4.3) — an ICS-fallback expert's
+  //    calendar entry updates the moment the reschedule commits. BAL-476 owns `METHOD:CANCEL`
+  //    and guest-removal only.
   //
   //    ⚠ THE READ IS NARROWED TO `party='expert' AND delivery_mode='provider_event'` — a
   //    whole-meeting read would hand back a client-party or ICS row and this job would try to

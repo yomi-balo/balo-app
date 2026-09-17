@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
 
-const { mockResolveFacts, mockProjectToExpertCalendar } = vi.hoisted(() => ({
+const { mockResolveFacts, mockProjectToExpertCalendar, mockRecordIcsDelivery } = vi.hoisted(() => ({
   mockResolveFacts: vi.fn(),
   mockProjectToExpertCalendar: vi.fn(),
+  mockRecordIcsDelivery: vi.fn(),
 }));
 
 vi.mock('./resolve-calendar-facts.js', () => ({
@@ -12,8 +13,12 @@ vi.mock('./resolve-calendar-facts.js', () => ({
 vi.mock('./project-booking-to-calendar.js', () => ({
   projectBookingToExpertCalendar: mockProjectToExpertCalendar,
 }));
+vi.mock('@balo/db', () => ({
+  meetingCalendarEventsRepository: { recordIcsDelivery: mockRecordIcsDelivery },
+}));
 
-const { projectBookingCalendarEvent } = await import('./booking-calendar-projection.js');
+const { projectBookingCalendarEvent, recordClientCalendarEntry } =
+  await import('./booking-calendar-projection.js');
 
 function fakeLog(): FastifyBaseLogger {
   return {
@@ -59,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockResolveFacts.mockResolvedValue(FACTS);
   mockProjectToExpertCalendar.mockResolvedValue('provider_event');
+  mockRecordIcsDelivery.mockResolvedValue({ id: 'row-client-1' });
 });
 
 describe('projectBookingCalendarEvent — the happy path', () => {
@@ -304,5 +310,60 @@ describe('projectBookingCalendarEvent — it never rejects on its own callees', 
     await expect(
       projectBookingCalendarEvent(createdMeeting(), 'case', CONTEXT_ID, fakeLog())
     ).rejects.toThrow('contract violated');
+  });
+});
+
+/** BAL-475 — the CLIENT-party sibling: always `ics`, never throws. */
+describe('recordClientCalendarEntry', () => {
+  it("records the client-party ICS row and returns 'ics'", async () => {
+    const log = fakeLog();
+
+    await expect(recordClientCalendarEntry(MEETING_ID, 'case', CONTEXT_ID, log)).resolves.toBe(
+      'ics'
+    );
+
+    expect(mockRecordIcsDelivery).toHaveBeenCalledWith({ meetingId: MEETING_ID, party: 'client' });
+    expect(vi.mocked(log.error)).not.toHaveBeenCalled();
+  });
+
+  it("emits 'Meeting calendar projection outcome' with party: 'client'", async () => {
+    const log = fakeLog();
+
+    await recordClientCalendarEntry(MEETING_ID, 'case', CONTEXT_ID, log);
+
+    expect(vi.mocked(log.info)).toHaveBeenCalledWith(
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        contextType: 'case',
+        contextId: CONTEXT_ID,
+        deliveryMode: 'ics',
+      },
+      'Meeting calendar projection outcome'
+    );
+  });
+
+  it("a repository failure degrades to 'failed', logs an error, and never throws", async () => {
+    mockRecordIcsDelivery.mockRejectedValueOnce(new Error('db blip'));
+    const log = fakeLog();
+
+    await expect(recordClientCalendarEntry(MEETING_ID, 'case', CONTEXT_ID, log)).resolves.toBe(
+      'failed'
+    );
+
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meetingId: MEETING_ID,
+        party: 'client',
+        contextType: 'case',
+        contextId: CONTEXT_ID,
+        error: 'db blip',
+      }),
+      'Client calendar projection failed'
+    );
+    expect(vi.mocked(log.info)).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryMode: 'failed' }),
+      'Meeting calendar projection outcome'
+    );
   });
 });

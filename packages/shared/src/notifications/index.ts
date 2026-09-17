@@ -978,14 +978,13 @@ export interface MeetingGuestAddedPayload {
  *
  * ⚠ THE CALENDAR HALF OF THE AC IS DEFERRED, AND THIS EVENT IS THE WHOLE OF THE SHIPPED
  * REMOVAL NOTICE. The AC line "Removing a guest … sends `METHOD:CANCEL` to that person only"
- * cannot be satisfied: no meeting has a calendar event to cancel. Verified against this
- * checkout — no `SEQUENCE` / `METHOD:CANCEL` / `VEVENT` literal exists anywhere in `apps/**`
- * or `packages/**`, no `ics` / `ical-generator` / `node-ical` dependency exists, and
- * `lib/cronofy.ts` exports only the two client getters (all calendar traffic is READ:
- * free/busy → the availability cache). BAL-129 provisions a Daily room and writes no
- * calendar event. A NEW TICKET owns meeting calendar-event writing + `SEQUENCE` fan-out, as
- * a shared dependency of BAL-408/409/410/411 — see the plan's §14.2. Revocation itself IS
- * immediate and total: every read path re-checks `revoked_at IS NULL`.
+ * is still not satisfied — but the ORIGINAL REASON stated here ("no meeting has a calendar
+ * event to cancel") is now FALSE and must not be trusted: BAL-475 ships Balo-organised
+ * `METHOD:REQUEST` ICS invites (`ical-generator`, `nodemailer`, the Brevo SMTP relay), so a
+ * removed guest who was ADMITTED/PRE_ADMITTED and already received one now holds a STALE
+ * calendar entry until BAL-476 sends the matching `METHOD:CANCEL`. BAL-476 owns that relax
+ * (widening `meeting_calendar_deliveries.method`'s CHECK to add `'CANCEL'`) and the re-send.
+ * Revocation itself IS immediate and total: every read path re-checks `revoked_at IS NULL`.
  */
 export interface MeetingGuestRemovedPayload {
   correlationId: string; // = meeting_guests.id (stable: one removal per guest row)

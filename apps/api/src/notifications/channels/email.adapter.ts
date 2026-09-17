@@ -1,14 +1,82 @@
 import { Worker, type Job } from 'bullmq';
+import nodemailer, { type Transporter } from 'nodemailer';
+import * as Sentry from '@sentry/node';
 import { usersRepository } from '@balo/db';
 import { render } from '@react-email/render';
 import { createLogger } from '@balo/shared/logging';
 import { createRedisConnection } from '../../lib/redis.js';
 import { getR2ObjectBytes } from '../../lib/storage/r2.js';
+import { readCalendarSmtpConfig } from './calendar-smtp-config.js';
+import {
+  CalendarInviteSendError,
+  deliverCalendarInvite,
+  type CalendarInviteTransport,
+} from './calendar-invite-delivery.js';
 import { getEmailTemplate } from './templates/index.js';
 import { logNotification } from './log.js';
 import type { DeliveryPayload } from './types.js';
 
+/** BAL-475 — the ONE event this queue may route to the SMTP relay (F25, fix round 1, S12). */
+const CALENDAR_INVITE_EVENT = 'meeting.calendar_invite';
+
 const log = createLogger('notification-email');
+
+// Cached SMTP transport — created lazily on first use, matching `getBrevoClient`'s posture.
+let calendarSmtpTransport: Transporter | null = null;
+
+/**
+ * BAL-475 — the SECOND transport of the email channel, for the CALENDAR message class only.
+ * Lazily created, `undefined` when unconfigured (so a delivery SKIPS rather than throwing).
+ * Bounded timeouts so a stuck relay can never hold a claim past its lease. `logger: false`,
+ * `debug: false` — nodemailer must never log credentials or envelopes.
+ *
+ * ⚠ F3 (fix round 1, S2/S14) — TLS IS REQUIRED, NEVER OPTIONAL. `secure: false` (port 587) means
+ * STARTTLS, and nodemailer's `login()` never checks whether STARTTLS actually ran before sending
+ * `AUTH` — a live probe against a fake SMTP server confirmed the relay's credentials go out in
+ * PLAINTEXT the moment the server doesn't (or an on-path attacker strips) `250-STARTTLS` from its
+ * EHLO reply. `requireTLS: true` makes nodemailer refuse to authenticate without it;
+ * `tls: { minVersion: 'TLSv1.2' }` floors the negotiated protocol version WITHOUT touching
+ * `rejectUnauthorized` (stays at Node's secure default — certificate verification is never
+ * disabled). `disableFileAccess`/`disableUrlAccess` are defence in depth against a future
+ * `{ path }` / `{ href }` content object — every value passed today is a plain string.
+ *
+ * ⚠ THE ONLY VALUE IMPORT OF `nodemailer` IN THE REPO — pinned by
+ * `invariants/nodemailer-only-in-email-channel.test.ts`. A second transport inside the ONE
+ * email channel, never a second dispatch path.
+ */
+function getCalendarInviteTransport(): CalendarInviteTransport | undefined {
+  const config = readCalendarSmtpConfig();
+  if (config === undefined) {
+    return undefined;
+  }
+
+  if (calendarSmtpTransport === null) {
+    calendarSmtpTransport = nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
+      ...(config.secure ? {} : { requireTLS: true }),
+      tls: { minVersion: 'TLSv1.2' },
+      auth: { user: config.user, pass: config.pass },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
+      logger: false,
+      debug: false,
+      disableFileAccess: true,
+      disableUrlAccess: true,
+    });
+  }
+  const transporter = calendarSmtpTransport;
+
+  return {
+    organizerAddress: config.organizerAddress,
+    send: async (options) => {
+      const info = await transporter.sendMail(options);
+      return { messageId: typeof info.messageId === 'string' ? info.messageId : null };
+    },
+  };
+}
 
 /** A Brevo transactional-email attachment (base64 content + download name). */
 interface BrevoAttachment {
@@ -90,6 +158,48 @@ export function devEmailSendIsBlocked(): boolean {
   return process.env.DEV_ALLOW_REAL_EMAIL !== 'true';
 }
 
+/**
+ * F4 (fix round 1, R3) — the calendar-class branch, extracted so `processEmailJob` itself stays
+ * under the repo's Sonar cognitive-complexity limit. F25 (S12) gates on the event name (defence
+ * in depth — the dispatcher already gates on it too); F14 (R13) sanitises and rethrows any
+ * non-send failure, capturing it to Sentry only on the FINAL attempt (a `CalendarInviteSendError`
+ * is already sanitised and already captured inside `deliverCalendarInvite` itself).
+ */
+async function processCalendarInviteJob(job: Job<DeliveryPayload>): Promise<void> {
+  const payload = job.data;
+
+  if (payload.event !== CALENDAR_INVITE_EVENT) {
+    log.error(
+      { template: payload.template, event: payload.event },
+      'A non-calendar-invite event carried a calendarInvite payload — refusing to route to SMTP'
+    );
+    Sentry.captureMessage('A non-calendar-invite event carried a calendarInvite payload', {
+      level: 'error',
+      extra: { template: payload.template, event: payload.event },
+    });
+    await logNotification(payload, 'email', 'skipped', 'calendar_invite_event_mismatch');
+    return;
+  }
+
+  try {
+    await deliverCalendarInvite(job, getCalendarInviteTransport());
+  } catch (error) {
+    if (error instanceof CalendarInviteSendError) {
+      throw error;
+    }
+    const attempts = job.opts.attempts ?? 1;
+    const sanitized = new Error(
+      `Calendar invite delivery failed: ${error instanceof Error ? error.name : 'UnknownError'}`
+    );
+    if (job.attemptsMade + 1 >= attempts) {
+      Sentry.captureException(sanitized, {
+        extra: { jobId: job.id, template: payload.template, event: payload.event },
+      });
+    }
+    throw sanitized;
+  }
+}
+
 /** Exported for testability — called by the BullMQ worker. */
 export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> {
   const payload = job.data;
@@ -102,6 +212,14 @@ export async function processEmailJob(job: Job<DeliveryPayload>): Promise<void> 
     );
     await logNotification(payload, 'email', 'skipped', 'Blocked outside production');
     return; // ⚠ RETURN, never throw — a throw would make BullMQ retry this forever.
+  }
+
+  // BAL-475 — transport selected by MESSAGE CLASS: calendar ⇒ SMTP relay; everything else ⇒
+  // Brevo API. Placed HERE, immediately after the dev block, so that block covers BOTH
+  // transports by position — no separate dev-send guard for the calendar path.
+  if (payload.calendarInvite !== undefined) {
+    await processCalendarInviteJob(job);
+    return;
   }
 
   // 1. Resolve recipient email + display name.

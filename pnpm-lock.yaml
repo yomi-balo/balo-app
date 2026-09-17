@@ -112,6 +112,9 @@ importers:
       fastify-raw-body:
         specifier: ^5.0.0
         version: 5.0.0
+      ical-generator:
+        specifier: ~10.2.0
+        version: 10.2.0(@types/node@22.15.3)(dayjs@1.11.21)(luxon@3.7.2)
       ioredis:
         specifier: ^5.9.3
         version: 5.9.3
@@ -124,6 +127,9 @@ importers:
       lodash:
         specifier: ^4.17.23
         version: 4.17.23
+      nodemailer:
+        specifier: ^10.0.10
+        version: 10.0.10
       pino:
         specifier: ^9.0.0
         version: 9.14.0
@@ -9128,6 +9134,42 @@ packages:
         integrity: sha512-kvL8xYl5QMTh+LwohVN72ciOxC0OEV79IPdJSTwEXok9y9QHebXGdFgrED4sWfiax/ODx++CAMk3hMy4XPJPOw==,
       }
 
+  ical-generator@10.2.0:
+    resolution:
+      {
+        integrity: sha512-XR5FsiDWCsz5MwBwMA/sQqR3A9H240xkXIeXOabV7uNAiieP+TA9rleVvlwPLRXMz+CXME8cGuDd7cdnE5At6w==,
+      }
+    engines: { node: 20 || 22 || >=24 }
+    peerDependencies:
+      '@touch4it/ical-timezones': '>=1.6.0'
+      '@types/luxon': '>= 1.26.0'
+      '@types/mocha': '>= 8.2.1'
+      '@types/node': '*'
+      dayjs: '>= 1.10.0'
+      luxon: '>= 1.26.0'
+      moment: '>= 2.29.0'
+      moment-timezone: '>= 0.5.33'
+      rrule: '>= 2.6.8'
+    peerDependenciesMeta:
+      '@touch4it/ical-timezones':
+        optional: true
+      '@types/luxon':
+        optional: true
+      '@types/mocha':
+        optional: true
+      '@types/node':
+        optional: true
+      dayjs:
+        optional: true
+      luxon:
+        optional: true
+      moment:
+        optional: true
+      moment-timezone:
+        optional: true
+      rrule:
+        optional: true
+
   iconv-lite@0.7.3:
     resolution:
       {
@@ -10503,6 +10545,13 @@ packages:
         integrity: sha512-Uzmd6LXpouKo8EUK68IjH4+E01w/hXyV3R3g/geCJo+rXLNfh1xucB+LOzYEOQPSiUK3h/xZf0cQGcSsmyL2Og==,
       }
     engines: { node: '>=18' }
+
+  nodemailer@10.0.10:
+    resolution:
+      {
+        integrity: sha512-He9XskOFms62SyAKkLu8CcGcYHAo+BSHSsORI8s4PJH8qZgZY4L4lDfvyN0twvmbpyG+eGrxpyBlskj9d9rJ8A==,
+      }
+    engines: { node: '>=20.0.0' }
 
   normalize-package-data@2.5.0:
     resolution:
@@ -19260,6 +19309,12 @@ snapshots:
 
   hyphen@1.14.1: {}
 
+  ical-generator@10.2.0(@types/node@22.15.3)(dayjs@1.11.21)(luxon@3.7.2):
+    optionalDependencies:
+      '@types/node': 22.15.3
+      dayjs: 1.11.21
+      luxon: 3.7.2
+
   iconv-lite@0.7.3:
     dependencies:
       safer-buffer: 2.1.2
@@ -20026,6 +20081,8 @@ snapshots:
   node-releases@2.0.27: {}
 
   node-releases@2.0.47: {}
+
+  nodemailer@10.0.10: {}
 
   normalize-package-data@2.5.0:
     dependencies:
