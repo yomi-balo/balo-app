@@ -2,6 +2,7 @@
 
 import { useCallback, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import { staffCustomListAllowed, type StaffAccessPerson } from '@balo/shared/authz';
@@ -23,6 +24,7 @@ import { saveStaffAccessAction } from '../_actions/save-staff-access';
 import { findStaffCandidateInputSchema } from '../_lib/staff-access-schema';
 import { resolvedAccessOf } from '../_lib/staff-access-form';
 import {
+  STAFF_ACCESS_SAVE_MESSAGES,
   STAFF_CANDIDATE_MESSAGES,
   staffAccessFailureNeedsReload,
 } from '../_lib/staff-access-outcome';
@@ -51,6 +53,14 @@ interface AddStaffDialogProps {
  * with the page and can be out of date by the time this dialog runs a fresh lookup. Every
  * decision here reads the FRESH lookup result instead (`staffCustomListAllowed(result.person.role)`
  * for the classification, a `router.refresh()` before selecting an existing match).
+ *
+ * ⚠ N5 — THE SAVE STEP USES AN EXPLICIT `saving` FLAG, NOT `useTransition`, for the identical
+ * reason `staff-access-detail.tsx` does (C1): React does not guarantee `isPending` falls back to
+ * `false` in the SAME commit as the transition's final `setState` call, which could leave the
+ * close guard blocking dismissal for one extra render after the save has already settled. `saving`
+ * is set once, synchronously, and cleared in a `finally` that runs on every path — success, a
+ * typed refusal, or a raw promise rejection (N4). The LOOKUP step still uses `useTransition`
+ * (`lookupPending`) — untouched here, out of this fix's scope.
  */
 export function AddStaffDialog({
   open,
@@ -65,7 +75,7 @@ export function AddStaffDialog({
   const [candidate, setCandidate] = useState<StaffAccessPerson | null>(null);
   const [alreadyStaff, setAlreadyStaff] = useState<StaffAccessPerson | null>(null);
   const [role, setRole] = useState<PlatformRole>(PROMOTABLE_ROLES[0] ?? 'admin');
-  const [savePending, startSave] = useTransition();
+  const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ConfirmAccessChangeError | null>(null);
 
   const reset = useCallback(() => {
@@ -80,11 +90,11 @@ export function AddStaffDialog({
 
   const handleOpenChange = useCallback(
     (next: boolean): void => {
-      if ((lookupPending || savePending) && !next) return;
+      if ((lookupPending || saving) && !next) return;
       if (!next) reset();
       onOpenChange(next);
     },
-    [lookupPending, savePending, reset, onOpenChange]
+    [lookupPending, saving, reset, onOpenChange]
   );
 
   const handleFindAccount = useCallback((): void => {
@@ -139,33 +149,50 @@ export function AddStaffDialog({
     handleOpenChange(false);
   }, [alreadyStaff, onSelectPerson, handleOpenChange, router]);
 
+  const runConfirm = useCallback(
+    async (target: StaffAccessPerson): Promise<void> => {
+      // N4/N5 — `try`/`catch`/`finally`: a transport-level rejection (offline, a 500 from the
+      // action endpoint, an aborted POST) must not strand `saving` true, which would block the
+      // close guard above indefinitely — the same fix `staff-access-detail.tsx` needed.
+      try {
+        const result = await saveStaffAccessAction({
+          targetUserId: target.id,
+          // C2 part 3 — this flow's own premise is "the candidate is a plain user", so state
+          // THAT, never `target.role`/`target.customList` (only as fresh as the lookup that ran
+          // when this dialog opened). If someone else promoted or restricted the candidate since,
+          // the D6 stale check on the server refuses rather than silently overwriting their change.
+          expected: { role: 'user', customList: null },
+          next: { role, customList: null },
+        });
+        if (result.success) {
+          const name = personDisplayName(target.firstName, target.lastName, target.email);
+          toast.success(`${name} now has staff access`); // pending-MJ
+          onSelectPerson(target.id);
+          handleOpenChange(false);
+          return;
+        }
+        toast.error(result.error);
+        setSaveError({
+          message: result.error,
+          needsReload: staffAccessFailureNeedsReload(result.code),
+        });
+      } catch (error) {
+        Sentry.captureException(error);
+        toast.error(STAFF_ACCESS_SAVE_MESSAGES.failed);
+        setSaveError({ message: STAFF_ACCESS_SAVE_MESSAGES.failed, needsReload: false });
+      } finally {
+        setSaving(false);
+      }
+    },
+    [role, onSelectPerson, handleOpenChange]
+  );
+
   const handleConfirm = useCallback((): void => {
     if (candidate === null) return;
     setSaveError(null);
-    startSave(async () => {
-      const result = await saveStaffAccessAction({
-        targetUserId: candidate.id,
-        // C2 part 3 — this flow's own premise is "the candidate is a plain user", so state THAT,
-        // never `candidate.role`/`candidate.customList` (which is only as fresh as the lookup that
-        // ran when this dialog opened). If someone else promoted or restricted the candidate since,
-        // the D6 stale check on the server refuses rather than silently overwriting their change.
-        expected: { role: 'user', customList: null },
-        next: { role, customList: null },
-      });
-      if (result.success) {
-        const name = personDisplayName(candidate.firstName, candidate.lastName, candidate.email);
-        toast.success(`${name} now has staff access`); // pending-MJ
-        onSelectPerson(candidate.id);
-        handleOpenChange(false);
-        return;
-      }
-      toast.error(result.error);
-      setSaveError({
-        message: result.error,
-        needsReload: staffAccessFailureNeedsReload(result.code),
-      });
-    });
-  }, [candidate, role, onSelectPerson, handleOpenChange]);
+    setSaving(true);
+    void runConfirm(candidate);
+  }, [candidate, runConfirm]);
 
   const candidateName =
     candidate === null
@@ -301,14 +328,12 @@ export function AddStaffDialog({
                 type="button"
                 variant="outline"
                 onClick={() => setStep('promote')}
-                disabled={savePending}
+                disabled={saving}
               >
                 Back
               </Button>
-              <Button type="button" onClick={handleConfirm} disabled={savePending}>
-                {savePending && (
-                  <Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden="true" />
-                )}
+              <Button type="button" onClick={handleConfirm} disabled={saving}>
+                {saving && <Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden="true" />}
                 {/* pending-MJ */}
                 Save changes
               </Button>

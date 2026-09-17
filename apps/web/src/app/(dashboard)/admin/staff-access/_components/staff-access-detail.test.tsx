@@ -436,6 +436,37 @@ describe('StaffAccessDetail — confirm dialog diff and save outcomes', () => {
     });
   });
 
+  it('N4: a REJECTED save (not a typed refusal) shows the generic failed banner, and Escape can close it', async () => {
+    mockSaveStaffAccessAction.mockRejectedValueOnce(new Error('network down'));
+    const { user } = await renderAtConfirmStep();
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(STAFF_ACCESS_SAVE_MESSAGES.failed);
+    });
+
+    // `saving` must not be stuck true after a rejection — Escape closes the dialog.
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('N4: a REJECTED save also allows Cancel once the banner is showing', async () => {
+    mockSaveStaffAccessAction.mockRejectedValueOnce(new Error('network down'));
+    const { user } = await renderAtConfirmStep();
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(STAFF_ACCESS_SAVE_MESSAGES.failed);
+    });
+
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+  });
+
   it('a stale refusal shows the reload banner, and Reload calls router.refresh', async () => {
     mockSaveStaffAccessAction.mockResolvedValue({
       success: false,

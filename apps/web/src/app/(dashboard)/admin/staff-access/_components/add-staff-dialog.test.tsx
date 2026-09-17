@@ -7,7 +7,7 @@ import type {
   FindStaffCandidateActionResult,
   SaveStaffAccessActionResult,
 } from '../_lib/staff-access-outcome';
-import { STAFF_CANDIDATE_MESSAGES } from '../_lib/staff-access-outcome';
+import { STAFF_ACCESS_SAVE_MESSAGES, STAFF_CANDIDATE_MESSAGES } from '../_lib/staff-access-outcome';
 
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), info: vi.fn() }),
@@ -221,6 +221,30 @@ describe('AddStaffDialog — promote and confirm steps', () => {
     await user.click(screen.getByRole('button', { name: /review and save/i }));
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('N5: a REJECTED save (not a typed refusal) shows the generic failed banner, and the dialog is not stranded', async () => {
+    const user = userEvent.setup();
+    mockSaveStaffAccessAction.mockRejectedValueOnce(new Error('network down'));
+    mockFindStaffCandidateAction.mockResolvedValue({ success: true, person: CANDIDATE });
+    const onOpenChange = vi.fn();
+    renderDialog({ onOpenChange });
+    await user.type(screen.getByLabelText(/email they signed up with/i), 'priya@example.com');
+    await user.click(screen.getByRole('button', { name: /find account/i }));
+    await waitFor(() => screen.getByRole('radio', { name: /^admin/i }));
+    await user.click(screen.getByRole('button', { name: /review and save/i }));
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(STAFF_ACCESS_SAVE_MESSAGES.failed);
+    });
+
+    // `saving` must not be stuck true after a rejection — Escape (the close guard's own check)
+    // must still be able to close the dialog.
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
   });
 
   it('F4 (R3): a stale save failure shows Reload, and clicking it calls router.refresh and closes', async () => {

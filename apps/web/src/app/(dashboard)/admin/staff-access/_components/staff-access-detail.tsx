@@ -2,6 +2,7 @@
 
 import { useCallback, useReducer, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import * as Sentry from '@sentry/nextjs';
 import { toast } from 'sonner';
 import { AlertTriangle } from 'lucide-react';
 import {
@@ -127,28 +128,40 @@ export function StaffAccessDetail({
   }, [router]);
 
   const runConfirm = useCallback(async (): Promise<void> => {
-    const result = await saveStaffAccessAction({
-      targetUserId: person.id,
-      expected: {
-        role: person.role,
-        customList: person.customList === null ? null : [...person.customList],
-      },
-      next: { role: state.role, customList: draftCustomListOf(state) },
-    });
-    if (result.success) {
-      toast.success(`Access updated for ${firstName}`); // pending-MJ
+    // N4 — `saveStaffAccessAction` is a Server Action: a TRANSPORT-level failure (offline, a 500
+    // from the action endpoint, an aborted POST) REJECTS the promise instead of resolving a typed
+    // refusal. Without this `try`/`catch`/`finally`, that rejection would propagate out of the
+    // fire-and-forget `void runConfirm()` call, `saving` would never clear, and C8's dismiss
+    // guard (which keys on `saving`) would strand the dialog open until a page reload — a NEW
+    // consequence of C8, so it ships with it.
+    try {
+      const result = await saveStaffAccessAction({
+        targetUserId: person.id,
+        expected: {
+          role: person.role,
+          customList: person.customList === null ? null : [...person.customList],
+        },
+        next: { role: state.role, customList: draftCustomListOf(state) },
+      });
+      if (result.success) {
+        toast.success(`Access updated for ${firstName}`); // pending-MJ
+        setConfirmOpen(false);
+        // `revalidatePath` inside the action re-renders the page with fresh data; the parent
+        // workspace re-keys this component, which resets the form to the new saved state.
+        return;
+      }
+      toast.error(result.error);
+      setError({ message: result.error, needsReload: staffAccessFailureNeedsReload(result.code) });
+    } catch (error) {
+      Sentry.captureException(error);
+      toast.error(STAFF_ACCESS_SAVE_MESSAGES.failed);
+      setError({ message: STAFF_ACCESS_SAVE_MESSAGES.failed, needsReload: false });
+    } finally {
+      // N4 — cleared here, UNCONDITIONALLY, on every path (success, typed refusal, or a raw
+      // rejection) so `saving` — and therefore C8's dismiss guard and the Cancel button — can
+      // never get stuck true.
       setSaving(false);
-      setConfirmOpen(false);
-      // `revalidatePath` inside the action re-renders the page with fresh data; the parent
-      // workspace re-keys this component, which resets the form to the new saved state.
-      return;
     }
-    toast.error(result.error);
-    // C1 — `saving` clears in the SAME synchronous block that reveals the error, so a subsequent
-    // Cancel click is never blocked by a `pending`-style flag lagging one render behind the
-    // outcome it gates.
-    setSaving(false);
-    setError({ message: result.error, needsReload: staffAccessFailureNeedsReload(result.code) });
   }, [person, state, firstName]);
 
   const handleConfirm = useCallback((): void => {
