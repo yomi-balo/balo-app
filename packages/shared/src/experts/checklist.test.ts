@@ -3,12 +3,18 @@ import {
   EXPERT_CHECKLIST_ITEM_KEYS,
   deriveExpertChecklist,
   hasLiveCalendarConnection,
+  RECONNECT_NEEDED_CREDENTIAL_STATUSES,
+  calendarConnectionNeedsReconnect,
   withCredentialStatusOverride,
   searchabilityTriggerFor,
   buildSearchabilityAnalyticsProperties,
   type ExpertChecklistInputs,
   type ExpertCalendarConnectionState,
 } from './checklist';
+import {
+  RECONNECT_NEEDED_CREDENTIAL_STATUSES as RECONNECT_FROM_BARREL,
+  calendarConnectionNeedsReconnect as needsReconnectFromBarrel,
+} from './index';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -45,6 +51,59 @@ describe('hasLiveCalendarConnection', () => {
     expect(hasLiveCalendarConnection([connection('g', 'EXPIRED'), connection('m', 'ACTIVE')])).toBe(
       true
     );
+  });
+});
+
+// ── BAL-566 R2 — calendarConnectionNeedsReconnect (the dashboard banner) ──
+
+describe('RECONNECT_NEEDED_CREDENTIAL_STATUSES', () => {
+  it('is exactly EXPIRED and REVOKED — never ACTIVE, never SYNC_PENDING', () => {
+    expect([...RECONNECT_NEEDED_CREDENTIAL_STATUSES]).toEqual(['EXPIRED', 'REVOKED']);
+    expect(RECONNECT_NEEDED_CREDENTIAL_STATUSES.has('ACTIVE')).toBe(false);
+    expect(RECONNECT_NEEDED_CREDENTIAL_STATUSES.has('SYNC_PENDING')).toBe(false);
+  });
+
+  it('is reachable through the @balo/shared/experts barrel as the SAME values', () => {
+    expect(RECONNECT_FROM_BARREL).toBe(RECONNECT_NEEDED_CREDENTIAL_STATUSES);
+    expect(needsReconnectFromBarrel).toBe(calendarConnectionNeedsReconnect);
+  });
+});
+
+describe('calendarConnectionNeedsReconnect', () => {
+  it.each([
+    {
+      label: 'no connections at all (never connected — setup, not breakage)',
+      statuses: [],
+      expected: false,
+    },
+    { label: 'one ACTIVE connection', statuses: ['ACTIVE'], expected: false },
+    { label: 'one EXPIRED connection', statuses: ['EXPIRED'], expected: true },
+    { label: 'one REVOKED connection', statuses: ['REVOKED'], expected: true },
+    {
+      label: 'one SYNC_PENDING connection (first-connect provisioning)',
+      statuses: ['SYNC_PENDING'],
+      expected: false,
+    },
+    {
+      label: 'an EXPIRED connection beside an ACTIVE one (D4 — the calendar still works)',
+      statuses: ['EXPIRED', 'ACTIVE'],
+      expected: false,
+    },
+    {
+      label: 'SYNC_PENDING beside EXPIRED (nothing works, one has broken)',
+      statuses: ['SYNC_PENDING', 'EXPIRED'],
+      expected: true,
+    },
+  ])('$label → $expected', ({ statuses, expected }) => {
+    const connections = statuses.map((status, index) => connection(`c${index}`, status));
+    expect(connections).toHaveLength(statuses.length);
+    expect(calendarConnectionNeedsReconnect(connections)).toBe(expected);
+  });
+
+  it('is never true while hasLiveCalendarConnection is true (it consumes the ANY-ACTIVE rule)', () => {
+    const healthy = [connection('g', 'REVOKED'), connection('m', 'ACTIVE')];
+    expect(hasLiveCalendarConnection(healthy)).toBe(true);
+    expect(calendarConnectionNeedsReconnect(healthy)).toBe(false);
   });
 });
 

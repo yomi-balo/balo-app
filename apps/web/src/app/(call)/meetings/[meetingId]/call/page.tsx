@@ -5,6 +5,7 @@ import { checkSessionDrift } from '@/lib/auth/session-sync';
 import { resolveInCallDrawdown } from '@/lib/credit/resolve-in-call-drawdown';
 import { log } from '@/lib/logging';
 import { meetingJoinLinkUrl } from '@/lib/meetings/join-link';
+import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { resolveMeetingChatAccess } from '@/lib/meetings/meeting-chat-anchor';
 import { isRealtimeConfigured } from '@/lib/realtime/ably-server';
 import { conversationChannelName } from '@/lib/realtime/channels';
@@ -158,7 +159,9 @@ export default async function MeetingCallPage({
   if (drift.action === 'sync-needed') {
     // ⚠ BACK INTO THE CALL, not to the dashboard. `getSafeRedirectPath` re-checks this
     // server-side (same origin, no auth paths), so a same-origin literal is the safe shape.
-    const returnTo = `/meetings/${meetingId}/call`;
+    // BAL-566 fix round 1 (F1) — built via `memberCallPath` (this page's own route shape), the
+    // ONE definition `isMeetingCallPath` round-trips against.
+    const returnTo = memberCallPath(meetingId);
     redirect(`/api/auth/session-sync?returnTo=${encodeURIComponent(returnTo)}`);
   }
 

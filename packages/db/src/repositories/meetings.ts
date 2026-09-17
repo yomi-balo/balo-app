@@ -412,8 +412,11 @@ async function updateLiveMeeting(
  * BAL-498 — one raw row from `listCalendarForExpert`'s step-1 query, and also the shape a
  * meeting is reduced to after step 2's fold. Same shape both before and after folding: a
  * pre-fold row is one (meeting, context) pair; a folded row is the winning pair.
+ *
+ * Exported (BAL-566) so `upcoming-meetings.ts`' company read feeds the SAME fold — the shape is
+ * unchanged.
  */
-interface RawMeetingContextRow {
+export interface RawMeetingContextRow {
   meetingId: string;
   scheduledStart: Date;
   scheduledEnd: Date;
@@ -526,8 +529,9 @@ function dropPossiblyTruncatedTrailingMeeting(
 }
 
 /** Post-fold: one row per meeting, its `contextId` narrowed to non-null by
- *  {@link selectPrimaryMeetingContext}. */
-interface FoldedCalendarMeeting {
+ *  {@link selectPrimaryMeetingContext}. Exported (BAL-566) alongside {@link RawMeetingContextRow};
+ *  the shape is unchanged. */
+export interface FoldedCalendarMeeting {
   meetingId: string;
   scheduledStart: Date;
   scheduledEnd: Date;
@@ -536,15 +540,23 @@ interface FoldedCalendarMeeting {
   contextId: string;
 }
 
+/** Told about every meeting the fold omits, and why. The CALLER owns the log line and its scope. */
+export type MeetingContextFoldOmission = (meetingId: string, reason: 'none' | 'ambiguous') => void;
+
 /**
- * `listCalendarForExpert` step 2 — reduce each meeting's fanned-out context rows to ONE primary
- * context via {@link selectPrimaryMeetingContext}. Extracted as a named module-private helper
- * (SonarCloud `sonarjs/cognitive-complexity` gate on the un-extracted method was 34, allowed 15)
- * and exported so it is unit-testable without Docker (plan-bal-498.md § 12.1).
+ * THE SCOPE-AGNOSTIC FOLD (BAL-566 D3) — group fanned-out context rows by meeting (`Map`
+ * insertion order = input order, so the caller's SQL `ORDER BY` survives), reduce each meeting to
+ * ONE primary context via {@link selectPrimaryMeetingContext}, and report each omitted meeting to
+ * `onOmitted`.
+ *
+ * Extracted from {@link foldMeetingContextRowsToPrimary} so the expert calendar and the company
+ * Up next read (`upcoming-meetings.ts`) fold IDENTICALLY — a meeting that is `ambiguous` on one
+ * side is `ambiguous` on the other. The body moved verbatim; only the log call became
+ * `onOmitted`, because the scope a log line names (expert vs company) belongs to the caller.
  */
-export function foldMeetingContextRowsToPrimary(
+export function foldMeetingContextRows(
   rows: readonly RawMeetingContextRow[],
-  expertProfileId: string
+  onOmitted: MeetingContextFoldOmission
 ): FoldedCalendarMeeting[] {
   const byMeeting = new Map<string, RawMeetingContextRow[]>();
   for (const row of rows) {
@@ -564,15 +576,12 @@ export function foldMeetingContextRowsToPrimary(
     }
     const primary = selectPrimaryMeetingContext(meetingRows);
     if (!primary.ok) {
-      // BOTH reasons are logged, not just `'ambiguous'` (BAL-498 fix round 3, R9). A meeting
+      // BOTH reasons are reported, not just `'ambiguous'` (BAL-498 fix round 3, R9). A meeting
       // folding to `'none'` (every context row is `admin`, or carries a null `context_id`) still
       // OCCUPIES the expert's availability through `consultations`, yet vanishes from their
       // calendar — silently dropping it made that state unobservable, while this method's own
       // docblock promised "OMITTED, fail-closed, and logged" for both.
-      logger.warn(
-        { meetingId, expertProfileId, reason: primary.reason },
-        'Meeting omitted from the expert calendar read: no usable primary context'
-      );
+      onOmitted(meetingId, primary.reason);
       continue;
     }
     folded.push({
@@ -585,6 +594,27 @@ export function foldMeetingContextRowsToPrimary(
     });
   }
   return folded;
+}
+
+/**
+ * `listCalendarForExpert` step 2 — reduce each meeting's fanned-out context rows to ONE primary
+ * context via {@link selectPrimaryMeetingContext}. Extracted as a named module-private helper
+ * (SonarCloud `sonarjs/cognitive-complexity` gate on the un-extracted method was 34, allowed 15)
+ * and exported so it is unit-testable without Docker (plan-bal-498.md § 12.1).
+ *
+ * Since BAL-566 a thin wrapper over {@link foldMeetingContextRows}. ⚠ The log message is
+ * BYTE-IDENTICAL to the pre-extraction line — monitors may key on it; do not reword it.
+ */
+export function foldMeetingContextRowsToPrimary(
+  rows: readonly RawMeetingContextRow[],
+  expertProfileId: string
+): FoldedCalendarMeeting[] {
+  return foldMeetingContextRows(rows, (meetingId, reason) =>
+    logger.warn(
+      { meetingId, expertProfileId, reason },
+      'Meeting omitted from the expert calendar read: no usable primary context'
+    )
+  );
 }
 
 export interface CalendarContextIdBuckets {
@@ -1671,7 +1701,8 @@ export const meetingsRepository = {
    * are only FILTERED on. They are kept in lockstep by `syncProjectionScheduleTx`.
    *
    * Selects NO join credential (`dailyRoomName`/`joinUrl`) — the Join affordance is built
-   * from the meeting id alone via the tokenless lobby URL.
+   * from the meeting id alone via `memberCallPath` (BAL-566 fix round 1, F1 / user ruling J1;
+   * previously the tokenless lobby URL).
    *
    * A meeting whose contexts fold to `'none'` or `'ambiguous'` (via
    * {@link selectPrimaryMeetingContext}) is OMITTED, fail-closed, and logged.

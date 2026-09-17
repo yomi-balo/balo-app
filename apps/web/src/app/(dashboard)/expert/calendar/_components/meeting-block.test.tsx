@@ -59,7 +59,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
-    joinUrl: 'https://balo.expert/join/m/m-1',
+    joinUrl: '/meetings/m-1/call',
     counterpartyCompanyName: 'Northwind',
     ...overrides,
   };
@@ -114,7 +114,7 @@ describe('MeetingBlock — full mode', () => {
     ).toBeInTheDocument();
   });
 
-  it('the inline Join button renders when the parent reports joinVisible, fires onJoinClick with the meeting, and navigates to the tokenless lobby URL', () => {
+  it('the inline Join button renders when the parent reports joinVisible, fires onJoinClick with the meeting, and navigates to the authenticated member call route', () => {
     const onJoinClick = vi.fn();
     const imminent = meeting({
       scheduledStart: '2026-08-24T08:05:00.000Z',
@@ -130,18 +130,23 @@ describe('MeetingBlock — full mode', () => {
     const joinButton = screen.getByRole('button', { name: /Join Northwind's meeting/i });
     fireEvent.click(joinButton);
     expect(onJoinClick).toHaveBeenCalledWith(imminent);
-    // The URL is reached by NAVIGATING, not by being rendered.
-    expect(mockAssign).toHaveBeenCalledWith('https://balo.expert/join/m/m-1');
+    // The URL is reached by NAVIGATING, not by being rendered. BAL-566 fix round 1 (F1, user
+    // ruling J1) — the member call route, never the anonymous lobby.
+    expect(mockAssign).toHaveBeenCalledWith('/meetings/m-1/call');
   });
 
   /**
    * S1 — the security regression this replaces an `<a href>` to prevent. PostHog autocapture is
    * ON and ships `$elements[].attr__href` (which `sanitizeAnalyticsEvent` never walks), and
    * Sentry Session Replay records rrweb DOM snapshots whose default `maskAttributes` excludes
-   * `href`. So an `href` here leaked `/join/m/{meetingId}` — sensitive-by-policy in
-   * `SENSITIVE_PATH_PREFIXES` — to two external processors just by RENDERING, before any click.
+   * `href`. The join target is `memberCallPath`'s authenticated member call route (BAL-566 fix
+   * round 1, F1 / user ruling J1) — it is NOT on the `SENSITIVE_PATH_PREFIXES` redaction list
+   * (it is already linked, unredacted, from in-app notifications and absence emails), so an
+   * `href` here would not open a NEW redaction gap; it would still leak the meeting id to both
+   * external processors just by RENDERING, before any click, which is reason enough to keep it
+   * off the DOM.
    */
-  it('renders NO element whose href contains /join/m/ — the lobby URL never enters the DOM (S1)', () => {
+  it('renders NO element whose href contains the member call route — the join target never enters the DOM (S1, widened BAL-566 D9)', () => {
     const imminent = meeting({
       scheduledStart: '2026-08-24T08:05:00.000Z',
       scheduledEnd: '2026-08-24T08:35:00.000Z',
@@ -156,8 +161,8 @@ describe('MeetingBlock — full mode', () => {
       node.getAttribute('href')
     );
     expect(hrefs).not.toHaveLength(0); // the card body IS still a link — non-vacuous
-    expect(hrefs.some((href) => href?.includes('/join/m/'))).toBe(false);
-    expect(container.innerHTML).not.toContain('/join/m/');
+    expect(hrefs.some((href) => href?.includes('/meetings/m-1/call'))).toBe(false);
+    expect(container.innerHTML).not.toContain('/meetings/m-1/call');
   });
 
   it('A1 — the Join chip keeps its small visual but extends its hit area to the 44px minimum, and carries the live ping-ring cue', () => {
@@ -282,9 +287,9 @@ describe('MeetingBlock — compact mode (H13: below 24px, no inline Join, Popove
     const joinButton = screen.getByRole('button', { name: /Join Northwind's meeting/i });
     fireEvent.click(joinButton);
     expect(onJoinClick).toHaveBeenCalledWith(imminent);
-    expect(mockAssign).toHaveBeenCalledWith('https://balo.expert/join/m/m-1');
+    expect(mockAssign).toHaveBeenCalledWith('/meetings/m-1/call');
     // Same S1 rule inside the popover — the popover Join was the SECOND `<a href={joinUrl}>`.
-    expect(document.body.innerHTML).not.toContain('/join/m/');
+    expect(document.body.innerHTML).not.toContain('/meetings/m-1/call');
     // BAL-511 D2 — this popover instance had neither the old pulse nor a reduced-motion fallback;
     // it now inherits the same live cue as the other two sites, from JoinMeetingButton itself.
     expect(joinButton.className).toContain('motion-safe:before:animate-ping-slow');

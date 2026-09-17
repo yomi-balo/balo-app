@@ -25,6 +25,7 @@ import {
   resolveCancelRefusal,
 } from '@balo/shared/meetings';
 import { expertPartyDisplayName, personDisplayName } from '@balo/shared/parties';
+import { expertCounterpartyLabels } from '@/lib/meetings/expert-counterparty';
 import {
   caseConsultationIsUpcoming,
   deriveCaseConsultationState,
@@ -381,10 +382,14 @@ async function resolveCounterparty(
       : agenciesRepository.getSummaryById(profile.agencyId),
   ]);
 
-  const agencyLabel = agency?.name ?? null;
   const firstName = expertUser?.firstName ?? null;
   const lastName = expertUser?.lastName ?? null;
-  const expertPerson = personDisplayName(firstName, lastName, 'An expert');
+  // BAL-566 (D7) — the shared client-side expert-naming rule.
+  const { personName: expertPerson, agencyLabel } = expertCounterpartyLabels({
+    firstName,
+    lastName,
+    agencyName: agency?.name ?? null,
+  });
   const expertPartyShort = expertPartyDisplayName({
     type: profile?.type ?? 'freelancer',
     agencyName: agencyLabel,

@@ -56,6 +56,7 @@ import type { CommandPaletteEventMap } from './events/command-palette';
 import type { StripeRedirectEventMap } from './events/stripe-redirect';
 import type { AdminLookupEventMap } from './events/admin-lookup';
 import type { AdminApplicationsEventMap } from './events/admin-applications';
+import type { DashboardEventMap } from './events/dashboard';
 
 /** Union of all client-side (browser) event maps. */
 export type AllEvents = AuthEventMap &
@@ -129,7 +130,10 @@ export type AllEvents = AuthEventMap &
   // BAL-550 — the `/admin/health/capture` lens's CLIENT family. `CaptureHealthAnalytics` and
   // `RedriveSheet` (apps/web) are the dispatch points; no server events (see the family's own
   // header).
-  AdminCaptureHealthEventMap;
+  AdminCaptureHealthEventMap &
+  // BAL-566 — the dashboard "Up next" card's CLIENT family. `UpNextCard` (apps/web) is the ONE
+  // dispatch point; no server events (read-only surface).
+  DashboardEventMap;
 
 export type EventName = keyof AllEvents;
 

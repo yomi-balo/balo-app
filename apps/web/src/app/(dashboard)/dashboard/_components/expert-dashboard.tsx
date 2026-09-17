@@ -5,8 +5,8 @@ import { motion } from 'motion/react';
 import { GettingStartedChecklist } from './getting-started-checklist';
 import { CelebrationCard } from './celebration-card';
 import { MetricCards } from './metric-cards';
-import { GhostConsultationsCard } from './ghost-consultations-card';
 import { GhostClientsCard } from './ghost-clients-card';
+import { CalendarDisconnectedBanner } from './calendar-disconnected-banner';
 import { track, EXPERT_SETUP_EVENTS } from '@/lib/analytics';
 import { CHECKLIST_ITEMS } from '@/lib/constants/expert-checklist';
 import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
@@ -14,12 +14,15 @@ import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
 interface ExpertDashboardProps {
   checklistStatus: ChecklistStatus | null;
   userName: string;
+  /** BAL-566 — the Up next slot (or the ghost card), streamed in via Suspense by `page.tsx`. */
+  upNext: React.ReactNode;
 }
 
 export function ExpertDashboard({
   checklistStatus,
   userName,
-}: ExpertDashboardProps): React.JSX.Element {
+  upNext,
+}: Readonly<ExpertDashboardProps>): React.JSX.Element {
   const isAllComplete = checklistStatus?.allComplete ?? false;
   const prevItems = useRef<ChecklistStatus['items'] | null>(null);
   const prevAllComplete = useRef<boolean | null>(null);
@@ -59,6 +62,9 @@ export function ExpertDashboard({
 
   return (
     <div>
+      {/* BAL-566 (R2) — the calendar-disconnected banner, at the top, above the welcome header. */}
+      {checklistStatus?.calendarNeedsReconnect === true && <CalendarDisconnectedBanner />}
+
       {/* Page header */}
       <motion.div
         initial={{ y: 16, opacity: 0 }}
@@ -80,14 +86,14 @@ export function ExpertDashboard({
           <GettingStartedChecklist status={checklistStatus} />
         ))}
 
-      {/* Metric cards */}
-      <MetricCards />
-
-      {/* Ghost preview cards */}
-      <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <GhostConsultationsCard />
+      {/* BAL-566 (D13) — Up next (or the ghost card) beside the ghost Clients card. */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        {upNext}
         <GhostClientsCard />
       </div>
+
+      {/* Metric cards */}
+      <MetricCards />
     </div>
   );
 }

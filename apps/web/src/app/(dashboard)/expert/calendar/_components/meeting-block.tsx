@@ -10,7 +10,7 @@ import { ENGAGEMENT_TYPE_INDICATOR } from '@/lib/calendar/engagement-type-indica
 import { formatZonedTimeRange, formatZonedTime } from '@/lib/calendar/zoned-grid';
 import { joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
-import { JoinMeetingButton } from './join-meeting-button';
+import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
 
 interface MeetingBlockProps {
   readonly meeting: CalendarMeetingView;
@@ -40,9 +40,9 @@ const COMPACT_HEIGHT_PX = 24;
  * BAL-498 — one absolutely-positioned meeting card within a Week day column. The card body is an
  * in-app `next/link` to the owning engagement detail (ordinary client-side navigation — the
  * plain-anchor rule never covered these routes; fix round 3, R5). Join is a SEPARATE click target
- * and is a `<button>`, NOT a link: see {@link JoinMeetingButton} for why the lobby URL must never
- * become a DOM attribute, and why the navigation it performs is still a hard document
- * navigation (D4 / the `/join/` invariant).
+ * and is a `<button>`, NOT a link: see {@link JoinMeetingButton} for why the join target must
+ * never become a DOM attribute, and why the navigation it performs is still a hard document
+ * navigation (the `join-link-never-writes.test.ts` invariant).
  *
  * COMPACT MODE (< 24px, e.g. a 15-minute case): the inline Join button is suppressed — an
  * absolutely-positioned icon button over a 16px card occludes the only line of text and is

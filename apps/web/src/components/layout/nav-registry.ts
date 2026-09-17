@@ -595,3 +595,21 @@ export function resolveBreadcrumbTrail(pathname: string): readonly NavCrumb[] {
   const parent = ENTITY_PARENTS[segment];
   return parent === undefined ? [] : [parent];
 }
+
+/**
+ * BAL-566 — the ENABLED, workspace-scoped primary nav entry that LISTS an entity route's
+ * records, resolved THROUGH {@link ENTITY_PARENTS}`[entitySegment].href`. The dashboard Up next
+ * card's footer links use this so its "Cases"/"Consultations" label always matches the live nav
+ * entry rather than a hand-typed literal. BAL-567 re-points `ENTITY_PARENTS.cases` at the renamed
+ * Cases item, so the dashboard footer follows the key/label/href rename without naming
+ * `consultations` anywhere.
+ */
+export function resolveEntityListNavEntry(
+  context: NavContext,
+  entitySegment: string
+): EnabledNavEntry | undefined {
+  if (!Object.hasOwn(ENTITY_PARENTS, entitySegment)) return undefined;
+  const parent = ENTITY_PARENTS[entitySegment];
+  if (parent === undefined) return undefined;
+  return resolveNavItems(context, 'primary').find((entry) => entry.href === parent.href);
+}

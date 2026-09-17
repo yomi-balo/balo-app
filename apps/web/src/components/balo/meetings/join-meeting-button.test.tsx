@@ -6,9 +6,10 @@ import { JoinMeetingButton } from './join-meeting-button';
 
 /**
  * BAL-511 / ADR-1053 — the Join live cue: a ping ring, `ambient  live-call ping ring 1.8s`,
- * replacing the whole-button `motion-safe:animate-pulse`. This is the FIRST direct test for this
- * component — until now it was only exercised indirectly through `meeting-block.test.tsx` and
- * `agenda-list.test.tsx`.
+ * replacing the whole-button `motion-safe:animate-pulse`.
+ *
+ * BAL-566 — moved verbatim from `expert/calendar/_components/` to `components/balo/meetings/`
+ * so the dashboard Up next row can be a fourth call site. Content unchanged.
  */
 
 /** S1 idiom, copied from `meeting-block.test.tsx` — jsdom's `Location.assign` is a

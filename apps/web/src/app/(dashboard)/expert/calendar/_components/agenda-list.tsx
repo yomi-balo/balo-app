@@ -13,7 +13,7 @@ import {
 import { ENGAGEMENT_TYPE_INDICATOR } from '@/lib/calendar/engagement-type-indicator';
 import { calendarMeetingTiming, joinAffordanceAriaLabel } from '@/lib/calendar/join-window';
 import type { CalendarMeetingView } from '../_lib/calendar-view-types';
-import { JoinMeetingButton } from './join-meeting-button';
+import { JoinMeetingButton } from '@/components/balo/meetings/join-meeting-button';
 
 interface AgendaListProps {
   readonly meetings: readonly CalendarMeetingView[];

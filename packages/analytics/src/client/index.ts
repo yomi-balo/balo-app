@@ -102,6 +102,13 @@ export {
   // BAL-550 — the `/admin/health/capture` lens's event constant. ⚠ THE RE-EXPORT ALLOWLIST.
   // Omitting a name here fails in a DIFFERENT package (`apps/web` cannot import it).
   ADMIN_CAPTURE_HEALTH_EVENTS,
+  // BAL-566 — the dashboard "Up next" card's event constant + its three vocabulary tuples.
+  // ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package (`apps/web`
+  // cannot import it).
+  DASHBOARD_EVENTS,
+  DASHBOARD_UP_NEXT_MEETING_TYPES,
+  DASHBOARD_UP_NEXT_TARGETS,
+  DASHBOARD_UP_NEXT_ROW_STATES,
 } from '../events';
 
 export type {
@@ -229,4 +236,9 @@ export type {
   CaptureHealthQueueFilter,
   AdminRedriveKind,
   AdminRedriveOutcome,
+  // BAL-566 — the dashboard "Up next" card's event payload and its three vocabularies.
+  DashboardEventMap,
+  DashboardUpNextMeetingType,
+  DashboardUpNextTarget,
+  DashboardUpNextRowState,
 } from '../events';

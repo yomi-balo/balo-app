@@ -66,16 +66,17 @@ export interface CalendarEventMap {
   };
   [CALENDAR_EVENTS.CONNECT_CTA_CLICKED]: {
     /**
-     * WHICH connect affordance on the Calendar page was clicked: the full-page "no calendar
-     * connected" empty state (shown only when there are also no meetings), or the inline warning
-     * banner that appears alongside real bookings. Both point at
-     * `/expert/settings?tab=schedule&setup=calendar`.
+     * WHICH connect affordance was clicked: the full-page "no calendar connected" empty state on
+     * the Calendar page (shown only when there are also no meetings), the inline warning banner
+     * on the Calendar page that appears alongside real bookings, or (BAL-566) the dashboard's
+     * OWN calendar-disconnected banner (R2) — a different surface, same funnel step. All three
+     * point at `/expert/settings?tab=schedule&setup=calendar`.
      *
      * ⚠ DISTINCT FROM `CONNECT_INITIATED` (BAL-397), which fires when the OAuth round trip
      * actually starts in Settings. This is the click-through that PRECEDES it — the two are the
      * first two steps of one funnel, not duplicates. The value unions do not overlap.
      */
-    source: 'empty_state' | 'banner';
+    source: 'empty_state' | 'banner' | 'dashboard_banner';
   };
   [CALENDAR_EVENTS.WEEK_NAVIGATED]: {
     /**

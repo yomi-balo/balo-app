@@ -22,7 +22,7 @@ function meeting(overrides: Partial<CalendarMeetingView>): CalendarMeetingView {
     status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
-    joinUrl: 'https://balo.expert/join/m/meeting-1',
+    joinUrl: '/meetings/meeting-1/call',
     counterpartyCompanyName: 'Northwind',
     ...overrides,
   };

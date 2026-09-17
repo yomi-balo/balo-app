@@ -3,8 +3,10 @@ import type { ProjectEngagementWithMilestones } from '@balo/db';
 import {
   deriveActorLabel,
   deriveEngagementParties,
+  deriveExpertPartyLabels,
   engagementHeaderLine,
   personAtCompany,
+  projectEngagementTitle,
 } from './engagement-parties';
 
 type ExpertProfile = ProjectEngagementWithMilestones['expertProfile'];
@@ -186,5 +188,65 @@ describe('engagementHeaderLine', () => {
     expect(engagementHeaderLine('admin', p)).toBe(
       'Northwind Industrial ↔ CloudPeak Consulting (Priya Sharma)'
     );
+  });
+});
+
+describe('deriveExpertPartyLabels (BAL-566 D8)', () => {
+  it('matches deriveEngagementParties for the same fields (extraction is behaviour-preserving)', () => {
+    const engagement = makeEngagement({ agency: makeAgency() });
+    const full = deriveEngagementParties(engagement);
+    const extracted = deriveExpertPartyLabels({
+      type: engagement.expertProfile.type,
+      agencyName: engagement.expertProfile.agency?.name ?? null,
+      firstName: engagement.expertProfile.user.firstName,
+      lastName: engagement.expertProfile.user.lastName,
+    });
+    expect(extracted).toEqual({
+      isAgencyExpert: full.isAgencyExpert,
+      expertPerson: full.expertPerson,
+      expertPersonShort: full.expertPersonShort,
+      expertParty: full.expertParty,
+      expertPartyShort: full.expertPartyShort,
+      expertRetroFirstMention: full.expertRetroFirstMention,
+    });
+  });
+
+  it('an independent expert resolves the party to the person', () => {
+    const labels = deriveExpertPartyLabels({
+      type: 'freelancer',
+      agencyName: null,
+      firstName: 'Priya',
+      lastName: 'Sharma',
+    });
+    expect(labels.isAgencyExpert).toBe(false);
+    expect(labels.expertParty).toBe('Priya Sharma');
+    expect(labels.expertRetroFirstMention).toBe('Priya');
+  });
+
+  it('an unnamed expert falls back to "the expert" / "An expert"', () => {
+    const labels = deriveExpertPartyLabels({
+      type: 'freelancer',
+      agencyName: null,
+      firstName: null,
+      lastName: null,
+    });
+    expect(labels.expertPerson).toBe('the expert');
+    expect(labels.expertParty).toBe('An expert');
+  });
+});
+
+describe('projectEngagementTitle (BAL-566 D8)', () => {
+  it('uses the request title when non-blank', () => {
+    expect(projectEngagementTitle('Salesforce CPQ rollout', 'CloudPeak')).toBe(
+      'Salesforce CPQ rollout'
+    );
+  });
+
+  it('falls back to "Delivery with {party}" when the title is null', () => {
+    expect(projectEngagementTitle(null, 'CloudPeak')).toBe('Delivery with CloudPeak');
+  });
+
+  it('falls back to "Delivery with {party}" when the title is blank', () => {
+    expect(projectEngagementTitle('   ', 'Priya')).toBe('Delivery with Priya');
   });
 });

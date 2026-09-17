@@ -16,7 +16,12 @@ export interface CalendarMeetingView {
   readonly contextType: MeetingContextTypeWithHolder;
   /** Link to the owning engagement/request detail. `null` when the owning row is not live. */
   readonly href: string | null;
-  /** The tokenless anonymous-lobby URL, built server-side via `meetingJoinLinkUrl`. */
+  /**
+   * The authenticated MEMBER call route (`/meetings/{id}/call`), built server-side via
+   * `memberCallPath` (BAL-566 fix round 1, F1 / user ruling J1). NOT the anonymous lobby URL
+   * `meetingJoinLinkUrl` builds — that is a different, tokenless share link used only by the call
+   * page's own "Copy join link" control.
+   */
   readonly joinUrl: string;
   /** The CLIENT COMPANY. `null` when the owning row is absent/soft-deleted. */
   readonly counterpartyCompanyName: string | null;

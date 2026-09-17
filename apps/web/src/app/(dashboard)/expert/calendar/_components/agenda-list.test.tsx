@@ -47,7 +47,7 @@ function meeting(overrides: Partial<CalendarMeetingView>): CalendarMeetingView {
     status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
-    joinUrl: 'https://balo.expert/join/m/m-1',
+    joinUrl: '/meetings/m-1/call',
     counterpartyCompanyName: 'Northwind',
     ...overrides,
   };
@@ -115,7 +115,7 @@ describe('AgendaList', () => {
     expect(screen.getAllByRole('link')[0]).toHaveAttribute('data-next-link', 'true');
   });
 
-  it('fires onJoinClick when Join is clicked, and navigates to the tokenless lobby URL', async () => {
+  it('fires onJoinClick when Join is clicked, and navigates to the authenticated member call route', async () => {
     const onJoinClick = vi.fn();
     const imminent = meeting({
       meetingId: 'imminent-2',
@@ -136,16 +136,17 @@ describe('AgendaList', () => {
     });
     joinButton.click();
     expect(onJoinClick).toHaveBeenCalledWith(imminent);
-    expect(mockAssign).toHaveBeenCalledWith('https://balo.expert/join/m/m-1');
+    // BAL-566 fix round 1 (F1, user ruling J1) — the member call route, never the lobby.
+    expect(mockAssign).toHaveBeenCalledWith('/meetings/m-1/call');
   });
 
   /**
    * S1 — Agenda is the MOBILE DEFAULT surface, so this is the row that renders most often. An
-   * `href` here shipped `/join/m/{meetingId}` to PostHog autocapture
+   * `href` here would ship the meeting id to PostHog autocapture
    * (`$elements[].attr__href`, never walked by `sanitizeAnalyticsEvent`) and to Sentry Session
    * Replay's rrweb DOM snapshots (`href` is not in the default `maskAttributes`) on render alone.
    */
-  it('renders NO element whose href contains /join/m/ (S1)', () => {
+  it('renders NO element whose href contains the member call route (S1, widened BAL-566 D9)', () => {
     const imminent = meeting({
       meetingId: 'imminent-4',
       scheduledStart: '2026-08-24T00:05:00.000Z',
@@ -164,8 +165,8 @@ describe('AgendaList', () => {
       node.getAttribute('href')
     );
     expect(hrefs).not.toHaveLength(0); // the row body IS still a link — non-vacuous
-    expect(hrefs.some((href) => href?.includes('/join/m/'))).toBe(false);
-    expect(container.innerHTML).not.toContain('/join/m/');
+    expect(hrefs.some((href) => href?.includes('/meetings/m-1/call'))).toBe(false);
+    expect(container.innerHTML).not.toContain('/meetings/m-1/call');
   });
 
   it('A1 — the Join control meets the 44px minimum tap target on the mobile-default surface', () => {

@@ -99,6 +99,45 @@ export function hasLiveCalendarConnection(
 }
 
 /**
+ * BAL-566 R2 — the credential statuses that mean "this connection HAD worked and has broken".
+ * EXPIRED and REVOKED share one reconnect UX (apiroc skill; `CALENDAR_CREDENTIAL_STATUSES`'
+ * docblock). `SYNC_PENDING` is deliberately ABSENT: it is first-connect provisioning still in
+ * flight — setup, not breakage — and `ACTIVE` is the healthy state.
+ *
+ * ⚠ Typed `ReadonlySet<string>` for the same dependency-direction reason as
+ * {@link ExpertCalendarConnectionState.credentialStatus}. Every member is pinned to the DB
+ * vocabulary by `packages/db/src/invariants/calendar-reconnect-statuses-are-db-labels.test.ts`,
+ * so a rename on the DB side fails there instead of silently never matching.
+ */
+export const RECONNECT_NEEDED_CREDENTIAL_STATUSES: ReadonlySet<string> = new Set([
+  'EXPIRED',
+  'REVOKED',
+]);
+
+/**
+ * BAL-566 R2 — the calendar-disconnected banner's predicate: NO connection is ACTIVE **and** at
+ * least one live connection is EXPIRED or REVOKED.
+ *
+ * Built ON {@link hasLiveCalendarConnection} — the ANY-ACTIVE rule is consumed, never re-derived.
+ * An expert who never connected (no rows) is `false`: that is setup, covered by the checklist.
+ * An expert whose only connection is `SYNC_PENDING` is `false` for the same reason. One broken
+ * connection beside a healthy one is `false`: the calendar item still passes (D4).
+ *
+ * The caller MUST pass only non-soft-deleted connections (the {@link ExpertChecklistInputs}
+ * contract `expertSearchabilityRepository.loadInputs` already honours).
+ */
+export function calendarConnectionNeedsReconnect(
+  connections: readonly ExpertCalendarConnectionState[]
+): boolean {
+  return (
+    !hasLiveCalendarConnection(connections) &&
+    connections.some((connection) =>
+      RECONNECT_NEEDED_CREDENTIAL_STATUSES.has(connection.credentialStatus)
+    )
+  );
+}
+
+/**
  * The rule bodies, lifted verbatim from the pre-BAL-414 `expert-checklist.ts`, with only the
  * `calendar` item changed (D4, ANY-ACTIVE over the set rather than a single connection).
  */

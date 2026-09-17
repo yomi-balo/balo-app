@@ -625,6 +625,20 @@ export {
   // BAL-498 — the expert calendar's read row shape.
   type ExpertCalendarMeeting,
 } from './meetings';
+// ── Dashboard Up next read model (BAL-566) ──
+// ⚠ READ-ONLY. `listForCompany` runs AFTER the caller's company-level `PARTICIPATE` check and
+// never trusts a `meeting_contexts.context_id` it did not reach through a company-owned parent.
+// `findTitles` / `findExpertPartyNames` add NO scope predicate: pass only ids already verified as
+// the viewer's own. `VisibleCompanyContext` and the pure step helpers stay module-private.
+export {
+  upcomingMeetingsRepository,
+  UpcomingMeetingsRangeTooWideError,
+  UpcomingMeetingsTooManyRowsError,
+  MAX_UPCOMING_RANGE_DAYS,
+  type CompanyUpcomingMeeting,
+  type UpcomingMeetingTitles,
+  type ExpertPartyNames,
+} from './upcoming-meetings';
 // ── Consultation projection (BAL-428) — `consultations` as a read model of `meetings` ──
 // The WRITERS are deliberately NOT exported: they are transaction-scoped internals of
 // `meetingsRepository` / `meetingContextsRepository`. Only the typed errors (so callers can
