@@ -38,6 +38,7 @@ import {
 import { createRedisConnection } from '../lib/redis.js';
 import { buildJobId, getQueue } from '../lib/queue.js';
 import { sanitizedErrorMessage } from '../lib/sanitize-error.js';
+import { dailyBatchCaptureId } from '../services/transcript/capture-id.js';
 import {
   BatchArtefactTooLargeError,
   fetchBatchArtefactJson,
@@ -385,7 +386,7 @@ async function handleIngest(job: Job<TranscriptCaptureIngestJobData>): Promise<v
     return;
   }
 
-  const captureId = `daily-batch:${batchJobId}`;
+  const captureId = dailyBatchCaptureId(batchJobId);
   const existing = await transcriptsRepository.findByCaptureId(captureId);
   if (existing !== undefined) {
     log.info({ recordingId, captureId }, 'transcript-capture ingest: already ingested — no-op');
