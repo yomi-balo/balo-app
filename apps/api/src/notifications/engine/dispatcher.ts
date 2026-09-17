@@ -1,6 +1,8 @@
 import { createLogger } from '@balo/shared/logging';
 import type { EmailAttachmentSpec } from '@balo/shared/notifications';
 import { buildJobId, getQueue } from '../../lib/queue.js';
+import { calendarInviteRecipientId, readCalendarInviteSpec } from '../calendar-invite-spec.js';
+import type { DeliveryPayload } from '../channels/types.js';
 import type { NotificationChannel, NotificationRule, RuleContext } from './rules.js';
 
 const log = createLogger('notification-dispatcher');
@@ -58,17 +60,39 @@ async function enqueueDelivery(
   recipientId: string,
   recipientEmail?: string
 ): Promise<void> {
-  const deliveryPayload = {
+  const base = {
     recipientId,
     recipientEmail,
     template: rule.template,
     event: context.event,
     data: context.data,
     payload: context.payload,
-    // BAL-386: forward any email attachments carried on the event payload so the
-    // email adapter can resolve their bytes (from R2) at send time.
-    attachments: extractAttachments(context.payload.attachments),
   };
+
+  // BAL-475 — the delivery payload's MESSAGE CLASS is decided here, once, for both the
+  // fan-out and single-recipient paths that call this function. A calendar-class payload NEVER
+  // carries `attachments` (ADR-1044 Ruling 4 guardrail 2) — the two are mutually exclusive by
+  // TYPE (`DeliveryPayload`), not just by convention.
+  //
+  // ⚠ F25 (fix round 1, S12) — GATED ON THE EVENT NAME, NOT SHAPE ALONE. Choosing the calendar
+  // class purely because `context.payload.calendarInvite` happens to parse would route ANY
+  // event carrying that shape to the SMTP relay, addressed by `spec.recipient` while ignoring
+  // the rule's own resolved `recipientId`. Restricting to `meeting.calendar_invite` — the one
+  // event this class exists for — makes that unreachable by construction, not merely by the
+  // route's current callers happening not to send the shape.
+  const calendarInvite =
+    context.event === 'meeting.calendar_invite'
+      ? readCalendarInviteSpec(context.payload.calendarInvite)
+      : undefined;
+  const deliveryPayload: DeliveryPayload =
+    calendarInvite === undefined
+      ? {
+          ...base,
+          // BAL-386: forward any email attachments carried on the event payload so the
+          // email adapter can resolve their bytes (from R2) at send time.
+          attachments: extractAttachments(context.payload.attachments),
+        }
+      : { ...base, calendarInvite };
 
   const queueName = CHANNEL_QUEUES[rule.channel];
   const channelQueue = getQueue(queueName);
@@ -289,6 +313,12 @@ function resolveRecipient(
     case 'admin':
       // Future: resolve admin user IDs from config or DB
       return undefined;
+    case 'calendar_invite_recipient': {
+      // BAL-475 — the ONE recipient named inside the payload's own `calendarInvite.recipient`,
+      // resolved directly (never via `context.data`, which nothing hydrates for this event).
+      const spec = readCalendarInviteSpec(context.payload.calendarInvite);
+      return spec === undefined ? undefined : calendarInviteRecipientId(spec.recipient);
+    }
     default:
       return undefined;
   }

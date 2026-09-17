@@ -48,8 +48,13 @@ export async function writeConsultationEvent(
      * produces is the expert's: `endUserAccountId` comes off a `calendar_connections` row,
      * and that table is keyed on `expert_profile_id`. There is no client-side connection
      * model anywhere in the repo, so no writer produces a client-party `provider_event` row
-     * today (BAL-475 delivers the client party by ICS). ⚠ That is a property of the writers,
-     * not a constraint — the column and the repository both accept either party.
+     * today (BAL-475 delivers the client party by ICS).
+     *
+     * ⚠ BAL-475 — "provider_event ⇒ expert" is now a DATABASE CONSTRAINT, not merely a
+     * property of the writers: the CHECK `meeting_calendar_event_provider_event_is_expert`
+     * rejects a client-party `provider_event` row outright (23514), and
+     * `RecordProviderEventInput.party` is narrowed to `Extract<MeetingCalendarEventParty,
+     * 'expert'>` to match. This line already passes `'expert'`, so nothing here changes.
      */
     party: 'expert',
     connectionId: input.connectionId,

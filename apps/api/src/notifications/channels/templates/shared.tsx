@@ -345,6 +345,72 @@ export function SupportFooter({ prefix = 'Questions?' }: SupportFooterProps) {
   );
 }
 
+// ── Meeting "what and when" block (F27, fix round 1 — UX2/plan §8.6) ──────
+
+/**
+ * F27 (fix round 1, UX2) — MOVED here from `meeting-guest-emails.tsx` (not copied), so
+ * `meeting-calendar-invite.tsx` can reuse it too. This is the ONE place across every meeting
+ * email that presents the date/time in a visually distinct card, and the ONE sentence that
+ * states the video-call venue.
+ */
+export const whenBlockStyle = {
+  margin: '20px 0',
+  padding: '16px 18px',
+  borderRadius: '10px',
+  background: colors.bg,
+  border: `1px solid ${colors.border}`,
+} as const;
+
+export const whenLabelStyle = {
+  fontSize: '11px',
+  fontWeight: '700',
+  color: colors.textTertiary,
+  textTransform: 'uppercase' as const,
+  letterSpacing: '0.07em',
+  margin: '0 0 6px',
+} as const;
+
+export const whenTextStyle = {
+  fontSize: '14px',
+  color: colors.textSecondary,
+  margin: 0,
+  lineHeight: '1.6',
+} as const;
+
+export interface MeetingWhenBlockProps {
+  readonly meetingTitle: string;
+  readonly window: string;
+}
+
+/**
+ * The shared "what and when" block. Title + UTC window; never a price.
+ *
+ * ⚠ THE LABEL IS ENGAGEMENT-TYPE-AGNOSTIC, AND IT HAS TO BE. `meetingTitle` is resolved from
+ * the meeting's PRIMARY CONTEXT and falls back to `MEETING_LABEL_FOR_CONTEXT`, which yields
+ * 'a project kickoff', 'a discovery call' or 'an intro call' as readily as 'a consultation'.
+ * A hardcoded "The consultation" label therefore rendered `The consultation / a discovery
+ * call` — the chrome contradicting the very value it introduces. Every Balo meeting is a
+ * Daily video call, so "The video call" is both neutral across all six context types and
+ * the only place the invite states the VENUE (a guest otherwise had no way to know whether
+ * to expect a phone call, a room, or a link).
+ */
+export function MeetingWhenBlock({ meetingTitle, window }: Readonly<MeetingWhenBlockProps>) {
+  return (
+    <Section style={whenBlockStyle}>
+      <p style={whenLabelStyle}>The video call</p>
+      <p style={whenTextStyle}>
+        <strong>{meetingTitle}</strong>
+        {window.length > 0 ? (
+          <>
+            <br />
+            {window}
+          </>
+        ) : null}
+      </p>
+    </Section>
+  );
+}
+
 // ── Project status email (shared body for A2 notification emails) ─
 
 /**

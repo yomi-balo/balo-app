@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { FastifyBaseLogger } from 'fastify';
+import type { MeetingCalendarSequenceBump } from '@balo/db';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ const {
   mockCancelSession,
   mockDeleteRoom,
   mockRaiseAdminAlert,
+  mockPublishRescheduleCalendarInvites,
   MockInvalidSessionTransitionError,
 } = vi.hoisted(() => ({
   mockCreate: vi.fn(),
@@ -45,6 +47,7 @@ const {
   mockDeleteRoom: vi.fn().mockResolvedValue('deleted'),
   /** BAL-548 — the `calendar.amend_failed` raise, additive to log.error on the enqueue catch. */
   mockRaiseAdminAlert: vi.fn().mockResolvedValue(undefined),
+  mockPublishRescheduleCalendarInvites: vi.fn().mockResolvedValue(undefined),
   /**
    * BAL-410 — the real `InvalidSessionTransitionError` cannot be imported here (`@balo/db` is
    * factory-mocked below), so the mock exports a stand-in the service's `instanceof` check
@@ -100,6 +103,10 @@ vi.mock('./guest-participation.js', () => ({
 }));
 
 vi.mock('../admin-alerts/raise.js', () => ({ raiseAdminAlert: mockRaiseAdminAlert }));
+
+vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
+  publishRescheduleCalendarInvites: mockPublishRescheduleCalendarInvites,
+}));
 
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import {
@@ -189,6 +196,7 @@ beforeEach(() => {
   mockCancelSession.mockResolvedValue({ id: 'session-1', holdId: HOLD_ID });
   mockDeleteRoom.mockResolvedValue('deleted');
   mockFindById.mockResolvedValue(undefined);
+  mockPublishRescheduleCalendarInvites.mockResolvedValue(undefined);
 });
 
 // ── The contract ─────────────────────────────────────────────────────────────
@@ -325,6 +333,7 @@ function rescheduleResult(
   previous: { scheduledStart: Date; scheduledEnd: Date };
   guestLinksExtended: number;
   rescheduleAuditId: string;
+  calendarEvents: MeetingCalendarSequenceBump[];
 } {
   return {
     meeting: { id: MEETING_ID, ...SCHEDULE },
@@ -335,6 +344,8 @@ function rescheduleResult(
     },
     guestLinksExtended: 0,
     rescheduleAuditId: AUDIT_ID,
+    // BAL-475 — the post-bump calendar rows `updateSchedule` now returns; none by default.
+    calendarEvents: [],
     ...overrides,
   };
 }
@@ -511,6 +522,61 @@ describe('rescheduleMeeting — T-API-SVC', () => {
 
     expect(mockPublish).not.toHaveBeenCalled();
     expect(mockListByMeeting).not.toHaveBeenCalled();
+  });
+
+  // ── BAL-475 — the calendar-invite re-send ─────────────────────────────────────
+  describe('BAL-475 — publishRescheduleCalendarInvites', () => {
+    it('calls the publisher with result.calendarEvents, rescheduleAuditId and expertProfileId', async () => {
+      const calendarEvents: MeetingCalendarSequenceBump[] = [
+        { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 1 },
+        { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 1 },
+      ];
+      mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID, { calendarEvents }));
+
+      await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+      expect(mockPublishRescheduleCalendarInvites).toHaveBeenCalledWith(
+        {
+          meetingId: MEETING_ID,
+          rescheduleAuditId: AUDIT_ID,
+          expertProfileId: EXPERT_ID,
+          calendarEvents,
+        },
+        log
+      );
+    });
+
+    it('runs AFTER the guest-reschedule fan-out', async () => {
+      const order: string[] = [];
+      mockPublish.mockImplementation(async () => {
+        order.push('guest-reschedule-publish');
+      });
+      mockPublishRescheduleCalendarInvites.mockImplementation(async () => {
+        order.push('calendar-invite-publish');
+      });
+      mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+      mockListLiveByMeeting.mockResolvedValue([
+        { id: 'guest-1', email: 'a@example.com', name: null, admission: 'admitted' },
+      ]);
+      mockListByMeeting.mockResolvedValue([{ contextType: 'case', contextId: 'ctx-1' }]);
+
+      await rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log);
+
+      expect(order).toEqual(['guest-reschedule-publish', 'calendar-invite-publish']);
+    });
+
+    it('a throwing publisher (a violation of its own never-throws contract) does not fail the reschedule', async () => {
+      mockUpdateSchedule.mockResolvedValue(rescheduleResult(EXPERT_ID));
+      mockPublishRescheduleCalendarInvites.mockRejectedValue(new Error('queue down'));
+
+      await expect(
+        rescheduleMeeting(MEETING_ID, SCHEDULE, ACTOR_USER_ID, log)
+      ).resolves.toMatchObject({ expertProfileId: EXPERT_ID });
+      expect(log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ meetingId: MEETING_ID, error: 'queue down' }),
+        expect.stringContaining('Calendar invite publish threw')
+      );
+    });
   });
 });
 

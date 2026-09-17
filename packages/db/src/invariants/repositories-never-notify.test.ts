@@ -82,6 +82,13 @@ const PINNED_REPOSITORIES: readonly string[] = [
   'meeting-calendar-events.ts',
   'calendar.ts',
   /**
+   * BAL-475 adds the calendar-invite SEND LEDGER, the sharpest near-miss in this list: its
+   * only caller is the email channel's calendar-invite delivery, which claims a row, SENDS
+   * over SMTP, then marks it. "Claim, send, mark" collapsing INTO the repository is the
+   * specific regression this pin catches — the transport must stay in apps/api.
+   */
+  'meeting-calendar-deliveries.ts',
+  /**
    * BAL-414 adds the searchability repository, and it is a genuine near-miss: its docblock
    * says "NO PUBLISH HERE, EVER" and its ONLY production caller publishes a notification
    * immediately after `applySearchable` commits (`apps/api`'s searchability service, and

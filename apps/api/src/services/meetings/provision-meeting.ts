@@ -136,8 +136,10 @@ import type { FastifyBaseLogger } from 'fastify';
 import { DailyApiError } from '../daily/errors.js';
 import type { RoomProvisioner } from '../daily/rooms.js';
 import { dailyRoomProvisioner } from '../daily/rooms.js';
+import { publishBookingCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
 import {
   projectBookingCalendarEvent,
+  recordClientCalendarEntry,
   type ExpertCalendarDelivery,
 } from '../consultation-events/booking-calendar-projection.js';
 import type { BookableEngagementType } from './authorize-meeting-booking.js';
@@ -532,39 +534,72 @@ export async function bookAndProvisionMeeting(
     deps
   );
 
-  // BAL-400 (D2) / BAL-283 / BAL-433 — the EXPERT-side calendar projection, run ONLY on a
-  // fresh create and never on a replay: `provisionMeeting` (the replay path) never reaches
-  // here, matching the availability-cache rebuild's own "the replay path skips it anyway"
-  // rule — re-running this on a replay would call `events.create` a SECOND time and, per
-  // apiroc skill §M1, could strand a first vendor event rather than merely re-stamping Balo's
-  // own row.
+  // BAL-400 (D2) / BAL-283 / BAL-433 / BAL-475 — the calendar pipeline, run ONLY on a fresh
+  // create and never on a replay: `provisionMeeting` (the replay path) never reaches here,
+  // matching the availability-cache rebuild's own "the replay path skips it anyway" rule —
+  // re-running this on a replay would call `events.create` a SECOND time and, per apiroc
+  // skill §M1, could strand a first vendor event rather than merely re-stamping Balo's own
+  // row (and would enqueue a duplicate pair of calendar invites).
   //
   // ⚠ NO GATE. As of BAL-433 EVERY bookable context projects — the registry
   // (`services/consultation-events/calendar-context-registry.ts`) is TOTAL over
   // `MeetingBookingContextType`, so a sixth bookable label fails `tsc` there rather than
   // silently reaching no calendar. `isCalendarProjectedContext` is gone; do not reintroduce
   // one, and do not re-add a per-context resolver here — the pipeline lives under
-  // `services/consultation-events/`.
-  //
-  // ⚠ `input.contextType` is a `MeetingBookingContextType` and `projectBookingCalendarEvent`
-  // takes a `CalendarProjectedContextType`. Today the `Extract` makes them identical, so this
-  // compiles with NO cast and NO runtime branch. If the two ever drift, THIS LINE is where
-  // `tsc` says so — which is the exhaustiveness guarantee working.
+  // `services/consultation-events/` and `services/calendar-invites/`.
   //
   // ⚠ IT NEVER THROWS (D2c) — the booking above has already committed and must not be undone
-  // by a best-effort projection. An expert with no writable calendar is no longer silence
-  // either: BAL-433 records a durable `delivery_mode='ics'` fallback row (ADR-1044 Ruling 1).
-  // Nothing is built and nothing is sent — BAL-475 delivers.
-  const delivery = await projectBookingCalendarEventSafely(created, input, log);
+  // by a best-effort projection or a best-effort invite publish. See
+  // `runPostCommitCalendarSteps`'s own docblock for the step order (load-bearing: the invite
+  // publisher reads the rows the first two steps write).
+  await runPostCommitCalendarSteps(created, input, log);
+
+  return { meeting: created.meeting, ...venue };
+}
+
+/**
+ * BAL-475 — expert projection → client row → both analytics emits → invites. Order is
+ * load-bearing: `publishBookingCalendarInvites` READS the LIVE `meeting_calendar_events` rows
+ * the first two steps write, so it must run after both. Extracted from
+ * `bookAndProvisionMeeting` purely to keep that function under SonarCloud's cognitive-
+ * complexity limit — every line here was inline there before this ticket. Never throws:
+ * `projectBookingCalendarEventSafely`, `recordClientCalendarEntry` and
+ * `publishBookingCalendarInvites` each own that contract independently.
+ */
+async function runPostCommitCalendarSteps(
+  created: CreatedMeeting,
+  input: BookAndProvisionInput,
+  log: FastifyBaseLogger
+): Promise<void> {
+  // ⚠ `input.contextType` is a `MeetingBookingContextType`; `projectBookingCalendarEvent` /
+  // `recordClientCalendarEntry` / `publishBookingCalendarInvites` each take a
+  // `CalendarProjectedContextType`. Today the `Extract` makes them identical, so every call
+  // below compiles with NO cast and NO runtime branch. If the two ever drift, THIS FUNCTION is
+  // where `tsc` says so — the exhaustiveness guarantee working.
+  const expertDelivery = await projectBookingCalendarEventSafely(created, input, log);
   trackServer(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED, {
     meeting_id: created.meeting.id,
     context_type: input.contextType,
     party: 'expert',
-    delivery,
+    delivery: expertDelivery,
     distinct_id: input.userId,
   });
 
-  return { meeting: created.meeting, ...venue };
+  const clientDelivery = await recordClientCalendarEntry(
+    created.meeting.id,
+    input.contextType,
+    input.contextId,
+    log
+  );
+  trackServer(MEETING_SERVER_EVENTS.MEETING_CALENDAR_PROJECTED, {
+    meeting_id: created.meeting.id,
+    context_type: input.contextType,
+    party: 'client',
+    delivery: clientDelivery,
+    distinct_id: input.userId,
+  });
+
+  await publishBookingCalendarInvitesSafely(created, input, log);
 }
 
 /**
@@ -598,7 +633,9 @@ async function projectBookingCalendarEventSafely(
         // the ONLY Axiom record of a contract-violation projection. Without these two keys an
         // Axiom query filtered on `deliveryMode` silently undercounts failures — while the
         // PostHog emit at the call site carries both, so the two sources would disagree
-        // exactly when someone is debugging an incident. `sequence` joins this set in BAL-475.
+        // exactly when someone is debugging an incident. ⚠ NO `sequence` HERE, STILL — BAL-475
+        // put SEQUENCE on the calendar-invite publish/delivery lines, never on a PROJECTION
+        // line; this line reports a projection, not a send.
         party: 'expert',
         deliveryMode: 'failed' satisfies ExpertCalendarDelivery,
         contextType: input.contextType,
@@ -609,5 +646,39 @@ async function projectBookingCalendarEventSafely(
       'The expert calendar projection threw despite its never-throws contract — booking stands'
     );
     return 'failed';
+  }
+}
+
+/**
+ * BAL-475 — `publishBookingCalendarInvites`'s own contract is ALREADY "never throws" (every
+ * one of its three publishers try/catches its per-recipient enqueue). This wrapper is DEFENCE
+ * IN DEPTH, matching `projectBookingCalendarEventSafely`'s precedent immediately above: a
+ * violation of that contract must still never turn a COMMITTED booking into a rejected
+ * promise. Logged and swallowed, never rethrown.
+ */
+async function publishBookingCalendarInvitesSafely(
+  created: CreatedMeeting,
+  input: BookAndProvisionInput,
+  log: FastifyBaseLogger
+): Promise<void> {
+  try {
+    await publishBookingCalendarInvites(
+      {
+        meetingId: created.meeting.id,
+        contextType: input.contextType,
+        expertProfileId: created.expertProfileId,
+      },
+      log
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: created.meeting.id,
+        contextType: input.contextType,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Calendar invite publish threw despite its never-throws contract — booking stands'
+    );
   }
 }

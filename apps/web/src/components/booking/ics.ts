@@ -14,7 +14,14 @@
  * ATTENDEE into the client's downloaded calendar file — and many clients mail invite responses
  * to every ATTENDEE, which is the ADR-1044 counterparty-address disclosure reached sideways
  * through a calendar file. `BEGIN:VALARM` and `URL:` are equally injectable the same way.
+ *
+ * ⚠ BAL-475 §6 — the escaper itself moved to `@balo/shared/calendar` (`escapeIcsText`), which
+ * is now the ONE definition of RFC 5545 TEXT escaping in the repo. This file still calls it AT
+ * RUNTIME (the browser download); the server-side Balo-organised ICS
+ * (`apps/api/src/services/calendar-invites/build-calendar-invite-ics.ts`) delegates escaping to
+ * `ical-generator` and uses the shared function only as a test ORACLE, never at runtime.
  */
+import { escapeIcsText } from '@balo/shared/calendar';
 export interface DownloadIcsEventInput {
   summary: string;
   startIso: string;
@@ -26,28 +33,6 @@ export interface DownloadIcsEventInput {
 function icsTimestamp(date: Date): string {
   const [stamp] = date.toISOString().replace(/[-:]/g, '').split('.');
   return `${stamp ?? ''}Z`;
-}
-
-/**
- * RFC 5545 §3.3.11 TEXT escaping, plus an absolute ban on raw line breaks.
- *
- * ⚠ ORDER IS LOAD-BEARING: the backslash MUST be doubled FIRST, or the escapes introduced by
- * the later replacements would themselves be escaped again.
- *
- * ⚠ A LINE BREAK BECOMES THE TWO-CHARACTER SEQUENCE `\n`, NOT A REAL ONE. That is what makes
- * this a structural fix rather than a cosmetic one: after this, no input can start a new
- * content line, so no input can name a new property (`ATTENDEE`, `URL`) or a new component
- * (`BEGIN:VALARM`). CR, LF and CRLF all collapse to the same escape.
- *
- * ⚠ FOUR FLAT, LINEAR REGEXES — no nested quantifiers and no alternation over overlapping
- * branches, so SonarCloud S5852 (super-linear backtracking) does not apply.
- */
-function escapeIcsText(value: string): string {
-  return value
-    .replace(/\\/g, '\\\\')
-    .replace(/\r\n|\r|\n/g, '\\n')
-    .replace(/;/g, '\\;')
-    .replace(/,/g, '\\,');
 }
 
 /** Build and trigger the download of a minimal single-event `.ics` file. */

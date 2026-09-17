@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * `_source-scan` — the shared reading primitives behind `apps/api`'s SOURCE invariants
- * (`sync-token-parity.test.ts`, `no-counterparty-address-on-calendar-writes.test.ts`).
+ * (`sync-token-parity.test.ts`, `no-counterparty-address-on-calendar-writes.test.ts`,
+ * `nodemailer-only-in-email-channel.test.ts`).
  *
  * ⚠ EXTRACTED, NOT INVENTED. BAL-447 shipped these functions inside `sync-token-parity.test.ts`;
  * BAL-433 needs the identical walk-and-classify for the counterparty-address ban, and a second
@@ -57,10 +58,24 @@ export function readRaw(rel: string): string {
  *
  * That errs toward FALSE ALARMS, and that is the correct direction for a fail-closed invariant
  * to be wrong in.
+ *
+ * ⚠ F10(d) (fix round 1, S5(d)) — AN OPEN-AND-CLOSED BLOCK COMMENT ON ONE LINE IS A COMMENT
+ * ONLY WHEN NOTHING FOLLOWS ITS CLOSE MARKER. A line that opens and closes a block comment and
+ * then continues with real code used to classify as a comment line IN FULL (any line starting
+ * with the block-comment opener did), which let a marker sitting after the close evade every
+ * scan in this directory — an adversarial-only bypass, but a real gap in a fail-closed
+ * invariant's own classifier. A line that OPENS a block comment with no close marker at all (a
+ * genuinely open block comment) still classifies as comment, unchanged.
  */
 export function isCommentLine(line: string): boolean {
   const trimmed = line.trimStart();
-  return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
+  if (trimmed.startsWith('//') || trimmed.startsWith('*')) return true;
+  if (trimmed.startsWith('/*')) {
+    const closeIndex = trimmed.indexOf('*/');
+    if (closeIndex === -1) return true;
+    return trimmed.slice(closeIndex + 2).trim().length === 0;
+  }
+  return false;
 }
 
 /**
@@ -80,6 +95,45 @@ export function codeLines(raw: string): string {
 export function markersInCode(raw: string, markers: readonly string[]): string[] {
   const code = codeLines(raw);
   return markers.filter((marker) => code.includes(marker));
+}
+
+/**
+ * BAL-475 — trimmed NON-comment lines of `raw` containing at least one of `markers`, in file
+ * order. The line-level sibling of `markersInCode` (which answers only "which markers, at
+ * all"): `no-counterparty-address-on-calendar-writes.test.ts`'s pinned exception needs the
+ * exact LINES themselves, so it can assert they equal a fixed, verbatim list.
+ */
+export function markerLinesInCode(raw: string, markers: readonly string[]): string[] {
+  const found: string[] = [];
+  for (const line of raw.split('\n')) {
+    if (isCommentLine(line)) continue;
+    const trimmed = line.trim();
+    if (markers.some((marker) => trimmed.includes(marker))) {
+      found.push(trimmed);
+    }
+  }
+  return found;
+}
+
+/**
+ * BAL-475 — trimmed lines strictly between the first line whose `trimStart()` starts with
+ * `signaturePrefix` and the first later line that is EXACTLY `}` (a top-level function close).
+ * `[]` if the prefix is absent. Comment lines are NOT excluded here — the pinned exception
+ * matches on line CONTENT only ("must stay inside the function"), not on whether a line is a
+ * comment.
+ */
+export function functionBodyLines(raw: string, signaturePrefix: string): string[] {
+  const lines = raw.split('\n');
+  const startIndex = lines.findIndex((line) => line.trimStart().startsWith(signaturePrefix));
+  if (startIndex === -1) return [];
+
+  const body: string[] = [];
+  for (let i = startIndex + 1; i < lines.length; i++) {
+    const trimmed = lines[i]?.trim() ?? '';
+    if (trimmed === '}') break;
+    body.push(trimmed);
+  }
+  return body;
 }
 
 /**

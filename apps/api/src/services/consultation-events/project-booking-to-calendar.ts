@@ -5,6 +5,8 @@ import {
   type CalendarCredentialStatus,
 } from '@balo/db';
 import type { FastifyBaseLogger } from 'fastify';
+import { ApirocConfigError, ApirocError, type ApirocFailureKind } from '../../lib/apiroc/errors.js';
+import { reconcileByTag } from './reconcile-by-tag.js';
 import type { CalendarProjectedContextType } from './calendar-context-registry.js';
 import { buildConsultationEvent } from './event-mapper.js';
 import { writeConsultationEvent } from './write-consultation-event.js';
@@ -16,12 +18,21 @@ import { writeConsultationEvent } from './write-consultation-event.js';
  *
  * ⚠ AN EXPERT WITH NO WRITABLE CALENDAR IS NO LONGER SILENCE. Before BAL-433 that case was a
  * `log.info` and a return; it is now a durable `delivery_mode='ics'` row (ADR-1044 amendment
- * 2026-08-25, Ruling 1) so the delivery slice has a fact to work from instead of re-deriving
- * the condition off `calendar_connections`. **NOTHING IS BUILT AND NOTHING IS SENT HERE.**
+ * 2026-08-25, Ruling 1) so BAL-475's delivery slice has a fact to work from instead of
+ * re-deriving the condition off `calendar_connections`. **NOTHING IS BUILT AND NOTHING IS SENT
+ * HERE** — BAL-475 delivers the ICS from the row this function records.
+ *
+ * ⚠ BAL-475 (U3) AMENDS RULING 1 A SECOND WAY: an expert who HAS a writable connection when
+ * the vendor CREATE ITSELF fails (an `ApirocError`, or an `ApirocConfigError` before any call)
+ * ALSO falls back to the expert-party `ics` row — see the `catch` below. A failure AFTER a
+ * successful create (the id-substitution assertion, or `recordProviderEvent` itself) records
+ * NO fallback, because a real vendor event exists; "never both" is still the partial unique on
+ * `(meeting_id, party)`, not either branch here.
  *
  * ⚠ THIS IS THE EXPERT SIDE ONLY (D2a). `calendar_connections` is keyed on
  * `expert_profile_id` and no client-side connection model exists anywhere in the repo, so
- * there is no vendor path to a client's calendar. The CLIENT-party row is BAL-475's.
+ * there is no vendor path to a client's calendar. The CLIENT-party row is BAL-475's
+ * (`recordClientCalendarEntry`).
  *
  * ⚠ IDEMPOTENCY IS BALO'S OWN `(meeting_id, party)` — the partial unique behind
  * `recordProviderEvent` / `recordIcsDelivery` (`repositories/meeting-calendar-events.ts`). NOT
@@ -107,15 +118,207 @@ function pickWriteTarget(
   return connections.find(isWritable);
 }
 
+/**
+ * BAL-475 (U3) — did the VENDOR CREATE ITSELF fail (as opposed to a failure after a successful
+ * create)? `getApirocClient()` throws `ApirocConfigError` before any call; `callApiroc`
+ * (`events.create`) normalizes every SDK failure to `ApirocError`. Deliberately narrow: the
+ * id-substitution assertion and a `recordProviderEvent` DB error are PLAIN `Error`s thrown
+ * AFTER a real vendor event already exists, and must record NO fallback.
+ */
+function isVendorCreateFailure(error: unknown): boolean {
+  return error instanceof ApirocError || error instanceof ApirocConfigError;
+}
+
+/**
+ * F17 (fix round 1, R16/S7) — the orchestrator's refinement of U3 within its own intent (no
+ * silence AND never both): a DEFINITIVE client-side refusal means the vendor never created
+ * anything, so the expert-party ICS fallback is recorded immediately. `server_error`,
+ * `network` and `unknown` are AMBIGUOUS — the vendor may have committed the event and only the
+ * RESPONSE was lost — so those go through `reconcileByTag` first (see
+ * `handleAmbiguousVendorCreateFailure`) instead of assuming non-creation.
+ */
+const DEFINITIVE_APIROC_FAILURE_KINDS: readonly ApirocFailureKind[] = [
+  'validation',
+  'unauthorized',
+  'forbidden',
+  'not_found',
+  'rate_limited',
+];
+
+function isDefinitiveVendorCreateFailure(error: unknown): boolean {
+  return (
+    error instanceof ApirocConfigError ||
+    (error instanceof ApirocError &&
+      (DEFINITIVE_APIROC_FAILURE_KINDS as readonly string[]).includes(error.kind))
+  );
+}
+
+/** The `apirocErrorKind` LOG FIELD (F17/R16) — the error's own classification, never its class
+ *  name (`error.name` is always the literal string `"ApirocError"`/`"ApirocConfigError"`). */
+function apirocErrorKindOf(error: unknown): string {
+  if (error instanceof ApirocError) return error.kind;
+  if (error instanceof ApirocConfigError) return 'config';
+  return 'unknown';
+}
+
+/**
+ * BAL-475 (U3) — record the expert-party ICS fallback after a FAILED vendor create. Own
+ * try/catch: a database blip here must not turn a caught Apiroc failure into an unhandled one.
+ * The vendor write is NOT retried.
+ */
+async function recordIcsFallbackAfterProviderFailure(
+  input: ProjectBookingToCalendarInput,
+  apirocErrorKind: string,
+  log: FastifyBaseLogger
+): Promise<void> {
+  try {
+    await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: input.meetingId,
+      party: 'expert',
+    });
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        party: 'expert',
+        contextType: input.contextType,
+        expertProfileId: input.expertProfileId,
+        deliveryMode: 'ics',
+        apirocErrorKind,
+      },
+      'Provider calendar write failed — recorded the expert-party ICS fallback (ADR-1044 Ruling 1, amended)'
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: input.meetingId,
+        party: 'expert',
+        contextType: input.contextType,
+        expertProfileId: input.expertProfileId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Failed to record the expert-party ICS fallback after a failed vendor create'
+    );
+  }
+}
+
+/**
+ * F17 (fix round 1, R16/S7) — an AMBIGUOUS vendor create outcome (`server_error`, `network`,
+ * `unknown`): the response was lost, but the event may have committed anyway. Reconcile by the
+ * SAME `baloBookingId` tag `writeConsultationEvent` writes (`input.meetingId`, unchanged by a
+ * failure) before assuming non-creation.
+ *
+ *   · Exactly one candidate ⇒ the vendor DID create it — record it as the live provider event
+ *     (the expert keeps a manageable, addressable entry; no ICS, "never both" holds).
+ *   · Zero candidates ⇒ genuinely never created — record the ICS fallback.
+ *   · More than one, or the reconcile call itself throws ⇒ the accepted residual: record the
+ *     ICS fallback and `log.warn` (counts/kinds only, per the consultation-events invariants —
+ *     no attendee/address vocabulary, no vendor identity beyond a count).
+ */
+async function handleAmbiguousVendorCreateFailure(
+  input: ProjectBookingToCalendarInput,
+  target: CalendarConnection & { targetCalendarId: string },
+  apirocErrorKind: string,
+  log: FastifyBaseLogger
+): Promise<void> {
+  let candidates: Awaited<ReturnType<typeof reconcileByTag>>;
+  try {
+    candidates = await reconcileByTag({
+      endUserAccountId: target.endUserAccountId,
+      calendarId: target.targetCalendarId,
+      baloBookingId: input.meetingId,
+    });
+  } catch (error) {
+    log.warn(
+      {
+        meetingId: input.meetingId,
+        party: 'expert',
+        contextType: input.contextType,
+        expertProfileId: input.expertProfileId,
+        apirocErrorKind,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Ambiguous vendor create outcome — reconcile itself failed; recording the ICS fallback (accepted residual)'
+    );
+    await recordIcsFallbackAfterProviderFailure(input, apirocErrorKind, log);
+    return;
+  }
+
+  if (candidates.length === 1) {
+    const [found] = candidates;
+    if (found === undefined) {
+      // Unreachable (length === 1 guarantees an element), kept for noUncheckedIndexedAccess.
+      await recordIcsFallbackAfterProviderFailure(input, apirocErrorKind, log);
+      return;
+    }
+    try {
+      await meetingCalendarEventsRepository.recordProviderEvent({
+        meetingId: input.meetingId,
+        party: 'expert',
+        connectionId: target.id,
+        calendarId: target.targetCalendarId,
+        vendorEventId: found.id,
+        baloBookingId: input.meetingId,
+      });
+      log.warn(
+        {
+          meetingId: input.meetingId,
+          party: 'expert',
+          contextType: input.contextType,
+          expertProfileId: input.expertProfileId,
+          apirocErrorKind,
+        },
+        'Ambiguous vendor create outcome — reconciled to the vendor event that DID exist'
+      );
+    } catch (error) {
+      log.error(
+        {
+          meetingId: input.meetingId,
+          party: 'expert',
+          contextType: input.contextType,
+          expertProfileId: input.expertProfileId,
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+        'Ambiguous vendor create outcome reconciled, but recording the provider event failed'
+      );
+    }
+    return;
+  }
+
+  if (candidates.length === 0) {
+    await recordIcsFallbackAfterProviderFailure(input, apirocErrorKind, log);
+    return;
+  }
+
+  // More than one candidate — an accepted residual (S7): counts/kinds only, no vendor identity.
+  log.warn(
+    {
+      meetingId: input.meetingId,
+      party: 'expert',
+      contextType: input.contextType,
+      expertProfileId: input.expertProfileId,
+      apirocErrorKind,
+      reconciledCount: candidates.length,
+    },
+    'Ambiguous vendor create outcome — reconcile found more than one candidate event; recording the ICS fallback (accepted residual)'
+  );
+  await recordIcsFallbackAfterProviderFailure(input, apirocErrorKind, log);
+}
+
 export async function projectBookingToExpertCalendar(
   input: ProjectBookingToCalendarInput,
   log: FastifyBaseLogger
 ): Promise<ExpertCalendarDelivery> {
+  // ⚠ HOISTED ABOVE THE `try` (BAL-475) — the catch below needs to know whether a write target
+  // was ever selected, to distinguish "no writable connection" (handled inline, no exception)
+  // from "the vendor create itself failed" (U3's fallback).
+  let target: (CalendarConnection & { targetCalendarId: string }) | undefined;
   try {
     const connections = await calendarRepository.listConnectionsByExpertProfileId(
       input.expertProfileId
     );
-    const target = pickWriteTarget(connections);
+    target = pickWriteTarget(connections);
     if (target === undefined) {
       /**
        * ADR-1044 amendment 2026-08-25, RULING 1 — no writable provider connection (none
@@ -127,8 +330,8 @@ export async function projectBookingToExpertCalendar(
        * ⚠ THERE IS NO PROVIDER CHECK AT THIS WRITE PATH AND THERE NEVER WAS. Do not add one,
        * and do not "restore" one: `isWritable` is exactly two conditions.
        *
-       * ⚠ SLICE 1 RECORDS THE CONDITION AND SENDS NOTHING. BAL-475 builds and delivers the
-       * ICS; BAL-476 owns cancellation. Do not add a send here.
+       * ⚠ NOTHING IS SENT HERE — BAL-475 delivers the ICS from this row
+       * (`publishBookingCalendarInvites`); BAL-476 owns cancellation. Do not add a send here.
        *
        * ⚠ THIS IS INSIDE THE `try` ON PURPOSE — a database blip on the fallback row degrades
        * to `'failed'` plus an error log, and the booking still stands.
@@ -174,17 +377,35 @@ export async function projectBookingToExpertCalendar(
   } catch (error) {
     // ⚠ THE BOOKING STANDS (D2c) — this is a best-effort projection, never the booking of
     // record. Log and return; never rethrow, never surface a calendar error to the client.
+    const providerCreateFailed = target !== undefined && isVendorCreateFailure(error);
     log.error(
       {
         meetingId: input.meetingId,
         party: 'expert',
         contextType: input.contextType,
         expertProfileId: input.expertProfileId,
+        providerCreateFailed,
         error: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       },
       'Expert calendar projection failed'
     );
+    // F17 (fix round 1, R16/S7) — a target WAS selected (a writable connection existed) and
+    // the failure is the VENDOR CREATE ITSELF (not a post-create assertion or DB error).
+    // DEFINITIVE non-creation (`ApirocConfigError`, or a definitive-kind `ApirocError`) records
+    // the fallback immediately, exactly as before. An AMBIGUOUS outcome (`server_error`,
+    // `network`, `unknown`) reconciles by tag first — the vendor may have committed the event
+    // and only the response was lost. `apirocErrorKind` logs the error's own classification
+    // (`error.kind`, or `'config'` for `ApirocConfigError`), never `error.name` (always the
+    // literal class name).
+    if (providerCreateFailed && target !== undefined) {
+      const apirocErrorKind = apirocErrorKindOf(error);
+      if (isDefinitiveVendorCreateFailure(error)) {
+        await recordIcsFallbackAfterProviderFailure(input, apirocErrorKind, log);
+      } else {
+        await handleAmbiguousVendorCreateFailure(input, target, apirocErrorKind, log);
+      }
+    }
     return 'failed';
   }
 }

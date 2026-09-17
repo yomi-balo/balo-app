@@ -1,13 +1,18 @@
 /**
  * BAL-396 §5/§10.6 — the consultation-event write seam. **LIVE, not inert**: BAL-400 wired
  * booking, BAL-283 added the intro call, BAL-409/411 wired the amend, and BAL-433 Slice 1 made
- * EVERY bookable context project. Three of the five exports below have production callers;
- * `deleteConsultationEvent` and `reconcileByTag` still have none. ⚠ CORRECTED OWNER
- * (orchestrator D2): the delete's first consumer is **BAL-476**, not BAL-410. BAL-410 shipped
- * the cancel PRODUCER — the state flip, the `meeting.cancelled` audit row (whose id is the
- * correlation handle), the credit-hold release, the Daily room delete and the
- * `booking.cancelled` event — and deliberately emits no calendar event and no ICS; BAL-476
- * consumes that signal. Nothing schedules an orphan sweep for `reconcileByTag`.
+ * EVERY bookable context project. Four of the five exports below have production callers;
+ * `deleteConsultationEvent` still has none. ⚠ CORRECTED OWNER (orchestrator D2): the delete's
+ * first consumer is **BAL-476**, not BAL-410. BAL-410 shipped the cancel PRODUCER — the state
+ * flip, the `meeting.cancelled` audit row (whose id is the correlation handle), the
+ * credit-hold release, the Daily room delete and the `booking.cancelled` event — and
+ * deliberately emits no calendar event and no ICS; BAL-476 consumes that signal.
+ *
+ * ⚠ `reconcileByTag` GOT ITS FIRST LIVE CALLER IN BAL-475 (fix round 1, F17/S7):
+ * `project-booking-to-calendar.ts`'s AMBIGUOUS vendor-create-failure branch
+ * (`server_error`/`network`/`unknown` — the response was lost but the event may have
+ * committed) calls it before assuming non-creation. Still no SCHEDULED orphan sweep — this is
+ * an inline, synchronous reconcile-on-failure, not a background job.
  *
  * ⚠ THE FOUR PROJECTION MODULES ARE DELIBERATELY OFF THIS BARREL and reached by deep path, as
  * `project-booking-to-calendar.ts` already was: `calendar-context-registry.ts`,

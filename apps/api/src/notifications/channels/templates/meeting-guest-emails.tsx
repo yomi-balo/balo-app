@@ -8,6 +8,7 @@ import {
   StatusPill,
   Callout,
   SupportFooter,
+  MeetingWhenBlock,
 } from './shared.js';
 
 /**
@@ -48,30 +49,6 @@ const guestPillStyle = {
   border: '1px solid rgba(37, 99, 235, 0.34)',
   color: '#93C5FD',
 };
-
-const whenBlockStyle = {
-  margin: '20px 0',
-  padding: '16px 18px',
-  borderRadius: '10px',
-  background: colors.bg,
-  border: `1px solid ${colors.border}`,
-} as const;
-
-const whenLabelStyle = {
-  fontSize: '11px',
-  fontWeight: '700',
-  color: colors.textTertiary,
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.07em',
-  margin: '0 0 6px',
-} as const;
-
-const whenTextStyle = {
-  fontSize: '14px',
-  color: colors.textSecondary,
-  margin: 0,
-  lineHeight: '1.6',
-} as const;
 
 /**
  * Render the scheduled window as a single UTC line:
@@ -116,40 +93,6 @@ export function formatMeetingWindowUtc(startIso: string, endIso?: string): strin
     return `${day} · ${time.format(start)} (UTC)`;
   }
   return `${day} · ${time.format(start)}–${time.format(end)} (UTC)`;
-}
-
-interface MeetingWhenBlockProps {
-  readonly meetingTitle: string;
-  readonly window: string;
-}
-
-/**
- * The shared "what and when" block. Title + UTC window; never a price.
- *
- * ⚠ THE LABEL IS ENGAGEMENT-TYPE-AGNOSTIC, AND IT HAS TO BE. `meetingTitle` is resolved from
- * the meeting's PRIMARY CONTEXT and falls back to `MEETING_LABEL_FOR_CONTEXT`, which yields
- * 'a project kickoff', 'a discovery call' or 'an intro call' as readily as 'a consultation'.
- * A hardcoded "The consultation" label therefore rendered `The consultation / a discovery
- * call` — the chrome contradicting the very value it introduces. Every Balo meeting is a
- * Daily video call, so "The video call" is both neutral across all six context types and
- * the only place the invite states the VENUE (a guest otherwise had no way to know whether
- * to expect a phone call, a room, or a link).
- */
-function MeetingWhenBlock({ meetingTitle, window }: Readonly<MeetingWhenBlockProps>) {
-  return (
-    <Section style={whenBlockStyle}>
-      <p style={whenLabelStyle}>The video call</p>
-      <p style={whenTextStyle}>
-        <strong>{meetingTitle}</strong>
-        {window.length > 0 ? (
-          <>
-            <br />
-            {window}
-          </>
-        ) : null}
-      </p>
-    </Section>
-  );
 }
 
 /**

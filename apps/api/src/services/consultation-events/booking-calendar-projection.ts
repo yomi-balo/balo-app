@@ -1,6 +1,7 @@
-import type { CreatedMeeting } from '@balo/db';
+import { meetingCalendarEventsRepository, type CreatedMeeting } from '@balo/db';
 import type { FastifyBaseLogger } from 'fastify';
 import type { CalendarProjectedContextType } from './calendar-context-registry.js';
+import { memberJoinUrl } from './member-join-url.js';
 import {
   projectBookingToExpertCalendar,
   type ExpertCalendarDelivery,
@@ -9,26 +10,24 @@ import { resolveExpertCalendarFacts } from './resolve-calendar-facts.js';
 
 /**
  * BAL-433 Slice 1 — THE ENTRY POINT: one committed booking → one expert-party calendar entry.
+ * BAL-475 adds the sibling CLIENT-party entry (`recordClientCalendarEntry`, below) — always
+ * `ics`, since there is no client-side vendor connection model in the repo.
  *
  * ⚠ NO GATE. As of BAL-433 EVERY bookable context projects. `isCalendarProjectedContext` is
  * gone and must not be reintroduced: exhaustiveness now lives in
  * `CALENDAR_CONTEXT_REGISTRY`'s `Record`, so a sixth bookable label fails
  * `pnpm --filter api typecheck` there rather than silently reaching no calendar.
  *
- * ⚠ EXPERT SIDE ONLY. `calendar_connections` is keyed on `expert_profile_id` and there is no
- * client-side connection model anywhere in the repo, so no vendor path to a client's calendar
- * exists. The CLIENT-party row — always `delivery_mode='ics'` — is BAL-475's, and it is one
+ * ⚠ EXPERT SIDE ONLY (`runExpertCalendarProjection`/`projectBookingCalendarEvent`).
+ * `calendar_connections` is keyed on `expert_profile_id` and there is no client-side connection
+ * model anywhere in the repo, so no vendor path to a client's calendar exists. The CLIENT-party
+ * row — always `delivery_mode='ics'` — is `recordClientCalendarEntry`'s, one
  * `recordIcsDelivery({ meetingId, party: 'client' })` call, not a migration.
  *
  * ⚠ NEVER THROWS (ADR-1044 D2c). The booking has already committed and must never be undone
- * by a best-effort projection.
+ * by a best-effort projection. BAL-475 delivers the ICS itself from these rows (never from this
+ * file — see `services/calendar-invites/publish-calendar-invites.ts`).
  */
-
-/**
- * The web origin used to build the MEMBER join route — never `meetings.join_url` (the raw
- * Daily URL). Moved here from `provision-meeting.ts`, whose only reader was the projection.
- */
-const WEB_BASE_URL = process.env.APP_URL ?? 'https://balo.expert';
 
 export type { ExpertCalendarDelivery };
 
@@ -88,7 +87,7 @@ async function runExpertCalendarProjection(
       // ONLY link a calendar artefact carries (BAL-433 D4): `/packages/…` does not exist and
       // `/engagements/[id]` 404s a case id, and a calendar entry outlives the meeting — a
       // dead link inside one is worse than no link.
-      joinUrl: `${WEB_BASE_URL}/join/m/${created.meeting.id}`,
+      joinUrl: memberJoinUrl(created.meeting.id),
     },
     log
   );
@@ -119,12 +118,56 @@ export async function projectBookingCalendarEvent(
    * name, no provider, no calendar id, nothing derived from an address (ADR-1044 §4). That is
    * what makes an operational log of every booking safe to keep.
    *
-   * ⚠ `sequence` IS DELIBERATELY ABSENT, NOT FORGOTTEN. There is no sequence column in Slice 1
-   * — `meeting_calendar_events` gains it with BAL-475's amend/cancel ordering — and a
-   * fabricated placeholder would be worse than the gap. It joins this key set there.
+   * ⚠ `sequence` IS DELIBERATELY ABSENT, STILL, NOT FORGOTTEN. `meeting_calendar_events` now
+   * HAS a `sequence` column (BAL-475), but no ICS is sent from this line — it is a PROJECTION
+   * outcome, not a SEND outcome — so there is no SEQUENCE for this line to report. SEQUENCE
+   * lives on the calendar-invite publish/delivery outcome lines instead
+   * (`services/calendar-invites/log-fields.ts`), which is where it actually changes.
    */
   log.info(
     { meetingId: created.meeting.id, party: 'expert', contextType, contextId, deliveryMode },
+    'Meeting calendar projection outcome'
+  );
+
+  return deliveryMode;
+}
+
+/** What the CLIENT-party row became — narrower than {@link ExpertCalendarDelivery} because
+ *  there is no vendor path on this side, only ICS or a swallowed failure. */
+export type ClientCalendarDelivery = 'ics' | 'failed';
+
+/**
+ * BAL-475 — the CLIENT-party row for one FRESH booking: always `ics` (no client vendor path in
+ * V1). NEVER THROWS. Emits the SAME `'Meeting calendar projection outcome'` line the expert
+ * side does, with `party: 'client'`, so one Axiom query covers both parties.
+ */
+export async function recordClientCalendarEntry(
+  meetingId: string,
+  contextType: CalendarProjectedContextType,
+  contextId: string,
+  log: FastifyBaseLogger
+): Promise<ClientCalendarDelivery> {
+  let deliveryMode: ClientCalendarDelivery;
+  try {
+    await meetingCalendarEventsRepository.recordIcsDelivery({ meetingId, party: 'client' });
+    deliveryMode = 'ics';
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        party: 'client',
+        contextType,
+        contextId,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Client calendar projection failed'
+    );
+    deliveryMode = 'failed';
+  }
+
+  log.info(
+    { meetingId, party: 'client', contextType, contextId, deliveryMode },
     'Meeting calendar projection outcome'
   );
 
