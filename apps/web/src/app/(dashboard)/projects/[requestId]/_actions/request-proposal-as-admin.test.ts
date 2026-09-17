@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PlatformCapability } from '@balo/shared/authz';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const RELATIONSHIP_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -47,9 +48,22 @@ vi.mock('@balo/db', () => ({
   InvalidRelationshipTransitionError,
 }));
 
-const mockRequireAdmin = vi.fn();
-vi.mock('@/lib/auth/require-admin', () => ({
-  requireAdmin: () => mockRequireAdmin(),
+const mockGetCurrentUser = vi.fn();
+vi.mock('@/lib/auth/session', () => ({
+  getCurrentUser: () => mockGetCurrentUser(),
+}));
+
+/**
+ * BAL-558 — the LIVE-ROW platform gate `requireRequestStaffCapability` runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them.
+ */
+const mockActorHoldsLive = vi.fn<
+  (userId: string, capability: PlatformCapability) => Promise<boolean>
+>(async () => true);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: PlatformCapability) =>
+    mockActorHoldsLive(userId, capability),
 }));
 
 const mockPublish = vi.fn().mockResolvedValue(undefined);
@@ -61,7 +75,8 @@ import { requestProposalAsAdmin } from './request-proposal-as-admin';
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
 
-const ADMIN = { id: 'admin-1', platformRole: 'admin' };
+const ADMIN = { id: 'admin-1', platformRole: 'admin' as const };
+const PERMISSION_DENIED = 'You do not have permission to do this.';
 const VALID_INPUT = { requestId: REQUEST_ID, relationshipId: RELATIONSHIP_ID };
 
 interface RequestOptions {
@@ -97,7 +112,8 @@ function buildRequest(opts: RequestOptions = {}): Record<string, unknown> {
 describe('requestProposalAsAdmin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRequireAdmin.mockResolvedValue(ADMIN);
+    mockGetCurrentUser.mockResolvedValue(ADMIN);
+    mockActorHoldsLive.mockImplementation(async () => true);
     mockFindByIdWithRelations.mockResolvedValue(buildRequest());
     mockTransition.mockResolvedValue({ id: RELATIONSHIP_ID });
     // Default re-read: the rollup advanced experts_invited → proposal_requested.
@@ -107,13 +123,49 @@ describe('requestProposalAsAdmin', () => {
     mockPublish.mockResolvedValue(undefined);
   });
 
-  it('rejects a non-admin before touching the graph', async () => {
-    mockRequireAdmin.mockRejectedValue(new Error('Forbidden'));
+  it('denies an unauthenticated caller before touching the graph', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
     const result = await requestProposalAsAdmin(VALID_INPUT);
-    expect(result).toEqual({ success: false, error: 'You do not have permission to do this.' });
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
     expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
     expect(mockTransition).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('denies a session-uncapable caller (platformRole "user"); live gate NOT called', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    const result = await requestProposalAsAdmin(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
+    expect(mockActorHoldsLive).not.toHaveBeenCalled();
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
+  });
+
+  it('BAL-560/BAL-558: denies when the LIVE row has revoked the capability, though the cookie still grants', async () => {
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+    const result = await requestProposalAsAdmin(VALID_INPUT);
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
+    expect(mockTransition).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockFindByContext).not.toHaveBeenCalled();
+    expect(mockCountThreadActivity).not.toHaveBeenCalled();
+    expect(mockActorHoldsLive).toHaveBeenCalledWith(ADMIN.id, 'manage_any_request_sourcing');
+  });
+
+  it('ordering: an uncapable caller with INVALID input gets the permission denial, not the validation message', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    const result = await requestProposalAsAdmin({ requestId: 'nope', relationshipId: 'also-nope' });
+    expect(result).toEqual({ success: false, error: PERMISSION_DENIED });
+  });
+
+  it('a thrown session read resolves to the permission denial, not an unhandled rejection', async () => {
+    mockGetCurrentUser.mockRejectedValueOnce(new Error('bad seal'));
+    await expect(requestProposalAsAdmin(VALID_INPUT)).resolves.toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
   });
 
   it('rejects invalid ids before loading the request', async () => {

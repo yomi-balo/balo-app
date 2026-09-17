@@ -113,8 +113,16 @@ export {
   // token expresses. `@balo/db`'s `assignOwner` is the first consumer.
   PLATFORM_STAFF_ROLES,
   platformRoleIsStaff,
+  // BAL-558 — the sealed-cookie codec. `PLATFORM_CAPABILITY_SEAL_ORDER` itself is deliberately
+  // NOT re-exported here (PIN H): only the codec functions below read it.
+  encodeSealedPlatformCapabilities,
+  decodeSealedPlatformCapabilities,
 } from './platform';
-export type { PlatformCapability, PlatformStaffRole } from './platform';
+export type {
+  PlatformCapability,
+  PlatformStaffRole,
+  SealedPlatformCapabilityIndexes,
+} from './platform';
 
 // The DISTINCT engagement-capability axis (BAL-413 / ADR-1046) — gates by DELIVERY
 // IDENTITY on ONE already-resolved meeting context, not by membership role and not by

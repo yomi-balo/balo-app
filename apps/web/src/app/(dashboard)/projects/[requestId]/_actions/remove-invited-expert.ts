@@ -5,8 +5,9 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { requestExpertRelationshipsRepository } from '@balo/db';
-import { requireAdmin } from '@/lib/auth/require-admin';
+import { PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
+import { requireRequestStaffCapability } from './_shared/require-request-staff-capability';
 
 const inputSchema = z.object({
   requestId: z.uuid(),
@@ -27,12 +28,13 @@ export type RemoveInvitedExpertResult = { success: true } | { success: false; er
 export async function removeInvitedExpertAction(
   input: z.infer<typeof inputSchema>
 ): Promise<RemoveInvitedExpertResult> {
-  let admin;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { success: false, error: 'You do not have permission to do this.' };
+  const auth = await requireRequestStaffCapability(
+    PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING
+  );
+  if (!auth.ok) {
+    return { success: false, error: auth.error };
   }
+  const admin = auth.user;
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {

@@ -35,7 +35,8 @@ import { hasPlatformCapability } from './platform';
  *
  * ⚠ NOT FOR READ-ONLY LOADERS. A stale read shows data the person could already see one render
  * ago and grants nothing; paying a query on every `load-more-*` / `fetch-lookup-*` call would be
- * cost without a security boundary.
+ * cost without a security boundary. The exceptions are enumerated, each with its reason, in
+ * `invariants/platform-capability-live-gate.test.ts`.
  *
  * ⚠ NOT FOR THE EDGE, AND NOT FOR A LENS RESOLVER. It is `async` and imports `@balo/db`, so it is
  * illegal in `middleware.ts` and would break the "Pure + synchronous — no I/O" contract that

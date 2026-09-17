@@ -16,7 +16,11 @@ import {
 } from '@/lib/auth/route-config';
 import { COOKIE_NAME } from '@/lib/auth/session-config';
 import { redactSensitivePath } from '@balo/shared/redaction';
-import { platformActorHasCapability, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import {
+  decodeSealedPlatformCapabilities,
+  platformActorHasCapability,
+  PLATFORM_CAPABILITIES,
+} from '@balo/shared/authz';
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
@@ -154,7 +158,7 @@ function checkRouteGuards(
     (user.impersonatorUserId !== undefined ||
       !platformActorHasCapability(
         user.platformRole,
-        user.platformCapabilities,
+        decodeSealedPlatformCapabilities(user.platformCapabilities),
         PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN
       ))
   ) {

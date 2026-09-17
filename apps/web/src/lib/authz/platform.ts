@@ -1,5 +1,6 @@
 import type { SessionUser } from '@/lib/auth/session';
 import {
+  decodeSealedPlatformCapabilities,
   platformActorHasCapability,
   PLATFORM_CAPABILITIES,
   type PlatformCapability,
@@ -46,10 +47,19 @@ export type { PlatformCapability };
  * like `'Admin'` is a compile error today. A structural `platformRole: string` would silently
  * lose that. `platformCapabilities` is OPTIONAL on `SessionUser`, so every existing caller —
  * whole-session or bare `{ platformRole }` — still type-checks unchanged.
+ *
+ * ⚠ BAL-558 — `user.platformCapabilities` NOW CARRIES SEAL-ORDER INDEXES, NOT TOKEN STRINGS.
+ * `decodeSealedPlatformCapabilities` turns them back into tokens (dropping anything unknown,
+ * fail closed) before the shared resolver — which stays strings-only, because `apps/api` passes
+ * it a live DB row — ever sees them.
  */
 export function hasPlatformCapability(
   user: Pick<SessionUser, 'platformRole' | 'platformCapabilities'>,
   capability: PlatformCapability
 ): boolean {
-  return platformActorHasCapability(user.platformRole, user.platformCapabilities, capability);
+  return platformActorHasCapability(
+    user.platformRole,
+    decodeSealedPlatformCapabilities(user.platformCapabilities),
+    capability
+  );
 }

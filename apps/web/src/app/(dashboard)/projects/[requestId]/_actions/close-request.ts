@@ -44,8 +44,9 @@ export type CloseRequestActionResult =
  * `request-close.jsx:849-852`), and there is no note field on this arm at all.
  *
  * Capability-gated on membership `MANAGE_REQUESTS` (D7) — its first gate call site — scoped to
- * the request's OWN company. No `requireAdmin()`, no `lens ===` anywhere. `relationshipId` is
- * not involved here — this ends the whole request, not one track.
+ * the request's OWN company. No platform-role gate (the since-deleted `requireAdmin()`), no
+ * `lens ===` anywhere. `relationshipId` is not involved here — this ends the whole request, not
+ * one track.
  *
  * The cascade (`projectRequestsRepository.close`) does everything transactionally: declines
  * every live track, withdraws every open proposal, cancels every still-`scheduled` request-grain

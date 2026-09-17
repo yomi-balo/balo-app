@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PlatformCapability } from '@balo/shared/authz';
 
 const REQUEST_ID = 'a0000000-0000-4000-8000-000000000001';
 const REL_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -10,9 +11,22 @@ const CLIENT_USER_ID = 'f0000000-0000-4000-8000-000000000006';
 vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
-const mockRequireAdmin = vi.fn();
-vi.mock('@/lib/auth/require-admin', () => ({
-  requireAdmin: () => mockRequireAdmin(),
+const mockGetCurrentUser = vi.fn();
+vi.mock('@/lib/auth/session', () => ({
+  getCurrentUser: () => mockGetCurrentUser(),
+}));
+
+/**
+ * BAL-558 — the LIVE-ROW platform gate `requireRequestStaffCapability` runs after its
+ * synchronous session check. Mocked to GRANT by default, so every pre-existing case below still
+ * exercises exactly what it did before: the session gate is still what decides them.
+ */
+const mockActorHoldsLive = vi.fn<
+  (userId: string, capability: PlatformCapability) => Promise<boolean>
+>(async () => true);
+vi.mock('@/lib/authz/live-platform-capability', () => ({
+  actorHoldsPlatformCapability: (userId: string, capability: PlatformCapability) =>
+    mockActorHoldsLive(userId, capability),
 }));
 
 const mockPublish = vi.fn();
@@ -67,7 +81,8 @@ import { approveKickoffAction } from './approve-kickoff';
 import { revalidatePath } from 'next/cache';
 import { log } from '@/lib/logging';
 
-const ADMIN = { id: 'user-admin' };
+const ADMIN = { id: 'user-admin', platformRole: 'admin' as const };
+const PERMISSION_DENIED = 'You do not have permission to do this.';
 
 const VALID_INPUT = { requestId: REQUEST_ID, relationshipId: REL_ID };
 
@@ -110,7 +125,8 @@ function requestGraph(overrides: Record<string, unknown> = {}) {
 describe('approveKickoffAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRequireAdmin.mockResolvedValue(ADMIN);
+    mockGetCurrentUser.mockResolvedValue(ADMIN);
+    mockActorHoldsLive.mockImplementation(async () => true);
     mockFindByIdWithRelations.mockResolvedValue(requestGraph());
     mockFindCurrentByRelationship.mockResolvedValue({ ...PROPOSAL });
     mockMaterializeFromKickoff.mockResolvedValue({
@@ -123,13 +139,56 @@ describe('approveKickoffAction', () => {
     mockPublish.mockResolvedValue(undefined);
   });
 
-  it('rejects a non-admin', async () => {
-    mockRequireAdmin.mockRejectedValue(new Error('Forbidden'));
+  it('denies an unauthenticated caller; no repo/publish/revalidate call', async () => {
+    mockGetCurrentUser.mockResolvedValue(null);
     expect(await approveKickoffAction(VALID_INPUT)).toEqual({
       success: false,
-      error: 'You do not have permission to do this.',
+      error: PERMISSION_DENIED,
     });
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
     expect(mockMaterializeFromKickoff).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it('denies a session-uncapable caller (platformRole "user"); live gate NOT called', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    expect(await approveKickoffAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
+    expect(mockActorHoldsLive).not.toHaveBeenCalled();
+    expect(mockMaterializeFromKickoff).not.toHaveBeenCalled();
+  });
+
+  it('BAL-560/BAL-558: denies when the LIVE row has revoked the capability, though the cookie still grants', async () => {
+    mockActorHoldsLive.mockResolvedValueOnce(false);
+    expect(await approveKickoffAction(VALID_INPUT)).toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
+    expect(mockFindByIdWithRelations).not.toHaveBeenCalled();
+    expect(mockMaterializeFromKickoff).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+    expect(mockFindCurrentByRelationship).not.toHaveBeenCalled();
+    expect(mockActorHoldsLive).toHaveBeenCalledWith(ADMIN.id, 'manage_any_kickoff_gate');
+  });
+
+  it('ordering: an uncapable caller with INVALID input gets the permission denial, not the validation message', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'user-1', platformRole: 'user' });
+    expect(await approveKickoffAction({ ...VALID_INPUT, relationshipId: 'nope' })).toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
+  });
+
+  it('a thrown session read resolves to the permission denial, not an unhandled rejection', async () => {
+    mockGetCurrentUser.mockRejectedValueOnce(new Error('bad seal'));
+    await expect(approveKickoffAction(VALID_INPUT)).resolves.toEqual({
+      success: false,
+      error: PERMISSION_DENIED,
+    });
   });
 
   it('rejects invalid input', async () => {

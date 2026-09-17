@@ -39,7 +39,8 @@ export type CreateInternalNoteActionResult =
 /**
  * Append a staff-internal note to a project request (BAL-541). Gated on the platform
  * capability `MANAGE_INTERNAL_NOTES` (D1) — the `close-request-as-admin.ts` shape
- * (`requireOnboardedUser` in try/catch, then `hasPlatformCapability`), NOT `requireAdmin()`.
+ * (`requireOnboardedUser` in try/catch, then `hasPlatformCapability`), NOT the since-deleted
+ * `requireAdmin()` (BAL-558).
  *
  * ⚠ `entityType` is a SERVER-STATED LITERAL, never a request-body field — the Zod schema has
  * NO key for it (`.strict()` rejects one if a caller tried), matching `meeting_files.party` /

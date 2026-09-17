@@ -102,6 +102,22 @@ describe('actorHoldsPlatformCapability', () => {
     ).resolves.toBe(false);
   });
 
+  /**
+   * BAL-558 — the live-row seam stays STRINGS-ONLY (the api actor path, D6); it never decodes
+   * seal-order indexes. A row that somehow carries a NUMBER (the sealed-cookie wire shape, never
+   * a legal `users.platform_capabilities` value) is filtered out by `isPlatformCapability`
+   * exactly like any other non-string entry — it is NOT reinterpreted as an index.
+   */
+  it('a live row storing a NUMBER `[5]` is NOT decoded as an index — denies VIEW_PLATFORM_ADMIN', async () => {
+    mockFindForSessionSync.mockResolvedValue(
+      row({ platformRole: 'admin', platformCapabilities: [5] })
+    );
+
+    await expect(
+      actorHoldsPlatformCapability(USER_ID, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
+    ).resolves.toBe(false);
+  });
+
   // ── Liveness: the same three conditions the impersonation entry point applies ──────────────
   it.each([
     ['the row is missing', null],

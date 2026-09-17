@@ -4,7 +4,7 @@ import type { IronSession } from 'iron-session';
 import type { SessionData, SessionUser } from '@/lib/auth/session';
 import { COOKIE_NAME } from '@/lib/auth/session-config';
 import { middleware } from './middleware';
-import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { PLATFORM_CAPABILITIES, encodeSealedPlatformCapabilities } from '@balo/shared/authz';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
@@ -304,7 +304,10 @@ describe('middleware — admin routes', () => {
   it('redirects a staff member whose override names OTHER tokens but not view_platform_admin', async () => {
     setupAuthenticatedSession({
       platformRole: 'super_admin',
-      platformCapabilities: ['manage_platform_fees', 'manage_promo_codes'],
+      platformCapabilities: encodeSealedPlatformCapabilities([
+        PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
+        PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES,
+      ]),
     });
     await expectRedirectTo('/admin/users', '/dashboard');
   });
@@ -316,7 +319,9 @@ describe('middleware — admin routes', () => {
     // place at this gate where an override could otherwise widen.)
     setupAuthenticatedSession({
       platformRole: 'admin',
-      platformCapabilities: ['view_platform_admin'],
+      platformCapabilities: encodeSealedPlatformCapabilities([
+        PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
+      ]),
     });
     const res = await middleware(createRequest('/admin/users'));
     expect(res.status).toBe(200);
@@ -337,7 +342,9 @@ describe('middleware — admin routes', () => {
   it('BAL-560/D1: a platformRole "user" cookie carrying an override naming view_platform_admin is STILL redirected', async () => {
     setupAuthenticatedSession({
       platformRole: 'user',
-      platformCapabilities: ['view_platform_admin'],
+      platformCapabilities: encodeSealedPlatformCapabilities([
+        PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN,
+      ]),
     });
     await expectRedirectTo('/admin/users', '/dashboard');
   });
@@ -345,7 +352,23 @@ describe('middleware — admin routes', () => {
   it('BAL-560/D1: the same holds for a cookie carrying the FULL axis on a non-staff role', async () => {
     setupAuthenticatedSession({
       platformRole: 'user',
-      platformCapabilities: Object.values(PLATFORM_CAPABILITIES),
+      platformCapabilities: encodeSealedPlatformCapabilities(Object.values(PLATFORM_CAPABILITIES)),
+    });
+    await expectRedirectTo('/admin/users', '/dashboard');
+  });
+
+  it('BAL-558: an admin cookie carrying a LEGACY string override naming view_platform_admin is redirected', async () => {
+    setupAuthenticatedSession({
+      platformRole: 'admin',
+      platformCapabilities: ['view_platform_admin'] as never,
+    });
+    await expectRedirectTo('/admin/users', '/dashboard');
+  });
+
+  it('BAL-558: an admin cookie with only an unknown index [999] is redirected', async () => {
+    setupAuthenticatedSession({
+      platformRole: 'admin',
+      platformCapabilities: [999],
     });
     await expectRedirectTo('/admin/users', '/dashboard');
   });

@@ -118,10 +118,11 @@ export const users = pgTable(
      * LENGTH (BAL-560 fix round 1, security F1; RELAXED 17 → 64 in fix round 3, R8):
      * `jsonb_array_length(...) <= 64`. WITHOUT IT THE COOKIE IS UNBOUNDED AND A LONG ARRAY IS A
      * SILENT, NON-SELF-HEALING LOCKOUT — a browser discards a `Set-Cookie` over 4096 bytes with
-     * no server-side error, and a measured 26-entry override seals to 4097 bytes — ONE byte past
-     * the cliff (30 entries is 4289; the figures are computed in
-     * `apps/web/src/lib/auth/session-cookie-size.test.ts:244-245`). Duplicates are what make that
-     * reachable: the axis has only 17 distinct tokens, but nothing stops
+     * no server-side error, and a measured 26-entry RAW-STRING override seals to 4097 bytes — one
+     * byte past the cliff. The figure is computed in `apps/web/src/lib/auth/session-cookie-size
+     * .test.ts`, the test titled "PROOF OF THE REASON (F1): a DUPLICATE-heavy override blows the
+     * cliff RAW, and is bounded by the encoder". Duplicates are what make that reachable: the
+     * axis has only a small fixed set of distinct tokens, but nothing stops
      * `['view_platform_admin', 'view_platform_admin', …]`.
      *
      * ⚠⚠ **SEAL-TIME DE-DUPLICATION IS WHAT ACTUALLY BOUNDS THE COOKIE; THIS NUMBER IS
@@ -179,12 +180,17 @@ export const users = pgTable(
      * this constraint — `normalizePlatformOverride`'s `platformRoleIsStaff` guard
      * (`@balo/shared/authz`) is the resolver-side backstop for that case.
      *
-     * ⚠ IT IS ALSO THE COOKIE BUDGET'S GUARANTEE. An impersonated session carrying a full
-     * 17-token override seals to 3542 bytes — OVER the 3500-byte safe budget. That combination
-     * is unreachable only because an impersonation target cannot be staff
-     * (`lib/auth/actions/impersonation.ts:198`) AND a non-staff row cannot hold an override
-     * (this constraint). Both halves are load-bearing; see the proof-of-the-reason test in
-     * `apps/web/src/lib/auth/session-cookie-size.test.ts`.
+     * ⚠ HISTORICAL — BAL-560 leaned on this pairing for the cookie budget: an impersonated
+     * session carrying a full-axis override, sealed the (then-only) STRING way, measured 3542
+     * bytes — OVER the 3500-byte safe budget. BAL-558's INDEX encoding (`SessionUser
+     * .platformCapabilities` now carries `PLATFORM_CAPABILITY_SEAL_ORDER` indexes, never token
+     * strings) retired that argument — the same combination now measures ≈3073 bytes, comfortably
+     * under budget on the index encoding alone. D1 (this constraint) stands regardless, on its
+     * own authorization argument above: a capability-only staff account must not exist. The
+     * combination is STILL unreachable only because an impersonation target cannot be staff
+     * (`lib/auth/actions/impersonation.ts:198`) AND a non-staff row cannot hold an override (this
+     * constraint); see `apps/web/src/lib/auth/session-cookie-size.test.ts` for the current
+     * measurements of both encodings side by side.
      *
      * ⚠⚠ **ESCALATION (fix round 3, R2): `manage_staff_capabilities` MAY APPEAR ONLY ON A
      * `super_admin` ROW.** An override REPLACES the role bundle and is deliberately unclamped —

@@ -856,8 +856,8 @@ describe('users.active_company_id (BAL-494 schema)', () => {
 
 /**
  * The FULL platform capability axis, taken from the one source of truth rather than
- * retyped. 16 tokens before BAL-560 lands `MANAGE_STAFF_CAPABILITIES`, 17 after; the EXACT
- * count is pinned in `packages/shared/src/authz/platform.test.ts` and in
+ * retyped. 17 after BAL-560, 19 after BAL-558; the EXACT count is pinned in
+ * `packages/shared/src/authz/platform-capability-seal.test.ts` and in
  * `apps/web/src/lib/auth/session-cookie-size.test.ts` (where it is the cookie budget's
  * worst case). Here it only has to be a realistically large array that round-trips.
  */
@@ -1071,10 +1071,12 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
   // ⚠ THE COOKIE LOCKOUT THIS ARM CLOSES. `SessionUser.platformCapabilities` is SEALED into
   // `balo_session`, and a browser SILENTLY DISCARDS a `Set-Cookie` over 4096 bytes — no error,
   // no recovery, the user just bounces to /login forever. Nothing bounded this column before:
-  // the axis has only 17 DISTINCT tokens, but jsonb happily stores the same one 40 times, and a
-  // measured 26-entry override seals to 4097 bytes — ONE byte past the cliff (30 entries is
-  // 4289). The figures are computed in
-  // `apps/web/src/lib/auth/session-cookie-size.test.ts:244-245`; everywhere else quotes them.
+  // the axis has only a small fixed set of distinct tokens, but jsonb happily stores the same
+  // one 40 times, and a measured 26-entry raw-STRING override seals to 4097 bytes — one byte
+  // past the cliff (BAL-558's INDEX encoding raises this considerably). The figure is computed
+  // in `apps/web/src/lib/auth/session-cookie-size.test.ts`, the test titled "PROOF OF THE
+  // REASON (F1): a DUPLICATE-heavy override blows the cliff RAW, and is bounded by the encoder";
+  // everywhere else quotes it.
   // The seal path de-duplicates and filters
   // (`apps/web/src/lib/auth/session-platform-capabilities.ts`); this is the database half of the
   // same bound, so a row cannot even hold a value that would overrun.
@@ -1121,14 +1123,15 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
     expect(stored).toHaveLength(64);
   });
 
-  it('LENGTH: the full 17-token axis is ACCEPTED — the bound has real slack above it', async () => {
-    // ⚠ 17 is `Object.keys(PLATFORM_CAPABILITIES).length` TODAY and the CHECK does NOT track it.
-    // Until fix round 3 (R8) the bound WAS 17, so an 18th platform token would have made this
-    // exact write fail with a mystifying 23514 — a silent migration obligation on every new
-    // token. 64 is deliberate slack so that stops being true. If the axis ever exceeds 64, the
-    // fix is a MIGRATION bumping the bound, not a smaller fixture here.
+  it('LENGTH: the full axis is ACCEPTED — the bound has real slack above it', async () => {
+    // ⚠ 19 is `Object.keys(PLATFORM_CAPABILITIES).length` at BAL-558 and the CHECK does NOT
+    // track it. Until fix round 3 (R8) the bound WAS 17 (the count at the time), so an 18th
+    // platform token would have made this exact write fail with a mystifying 23514 — a silent
+    // migration obligation on every new token. 64 is deliberate slack so that stops being true.
+    // If the axis ever exceeds 64, the fix is a MIGRATION bumping the bound, not a smaller
+    // fixture here.
     const user = await userFactory({ platformRole: 'super_admin' });
-    expect(FULL_AXIS).toHaveLength(17);
+    expect(FULL_AXIS).toHaveLength(19);
 
     await db
       .update(users)

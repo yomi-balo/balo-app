@@ -5,9 +5,10 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { projectRequestsRepository, InvalidStatusTransitionError } from '@balo/db';
-import { requireAdmin } from '@/lib/auth/require-admin';
+import { PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
+import { requireRequestStaffCapability } from './_shared/require-request-staff-capability';
 
 const inputSchema = z.object({ requestId: z.uuid() });
 
@@ -32,12 +33,13 @@ export type RequestExploratoryMeetingResult =
 export async function requestExploratoryMeetingAction(
   input: z.infer<typeof inputSchema>
 ): Promise<RequestExploratoryMeetingResult> {
-  let admin;
-  try {
-    admin = await requireAdmin();
-  } catch {
-    return { success: false, error: 'You do not have permission to do this.' };
+  const auth = await requireRequestStaffCapability(
+    PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING
+  );
+  if (!auth.ok) {
+    return { success: false, error: auth.error };
   }
+  const admin = auth.user;
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {

@@ -47,7 +47,8 @@ export type DeclineTrackAsAdminActionResult =
 /**
  * Balo declines one expert's track on the client's behalf (BAL-540). Gated on the platform
  * capability `CLOSE_ANY_REQUEST` (D7) — the same admin token as `close-request-as-admin.ts`,
- * since both are Balo acting as the client's proxy on this request. NOT `requireAdmin()`.
+ * since both are Balo acting as the client's proxy on this request. NOT a platform-role set read
+ * (the since-deleted `requireAdmin()`).
  *
  * Same non-effects as the client arm (V2, D9): no meeting cancellation, no file-grant
  * revocation — both flip for free / are out of scope, proved by test rather than by code.
