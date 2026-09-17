@@ -29,6 +29,7 @@ vi.mock('@balo/shared/logging', () => ({
 }));
 
 import {
+  foldMeetingContextRows,
   foldMeetingContextRowsToPrimary,
   classifyCalendarContextIds,
   assembleCalendarMeetings,
@@ -207,6 +208,143 @@ describe('foldMeetingContextRowsToPrimary', () => {
     );
 
     expect(folded.map((row) => row.meetingId)).toEqual(['m1', 'm2']);
+  });
+
+  /**
+   * BAL-566 — the wrapper's log line is now built in a callback over `foldMeetingContextRows`.
+   * Monitors may key on the message, so it is pinned VERBATIM (full literal, never
+   * `expect.any(String)`) along with the exact payload — the extraction must not have reworded it
+   * or dropped the expert scope.
+   */
+  it('the wrapper still logs the byte-identical message with the expert scope (BAL-566 extraction)', () => {
+    const folded = foldMeetingContextRowsToPrimary(
+      [
+        {
+          meetingId: 'm-none',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'admin',
+          contextId: null,
+        },
+      ],
+      'expert-9'
+    );
+
+    expect(folded).toHaveLength(0);
+    expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      { meetingId: 'm-none', expertProfileId: 'expert-9', reason: 'none' },
+      'Meeting omitted from the expert calendar read: no usable primary context'
+    );
+  });
+});
+
+/**
+ * BAL-566 D3 — the SCOPE-AGNOSTIC core both the expert calendar and the company Up next read
+ * fold through. It reports omissions to its caller and logs NOTHING itself: the log line (and
+ * the scope it names) belongs to the caller.
+ */
+describe('foldMeetingContextRows', () => {
+  it('carries the precedence winner through, one row per meeting, and reports no omission', () => {
+    const onOmitted = vi.fn();
+    const folded = foldMeetingContextRows(
+      [
+        {
+          meetingId: 'm1',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'in_progress',
+          contextType: 'project_discovery',
+          contextId: 'request-1',
+        },
+        {
+          meetingId: 'm1',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'in_progress',
+          contextType: 'project_kickoff',
+          contextId: 'engagement-1',
+        },
+      ],
+      onOmitted
+    );
+
+    expect(folded).toHaveLength(1);
+    expect(folded).toEqual([
+      {
+        meetingId: 'm1',
+        scheduledStart: START,
+        scheduledEnd: END,
+        status: 'in_progress',
+        contextType: 'project_kickoff',
+        contextId: 'engagement-1',
+      },
+    ]);
+    expect(onOmitted).not.toHaveBeenCalled();
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
+  });
+
+  it("a meeting with no usable context calls onOmitted(meetingId, 'none') and is dropped", () => {
+    const onOmitted = vi.fn();
+    const folded = foldMeetingContextRows(
+      [
+        {
+          meetingId: 'm-admin',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'admin',
+          contextId: null,
+        },
+        {
+          meetingId: 'm-kept',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'case',
+          contextId: 'engagement-1',
+        },
+      ],
+      onOmitted
+    );
+
+    expect(folded).toHaveLength(1);
+    expect(folded[0]?.meetingId).toBe('m-kept');
+    expect(onOmitted).toHaveBeenCalledTimes(1);
+    expect(onOmitted).toHaveBeenCalledWith('m-admin', 'none');
+    // The core never logs on the caller's behalf.
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
+  });
+
+  it("two distinct top-tier contexts call onOmitted(meetingId, 'ambiguous') and the meeting is dropped", () => {
+    const onOmitted = vi.fn();
+    const folded = foldMeetingContextRows(
+      [
+        {
+          meetingId: 'm-ambiguous',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'project_discovery',
+          contextId: 'request-1',
+        },
+        {
+          meetingId: 'm-ambiguous',
+          scheduledStart: START,
+          scheduledEnd: END,
+          status: 'scheduled',
+          contextType: 'request_interaction',
+          contextId: 'relationship-1',
+        },
+      ],
+      onOmitted
+    );
+
+    expect(folded).toHaveLength(0);
+    expect(onOmitted).toHaveBeenCalledTimes(1);
+    expect(onOmitted).toHaveBeenCalledWith('m-ambiguous', 'ambiguous');
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
   });
 });
 

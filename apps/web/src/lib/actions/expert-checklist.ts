@@ -4,7 +4,7 @@ import { cache } from 'react';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { expertSearchabilityRepository } from '@balo/db';
-import { deriveExpertChecklist } from '@balo/shared/experts';
+import { calendarConnectionNeedsReconnect, deriveExpertChecklist } from '@balo/shared/experts';
 import { log } from '@/lib/logging';
 import { reconcileFromRead } from '@/lib/expert/searchability';
 
@@ -21,6 +21,13 @@ export interface ChecklistStatus {
   allComplete: boolean;
   /** Raw per-minute rate in cents from expert profile. Used by settings tabs to avoid a second DB query. */
   rateCents: number | null;
+  /**
+   * BAL-566 (R2) — a connection the expert HAD has broken (EXPIRED/REVOKED) and none is
+   * currently ACTIVE. Derived from the SAME snapshot this call already fetched — no second
+   * query. Drives the dashboard's calendar-disconnected banner; `false` for an expert who never
+   * connected at all (that is setup, covered by `items.calendar`).
+   */
+  calendarNeedsReconnect: boolean;
 }
 
 /**
@@ -112,5 +119,6 @@ export const getChecklistStatus = cache(async (): Promise<ChecklistStatus> => {
     completedCount: derivation.completedCount,
     allComplete: derivation.allComplete,
     rateCents: snapshot.rateCents,
+    calendarNeedsReconnect: calendarConnectionNeedsReconnect(snapshot.inputs.calendarConnections),
   };
 });

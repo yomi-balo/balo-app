@@ -272,6 +272,20 @@ describe('loadExpertCalendar — href fails closed with owningRowFound (B7)', ()
     expect(view.meetings[0]?.href).toBe('/cases/engagement-1');
   });
 
+  it('BAL-566 fix round 1 (F1, user ruling J1): joinUrl is the authenticated member call route, never the anonymous lobby', async () => {
+    m.listCalendarForExpert.mockResolvedValue([baseMeeting({ meetingId: 'm1' })]);
+    const { loadExpertCalendar } = await import('./load-expert-calendar');
+
+    const view = await loadExpertCalendar({
+      expertProfileId: EXPERT_PROFILE_ID,
+      userId: USER_ID,
+      weekStartDayKey: '2026-08-24',
+    });
+
+    expect(view.meetings[0]?.joinUrl).toBe('/meetings/m1/call');
+    expect(view.meetings[0]?.joinUrl).not.toContain('/join/m/');
+  });
+
   it('a request_interaction meeting resolves href from the VERIFIED projectRequestId, not contextId', async () => {
     m.listCalendarForExpert.mockResolvedValue([
       baseMeeting({

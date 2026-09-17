@@ -119,6 +119,15 @@ const PINNED_REPOSITORIES: readonly string[] = [
    */
   'project-requests.ts',
   'internal-notes.ts',
+  /**
+   * BAL-566 adds the dashboard Up next read model. It has no writer at all, which is exactly
+   * why its docblock can promise "never notifies" — and a promise in a docblock is only worth
+   * something with a pin behind it. The read sits one layer below a Server Component slot and
+   * beside `meetings.ts` (whose fold it imports), so a future "notify on an upcoming call" idea
+   * landing HERE, rather than in the notification engine's scheduled reminders, is the
+   * regression this pin catches.
+   */
+  'upcoming-meetings.ts',
 ];
 
 /**

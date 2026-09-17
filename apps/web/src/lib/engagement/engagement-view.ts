@@ -18,6 +18,7 @@ import {
   deriveEngagementParties,
   engagementHeaderLine,
   personAtCompany,
+  projectEngagementTitle,
   type EngagementParties,
 } from './engagement-parties';
 import type {
@@ -758,12 +759,10 @@ export function mapEngagementToWorkspaceView(
 ): EngagementWorkspaceView {
   const parties = deriveEngagementParties(engagement);
   const status = engagement.status;
-  const engagementTitle =
-    engagement.projectRequest !== null &&
-    engagement.projectRequest.title !== null &&
-    engagement.projectRequest.title.trim() !== ''
-      ? engagement.projectRequest.title
-      : `Delivery with ${parties.expertPartyShort}`;
+  const engagementTitle = projectEngagementTitle(
+    engagement.projectRequest?.title ?? null,
+    parties.expertPartyShort
+  );
 
   const provenance: ProvenanceLinkView | null =
     engagement.projectRequest === null

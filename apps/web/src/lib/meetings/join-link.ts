@@ -49,10 +49,16 @@ import 'server-only';
  * must let them in — which is exactly what the panel's helper line says, and why the row they
  * arrive as is marked UNVERIFIED.
  *
- * ⚠ BAL-498 — SECOND CALLER, AND IT IS NAVIGATED TO, NEVER RENDERED (not a clipboard write
- * either). The expert calendar page (`app/(dashboard)/expert/calendar/`) calls this server-side
- * and passes the result down as a plain string prop, which `_components/join-meeting-button.tsx`
- * holds in a closure and hands to `globalThis.location.assign` from a `<button>` click handler.
+ * ⚠⚠ BAL-566 fix round 1 (F1, user ruling J1, 2026-09-18) CORRECTED THIS: the expert calendar
+ * page and the dashboard Up next card's row were BOTH sending Join through this tokenless lobby
+ * URL, which is wrong for a SIGNED-IN member — see `member-call-path.ts` for the full account of
+ * why. Both now call `memberCallPath` (`/meetings/{id}/call`, the authenticated member route)
+ * instead, and pass ITS result down the same way: a plain string prop that
+ * `components/balo/meetings/join-meeting-button.tsx` holds in a closure and hands to
+ * `globalThis.location.assign` from a `<button>` click handler. `meetingJoinLinkUrl`'s own
+ * remaining call site is the call page's server-rendered "Copy join link" share URL
+ * (`app/(call)/meetings/[meetingId]/call/page.tsx`), which is a genuinely different, tokenless,
+ * render-safe link and is unaffected by this change.
  *
  * ⚠⚠ THE URL NEVER BECOMES A DOM ATTRIBUTE, AND THAT IS THE POINT — DO NOT "RESTORE" AN
  * `<a href>`/`Button asChild`. An attribute is not a URL: PostHog autocapture is ON and ships
@@ -72,8 +78,9 @@ import 'server-only';
  * `router.push`) would start Replay on the calendar and carry it INTO the token-adjacent route.
  *
  * See `join-link-never-writes.test.ts` — its amended docblock records why this tokenless URL is
- * safe to navigate to, and its `'invariant: the expert calendar never renders a join URL as an
- * href (BAL-498 S1)'` block is the source-level pin for everything above.
+ * safe to navigate to, and its `'invariant: no dashboard-adjacent surface renders a join
+ * URL/path as an href (BAL-498 S1, widened BAL-566 D9)'` block is the source-level pin for
+ * everything above.
  */
 
 /**

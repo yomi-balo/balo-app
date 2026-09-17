@@ -4,7 +4,8 @@ import { cache } from 'react';
 import { fromZonedTime } from 'date-fns-tz';
 import { meetingsRepository, expertsRepository, type ExpertCalendarMeeting } from '@balo/db';
 import { getChecklistStatus } from '@/lib/actions/expert-checklist';
-import { meetingJoinLinkUrl } from '@/lib/meetings/join-link';
+import { memberCallPath } from '@/lib/meetings/member-call-path';
+import { hrefForMeeting } from '@/lib/meetings/href-for-meeting';
 import { log } from '@/lib/logging';
 import { addDaysToDayKey, todayDayKey } from '@/lib/calendar/zoned-grid';
 import type { CalendarMeetingView, CalendarPageView } from './calendar-view-types';
@@ -26,47 +27,6 @@ const WEEK_DAYS = 7;
  * `CalendarRangeTooWideError` on every page load.
  */
 const AGENDA_HORIZON_DAYS = 28;
-
-/**
- * Resolved server-side. `null` whenever the repository could not resolve a LIVE owning row for
- * this expert (`meeting.owningRowFound === false`) — REGARDLESS of arm. `contextId`/
- * `projectRequestId` are not trustworthy on their own: `meeting_contexts.context_id` has no FK
- * and no RLS, so a drifted or forged row (or a soft-deleted owning engagement/request) can carry
- * a value that resolved to nobody. Rendering it as a live `href` in that case would leak another
- * tenant's identifier into this expert's page even though the repository already refused to name
- * the counterparty (security-bal-498.md MEDIUM finding). This is the SAME discipline the
- * `request_interaction` arm always applied — now applied uniformly to all four arms.
- */
-function hrefForMeeting(meeting: ExpertCalendarMeeting): string | null {
-  // `contextId` is now nulled by the repository alongside every other identity field whenever
-  // the owning row could not be verified (BAL-498 fix round 3, R8) — the second conjunct is the
-  // compiler's proof of that, not a second policy.
-  if (!meeting.owningRowFound || meeting.contextId === null) {
-    return null;
-  }
-  switch (meeting.contextType) {
-    case 'case':
-      return `/cases/${meeting.contextId}`;
-    case 'project_kickoff':
-      return `/engagements/${meeting.contextId}`;
-    case 'project_discovery':
-    case 'request_interaction':
-      // Both request-grain labels resolve their link target through the VERIFIED
-      // `projectRequestId` the repository already resolved — never the raw `contextId`
-      // (security-bal-498.md: `project_discovery`'s contextId IS the request id, but reaching
-      // for it here bypasses the `owningRowFound` gate's sibling discipline of "use the
-      // resolved column, not the polymorphic one").
-      return meeting.projectRequestId === null ? null : `/projects/${meeting.projectRequestId}`;
-    case 'package_session':
-    case 'retainer_checkin':
-      // No detail route exists — these engagement kinds are declared-but-unbuilt.
-      return null;
-    default: {
-      const unhandled: never = meeting.contextType;
-      throw new Error(`Unhandled meeting context type: ${String(unhandled)}`);
-    }
-  }
-}
 
 /**
  * `expert_profiles.timezone` — resolved ONCE per request (`cache()`d, React de-dupes concurrent
@@ -102,7 +62,9 @@ export interface LoadExpertCalendarInput {
 
 /**
  * Fans out the expert calendar's four independent reads and maps to the client-safe view.
- * `meetingJoinLinkUrl` is `server-only` — computed here, passed down as a plain string.
+ * `memberCallPath` is computed here (BAL-566 fix round 1, F1 / user ruling J1 — the authenticated
+ * member call route, not the anonymous lobby `meetingJoinLinkUrl` used to send Join to) and passed
+ * down as a plain string.
  *
  * ⚠ TIMEZONE MUST RESOLVE FIRST. Both query windows are built from LOCAL day keys
  * (`weekStartDayKey`, and today's own day key); converting them to the UTC instants the
@@ -169,7 +131,7 @@ export const loadExpertCalendar = cache(async function loadExpertCalendar(
     status: meeting.status, // @balo/db `MeetingStatus` → shared `MeetingLifecycleStatus`, no cast — see D2 §status
     contextType: meeting.contextType,
     href: hrefForMeeting(meeting),
-    joinUrl: meetingJoinLinkUrl(meeting.meetingId),
+    joinUrl: memberCallPath(meeting.meetingId),
     counterpartyCompanyName: meeting.counterpartyCompanyName,
   }));
 

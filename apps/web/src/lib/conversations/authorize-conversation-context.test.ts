@@ -344,4 +344,15 @@ describe('axis discipline', () => {
     // The `agencyRole !== undefined` line lives in `@balo/shared/authz` and ONLY there.
     expect(code).not.toContain('agencyRole');
   });
+
+  /**
+   * BAL-566 (D14) — the client arm now delegates to the shared `resolveCompanyParticipation`
+   * (`@balo/shared/authz`) rather than inlining `getMemberRole` + `roleHasCapability` itself.
+   * Pinned mechanically, the same way as the expert arm above: exactly one CALL site, and the
+   * role-interpreting function itself is absent (interpreted ONLY inside the shared module).
+   */
+  it('delegates the client arm to resolveCompanyParticipation — exactly one CALL site', () => {
+    expect([...code.matchAll(/resolveCompanyParticipation\(/g)]).toHaveLength(1);
+    expect(code).not.toContain('roleHasCapability');
+  });
 });

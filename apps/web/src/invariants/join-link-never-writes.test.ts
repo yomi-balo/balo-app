@@ -348,10 +348,16 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
  * ⚠⚠ BAL-498 UPDATE — the "never rendered as an `href`" clause above still HOLDS, and the
  * fix-round-3 amendment below records why an earlier revision of this block was wrong to relax
  * it. `app/(call)/meetings/[meetingId]/call/page.tsx` (BAL-436) passes the URL as a
- * `joinLinkUrl` prop for a "Copy join link" button. The expert calendar page (BAL-498,
- * `app/(dashboard)/expert/calendar/`) is a SECOND caller, and it navigates to the URL from a
- * `<button>` handler (`globalThis.location.assign`) — it does NOT put it in the DOM. Why it is
- * safe:
+ * `joinLinkUrl` prop for a "Copy join link" button — its ONE remaining caller today.
+ *
+ * ⚠⚠ BAL-566 fix round 1 (F1, user ruling J1) CORRECTED A SECOND CALLER THIS PARAGRAPH USED TO
+ * NAME: the expert calendar page (BAL-498) used to call `meetingJoinLinkUrl` too and navigate to
+ * it from a `<button>` handler for Join, exactly like the copy-link button. That was wrong for a
+ * SIGNED-IN member (see `lib/meetings/member-call-path.ts` for the full account), so the calendar
+ * — and the dashboard Up next card's row, BAL-566's own net-new surface — now build
+ * `memberCallPath` (`/meetings/{id}/call`) instead and navigate to THAT the same way. The safety
+ * analysis below is preserved because it still holds for `meetingJoinLinkUrl`'s one remaining
+ * caller; it no longer describes the calendar or the dashboard. Why it is safe:
  *   1. TOKENLESS — the id in the URL admits nobody; a host must still explicitly admit.
  *   2. The lobby page (`app/join/m/[meetingId]/page.tsx`) performs ZERO database reads and
  *      renders a byte-identical card for every id — its own acceptance criterion — so even a
@@ -431,8 +437,8 @@ describe('invariant: guestRecapPath / guestInvitationPath are only called from a
 });
 
 /**
- * BAL-498 fix round 3 (security WARNING #1) — the SOURCE half of "the lobby URL never becomes a
- * DOM attribute". The DOM half is pinned at the component level
+ * BAL-498 fix round 3 (security WARNING #1) — the SOURCE half of "the join target never becomes
+ * a DOM attribute". The DOM half is pinned at the component level
  * (`_components/meeting-block.test.tsx`, `_components/agenda-list.test.tsx`), which is what
  * catches a behavioural regression; this half catches the same regression written a different
  * way — a `<Button asChild><a href={meeting.joinUrl}>` reintroduced anywhere on the route,
@@ -441,60 +447,128 @@ describe('invariant: guestRecapPath / guestInvitationPath are only called from a
  * Why an attribute is the hazard and a navigation is not: PostHog autocapture is ON and ships
  * `$elements[].attr__href`, which `sanitizeAnalyticsEvent` does not walk; Sentry
  * `replayIntegration` records rrweb DOM snapshots and its default `maskAttributes` excludes
- * `href`. Both processors therefore see a raw `/join/m/{meetingId}` the moment it is rendered —
- * no click required. `globalThis.location.assign(joinUrl)` from a `<button>` handler keeps it out
- * of the DOM entirely, and remains the hard document navigation D4 and the init-time Replay
- * refusal in `instrumentation-client.ts` both require.
+ * `href`. Both processors would therefore see a raw meeting id the moment it is rendered — no
+ * click required. As of BAL-566 fix round 1 (F1 / user ruling J1) the join target is
+ * `memberCallPath`'s authenticated member call route, which is not on the
+ * `SENSITIVE_PATH_PREFIXES` redaction list — it is already linked, unredacted, from in-app
+ * notifications and absence emails — so this is not closing a dedicated redaction gap. It is
+ * still worth keeping off the DOM: `globalThis.location.assign(joinUrl)` from a `<button>`
+ * handler keeps it out entirely and avoids a Next prefetch firing the navigation on hover/
+ * viewport, without depending on any Session Replay refusal (the call route is authenticated and
+ * is not a landing `instrumentation-client.ts`'s `onSensitiveLanding` refuses).
  */
-describe('invariant: the expert calendar never renders a join URL as an href (BAL-498 S1)', () => {
+describe('invariant: no dashboard-adjacent surface renders a join URL/path as an href (BAL-498 S1, widened BAL-566 D9)', () => {
   const CALENDAR_DIR = resolveRouteDir([
     'src/app/(dashboard)/expert/calendar',
     'apps/web/src/app/(dashboard)/expert/calendar',
   ]);
-  const scanned = scanRouteSources(CALENDAR_DIR, '', []);
+  const DASHBOARD_DIR = resolveRouteDir([
+    'src/app/(dashboard)/dashboard',
+    'apps/web/src/app/(dashboard)/dashboard',
+  ]);
+  const COMPONENTS_DIR = resolveRouteDir([
+    'src/components/balo/meetings',
+    'apps/web/src/components/balo/meetings',
+  ]);
 
   /**
-   * `href={ … joinUrl … }` in any JSX-attribute shape. An indexOf walk, NOT a regex — the same
-   * convention `_source-scan.ts` keeps for exactly this reason (SonarCloud S5852).
+   * BAL-566 — THREE trees now, not one: the calendar route (BAL-498's original scope), the
+   * dashboard route (the Up next card's row, BAL-566), and `components/balo/meetings` (where
+   * `JoinMeetingButton` now lives, having moved out of the calendar route entirely). Each gets
+   * its own prefix so a failure names which tree the offending file is in.
    */
-  function bindsJoinUrlToHref(code: string): boolean {
+  const scanned = [
+    ...scanRouteSources(CALENDAR_DIR, 'calendar', []),
+    ...scanRouteSources(DASHBOARD_DIR, 'dashboard', []),
+    ...scanRouteSources(COMPONENTS_DIR, 'components', []),
+  ];
+
+  /**
+   * `href={ … joinUrl|joinPath … }` in any JSX-attribute shape. An indexOf walk, NOT a regex —
+   * the same convention `_source-scan.ts` keeps for exactly this reason (SonarCloud S5852).
+   *
+   * ⚠ BOTH NAMES, DELIBERATELY. `joinUrl` is the calendar's prop name and `joinPath` is the
+   * dashboard Up next row's prop name — as of BAL-566 fix round 1 (F1 / user ruling J1) BOTH now
+   * hold `memberCallPath`'s output, the AUTHENTICATED member call route, never
+   * `meetingJoinLinkUrl` or `memberJoinPath`'s anonymous lobby URL. The call route is not on the
+   * `SENSITIVE_PATH_PREFIXES` redaction list (it is already linked, unredacted, from in-app
+   * notifications and absence emails), so the hazard here is narrower than the lobby URL's used
+   * to be: it is not a NEW redaction gap, only an avoidable DOM exposure. Both prop names are
+   * still checked because a future caller could reintroduce either shape.
+   */
+  function bindsJoinTargetToHref(code: string): boolean {
     const marker = 'href={';
     let index = code.indexOf(marker);
     while (index !== -1) {
       const close = code.indexOf('}', index + marker.length);
       const expression = close === -1 ? code.slice(index) : code.slice(index, close);
-      if (expression.includes('joinUrl')) return true;
+      if (
+        expression.includes('joinUrl') ||
+        expression.includes('joinPath') ||
+        // BAL-566 fix round 2 (S) — a call site could skip the `row.joinPath`/`meeting.joinUrl`
+        // prop entirely and build the target inline, e.g. `href={memberCallPath(row.meetingId)}`.
+        // That is the SAME hazard by a different route into the expression, so the builder's own
+        // name is caught too, not only the two prop names above.
+        expression.includes('memberCallPath(')
+      ) {
+        return true;
+      }
       index = code.indexOf(marker, index + marker.length);
     }
     return false;
   }
 
-  it('collects the calendar route sources (guards against a vacuous pass)', () => {
+  it('collects all three trees, including the moved button and the dashboard row (guards against a vacuous pass)', () => {
+    expect(CALENDAR_DIR).not.toBe('');
+    expect(DASHBOARD_DIR).not.toBe('');
+    expect(COMPONENTS_DIR).not.toBe('');
     expect(scanned.length).toBeGreaterThan(0);
-    expect(scanned.map((file) => file.rel)).toContain('_components/join-meeting-button.tsx');
+    const rels = scanned.map((file) => file.rel);
+    expect(rels).toContain('components/join-meeting-button.tsx');
+    expect(rels).toContain('dashboard/_components/up-next-row.tsx');
   });
 
-  it('the join URL is navigated to, never bound to an href', () => {
+  it('⚠ guards the guard: a synthetic href={row.joinPath} is detected by the matcher', () => {
+    expect(bindsJoinTargetToHref('<Link href={row.joinPath}>Join</Link>')).toBe(true);
+    expect(bindsJoinTargetToHref('<Link href={meeting.joinUrl}>Join</Link>')).toBe(true);
+    expect(bindsJoinTargetToHref('<Link href={row.href}>Open</Link>')).toBe(false);
+  });
+
+  it('⚠ guards the guard: a synthetic href={memberCallPath(row.meetingId)} is also detected', () => {
+    expect(bindsJoinTargetToHref('<Link href={memberCallPath(row.meetingId)}>Join</Link>')).toBe(
+      true
+    );
+    expect(bindsJoinTargetToHref('<Link href={memberCallPathLabel}>Open</Link>')).toBe(false);
+  });
+
+  it('no join URL or path is ever bound to an href — it is navigated to, never bound', () => {
     const offenders = scanned
-      .filter((file) => bindsJoinUrlToHref(file.code))
+      .filter((file) => bindsJoinTargetToHref(file.code))
       .map((file) => file.rel);
 
     expect(
       offenders,
-      `These files bind a join URL to an href. That puts /join/m/{meetingId} — declared ` +
-        `sensitive-by-policy in SENSITIVE_PATH_PREFIXES — into the DOM, where PostHog ` +
-        `autocapture ($elements[].attr__href) and Sentry Session Replay (rrweb DOM snapshots, ` +
-        `href is not in maskAttributes) both collect it un-redacted, with no click required. ` +
-        `Use <JoinMeetingButton>, which navigates via globalThis.location.assign:\n  ` +
+      `These files bind a join URL/path to an href. The join target is memberCallPath's ` +
+        `authenticated member call route — not on the SENSITIVE_PATH_PREFIXES redaction list, ` +
+        `since it is already linked, unredacted, from in-app notifications and absence emails — ` +
+        `so this is not closing a redaction gap, only an avoidable one: rendering it puts the ` +
+        `meeting id into PostHog autocapture ($elements[].attr__href, which ` +
+        `sanitizeAnalyticsEvent never walks) and Sentry Session Replay (rrweb DOM snapshots, ` +
+        `href is not in maskAttributes) with no click required, and risks Next prefetching the ` +
+        `route on hover/viewport. Use <JoinMeetingButton>, which navigates via ` +
+        `globalThis.location.assign:\n  ` +
         offenders.join('\n  ')
     ).toEqual([]);
   });
 
-  it('the Join affordance still performs a HARD document navigation, not a soft one', () => {
-    const joinButton = scanned.find((file) => file.rel === '_components/join-meeting-button.tsx');
+  it('the Join affordance still performs a HARD document navigation, not a soft one (reads the moved file)', () => {
+    const joinButton = scanned.find((file) => file.rel === 'components/join-meeting-button.tsx');
     if (joinButton === undefined) throw new Error('join-meeting-button.tsx was not scanned');
-    // D4 + instrumentation-client.ts:52 — `onSensitiveLanding` is evaluated at Sentry.init(),
-    // so Replay is only refused on the lobby if the browser genuinely re-initialises there.
+    // A real navigation means Next never prefetches the member call route on hover/viewport, and
+    // it keeps the target out of the DOM as an href. It does not gate a Session Replay refusal —
+    // the call route is authenticated and `onSensitiveLanding` (instrumentation-client.ts) does
+    // not match it; that mechanism only ever applied to the anonymous guest lobby this button no
+    // longer targets.
     expect(joinButton.code).toContain('globalThis.location.assign');
     expect(joinButton.code).not.toContain('next/link');
     expect(joinButton.code).not.toContain('router.push');

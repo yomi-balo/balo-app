@@ -10,6 +10,9 @@ export {
   type ExpertChecklistDerivation,
   deriveExpertChecklist,
   hasLiveCalendarConnection,
+  // BAL-566 R2 — the calendar-disconnected banner predicate, built ON the ANY-ACTIVE rule above.
+  RECONNECT_NEEDED_CREDENTIAL_STATUSES,
+  calendarConnectionNeedsReconnect,
   withCredentialStatusOverride,
   type ExpertSearchabilityTrigger,
   searchabilityTriggerFor,

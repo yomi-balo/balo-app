@@ -16,6 +16,8 @@ function buildStatus(overrides: Partial<ChecklistStatus> = {}): ChecklistStatus 
     completedCount: 6,
     allComplete: true,
     rateCents: 313,
+    // BAL-566 — a typed fixture; this line never asserts on the banner (out of scope here).
+    calendarNeedsReconnect: false,
     ...overrides,
   };
 }

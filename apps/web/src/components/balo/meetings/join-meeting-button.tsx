@@ -5,7 +5,11 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 interface JoinMeetingButtonProps {
-  /** The TOKENLESS lobby URL (`/join/m/{meetingId}`) — navigated to, never rendered. */
+  /**
+   * The join destination — today, `memberCallPath`'s `/meetings/{meetingId}/call` (the
+   * authenticated member call route, BAL-566 fix round 1 F1 / user ruling J1) at every call site.
+   * Navigated to, never rendered.
+   */
   readonly joinUrl: string;
   /** Names the meeting, e.g. `Join Northwind's meeting, starting in 5 minutes`. */
   readonly ariaLabel: string;
@@ -17,33 +21,42 @@ interface JoinMeetingButtonProps {
 }
 
 /**
- * BAL-498 fix round 3 (S1 + A1) — the ONE Join affordance for both calendar surfaces.
+ * BAL-498 fix round 3 (S1 + A1) — the ONE Join affordance shared across every calendar-adjacent
+ * surface. BAL-566 moved it here (from `expert/calendar/_components/`) so the dashboard Up next
+ * card's row can be its FOURTH call site (rendered only under `joinVisible`), beside the Week
+ * grid chip, the compact popover and the Agenda row.
  *
  * ⚠⚠ IT IS A `<button>`, AND THAT IS THE WHOLE POINT — DO NOT "RESTORE" THE `<a href>`.
- * This ticket was the first to render `meetingJoinLinkUrl`'s output into the DOM, and an
- * attribute is not a URL: PostHog autocapture is ON (`analytics/client/client.ts` passes no
- * `autocapture: false`) and ships `$elements[].attr__href`, while `sanitizeAnalyticsEvent` walks
- * only `$current_url`/`$pathname`/`$referrer`; Sentry `replayIntegration` records rrweb DOM
- * snapshots and its `maskAttributes` default does not include `href`. So an `href` here shipped
- * `/join/m/{meetingId}` — declared sensitive-by-policy in `SENSITIVE_PATH_PREFIXES` — to two
- * external processors un-redacted, on a page the expert merely LOOKS at. Keeping the URL out of
- * the DOM closes both channels at once, with no redaction hook to keep in sync.
+ * Binding the join target to an href would put it in the DOM, and an attribute is not a URL:
+ * PostHog autocapture is ON (`analytics/client/client.ts` passes no `autocapture: false`) and
+ * ships `$elements[].attr__href`, while `sanitizeAnalyticsEvent` walks only
+ * `$current_url`/`$pathname`/`$referrer`; Sentry `replayIntegration` records rrweb DOM snapshots
+ * and its `maskAttributes` default does not include `href`. The join target is `memberCallPath`'s
+ * authenticated member call route (`/meetings/{id}/call`, BAL-566 fix round 1, F1 / user ruling
+ * J1) — it is NOT in `SENSITIVE_PATH_PREFIXES` and is NOT redaction-covered, deliberately: it is
+ * an authenticated route already linked, unredacted, from in-app notifications and absence
+ * emails. So keeping it off the DOM here does not close a dedicated redaction gap; it simply
+ * keeps a meeting id from reaching either processor as a rendered attribute, with no click and
+ * no redaction hook required.
  *
  * ⚠ `globalThis.location.assign` — a HARD DOCUMENT NAVIGATION, never `next/link` and never
- * `router.push`. D4 and the init-time Replay refusal at `instrumentation-client.ts:52` both
- * depend on a real navigation so `onSensitiveLanding` re-evaluates on the lobby landing; a soft
- * navigation would start Replay on the calendar and carry it INTO the token-adjacent route.
+ * `router.push`. A real navigation means Next never prefetches the destination on hover/viewport,
+ * and it keeps the target out of the DOM the same way the guard above requires. It does not
+ * trigger a Session Replay refusal — the call route is authenticated and `onSensitiveLanding`
+ * (`instrumentation-client.ts`) does not match it — that mechanism only ever applied to the
+ * anonymous guest lobby this button no longer targets.
  *
  * ⚠ ≥44px HIT AREA (balo-ui NEVER-rule) via a transparent `after:` pseudo-element, so the visual
  * chip can stay small while the tap target is not. `min-h-11` where the button is in normal flow.
  *
  * ⚠ THE LIVE CUE IS UNCONDITIONAL (BAL-511 / ADR-1053 `ambient  live-call ping ring 1.8s`). It is
  * baked into this component rather than applied per call site because `JoinMeetingButton` is
- * rendered ONLY inside the join window at all three of today's call sites (`meeting-block.tsx`
- * full mode: `joinVisible && !compact`; its compact popover: `joinVisible &&`; `agenda-list.tsx`:
- * `joinVisible ? … : <ChevronRight/>`). If a future caller ever renders this component OUTSIDE
- * that gate, add a prop and condition the cue on it rather than deleting it — Join showing no
- * live affordance while genuinely joinable is the regression this paragraph exists to prevent.
+ * rendered ONLY inside the join window at all of today's call sites (`meeting-block.tsx` full
+ * mode: `joinVisible && !compact`; its compact popover: `joinVisible &&`; `agenda-list.tsx`:
+ * `joinVisible ? … : <ChevronRight/>`; the dashboard Up next row: `clock !== null &&
+ * timing.joinVisible`). If a future caller ever renders this component OUTSIDE that gate, add a
+ * prop and condition the cue on it rather than deleting it — Join showing no live affordance
+ * while genuinely joinable is the regression this paragraph exists to prevent.
  *
  * ⚠ BAL-513 EXTENDED THAT WINDOW to `scheduledEnd + MEETING_OVERRUN_GRACE_MINUTES` and moved
  * `isPast` onto the SAME boundary (`join-window.ts`'s `calendarMeetingTiming`), precisely so this

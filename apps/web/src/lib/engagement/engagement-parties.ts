@@ -42,6 +42,77 @@ function joinName(firstName: string | null, lastName: string | null, fallback: s
   return parts.length > 0 ? parts.join(' ') : fallback;
 }
 
+/** The four name/type columns {@link deriveExpertPartyLabels} needs. */
+export interface ExpertPartyNameFields {
+  readonly type: 'freelancer' | 'agency';
+  readonly agencyName: string | null;
+  readonly firstName: string | null;
+  readonly lastName: string | null;
+}
+
+/**
+ * BAL-566 (D8) — THE PARTY/PERSON NAME DERIVATION, extracted from {@link deriveEngagementParties}
+ * so the dashboard Up next card's kickoff-title fallback can share it without hydrating a full
+ * `ProjectEngagementWithMilestones`. Body moved verbatim.
+ */
+export function deriveExpertPartyLabels(
+  fields: ExpertPartyNameFields
+): Pick<
+  EngagementParties,
+  | 'isAgencyExpert'
+  | 'expertPerson'
+  | 'expertPersonShort'
+  | 'expertParty'
+  | 'expertPartyShort'
+  | 'expertRetroFirstMention'
+> {
+  const { type, agencyName, firstName, lastName } = fields;
+  const isAgencyExpert = type === 'agency';
+
+  const expertPerson = joinName(firstName, lastName, 'the expert');
+  const expertPersonShort =
+    firstName !== null && firstName.trim() !== '' ? firstName : expertPerson;
+
+  // Party display name via the shared BAL-329 convention (single source of truth,
+  // shared with the D6 inbox): agency name when type === 'agency' with a non-blank
+  // name; otherwise the person's full name; otherwise 'An expert'. Never touches
+  // `agencyName` unguarded.
+  const expertParty = expertPartyDisplayName({ type, agencyName, firstName, lastName });
+
+  // True only when the party resolved to the AGENCY name (vs a person fallback) —
+  // i.e. an agency-typed profile with a non-blank joined agency name. Optional-chained
+  // + nullish-guarded, so it type-checks when `agencyName` is null.
+  const showsAgencyName = isAgencyExpert && (agencyName?.trim() ?? '') !== '';
+
+  const expertPartyShort = showsAgencyName ? expertParty : expertPersonShort;
+  const expertRetroFirstMention = showsAgencyName
+    ? `${expertPersonShort} @ ${expertParty}`
+    : expertPersonShort;
+
+  return {
+    isAgencyExpert,
+    expertPerson,
+    expertPersonShort,
+    expertParty,
+    expertPartyShort,
+    expertRetroFirstMention,
+  };
+}
+
+/**
+ * BAL-566 (D8) — `/engagements/[id]`'s header title, ONE definition: the request title when
+ * non-blank, else "Delivery with {expertPartyShort}". `engagement-view.ts` and the dashboard Up
+ * next card's kickoff row both consume this rather than re-implementing the fallback.
+ */
+export function projectEngagementTitle(
+  requestTitle: string | null,
+  expertPartyShort: string
+): string {
+  return requestTitle !== null && requestTitle.trim() !== ''
+    ? requestTitle
+    : `Delivery with ${expertPartyShort}`;
+}
+
 /**
  * Derive every party / person string for an engagement from the hydrated read
  * model. `isAgencyExpert = expertProfile.type === 'agency'`; the person always comes
@@ -57,41 +128,15 @@ function joinName(firstName: string | null, lastName: string | null, fallback: s
  */
 export function deriveEngagementParties(e: ProjectEngagementWithMilestones): EngagementParties {
   const { user, agency, headline, type } = e.expertProfile;
-  const isAgencyExpert = type === 'agency';
-
-  const expertPerson = joinName(user.firstName, user.lastName, 'the expert');
-  const expertPersonShort =
-    user.firstName !== null && user.firstName.trim() !== '' ? user.firstName : expertPerson;
-
-  // Party display name via the shared BAL-329 convention (single source of truth,
-  // shared with the D6 inbox): agency name when type === 'agency' with a non-blank
-  // name; otherwise the person's full name; otherwise 'An expert'. Never touches
-  // `agency.name` unguarded.
-  const expertParty = expertPartyDisplayName({
-    type,
-    agencyName: agency?.name ?? null,
-    firstName: user.firstName,
-    lastName: user.lastName,
-  });
-
-  // True only when the party resolved to the AGENCY name (vs a person fallback) —
-  // i.e. an agency-typed profile with a non-blank joined agency name. Optional-chained
-  // + nullish-guarded, so it type-checks when `agency` is null.
-  const showsAgencyName = isAgencyExpert && (agency?.name?.trim() ?? '') !== '';
-
-  const expertPartyShort = showsAgencyName ? expertParty : expertPersonShort;
-  const expertRetroFirstMention = showsAgencyName
-    ? `${expertPersonShort} @ ${expertParty}`
-    : expertPersonShort;
 
   return {
-    isAgencyExpert,
-    expertPerson,
-    expertPersonShort,
-    expertParty,
-    expertPartyShort,
+    ...deriveExpertPartyLabels({
+      type,
+      agencyName: agency?.name ?? null,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    }),
     expertHeadline: headline,
-    expertRetroFirstMention,
     clientCompanyName: e.company.name,
   };
 }

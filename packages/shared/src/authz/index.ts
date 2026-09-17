@@ -194,6 +194,13 @@ export { actorHasExpertSideVisibility } from './expert-side-visibility';
 // consumer (`const lookup: AgencyRoleLookup = …` would not compile).
 export type { ExpertSideVisibilityProfile, AgencyRoleLookup } from './expert-side-visibility';
 
+// The company-level `PARTICIPATE` rule (BAL-566 D14) — the membership axis at COMPANY scope,
+// extracted from `authorizeEngagementConversation`'s client arm so the dashboard's Up next card
+// (and BAL-567) consume ONE definition. NOT a new axis, no new token. See
+// `./company-participation.ts`.
+export { resolveCompanyParticipation } from './company-participation';
+export type { CompanyParticipation, CompanyRoleLookup } from './company-participation';
+
 /**
  * The set of roles whose bundle grants `capability` — the single source of truth
  * for admin-role fan-out queries (e.g. `listAdminUserIds`). Keeps "a role is only

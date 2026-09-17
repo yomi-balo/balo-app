@@ -81,6 +81,15 @@ export {
   ADMIN_APPLICATIONS_EVENTS,
   /** BAL-550 — the `/admin/health/capture` lens's event constant. */
   ADMIN_CAPTURE_HEALTH_EVENTS,
+  /**
+   * BAL-566 — the dashboard "Up next" card's event constant. Fix round 1 (F12) removed the three
+   * vocabulary-tuple re-exports (`DASHBOARD_UP_NEXT_MEETING_TYPES`/`_TARGETS`/`_ROW_STATES`):
+   * nothing imports them from `@/lib/analytics` — every real call site (`select-up-next-rows.ts`,
+   * `up-next-card.tsx`) imports `DASHBOARD_UP_NEXT_MEETING_TYPES` directly from
+   * `@balo/analytics/events`, and `apps/web/src/test/setup.ts`'s analytics mock only re-exports
+   * `DASHBOARD_EVENTS` from this module too.
+   */
+  DASHBOARD_EVENTS,
 } from '@balo/analytics/client';
 
 export type {
@@ -174,4 +183,9 @@ export type {
   CaptureHealthQueueFilter,
   AdminRedriveKind,
   AdminRedriveOutcome,
+  /** BAL-566 — the dashboard "Up next" card's event payload and its three vocabularies. */
+  DashboardEventMap,
+  DashboardUpNextMeetingType,
+  DashboardUpNextTarget,
+  DashboardUpNextRowState,
 } from '@balo/analytics/client';

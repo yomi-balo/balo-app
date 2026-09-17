@@ -39,6 +39,16 @@ export {
 } from './calendar';
 export { NOTIFICATION_SERVER_EVENTS, type NotificationServerEventMap } from './notifications';
 export {
+  DASHBOARD_EVENTS,
+  type DashboardEventMap,
+  DASHBOARD_UP_NEXT_MEETING_TYPES,
+  type DashboardUpNextMeetingType,
+  DASHBOARD_UP_NEXT_TARGETS,
+  type DashboardUpNextTarget,
+  DASHBOARD_UP_NEXT_ROW_STATES,
+  type DashboardUpNextRowState,
+} from './dashboard';
+export {
   SEARCH_EVENTS,
   type SearchEventMap,
   SEARCH_SERVER_EVENTS,

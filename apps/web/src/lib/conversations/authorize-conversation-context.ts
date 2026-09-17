@@ -7,7 +7,7 @@ import {
   partyMembershipsRepository,
   type EngagementStatus,
 } from '@balo/db';
-import { actorHasExpertSideVisibility, CAPABILITIES, roleHasCapability } from '@balo/shared/authz';
+import { actorHasExpertSideVisibility, resolveCompanyParticipation } from '@balo/shared/authz';
 import type { EngagementStatusLabel } from '@balo/shared/conversations';
 import { log } from '@/lib/logging';
 
@@ -174,22 +174,26 @@ type SideResolution =
   | { ok: false; denial: AuthorizeEngagementConversationResult };
 
 /**
- * CLIENT arm first (membership axis, company scope, `PARTICIPATE`), then the EXPERT arm — the
- * shipped visibility rule. The expert arm is reached ONLY when the actor holds no company
- * membership at all, so the two can never both fire and the reported side is unambiguous.
+ * CLIENT arm first (membership axis, company scope, `PARTICIPATE`, via the shared
+ * `resolveCompanyParticipation` — BAL-566 D14), then the EXPERT arm — the shipped visibility
+ * rule. The expert arm is reached ONLY when the actor holds no company membership at all, so the
+ * two can never both fire and the reported side is unambiguous.
  */
 async function resolveSide(
   companyId: string,
   expertProfileId: string,
   userId: string
 ): Promise<SideResolution> {
-  const companyRole = await partyMembershipsRepository.getMemberRole('company', companyId, userId);
-  if (companyRole !== undefined) {
-    if (roleHasCapability(companyRole, CAPABILITIES.PARTICIPATE)) {
-      return { ok: true, side: 'client' };
-    }
+  const participation = await resolveCompanyParticipation(companyId, userId, (partyId, actorId) =>
+    partyMembershipsRepository.getMemberRole('company', partyId, actorId)
+  );
+  if (participation === 'participant') {
+    return { ok: true, side: 'client' };
+  }
+  if (participation === 'member_without_participate') {
     return { ok: false, denial: deny('no_capability', { companyId, userId }) };
   }
+  // 'not_a_member' falls through to the expert arm below.
 
   const profile = await expertsRepository.findProfileById(expertProfileId);
   if (profile === undefined) {

@@ -212,6 +212,52 @@ describe('getChecklistStatus', () => {
     });
   });
 
+  describe('BAL-566 (R2) — calendarNeedsReconnect', () => {
+    it('is false when every connection is ACTIVE', async () => {
+      const status = await getChecklistStatus();
+      expect(status.calendarNeedsReconnect).toBe(false);
+    });
+
+    it('is true when no connection is ACTIVE and one is EXPIRED', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: {
+            ...completeSnapshot().inputs,
+            calendarConnections: [{ id: 'conn-1', credentialStatus: 'EXPIRED' }],
+          },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.calendarNeedsReconnect).toBe(true);
+    });
+
+    it('is false for an expert who never connected a calendar', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: { ...completeSnapshot().inputs, calendarConnections: [] },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.calendarNeedsReconnect).toBe(false);
+    });
+
+    it('is false when an EXPIRED connection sits beside a healthy ACTIVE one', async () => {
+      mockLoadInputs.mockResolvedValue(
+        completeSnapshot({
+          inputs: {
+            ...completeSnapshot().inputs,
+            calendarConnections: [
+              { id: 'g', credentialStatus: 'EXPIRED' },
+              { id: 'm', credentialStatus: 'ACTIVE' },
+            ],
+          },
+        })
+      );
+      const status = await getChecklistStatus();
+      expect(status.calendarNeedsReconnect).toBe(false);
+    });
+  });
+
   describe('T5.1 — read-path reconciliation, both directions (D1 symmetric)', () => {
     it('a complete checklist reconciles with allComplete true', async () => {
       await getChecklistStatus();

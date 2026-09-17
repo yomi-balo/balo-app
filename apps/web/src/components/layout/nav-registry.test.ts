@@ -6,6 +6,7 @@ import {
   requiresCapability,
   NO_CAPABILITY_REQUIRED,
   resolveBreadcrumbTrail,
+  resolveEntityListNavEntry,
   splitMobileNav,
   resolveMobileTabs,
   resolveMoreItems,
@@ -548,5 +549,50 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     for (const route of supplementalRoutes) {
       expect(registryHrefs.has(route)).toBe(false);
     }
+  });
+});
+
+/**
+ * BAL-566 — the dashboard Up next card's footer-link resolver. Resolves an entity segment
+ * THROUGH `ENTITY_PARENTS`, so the label always matches the live registry entry.
+ */
+describe('resolveEntityListNavEntry (BAL-566)', () => {
+  it('"cases" resolves to the entry whose href matches the /cases/:id crumb parent, both workspaces', () => {
+    const [crumb] = resolveBreadcrumbTrail('/cases/case-1');
+    expect(crumb).toBeDefined();
+    for (const ctx of [COMPANY_NO_MANAGE, EXPERT_NO_MANAGE]) {
+      const entry = resolveEntityListNavEntry(ctx, 'cases');
+      expect(entry).toBeDefined();
+      expect(entry?.href).toBe(crumb?.href);
+    }
+  });
+
+  it('"projects" resolves to the Projects entry', () => {
+    const entry = resolveEntityListNavEntry(COMPANY_NO_MANAGE, 'projects');
+    expect(entry?.label).toBe('Projects');
+    expect(entry?.href).toBe('/projects');
+  });
+
+  it('an unknown segment resolves to undefined', () => {
+    expect(resolveEntityListNavEntry(COMPANY_NO_MANAGE, 'not-a-real-segment')).toBeUndefined();
+  });
+
+  it('a prototype-pollution-shaped segment resolves to undefined', () => {
+    expect(resolveEntityListNavEntry(COMPANY_NO_MANAGE, 'constructor')).toBeUndefined();
+  });
+
+  it('BAL-566 fix round 1 (F9): a segment absent from ENTITY_PARENTS resolves to undefined (renamed — see below)', () => {
+    // ⚠ RENAMED FROM "a disabled entry resolves to undefined". `help` has no href, is disabled,
+    // AND is not a key in ENTITY_PARENTS at all — so this exercises the exact same early-return
+    // (`!Object.hasOwn(ENTITY_PARENTS, entitySegment)`) as the "an unknown segment resolves to
+    // undefined" test above, NOT the second failure mode (an ENTITY_PARENTS hit whose target nav
+    // entry is disabled or missing for the given workspace). That second branch is UNREACHABLE
+    // today: every `ENTITY_PARENTS` value's `href` ('/consultations', '/projects') resolves to an
+    // enabled entry present in BOTH workspaces' primary section (pinned by
+    // `resolveNavItems(...).map(...)` assertions elsewhere in this file), so there is no
+    // ENTITY_PARENTS mapping whose target is ever disabled or workspace-scoped-out — constructing
+    // a genuine "disabled entry" case would require adding one, which is out of scope for a test.
+    // Kept as a real (if duplicate-path) assertion rather than deleted, with an honest title.
+    expect(resolveEntityListNavEntry(COMPANY_NO_MANAGE, 'help')).toBeUndefined();
   });
 });

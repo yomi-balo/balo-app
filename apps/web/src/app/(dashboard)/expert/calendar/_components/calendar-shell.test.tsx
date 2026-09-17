@@ -81,7 +81,7 @@ function meeting(overrides: Partial<CalendarMeetingView> = {}): CalendarMeetingV
     status: 'scheduled',
     contextType: 'case',
     href: '/cases/e1',
-    joinUrl: 'https://balo.expert/join/m/m-1',
+    joinUrl: '/meetings/m-1/call',
     counterpartyCompanyName: 'Northwind',
     ...overrides,
   };
@@ -218,7 +218,8 @@ describe('CalendarShell — Join appears/disappears with the 60-second tick (fak
     );
 
     // S1 — the Join affordance is a `<button>` that NAVIGATES; it is deliberately never a link
-    // (an `href` here shipped the sensitive lobby URL to PostHog autocapture and Sentry Replay).
+    // (an `href` here would ship the member call route to PostHog autocapture and Sentry Replay
+    // as a rendered attribute, un-redacted, before any click).
     expect(screen.queryByRole('button', { name: /Join/i })).not.toBeInTheDocument();
 
     // Advance past the 15-minute join-window boundary (20 - 15 = 5 minutes -> tick past minute 6).

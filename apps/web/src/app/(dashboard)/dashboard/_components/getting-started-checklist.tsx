@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { IconBadge } from '@/components/balo/icon-badge';
 import type { ChecklistStatus } from '@/lib/actions/expert-checklist';
+import { expertSettingsHrefFor } from '@/lib/constants/expert-checklist';
 import type { LucideIcon } from 'lucide-react';
 
 interface ChecklistItemUI {
@@ -149,7 +150,7 @@ export function GettingStartedChecklist({
             <motion.button
               key={item.key}
               variants={itemVariants}
-              onClick={() => router.push(`/expert/settings?tab=${item.tab}&setup=${item.key}`)}
+              onClick={() => router.push(expertSettingsHrefFor(item.key))}
               className="group hover:bg-muted/50 flex w-full items-center gap-4 px-6 py-4 text-left transition-colors"
             >
               {/* Completion circle or number */}
