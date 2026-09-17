@@ -9,13 +9,15 @@
  *      role bundle wholesale (A1.2), a person is either "inherited" or "custom" — there is
  *      no row that is half one and half the other. Switching to Custom pre-fills from the
  *      role bundle, so "an admin, minus promo codes" is one click.
- *   2. Role and capabilities are ONE form with one save, because a role change over a live
- *      custom set is a destructive interaction (A1.4) that has to be visible, not a silent
- *      transaction rule. See the inline choice that appears when both change at once.
- *   3. The resolved set is the primary read. Same sixteen rows in both modes; one badge says
+ *   2. Role and capabilities are ONE form with one save. A role change ALWAYS resets to
+ *      follow the new role (override → the role's bundle) — there is no inline keep-or-reset
+ *      choice. Re-customising the new role is one click away: click Custom again and it
+ *      pre-fills from THAT role's bundle (ruling 1).
+ *   3. The resolved set is the primary read. Same nineteen rows in both modes; one badge says
  *      where the answer came from.
- *   4. Floor rules are disabled states with copy, never a failed save: last super admin,
- *      no self-reduction, and the lock on manage_staff_capabilities for a sole super admin.
+ *   4. Floor rules are disabled states with copy, never a failed save: someone must still be
+ *      able to open this page and manage staff (D2); your own record is read-only and the
+ *      server refuses it (D3); Custom is unavailable for No staff access (D9).
  *   5. A security write gets a diff before it commits.
  *
  * COLOURS are placeholders mapped to shadcn token names — swap for the real values in
@@ -333,8 +335,11 @@ const Users = () => (
 );
 
 /* ------------------------------------------------------------------ data */
-// Sixteen tokens: the fifteen on main plus manage_staff_capabilities (ADR-1035 A1.3).
-// BAL-558 will mint one or two more for the request-sourcing conversions — pending ruling.
+// Nineteen tokens — the full LIVE @balo/shared/authz/platform.ts axis: BAL-558's two
+// request-sourcing conversions (manage_any_request_sourcing, manage_any_kickoff_gate) and
+// BAL-560's manage_staff_capabilities have all shipped. `super: true` marks the four tokens
+// that may sit only on a super_admin row; fast_forward_request is a dev-only note, not a
+// super-only token — both staff roles hold it.
 const GROUPS = [
   {
     label: 'Project requests',
@@ -344,11 +349,16 @@ const GROUPS = [
       { id: 'view_any_request_file', name: 'Read every file on any request' },
       { id: 'manage_internal_notes', name: 'Read and write staff notes' },
       { id: 'delete_any_internal_note', name: "Delete someone else's staff note", super: true },
+      { id: 'manage_any_request_sourcing', name: 'Find and invite experts on any request' },
     ],
   },
   {
     label: 'Delivery and calls',
     caps: [
+      {
+        id: 'manage_any_kickoff_gate',
+        name: 'Approve kickoff and start delivery on any request',
+      },
       { id: 'cancel_any_engagement', name: 'Cancel any live engagement' },
       { id: 'manage_any_engagement_action_item', name: 'Manage action items on any engagement' },
       { id: 'cancel_any_meeting', name: 'Cancel any booked call' },
@@ -375,6 +385,11 @@ const GROUPS = [
       { id: 'redrive_job', name: 'Re-run a stuck recording or transcript job', super: true },
       { id: 'impersonate_user', name: 'Use the product as another person', super: true },
       { id: 'manage_staff_capabilities', name: 'Change what other staff can do', super: true },
+      {
+        id: 'fast_forward_request',
+        name: 'Fast-forward a request for testing',
+        note: 'Only works in development. Does nothing in production.',
+      },
     ],
   },
 ];
@@ -479,6 +494,7 @@ function CapabilityRow({ cap, held, editable, locked, lockReason, onToggle }) {
       <span className="cap-body">
         <span className="cap-name">{cap.name}</span>
         <div className="cap-token">{cap.id}</div>
+        {cap.note ? <div className="cap-token">{cap.note}</div> : null}
         {locked ? <div className="cap-super">{lockReason}</div> : null}
       </span>
     </Tag>
@@ -547,36 +563,45 @@ function ConfirmDialog({ person, before, after, roleBefore, roleAfter, onCancel,
   );
 }
 
+/* ------------------------------------------------------------------ floor */
+// D2 — someone must still hold BOTH manage_staff_capabilities and view_platform_admin, not just
+// "a sole super admin". Generalised from the narrower prototype framing this replaces.
+function floorHolds(peopleList) {
+  return peopleList.some((p) => {
+    const set = resolved(p.role, p.capabilities);
+    return set.has('manage_staff_capabilities') && set.has('view_platform_admin');
+  });
+}
+function withDraft(peopleList, targetId, role, capabilities) {
+  return peopleList.map((p) => (p.id === targetId ? { ...p, role, capabilities } : p));
+}
+
 /* ------------------------------------------------------------------ detail */
-function Detail({ person, viewerId, superAdminCount, onSave }) {
+function Detail({ person, viewerId, people, onSave }) {
   const savedSet = useMemo(() => resolved(person.role, person.capabilities), [person]);
 
   const [role, setRole] = useState(person.role);
   const [mode, setMode] = useState(person.capabilities ? 'custom' : 'inherited');
   const [custom, setCustom] = useState(() => new Set(savedSet));
-  const [onRoleChange, setOnRoleChange] = useState('keep'); // 'keep' | 'reset'
   const [confirming, setConfirming] = useState(false);
 
   const isSelf = person.id === viewerId;
-  const isSoleSuper = person.role === 'super_admin' && superAdminCount === 1;
   const readOnly = isSelf;
 
-  const roleMoved = role !== person.role;
-  const showRoleCollision = roleMoved && mode === 'custom';
-  const effectiveMode = showRoleCollision && onRoleChange === 'reset' ? 'inherited' : mode;
-
   const draftSet = useMemo(
-    () => (effectiveMode === 'inherited' ? new Set(ROLE_BUNDLES[role]) : new Set(custom)),
-    [effectiveMode, role, custom]
+    () => (mode === 'inherited' ? new Set(ROLE_BUNDLES[role]) : new Set(custom)),
+    [mode, role, custom]
   );
 
   const dirty =
-    roleMoved ||
-    (effectiveMode === 'custom') !== Boolean(person.capabilities) ||
+    role !== person.role ||
+    (mode === 'custom') !== Boolean(person.capabilities) ||
     draftSet.size !== savedSet.size ||
     [...draftSet].some((c) => !savedSet.has(c));
 
+  // D9 — Custom is unavailable for role 'user'.
   const switchToCustom = () => {
+    if (role === 'user') return;
     setCustom(new Set(ROLE_BUNDLES[role])); // pre-fill from the bundle — subtraction is one click
     setMode('custom');
   };
@@ -589,11 +614,22 @@ function Detail({ person, viewerId, superAdminCount, onSave }) {
     });
   };
 
+  // A role pick ALWAYS resets to follow-role (ruling 1), so (r, null) IS the draft this checks.
+  const roleBlockedReason = (r) => {
+    if (floorHolds(withDraft(people, person.id, r, null))) return null;
+    return `${person.first} is the only person who can open this page and manage staff. Give someone else that access first.`;
+  };
+
   const lockFor = (cap) => {
-    if (isSoleSuper && cap.id === 'manage_staff_capabilities') {
-      return `${person.first} is the only super admin — removing this locks everyone out of this page.`;
+    if (mode !== 'custom') return null;
+    if (cap.id === 'manage_staff_capabilities' && role !== 'super_admin') {
+      return 'Only a super admin can hold this.';
     }
-    return null;
+    if (!custom.has(cap.id)) return null;
+    const without = new Set(custom);
+    without.delete(cap.id);
+    if (floorHolds(withDraft(people, person.id, role, [...without]))) return null;
+    return 'Removing this leaves no one able to open this page and manage staff.';
   };
 
   return (
@@ -624,93 +660,63 @@ function Detail({ person, viewerId, superAdminCount, onSave }) {
           <p className="field-help">Sets the starting list of what they can do.</p>
           <div className="roles">
             {ROLES.map((r) => {
-              const blocked = isSoleSuper && r.id !== 'super_admin';
-              const disabled = readOnly || blocked;
+              const blockReason = readOnly ? null : roleBlockedReason(r.id);
+              const disabled = readOnly || Boolean(blockReason);
               return (
                 <button
                   key={r.id}
                   className="role-opt"
                   data-on={role === r.id}
                   disabled={disabled}
-                  onClick={() => setRole(r.id)}
+                  onClick={() => {
+                    // Ruling 1 — every role change resets to follow-role.
+                    setRole(r.id);
+                    setMode('inherited');
+                  }}
                 >
                   <span className="radio">{role === r.id ? <span /> : null}</span>
                   <span>
                     <span className="role-title">{r.title}</span>
                     <div className="role-desc">{r.desc}</div>
-                    {blocked ? (
-                      <div className="role-block">
-                        {person.first} is the only super admin. Promote someone else first.
-                      </div>
-                    ) : null}
+                    {blockReason ? <div className="role-block">{blockReason}</div> : null}
                   </span>
                 </button>
               );
             })}
           </div>
-
-          {showRoleCollision ? (
-            <div className="banner banner-warn" style={{ marginTop: 14 }}>
-              <Alert c="#B54708" />
-              <span>
-                {person.first} has a custom list. Moving them to{' '}
-                <b>{ROLES.find((r) => r.id === role).title}</b> has to do one of these.
-                <div style={{ display: 'grid', gap: 6, marginTop: 9 }}>
-                  {[
-                    ['keep', 'Keep their custom list exactly as it is'],
-                    [
-                      'reset',
-                      `Replace it with the ${ROLES.find((r) => r.id === role).title} defaults`,
-                    ],
-                  ].map(([v, text]) => (
-                    <label
-                      key={v}
-                      style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}
-                    >
-                      <input
-                        type="radio"
-                        name="collision"
-                        checked={onRoleChange === v}
-                        onChange={() => setOnRoleChange(v)}
-                      />
-                      <span style={{ fontSize: 13 }}>{text}</span>
-                    </label>
-                  ))}
-                </div>
-              </span>
-            </div>
-          ) : null}
         </div>
 
         <div className="card-head">
           <div>
             <h3 className="card-title">What they can do</h3>
             <p className="card-note">
-              {effectiveMode === 'inherited'
+              {mode === 'inherited'
                 ? 'Following the role. Change the role and this list changes with it.'
                 : 'A custom list. It replaces the role defaults rather than adding to them.'}
             </p>
           </div>
           <div className="seg">
             <button
-              data-on={effectiveMode === 'inherited'}
+              data-on={mode === 'inherited'}
               disabled={readOnly}
-              onClick={() => {
-                setMode('inherited');
-                setOnRoleChange('reset');
-              }}
+              onClick={() => setMode('inherited')}
             >
               Follow role
             </button>
             <button
-              data-on={effectiveMode === 'custom'}
-              disabled={readOnly}
+              data-on={mode === 'custom'}
+              disabled={readOnly || role === 'user'}
               onClick={switchToCustom}
             >
               Custom
             </button>
           </div>
         </div>
+        {role === 'user' ? (
+          <p className="card-note" style={{ padding: '0 20px 14px' }}>
+            A custom list needs the Admin or Super admin role.
+          </p>
+        ) : null}
 
         {GROUPS.map((g) => (
           <div key={g.label}>
@@ -722,8 +728,8 @@ function Detail({ person, viewerId, superAdminCount, onSave }) {
                   key={cap.id}
                   cap={cap}
                   held={draftSet.has(cap.id)}
-                  editable={effectiveMode === 'custom' && !readOnly}
-                  locked={Boolean(lock) && effectiveMode === 'custom'}
+                  editable={mode === 'custom' && !readOnly}
+                  locked={Boolean(lock) && mode === 'custom'}
                   lockReason={lock}
                   onToggle={() => toggle(cap.id)}
                 />
@@ -735,16 +741,10 @@ function Detail({ person, viewerId, superAdminCount, onSave }) {
         <div className="count-line">
           <span>
             {draftSet.size} of {ALL_CAPS.length} ·{' '}
-            {effectiveMode === 'inherited' ? 'from role' : 'set for this person'}
+            {mode === 'inherited' ? 'from role' : 'set for this person'}
           </span>
-          {effectiveMode === 'custom' && !readOnly ? (
-            <button
-              className="btn-link"
-              onClick={() => {
-                setMode('inherited');
-                setOnRoleChange('reset');
-              }}
-            >
+          {mode === 'custom' && !readOnly ? (
+            <button className="btn-link" onClick={() => setMode('inherited')}>
               Go back to following the role
             </button>
           ) : null}
@@ -764,7 +764,6 @@ function Detail({ person, viewerId, superAdminCount, onSave }) {
                 setRole(person.role);
                 setMode(person.capabilities ? 'custom' : 'inherited');
                 setCustom(new Set(savedSet));
-                setOnRoleChange('keep');
               }}
             >
               Discard
@@ -792,7 +791,7 @@ function Detail({ person, viewerId, superAdminCount, onSave }) {
             onSave({
               ...person,
               role,
-              capabilities: effectiveMode === 'custom' ? [...draftSet] : null,
+              capabilities: mode === 'custom' ? [...draftSet] : null,
             });
             setConfirming(false);
           }}
@@ -819,12 +818,17 @@ const Loading = () => (
   </div>
 );
 
-const Empty = () => (
+const Empty = ({ onGiveAccess }) => (
   <div className="card state">
     <Users />
-    <h3>No one has staff access yet</h3>
-    <p>Give someone access and they will be able to open the Balo admin area.</p>
-    <button className="btn btn-primary">Give someone access</button>
+    <h3>Give someone staff access</h3>
+    <p>
+      Staff access lets someone open the Balo admin area. Find them by the email they signed up
+      with.
+    </p>
+    <button className="btn btn-primary" onClick={onGiveAccess}>
+      Give someone access
+    </button>
   </div>
 );
 
@@ -842,10 +846,133 @@ const Failed = ({ onRetry }) => (
 const NoAccess = () => (
   <div className="card state">
     <Shield s={28} c="#98A2B3" />
-    <h3>Only super admins can open this page</h3>
-    <p>Ask a super admin if you need someone&rsquo;s access changed.</p>
+    <h3>Only people who manage staff can open this page</h3>
+    <p>Ask a super admin if someone&rsquo;s access needs to change.</p>
   </div>
 );
+
+/* ------------------------------------------------------------------ add staff */
+// Non-staff prototype accounts the email lookup can "find". A person already on `PEOPLE` is
+// handled separately (the "already has staff access" outcome), never listed here.
+const ACCOUNTS = [
+  { id: 'a1', first: 'Priya', last: 'Shah', email: 'priya@northwind.com.au' },
+  { id: 'a2', first: 'Marcus', last: 'Webb', email: 'marcus@getbalo.com' },
+];
+
+function AddStaffDialog({ people, onClose, onPromote }) {
+  const [step, setStep] = useState('lookup'); // 'lookup' | 'promote' | 'confirm'
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+  const [candidate, setCandidate] = useState(null);
+  const [role, setRole] = useState('admin');
+
+  const findAccount = () => {
+    const needle = email.trim().toLowerCase();
+    if (!needle) {
+      setError('Enter a full email address.');
+      return;
+    }
+    const alreadyStaff = people.find((p) => p.email.toLowerCase() === needle);
+    if (alreadyStaff) {
+      setError(`${fullName(alreadyStaff)} already has staff access.`);
+      return;
+    }
+    const found = ACCOUNTS.find((a) => a.email.toLowerCase() === needle);
+    if (!found) {
+      // ONE generic message — no partial matching, no listing (ruling 3).
+      setError('No account found with that email.');
+      return;
+    }
+    setError('');
+    setCandidate(found);
+    setRole('admin');
+    setStep('promote');
+  };
+
+  if (step === 'confirm' && candidate) {
+    return (
+      <ConfirmDialog
+        person={candidate}
+        before={resolved('user', null)}
+        after={resolved(role, null)}
+        roleBefore="user"
+        roleAfter={role}
+        onCancel={() => setStep('promote')}
+        onConfirm={() => onPromote(candidate, role)}
+      />
+    );
+  }
+
+  return (
+    <div className="scrim" role="dialog" aria-modal="true" aria-label="Give someone access">
+      <div className="dialog">
+        <div className="card-head">
+          <h3 className="card-title">
+            {step === 'lookup' ? 'Give someone access' : `Give ${candidate?.first} staff access`}
+          </h3>
+        </div>
+        <div className="dialog-body">
+          {step === 'lookup' ? (
+            <>
+              <div>
+                <p className="field-label">Email they signed up with</p>
+                <input
+                  className="roster-search"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@company.com"
+                />
+              </div>
+              {error ? (
+                <p style={{ color: 'var(--danger)', fontSize: 13, margin: 0 }}>{error}</p>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <div className="avatar">{initials(candidate)}</div>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{fullName(candidate)}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>{candidate.email}</div>
+                </div>
+              </div>
+              <div className="roles">
+                {ROLES.filter((r) => r.id !== 'user').map((r) => (
+                  <button
+                    key={r.id}
+                    className="role-opt"
+                    data-on={role === r.id}
+                    onClick={() => setRole(r.id)}
+                  >
+                    <span className="radio">{role === r.id ? <span /> : null}</span>
+                    <span>
+                      <span className="role-title">{r.title}</span>
+                      <div className="role-desc">{r.desc}</div>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="dialog-foot">
+          <button className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          {step === 'lookup' ? (
+            <button className="btn btn-primary" onClick={findAccount}>
+              Find account
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={() => setStep('confirm')}>
+              Review and save
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ page */
 export default function StaffAccess() {
@@ -854,12 +981,18 @@ export default function StaffAccess() {
   const [people, setPeople] = useState(PEOPLE);
   const [selectedId, setSelectedId] = useState('u3'); // Adeeb — the custom-list case
   const [query, setQuery] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
 
-  const superAdminCount = people.filter((p) => p.role === 'super_admin').length;
   const shown = people.filter((p) =>
     `${fullName(p)} ${p.email}`.toLowerCase().includes(query.toLowerCase())
   );
   const selected = people.find((p) => p.id === selectedId);
+
+  const handlePromote = (candidate, role) => {
+    setPeople((prev) => [...prev, { ...candidate, role, capabilities: null }]);
+    setSelectedId(candidate.id);
+    setAddOpen(false);
+  };
 
   return (
     <div className="sa-root">
@@ -902,7 +1035,7 @@ export default function StaffAccess() {
         </p>
 
         {view === 'loading' && <Loading />}
-        {view === 'empty' && <Empty />}
+        {view === 'empty' && <Empty onGiveAccess={() => setAddOpen(true)} />}
         {view === 'error' && <Failed onRetry={() => setView('ready')} />}
         {view === 'denied' && <NoAccess />}
 
@@ -942,7 +1075,9 @@ export default function StaffAccess() {
               </ul>
               <div className="count-line">
                 <span>{people.length} with staff access</span>
-                <button className="btn-link">Give someone access</button>
+                <button className="btn-link" onClick={() => setAddOpen(true)}>
+                  Give someone access
+                </button>
               </div>
             </div>
 
@@ -950,12 +1085,20 @@ export default function StaffAccess() {
               key={selectedId}
               person={selected}
               viewerId={viewerId}
-              superAdminCount={superAdminCount}
+              people={people}
               onSave={(next) => setPeople((prev) => prev.map((p) => (p.id === next.id ? next : p)))}
             />
           </div>
         )}
       </div>
+
+      {addOpen ? (
+        <AddStaffDialog
+          people={people}
+          onClose={() => setAddOpen(false)}
+          onPromote={handlePromote}
+        />
+      ) : null}
     </div>
   );
 }

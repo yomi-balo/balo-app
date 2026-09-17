@@ -270,6 +270,9 @@ export const PLATFORM_CAPABILITIES = {
    * Granted to BOTH staff roles: it goes in `PLATFORM_STAFF_BUNDLE`. It confers nothing in
    * production — no reachable call site resolves it there, which is exactly the workspace-wide
    * single-consumer pin above, not an assertion made on trust.
+   *
+   * BAL-561's `PLATFORM_CAPABILITY_LABELS` names it for DISPLAY in this same file (no second
+   * namer); the Staff access page lists it with a dev-only note.
    */
   FAST_FORWARD_REQUEST: 'fast_forward_request',
   /**
@@ -289,16 +292,15 @@ export const PLATFORM_CAPABILITIES = {
    * write itself — or any other token on this axis — onto any staff row, so putting it in the
    * shared bundle would make every `admin` a latent `super_admin`. `admin` does not hold it.
    *
-   * ⚠ IT IS INERT IN THIS TICKET. BAL-560 ships the token, the column and the resolution path;
-   * BAL-561 ships the Staff access surface that resolves this token and writes the column.
-   * Nothing resolves it today, which is pinned as a fact rather than trusted — PIN E of
-   * `apps/web/src/invariants/platform-capability-single-resolution-point.test.ts` asserts that
-   * exactly ONE non-test file in the whole monorepo names the CONSTANT (its own definition, plus
-   * its `PLATFORM_CAPABILITY_SEAL_ORDER` slot below — a wire position, not a resolution, so it
-   * does not add a second namer), and exactly TWO name the wire value
-   * `'manage_staff_capabilities'` — this file and the CHECK's SQL literal in
-   * `packages/db/src/schema/users.ts`, which is a STORAGE rule rather than a resolution (see the
-   * next paragraph, and that pin's own docblock).
+   * ⚠ LIVE SINCE BAL-561. Resolved at exactly the four points PIN E pins in
+   * `apps/web/src/invariants/platform-capability-single-resolution-point.test.ts` — the
+   * definition (this file, alongside the role map, the seal slot below and the D7 label map,
+   * none of which adds a namer), the shared staff-access RULE module
+   * (`@balo/shared/authz/staff-access.ts`, the in-transaction actor re-check and the D2 floor),
+   * the Staff access page's server loader, and its Server Action gate. A fifth namer means a new
+   * place decides staff-management rights; review it before adding. The wire value is still named
+   * only HERE and by the CHECK's SQL literal in `packages/db/src/schema/users.ts`, which is a
+   * STORAGE rule rather than a resolution (see the next paragraph, and that pin's own docblock).
    *
    * ⚠⚠ **IT MAY APPEAR ONLY ON A `super_admin` ROW** (fix round 1, security F3; NARROWED in fix
    * round 3, R2). An override REPLACES the role bundle and is deliberately unclamped — it is
@@ -321,9 +323,10 @@ export const PLATFORM_CAPABILITIES = {
    * ⚠ THE RULE IS "ONLY ON A `super_admin` ROW", **NOT** "never in an override" — the blanket
    * form is incompatible with BAL-561's design. Switching a super_admin to a Custom override
    * pre-fills from the current role bundle, which for a `super_admin` INCLUDES this token, and
-   * BAL-561's floor rule 3 requires a sole super_admin to keep `manage_staff_capabilities` while
-   * remaining a super admin. A blanket refusal would leave a sole super_admin unable to switch to
-   * Custom at all, and would silently strip staff management from any other super_admin who did.
+   * BAL-561's staff-management floor (ADR-1035 §A1.9, D2) requires at least one live account to
+   * keep this token AND `VIEW_PLATFORM_ADMIN`, and a super_admin on a Custom list must be able to
+   * keep it. A blanket refusal would leave a sole super_admin unable to switch to Custom at all,
+   * and would silently strip staff management from any other super_admin who did.
    * The hazard is narrow: the token on a NON-super_admin row.
    */
   MANAGE_STAFF_CAPABILITIES: 'manage_staff_capabilities',
@@ -385,6 +388,153 @@ export const PLATFORM_CAPABILITIES = {
 } as const;
 
 export type PlatformCapability = (typeof PLATFORM_CAPABILITIES)[keyof typeof PLATFORM_CAPABILITIES];
+
+/**
+ * BAL-561 / D7 — display metadata for the platform-capability axis: the human NAME, the GROUP a
+ * capability renders under on the Staff access page, and an optional secondary NOTE. Lives
+ * directly below the axis definition it labels, so this file stays the ONE namer of every
+ * constant here (PIN E) — the map introduces no new namer for `MANAGE_STAFF_CAPABILITIES` (its
+ * second namer is the shared staff-access rule module) or for `FAST_FORWARD_REQUEST`.
+ *
+ * ⚠ KEYS ARE COMPUTED (`[PLATFORM_CAPABILITIES.X]`), NEVER STRING LITERALS. A literal wire-value
+ * key here would be a THIRD namer of the wire value — PIN E holds that to exactly two (this
+ * file's definition and the `users_platform_capabilities_staff_array` CHECK's SQL literal). See
+ * that pin's docblock in `apps/web/src/invariants/platform-capability-single-resolution-point
+ * .test.ts`.
+ *
+ * ⚠ COPY NAMES THE ACT, NEVER A HIDDEN VIEW (N3). No `name` or `note` claims an override hides a
+ * page, a nav entry or a lens that stays role-gated regardless — `platform-capability-labels
+ * .test.ts` pins this as a property over every entry. The one VIEW token, `VIEW_PLATFORM_ADMIN`,
+ * is genuinely override-aware (middleware + the admin layout gate); none of the others are.
+ */
+export type PlatformCapabilityGroup =
+  | 'project_requests'
+  | 'delivery'
+  | 'money'
+  | 'queues'
+  | 'platform';
+
+export interface PlatformCapabilityLabel {
+  readonly name: string;
+  readonly group: PlatformCapabilityGroup;
+  readonly note?: string;
+}
+
+/** Display order of the groups on the Staff access page. */
+export const PLATFORM_CAPABILITY_GROUPS: readonly {
+  readonly key: PlatformCapabilityGroup;
+  readonly label: string;
+}[] = [
+  { key: 'project_requests', label: 'Project requests' },
+  { key: 'delivery', label: 'Delivery and calls' },
+  { key: 'money', label: 'Money' },
+  { key: 'queues', label: 'Queues' },
+  { key: 'platform', label: 'Platform' },
+];
+
+/**
+ * Authored in DISPLAY order — the same order {@link platformCapabilityDisplayOrder} reproduces
+ * once grouped. Wording mirrors the design prototype (`.claude/design-references/staff-access
+ * .jsx`) where it already existed.
+ */
+export const PLATFORM_CAPABILITY_LABELS: Readonly<
+  Record<PlatformCapability, PlatformCapabilityLabel>
+> = {
+  [PLATFORM_CAPABILITIES.CLOSE_ANY_REQUEST]: {
+    name: 'Close any project request',
+    group: 'project_requests',
+  },
+  [PLATFORM_CAPABILITIES.ASSIGN_ANY_REQUEST_OWNER]: {
+    name: 'Assign a Balo owner to a request',
+    group: 'project_requests',
+  },
+  [PLATFORM_CAPABILITIES.VIEW_ANY_REQUEST_FILE]: {
+    name: 'Read every file on any request',
+    group: 'project_requests',
+  },
+  [PLATFORM_CAPABILITIES.MANAGE_INTERNAL_NOTES]: {
+    name: 'Read and write staff notes',
+    group: 'project_requests',
+  },
+  [PLATFORM_CAPABILITIES.DELETE_ANY_INTERNAL_NOTE]: {
+    name: "Delete someone else's staff note",
+    group: 'project_requests',
+  },
+  [PLATFORM_CAPABILITIES.MANAGE_ANY_REQUEST_SOURCING]: {
+    name: 'Find and invite experts on any request',
+    group: 'project_requests',
+  },
+  [PLATFORM_CAPABILITIES.MANAGE_ANY_KICKOFF_GATE]: {
+    name: 'Approve kickoff and start delivery on any request',
+    group: 'delivery',
+  },
+  [PLATFORM_CAPABILITIES.CANCEL_ANY_ENGAGEMENT]: {
+    name: 'Cancel any live engagement',
+    group: 'delivery',
+  },
+  [PLATFORM_CAPABILITIES.MANAGE_ANY_ENGAGEMENT_ACTION_ITEM]: {
+    name: 'Manage action items on any engagement',
+    group: 'delivery',
+  },
+  [PLATFORM_CAPABILITIES.CANCEL_ANY_MEETING]: {
+    name: 'Cancel any booked call',
+    group: 'delivery',
+  },
+  [PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES]: {
+    name: 'Set the Balo fee on a project',
+    group: 'money',
+  },
+  [PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES]: {
+    name: 'Create and manage promo codes',
+    group: 'money',
+  },
+  [PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS]: {
+    name: 'Close items in the alert queue',
+    group: 'queues',
+  },
+  [PLATFORM_CAPABILITIES.REVIEW_EXPERT_APPLICATIONS]: {
+    name: 'Approve or decline expert applications',
+    group: 'queues',
+  },
+  [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN]: {
+    name: 'Open the Balo admin area',
+    group: 'platform',
+  },
+  [PLATFORM_CAPABILITIES.REDRIVE_JOB]: {
+    name: 'Re-run a stuck recording or transcript job',
+    group: 'platform',
+  },
+  [PLATFORM_CAPABILITIES.IMPERSONATE_USER]: {
+    name: 'Use the product as another person',
+    group: 'platform',
+  },
+  [PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES]: {
+    name: 'Change what other staff can do',
+    group: 'platform',
+  },
+  [PLATFORM_CAPABILITIES.FAST_FORWARD_REQUEST]: {
+    name: 'Fast-forward a request for testing',
+    group: 'platform',
+    note: 'Only works in development. Does nothing in production.',
+  },
+};
+
+/** Every capability in `group`, in the label map's authored (display) order. No cast: the guard narrows. */
+export function platformCapabilityGroupMembers(
+  group: PlatformCapabilityGroup
+): PlatformCapability[] {
+  return Object.entries(PLATFORM_CAPABILITY_LABELS)
+    .filter((entry): entry is [PlatformCapability, PlatformCapabilityLabel] => {
+      const [key, label] = entry;
+      return isPlatformCapability(key) && label.group === group;
+    })
+    .map(([key]) => key);
+}
+
+/** The full axis, grouped and ordered exactly as the Staff access page renders it. */
+export function platformCapabilityDisplayOrder(): PlatformCapability[] {
+  return PLATFORM_CAPABILITY_GROUPS.flatMap((group) => platformCapabilityGroupMembers(group.key));
+}
 
 /**
  * The platform roles that ARE Balo staff — exactly the keys of `PLATFORM_ROLE_CAPABILITIES`
@@ -534,14 +684,17 @@ function normalizePlatformOverride(
  * `(platform_role, platform_capabilities)` (ADR-1029). No call site anywhere reads
  * `PLATFORM_ROLE_CAPABILITIES` or `users.platform_capabilities` itself.
  *
- * ⚠ IT HAS **ZERO PRODUCTION CALL SITES**, AND THAT IS STRONGER THAN "THE SINGLE INTERPRETATION
- * POINT", NOT WEAKER (fix round 3, R9 — the claim previously read the other way and was
- * imprecise). Every gate in the product reaches this rule through `platformActorHasCapability`
- * below, which is the SET-MEMBERSHIP question the gates actually ask; this function answers the
- * WHOLE-SET question, which only `platformActorHasCapability` and the tests need. Exporting it is
- * what lets `resolve-platform-capabilities.test.ts` pin the full role × override matrix directly
- * rather than inferring it one token at a time. If a production caller ever appears, it wants a
- * capability CHECK and should use the predicate.
+ * ⚠ THE GATES STILL USE THE PREDICATE. Every gate in the product reaches this rule through
+ * `platformActorHasCapability` below, which is the SET-MEMBERSHIP question the gates actually
+ * ask; this function answers the WHOLE-SET question. Its production callers are the Staff access
+ * page's WHOLE-SET readers (`apps/web/src/app/(dashboard)/admin/staff-access/_lib/staff-access-
+ * form.ts`: the Custom pre-fill with `(role, null)` per D9, the resolved row state, the count line
+ * and the diff), `authz/staff-access.ts` (F1's `accountMayGainAccess` gain check — did the WHOLE
+ * SET grow, compared before/after, never a per-token loop) plus `authz/staff-access.test.ts` —
+ * those need the SET, not a membership answer. Exporting it is also what lets
+ * `resolve-platform-capabilities.test.ts` pin the full role × override matrix directly rather than
+ * inferring it one token at a time. If a production caller wants a CHECK rather than the whole
+ * set, it should use the predicate — that rule stands.
  *
  * ⚠ TAKES TWO PRIMITIVES, NOT "THE USER". The ticket says "a sibling that takes the user"; that
  * shape lives in the two APP SEAMS (`apps/web/src/lib/authz/platform.ts`,

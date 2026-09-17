@@ -1,6 +1,13 @@
 import { isPlatformAdminRole, personDisplayName, personWithOrgLabel } from '../parties';
 import type { ExpertSearchabilitySource } from '../experts/checklist';
 import type { LookupEntityType } from './types';
+// BAL-561 — the staff-access rule module. Timeline is INSIDE `packages/shared`, so it reaches
+// this directly rather than through the `@balo/shared/authz` barrel (the sibling subpath rule
+// stated in the build instructions). `STAFF_ACCESS_AUDIT_ACTIONS` is the ONE definition of the
+// two wire strings a Staff access save writes — reading the constant here, never a literal, is
+// what keeps `platform_capabilities` at exactly two namers (PIN C2).
+import { PLATFORM_ROLE_LABELS, STAFF_ACCESS_AUDIT_ACTIONS } from '../authz/staff-access';
+import type { PlatformRole } from '../parties';
 
 /**
  * BAL-555 — the Lookup Timeline's plain-words layer.
@@ -90,6 +97,27 @@ function readString(m: Record<string, unknown>, key: string, fallback = 'unknown
 function readNumber(m: Record<string, unknown>, key: string, fallback = 0): number {
   const value = m[key];
   return typeof value === 'number' ? value : fallback;
+}
+
+/**
+ * BAL-561 — `PLATFORM_ROLE_LABELS[role]`, guarded: an unknown/retired role string falls back to
+ * itself rather than throwing. `Object.hasOwn`, never a bare index (the same class of defect
+ * `nav-registry.ts`'s `exactCrumbLabelFor` guards against) — a role read from an audit row's
+ * jsonb metadata is `unknown`-shaped data, never trusted as a `PlatformRole` without the check.
+ */
+function roleLabel(role: string): string {
+  if (!Object.hasOwn(PLATFORM_ROLE_LABELS, role)) return role;
+  return PLATFORM_ROLE_LABELS[role as PlatformRole];
+}
+
+/** `m.to`'s length for the CUSTOM_LIST_SET sentence — 0 for any non-array (defensive, unknown jsonb). */
+function customListLength(to: unknown): number {
+  return Array.isArray(to) ? to.length : 0;
+}
+
+/** F6 (R5) — "1 capability" singular, "N capabilities" otherwise (0 included). */
+function capabilityCountPhrase(count: number): string {
+  return count === 1 ? '1 capability' : `${count} capabilities`;
 }
 
 /** `reason` trimmed to 140 chars — staff free text, staff-only surface. */
@@ -231,6 +259,17 @@ export const AUDIT_ACTION_SENTENCES: Record<string, (m: Record<string, unknown>)
   'engagement.case_closed': () => 'Case closed',
 
   'engagement_milestone.reordered': () => 'Milestones reordered',
+
+  // BAL-561 — computed keys from `STAFF_ACCESS_AUDIT_ACTIONS`, never the raw wire strings: a
+  // literal `'user.platform_capabilities_set'` here would be a THIRD namer of the
+  // `platform_capabilities` substring, which PIN C2 holds to exactly two (the schema column and
+  // the shared rule module's own constant definition).
+  [STAFF_ACCESS_AUDIT_ACTIONS.ROLE_CHANGED]: (m) =>
+    `Staff role changed from ${roleLabel(readString(m, 'from'))} to ${roleLabel(readString(m, 'to'))}`,
+  [STAFF_ACCESS_AUDIT_ACTIONS.CUSTOM_LIST_SET]: (m) =>
+    m.to === null
+      ? 'Custom staff access removed — follows the role again'
+      : `Custom staff access set (${capabilityCountPhrase(customListLength(m.to))})`,
 };
 
 /**

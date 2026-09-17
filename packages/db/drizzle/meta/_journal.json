@@ -673,6 +673,13 @@
       "when": 1789586032570,
       "tag": "0095_bal489_guest_conversion_linkage",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1789611799271,
+      "tag": "0096_bal561_users_email_lower_unique",
+      "breakpoints": true
     }
   ]
 }

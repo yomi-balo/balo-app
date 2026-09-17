@@ -23,8 +23,8 @@ export interface SessionUser {
   //
   // ⚠ ABSENT MEANS "NO OVERRIDE — INHERIT THE ROLE BUNDLE" (D4). Encoded as the field being
   // missing from the sealed payload, never as an explicit `null`: NULL is the state of every
-  // row until BAL-561 ships a writer, and an absent field costs ZERO bytes. Sealing the
-  // RESOLVED set instead would cost hundreds of bytes on EVERY staff session even with no
+  // row unless a Staff access custom list is set, and an absent field costs ZERO bytes. Sealing
+  // the RESOLVED set instead would cost hundreds of bytes on EVERY staff session even with no
   // override.
   //
   // ⚠ OPTIONAL FOR A SECOND REASON: seven-day cookies sealed before BAL-560 carry it not at

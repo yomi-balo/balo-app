@@ -339,3 +339,57 @@ describe('isPlatformCapability', () => {
     expect(isPlatformCapability(value)).toBe(false);
   });
 });
+
+describe('platformActorHasCapability === resolvePlatformCapabilities(...).includes(...) — the direct pin', () => {
+  /**
+   * BAL-561 — `staff-access.ts`'s header claims
+   * `resolvePlatformCapabilities(role, override).includes(token) === platformActorHasCapability(
+   * role, override, token)` for every input, and cites the NULL-only comparison above as
+   * (indirect) support. That comparison never calls `platformActorHasCapability` with a non-null
+   * override at all, so the general claim — which the whole-set gain check (F1's
+   * `accountMayGainAccess`) and the per-token gates rely on agreeing forever — had no direct
+   * test. This is that test: EVERY role × EVERY stored-override shape × EVERY token on the axis.
+   */
+  const ROLES = ['user', 'admin', 'super_admin', 'nonsense_role'] as const;
+
+  const STORED_OVERRIDES: readonly { readonly label: string; readonly stored: unknown }[] = [
+    { label: 'null (inherit)', stored: null },
+    { label: '[] (holds nothing)', stored: [] },
+    { label: 'a subset', stored: SUBSET },
+    { label: 'the full axis', stored: FULL_AXIS },
+    {
+      label: 'an unknown token plus a duplicate',
+      stored: [
+        PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
+        'retired_token',
+        PLATFORM_CAPABILITIES.MANAGE_PLATFORM_FEES,
+      ],
+    },
+    { label: 'a non-array scalar', stored: 'x' },
+  ];
+
+  it('agrees for every role × stored-override shape × token (4 × 6 × 19 = 456 checks)', () => {
+    // Non-vacuity: the fixture sizes are what the product below assumes, not a shrunken stand-in.
+    expect(ROLES).toHaveLength(4);
+    expect(STORED_OVERRIDES).toHaveLength(6);
+    expect(EVERY_TOKEN).toHaveLength(19);
+
+    let iterations = 0;
+    for (const role of ROLES) {
+      for (const { label, stored } of STORED_OVERRIDES) {
+        const resolved = resolvePlatformCapabilities(role, stored);
+        for (const token of EVERY_TOKEN) {
+          iterations += 1;
+          expect(
+            platformActorHasCapability(role, stored, token),
+            `${role} × ${label} × ${token}`
+          ).toBe(resolved.includes(token));
+        }
+      }
+    }
+
+    // The loop actually ran the claimed number of times — not zero, not a partial sweep.
+    expect(iterations).toBe(ROLES.length * STORED_OVERRIDES.length * EVERY_TOKEN.length);
+    expect(iterations).toBe(456);
+  });
+});

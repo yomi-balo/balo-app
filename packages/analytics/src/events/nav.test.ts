@@ -39,12 +39,13 @@ describe('NAV_ITEM_KEYS', () => {
       'admin_catalogue',
       'admin_lookup',
       'admin_health',
+      'admin_staff_access',
     ]);
   });
 
-  it('has 18 entries with no duplicates', () => {
-    expect(NAV_ITEM_KEYS.length).toBe(18);
-    expect(new Set(NAV_ITEM_KEYS).size).toBe(18);
+  it('has 19 entries with no duplicates', () => {
+    expect(NAV_ITEM_KEYS.length).toBe(19);
+    expect(new Set(NAV_ITEM_KEYS).size).toBe(19);
   });
 });
 

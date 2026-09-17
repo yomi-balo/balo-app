@@ -1,7 +1,19 @@
-import { eq, and, asc, isNull, inArray, gt, lte } from 'drizzle-orm';
+import { eq, and, or, asc, isNull, inArray, gt, lte, sql } from 'drizzle-orm';
 // BAL-541 — the ONE place the Balo-staff role set is spelled (ADR-1029). `listPlatformStaff`
 // asks it who is eligible to be named a request owner; it never lists the roles itself.
-import { PLATFORM_STAFF_ROLES } from '@balo/shared/authz';
+// BAL-561 — the staff-access RULE MODULE. `saveStaffAccess` locks, hands the locked rows to
+// `evaluateLockedStaffAccessSave`, and writes; every rule lives there, never as SQL here.
+import {
+  PLATFORM_STAFF_ROLES,
+  STAFF_ACCESS_AUDIT_ACTIONS,
+  evaluateLockedStaffAccessSave,
+  precheckStaffAccessSave,
+  storedCustomListOf,
+  userRowIsLive,
+  type StaffAccessPerson,
+  type StaffAccessSaveRefusal,
+  type StaffAccessSaveRequest,
+} from '@balo/shared/authz';
 import { db } from '../client';
 import {
   users,
@@ -22,6 +34,72 @@ import type { DbExecutor } from './_shared/db-executor';
  * (single source of truth) — same house style as the A6 proposal enum types.
  */
 export type PlatformRole = User['platformRole'];
+
+/** BAL-561 — one Staff access save. `actorUserId` comes from the SESSION, never the payload. */
+export type SaveStaffAccessInput = StaffAccessSaveRequest;
+
+/**
+ * BAL-561 — a Staff access save's outcome. A business refusal is a VALUE, never a throw (the
+ * `companiesRepository.setBillingEmail` posture); only a genuine database fault throws.
+ */
+export type SaveStaffAccessResult =
+  | {
+      readonly outcome: 'saved';
+      readonly roleChanged: boolean;
+      readonly customListChanged: boolean;
+      /** The audit rows written in the save's transaction: role row first, then list row. */
+      readonly auditEventIds: readonly string[];
+    }
+  | { readonly outcome: 'refused'; readonly reason: StaffAccessSaveRefusal };
+
+/**
+ * BAL-561 — the EXPLICIT projection every Staff access read and the save's lock read select.
+ * Never a relational `with:` hydration (memory `reference_drizzle_with_hydration_leaks_secrets`):
+ * `workosId` and `phone` cannot reach the page because this object cannot select them.
+ */
+const STAFF_ACCESS_ROW = {
+  id: users.id,
+  firstName: users.firstName,
+  lastName: users.lastName,
+  email: users.email,
+  emailVerified: users.emailVerified,
+  platformRole: users.platformRole,
+  platformCapabilities: users.platformCapabilities,
+  status: users.status,
+  deletedAt: users.deletedAt,
+} as const;
+
+interface StaffAccessRow {
+  readonly id: string;
+  readonly firstName: string | null;
+  readonly lastName: string | null;
+  readonly email: string;
+  /** F1 (S1/S2) — read alongside `isLive` so `accountMayGainAccess` can be evaluated on this row. */
+  readonly emailVerified: boolean;
+  readonly platformRole: PlatformRole;
+  /** jsonb — UNKNOWN-shaped whatever `$type` claims; normalised by `storedCustomListOf`. */
+  readonly platformCapabilities: unknown;
+  readonly status: string;
+  readonly deletedAt: Date | null;
+}
+
+/**
+ * Row → the shape every Staff access consumer sees: `role` and a NORMALISED `customList`, never
+ * the column names. The web surface therefore never holds a raw stored override (PIN C in
+ * `platform-capability-single-resolution-point.test.ts` measures exactly that).
+ */
+function toStaffAccessPerson(row: StaffAccessRow): StaffAccessPerson {
+  return {
+    id: row.id,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    email: row.email,
+    emailVerified: row.emailVerified,
+    role: row.platformRole,
+    customList: storedCustomListOf(row.platformRole, row.platformCapabilities),
+    isLive: userRowIsLive(row),
+  };
+}
 
 export const usersRepository = {
   /**
@@ -214,6 +292,246 @@ export const usersRepository = {
         )
       )
       .orderBy(asc(users.firstName), asc(users.lastName));
+  },
+
+  /**
+   * BAL-561 — THE STAFF ACCESS ROSTER: every non-deleted account holding a staff role, with its
+   * normalised access.
+   *
+   * ⚠ A NEW METHOD, NOT A WIDENING OF {@link usersRepository.listPlatformStaff} — that one's
+   * docblock asks for exactly this, and its owner picker needs neither `email` nor access.
+   *
+   * ⚠ SUSPENDED STAFF ARE INCLUDED, with `isLive: false`. The save transaction's floor counts
+   * them as non-holders, and the page's floor preview must see the same set to agree with it; the
+   * UI marks them. Soft-deleted accounts are excluded (no Staff access action can reach one).
+   *
+   * Ordered by first name, last name, email, then id — total, so the roster is stable between
+   * renders even for two people with the same name. No index serves `platform_role`, exactly like
+   * `findIdsByPlatformRoles`; this is a rare admin read over a small set.
+   */
+  listStaffAccessRoster: async (): Promise<StaffAccessPerson[]> => {
+    const rows = await db
+      .select(STAFF_ACCESS_ROW)
+      .from(users)
+      .where(
+        and(
+          inArray(users.platformRole, [...PLATFORM_STAFF_ROLES] as PlatformRole[]),
+          isNull(users.deletedAt)
+        )
+      )
+      .orderBy(asc(users.firstName), asc(users.lastName), asc(users.email), asc(users.id));
+    return rows.map(toStaffAccessPerson);
+  },
+
+  /**
+   * BAL-561 (ruling 3) — find the ONE live, active account with exactly this email, compared
+   * case-insensitively, for "Give someone access". `undefined` for anything else.
+   *
+   * ⚠⚠ `LIMIT 1` IS SAFE ONLY BECAUSE OF `users_email_lower_unique` (D1, P2). That partial unique
+   * index on `lower(email) WHERE deleted_at IS NULL` makes "at most one live account per
+   * lower(email)" true by construction, so there is no second row for `LIMIT 1` to hide and no
+   * two-match refusal is needed. It is pinned by the 23505 case in
+   * `users.staff-access.integration.test.ts`. Drop the index and this query could promote an
+   * arbitrary one of two case-variant accounts — a security write landing on the wrong person.
+   *
+   * CALLER CONTRACT: pass the input TRIMMED and do NOT lowercase it in JavaScript. `lower()` on
+   * both sides in Postgres is exactly the index expression, so this lookup and the index agree on
+   * what "the same email" means; a JS `toLowerCase()` folds some characters differently (the
+   * mismatch `meeting-guests.ts` guards against). Equality only — no partial or prefix match.
+   *
+   * ⚠ SUSPENDED ACCOUNTS ARE EXCLUDED (`status = 'active'`), as are soft-deleted ones: both get the
+   * same `undefined` a miss does, so the lookup reveals nothing beyond "a live account exists".
+   * The action that calls this is live-gated for that reason.
+   *
+   * ⚠ UNVERIFIED EMAILS ARE EXCLUDED TOO (F1 / S1, S2), for the SAME generic-miss reason: staff
+   * access is the most privileged email-based grant in the product, and every OTHER email-based
+   * grant (`run-domain-join.ts`, `resolve-actionable-company.ts`, `resolve-identity.ts`) already
+   * refuses an unverified email. This lookup is how a NEW promotion is found, so it is the STRONGER
+   * of the two F1 checks — `saveStaffAccess`'s `accountMayGainAccess` is the backstop for a
+   * candidate whose email was verified at lookup time but was un-verified (or suspended) by the
+   * time the confirm dialog's save actually lands. An unverified account creates NO new oracle: it
+   * reads exactly like a miss.
+   *
+   * Explicit projection (`STAFF_ACCESS_ROW`) — never `findByEmail`, which is case-sensitive and
+   * returns the whole row, `workosId` and `phone` included.
+   */
+  findStaffCandidateByEmail: async (email: string): Promise<StaffAccessPerson | undefined> => {
+    const [row] = await db
+      .select(STAFF_ACCESS_ROW)
+      .from(users)
+      .where(
+        and(
+          sql`lower(${users.email}) = lower(${email})`,
+          isNull(users.deletedAt),
+          eq(users.status, 'active'),
+          eq(users.emailVerified, true)
+        )
+      )
+      .limit(1);
+    return row === undefined ? undefined : toStaffAccessPerson(row);
+  },
+
+  /**
+   * BAL-561 — SAVE ONE PERSON'S STAFF ACCESS: their `platform_role` and their custom list
+   * (`platform_capabilities`) together, with the audit rows, in ONE transaction — or nothing.
+   *
+   * ⚠⚠ THE ONE PRODUCTION WRITER OF BOTH COLUMNS. Every production change to either column goes
+   * through here. (The generic {@link usersRepository.update} can still set them; its only such
+   * caller is the secret-gated E2E test-login route, pre-flight N1.)
+   *
+   * ⚠ F1 (S1 MEDIUM / S2 LOW) — A SAVE MAY ONLY *GRANT* A CAPABILITY TO A LIVE, EMAIL-VERIFIED
+   * TARGET. `evaluateLockedStaffAccessSave` (`@balo/shared/authz`) computes the target's resolved
+   * set before and after the draft and, if the draft ADDS anything, requires
+   * `accountMayGainAccess(target)` — the same bar every other email-based grant in the product
+   * already holds (`run-domain-join.ts`, `resolve-actionable-company.ts`, `resolve-identity.ts`).
+   * A PURE REDUCTION is never blocked by this: a suspended or unverified staff member can still be
+   * demoted or trimmed. This closes a crafted-POST path where any `targetUserId` could be promoted
+   * regardless of its live `status` — the api does not read `status` today (BAL-568), so such a
+   * promotion would have taken effect there immediately.
+   *
+   * Never throws for a business outcome: a refusal is `{ outcome: 'refused', reason }`. A real
+   * database fault throws and the transaction rolls back. `exec` follows the
+   * `reschedule-proposals.ts` precedent — a `Database` gets a real transaction, a transaction
+   * handle gets a SAVEPOINT — which is how the concurrency suite drives it on its own connections.
+   *
+   * ORDER, and why each step sits where it does:
+   *   1. `precheckStaffAccessSave` — synchronous, BEFORE the transaction: D3 refuses EVERY save on
+   *      the actor's own record (self-reduction AND self-escalation), and the drafted pair is
+   *      validated against the storage CHECK so a bad draft is a named refusal, never a raw 23514
+   *      that would abort a caller's transaction (N7). No `await` precedes the transaction.
+   *   2. LOCK every staff row + the target + the actor, `FOR NO KEY UPDATE`, ordered by id.
+   *   3. `evaluateLockedStaffAccessSave` on the LOCKED rows, through the shared resolver — the
+   *      actor re-check (M2/D6), the stale before-state check (D6), no-op, the F1 grant-eligibility
+   *      check (`target_ineligible` — a live, email-verified target only, and only when the draft
+   *      GAINS a capability), and the floor (D2), in that order. There is NO SQL copy of any rule
+   *      (ADR-1029).
+   *   4. ONE `UPDATE` writing role AND list — the CHECK's pair obligation (a role change over a
+   *      list must clear or restate it in the same statement). A `null` list stores SQL NULL.
+   *   5. The audit rows in the same transaction (ADR-1030, the `relinkWorkosId` shape): the
+   *      role row (`{ from, to }` roles) first, then the list row (`{ from, to }` lists, `null` =
+   *      follows the role). A role move whose list stays `null` writes only the role row.
+   *
+   * ⚠ THE LOCK SET IS A DELIBERATE SUPERSET. D6 names the target plus every `super_admin` row —
+   * the only rows that can hold `MANAGE_STAFF_CAPABILITIES` (the CHECK keeps it off every other
+   * row's list). Locking every STAFF row plus the target and the actor covers that set without a
+   * role literal in `@balo/db` and without depending on the CHECK staying exactly as written, and
+   * it costs nothing: the staff set is small and this is a rare admin write. Deleted rows are not
+   * filtered out of the lock read; they are locked and then fail liveness.
+   *
+   * ⚠⚠ `FOR NO KEY UPDATE`, NOT `FOR UPDATE` (P1). Dozens of tables FK `users.id`, and Postgres's
+   * RI trigger takes `FOR KEY SHARE` on the parent row for every child insert. `FOR UPDATE`
+   * conflicts with `FOR KEY SHARE`, so holding it on every staff row would stall every audit
+   * event, internal note or owner assignment naming ANY staff member for the life of a save — and
+   * open a deadlock path with a transaction that key-shares two staff rows in the other order.
+   * `FOR NO KEY UPDATE` conflicts with ITSELF, so two saves still serialise exactly as D6 and
+   * ruling 2 require, and it is the same strength the following non-key `UPDATE` takes. The
+   * ticket's "FOR UPDATE" wording meant serialisation, which is preserved. Precedent and full
+   * argument: `reviews.concurrency.integration.test.ts`. Both halves are pinned by
+   * `users.staff-access.concurrency.integration.test.ts`.
+   *
+   * ⚠ ORDERED BY ID SO SAVES CANNOT DEADLOCK. Postgres locks the rows of a `SELECT … ORDER BY …
+   * FOR …` in sort order, so every saver acquires the rows it shares with another saver in the
+   * same global order. Every other writer to these rows is a single-row `UPDATE`.
+   *
+   * ⚠ READ COMMITTED + EvalPlanQual — WHAT A BLOCKED SAVE SEES WHEN IT WAKES. The lock read's rows
+   * come from its snapshot; a row a concurrent winner CHANGED is re-read at its committed version
+   * and its predicate re-checked, so the loser evaluates the winner's committed state (that is what
+   * makes the floor and the actor re-check race-safe). Two consequences, both in the SAFE
+   * direction because both can only UNDER-count floor holders, never over-count them:
+   *   · a row the winner moved OUT of the staff set (demoted to `user`) drops out of the scan —
+   *     and a `user` row holds nothing anyway;
+   *   · a row the winner moved INTO the staff set (a PROMOTION committed while this save waited)
+   *     is NOT added, because it did not match in the snapshot. So a demotion racing the promotion
+   *     of a new holder may be refused with `floor_violation` even though the promotion committed
+   *     first. Refusing is safe, and a retry sees the new holder.
+   *
+   * ⚠ NOT COVERED HERE, deliberately (out of scope, pre-flight N5): soft-deleting the last floor
+   * holder through some other path (no staff soft-delete path exists today), and a demoted person
+   * staying named in `project_requests.balo_owner_user_id`.
+   */
+  saveStaffAccess: async (
+    input: SaveStaffAccessInput,
+    exec: DbExecutor = db
+  ): Promise<SaveStaffAccessResult> => {
+    const precheck = precheckStaffAccessSave(input);
+    if (!precheck.ok) return { outcome: 'refused', reason: precheck.reason };
+
+    return exec.transaction(async (tx): Promise<SaveStaffAccessResult> => {
+      // ── 2. LOCK — before anything is read for evaluation. See the ⚠⚠ above on the strength.
+      const rows = await tx
+        .select(STAFF_ACCESS_ROW)
+        .from(users)
+        .where(
+          or(
+            inArray(users.id, [input.actorUserId, input.targetUserId]),
+            inArray(users.platformRole, [...PLATFORM_STAFF_ROLES] as PlatformRole[])
+          )
+        )
+        .orderBy(asc(users.id))
+        .for('no key update');
+
+      // ── 3. EVALUATE on the locked rows. A missing target is detected from `accounts`.
+      const targetRow = rows.find((row) => row.id === input.targetUserId);
+      const verdict = evaluateLockedStaffAccessSave(input, precheck, {
+        accounts: rows.map(toStaffAccessPerson),
+        targetIsDeleted: targetRow !== undefined && targetRow.deletedAt !== null,
+      });
+      if (!verdict.ok) return { outcome: 'refused', reason: verdict.reason };
+
+      // ── 4. WRITE THE PAIR in one statement. `after.customList` is canonical and validated, so
+      // the CHECK cannot fire here (N7).
+      const { before, after } = verdict;
+      const [updated] = await tx
+        .update(users)
+        .set({
+          platformRole: after.role,
+          platformCapabilities: after.customList === null ? null : [...after.customList],
+          updatedAt: new Date(),
+        })
+        .where(and(eq(users.id, input.targetUserId), isNull(users.deletedAt)))
+        .returning({ id: users.id });
+      if (updated === undefined) {
+        // Unreachable while the row lock is held (the target was read live under it). Throwing
+        // rolls the transaction back rather than auditing a change that did not happen.
+        throw new Error('saveStaffAccess: target row vanished under lock');
+      }
+
+      // ── 5. AUDIT in the same transaction: role row first, then list row.
+      const auditEventIds: string[] = [];
+      if (verdict.roleChanged) {
+        const row = await auditEventsRepository.record(
+          {
+            actorUserId: input.actorUserId,
+            action: STAFF_ACCESS_AUDIT_ACTIONS.ROLE_CHANGED,
+            entityType: 'user',
+            entityId: input.targetUserId,
+            metadata: { from: before.role, to: after.role },
+          },
+          tx
+        );
+        auditEventIds.push(row.id);
+      }
+      if (verdict.customListChanged) {
+        const row = await auditEventsRepository.record(
+          {
+            actorUserId: input.actorUserId,
+            action: STAFF_ACCESS_AUDIT_ACTIONS.CUSTOM_LIST_SET,
+            entityType: 'user',
+            entityId: input.targetUserId,
+            metadata: { from: before.customList, to: after.customList },
+          },
+          tx
+        );
+        auditEventIds.push(row.id);
+      }
+
+      return {
+        outcome: 'saved',
+        roleChanged: verdict.roleChanged,
+        customListChanged: verdict.customListChanged,
+        auditEventIds,
+      };
+    });
   },
 
   /**

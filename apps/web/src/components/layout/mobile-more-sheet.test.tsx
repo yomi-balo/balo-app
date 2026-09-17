@@ -175,7 +175,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
     });
   });
 
-  it('BAL-534/BAL-548/BAL-551/BAL-549/BAL-550: the seven admin rows appear for a staff context, after the member rows, in registry order', () => {
+  it('BAL-534/BAL-548/BAL-551/BAL-549/BAL-550/BAL-561: the eight admin rows appear for a staff context, after the member rows, in registry order', () => {
     renderSheet(buildSidebarValue({ workspaceType: 'company', canManage: false, isStaff: true }));
     expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual([
       '/projects',
@@ -188,6 +188,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       '/admin/catalogue',
       '/admin/health/capture',
       '/admin/lookup',
+      '/admin/staff-access',
     ]);
   });
 
@@ -196,6 +197,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
     const hrefs = screen.getAllByRole('link').map((l) => l.getAttribute('href'));
     expect(hrefs).not.toContain('/admin/catalogue');
     expect(hrefs).not.toContain('/admin/lookup');
+    expect(hrefs).not.toContain('/admin/staff-access');
     expect(hrefs).not.toContain('/promo-codes');
     expect(hrefs).not.toContain('/admin');
   });
@@ -216,6 +218,7 @@ describe('MobileMoreSheet (BAL-501)', () => {
       '/admin/catalogue',
       '/admin/health/capture',
       '/admin/lookup',
+      '/admin/staff-access',
     ]);
   });
 

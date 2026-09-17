@@ -11,8 +11,8 @@ import { LookupSectionRetryNotice } from './lookup-section-retry-notice';
  * BAL-551 — the drill-in's Money section, credit sessions only. Fetch-on-select via the
  * `fetchLookupMoneyBlockAction` Server Action, ALL-OR-NOTHING (B5): there is no `canSeeFees`
  * prop, no per-row lock line, and no fee-less projection. BAL-560 made a fee-blind staff viewer
- * EXPRESSIBLE (the `users.platform_capabilities` override and its resolution path); BAL-561 is
- * where one becomes WRITABLE, and therefore reachable. Neither is this ticket.
+ * EXPRESSIBLE (the `users.platform_capabilities` override and its resolution path); it became
+ * WRITABLE, and therefore reachable, in BAL-561. Neither is this ticket.
  *
  * Rendered as a TAB when the drill-in has two (credit sessions), and never alone: a one-tab
  * tab bar is still a defect, so every other type renders its Timeline as a labelled SECTION

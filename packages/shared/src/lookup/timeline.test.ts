@@ -239,6 +239,39 @@ describe('describeAuditEvent — mapped actions', () => {
       metadata: {},
       expected: 'Milestones reordered',
     },
+    // BAL-561 — the two staff-access audit sentences.
+    {
+      action: 'user.platform_role_changed',
+      metadata: { from: 'admin', to: 'super_admin' },
+      expected: 'Staff role changed from Admin to Super admin',
+    },
+    {
+      action: 'user.platform_role_changed',
+      metadata: { from: 'admin', to: 'user' },
+      expected: 'Staff role changed from Admin to No staff access',
+    },
+    {
+      // An unmapped/retired role string falls back to itself rather than throwing.
+      action: 'user.platform_role_changed',
+      metadata: { from: 'admin', to: 'retired_role' },
+      expected: 'Staff role changed from Admin to retired_role',
+    },
+    {
+      // F6 (R5) — singular: "1 capability", never "1 capabilities".
+      action: 'user.platform_capabilities_set',
+      metadata: { from: null, to: ['manage_promo_codes'] },
+      expected: 'Custom staff access set (1 capability)',
+    },
+    {
+      action: 'user.platform_capabilities_set',
+      metadata: { from: null, to: ['manage_promo_codes', 'resolve_admin_alerts'] },
+      expected: 'Custom staff access set (2 capabilities)',
+    },
+    {
+      action: 'user.platform_capabilities_set',
+      metadata: { from: ['manage_promo_codes'], to: null },
+      expected: 'Custom staff access removed — follows the role again',
+    },
   ];
 
   it.each(cases)('$action', ({ action, metadata, expected }) => {
