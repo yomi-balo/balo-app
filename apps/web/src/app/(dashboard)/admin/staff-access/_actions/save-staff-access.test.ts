@@ -77,6 +77,7 @@ describe('saveStaffAccessAction', () => {
     'stale',
     'no_change',
     'target_ineligible',
+    'grant_exceeds_actor',
     'floor_violation',
   ];
 

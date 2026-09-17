@@ -508,6 +508,63 @@ describe('usersRepository.saveStaffAccess — refusals (reason + row unchanged +
     ).resolves.toMatchObject({ outcome: 'saved', roleChanged: true });
     expect((await storedAccess(targetUserId)).platformRole).toBe('admin');
   });
+
+  it('C3 target_ineligible: a SUSPENDED user and an UNVERIFIED user moved to admin with customList: [] — resolved [] both sides', async () => {
+    const actorUserId = await staff('super_admin');
+    const suspended = await staff('user', { status: 'suspended' });
+    const unverified = await staff('user', { emailVerified: false });
+
+    for (const targetUserId of [suspended, unverified]) {
+      await expectRefused(
+        {
+          actorUserId,
+          targetUserId,
+          expected: { role: 'user', customList: null },
+          next: { role: 'admin', customList: [] },
+        },
+        'target_ineligible',
+        { role: 'user', customList: null }
+      );
+    }
+  });
+
+  it('C4 grant_exceeds_actor: an actor restricted to MANAGE_STAFF_CAPABILITIES cannot grant IMPERSONATE_USER', async () => {
+    const actorUserId = await staff('super_admin', {
+      platformCapabilities: [CAP.MANAGE_STAFF_CAPABILITIES],
+    });
+    const targetUserId = await staff('super_admin', { platformCapabilities: [] });
+
+    await expectRefused(
+      {
+        actorUserId,
+        targetUserId,
+        expected: { role: 'super_admin', customList: [] },
+        next: { role: 'super_admin', customList: [CAP.IMPERSONATE_USER] },
+      },
+      'grant_exceeds_actor',
+      { role: 'super_admin', customList: [] }
+    );
+  });
+
+  it('C4: the SAME restricted actor CAN grant MANAGE_STAFF_CAPABILITIES — a ceiling, not a blanket freeze', async () => {
+    const actorUserId = await staff('super_admin', {
+      platformCapabilities: [CAP.MANAGE_STAFF_CAPABILITIES],
+    });
+    const targetUserId = await staff('super_admin', { platformCapabilities: [] });
+    await staff('super_admin'); // bystander floor holder — neither actor nor target holds it
+
+    await expect(
+      usersRepository.saveStaffAccess({
+        actorUserId,
+        targetUserId,
+        expected: { role: 'super_admin', customList: [] },
+        next: { role: 'super_admin', customList: [CAP.MANAGE_STAFF_CAPABILITIES] },
+      })
+    ).resolves.toMatchObject({ outcome: 'saved', customListChanged: true });
+    expect((await storedAccess(targetUserId)).platformCapabilities).toEqual([
+      CAP.MANAGE_STAFF_CAPABILITIES,
+    ]);
+  });
 });
 
 describe('usersRepository.saveStaffAccess — the D2 floor, calling the mutator directly', () => {

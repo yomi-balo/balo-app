@@ -133,13 +133,13 @@ export type {
 } from './platform';
 
 // BAL-561 — the STAFF-ACCESS RULE MODULE: the actor re-check, the D2 staff-management floor, the
-// draft validation that pre-empts the CHECK, F1's grant-eligibility gain check, and the audit
-// action names. NOT a fourth axis: no token, no role→capability map — every MEMBERSHIP question
-// inside it goes through `platformActorHasCapability` above, and F1's gain check (a WHOLE-SET
-// question, "did the set grow") goes through that predicate's whole-set sibling
-// `resolvePlatformCapabilities`, also above — never a role bundle or override read directly. ONE
-// definition, consumed by `@balo/db`'s save transaction and by the Staff access page's floor and
-// eligibility preview. See `./staff-access.ts`.
+// draft validation that pre-empts the CHECK, F1's grant-eligibility gain check, C4's grant
+// ceiling, and the audit action names. NOT a fourth axis: no token, no role→capability map —
+// every MEMBERSHIP question inside it goes through `platformActorHasCapability` above, and every
+// GAIN question (F1's eligibility check, C4's ceiling — C7's single `staffAccessDraftGains`) goes
+// through that predicate's whole-set sibling `resolvePlatformCapabilities`, also above — never a
+// role bundle or override read directly. ONE definition, consumed by `@balo/db`'s save transaction
+// and by the Staff access page's floor and eligibility preview. See `./staff-access.ts`.
 export {
   PLATFORM_ROLE_LABELS,
   STAFF_ACCESS_AUDIT_ACTIONS,
@@ -157,6 +157,8 @@ export {
   applyStaffAccessDraft,
   precheckStaffAccessSave,
   evaluateLockedStaffAccessSave,
+  staffAccessDraftGains,
+  staffAccessDraftGainsAnything,
 } from './staff-access';
 export type {
   StaffAccessAccount,
@@ -174,6 +176,7 @@ export type {
   StaffAccessSavePrecheck,
   StaffAccessLockedRows,
   StaffAccessSaveVerdict,
+  StaffAccessDraftGains,
 } from './staff-access';
 
 // The DISTINCT engagement-capability axis (BAL-413 / ADR-1046) — gates by DELIVERY

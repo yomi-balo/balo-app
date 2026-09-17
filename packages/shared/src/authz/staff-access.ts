@@ -147,6 +147,7 @@ export type StaffAccessLockedRefusal =
   | 'stale'
   | 'no_change'
   | 'target_ineligible'
+  | 'grant_exceeds_actor'
   | 'floor_violation';
 
 /** Every named refusal a Staff access save can return. */
@@ -311,6 +312,48 @@ export function accountMayGainAccess(account: StaffAccessAccount): boolean {
   return account.isLive && account.emailVerified;
 }
 
+/** C7 — what {@link staffAccessDraftGains} answers about one (before, after) pair. */
+export interface StaffAccessDraftGains {
+  /** Capabilities the AFTER snapshot resolves that the BEFORE snapshot did not. */
+  readonly addedCapabilities: readonly PlatformCapability[];
+  /**
+   * C3 — the move crosses from a non-staff role to a staff role, even when the RESOLVED
+   * capability set is otherwise unchanged (`user` → `admin` with `customList: []` resolves to
+   * `[]` both before and after — no `addedCapabilities`, but the account is now staff, which
+   * matters to every check that reads only the role: request-owner eligibility, impersonation
+   * immunity).
+   */
+  readonly staffRoleGained: boolean;
+}
+
+/**
+ * C7 — ONE definition of "does this draft add anything", so the transaction and the UI preview
+ * can never disagree about it. Two consumers, both through this function alone:
+ *   · F1/C3's grant-eligibility check (`evaluateLockedStaffAccessSave`, `saveBlockOf`) — a save
+ *     may not GRANT anything (a capability OR the staff role itself) to an ineligible target;
+ *   · C4's grant ceiling (`evaluateLockedStaffAccessSave`, `saveBlockOf`) — every capability in
+ *     `addedCapabilities` must be one the ACTOR resolves.
+ * Reuses `resolvePlatformCapabilities` (the shared predicate's whole-set sibling, see the module
+ * docblock) and `staffCustomListAllowed` (`platformRoleIsStaff`) — no second definition of
+ * "resolved" or "staff role" is introduced here.
+ */
+export function staffAccessDraftGains(
+  before: StaffAccessSnapshot,
+  after: StaffAccessSnapshot
+): StaffAccessDraftGains {
+  const beforeResolved = new Set(resolvePlatformCapabilities(before.role, before.customList));
+  const afterResolved = resolvePlatformCapabilities(after.role, after.customList);
+  return {
+    addedCapabilities: afterResolved.filter((capability) => !beforeResolved.has(capability)),
+    staffRoleGained: !staffCustomListAllowed(before.role) && staffCustomListAllowed(after.role),
+  };
+}
+
+/** Does {@link staffAccessDraftGains}'s result represent a gain of ANY kind (capability or role)? */
+export function staffAccessDraftGainsAnything(gains: StaffAccessDraftGains): boolean {
+  return gains.addedCapabilities.length > 0 || gains.staffRoleGained;
+}
+
 /**
  * May this account manage staff right now? The in-transaction ACTOR RE-CHECK (M2 / D6): it runs
  * on the actor's LOCKED row, never on the session and never through the web live gate (which reads
@@ -390,16 +433,27 @@ export function precheckStaffAccessSave(request: StaffAccessSaveRequest): StaffA
  *   2. target absent or soft-deleted → `target_not_found`;
  *   3. target's role or customList differs from the reviewed before-state → `stale` (D6);
  *   4. nothing would change → `no_change`;
- *   5. the draft GAINS a capability the target does not already resolve, and the target is not
- *      live-and-verified → `target_ineligible` (F1, S1/S2);
- *   6. no account would keep the floor afterwards → `floor_violation` (D2).
+ *   5. the draft GAINS anything (a capability, OR — C3 — the staff role itself, e.g. `user` →
+ *      `admin` with `customList: []`) and the target is not live-and-verified →
+ *      `target_ineligible` (F1, S1/S2);
+ *   6. the draft adds a capability the ACTOR does not itself resolve → `grant_exceeds_actor` (C4,
+ *      user-ruled: an actor may only grant what the actor holds — D3 stops self-edits, but
+ *      without this an actor could promote a second account to super_admin and use IT to restore
+ *      the actor's own list, which is not a self-edit);
+ *   7. no account would keep the floor afterwards → `floor_violation` (D2).
  * There is no SQL copy of any of these: the repository locks, calls this, and writes.
  *
- * ⚠ STEP 5 SITS AFTER `stale`/`no_change` AND BEFORE THE FLOOR, DELIBERATELY. A stale request on
- * an ineligible target must still report `stale` — the operator is reviewing data that has already
- * moved, and eligibility is not the reason. A no-op draft never reaches step 5 either. The floor
- * stays last because it is the rarest, most consequential refusal and only worth computing once
- * every cheaper check has passed.
+ * ⚠ STEPS 5 AND 6 SIT AFTER `stale`/`no_change` AND BEFORE THE FLOOR, DELIBERATELY. A stale
+ * request on an ineligible target, or one that exceeds the actor, must still report `stale` — the
+ * operator is reviewing data that has already moved, and neither eligibility nor the ceiling is
+ * the reason. A no-op draft never reaches either step. The floor stays last because it is the
+ * rarest, most consequential refusal and only worth computing once every cheaper check has passed.
+ *
+ * ⚠ BOTH GAIN QUESTIONS GO THROUGH ONE HELPER, `staffAccessDraftGains` (C7): step 5 asks "did this
+ * gain ANYTHING" (`staffAccessDraftGainsAnything`, capability or role) and step 6 asks "is every
+ * ADDED CAPABILITY one the actor holds" (`addedCapabilities`, role move aside — the ceiling is
+ * about capabilities the ticket names, not about whether the target becomes staff). `saveBlockOf`
+ * (`apps/web`) calls the identical helper so the UI and the transaction cannot disagree.
  */
 export function evaluateLockedStaffAccessSave(
   request: StaffAccessSaveRequest,
@@ -431,11 +485,14 @@ export function evaluateLockedStaffAccessSave(
   const customListChanged = !sameCustomList(target.customList, after.customList);
   if (!roleChanged && !customListChanged) return { ok: false, reason: 'no_change' };
 
-  const beforeResolved = new Set(resolvePlatformCapabilities(target.role, target.customList));
-  const afterResolved = new Set(resolvePlatformCapabilities(after.role, after.customList));
-  const gainsCapability = [...afterResolved].some((capability) => !beforeResolved.has(capability));
-  if (gainsCapability && !accountMayGainAccess(target)) {
+  const gains = staffAccessDraftGains({ role: target.role, customList: target.customList }, after);
+  if (staffAccessDraftGainsAnything(gains) && !accountMayGainAccess(target)) {
     return { ok: false, reason: 'target_ineligible' };
+  }
+
+  const actorResolved = new Set(resolvePlatformCapabilities(actor.role, actor.customList));
+  if (gains.addedCapabilities.some((capability) => !actorResolved.has(capability))) {
+    return { ok: false, reason: 'grant_exceeds_actor' };
   }
 
   if (!staffManagementFloorHolds(applyStaffAccessDraft(locked.accounts, target, after))) {

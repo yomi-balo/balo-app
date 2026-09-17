@@ -381,13 +381,23 @@ export const usersRepository = {
    *
    * ⚠ F1 (S1 MEDIUM / S2 LOW) — A SAVE MAY ONLY *GRANT* A CAPABILITY TO A LIVE, EMAIL-VERIFIED
    * TARGET. `evaluateLockedStaffAccessSave` (`@balo/shared/authz`) computes the target's resolved
-   * set before and after the draft and, if the draft ADDS anything, requires
-   * `accountMayGainAccess(target)` — the same bar every other email-based grant in the product
-   * already holds (`run-domain-join.ts`, `resolve-actionable-company.ts`, `resolve-identity.ts`).
-   * A PURE REDUCTION is never blocked by this: a suspended or unverified staff member can still be
-   * demoted or trimmed. This closes a crafted-POST path where any `targetUserId` could be promoted
-   * regardless of its live `status` — the api does not read `status` today (BAL-568), so such a
-   * promotion would have taken effect there immediately.
+   * set before and after the draft and, if the draft ADDS anything — C3: including a plain
+   * `user` moving to a staff role even when the resolved set is unchanged (`customList: []`) —
+   * requires `accountMayGainAccess(target)`, the same bar every other email-based grant in the
+   * product already holds (`run-domain-join.ts`, `resolve-actionable-company.ts`,
+   * `resolve-identity.ts`). A PURE REDUCTION is never blocked by this: a suspended or unverified
+   * staff member can still be demoted or trimmed. This closes a crafted-POST path where any
+   * `targetUserId` could be promoted regardless of its live `status` — the api does not read
+   * `status` today (BAL-568), so such a promotion would have taken effect there immediately.
+   *
+   * ⚠⚠ C4 (user-ruled) — A SAVE MAY ONLY *GRANT* A CAPABILITY THE ACTOR ITSELF RESOLVES. D3 stops
+   * every self-edit, but without this an actor could promote a SECOND account to full
+   * `super_admin` in one save, then use THAT account to restore the actor's own list in a second
+   * save — never touching the actor's own record directly, so D3 never sees it. `grant_exceeds_actor`
+   * refuses any draft whose added capabilities are not a subset of the ACTOR's own locked-row
+   * resolved set (`staffAccessDraftGains`, shared with `saveBlockOf` — C7). Removals are
+   * unaffected: a restricted actor can still demote or trim anyone. Intended consequence: a super
+   * admin on a restricted custom list can no longer create a full super admin.
    *
    * Never throws for a business outcome: a refusal is `{ outcome: 'refused', reason }`. A real
    * database fault throws and the transaction rolls back. `exec` follows the

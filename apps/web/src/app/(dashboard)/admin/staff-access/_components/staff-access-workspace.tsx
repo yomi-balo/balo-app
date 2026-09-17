@@ -73,12 +73,7 @@ export function StaffAccessWorkspace({
     return (
       <>
         <StaffAccessEmptyState onGiveAccess={handleGiveAccess} />
-        <AddStaffDialog
-          open={addOpen}
-          onOpenChange={setAddOpen}
-          people={people}
-          onSelectPerson={handleSelect}
-        />
+        <AddStaffDialog open={addOpen} onOpenChange={setAddOpen} onSelectPerson={handleSelect} />
       </>
     );
   }
@@ -102,12 +97,7 @@ export function StaffAccessWorkspace({
       {selected !== null && (
         <StaffAccessDetail key={detailKey} person={selected} people={people} viewerId={viewerId} />
       )}
-      <AddStaffDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        people={people}
-        onSelectPerson={handleSelect}
-      />
+      <AddStaffDialog open={addOpen} onOpenChange={setAddOpen} onSelectPerson={handleSelect} />
     </div>
   );
 }

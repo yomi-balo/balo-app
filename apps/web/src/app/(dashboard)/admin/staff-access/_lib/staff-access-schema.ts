@@ -11,9 +11,13 @@ import { STAFF_ACCESS_ROLE_ORDER } from './staff-access-roles';
  * ONE definition of "known" (`@balo/shared/authz/staff-access`'s `validateStaffAccessDraft`), not
  * a second one duplicated into a Zod enum that could drift from the axis.
  *
- * `.email()` on a TRIMMED string (`z.string().trim()` runs before `.email()`) means a partial
- * address like `'dana@'` or `'dana@northwind'` fails validation, so nothing is looked up — the
- * lookup action never runs a query for malformed input.
+ * C10 — `z.string().email()` is deprecated in Zod 4; `.pipe(z.email())` is the replacement that
+ * keeps the SAME order this relies on: `z.string().trim().max(254)` runs (and TRANSFORMS via
+ * `.trim()`) first, and only the trimmed, length-checked result is piped into the email FORMAT
+ * check. A partial address like `'dana@'` or `'dana@northwind'` still fails validation on the
+ * trimmed value, so nothing is looked up — the lookup action never runs a query for malformed
+ * input. Same underlying check, same issue shape, either way — `z.email()` is sugar for the
+ * identical format check the deprecated method registered.
  */
 export const staffAccessStateSchema = z
   .object({
@@ -31,7 +35,7 @@ export const saveStaffAccessInputSchema = z
   .strict();
 
 export const findStaffCandidateInputSchema = z
-  .object({ email: z.string().trim().max(254).email() })
+  .object({ email: z.string().trim().max(254).pipe(z.email()) })
   .strict();
 
 export type SaveStaffAccessActionInput = z.infer<typeof saveStaffAccessInputSchema>;

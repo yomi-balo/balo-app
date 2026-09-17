@@ -6,6 +6,8 @@ import {
   platformCapabilityDisplayOrder,
   resolvePlatformCapabilities,
   sameCustomList,
+  staffAccessDraftGains,
+  staffAccessDraftGainsAnything,
   staffCustomListAllowed,
   staffManagementFloorHolds,
   type PlatformCapability,
@@ -195,9 +197,25 @@ export function capabilityLockOf(
   return wouldStillHold ? null : 'floor';
 }
 
-export type SaveBlock = 'self' | 'not_dirty' | 'ineligible' | 'floor' | null;
+export type SaveBlock =
+  | 'self'
+  | 'not_dirty'
+  | 'ineligible'
+  | 'grant_exceeds_actor'
+  | 'floor'
+  | null;
 
-/** Why (if at all) "Review and save" is disabled for the current draft. */
+/**
+ * Why (if at all) "Review and save" is disabled for the current draft.
+ *
+ * C7 — `staffAccessDraftGains` is the SAME helper `evaluateLockedStaffAccessSave` calls, so this
+ * preview and the transaction's own decision cannot disagree about what a draft "adds". Order:
+ * self, not-dirty, F1's eligibility gain check (C3 folds the non-staff → staff role move into
+ * "gains anything"), C4's grant ceiling (an actor may only grant a capability it itself resolves
+ * — read from the VIEWER'S OWN row in `people`, mirroring the transaction's actor re-check), then
+ * the floor. The transaction remains the enforcement point: a concurrent change the UI didn't see
+ * surfaces the transaction's own named refusal rather than a generic failure.
+ */
 export function saveBlockOf(
   people: readonly StaffAccessPerson[],
   person: StaffAccessPerson,
@@ -207,13 +225,19 @@ export function saveBlockOf(
   if (person.id === viewerId) return 'self';
   if (!isStaffAccessFormDirty(person, state)) return 'not_dirty';
   const draft: StaffAccessDraft = { role: state.role, customList: draftCustomListOf(state) };
-  // F1 (S1/S2) — the SAME predicate the save transaction consults, so the UI and the transaction
-  // agree on when a draft is a pure reduction (always allowed) versus a GAIN (blocked for an
-  // ineligible — suspended or unverified — target).
-  const before = resolvedAccessOf(person.role, person.customList);
-  const after = resolvedAccessOf(draft.role, draft.customList);
-  const gainsCapability = [...after].some((capability) => !before.has(capability));
-  if (gainsCapability && !accountMayGainAccess(person)) return 'ineligible';
+  const gains = staffAccessDraftGains({ role: person.role, customList: person.customList }, draft);
+  if (staffAccessDraftGainsAnything(gains) && !accountMayGainAccess(person)) return 'ineligible';
+  // C4 — the viewer's OWN row IS the actor; `people` is the roster the page loaded with, which
+  // always includes the viewer (they hold `manage_staff_capabilities` to be here at all). If it
+  // is somehow absent, resolve to NOTHING rather than skip the check — the conservative direction
+  // for a UI preview whose real enforcement point is the transaction anyway.
+  const viewer = people.find((candidate) => candidate.id === viewerId);
+  const viewerResolved = new Set(
+    viewer === undefined ? [] : resolvePlatformCapabilities(viewer.role, viewer.customList)
+  );
+  if (gains.addedCapabilities.some((capability) => !viewerResolved.has(capability))) {
+    return 'grant_exceeds_actor';
+  }
   if (!staffManagementFloorHolds(applyStaffAccessDraft(people, person, draft))) return 'floor';
   return null;
 }

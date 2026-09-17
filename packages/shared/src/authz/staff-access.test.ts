@@ -18,6 +18,8 @@ import {
   evaluateLockedStaffAccessSave,
   precheckStaffAccessSave,
   sameCustomList,
+  staffAccessDraftGains,
+  staffAccessDraftGainsAnything,
   staffCustomListAllowed,
   staffManagementFloorHolds,
   storedCustomListOf,
@@ -660,6 +662,183 @@ describe('evaluateLockedStaffAccessSave — target_ineligible (F1 / S1 / S2)', (
   });
 });
 
+describe('evaluateLockedStaffAccessSave — C3: a non-staff → staff role move is a gain even with an EMPTY resolved set', () => {
+  const holder = account(ACTOR, 'super_admin');
+
+  it('refuses a SUSPENDED user moved to admin with customList: [] — resolved [] both before and after', () => {
+    const req = request({
+      expected: { role: 'user', customList: null },
+      next: { role: 'admin', customList: [] },
+    });
+    const rows = [holder, account(TARGET, 'user', null, false, true)];
+    // Non-vacuity: the move really does resolve to nothing on both sides.
+    expect(resolvePlatformCapabilities('user', null)).toHaveLength(0);
+    expect(resolvePlatformCapabilities('admin', [])).toHaveLength(0);
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toEqual({
+      ok: false,
+      reason: 'target_ineligible',
+    });
+  });
+
+  it('refuses an UNVERIFIED user moved to admin with customList: [] the same way', () => {
+    const req = request({
+      expected: { role: 'user', customList: null },
+      next: { role: 'admin', customList: [] },
+    });
+    const rows = [holder, account(TARGET, 'user', null, true, false)];
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toEqual({
+      ok: false,
+      reason: 'target_ineligible',
+    });
+  });
+
+  it('allows the SAME move for a live, verified user — the role move alone is not otherwise blocked', () => {
+    const req = request({
+      expected: { role: 'user', customList: null },
+      next: { role: 'admin', customList: [] },
+    });
+    const rows = [holder, account(TARGET, 'user')];
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toMatchObject({
+      ok: true,
+    });
+  });
+});
+
+describe('staffAccessDraftGains (C7) — the one "does this draft add anything" helper', () => {
+  it('reports no gain and no staff-role move for an unchanged snapshot', () => {
+    const snapshot = { role: 'admin' as const, customList: null };
+    const gains = staffAccessDraftGains(snapshot, snapshot);
+    expect(gains.addedCapabilities).toEqual([]);
+    expect(gains.staffRoleGained).toBe(false);
+  });
+
+  it('reports the added capabilities for a widened custom list, with no staff-role move (already staff)', () => {
+    const gains = staffAccessDraftGains(
+      { role: 'admin', customList: [CAP.RESOLVE_ADMIN_ALERTS] },
+      { role: 'admin', customList: [CAP.RESOLVE_ADMIN_ALERTS, CAP.MANAGE_PROMO_CODES] }
+    );
+    expect(gains.addedCapabilities).toEqual([CAP.MANAGE_PROMO_CODES]);
+    expect(gains.staffRoleGained).toBe(false);
+  });
+
+  it('reports NO added capabilities but staffRoleGained: true for user → admin with customList: []', () => {
+    const gains = staffAccessDraftGains(
+      { role: 'user', customList: null },
+      { role: 'admin', customList: [] }
+    );
+    expect(gains.addedCapabilities).toEqual([]);
+    expect(gains.staffRoleGained).toBe(true);
+  });
+
+  it('reports both added capabilities AND staffRoleGained for a full user → super_admin promotion', () => {
+    const gains = staffAccessDraftGains(
+      { role: 'user', customList: null },
+      { role: 'super_admin', customList: null }
+    );
+    expect(gains.addedCapabilities.length).toBeGreaterThan(0);
+    expect(gains.addedCapabilities).toHaveLength(19);
+    expect(gains.staffRoleGained).toBe(true);
+  });
+
+  it('reports nothing gained for a pure reduction (admin → user)', () => {
+    const gains = staffAccessDraftGains(
+      { role: 'admin', customList: null },
+      { role: 'user', customList: null }
+    );
+    expect(gains.addedCapabilities).toEqual([]);
+    expect(gains.staffRoleGained).toBe(false);
+  });
+
+  it('staffAccessDraftGainsAnything is true iff either field is non-empty/true', () => {
+    expect(staffAccessDraftGainsAnything({ addedCapabilities: [], staffRoleGained: false })).toBe(
+      false
+    );
+    expect(
+      staffAccessDraftGainsAnything({
+        addedCapabilities: [CAP.MANAGE_PROMO_CODES],
+        staffRoleGained: false,
+      })
+    ).toBe(true);
+    expect(staffAccessDraftGainsAnything({ addedCapabilities: [], staffRoleGained: true })).toBe(
+      true
+    );
+  });
+});
+
+describe('evaluateLockedStaffAccessSave — C4: an actor may only grant what the actor itself resolves', () => {
+  const fullBundleActor = account(ACTOR, 'super_admin');
+
+  it('an actor with the full bundle can grant anything, including a full promotion to super_admin', () => {
+    const req = request({
+      expected: { role: 'user', customList: null },
+      next: { role: 'super_admin', customList: null },
+    });
+    const rows = [fullBundleActor, account(TARGET, 'user')];
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('an actor missing impersonate_user cannot grant it directly (a custom-list add)', () => {
+    const restrictedActor = account(ACTOR, 'super_admin', [CAP.MANAGE_STAFF_CAPABILITIES]);
+    const req = request({
+      expected: { role: 'super_admin', customList: [] },
+      next: { role: 'super_admin', customList: [CAP.IMPERSONATE_USER] },
+    });
+    const rows = [restrictedActor, account(TARGET, 'super_admin', [])];
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toEqual({
+      ok: false,
+      reason: 'grant_exceeds_actor',
+    });
+  });
+
+  it('an actor missing impersonate_user cannot grant it via a role move to super_admin either', () => {
+    const restrictedActor = account(ACTOR, 'super_admin', [
+      CAP.MANAGE_STAFF_CAPABILITIES,
+      CAP.VIEW_PLATFORM_ADMIN,
+    ]);
+    const req = request({
+      expected: { role: 'admin', customList: null },
+      next: { role: 'super_admin', customList: null },
+    });
+    const rows = [restrictedActor, account(TARGET, 'admin', null)];
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toEqual({
+      ok: false,
+      reason: 'grant_exceeds_actor',
+    });
+  });
+
+  it('a reduction by a restricted actor still saves — removals are unaffected', () => {
+    const restrictedActor = account(ACTOR, 'super_admin', [CAP.MANAGE_STAFF_CAPABILITIES]);
+    const req = request({
+      expected: { role: 'super_admin', customList: null },
+      next: { role: 'admin', customList: null },
+    });
+    const rows = [
+      restrictedActor,
+      account(TARGET, 'super_admin', null),
+      account('second', 'super_admin'), // keeps the floor after TARGET's demotion
+    ];
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it('grant_exceeds_actor is checked AFTER target_ineligible but BEFORE the floor', () => {
+    // An ineligible (suspended) target takes priority over the ceiling, even when both would fire.
+    const restrictedActor = account(ACTOR, 'super_admin', [CAP.MANAGE_STAFF_CAPABILITIES]);
+    const req = request({
+      expected: { role: 'user', customList: null },
+      next: { role: 'super_admin', customList: null },
+    });
+    const rows = [restrictedActor, account(TARGET, 'user', null, false, true)];
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toEqual({
+      ok: false,
+      reason: 'target_ineligible',
+    });
+  });
+});
+
 describe('evaluateLockedStaffAccessSave — the D2 floor, on the POST-save state', () => {
   /** An authorised actor who is NOT a floor holder — isolates the floor from the actor re-check. */
   const nonHolderActor = account(ACTOR, 'super_admin', [CAP.MANAGE_STAFF_CAPABILITIES]);
@@ -730,12 +909,47 @@ describe('evaluateLockedStaffAccessSave — the D2 floor, on the POST-save state
     });
   });
 
-  it('counts the POST-save state: promoting the only future holder saves even with none today', () => {
+  it('C4 now supersedes this: a non-holder actor cannot single-handedly create the floor via a role move', () => {
+    // ⚠ Pre-C4 this was `{ ok: true }` — "counts the POST-save state: promoting the only future
+    // holder saves even with none today". C4 makes that premise permanently unreachable: for
+    // `nonHolderActor` to grant the WHOLE super_admin bundle, it would have to already resolve
+    // both floor tokens itself — at which point it WOULD already keep the floor, contradicting
+    // "none today". This is the fixes doc's own named consequence of C4 ("a super admin on a
+    // restricted custom list can no longer create a full super admin"), pinned here as a
+    // regression test for the C3/C4/D2 interaction rather than deleted.
     const req = request({
       expected: { role: 'user', customList: null },
       next: { role: 'super_admin', customList: null },
     });
     const rows = [nonHolderActor, account(TARGET, 'user')];
+    expect(rows.filter(accountKeepsStaffManagementFloor)).toHaveLength(0);
+    expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toEqual({
+      ok: false,
+      reason: 'grant_exceeds_actor',
+    });
+  });
+
+  it('counts the POST-save state (still true post-C4): a promotion whose gain the actor fully covers still creates the only future holder', () => {
+    // The super_admin-exclusive delta over admin's bundle — computed, not hand-copied, so this
+    // stays correct if the bundles ever change.
+    const adminResolved = resolvePlatformCapabilities('admin', null);
+    const superAdminDelta = resolvePlatformCapabilities('super_admin', null).filter(
+      (capability) => !adminResolved.includes(capability)
+    );
+    expect(superAdminDelta.length).toBeGreaterThan(0);
+    expect(superAdminDelta).toContain(CAP.MANAGE_STAFF_CAPABILITIES);
+    expect(superAdminDelta).not.toContain(CAP.VIEW_PLATFORM_ADMIN); // already in admin's bundle
+
+    // An actor who resolves EXACTLY that delta (enough to cover the coming promotion's gain
+    // under C4) but, missing VIEW_PLATFORM_ADMIN, does not itself keep the floor today.
+    const coveringActor = account(ACTOR, 'super_admin', [...superAdminDelta]);
+    expect(accountKeepsStaffManagementFloor(coveringActor)).toBe(false);
+
+    const req = request({
+      expected: { role: 'admin', customList: null },
+      next: { role: 'super_admin', customList: null },
+    });
+    const rows = [coveringActor, account(TARGET, 'admin', null)];
     expect(rows.filter(accountKeepsStaffManagementFloor)).toHaveLength(0);
     expect(evaluateLockedStaffAccessSave(req, passed(req), locked(rows))).toMatchObject({
       ok: true,

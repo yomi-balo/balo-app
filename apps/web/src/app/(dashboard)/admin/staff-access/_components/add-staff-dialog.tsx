@@ -38,7 +38,6 @@ type AddStaffStep = 'lookup' | 'promote' | 'confirm';
 interface AddStaffDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly people: readonly StaffAccessPerson[];
   readonly onSelectPerson: (personId: string) => void;
 }
 
@@ -46,11 +45,16 @@ interface AddStaffDialogProps {
  * BAL-561 (ruling 3) — "Give someone access": a real three-step flow, not a stub button. Exact,
  * case-insensitive email lookup; ONE generic "No account found with that email." on a miss — no
  * partial matching, no listing.
+ *
+ * ⚠ C2 — TAKES NO `people` PROP, DELIBERATELY. It used to take the roster and classify
+ * "already staff" from it, which is exactly the STALE-roster bug C2 fixed: `people` is loaded
+ * with the page and can be out of date by the time this dialog runs a fresh lookup. Every
+ * decision here reads the FRESH lookup result instead (`staffCustomListAllowed(result.person.role)`
+ * for the classification, a `router.refresh()` before selecting an existing match).
  */
 export function AddStaffDialog({
   open,
   onOpenChange,
-  people,
   onSelectPerson,
 }: Readonly<AddStaffDialogProps>): React.JSX.Element {
   const router = useRouter();
@@ -98,8 +102,11 @@ export function AddStaffDialog({
         if (result.code !== 'not_found') toast.error(result.error);
         return;
       }
-      const existing = people.find((p) => p.id === result.person.id) !== undefined;
-      if (existing) {
+      // C2 — classify from the FRESH lookup result, never from `people` (the roster loaded with
+      // the page, which can be stale by the time this dialog runs). `staffCustomListAllowed` is
+      // the surface's sanctioned "is this role staff" proxy (the no-role-read invariant permits
+      // it), so this reads the same fresh row the save itself will re-check server-side.
+      if (staffCustomListAllowed(result.person.role)) {
         setAlreadyStaff(result.person);
         return;
       }
@@ -107,7 +114,7 @@ export function AddStaffDialog({
       setRole(PROMOTABLE_ROLES[0] ?? 'admin');
       setStep('promote');
     });
-  }, [email, people]);
+  }, [email]);
 
   const handleReviewAndSave = useCallback((): void => {
     // N2 (same shape as F3 in the detail view) — a stale error from a previous save attempt must
@@ -125,9 +132,12 @@ export function AddStaffDialog({
 
   const handleOpenExisting = useCallback((): void => {
     if (alreadyStaff === null) return;
+    // C2 part 2 — the roster `people` came from is exactly what led here (it looked new to it);
+    // refresh so the detail pane the parent renders for this id is not empty.
+    router.refresh();
     onSelectPerson(alreadyStaff.id);
     handleOpenChange(false);
-  }, [alreadyStaff, onSelectPerson, handleOpenChange]);
+  }, [alreadyStaff, onSelectPerson, handleOpenChange, router]);
 
   const handleConfirm = useCallback((): void => {
     if (candidate === null) return;
@@ -135,10 +145,11 @@ export function AddStaffDialog({
     startSave(async () => {
       const result = await saveStaffAccessAction({
         targetUserId: candidate.id,
-        expected: {
-          role: candidate.role,
-          customList: candidate.customList === null ? null : [...candidate.customList],
-        },
+        // C2 part 3 — this flow's own premise is "the candidate is a plain user", so state THAT,
+        // never `candidate.role`/`candidate.customList` (which is only as fresh as the lookup that
+        // ran when this dialog opened). If someone else promoted or restricted the candidate since,
+        // the D6 stale check on the server refuses rather than silently overwriting their change.
+        expected: { role: 'user', customList: null },
         next: { role, customList: null },
       });
       if (result.success) {

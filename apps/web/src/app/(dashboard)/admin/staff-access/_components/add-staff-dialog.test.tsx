@@ -55,13 +55,7 @@ const mockToast = vi.mocked(toast);
 
 function renderDialog(overrides: Partial<React.ComponentProps<typeof AddStaffDialog>> = {}) {
   return render(
-    <AddStaffDialog
-      open
-      onOpenChange={vi.fn()}
-      people={[EXISTING]}
-      onSelectPerson={vi.fn()}
-      {...overrides}
-    />
+    <AddStaffDialog open onOpenChange={vi.fn()} onSelectPerson={vi.fn()} {...overrides} />
   );
 }
 
@@ -110,12 +104,12 @@ describe('AddStaffDialog — lookup step', () => {
     });
   });
 
-  it('found + already staff shows the "already has staff access" card, and Open selects + closes', async () => {
+  it('found + already staff (C2 part 1: classified from the FRESH lookup, never a roster prop) shows the "already has staff access" card, and Open refreshes, selects + closes (C2 part 2)', async () => {
     const user = userEvent.setup();
     const onSelectPerson = vi.fn();
     const onOpenChange = vi.fn();
     mockFindStaffCandidateAction.mockResolvedValue({ success: true, person: EXISTING });
-    renderDialog({ people: [EXISTING], onSelectPerson, onOpenChange });
+    renderDialog({ onSelectPerson, onOpenChange });
 
     await user.type(screen.getByLabelText(/email they signed up with/i), 'luke@example.com');
     await user.click(screen.getByRole('button', { name: /find account/i }));
@@ -123,7 +117,11 @@ describe('AddStaffDialog — lookup step', () => {
     await waitFor(() => {
       expect(screen.getByText(/already has staff access/i)).toBeInTheDocument();
     });
+    // It must NOT have advanced to the promote step (which would re-grant a fresh role).
+    expect(screen.queryByText(/give .* staff access$/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /open their access/i }));
+    // C2 part 2 — refresh before selecting, so a stale detail pane is not left empty.
+    expect(refresh).toHaveBeenCalledTimes(1);
     expect(onSelectPerson).toHaveBeenCalledWith('existing-1');
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
@@ -163,6 +161,9 @@ describe('AddStaffDialog — promote and confirm steps', () => {
     await user.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => {
+      // C2 part 3 — `expected` is the flow's own premise (a plain user), a literal pin, never
+      // read off `candidate.role`/`candidate.customList`: if the candidate is no longer a plain
+      // user by the time this save lands, the server's D6 stale check refuses it.
       expect(mockSaveStaffAccessAction).toHaveBeenCalledWith(
         expect.objectContaining({
           targetUserId: 'candidate-1',

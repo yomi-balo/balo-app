@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useReducer, useState, useTransition } from 'react';
+import { useCallback, useReducer, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { AlertTriangle } from 'lucide-react';
@@ -65,7 +65,17 @@ export function StaffAccessDetail({
   const router = useRouter();
   const [state, dispatch] = useReducer(reduceStaffAccessForm, person, initialStaffAccessForm);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [pending, startTransition] = useTransition();
+  // C1/C8 — an EXPLICIT in-flight flag, set true synchronously when the save starts and cleared
+  // in the SAME synchronous block as the outcome it produces (`error` or the close). NOT
+  // `useTransition`'s `isPending`: that flag's fall back to `false` is scheduled by React's own
+  // async-transition completion tracking, a separate mechanism from the `setError` call inside
+  // the callback — the two are not guaranteed to land in the same commit. The CI failure on the
+  // F3 test (dialog still open after Cancel) is consistent with exactly that gap: Cancel reads
+  // `disabled={pending}`, and a click on an already-disabled button dispatches nothing, so a
+  // `pending` that is still `true` for one extra render after the error banner appears makes
+  // Cancel a silent no-op. `saving` cannot have that gap because there is only one place that
+  // ever sets it, and every call site sets it in the same statement group as the state it gates.
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<ConfirmAccessChangeError | null>(null);
 
   const isSelf = person.id === viewerId;
@@ -116,28 +126,48 @@ export function StaffAccessDetail({
     router.refresh();
   }, [router]);
 
-  const handleConfirm = useCallback(() => {
-    startTransition(async () => {
-      setError(null);
-      const result = await saveStaffAccessAction({
-        targetUserId: person.id,
-        expected: {
-          role: person.role,
-          customList: person.customList === null ? null : [...person.customList],
-        },
-        next: { role: state.role, customList: draftCustomListOf(state) },
-      });
-      if (result.success) {
-        toast.success(`Access updated for ${firstName}`); // pending-MJ
-        setConfirmOpen(false);
-        // `revalidatePath` inside the action re-renders the page with fresh data; the parent
-        // workspace re-keys this component, which resets the form to the new saved state.
-        return;
-      }
-      toast.error(result.error);
-      setError({ message: result.error, needsReload: staffAccessFailureNeedsReload(result.code) });
+  const runConfirm = useCallback(async (): Promise<void> => {
+    const result = await saveStaffAccessAction({
+      targetUserId: person.id,
+      expected: {
+        role: person.role,
+        customList: person.customList === null ? null : [...person.customList],
+      },
+      next: { role: state.role, customList: draftCustomListOf(state) },
     });
+    if (result.success) {
+      toast.success(`Access updated for ${firstName}`); // pending-MJ
+      setSaving(false);
+      setConfirmOpen(false);
+      // `revalidatePath` inside the action re-renders the page with fresh data; the parent
+      // workspace re-keys this component, which resets the form to the new saved state.
+      return;
+    }
+    toast.error(result.error);
+    // C1 — `saving` clears in the SAME synchronous block that reveals the error, so a subsequent
+    // Cancel click is never blocked by a `pending`-style flag lagging one render behind the
+    // outcome it gates.
+    setSaving(false);
+    setError({ message: result.error, needsReload: staffAccessFailureNeedsReload(result.code) });
   }, [person, state, firstName]);
+
+  const handleConfirm = useCallback((): void => {
+    setSaving(true);
+    setError(null);
+    void runConfirm();
+  }, [runConfirm]);
+
+  // C8 — the confirm dialog must not be dismissible (Esc, click-away, or a controlled `false`)
+  // while a save is genuinely in flight; once it resolves (success closes it directly, failure
+  // shows the banner), dismissal is allowed again. Keys on `saving`, never on a raw transition
+  // pending flag — see the `saving` declaration above for why.
+  const handleConfirmOpenChange = useCallback(
+    (next: boolean) => {
+      if (saving && !next) return;
+      setConfirmOpen(next);
+    },
+    [saving]
+  );
 
   return (
     <div>
@@ -203,7 +233,10 @@ export function StaffAccessDetail({
               disabled={isSelf}
               onClick={handleFollowRole}
               className={cn(
-                'rounded-md px-3 py-1.5 text-xs font-medium',
+                // C9 (PR #297 precedent) — 44px minimum tap target and a visible focus ring, same
+                // as `lookup-drill-in-tabs.tsx`'s segmented control. `aria-pressed` stays: this is
+                // a toggle button pair, not a tablist.
+                'focus-visible:ring-ring inline-flex min-h-[44px] items-center justify-center rounded-md px-3 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none',
                 state.mode === 'follow'
                   ? 'bg-card text-foreground shadow-sm'
                   : 'text-muted-foreground'
@@ -218,7 +251,7 @@ export function StaffAccessDetail({
               disabled={isSelf || !staffCustomListAllowed(state.role)}
               onClick={handleUseCustom}
               className={cn(
-                'rounded-md px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50',
+                'focus-visible:ring-ring inline-flex min-h-[44px] items-center justify-center rounded-md px-3 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50',
                 state.mode === 'custom'
                   ? 'bg-card text-foreground shadow-sm'
                   : 'text-muted-foreground'
@@ -274,6 +307,11 @@ export function StaffAccessDetail({
                 {STAFF_ACCESS_SAVE_MESSAGES.target_ineligible}
               </p>
             )}
+            {block === 'grant_exceeds_actor' && (
+              <p className="text-warning mt-0.5 text-xs">
+                {STAFF_ACCESS_SAVE_MESSAGES.grant_exceeds_actor}
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             <Button variant="outline" disabled={!dirty} onClick={handleDiscard}>
@@ -290,9 +328,9 @@ export function StaffAccessDetail({
 
       <ConfirmAccessChangeDialog
         open={confirmOpen}
-        onOpenChange={setConfirmOpen}
+        onOpenChange={handleConfirmOpenChange}
         firstName={firstName}
-        pending={pending}
+        pending={saving}
         onConfirm={handleConfirm}
         roleBefore={person.role}
         roleAfter={state.role}

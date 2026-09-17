@@ -34,6 +34,14 @@ import { requireStaffAccessManager } from './require-staff-access-manager';
 const SUPER_ADMIN = { id: 'super-1', platformRole: 'super_admin' as const };
 const ADMIN = { id: 'admin-1', platformRole: 'admin' as const };
 const PLAIN_USER = { id: 'user-1', platformRole: 'user' as const };
+// C5 — during an impersonated session `getCurrentUser()` returns the IMPERSONATED account, which
+// is why this fixture is otherwise shaped like a fully-eligible super_admin: the point of C5's
+// check is that it refuses BEFORE either capability read even considers that shape.
+const IMPERSONATED_SUPER_ADMIN = {
+  ...SUPER_ADMIN,
+  isImpersonating: true,
+  impersonatorUserId: 'staff-1',
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -50,6 +58,13 @@ describe('requireStaffAccessManager', () => {
 
   it('denies a plain user (no staff role) with the SAME string, and never calls the live gate', async () => {
     mockGetCurrentUser.mockResolvedValue(PLAIN_USER);
+    const result = await requireStaffAccessManager();
+    expect(result).toEqual({ ok: false, error: STAFF_ACCESS_SAVE_MESSAGES.denied });
+    expect(mockActorHoldsLive).not.toHaveBeenCalled();
+  });
+
+  it('C5: denies an IMPERSONATED session with the SAME string, and never calls the live gate', async () => {
+    mockGetCurrentUser.mockResolvedValue(IMPERSONATED_SUPER_ADMIN);
     const result = await requireStaffAccessManager();
     expect(result).toEqual({ ok: false, error: STAFF_ACCESS_SAVE_MESSAGES.denied });
     expect(mockActorHoldsLive).not.toHaveBeenCalled();

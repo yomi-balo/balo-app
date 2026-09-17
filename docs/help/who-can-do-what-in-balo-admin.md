@@ -55,7 +55,7 @@ regardless of what's on their list.
   leave nobody holding that.
 - Changes are recorded against your name, and take effect the next time the other person
   loads a page.
-
-## Questions?
-
-Reach us any time at [support@getbalo.com](mailto:support@getbalo.com).
+- "Give someone access" only finds accounts that already exist, are active, and have a
+  **verified email address**. If you get "No account found" for someone you know has
+  signed up, they may not have verified their email yet — ask them to check for it before
+  trying again.

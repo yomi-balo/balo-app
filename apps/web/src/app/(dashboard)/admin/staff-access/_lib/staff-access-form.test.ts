@@ -465,4 +465,85 @@ describe('saveBlockOf', () => {
     const other = person({ id: 'u2', role: 'user', customList: null, isLive: false });
     expect(saveBlockOf([other], other, initialStaffAccessForm(other), 'viewer')).toBe('not_dirty');
   });
+
+  describe('C4 — grant_exceeds_actor', () => {
+    it('is "grant_exceeds_actor" when the viewer cannot grant everything the draft adds', () => {
+      const viewer = person({
+        id: 'viewer',
+        role: 'super_admin',
+        customList: [PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES],
+      });
+      const target = person({ id: 'u1', role: 'user', customList: null });
+      const state = reduceStaffAccessForm(initialStaffAccessForm(target), {
+        type: 'select_role',
+        role: 'super_admin',
+      });
+      expect(saveBlockOf([viewer, target], target, state, 'viewer')).toBe('grant_exceeds_actor');
+    });
+
+    it('is null (allowed) when the viewer holds the FULL bundle being granted', () => {
+      const viewer = person({ id: 'viewer', role: 'super_admin', customList: null });
+      const target = person({ id: 'u1', role: 'user', customList: null });
+      const state = reduceStaffAccessForm(initialStaffAccessForm(target), {
+        type: 'select_role',
+        role: 'super_admin',
+      });
+      // The target becomes the floor holder post-save (super_admin, following the role).
+      expect(saveBlockOf([viewer, target], target, state, 'viewer')).toBe(null);
+    });
+
+    it('a reduction by a restricted viewer is never "grant_exceeds_actor" — removals are unaffected', () => {
+      const viewer = person({
+        id: 'viewer',
+        role: 'super_admin',
+        customList: [PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES],
+      });
+      const target = person({ id: 'u1', role: 'super_admin', customList: null });
+      const other = person({ id: 'u2', role: 'super_admin', customList: null }); // keeps the floor
+      const state = reduceStaffAccessForm(initialStaffAccessForm(target), {
+        type: 'select_role',
+        role: 'admin',
+      });
+      expect(saveBlockOf([viewer, target, other], target, state, 'viewer')).toBe(null);
+    });
+
+    it('order — "grant_exceeds_actor" is decided AFTER "ineligible" and BEFORE "floor"', () => {
+      // Ineligible target takes priority even when the grant would also exceed the actor.
+      const viewer = person({
+        id: 'viewer',
+        role: 'super_admin',
+        customList: [PLATFORM_CAPABILITIES.MANAGE_STAFF_CAPABILITIES],
+      });
+      const ineligibleTarget = person({
+        id: 'u1',
+        role: 'user',
+        customList: null,
+        isLive: false,
+      });
+      const ineligibleState = reduceStaffAccessForm(initialStaffAccessForm(ineligibleTarget), {
+        type: 'select_role',
+        role: 'super_admin',
+      });
+      expect(
+        saveBlockOf([viewer, ineligibleTarget], ineligibleTarget, ineligibleState, 'viewer')
+      ).toBe('ineligible');
+
+      // An eligible target whose grant exceeds the actor, and — because the draft's custom list
+      // omits both floor tokens — would ALSO fail the floor with nobody else holding it: the
+      // ceiling is reported (checked first), never "floor".
+      const eligibleTarget = person({ id: 'u2', role: 'user', customList: null });
+      const stateAddingImpersonate = reduceStaffAccessForm(initialStaffAccessForm(eligibleTarget), {
+        type: 'select_role',
+        role: 'admin',
+      });
+      const draftState: StaffAccessFormState = {
+        ...stateAddingImpersonate,
+        mode: 'custom',
+        customList: [PLATFORM_CAPABILITIES.IMPERSONATE_USER],
+      };
+      expect(saveBlockOf([viewer, eligibleTarget], eligibleTarget, draftState, 'viewer')).toBe(
+        'grant_exceeds_actor'
+      );
+    });
+  });
 });

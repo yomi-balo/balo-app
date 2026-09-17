@@ -40,6 +40,7 @@ export const STAFF_ACCESS_SAVE_MESSAGES: Readonly<Record<StaffAccessFailureCode,
     'Someone must still be able to open this page and manage staff. Give that access to someone else first.',
   target_ineligible:
     "This account can't be given more access while it's suspended or its email address isn't verified.",
+  grant_exceeds_actor: 'You can only give someone access that you hold yourself.',
 };
 
 export const STAFF_CANDIDATE_MESSAGES: Readonly<Record<StaffCandidateFailureCode, string>> = {
@@ -56,8 +57,9 @@ export const STAFF_CANDIDATE_MESSAGES: Readonly<Record<StaffCandidateFailureCode
  * the UI didn't know about reached the mutator (a retired-token edge, D6-adjacent);
  * `target_ineligible` (F1) means the target's live/verified state may have changed since the page
  * loaded — a reload is the only way to see whether it still would. None of the others say
- * anything about staleness — `self_edit`, the two `custom_list_*` refusals, `no_change`, `denied`,
- * `invalid` and `failed` are all true regardless of when the page was loaded.
+ * anything about staleness — `self_edit`, the two `custom_list_*` refusals, `no_change`,
+ * `grant_exceeds_actor` (C4 — reloading the roster does not change what the ACTOR themselves
+ * holds), `denied`, `invalid` and `failed` are all true regardless of when the page was loaded.
  */
 export function staffAccessFailureNeedsReload(code: StaffAccessFailureCode): boolean {
   return (

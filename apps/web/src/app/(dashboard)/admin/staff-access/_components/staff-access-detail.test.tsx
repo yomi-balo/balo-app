@@ -40,9 +40,16 @@ function person(overrides: Partial<StaffAccessPerson> = {}): StaffAccessPerson {
  * tests, so changing the TARGET's role never spuriously trips `roleOptionFloorBlocked`/
  * `saveBlockOf` for reasons unrelated to what each test is checking (the floor rule only cares
  * whether SOMEONE keeps it, and this fixture is that someone).
+ *
+ * ⚠ ITS id IS `viewerId` ("viewer") ON PURPOSE (C4). In production `people` (the roster the page
+ * loaded with) always includes the viewer's OWN row — they hold `manage_staff_capabilities` to be
+ * here at all — and `saveBlockOf`'s grant ceiling reads the viewer's resolved set from exactly
+ * that row. Following the role with `customList: null` resolves the FULL super_admin bundle, so
+ * this fixture can grant anything a test promotes someone else to, keeping every test unrelated to
+ * C4 unaffected by it. Tests that specifically exercise a RESTRICTED actor build their own.
  */
 const FLOOR_HOLDER = person({
-  id: 'floor-holder',
+  id: 'viewer',
   firstName: 'Priya',
   lastName: 'Okafor',
   email: 'priya@example.com',
@@ -113,6 +120,23 @@ describe('StaffAccessDetail — ruling 1: role change resets to follow, next Cus
     expect(
       screen.getByRole('checkbox', { name: /use the product as another person/i })
     ).toBeChecked();
+  });
+});
+
+describe('StaffAccessDetail — C9: mode toggle focus and tap targets', () => {
+  it('Follow role and Custom both meet the 44px minimum and carry a focus-visible ring', () => {
+    const admin = person({ role: 'admin', customList: null });
+    render(<StaffAccessDetail person={admin} people={[admin, FLOOR_HOLDER]} viewerId="viewer" />);
+
+    const followButton = screen.getByRole('button', { name: 'Follow role' });
+    const customButton = screen.getByRole('button', { name: 'Custom' });
+    expect(followButton).toHaveClass('min-h-[44px]');
+    expect(followButton.className).toContain('focus-visible:ring-2');
+    expect(customButton).toHaveClass('min-h-[44px]');
+    expect(customButton.className).toContain('focus-visible:ring-2');
+    // `aria-pressed`, not tab semantics — this is a toggle button pair.
+    expect(followButton).toHaveAttribute('aria-pressed');
+    expect(customButton).toHaveAttribute('aria-pressed');
   });
 });
 
@@ -246,6 +270,76 @@ describe('StaffAccessDetail — F1 (S1/S2): a SUSPENDED staff member', () => {
   });
 });
 
+describe('StaffAccessDetail — C4: an actor may only grant what the actor holds', () => {
+  // A genuine THIRD PARTY floor holder, distinct from the restricted viewer under test, so every
+  // assertion below isolates the ceiling from D2's floor (which otherwise would ALSO fire here,
+  // since neither the target nor the restricted viewer holds the floor tokens).
+  const thirdPartyFloorHolder = person({
+    id: 'third-party',
+    role: 'super_admin',
+    customList: null,
+  });
+
+  it('adding a capability the viewer does not resolve disables Review and save, with the ceiling copy', async () => {
+    const user = userEvent.setup();
+    // Overrides the shared full-bundle `FLOOR_HOLDER`/viewer fixture with a RESTRICTED one that
+    // cannot grant MANAGE_PROMO_CODES.
+    const restrictedViewer = person({
+      id: 'viewer',
+      role: 'admin',
+      customList: [PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS],
+      isLive: true,
+    });
+    const admin = person({
+      role: 'admin',
+      customList: [PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS],
+    });
+    render(
+      <StaffAccessDetail
+        person={admin}
+        people={[admin, restrictedViewer, thirdPartyFloorHolder]}
+        viewerId="viewer"
+      />
+    );
+
+    await user.click(screen.getByRole('checkbox', { name: /create and manage promo codes/i }));
+
+    expect(screen.getByRole('button', { name: /review and save/i })).toBeDisabled();
+    expect(screen.getByText(STAFF_ACCESS_SAVE_MESSAGES.grant_exceeds_actor)).toBeInTheDocument();
+  });
+
+  it('removing a capability by a restricted viewer stays saveable — the ceiling never blocks a reduction', async () => {
+    const user = userEvent.setup();
+    const restrictedViewer = person({
+      id: 'viewer',
+      role: 'admin',
+      customList: [PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS],
+      isLive: true,
+    });
+    const admin = person({
+      role: 'admin',
+      customList: [
+        PLATFORM_CAPABILITIES.RESOLVE_ADMIN_ALERTS,
+        PLATFORM_CAPABILITIES.MANAGE_PROMO_CODES,
+      ],
+    });
+    render(
+      <StaffAccessDetail
+        person={admin}
+        people={[admin, restrictedViewer, thirdPartyFloorHolder]}
+        viewerId="viewer"
+      />
+    );
+
+    await user.click(screen.getByRole('checkbox', { name: /create and manage promo codes/i }));
+
+    expect(screen.getByRole('button', { name: /review and save/i })).not.toBeDisabled();
+    expect(
+      screen.queryByText(STAFF_ACCESS_SAVE_MESSAGES.grant_exceeds_actor)
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe('StaffAccessDetail — token id shown as secondary text', () => {
   it('renders the raw token id alongside the human name', () => {
     const admin = person();
@@ -271,14 +365,28 @@ describe('StaffAccessDetail — Discard', () => {
   });
 });
 
+/**
+ * Shared setup for every test below: an admin promoted to super_admin, with the confirm dialog
+ * already open (mirrors clicking "Review and save"). Extracted because jscpd flagged this exact
+ * sequence repeated across five tests in this describe block — a DRY fix, not a behavior change;
+ * each test still drives `user` itself from here (clicking "Save changes", Escape, Cancel, …).
+ * Any mock on `mockSaveStaffAccessAction` a test needs may be set before OR after calling this —
+ * `render`/opening the dialog never calls the save action, only "Save changes" does.
+ */
+async function renderAtConfirmStep(): Promise<{
+  readonly user: ReturnType<typeof userEvent.setup>;
+}> {
+  const user = userEvent.setup();
+  const admin = person({ role: 'admin', customList: null });
+  render(<StaffAccessDetail person={admin} people={[admin, FLOOR_HOLDER]} viewerId="viewer" />);
+  await user.click(screen.getByRole('radio', { name: /^super admin/i }));
+  await user.click(screen.getByRole('button', { name: /review and save/i }));
+  return { user };
+}
+
 describe('StaffAccessDetail — confirm dialog diff and save outcomes', () => {
   it('shows the capability diff in the confirm dialog', async () => {
-    const user = userEvent.setup();
-    const admin = person({ role: 'admin', customList: null });
-    render(<StaffAccessDetail person={admin} people={[admin, FLOOR_HOLDER]} viewerId="viewer" />);
-
-    await user.click(screen.getByRole('radio', { name: /^super admin/i }));
-    await user.click(screen.getByRole('button', { name: /review and save/i }));
+    await renderAtConfirmStep();
 
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     expect(
@@ -287,12 +395,7 @@ describe('StaffAccessDetail — confirm dialog diff and save outcomes', () => {
   });
 
   it('shows a success toast and closes the dialog on a successful save', async () => {
-    const user = userEvent.setup();
-    const admin = person({ role: 'admin', customList: null });
-    render(<StaffAccessDetail person={admin} people={[admin, FLOOR_HOLDER]} viewerId="viewer" />);
-
-    await user.click(screen.getByRole('radio', { name: /^super admin/i }));
-    await user.click(screen.getByRole('button', { name: /review and save/i }));
+    const { user } = await renderAtConfirmStep();
     await user.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => {
@@ -303,18 +406,43 @@ describe('StaffAccessDetail — confirm dialog diff and save outcomes', () => {
     });
   });
 
+  it('C8: cannot be dismissed (Escape) while the save is in flight, but CAN once it fails', async () => {
+    let resolveSave: (value: SaveStaffAccessActionResult) => void = () => {
+      throw new Error('resolveSave called before assignment');
+    };
+    mockSaveStaffAccessAction.mockImplementation(
+      () =>
+        new Promise<SaveStaffAccessActionResult>((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+    const { user } = await renderAtConfirmStep();
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // The save is still in flight (the mock promise has not been resolved yet) — Escape must
+    // not close the dialog.
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+
+    resolveSave({ success: false, code: 'no_change', error: STAFF_ACCESS_SAVE_MESSAGES.no_change });
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(STAFF_ACCESS_SAVE_MESSAGES.no_change);
+    });
+
+    // The save has settled (failed) and the banner is showing — it CAN be dismissed now.
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+  });
+
   it('a stale refusal shows the reload banner, and Reload calls router.refresh', async () => {
-    const user = userEvent.setup();
     mockSaveStaffAccessAction.mockResolvedValue({
       success: false,
       code: 'stale',
       error: STAFF_ACCESS_SAVE_MESSAGES.stale,
     });
-    const admin = person({ role: 'admin', customList: null });
-    render(<StaffAccessDetail person={admin} people={[admin, FLOOR_HOLDER]} viewerId="viewer" />);
-
-    await user.click(screen.getByRole('radio', { name: /^super admin/i }));
-    await user.click(screen.getByRole('button', { name: /review and save/i }));
+    const { user } = await renderAtConfirmStep();
     await user.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => {
@@ -325,17 +453,12 @@ describe('StaffAccessDetail — confirm dialog diff and save outcomes', () => {
   });
 
   it('F3 (R2): cancelling a failed save, editing further, and reopening shows NO old banner', async () => {
-    const user = userEvent.setup();
     mockSaveStaffAccessAction.mockResolvedValue({
       success: false,
       code: 'no_change',
       error: STAFF_ACCESS_SAVE_MESSAGES.no_change,
     });
-    const admin = person({ role: 'admin', customList: null });
-    render(<StaffAccessDetail person={admin} people={[admin, FLOOR_HOLDER]} viewerId="viewer" />);
-
-    await user.click(screen.getByRole('radio', { name: /^super admin/i }));
-    await user.click(screen.getByRole('button', { name: /review and save/i }));
+    const { user } = await renderAtConfirmStep();
     await user.click(screen.getByRole('button', { name: /save changes/i }));
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(STAFF_ACCESS_SAVE_MESSAGES.no_change);

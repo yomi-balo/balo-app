@@ -17,6 +17,7 @@ const ALL_REFUSALS: readonly StaffAccessSaveRefusal[] = [
   'stale',
   'no_change',
   'target_ineligible',
+  'grant_exceeds_actor',
   'floor_violation',
 ];
 
@@ -76,6 +77,7 @@ describe('staffAccessFailureNeedsReload', () => {
       'custom_list_requires_staff_role',
       'staff_management_requires_super_admin',
       'no_change',
+      'grant_exceeds_actor',
       'denied',
       'invalid',
       'failed',
