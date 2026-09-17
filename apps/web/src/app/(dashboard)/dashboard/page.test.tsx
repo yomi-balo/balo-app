@@ -111,6 +111,24 @@ describe('DashboardPage — company branch', () => {
       'company'
     );
   });
+
+  /**
+   * `SessionUser` is a type assertion over cookie JSON with no runtime validation, so a BLANK
+   * `expertProfileId` is representable. The branch gates on truthiness — as `requireExpert()`
+   * does — so a blank id lands here rather than on an expert dashboard whose every read
+   * ('' as a profile id) can only come back empty.
+   */
+  it('an expert-mode user whose expertProfileId is an empty string renders the company dashboard', async () => {
+    mockGetCurrentUser.mockResolvedValue({ id: 'u-1', activeMode: 'expert', expertProfileId: '' });
+    mockRequireUser.mockResolvedValue({ id: 'u-1' });
+    mockGetCompanyContext.mockResolvedValue({ companyId: 'co-1', companyName: 'Northwind' });
+    mockBuildNavContext.mockResolvedValue({ workspaceType: 'expert', capabilities: [] });
+
+    const element = await DashboardPage();
+    render(element);
+    expect(screen.queryByTestId('expert-dashboard')).toBeNull();
+    expect(screen.getByTestId('company-up-next-slot')).toBeInTheDocument();
+  });
 });
 
 describe('DashboardPage — expert branch', () => {

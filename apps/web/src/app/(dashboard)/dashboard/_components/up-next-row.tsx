@@ -156,6 +156,13 @@ export function UpNextRow({
           <>
             <span className="text-foreground block text-[13px] font-semibold">{when.primary}</span>
             <span className="text-muted-foreground block text-xs">{when.secondary}</span>
+            {/* ⚠ RAW PALETTE, NOT `text-success` / `text-warning`, AND DELIBERATELY SO (raised and
+                rejected twice in review). At 12px these are normal-size text, so they owe AA 4.5:1
+                on the light card: `--success` (oklch L .623) lands ≈3.6:1 and `--warning`
+                (L .77) ≈2.1:1, while emerald-700/amber-700 clear it — the tokens stay correct for
+                icons, fills and the permanently-dark call surface. Same pairing as
+                `credit/in-session-panel.tsx`. The featured row's `bg-success/10 ring-success/30`
+                below IS a token: a fill carries no contrast obligation. */}
             {timing.statusLine !== null && (
               <span className="block text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                 {timing.statusLine}

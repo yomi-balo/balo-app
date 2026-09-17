@@ -454,6 +454,35 @@ describe('UpNextCard — footer links', () => {
       row_state: null,
     });
   });
+
+  /** The strip is a border: with no links it would draw a bare rule above the card edge. */
+  it('renders no footer strip at all when there are no links', () => {
+    // Expert workspace: its Empty state carries no CTA link, so any link found here is a
+    // footer link (the company Empty state renders "Find an expert").
+    const { container, rerender } = render(
+      <UpNextCard
+        data={{ kind: 'ready', rows: [] }}
+        workspaceType="expert"
+        subtitle="sub"
+        footerLinks={[]}
+      />
+    );
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(container.querySelectorAll('.border-t')).toHaveLength(0);
+
+    // Guard-the-guard: the same query DOES find the strip once links exist, so the assertion
+    // above cannot pass because `.border-t` is simply never used here.
+    rerender(
+      <UpNextCard
+        data={{ kind: 'ready', rows: [] }}
+        workspaceType="expert"
+        subtitle="sub"
+        footerLinks={FOOTER_LINKS}
+      />
+    );
+    expect(container.querySelectorAll('.border-t')).toHaveLength(1);
+    expect(screen.queryAllByRole('link')).toHaveLength(FOOTER_LINKS.length);
+  });
 });
 
 describe('UpNextCard — D10 tick behaviour', () => {

@@ -145,19 +145,24 @@ export function UpNextCard({
           />
         ))}
 
-      <div className="border-border mt-1.5 flex gap-[18px] border-t pt-3 pb-2.5">
-        {footerLinks.map((link) => (
-          <Link
-            key={link.target}
-            href={link.href}
-            onClick={() => handleFooterLinkClick(link.target)}
-            className="text-primary inline-flex items-center gap-1 text-[12.5px] font-semibold"
-          >
-            {link.label}
-            <ArrowRight className="size-3" aria-hidden="true" />
-          </Link>
-        ))}
-      </div>
+      {/* The strip is a BORDER, so it only renders with links in it: `resolveUpNextFooterLinks`
+          skips a nav entry the workspace doesn't have, and an empty list would otherwise draw a
+          bare rule above the card edge. */}
+      {footerLinks.length > 0 && (
+        <div className="border-border mt-1.5 flex gap-[18px] border-t pt-3 pb-2.5">
+          {footerLinks.map((link) => (
+            <Link
+              key={link.target}
+              href={link.href}
+              onClick={() => handleFooterLinkClick(link.target)}
+              className="text-primary inline-flex items-center gap-1 text-[12.5px] font-semibold"
+            >
+              {link.label}
+              <ArrowRight className="size-3" aria-hidden="true" />
+            </Link>
+          ))}
+        </div>
+      )}
     </motion.section>
   );
 }
