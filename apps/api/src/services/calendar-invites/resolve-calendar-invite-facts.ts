@@ -36,6 +36,21 @@ export interface CalendarInviteFacts {
 }
 
 /**
+ * BAL-475 (follow-up, F32) — the ONLY shape `resolveCalendarInviteFacts` throws for an upstream
+ * read failure. Sanitised consistent with `CalendarInviteSendError`'s reasoning
+ * (`calendar-invite-delivery.ts`, F2, fix round 1): carries the failing read's error NAME only,
+ * never its message or a `cause` chain (Pino's `err` serializer walks `cause`, which would
+ * silently reintroduce a leak).
+ */
+export class CalendarInviteFactsError extends Error {
+  constructor(causeName: string) {
+    super(`Calendar invite display facts resolution failed: ${causeName}`);
+    this.name = 'CalendarInviteFactsError';
+    Object.setPrototypeOf(this, CalendarInviteFactsError.prototype);
+  }
+}
+
+/**
  * READ-SIDE NARROWING, NOT the deleted `isCalendarProjectedContext` projection gate. A meeting
  * that holds a calendar row was booked through a bookable context by construction; a
  * non-bookable primary context here is drift, and yields no facts (skip) rather than a guessed
@@ -56,7 +71,20 @@ function buildDescription(
 }
 
 /**
- * NEVER THROWS — `undefined` on any failure (logged).
+ * `undefined` is returned ONLY for genuine domain absence — no primary context, a primary
+ * context that isn't calendar-projected/bookable, or `resolveExpertCalendarFacts` itself
+ * reporting no live facts. Every one of those is a terminal business fact a retry cannot change,
+ * so the delivery job's `no_display_facts` skip stays meaningful and non-retryable.
+ *
+ * BAL-475 (follow-up, F32) — on a THROWN error (a DB read blip, etc.) this now logs it exactly
+ * as before (message + stack) and THEN RETHROWS a sanitised {@link CalendarInviteFactsError}
+ * (never the raw error) so the caller's promise rejects and BullMQ retries. Previously every
+ * failure — thrown or not — degraded to `undefined`, which meant a single transient read failure
+ * silently and PERMANENTLY dropped that recipient's calendar invite (the delivery job "succeeded"
+ * with nothing sent, no Sentry event, no retry). This is the ONLY caller of
+ * `resolveExpertCalendarFacts` that must behave this way — that function's OTHER caller (the
+ * post-commit, best-effort expert-calendar projection) genuinely cannot retry and correctly keeps
+ * its own "never throws" contract; it is untouched by this fix.
  */
 export async function resolveCalendarInviteFacts(
   input: {
@@ -125,6 +153,11 @@ export async function resolveCalendarInviteFacts(
       },
       'Failed to resolve calendar invite display facts'
     );
-    return undefined;
+    // BAL-475 (follow-up, F32) — RETHROW, sanitised. This used to `return undefined`, which the
+    // delivery job's Step 6 treats identically to genuine domain absence: a terminal
+    // `no_display_facts` skip. That silently and permanently dropped the invite on a transient
+    // read failure instead of letting BullMQ retry (`attempts: 3`). Nothing has been claimed yet
+    // at this point in the delivery path, so throwing here is safe to retry from scratch.
+    throw new CalendarInviteFactsError(error instanceof Error ? error.name : 'UnknownError');
   }
 }

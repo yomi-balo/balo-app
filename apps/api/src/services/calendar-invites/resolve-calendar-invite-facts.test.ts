@@ -23,7 +23,8 @@ vi.mock('../meetings/delivering-party.js', () => ({
   deliveringPartyName: mockDeliveringPartyName,
 }));
 
-const { resolveCalendarInviteFacts } = await import('./resolve-calendar-invite-facts.js');
+const { resolveCalendarInviteFacts, CalendarInviteFactsError } =
+  await import('./resolve-calendar-invite-facts.js');
 
 function fakeLog() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -160,16 +161,75 @@ describe('resolveCalendarInviteFacts', () => {
     expect(facts).toBeUndefined();
   });
 
-  it('a throwing read degrades to undefined + log.error, never throws', async () => {
-    mockListByMeeting.mockRejectedValue(new Error('db blip'));
+  // BAL-475 (follow-up, F32) — a THROWN read must now propagate (rejected), not degrade to
+  // `undefined`. Swallowing it used to make the delivery job "succeed" with a terminal
+  // `no_display_facts` skip on a transient DB error, permanently dropping the invite instead of
+  // letting BullMQ retry (`attempts: 3`).
+  it('a throwing read (listByMeeting) LOGS then RETHROWS a sanitised error — never the raw message', async () => {
+    mockListByMeeting.mockRejectedValue(new Error('db blip: connection to 10.0.0.7:5432 refused'));
     const log = fakeLog();
 
+    let caught: unknown;
+    try {
+      await resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'expert', audience: 'member' },
+        log
+      );
+      throw new Error('expected resolveCalendarInviteFacts to reject');
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(CalendarInviteFactsError);
+    const message = (caught as Error).message;
+    expect(message).toBe('Calendar invite display facts resolution failed: Error');
+    expect(message).not.toContain('db blip');
+    expect(message).not.toContain('10.0.0.7');
+
+    // Still logged exactly as before: message + stack, same fields.
+    expect(log.error).toHaveBeenCalledTimes(1);
+    const [fields] = log.error.mock.calls[0] as [Record<string, unknown>];
+    expect(fields.error).toContain('db blip');
+    expect(fields.stack).toBeDefined();
+  });
+
+  it('a throwing read from a downstream call (deliveringPartyName, client party) also rethrows sanitised', async () => {
+    mockDeliveringPartyName.mockRejectedValue(new Error('agency lookup blew up'));
+
+    await expect(
+      resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'client', audience: 'member' },
+        fakeLog()
+      )
+    ).rejects.toBeInstanceOf(CalendarInviteFactsError);
+  });
+
+  it('genuine domain absence paths still resolve to undefined and do NOT throw (no primary context, non-bookable context, undefined expert facts)', async () => {
+    const log = fakeLog();
+
+    mockListByMeeting.mockResolvedValue([]);
     await expect(
       resolveCalendarInviteFacts(
         { meetingId: MEETING_ID, party: 'expert', audience: 'member' },
         log
       )
     ).resolves.toBeUndefined();
-    expect(log.error).toHaveBeenCalled();
+
+    mockListByMeeting.mockResolvedValue([{ contextType: 'retainer_checkin', contextId: 'ctx-1' }]);
+    await expect(
+      resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'expert', audience: 'member' },
+        log
+      )
+    ).resolves.toBeUndefined();
+
+    mockListByMeeting.mockResolvedValue(CASE_CONTEXT);
+    mockResolveExpertCalendarFacts.mockResolvedValue(undefined);
+    await expect(
+      resolveCalendarInviteFacts(
+        { meetingId: MEETING_ID, party: 'expert', audience: 'member' },
+        log
+      )
+    ).resolves.toBeUndefined();
   });
 });

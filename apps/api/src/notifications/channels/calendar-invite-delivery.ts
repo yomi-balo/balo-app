@@ -112,6 +112,16 @@ function toExtras(fields: ReturnType<typeof calendarInviteLogFields>): Record<st
   return { ...fields };
 }
 
+/**
+ * BAL-475 (follow-up, F32) — `no_display_facts` means GENUINE domain absence ONLY: no primary
+ * context, a non-bookable primary context, or `resolveExpertCalendarFacts` reporting no live
+ * facts. `resolveCalendarInviteFacts` used to ALSO collapse a thrown read failure into this same
+ * `undefined` (and therefore this same terminal skip), which meant a single transient DB error
+ * silently and permanently dropped the invite. It no longer does: a thrown error now propagates
+ * out of `loadSendableState` (Step 6, below) and out of this whole function uncaught, rejecting
+ * the promise BullMQ awaits so the job retries. `no_display_facts` therefore never fires for a
+ * failure a retry could resolve.
+ */
 type CalendarInviteSkipReason =
   | 'calendar_class_with_attachments'
   | 'smtp_not_configured'
@@ -267,7 +277,12 @@ async function loadSendableState(
     return { ok: false, reason: 'meeting_not_live', sequence: row.sequence };
   }
 
-  // Step 6 — display facts, re-resolved at send time (O3).
+  // Step 6 — display facts, re-resolved at send time (O3). F32 (follow-up) — this AWAIT is
+  // deliberately NOT wrapped in a try/catch here: `resolveCalendarInviteFacts` now throws a
+  // sanitised `CalendarInviteFactsError` for a genuine read failure (rather than degrading it to
+  // `undefined`), and letting that propagate uncaught out of `loadSendableState` is exactly what
+  // makes the delivery job's promise reject so BullMQ retries. Only a genuine domain absence
+  // reaches the `undefined` check below.
   const facts = await resolveCalendarInviteFacts(
     { meetingId: spec.meetingId, party: spec.party, audience },
     log
@@ -412,7 +427,12 @@ async function sendClaimedInvite(input: {
  * Deliver ONE calendar invite. Never sends anything but a calendar-class message. Never
  * throws for a skip; throws on a transport failure (always a sanitised `CalendarInviteSendError`
  * — F2) or a transient read/claim failure (F14 corrects the docblock that used to claim
- * otherwise) — so BullMQ retries.
+ * otherwise) — so BullMQ retries. F32 (follow-up) closes the one read that was still an
+ * exception to this: `resolveCalendarInviteFacts` (Step 6) used to swallow every failure —
+ * thrown or not — into `undefined`, so a transient error there produced a terminal
+ * `no_display_facts` skip instead of a retry. It now throws a sanitised
+ * `CalendarInviteFactsError` for a genuine read failure, propagating uncaught from here exactly
+ * like every other read in this path.
  */
 export async function deliverCalendarInvite(
   job: Job<DeliveryPayload>,

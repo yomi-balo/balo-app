@@ -624,6 +624,24 @@ describe('deliverCalendarInvite — skip branches', () => {
     expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
   });
 
+  // BAL-475 (follow-up, F32) — a THROWN facts read must reject `deliverCalendarInvite` (so
+  // BullMQ retries), not resolve to a `no_display_facts` skip. Nothing may be claimed or sent.
+  it('a facts resolver that THROWS rejects deliverCalendarInvite — no skip, no claim, no send', async () => {
+    mockResolveFacts.mockRejectedValue(new Error('display facts read blew up'));
+    const job = jobFor(USER_SPEC);
+
+    await expect(deliverCalendarInvite(job, FAKE_TRANSPORT)).rejects.toThrow();
+
+    expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
+    expect(mockClaimSend).not.toHaveBeenCalled();
+    expect(mockLogNotification).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'email',
+      'skipped',
+      'no_display_facts'
+    );
+  });
+
   it('already_sent skips duplicate_suppressed — no send', async () => {
     mockClaimSend.mockResolvedValue({ status: 'already_sent', delivery: { id: 'delivery-1' } });
     const job = jobFor(USER_SPEC);
