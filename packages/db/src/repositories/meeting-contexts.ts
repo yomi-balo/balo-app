@@ -501,9 +501,10 @@ export const meetingContextsRepository = {
    *    UNTIL BAL-425 WAS STALE, AND THE WAY IT WENT STALE IS THE POINT: it was TRUE when
    *    written — this seam and that sentence both shipped in BAL-418 (`5b843429`), when
    *    `meeting_status` genuinely had four labels. BAL-428 (`8daefce1`) added `cancelled`
-   *    two days later WITHOUT touching this file, so nothing in that commit's diff pointed
-   *    a reviewer here. A comment does not have to be edited to become false; it only has
-   *    to describe something another commit is free to change.
+   *    two days later; its diff DID touch this file, but every hunk sat far above this
+   *    enumeration (the attach guard and the detach docblock), so nothing on a reviewer's
+   *    screen pointed here. A comment does not have to be edited to become false; it only
+   *    has to describe something another commit is free to change.
    *
    *    So "non-terminal" would readmit BOTH `in_progress` AND `cancelled`, and the second
    *    is the dangerous one. `cancelMeetingTx` SOFT-DELETES NEITHER the meeting NOR its

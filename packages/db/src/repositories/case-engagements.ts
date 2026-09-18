@@ -824,7 +824,7 @@ export const caseEngagementsRepository = {
    * ⚠ This is a SUPERSET, not the rule: it is consultation-blind. The refinement is
    * `isCaseInactive()` from `@balo/shared/engagements`, fed by
    * `meetingContextsRepository.consultationTimestampsForEngagements(ids, now)` — the
-   * `meeting_contexts` seam shipped by BAL-418/BAL-428. THE SUPERSET-PLUS-REFINE SHAPE
+   * `meeting_contexts` seam shipped by BAL-418. THE SUPERSET-PLUS-REFINE SHAPE
    * IS RATIFIED, NOT A GAP — see the composition suite's header: folding the skip into
    * this query would need a correlated subquery
    * over `meeting_contexts` + `meetings`, i.e. a SECOND definition of "upcoming" that can
@@ -832,8 +832,9 @@ export const caseEngagementsRepository = {
    *
    * ⚠ DO NOT resolve the anchors through `credit_sessions.engagement_id`. That column
    * exists, but money/reporting read it while this rule reads the seam, and nothing
-   * enforces coherence between the two — see the `engagementId` column's docblock in
-   * `schema/credit-sessions.ts`.
+   * enforces coherence between the two — see the "BAL-418 / ADR-1045 §3" block in
+   * `schema/credit-sessions.ts` (the caveat sits above the columns, not on `engagement_id`,
+   * whose own comment is the denormalisation note).
    *
    * ⚠ THE BAL-425 PROHIBITION, RESTATED RATHER THAN DELETED. The old wording ("MUST NOT
    * run a sweep over this before BAL-418 lands") is discharged: BAL-418 landed in
