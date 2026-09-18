@@ -479,7 +479,7 @@ export const meetingContextsRepository = {
    * THE BAL-425 SEAM — the two consultation anchors `isCaseInactive`
    * (`@balo/shared/engagements`) takes as parameters, for a BATCH of case engagements.
    *
-   * BATCHED DELIBERATELY: BAL-420 sweeps a candidate list from
+   * BATCHED DELIBERATELY: the sweep resolves a candidate list from
    * `caseEngagementsRepository.listOpenCreatedBefore`, so a per-engagement query would be
    * a textbook N+1.
    *
@@ -494,31 +494,61 @@ export const meetingContextsRepository = {
    *  - `nextScheduledConsultationAt` = `MIN(meetings.scheduled_start)` over live meetings
    *    with `scheduled_start > now` AND `status IN ('scheduled',
    *    'waiting_for_participants')` — THE TWO STATUSES NAMED, never "a non-terminal
-   *    status". `meeting_status` is `scheduled | waiting_for_participants | in_progress |
-   *    ended`, of which only `ended` is terminal, so "non-terminal" would also mean
-   *    `in_progress` — which this filter deliberately EXCLUDES. The anchor means UPCOMING,
-   *    and a meeting already running is not upcoming. Probed on Postgres 16 with one
-   *    future-dated meeting per status: `scheduled` → the timestamp,
-   *    `waiting_for_participants` → the timestamp, `in_progress` → NULL, `ended` → NULL.
+   *    status". `meeting_status` has FIVE labels: `scheduled | waiting_for_participants |
+   *    in_progress | ended | cancelled`, of which TWO are terminal — `ended` and
+   *    `cancelled` (`endMeeting`'s CAS is written as the exclusion `NOT IN ('ended',
+   *    'cancelled')`; see `schema/enums.ts`). ⚠ THE FOUR-LABEL ENUMERATION THAT STOOD HERE
+   *    UNTIL BAL-425 WAS STALE: `cancelled` was added by BAL-428 (`8daefce1`) in the SAME
+   *    commit that shipped this seam, and the enumeration was not refreshed.
    *
-   * ⚠ THE BOUNDARY THAT FALLS OUT OF THAT, ASSIGNED TO **BAL-425/BAL-420** IN WRITING. An
-   * `in_progress` meeting contributes to NEITHER anchor — not to
-   * `nextScheduledConsultationAt` (not upcoming) and not to `lastCompletedConsultationAt`
-   * (not `ended`) — so a case whose only activity is a consultation running RIGHT NOW reads
-   * as having none. `isCaseInactive` then falls back to `caseInactivityAnchor`'s
-   * `engagements.created_at`, so a case created ≥ `CASE_INACTIVITY_DAYS` ago whose FIRST
-   * consultation is in progress is eligible for auto-close MID-CALL. Widening the filter is
-   * not this seam's call to make (the anchor's meaning is "upcoming"); the sweep must handle
-   * it — by excluding engagements with a live `in_progress` meeting from its candidate list,
-   * or by deciding explicitly that the exposure is acceptable. Stated here, in the same
-   * register as the tenancy obligation above, so it is not rediscovered as a case that
-   * closed itself while two people were talking.
+   *    So "non-terminal" would readmit BOTH `in_progress` AND `cancelled`, and the second
+   *    is the dangerous one. `cancelMeetingTx` flips `status` ONLY — it soft-deletes
+   *    neither the meeting nor its `meeting_contexts` rows — so a cancelled meeting keeps
+   *    its future `scheduled_start` FOREVER. Widening this filter would let one cancelled
+   *    call hold a dead case open permanently, with no row anywhere that looks wrong. The
+   *    `in_progress` exclusion is a judgement about the word "upcoming"; the `cancelled`
+   *    exclusion is the difference between a rule that terminates and one that does not.
+   *    PINNED by 'a CANCELLED future meeting is NOT upcoming — the earliest LIVE scheduled
+   *    one wins' and by composition case 7 in `meeting-contexts.integration.test.ts`.
+   *
+   *    The COMPLETED anchor needs no such filter hardening and structurally cannot: CHECK
+   *    `meeting_outcome_requires_ended` makes `status='cancelled' AND outcome='completed'`
+   *    unrepresentable, and `CANCELLABLE_MEETING_STATUSES = ['scheduled']` means an `ended`
+   *    meeting can never later be cancelled. A cancelled row always carries a NULL outcome.
+   *    Pinned by 'a cancelled meeting can NEVER be a completed consultation'.
+   *
+   *    Probed on Postgres 16 with one future-dated meeting per status: `scheduled` → the
+   *    timestamp, `waiting_for_participants` → the timestamp, `in_progress` → NULL,
+   *    `ended` → NULL, `cancelled` → NULL.
+   *
+   * ⚠ THE BOUNDARY THAT FALLS OUT OF THAT — RE-ASSIGNED BY BAL-425. An `in_progress`
+   * meeting contributes to NEITHER anchor: not to `nextScheduledConsultationAt` (it is
+   * not upcoming) and not to `lastCompletedConsultationAt` (it is not `ended`). So a case
+   * whose only activity is a consultation running RIGHT NOW reads as having none,
+   * `isCaseInactive` falls back to `engagements.created_at`, and a case created ≥
+   * `CASE_INACTIVITY_DAYS` ago whose FIRST consultation is in progress is eligible for
+   * auto-close MID-CALL.
+   *
+   * ⚠ OWNERSHIP, STATED AS A CONDITION BECAUSE THE PREVIOUS TICKET-ID ASSIGNMENT FAILED.
+   * This was assigned to "BAL-425/BAL-420". BAL-420 is CLOSED (it shipped the delayed-
+   * dispatch primitive, not this sweep) and BAL-425 was documentation-and-tests only, so
+   * the hazard was owned by nobody. It now belongs to WHICHEVER TICKET FIRST GIVES
+   * `consultationTimestampsForEngagements` A PRODUCTION CALLER — a condition that cannot
+   * go stale, and that is checkable today: this method has ZERO production callers.
+   *
+   * THE REMEDY IS NOT IN THIS SEAM, and that is deliberate — the anchor's meaning is
+   * "upcoming", and a running meeting is not upcoming. Widening the filter would be the
+   * wrong fix. The sweep must instead EXCLUDE FROM ITS CANDIDATE LIST any engagement with
+   * a live `meetings` row in `status='in_progress'` carrying a live `case`
+   * `meeting_contexts` row — i.e. filter the candidates, not the anchors — or decide
+   * explicitly, in writing, that the mid-call exposure is acceptable. Stated here so it is
+   * not rediscovered as a case that closed itself while two people were talking.
    *
    * Enum literals at QUERY time are always safe — the house restriction is on index
    * predicates and CHECKs only.
    *
    * Returns an entry for EVERY requested id (both timestamps `null` when nothing matches),
-   * so BAL-420 never has to distinguish "absent" from "none". An empty input returns an
+   * so the sweep never has to distinguish "absent" from "none". An empty input returns an
    * empty Map WITHOUT touching the DB.
    */
   async consultationTimestampsForEngagements(

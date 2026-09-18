@@ -757,6 +757,10 @@ export const transcriptArtifactKindEnum = pgEnum('transcript_artifact_kind', [
  *     `'cancelled'` residual paragraph before adding a terminal label.
  *   · `repositories/meeting-contexts.ts` — `consultationTimestampsForEngagements` names
  *     `scheduled | waiting_for_participants` (upcoming) and `ended`+`completed` (delivered).
+ *     The "ZERO code change" exclusion above is PINNED as of BAL-425 by 'a CANCELLED future
+ *     meeting is NOT upcoming' and composition case 7 in
+ *     `repositories/meeting-contexts.integration.test.ts` — a new label that should also be
+ *     excluded needs a sibling case there, not just a reading of this list.
  *   · `repositories/_shared/consultation-count.ts` — the PUBLIC "sessions" stat, gated on
  *     `ended` + `outcome='completed'`.
  *

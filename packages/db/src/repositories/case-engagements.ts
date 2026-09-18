@@ -817,16 +817,31 @@ export const caseEngagementsRepository = {
    * Rides `engagement_type_status_created_idx` + `case_engagement_open_idx`.
    *
    * ⚠ The cutoff is compared against the PARENT's `created_at` — the same value
-   * `CaseEngagementRow.createdAt` exposes, so the set this selects and the set BAL-420
+   * `CaseEngagementRow.createdAt` exposes, so the set this selects and the set the sweep
    * re-evaluates with `isCaseInactive` cannot diverge on two clocks.
    *
-   * ⚠ This is a SUPERSET, not the rule: it is consultation-blind, because no FK links
-   * a case to its consultations yet (`credit_sessions` has no `engagement_id`;
-   * `consultations` is an availability stub — BAL-418's `meeting_contexts` is the
-   * link). BAL-420 refines each row with `isCaseInactive()` from
-   * `@balo/shared/engagements`, and MUST NOT run a sweep over this before BAL-418
-   * lands. The caller computes `cutoff = now - CASE_INACTIVITY_DAYS` — the repo stays
-   * policy-free (mirrors `listPendingAutoAccept(cutoff)`).
+   * ⚠ This is a SUPERSET, not the rule: it is consultation-blind. The refinement is
+   * `isCaseInactive()` from `@balo/shared/engagements`, fed by
+   * `meetingContextsRepository.consultationTimestampsForEngagements(ids, now)` — the
+   * `meeting_contexts` seam shipped by BAL-418/BAL-428. THE SUPERSET-PLUS-REFINE SHAPE
+   * IS RATIFIED, NOT A GAP — see the composition suite's header: folding the skip into
+   * this query would need a correlated subquery
+   * over `meeting_contexts` + `meetings`, i.e. a SECOND definition of "upcoming" that can
+   * drift from the seam's, and it would defeat `engagement_type_status_created_idx`.
+   *
+   * ⚠ DO NOT resolve the anchors through `credit_sessions.engagement_id`. That column
+   * exists, but money/reporting read it while this rule reads the seam, and nothing
+   * enforces coherence between the two — see `schema/credit-sessions.ts:304-309`.
+   *
+   * ⚠ THE BAL-425 PROHIBITION, RESTATED RATHER THAN DELETED. The old wording ("MUST NOT
+   * run a sweep over this before BAL-418 lands") is discharged: BAL-418 landed in
+   * `5b843429` and the rule is now SATISFIABLE end-to-end. That is NOT a licence to run a
+   * sweep. No case-inactivity sweep exists, and whichever ticket builds one still owes,
+   * BEFORE it runs in production: (a) excluding engagements with a live `in_progress`
+   * meeting from the candidate list (the mid-call hazard on
+   * `consultationTimestampsForEngagements`), and (b) calling the seam for every candidate
+   * — passing `null, null` is a BUG, not a gap. The caller computes
+   * `cutoff = now - CASE_INACTIVITY_DAYS`; the repo stays policy-free.
    */
   async listOpenCreatedBefore(cutoff: Date): Promise<CaseEngagementRow[]> {
     const rows = await db
