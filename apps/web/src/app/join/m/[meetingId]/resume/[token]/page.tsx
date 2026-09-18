@@ -39,8 +39,16 @@ const tokenSchema = z.string().min(20).max(200);
 /**
  * BAL-442 (RULING 3) — the RESUME landing an emailed re-entry link points at:
  * `/join/m/{meetingId}/resume/{token}`. It writes the raw token into the lobby's own
- * `sessionStorage` keys, then replaces into the clean `/join/m/{meetingId}` URL, so the
- * credential does not persist in browser history.
+ * `sessionStorage` keys, then REPLACES into the clean `/join/m/{meetingId}` URL, so the
+ * token-bearing URL leaves this TAB'S BACK STACK.
+ *
+ * ⚠ fix round (R-7) — THAT IS ALL `replace` BUYS, AND THE EARLIER WORDING OVERCLAIMED IT. This
+ * page is reached by a real navigation from an email client, so the visit is already recorded
+ * in the browser's own history — and, for a signed-in profile, synced — exactly as a
+ * `/join/{token}` landing is. The exposure of this form EQUALS that one; `replace` only keeps
+ * a Back press from re-landing on the credential. What the path form actually buys over a
+ * `?rt=` query string is the SERVER-SIDE surfaces: `redactSensitivePathPrefixes` covers it
+ * (BLOCKER B), where a query string lands in logs and referrer headers unredacted.
  *
  * ⚠⚠ ZERO DATABASE READS — the acceptance criterion of this file, exactly as the lobby page's
  * (`m/[meetingId]/page.tsx`) own. The token is NOT resolved here: resolution happens on the

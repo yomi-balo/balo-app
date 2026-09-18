@@ -572,31 +572,38 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
     // floor: a status AND latency oracle, defeating this route's own "ONE EXIT, ONE BODY, ONE
     // STATUS" contract. Catching HERE, inside the closure, means a throw is still padded to the
     // floor AND still falls through to the same neutral `202` below — never its own status.
-    await withResponseFloor(LOBBY_REENTRY_RESPONSE_FLOOR_MS, async () => {
-      if (!recipientAllowed) {
-        // ⚠ NO EMAIL IN THIS LOG — the meeting id and the window label are the safe fields.
-        log.warn(
-          { route: 'lobby-reentry', meetingId: params.meetingId, kind: 'recipient' },
-          'Lobby re-entry recipient budget exhausted — answering neutrally, sending nothing'
-        );
-        return;
-      }
-      try {
-        await requestLobbyReentryLink({ meetingId: params.meetingId, email });
-      } catch (error) {
-        // ⚠ NO EMAIL, NO TOKEN — only the route, meeting id and error detail, matching every
-        // other catch block on this route tree.
-        log.error(
-          {
-            route: 'lobby-reentry',
-            meetingId: params.meetingId,
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-          },
-          'Lobby re-entry request failed — answering neutrally, same 202'
-        );
-      }
-    });
+    await withResponseFloor(
+      LOBBY_REENTRY_RESPONSE_FLOOR_MS,
+      async () => {
+        if (!recipientAllowed) {
+          // ⚠ NO EMAIL IN THIS LOG — the meeting id and the window label are the safe fields.
+          log.warn(
+            { route: 'lobby-reentry', meetingId: params.meetingId, kind: 'recipient' },
+            'Lobby re-entry recipient budget exhausted — answering neutrally, sending nothing'
+          );
+          return;
+        }
+        try {
+          await requestLobbyReentryLink({ meetingId: params.meetingId, email });
+        } catch (error) {
+          // ⚠ NO EMAIL, NO TOKEN — only the route, meeting id and error detail, matching every
+          // other catch block on this route tree.
+          log.error(
+            {
+              route: 'lobby-reentry',
+              meetingId: params.meetingId,
+              error: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : undefined,
+            },
+            'Lobby re-entry request failed — answering neutrally, same 202'
+          );
+        }
+      },
+      // ⚠ fix round (R-4) — the ROUTE LABEL the overrun warning is filed under, and the ONLY
+      // identifying field it carries. Never the meeting id and never the address: an overrun
+      // is a fact about OUR latency, not about whose request produced it.
+      'lobby-reentry'
+    );
 
     // 6. ⚠⚠ ONE EXIT, ONE BODY, ONE STATUS. There is no verdict to branch on: the service
     //    returns `void` BY DESIGN, so "matched" is structurally unable to reach here.

@@ -15,11 +15,27 @@
  * legible side by side: meeting → primary context → liveness → the guest-specific read → mint
  * → write → publish → track.
  *
- * ⚠⚠ NOT `assertMeetingJoinable`. That refuses an `ended` meeting, and `findLiveByTokenHash`
- * deliberately RESOLVES one so a guest keeps their handle on the recap (BAL-388). Refusing
- * recovery for an ended meeting would be a NARROWER rule than the credential it restores, so
- * this checks only `deleted_at IS NULL` (via `findById`) and `status !== 'cancelled'` — exactly
- * `findLiveByTokenHash`'s two meeting-side predicates.
+ * ⚠⚠ `assertMeetingJoinable` — THE SAME LIVENESS GATE `claimLobbyPlace` USES, AND A FAILURE IS
+ * A **NEUTRAL MISS**, NEVER AN ERROR. The first cut deliberately SKIPPED it, on the written
+ * rationale that refusing an `ended` meeting would be "a NARROWER rule than the credential it
+ * restores" because `findLiveByTokenHash` tolerates an ended meeting for the recap (BAL-388).
+ * ⚠⚠ **THAT RATIONALE IS FALSE FOR THE ONLY ROW SHAPE THIS FEATURE CAN MATCH**, and the
+ * recovery it produced was DEAD ON ARRIVAL:
+ *   · `joinMeetingAsGuest` runs `assertMeetingJoinable` **BEFORE** its admission switch, so a
+ *     lobby token on an ended meeting is refused at the liveness gate. The email would promise
+ *     "you'll still wait for the host to let you in" and the very first poll would answer
+ *     "This link isn't active".
+ *   · THE RECAP IS NOT A FALLBACK EITHER: `resolveGuestRecapAccess` (`apps/web`) lists
+ *     **pending admission** among the denials that collapse to `null`. Every row this arm can
+ *     match is `invite_channel='link'` + `admission='pending'`, so a pending lobby row can
+ *     never load a recap.
+ * It also closes the MOVED-EARLIER hazard: a stored `expires_at` can still be in the future
+ * while the recomputed `scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS` is already past, so
+ * without this gate a rotation would destroy a WORKING link and email a dead one.
+ *
+ * ⚠ NON-ENUMERATION IS UNTOUCHED BY IT. A liveness failure converges on the same `miss(...)`
+ * as every other refusal — same `202`, same floor, same neutral copy, nothing sent — because a
+ * miss is already indistinguishable from a match by construction.
  *
  * ⚠ NO SEAT CAP AND NO QUEUE CAP. This is not an additive mutation: no row is created and no
  * seat or queue slot is taken (`resendGuestJoinLink`'s "NO SEAT-CAP CHECK" note verbatim).
@@ -42,6 +58,7 @@ import { createLogger } from '@balo/shared/logging';
 import { GUEST_TOKEN_TTL_AFTER_END_MS, selectPrimaryMeetingContext } from '@balo/shared/meetings';
 import { notificationEvents } from '../../notifications/index.js';
 import { mintGuestInviteToken } from '../../lib/guest-token.js';
+import { assertMeetingJoinable } from './meeting-liveness.js';
 import { formatExpiryDate, publishBestEffort, resolveMeetingTitle } from './guest-participation.js';
 
 const log = createLogger('request-lobby-reentry-link');
@@ -112,11 +129,13 @@ export async function requestLobbyReentryLink(input: RequestLobbyReentryLinkInpu
     return;
   }
 
-  // ⚠⚠ NOT `assertMeetingJoinable` — see the module docblock. The two meeting-side predicates
-  // here are exactly `findLiveByTokenHash`'s: `deleted_at IS NULL` (already enforced by
-  // `findById`) and `status !== 'cancelled'`.
-  if (meeting.status === 'cancelled') {
-    miss(meetingId, 'meeting_cancelled');
+  // ⚠⚠ THE SAME GATE `claimLobbyPlace` RUNS, AND A FAILURE IS A NEUTRAL MISS — see the module
+  // docblock for why the hand-rolled `status !== 'cancelled'` pair this replaced was wrong.
+  // Restoring a credential `joinMeetingAsGuest` would refuse at its own liveness gate is not a
+  // recovery; it is a dead link plus a rotation that killed whatever the guest still had.
+  const liveness = await assertMeetingJoinable(meeting, primary.context);
+  if (!liveness.ok) {
+    miss(meetingId, liveness.reason);
     return;
   }
 
@@ -137,10 +156,16 @@ export async function requestLobbyReentryLink(input: RequestLobbyReentryLinkInpu
     guestId: guest.id,
     tokenHash,
     expiresAt,
+    // ⚠⚠ THE COMPARE-AND-SET TOKEN, HANDED BACK UNMODIFIED (fix round R-6) — opaque here, and
+    // it is what makes two simultaneous recoveries produce ONE rotation and ONE email instead
+    // of two, the second of which could arrive last holding an already-dead credential.
+    expectedVersionToken: guest.versionToken,
   });
   if (rotated === undefined) {
-    // Lost a race with a concurrent revoke/deny/admit between the read and the write. Nothing
-    // was published — the `WHERE` is the gate, not the read.
+    // Lost a race with a concurrent revoke/deny/admit — or with ANOTHER RECOVERY for the same
+    // address, which the `updated_at` compare-and-set now settles in favour of exactly one
+    // writer. Nothing was published: the `WHERE` is the gate, not the read. ⚠ A NEUTRAL MISS,
+    // never an error — the loser must be indistinguishable from "no row at all".
     miss(meetingId, 'rotation_lost_race');
     return;
   }
@@ -149,7 +174,12 @@ export async function requestLobbyReentryLink(input: RequestLobbyReentryLinkInpu
   // factory, and a title lookup is a cosmetic read that must not sit inside the swallow.
   const meetingTitle = await resolveMeetingTitle(primary.context);
 
-  await publishBestEffort(
+  // ⚠⚠ THE RETURN VALUE IS LOAD-BEARING (fix round R-5). `publishBestEffort` SWALLOWS a queue
+  // failure by design, so before it answered a boolean this arm reported `matched: true` and
+  // logged "link sent" for a link that was never queued — contradicting the event's own
+  // documented meaning ("A FRESH LINK WAS EMAILED", below) and hiding the one outcome support
+  // most needs to see: the old credential is dead and nothing replaced it.
+  const published = await publishBestEffort(
     () =>
       notificationEvents.publish('meeting.guest_reentry_link_sent', {
         // ⚠⚠ NEVER THE GUEST ROW ID. A repeat recovery on the SAME row would collide with the
@@ -171,15 +201,33 @@ export async function requestLobbyReentryLink(input: RequestLobbyReentryLinkInpu
     'Failed to publish lobby re-entry link — the rotation itself is committed'
   );
 
+  // ⚠⚠ REPORTING ONLY — `matched` STILL BRANCHES NOTHING THE CALLER CAN SEE. The function
+  // returns `void` either way, the route answers the same `202` inside the same floor, and the
+  // panel renders the same neutral sentence. R-5 changed WHAT IS REPORTED, never control flow.
+  // ⚠ The MISS-arm `distinct_id` on an unqueued publish, deliberately: `matched: false` and a
+  // guest-row `distinct_id` would be two different answers to the same question, and the funnel
+  // ("how often does recovery actually rescue somebody?") counts this as a failure.
   trackServer(GUEST_SERVER_EVENTS.GUEST_REENTRY_REQUESTED, {
-    matched: true,
-    distinct_id: rotated.id,
+    matched: published,
+    distinct_id: published ? rotated.id : GUEST_REENTRY_ANONYMOUS_DISTINCT_ID,
   });
 
-  // ⚠ A CREDENTIAL WAS ISSUED — the line that makes a "they never got it" support case
-  // answerable. ⚠ NO ADDRESS, NO TOKEN, NO HASH.
-  log.info(
-    { meetingId, guestId: rotated.id, matched: true },
-    'Lobby re-entry link sent — the previous credential is now dead'
+  if (published) {
+    // ⚠ A CREDENTIAL WAS ISSUED — the line that makes a "they never got it" support case
+    // answerable. ⚠ NO ADDRESS, NO TOKEN, NO HASH.
+    log.info(
+      { meetingId, guestId: rotated.id, matched: true },
+      'Lobby re-entry link sent — the previous credential is now dead'
+    );
+    return;
+  }
+
+  // ⚠⚠ THE WORST OUTCOME THIS FEATURE HAS, AND IT USED TO LOG AS A SUCCESS. The rotation IS
+  // committed, so the guest's old link is dead — and the replacement was never queued.
+  // `publishBestEffort` already logged the underlying error; this names the consequence.
+  // ⚠ NO ADDRESS, NO TOKEN, NO HASH — `guestId` is the safe handle, as on the success arm.
+  log.warn(
+    { meetingId, guestId: rotated.id, matched: false },
+    'Lobby re-entry link was NOT queued — the previous credential is dead and nothing replaced it'
   );
 }

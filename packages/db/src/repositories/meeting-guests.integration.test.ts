@@ -1698,6 +1698,30 @@ describe('meetingGuestsRepository.rotateToken (BAL-436 — the re-send)', () => 
 const SELF_RECOVERED = 'meeting_guest.link_self_recovered';
 
 /**
+ * BAL-442 fix round (R-6) — the row's CURRENT compare-and-set token, read the same way the
+ * repository projects it.
+ *
+ * ⚠⚠ `updated_at::text`, NEVER `readGuest(...).updatedAt`. `timestamptz` carries MICROSECOND
+ * precision and a JavaScript `Date` carries only milliseconds, so a `Date` round-trip TRUNCATES
+ * — and a compare-and-set on the truncated value would match NOTHING, turning every rotation in
+ * this file into a `undefined` that the "refused" assertions would happily accept. A test that
+ * read it as a `Date` would pass the negatives and silently lose every positive.
+ *
+ * ⚠ It reads the row DIRECTLY rather than through `findLivePendingLobbyByEmail`, because the
+ * refusal cases below are deliberately shapes that read refuses (admitted, revoked, expired).
+ */
+async function versionTokenOf(guestId: string): Promise<string> {
+  const [row] = await db
+    .select({ versionToken: sql<string>`${meetingGuests.updatedAt}::text` })
+    .from(meetingGuests)
+    .where(eq(meetingGuests.id, guestId));
+  if (row === undefined) {
+    throw new Error(`expected meeting_guests row ${guestId} to exist`);
+  }
+  return row.versionToken;
+}
+
+/**
  * One LIVE, client-side, `link`-channel, `pending` lobby row — the ONLY shape BAL-442's
  * recovery arm may ever read or rotate.
  *
@@ -1736,6 +1760,9 @@ async function expectLobbyRotationRefused(
   meetingId: string = seeded.meetingId
 ): Promise<void> {
   const oldHash = seeded.guest.tokenHash;
+  // ⚠ THE **CURRENT**, CORRECT token — so every refusal below is attributable to the predicate
+  // under test and never to a stale compare-and-set that would refuse everything for free.
+  const expectedVersionToken = await versionTokenOf(seeded.guest.id);
 
   await expect(
     meetingGuestsRepository.rotatePendingLobbyToken({
@@ -1743,6 +1770,7 @@ async function expectLobbyRotationRefused(
       guestId: seeded.guest.id,
       tokenHash: tokenHash(),
       expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken,
     })
   ).resolves.toBeUndefined();
 
@@ -1796,12 +1824,47 @@ describe('meetingGuestsRepository.findLivePendingLobbyByEmail (BAL-442 — the r
       throw new Error('expected the live pending row to match');
     }
     // ⚠ `localeCompare`, never a bare `.sort()` — S2871 fails the Sonar gate on Reliability.
+    // ⚠ fix round (R-6) — FIVE now, not four: `versionToken` is the compare-and-set value the
+    // rotation demands. Still no `token_hash`, no `expires_at` and no attribution column.
     expect(Object.keys(match).sort((a, b) => a.localeCompare(b))).toEqual([
       'email',
       'id',
       'meetingId',
       'name',
+      'versionToken',
     ]);
+  });
+
+  /**
+   * BAL-442 fix round (R-6) — ⚠⚠ THE PROJECTED TOKEN MUST BE THE **EXACT, UNTRUNCATED**
+   * `updated_at`, which is why it is `::text` and not the `Date` column. A `timestamptz` read
+   * into a JavaScript `Date` loses its microseconds, and the compare-and-set built on it would
+   * then match NOTHING — every recovery would collapse into a neutral "lost race" that no log,
+   * metric or response could tell apart from a genuine miss.
+   */
+  it('⚠⚠ the projected `versionToken` round-trips EXACTLY, and a truncated `Date` would not', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS } });
+
+    const match = await meetingGuestsRepository.findLivePendingLobbyByEmail(
+      seeded.meetingId,
+      ADDRESS
+    );
+    if (match === undefined) {
+      throw new Error('expected the live pending row to match');
+    }
+
+    // It IS the stored value, byte for byte, as the database renders it.
+    await expect(versionTokenOf(seeded.guest.id)).resolves.toBe(match.versionToken);
+    // ⚠ AND IT IS ACCEPTED BY THE WRITE — the half that proves it is not merely a string.
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: match.versionToken,
+      })
+    ).resolves.toBeDefined();
   });
 
   /**
@@ -1953,6 +2016,7 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
       guestId: seeded.guest.id,
       tokenHash: newHash,
       expiresAt: newExpiry,
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
     });
 
     expect(rotated?.tokenHash).toBe(newHash);
@@ -1972,6 +2036,7 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
       guestId: seeded.guest.id,
       tokenHash: tokenHash(),
       expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
     });
 
     // ⚠ EXACT SET: `meeting_guest.link_resent` means "a HOST re-sent it" and is FALSE here, so
@@ -2008,12 +2073,16 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
       guestId: seeded.guest.id,
       tokenHash: first,
       expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
     });
+    // ⚠ RE-READ THE TOKEN — the first rotation moved `updated_at`, and passing the ORIGINAL
+    // token here would be refused. That is the compare-and-set working, not a test artefact.
     await meetingGuestsRepository.rotatePendingLobbyToken({
       meetingId: seeded.meetingId,
       guestId: seeded.guest.id,
       tokenHash: second,
       expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
     });
 
     await expect(guestAuditRows(seeded.guest.id, SELF_RECOVERED)).resolves.toHaveLength(2);
@@ -2029,6 +2098,7 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
       guestId: seeded.guest.id,
       tokenHash: tokenHash(),
       expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
     });
 
     const after = await readGuest(seeded.guest.id);
@@ -2054,6 +2124,7 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
       guestId: seeded.guest.id,
       tokenHash: tokenHash(),
       expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
     });
 
     await expect(
@@ -2068,7 +2139,7 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
   });
 
   /**
-   * ⚠⚠ SEVEN PREDICATES, ONE NEGATIVE EACH — and every one of these calls the method with a
+   * ⚠⚠ EIGHT PREDICATES, ONE NEGATIVE EACH — and every one of these calls the method with a
    * shape the SERVICE would have refused first, precisely to prove the refusal does not depend
    * on the service. The pre-read is a COURTESY; the `WHERE` is the gate, and there is no RLS.
    */
@@ -2082,6 +2153,7 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
       guestId: mine.guest.id,
       tokenHash: tokenHash(),
       expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(mine.guest.id),
     });
 
     // ⚠ A rotation not keyed on the id would re-mint EVERY queued knock on the meeting at
@@ -2144,9 +2216,126 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
     await expectLobbyRotationRefused(seeded);
   });
 
+  /**
+   * ── BAL-442 fix round (R-6): THE EIGHTH PREDICATE, THE COMPARE-AND-SET ────────────────────
+   *
+   * Two simultaneous re-entry requests for the SAME address both read the same row and BOTH
+   * rotated it. Two emails went out; the LOSER's was minted second and could arrive LAST, so
+   * the guest's newest inbox message held an already-dead credential while the working one
+   * looked stale. With `updated_at` in the `WHERE`, exactly one writer wins.
+   *
+   * ⚠ THE HARNESS RUNS EVERY TEST INSIDE ONE TRANSACTION ON A `max: 1` POOL, so genuinely
+   * CONCURRENT writers are not expressible here. These drive the predicate DETERMINISTICALLY
+   * instead — a stale token is exactly what a loser presents once the winner has committed —
+   * which is the same statement the race produces and is testable without concurrency.
+   */
+  it('⚠⚠ REFUSES A STALE TOKEN — the loser of a double recovery rotates NOTHING', async () => {
+    const seeded = await pendingLobbyGuest();
+    // Both callers read the SAME token, exactly as two simultaneous requests would.
+    const sharedToken = await versionTokenOf(seeded.guest.id);
+    const winnerHash = tokenHash();
+
+    // The winner commits first.
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: winnerHash,
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: sharedToken,
+      })
+    ).resolves.toBeDefined();
+
+    // The loser now presents the token it read BEFORE that commit.
+    const loserHash = tokenHash();
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: loserHash,
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: sharedToken,
+      })
+    ).resolves.toBeUndefined();
+
+    // ⚠⚠ THE WINNER'S CREDENTIAL IS THE ONE THAT SURVIVES — the whole point. Without the
+    // predicate the loser would have overwritten it, and its email could land afterwards.
+    const after = await readGuest(seeded.guest.id);
+    expect(after.tokenHash).toBe(winnerHash);
+    await expect(meetingGuestsRepository.findLiveByTokenHash(loserHash)).resolves.toBeUndefined();
+    const resolved = await meetingGuestsRepository.findLiveByTokenHash(winnerHash);
+    expect(resolved?.guest.id).toBe(seeded.guest.id);
+  });
+
+  it('⚠⚠ THE LOSER IS A SILENT NO-OP — no audit row, so exactly ONE recovery is recorded', async () => {
+    const seeded = await pendingLobbyGuest();
+    const sharedToken = await versionTokenOf(seeded.guest.id);
+
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: sharedToken,
+    });
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: sharedToken,
+    });
+
+    // ⚠ ONE, not two. The refusal is `undefined` and NOT an error — a distinguishable
+    // "somebody beat you to it" would be a match oracle on a route whose whole design is that
+    // a match and a miss are the same response.
+    await expect(guestAuditRows(seeded.guest.id, SELF_RECOVERED)).resolves.toHaveLength(1);
+  });
+
+  it('⚠ REFUSES A TOKEN THAT NAMES A DIFFERENT INSTANT ENTIRELY', async () => {
+    const seeded = await pendingLobbyGuest();
+    const oldHash = seeded.guest.tokenHash;
+
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: '2020-01-01 00:00:00+00',
+      })
+    ).resolves.toBeUndefined();
+
+    expect((await readGuest(seeded.guest.id)).tokenHash).toBe(oldHash);
+    await expect(guestAuditActions(seeded.guest.id)).resolves.toEqual([]);
+  });
+
+  /**
+   * ⚠⚠ THE NON-VACUITY PAIR FOR EVERY REFUSAL ABOVE. A compare-and-set that refused
+   * EVERYTHING — the shape a `Date`-based token would silently produce, because `timestamptz`
+   * microseconds do not survive a JavaScript `Date` — would pass all three of them and break
+   * the feature outright. This is the one that fails if that happens.
+   */
+  it('⚠⚠ ACCEPTS THE CURRENT TOKEN — the compare-and-set is not refusing everything', async () => {
+    const seeded = await pendingLobbyGuest();
+    const newHash = tokenHash();
+
+    const rotated = await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: newHash,
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+
+    expect(rotated?.tokenHash).toBe(newHash);
+    await expect(guestAuditRows(seeded.guest.id, SELF_RECOVERED)).resolves.toHaveLength(1);
+  });
+
   it('⚠ ROLLS THE ROTATION BACK when the audit write fails — one transaction, not two', async () => {
     const seeded = await pendingLobbyGuest();
     const oldHash = seeded.guest.tokenHash;
+    const expectedVersionToken = await versionTokenOf(seeded.guest.id);
 
     await expectAuditFailureRollsBack(() =>
       meetingGuestsRepository.rotatePendingLobbyToken({
@@ -2154,6 +2343,7 @@ describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recov
         guestId: seeded.guest.id,
         tokenHash: tokenHash(),
         expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken,
       })
     );
 

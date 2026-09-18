@@ -8,7 +8,7 @@ import { LOBBY_TOKEN_STORAGE_KEY, LOBBY_WAIT_STARTED_STORAGE_KEY } from '@/lib/m
 
 /**
  * BAL-442 — writes the resume link's raw token into the lobby's own `sessionStorage` keys,
- * then replaces into the clean lobby URL so the credential does not persist in history.
+ * then replaces into the clean lobby URL so the credential leaves this TAB'S BACK STACK.
  *
  * ⚠⚠ CORRECTION A — THE KEYS ARE NAMESPACED PER MEETING, AND DERIVED FROM THE EXPORTED
  * CONSTANTS, NEVER HARDCODED. `lobby-client.tsx`'s resume effect reads
@@ -23,8 +23,15 @@ import { LOBBY_TOKEN_STORAGE_KEY, LOBBY_WAIT_STARTED_STORAGE_KEY } from '@/lib/m
  * copy immediately. Overwriting it with `now` is the honest anchor: the original wait's start
  * instant died with the tab that held it.
  *
- * ⚠ `router.replace`, NEVER `router.push` — `replace` guarantees the token-bearing URL leaves
- * the history stack. A hard `location.replace` is NOT needed here the way BAL-566's join
+ * ⚠ `router.replace`, NEVER `router.push` — `replace` keeps the token-bearing URL out of this
+ * tab's BACK STACK, so a Back press lands on the clean lobby rather than re-entering on the
+ * credential. ⚠ fix round (R-7) — IT DOES **NOT** ERASE THE VISIT. The page was reached by a
+ * real navigation, so the browser's own history (and, on a signed-in profile, its sync) already
+ * holds the token-bearing URL, exactly as it would for a `/join/{token}` landing: the exposure
+ * of the two forms is EQUAL, and the earlier "does not persist in browser history" wording
+ * claimed more than `replace` can deliver. What the PATH form buys over a `?rt=` query string
+ * is server-side — `redactSensitivePathPrefixes` covers it (BLOCKER B) — not client-side.
+ * A hard `location.replace` is NOT needed here the way BAL-566's join
  * button needs a hard navigation: that case goes from a NON-sensitive page into a sensitive
  * one, and `instrumentation-client.ts` decides Session Replay by URL at `Sentry.init()` time.
  * Here BOTH the origin (`/join/m/{id}/resume/{token}`) and the destination (`/join/m/{id}`)

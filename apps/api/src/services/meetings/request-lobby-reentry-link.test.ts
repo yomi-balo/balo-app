@@ -5,6 +5,7 @@ const {
   mockListByMeeting,
   mockFindLivePendingLobbyByEmail,
   mockRotatePendingLobbyToken,
+  mockEngagementFindById,
   mockMintGuestInviteToken,
   mockPublish,
   mockTrackServer,
@@ -22,6 +23,7 @@ const {
   mockListByMeeting: vi.fn(),
   mockFindLivePendingLobbyByEmail: vi.fn(),
   mockRotatePendingLobbyToken: vi.fn(),
+  mockEngagementFindById: vi.fn(),
   mockMintGuestInviteToken: vi.fn(),
   mockPublish: vi.fn(),
   mockTrackServer: vi.fn(),
@@ -56,6 +58,11 @@ vi.mock('@balo/db', () => ({
     rotatePendingLobbyToken: mockRotatePendingLobbyToken,
   },
   agenciesRepository: { getSummaryById: vi.fn() },
+  // ⚠ fix round (R-0) — the service now runs the REAL `assertMeetingJoinable`, which reads this
+  // for every engagement-grain context type. `meeting-liveness.js` is DELIBERATELY NOT MOCKED:
+  // the whole point of R-0 is that this arm uses the same gate `claimLobbyPlace` does, so
+  // stubbing it out would leave the fix unasserted.
+  engagementsRepository: { findById: mockEngagementFindById },
   caseEngagementsRepository: { findByEngagementId: mockCaseFindByEngagementId },
   companiesRepository: { findById: vi.fn() },
   expertsRepository: { findProfileById: vi.fn() },
@@ -95,8 +102,14 @@ const MEETING_ID = '22222222-2222-4222-8222-222222222222';
 const ENGAGEMENT_ID = '44444444-4444-4444-8444-444444444444';
 const GUEST_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-const SCHEDULED_START = new Date('2026-09-01T10:00:00.000Z');
-const SCHEDULED_END = new Date('2026-09-01T11:00:00.000Z');
+/**
+ * ⚠⚠ RELATIVE TO `Date.now()`, NEVER A HARDCODED CALENDAR DATE. `assertMeetingJoinable` (wired
+ * in by R-0) refuses any meeting whose `scheduled_end + 24h` has passed, so a fixed 2026-09-01
+ * fixture would compile, pass on the day it was written, and then turn every MATCH test in this
+ * file red on a later calendar day with no code change at all.
+ */
+const SCHEDULED_START = new Date(Date.now() - 10 * 60 * 1000);
+const SCHEDULED_END = new Date(Date.now() + 50 * 60 * 1000);
 const GUEST_TOKEN_TTL_AFTER_END_MS = 7 * 24 * 60 * 60 * 1000;
 
 const CANONICAL_EMAIL = 'dana@northwind.test';
@@ -111,11 +124,16 @@ function meetingRow(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
+const VERSION_TOKEN = '2026-09-18 21:04:05.123456+00';
+
 const PENDING_LOBBY_MATCH = {
   id: GUEST_ID,
   meetingId: MEETING_ID,
   email: CANONICAL_EMAIL,
   name: 'Dana Okoro',
+  // ⚠ fix round (R-6) — the opaque compare-and-set token the read projects and the write
+  // demands. A plain literal here: the service must forward it UNMODIFIED, never parse it.
+  versionToken: VERSION_TOKEN,
 };
 
 function rotatedRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -159,6 +177,8 @@ beforeEach(() => {
   mockListByMeeting.mockResolvedValue([{ contextType: 'case', contextId: ENGAGEMENT_ID }]);
   mockFindLivePendingLobbyByEmail.mockResolvedValue(PENDING_LOBBY_MATCH);
   mockRotatePendingLobbyToken.mockResolvedValue(rotatedRow());
+  // ⚠ R-0 — an ACTIVE engagement, so the shared liveness gate passes on the happy path.
+  mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'active' });
   mockMintGuestInviteToken.mockImplementation(nextMint);
   mockPublish.mockResolvedValue(undefined);
   mockCaseFindByEngagementId.mockResolvedValue({ title: 'CPQ implementation' });
@@ -248,14 +268,6 @@ describe('requestLobbyReentryLink — MATCH', () => {
     expect(serialised).not.toContain('raw-token-1');
   });
 
-  it('⚠ ENDED meeting → MATCH, a link IS sent (NOT assertMeetingJoinable)', async () => {
-    mockMeetingFindById.mockResolvedValue(meetingRow({ status: 'ended' }));
-
-    await request();
-
-    expect(publishedPayloads('meeting.guest_reentry_link_sent')).toHaveLength(1);
-  });
-
   it('⚠⚠ ORDER: rotatePendingLobbyToken resolves BEFORE publish is called', async () => {
     await request();
 
@@ -276,6 +288,24 @@ describe('requestLobbyReentryLink — MATCH', () => {
         guestId: GUEST_ID,
         expiresAt: new Date(SCHEDULED_END.getTime() + GUEST_TOKEN_TTL_AFTER_END_MS),
       })
+    );
+  });
+
+  /**
+   * BAL-442 fix round (R-6) — the compare-and-set token the READ projected must reach the WRITE
+   * UNCHANGED. If the service ever re-derived it (or dropped it), two simultaneous recoveries
+   * would both rotate again and the loser's email could arrive last holding a dead credential.
+   */
+  it('⚠⚠ R-6 — forwards the READ row`s versionToken to the rotation, byte for byte', async () => {
+    mockFindLivePendingLobbyByEmail.mockResolvedValue({
+      ...PENDING_LOBBY_MATCH,
+      versionToken: 'a-different-opaque-token',
+    });
+
+    await request();
+
+    expect(mockRotatePendingLobbyToken).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedVersionToken: 'a-different-opaque-token' })
     );
   });
 
@@ -395,5 +425,159 @@ describe('requestLobbyReentryLink — MISS', () => {
       expect.any(String)
     );
     expect(JSON.stringify(mockLogInfo.mock.calls)).not.toContain(CANONICAL_EMAIL);
+  });
+});
+
+/**
+ * BAL-442 fix round (R-0) — THE LIVENESS GATE, AND THE TEST THAT USED TO ASSERT THE OPPOSITE.
+ *
+ * This file previously carried "⚠ ENDED meeting → MATCH, a link IS sent (NOT
+ * assertMeetingJoinable)". That assertion was WRONG, not merely over-permissive: a lobby token
+ * on an ended meeting is refused by `joinMeetingAsGuest`'s own `assertMeetingJoinable` call
+ * BEFORE its admission switch, and `resolveGuestRecapAccess` refuses a PENDING row too — so the
+ * "recovered" credential could do nothing at all, while the rotation had already killed
+ * whatever the guest still held. The service now runs the SAME gate `claimLobbyPlace` runs, and
+ * a failure is a NEUTRAL MISS: no publish, `matched: false`, the anonymous `distinct_id`.
+ *
+ * ⚠ `meeting-liveness.js` IS NOT MOCKED IN THIS FILE — these cases drive the real predicate.
+ */
+describe('requestLobbyReentryLink — R-0: the shared liveness gate, every failure a NEUTRAL MISS', () => {
+  /** The three assertions "a neutral miss" has to mean, applied identically to every arm. */
+  async function expectNeutralMiss(): Promise<void> {
+    await request();
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockRotatePendingLobbyToken).not.toHaveBeenCalled();
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_reentry_requested', {
+      matched: false,
+      distinct_id: 'system:guest-reentry',
+    });
+  }
+
+  it('⚠⚠ FLIPPED — an ENDED meeting is a MISS and NOTHING is sent', async () => {
+    mockMeetingFindById.mockResolvedValue(meetingRow({ status: 'ended' }));
+
+    await expectNeutralMiss();
+    // ⚠ THE POSITIVE HALF: the email was not merely un-asserted, it was never published.
+    expect(publishedPayloads('meeting.guest_reentry_link_sent')).toHaveLength(0);
+  });
+
+  it('a CANCELLED meeting is a MISS (the same terminal set, through the shared gate)', async () => {
+    mockMeetingFindById.mockResolvedValue(meetingRow({ status: 'cancelled' }));
+
+    await expectNeutralMiss();
+  });
+
+  /**
+   * ⚠⚠ THE MOVED-EARLIER HAZARD (Qodo #4). The stored `expires_at` can still be in the future
+   * while the RECOMPUTED `scheduled_end + TTL` is already past, so without this gate the
+   * rotation destroyed a WORKING link and emailed a dead one.
+   */
+  it('⚠⚠ a meeting whose TOKEN WINDOW has elapsed is a MISS — the recomputed expiry is dead', async () => {
+    const longPast = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    mockMeetingFindById.mockResolvedValue(
+      meetingRow({ scheduledStart: longPast, scheduledEnd: longPast })
+    );
+
+    await expectNeutralMiss();
+  });
+
+  it('a CANCELLED engagement behind an otherwise-live meeting is a MISS', async () => {
+    mockEngagementFindById.mockResolvedValue({ id: ENGAGEMENT_ID, status: 'cancelled' });
+
+    await expectNeutralMiss();
+  });
+
+  it('a MISSING (or soft-deleted) engagement is a MISS', async () => {
+    mockEngagementFindById.mockResolvedValue(undefined);
+
+    await expectNeutralMiss();
+  });
+
+  /**
+   * ⚠ THE REQUEST-GRAIN CONTEXTS HAVE NO ENGAGEMENT TO READ, so the gate must NOT deny them —
+   * the negative pair for the cases above, without which "deny everything" would pass them all.
+   */
+  it('⚠ a request-grain context (project_discovery) still MATCHES — no engagement is read', async () => {
+    mockListByMeeting.mockResolvedValue([
+      { contextType: 'project_discovery', contextId: '55555555-5555-4555-8555-555555555555' },
+    ]);
+
+    await request();
+
+    expect(publishedPayloads('meeting.guest_reentry_link_sent')).toHaveLength(1);
+    expect(mockEngagementFindById).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BAL-442 fix round (R-5) — `publishBestEffort` SWALLOWS a queueing failure, and this arm used
+ * to report `matched: true` and log "link sent" straight through it. That contradicted the
+ * event's own documented meaning ("A FRESH LINK WAS EMAILED") and hid the single worst outcome
+ * this feature has: the rotation is committed, so the guest's old link is DEAD, and nothing
+ * replaced it.
+ *
+ * ⚠⚠ IT CHANGES ONLY WHAT IS REPORTED. The function still returns `void`, so no verdict crosses
+ * the boundary and neither the status, the body nor the floor can move.
+ */
+describe('requestLobbyReentryLink — R-5: a swallowed publish is NOT a match', () => {
+  beforeEach(() => {
+    mockPublish.mockRejectedValue(new Error('Redis unavailable'));
+  });
+
+  it('⚠⚠ tracks {matched: false, distinct_id: the anonymous constant} when the publish is swallowed', async () => {
+    await request();
+
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_reentry_requested', {
+      matched: false,
+      distinct_id: 'system:guest-reentry',
+    });
+    // ⚠ THE NEGATIVE HALF — the success shape must appear NOWHERE in the call log.
+    expect(mockTrackServer).not.toHaveBeenCalledWith(
+      'guest_reentry_requested',
+      expect.objectContaining({ matched: true })
+    );
+  });
+
+  it('⚠⚠ warns that the credential is dead and nothing replaced it — and does NOT log a send', async () => {
+    await request();
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, guestId: GUEST_ID, matched: false }),
+      'Lobby re-entry link was NOT queued — the previous credential is dead and nothing replaced it'
+    );
+    // ⚠ NO `log.info` MAY CLAIM A SEND. The whole defect was a success line over a failure.
+    const infoLines = mockLogInfo.mock.calls.map((call) => String(call[1]));
+    expect(infoLines).toHaveLength(0);
+  });
+
+  it('⚠ the rotation still HAPPENED — the credential really is dead, which is why the warn matters', async () => {
+    await request();
+
+    expect(mockRotatePendingLobbyToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ no address, no raw token and no hash in any log line', async () => {
+    await request();
+
+    const serialised = JSON.stringify([
+      ...mockLogWarn.mock.calls,
+      ...mockLogInfo.mock.calls,
+      ...mockLogError.mock.calls,
+    ]);
+    expect(serialised).not.toContain(CANONICAL_EMAIL);
+    expect(serialised).not.toContain('raw-token-1');
+  });
+
+  it('⚠ the SUCCESS path still reports matched: true — the negative pair for the four above', async () => {
+    mockPublish.mockResolvedValue(undefined);
+
+    await request();
+
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_reentry_requested', {
+      matched: true,
+      distinct_id: GUEST_ID,
+    });
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 });

@@ -248,3 +248,32 @@ export const LOBBY_REENTRY_INVALID_INPUT_ERROR = 'Please enter the email address
  * reached the server at all.
  */
 export const LOBBY_REENTRY_TRANSPORT_ERROR = "We couldn't reach Balo just now. Please try again.";
+
+/**
+ * BAL-442 fix round (R-2) — the copy for a SERVER REFUSAL on the re-entry route: a `429` from
+ * any of the three caller-keyed windows, a `503` when the recipient window's Redis is
+ * unreachable, or the (structurally unreachable) `400`.
+ *
+ * ⚠⚠ IT REPLACES {@link JOIN_UNAVAILABLE_TITLE} ON THIS PATH, BY THE SAME REASONING THAT
+ * PRODUCED {@link LOBBY_REENTRY_TRANSPORT_ERROR}. `JOIN_UNAVAILABLE_TITLE` is collapsed to
+ * protect THE ANONYMITY OF A MEETING — see its own docblock — and **not one of the statuses
+ * above is about a meeting.** `POST /meetings/:meetingId/lobby/reentry` answers `202` with the
+ * neutral sentence for EVERY meeting-related outcome there is (no such meeting, cancelled,
+ * ended, no matching row, recipient budget exhausted, even a throw); its own docblock states
+ * there is no `404` and no `409` on it, ever. So a refusal that reaches this branch is a fact
+ * about OUR side or about the caller's own request rate, where there is nothing to protect —
+ * and "this link isn't active" is simply FALSE there. It sends a guest off to chase a fresh
+ * link from whoever shared the meeting when all they had to do was wait a minute.
+ *
+ * ⚠⚠ ONE LITERAL FOR ALL THREE STATUSES, AND THAT IS WHAT KEEPS THE `429` SAFE. The earlier
+ * docblock's concern was real — copy that said "you are being rate limited" would tell an
+ * anonymous scanner they are being counted. This says nothing of the sort, and a `429`, a
+ * `503` and a `400` are BYTE-IDENTICAL to the caller, so the window's existence is still not
+ * disclosed. ⚠ DO NOT SPLIT THIS BY STATUS.
+ *
+ * ⚠ SEPARATE FROM {@link LOBBY_REENTRY_TRANSPORT_ERROR} because the two are different facts:
+ * that one means the request may never have arrived, this one means it arrived and was
+ * refused. Both are honest, and both point at the same next step.
+ */
+export const LOBBY_REENTRY_RETRY_LATER_ERROR =
+  "We couldn't send that just now. Give it a little while and try again.";

@@ -11,6 +11,8 @@ import {
   JOIN_UNAVAILABLE_TITLE,
   LOBBY_REENTRY_INVALID_INPUT_ERROR,
   LOBBY_REENTRY_NEUTRAL_MESSAGE,
+  LOBBY_REENTRY_RETRY_LATER_ERROR,
+  LOBBY_REENTRY_TRANSPORT_ERROR,
 } from '@/lib/meetings/lobby';
 
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
@@ -75,33 +77,66 @@ describe('requestLobbyReentryLinkAction — validation', () => {
   });
 });
 
-describe('⚠⚠ requestLobbyReentryLinkAction — every non-2xx status returns the SAME string', () => {
+/**
+ * BAL-442 fix round (R-2) — THE COPY FOR A SERVER REFUSAL, AND WHY IT IS NO LONGER
+ * `JOIN_UNAVAILABLE_TITLE`.
+ *
+ * That literal is deliberately collapsed to protect THE ANONYMITY OF A MEETING — and the api
+ * route answers `202` with the neutral sentence for every meeting-related outcome there is
+ * (its own docblock: "THERE IS NO `404` AND NO `409` ON THIS ROUTE, EVER"). So nothing that
+ * reaches the failure arm is about a meeting, and "This link isn't active" was simply FALSE
+ * there: it sent the guest off to chase a fresh link from whoever shared the meeting when the
+ * honest answer was "wait a minute and try again".
+ *
+ * ⚠⚠ THE `429` IS STILL NOT SPLIT OUT. It is byte-identical to the `503` and the `400`, so no
+ * wording tells an anonymous scanner they are being counted.
+ */
+describe('⚠⚠ requestLobbyReentryLinkAction — server refusals are honest, and indistinguishable from each other', () => {
   it.each([
     ['invalid_request', 400],
     ['rate_limited', 429],
     ['rate_limit_unavailable', 503],
-    ['request_failed', 0],
-  ])('maps `%s` (status %d) to the uniform copy', async (code, status) => {
+  ])('maps `%s` (status %d) to the retry-later copy', async (code, status) => {
     mockPostLobbyReentryRequest.mockResolvedValue({ ok: false, status, code });
 
     await expect(requestLobbyReentryLinkAction(VALID)).resolves.toEqual({
       success: false,
       kind: 'unavailable',
-      error: JOIN_UNAVAILABLE_TITLE,
+      error: LOBBY_REENTRY_RETRY_LATER_ERROR,
     });
   });
 
   /**
-   * ⚠⚠ TEST #59 — every non-2xx status collapses to ONE error string, paired with a
-   * non-vacuous length assertion so this cannot pass on an accidentally-empty list.
+   * ⚠ `0` IS THE TRANSPORT SENTINEL, NOT A STATUS THE SERVER SENT — a DNS failure, a dropped
+   * connection. It is a fact about the caller's own connection, and it gets the SAME literal
+   * the client component's `.catch()` arm renders for the identical condition, so one failure
+   * mode cannot describe itself two ways depending on which layer noticed it.
    */
-  it('⚠ collapses ALL FIVE statuses into exactly one error string — 429 is NOT split out', async () => {
+  it('⚠ maps the TRANSPORT SENTINEL (status 0) to the transport copy, not the retry-later one', async () => {
+    mockPostLobbyReentryRequest.mockResolvedValue({
+      ok: false,
+      status: 0,
+      code: 'request_failed',
+    });
+
+    await expect(requestLobbyReentryLinkAction(VALID)).resolves.toEqual({
+      success: false,
+      kind: 'unavailable',
+      error: LOBBY_REENTRY_TRANSPORT_ERROR,
+    });
+  });
+
+  /**
+   * ⚠⚠ TEST #59, REWRITTEN FOR R-2 — the FOUR server-sent statuses still collapse to ONE error
+   * string (so the rate-limit window is not disclosed), paired with a non-vacuous length
+   * assertion so this cannot pass on an accidentally-empty list.
+   */
+  it('⚠ collapses ALL FOUR server-sent statuses into exactly one error string — 429 is NOT split out', async () => {
     const statuses: ReadonlyArray<{ code: string; status: number }> = [
       { code: 'invalid_request', status: 400 },
       { code: 'meeting_not_found', status: 404 },
       { code: 'rate_limited', status: 429 },
       { code: 'rate_limit_unavailable', status: 503 },
-      { code: 'request_failed', status: 0 },
     ];
 
     const results = await Promise.all(
@@ -111,10 +146,29 @@ describe('⚠⚠ requestLobbyReentryLinkAction — every non-2xx status returns 
       })
     );
 
-    expect(results).toHaveLength(5);
+    expect(results).toHaveLength(4);
     const errors = new Set(results.map((r) => (r.success ? null : r.error)));
     expect(errors.size).toBe(1);
-    expect([...errors][0]).toBe(JOIN_UNAVAILABLE_TITLE);
+    expect([...errors][0]).toBe(LOBBY_REENTRY_RETRY_LATER_ERROR);
+  });
+
+  /**
+   * ⚠⚠ THE REGRESSION GUARD. `JOIN_UNAVAILABLE_TITLE` is still imported and still rendered by
+   * `LobbyUnavailable` and `LinkNotActive` — it must simply never come back HERE, where it
+   * would be a false statement about a meeting nothing on this path has an opinion about.
+   */
+  it('⚠⚠ NO status renders `JOIN_UNAVAILABLE_TITLE` any more', async () => {
+    const statuses = [400, 404, 429, 503, 0];
+
+    const results = await Promise.all(
+      statuses.map(async (status) => {
+        mockPostLobbyReentryRequest.mockResolvedValue({ ok: false, status, code: 'x' });
+        return requestLobbyReentryLinkAction(VALID);
+      })
+    );
+
+    expect(results).toHaveLength(5);
+    expect(results.map((r) => (r.success ? null : r.error))).not.toContain(JOIN_UNAVAILABLE_TITLE);
   });
 
   it('⚠ no log call contains the address; meetingId IS present (non-vacuity pair)', async () => {

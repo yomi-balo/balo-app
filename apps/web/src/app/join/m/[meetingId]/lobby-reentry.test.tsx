@@ -213,3 +213,77 @@ describe('LobbyReentry — accessibility', () => {
     );
   });
 });
+
+/**
+ * BAL-442 fix round (R-3) — THE TYPED ADDRESS MUST REACH THE PANEL.
+ *
+ * `LobbyReentry` is the ALWAYS-RENDERED trigger (RULING 2), so it mounts on FIRST PAINT, when
+ * the knock form's `email` is still `''`. `useState(defaultEmail)` reads its argument ONCE, so
+ * it captured that empty string and never saw a keystroke afterwards: the address typed a few
+ * pixels above did not appear here, and the visitor had to type it twice. It only ever LOOKED
+ * correct in the terminal `unavailable` state, which happens to be a fresh mount.
+ *
+ * ⚠ These tests RE-RENDER with a new `defaultEmail` — exactly what the parent does on every
+ * keystroke — because a `renderPanel('…')` alone is a fresh mount and cannot see the defect.
+ */
+describe('LobbyReentry — R-3: defaultEmail arriving AFTER mount', () => {
+  it('⚠⚠ seeds the panel on EXPAND with an address typed after mount', async () => {
+    const { rerender } = renderPanel('');
+
+    // The visitor types into the KNOCK form above; the parent re-renders this component.
+    rerender(
+      <LobbyReentry
+        meetingId={MEETING_ID}
+        defaultEmail="sam@cloudpeak.example"
+        reduceMotion={false}
+      />
+    );
+
+    await expandPanel();
+
+    expect(screen.getByLabelText(/the email you used/i)).toHaveValue('sam@cloudpeak.example');
+  });
+
+  it('⚠ does NOT overwrite an address the visitor deliberately typed INTO the panel', async () => {
+    const { rerender } = renderPanel('');
+    await expandPanel();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/the email you used/i), 'other@address.example');
+
+    // Collapse, the knock form changes underneath, re-expand.
+    await user.click(screen.getByRole('button', { name: /already asked to join/i }));
+    rerender(
+      <LobbyReentry
+        meetingId={MEETING_ID}
+        defaultEmail="sam@cloudpeak.example"
+        reduceMotion={false}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: /already asked to join/i }));
+
+    expect(screen.getByLabelText(/the email you used/i)).toHaveValue('other@address.example');
+  });
+
+  it('⚠ the seeded value is what gets SUBMITTED — not merely what is displayed', async () => {
+    const { rerender } = renderPanel('');
+    rerender(
+      <LobbyReentry
+        meetingId={MEETING_ID}
+        defaultEmail="sam@cloudpeak.example"
+        reduceMotion={false}
+      />
+    );
+    await expandPanel();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Email me my link' }));
+
+    await waitFor(() => {
+      expect(mockReentry).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        email: 'sam@cloudpeak.example',
+      });
+    });
+  });
+});

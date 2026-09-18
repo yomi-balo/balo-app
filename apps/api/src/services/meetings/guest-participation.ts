@@ -349,19 +349,31 @@ interface AnnounceInvitesParams {
  * re-entry arm. A copy would trip the SonarCloud duplication gate (<3% on new code) and
  * create a second definition of the swallow rule. Its `correlationId` is also a rotated-hash
  * prefix (`tokenHash.slice(0, 16)`), for the identical dedup reason as `meeting.guest_link_resent`.
+ *
+ * ⚠⚠ BAL-442 fix round (R-5) — IT ANSWERS **`true` WHEN THE EVENT WAS QUEUED AND `false` WHEN
+ * THE SWALLOW FIRED**, so a caller whose analytics or logs CLAIM a delivery can tell the two
+ * apart. The swallow itself is unchanged and still never throws, so EVERY EXISTING CALLER'S
+ * BEHAVIOUR IS UNCHANGED — the three call sites in this file ignore the value deliberately:
+ * their events are per-row fan-outs whose durable work is already committed, and a `false`
+ * there has no second thing to say that this function's own `log.error` has not already said.
+ * Only `request-lobby-reentry-link.ts` reads it, because there the swallow's `false` IS the
+ * difference between "a fresh link is on its way" and "your old link is dead and nothing
+ * replaced it".
  */
 export async function publishBestEffort(
   publish: () => Promise<unknown>,
   context: { event: string; correlationId: string },
   failureMessage: string
-): Promise<void> {
+): Promise<boolean> {
   try {
     await publish();
+    return true;
   } catch (error) {
     log.error(
       { ...context, error: error instanceof Error ? error.message : String(error) },
       failureMessage
     );
+    return false;
   }
 }
 

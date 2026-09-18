@@ -134,6 +134,21 @@ export interface RotatePendingLobbyTokenInput {
   tokenHash: string;
   /** `meetings.scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`, recomputed by the caller. */
   expiresAt: Date;
+  /**
+   * BAL-442 fix round (R-6) — THE COMPARE-AND-SET TOKEN: the exact
+   * {@link PendingLobbyGuestMatch.versionToken} this caller read, passed back unmodified.
+   *
+   * ⚠⚠ NON-OPTIONAL, AND THAT IS THE FIX. Two simultaneous recoveries for the same address
+   * both read the same row and both rotated it; the LOSER's email was minted second and could
+   * arrive LAST, so the guest's newest inbox message held an already-dead credential. With the
+   * token in the `WHERE`, exactly one writer wins and the other matches no row.
+   *
+   * ⚠ THE LOSER IS A **NEUTRAL NO-OP, NEVER AN ERROR** — it comes back `undefined`, identical
+   * to every other refusal, because a distinguishable "somebody else got there first" would be
+   * a match oracle on a route whose entire design is that a match and a miss are the same
+   * response.
+   */
+  expectedVersionToken: string;
 }
 
 /**
@@ -220,8 +235,9 @@ export interface ConvertedGuestLink {
  *
  * ⚠ DELIBERATELY EXCLUDES `token_hash`, `expires_at`, `access_count`, `last_accessed_at` and
  * every attribution column — the {@link MeetingGuestPublic} rule, applied harder because this
- * one is read on an UNAUTHENTICATED path. The caller needs exactly three things: the id (to
- * rotate, to audit, and as the analytics `distinct_id`), the STORED email and the name.
+ * one is read on an UNAUTHENTICATED path. The caller needs exactly four things: the id (to
+ * rotate, to audit, and as the analytics `distinct_id`), the STORED email, the name, and the
+ * opaque {@link PendingLobbyGuestMatch.versionToken} the rotation compares-and-sets on.
  */
 export interface PendingLobbyGuestMatch {
   id: string;
@@ -233,6 +249,21 @@ export interface PendingLobbyGuestMatch {
    */
   email: string;
   name: string | null;
+  /**
+   * BAL-442 fix round (R-6) — THE ROW'S VERSION AT READ TIME, hand straight back to
+   * {@link RotatePendingLobbyTokenInput.expectedVersionToken} and never interpret it.
+   *
+   * ⚠⚠ IT IS `updated_at::text`, NOT A `Date`, AND THE CAST IS THE WHOLE POINT. `timestamptz`
+   * carries MICROSECOND precision while a JavaScript `Date` carries only milliseconds, so a
+   * `Date` round-trip TRUNCATES — and a compare-and-set on the truncated value would never
+   * match the stored row, silently turning every recovery into a neutral "lost race" miss that
+   * no log, metric or response could distinguish from a genuine one. The text form round-trips
+   * exactly.
+   *
+   * ⚠ OPAQUE. It is a concurrency token, not a timestamp to render, compare or reason about —
+   * nothing outside this pair may parse it.
+   */
+  versionToken: string;
 }
 
 /** A resolved live token: the guest AND the meeting it lets them into, in one round trip. */
@@ -963,6 +994,11 @@ export const meetingGuestsRepository = {
    * ⚠ NARROW PROJECTION VIA AN EXPLICIT `select({...})`, NEVER a bare `select()`, which would
    * hydrate `token_hash` (memory `reference_drizzle_with_hydration_leaks_secrets`).
    *
+   * ⚠ IT ALSO PROJECTS `updated_at::text` AS AN OPAQUE `versionToken` (fix round R-6) — the
+   * compare-and-set value {@link RotatePendingLobbyTokenInput.expectedVersionToken} demands, so
+   * two simultaneous recoveries cannot both rotate. See that field's docblock for why it is
+   * TEXT and not a `Date`.
+   *
    * ── WHY THIS MATCHER CANONICALISES INSIDE THE REPOSITORY ──────────────────────────────────
    * `linkConvertedUser` §7 is the precedent and the argument is the same: the "`@balo/db` never
    * normalises input" convention protects STORED BYTES under a unique index
@@ -990,6 +1026,10 @@ export const meetingGuestsRepository = {
         meetingId: meetingGuests.meetingId,
         email: meetingGuests.email,
         name: meetingGuests.name,
+        // ⚠⚠ `::text`, NEVER THE `Date` COLUMN — see `PendingLobbyGuestMatch.versionToken`. A
+        // `timestamptz` read into a JS `Date` loses its microseconds, so the compare-and-set
+        // would never match and every recovery would collapse into a silent "lost race".
+        versionToken: sql<string>`${meetingGuests.updatedAt}::text`,
       })
       .from(meetingGuests)
       .where(
@@ -1193,7 +1233,7 @@ export const meetingGuestsRepository = {
    * from the mint instant — the `createMany` / `rotateToken` rule, and the reason
    * `meeting_guests.expires_at` has no SQL default.
    *
-   * ── ⚠⚠ THE `WHERE` CLAUSE IS THE WHOLE BOUNDARY, AND IT CARRIES ALL **SEVEN** PREDICATES ──
+   * ── ⚠⚠ THE `WHERE` CLAUSE IS THE WHOLE BOUNDARY, AND IT CARRIES ALL **EIGHT** PREDICATES ──
    * There is no RLS, so a credential-minting UPDATE is contained by its own `WHERE` and by
    * nothing else. ⚠ **ATOMIC, NOT RE-READ** — `rotateToken`'s rule, restated here because the
    * function is not shared: the service's `findLivePendingLobbyByEmail` in front of this call is
@@ -1217,8 +1257,25 @@ export const meetingGuestsRepository = {
    *                                window — reviving a credential nobody admitted and that the
    *                                deliberately-narrowed `extendGuestExpiryForMeetingTx` already
    *                                refuses to revive. (Do not "align" this away.)
+   *   8. `updated_at = <token>`  — ⚠⚠ **THE COMPARE-AND-SET (fix round R-6), AND THE ONLY
+   *                                PREDICATE HERE THAT IS ABOUT CONCURRENCY RATHER THAN
+   *                                SHAPE.** Without it two simultaneous recoveries for one
+   *                                address BOTH rotated: two emails went out, the loser's was
+   *                                minted second and could land LAST, so the guest's newest
+   *                                message held an already-dead credential and the working one
+   *                                looked stale. The token is
+   *                                {@link PendingLobbyGuestMatch.versionToken}, i.e.
+   *                                `updated_at::text`, cast back here — **never a `Date`**,
+   *                                which truncates `timestamptz` microseconds and would make
+   *                                this predicate match nothing, ever. ⚠ THE LOSER IS A
+   *                                NEUTRAL NO-OP (`undefined`), never an error: the route's
+   *                                response is the same either way, and a distinguishable
+   *                                "somebody beat you to it" would be a match oracle.
+   *                                ⚠ IT IS PAIRED WITH `clock_timestamp()` ON THE `SET` — see
+   *                                the note there. Under `now()` the version does not move
+   *                                within a transaction and the predicate is a no-op.
    *
-   * ⚠ `undefined` therefore means "no row matched ALL SEVEN", and the caller cannot tell which
+   * ⚠ `undefined` therefore means "no row matched ALL EIGHT", and the caller cannot tell which
    * one failed. That is CORRECT here rather than merely acceptable: the caller's response is
    * neutral either way, by design, so a distinguishable failure would be a match oracle.
    *
@@ -1244,7 +1301,16 @@ export const meetingGuestsRepository = {
         .set({
           tokenHash: input.tokenHash,
           expiresAt: input.expiresAt,
-          updatedAt: sql`now()`,
+          // ⚠⚠ `clock_timestamp()`, NOT `now()` — A DELIBERATE DIVERGENCE FROM EVERY OTHER
+          // WRITER IN THIS FILE, AND IT IS WHAT MAKES PREDICATE 8 ACTUALLY HOLD. `now()` is
+          // `transaction_timestamp()`: it is FROZEN for the life of a transaction, so two
+          // rotations inside one transaction stamp the SAME value and the compare-and-set
+          // cannot tell them apart — the second silently overwrites the first, which is the
+          // exact defect the predicate exists to close. `clock_timestamp()` advances per
+          // statement, so the version strictly moves on every successful rotation regardless
+          // of how the calls are grouped. It is also what made the race expressible in the
+          // integration harness, which runs every test inside ONE transaction.
+          updatedAt: sql`clock_timestamp()`,
         })
         .where(
           and(
@@ -1257,7 +1323,13 @@ export const meetingGuestsRepository = {
             eq(meetingGuests.inviteChannel, 'link'),
             eq(meetingGuests.admission, 'pending'),
             // ⚠ THE SEVENTH — deliberately absent from `rotateToken`. See the docblock.
-            gt(meetingGuests.expiresAt, sql`now()`)
+            gt(meetingGuests.expiresAt, sql`now()`),
+            // ⚠⚠ THE EIGHTH — THE COMPARE-AND-SET. Cast back to `timestamptz` and compared as
+            // an instant, so the token's exact microseconds are honoured. Under READ COMMITTED
+            // the second writer blocks on the row lock, then re-evaluates this predicate
+            // against the row the FIRST writer committed — whose `updated_at` is `now()` of a
+            // later transaction — so it matches nothing and returns `undefined`.
+            sql`${meetingGuests.updatedAt} = ${input.expectedVersionToken}::timestamptz`
           )
         )
         .returning();

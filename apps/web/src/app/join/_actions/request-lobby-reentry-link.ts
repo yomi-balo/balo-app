@@ -6,9 +6,10 @@ import { z } from 'zod';
 import { log } from '@/lib/logging';
 import { postLobbyReentryRequest } from '@/lib/meetings/join-api-client';
 import {
-  JOIN_UNAVAILABLE_TITLE,
   LOBBY_REENTRY_INVALID_INPUT_ERROR,
   LOBBY_REENTRY_NEUTRAL_MESSAGE,
+  LOBBY_REENTRY_RETRY_LATER_ERROR,
+  LOBBY_REENTRY_TRANSPORT_ERROR,
 } from '@/lib/meetings/lobby';
 
 /**
@@ -58,12 +59,25 @@ export type RequestLobbyReentryLinkResult =
   | { success: false; kind: 'invalid_input' | 'unavailable'; error: string };
 
 /**
- * ⚠ EVERY non-2xx status — `400`, `429`, `503`, and the transport sentinel `0` — maps to the
- * SAME `unavailable` literal. ⚠⚠ `429` IS **NOT** SPLIT OUT, deliberately: it fires
- * PRE-AUTHORIZATION, so a distinct message here would tell an anonymous scanner they are being
- * counted. (`poll-guest-admission.ts` splits `503` out for the GUEST POLL; that is safe only
- * because that path is reachable exclusively after a ≥256-bit token has already resolved,
- * which is not the case here.)
+ * ⚠⚠ CORRECTED BY THE FIX ROUND (R-2) — `JOIN_UNAVAILABLE_TITLE` IS NO LONGER RENDERED HERE.
+ * This arm used to map `400` / `429` / `503` / the transport sentinel `0` all onto
+ * "This link isn't active", which is FALSE for every one of them: the api answers `202` with
+ * the neutral sentence for EVERY meeting-related outcome (its own docblock: "THERE IS NO `404`
+ * AND NO `409` ON THIS ROUTE, EVER"), so nothing that reaches this branch says anything about a
+ * meeting. `JOIN_UNAVAILABLE_TITLE` exists to protect MEETING ANONYMITY; with nothing to
+ * protect, it only strands the guest — telling them to chase a fresh link from whoever shared
+ * the meeting when the honest answer is "wait a minute and try again".
+ *
+ * ⚠⚠ `429` IS STILL NOT SPLIT OUT, and the original concern is still honoured: a `429`, a
+ * `503` and a `400` all render the SAME {@link LOBBY_REENTRY_RETRY_LATER_ERROR}, so no wording
+ * tells an anonymous scanner they are being counted. (`poll-guest-admission.ts` splits `503`
+ * out for the GUEST POLL; that is safe only because that path is reachable exclusively after a
+ * ≥256-bit token has already resolved, which is not the case here.) ⚠ DO NOT SPLIT BY STATUS.
+ *
+ * ⚠ THE TRANSPORT SENTINEL `0` IS THE ONE DISTINCTION, and it is a fact about the CALLER'S OWN
+ * CONNECTION rather than about us: the request may never have arrived. It gets the same literal
+ * the client component's `.catch()` arm renders for the identical condition, so one failure
+ * mode cannot describe itself two ways depending on which layer noticed it.
  */
 export async function requestLobbyReentryLinkAction(input: {
   meetingId: string;
@@ -88,7 +102,12 @@ export async function requestLobbyReentryLinkAction(input: {
       status: result.status,
       code: result.code,
     });
-    return { success: false, kind: 'unavailable', error: JOIN_UNAVAILABLE_TITLE };
+    return {
+      success: false,
+      kind: 'unavailable',
+      // ⚠ `0` IS THE TRANSPORT SENTINEL, never a status the server sent — see `JoinApiResult`.
+      error: result.status === 0 ? LOBBY_REENTRY_TRANSPORT_ERROR : LOBBY_REENTRY_RETRY_LATER_ERROR,
+    };
   }
 
   log.info('Lobby re-entry requested', { meetingId: parsed.data.meetingId });

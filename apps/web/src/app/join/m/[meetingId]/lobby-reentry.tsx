@@ -42,7 +42,10 @@ import { requestLobbyReentryLinkAction } from '../../_actions/request-lobby-reen
 
 interface LobbyReentryProps {
   readonly meetingId: string;
-  /** Seeds the panel's input so the visitor types their address once, not twice. */
+  /**
+   * Seeds the panel's input so the visitor types their address once, not twice.
+   * ⚠ APPLIED ON EXPAND, NOT ON MOUNT — see {@link handleToggle}'s docblock (R-3).
+   */
   readonly defaultEmail: string;
   readonly reduceMotion: boolean;
 }
@@ -73,9 +76,27 @@ export function LobbyReentry({
   const panelId = 'lobby-reentry-panel';
   const errorId = 'lobby-reentry-error';
 
+  /**
+   * ⚠⚠ fix round (R-3) — SEED FROM THE KNOCK FORM **ON EXPAND**, NOT ON MOUNT. `useState`'s
+   * argument is an INITIAL value, read once. This component mounts on first paint (it is the
+   * ALWAYS-RENDERED trigger, RULING 2), when the knock form's `email` is still the empty
+   * string — so `useState(defaultEmail)` captured `''` and never saw a keystroke after it, and
+   * an address typed a few pixels above did NOT appear here. It only ever LOOKED right in the
+   * terminal `unavailable` state, which happens to be a FRESH MOUNT.
+   *
+   * ⚠ ONLY WHEN THE PANEL'S OWN VALUE IS EMPTY, so a visitor who deliberately typed a DIFFERENT
+   * address in here (the "I used my other address" case "Try a different address" exists for)
+   * never has it overwritten by collapsing and re-expanding.
+   *
+   * ⚠ NOT A `useEffect` SYNC ON `defaultEmail` — that would re-seed on every keystroke in the
+   * knock form while the panel is open, fighting the visitor for their own input.
+   */
   const handleToggle = useCallback(() => {
+    if (!isExpanded) {
+      setEmail((current) => (current.length === 0 ? defaultEmail : current));
+    }
     setIsExpanded((current) => !current);
-  }, []);
+  }, [defaultEmail, isExpanded]);
 
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>): void => {
