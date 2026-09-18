@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from '@react-email/render';
 import {
   MeetingGuestInvitedEmail,
+  MeetingGuestReentryLinkEmail,
   MeetingGuestRemovedEmail,
   MeetingGuestRescheduledEmail,
   formatMeetingWindowUtc,
@@ -589,5 +590,120 @@ describe('MeetingGuestRescheduledEmail', () => {
     const html = (await render(MeetingGuestRescheduledEmail(rescheduledProps()))).toLowerCase();
     expect(html).not.toContain('calendar has been updated');
     expect(html).not.toContain('added to your calendar');
+  });
+});
+
+/**
+ * BAL-442 — the FOURTH guest-facing email: a lobby guest recovered their own link back.
+ *
+ * ⚠ Names no inviter (self-claimed row), states the old link is dead, states they are still
+ * WAITING to be let in (this is a credential replacement, not an admission), has no billing
+ * line, and uses no gendered pronoun.
+ */
+describe('MeetingGuestReentryLinkEmail', () => {
+  const reentryProps = () => ({
+    guestName: 'Dana',
+    meetingTitle: 'CPQ implementation',
+    scheduledStartIso: START,
+    scheduledEndIso: END,
+    expiresOn: '13 August 2026',
+    joinUrl: JOIN_URL,
+    baseUrl: SITE,
+  });
+
+  it('names no inviter anywhere in the rendered copy', async () => {
+    const html = clean(await render(MeetingGuestReentryLinkEmail(reentryProps())));
+    expect(html).not.toContain('invited');
+    expect(html).not.toContain('admitted');
+  });
+
+  it('states plainly that the old link has stopped working', async () => {
+    const text = textOf(await render(MeetingGuestReentryLinkEmail(reentryProps())));
+    expect(text).toContain('stopped working');
+  });
+
+  it('⚠⚠ states plainly they are STILL WAITING to be let in — this is not an admission', async () => {
+    const text = textOf(await render(MeetingGuestReentryLinkEmail(reentryProps())));
+    expect(text).toContain("you'll still wait for the host to let you in");
+  });
+
+  it('states the expiry as a helpful fact, never a countdown', async () => {
+    const text = textOf(await render(MeetingGuestReentryLinkEmail(reentryProps())));
+    expect(text).toContain('good until 13 August 2026');
+    expect(text).toContain('no rush');
+  });
+
+  it('omits the expiry clause entirely rather than rendering "good until ."', async () => {
+    const text = textOf(
+      await render(MeetingGuestReentryLinkEmail({ ...reentryProps(), expiresOn: '' }))
+    );
+    expect(text).not.toContain('good until .');
+    expect(text).not.toContain('good until  ');
+  });
+
+  it('renders no money — no billing line, ever', async () => {
+    const text = textOf(await render(MeetingGuestReentryLinkEmail(reentryProps())));
+    expect(text).not.toContain('$');
+  });
+
+  it('uses no gendered pronoun', async () => {
+    const text = textOf(await render(MeetingGuestReentryLinkEmail(reentryProps()))).toLowerCase();
+    for (const pronoun of [' he ', ' she ', ' him ', ' her ', ' his ', ' hers ']) {
+      expect(text).not.toContain(pronoun);
+    }
+  });
+
+  it('greets generically when no guest name is supplied', async () => {
+    const html = clean(
+      await render(MeetingGuestReentryLinkEmail({ ...reentryProps(), guestName: undefined }))
+    );
+    expect(html).toContain('Hi there,');
+  });
+});
+
+describe('getEmailTemplate — meeting-guest-reentry-link', () => {
+  const MEETING_ID = 'a0000000-0000-4000-8000-000000000004';
+
+  it('⚠⚠ builds the CTA against the RESUME route, not /join/{token}, asserted verbatim', async () => {
+    const out = getEmailTemplate('meeting-guest-reentry-link', {
+      guestName: 'Dana',
+      meetingTitle: 'CPQ implementation',
+      scheduledStartIso: START,
+      scheduledEndIso: END,
+      expiresOn: '13 August 2026',
+      joinToken: RAW_TOKEN,
+      meetingId: MEETING_ID,
+    });
+
+    const html = await render(out.component);
+    // ⚠ Path-only assertion, not the full origin — the registry's `BASE_URL` is
+    // `process.env.APP_URL ?? 'https://balo.expert'`, which this test does not control.
+    expect(html).toContain(`/join/m/${MEETING_ID}/resume/${RAW_TOKEN}`);
+    expect(html).not.toContain(`/join/${RAW_TOKEN}"`);
+  });
+
+  it('pins the subject verbatim', () => {
+    const out = getEmailTemplate('meeting-guest-reentry-link', {
+      joinToken: RAW_TOKEN,
+      meetingId: MEETING_ID,
+    });
+    expect(out.subject).toBe('Your link back into the video call');
+  });
+
+  it('never puts the raw token in the SUBJECT line', async () => {
+    const out = getEmailTemplate('meeting-guest-reentry-link', {
+      joinToken: RAW_TOKEN,
+      meetingId: MEETING_ID,
+    });
+
+    expect(out.subject).not.toContain(RAW_TOKEN);
+    await expect(render(out.component)).resolves.toContain(RAW_TOKEN);
+  });
+
+  it('renders with an entirely empty payload rather than throwing', async () => {
+    const out = getEmailTemplate('meeting-guest-reentry-link', {});
+    const html = clean(await render(out.component));
+
+    expect(html).toContain('Hi there,');
   });
 });

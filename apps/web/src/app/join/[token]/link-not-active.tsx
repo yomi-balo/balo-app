@@ -21,9 +21,12 @@ import { JOIN_UNAVAILABLE_BODY, JOIN_UNAVAILABLE_TITLE } from '@/lib/meetings/lo
  * which is the opposite of what this feature promises. The real recovery is a human one:
  * ask the person who invited you. So the copy says exactly that and offers no button.
  *
- * ⚠ NO "EMAIL ME A NEW LINK". That would be an unauthenticated email-send primitive (an
- * email-bomb amplifier and an existence oracle) and needs its own ticket, rate limit and
- * non-enumerating response.
+ * ⚠ NO "EMAIL ME A NEW LINK" HERE. ⚠ CORRECTED BY BAL-442 — this docblock used to say that
+ * affordance "needs its own ticket, rate limit and non-enumerating response." That ticket is
+ * BAL-442 and it has SHIPPED — on `/join/m/[meetingId]`'s knock form
+ * (`lobby-reentry.tsx`), NOT here. This component takes no props and has no `meetingId` in
+ * scope, so it is structurally incapable of hosting the affordance, and it renders for a token
+ * that did not resolve, so there is nothing here to recover. Do NOT add a form.
  *
  * ⚠ IT NAMES NOTHING — no meeting, no company, no agency, no date, no inviter. It renders
  * for a token that never existed, so it cannot reference anything a token might have

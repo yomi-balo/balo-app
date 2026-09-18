@@ -130,3 +130,24 @@ export function guestRecapPath(token: string, meetingId: string): string {
 export function guestInvitationPath(token: string): string {
   return `/join/${token}`;
 }
+
+/**
+ * BAL-442 (BLOCKER C) — the BARE, TOKENLESS lobby PATH, for the resume route's replace-redirect.
+ *
+ * ⚠⚠ IT EXISTS BECAUSE `join-link-never-writes.test.ts` FAILS ANY FILE UNDER `app/join` WHOSE
+ * COMMENT-STRIPPED SOURCE CONTAINS `/join/`. So `router.replace('/join/m/…')` CANNOT be written
+ * in the resume client component — and this module begins `import 'server-only'`, so a client
+ * component cannot import the builder either. The **server page** calls this and passes the
+ * result down as a plain `destination: string` prop.
+ *
+ * ⚠ A PATH, NOT AN ABSOLUTE URL (the {@link guestRecapPath} shape, not {@link meetingJoinLinkUrl}'s):
+ * this is same-origin navigation, so no origin lookup applies.
+ *
+ * ⚠⚠ DO **NOT** ADD IT TO `TOKEN_BEARING_BUILDERS`. That restriction exists because
+ * `guestRecapPath` / `guestInvitationPath` carry a replayable TOKEN whose exposure via prefetch,
+ * `Referer` or Session Replay is the hazard. This URL has no token to expose — the
+ * `meetingJoinLinkUrl` precedent is explicit that tokenless builders are excluded.
+ */
+export function lobbyPath(meetingId: string): string {
+  return `/join/m/${meetingId}`;
+}

@@ -1194,6 +1194,32 @@ describe('notificationRules', () => {
       expect(rules.some((r) => r.channel === 'in-app')).toBe(false);
     });
 
+    /**
+     * ⚠⚠ BAL-442 — THE SHAPE TEST FOR THE LOBBY RE-ENTRY LINK, AND IT IS A SAFETY PROPERTY FOR
+     * THE SAME REASON `meeting.guest_link_resent`'s IS. The payload carries a freshly ROTATED
+     * RAW join token; a fan-out or a second rule here would email a stranger's live credential
+     * to more than the one address it belongs to.
+     */
+    it('⚠⚠ meeting.guest_reentry_link_sent: EMAIL ONLY, to that person and NOBODY else', () => {
+      const rules = guestRulesFor('meeting.guest_reentry_link_sent');
+
+      expect(rules).toHaveLength(1);
+      const [rule] = rules;
+      expect(rule).toMatchObject({
+        channel: 'email',
+        recipient: 'email_address',
+        template: 'meeting-guest-reentry-link',
+        timing: 'immediate',
+        priority: 'normal',
+      });
+      // ⚠ NO CONDITION — a conditional rule is one a future edit can make not fire at all.
+      expect(rule?.condition).toBeUndefined();
+      // ⚠⚠ NOT A FAN-OUT, RESTATED AS ITS OWN ASSERTION so widening the recipient fails here
+      // rather than in production.
+      expect(rules.every((r) => r.recipient === 'email_address')).toBe(true);
+      expect(rules.some((r) => r.channel === 'in-app')).toBe(false);
+    });
+
     it('⚠ there is NO rule key for admit or deny — and that is a product decision', () => {
       // The person is standing in the lobby watching the UI: an email after a DENY is
       // hostile, and one after an ADMIT is redundant with the door opening in front of them.
@@ -1210,6 +1236,11 @@ describe('notificationRules', () => {
         // room. The email IS the act, so it has a rule — which is the opposite of the two
         // decisions below, where the door opening in front of the person IS the notification.
         'meeting.guest_link_resent',
+        // ⚠ BAL-442. A lobby guest recovered their OWN link — the email IS the act, same
+        // reasoning as `meeting.guest_link_resent` above. Sorts here under `localeCompare`:
+        // after the shared `meeting.guest_` prefix, `link_resent` < `reentry_link_sent` <
+        // `removed` (`l` < `r`, then `ree` < `rem`).
+        'meeting.guest_reentry_link_sent',
         'meeting.guest_removed',
         // ⚠ BAL-409. A booked consultation MOVED — the guest is not in a lobby for this one,
         // they are told by email ahead of time, same reasoning as `meeting.guest_invited`.

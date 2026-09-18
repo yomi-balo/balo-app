@@ -83,3 +83,21 @@ export const guestJoinBodySchema = z.object({
 });
 
 export type GuestJoinBody = z.infer<typeof guestJoinBodySchema>;
+
+/**
+ * BAL-442 — the anonymous lobby RE-ENTRY request.
+ *
+ * ⚠⚠ THERE IS DELIBERATELY NO `name` KEY, NO `party` KEY AND NO `token` KEY. This request
+ * WRITES NOTHING except a rotated hash on a row that already exists, so there is nothing for a
+ * caller to declare: a `name` would let a stranger relabel somebody else's queue row (the exact
+ * hijack `claimLobbyPlace`'s `DO NOTHING` closed), and `party` is the lobby writer's
+ * placeholder. Zod strips unknown keys, so sending them is ignored rather than honoured.
+ * ⚠ DO NOT weaken to `.passthrough()`.
+ *
+ * ⚠ 254 IS THE RFC 5321 MAXIMUM — matching `lobbyClaimBodySchema` and `guests.schema.ts`.
+ */
+export const lobbyReentryBodySchema = z.object({
+  email: z.string().trim().email().max(254),
+});
+
+export type LobbyReentryBody = z.infer<typeof lobbyReentryBodySchema>;

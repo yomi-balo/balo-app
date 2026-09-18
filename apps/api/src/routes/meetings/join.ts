@@ -1,16 +1,20 @@
 /**
- * BAL-132 — the meeting JOIN surface, registered inside the existing `meetingsRoutes` plugin.
+ * BAL-132 (+ BAL-442) — the meeting JOIN surface, registered inside the existing
+ * `meetingsRoutes` plugin.
  *
- * ⚠⚠ TWO OF THESE THREE ROUTES ARE **PUBLIC**, AND THEY ARE THE FIRST UNAUTHENTICATED ROUTES
+ * ⚠⚠ THREE OF THESE FOUR ROUTES ARE **PUBLIC**, AND THEY ARE THE FIRST UNAUTHENTICATED ROUTES
  * ON `/meetings/*`. That is not an oversight to be "fixed" by a helpful `requireAuth`:
  *
- *   · `POST /meetings/:meetingId/lobby`      — an anonymous visitor at a bare meeting URL
+ *   · `POST /meetings/:meetingId/lobby`         — an anonymous visitor at a bare meeting URL
  *     knocks. They have no account BY DEFINITION; that is what the admission queue is for.
- *   · `POST /meetings/:meetingId/guest-join` — a guest presents a ≥256-bit token. The TOKEN
+ *   · `POST /meetings/:meetingId/guest-join`    — a guest presents a ≥256-bit token. The TOKEN
  *     is the credential; a guest has no WorkOS session to send a Bearer from.
+ *   · `POST /meetings/:meetingId/lobby/reentry` — BAL-442. The visitor above closed the tab
+ *     that held their only credential. They still have no account; that is exactly why the
+ *     recovery path must be public too.
  *
- * `join.test.ts` asserts that neither answers `401` without a Bearer, precisely so that
- * adding the preHandler breaks a test instead of breaking the product.
+ * `join.test.ts` asserts that none of the three answers `401` without a Bearer, precisely so
+ * that adding the preHandler breaks a test instead of breaking the product.
  *
  * ⚠ THIS FILE IS THE `log.warn` BOUNDARY. Every mapped branch logs server-side and sends only
  * a fixed literal — the logging lives INSIDE `sendJoinError`, so "every mapped branch logs"
@@ -32,6 +36,7 @@
  */
 import { isIP } from 'node:net';
 import { createLogger } from '@balo/shared/logging';
+import { canonicalGuestEmail } from '@balo/shared/meetings';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   checkRateLimit,
@@ -42,13 +47,21 @@ import { getRedis } from '../../lib/redis.js';
 import { requireAuth } from '../../lib/require-auth.js';
 import { withDeadline } from '../../lib/with-deadline.js';
 import { parseBodyOr400, resolveUserId } from '../../lib/route-helpers.js';
+import { hashRateLimitRecipient } from '../../lib/recipient-rate-limit-key.js';
+import { LOBBY_REENTRY_RESPONSE_FLOOR_MS, withResponseFloor } from '../../lib/response-floor.js';
 import {
   claimLobbyPlace,
   joinMeetingAsGuest,
   joinMeetingAsMember,
   type JoinErrorCode,
 } from '../../services/meetings/join-meeting.js';
-import { guestJoinBodySchema, lobbyClaimBodySchema, meetingIdParamsSchema } from './join.schema.js';
+import { requestLobbyReentryLink } from '../../services/meetings/request-lobby-reentry-link.js';
+import {
+  guestJoinBodySchema,
+  lobbyClaimBodySchema,
+  lobbyReentryBodySchema,
+  meetingIdParamsSchema,
+} from './join.schema.js';
 
 const log = createLogger('meeting-join-route');
 
@@ -161,6 +174,72 @@ const GUEST_JOIN_VISITOR_RATE_LIMIT: RateLimitConfig = {
 const GUEST_JOIN_PEER_RATE_LIMIT: RateLimitConfig = {
   keyPrefix: 'ratelimit:meeting-guest-join:peer',
   maxRequests: 20_000,
+  windowSeconds: 3600,
+};
+
+/**
+ * BAL-442 — the FOUR re-entry windows. All Redis-backed `RateLimitConfig`s with their own
+ * `keyPrefix`es, DISTINCT from the knock's ("Re-entry gets its OWN config"). `checkMemoryLimit`
+ * (`apps/web/.../memory-window.ts`) is NOT used here — it is a module-level `Map`,
+ * per-serverless-instance and best-effort, which is inadequate as the primary control on an
+ * email-send primitive.
+ */
+
+/**
+ * ONE ANONYMOUS VISITOR's re-entry requests. Keyed on `peer|client` — see {@link visitorIdentity}.
+ * ⚠ TIGHTER THAN THE KNOCK'S 10/hr, deliberately: this is an EMAIL-SEND primitive, and a
+ * legitimate visitor needs it once — twice if the first genuinely did not arrive.
+ */
+const LOBBY_REENTRY_VISITOR_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meeting-lobby-reentry:visitor',
+  maxRequests: 5,
+  windowSeconds: 3600,
+};
+
+/**
+ * ONE VISITOR against ONE meeting. ⚠ KEYED ON `meetingId|peer|client`, NEVER `meetingId` alone
+ * — a bare meeting key is an availability lever pointed at the host (see
+ * {@link LOBBY_MEETING_VISITOR_RATE_LIMIT}'s note, which this copies rather than re-derives).
+ */
+const LOBBY_REENTRY_MEETING_VISITOR_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meeting-lobby-reentry:meeting-visitor',
+  maxRequests: 5,
+  windowSeconds: 3600,
+};
+
+/**
+ * THE ABSOLUTE BACKSTOP, keyed on the UNSPOOFABLE peer alone — the only window a
+ * header-spoofing caller cannot escape. ⚠ SIZED FOR THE WEB TIER (all legitimate traffic
+ * arrives via `apps/web`'s Server Action), and half the knock's 600 because recovery is a far
+ * rarer act than knocking.
+ */
+const LOBBY_REENTRY_PEER_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meeting-lobby-reentry:peer',
+  maxRequests: 300,
+  windowSeconds: 3600,
+};
+
+/**
+ * ⚠⚠ THE FOURTH WINDOW, AND THE ONLY ONE THAT BOUNDS AN **INBOX** RATHER THAN A CALLER.
+ *
+ * The three above bound a caller. None bounds a recipient — so without this, an attacker
+ * rotating `x-balo-client-ip` can repeatedly rotate a stranger's credential: both an
+ * email-bomb amplifier and a denial of the real guest's recovery. This is the same gap
+ * `RESEND_ROW_RATE_LIMIT` closes on the host arm, and it is TIGHTER (3, not 5) because there
+ * is no authenticated host here — every caller is anonymous.
+ *
+ * ⚠ KEYED ON `${meetingId}|sha256(canonicalEmail).slice(0,32)` — **HASHED, so no raw address
+ * ever enters Redis.** Meeting-scoped so one address's budget on one call cannot exhaust its
+ * budget on another.
+ *
+ * ⚠⚠ EXHAUSTION RETURNS THE **SAME NEUTRAL `202`** AND SENDS NOTHING — **NOT a `429`.** An
+ * address-keyed `429` is match-correlated (it fires only for addresses somebody keeps
+ * targeting) and would reopen the exact tell the fixed floor exists to close. The other three
+ * windows keep their normal `429` behaviour because their keys say nothing about any address.
+ */
+const LOBBY_REENTRY_RECIPIENT_RATE_LIMIT: RateLimitConfig = {
+  keyPrefix: 'ratelimit:meeting-lobby-reentry:recipient',
+  maxRequests: 3,
   windowSeconds: 3600,
 };
 
@@ -409,6 +488,126 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
       return;
     }
     reply.code(201).send({ state: 'waiting', lobbyToken: result.lobbyToken });
+  });
+
+  /**
+   * POST /meetings/:meetingId/lobby/reentry — the ANONYMOUS re-entry request. ⚠ PUBLIC, NO
+   * `requireAuth`. The THIRD public route on `/meetings/*`, for the same reason as the other
+   * two: the caller has no account by definition.
+   *
+   * `202` with `{ "state": "requested" }` — IDENTICAL on match, on miss, and on
+   * recipient-budget exhaustion. ⚠⚠ THERE IS NO `404` AND NO `409` ON THIS ROUTE, EVER. Adding
+   * one is the defect — see `requestLobbyReentryLink`'s own docblock.
+   *
+   * ⚠ VALIDATION FIRST, THEN THE THREE CALLER-KEYED WINDOWS, THEN THE RECIPIENT WINDOW, THEN
+   * THE FIXED FLOOR — so a malformed body cannot consume anybody's window, and the floor wraps
+   * only the two branches that are actually match-correlated (see §14.G in the plan / the
+   * module docblock below).
+   */
+  fastify.post('/meetings/:meetingId/lobby/reentry', async (req, reply) => {
+    // 1. VALIDATION FIRST — a malformed body must not consume anybody's window.
+    const params = parseMeetingParams(req.params, reply);
+    if (params === null) return;
+
+    const body = parseBodyOr400(lobbyReentryBodySchema, req, reply);
+    if (body === null) return;
+
+    // 2. THE THREE CALLER-KEYED windows, per-visitor first and the peer backstop last — so an
+    //    abuser is told about their OWN limit rather than the platform-wide one.
+    const { peer, visitorKey } = visitorIdentity(req);
+    const limited = await enforceRateLimits(reply, 'lobby-reentry', [
+      { config: LOBBY_REENTRY_VISITOR_RATE_LIMIT, identifier: visitorKey, kind: 'visitor' },
+      {
+        config: LOBBY_REENTRY_MEETING_VISITOR_RATE_LIMIT,
+        identifier: `${params.meetingId}|${visitorKey}`,
+        kind: 'meeting-visitor',
+      },
+      { config: LOBBY_REENTRY_PEER_RATE_LIMIT, identifier: peer, kind: 'peer' },
+    ]);
+    if (limited) return;
+
+    // 3. ⚠ CANONICALISED HERE, ONCE. The rate-limit key and the repository lookup key MUST be
+    //    the SAME STRING, or the budget bounds a different thing to the query.
+    const email = canonicalGuestEmail(body.email);
+    const recipientKey = `${params.meetingId}|${hashRateLimitRecipient(email)}`;
+
+    // 4. THE RECIPIENT WINDOW — enforced SEPARATELY because its exhaustion behaviour differs
+    //    (neutral 202, never a 429). ⚠ A Redis OUTAGE IS NOT NEUTRAL: it is uncorrelated with
+    //    whether a row exists, and failing closed here matches the other three windows exactly.
+    let recipientAllowed: boolean;
+    try {
+      const result = await withDeadline(
+        () => checkRateLimit(getRedis(), LOBBY_REENTRY_RECIPIENT_RATE_LIMIT, recipientKey),
+        {
+          deadlineMs: RATE_LIMIT_DEADLINE_MS,
+          label: `rate limit ${LOBBY_REENTRY_RECIPIENT_RATE_LIMIT.keyPrefix}`,
+        }
+      );
+      recipientAllowed = result.allowed;
+    } catch (error) {
+      log.error(
+        {
+          route: 'lobby-reentry',
+          keyPrefix: LOBBY_REENTRY_RECIPIENT_RATE_LIMIT.keyPrefix,
+          kind: 'recipient',
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+        'Lobby re-entry rate-limit unavailable — failing CLOSED'
+      );
+      reply.code(503).send({ error: 'rate_limit_unavailable' });
+      return;
+    }
+
+    // 5. ⚠⚠ THE FIXED FLOOR (RULING 4). It wraps BOTH `202` branches and NOTHING ELSE — the
+    //    `400`/`429`/`503` arms above are each uncorrelated with whether a row matched, so
+    //    padding them would only add latency to abuse handling and to a caller's own typo.
+    //
+    // ⚠⚠ fix-round (F2 / SEC-1 / REV-3) — THE TRY/CATCH IS *INSIDE* THIS CLOSURE, ON PURPOSE.
+    // `withResponseFloor` does `const result = await work();` — a REJECTION from `work()`
+    // propagates straight past the pad, and this route has no OUTER try/catch, so it used to
+    // fall through to `app.ts`'s handler as a fast `500` in ~5ms. The only residual throw
+    // source (`rotatePendingLobbyToken`, a DB transaction) is reached ONLY on the MATCH arm —
+    // so a matching address answered in ~5ms while a non-matching one answered at the 400ms
+    // floor: a status AND latency oracle, defeating this route's own "ONE EXIT, ONE BODY, ONE
+    // STATUS" contract. Catching HERE, inside the closure, means a throw is still padded to the
+    // floor AND still falls through to the same neutral `202` below — never its own status.
+    await withResponseFloor(
+      LOBBY_REENTRY_RESPONSE_FLOOR_MS,
+      async () => {
+        if (!recipientAllowed) {
+          // ⚠ NO EMAIL IN THIS LOG — the meeting id and the window label are the safe fields.
+          log.warn(
+            { route: 'lobby-reentry', meetingId: params.meetingId, kind: 'recipient' },
+            'Lobby re-entry recipient budget exhausted — answering neutrally, sending nothing'
+          );
+          return;
+        }
+        try {
+          await requestLobbyReentryLink({ meetingId: params.meetingId, email });
+        } catch (error) {
+          // ⚠ NO EMAIL, NO TOKEN — only the route, meeting id and error detail, matching every
+          // other catch block on this route tree.
+          log.error(
+            {
+              route: 'lobby-reentry',
+              meetingId: params.meetingId,
+              error: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : undefined,
+            },
+            'Lobby re-entry request failed — answering neutrally, same 202'
+          );
+        }
+      },
+      // ⚠ fix round (R-4) — the ROUTE LABEL the overrun warning is filed under, and the ONLY
+      // identifying field it carries. Never the meeting id and never the address: an overrun
+      // is a fact about OUR latency, not about whose request produced it.
+      'lobby-reentry'
+    );
+
+    // 6. ⚠⚠ ONE EXIT, ONE BODY, ONE STATUS. There is no verdict to branch on: the service
+    //    returns `void` BY DESIGN, so "matched" is structurally unable to reach here.
+    reply.code(202).send({ state: 'requested' });
   });
 
   /**

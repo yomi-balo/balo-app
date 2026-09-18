@@ -77,6 +77,17 @@ const PINNED_GET_PATH_FILES: readonly string[] = [
   'm/[meetingId]/lobby-client.tsx',
   'm/[meetingId]/loading.tsx',
   'm/[meetingId]/error.tsx',
+  // ── BAL-442 — the lobby re-entry affordance + the resume route ─────────────────────────
+  //
+  // ⚠ THE RESUME ROUTE PERFORMS ZERO DATABASE READS, exactly like `m/[meetingId]/page.tsx`
+  // — its own acceptance criterion. That is what makes it trivially satisfy the
+  // participation-mutator and allow-list assertions below: there is no
+  // `meetingGuestsRepository` reference to find.
+  'm/[meetingId]/lobby-reentry.tsx',
+  'm/[meetingId]/resume/[token]/page.tsx',
+  'm/[meetingId]/resume/[token]/lobby-resume-client.tsx',
+  'm/[meetingId]/resume/[token]/loading.tsx',
+  'm/[meetingId]/resume/[token]/error.tsx',
   // ── BAL-439 — the guest recap ────────────────────────────────────────────────────────
   //
   // ⚠ These NINE files are the whole recap tree. The two-tier `[token]/_lib/` vs
@@ -206,6 +217,26 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
         `apps/api; if it is genuinely a read, add it to ALLOWED_GUEST_REPOSITORY_MEMBERS with ` +
         `a one-line justification.`
     ).toEqual([]);
+  });
+
+  /**
+   * BAL-442 fix round (F5) — plan §9.6 #64, silently dropped from the original build: BLOCKER C
+   * requires `lobbyPath(...)` to be called ONLY on the SERVER page (`resume/[token]/page.tsx`)
+   * and passed down as a plain `destination` string — never called, and never even reachable,
+   * from the CLIENT component (`lobby-resume-client.tsx`), because `lib/meetings/join-link.ts`
+   * begins `import 'server-only'` and a client component importing from it would fail the build.
+   * Extending `PINNED_GET_PATH_FILES` alone does not check this; this is the missing positive
+   * assertion.
+   */
+  it('⚠ BLOCKER C: lobbyPath( is called on the server page, never on the resume client', () => {
+    const serverPage = scanned.find((file) => file.rel === 'm/[meetingId]/resume/[token]/page.tsx');
+    const client = scanned.find(
+      (file) => file.rel === 'm/[meetingId]/resume/[token]/lobby-resume-client.tsx'
+    );
+    expect(serverPage).toBeDefined();
+    expect(client).toBeDefined();
+    expect(serverPage?.code).toContain('lobbyPath(');
+    expect(client?.code).not.toContain('lobbyPath(');
   });
 
   /**

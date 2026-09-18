@@ -27,6 +27,7 @@ import { claimLobbyPlaceAction } from '../../_actions/claim-lobby-place';
 import { listGuestMeetingFilesAction } from '../../_actions/list-guest-meeting-files';
 import { getGuestMeetingFileDownloadAction } from '../../_actions/get-guest-meeting-file-download';
 import type { JoinGrant } from '@/lib/meetings/join-api-client';
+import { LobbyReentry } from './lobby-reentry';
 
 /**
  * BAL-132 — the lobby's FIVE-STATE MACHINE.
@@ -390,7 +391,17 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
     // there is nothing left to poll with. Re-identifying is the honest recovery.
     content = <JoinRetryNotice headingRef={headingRef} onRetry={handleLeaveQueue} />;
   } else if (state === 'unavailable') {
-    content = <JoinUnavailableNotice headingRef={headingRef} />;
+    // ⚠⚠ BAL-442 ROUND-2 ADJUDICATION D — the re-entry affordance renders as a SIBLING BELOW
+    // the terminal card, NEVER inside it. `JoinUnavailableNotice` stays propless, shared with
+    // `/join/[token]`, and untouched; the locked-out re-knocker is this ticket's PRIMARY
+    // persona, so making them reload to find recovery is the one journey the feature exists
+    // for. Rendered UNCONDITIONALLY here too, never gated on server state.
+    content = (
+      <div className="mx-auto w-full max-w-md">
+        <JoinUnavailableNotice headingRef={headingRef} />
+        <LobbyReentry meetingId={meetingId} defaultEmail={email} reduceMotion={isReduced} />
+      </div>
+    );
   } else if (state === 'waiting') {
     content = (
       <LobbyWaiting
@@ -403,6 +414,7 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
   } else {
     content = (
       <LobbyIdentify
+        meetingId={meetingId}
         name={name}
         email={email}
         formError={formError}
@@ -450,6 +462,7 @@ const INPUT_CLASSES =
   'border-border bg-background text-foreground focus-visible:ring-ring aria-[invalid=true]:border-destructive min-h-11 w-full rounded-lg border px-3 text-base focus-visible:ring-2 focus-visible:outline-none sm:text-[13.5px]';
 
 interface LobbyIdentifyProps {
+  readonly meetingId: string;
   readonly name: string;
   readonly email: string;
   readonly formError: string | null;
@@ -462,6 +475,7 @@ interface LobbyIdentifyProps {
 }
 
 function LobbyIdentify({
+  meetingId,
   name,
   email,
   formError,
@@ -581,6 +595,8 @@ function LobbyIdentify({
           {isSubmitting ? 'Asking to join…' : 'Ask to join'}
         </motion.button>
       </form>
+
+      <LobbyReentry meetingId={meetingId} defaultEmail={email} reduceMotion={reduceMotion} />
 
       <p className="text-muted-foreground border-border mt-6 border-t pt-4 text-[11.5px]">
         Powered by <span className="text-foreground font-semibold">Balo</span>

@@ -1611,8 +1611,13 @@ describe('meetingGuestsRepository.rotateToken (BAL-436 — the re-send)', () => 
   /**
    * ⚠⚠ **THE `WHERE` CLAUSE IS THE BOUNDARY — THERE IS NO RLS BEHIND IT.** Each case below
    * calls the method with a shape the SERVICE would have refused first, precisely to prove the
-   * refusal does not depend on the service. BAL-442's guest self-service arm inherits this
-   * primitive, and a caller that skips the pre-read still cannot widen it.
+   * refusal does not depend on the service. A caller that skips the pre-read still cannot widen
+   * the shape.
+   *
+   * ⚠ CORRECTED BY BAL-442: this note used to say BAL-442's guest self-service arm "inherits this
+   * primitive". It does not — that arm calls `rotatePendingLobbyToken`, because the
+   * `admission = 'admitted'` case below excludes every row it can match. What is inherited is the
+   * DISCIPLINE (tenancy and liveness live in the statement), not the function.
    */
   it('⚠⚠ REFUSES A CROSS-MEETING ROTATE — the tenancy scope is IN the statement', async () => {
     const host = await userFactory();
@@ -1655,6 +1660,12 @@ describe('meetingGuestsRepository.rotateToken (BAL-436 — the re-send)', () => 
     await expect(linkResentAuditCount(seeded.guest.id)).resolves.toBe(0);
   });
 
+  /**
+   * ⚠⚠ **THE BAL-442 GUARD.** `pending` STAYS REFUSED HERE. BAL-442 added a second,
+   * separately-named primitive rather than widening this predicate, precisely so the HOST resend
+   * arm (`resendGuestJoinLink`) never gains the ability to re-send to an un-admitted knock. If a
+   * future change widens this to `inArray(admission, ['admitted','pending'])`, this case fails.
+   */
   it.each(['pending' as const, 'denied' as const])(
     '⚠ REFUSES a `%s` row — a re-send must never precede an admit',
     async (admission) => {
@@ -1680,6 +1691,664 @@ describe('meetingGuestsRepository.rotateToken (BAL-436 — the re-send)', () => 
       await expect(linkResentAuditCount(seeded.guest.id)).resolves.toBe(0);
     }
   );
+});
+
+// ── 6a. THE SELF-SERVICE LOBBY RE-ENTRY ARM (BAL-442) ────────────────────────
+
+const SELF_RECOVERED = 'meeting_guest.link_self_recovered';
+
+/**
+ * BAL-442 fix round (R-6) — the row's CURRENT compare-and-set token, read the same way the
+ * repository projects it.
+ *
+ * ⚠⚠ `updated_at::text`, NEVER `readGuest(...).updatedAt`. `timestamptz` carries MICROSECOND
+ * precision and a JavaScript `Date` carries only milliseconds, so a `Date` round-trip TRUNCATES
+ * — and a compare-and-set on the truncated value would match NOTHING, turning every rotation in
+ * this file into a `undefined` that the "refused" assertions would happily accept. A test that
+ * read it as a `Date` would pass the negatives and silently lose every positive.
+ *
+ * ⚠ It reads the row DIRECTLY rather than through `findLivePendingLobbyByEmail`, because the
+ * refusal cases below are deliberately shapes that read refuses (admitted, revoked, expired).
+ */
+async function versionTokenOf(guestId: string): Promise<string> {
+  const [row] = await db
+    .select({ versionToken: sql<string>`${meetingGuests.updatedAt}::text` })
+    .from(meetingGuests)
+    .where(eq(meetingGuests.id, guestId));
+  if (row === undefined) {
+    throw new Error(`expected meeting_guests row ${guestId} to exist`);
+  }
+  return row.versionToken;
+}
+
+/**
+ * One LIVE, client-side, `link`-channel, `pending` lobby row — the ONLY shape BAL-442's
+ * recovery arm may ever read or rotate.
+ *
+ * ⚠ `invitedById: null` is what `claimLobbyPlace` actually writes (a knock has no inviter), and
+ * `meeting_guest_self_claimed_is_link` permits it ONLY because the channel is `link`.
+ * ⚠ `admissionDecidedAt` MUST stay null: `meeting_guest_admission_terminal_stamped` is a
+ * BICONDITIONAL, so a `pending` row carrying a decision stamp will not insert at all.
+ */
+async function pendingLobbyGuest(
+  overrides: { meetingId?: string; values?: Partial<NewMeetingGuest> } = {}
+): ReturnType<typeof meetingGuestFactory> {
+  return meetingGuestFactory({
+    ...(overrides.meetingId === undefined ? {} : { meetingId: overrides.meetingId }),
+    values: {
+      invitedById: null,
+      inviteChannel: 'link',
+      admission: 'pending',
+      admissionDecidedAt: null,
+      party: 'client',
+      ...overrides.values,
+    },
+  });
+}
+
+/**
+ * ONE refusal assertion, shared by every negative in the rotate block — the `guestAuditRows`
+ * rule applied here: a per-case copy is both a Sonar new-code duplication finding AND a copy
+ * that keeps passing after the original's assertions are weakened.
+ *
+ * Asserts the THREE things a refusal has to mean, not just the return value: `undefined` comes
+ * back, the stored credential is BYTE-IDENTICAL afterwards, and NO audit row was written.
+ * `meetingId` is overridable so the tenancy case can name a meeting that is not the row's.
+ */
+async function expectLobbyRotationRefused(
+  seeded: Awaited<ReturnType<typeof meetingGuestFactory>>,
+  meetingId: string = seeded.meetingId
+): Promise<void> {
+  const oldHash = seeded.guest.tokenHash;
+  // ⚠ THE **CURRENT**, CORRECT token — so every refusal below is attributable to the predicate
+  // under test and never to a stale compare-and-set that would refuse everything for free.
+  const expectedVersionToken = await versionTokenOf(seeded.guest.id);
+
+  await expect(
+    meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken,
+    })
+  ).resolves.toBeUndefined();
+
+  expect((await readGuest(seeded.guest.id)).tokenHash).toBe(oldHash);
+  await expect(guestAuditActions(seeded.guest.id)).resolves.toEqual([]);
+}
+
+describe('meetingGuestsRepository.findLivePendingLobbyByEmail (BAL-442 — the recovery read)', () => {
+  const ADDRESS = 'dana@northwind.test';
+
+  it('finds the LIVE `pending` lobby row an address holds on the meeting', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS, name: 'Dana Visitor' } });
+
+    const match = await meetingGuestsRepository.findLivePendingLobbyByEmail(
+      seeded.meetingId,
+      ADDRESS
+    );
+
+    expect(match?.id).toBe(seeded.guest.id);
+    expect(match?.meetingId).toBe(seeded.meetingId);
+    // ⚠ THE STORED BYTES — the address the recovery link may be sent to.
+    expect(match?.email).toBe(ADDRESS);
+    expect(match?.name).toBe('Dana Visitor');
+  });
+
+  /**
+   * ⚠ THE FALSE NEGATIVE THIS CLOSES IS INVISIBLE EVERYWHERE ELSE. A miss and a match produce
+   * the SAME neutral response by design, so a lookup that silently matched nothing because the
+   * caller forgot to canonicalise could never be seen in a log, a metric or a downstream test.
+   */
+  it('⚠ CANONICALISES THE LOOKUP KEY — trims and lowercases before matching', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS } });
+
+    const match = await meetingGuestsRepository.findLivePendingLobbyByEmail(
+      seeded.meetingId,
+      '  DANA@Northwind.TEST  '
+    );
+
+    expect(match?.id).toBe(seeded.guest.id);
+  });
+
+  it('⚠ PROJECTS EXACTLY FOUR COLUMNS AND NEVER `token_hash`', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS } });
+
+    const match = await meetingGuestsRepository.findLivePendingLobbyByEmail(
+      seeded.meetingId,
+      ADDRESS
+    );
+
+    if (match === undefined) {
+      throw new Error('expected the live pending row to match');
+    }
+    // ⚠ `localeCompare`, never a bare `.sort()` — S2871 fails the Sonar gate on Reliability.
+    // ⚠ fix round (R-6) — FIVE now, not four: `versionToken` is the compare-and-set value the
+    // rotation demands. Still no `token_hash`, no `expires_at` and no attribution column.
+    expect(Object.keys(match).sort((a, b) => a.localeCompare(b))).toEqual([
+      'email',
+      'id',
+      'meetingId',
+      'name',
+      'versionToken',
+    ]);
+  });
+
+  /**
+   * BAL-442 fix round (R-6) — ⚠⚠ THE PROJECTED TOKEN MUST BE THE **EXACT, UNTRUNCATED**
+   * `updated_at`, which is why it is `::text` and not the `Date` column. A `timestamptz` read
+   * into a JavaScript `Date` loses its microseconds, and the compare-and-set built on it would
+   * then match NOTHING — every recovery would collapse into a neutral "lost race" that no log,
+   * metric or response could tell apart from a genuine miss.
+   */
+  it('⚠⚠ the projected `versionToken` round-trips EXACTLY, and a truncated `Date` would not', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS } });
+
+    const match = await meetingGuestsRepository.findLivePendingLobbyByEmail(
+      seeded.meetingId,
+      ADDRESS
+    );
+    if (match === undefined) {
+      throw new Error('expected the live pending row to match');
+    }
+
+    // It IS the stored value, byte for byte, as the database renders it.
+    await expect(versionTokenOf(seeded.guest.id)).resolves.toBe(match.versionToken);
+    // ⚠ AND IT IS ACCEPTED BY THE WRITE — the half that proves it is not merely a string.
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: match.versionToken,
+      })
+    ).resolves.toBeDefined();
+  });
+
+  /**
+   * ⚠⚠ ONE NEGATIVE PER PREDICATE, EACH SEEDING EXACTLY ONE ROW IN THE REFUSED SHAPE — so the
+   * only thing that can make the lookup answer `undefined` is the predicate under test. There is
+   * no RLS behind this read; the `WHERE` is the entire boundary.
+   */
+  it('⚠ REFUSES an `email`-channel row — that address has BAL-436 host resend, not this arm', async () => {
+    // ⚠ NOT `pendingLobbyGuest`: `meeting_guest_self_claimed_is_link` forbids a null inviter on
+    // an `email` row, so this fixture must name one.
+    const seeded = await meetingGuestFactory({
+      values: {
+        email: ADDRESS,
+        inviteChannel: 'email',
+        admission: 'pending',
+        admissionDecidedAt: null,
+        party: 'client',
+      },
+    });
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['admitted' as const, new Date()],
+    ['pre_admitted' as const, null],
+  ])(
+    '⚠ REFUSES an `%s` row — room entry is NOT self-recoverable, only a queue place is',
+    async (admission, decidedAt) => {
+      const seeded = await pendingLobbyGuest({
+        values: { email: ADDRESS, admission, admissionDecidedAt: decidedAt },
+      });
+
+      await expect(
+        meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+      ).resolves.toBeUndefined();
+    }
+  );
+
+  it('⚠⚠ REFUSES a DENIED row — a host denial is never undone by self-service', async () => {
+    const host = await userFactory();
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS } });
+    // ⚠ THE DENY BRANCH STAMPS `revoked_at`, which is what drops the row out of this lookup.
+    await meetingGuestsRepository.decideAdmission({
+      guestId: seeded.guest.id,
+      decision: 'denied',
+      deciderUserId: host.id,
+    });
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeUndefined();
+  });
+
+  it('⚠ REFUSES a revoked row', async () => {
+    const seeded = await pendingLobbyGuest({
+      values: { email: ADDRESS, revokedAt: new Date() },
+    });
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeUndefined();
+  });
+
+  it('⚠ REFUSES a soft-deleted row', async () => {
+    const seeded = await pendingLobbyGuest({
+      values: { email: ADDRESS, deletedAt: new Date() },
+    });
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeUndefined();
+  });
+
+  /**
+   * ⚠ `meeting_guest_meeting_email_live_idx` carries NO `expires_at` predicate, so expiry does
+   * not vacate the slot and this method must exclude the row itself. Rotating an expired row
+   * would email a link whose recomputed window is also in the past — dead on arrival.
+   */
+  it('⚠ REFUSES an EXPIRED row', async () => {
+    const seeded = await pendingLobbyGuest({
+      values: { email: ADDRESS, expiresAt: new Date(Date.now() - DAY_MS) },
+    });
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeUndefined();
+  });
+
+  /**
+   * ⚠ THE MATCH KEY ITSELF. Without it the read returns SOMEBODY ELSE'S row — which on this
+   * arm would email a fresh credential to an address that never asked for one.
+   */
+  it('⚠⚠ REFUSES AN ADDRESS WITH NO ROW, even while another knock is queued there', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS } });
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(
+        seeded.meetingId,
+        'stranger@elsewhere.test'
+      )
+    ).resolves.toBeUndefined();
+    // Non-vacuity: the queued knock really is there to be wrongly returned.
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeDefined();
+  });
+
+  it('⚠⚠ TENANCY — the same address pending on ANOTHER meeting does not match', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS } });
+    const { meeting: otherMeeting } = await meetingFactory();
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(otherMeeting.id, ADDRESS)
+    ).resolves.toBeUndefined();
+    // Non-vacuity: the row really is findable on ITS OWN meeting.
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeDefined();
+  });
+
+  /**
+   * ⚠ `party = 'client'` IS WHAT MAKES `meeting_guest_meeting_email_live_idx` USABLE (it is
+   * `(meeting_id, party, email)`), and it is also correct: `claimLobbyPlace` hard-codes `client`,
+   * so no expert-side row can be a lobby knock this arm may recover.
+   */
+  it('⚠ REFUSES an expert-side row holding the same address', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: ADDRESS, party: 'expert' } });
+
+    await expect(
+      meetingGuestsRepository.findLivePendingLobbyByEmail(seeded.meetingId, ADDRESS)
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('meetingGuestsRepository.rotatePendingLobbyToken (BAL-442 — the recovery write)', () => {
+  it('⚠⚠ replaces the hash and the expiry, and KILLS the previous credential', async () => {
+    const seeded = await pendingLobbyGuest({
+      values: { expiresAt: new Date(Date.now() + DAY_MS) },
+    });
+    const oldHash = seeded.guest.tokenHash;
+    const newHash = tokenHash();
+    const newExpiry = new Date(Date.now() + 30 * DAY_MS);
+
+    const rotated = await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: newHash,
+      expiresAt: newExpiry,
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+
+    expect(rotated?.tokenHash).toBe(newHash);
+    expect(rotated?.expiresAt.getTime()).toBe(newExpiry.getTime());
+    // ⚠ The lost credential stops resolving — the tab that held it is gone, and two live
+    // credentials on one row would be a second hijack surface opened by the rescue itself.
+    await expect(meetingGuestsRepository.findLiveByTokenHash(oldHash)).resolves.toBeUndefined();
+    const resolved = await meetingGuestsRepository.findLiveByTokenHash(newHash);
+    expect(resolved?.guest.id).toBe(seeded.guest.id);
+  });
+
+  it('⚠⚠ writes ONE UNATTRIBUTED `meeting_guest.link_self_recovered` row — never `link_resent`', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: 'dana@northwind.test' } });
+
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+
+    // ⚠ EXACT SET: `meeting_guest.link_resent` means "a HOST re-sent it" and is FALSE here, so
+    // reusing the host arm's action would make the two arms indistinguishable in the trail.
+    await expect(guestAuditActions(seeded.guest.id)).resolves.toEqual([SELF_RECOVERED]);
+
+    const audits = await guestAuditRows(seeded.guest.id, SELF_RECOVERED);
+    expect(audits).toHaveLength(1);
+    // ⚠ NULL — self-service has no actor, exactly as `meeting_guest.self_claimed` has none.
+    expect(audits[0]?.actorUserId).toBeNull();
+    expect(audits[0]?.metadata).toMatchObject({
+      meetingId: seeded.meetingId,
+      party: 'client',
+      inviteChannel: 'link',
+    });
+    // ⚠ IDS AND LABELS ONLY — never the credential, never the address.
+    const serialised = JSON.stringify(audits[0]?.metadata);
+    expect(serialised).not.toContain('tokenHash');
+    expect(serialised).not.toContain('token_hash');
+    expect(serialised).not.toContain('dana@northwind.test');
+  });
+
+  /**
+   * ⚠ THE OPPOSITE RULE TO `meeting_guest.self_claimed`, WHICH IS ONE-PER-ROW. A guest may lose
+   * a tab more than once, so repeated recovery is expected and each rotation kills the last link.
+   */
+  it('⚠ rotating TWICE writes TWO `link_self_recovered` rows — recovery is repeatable', async () => {
+    const seeded = await pendingLobbyGuest();
+    const first = tokenHash();
+    const second = tokenHash();
+
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: first,
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+    // ⚠ RE-READ THE TOKEN — the first rotation moved `updated_at`, and passing the ORIGINAL
+    // token here would be refused. That is the compare-and-set working, not a test artefact.
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: second,
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+
+    await expect(guestAuditRows(seeded.guest.id, SELF_RECOVERED)).resolves.toHaveLength(2);
+    await expect(meetingGuestsRepository.findLiveByTokenHash(first)).resolves.toBeUndefined();
+    await expect(meetingGuestsRepository.findLiveByTokenHash(second)).resolves.toBeDefined();
+  });
+
+  it('⚠⚠ LEAVES THE ROW `pending` — a recovery is a credential replacement, not an admission', async () => {
+    const seeded = await pendingLobbyGuest({ values: { name: 'Dana Visitor' } });
+
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+
+    const after = await readGuest(seeded.guest.id);
+    expect(after.admission).toBe('pending');
+    expect(after.admissionDecidedAt).toBeNull();
+    expect(after.admittedByUserId).toBeNull();
+    // ⚠ NOT AN IDENTITY EDIT EITHER — the host's queue still shows what was knocked with.
+    expect(after.name).toBe('Dana Visitor');
+    expect(after.email).toBe(seeded.guest.email);
+    expect(after.party).toBe('client');
+  });
+
+  /**
+   * ⚠⚠ THE RECOVERY DOES NOT REOPEN `claimLobbyPlace`'s `ON CONFLICT DO NOTHING` HIJACK CONTROL
+   * (residual F3). Only the CREDENTIAL is recoverable — never the queue slot, and never the
+   * right to re-knock under a different name.
+   */
+  it('⚠⚠ does NOT vacate `meeting_guest_meeting_email_live_idx` — the re-knock stays refused', async () => {
+    const seeded = await pendingLobbyGuest({ values: { email: 'dana@northwind.test' } });
+
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+
+    await expect(
+      meetingGuestsRepository.claimLobbyPlace(
+        claimInput(seeded.meetingId, { email: 'dana@northwind.test', name: 'Someone Else' })
+      )
+    ).resolves.toBeUndefined();
+    const after = await readGuest(seeded.guest.id);
+    expect(after.name).toBe('Guest Person');
+    expect(after.revokedAt).toBeNull();
+    expect(after.deletedAt).toBeNull();
+  });
+
+  /**
+   * ⚠⚠ EIGHT PREDICATES, ONE NEGATIVE EACH — and every one of these calls the method with a
+   * shape the SERVICE would have refused first, precisely to prove the refusal does not depend
+   * on the service. The pre-read is a COURTESY; the `WHERE` is the gate, and there is no RLS.
+   */
+  it('⚠⚠ ROTATES ONLY THE NAMED ROW — a sibling knock on the SAME meeting is untouched', async () => {
+    const mine = await pendingLobbyGuest();
+    const bystander = await pendingLobbyGuest({ meetingId: mine.meetingId });
+    const bystanderHash = bystander.guest.tokenHash;
+
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: mine.meetingId,
+      guestId: mine.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(mine.guest.id),
+    });
+
+    // ⚠ A rotation not keyed on the id would re-mint EVERY queued knock on the meeting at
+    // once — killing bystanders' live links in order to rescue one person.
+    expect((await readGuest(bystander.guest.id)).tokenHash).toBe(bystanderHash);
+    await expect(guestAuditActions(bystander.guest.id)).resolves.toEqual([]);
+  });
+
+  it('⚠⚠ REFUSES A CROSS-MEETING ROTATE — the tenancy scope is IN the statement', async () => {
+    const seeded = await pendingLobbyGuest();
+    const { meeting: otherMeeting } = await meetingFactory();
+
+    // A caller holding a valid guest uuid but naming a meeting of their own. The helper also
+    // pins that the row is BYTE-IDENTICAL afterwards — the original credential still resolves.
+    await expectLobbyRotationRefused(seeded, otherMeeting.id);
+  });
+
+  it.each([
+    ['admitted' as const, new Date()],
+    ['pre_admitted' as const, null],
+    ['denied' as const, new Date()],
+  ])(
+    '⚠⚠ REFUSES an `%s` row — self-service may only rotate a queue place',
+    async (admission, decidedAt) => {
+      const seeded = await pendingLobbyGuest({
+        values: { admission, admissionDecidedAt: decidedAt },
+      });
+      await expectLobbyRotationRefused(seeded);
+    }
+  );
+
+  it('⚠ REFUSES an `email`-channel row — that path has its own attributed re-send', async () => {
+    const seeded = await meetingGuestFactory({
+      values: { inviteChannel: 'email', admission: 'pending', admissionDecidedAt: null },
+    });
+    await expectLobbyRotationRefused(seeded);
+  });
+
+  it.each([
+    ['revoked', { revokedAt: new Date() }],
+    ['soft-deleted', { deletedAt: new Date() }],
+  ])(
+    '⚠ REFUSES a %s row — a rotation must never undo a deliberate switch-off',
+    async (_label, values) => {
+      const seeded = await pendingLobbyGuest({ values });
+      await expectLobbyRotationRefused(seeded);
+    }
+  );
+
+  /**
+   * ⚠⚠ THE SEVENTH PREDICATE, AND THE ONE `rotateToken` DELIBERATELY DOES NOT CARRY. It is here
+   * so the write is independently safe when called by a future caller that skips the read — the
+   * same philosophy `rotateToken`'s "ATOMIC, NOT RE-READ" paragraph states. Without it an expired
+   * handle could be re-minted with a fresh window, reviving a credential nobody ever admitted.
+   */
+  it('⚠⚠ REFUSES an EXPIRED row even though the READ would have refused it first', async () => {
+    const seeded = await pendingLobbyGuest({
+      values: { expiresAt: new Date(Date.now() - DAY_MS) },
+    });
+    await expectLobbyRotationRefused(seeded);
+  });
+
+  /**
+   * ── BAL-442 fix round (R-6): THE EIGHTH PREDICATE, THE COMPARE-AND-SET ────────────────────
+   *
+   * Two simultaneous re-entry requests for the SAME address both read the same row and BOTH
+   * rotated it. Two emails went out; the LOSER's was minted second and could arrive LAST, so
+   * the guest's newest inbox message held an already-dead credential while the working one
+   * looked stale. With `updated_at` in the `WHERE`, exactly one writer wins.
+   *
+   * ⚠ THE HARNESS RUNS EVERY TEST INSIDE ONE TRANSACTION ON A `max: 1` POOL, so genuinely
+   * CONCURRENT writers are not expressible here. These drive the predicate DETERMINISTICALLY
+   * instead — a stale token is exactly what a loser presents once the winner has committed —
+   * which is the same statement the race produces and is testable without concurrency.
+   */
+  it('⚠⚠ REFUSES A STALE TOKEN — the loser of a double recovery rotates NOTHING', async () => {
+    const seeded = await pendingLobbyGuest();
+    // Both callers read the SAME token, exactly as two simultaneous requests would.
+    const sharedToken = await versionTokenOf(seeded.guest.id);
+    const winnerHash = tokenHash();
+
+    // The winner commits first.
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: winnerHash,
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: sharedToken,
+      })
+    ).resolves.toBeDefined();
+
+    // The loser now presents the token it read BEFORE that commit.
+    const loserHash = tokenHash();
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: loserHash,
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: sharedToken,
+      })
+    ).resolves.toBeUndefined();
+
+    // ⚠⚠ THE WINNER'S CREDENTIAL IS THE ONE THAT SURVIVES — the whole point. Without the
+    // predicate the loser would have overwritten it, and its email could land afterwards.
+    const after = await readGuest(seeded.guest.id);
+    expect(after.tokenHash).toBe(winnerHash);
+    await expect(meetingGuestsRepository.findLiveByTokenHash(loserHash)).resolves.toBeUndefined();
+    const resolved = await meetingGuestsRepository.findLiveByTokenHash(winnerHash);
+    expect(resolved?.guest.id).toBe(seeded.guest.id);
+  });
+
+  it('⚠⚠ THE LOSER IS A SILENT NO-OP — no audit row, so exactly ONE recovery is recorded', async () => {
+    const seeded = await pendingLobbyGuest();
+    const sharedToken = await versionTokenOf(seeded.guest.id);
+
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: sharedToken,
+    });
+    await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: tokenHash(),
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: sharedToken,
+    });
+
+    // ⚠ ONE, not two. The refusal is `undefined` and NOT an error — a distinguishable
+    // "somebody beat you to it" would be a match oracle on a route whose whole design is that
+    // a match and a miss are the same response.
+    await expect(guestAuditRows(seeded.guest.id, SELF_RECOVERED)).resolves.toHaveLength(1);
+  });
+
+  it('⚠ REFUSES A TOKEN THAT NAMES A DIFFERENT INSTANT ENTIRELY', async () => {
+    const seeded = await pendingLobbyGuest();
+    const oldHash = seeded.guest.tokenHash;
+
+    await expect(
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken: '2020-01-01 00:00:00+00',
+      })
+    ).resolves.toBeUndefined();
+
+    expect((await readGuest(seeded.guest.id)).tokenHash).toBe(oldHash);
+    await expect(guestAuditActions(seeded.guest.id)).resolves.toEqual([]);
+  });
+
+  /**
+   * ⚠⚠ THE NON-VACUITY PAIR FOR EVERY REFUSAL ABOVE. A compare-and-set that refused
+   * EVERYTHING — the shape a `Date`-based token would silently produce, because `timestamptz`
+   * microseconds do not survive a JavaScript `Date` — would pass all three of them and break
+   * the feature outright. This is the one that fails if that happens.
+   */
+  it('⚠⚠ ACCEPTS THE CURRENT TOKEN — the compare-and-set is not refusing everything', async () => {
+    const seeded = await pendingLobbyGuest();
+    const newHash = tokenHash();
+
+    const rotated = await meetingGuestsRepository.rotatePendingLobbyToken({
+      meetingId: seeded.meetingId,
+      guestId: seeded.guest.id,
+      tokenHash: newHash,
+      expiresAt: new Date(Date.now() + 7 * DAY_MS),
+      expectedVersionToken: await versionTokenOf(seeded.guest.id),
+    });
+
+    expect(rotated?.tokenHash).toBe(newHash);
+    await expect(guestAuditRows(seeded.guest.id, SELF_RECOVERED)).resolves.toHaveLength(1);
+  });
+
+  it('⚠ ROLLS THE ROTATION BACK when the audit write fails — one transaction, not two', async () => {
+    const seeded = await pendingLobbyGuest();
+    const oldHash = seeded.guest.tokenHash;
+    const expectedVersionToken = await versionTokenOf(seeded.guest.id);
+
+    await expectAuditFailureRollsBack(() =>
+      meetingGuestsRepository.rotatePendingLobbyToken({
+        meetingId: seeded.meetingId,
+        guestId: seeded.guest.id,
+        tokenHash: tokenHash(),
+        expiresAt: new Date(Date.now() + 7 * DAY_MS),
+        expectedVersionToken,
+      })
+    );
+
+    expect((await readGuest(seeded.guest.id)).tokenHash).toBe(oldHash);
+  });
 });
 
 // ── 6b. THE GUEST→MEMBER LINKAGE (BAL-489) ───────────────────────────────────
