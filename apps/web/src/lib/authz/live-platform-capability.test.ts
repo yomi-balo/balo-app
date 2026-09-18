@@ -9,7 +9,20 @@ vi.mock('@balo/db', () => ({
   },
 }));
 
+// BAL-568 — the read now goes through `readLiveUserRow`, which is `React.cache()`'d. There is no
+// request scope in a unit test, so pass `cache` through. ⚠ THE `@balo/db` DOUBLE ABOVE STILL
+// DRIVES EVERY CASE BELOW UNCHANGED, because `readLiveUserRow` calls straight through to it —
+// which is exactly why reusing `findForSessionSync` rather than a narrower reader costs zero
+// test churn.
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, cache: <T>(fn: T): T => fn };
+});
+
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { PLATFORM_CAPABILITIES } from '@balo/shared/authz';
+import { codeLinesOf, resolveRouteDir } from '@/invariants/_source-scan';
 import { log } from '@/lib/logging';
 import { actorHoldsPlatformCapability } from './live-platform-capability';
 
@@ -199,5 +212,37 @@ describe('actorHoldsPlatformCapability', () => {
     await expect(
       actorHoldsPlatformCapability(USER_ID, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN)
     ).resolves.toBe(false);
+  });
+});
+
+/**
+ * ⚠⚠ BAL-568 — TWO SOURCE ASSERTIONS, BOTH OF WHICH EVERY BEHAVIOURAL CASE ABOVE IS BLIND TO.
+ *
+ *  · R5, ONE DEFINITION OF "LIVE": this file used to inline `row.deletedAt !== null ||
+ *    row.status !== 'active'`. Those three conditions produce identical outcomes to
+ *    `userRowIsLive`, so no behavioural test can tell the two apart — only reading the source can.
+ *  · R7, ONE READ PER REQUEST: the 22 platform-gated staff actions must not pay two round trips
+ *    for the same row. `React.cache()` is a no-op outside a request scope (vitest included), so
+ *    the dedupe is not observable at runtime here either.
+ */
+describe('⚠ BAL-568 source pins (R5 one definition, R7 one read)', () => {
+  const SRC_DIR = resolveRouteDir(['apps/web/src', 'src']);
+  const SOURCE = codeLinesOf(
+    readFileSync(path.join(SRC_DIR, 'lib/authz/live-platform-capability.ts'), 'utf8')
+  );
+
+  it('uses the SHARED liveness predicate and restates none of its conditions', () => {
+    expect(SRC_DIR).not.toBe('');
+    expect(SOURCE.length).toBeGreaterThan(200);
+    // It genuinely is the module under test — a path typo would make the rest vacuous.
+    expect(SOURCE).toContain('export async function actorHoldsPlatformCapability');
+    expect(SOURCE).toContain('userRowIsLive(row)');
+    expect(SOURCE).not.toContain("!== 'active'");
+    expect(SOURCE).not.toContain('row.deletedAt !== null');
+  });
+
+  it('reads through the ONE cached reader and never the repository directly', () => {
+    expect(SOURCE).toContain('readLiveUserRow(userId)');
+    expect(SOURCE).not.toContain('usersRepository.findForSessionSync(');
   });
 });

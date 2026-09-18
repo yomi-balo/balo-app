@@ -25,6 +25,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { track, PHONE_EVENTS } from '@/lib/analytics';
+import { ACCOUNT_REFUSAL_HEADER } from '@balo/shared/authz';
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -308,6 +309,30 @@ function StatusBanner({
 
 // ── API response handlers (extracted to reduce cognitive complexity) ──
 
+/**
+ * BAL-568 — THE ONE BROWSER-SIDE BEARER CALLER IN THE APP, and the one place the browser can
+ * drive a REAL, IMMEDIATE sign-out. `apps/api`'s `requireAuth` marks an account-state 401 with
+ * {@link ACCOUNT_REFUSAL_HEADER}; navigating to the session-sync Route Handler makes it re-read
+ * the live row, destroy the cookie, and land on `/login?error=account_suspended|account_deleted`
+ * with BAL-197's shipped copy.
+ *
+ * ⚠ WE DO NOT PICK THE CODE HERE — the route owns the precedence (a suspended-AND-deleted row
+ * reads `account_deleted`). We only detect that the marker is present.
+ * ⚠ IT MUST NOT CALL `logoutAction()`: destroying the cookie from this side would make the sync
+ * route take its no-session arm and redirect to a BARE `/login`, losing the message entirely.
+ * ⚠ THE CONSTANT COMES FROM `@balo/shared/authz` (pure constants, no `@balo/db`), never from
+ * `@/lib/auth/*` — this is a client component, and the web logger/db seams cannot be bundled
+ * into one.
+ *
+ * Returns `true` when it has taken over the response, so the caller returns without running its
+ * normal error mapping.
+ */
+function signOutOnAccountRefusal(res: Response): boolean {
+  if (res.headers.get(ACCOUNT_REFUSAL_HEADER) === null) return false;
+  globalThis.location.assign('/api/auth/session-sync?returnTo=/login');
+  return true;
+}
+
 interface SendErrorHandlers {
   setStage: (s: Stage) => void;
   setRateLimited: (v: boolean) => void;
@@ -522,6 +547,12 @@ function usePhoneOtp(opts: {
         body: JSON.stringify({ phone }),
       });
 
+      // ⚠ BAL-568 — THE MARKER CHECK RUNS BEFORE `res.json()` (fix round 1, F11). It reads only
+      // headers, and a non-JSON body on a marked 401 (an edge 401 page, say) would otherwise throw
+      // in the parse and land in the network-error catch below — showing "try again" to an account
+      // that can never succeed, instead of signing it out. Unreachable today; free to get right.
+      if (signOutOnAccountRefusal(res)) return;
+
       const data = (await res.json()) as Record<string, unknown>;
 
       if (!res.ok) {
@@ -554,6 +585,9 @@ function usePhoneOtp(opts: {
           },
           body: JSON.stringify({ phone: e164Phone, code }),
         });
+
+        // ⚠ BAL-568 — BEFORE `res.json()`, same reasoning as the send arm above (fix round 1, F11).
+        if (signOutOnAccountRefusal(res)) return;
 
         const data = (await res.json()) as Record<string, unknown>;
 

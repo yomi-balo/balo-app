@@ -3,6 +3,7 @@ import 'server-only';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
+import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
 
 /**
  * BAL-134 (§7.1 / §5.4) — the SERVER-ONLY web→api client for the two MEMBER meeting-lifecycle
@@ -140,10 +141,13 @@ async function callMeetingApi<T>(
       // window, and quoting an unrelated upstream's opinion at a live poll is worse than
       // silence.
       const retryAfterSeconds = response.status === 429 ? readRetryAfter(response) : undefined;
+      // BAL-568 — a 401 carrying the account-refusal marker is a LIVENESS refusal, not an
+      // ordinary auth failure. Recorded here; the code replaces the body's generic literal.
+      const refusal = await consumeApiAccountRefusal(response);
       return {
         ok: false,
         status: response.status,
-        code: typeof parsed.error === 'string' ? parsed.error : 'request_failed',
+        code: refusal ?? (typeof parsed.error === 'string' ? parsed.error : 'request_failed'),
         // ⚠ THE KEY IS **OMITTED**, NOT SET TO `undefined` — a present-but-undefined optional
         // survives an `in` check and violates the declared type under
         // `exactOptionalPropertyTypes`.

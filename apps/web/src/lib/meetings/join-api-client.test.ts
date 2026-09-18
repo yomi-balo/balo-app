@@ -15,6 +15,13 @@ vi.mock('next/headers', () => ({
   headers: async () => mockHeaders(),
 }));
 
+// BAL-568 — the account-refusal marker reader. Doubled here; its header parsing, logging and
+// emission are covered in `lib/auth/api-account-refusal.test.ts`.
+const mockConsumeApiAccountRefusal = vi.fn();
+vi.mock('@/lib/auth/api-account-refusal', () => ({
+  consumeApiAccountRefusal: (...args: unknown[]) => mockConsumeApiAccountRefusal(...args),
+}));
+
 import { log } from '@/lib/logging';
 import { postGuestJoin, postLobbyClaim, postMemberJoin } from './join-api-client';
 
@@ -49,6 +56,42 @@ beforeEach(() => {
   });
   mockLoggedFetch.mockResolvedValue(response(200, { ok: true }));
   mockHeaders.mockReturnValue(new Headers({ 'x-vercel-forwarded-for': '203.0.113.7' }));
+  mockConsumeApiAccountRefusal.mockResolvedValue(null);
+});
+
+describe('BAL-568 — the api account-refusal marker', () => {
+  it('⚠ surfaces the refusal code on a marked 401 from the MEMBER hop', async () => {
+    const refused = response(401, { error: 'Unauthorized' });
+    mockLoggedFetch.mockResolvedValue(refused);
+    mockConsumeApiAccountRefusal.mockResolvedValue('account_suspended');
+
+    const result = await postMemberJoin(MEETING_ID);
+
+    expect(result).toEqual({ ok: false, status: 401, code: 'account_suspended' });
+    expect(mockConsumeApiAccountRefusal).toHaveBeenCalledTimes(1);
+    expect(mockConsumeApiAccountRefusal).toHaveBeenCalledWith(refused);
+  });
+
+  /**
+   * ⚠ THE TWO PUBLIC HOPS SHARE `callJoinApi`, AND THAT IS HARMLESS. A public route has no
+   * `requireAuth` preHandler, so it never emits the marker — the reader simply finds nothing and
+   * the lobby/guest failure shape is unchanged.
+   */
+  it('⚠ leaves the PUBLIC lobby hop unchanged when there is no marker', async () => {
+    mockLoggedFetch.mockResolvedValue(response(403, { error: 'meeting_not_joinable' }));
+
+    const result = await postLobbyClaim(MEETING_ID, 'Ada', 'ada@example.com');
+
+    expect(result).toEqual({ ok: false, status: 403, code: 'meeting_not_joinable' });
+  });
+
+  it('an UNMARKED 401 on the member hop is byte-identical to its pre-BAL-568 behaviour', async () => {
+    mockLoggedFetch.mockResolvedValue(response(401, { error: 'forbidden' }));
+
+    const result = await postMemberJoin(MEETING_ID);
+
+    expect(result).toEqual({ ok: false, status: 401, code: 'forbidden' });
+  });
 });
 
 describe('postMemberJoin — the AUTHENTICATED hop', () => {

@@ -2,6 +2,7 @@ import Fastify, { type FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import * as Sentry from '@sentry/node';
 import { log as sharedLogger } from '@balo/shared/logging';
+import { ACCOUNT_REFUSAL_HEADER } from '@balo/shared/authz';
 import { notificationsRoutes } from './routes/notifications/index.js';
 import { payoutsRoutes } from './routes/payouts/index.js';
 import { phoneRoutes } from './routes/phone/index.js';
@@ -45,6 +46,13 @@ export async function buildApp(opts?: { logger?: boolean }) {
 
   await fastify.register(cors, {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    // ⚠⚠ BAL-568 — REQUIRED, AND EASY TO MISS. A browser fetch cannot READ a custom response
+    // header cross-origin without `Access-Control-Expose-Headers`, and web (`:3000`) → api
+    // (`:3002`) is cross-origin. The one browser-side Bearer caller in the app
+    // (`components/balo/phone-verification-flow.tsx`) reads this marker to drive a real sign-out;
+    // without this line that whole arm is dead code the browser silently strips, and no api-side
+    // test would notice. `app.test.ts` pins the registration.
+    exposedHeaders: [ACCOUNT_REFUSAL_HEADER],
   });
 
   fastify.setErrorHandler((error, request, reply) => {

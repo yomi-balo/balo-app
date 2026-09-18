@@ -21,8 +21,39 @@ vi.mock('iron-session', () => ({
   getIronSession: vi.fn(() => Promise.resolve(mockSession)),
 }));
 
-import { requireUser, requireOnboardedUser, getCompanyContext, getSession } from './session';
+// BAL-568 — `session.ts` now reaches the LIVE row through `./account-liveness` → `./live-user`.
+// The repository double is the whole point of the new assertions below: it is what proves an
+// anonymous visitor pays ZERO reads, and it is what drives the suspended / soft-deleted arms.
+const mockFindForSessionSync = vi.fn();
+vi.mock('@balo/db', () => ({
+  usersRepository: {
+    findForSessionSync: (...args: unknown[]) => mockFindForSessionSync(...args),
+  },
+}));
+
+// `readLiveUserRow` is `React.cache()`'d, which needs a request scope; pass through in tests.
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, cache: <T>(fn: T): T => fn };
+});
+
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: vi.fn(),
+  AUTH_SERVER_EVENTS: { SESSION_INVALIDATED: 'auth_session_invalidated' },
+}));
+
+import { trackServerAndFlush } from '@/lib/analytics/server';
+import {
+  requireUser,
+  requireOnboardedUser,
+  getCompanyContext,
+  getCurrentUser,
+  getSession,
+} from './session';
 import type { SessionUser } from './session';
+import { AccountNotLiveError } from './account-liveness';
+
+const LIVE_ROW = { status: 'active', deletedAt: null };
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -42,6 +73,13 @@ const baseUser = {
 function userWith(onboardingCompleted: unknown): Record<string, unknown> {
   return { ...baseUser, onboardingCompleted };
 }
+
+// BAL-568 — default every suite to a LIVE row so the pre-existing contracts below are unchanged.
+// ⚠ `vi.clearAllMocks()` in the nested `beforeEach`es KEEPS implementations (it clears calls and
+// results only), so this survives them regardless of hook order.
+beforeEach(() => {
+  mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
+});
 
 // ── Tests ───────────────────────────────────────────────────────
 
@@ -243,5 +281,127 @@ describe('getCompanyContext (unchanged by BAL-494)', () => {
   it('throws Unauthorized when there is no user (delegates to requireUser)', async () => {
     mockSession = {};
     await expect(getCompanyContext()).rejects.toThrow('Unauthorized');
+  });
+});
+
+// ── BAL-568 — account liveness folded into the actor-resolution seams ────────────────────
+
+describe('BAL-568 — the seams re-read the LIVE row, and the cookie stops granting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
+  });
+
+  /**
+   * ⚠⚠ THE BINDING PERFORMANCE CONSTRAINT (ruling A2). `getCurrentUser()` runs on the root and
+   * marketing layouts, i.e. on EVERY render including a logged-out marketing page. An anonymous
+   * visitor must pay NOTHING: the live read happens only once a session user has been resolved.
+   * Asserted here rather than left to inspection.
+   */
+  it('⚠ an ANONYMOUS visitor pays ZERO database reads', async () => {
+    mockSession = {};
+
+    await expect(getCurrentUser()).resolves.toBeNull();
+
+    expect(mockFindForSessionSync).not.toHaveBeenCalled();
+  });
+
+  it('getCurrentUser returns the user for a live row, reading it exactly once', async () => {
+    mockSession = { user: userWith(true) };
+
+    const user = await getCurrentUser();
+
+    expect(user?.id).toBe('user-1');
+    expect(mockFindForSessionSync).toHaveBeenCalledTimes(1);
+    expect(mockFindForSessionSync).toHaveBeenCalledWith('user-1');
+  });
+
+  /**
+   * ⚠ THE COOKIE IS IGNORED, NOT DESTROYED. `getSession()` still carries a fully-populated user —
+   * that is the whole point: a seven-day cookie outlives a suspension by up to a week.
+   * `getCurrentUser()` must answer `null` anyway, which is the shape every shipped call site
+   * already handles.
+   */
+  it('⚠ getCurrentUser returns NULL for a suspended row while the cookie still carries a user', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
+
+    const session = await getSession();
+    expect(session.user, 'the cookie itself is untouched — it simply grants nothing').toBeDefined();
+
+    await expect(getCurrentUser()).resolves.toBeNull();
+  });
+
+  /**
+   * ⚠⚠ THE `path` DIMENSION (fix round 1, F3). `getCurrentUser` runs from `app/layout.tsx`,
+   * `(marketing)/layout.tsx` and `(dashboard)/layout.tsx` — i.e. on every authenticated RENDER —
+   * so it must report `'page'`. The first cut reported the hard-coded `'action'` (a plan defect,
+   * §5.2), which left R3's `page` arm coming only from the sync route and hid exactly the thing
+   * the dimension exists to measure: how often a suspended account is stopped OUTSIDE a page load.
+   */
+  it('⚠ getCurrentUser reports path=page, not the action default', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
+
+    await getCurrentUser();
+
+    expect(trackServerAndFlush).toHaveBeenCalledWith('auth_session_invalidated', {
+      distinct_id: 'user-1',
+      path: 'page',
+      reason: 'suspended',
+    });
+  });
+
+  it('getCurrentUser returns NULL for a soft-deleted row', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockResolvedValue({
+      status: 'active',
+      deletedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    await expect(getCurrentUser()).resolves.toBeNull();
+  });
+
+  it('getCurrentUser returns NULL when the database is unreachable (fail closed)', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
+
+    await expect(getCurrentUser()).resolves.toBeNull();
+  });
+
+  /**
+   * ⚠ THE TWO FAILURES MUST STAY DISTINGUISHABLE, which is why `requireUser` reads `getSession()`
+   * directly rather than going through `getCurrentUser()`. No session is still the generic
+   * 'Unauthorized' every caller already maps; a non-live account carries the refusal CODE.
+   */
+  it('⚠ requireUser throws AccountNotLiveError (not the generic Unauthorized) for a suspended row', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
+
+    await expect(requireUser()).rejects.toBeInstanceOf(AccountNotLiveError);
+    mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
+    await expect(requireUser()).rejects.toMatchObject({ code: 'account_suspended' });
+  });
+
+  it('⚠ requireUser still throws the GENERIC Unauthorized when there is no session at all', async () => {
+    mockSession = {};
+
+    await expect(requireUser()).rejects.toThrow('Unauthorized');
+    await expect(requireUser()).rejects.not.toBeInstanceOf(AccountNotLiveError);
+    expect(mockFindForSessionSync).not.toHaveBeenCalled();
+  });
+
+  it('requireOnboardedUser inherits the gate transitively, with no edit of its own', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
+
+    await expect(requireOnboardedUser()).rejects.toBeInstanceOf(AccountNotLiveError);
+  });
+
+  it('getCompanyContext inherits the gate transitively too', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
+
+    await expect(getCompanyContext()).rejects.toBeInstanceOf(AccountNotLiveError);
   });
 });

@@ -6,6 +6,27 @@ import { NextRequest } from 'next/server';
 const mockGetSession = vi.fn();
 vi.mock('@/lib/auth/session', () => ({ getSession: () => mockGetSession() }));
 
+// BAL-568 (fix round 1, F1) — this handler now gates on account liveness before it writes. The
+// repository double drives the REAL `accountRefusalFor`, so the refusal arm below exercises the
+// shipped gate rather than a stub of it.
+const mockFindForSessionSync = vi.fn();
+vi.mock('@balo/db', () => ({
+  usersRepository: {
+    findForSessionSync: (...args: unknown[]) => mockFindForSessionSync(...args),
+  },
+}));
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, cache: <T>(fn: T): T => fn };
+});
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: vi.fn(),
+  AUTH_SERVER_EVENTS: { SESSION_INVALIDATED: 'auth_session_invalidated' },
+}));
+
+const LIVE_ROW = { status: 'active', deletedAt: null };
+const SUSPENDED_ROW = { status: 'suspended', deletedAt: null };
+
 const mockSwitchWorkspace = vi.fn();
 vi.mock('@/lib/workspaces/switch-workspace', () => ({
   switchWorkspace: (...args: unknown[]) => mockSwitchWorkspace(...args),
@@ -75,9 +96,87 @@ function switchSucceeds(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
 });
 
 // ── Tests ───────────────────────────────────────────────────────
+
+/**
+ * ⚠⚠ BAL-568 fix round 1, F1 — THE REGRESSION THIS BLOCK EXISTS FOR.
+ *
+ * This handler resolved its actor with a bare `getSession()` and no liveness gate, then
+ * `switchWorkspace` WROTE to `users` and called `session.save()` — **re-sealing a fresh seven-day
+ * cookie**. A suspended account holding a pending deep-link token (60s TTL, ~120s with iron's
+ * clock skew) therefore both acted AND had its session renewed: a live counterexample to the whole
+ * ticket's headline property. Its Server Action sibling was gated; only this GET diverged, and no
+ * invariant could see it because the action walk does not cover Route Handlers.
+ */
+describe('BAL-568 — account liveness (F1)', () => {
+  it('⚠ a SUSPENDED account is refused BEFORE any write, and never re-seals its cookie', async () => {
+    onboardedSession();
+    validToken('/dashboard');
+    switchSucceeds();
+    mockFindForSessionSync.mockResolvedValue(SUSPENDED_ROW);
+
+    const response = await GET(makeRequest(signedQuery('/dashboard')));
+
+    // ⚠ THE SYNC ROUTE, NOT A BARE `/login`: the sync handler re-reads the live row, destroys the
+    // cookie and lands on /login?error=account_suspended with BAL-197's copy. A bare /login would
+    // sign them out with no message.
+    expect(getRedirectLocation(response)).toBe('/api/auth/session-sync?returnTo=/login');
+    // ⚠ THE LOAD-BEARING HALF: no write, so no `usersRepository.update` and no `session.save()`.
+    expect(mockSwitchWorkspace).not.toHaveBeenCalled();
+    // And it refused before even unsealing the token — the gate is above the token work.
+    expect(mockUnsealWorkspaceSwitchToken).not.toHaveBeenCalled();
+  });
+
+  it('a SOFT-DELETED account is refused the same way', async () => {
+    onboardedSession();
+    validToken('/dashboard');
+    switchSucceeds();
+    mockFindForSessionSync.mockResolvedValue({
+      status: 'active',
+      deletedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const response = await GET(makeRequest(signedQuery('/dashboard')));
+
+    expect(getRedirectLocation(response)).toBe('/api/auth/session-sync?returnTo=/login');
+    expect(mockSwitchWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED when the live-row read throws — an unreachable DB does not permit the switch', async () => {
+    onboardedSession();
+    validToken('/dashboard');
+    switchSucceeds();
+    mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
+
+    const response = await GET(makeRequest(signedQuery('/dashboard')));
+
+    expect(getRedirectLocation(response)).toBe('/api/auth/session-sync?returnTo=/login');
+    expect(mockSwitchWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('⚠ an anonymous caller pays ZERO live-row reads', async () => {
+    mockGetSession.mockResolvedValue({});
+
+    await GET(makeRequest(signedQuery('/dashboard')));
+
+    expect(mockFindForSessionSync).not.toHaveBeenCalled();
+  });
+
+  it('a LIVE account still switches — the gate costs exactly one read', async () => {
+    onboardedSession();
+    validToken('/dashboard');
+    switchSucceeds();
+
+    await GET(makeRequest(signedQuery('/dashboard')));
+
+    expect(mockSwitchWorkspace).toHaveBeenCalledTimes(1);
+    expect(mockFindForSessionSync).toHaveBeenCalledTimes(1);
+    expect(mockFindForSessionSync).toHaveBeenCalledWith(USER_ID);
+  });
+});
 
 describe('GET /api/auth/switch-workspace', () => {
   it('redirects to /login when there is no session user', async () => {

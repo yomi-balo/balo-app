@@ -5,7 +5,7 @@ import 'server-only';
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { usersRepository, auditEventsRepository, db } from '@balo/db';
-import { platformRoleIsStaff } from '@balo/shared/authz';
+import { platformRoleIsStaff, userRowIsLive } from '@balo/shared/authz';
 import { requireOnboardedUser, getSession } from '@/lib/auth/session';
 import { hasPlatformCapability, PLATFORM_CAPABILITIES } from '@/lib/authz/platform';
 import { isImpersonatedSession, markSessionAsImpersonated } from '@/lib/auth/impersonation';
@@ -159,8 +159,13 @@ export async function startImpersonationAction(input: {
     const actorRow = await usersRepository.findForSessionSync(actor.id);
     if (
       actorRow === null ||
-      actorRow.deletedAt !== null ||
-      actorRow.status !== 'active' ||
+      // BAL-568 (R5) — ONE definition of "live". This used to inline the same two conditions
+      // (`deletedAt !== null || status !== 'active'`). ⚠ The READ above deliberately stays
+      // `findForSessionSync` rather than the per-request cached reader: impersonation start is
+      // the rarest path in the app, routing it through the cache would change nothing
+      // behaviourally, and `invariants/platform-capability-live-gate.test.ts` pins this file on
+      // that exact string.
+      !userRowIsLive(actorRow) ||
       !hasPlatformCapability(
         // BAL-560 (gate #7) — the LIVE row's OVERRIDE, not just its role. This is a deliberate
         // live read (see above: the cookie can be seven days stale), so dropping the override
@@ -190,7 +195,8 @@ export async function startImpersonationAction(input: {
     }
 
     const targetRow = await usersRepository.findForSessionSync(targetUserId);
-    if (targetRow === null || targetRow.deletedAt !== null || targetRow.status !== 'active') {
+    // BAL-568 (R5) — the same fold on the TARGET arm; the read stays as it is, same reasoning.
+    if (targetRow === null || !userRowIsLive(targetRow)) {
       log.warn('Impersonation start refused', {
         actorUserId: actor.id,
         code: 'target_unavailable',

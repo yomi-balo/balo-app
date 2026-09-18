@@ -4,6 +4,7 @@ import type { EligibleCompany } from '@balo/shared/credit';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
+import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
 
 /**
  * Server-only web→api clients for the credit surface. TWO distinct hops share this module,
@@ -376,10 +377,13 @@ export async function callSessionApi<T>(
     if (!response.ok) {
       const companies = readEligibleCompanies(parsed);
       const retryAfterSeconds = readCooldownSeconds(parsed);
+      // BAL-568 — a 401 carrying the account-refusal marker is a LIVENESS refusal, not an
+      // ordinary auth failure. Recorded here; the code replaces the body's generic literal.
+      const refusal = await consumeApiAccountRefusal(response);
       return {
         ok: false,
         status: response.status,
-        code: readString(parsed, 'code'),
+        code: refusal ?? readString(parsed, 'code'),
         error: readString(parsed, 'error') ?? readString(parsed, 'code') ?? 'Request failed.',
         ...(companies === undefined ? {} : { companies }),
         ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),

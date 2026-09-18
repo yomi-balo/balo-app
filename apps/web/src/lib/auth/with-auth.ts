@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { getSession, type SessionData, type SessionUser } from './session';
+import { assertAccountLive } from './account-liveness';
 
 export interface AuthenticatedSession extends SessionData {
   user: SessionUser;
@@ -24,6 +25,17 @@ export interface WithAuthOptions {
  * (`onboardingCompleted !== true`) cannot execute the action unless the caller
  * opts out via `{ allowUnonboarded: true }` (onboarding-flow actions only).
  *
+ * BAL-568 (ruling 2026-09-18) — fail-closed ACCOUNT-LIVENESS gate, above the onboarding gate and
+ * above the wrapped action. `hasPlatformCapability` is not the only thing a seven-day cookie can
+ * be wrong about: a suspended or soft-deleted account's cookie keeps working on every Server
+ * Action for the full cookie lifetime, because an action POSTs straight to its own endpoint and
+ * `checkSessionDrift` only runs on a page RENDER. The gate goes HERE so every action already
+ * wrapped in `withAuth` gains it with zero edits.
+ *
+ * ⚠ IT SITS **ABOVE** THE ONBOARDING CHECK ON PURPOSE. An actor who is both un-onboarded and
+ * suspended must report the LIVENESS refusal: the onboarding message would invite them to finish
+ * a wizard they are not allowed to run.
+ *
  * Usage:
  *   export const myAction = withAuth(async (session, input: MyInput) => {
  *     // session.user is guaranteed here, and onboarding is complete
@@ -38,6 +50,7 @@ export function withAuth<TArgs extends unknown[], TReturn>(
     if (!session?.user?.id) {
       throw new Error('Unauthorized');
     }
+    await assertAccountLive(session.user.id); // BAL-568 — above the onboarding gate, above the action.
     if (options?.allowUnonboarded !== true && session.user.onboardingCompleted !== true) {
       throw new Error('Onboarding not completed');
     }

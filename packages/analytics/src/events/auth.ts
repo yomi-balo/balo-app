@@ -113,14 +113,37 @@ export interface AuthEventMap {
 export const AUTH_SERVER_EVENTS = {
   AUTH_RELINK: 'auth_relink',
   AUTH_CONFLICT: 'auth_conflict',
+  // BAL-568: a live-row read refused a suspended or soft-deleted account. Named
+  // `auth_session_invalidated` rather than a bare `session_invalidated` so it joins THIS
+  // family and follows CLAUDE.md's `{feature}_{noun}_{past_tense_verb}` convention; the
+  // constant still reads exactly as the ruling describes at every call site.
+  SESSION_INVALIDATED: 'auth_session_invalidated',
 } as const;
 
 /** Which auth entry point emitted the server event. */
 export type AuthMethodServer = 'oauth' | 'password' | 'otp';
+
+/**
+ * BAL-568 — WHICH ENFORCEMENT PATH refused the account.
+ *  · `page`   — the session-sync Route Handler, reached from a dashboard render (BAL-197).
+ *  · `api`    — `apps/api`'s `requireAuth`, on a WorkOS-Bearer call.
+ *  · `action` — `apps/web`'s actor-resolution seams, on a Server Action POST.
+ */
+export type AuthSessionInvalidationPath = 'page' | 'api' | 'action';
+
+/** BAL-568 — WHY it was refused. Mirrors `AccountRefusalReason` in `@balo/shared/authz`. */
+export type AuthSessionInvalidationReason = 'suspended' | 'deleted';
 
 export interface AuthServerEventMap {
   // Fired after a successful workosId re-link onto a live verified-email user.
   [AUTH_SERVER_EVENTS.AUTH_RELINK]: { distinct_id: string; method: AuthMethodServer };
   // Fired when a live email is owned under a different identity → re-link refused.
   [AUTH_SERVER_EVENTS.AUTH_CONFLICT]: { distinct_id: string; method: AuthMethodServer };
+  // BAL-568: fired once per refusal, on whichever path caught it. `distinct_id` is the BALO
+  // user id — never the WorkOS `sub`, never the token, never the email.
+  [AUTH_SERVER_EVENTS.SESSION_INVALIDATED]: {
+    distinct_id: string;
+    path: AuthSessionInvalidationPath;
+    reason: AuthSessionInvalidationReason;
+  };
 }

@@ -12,6 +12,7 @@ const {
   mockCapture,
   mockUpdateName,
   mockUsersUpdate,
+  mockFindForSessionSync,
 } = vi.hoisted(() => ({
   mockFindActiveByDomain: vi.fn(),
   mockGetPartyJoinSettings: vi.fn(),
@@ -19,6 +20,8 @@ const {
   mockCapture: vi.fn(),
   mockUpdateName: vi.fn(),
   mockUsersUpdate: vi.fn(),
+  // BAL-568 — the account-liveness gate reads the LIVE row through `readLiveUserRow`.
+  mockFindForSessionSync: vi.fn(),
 }));
 
 vi.mock('@balo/db', () => ({
@@ -31,8 +34,21 @@ vi.mock('@balo/db', () => ({
     findWithMembers: mockFindWithMembers,
     updateName: mockUpdateName,
   },
-  usersRepository: { update: mockUsersUpdate },
+  usersRepository: { update: mockUsersUpdate, findForSessionSync: mockFindForSessionSync },
 }));
+
+// `readLiveUserRow` is `React.cache()`'d; a unit test has no request scope, so pass it through.
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, cache: <T>(fn: T): T => fn };
+});
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: vi.fn(),
+  AUTH_SERVER_EVENTS: { SESSION_INVALIDATED: 'auth_session_invalidated' },
+}));
+
+const LIVE_ROW = { status: 'active', deletedAt: null };
+const SUSPENDED_ROW = { status: 'suspended', deletedAt: null };
 
 let mockSessionObj: Record<string, unknown>;
 vi.mock('@/lib/auth/session', () => ({
@@ -60,6 +76,45 @@ function expectNoWrites(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   withEmail('founder@acme.io'); // acme.io is a non-freemail corporate domain
+  mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
+});
+
+/**
+ * BAL-568 — one of the bounded `getSession()`-only set.
+ *
+ * ⚠ THE GATE SITS **ABOVE** THIS ACTION'S `try`, DELIBERATELY. The action fails OPEN on any
+ * throw, so a gate inside the `try` would be swallowed by its catch and silently do nothing. A
+ * refused account lands on the same safe default an anonymous one does: no company is disclosed,
+ * and this path writes nothing.
+ */
+describe('BAL-568 — account liveness', () => {
+  it('⚠ a SUSPENDED actor gets the empty default WITHOUT any domain lookup', async () => {
+    mockFindForSessionSync.mockResolvedValue(SUSPENDED_ROW);
+
+    const result = await resolveOnboardingCompanyAction();
+
+    expect(result).toEqual({ status: 'new', suggestion: '' });
+    expect(mockFindActiveByDomain).not.toHaveBeenCalled();
+    expectNoWrites();
+  });
+
+  it('a SOFT-DELETED actor is refused the same way', async () => {
+    mockFindForSessionSync.mockResolvedValue({
+      status: 'active',
+      deletedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    expect(await resolveOnboardingCompanyAction()).toEqual({ status: 'new', suggestion: '' });
+    expect(mockFindActiveByDomain).not.toHaveBeenCalled();
+  });
+
+  it('⚠ an anonymous caller pays ZERO live-row reads', async () => {
+    mockSessionObj = { user: undefined };
+
+    await resolveOnboardingCompanyAction();
+
+    expect(mockFindForSessionSync).not.toHaveBeenCalled();
+  });
 });
 
 // ── Tests ───────────────────────────────────────────────────────

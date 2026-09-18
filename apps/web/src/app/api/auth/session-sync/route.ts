@@ -7,7 +7,8 @@ import {
 } from '@balo/shared/workspaces';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { isImpersonatedSession } from '@/lib/auth/impersonation';
-import { platformRoleIsStaff } from '@balo/shared/authz';
+import { platformRoleIsStaff, classifyAccountRefusal, reasonOfRefusal } from '@balo/shared/authz';
+import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server';
 import { getSafeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   loadWorkspaceDerivationMaterials,
@@ -92,23 +93,33 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(new URL('/login?error=account_deleted', request.url));
   }
 
-  if (dbUser.deletedAt !== null) {
-    log.info('Session invalidated: user deleted', {
-      userId: session.user.id,
-      reason: 'deleted',
+  // BAL-568 — the two hand-written branches that used to live here now go through
+  // `classifyAccountRefusal`, the ONE place the two codes are chosen on all three paths. Both
+  // redirect targets and both `log.info` strings are byte-identical to what shipped; the
+  // precedence (soft-deleted wins over suspended) is preserved BY that function, which is where
+  // it is now pinned. The `!dbUser` arm above stays its own branch — it `warn`s, these `info`.
+  const refusal = classifyAccountRefusal(dbUser);
+  if (refusal !== null) {
+    const reason = reasonOfRefusal(refusal);
+    log.info(
+      refusal === 'account_deleted'
+        ? 'Session invalidated: user deleted'
+        : 'Session invalidated: user suspended',
+      {
+        userId: session.user.id,
+        reason,
+        ...(refusal === 'account_suspended' ? { status: dbUser.status } : {}),
+      }
+    );
+    // ⚠ `trackServerAndFlush`, NOT `trackServer`: a Vercel route handler can freeze the moment it
+    // returns the redirect, and an unflushed PostHog batch is simply lost.
+    trackServerAndFlush(AUTH_SERVER_EVENTS.SESSION_INVALIDATED, {
+      distinct_id: session.user.id,
+      path: 'page',
+      reason,
     });
     session.destroy();
-    return NextResponse.redirect(new URL('/login?error=account_deleted', request.url));
-  }
-
-  if (dbUser.status !== 'active') {
-    log.info('Session invalidated: user suspended', {
-      userId: session.user.id,
-      reason: 'suspended',
-      status: dbUser.status,
-    });
-    session.destroy();
-    return NextResponse.redirect(new URL('/login?error=account_suspended', request.url));
+    return NextResponse.redirect(new URL(`/login?error=${refusal}`, request.url));
   }
 
   // BAL-553 fix round 2, F3 — a SECOND super_admin promoting the impersonation TARGET to staff

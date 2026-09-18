@@ -8,6 +8,7 @@ import {
   representationsRepository,
 } from '@balo/db';
 import { CAPABILITIES } from '@balo/shared/authz';
+import { readLiveUserRow } from '@/lib/auth/live-user';
 import {
   deriveWorkspaces,
   type DerivedWorkspaces,
@@ -61,7 +62,12 @@ export const loadWorkspaceDerivationMaterials = cache(
 
     const [sessionSyncUser, eligibleCompanies, userWithCompany, activeRepresentations] =
       await Promise.all([
-        usersRepository.findForSessionSync(userId),
+        // BAL-568 — THE ONE CACHED LIVE-ROW READER, not the raw repository call. Every dashboard
+        // render reaches both this loader and `checkSessionDrift`; before this ticket each held
+        // its own `cache()` entry over the SAME query, so a render paid two round trips for one
+        // row. Sharing `readLiveUserRow` collapses them to one. Pinned by
+        // `invariants/live-row-single-reader.test.ts`.
+        readLiveUserRow(userId),
         partyMembershipsRepository.listCapabilityEligibleCompanies(
           userId,
           CAPABILITIES.PARTICIPATE

@@ -7,6 +7,7 @@ import type { SealedPlatformCapabilityIndexes } from '@balo/shared/authz';
 import { sessionConfig } from './config';
 import { impersonatedSessionConfig } from './session-config';
 import { isImpersonatedSession } from './impersonation';
+import { accountRefusalFor, assertAccountLive } from './account-liveness';
 import type { AuthMethodSignal } from './auth-method';
 
 export interface SessionUser {
@@ -186,16 +187,53 @@ export async function getSession() {
   return session;
 }
 
+/**
+ * BAL-568 (ruling 2026-09-18) — the session's user, **re-validated against the LIVE row**.
+ *
+ * ⚠ A SUSPENDED OR SOFT-DELETED ACCOUNT READS AS `null` HERE, exactly as an unauthenticated one
+ * does. Every shipped caller already handles `null`, so the whole read-only surface gains the
+ * check with zero edits.
+ *
+ * ⚠⚠ AN ANONYMOUS VISITOR PAYS **NOTHING**. The live read happens only AFTER a session user has
+ * been resolved; no session means no DB read at all, so a marketing page for a logged-out visitor
+ * issues zero extra queries. Pinned by `session.test.ts`.
+ *
+ * ⚠ Inside `(dashboard)` the read is free — it shares `checkSessionDrift`'s `React.cache()` entry
+ * via `readLiveUserRow`. Outside it (the root and marketing layouts) it is one indexed read per
+ * authenticated render: an accepted cost, because showing "signed in" chrome to an account whose
+ * every action is refused is worse than the read.
+ *
+ * ⚠⚠ IT REPORTS `path: 'page'`, AND THAT IS AN APPROXIMATION WITH A NAMED RESIDUAL (fix round 1,
+ * F3). This seam has two kinds of caller and cannot tell them apart from the inside: the THREE
+ * layouts (`app/layout.tsx`, `(marketing)/layout.tsx`, `(dashboard)/layout.tsx`) that run on every
+ * authenticated render, and a handful of Server Actions that resolve their actor here rather than
+ * through `requireUser`. `'page'` is right for the dominant caller and the one the dimension exists
+ * to measure; the residual is that those few actions report as page refusals. The EXACT arms are
+ * unaffected — `assertAccountLive` (behind `requireUser` / `withAuth`) reports `'action'`, the
+ * api clients report `'api'`, and the sync route reports `'page'`.
+ */
 export async function getCurrentUser(): Promise<SessionUser | null> {
   const session = await getSession();
-  return session.user ?? null;
+  const user = session.user ?? null;
+  if (user === null) return null;
+  if ((await accountRefusalFor(user.id, 'page')) !== null) return null;
+  return user;
 }
 
+/**
+ * BAL-568 — ⚠ THIS SEAM READS `getSession()` DIRECTLY RATHER THAN GOING VIA `getCurrentUser()`,
+ * and that is deliberate: the two failures must stay distinguishable. No session at all is still
+ * the generic `'Unauthorized'` every caller already maps; a non-live account throws
+ * `AccountNotLiveError`, which carries the refusal code. Routing through `getCurrentUser()` would
+ * collapse both onto `'Unauthorized'` and lose the code.
+ */
 export async function requireUser(): Promise<SessionUser> {
-  const user = await getCurrentUser();
+  const session = await getSession();
+  const user = session.user;
   if (!user) {
     throw new Error('Unauthorized');
   }
+  await assertAccountLive(user.id);
   return user;
 }
 

@@ -3,6 +3,7 @@ import 'server-only';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
+import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
 
 /**
  * Fix round 1 item 9 — THE ONE FETCH+AUTH+ERROR-MAPPING SHAPE, extracted from
@@ -110,10 +111,14 @@ export async function postBaloApiJson<T>(
     if (!response.ok) {
       // ⚠ ONLY READ ON A `429`. Any other status's `Retry-After` is not advice about OUR window.
       const retryAfterSeconds = response.status === 429 ? readRetryAfter(response) : undefined;
+      // BAL-568 — a 401 carrying the account-refusal marker is a LIVENESS refusal, not an
+      // ordinary auth failure. Recorded here; the code replaces the body's generic literal so no
+      // caller has to infer "suspended" from a bare 401.
+      const refusal = await consumeApiAccountRefusal(response);
       return {
         ok: false,
         status: response.status,
-        code: readString(parsedBody, 'error') ?? 'request_failed',
+        code: refusal ?? readString(parsedBody, 'error') ?? 'request_failed',
         // ⚠ THE KEY IS OMITTED, NOT SET TO `undefined` — a present-but-undefined optional
         // survives an `in` check and violates the declared type under
         // `exactOptionalPropertyTypes`.

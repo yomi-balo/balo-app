@@ -4,6 +4,7 @@ import type { GuestForViewer } from '@balo/shared/meetings';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
+import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
 
 /**
  * BAL-436 — the SERVER-ONLY web→api client for the four guest-roster operations.
@@ -116,10 +117,13 @@ async function callGuestsApi<T>(
       // ⚠ ONLY READ ON A `429`. Any other status's `Retry-After` is not advice about OUR
       // window, and quoting an unrelated upstream's opinion at a host is worse than silence.
       const retryAfterSeconds = response.status === 429 ? readRetryAfter(response) : undefined;
+      // BAL-568 — a 401 carrying the account-refusal marker is a LIVENESS refusal, not an
+      // ordinary auth failure. Recorded here; the code replaces the body's generic literal.
+      const refusal = await consumeApiAccountRefusal(response);
       return {
         ok: false,
         status: response.status,
-        code: readString(parsed, 'error') ?? 'request_failed',
+        code: refusal ?? readString(parsed, 'error') ?? 'request_failed',
         // ⚠ THE KEY IS **OMITTED**, NOT SET TO `undefined` — a present-but-undefined optional
         // survives an `in` check and violates the declared type under
         // `exactOptionalPropertyTypes`.

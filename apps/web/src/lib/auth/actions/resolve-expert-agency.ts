@@ -4,6 +4,7 @@ import 'server-only';
 
 import { usersRepository } from '@balo/db';
 import { getSession } from '@/lib/auth/session';
+import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { resolveExpertAgency } from '@/lib/expert-agency/resolve-expert-agency';
 import type { ResolveExpertAgencyResult } from '@/lib/expert-agency/types';
 import { log } from '@/lib/logging';
@@ -30,6 +31,13 @@ export async function resolveExpertAgencyAction(): Promise<ResolveExpertAgencyRe
   const session = await getSession();
   const userId = session?.user?.id;
   if (!userId) return { kind: 'solo' }; // no auth → fail open to the independent path
+
+  // BAL-568 — ACCOUNT LIVENESS against the LIVE row; one of the bounded `getSession()`-only set.
+  // ⚠⚠ IT SITS **ABOVE** THE `try`, DELIBERATELY. This action fails OPEN on any throw, so a gate
+  // inside the `try` would be swallowed by the catch below and silently do nothing — the exact
+  // "a gate nobody noticed had stopped working" shape. A refused account lands on the same safe
+  // default an anonymous one does: it learns nothing, and this path writes nothing.
+  if ((await accountRefusalFor(userId)) !== null) return { kind: 'solo' };
 
   try {
     // DB is authoritative for email + verification state (never trust the session copy).

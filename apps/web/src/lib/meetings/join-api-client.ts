@@ -5,6 +5,7 @@ import type { GuestJoinState, LobbyClaimState, MemberJoinResponse } from '@balo/
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
+import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
 
 /**
  * BAL-132 — the SERVER-ONLY web→api client for the three join routes. Modelled on
@@ -266,11 +267,15 @@ async function callJoinApi<T>(
       // ⚠ ONLY READ ON A `429`. Any other status's `Retry-After` is not advice about OUR
       // window, and a poller that obeyed it would stall on an unrelated upstream's opinion.
       const retryAfterSeconds = response.status === 429 ? readRetryAfter(response) : undefined;
+      // BAL-568 — a 401 carrying the account-refusal marker is a LIVENESS refusal. ⚠ THE TWO
+      // PUBLIC HOPS SHARE THIS FUNCTION AND THAT IS HARMLESS: a public route has no `requireAuth`
+      // preHandler, so it never emits the marker and `consumeApiAccountRefusal` returns `null`.
+      const refusal = await consumeApiAccountRefusal(response);
       return {
         ok: false,
         status: response.status,
         // ⚠ THE FIXED LITERAL ONLY. Never a message, never a vendor string.
-        code: readString(parsed, 'error') ?? 'request_failed',
+        code: refusal ?? readString(parsed, 'error') ?? 'request_failed',
         // ⚠ THE KEY IS **OMITTED**, NOT SET TO `undefined`. A present-but-undefined optional
         // property is a different thing to an absent one: it survives an `in` check and it
         // violates the declared type under `exactOptionalPropertyTypes`.

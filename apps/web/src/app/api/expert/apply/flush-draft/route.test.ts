@@ -11,6 +11,8 @@ vi.mock('@/app/(apply)/expert/apply/_actions/save-draft', () => ({
 
 import { POST } from './route';
 import { STEP_CONFIG } from '@/app/(apply)/expert/apply/_actions/schemas';
+import { AccountNotLiveError } from '@/lib/auth/account-liveness';
+import { log } from '@/lib/logging';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -79,6 +81,46 @@ describe('POST /api/expert/apply/flush-draft', () => {
 
     expect(res.status).toBe(401);
     await expect(res.json()).resolves.toEqual({ success: false, error: 'Unauthorized' });
+  });
+
+  /**
+   * ⚠⚠ BAL-568 fix round 1, F2 — A REAL BEHAVIOUR REGRESSION, AND THE CRACK IN "ZERO CALL-SITE
+   * EDITS". `saveDraftAction` is `withAuth`-wrapped, so BAL-568 changed the THROW TYPE at that
+   * seam from `Error('Unauthorized')` to `AccountNotLiveError` — without editing any call site.
+   * This route is the single place in `apps/web` that branches on the message LITERAL, so a
+   * refused account fell straight through to the "genuine server failure" arm: a **500** plus a
+   * `log.error` for a routine, expected refusal, on EVERY unload beacon, for up to the full
+   * seven-day cookie life. Matching on the TYPE is what makes this robust against the next
+   * seam-throw change.
+   */
+  it.each([['account_suspended'], ['account_deleted'], ['account_unreadable']] as const)(
+    '⚠ maps an AccountNotLiveError (%s) to 401, not 500',
+    async (code) => {
+      const error = new AccountNotLiveError(code);
+      // The literal the old `message === 'Unauthorized'` check could never have matched.
+      expect(error.message).toBe(`Account not live: ${code}`);
+      mockSaveDraftAction.mockRejectedValue(error);
+
+      const res = await POST(makeRequest({ step: 'profile', data: {} }));
+
+      expect(res.status).toBe(401);
+      await expect(res.json()).resolves.toEqual({ success: false, error: 'Unauthorized' });
+      // ⚠ AND IT IS NOT LOGGED AS A SERVER FAULT. A routine refusal that writes `log.error` on
+      // every beacon is how a suspended user's open wizard fills the error budget.
+      expect(log.error).not.toHaveBeenCalled();
+    }
+  );
+
+  it('a genuine server failure still 500s and IS logged', async () => {
+    mockSaveDraftAction.mockRejectedValue(new Error('connection terminated'));
+
+    const res = await POST(makeRequest({ step: 'profile', data: {} }));
+
+    expect(res.status).toBe(500);
+    expect(log.error).toHaveBeenCalledWith(
+      'Failed to flush expert application draft',
+      expect.objectContaining({ error: 'connection terminated' })
+    );
   });
 
   it('returns 400 for a malformed (invalid step) body', async () => {

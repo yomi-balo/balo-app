@@ -5,6 +5,7 @@ import {
   WORKSPACE_SWITCH_TOKEN_PARAM,
 } from '@/lib/workspaces/switch-token';
 import { getSession } from '@/lib/auth/session';
+import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { getSafeRedirectPath } from '@/lib/auth/safe-redirect';
 import { log } from '@/lib/logging';
 
@@ -40,6 +41,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const session = await getSession();
   if (!session?.user?.id) {
     return NextResponse.redirect(new URL('/login', request.url));
+  }
+
+  // ⚠⚠ BAL-568 (fix round 1, F1) — ACCOUNT LIVENESS, AND THIS ROUTE IS WHY THE GATE CANNOT LIVE
+  // ONLY ON THE SERVER-ACTION SEAMS. This handler resolves its actor with a raw `getSession()`,
+  // then `switchWorkspace(…)` below WRITES to `users` and calls `session.save()`, **re-sealing a
+  // fresh seven-day cookie**. A suspended account holding a pending deep-link token therefore both
+  // acted and had its cookie renewed — a live counterexample to this ticket's headline property,
+  // found by the security gate rather than by the invariant, because that invariant walks
+  // `'use server'` modules and a Route Handler is not one. (`route-handler-liveness-gate.test.ts`
+  // now closes that corpus gap.)
+  //
+  // ⚠ IT REDIRECTS TO THE SYNC ROUTE, NOT TO `/login` DIRECTLY. The sync Route Handler re-reads the
+  // live row, destroys the cookie and lands on `/login?error=account_suspended|account_deleted`
+  // with BAL-197's shipped copy; a bare `/login` would lose the message entirely. Same move as
+  // `signOutOnAccountRefusal` in `components/balo/phone-verification-flow.tsx`.
+  if ((await accountRefusalFor(session.user.id, 'page')) !== null) {
+    return NextResponse.redirect(new URL('/api/auth/session-sync?returnTo=/login', request.url));
   }
 
   if (session.user.onboardingCompleted !== true) {

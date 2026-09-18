@@ -3,20 +3,46 @@ import { log } from '@/lib/logging';
 
 // ── Mocks ───────────────────────────────────────────────────────
 
-const { mockUpdateName, mockPromote, mockFindById, mockUsersUpdate, mockPublish, mockEmitOrg } =
-  vi.hoisted(() => ({
-    mockUpdateName: vi.fn(),
-    mockPromote: vi.fn(),
-    mockFindById: vi.fn(),
-    mockUsersUpdate: vi.fn(),
-    mockPublish: vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve()),
-    mockEmitOrg: vi.fn(),
-  }));
+const {
+  mockUpdateName,
+  mockPromote,
+  mockFindById,
+  mockUsersUpdate,
+  mockPublish,
+  mockEmitOrg,
+  mockFindForSessionSync,
+} = vi.hoisted(() => ({
+  mockUpdateName: vi.fn(),
+  mockPromote: vi.fn(),
+  mockFindById: vi.fn(),
+  mockUsersUpdate: vi.fn(),
+  mockPublish: vi.fn<(...a: unknown[]) => Promise<void>>(() => Promise.resolve()),
+  mockEmitOrg: vi.fn(),
+  // BAL-568 — the account-liveness gate reads the LIVE row through `readLiveUserRow`.
+  mockFindForSessionSync: vi.fn(),
+}));
 
 vi.mock('@balo/db', () => ({
   companiesRepository: { updateName: mockUpdateName, promoteToOrganization: mockPromote },
-  usersRepository: { findById: mockFindById, update: mockUsersUpdate },
+  usersRepository: {
+    findById: mockFindById,
+    update: mockUsersUpdate,
+    findForSessionSync: mockFindForSessionSync,
+  },
 }));
+
+// `readLiveUserRow` is `React.cache()`'d; a unit test has no request scope, so pass it through.
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, cache: <T>(fn: T): T => fn };
+});
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: vi.fn(),
+  AUTH_SERVER_EVENTS: { SESSION_INVALIDATED: 'auth_session_invalidated' },
+}));
+
+const LIVE_ROW = { status: 'active', deletedAt: null };
+const SUSPENDED_ROW = { status: 'suspended', deletedAt: null };
 
 // `@balo/shared/domains` runs for REAL (never the session copy): gmail.com →
 // freemail, acme.io → corporate. Only the DB email drives the promote gate.
@@ -45,6 +71,7 @@ describe('nameWorkspaceAndCompleteAction', () => {
     // DEFAULT: freemail + verified → the personal-rename path (keeps the guard /
     // success-path suites unchanged). Corporate cases override per-test.
     mockFindById.mockResolvedValue({ id: 'user-1', email: 'jane@gmail.com', emailVerified: true });
+    mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
     mockSessionObj = {
       user: {
         id: 'user-1',
@@ -73,6 +100,38 @@ describe('nameWorkspaceAndCompleteAction', () => {
       expect(result).toEqual({ success: false, error: 'That name is too long' });
       expect(mockFindById).not.toHaveBeenCalled();
       expect(mockUpdateName).not.toHaveBeenCalled();
+    });
+  });
+
+  /** BAL-568 — one of the bounded `getSession()`-only set; the gate runs before the write. */
+  describe('BAL-568 — account liveness', () => {
+    it('⚠ refuses a SUSPENDED actor before any repository read or write', async () => {
+      mockFindForSessionSync.mockResolvedValue(SUSPENDED_ROW);
+
+      const result = await nameWorkspaceAndCompleteAction('Acme Corp');
+
+      expect(result).toEqual({ success: false, error: 'Unauthorized' });
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(mockUpdateName).not.toHaveBeenCalled();
+      expect(mockPromote).not.toHaveBeenCalled();
+      expect(mockUsersUpdate).not.toHaveBeenCalled();
+    });
+
+    it('fails CLOSED when the live-row read throws', async () => {
+      mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
+
+      const result = await nameWorkspaceAndCompleteAction('Acme Corp');
+
+      expect(result).toEqual({ success: false, error: 'Unauthorized' });
+      expect(mockUpdateName).not.toHaveBeenCalled();
+    });
+
+    it('⚠ an unauthenticated caller pays ZERO live-row reads', async () => {
+      mockSessionObj = { save: mockSave };
+
+      await nameWorkspaceAndCompleteAction('Acme Corp');
+
+      expect(mockFindForSessionSync).not.toHaveBeenCalled();
     });
   });
 

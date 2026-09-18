@@ -17,6 +17,7 @@ vi.mock('@balo/shared/logging', () => {
   };
 });
 
+import { ACCOUNT_REFUSAL_HEADER } from '@balo/shared/authz';
 import { buildApp } from './app.js';
 
 /**
@@ -50,6 +51,31 @@ describe('buildApp', () => {
 
   it('still boots silent for tests via logger: false', async () => {
     const app = await buildApp({ logger: false });
+    await app.close();
+  });
+
+  /**
+   * ⚠⚠ BAL-568 — REQUIRED, AND THE FAILURE IT PREVENTS IS SILENT. A browser cannot READ a custom
+   * response header cross-origin without `Access-Control-Expose-Headers`, and web (`:3000`) → api
+   * (`:3002`) is cross-origin. Without `exposedHeaders` on the CORS registration the browser
+   * strips `x-balo-session-invalid` before any JavaScript sees it, so the one browser-side Bearer
+   * caller's sign-out arm is dead code — and NO test that only inspects `requireAuth`'s reply
+   * would notice, because the header IS sent; it just never arrives.
+   *
+   * ⚠ BEHAVIOURAL, NOT A SOURCE SCAN: it sends a real cross-origin request through the real CORS
+   * plugin and reads the header a browser would read.
+   */
+  it('⚠ exposes the BAL-568 account-refusal header cross-origin', async () => {
+    const app = await buildApp({ logger: false });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { origin: 'http://localhost:3000' },
+    });
+    expect(response.statusCode).toBe(200);
+    const exposed = response.headers['access-control-expose-headers'];
+    expect(exposed, 'the CORS registration must set exposedHeaders').toBeDefined();
+    expect(String(exposed)).toContain(ACCOUNT_REFUSAL_HEADER);
     await app.close();
   });
 });

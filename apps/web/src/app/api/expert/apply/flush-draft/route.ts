@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { saveDraftAction } from '@/app/(apply)/expert/apply/_actions/save-draft';
 import { STEP_CONFIG, type StepKey } from '@/app/(apply)/expert/apply/_actions/schemas';
+import { AccountNotLiveError } from '@/lib/auth/account-liveness';
 import { log } from '@/lib/logging';
 
 /**
@@ -28,8 +29,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     const result = await saveDraftAction(body);
     return NextResponse.json(result);
   } catch (error) {
-    // `withAuth` throws `new Error('Unauthorized')` for an unauthenticated request.
-    if (error instanceof Error && error.message === 'Unauthorized') {
+    // `withAuth` throws `new Error('Unauthorized')` for an unauthenticated request, and — since
+    // BAL-568 — `AccountNotLiveError` for a suspended or soft-deleted one.
+    //
+    // ⚠⚠ BOTH ARMS ARE REQUIRED, AND THE SECOND IS THE CRACK IN "ZERO CALL-SITE EDITS" (fix round
+    // 1, F2). BAL-568 changed the THROW TYPE at the `withAuth` seam without editing any call site —
+    // but this is the one place in `apps/web` that branches on the message LITERAL, so a refused
+    // account fell through to the "genuine server failure" arm below: a 500 plus a `log.error` for
+    // a routine, expected refusal, on every unload beacon, for up to the full seven-day cookie
+    // life. Matching on the TYPE is what makes this robust against the next seam-throw change.
+    if (
+      error instanceof AccountNotLiveError ||
+      (error instanceof Error && error.message === 'Unauthorized')
+    ) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
     // A malformed request — invalid JSON or a body that fails schema validation —

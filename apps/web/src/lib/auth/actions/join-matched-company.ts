@@ -4,6 +4,7 @@ import 'server-only';
 
 import { partyMembershipsRepository, usersRepository } from '@balo/db';
 import { getSession } from '@/lib/auth/session';
+import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { resolveActionableCompanyForSession } from '@/lib/domain-join/resolve-actionable-company';
 import { type AuthResult } from '@/lib/auth/errors';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -39,6 +40,13 @@ interface JoinMatchedCompanyResult {
 export async function joinMatchedCompanyAction(): Promise<AuthResult<JoinMatchedCompanyResult>> {
   const session = await getSession();
   if (!session?.user?.id) {
+    return { success: false, error: 'Unauthorized' };
+  }
+  // BAL-568 — ACCOUNT LIVENESS against the LIVE row. One of the bounded `getSession()`-only set
+  // (see `complete-onboarding.ts` for the full reasoning); `accountRefusalFor`, not
+  // `assertAccountLive`, because this action returns a typed result and the `try` below would
+  // swallow a throw into its generic retry copy.
+  if ((await accountRefusalFor(session.user.id)) !== null) {
     return { success: false, error: 'Unauthorized' };
   }
   if (session.user.onboardingCompleted) {

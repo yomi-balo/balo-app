@@ -32,12 +32,24 @@ const { mockFindToken, mockFindEngagement, mockUpsert, mockFindExpertUser } = vi
   mockFindExpertUser: vi.fn(),
 }));
 
+// BAL-568 (fix round 1, F6) — this action now gates the TOKEN'S SUBJECT on account liveness. The
+// repository double drives the REAL `accountRefusalFor`, so the refusal arm below exercises the
+// shipped gate rather than a stub of it.
+const mockFindForSessionSync = vi.hoisted(() => vi.fn());
 vi.mock('@balo/db', () => ({
   reviewInviteTokensRepository: { findLiveByTokenHash: (...a: unknown[]) => mockFindToken(...a) },
   engagementsRepository: { findById: (...a: unknown[]) => mockFindEngagement(...a) },
   reviewsRepository: { upsert: (...a: unknown[]) => mockUpsert(...a) },
   expertsRepository: { findUserIdByProfileId: (...a: unknown[]) => mockFindExpertUser(...a) },
+  usersRepository: { findForSessionSync: (...a: unknown[]) => mockFindForSessionSync(...a) },
 }));
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, cache: <T>(fn: T): T => fn };
+});
+
+const LIVE_ROW = { status: 'active', deletedAt: null };
+const SUSPENDED_ROW = { status: 'suspended', deletedAt: null };
 
 const mockTrack = vi.fn();
 vi.mock('@/lib/analytics/server', async () => {
@@ -45,6 +57,8 @@ vi.mock('@/lib/analytics/server', async () => {
   return {
     trackServerAndFlush: (...a: unknown[]) => mockTrack(...a),
     REVIEW_SERVER_EVENTS: events.REVIEW_SERVER_EVENTS,
+    // BAL-568 (F6) — the liveness gate emits `auth_session_invalidated` through this same seam.
+    AUTH_SERVER_EVENTS: events.AUTH_SERVER_EVENTS,
   };
 });
 
@@ -75,7 +89,88 @@ function primeHappyPath(overrides: { engagementType?: string; created?: boolean 
   mockHasCapability.mockResolvedValue(true);
   mockFindExpertUser.mockResolvedValue({ user: { id: EXPERT_USER_ID } });
   mockUpsert.mockResolvedValue({ review: { id: 'review-1' }, created: overrides.created ?? true });
+  mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
 }
+
+/**
+ * ⚠⚠ BAL-568 fix round 1, F6 — THE HOLE THIS BLOCK CLOSES, AND THE FALSE REASON THAT HID IT.
+ *
+ * This action was ALLOWLISTED out of the liveness invariant on the stated grounds that "the
+ * reviewer may have no `users` row at all". That was simply FALSE — `review_invite_tokens
+ * .reviewer_user_id` is a `notNull` FK to `users.id` — and the false premise concealed a real
+ * residual: a suspended or soft-deleted user holding a live 30-day magic link could still submit a
+ * review, because the only gate (`review-write-shared`) reads `company_members.role` and never
+ * touches `users.status` / `users.deleted_at`.
+ */
+describe('submitTokenReviewAction — BAL-568 account liveness (F6)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('⚠ refuses a SUSPENDED reviewer, writing nothing and disclosing nothing', async () => {
+    primeHappyPath();
+    mockFindForSessionSync.mockResolvedValue(SUSPENDED_ROW);
+
+    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+
+    // ⚠ THE SAME NON-ENUMERATING LITERAL as every other failure on this surface — an anonymous
+    // prober must not learn from the response whether a link's owner is suspended.
+    expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
+    // ⚠ THE LOAD-BEARING HALF: no write, and the capability gate is never even reached.
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockHasCapability).not.toHaveBeenCalled();
+    // ⚠ NO REVIEW EVENT. The ONE event that does fire is the liveness refusal itself, which is the
+    // point of the `path` dimension — asserting "nothing tracked" would have been wrong AND would
+    // have hidden whether the gate actually ran.
+    const trackedEvents = mockTrack.mock.calls.map((call) => call[0]);
+    expect(trackedEvents).toEqual(['auth_session_invalidated']);
+    expect(trackedEvents.some((name) => String(name).startsWith('review_'))).toBe(false);
+  });
+
+  it('refuses a SOFT-DELETED reviewer the same way', async () => {
+    primeHappyPath();
+    mockFindForSessionSync.mockResolvedValue({
+      status: 'active',
+      deletedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+
+    expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED when the live-row read throws', async () => {
+    primeHappyPath();
+    mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
+
+    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+
+    expect(result).toEqual({ success: false, error: REVIEW_SUBMIT_FAILED });
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ THE GATE RUNS ON THE TOKEN'S SUBJECT, SO IT MUST RUN AFTER THE TOKEN LOOKUP — there is no
+   * other actor to check. An invalid token must still cost nothing beyond the lookup.
+   */
+  it('⚠ an INVALID token pays ZERO live-row reads — the gate is below the token check', async () => {
+    primeHappyPath();
+    mockFindToken.mockResolvedValue(undefined);
+
+    await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+
+    expect(mockFindForSessionSync).not.toHaveBeenCalled();
+  });
+
+  it('a LIVE reviewer still writes, and the gate reads the TOKEN SUBJECT exactly once', async () => {
+    primeHappyPath();
+
+    const result = await submitTokenReviewAction({ token: RAW_TOKEN, rating: 5 });
+
+    expect(result).toEqual({ success: true, created: true });
+    expect(mockFindForSessionSync).toHaveBeenCalledTimes(1);
+    expect(mockFindForSessionSync).toHaveBeenCalledWith(REVIEWER_ID);
+  });
+});
 
 describe('submitTokenReviewAction', () => {
   beforeEach(() => vi.clearAllMocks());
