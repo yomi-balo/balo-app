@@ -79,7 +79,19 @@ export const CASES_INDEX_SETUP_TITLE = 'Finish setup to get booked';
 export const CASES_INDEX_SETUP_BODY =
   'Clients can book time with you once your expert setup is complete.';
 export const CASES_INDEX_SETUP_CTA = 'Continue setup';
-export const CASES_INDEX_SETUP_HREF = '/settings/expert';
+
+/**
+ * ⚠⚠ THERE IS NO `CASES_INDEX_SETUP_HREF` CONSTANT, AND THAT IS THE FIX, NOT AN OMISSION.
+ * This module shipped one reading `/settings/expert` — a route that does not exist. The real
+ * destination is `/expert/settings`, which the `expert_settings` nav entry, the sidebar and the
+ * expert-searchability-lost email all use, and this was the ONLY call-to-action an expert with
+ * no cases and unfinished setup ever sees.
+ *
+ * The href is now RESOLVED FROM THE NAV REGISTRY at render time (`page.tsx`, the same way the
+ * page's own title is), so the two cannot drift apart again and a future rename moves both. A
+ * hand-typed literal here is exactly what a component test can lock the wrong value into — which
+ * is what happened.
+ */
 
 /**
  * ⚠ THE LOCK STATE IS FAIL-CLOSED AND, AS OF THIS COMMIT, UNREACHABLE BY CONSTRUCTION (D9): all

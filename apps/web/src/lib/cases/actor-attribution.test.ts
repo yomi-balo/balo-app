@@ -88,6 +88,18 @@ const CASES: readonly AttributionCase[] = [
     expected: 'Priya',
   },
   {
+    // ⚠ IDENTITY BEATS NAMING. An expert whose own `first_name` is blank (routine for an SSO
+    // profile carrying only a full name) still read their OWN ask as "You", not as the agency.
+    name: 'expert side · the viewer with a BLANK name → still "You", not the party label',
+    overrides: { side: 'expert', actorUserId: VIEWER, actorFirstName: null },
+    expected: 'You',
+  },
+  {
+    name: 'expert side · the viewer with a WHITESPACE-ONLY name → still "You"',
+    overrides: { side: 'expert', actorUserId: VIEWER, actorFirstName: '   ' },
+    expected: 'You',
+  },
+  {
     name: 'expert side · the delivering expert, viewed by a colleague → their first name',
     overrides: { side: 'expert', actorUserId: DELIVERING_EXPERT, actorFirstName: 'Dana' },
     expected: 'Dana',
@@ -101,7 +113,7 @@ const CASES: readonly AttributionCase[] = [
 
 describe('resolveActorLabel', () => {
   it('covers every documented arm of the rule (guards a shrunken table)', () => {
-    expect(CASES).toHaveLength(10);
+    expect(CASES).toHaveLength(12);
   });
 
   it.each(CASES)('$name', ({ overrides, expected }) => {

@@ -28,8 +28,10 @@ vi.mock('@/lib/navigation/nav-context', () => ({
 }));
 
 const mockResolveEntityListNavEntry = vi.fn();
+const mockResolveNavItems = vi.fn();
 vi.mock('@/components/layout/nav-registry', () => ({
   resolveEntityListNavEntry: (...a: unknown[]) => mockResolveEntityListNavEntry(...a),
+  resolveNavItems: (...a: unknown[]) => mockResolveNavItems(...a),
 }));
 
 const mockResolveCasesIndexRequest = vi.fn();
@@ -62,6 +64,9 @@ beforeEach(() => {
   mockGetCurrentUser.mockResolvedValue(USER);
   mockBuildNavContext.mockResolvedValue({ workspaceType: 'company', capabilities: [] });
   mockResolveEntityListNavEntry.mockReturnValue({ key: 'cases', label: 'Cases', href: '/cases' });
+  mockResolveNavItems.mockReturnValue([
+    { key: 'expert_settings', label: 'Expert Settings', href: '/expert/settings' },
+  ]);
   mockResolveCasesIndexRequest.mockReturnValue(COMPANY_REQUEST);
   mockReadCasesIndexData.mockResolvedValue(ERROR_DATA);
 });
@@ -138,6 +143,52 @@ describe('CasesPage — the render', () => {
   it('renders NO second h1 — BAL-499 owns the one in the top bar', async () => {
     render(await CasesPage());
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠⚠ THE EXPERT-SETUP CTA'S HREF IS RESOLVED FROM THE REGISTRY, NEVER TYPED HERE. The page
+ * shipped with a hand-typed `/settings/expert`, which is not a route, and it was the only CTA an
+ * expert with unfinished setup ever saw. These cases pin that the page asks the registry and
+ * passes NOTHING when the registry has no answer.
+ */
+describe('CasesPage — the expert-setup destination', () => {
+  /** A ready payload whose ONLY content is the expert setup-incomplete empty state. */
+  const SETUP_EMPTY = {
+    kind: 'ready' as const,
+    side: 'expert' as const,
+    companyName: 'Acme Corp',
+    featured: null,
+    open: [],
+    openHasMore: false,
+    openCursor: null,
+    openCount: 0,
+    resolvedCount: 0,
+    empty: 'expert_setup_incomplete' as const,
+  };
+
+  it('asks the registry for the expert_settings entry and renders ITS href', async () => {
+    mockReadCasesIndexData.mockResolvedValue(SETUP_EMPTY);
+    render(await CasesPage());
+
+    expect(mockResolveNavItems).toHaveBeenCalledWith(
+      { workspaceType: 'company', capabilities: [] },
+      'secondary'
+    );
+    expect(screen.getByRole('link', { name: 'Continue setup' })).toHaveAttribute(
+      'href',
+      '/expert/settings'
+    );
+  });
+
+  it('renders NO CTA at all when the registry resolves no expert_settings entry', async () => {
+    mockReadCasesIndexData.mockResolvedValue(SETUP_EMPTY);
+    mockResolveNavItems.mockReturnValue([]);
+    render(await CasesPage());
+
+    expect(screen.getByText('Finish setup to get booked')).toBeInTheDocument();
+    // ⚠ NEVER A GUESSED FALLBACK — a guessed destination is how this shipped broken.
+    expect(screen.queryByRole('link', { name: 'Continue setup' })).not.toBeInTheDocument();
   });
 });
 

@@ -25,6 +25,8 @@ const mockToastError = vi.fn();
 vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => mockToastError(...a) } }));
 
 import { CasesIndexShell } from './cases-index-shell';
+import { resolveNavItems } from '@/components/layout/nav-registry';
+import { resolveRouteDir } from '@/invariants/_source-scan';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type {
   CasesIndexCardView,
@@ -39,6 +41,18 @@ import type {
 
 const NOW = new Date('2026-09-16T04:30:00.000Z');
 const MIN = 60_000;
+
+/**
+ * ⚠⚠ RESOLVED FROM THE REGISTRY, NEVER TYPED AS A LITERAL. This suite previously asserted the
+ * CTA's href against the string `'/settings/expert'` — a route that does not exist — so CI
+ * locked the bug in rather than catching it. Deriving the expectation from the same source the
+ * page derives the prop from means the only way to get this wrong now is to break the registry
+ * itself, which the "the route exists on disk" case below catches.
+ */
+const EXPERT_SETTINGS_HREF =
+  resolveNavItems({ workspaceType: 'expert', capabilities: [] }, 'secondary').find(
+    (entry) => entry.key === 'expert_settings'
+  )?.href ?? null;
 
 function card(overrides: Partial<CasesIndexCardView> = {}): CasesIndexCardView {
   return {
@@ -128,22 +142,36 @@ describe('CasesIndexShell — the page heading', () => {
    * `PageHead`. A second `<h1>` is an a11y defect, not a style preference.
    */
   it('renders the title as an h2, never an h1', () => {
-    render(<CasesIndexShell data={ready()} title="Cases" />);
+    render(<CasesIndexShell data={ready()} title="Cases" expertSetupHref={EXPERT_SETTINGS_HREF} />);
     expect(screen.getByRole('heading', { level: 2, name: 'Cases' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 
   it('uses the TITLE it is given, so a nav rename moves the crumb and the heading together', () => {
-    render(<CasesIndexShell data={ready()} title="Consultations" />);
+    render(
+      <CasesIndexShell
+        data={ready()}
+        title="Consultations"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     expect(screen.getByRole('heading', { level: 2, name: 'Consultations' })).toBeInTheDocument();
   });
 
   it('names the company on the client side and nobody on the expert side', () => {
-    const { unmount } = render(<CasesIndexShell data={ready()} title="Cases" />);
+    const { unmount } = render(
+      <CasesIndexShell data={ready()} title="Cases" expertSetupHref={EXPERT_SETTINGS_HREF} />
+    );
     expect(screen.getByText('Everything Acme Corp has booked with experts.')).toBeInTheDocument();
     unmount();
 
-    render(<CasesIndexShell data={ready({ side: 'expert' })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ side: 'expert' })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     expect(screen.getByText('Everything clients have booked with you.')).toBeInTheDocument();
     expect(screen.queryByText(/Acme Corp/)).not.toBeInTheDocument();
   });
@@ -154,7 +182,9 @@ describe('CasesIndexShell — the page heading', () => {
    */
   it('offers the Book CTA on the client side only, from the page body', async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<CasesIndexShell data={ready()} title="Cases" />);
+    const { unmount } = render(
+      <CasesIndexShell data={ready()} title="Cases" expertSetupHref={EXPERT_SETTINGS_HREF} />
+    );
     const cta = screen.getByRole('link', { name: /Book a consultation/ });
     expect(cta).toHaveAttribute('href', '/experts');
     await user.click(cta);
@@ -164,7 +194,13 @@ describe('CasesIndexShell — the page heading', () => {
     });
     unmount();
 
-    render(<CasesIndexShell data={ready({ side: 'expert' })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ side: 'expert' })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     expect(screen.queryByRole('link', { name: /Book a consultation/ })).not.toBeInTheDocument();
   });
 });
@@ -181,7 +217,11 @@ describe('CasesIndexShell — the non-list states', () => {
    */
   it('renders the LOCK state, naming the company and pointing at Settings', () => {
     render(
-      <CasesIndexShell data={{ kind: 'no_access', companyName: 'Acme Corp' }} title="Cases" />
+      <CasesIndexShell
+        data={{ kind: 'no_access', companyName: 'Acme Corp' }}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
     );
     expect(screen.getByText('You can’t view Acme Corp’s cases')).toBeInTheDocument();
     expect(
@@ -194,7 +234,13 @@ describe('CasesIndexShell — the non-list states', () => {
 
   it('renders the ERROR state with a retry that re-reads the page', async () => {
     const user = userEvent.setup();
-    render(<CasesIndexShell data={{ kind: 'error' }} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={{ kind: 'error' }}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     expect(screen.getByText('We couldn’t load your cases')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     expect(mockRefresh).toHaveBeenCalledTimes(1);
@@ -207,7 +253,13 @@ describe('CasesIndexShell — the non-list states', () => {
    * shipping.
    */
   it('invites the CLIENT to book, and never frames the state as an absence', () => {
-    render(<CasesIndexShell data={ready({ empty: 'no_cases', openCount: 0 })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ empty: 'no_cases', openCount: 0 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     expect(screen.getByText('Book your first consultation')).toBeInTheDocument();
     expect(screen.queryByText('No cases yet')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Find an expert' })).toHaveAttribute(
@@ -221,6 +273,7 @@ describe('CasesIndexShell — the non-list states', () => {
       <CasesIndexShell
         data={ready({ side: 'expert', empty: 'no_cases', openCount: 0, featured: null, open: [] })}
         title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
       />
     );
     // Forward-looking, not absence-framed — an empty expert workspace is a beginning, not a
@@ -241,13 +294,52 @@ describe('CasesIndexShell — the non-list states', () => {
           open: [],
         })}
         title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
       />
     );
     expect(screen.getByText('Finish setup to get booked')).toBeInTheDocument();
+    // ⚠ THE REGISTRY'S HREF, NOT A LITERAL. This assertion used to read `'/settings/expert'` — a
+    // route that does not exist — so it locked the dead link in instead of catching it.
     expect(screen.getByRole('link', { name: 'Continue setup' })).toHaveAttribute(
       'href',
-      '/settings/expert'
+      EXPERT_SETTINGS_HREF
     );
+  });
+
+  /**
+   * ⚠⚠ THE GUARD THAT WOULD HAVE CAUGHT THE ORIGINAL BUG. Asserting the CTA matches whatever the
+   * registry says is necessary but not sufficient — both could be wrong together. This checks the
+   * destination is a REAL ROUTE on disk, which is the property "Continue setup is not a dead
+   * link" actually depends on.
+   */
+  it('the expert-setup destination is a route that EXISTS', () => {
+    expect(EXPERT_SETTINGS_HREF).not.toBeNull();
+    const routeDir = resolveRouteDir([
+      `src/app/(dashboard)${EXPERT_SETTINGS_HREF}/page.tsx`,
+      `apps/web/src/app/(dashboard)${EXPERT_SETTINGS_HREF}/page.tsx`,
+    ]);
+    expect(routeDir, `${EXPERT_SETTINGS_HREF} has no page.tsx — the CTA is a dead link`).not.toBe(
+      ''
+    );
+  });
+
+  it('renders the setup state with NO button at all when the registry gives no href', () => {
+    render(
+      <CasesIndexShell
+        data={ready({
+          side: 'expert',
+          empty: 'expert_setup_incomplete',
+          openCount: 0,
+          featured: null,
+          open: [],
+        })}
+        title="Cases"
+        expertSetupHref={null}
+      />
+    );
+    expect(screen.getByText('Finish setup to get booked')).toBeInTheDocument();
+    // An absent action beats a dead one — never a guessed fallback destination.
+    expect(screen.queryByRole('link', { name: 'Continue setup' })).not.toBeInTheDocument();
   });
 });
 
@@ -256,9 +348,19 @@ describe('CasesIndexShell — the non-list states', () => {
 describe('CasesIndexShell — analytics', () => {
   it('fires cases_index_viewed EXACTLY ONCE, with the scope totals', () => {
     const { rerender } = render(
-      <CasesIndexShell data={ready({ openCount: 26, resolvedCount: 4 })} title="Cases" />
+      <CasesIndexShell
+        data={ready({ openCount: 26, resolvedCount: 4 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
     );
-    rerender(<CasesIndexShell data={ready({ openCount: 26, resolvedCount: 4 })} title="Cases" />);
+    rerender(
+      <CasesIndexShell
+        data={ready({ openCount: 26, resolvedCount: 4 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
 
     const viewed = vi
       .mocked(track)
@@ -273,7 +375,13 @@ describe('CasesIndexShell — analytics', () => {
   });
 
   it('reports has_featured: false when nothing is booked', () => {
-    render(<CasesIndexShell data={ready({ featured: null })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ featured: null })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     expect(track).toHaveBeenCalledWith(
       RECAP_EVENTS.CASES_INDEX_VIEWED,
       expect.objectContaining({ has_featured: false })
@@ -292,7 +400,13 @@ describe('CasesIndexShell — analytics', () => {
       nextBookingStartIso: new Date(Date.now() + 5 * MIN).toISOString(),
       nextBookingEndIso: new Date(Date.now() + 35 * MIN).toISOString(),
     });
-    render(<CasesIndexShell data={ready({ featured, open: [] })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ featured, open: [] })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
 
     await user.click(screen.getByRole('link', { name: /Open case/ }));
 
@@ -320,6 +434,7 @@ describe('CasesIndexShell — analytics', () => {
           ],
         })}
         title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
       />
     );
 
@@ -344,7 +459,7 @@ describe('CasesIndexShell — "show more"', () => {
   const CURSOR = { bucket: 0, sortRank: 1, id: 'eng-2' };
 
   it('renders no button when there is nothing more', () => {
-    render(<CasesIndexShell data={ready()} title="Cases" />);
+    render(<CasesIndexShell data={ready()} title="Cases" expertSetupHref={EXPERT_SETTINGS_HREF} />);
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });
 
@@ -359,7 +474,11 @@ describe('CasesIndexShell — "show more"', () => {
       nextCursor: null,
     });
     render(
-      <CasesIndexShell data={ready({ openHasMore: true, openCursor: CURSOR })} title="Cases" />
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: CURSOR })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
     );
 
     await user.click(screen.getByRole('button', { name: 'Show more' }));
@@ -370,11 +489,115 @@ describe('CasesIndexShell — "show more"', () => {
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });
 
+  /**
+   * ⚠⚠ THE REFRESH REGRESSION. `useRefreshOnFocus` calls `router.refresh()`, which re-renders this
+   * component with fresh props WITHOUT remounting it — so `useState` initialisers do not re-run.
+   * Before the fix, the rows appended by "Show more" survived that refresh and were rendered under
+   * a fresh page one, against a cursor from the old ordering.
+   */
+  it('DISCARDS appended pages when a fresh read lands, and pages from the FRESH cursor', async () => {
+    const user = userEvent.setup();
+    mockLoadMoreOpenCases.mockResolvedValue({
+      success: true,
+      rows: [
+        card({ engagementId: 'eng-3', href: '/cases/eng-3', title: 'Report builder timeouts' }),
+      ],
+      hasMore: true,
+      nextCursor: { bucket: 1, sortRank: 9, id: 'eng-3' },
+    });
+    const { rerender } = render(
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: CURSOR })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('Report builder timeouts')).toBeInTheDocument();
+
+    // A focus refresh: same component instance, brand-new `data` object.
+    const FRESH_CURSOR = { bucket: 0, sortRank: 42, id: 'eng-7' };
+    rerender(
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: FRESH_CURSOR })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+
+    // The appended page is gone — it belonged to an ordering that no longer holds.
+    expect(screen.queryByText('Report builder timeouts')).not.toBeInTheDocument();
+
+    mockLoadMoreOpenCases.mockClear();
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+    // …and the next page is requested from the FRESH cursor, not the stale one.
+    expect(mockLoadMoreOpenCases).toHaveBeenCalledWith({ cursor: FRESH_CURSOR });
+  });
+
+  it('never renders the same case twice after a refresh — no duplicate React keys', async () => {
+    const user = userEvent.setup();
+    // The appended row is the SAME case the fresh page one now carries in its grid: exactly the
+    // shape that produced a duplicate key and a case rendering as both ticket and card.
+    mockLoadMoreOpenCases.mockResolvedValue({
+      success: true,
+      rows: [
+        card({
+          engagementId: 'eng-2',
+          href: '/cases/eng-2',
+          title: 'Flow error on lead conversion',
+        }),
+      ],
+      hasMore: false,
+      nextCursor: null,
+    });
+    const { rerender } = render(
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: CURSOR })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+    // Duplicated while the appended page is still held — the state this test exists to clear.
+    expect(screen.getAllByText('Flow error on lead conversion')).toHaveLength(2);
+
+    rerender(
+      <CasesIndexShell data={ready()} title="Cases" expertSetupHref={EXPERT_SETTINGS_HREF} />
+    );
+    expect(screen.getAllByText('Flow error on lead conversion')).toHaveLength(1);
+  });
+
+  it('a refresh does NOT re-fire cases_index_viewed — the reset is not a remount', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: CURSOR })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+    rerender(
+      <CasesIndexShell data={ready()} title="Cases" expertSetupHref={EXPERT_SETTINGS_HREF} />
+    );
+
+    const viewed = vi
+      .mocked(track)
+      .mock.calls.filter(([event]) => event === RECAP_EVENTS.CASES_INDEX_VIEWED);
+    expect(viewed).toHaveLength(1);
+  });
+
   it('toasts on failure rather than silently appending nothing', async () => {
     const user = userEvent.setup();
     mockLoadMoreOpenCases.mockResolvedValue({ success: false, error: 'nope' });
     render(
-      <CasesIndexShell data={ready({ openHasMore: true, openCursor: CURSOR })} title="Cases" />
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: CURSOR })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
     );
 
     await user.click(screen.getByRole('button', { name: 'Show more' }));
@@ -389,12 +612,24 @@ describe('CasesIndexShell — "show more"', () => {
 
 describe('CasesIndexShell — the Resolved section', () => {
   it('is absent entirely when nothing is resolved', () => {
-    render(<CasesIndexShell data={ready({ resolvedCount: 0 })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 0 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     expect(screen.queryByRole('button', { name: /Resolved/ })).not.toBeInTheDocument();
   });
 
   it('starts COLLAPSED and fetches nothing until it is opened', () => {
-    render(<CasesIndexShell data={ready({ resolvedCount: 4 })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 4 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     const toggle = screen.getByRole('button', { name: /Resolved/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(mockLoadMoreResolvedCases).not.toHaveBeenCalled();
@@ -402,7 +637,13 @@ describe('CasesIndexShell — the Resolved section', () => {
 
   it('loads page one on the first expansion, and reports the toggle both ways', async () => {
     const user = userEvent.setup();
-    render(<CasesIndexShell data={ready({ resolvedCount: 4 })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 4 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     const toggle = screen.getByRole('button', { name: /Resolved/ });
 
     await user.click(toggle);
@@ -420,9 +661,57 @@ describe('CasesIndexShell — the Resolved section', () => {
     });
   });
 
+  /**
+   * ⚠ THE RESOLVED SECTION'S MILDER VERSION OF THE SAME REFRESH BUG: the COUNT updated on a
+   * refresh while the already-loaded rows did not, so the heading disagreed with its own list.
+   * The disclosure deliberately stays OPEN — collapsing a section the viewer opened would be a
+   * second surprise — and page one is re-fetched instead.
+   */
+  it('re-fetches its rows when a fresh read lands, without collapsing', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 4 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: /Resolved/ }));
+    await screen.findByText('Einstein bot handoff');
+    expect(mockLoadMoreResolvedCases).toHaveBeenCalledTimes(1);
+
+    mockLoadMoreResolvedCases.mockResolvedValue({
+      success: true,
+      rows: [{ ...resolvedRow(), engagementId: 'eng-8', title: 'Guided selling flow' }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    rerender(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 5 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Resolved/ })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    expect(await screen.findByText('Guided selling flow')).toBeInTheDocument();
+    expect(screen.queryByText('Einstein bot handoff')).not.toBeInTheDocument();
+    expect(mockLoadMoreResolvedCases).toHaveBeenCalledTimes(2);
+  });
+
   it('does NOT re-fetch when it is collapsed and opened again', async () => {
     const user = userEvent.setup();
-    render(<CasesIndexShell data={ready({ resolvedCount: 4 })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 4 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     const toggle = screen.getByRole('button', { name: /Resolved/ });
 
     await user.click(toggle);
@@ -436,7 +725,11 @@ describe('CasesIndexShell — the Resolved section', () => {
   it('offers "Book again" to the CLIENT side only', async () => {
     const user = userEvent.setup();
     const { unmount } = render(
-      <CasesIndexShell data={ready({ resolvedCount: 1 })} title="Cases" />
+      <CasesIndexShell
+        data={ready({ resolvedCount: 1 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
     );
     await user.click(screen.getByRole('button', { name: /Resolved/ }));
     const bookAgain = await screen.findByRole('link', { name: 'Book again' });
@@ -461,7 +754,13 @@ describe('CasesIndexShell — the Resolved section', () => {
       hasMore: false,
       nextCursor: null,
     });
-    render(<CasesIndexShell data={ready({ side: 'expert', resolvedCount: 1 })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ side: 'expert', resolvedCount: 1 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     await user.click(screen.getByRole('button', { name: /Resolved/ }));
     await screen.findByText('Einstein bot handoff');
     expect(screen.queryByRole('link', { name: 'Book again' })).not.toBeInTheDocument();
@@ -470,7 +769,13 @@ describe('CasesIndexShell — the Resolved section', () => {
   it('toasts when the resolved page fails to load', async () => {
     const user = userEvent.setup();
     mockLoadMoreResolvedCases.mockResolvedValue({ success: false, error: 'nope' });
-    render(<CasesIndexShell data={ready({ resolvedCount: 2 })} title="Cases" />);
+    render(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 2 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
     await user.click(screen.getByRole('button', { name: /Resolved/ }));
     expect(mockToastError).toHaveBeenCalled();
   });
@@ -488,6 +793,7 @@ describe('CasesIndexShell — accessibility', () => {
           openCursor: { bucket: 0, sortRank: 1, id: 'eng-2' },
         })}
         title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
       />
     );
     expect(await axe(container)).toHaveNoViolations();
@@ -495,7 +801,11 @@ describe('CasesIndexShell — accessibility', () => {
 
   it('has no axe violations on the lock state', async () => {
     const { container } = render(
-      <CasesIndexShell data={{ kind: 'no_access', companyName: 'Acme Corp' }} title="Cases" />
+      <CasesIndexShell
+        data={{ kind: 'no_access', companyName: 'Acme Corp' }}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
     );
     expect(await axe(container)).toHaveNoViolations();
   });

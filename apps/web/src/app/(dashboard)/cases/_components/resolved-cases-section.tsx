@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { ChevronDown, CircleCheck, CircleSlash } from 'lucide-react';
@@ -42,43 +42,98 @@ import type { CasesIndexClickHandler } from './cases-index-click';
 
 interface ResolvedCasesSectionProps {
   readonly resolvedCount: number;
+  /**
+   * The SERVER PAYLOAD'S IDENTITY. A new object means a fresh read landed, which makes any rows
+   * this section already loaded stale — see the reset below. It is compared by reference only;
+   * nothing here reads a field off it.
+   */
+  readonly dataToken: object;
   readonly onTrack: CasesIndexClickHandler;
 }
 
+/** One loaded page-set of resolved rows. `loaded` is what tells the effect below to stop. */
+interface ResolvedPage {
+  readonly rows: readonly CasesIndexResolvedRowView[];
+  readonly cursor: ResolvedCasesCursorDTO | null;
+  readonly hasMore: boolean;
+  readonly loaded: boolean;
+}
+
+const EMPTY_RESOLVED_PAGE: ResolvedPage = {
+  rows: [],
+  cursor: null,
+  hasMore: true,
+  loaded: false,
+};
+
 export function ResolvedCasesSection({
   resolvedCount,
+  dataToken,
   onTrack,
 }: Readonly<ResolvedCasesSectionProps>): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false);
-  const [rows, setRows] = useState<readonly CasesIndexResolvedRowView[]>([]);
-  const [cursor, setCursor] = useState<ResolvedCasesCursorDTO | null>(null);
-  const [hasMore, setHasMore] = useState(true);
-  const [loaded, setLoaded] = useState(false);
+  const [page, setPage] = useState<ResolvedPage>(EMPTY_RESOLVED_PAGE);
   const [pending, startTransition] = useTransition();
+  /** Guards the fetch effect below against re-entering while a transition is still in flight. */
+  const inFlight = useRef(false);
+
+  /**
+   * ⚠⚠ ALREADY-LOADED ROWS ARE DISCARDED WHEN A FRESH READ LANDS. `useRefreshOnFocus` (in the
+   * shell) calls `router.refresh()`, which re-renders without remounting — so `resolvedCount`
+   * updated while these rows did not, and the section showed a count that disagreed with its own
+   * list, against a cursor from the old ordering. Milder than the open list's version of the
+   * same bug, but the same bug.
+   *
+   * ⚠ THE DISCLOSURE STAYS OPEN. Collapsing a section the viewer deliberately opened would be a
+   * second, visible surprise; instead `loaded` goes back to `false` and the effect below re-fetches
+   * page one. That also unifies the two paths — first expansion and post-refresh reload are now
+   * the same code.
+   *
+   * ⚠ ADJUSTED DURING RENDER, not in an effect, so the stale rows never paint.
+   */
+  const [servedToken, setServedToken] = useState(dataToken);
+  if (servedToken !== dataToken) {
+    setServedToken(dataToken);
+    setPage(EMPTY_RESOLVED_PAGE);
+  }
 
   const fetchPage = useCallback((after: ResolvedCasesCursorDTO | null) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     startTransition(async () => {
-      const result = await loadMoreResolvedCases({ cursor: after });
-      if (!result.success) {
-        // ⚠ A TOAST, NOT A SILENT NO-OP. The disclosure has already opened, so an empty body with
-        // no explanation would read as "there are none" — the opposite of what happened.
-        toast.error(CASES_INDEX_SHOW_MORE_FAILED);
-        return;
+      try {
+        const result = await loadMoreResolvedCases({ cursor: after });
+        if (!result.success) {
+          // ⚠ A TOAST, NOT A SILENT NO-OP. The disclosure has already opened, so an empty body
+          // with no explanation would read as "there are none" — the opposite of what happened.
+          toast.error(CASES_INDEX_SHOW_MORE_FAILED);
+          return;
+        }
+        setPage((current) => ({
+          rows: [...current.rows, ...result.rows],
+          cursor: result.nextCursor,
+          hasMore: result.hasMore,
+          loaded: true,
+        }));
+      } finally {
+        inFlight.current = false;
       }
-      setRows((current) => [...current, ...result.rows]);
-      setCursor(result.nextCursor);
-      setHasMore(result.hasMore);
-      setLoaded(true);
     });
   }, []);
+
+  // Page one, for BOTH the first expansion and a post-refresh reload of an open section.
+  useEffect(() => {
+    if (!expanded || page.loaded) return;
+    fetchPage(null);
+  }, [expanded, page.loaded, fetchPage]);
 
   const handleToggle = useCallback(() => {
     const next = !expanded;
     setExpanded(next);
     track(RECAP_EVENTS.CASES_INDEX_RESOLVED_TOGGLED, { expanded: next });
-    if (next && !loaded) fetchPage(null);
-  }, [expanded, loaded, fetchPage]);
+  }, [expanded]);
 
+  const { rows, cursor, hasMore } = page;
   const handleShowMore = useCallback(() => {
     if (cursor !== null) fetchPage(cursor);
   }, [cursor, fetchPage]);

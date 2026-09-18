@@ -39,9 +39,17 @@ The name on a band is the person who actually did it. If they work through an ag
 the expert delivering your case, their agency is named after them — "Priya @ CloudPeak".
 
 Each card also shows how many consultations have been held, how many open action items are
-assigned to your side, and whether there are messages you haven't read. The row of dots is the
-case's consultation history, oldest first: filled for held, outlined for booked, dashed for
-cancelled.
+assigned to your side, and whether there are messages you haven't read.
+
+The row of dots is the case's consultation history, oldest first:
+
+- **Filled** — held.
+- **Outlined** — booked, still to come.
+- **Dashed** — cancelled.
+- **Solid grey** — missed: either nobody from your side arrived, or the expert didn't join.
+- **Pale grey** — held, but the outcome wasn't recorded.
+
+If you use a screen reader, the row reads as a summary — "Consultations: 2 held, 1 booked".
 
 **Resolved** holds closed cases. Each says whether it was resolved or closed automatically after
 30 days without activity, and how many consultations were held. Everything in a resolved case

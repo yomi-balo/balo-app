@@ -71,10 +71,10 @@ function presentName(value: string | null): string | null {
  * THE RULE, exactly as the ticket's Attribution section states it:
  *
  * ```
+ * expert side, the viewer    → "You"                                   — checked FIRST; see below
  * no readable actor          → the PARTY label (agency, or an independent expert's own name)
  * client side, the expert    → their first name        ("Dana")        — already named on the card
  * client side, a colleague   → "{First name} @ {Agency}" ("Priya @ CloudPeak")
- * expert side, the viewer    → "You"
  * expert side, a colleague   → their first name        ("Priya")
  * ```
  *
@@ -85,12 +85,29 @@ function presentName(value: string | null): string | null {
  */
 export function resolveActorLabel(input: ActorAttributionInput): string {
   const firstName = presentName(input.actorFirstName);
+
+  /**
+   * ⚠⚠ THE VIEWER CHECK RUNS BEFORE THE READABLE-NAME CHECK, AND THE ORDER IS THE POINT.
+   * "You" is an IDENTITY fact, not a naming one: it does not depend on whether the actor has a
+   * readable first name. With the guards the other way round, an expert whose own `first_name`
+   * is blank — routine for an account created from an SSO profile that only carries a full name
+   * — read their OWN outstanding ask as "{Agency} asked if this is sorted", which is both wrong
+   * and the exact confusion this rule was written to remove.
+   *
+   * ⚠ A `null` `actorUserId` NEEDS NO EXTRA GUARD: `viewerUserId` is a non-nullable `string`, so
+   * `null === viewerUserId` is false and a nobody-acted case falls through to the party label
+   * below, as it should.
+   */
+  if (input.side === 'expert' && input.actorUserId === input.viewerUserId) {
+    return ATTRIBUTION_VIEWER_LABEL;
+  }
+
   if (input.actorUserId === null || firstName === null) {
     return input.partyFallbackLabel;
   }
 
   if (input.side === 'expert') {
-    return input.actorUserId === input.viewerUserId ? ATTRIBUTION_VIEWER_LABEL : firstName;
+    return firstName;
   }
 
   // The client already sees the delivering expert's name on the card/party block, so repeating

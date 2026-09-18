@@ -26,7 +26,6 @@ import {
   CASES_INDEX_RETRY,
   CASES_INDEX_SETUP_BODY,
   CASES_INDEX_SETUP_CTA,
-  CASES_INDEX_SETUP_HREF,
   CASES_INDEX_SETUP_TITLE,
   CASES_INDEX_SHOW_MORE,
   CASES_INDEX_SHOW_MORE_BUSY,
@@ -70,6 +69,13 @@ interface CasesIndexShellProps {
   readonly data: CasesIndexData;
   /** The live nav entry's label — never a literal, so the crumb and the heading cannot drift. */
   readonly title: string;
+  /**
+   * The `expert_settings` nav entry's href, RESOLVED FROM THE REGISTRY by `page.tsx` — never a
+   * literal in this tree. `null` when the entry does not resolve for this workspace (it is
+   * expert-only), in which case the setup state renders WITHOUT a CTA: an absent action beats a
+   * dead one, and a dead one is exactly what a hand-typed `/settings/expert` shipped.
+   */
+  readonly expertSetupHref: string | null;
 }
 
 /** Only the CLIENT side can book, so only it is offered the header CTA and the empty-state one. */
@@ -90,6 +96,7 @@ const DENSE_CARDS: Readonly<Record<CasesIndexSide, boolean>> = { company: false,
 export function CasesIndexShell({
   data,
   title,
+  expertSetupHref,
 }: Readonly<CasesIndexShellProps>): React.JSX.Element {
   const router = useRouter();
 
@@ -122,7 +129,7 @@ export function CasesIndexShell({
     );
   }
 
-  return <CasesIndexReady data={data} title={title} />;
+  return <CasesIndexReady data={data} title={title} expertSetupHref={expertSetupHref} />;
 }
 
 /** The heading + description + CTA frame every state renders inside. */
@@ -157,12 +164,26 @@ function CasesIndexFrame({
   );
 }
 
+/** Everything a "show more" has appended to page one, plus where the next page starts. */
+interface OpenPagination {
+  readonly extraCards: readonly CasesIndexCardView[];
+  readonly cursor: CasesIndexCursorDTO | null;
+  readonly hasMore: boolean;
+}
+
+/** The pagination state a freshly-served page one implies. */
+function paginationFor(data: Extract<CasesIndexData, { kind: 'ready' }>): OpenPagination {
+  return { extraCards: [], cursor: data.openCursor, hasMore: data.openHasMore };
+}
+
 function CasesIndexReady({
   data,
   title,
+  expertSetupHref,
 }: Readonly<{
   data: Extract<CasesIndexData, { kind: 'ready' }>;
   title: string;
+  expertSetupHref: string | null;
 }>): React.JSX.Element {
   const clock = useViewerClock();
   // A case can be booked, rescheduled or closed in another tab; re-reading on focus keeps the
@@ -170,9 +191,31 @@ function CasesIndexReady({
   useRefreshOnFocus();
   const viewedRef = useRef(false);
 
-  const [extraCards, setExtraCards] = useState<readonly CasesIndexCardView[]>([]);
-  const [cursor, setCursor] = useState<CasesIndexCursorDTO | null>(data.openCursor);
-  const [hasMore, setHasMore] = useState(data.openHasMore);
+  /**
+   * ⚠⚠ THE APPENDED PAGES ARE DISCARDED WHENEVER THE SERVER SENDS A NEW `data`, AND THAT IS A
+   * CORRECTNESS FIX, NOT TIDINESS. `useRefreshOnFocus` calls `router.refresh()`, which re-renders
+   * this component with fresh props and does NOT remount it — so `useState` initialisers do not
+   * re-run. Left alone, a viewer who pressed "Show more", tabbed away and came back got fresh
+   * page one PLUS the pages appended before the refresh, against a cursor from the old ordering:
+   * duplicate `engagementId` React keys, one case rendering as both the featured ticket and a
+   * grid card, another vanishing until reload, and the next "Show more" paging from a stale
+   * position.
+   *
+   * ⚠ ADJUSTED DURING RENDER, NOT IN AN EFFECT. React re-runs this component immediately and
+   * commits only the corrected output, so the stale rows never paint; an effect would commit them
+   * first and then blank them. It is also NOT a `key` remount — that would reset `viewedRef` and
+   * turn `cases_index_viewed` into a count of focus events.
+   *
+   * ⚠ ONE OBJECT, NOT THREE `useState`s, so the reset is atomic: three setters leave three chances
+   * to add a fourth field later and forget it here.
+   */
+  const [pagination, setPagination] = useState<OpenPagination>(() => paginationFor(data));
+  const [servedData, setServedData] = useState(data);
+  if (servedData !== data) {
+    setServedData(data);
+    setPagination(paginationFor(data));
+  }
+  const { extraCards, cursor, hasMore } = pagination;
   const [pending, startTransition] = useTransition();
 
   useEffect(() => {
@@ -228,9 +271,11 @@ function CasesIndexReady({
         toast.error(CASES_INDEX_SHOW_MORE_FAILED);
         return;
       }
-      setExtraCards((current) => [...current, ...result.rows]);
-      setCursor(result.nextCursor);
-      setHasMore(result.hasMore);
+      setPagination((current) => ({
+        extraCards: [...current.extraCards, ...result.rows],
+        cursor: result.nextCursor,
+        hasMore: result.hasMore,
+      }));
     });
   }, [cursor]);
 
@@ -302,10 +347,22 @@ function CasesIndexReady({
             )}
           </section>
 
-          <ResolvedCasesSection resolvedCount={data.resolvedCount} onTrack={trackChrome} />
+          {/* ⚠ `dataToken` IS THE SERVER PAYLOAD'S IDENTITY, and it is what tells the section
+              its already-loaded rows are stale — the same refresh hazard the pagination reset
+              above exists for. See `ResolvedCasesSection`'s own docblock. */}
+          <ResolvedCasesSection
+            resolvedCount={data.resolvedCount}
+            dataToken={data}
+            onTrack={trackChrome}
+          />
         </>
       ) : (
-        <CasesIndexEmpty side={data.side} empty={data.empty} onTrack={handleBookClick} />
+        <CasesIndexEmpty
+          side={data.side}
+          empty={data.empty}
+          expertSetupHref={expertSetupHref}
+          onTrack={handleBookClick}
+        />
       )}
     </CasesIndexFrame>
   );
@@ -323,21 +380,28 @@ function CasesIndexReady({
 function CasesIndexEmpty({
   side,
   empty,
+  expertSetupHref,
   onTrack,
 }: Readonly<{
   side: CasesIndexSide;
   empty: NonNullable<Extract<CasesIndexData, { kind: 'ready' }>['empty']>;
+  expertSetupHref: string | null;
   /** Already bound to "no card" by the shell — the empty state belongs to none. */
   onTrack: () => void;
 }>): React.JSX.Element {
   if (empty === 'expert_setup_incomplete') {
+    // ⚠ THE CTA IS OMITTED WHEN THE REGISTRY GIVES NO HREF, rather than falling back to a
+    // literal. A guessed destination is how this shipped broken the first time.
+    const setupAction =
+      expertSetupHref === null
+        ? {}
+        : { actionLabel: CASES_INDEX_SETUP_CTA, actionHref: expertSetupHref };
     return (
       <CasesIndexEmptyState
         icon={CASES_INDEX_EMPTY_ICONS.setup}
         title={CASES_INDEX_SETUP_TITLE}
         body={CASES_INDEX_SETUP_BODY}
-        actionLabel={CASES_INDEX_SETUP_CTA}
-        actionHref={CASES_INDEX_SETUP_HREF}
+        {...setupAction}
       />
     );
   }

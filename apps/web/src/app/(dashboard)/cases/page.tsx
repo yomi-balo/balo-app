@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/auth/session';
 import { buildNavContext } from '@/lib/navigation/nav-context';
-import { resolveEntityListNavEntry } from '@/components/layout/nav-registry';
+import { resolveEntityListNavEntry, resolveNavItems } from '@/components/layout/nav-registry';
 import { CASES_INDEX_FALLBACK_TITLE } from './_lib/cases-index-copy';
 import { loadCasesIndex, resolveCasesIndexRequest } from './_lib/load-cases-index';
 import { readCasesIndexData } from './_lib/read-cases-index-data';
@@ -50,6 +50,17 @@ export default async function CasesPage(): Promise<React.JSX.Element> {
 
   const navContext = await buildNavContext(user);
   const navEntry = resolveEntityListNavEntry(navContext, 'cases');
+  /**
+   * ⚠⚠ THE EXPERT-SETUP CTA'S HREF COMES FROM THE REGISTRY, NEVER FROM A LITERAL. This page
+   * shipped with a hand-typed `/settings/expert`, which is not a route — the real one is
+   * `/expert/settings`, and it was the ONLY call to action an expert with unfinished setup ever
+   * saw. Resolving it here means the nav entry, the sidebar and this CTA cannot disagree, and a
+   * future rename moves all three. `undefined` (the entry is expert-only, so it does not resolve
+   * in a company workspace) renders the state with NO button rather than a guess.
+   */
+  const expertSettings = resolveNavItems(navContext, 'secondary').find(
+    (entry) => entry.key === 'expert_settings'
+  );
 
   const data = await readCasesIndexData(
     () => loadCasesIndex({ viewerUserId: user.id, request }),
@@ -60,5 +71,11 @@ export default async function CasesPage(): Promise<React.JSX.Element> {
       : { workspaceType: request.side, expertProfileId: request.expertProfileId }
   );
 
-  return <CasesIndexShell data={data} title={navEntry?.label ?? CASES_INDEX_FALLBACK_TITLE} />;
+  return (
+    <CasesIndexShell
+      data={data}
+      title={navEntry?.label ?? CASES_INDEX_FALLBACK_TITLE}
+      expertSetupHref={expertSettings?.href ?? null}
+    />
+  );
 }

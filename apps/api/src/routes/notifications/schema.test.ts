@@ -1389,17 +1389,40 @@ describe('publishBodySchema', () => {
     });
 
     /**
-     * ⚠ BAL-567 — THE OLD LOBBY PATH MUST NOW BE REJECTED, AND THIS CASE IS WHAT PROVES THE
-     * MIGRATION RATHER THAN ASSUMING IT. `/join/m/{uuid}` is a perfectly well-formed route;
-     * what makes it wrong on THIS payload is that it is the ANONYMOUS GUEST lobby and this
-     * event is member-facing. Without this case, a regex quietly widened to admit both shapes
-     * would pass every other assertion in the block.
+     * ⚠⚠ BAL-567 review item 3 — THE OLD LOBBY PATH IS ACCEPTED FOR EXACTLY ONE RELEASE, AND
+     * THIS CASE IS THE REMINDER TO TAKE IT BACK OUT. `apps/web` (Vercel) and `apps/api`
+     * (Railway) deploy independently and publishing is fire-and-forget, so in the deploy gap —
+     * in EITHER order, and after a web-only rollback — a rejected publish silently drops the
+     * booking confirmation with nothing surfaced to the customer. The union removes that window.
+     *
+     * ⚠ THIS DOES NOT WEAKEN THE SHAPE CHECK. Both arms stay anchored front and back, so N3's
+     * actual guarantee — `joinPath` is a same-origin ROUTE, never an absolute phishing URL
+     * rendered into `${BASE_URL}${joinPath}` — is untouched. The malformed cases above still
+     * fail.
+     *
+     * ⚠ WHEN BOTH APPS ARE ON THIS RELEASE: delete `legacyLobbyPathSchema`, point `joinPath`
+     * back at `memberCallPathSchema`, and INVERT this case to `toBe(false)`.
      */
-    it('rejects the retired ANONYMOUS lobby path on a member-facing payload', () => {
+    it('TRANSITIONALLY accepts the anonymous lobby path (delete with the union)', () => {
       expect(
         publishBodySchema.safeParse({
           event: 'booking.confirmed',
           payload: { ...valid, joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000' },
+        }).success
+      ).toBe(true);
+    });
+
+    /** Neither arm of the union admits an off-origin or otherwise unshaped value. */
+    it.each([
+      ['an absolute URL', 'https://evil.com/meetings/550e8400-e29b-41d4-a716-446655440000/call'],
+      ['a protocol-relative URL', '//evil.com/join/m/550e8400-e29b-41d4-a716-446655440000'],
+      ['a malformed lobby id', '/join/m/not-a-uuid'],
+      ['a near-miss member route', '/meetings/550e8400-e29b-41d4-a716-446655440000/call/extra'],
+    ])('rejects %s on either arm', (_label, joinPath) => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.confirmed',
+          payload: { ...valid, joinPath },
         }).success
       ).toBe(false);
     });
