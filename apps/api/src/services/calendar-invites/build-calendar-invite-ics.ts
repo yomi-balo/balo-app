@@ -1,4 +1,5 @@
 import ical, { ICalCalendarMethod, ICalEventStatus, ICalEventTransparency } from 'ical-generator';
+import type { CalendarInviteMethod } from '../../notifications/calendar-invite-spec.js';
 
 /**
  * BAL-475 (U1) — THE PURE RFC 5545 BUILDER, and the ONE PINNED EXCEPTION to the
@@ -18,7 +19,11 @@ import ical, { ICalCalendarMethod, ICalEventStatus, ICalEventTransparency } from
  * `summary`/`description` before handing them to `ical-generator` would double-escape them
  * (`Northwind, Inc.` would render `Northwind\, Inc.` in every client).
  *
- * ⚠ NO METHOD OTHER THAN REQUEST IN THIS TICKET — BAL-476 adds CANCEL.
+ * ⚠⚠ BAL-476 — TWO METHODS, ONE BUILDER. `REQUEST` issues the series (`STATUS:CONFIRMED`);
+ * `CANCEL` withdraws it (`STATUS:CANCELLED`). A PARALLEL BUILDER IS FORBIDDEN: the invariant
+ * above pins the ORGANIZER and ATTENDEE lines to this one function, and the ATTENDEE is created
+ * UNCONDITIONALLY for both methods — RFC 5546 §3.2.5 requires the ATTENDEE on a CANCEL addressed
+ * to a specific attendee, so the two lines are byte-identical across methods and stay put.
  */
 
 export const CALENDAR_INVITE_ORGANIZER_NAME = 'Balo';
@@ -45,6 +50,13 @@ export interface BuildCalendarInviteIcsInput {
   readonly organizerAddress: string;
   /** THE ONLY ATTENDEE — the person this message is delivered to. */
   readonly recipientAddress: string;
+  /**
+   * BAL-476 — the RFC 5546 iTIP method. `REQUEST` issues the series; `CANCEL` withdraws it.
+   *
+   * ⚠ REQUIRED, NEVER DEFAULTED. A forgotten method would silently RE-ISSUE an invite the
+   * caller meant to withdraw, and there is no safe default for that.
+   */
+  readonly method: CalendarInviteMethod;
 }
 
 /**
@@ -54,7 +66,11 @@ export interface BuildCalendarInviteIcsInput {
  * every content line, including the last — so this function appends it.
  */
 export function buildCalendarInviteIcs(input: BuildCalendarInviteIcsInput): string {
-  const calendar = ical({ prodId: CALENDAR_INVITE_PRODUCT_ID, method: ICalCalendarMethod.REQUEST });
+  const isCancel = input.method === 'CANCEL';
+  const calendar = ical({
+    prodId: CALENDAR_INVITE_PRODUCT_ID,
+    method: isCancel ? ICalCalendarMethod.CANCEL : ICalCalendarMethod.REQUEST,
+  });
   const event = calendar.createEvent({
     id: input.uid,
     sequence: input.sequence,
@@ -64,7 +80,7 @@ export function buildCalendarInviteIcs(input: BuildCalendarInviteIcsInput): stri
     summary: input.summary,
     description: input.description,
     ...(input.location === undefined ? {} : { location: input.location }),
-    status: ICalEventStatus.CONFIRMED,
+    status: isCancel ? ICalEventStatus.CANCELLED : ICalEventStatus.CONFIRMED,
     transparency: ICalEventTransparency.OPAQUE,
     organizer: { name: CALENDAR_INVITE_ORGANIZER_NAME, email: input.organizerAddress },
   });

@@ -75,6 +75,9 @@ export async function getMeetingGuestsAction(input: {
     data: {
       guests: result.data.guests,
       canHost: result.data.canHost,
+      // BAL-476 — passed through UNCHANGED, same rule as `canHost`: server-resolved, never
+      // re-derived in this tier.
+      viewerSide: result.data.viewerSide,
       participantCount: result.data.participantCount,
       participantCap: result.data.participantCap,
     },

@@ -17,6 +17,7 @@ const BASE_INPUT: BuildCalendarInviteIcsInput = {
   stampAt: new Date('2026-08-20T00:00:00.000Z'),
   organizerAddress: 'no-reply@balo.test',
   recipientAddress: 'recipient@example.test',
+  method: 'REQUEST',
 };
 
 describe('BuildCalendarInviteIcsInput — F10(a) (fix round 1, S5(a)) — the key set is pinned exactly', () => {
@@ -38,13 +39,15 @@ describe('BuildCalendarInviteIcsInput — F10(a) (fix round 1, S5(a)) — the ke
     stampAt: BASE_INPUT.stampAt,
     organizerAddress: BASE_INPUT.organizerAddress,
     recipientAddress: BASE_INPUT.recipientAddress,
+    method: BASE_INPUT.method,
   };
 
-  it('has exactly these ten keys and no eleventh', () => {
+  it('has exactly these eleven keys and no twelfth', () => {
     expect(Object.keys(REQUIRED_FIXTURE).sort((a, b) => a.localeCompare(b))).toEqual([
       'description',
       'endAt',
       'location',
+      'method',
       'organizerAddress',
       'recipientAddress',
       'sequence',
@@ -138,5 +141,43 @@ describe('buildCalendarInviteIcs', () => {
 
     const lines = unfold(ics);
     expect(lines.find((l) => l.startsWith('SUMMARY:'))).toBe(`SUMMARY:${longSummary}`);
+  });
+});
+
+// ── BAL-476 — the WITHDRAWAL, out of the same builder ─────────────────────────────────────
+
+describe('buildCalendarInviteIcs — METHOD:CANCEL', () => {
+  it('⚠ emits METHOD:CANCEL and STATUS:CANCELLED, with the SAME UID and the SAME SEQUENCE', () => {
+    const request = unfold(buildCalendarInviteIcs({ ...BASE_INPUT, sequence: 3 }));
+    const cancel = unfold(buildCalendarInviteIcs({ ...BASE_INPUT, sequence: 3, method: 'CANCEL' }));
+
+    expect(cancel).toContain('METHOD:CANCEL');
+    expect(cancel).toContain('STATUS:CANCELLED');
+    expect(cancel).not.toContain('METHOD:REQUEST');
+    expect(cancel).not.toContain('STATUS:CONFIRMED');
+
+    // ⚠ R2 — the withdrawal addresses the series it is retiring: SAME uid, and NO sequence bump.
+    const uidLine = `UID:${BASE_INPUT.uid}`;
+    expect(request).toContain(uidLine);
+    expect(cancel).toContain(uidLine);
+    expect(request).toContain('SEQUENCE:3');
+    expect(cancel).toContain('SEQUENCE:3');
+  });
+
+  it('⚠ still emits exactly ONE ATTENDEE — RFC 5546 §3.2.5 requires it on a targeted CANCEL', () => {
+    const lines = unfold(buildCalendarInviteIcs({ ...BASE_INPUT, method: 'CANCEL' }));
+    const attendeeLines = lines.filter((l) => l.startsWith('ATTENDEE'));
+
+    expect(attendeeLines).toHaveLength(1);
+    expect(attendeeLines[0]).toContain(BASE_INPUT.recipientAddress);
+  });
+
+  it('⚠ the two methods differ ONLY in METHOD and STATUS — nothing else moves', () => {
+    const request = unfold(buildCalendarInviteIcs(BASE_INPUT));
+    const cancel = unfold(buildCalendarInviteIcs({ ...BASE_INPUT, method: 'CANCEL' }));
+
+    expect(request).toHaveLength(cancel.length);
+    const differing = request.filter((line, index) => line !== cancel[index]);
+    expect(differing).toEqual(['METHOD:REQUEST', 'STATUS:CONFIRMED']);
   });
 });

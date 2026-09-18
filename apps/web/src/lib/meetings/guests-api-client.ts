@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { GuestForViewer } from '@balo/shared/meetings';
+import type { GuestForViewer, MeetingGuestSide } from '@balo/shared/meetings';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -90,7 +90,7 @@ function readRetryAfter(response: Response): number | undefined {
  */
 async function callGuestsApi<T>(
   path: string,
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'DELETE',
   body?: unknown
 ): Promise<GuestsApiResult<T>> {
   const session = await getSession();
@@ -143,6 +143,11 @@ async function callGuestsApi<T>(
 export interface GuestsListResponse {
   guests: GuestForViewer[];
   canHost: boolean;
+  /**
+   * BAL-476 — the viewer's own resolved side, computed SERVER-side from the tenancy gate.
+   * ⚠ NEVER RE-DERIVED CLIENT-SIDE, same rule as `canHost`.
+   */
+  viewerSide: MeetingGuestSide;
   participantCount: number;
   participantCap: number;
 }
@@ -208,4 +213,20 @@ export async function resendMeetingGuestLink(
     `/meetings/${meetingId}/guests/${guestId}/resend-link`,
     'POST'
   );
+}
+
+/**
+ * BAL-476 (R3) — `DELETE /meetings/:meetingId/guests/:guestId`: revoke a guest's access.
+ *
+ * ⚠ THE ROUTE ANSWERS `204`, so the body is empty and `callGuestsApi` parses that to `{}`.
+ * Nothing reads `data`; the discriminant is `ok`.
+ *
+ * Never throws. `status: 0` stays the retryable transport sentinel. ⚠ NO EMAIL, NO NAME, NO
+ * TOKEN in any log line — `callGuestsApi` logs the path and method only.
+ */
+export async function removeMeetingGuest(
+  meetingId: string,
+  guestId: string
+): Promise<GuestsApiResult<Record<string, never>>> {
+  return callGuestsApi<Record<string, never>>(`/meetings/${meetingId}/guests/${guestId}`, 'DELETE');
 }

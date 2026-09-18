@@ -21,6 +21,20 @@ export const cancelledTeardownBodySchema = z
           meetingId: z.uuid(),
           /** Whose availability cache to rebuild. `null` = an admin meeting, nothing to rebuild. */
           expertProfileId: z.uuid().nullable(),
+          /**
+           * BAL-476 — the `meeting.cancelled` audit row id `cancelMeetingTx` already minted, used
+           * as the per-WRITE correlation handle for the calendar withdrawal.
+           *
+           * ⚠⚠ `.optional()` ON PURPOSE, AND THE REASON IS DEPLOY SKEW. `apps/web` (Vercel) and
+           * `apps/api` (Railway) deploy independently from the same merge and either can win. A
+           * REQUIRED field would `400` the WHOLE batch during the skew window, and
+           * `postCancelledTeardown` logs-and-swallows a non-2xx — so the EXISTING room teardown
+           * and availability rebuild would be dropped too, for every meeting in the batch.
+           * Optional + warn-and-skip degrades only the new half.
+           *
+           * Follow-up: make it required once both apps are past the skew window.
+           */
+          cancelAuditId: z.uuid().optional(),
         })
       )
       .min(1)

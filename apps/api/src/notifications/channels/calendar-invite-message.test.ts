@@ -14,6 +14,7 @@ const FIXTURE: CalendarInviteMailInput = {
   html: '<p>Hello</p>',
   text: 'Hello',
   ics: 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n',
+  method: 'REQUEST',
 };
 
 /** Unfold RFC 5322 folded header lines (continuation lines begin with whitespace). */
@@ -88,7 +89,7 @@ describe('buildCalendarInviteMailOptions', () => {
     expect(options).not.toHaveProperty('attachments');
   });
 
-  it('sets the icalEvent method to REQUEST with the given filename and content', () => {
+  it('passes the caller\u2019s method through to icalEvent, with the given filename and content', () => {
     const options = buildCalendarInviteMailOptions(FIXTURE);
     expect(options.icalEvent).toEqual({
       method: 'REQUEST',
@@ -146,5 +147,25 @@ describe('the built MIME message (CI-assertable, never a live send)', () => {
     const raw = await buildRawMessage();
     const decoded = decodedMimePartBody(raw, 'application/ics');
     expect(decoded).toBe(FIXTURE.ics);
+  });
+});
+
+// ── BAL-476 — the method is THREADED, not hard-coded ──────────────────────────────────────
+
+describe('buildCalendarInviteMailOptions — METHOD:CANCEL', () => {
+  it('⚠ puts CANCEL on icalEvent.method — Outlook silently ignores a CANCEL body under method=REQUEST', () => {
+    const options = buildCalendarInviteMailOptions({ ...FIXTURE, method: 'CANCEL' });
+    expect(options.icalEvent).toEqual({
+      method: 'CANCEL',
+      filename: CALENDAR_INVITE_FILENAME,
+      content: FIXTURE.ics,
+    });
+  });
+
+  it('⚠ the Content-Type method PARAMETER follows it onto the wire', async () => {
+    const options = buildCalendarInviteMailOptions({ ...FIXTURE, method: 'CANCEL' });
+    const raw = unfoldHeaders((await new MailComposer(options).compile().build()).toString('utf8'));
+    expect(raw).toContain('Content-Type: text/calendar; charset=utf-8; method=CANCEL');
+    expect(raw).not.toContain('method=REQUEST');
   });
 });

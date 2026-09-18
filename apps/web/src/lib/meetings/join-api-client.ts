@@ -242,7 +242,15 @@ function warnVisitorIpUnresolved(
 async function callJoinApi<T>(
   path: string,
   body: unknown,
-  options?: { readonly authorization?: string; readonly forwardVisitorIp?: boolean }
+  options?: {
+    readonly authorization?: string;
+    readonly forwardVisitorIp?: boolean;
+    /**
+     * BAL-476 — an OPTIONAL hard bound. An abort lands in the catch below and therefore resolves
+     * to the `status: 0` TRANSPORT sentinel, which every caller already treats as inconclusive.
+     */
+    readonly signal?: AbortSignal;
+  }
 ): Promise<JoinApiResult<T>> {
   const authorization = options?.authorization;
   // ⚠ ONLY ON THE PUBLIC HOPS. The member arm is already identified by its Bearer, and its
@@ -263,6 +271,7 @@ async function callJoinApi<T>(
         ...(visitorIp === undefined ? {} : { 'x-balo-client-ip': visitorIp }),
       },
       body: JSON.stringify(body ?? {}),
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
 
     const parsed = safeParse(await response.text());
@@ -364,5 +373,33 @@ export async function postLobbyReentryRequest(
     `/meetings/${meetingId}/lobby/reentry`,
     { email },
     { forwardVisitorIp: true } // ⚠ REQUIRED — the per-visitor windows key on the GUEST
+  );
+}
+
+/**
+ * BAL-476 (R5 amended) — THE EXIT-REASON PROBE: "am I still allowed in this call?", asked on the
+ * terminal ejection transition, with NO side effects at the api.
+ *
+ * ⚠⚠ `probe: true` MAKES THE ROUTE DO **LESS**, NEVER MORE. Without it, the inconclusive arm (a
+ * genuine network blip while both the meeting and the token are live) would answer `200` and, on
+ * the way there, MINT A LIVE DAILY CREDENTIAL FOR NOBODY and fire a FALSE `guest_joined`. The
+ * flag short-circuits the service before the mint. See `JoinMeetingAsGuestInput.probe` in
+ * `apps/api`.
+ *
+ * ⚠ THE ANSWER THIS CALLER WANTS IS THE **STATUS**, not the body: `404` ⇒ removed, `409` ⇒ the
+ * host ended it, anything else ⇒ inconclusive (`guestExitCauseForStatus`).
+ *
+ * ⚠ HARD-BOUNDED BY THE CALLER'S SIGNAL — see `GUEST_EXIT_PROBE_TIMEOUT_MS`. One attempt.
+ * ⚠ THE TOKEN IS NEVER LOGGED, NOT EVEN A PREFIX (`callJoinApi` logs the path only).
+ */
+export async function postGuestJoinProbe(
+  meetingId: string,
+  guestToken: string,
+  signal?: AbortSignal
+): Promise<JoinApiResult<{ state: 'live' }>> {
+  return callJoinApi<{ state: 'live' }>(
+    `/meetings/${meetingId}/guest-join`,
+    { guestToken, probe: true },
+    { forwardVisitorIp: true, ...(signal === undefined ? {} : { signal }) }
   );
 }

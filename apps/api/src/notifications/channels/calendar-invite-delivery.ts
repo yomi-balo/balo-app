@@ -13,11 +13,7 @@ import {
 import { createLogger } from '@balo/shared/logging';
 import { guestIsAdmittedForRead, sanitizeSelfDeclaredName } from '@balo/shared/meetings';
 import type { SendMailOptions } from 'nodemailer';
-import {
-  CALENDAR_INVITE_METHOD,
-  readCalendarInviteSpec,
-  type CalendarInviteSpec,
-} from '../calendar-invite-spec.js';
+import { readCalendarInviteSpec, type CalendarInviteSpec } from '../calendar-invite-spec.js';
 import { deliveringExpertProfileIdForMeeting } from '../../services/meetings/delivering-party.js';
 import { buildCalendarInviteIcs } from '../../services/calendar-invites/build-calendar-invite-ics.js';
 import { calendarInviteLogFields } from '../../services/calendar-invites/log-fields.js';
@@ -129,8 +125,10 @@ type CalendarInviteSkipReason =
   | 'recipient_not_member'
   | 'guest_not_admitted'
   | 'calendar_event_not_live'
+  | 'calendar_event_not_found'
   | 'provider_event_party'
   | 'meeting_not_live'
+  | 'meeting_not_found'
   | 'no_display_facts'
   | 'no_job_id'
   | 'duplicate_suppressed'
@@ -207,7 +205,24 @@ async function resolveCalendarInviteTarget(
     };
   }
 
-  const guest = await meetingGuestsRepository.findLiveById(spec.meetingId, spec.recipient.guestId);
+  // BAL-476 GATE C — a REQUEST may only address LIVE state; a CANCEL may address RETIRED state.
+  // A `METHOD:CANCEL` is BY DEFINITION addressed to somebody whose access has just been revoked,
+  // so there is no live row left to compose it from.
+  //
+  // ⚠⚠ BOTH ARMS KEEP `party` AND `guestIsAdmittedForRead`. `meetingGuestsRepository.revoke`
+  // stamps `revoked_at` + `revoked_by_user_id` + `deleted_at` and does NOT touch `admission`, so
+  // the admitted-ness of the person at removal time survives verbatim on the revoked row. Keeping
+  // the predicate makes the withdrawal EXACTLY SYMMETRIC with the publisher (which fans out over
+  // the same `guestIsAdmittedForRead` set) — you can only withdraw what you issued — and it stops
+  // the one real hazard: a `pending` anonymous lobby knock whose self-declared address Balo never
+  // invited would otherwise receive an unsolicited ICS.
+  const guest =
+    spec.method === 'CANCEL'
+      ? await meetingGuestsRepository.findByIdIncludingRevoked(
+          spec.meetingId,
+          spec.recipient.guestId
+        )
+      : await meetingGuestsRepository.findLiveById(spec.meetingId, spec.recipient.guestId);
   if (
     guest === undefined ||
     guest.party !== spec.party ||
@@ -240,28 +255,61 @@ type SendableState =
     };
 
 /**
- * Steps 3-6 — the LIVE calendar row (read BEFORE the meeting), Ruling 1's re-check, the
- * meeting's liveness (F30: `cancelled` OR `ended`), and the display facts. Order preserved
- * exactly from the pre-split function; M9's ordering test pins it.
+ * Steps 3-6 — the calendar row (read BEFORE the meeting), Ruling 1's re-check, the meeting's
+ * liveness (F30: `cancelled` OR `ended`), and the display facts. Order preserved exactly from
+ * the pre-split function; M9's ordering test pins it.
+ *
+ * ⚠⚠ BAL-476 — THE ONE RULE THAT BRANCHES HERE, AND IT BRANCHES ON `spec.method` AND NOTHING
+ * ELSE: **a `REQUEST` may only address LIVE state; a `CANCEL` may address RETIRED state.**
+ * Steps 3 and 5 each carry one arm of it. ⚠ STEP 4 IS DELIBERATELY *NOT* METHOD-AWARE — Ruling 1
+ * ("never both a provider event AND a member ICS") is a fan-out rule, not a liveness rule, so a
+ * `provider_event` expert row refuses a MEMBER ICS under both methods. Guests are unaffected
+ * (step 4 only fires for `recipient.kind === 'user'`), which is exactly what lets an expert-party
+ * `provider_event` row still fan a CANCEL out to that side's guests.
  */
 async function loadSendableState(
   spec: CalendarInviteSpec,
   audience: CalendarInviteAudience
 ): Promise<SendableState> {
-  // Step 3 — the LIVE calendar row, SCOPED to (id, meetingId, party) since F24 (fix round 1,
-  // S4). Read the row (SEQUENCE) BEFORE the meeting (window).
-  const row = await meetingCalendarEventsRepository.findLiveById({
-    id: spec.calendarEventId,
-    meetingId: spec.meetingId,
-    party: spec.party,
-  });
+  // Step 3 — the calendar row, SCOPED to (id, meetingId, party) since F24 (fix round 1, S4).
+  // Read the row (SEQUENCE) BEFORE the meeting (window) — the order is load-bearing and
+  // UNCHANGED by BAL-476.
+  //
+  // BAL-476 GATE A — a REQUEST may only address LIVE state; a CANCEL may address RETIRED state.
+  // `findLiveById` hides a soft-deleted row so a retired series is never RE-ISSUED; a withdrawal
+  // is the opposite act and must be able to address the series it is retiring, including on a
+  // BullMQ retry that runs AFTER the row was retired. This is also what lets
+  // `deleteConsultationEvent` keep its deliberate mark-first / delete-second order.
+  const isWithdrawal = spec.method === 'CANCEL';
+  const row = isWithdrawal
+    ? await meetingCalendarEventsRepository.findByIdIncludingRetired({
+        id: spec.calendarEventId,
+        meetingId: spec.meetingId,
+        party: spec.party,
+      })
+    : await meetingCalendarEventsRepository.findLiveById({
+        id: spec.calendarEventId,
+        meetingId: spec.meetingId,
+        party: spec.party,
+      });
   if (row === undefined) {
-    return { ok: false, reason: 'calendar_event_not_live', sequence: null };
+    // ⚠ TWO DISTINCT LABELS ON PURPOSE. For a CANCEL the row does not EXIST AT ALL, which is a
+    // different operational fact from "the row was retired" — a dashboard that cannot tell them
+    // apart is the one thing this line has to be right about.
+    return {
+      ok: false,
+      reason: isWithdrawal ? 'calendar_event_not_found' : 'calendar_event_not_live',
+      sequence: null,
+    };
   }
   // F24 — the WHERE above already scopes by (meetingId, party); this is now a structurally
   // guaranteed no-op, kept as a cheap defence-in-depth assertion rather than removed outright.
   if (row.meetingId !== spec.meetingId || row.party !== spec.party) {
-    return { ok: false, reason: 'calendar_event_not_live', sequence: null };
+    return {
+      ok: false,
+      reason: isWithdrawal ? 'calendar_event_not_found' : 'calendar_event_not_live',
+      sequence: null,
+    };
   }
 
   // Step 4 — Ruling 1, re-checked at send: never both a provider event AND an ICS.
@@ -269,11 +317,20 @@ async function loadSendableState(
     return { ok: false, reason: 'provider_event_party', sequence: row.sequence };
   }
 
-  // Step 5 — the meeting must still be live. F30 (fix round 1, tech follow-up): `ended` is a
-  // skip alongside `cancelled` — a very late job must never REQUEST an invite for a past call.
-  // METHOD:CANCEL is BAL-476's.
+  // Step 5 — meeting liveness. F30 (fix round 1, tech follow-up): `ended` is a skip alongside
+  // `cancelled` — a very late job must never REQUEST an invite for a past call.
+  //
+  // BAL-476 GATE B — for a CANCEL, the ONLY skip is a meeting that does not exist: a withdrawal
+  // for a `cancelled` or `ended` meeting is precisely the message this ticket exists to send.
   const meeting = await meetingsRepository.findById(spec.meetingId);
-  if (meeting === undefined || meeting.status === 'cancelled' || meeting.status === 'ended') {
+  if (meeting === undefined) {
+    return {
+      ok: false,
+      reason: isWithdrawal ? 'meeting_not_found' : 'meeting_not_live',
+      sequence: row.sequence,
+    };
+  }
+  if (!isWithdrawal && (meeting.status === 'cancelled' || meeting.status === 'ended')) {
     return { ok: false, reason: 'meeting_not_live', sequence: row.sequence };
   }
 
@@ -316,7 +373,7 @@ async function sendClaimedInvite(input: {
     calendarEventId: row.id,
     recipient: spec.recipient,
     sequence: row.sequence,
-    method: CALENDAR_INVITE_METHOD,
+    method: spec.method,
     channel: 'email',
     claimToken,
   });
@@ -370,7 +427,7 @@ async function sendClaimedInvite(input: {
       smtpMessageId: info.messageId,
       calendarEventId: row.id,
       sequence: row.sequence,
-      method: CALENDAR_INVITE_METHOD,
+      method: spec.method,
       transition: spec.transition,
     });
     const fields = calendarInviteLogFields({ spec, contextType, sequence: row.sequence });
@@ -528,6 +585,7 @@ export async function deliverCalendarInvite(
     stampAt: now(),
     organizerAddress: transport.organizerAddress,
     recipientAddress,
+    method: spec.method,
   });
 
   // Step 8 — render the accompanying email body.
@@ -550,6 +608,7 @@ export async function deliverCalendarInvite(
     html,
     text,
     ics,
+    method: spec.method,
   });
 
   // Step 9 — claim, IMMEDIATELY before sending.

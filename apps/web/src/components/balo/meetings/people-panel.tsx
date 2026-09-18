@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSessionId } from '@daily-co/daily-react';
 import { toast } from 'sonner';
-import { Check, Link2, Mail, ShieldCheck, UserPlus } from 'lucide-react';
+import { Check, Link2, Mail, ShieldCheck, UserMinus, UserPlus } from 'lucide-react';
 import { MAX_LOBBY_QUEUE } from '@balo/shared/meetings';
 import { MEETING_PANEL_EVENTS, track } from '@/lib/analytics';
 import {
@@ -23,6 +23,7 @@ import { LobbyQueueRow } from './lobby-queue-row';
 import { PanelErrorCard, PanelSkeletonRows } from './panel-states';
 import { useGuestRosterPoll } from './use-guest-roster-poll';
 import { useDailyIdentities } from './use-daily-identities';
+import { removalStateFor, useGuestRemoval } from './use-guest-removal';
 
 /**
  * BAL-436 — the People panel: who is here, who is expected, and the host's admit/deny queue.
@@ -116,6 +117,10 @@ export function PeoplePanel({
         guests: payload?.guests ?? [],
         presentGuestIds,
         canHost: payload?.canHost ?? false,
+        // ⚠ THE FALLBACK GATES NOTHING. It is only reachable BEFORE the first poll resolves, and
+        // at that point `guests` is `[]`, so no row exists for it to mis-label. Once a payload
+        // arrives the server's own value is used, always.
+        viewerSide: payload?.viewerSide ?? 'client',
         nowMs: Date.now(),
       }),
     [payload, presentGuestIds]
@@ -205,6 +210,37 @@ export function PeoplePanel({
     [panels, markPending, refetch, meetingProps, report]
   );
 
+  const { requestRemoval, confirmDialog } = useGuestRemoval({
+    panels,
+    markPending,
+    refetch,
+    report,
+    meetingProps,
+  });
+
+  /**
+   * BAL-476 — the row-level Remove control, or `undefined`.
+   *
+   * ⚠ ABSENT RATHER THAN DISABLED when there is nothing to offer — the panel's slot rule. The
+   * two reasons it is absent are `canRemove === false` (a guest the OTHER party invited) and a
+   * `waiting` row (see `removalStateFor`).
+   */
+  const removeActionFor = useCallback(
+    (row: GuestRosterRow): React.JSX.Element | undefined => {
+      const state = removalStateFor(row.state);
+      if (!row.canRemove || state === null) return undefined;
+      return (
+        <RemoveGuestButton
+          displayName={row.guest.displayName}
+          onClick={() =>
+            requestRemoval({ guestId: row.guest.id, displayName: row.guest.displayName, state })
+          }
+        />
+      );
+    },
+    [requestRemoval]
+  );
+
   useQueueArrivalAnnouncement(roster.waiting, onAnnounce, payload !== null);
 
   const tileCount = identities.length;
@@ -265,7 +301,14 @@ export function PeoplePanel({
             if (row !== undefined) {
               // ⚠⚠ THE ROSTER ROW, WHICH CARRIES `isUnverified`. Never a bare participant row:
               // that is what made the badge vanish on arrival.
-              return <PeoplePanelRow key={identity.sessionId} row={row} />;
+              return (
+                <PeoplePanelRow
+                  key={identity.sessionId}
+                  row={row}
+                  isPending={pendingGuestIds.has(row.guest.id)}
+                  action={removeActionFor(row)}
+                />
+              );
             }
             return (
               <PresentParticipantRow
@@ -309,7 +352,12 @@ export function PeoplePanel({
         {roster.invited.length > 0 ? (
           <PanelSection label={`Invited · ${roster.invited.length}`}>
             {roster.invited.map((row) => (
-              <PeoplePanelRow key={row.guest.id} row={row} />
+              <PeoplePanelRow
+                key={row.guest.id}
+                row={row}
+                isPending={pendingGuestIds.has(row.guest.id)}
+                action={removeActionFor(row)}
+              />
             ))}
           </PanelSection>
         ) : null}
@@ -324,14 +372,10 @@ export function PeoplePanel({
                 key={row.guest.id}
                 row={row}
                 isPending={pendingGuestIds.has(row.guest.id)}
-                action={
-                  row.canResendLink ? (
-                    <ResendLinkButton
-                      displayName={row.guest.displayName}
-                      onClick={() => onResend(row.guest.id, row.guest.displayName)}
-                    />
-                  ) : undefined
-                }
+                // ⚠ ABSENT, NOT AN EMPTY WRAPPER, when the row has neither affordance — the
+                // panel's slot rule ("an unregistered slot renders NOTHING"). An unconditional
+                // `<div>` here rendered an empty flex box on every row that could offer neither.
+                action={notArrivedActionFor(row, onResend, removeActionFor)}
               />
             ))}
           </PanelSection>
@@ -342,6 +386,9 @@ export function PeoplePanel({
           <span>{CHANNEL_DISCLOSURE}</span>
         </p>
       </div>
+      {/* ⚠ ONE instance for the whole panel — the FOURTH caller of `MeetingConfirmDialog`,
+          never a fourth copy of the markup. */}
+      {confirmDialog}
     </MeetingSidePanel>
   );
 }
@@ -453,6 +500,63 @@ function ResendLinkButton({
       className="text-primary hover:bg-primary/10 focus-visible:ring-ring inline-flex min-h-11 shrink-0 items-center rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
     >
       Re-send link
+    </button>
+  );
+}
+
+/**
+ * BAL-476 — the "Admitted · not yet arrived" row's action slot: Re-send, Remove, both, or
+ * NOTHING.
+ *
+ * ⚠ `undefined` WHEN NEITHER APPLIES. Returning an empty wrapper instead would put a zero-content
+ * flex box in every such row — invisible, but a real node the slot rule says should not exist.
+ * ⚠ BOTH IN ONE `flex shrink-0 items-center gap-1.5` GROUP when they coexist, which is the
+ * pattern `LobbyQueueRow` already uses for its Deny/Admit pair.
+ */
+function notArrivedActionFor(
+  row: GuestRosterRow,
+  onResend: (guestId: string, displayName: string) => void,
+  removeActionFor: (row: GuestRosterRow) => React.JSX.Element | undefined
+): React.JSX.Element | undefined {
+  const remove = removeActionFor(row);
+  if (!row.canResendLink) return remove;
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      <ResendLinkButton
+        displayName={row.guest.displayName}
+        onClick={() => onResend(row.guest.id, row.guest.displayName)}
+      />
+      {remove}
+    </div>
+  );
+}
+
+/**
+ * BAL-476 (R3) — the row-level Remove control.
+ *
+ * ⚠ ICON-ONLY, WITH THE PERSON IN THE ACCESSIBLE NAME. Admit/Deny are a row's only two competing
+ * actions and have room to spare; Remove has to coexist with Re-send Link on a ≥360px panel, and
+ * icon-only keeps every section's row height and rhythm identical whichever actions apply.
+ *
+ * ⚠ `UserMinus`, NOT `UserX` — "take this person off the list", not "block", which is a different
+ * register.
+ *
+ * ⚠ OUTLINED AND DESTRUCTIVE-TINTED, NEVER FILLED. The FILLED destructive treatment is reserved
+ * for the confirm dialog's own button, so severity is stated ONCE, at the moment of consequence,
+ * not twice.
+ */
+function RemoveGuestButton({
+  displayName,
+  onClick,
+}: Readonly<{ displayName: string; onClick: () => void }>): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Remove ${displayName}`}
+      className="border-destructive/50 text-destructive hover:bg-destructive/10 focus-visible:ring-ring inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg border transition-colors focus-visible:ring-2 focus-visible:outline-none"
+    >
+      <UserMinus className="h-4 w-4" aria-hidden="true" />
     </button>
   );
 }

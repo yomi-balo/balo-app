@@ -1149,11 +1149,10 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   ],
 
   // That person, and only that person. Email only, same external path as the invite.
-  // ⚠ This is the WHOLE of the shipped removal notice — the AC's `METHOD:CANCEL` half is
-  // deferred to BAL-476. ⚠ CORRECTED (BAL-475): "no meeting has a calendar event to cancel"
-  // is now FALSE — BAL-475 ships Balo-organised `METHOD:REQUEST` ICS invites, so a removed
-  // guest's calendar entry exists and is stale until BAL-476's `METHOD:CANCEL` ships. See
-  // `MeetingGuestRemovedPayload`'s docblock for the verification.
+  // ⚠ SHIPPED IN FULL SINCE BAL-476: this email PLUS a `METHOD:CANCEL` to that same person,
+  // published by `removeGuest` on the `meeting.calendar_invite` event with
+  // `transition: 'guest_removed'`. Nothing is sent to the remaining party and no sequence is
+  // bumped (R2).
   'meeting.guest_removed': [
     {
       channel: 'email',

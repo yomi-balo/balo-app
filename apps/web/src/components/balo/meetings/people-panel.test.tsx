@@ -107,10 +107,17 @@ interface PanelFakes {
   readonly inviteGuests: ReturnType<typeof vi.fn>;
   readonly decideAdmission: ReturnType<typeof vi.fn>;
   readonly resendLink: ReturnType<typeof vi.fn>;
+  readonly removeGuest: ReturnType<typeof vi.fn>;
 }
 
 function fakes(
-  options: { guests?: readonly GuestForViewer[]; canHost?: boolean; failLoad?: boolean } = {}
+  options: {
+    guests?: readonly GuestForViewer[];
+    canHost?: boolean;
+    failLoad?: boolean;
+    /** BAL-476 — the viewer's own SERVER-resolved side. Defaults to the fixtures' party. */
+    viewerSide?: 'client' | 'expert';
+  } = {}
 ): PanelFakes {
   const loadGuests = vi.fn().mockResolvedValue(
     options.failLoad === true
@@ -120,6 +127,7 @@ function fakes(
           data: {
             guests: options.guests ?? [],
             canHost: options.canHost ?? false,
+            viewerSide: options.viewerSide ?? 'client',
             participantCount: 3,
             participantCap: 10,
           },
@@ -130,12 +138,14 @@ function fakes(
     .mockResolvedValue({ success: true, invitedCount: 1, participantCount: 4, participantCap: 10 });
   const decideAdmission = vi.fn().mockResolvedValue({ success: true });
   const resendLink = vi.fn().mockResolvedValue({ success: true });
+  const removeGuest = vi.fn().mockResolvedValue({ success: true });
 
   return {
     loadGuests,
     inviteGuests,
     decideAdmission,
     resendLink,
+    removeGuest,
     panels: {
       audience: 'member',
       joinLinkUrl: JOIN_LINK,
@@ -143,6 +153,7 @@ function fakes(
       inviteGuests,
       decideAdmission,
       resendLink,
+      removeGuest,
       files: {
         list: vi.fn(),
         requestUpload: vi.fn(),
@@ -802,6 +813,274 @@ describe('PeoplePanel — accessibility', () => {
     );
 
     await screen.findByText(/Waiting to join/);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+// ── BAL-476 (R3) — the Remove affordance ─────────────────────────────────────────────────
+
+describe('PeoplePanel — Remove (BAL-476)', () => {
+  const GUEST_ID = '11111111-2222-4333-8444-555555555555';
+
+  const inCallGuest = guest({
+    id: GUEST_ID,
+    name: 'Dana Okoro',
+    displayName: 'Dana Okoro',
+    admission: 'admitted',
+  });
+
+  /** Puts `inCallGuest` in the live Daily roster, so the row lands in "In the call". */
+  function putInCall(): void {
+    dailyState.participantIds = ['local-session', 'guest-session'];
+    dailyState.participants = {
+      'local-session': { user_name: 'You', owner: false },
+      'guest-session': {
+        user_name: 'Dana Okoro',
+        owner: false,
+        user_id: `g${GUEST_ID.replaceAll('-', '')}`,
+      },
+    };
+  }
+
+  it('⚠ renders on a SAME-PARTY row, naming the person in the accessible name', async () => {
+    renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'client' }));
+
+    expect(await screen.findByRole('button', { name: 'Remove Dana Okoro' })).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ ABSENT, NOT DISABLED, for a guest the OTHER party invited — the panel's slot rule. It is
+   * a courtesy that saves a guaranteed 404, never the enforcement.
+   */
+  it('⚠ is ABSENT on a CROSS-PARTY row', async () => {
+    renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'expert' }));
+
+    await screen.findByText(/Admitted · not yet arrived · 1/);
+    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+  });
+
+  it.each(['in_call', 'invited', 'not_arrived'] as const)(
+    'renders on the %s section',
+    async (state) => {
+      if (state === 'in_call') putInCall();
+      const row =
+        state === 'invited' ? { ...inCallGuest, admission: 'pre_admitted' as const } : inCallGuest;
+
+      renderPanel(fakes({ guests: [row], viewerSide: 'client' }));
+
+      expect(await screen.findByRole('button', { name: 'Remove Dana Okoro' })).toBeInTheDocument();
+    }
+  );
+
+  /**
+   * ⚠⚠ DELIBERATELY EXCLUDED FROM THE LOBBY QUEUE. Deny already produces the identical practical
+   * outcome and IS host-gated (`host_meetings`); Remove is gated on same-party membership alone,
+   * so offering both would let a non-host achieve through Remove what Deny reserves for hosts.
+   */
+  it('⚠⚠ is NEVER offered on a "Waiting to join" row', async () => {
+    renderPanel(fakes({ guests: [KNOCKER], canHost: true, viewerSide: 'client' }));
+
+    await screen.findByText(/Waiting to join · 1/);
+    expect(screen.getByRole('button', { name: /^Admit /i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Remove /i })).not.toBeInTheDocument();
+  });
+
+  it('⚠ VARIANT A for an in-call row — "disconnected right away"', async () => {
+    const user = userEvent.setup();
+    putInCall();
+    renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'client' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Remove Dana Okoro from this call?' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/will be disconnected right away/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove from call' })).toBeInTheDocument();
+  });
+
+  it('⚠ VARIANT B for a row that never joined — "nothing to disconnect"', async () => {
+    const user = userEvent.setup();
+    renderPanel(
+      fakes({
+        guests: [{ ...inCallGuest, admission: 'pre_admitted' }],
+        viewerSide: 'client',
+      })
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+
+    expect(
+      await screen.findByRole('heading', { name: "Withdraw Dana Okoro's invite?" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/hasn't joined yet, so there's nothing to disconnect/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Withdraw invite' })).toBeInTheDocument();
+  });
+
+  /** ⚠ R2 — nobody else is told anything, so the dialog must not imply otherwise. */
+  it('⚠ the confirm copy says NOTHING about the remaining party', async () => {
+    const user = userEvent.setup();
+    putInCall();
+    const container = renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'client' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await screen.findByRole('button', { name: 'Remove from call' });
+
+    const text = container.textContent ?? '';
+    expect(text).not.toMatch(/everyone will be notified/i);
+    for (const adversarial of ['kick', 'boot', 'ban']) {
+      expect(text.toLowerCase()).not.toContain(adversarial);
+    }
+  });
+
+  it('a success closes the dialog, toasts, tracks and refetches', async () => {
+    const user = userEvent.setup();
+    putInCall();
+    const fake = fakes({ guests: [inCallGuest], viewerSide: 'client' });
+    renderPanel(fake);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove from call' }));
+
+    await waitFor(() => expect(fake.removeGuest).toHaveBeenCalledWith(GUEST_ID));
+    expect(toast.success).toHaveBeenCalledWith('Dana Okoro has been removed from the call.');
+    expect(onAnnounce).toHaveBeenCalledWith('Dana Okoro has been removed from the call.');
+    expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_REMOVED, {
+      ...MEETING_PROPS,
+      state: 'in_call',
+      outcome: 'ok',
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('heading', { name: 'Remove Dana Okoro from this call?' })
+      ).not.toBeInTheDocument()
+    );
+    // ⚠ Two loads: the initial poll and the post-mutation refetch.
+    await waitFor(() => expect(fake.loadGuests.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('a withdrawal toasts the invite-shaped sentence and tracks its own state', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({
+      guests: [{ ...inCallGuest, admission: 'pre_admitted' }],
+      viewerSide: 'client',
+    });
+    renderPanel(fake);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await user.click(await screen.findByRole('button', { name: 'Withdraw invite' }));
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("Dana Okoro's invite has been withdrawn.")
+    );
+    expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_REMOVED, {
+      ...MEETING_PROPS,
+      state: 'invited',
+      outcome: 'ok',
+    });
+  });
+
+  /**
+   * ⚠⚠ ONLY A SUCCESS CLOSES THE DIALOG — the `endForEveryone` precedent. A failure keeps the
+   * person's place, with the toast on top and the button reset.
+   */
+  it('⚠ a FAILURE keeps the dialog open, toasts the error, and still refetches', async () => {
+    const user = userEvent.setup();
+    putInCall();
+    const fake = fakes({ guests: [inCallGuest], viewerSide: 'client' });
+    fake.removeGuest.mockResolvedValue({
+      success: false,
+      error: 'That person is no longer in the list.',
+    });
+    renderPanel(fake);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove from call' }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('That person is no longer in the list.')
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Remove Dana Okoro from this call?' })
+    ).toBeInTheDocument();
+    expect(track).toHaveBeenCalledWith(MEETING_PANEL_EVENTS.GUEST_REMOVED, {
+      ...MEETING_PROPS,
+      state: 'in_call',
+      outcome: 'failed',
+    });
+    await waitFor(() => expect(fake.loadGuests.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('⚠ Cancel dismisses without removing anything', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [inCallGuest], viewerSide: 'client' });
+    renderPanel(fake);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove from call' })).not.toBeInTheDocument()
+    );
+    expect(fake.removeGuest).not.toHaveBeenCalled();
+  });
+
+  it('⚠ no address reaches the dialog, even from a bait-carrying row', async () => {
+    const user = userEvent.setup();
+    const container = renderPanel(
+      fakes({
+        guests: [{ ...inCallGuest, inviteChannel: 'link', email: BAIT_EMAIL }],
+        viewerSide: 'client',
+      })
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await screen.findByRole('button', { name: 'Withdraw invite' });
+
+    expect(containsEmailAddress(container.textContent ?? '')).toBe(false);
+  });
+
+  /**
+   * ⚠ R-5 — ABSENT, NOT AN EMPTY WRAPPER. A row in "Admitted · not yet arrived" that can offer
+   * NEITHER affordance (cross-party, so no Remove; inside the grace period, so no Re-send) must
+   * render no action node at all — the panel slot rule. An unconditional `<div>` put an empty
+   * flex box in every such row.
+   */
+  it('⚠ a not-arrived row with NEITHER affordance renders no action wrapper at all', async () => {
+    const container = renderPanel(
+      fakes({
+        guests: [{ ...inCallGuest, admissionDecidedAt: new Date().toISOString() }],
+        viewerSide: 'expert',
+      })
+    );
+
+    await screen.findByText(/Admitted · not yet arrived · 1/);
+    expect(screen.queryByRole('button', { name: /^Remove /i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /re-send/i })).not.toBeInTheDocument();
+    expect(container.querySelectorAll('[class*="gap-1.5"]')).toHaveLength(0);
+  });
+
+  it('⚠ a not-arrived row with BOTH affordances groups them in one flex wrapper', async () => {
+    const container = renderPanel(
+      fakes({
+        guests: [{ ...inCallGuest, admissionDecidedAt: '2020-01-01T00:00:00.000Z' }],
+        viewerSide: 'client',
+      })
+    );
+
+    await screen.findByRole('button', { name: 'Remove Dana Okoro' });
+    expect(
+      screen.getByRole('button', { name: 'Re-send the join link to Dana Okoro' })
+    ).toBeInTheDocument();
+    expect(container.querySelectorAll('[class*="gap-1.5"]')).toHaveLength(1);
+  });
+
+  it('has no accessibility violations with the control rendered', async () => {
+    const container = renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'client' }));
+    await screen.findByRole('button', { name: 'Remove Dana Okoro' });
+
     expect(await axe(container)).toHaveNoViolations();
   });
 });

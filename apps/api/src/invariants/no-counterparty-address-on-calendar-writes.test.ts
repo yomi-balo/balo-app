@@ -6,6 +6,12 @@ import {
 } from '../services/consultation-events/calendar-context-registry.js';
 import { buildConsultationEvent } from '../services/consultation-events/event-mapper.js';
 import { buildCalendarInviteIcs } from '../services/calendar-invites/build-calendar-invite-ics.js';
+import {
+  CALENDAR_INVITE_METHODS,
+  CALENDAR_INVITE_METHOD_CANCEL,
+  CALENDAR_INVITE_METHOD_REQUEST,
+  type CalendarInviteMethod,
+} from '../notifications/calendar-invite-spec.js';
 import { icsAddressPropertyNames, unfoldIcs as unfold } from '../test/fixtures/ics-assertions.js';
 import {
   ALL_SOURCE_FILES,
@@ -423,36 +429,64 @@ describe('Layer 2b — a built calendar invite names exactly Balo and its one re
     stampAt: new Date('2026-08-20T00:00:00.000Z'),
     organizerAddress: 'no-reply@balo.test',
     recipientAddress: 'recipient@example.test',
+    method: CALENDAR_INVITE_METHOD_REQUEST,
   };
 
-  it('exactly one ATTENDEE line, RSVP=FALSE, whose value is the recipient address', () => {
-    const lines = unfold(buildCalendarInviteIcs(BENIGN_FIXTURE));
-    const attendeeLines = lines.filter((l) => l.startsWith('ATTENDEE'));
+  /**
+   * BAL-476 — ⚠ BOTH METHODS, ONE FIXTURE. The withdrawal is a NEW WIRE SHAPE out of the same
+   * builder, so the address rule has to be asserted OVER it, not merely survive it.
+   */
+  const BOTH_METHODS: readonly CalendarInviteMethod[] = [
+    CALENDAR_INVITE_METHOD_REQUEST,
+    CALENDAR_INVITE_METHOD_CANCEL,
+  ];
 
-    expect(attendeeLines).toHaveLength(1);
-    expect(attendeeLines[0]).toContain('RSVP=FALSE');
-    const [attendeeLine] = attendeeLines;
-    const lastColon = (attendeeLine ?? '').lastIndexOf(':');
-    expect((attendeeLine ?? '').slice(lastColon + 1)).toBe(BENIGN_FIXTURE.recipientAddress);
+  it('⚠ covers every method the builder accepts (guards a vacuous pass)', () => {
+    expect([...BOTH_METHODS].sort((a, b) => a.localeCompare(b))).toEqual(
+      [...CALENDAR_INVITE_METHODS].sort((a, b) => a.localeCompare(b))
+    );
+    expect(BOTH_METHODS).toHaveLength(2);
   });
 
-  it('every line containing "@" is EITHER ORGANIZER OR ATTENDEE — no third address-bearing property', () => {
-    const lines = unfold(buildCalendarInviteIcs(BENIGN_FIXTURE));
-    const propertyNames = icsAddressPropertyNames(lines);
+  it.each([...BOTH_METHODS])(
+    '%s — exactly one ATTENDEE line, RSVP=FALSE, whose value is the recipient address',
+    (method) => {
+      const lines = unfold(buildCalendarInviteIcs({ ...BENIGN_FIXTURE, method }));
+      const attendeeLines = lines.filter((l) => l.startsWith('ATTENDEE'));
 
-    expect([...new Set(propertyNames)].sort((a, b) => a.localeCompare(b))).toEqual([
-      'ATTENDEE',
-      'ORGANIZER',
-    ]);
-  });
+      expect(attendeeLines).toHaveLength(1);
+      expect(attendeeLines[0]).toContain('RSVP=FALSE');
+      const [attendeeLine] = attendeeLines;
+      const lastColon = (attendeeLine ?? '').lastIndexOf(':');
+      expect((attendeeLine ?? '').slice(lastColon + 1)).toBe(BENIGN_FIXTURE.recipientAddress);
+    }
+  );
 
-  it('no CONTACT, no BEGIN:VALARM, no X- custom property', () => {
-    const lines = unfold(buildCalendarInviteIcs(BENIGN_FIXTURE));
+  it.each([...BOTH_METHODS])(
+    '%s — every line containing "@" is EITHER ORGANIZER OR ATTENDEE — no third address-bearing property',
+    (method) => {
+      const lines = unfold(buildCalendarInviteIcs({ ...BENIGN_FIXTURE, method }));
+      const propertyNames = icsAddressPropertyNames(lines);
 
-    expect(lines.some((l) => l.startsWith('CONTACT'))).toBe(false);
-    expect(lines.some((l) => l.startsWith('BEGIN:VALARM'))).toBe(false);
-    expect(lines.some((l) => l.startsWith('X-'))).toBe(false);
-  });
+      expect(propertyNames.length).toBeGreaterThan(0);
+      expect([...new Set(propertyNames)].sort((a, b) => a.localeCompare(b))).toEqual([
+        'ATTENDEE',
+        'ORGANIZER',
+      ]);
+    }
+  );
+
+  it.each([...BOTH_METHODS])(
+    '%s — no CONTACT, no BEGIN:VALARM, no X- custom property',
+    (method) => {
+      const lines = unfold(buildCalendarInviteIcs({ ...BENIGN_FIXTURE, method }));
+
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines.some((l) => l.startsWith('CONTACT'))).toBe(false);
+      expect(lines.some((l) => l.startsWith('BEGIN:VALARM'))).toBe(false);
+      expect(lines.some((l) => l.startsWith('X-'))).toBe(false);
+    }
+  );
 });
 
 // ── Layer 3 / Scan B — the vendor's attendee TYPE is absent tree-wide ────────────────────

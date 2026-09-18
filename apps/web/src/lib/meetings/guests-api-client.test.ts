@@ -17,6 +17,7 @@ import {
   decideMeetingGuestAdmission,
   getMeetingGuests,
   inviteMeetingGuests,
+  removeMeetingGuest,
   resendMeetingGuestLink,
 } from './guests-api-client';
 
@@ -290,5 +291,90 @@ describe('resendMeetingGuestLink', () => {
       status: 409,
       code: 'guest_link_not_resendable',
     });
+  });
+});
+
+// ── BAL-476 (R3) — the removal hop ────────────────────────────────────────────────────────
+
+describe('removeMeetingGuest', () => {
+  it('⚠ issues a DELETE to the bare guest path with the viewer Bearer', async () => {
+    mockLoggedFetch.mockResolvedValue(response(204, {}));
+
+    const result = await removeMeetingGuest(MEETING_ID, GUEST_ID);
+
+    expect(mockLoggedFetch.mock.calls.at(-1)?.[0]).toBe(
+      `http://api.test/meetings/${MEETING_ID}/guests/${GUEST_ID}`
+    );
+    const init = lastInit();
+    expect(init.method).toBe('DELETE');
+    expect(init.headers.Authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+    // ⚠ NO BODY — the route takes its ids from the path.
+    expect(init.body).toBeUndefined();
+    expect(result).toEqual({ ok: true, data: {} });
+  });
+
+  it('⚠ a 204 (empty body) parses to `{}` rather than throwing', async () => {
+    mockLoggedFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+      headers: new Headers(),
+      text: async () => '',
+    } as unknown as Response);
+
+    await expect(removeMeetingGuest(MEETING_ID, GUEST_ID)).resolves.toEqual({ ok: true, data: {} });
+  });
+
+  it('maps a 404 to the plain guest_not_found literal (a cross-party attempt answers the same)', async () => {
+    mockLoggedFetch.mockResolvedValue(response(404, { error: 'guest_not_found' }));
+
+    await expect(removeMeetingGuest(MEETING_ID, GUEST_ID)).resolves.toEqual({
+      ok: false,
+      status: 404,
+      code: 'guest_not_found',
+    });
+  });
+
+  it('⚠ a transport throw becomes `status: 0` — the retryable sentinel — and never rejects', async () => {
+    mockLoggedFetch.mockRejectedValue(new Error('ECONNRESET'));
+
+    await expect(removeMeetingGuest(MEETING_ID, GUEST_ID)).resolves.toEqual({
+      ok: false,
+      status: 0,
+      code: 'request_failed',
+    });
+  });
+
+  it('fails closed with 401 when there is no session', async () => {
+    mockGetSession.mockResolvedValue({});
+
+    await expect(removeMeetingGuest(MEETING_ID, GUEST_ID)).resolves.toEqual({
+      ok: false,
+      status: 401,
+      code: 'unauthenticated',
+    });
+    expect(mockLoggedFetch).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ NO ADDRESS, NO NAME AND NO TOKEN IN THE LOG LINE — the path identifies the operation, and
+   * this function only ever HOLDS ids, so there is nothing else for it to leak.
+   */
+  it('⚠ logs the path and method only — no address, no name, no Bearer', async () => {
+    mockLoggedFetch.mockRejectedValue(new Error('ECONNRESET'));
+
+    await removeMeetingGuest(MEETING_ID, GUEST_ID);
+
+    const errorCalls = vi.mocked(log.error).mock.calls;
+    expect(errorCalls).toHaveLength(1);
+    const fields = errorCalls[0]?.[1] as Record<string, unknown>;
+    expect(Object.keys(fields).sort((a, b) => a.localeCompare(b))).toEqual([
+      'error',
+      'method',
+      'path',
+      'stack',
+    ]);
+    expect(fields.path).toBe(`/meetings/${MEETING_ID}/guests/${GUEST_ID}`);
+    expect(containsEmailAddress(JSON.stringify(fields))).toBe(false);
+    expect(JSON.stringify(fields)).not.toContain(ACCESS_TOKEN);
   });
 });

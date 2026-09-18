@@ -422,6 +422,8 @@ export async function meetingGuestRoutes(fastify: FastifyInstance): Promise<void
     reply.code(200).send({
       guests: result.guests,
       canHost: result.canHost,
+      // BAL-476 — the viewer's own side, server-resolved. See `ListGuestsResult`.
+      viewerSide: result.viewerSide,
       participantCount: result.participantCount,
       participantCap: result.participantCap,
     });

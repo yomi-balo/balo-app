@@ -682,6 +682,125 @@ describe('meetingCalendarEventsRepository reads', () => {
     ).toBeUndefined();
   });
 
+  /**
+   * ⚠⚠ BAL-476 (T-15) — THE WITHDRAWAL READ. The SAME `(id, meetingId, party)` triple that
+   * `findLiveById` now refuses must still resolve here, because a `METHOD:CANCEL` is by
+   * definition addressed to the series it is retiring — and on a BullMQ retry the delivery job
+   * runs AFTER `softDeleteByMeetingAndParty` has marked the row. This is the whole of "a
+   * REQUEST may only address LIVE state; a CANCEL may address RETIRED state", and the two
+   * answers differing on one identical input is what proves it.
+   */
+  it('findByIdIncludingRetired resolves a SOFT-DELETED row that findLiveById refuses, with the SAME uid and sequence', async () => {
+    const { meeting } = await meetingFactory();
+    const written = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+    const scope = { id: written.id, meetingId: meeting.id, party: 'client' } as const;
+
+    // Live: both reads agree.
+    expect(await meetingCalendarEventsRepository.findByIdIncludingRetired(scope)).toMatchObject({
+      id: written.id,
+      uid: written.uid,
+      sequence: 0,
+      deletedAt: null,
+    });
+
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(meeting.id, 'client');
+
+    // Retired: they diverge, and that divergence is the feature.
+    expect(await meetingCalendarEventsRepository.findLiveById(scope)).toBeUndefined();
+    const retired = await meetingCalendarEventsRepository.findByIdIncludingRetired(scope);
+    expect(retired).toMatchObject({
+      id: written.id,
+      // ⚠ The uid and sequence the withdrawal must carry: an ICS client matches a CANCEL to the
+      // entry it already holds by UID, so a fresh uid here would withdraw nothing at all.
+      uid: written.uid,
+      sequence: 0,
+    });
+    expect(retired?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  /** The tenancy scope is in the WHERE here too — the relax is on `deleted_at` and NOTHING else. */
+  it('findByIdIncludingRetired refuses an unknown id, and a wrong meetingId or party — retired or not', async () => {
+    const { meeting } = await meetingFactory();
+    const { meeting: otherMeeting } = await meetingFactory();
+    const written = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(meeting.id, 'client');
+
+    expect(
+      await meetingCalendarEventsRepository.findByIdIncludingRetired({
+        id: randomUUID(),
+        meetingId: meeting.id,
+        party: 'client',
+      })
+    ).toBeUndefined();
+    expect(
+      await meetingCalendarEventsRepository.findByIdIncludingRetired({
+        id: written.id,
+        meetingId: otherMeeting.id,
+        party: 'client',
+      })
+    ).toBeUndefined();
+    expect(
+      await meetingCalendarEventsRepository.findByIdIncludingRetired({
+        id: written.id,
+        meetingId: meeting.id,
+        party: 'expert',
+      })
+    ).toBeUndefined();
+  });
+
+  /**
+   * ⚠⚠ BAL-476 — "WITHDRAWAL IS TERMINAL", PINNED WITHOUT A `cancelled_at` COLUMN.
+   *
+   * The resolver pre-flight's constraint 5: terminality is already STRUCTURAL, so an
+   * attribution column with no writer must not be added for it. Three shipped properties carry
+   * it, and this test is the one place all three are asserted together:
+   *
+   *   1. `findByIdIncludingRetired` does not un-retire anything — the row it just handed a
+   *      CANCEL is still soft-deleted afterwards, so `findLiveById` still refuses it and NO
+   *      later `REQUEST` can be issued against that series.
+   *   2. A rebook INSERTs BESIDE the retired row (the `(meeting, party)` unique is partial on
+   *      `deleted_at IS NULL`) and draws a FRESH uid at sequence 0 — the withdrawn series is
+   *      never continued.
+   *   3. The uid unique is NON-partial, so the retired uid can never be re-used. That half has
+   *      its own probe — see "rejects reusing a uid — even a SOFT-DELETED row's (23505)" — and
+   *      is deliberately not re-asserted here.
+   */
+  it('a withdrawn series is TERMINAL: the read never un-retires it, and a rebook is a NEW series', async () => {
+    const { meeting } = await meetingFactory();
+    const withdrawn = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+    const scope = { id: withdrawn.id, meetingId: meeting.id, party: 'client' } as const;
+    await meetingCalendarEventsRepository.softDeleteByMeetingAndParty(meeting.id, 'client');
+
+    // The withdrawal reads the row — twice, as a retried job would.
+    await meetingCalendarEventsRepository.findByIdIncludingRetired(scope);
+    await meetingCalendarEventsRepository.findByIdIncludingRetired(scope);
+
+    expect(await meetingCalendarEventsRepository.findLiveById(scope)).toBeUndefined();
+    expect(await meetingCalendarEventsRepository.listLiveByMeeting(meeting.id)).toHaveLength(0);
+
+    const rebooked = await meetingCalendarEventsRepository.recordIcsDelivery({
+      meetingId: meeting.id,
+      party: 'client',
+    });
+
+    expect(rebooked.id).not.toBe(withdrawn.id);
+    expect(rebooked.uid).not.toBe(withdrawn.uid);
+    expect(rebooked.sequence).toBe(0);
+    expect(rebooked.deletedAt).toBeNull();
+    const all = await allRowsForMeeting(meeting.id);
+    expect(all).toHaveLength(2);
+    expect(all.filter((row) => row.deletedAt === null)).toHaveLength(1);
+  });
+
   it('listLiveByMeeting returns both parties in (created_at, id) order, excluding soft-deleted rows and other meetings', async () => {
     const seeded = await seedMeetingAndConnection();
     const { meeting: other } = await meetingFactory();

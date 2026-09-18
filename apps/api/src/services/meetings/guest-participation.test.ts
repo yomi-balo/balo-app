@@ -23,6 +23,8 @@ const {
   mockProjectRequestFindById,
   mockRelationshipFindById,
   mockPublishGuestAddedCalendarInvites,
+  mockPublishGuestRemovedCalendarWithdrawal,
+  mockEjectParticipants,
 } = vi.hoisted(() => ({
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockHasEngagementCapability: vi.fn(),
@@ -46,6 +48,8 @@ const {
   mockProjectRequestFindById: vi.fn(),
   mockRelationshipFindById: vi.fn(),
   mockPublishGuestAddedCalendarInvites: vi.fn(),
+  mockPublishGuestRemovedCalendarWithdrawal: vi.fn(),
+  mockEjectParticipants: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -104,6 +108,12 @@ vi.mock('./authorize-engagement-host.js', () => ({
 // sequence.
 vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
   publishGuestAddedCalendarInvites: mockPublishGuestAddedCalendarInvites,
+  publishGuestRemovedCalendarWithdrawal: mockPublishGuestRemovedCalendarWithdrawal,
+}));
+// BAL-476 (R4) — mocked at the PORT, exactly as `RoomTeardown` is elsewhere, so these tests
+// run with no network and no Daily account. `ejectParticipants` has its own unit tests.
+vi.mock('../daily/rooms.js', () => ({
+  dailyParticipantEjector: { ejectParticipants: mockEjectParticipants },
 }));
 /**
  * ⚠ `@balo/shared/meetings`, `@balo/shared/domains` AND `@balo/shared/authz` ARE DELIBERATELY
@@ -114,6 +124,7 @@ vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
  * of the three would leave the assertion asserting the stub.
  */
 
+import { dailyParticipantIdFor, dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import {
   decideGuestAdmission,
   inviteGuests,
@@ -1927,5 +1938,147 @@ describe('publishBestEffort — the swallow now answers WHICH happened (R-5)', (
         'failed'
       )
     ).resolves.toBe(false);
+  });
+});
+
+// ── BAL-476 (R3/R4) — the eject and the calendar withdrawal on removal ────────────────────
+
+describe('removeGuest — BAL-476', () => {
+  const LIVE_CLIENT_GUEST = {
+    id: GUEST_ID,
+    meetingId: MEETING_ID,
+    email: 'dana@northwind.example',
+    name: 'Dana',
+    party: 'client',
+    accessScope: 'engagement',
+    accessCount: 0,
+  };
+
+  /** The room name the meeting would legitimately carry — a pure function of the meeting id. */
+  const DERIVED_ROOM = dailyRoomNameForMeeting(MEETING_ID);
+
+  function provisionedGate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return gateOk({ meeting: meetingRow({ dailyRoomName: DERIVED_ROOM }), ...overrides });
+  }
+
+  function remove(): Promise<unknown> {
+    return removeGuest({ meetingId: MEETING_ID, guestId: GUEST_ID, actorUserId: USER_ID });
+  }
+
+  beforeEach(() => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(provisionedGate());
+    mockFindLiveById.mockResolvedValue(LIVE_CLIENT_GUEST);
+    mockRevoke.mockResolvedValue(LIVE_CLIENT_GUEST);
+    mockEjectParticipants.mockResolvedValue('ejected');
+    mockPublishGuestRemovedCalendarWithdrawal.mockResolvedValue(undefined);
+  });
+
+  /**
+   * ⚠⚠ THE participantId IS DERIVED, NOT LOOKED UP — byte-for-byte the `user_id` claim the
+   * guest's own meeting token carried. A lookup would have a "cannot resolve" case; this does
+   * not.
+   */
+  it('⚠ ejects by the DERIVED participantId, from the stamped room', async () => {
+    await expect(remove()).resolves.toEqual({ ok: true });
+
+    expect(mockEjectParticipants).toHaveBeenCalledTimes(1);
+    expect(mockEjectParticipants).toHaveBeenCalledWith(DERIVED_ROOM, [
+      dailyParticipantIdFor('guest', GUEST_ID),
+    ]);
+  });
+
+  it('⚠ ejects AFTER the revoke has committed — the credential is the authoritative act', async () => {
+    await remove();
+
+    const revokeOrder = mockRevoke.mock.invocationCallOrder[0] ?? 0;
+    const ejectOrder = mockEjectParticipants.mock.invocationCallOrder[0] ?? 0;
+    expect(revokeOrder).toBeGreaterThan(0);
+    expect(ejectOrder).toBeGreaterThan(revokeOrder);
+  });
+
+  it('never ejects when the revoke lost its race', async () => {
+    mockRevoke.mockResolvedValue(undefined);
+
+    await expect(remove()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockEjectParticipants).not.toHaveBeenCalled();
+    expect(mockPublishGuestRemovedCalendarWithdrawal).not.toHaveBeenCalled();
+  });
+
+  it('never ejects from an UNPROVISIONED meeting (dailyRoomName null)', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      gateOk({ meeting: meetingRow({ dailyRoomName: null }) })
+    );
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockEjectParticipants).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ A `ban: true` AGAINST A ROOM THIS MEETING MAY NOT OWN IS A WRITE INTO SOMEBODY ELSE'S
+   * CALL. The same guard the two destructive room-delete paths apply.
+   */
+  it('⚠ REFUSES to eject when the stamped room name disagrees with the derived one', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      gateOk({ meeting: meetingRow({ dailyRoomName: 'balo-somebody-elses-room' }) })
+    );
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockEjectParticipants).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a THROWING ejector still returns ok, still emails, still tracks, still withdraws', async () => {
+    mockEjectParticipants.mockRejectedValue(new Error('daily 500'));
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(publishedPayloads('meeting.guest_removed')).toHaveLength(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_removed', expect.anything());
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⚠⚠ COMPOSED FROM THE REVOKED ROW, AND **NEVER** WITH THE ADDRESS. U1 forbids an address on
+   * the wire; the email channel resolves it at delivery time from the guest id.
+   */
+  it('⚠ publishes the withdrawal from the REVOKED row, with ids only and NO email', async () => {
+    await remove();
+
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledTimes(1);
+    const [input] = mockPublishGuestRemovedCalendarWithdrawal.mock.calls[0] as [
+      Record<string, unknown>,
+    ];
+    expect(input).toEqual({
+      meetingId: MEETING_ID,
+      party: 'client',
+      guestId: GUEST_ID,
+      contextType: 'case',
+    });
+    expect(Object.values(input).some((value) => String(value).includes('@'))).toBe(false);
+    expect('email' in input).toBe(false);
+    expect('recipientEmail' in input).toBe(false);
+  });
+
+  it('takes the withdrawal party from the REVOKED row, not from the pre-revoke read', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      provisionedGate({
+        side: 'expert',
+        subject: { contextType: 'project_kickoff', contextId: ENGAGEMENT_ID },
+      })
+    );
+    mockFindLiveById.mockResolvedValue({ ...LIVE_CLIENT_GUEST, party: 'expert' });
+    mockRevoke.mockResolvedValue({ ...LIVE_CLIENT_GUEST, party: 'expert' });
+
+    await remove();
+
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledWith(
+      expect.objectContaining({ party: 'expert', contextType: 'project_kickoff' }),
+      expect.anything()
+    );
+  });
+
+  it('a throwing withdrawal publish does NOT undo a committed revocation', async () => {
+    mockPublishGuestRemovedCalendarWithdrawal.mockRejectedValue(new Error('contract violation'));
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_removed', expect.anything());
   });
 });

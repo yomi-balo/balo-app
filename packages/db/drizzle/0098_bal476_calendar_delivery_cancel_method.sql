@@ -1,0 +1,2 @@
+ALTER TABLE "meeting_calendar_deliveries" DROP CONSTRAINT "meeting_calendar_delivery_method_known";--> statement-breakpoint
+ALTER TABLE "meeting_calendar_deliveries" ADD CONSTRAINT "meeting_calendar_delivery_method_known" CHECK ("meeting_calendar_deliveries"."method" IN ('REQUEST','CANCEL'));

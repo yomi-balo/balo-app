@@ -37,8 +37,21 @@ export type MeetingCallLayout = 'prejoin' | 'waiting' | 'spotlight' | 'gallery' 
 /** Whether the layout moved because the headcount changed or because a person chose it. */
 export type MeetingCallLayoutSource = 'auto' | 'manual';
 
-/** Why the local participant is no longer in the room. */
-export type MeetingCallLeaveReason = 'self' | 'host_ended' | 'error';
+/**
+ * Why the local participant is no longer in the room.
+ *
+ * ⚠⚠ BAL-476 (R5 amended) ADDED `'removed'` AND `'access_ended'`, AND THEY ARE THE POINT OF THE
+ * BREAKDOWN: daily-js reports a host-ended eject and a targeted removal IDENTICALLY, so before
+ * this every removal was logged as `host_ended` and "was this call left because the host ended
+ * it, or because one person was removed?" had no answer. The frame resolves the real cause with
+ * one server round-trip on the terminal transition and fires this event ONCE, with the RESOLVED
+ * value. `access_ended` is the honest "we could not determine why" bucket.
+ *
+ * ⚠ `'resolving'` IS DELIBERATELY **NOT** ON THIS UNION. It is a frame state, not a leave
+ * reason, and putting it here would push a non-terminal value into `meeting_call_left.reason`
+ * and create a bogus PostHog breakdown bucket.
+ */
+export type MeetingCallLeaveReason = 'self' | 'host_ended' | 'error' | 'removed' | 'access_ended';
 
 /**
  * WHICH grant check failed — never the offending value.

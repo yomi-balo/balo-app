@@ -240,6 +240,7 @@ export {
   type MeetingPanelDecisionOutcome,
   type MeetingPanelInviteOutcome,
   type MeetingPanelOutcome,
+  type MeetingPanelRemovalState,
   type MeetingPanelFileOutcome,
   type MeetingPanelSizeBucket,
   type MeetingPanelMessageOutcome,

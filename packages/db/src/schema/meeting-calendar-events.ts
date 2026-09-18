@@ -41,7 +41,13 @@ import { timestamps, softDelete } from './helpers';
  * ── BAL-475: THE ICS IS DELIVERED FROM THIS ROW ───────────────────────────────────────
  * An `ics` row is no longer a recorded condition only: BAL-475 builds and sends a
  * Balo-organised ICS (METHOD:REQUEST) from it, reading `uid` and `sequence` below at send
- * time. Cancellation (`METHOD:CANCEL`) is BAL-476. Each send is ledgered per RECIPIENT in
+ * time. BAL-476 SHIPPED the withdrawal (`METHOD:CANCEL`) from the SAME row and the SAME `uid`
+ * and `sequence` — it withdraws the series it retires, so it reads through
+ * `findByIdIncludingRetired` and a soft-deleted row is still addressable by a CANCEL (never by
+ * a REQUEST). ⚠ THAT NEEDS NO `cancelled_at` COLUMN, and adding one would be wrong: withdrawal
+ * is terminal STRUCTURALLY — the NON-partial `uid` unique means a uid is never reused, the
+ * partial `(meeting, party)` unique lets a rebook INSERT a fresh series beside the retired row,
+ * and every re-issue path filters `deleted_at IS NULL`. Each send is ledgered per RECIPIENT in
  * `meeting_calendar_deliveries` — this row has no per-recipient grain (one party row fans
  * out to its member AND that side's admitted guests), no sequence history and no outcome.
  *

@@ -86,6 +86,7 @@ import {
 } from './meeting-guest-emails.js';
 import {
   MeetingCalendarInviteEmail,
+  TRANSITION_CHROME,
   type CalendarInviteEmailAudience,
   type CalendarInviteEmailTransition,
   type MeetingCalendarInviteEmailProps,
@@ -2171,10 +2172,10 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         : { ...base, audience: 'member', memberJoinUrl: (data.memberJoinUrl as string) ?? '' };
     return {
       component: React.createElement(MeetingCalendarInviteEmail, props),
-      subject:
-        transition === 'rescheduled'
-          ? `Updated calendar invite: ${sanitizeSubjectTitle(summary)}`
-          : `Calendar invite: ${sanitizeSubjectTitle(summary)}`,
+      // BAL-476 — the subject prefix comes off the SAME table the body's chrome does, so a
+      // withdrawal can never ship under an invite subject. The `?? 'booked'` defaulting above
+      // is what keeps the untyped `data` seam total.
+      subject: `${TRANSITION_CHROME[transition].previewPrefix}: ${sanitizeSubjectTitle(summary)}`,
     };
   },
 

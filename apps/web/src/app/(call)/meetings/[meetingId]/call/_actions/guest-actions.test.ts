@@ -7,6 +7,7 @@ const {
   mockInviteMeetingGuests,
   mockDecideMeetingGuestAdmission,
   mockResendMeetingGuestLink,
+  mockRemoveMeetingGuest,
 } = vi.hoisted(() => ({
   mockRequireUser: vi.fn(),
   mockRequireOnboardedUser: vi.fn(),
@@ -14,6 +15,7 @@ const {
   mockInviteMeetingGuests: vi.fn(),
   mockDecideMeetingGuestAdmission: vi.fn(),
   mockResendMeetingGuestLink: vi.fn(),
+  mockRemoveMeetingGuest: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -26,6 +28,7 @@ vi.mock('@/lib/meetings/guests-api-client', () => ({
   inviteMeetingGuests: mockInviteMeetingGuests,
   decideMeetingGuestAdmission: mockDecideMeetingGuestAdmission,
   resendMeetingGuestLink: mockResendMeetingGuestLink,
+  removeMeetingGuest: mockRemoveMeetingGuest,
 }));
 
 import { log } from '@/lib/logging';
@@ -35,6 +38,7 @@ import { getMeetingGuestsAction } from './get-meeting-guests';
 import { inviteMeetingGuestsAction } from './invite-meeting-guests';
 import { decideGuestAdmissionAction } from './decide-guest-admission';
 import { resendGuestLinkAction } from './resend-guest-link';
+import { removeGuestAction } from './remove-guest';
 
 /**
  * BAL-436 — the four in-call guest Server Actions.
@@ -68,7 +72,13 @@ beforeEach(() => {
   mockRequireOnboardedUser.mockResolvedValue({ id: 'user-1' });
   mockGetMeetingGuests.mockResolvedValue({
     ok: true,
-    data: { guests: [], canHost: true, participantCount: 3, participantCap: 10 },
+    data: {
+      guests: [],
+      canHost: true,
+      viewerSide: 'client',
+      participantCount: 3,
+      participantCap: 10,
+    },
   });
   mockInviteMeetingGuests.mockResolvedValue({
     ok: true,
@@ -79,6 +89,7 @@ beforeEach(() => {
     ok: true,
     data: { id: GUEST_ID, expiresAt: '2026-09-08T11:00:00.000Z' },
   });
+  mockRemoveMeetingGuest.mockResolvedValue({ ok: true, data: {} });
 });
 
 describe('getMeetingGuestsAction — ⚠ the READ, and it must stay read-only', () => {
@@ -503,5 +514,98 @@ describe('resendGuestLinkAction', () => {
       resendGuestLinkAction({ meetingId: MEETING_ID, guestId: 'nope' })
     ).resolves.toMatchObject({ success: false });
     expect(mockResendMeetingGuestLink).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-476 (R3) — the removal action ─────────────────────────────────────────────────────
+
+describe('removeGuestAction', () => {
+  it('⚠ MUTATING ⇒ `requireOnboardedUser()`', async () => {
+    await removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID });
+
+    expect(mockRequireOnboardedUser).toHaveBeenCalledTimes(1);
+    expect(mockRequireUser).not.toHaveBeenCalled();
+  });
+
+  it('forwards the ids and reports success', async () => {
+    await expect(removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID })).resolves.toEqual({
+      success: true,
+    });
+    expect(mockRemoveMeetingGuest).toHaveBeenCalledWith(MEETING_ID, GUEST_ID);
+  });
+
+  /**
+   * ⚠⚠ A REJECTED SESSION MUST NOT REVOKE A CREDENTIAL. Short-circuiting BEFORE the hop is the
+   * difference between "nothing happened" and "somebody's access just died for an
+   * unauthenticated caller".
+   */
+  it('⚠ a rejected session returns the fixed copy and never reaches the api', async () => {
+    mockRequireOnboardedUser.mockRejectedValue(new Error('no session'));
+
+    await expect(removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID })).resolves.toEqual({
+      success: false,
+      error: GUEST_ACTION_COPY.unauthenticated,
+    });
+    expect(mockRemoveMeetingGuest).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a malformed id without reaching the api', async () => {
+    await expect(
+      removeGuestAction({ meetingId: 'not-a-uuid', guestId: GUEST_ID })
+    ).resolves.toEqual({ success: false, error: 'Invalid request.' });
+    expect(mockRemoveMeetingGuest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['guest_not_found', 404, GUEST_ACTION_COPY.guest_not_found],
+    ['meeting_not_found', 404, GUEST_ACTION_COPY.meeting_not_found],
+    ['unauthenticated', 401, GUEST_ACTION_COPY.unauthenticated],
+  ])('maps the %s literal through guestActionCopyFor', async (code, status, copy) => {
+    mockRemoveMeetingGuest.mockResolvedValue({ ok: false, status, code });
+
+    await expect(removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID })).resolves.toEqual({
+      success: false,
+      error: copy,
+    });
+  });
+
+  it('maps the transport sentinel to the reachability copy', async () => {
+    mockRemoveMeetingGuest.mockResolvedValue({ ok: false, status: 0, code: 'request_failed' });
+
+    const result = await removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID });
+
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.error.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * ⚠ NO `outcome` FIELD, DELIBERATELY (R7). A lost race answers the plain `guest_not_found`, so
+   * the client has nothing to split on and the dimension would be `'failed'` in every case.
+   */
+  it('⚠ the failure shape carries NO `outcome` field', async () => {
+    mockRemoveMeetingGuest.mockResolvedValue({ ok: false, status: 404, code: 'guest_not_found' });
+
+    const result = await removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID });
+
+    expect(Object.keys(result).sort((a, b) => a.localeCompare(b))).toEqual(['error', 'success']);
+  });
+
+  it('⚠ no address, name or token reaches any log line, on either arm', async () => {
+    mockRemoveMeetingGuest.mockResolvedValue({
+      ok: false,
+      status: 404,
+      // The bait: an api answer shaped like prose carrying an address.
+      code: `guest_not_found ${EMAIL}`,
+    });
+
+    await removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID });
+    mockRemoveMeetingGuest.mockResolvedValue({ ok: true, data: {} });
+    await removeGuestAction({ meetingId: MEETING_ID, guestId: GUEST_ID });
+
+    const infoCalls = vi.mocked(log.info).mock.calls;
+    expect(infoCalls).toHaveLength(1);
+    expect(infoCalls[0]?.[1]).toEqual({ meetingId: MEETING_ID, guestId: GUEST_ID });
+    expect(containsEmailAddress(JSON.stringify(vi.mocked(log.info).mock.calls))).toBe(false);
   });
 });

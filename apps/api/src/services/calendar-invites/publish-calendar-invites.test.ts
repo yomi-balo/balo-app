@@ -36,6 +36,8 @@ const {
   publishBookingCalendarInvites,
   publishRescheduleCalendarInvites,
   publishGuestAddedCalendarInvites,
+  publishCancellationCalendarWithdrawals,
+  publishGuestRemovedCalendarWithdrawal,
 } = await import('./publish-calendar-invites.js');
 
 function fakeLog() {
@@ -364,5 +366,206 @@ describe('publishGuestAddedCalendarInvites', () => {
       expect.objectContaining({ reason: 'no_calendar_row' }),
       'Calendar invite not enqueued'
     );
+  });
+});
+
+// ── BAL-476 — the two withdrawal fan-outs ─────────────────────────────────────────────────
+
+describe('publishCancellationCalendarWithdrawals', () => {
+  it('one METHOD:CANCEL per (row × recipient), at each row CURRENT sequence, with exact keys', async () => {
+    mockResolveRecipients.mockImplementation(({ party }: { party: string }) =>
+      Promise.resolve(
+        party === 'client'
+          ? [
+              { kind: 'user', userId: 'booker-1' },
+              { kind: 'guest', guestId: 'guest-1' },
+            ]
+          : [{ kind: 'guest', guestId: 'guest-2' }]
+      )
+    );
+    const log = fakeLog();
+
+    await publishCancellationCalendarWithdrawals(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: 'audit-cancel-1',
+        expertProfileId: 'ep-1',
+        calendarEvents: [
+          { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 4 },
+          { id: 'row-expert', party: 'expert', deliveryMode: 'provider_event', sequence: 4 },
+        ],
+      } as never,
+      log
+    );
+
+    expect(mockPublish).toHaveBeenCalledTimes(3);
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'cancelled:audit-cancel-1:client:user:booker-1',
+      calendarInvite: {
+        meetingId: MEETING_ID,
+        party: 'client',
+        calendarEventId: 'row-client',
+        method: 'CANCEL',
+        transition: 'cancelled',
+        recipient: { kind: 'user', userId: 'booker-1' },
+        contextType: 'case',
+      },
+    });
+    // ⚠ THE EXPERT-PARTY `provider_event` ROW STILL FANS OUT — to that side's guests. This is
+    // exactly why the delivery path's calendar-row read had to become retired-tolerant.
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'cancelled:audit-cancel-1:expert:guest:guest-2',
+      calendarInvite: {
+        meetingId: MEETING_ID,
+        party: 'expert',
+        calendarEventId: 'row-expert',
+        method: 'CANCEL',
+        transition: 'cancelled',
+        recipient: { kind: 'guest', guestId: 'guest-2' },
+        contextType: 'case',
+      },
+    });
+  });
+
+  it('⚠ NEVER WRITES `sequence` — the mocked repository exposes no write method at all', async () => {
+    mockResolveRecipients.mockResolvedValue([{ kind: 'user', userId: 'booker-1' }]);
+
+    await publishCancellationCalendarWithdrawals(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: 'audit-cancel-1',
+        expertProfileId: null,
+        calendarEvents: [{ id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 7 }],
+      } as never,
+      fakeLog()
+    );
+
+    const { meetingCalendarEventsRepository } = await import('@balo/db');
+    expect(Object.keys(meetingCalendarEventsRepository)).toEqual(['listLiveByMeeting']);
+    const [, published] = mockPublish.mock.calls[0] as [string, { calendarInvite: unknown }];
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(published.calendarInvite).toMatchObject({ method: 'CANCEL', transition: 'cancelled' });
+  });
+
+  it('skips an empty row set and never publishes', async () => {
+    const log = fakeLog();
+    await publishCancellationCalendarWithdrawals(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: 'audit-cancel-1',
+        expertProfileId: null,
+        calendarEvents: [],
+      },
+      log
+    );
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'no_calendar_row' }),
+      'Calendar invite not enqueued'
+    );
+  });
+
+  it('never throws when the recipient read fails, and still covers the other row', async () => {
+    mockResolveRecipients
+      .mockRejectedValueOnce(new Error('db down'))
+      .mockResolvedValueOnce([{ kind: 'user', userId: 'expert-1' }]);
+    const log = fakeLog();
+
+    await expect(
+      publishCancellationCalendarWithdrawals(
+        {
+          meetingId: MEETING_ID,
+          cancelAuditId: 'audit-cancel-1',
+          expertProfileId: 'ep-1',
+          calendarEvents: [
+            { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 0 },
+            { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+          ],
+        } as never,
+        log
+      )
+    ).resolves.toBeUndefined();
+
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('publishGuestRemovedCalendarWithdrawal', () => {
+  /**
+   * ⚠⚠ R2 — THE TEST THAT SATISFIES "the remaining party's behaviour on guest removal is decided,
+   * documented, and covered". Exactly ONE publish, to the removed person, at the side's CURRENT
+   * sequence. Nothing to the remaining party, nothing to the other side, no bump.
+   */
+  it('⚠ sends to the removed person and to NOBODY ELSE', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 5 },
+      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 5 },
+    ]);
+    const log = fakeLog();
+
+    await publishGuestRemovedCalendarWithdrawal(
+      { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
+      log
+    );
+
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'guest_removed:guest-1',
+      calendarInvite: {
+        meetingId: MEETING_ID,
+        party: 'client',
+        calendarEventId: 'row-client',
+        method: 'CANCEL',
+        transition: 'guest_removed',
+        recipient: { kind: 'guest', guestId: 'guest-1' },
+        contextType: 'case',
+      },
+    });
+    // ⚠ NO recipient resolution at all — the removed guest is named directly, and the resolver
+    // (which reads the LIVE guest index) could not find them anyway.
+    expect(mockResolveRecipients).not.toHaveBeenCalled();
+  });
+
+  it('⚠ NEVER WRITES `sequence` — the mocked repository exposes no write method at all', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 5 },
+    ]);
+    await publishGuestRemovedCalendarWithdrawal(
+      { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
+      fakeLog()
+    );
+    const { meetingCalendarEventsRepository } = await import('@balo/db');
+    expect(Object.keys(meetingCalendarEventsRepository)).toEqual(['listLiveByMeeting']);
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips when the removed guest side has no live row', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+    ]);
+    const log = fakeLog();
+
+    await publishGuestRemovedCalendarWithdrawal(
+      { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
+      log
+    );
+
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'no_calendar_row' }),
+      'Calendar invite not enqueued'
+    );
+  });
+
+  it('never throws when the row read fails', async () => {
+    mockListLiveByMeeting.mockRejectedValue(new Error('db down'));
+    await expect(
+      publishGuestRemovedCalendarWithdrawal(
+        { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
+        fakeLog()
+      )
+    ).resolves.toBeUndefined();
+    expect(mockPublish).not.toHaveBeenCalled();
   });
 });

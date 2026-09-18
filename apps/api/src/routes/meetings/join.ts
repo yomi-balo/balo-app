@@ -616,7 +616,12 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
    * Always `200` on success, with a discriminated `state`:
    *   · `admitted` + `grant` — a `pre_admitted` invitee (mints on the FIRST call, so there is
    *     no visible token step) or a lobby visitor a host has now admitted;
-   *   · `waiting`  — still `pending`. ⚠ NO GRANT, and nothing was minted, tracked or written.
+   *   · `waiting`  — still `pending`. ⚠ NO GRANT, and nothing was minted, tracked or written;
+   *   · `live`     — BAL-476's `probe: true` answer: the meeting and the token are both live.
+   *     ⚠ NO GRANT, and NOTHING is minted, tracked or written — the probe asks this route to do
+   *     strictly LESS than a bare call does. It exists so an ejected guest's terminal card can
+   *     read the refusal their credential now produces (`404` = removed, `409` = the host ended
+   *     it) instead of guessing; daily-js reports both causes identically.
    *
    * ⚠ A DENIED TOKEN NEVER GETS ITS OWN STATE. `findLiveByTokenHash` filters `denied` out
    * entirely, so it resolves to `undefined` → `meeting_not_found` → the client's generic
@@ -642,11 +647,20 @@ export async function meetingJoinRoutes(fastify: FastifyInstance): Promise<void>
     const result = await joinMeetingAsGuest({
       meetingId: params.meetingId,
       rawGuestToken: body.guestToken,
+      // BAL-476 — see `JoinMeetingAsGuestInput.probe`. ⚠ It only ever makes this route do LESS,
+      // and it is read AFTER both rate-limit windows above, so a probe costs a visitor budget
+      // exactly like a poll does.
+      probe: body.probe === true,
     });
     if (!result.ok) {
       // ⚠ NO TOKEN, NOT EVEN A PREFIX, IN THE ROUTE LOG — the service already logged a hash
       // prefix where one is useful, and this context reaches a different log line.
       sendJoinError(reply, result.code, { route: 'guest-join', meetingId: params.meetingId });
+      return;
+    }
+    if (result.state === 'live') {
+      // BAL-476 — the probe's answer. No grant, because nothing was minted.
+      reply.code(200).send({ state: 'live' });
       return;
     }
     if (result.state === 'waiting') {

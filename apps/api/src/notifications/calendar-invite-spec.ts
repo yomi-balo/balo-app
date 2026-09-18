@@ -11,8 +11,21 @@ import { BOOKABLE_CONTEXT_TYPES } from '@balo/shared/meetings';
  * address at DELIVERY time, from the id here, and never before.
  */
 
-export const CALENDAR_INVITE_METHOD = 'REQUEST' as const;
-export type CalendarInviteMethod = typeof CALENDAR_INVITE_METHOD;
+/**
+ * BAL-476 — the closed set of RFC 5546 iTIP methods Balo issues. `REQUEST` ISSUES a series;
+ * `CANCEL` WITHDRAWS it.
+ *
+ * ⚠ THE OLD SINGLE-LITERAL `CALENDAR_INVITE_METHOD` IS GONE ON PURPOSE. A const of that name
+ * that silently meant REQUEST is a trap now that a second method exists — nothing may build a
+ * method literal at a call site; publishers read it from
+ * {@link CALENDAR_INVITE_TRANSITION_METHOD}.
+ */
+export const CALENDAR_INVITE_METHODS = ['REQUEST', 'CANCEL'] as const;
+export type CalendarInviteMethod = (typeof CALENDAR_INVITE_METHODS)[number];
+
+/** Named name-for-name so no call site has to guess which literal it means. */
+export const CALENDAR_INVITE_METHOD_REQUEST = 'REQUEST' as const;
+export const CALENDAR_INVITE_METHOD_CANCEL = 'CANCEL' as const;
 
 /**
  * The wire channel a calendar invite always rides on — V1 is EMAIL ONLY. Declared here, OUTSIDE
@@ -24,8 +37,39 @@ export type CalendarInviteMethod = typeof CALENDAR_INVITE_METHOD;
 export const CALENDAR_INVITE_CHANNEL = 'email' as const;
 export type CalendarInviteChannel = typeof CALENDAR_INVITE_CHANNEL;
 
-export const CALENDAR_INVITE_TRANSITIONS = ['booked', 'guest_added', 'rescheduled'] as const;
+export const CALENDAR_INVITE_TRANSITIONS = [
+  'booked',
+  'guest_added',
+  'rescheduled',
+  'cancelled',
+  'guest_removed',
+] as const;
 export type CalendarInviteTransition = (typeof CALENDAR_INVITE_TRANSITIONS)[number];
+
+/**
+ * BAL-476 — ⚠ THE ONE DEFINITION of "which transitions issue and which withdraw". A `Record`
+ * keyed on the transition union, so a SIXTH transition is a compile error here rather than a
+ * silent REQUEST. Publishers read the method from this map; nothing builds a method literal.
+ */
+export const CALENDAR_INVITE_TRANSITION_METHOD: Record<
+  CalendarInviteTransition,
+  CalendarInviteMethod
+> = {
+  booked: CALENDAR_INVITE_METHOD_REQUEST,
+  guest_added: CALENDAR_INVITE_METHOD_REQUEST,
+  rescheduled: CALENDAR_INVITE_METHOD_REQUEST,
+  cancelled: CALENDAR_INVITE_METHOD_CANCEL,
+  guest_removed: CALENDAR_INVITE_METHOD_CANCEL,
+};
+
+/**
+ * ⚠ THE ONE PREDICATE for "is this transition a withdrawal". Never a second
+ * `=== 'cancelled' || === 'guest_removed'` anywhere — two spellings of one rule is how they
+ * disagree.
+ */
+export function isCalendarInviteWithdrawal(transition: CalendarInviteTransition): boolean {
+  return CALENDAR_INVITE_TRANSITION_METHOD[transition] === CALENDAR_INVITE_METHOD_CANCEL;
+}
 
 export type CalendarInviteParty = 'client' | 'expert';
 
@@ -72,7 +116,9 @@ function readRecipient(value: unknown): CalendarInviteRecipient | undefined {
 }
 
 function isCalendarInviteMethod(value: unknown): value is CalendarInviteMethod {
-  return value === CALENDAR_INVITE_METHOD;
+  return (
+    typeof value === 'string' && (CALENDAR_INVITE_METHODS as readonly string[]).includes(value)
+  );
 }
 
 function isCalendarInviteTransition(value: unknown): value is CalendarInviteTransition {
@@ -108,6 +154,11 @@ export function readCalendarInviteSpec(value: unknown): CalendarInviteSpec | und
   if (typeof calendarEventId !== 'string' || calendarEventId.length === 0) return undefined;
   if (!isCalendarInviteMethod(method)) return undefined;
   if (!isCalendarInviteTransition(transition)) return undefined;
+  // BAL-476 — ⚠ COHERENCE, not just membership. A spec claiming `{ method: 'REQUEST',
+  // transition: 'cancelled' }` (or the reverse) is MALFORMED, not slightly wrong: it would
+  // re-issue an invite the write meant to withdraw. Same posture as the ambiguous-recipient
+  // rejection above.
+  if (CALENDAR_INVITE_TRANSITION_METHOD[transition] !== method) return undefined;
   if (contextType !== null && !isCalendarInviteContextType(contextType)) return undefined;
   const readRecipientValue = readRecipient(recipient);
   if (readRecipientValue === undefined) return undefined;

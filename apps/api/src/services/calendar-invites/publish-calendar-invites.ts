@@ -2,6 +2,8 @@ import * as Sentry from '@sentry/node';
 import {
   meetingCalendarEventsRepository,
   meetingContextsRepository,
+  type MeetingCalendarDeliveryMode,
+  type MeetingCalendarEvent,
   type MeetingCalendarSequenceBump,
 } from '@balo/db';
 import { createLogger } from '@balo/shared/logging';
@@ -9,8 +11,9 @@ import { BOOKABLE_CONTEXT_TYPES, selectPrimaryMeetingContext } from '@balo/share
 import type { FastifyBaseLogger } from 'fastify';
 import { notificationEvents } from '../../notifications/index.js';
 import {
-  CALENDAR_INVITE_METHOD,
+  CALENDAR_INVITE_TRANSITION_METHOD,
   isCalendarInviteParty,
+  type CalendarInviteMethod,
   type CalendarInviteParty,
   type CalendarInviteRecipient,
   type CalendarInviteTransition,
@@ -21,8 +24,12 @@ import { calendarInviteLogFields } from './log-fields.js';
 import { resolveCalendarInviteRecipients } from './resolve-calendar-invite-recipients.js';
 
 /**
- * BAL-475 — publishes ONE `meeting.calendar_invite` per (row × recipient). Post-commit, so ALL
- * THREE FUNCTIONS HERE NEVER THROW: the transition they follow already committed.
+ * BAL-475 / BAL-476 — publishes ONE `meeting.calendar_invite` per (row × recipient). Post-commit,
+ * so EVERY FUNCTION HERE NEVER THROWS: the transition they follow already committed.
+ *
+ * ⚠ BAL-476 — NOTHING IN THIS FILE WRITES A METHOD LITERAL. Every caller reads it from
+ * `CALENDAR_INVITE_TRANSITION_METHOD`, the one definition of "which transitions issue and which
+ * withdraw", so a new transition cannot be a silent REQUEST.
  *
  * F6 (fix round 1, R5/S9/R23) — EVERY DB READ IN THIS FILE IS ITS OWN try/catch, not just the
  * publish call. A transient read failure (the initial `listLiveByMeeting`, one row's
@@ -52,6 +59,9 @@ async function publishOne(input: {
   readonly party: CalendarInviteParty;
   readonly calendarEventId: string;
   readonly transition: CalendarInviteTransition;
+  /** ⚠ Always `CALENDAR_INVITE_TRANSITION_METHOD[transition]` — never a literal at the call
+   *  site. `readCalendarInviteSpec` rejects an incoherent pair outright. */
+  readonly method: CalendarInviteMethod;
   readonly recipient: CalendarInviteRecipient;
   readonly correlationId: string;
   readonly contextType: (typeof BOOKABLE_CONTEXT_TYPES)[number] | null;
@@ -62,7 +72,7 @@ async function publishOne(input: {
     meetingId: input.meetingId,
     party: input.party,
     calendarEventId: input.calendarEventId,
-    method: CALENDAR_INVITE_METHOD,
+    method: input.method,
     transition: input.transition,
     recipient: input.recipient,
     contextType: input.contextType,
@@ -125,6 +135,76 @@ function logSkip(input: {
 }
 
 /**
+ * One row's recipient list, with the read's own try/catch and the empty-list skip.
+ *
+ * ⚠ `null` MEANS "SKIP THIS ROW" — the caller `continue`s. Extracted (BAL-476) because the
+ * booking, reschedule and cancellation fan-outs need byte-identical behaviour here and three
+ * copies of it is how they drift apart (and how the duplication gate fails).
+ */
+async function resolveRowRecipients(input: {
+  readonly meetingId: string;
+  readonly party: CalendarInviteParty;
+  readonly deliveryMode: MeetingCalendarDeliveryMode;
+  readonly expertProfileId: string | null;
+  readonly log: CalendarInviteLogger;
+}): Promise<CalendarInviteRecipient[] | null> {
+  const { meetingId, party, deliveryMode, expertProfileId, log } = input;
+  let recipients: CalendarInviteRecipient[];
+  try {
+    recipients = await resolveCalendarInviteRecipients({
+      meetingId,
+      party,
+      deliveryMode,
+      expertProfileId,
+    });
+  } catch (error) {
+    logReadFailure({ log, meetingId, party, step: 'resolveCalendarInviteRecipients', error });
+    return null;
+  }
+  if (recipients.length === 0) {
+    logSkip({
+      log,
+      meetingId,
+      party,
+      reason: deliveryMode === 'provider_event' ? 'provider_event_party' : 'no_member_recipient',
+    });
+    return null;
+  }
+  return recipients;
+}
+
+/**
+ * ONE primary-context read, for LOGS ONLY — never re-derives what should be sent. F6: its own
+ * try/catch; F5 additionally narrows the result to the closed bookable set the spec's
+ * `contextType` field accepts (a `retainer_checkin` primary — holder-bearing but not bookable —
+ * is unreachable for a meeting that has a calendar row, but the TYPE is wider, so this degrades
+ * to `null` rather than asserting).
+ *
+ * ⚠ SHARED BY THE RESCHEDULE AND CANCELLATION FAN-OUTS (BAL-476), and that is exactly why
+ * neither of their callers has to supply a `contextType`: the BAL-540 close cascade has no
+ * context in hand and still gets a correctly-labelled log line.
+ */
+async function resolveContextTypeForLogs(
+  meetingId: string,
+  log: CalendarInviteLogger
+): Promise<(typeof BOOKABLE_CONTEXT_TYPES)[number] | null> {
+  try {
+    const contexts = await meetingContextsRepository.listByMeeting(meetingId);
+    const primary = selectPrimaryMeetingContext(contexts);
+    return primary.ok ? toBookableContextType(primary.context.contextType) : null;
+  } catch (error) {
+    logReadFailure({
+      log,
+      meetingId,
+      party: null,
+      step: 'listByMeeting (contextType, logs only)',
+      error,
+    });
+    return null;
+  }
+}
+
+/**
  * The booking fan-out: every LIVE calendar row of the meeting, fanned out to its resolved
  * recipients, each at that row's SEQUENCE (0 at booking).
  */
@@ -166,34 +246,14 @@ export async function publishBookingCalendarInvites(
     }
     const party = row.party;
 
-    let recipients: CalendarInviteRecipient[];
-    try {
-      recipients = await resolveCalendarInviteRecipients({
-        meetingId: input.meetingId,
-        party,
-        deliveryMode: row.deliveryMode,
-        expertProfileId: input.expertProfileId,
-      });
-    } catch (error) {
-      logReadFailure({
-        log,
-        meetingId: input.meetingId,
-        party,
-        step: 'resolveCalendarInviteRecipients',
-        error,
-      });
-      continue;
-    }
-    if (recipients.length === 0) {
-      logSkip({
-        log,
-        meetingId: input.meetingId,
-        party,
-        reason:
-          row.deliveryMode === 'provider_event' ? 'provider_event_party' : 'no_member_recipient',
-      });
-      continue;
-    }
+    const recipients = await resolveRowRecipients({
+      meetingId: input.meetingId,
+      party,
+      deliveryMode: row.deliveryMode,
+      expertProfileId: input.expertProfileId,
+      log,
+    });
+    if (recipients === null) continue;
 
     for (const recipient of recipients) {
       await publishOne({
@@ -201,6 +261,7 @@ export async function publishBookingCalendarInvites(
         party,
         calendarEventId: row.id,
         transition: 'booked',
+        method: CALENDAR_INVITE_TRANSITION_METHOD.booked,
         recipient,
         correlationId: calendarInviteCorrelationId({
           transition: 'booked',
@@ -237,56 +298,17 @@ export async function publishRescheduleCalendarInvites(
     return;
   }
 
-  // ONE primary-context read, for LOGS ONLY — never re-derives what should be sent. F6: its
-  // own try/catch already existed; F5 additionally narrows the result to the closed bookable
-  // set the spec's `contextType` field accepts (a `retainer_checkin` primary — holder-bearing
-  // but not bookable — is unreachable for a meeting that has a calendar row, but the TYPE is
-  // wider, so this degrades to `null` rather than asserting).
-  let contextType: (typeof BOOKABLE_CONTEXT_TYPES)[number] | null = null;
-  try {
-    const contexts = await meetingContextsRepository.listByMeeting(input.meetingId);
-    const primary = selectPrimaryMeetingContext(contexts);
-    contextType = primary.ok ? toBookableContextType(primary.context.contextType) : null;
-  } catch (error) {
-    logReadFailure({
-      log,
-      meetingId: input.meetingId,
-      party: null,
-      step: 'listByMeeting (contextType, logs only)',
-      error,
-    });
-    contextType = null;
-  }
+  const contextType = await resolveContextTypeForLogs(input.meetingId, log);
 
   for (const row of input.calendarEvents) {
-    let recipients: CalendarInviteRecipient[];
-    try {
-      recipients = await resolveCalendarInviteRecipients({
-        meetingId: input.meetingId,
-        party: row.party,
-        deliveryMode: row.deliveryMode,
-        expertProfileId: input.expertProfileId,
-      });
-    } catch (error) {
-      logReadFailure({
-        log,
-        meetingId: input.meetingId,
-        party: row.party,
-        step: 'resolveCalendarInviteRecipients',
-        error,
-      });
-      continue;
-    }
-    if (recipients.length === 0) {
-      logSkip({
-        log,
-        meetingId: input.meetingId,
-        party: row.party,
-        reason:
-          row.deliveryMode === 'provider_event' ? 'provider_event_party' : 'no_member_recipient',
-      });
-      continue;
-    }
+    const recipients = await resolveRowRecipients({
+      meetingId: input.meetingId,
+      party: row.party,
+      deliveryMode: row.deliveryMode,
+      expertProfileId: input.expertProfileId,
+      log,
+    });
+    if (recipients === null) continue;
 
     for (const recipient of recipients) {
       await publishOne({
@@ -294,6 +316,7 @@ export async function publishRescheduleCalendarInvites(
         party: row.party,
         calendarEventId: row.id,
         transition: 'rescheduled',
+        method: CALENDAR_INVITE_TRANSITION_METHOD.rescheduled,
         recipient,
         correlationId: calendarInviteCorrelationId({
           transition: 'rescheduled',
@@ -349,6 +372,7 @@ export async function publishGuestAddedCalendarInvites(
       party: input.party,
       calendarEventId: row.id,
       transition: 'guest_added',
+      method: CALENDAR_INVITE_TRANSITION_METHOD.guest_added,
       recipient,
       correlationId: calendarInviteCorrelationId({ transition: 'guest_added', guestId }),
       contextType,
@@ -356,4 +380,132 @@ export async function publishGuestAddedCalendarInvites(
       log,
     });
   }
+}
+
+/**
+ * BAL-476 — THE CANCELLATION FAN-OUT: one `METHOD:CANCEL` to every recipient of every row the
+ * CALLER read, at each row's CURRENT `sequence` (no bump — `sequence` keeps its single writer,
+ * `_shared/calendar-sequence.ts`, which is what makes "no double increment on retry" structural).
+ *
+ * NEVER THROWS. The rows are the caller's read (see `withdrawMeetingCalendarProjection`) so the
+ * publish and the retire act on ONE SNAPSHOT — and so the publish can run BEFORE the retire.
+ *
+ * ⚠ AN EXPERT-PARTY `provider_event` ROW STILL FANS OUT, to that side's admitted GUESTS:
+ * `resolveCalendarInviteRecipients` includes the expert MEMBER only for an `ics` row but includes
+ * that side's guests whatever the mode. That is precisely why the delivery path's calendar-row
+ * gate had to become retired-tolerant rather than the vendor delete being reordered.
+ */
+export async function publishCancellationCalendarWithdrawals(
+  input: {
+    readonly meetingId: string;
+    /** The `meeting.cancelled` audit row id — per WRITE, never per state. */
+    readonly cancelAuditId: string;
+    readonly expertProfileId: string | null;
+    readonly calendarEvents: readonly MeetingCalendarEvent[];
+  },
+  log: CalendarInviteLogger = defaultLog
+): Promise<void> {
+  if (input.calendarEvents.length === 0) {
+    logSkip({ log, meetingId: input.meetingId, party: null, reason: 'no_calendar_row' });
+    return;
+  }
+
+  const contextType = await resolveContextTypeForLogs(input.meetingId, log);
+
+  for (const row of input.calendarEvents) {
+    if (!isCalendarInviteParty(row.party)) {
+      // Unreachable under `meeting_calendar_event_party_two_sided` — a database that disagrees
+      // with its own CHECK must not be published from.
+      log.error(
+        { meetingId: input.meetingId, calendarEventId: row.id, party: row.party },
+        'meeting_calendar_events row holds a party the two-sided CHECK forbids — skipping'
+      );
+      continue;
+    }
+    const party = row.party;
+
+    const recipients = await resolveRowRecipients({
+      meetingId: input.meetingId,
+      party,
+      deliveryMode: row.deliveryMode,
+      expertProfileId: input.expertProfileId,
+      log,
+    });
+    if (recipients === null) continue;
+
+    for (const recipient of recipients) {
+      await publishOne({
+        meetingId: input.meetingId,
+        party,
+        calendarEventId: row.id,
+        transition: 'cancelled',
+        method: CALENDAR_INVITE_TRANSITION_METHOD.cancelled,
+        recipient,
+        correlationId: calendarInviteCorrelationId({
+          transition: 'cancelled',
+          cancelAuditId: input.cancelAuditId,
+          party,
+          recipient,
+        }),
+        contextType,
+        sequence: row.sequence,
+        log,
+      });
+    }
+  }
+}
+
+/**
+ * BAL-476 (R2) — THE GUEST-REMOVAL WITHDRAWAL: ONE `METHOD:CANCEL` to the removed person, at the
+ * side's CURRENT sequence.
+ *
+ * ⚠⚠ NOTHING IS SENT TO ANYONE ELSE AND NO SEQUENCE IS BUMPED. R2 departs from the inherited AC's
+ * "SEQUENCE incremented" deliberately: `sequence` has exactly one writer, inside `updateSchedule`'s
+ * transaction, and a second writer out here would forfeit the structural no-double-increment
+ * property. It is RFC-legal — no ICS Balo issues lists any other person, so a per-recipient
+ * withdrawal invalidates nobody else's copy — and BAL-475 made the same departure for guest-ADD.
+ */
+export async function publishGuestRemovedCalendarWithdrawal(
+  input: {
+    readonly meetingId: string;
+    readonly party: CalendarInviteParty;
+    readonly guestId: string;
+    readonly contextType: string;
+  },
+  log: CalendarInviteLogger = defaultLog
+): Promise<void> {
+  let rows: Awaited<ReturnType<typeof meetingCalendarEventsRepository.listLiveByMeeting>>;
+  try {
+    rows = await meetingCalendarEventsRepository.listLiveByMeeting(input.meetingId);
+  } catch (error) {
+    logReadFailure({
+      log,
+      meetingId: input.meetingId,
+      party: input.party,
+      step: 'listLiveByMeeting',
+      error,
+    });
+    return;
+  }
+  const row = rows.find((candidate) => candidate.party === input.party);
+  if (row === undefined) {
+    logSkip({ log, meetingId: input.meetingId, party: input.party, reason: 'no_calendar_row' });
+    return;
+  }
+
+  await publishOne({
+    meetingId: input.meetingId,
+    party: input.party,
+    calendarEventId: row.id,
+    transition: 'guest_removed',
+    method: CALENDAR_INVITE_TRANSITION_METHOD.guest_removed,
+    recipient: { kind: 'guest', guestId: input.guestId },
+    correlationId: calendarInviteCorrelationId({
+      transition: 'guest_removed',
+      guestId: input.guestId,
+    }),
+    contextType: toBookableContextType(input.contextType),
+    sequence: row.sequence,
+    log,
+  });
 }

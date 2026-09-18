@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { GuestForViewer } from '@balo/shared/meetings';
+import type { GuestForViewer, MeetingGuestSide } from '@balo/shared/meetings';
 import { buildGuestRoster } from './guest-roster';
 import { ADMITTED_NOT_ARRIVED_GRACE_MS } from './guests-poll';
 
@@ -29,12 +29,18 @@ function guest(overrides: Partial<GuestForViewer> & { id: string }): GuestForVie
 
 function build(
   guests: readonly GuestForViewer[],
-  options: { present?: readonly string[]; canHost?: boolean; nowMs?: number } = {}
+  options: {
+    present?: readonly string[];
+    canHost?: boolean;
+    nowMs?: number;
+    viewerSide?: MeetingGuestSide;
+  } = {}
 ) {
   return buildGuestRoster({
     guests,
     presentGuestIds: new Set(options.present ?? []),
     canHost: options.canHost ?? true,
+    viewerSide: options.viewerSide ?? 'client',
     nowMs: options.nowMs ?? NOW,
   });
 }
@@ -273,5 +279,64 @@ describe('buildGuestRoster — the whole payload at once', () => {
     const roster = build([]);
 
     expect(roster).toEqual({ inCall: [], invited: [], notArrived: [], waiting: [] });
+  });
+});
+
+// ── BAL-476 — `canRemove` ─────────────────────────────────────────────────────────────────
+
+describe('buildGuestRoster — canRemove (BAL-476)', () => {
+  /** One guest in each of the four sections, split across both parties. */
+  const EVERY_SECTION: readonly GuestForViewer[] = [
+    guest({ id: 'in-call-client', admission: 'admitted', party: 'client' }),
+    guest({ id: 'in-call-expert', admission: 'admitted', party: 'expert' }),
+    guest({ id: 'invited-client', admission: 'pre_admitted', party: 'client' }),
+    guest({ id: 'invited-expert', admission: 'pre_admitted', party: 'expert' }),
+    guest({ id: 'not-arrived-client', admission: 'admitted', party: 'client' }),
+    guest({ id: 'not-arrived-expert', admission: 'admitted', party: 'expert' }),
+    guest({ id: 'waiting-client', admission: 'pending', party: 'client' }),
+    guest({ id: 'waiting-expert', admission: 'pending', party: 'expert' }),
+  ];
+
+  function allRows(viewerSide: MeetingGuestSide) {
+    const roster = build(EVERY_SECTION, {
+      present: ['in-call-client', 'in-call-expert'],
+      canHost: true,
+      viewerSide,
+    });
+    return [...roster.inCall, ...roster.invited, ...roster.notArrived, ...roster.waiting];
+  }
+
+  it.each(['client', 'expert'] as const)(
+    '⚠ viewerSide %s: canRemove is true IFF guest.party === viewerSide, across ALL FOUR sections',
+    (viewerSide) => {
+      const rows = allRows(viewerSide);
+
+      // ⚠ A LENGTH ASSERTION SO THE PREDICATE BELOW CANNOT PASS VACUOUSLY.
+      expect(rows).toHaveLength(EVERY_SECTION.length);
+      expect(rows.filter((row) => row.canRemove)).toHaveLength(EVERY_SECTION.length / 2);
+      for (const row of rows) {
+        expect(row.canRemove).toBe(row.guest.party === viewerSide);
+      }
+    }
+  );
+
+  it('⚠ a `waiting` row still CARRIES canRemove — the section simply never renders the control', () => {
+    const roster = build([guest({ id: 'w1', admission: 'pending', party: 'client' })], {
+      canHost: true,
+      viewerSide: 'client',
+    });
+
+    expect(roster.waiting).toHaveLength(1);
+    expect(roster.waiting[0]?.canRemove).toBe(true);
+  });
+
+  it('⚠ canRemove is INDEPENDENT of canHost — the two gates are different rules', () => {
+    const roster = build([guest({ id: 'g1', admission: 'pre_admitted', party: 'client' })], {
+      canHost: false,
+      viewerSide: 'client',
+    });
+
+    expect(roster.invited).toHaveLength(1);
+    expect(roster.invited[0]?.canRemove).toBe(true);
   });
 });

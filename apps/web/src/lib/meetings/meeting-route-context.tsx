@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useMemo } from 'react';
 import type { MeetingCallLeaveReason } from '@balo/analytics/events';
+import type { GuestExitCause } from './guest-exit-cause';
 import type { MeetingClockState } from '@/components/balo/meetings/meeting-clock-slot';
 import type { BackTo } from './back-to-context';
 import type { EndMeetingResult } from './meeting-state';
@@ -105,6 +106,24 @@ export interface MeetingRouteValue {
    * **BAL-389 takes this seam over without touching the frame.**
    */
   readonly onExit?: (reason: MeetingExitReason) => void;
+  /**
+   * BAL-476 (R5 amended) — **"WHY AM I OUT OF THIS CALL?", ASKED OF THE SERVER** on the terminal
+   * ejection transition.
+   *
+   * ⚠⚠ A CALLBACK, NEVER THE TOKEN. Both guest mounts close over their own raw guest token and
+   * hand the frame a zero-argument resolver, exactly as they already do for `panels`. The raw
+   * credential must never reach `meeting-frame-impl.tsx` — it would then be in the call frame's
+   * props, in its React tree, and in any future error boundary's captured state.
+   *
+   * ⚠⚠ `undefined` ON THE MEMBER MOUNT, STRUCTURALLY — a member navigates away via `onExit` and
+   * never renders the terminal card at all. An ABSENT resolver means "keep the shipped
+   * `host_ended` behaviour", which is exactly what the member route wants.
+   *
+   * ⚠ IT MUST NEVER REJECT. `resolveGuestExitReasonAction` resolves every failure to
+   * `'access_ended'`; the frame additionally `.catch`es to the same value, so a rejection can
+   * only ever produce the VAGUER card, never a wrong specific one.
+   */
+  readonly resolveExitReason?: () => Promise<GuestExitCause>;
   /**
    * BAL-436 — **THE SIDE-PANEL REGISTRATION.**
    *
@@ -246,6 +265,7 @@ export function MeetingRouteContextProvider({
   contextNoun,
   waiting,
   onExit,
+  resolveExitReason,
   panels = null,
   waitingPhase = 'pre-start',
   waitingFacts = UNKNOWN_WAITING_FACTS,
@@ -260,6 +280,12 @@ export function MeetingRouteContextProvider({
   contextNoun: string;
   waiting: WaitingSubject | null;
   onExit?: (reason: MeetingExitReason) => void;
+  /**
+   * BAL-476 — ⚠ ABSENT ON THE MEMBER MOUNT, and absence means "keep the shipped `host_ended`
+   * behaviour". ⚠ THE CALLER MUST MEMOISE IT — it joins the provider's `useMemo` dependency
+   * list, so an inline arrow would churn the context identity on every render.
+   */
+  resolveExitReason?: () => Promise<GuestExitCause>;
   /**
    * ⚠ DEFAULTS TO `null` — NO PANEL SLOT. A mount that wants the panel has to say so, which
    * keeps "absent" the fail-closed default rather than something a caller can forget INTO.
@@ -288,6 +314,7 @@ export function MeetingRouteContextProvider({
       contextNoun,
       waiting,
       onExit,
+      resolveExitReason,
       panels,
       waitingPhase,
       waitingFacts,
@@ -302,6 +329,7 @@ export function MeetingRouteContextProvider({
       contextNoun,
       waiting,
       onExit,
+      resolveExitReason,
       panels,
       waitingPhase,
       waitingFacts,

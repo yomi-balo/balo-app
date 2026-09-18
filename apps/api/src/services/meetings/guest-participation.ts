@@ -30,6 +30,7 @@ import {
   projectRequestsRepository,
   requestExpertRelationshipsRepository,
   usersRepository,
+  type Meeting,
   type MeetingGuest,
   type MeetingGuestPublic,
   type MeetingStatus,
@@ -46,6 +47,8 @@ import {
   MAX_MEETING_PARTICIPANTS,
   RESERVED_BASE_PARTICIPANTS,
   canonicalGuestEmail,
+  dailyParticipantIdFor,
+  dailyRoomNameForMeeting,
   projectGuestForViewer,
   type GuestAccessScopeLabel,
   type GuestForViewer,
@@ -55,7 +58,11 @@ import {
 } from '@balo/shared/meetings';
 import { ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
 import { notificationEvents } from '../../notifications/index.js';
-import { publishGuestAddedCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
+import {
+  publishGuestAddedCalendarInvites,
+  publishGuestRemovedCalendarWithdrawal,
+} from '../calendar-invites/publish-calendar-invites.js';
+import { dailyParticipantEjector } from '../daily/rooms.js';
 import { mintGuestInviteToken } from '../../lib/guest-token.js';
 import { hasEngagementCapability } from './authorize-engagement-host.js';
 import {
@@ -131,7 +138,19 @@ export type InviteGuestsResult =
   | { ok: false; code: GuestServiceErrorCode };
 
 export type ListGuestsResult =
-  | ({ ok: true; guests: GuestForViewer[]; canHost: boolean } & GuestRosterCounts)
+  | ({
+      ok: true;
+      guests: GuestForViewer[];
+      canHost: boolean;
+      /**
+       * BAL-476 — the viewer's own resolved side, straight off the tenancy gate
+       * (`authorized.side`). ⚠ SERVER-COMPUTED, NEVER RE-DERIVED CLIENT-SIDE. Same shape and
+       * same provenance as `canHost`; it is what lets the roster show a Remove control only on
+       * the viewer's OWN side. It gates nothing — a cross-party removal still answers
+       * `guest_not_found`, identical to a nonexistent id.
+       */
+      viewerSide: MeetingGuestSide;
+    } & GuestRosterCounts)
   | { ok: false; code: GuestServiceErrorCode };
 
 export type RemoveGuestResult = { ok: true } | { ok: false; code: GuestServiceErrorCode };
@@ -896,9 +915,61 @@ export async function listGuests(input: {
       )
     ),
     canHost,
+    viewerSide: authorized.side,
     participantCount: seatCount,
     participantCap: MAX_MEETING_PARTICIPANTS,
   };
+}
+
+/**
+ * BAL-476 (R4) — get a removed guest OUT OF THE LIVE ROOM, best-effort.
+ *
+ * ⚠⚠ BEST-EFFORT AND NON-FATAL. The credential revocation is the AUTHORITATIVE act; a vendor
+ * failure must never fail the removal. Same discipline as `end-meeting.ts`'s room teardown and
+ * `meeting-availability.ts`'s `tearDownRoomBestEffort` — log at `error`, because the RATE is the
+ * health signal, not any single failure.
+ *
+ * ⚠ THE participantId IS DERIVED, NEVER LOOKED UP. `dailyParticipantIdFor('guest', guestId)` is
+ * total and non-throwing and produces byte-for-byte the `user_id` claim the guest's own meeting
+ * token carried (BAL-132 mints it with exactly this call), so there is no "cannot resolve" case.
+ * The only two skips are structural and both below.
+ *
+ * ⚠ THE STAMPED ROOM NAME IS CHECKED AGAINST THE DERIVED ONE — the same guard the two destructive
+ * room-delete paths apply. A `ban: true` against a room this meeting may not own is a write into
+ * somebody else's call.
+ *
+ * ⚠ NO EMAIL, NO NAME, NO TOKEN in any log line here — ids and the room name only.
+ */
+async function ejectGuestBestEffort(meeting: Meeting, guestId: string): Promise<void> {
+  const roomName = meeting.dailyRoomName;
+  // A `provisioned: false` meeting is a real outcome of `POST /meetings`. Nothing to eject from.
+  if (roomName === null) return;
+
+  const expected = dailyRoomNameForMeeting(meeting.id);
+  if (roomName !== expected) {
+    log.error(
+      { meetingId: meeting.id, guestId, expected, stamped: roomName },
+      'Stamped Daily room name disagrees with the derived one — REFUSING to eject from a room this meeting may not own'
+    );
+    return;
+  }
+
+  try {
+    await dailyParticipantEjector.ejectParticipants(roomName, [
+      dailyParticipantIdFor('guest', guestId),
+    ]);
+  } catch (error) {
+    log.error(
+      {
+        meetingId: meeting.id,
+        guestId,
+        roomName,
+        errorName: error instanceof Error ? error.name : 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Daily eject failed after a guest removal — the credential is revoked regardless'
+    );
+  }
 }
 
 /**
@@ -964,6 +1035,10 @@ export async function removeGuest(input: {
     return { ok: false, code: 'guest_not_found' };
   }
 
+  // BAL-476 (R4) — AFTER the revoke has committed. Remove means gone NOW, not "stops resolving
+  // on the next click". Best-effort; see `ejectGuestBestEffort`.
+  await ejectGuestBestEffort(authorized.meeting, revoked.id);
+
   try {
     await notificationEvents.publish('meeting.guest_removed', {
       correlationId: revoked.id,
@@ -980,6 +1055,37 @@ export async function removeGuest(input: {
         error: error instanceof Error ? error.message : String(error),
       },
       'Failed to publish guest-removed notification — the revocation itself is committed'
+    );
+  }
+
+  // BAL-476 — the METHOD:CANCEL to the removed person, and to NOBODY ELSE (R2).
+  //
+  // ⚠ COMPOSED FROM THE REVOKED ROW (`revoked.party`, `revoked.id`), never by re-reading a live
+  // index — the row is already revoked and soft-deleted by now, so no live read would find it.
+  // ⚠⚠ `revoked.email` IS DELIBERATELY NOT THREADED IN. U1 forbids an address on the wire and
+  // `MeetingCalendarInvitePayload` has no field for one: the email channel resolves the address
+  // at DELIVERY time from the guest id.
+  // ⚠ Wrapped even though `publishGuestRemovedCalendarWithdrawal`'s own contract is "never
+  // throws" — matching this module's best-effort-over-committed-rows rule.
+  try {
+    await publishGuestRemovedCalendarWithdrawal(
+      {
+        meetingId: input.meetingId,
+        party: revoked.party as MeetingGuestSide,
+        guestId: revoked.id,
+        contextType: authorized.subject.contextType,
+      },
+      log
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: input.meetingId,
+        guestId: revoked.id,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Calendar withdrawal publish threw despite its never-throws contract — the revocation already committed'
     );
   }
 

@@ -26,8 +26,10 @@ import type { MeetingCalendarEvent, MeetingParticipantParty } from '../schema';
  *
  * ⚠ BAL-475 DELIVERS THE ICS FROM THESE ROWS, BUT NOT FROM THIS FILE. The email channel reads a
  * row's `uid` and `sequence` at send time (`findLiveById`) and the booking / guest-add fan-outs
- * read them via `listLiveByMeeting`; `METHOD:CANCEL` is BAL-476. Nothing in this file talks to
- * a transport. ⚠ NEITHER UPSERT ARM EVER SETS `uid` OR `sequence`: a retried write keeps the
+ * read them via `listLiveByMeeting`. BAL-476 SHIPPED the WITHDRAWAL (`METHOD:CANCEL`) over the
+ * same rows, through `findByIdIncludingRetired` — a `REQUEST` may only address LIVE state, a
+ * `CANCEL` may address RETIRED state. Nothing in this file talks to a transport either way.
+ * ⚠ NEITHER UPSERT ARM EVER SETS `uid` OR `sequence`: a retried write keeps the
  * series identity and its SEQUENCE. The only `sequence` writer is
  * `_shared/calendar-sequence.ts`, inside a reschedule's transaction.
  *
@@ -297,6 +299,40 @@ export const meetingCalendarEventsRepository = {
         eq(meetingCalendarEvents.meetingId, input.meetingId),
         eq(meetingCalendarEvents.party, input.party),
         isNull(meetingCalendarEvents.deletedAt)
+      ),
+    });
+  },
+
+  /**
+   * BAL-476 — the row with this id, scoped to `(meetingId, party)`, LIVE **OR RETIRED**.
+   *
+   * ⚠⚠ THE WITHDRAWAL READ, AND NOTHING ELSE MAY CALL IT. {@link findLiveById} deliberately
+   * hides a soft-deleted row so a retired series is never RE-ISSUED. A withdrawal is the
+   * OPPOSITE act: a `METHOD:CANCEL` must be able to address the very series it is retiring —
+   * including on a BullMQ retry that runs after `softDeleteByMeetingAndParty` has already
+   * marked the row. The delivery path branches on the iTIP method and on NOTHING else: a
+   * `REQUEST` may only address LIVE state, a `CANCEL` may address RETIRED state.
+   *
+   * ⚠ IT RESURRECTS NOTHING. The caller reads `uid` and `sequence` off the row and writes
+   * nothing back; `deleted_at` is not touched here, so the row stays retired and no later
+   * `REQUEST` can be issued against it.
+   *
+   * ⚠ ALL THREE FIELDS ARE IN THE WHERE, exactly as in {@link findLiveById}, and for the same
+   * F24 reason. `id` is the PRIMARY KEY, so at most one row can ever match — there is nothing
+   * to order or disambiguate — and `(meetingId, party)` is the tenancy scope a bare `findById`
+   * would forfeit (`secure.md` §2). A mismatch on either collapses to `undefined`
+   * STRUCTURALLY rather than relying on the caller to re-check.
+   */
+  async findByIdIncludingRetired(input: {
+    readonly id: string;
+    readonly meetingId: string;
+    readonly party: MeetingCalendarEventParty;
+  }): Promise<MeetingCalendarEvent | undefined> {
+    return db.query.meetingCalendarEvents.findFirst({
+      where: and(
+        eq(meetingCalendarEvents.id, input.id),
+        eq(meetingCalendarEvents.meetingId, input.meetingId),
+        eq(meetingCalendarEvents.party, input.party)
       ),
     });
   },

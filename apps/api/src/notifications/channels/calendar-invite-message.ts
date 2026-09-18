@@ -1,4 +1,5 @@
 import type { SendMailOptions } from 'nodemailer';
+import type { CalendarInviteMethod } from '../calendar-invite-spec.js';
 
 /**
  * BAL-475 — the calendar-class message constructor. PURE (type-only nodemailer import, never a
@@ -17,6 +18,15 @@ export interface CalendarInviteMailInput {
   readonly html: string;
   readonly text: string;
   readonly ics: string;
+  /**
+   * BAL-476 — the iTIP method, which MUST match the ICS body's own `METHOD:`.
+   *
+   * ⚠ LOAD-BEARING, NOT COSMETIC. nodemailer emits `Content-Type: text/calendar; method=<this>`,
+   * and Gmail / Outlook / Apple all key their "this event was cancelled" handling off that
+   * parameter agreeing with the body. A CANCEL body under `method=REQUEST` is silently ignored
+   * by Outlook.
+   */
+  readonly method: CalendarInviteMethod;
 }
 
 /**
@@ -32,7 +42,7 @@ export function buildCalendarInviteMailOptions(input: CalendarInviteMailInput): 
     text: input.text,
     html: input.html,
     icalEvent: {
-      method: 'REQUEST',
+      method: input.method,
       filename: CALENDAR_INVITE_FILENAME,
       content: input.ics,
     },

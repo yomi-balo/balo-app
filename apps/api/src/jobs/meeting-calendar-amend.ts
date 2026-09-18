@@ -104,16 +104,14 @@ export async function processMeetingCalendarAmend(
     return;
   }
 
-  // 2. Cancelled ⇒ the vendor calendar DELETE is BAL-476's, not this job's.
-  //    ⚠ CORRECTED OWNER (orchestrator D2). This used to name BAL-410, which was true when it
-  //    was written and is now false: BAL-410 shipped the CANCEL PRODUCER (the state flip, the
-  //    `meeting.cancelled` audit row, the hold release, the Daily room delete and the
-  //    `booking.cancelled` event) and deliberately emits NO calendar event and NO ICS. BAL-476
-  //    owns the Apiroc `deleteConsultationEvent` call and the `METHOD:CANCEL` fan-out, and it
-  //    names itself that function's first consumer.
+  // 2. Cancelled ⇒ the vendor calendar DELETE belongs to the CANCELLATION path, not this job.
+  //    ⚠ SHIPPED OWNER: `services/meetings/withdraw-meeting-calendar.ts`'s
+  //    `withdrawMeetingCalendarProjection` (BAL-476), which both cancellation producers call
+  //    post-commit. It publishes the `METHOD:CANCEL` fan-out, calls `deleteConsultationEvent`
+  //    and retires every party's row. A cancelled meeting is still not this job's to AMEND.
   if (meeting.status === 'cancelled') {
     job.log(
-      `Meeting ${meetingId} is cancelled — the vendor calendar delete belongs to BAL-476, not this job`
+      `Meeting ${meetingId} is cancelled — the vendor calendar delete belongs to withdrawMeetingCalendarProjection, not this job`
     );
     return;
   }
@@ -124,12 +122,10 @@ export async function processMeetingCalendarAmend(
   //    (ADR-1044 Ruling 1), which names no vendor event at all.
   //
   //    ⚠ RE-SENDING AN UPDATED ICS ON RESCHEDULE IS **NOT THIS JOB'S**, exactly as the vendor
-  //    delete at step 2 is BAL-476's — and BAL-475 (O1) SHIPPED that re-send, correcting an
-  //    earlier version of this comment that called it a stale residual. `rescheduleMeeting`'s
-  //    post-commit block calls `publishRescheduleCalendarInvites`, off the SEQUENCE bump
-  //    `updateSchedule`'s transaction already committed (§4.4.3) — an ICS-fallback expert's
-  //    calendar entry updates the moment the reschedule commits. BAL-476 owns `METHOD:CANCEL`
-  //    and guest-removal only.
+  //    delete at step 2 is the cancellation path's. `rescheduleMeeting`'s post-commit block
+  //    calls `publishRescheduleCalendarInvites`, off the SEQUENCE bump `updateSchedule`'s
+  //    transaction already committed (§4.4.3) — an ICS-fallback expert's calendar entry updates
+  //    the moment the reschedule commits. There is no stale-ICS-on-reschedule residual.
   //
   //    ⚠ THE READ IS NARROWED TO `party='expert' AND delivery_mode='provider_event'` — a
   //    whole-meeting read would hand back a client-party or ICS row and this job would try to
