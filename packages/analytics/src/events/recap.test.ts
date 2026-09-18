@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { RECAP_EVENTS, RECAP_SERVER_EVENTS } from './recap';
+import {
+  CASES_INDEX_CARD_STATES,
+  CASES_INDEX_TARGETS,
+  RECAP_EVENTS,
+  RECAP_SERVER_EVENTS,
+} from './recap';
 import type {
   CaseResolveSource,
   CaseSurfaceAction,
   CaseSurfaceState,
+  CasesIndexWorkspaceType,
   RecapContextType,
   RecapEntrySource,
 } from './recap';
@@ -19,6 +25,9 @@ describe('RECAP_EVENTS (client)', () => {
     // (implementation-defined comparator).
     expect(Object.keys(RECAP_EVENTS).sort((a, b) => a.localeCompare(b))).toEqual([
       'CASE_ACTION_CLICKED',
+      'CASES_INDEX_CLICKED',
+      'CASES_INDEX_RESOLVED_TOGGLED',
+      'CASES_INDEX_VIEWED',
       'CTA_CLICKED',
       'FILE_DOWNLOADED',
       'RECORDING_PLAYED',
@@ -28,6 +37,9 @@ describe('RECAP_EVENTS (client)', () => {
 
   it('maps each constant to its exact snake_case event name', () => {
     expect(RECAP_EVENTS.CASE_ACTION_CLICKED).toBe('case_action_clicked');
+    expect(RECAP_EVENTS.CASES_INDEX_CLICKED).toBe('cases_index_clicked');
+    expect(RECAP_EVENTS.CASES_INDEX_RESOLVED_TOGGLED).toBe('cases_index_resolved_toggled');
+    expect(RECAP_EVENTS.CASES_INDEX_VIEWED).toBe('cases_index_viewed');
     expect(RECAP_EVENTS.CTA_CLICKED).toBe('recap_cta_clicked');
     expect(RECAP_EVENTS.FILE_DOWNLOADED).toBe('recap_file_downloaded');
     expect(RECAP_EVENTS.RECORDING_PLAYED).toBe('recap_recording_played');
@@ -85,6 +97,11 @@ const CASE_SURFACE_ACTIONS: Record<CaseSurfaceAction, true> = {
   dismiss_resolution_request: true,
   view_recap: true,
   download_file: true,
+  join: true,
+};
+const CASES_INDEX_WORKSPACE_TYPES: Record<CasesIndexWorkspaceType, true> = {
+  company: true,
+  expert: true,
 };
 const CASE_SURFACE_STATES: Record<CaseSurfaceState, true> = {
   open: true,
@@ -125,10 +142,15 @@ describe('BAL-388 enum values', () => {
     // design reference draws — there is no slot-listing endpoint anywhere on the platform —
     // so the surface renders a plain "Book another" affordance and nothing can emit a quick
     // pick. BAL-400 declares that value when it builds the producer.
+    // ⚠ `join` IS declared as of BAL-567 — the ticket that BUILDS its producer. Before it, the
+    // case surface had no Join affordance at all (`case-nudge.tsx` carried a docblock saying so),
+    // because the only member join route was the anonymous lobby. The value arrived with the
+    // button, which is the rule.
     expect(Object.keys(CASE_SURFACE_ACTIONS).sort((a, b) => a.localeCompare(b))).toEqual([
       'book_another',
       'dismiss_resolution_request',
       'download_file',
+      'join',
       'mark_resolved',
       'request_resolution',
       'view_recap',
@@ -176,6 +198,57 @@ describe('BAL-388 enum values', () => {
     expect(CONTEXT_TYPES).toHaveProperty(asRecap);
     expect(Object.keys(CONTEXT_TYPES)).toHaveLength(6);
     expect(CONTEXT_TYPES).not.toHaveProperty('admin');
+  });
+});
+
+describe('BAL-567 — the /cases index vocabularies', () => {
+  it('pins CASES_INDEX_TARGETS as an exact ORDERED tuple', () => {
+    // ⚠ ORDERED, not sorted, and with a LENGTH assertion beside it. The tuple IS the type
+    // (`CasesIndexTarget` is derived from it), so a value added here without a producer, or a
+    // producer added without its value, is exactly what this pin catches. A membership
+    // assertion with no length assertion goes vacuous the moment a member is added.
+    expect([...CASES_INDEX_TARGETS]).toEqual([
+      'case',
+      'join',
+      'choose_time',
+      'review',
+      'book_another',
+      'book_time',
+      'book_again',
+      'book',
+    ]);
+    expect(CASES_INDEX_TARGETS).toHaveLength(8);
+    // ⚠ NO act affordance on the index. Every button opens the case; nothing on this surface
+    // cancels, reschedules, resolves or answers a proposal, because doing so would need a
+    // per-row capability resolution the index deliberately never performs.
+    expect(CASES_INDEX_TARGETS).not.toContain('cancel');
+    expect(CASES_INDEX_TARGETS).not.toContain('mark_resolved');
+  });
+
+  it('pins CASES_INDEX_CARD_STATES as an exact ORDERED tuple of eight', () => {
+    expect([...CASES_INDEX_CARD_STATES]).toEqual([
+      'live',
+      'booked',
+      'proposal',
+      'proposal_pending',
+      'resolution_ask',
+      'resolution_ask_pending',
+      'nothing_booked',
+      'no_calls',
+    ]);
+    expect(CASES_INDEX_CARD_STATES).toHaveLength(8);
+  });
+
+  it('declares exactly the two workspaces the index can render for', () => {
+    // ⚠ NOT a lens and NOT `activeMode` — it names WHICH LIST rendered, never an
+    // authorization input. `agency` is absent on purpose: an agency colleague reads the expert
+    // list, they do not get a third one.
+    expect(Object.keys(CASES_INDEX_WORKSPACE_TYPES).sort((a, b) => a.localeCompare(b))).toEqual([
+      'company',
+      'expert',
+    ]);
+    expect(Object.keys(CASES_INDEX_WORKSPACE_TYPES)).toHaveLength(2);
+    expect(CASES_INDEX_WORKSPACE_TYPES).not.toHaveProperty('agency');
   });
 });
 

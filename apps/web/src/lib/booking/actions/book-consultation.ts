@@ -15,7 +15,7 @@ import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
-import { memberJoinPath } from '@/lib/meetings/member-join-path';
+import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { deriveBookingIdempotencyKey } from '../booking-idempotency';
 import { sanitizeCaseDescription } from '../sanitize-case-description';
 import { authorizeCaseAttach } from '../authorize-case-attach';
@@ -640,7 +640,7 @@ async function completeBooking(params: {
     ),
     scheduledStartIso: scheduledStart,
     durationMinutes,
-    joinPath: memberJoinPath(meetingId),
+    joinPath: memberCallPath(meetingId),
     provisioned,
     guestCount: guests.length,
   });
@@ -649,7 +649,7 @@ async function completeBooking(params: {
     ok: true,
     engagementId,
     meetingId,
-    joinPath: memberJoinPath(meetingId),
+    joinPath: memberCallPath(meetingId),
     provisioned,
     isNewCase,
     caseTitle,

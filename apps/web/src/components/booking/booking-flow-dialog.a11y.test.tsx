@@ -121,7 +121,7 @@ describe('StepBooked — accessibility', () => {
         viewerTimezone="UTC"
         durationMinutes={30}
         provisioned
-        joinPath="/join/m/meeting-1"
+        joinPath="/meetings/meeting-1/call"
         guestsInvited={1}
         guestInviteFailed={false}
         onDone={vi.fn()}

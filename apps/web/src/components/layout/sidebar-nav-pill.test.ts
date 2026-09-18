@@ -6,7 +6,7 @@ import {
   resolveSidebarNavPill,
 } from './sidebar-nav-pill';
 
-const PRIMARY = ['/dashboard', '/experts', '/consultations', '/projects', '/messages'];
+const PRIMARY = ['/dashboard', '/experts', '/cases', '/projects', '/messages'];
 
 describe('sidebar-nav-pill (BAL-497)', () => {
   it('THE PITCH PIN: 44px row (h-11) + 4px gap (gap-1) = 48px', () => {
@@ -21,7 +21,7 @@ describe('sidebar-nav-pill (BAL-497)', () => {
   it.each([
     ['/dashboard', 0, 0, true],
     ['/experts', 1, 48, true],
-    ['/consultations', 2, 96, true],
+    ['/cases', 2, 96, true],
     ['/projects', 3, 144, true],
     ['/messages', 4, 192, true],
   ] as const)(
@@ -53,18 +53,32 @@ describe('sidebar-nav-pill (BAL-497)', () => {
 
   // The D5 "no pill" class — routes no entry in EITHER section prefix-matches. `account` is
   // deliberately excluded: it IS a secondary registry entry and DOES light that section's pill.
-  it.each([
-    '/cases/abc',
-    '/meetings/abc',
-    '/engagements',
-    '/redeem',
-    '/promo-codes',
-    '/billing/top-up',
-  ])('pathname %s is outside this section entirely', (pathname) => {
-    expect(resolveSidebarNavPill(PRIMARY, pathname)).toEqual({
-      activeIndex: -1,
-      offsetPx: 0,
-      isVisible: false,
+  //
+  // ⚠ BAL-567 MOVED `/cases/abc` OUT OF THIS CLASS. The Cases entry's href is `/cases` now, so
+  // the prefix rule genuinely matches a case page and the pill DOES light — see the positive
+  // assertion below. `/meetings/abc` stays here: BAL-567 dropped its `ENTITY_PARENTS` row too,
+  // so it reaches no section at all.
+  it.each(['/meetings/abc', '/engagements', '/redeem', '/promo-codes', '/billing/top-up'])(
+    'pathname %s is outside this section entirely',
+    (pathname) => {
+      expect(resolveSidebarNavPill(PRIMARY, pathname)).toEqual({
+        activeIndex: -1,
+        offsetPx: 0,
+        isVisible: false,
+      });
+    }
+  );
+
+  /**
+   * BAL-567 — a case page now lights the Cases pill, because the entry's href and the case
+   * route finally share a prefix. Before the rename the pill went dark on `/cases/:id` while
+   * the top bar rendered a "Back to Consultations" crumb — two chrome elements disagreeing.
+   */
+  it('BAL-567 — pathname /cases/abc lights the Cases pill (index 2 in PRIMARY)', () => {
+    expect(resolveSidebarNavPill(PRIMARY, '/cases/abc')).toEqual({
+      activeIndex: 2,
+      offsetPx: 96,
+      isVisible: true,
     });
   });
 

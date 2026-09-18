@@ -150,7 +150,7 @@ describe('MoreSheet — the slot rule', () => {
             meetingId="m-1"
             viewerName={null}
             title={null}
-            backTo={{ label: 'Back to the case', href: '/consultations' }}
+            backTo={{ label: 'Back to the case', href: '/cases/eng-1' }}
             contextNoun="case"
             waiting={null}
           >
@@ -172,7 +172,7 @@ describe('MoreSheet — the slot rule', () => {
 
     expect(await screen.findByRole('link', { name: 'Back to the case' })).toHaveAttribute(
       'href',
-      '/consultations'
+      '/cases/eng-1'
     );
   });
 

@@ -88,17 +88,23 @@ export function MobileTabBar(): React.JSX.Element | null {
   });
   /*
    * ⚠ A POSITIVE rule, deliberately NOT `!tabs.some(...)`. `isNavItemActive` is a pure href-prefix
-   * rule, but an entity route reaches its list only via `ENTITY_PARENTS` in the breadcrumb
-   * resolver: `/cases/:id` and `/meetings/:id` belong to Consultations, whose tab href is
-   * `/consultations`, so NO tab prefix-matches them. A negated rule would light More on every case
-   * and meeting page — directly contradicting the top bar's own "Back to Consultations" crumb.
-   * Desktop shares the rule gap but fails NEUTRAL (nothing lit); a negated fallback turns that gap
-   * into a WRONG signal. Same for `/engagements`, `/billing/top-up`, `/promo-codes`, `/redeem`,
-   * none of which is a registry entry.
+   * rule, but an entity route generally reaches its list only via `ENTITY_PARENTS` in the
+   * breadcrumb resolver, and those hrefs need not prefix-match any tab. A negated rule would light
+   * More on every such page — directly contradicting the top bar's own parent crumb. Desktop
+   * shares the rule gap but fails NEUTRAL (nothing lit); a negated fallback turns that gap into a
+   * WRONG signal. `/engagements`, `/billing/top-up`, `/promo-codes` and `/redeem` are the live
+   * instances: none is a registry entry.
    *
-   * Teaching `isNavItemActive` about `ENTITY_PARENTS` is the proper fix, but it also changes
-   * BAL-495's FROZEN desktop rule, so it needs its own ticket and its own pin in `sidebar.test.tsx`
-   * rather than riding along here.
+   * ⚠ BAL-567 CLOSED THE GAP FOR CASES, AS A SIDE EFFECT OF THE RENAME AND IN THE RIGHT
+   * DIRECTION. The Cases tab href is now `/cases`, so `isNavItemActive('/cases/abc', '/cases')`
+   * is TRUE and the Cases tab lights on a case page — which is exactly what the crumb says. But
+   * `/meetings/:id` and `/sessions/:id/*` still prefix-match nothing (and BAL-567 dropped their
+   * `ENTITY_PARENTS` rows outright, because a meeting can belong to a case OR a project), so the
+   * reasoning above still binds for them and the positive rule stays.
+   *
+   * Teaching `isNavItemActive` about `ENTITY_PARENTS` is the proper general fix, but it also
+   * changes BAL-495's FROZEN desktop rule, so it needs its own ticket and its own pin in
+   * `sidebar.test.tsx` rather than riding along here.
    */
   const moreActive = moreOpen || moreItems.some((entry) => isNavItemActive(pathname, entry.href));
 

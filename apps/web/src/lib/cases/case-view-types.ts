@@ -211,7 +211,20 @@ export interface CaseHeaderView {
   closedNote: string | null;
 }
 
-/** Exactly one, chosen by `selectCaseNudge`. `null` ⇒ the case is closed. */
+/**
+ * Exactly one, chosen by `selectCaseNudge`. `null` ⇒ the case is closed.
+ *
+ * ⚠⚠ BAL-567 — `actorLabel` IS REQUIRED ON ALL FOUR ATTRIBUTED ARMS, NOT OPTIONAL. Those four
+ * arms exist because SOMEBODY did something; an arm that could render without naming them is
+ * exactly how "You've asked if this is sorted" came to be shown to every expert-side viewer,
+ * including agency colleagues who did nothing. Requiring the field means the arm cannot be
+ * constructed without it. Resolved server-side by `resolveActorLabel`
+ * (`@/lib/cases/actor-attribution`) — NAME COLUMNS ONLY, never an email (ADR-1044).
+ *
+ * ⚠ `nothing_booked` AND `upcoming` CARRY NO `actorLabel`, deliberately: nobody acted. Their
+ * copy is PROSPECTIVE and names the counterparty PARTY (`counterpartyLabel`), which is a
+ * different register — see `counterpartyPartyLabel`'s docblock.
+ */
 export type CaseNudgeView =
   | {
       kind: 'upcoming';
@@ -227,6 +240,21 @@ export type CaseNudgeView =
        * `scheduledEnd` server-side without a second read.
        */
       durationMinutes: number;
+      /**
+       * BAL-567 — `memberCallPath(meetingId)`, the AUTHENTICATED member call route
+       * (`/meetings/{id}/call`). ADDITIVE on this WEB WIRE PROJECTION only, the same posture as
+       * `durationMinutes` above: `@balo/shared/engagements`'s `CaseNudge` union is unchanged.
+       *
+       * ⚠⚠ BUILT SERVER-SIDE AND NAVIGATED TO, NEVER RENDERED AS AN `href`. `JoinMeetingButton`
+       * is a `<button>` + `globalThis.location.assign` precisely so the meeting id never becomes
+       * a DOM attribute PostHog autocapture or Sentry Session Replay can lift. Do not "restore"
+       * a link — `invariants/join-link-never-writes.test.ts` scans this route for exactly that.
+       *
+       * ⚠ NOT A CREDENTIAL AND NOT A ROOM. It is a path built from the `meetingId` this arm
+       * already carries; `meetings.join_url` / `daily_room_name` stay structurally absent from
+       * every shape in this file (see the module docblock).
+       */
+      joinPath: string;
     }
   /** CLIENT lens (BAL-411) — the expert asked to move it; only the client can answer. */
   | {
@@ -252,6 +280,8 @@ export type CaseNudgeView =
        * the loader ONLY when a live proposal is on the next meeting.
        */
       options: readonly { optionId: string; scheduledStartIso: string }[];
+      /** BAL-567 — see {@link CaseNudgeView}'s attribution note. */
+      actorLabel: string;
     }
   /** EXPERT lens (BAL-411) — their own outstanding proposal. */
   | {
@@ -270,9 +300,11 @@ export type CaseNudgeView =
       proposedAtIso: string | null;
       /** See the sibling `reschedule_proposal` arm's note — same additive shape. */
       options: readonly { optionId: string; scheduledStartIso: string }[];
+      /** BAL-567 — see {@link CaseNudgeView}'s attribution note. */
+      actorLabel: string;
     }
-  | { kind: 'resolution_ask' }
-  | { kind: 'resolution_ask_pending' }
+  | { kind: 'resolution_ask'; actorLabel: string }
+  | { kind: 'resolution_ask_pending'; actorLabel: string }
   | { kind: 'nothing_booked' }
   | null;
 

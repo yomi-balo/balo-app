@@ -9,7 +9,7 @@ import { CONVERSATION_CALL_SURFACES } from '@balo/analytics/events';
 import { requireOnboardedUser } from '@/lib/auth/session';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
-import { memberJoinPath } from '@/lib/meetings/member-join-path';
+import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { resolveConversationAccess } from '@/lib/project-request/resolve-conversation-access';
 import { assertRelationshipBookable } from '@/lib/project-request/assert-relationship-bookable';
 import { assertNoLiveIntroCall } from '@/lib/project-request/assert-no-live-intro-call';
@@ -309,7 +309,7 @@ export async function bookIntroCallAction(
 
     const expertProfileId = access.relationship.expertProfileId;
     const expertDisplay = await resolveBookingExpertDisplay(expertProfileId);
-    const joinPath = memberJoinPath(meetingId);
+    const joinPath = memberCallPath(meetingId);
 
     // Fire-and-forget — only reached on a real 201.
     publishNotificationEvent('conversation.intro_call_booked', {

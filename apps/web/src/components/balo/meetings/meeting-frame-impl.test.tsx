@@ -211,7 +211,7 @@ function renderMember(options: RouteOptions = {}, canEndMeeting = false): HTMLEl
       meetingId="0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d"
       viewerName="Dana Okoro"
       title="Salesforce flow review"
-      backTo={{ label: 'Back to the case', href: '/consultations' }}
+      backTo={{ label: 'Back to the case', href: '/cases/eng-1' }}
       contextNoun="case"
       waiting={options.waiting ?? null}
       onExit={options.onExit}
@@ -445,7 +445,7 @@ describe('MeetingFrame — PreJoin has a way out', () => {
 
     expect(await screen.findByRole('link', { name: 'Back to the case' })).toHaveAttribute(
       'href',
-      '/consultations'
+      '/cases/eng-1'
     );
   });
 

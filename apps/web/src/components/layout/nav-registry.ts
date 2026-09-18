@@ -179,12 +179,23 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     enabled: true,
   },
 
+  /**
+   * BAL-567 — "Cases" at `/cases`. Renamed in place from the `consultations` key, the
+   * "Consultations" label and the `/consultations` href: same position, same icon, same
+   * capability posture, same `mobilePriority`.
+   *
+   * ⚠ NO `shortLabel` ANY MORE. It carried `'Consults'` because "Consultations" does not fit a
+   * tab cell; "Cases" does, and an abbreviation of a word that is no longer the label reads as a
+   * leftover rather than a choice.
+   *
+   * ⚠ `/consultations` PERMANENTLY REDIRECTS HERE (`next.config.js`), so a bookmark, an old email
+   * deep link, or a crumb still in someone's history lands on the real page rather than a 404.
+   */
   {
-    key: 'consultations',
-    label: 'Consultations',
-    shortLabel: 'Consults',
+    key: 'cases',
+    label: 'Cases',
     icon: Video,
-    href: '/consultations',
+    href: '/cases',
     section: 'primary',
     workspaceTypes: ['company', 'expert'],
     requires: NO_CAPABILITY_REQUIRED,
@@ -556,11 +567,29 @@ const SUPPLEMENTAL_ROUTE_LABELS: Readonly<Record<string, string>> = {
  * published no label yet.
  */
 const ENTITY_PARENTS: Readonly<Record<string, NavCrumb>> = {
-  cases: { label: 'Consultations', href: '/consultations' },
-  meetings: { label: 'Consultations', href: '/consultations' },
-  // BAL-441 — `/sessions/:id/receipt` and `/sessions/:id/payout`. Consistent with `cases` and
-  // `meetings` above: `/consultations` is a "Coming soon" stub, not new debt.
-  sessions: { label: 'Consultations', href: '/consultations' },
+  // BAL-567 — the real list, at last. All three rows below used to point at `/consultations`, a
+  // "Coming soon" stub; `/cases` is a built page, so this is now a parent rather than a placeholder.
+  cases: { label: 'Cases', href: '/cases' },
+  /**
+   * ⚠⚠ BAL-567 DROPPED `meetings` AND `sessions` (D5, BAL-533's precedent), AND THE COST IS
+   * NAMED RATHER THAN HIDDEN.
+   *
+   * WHY: a meeting or a session can belong to a CASE or to a PROJECT, so no single static parent
+   * is honest for either segment. Deriving the right one needs a database read, and
+   * `Breadcrumbs` resolves client-side from the pathname alone. Pointing both at Cases would
+   * mis-parent every project meeting; pointing them at Projects would mis-parent every case
+   * meeting. Saying nothing is the only answer that is never wrong.
+   *
+   * WHAT IS NOT LOST: no route loses its heading. `/meetings/[meetingId]` and both
+   * `/sessions/[sessionId]/*` routes publish their own `EntityCrumb`, and
+   * `/meetings/[meetingId]/end` renders its own `<h1>` — which means dropping its parent actually
+   * REMOVES a pre-existing duplicate-`h1` defect there.
+   *
+   * WHAT IS LOST: the mobile back arrow on those routes. The in-call "Back to {context}" link
+   * (`back-to-context.ts`) is the real affordance and is untouched. Deriving the parent from the
+   * meeting's own context is the better answer and needs `breadcrumb-context` to carry a parent —
+   * a follow-up, not this ticket.
+   */
   // BAL-533 — Projects, NOT Engagements: `/engagements` is the admin-only list (`notFound()` for
   // non-staff) and `/engagements/[id]` is project-only, so `/projects` is the honest, never-404
   // parent for every lens.

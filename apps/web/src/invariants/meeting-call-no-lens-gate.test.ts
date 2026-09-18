@@ -159,13 +159,16 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   'use-drawdown-poll.ts',
   // ── BAL-409, client-initiated reschedule ────────────────────────────────────────────
   //
-  // ⚠ `member-join-path.ts` AND `reschedule-api-client.ts` ARE DELIBERATELY ABSENT, on
-  // exactly the grounds `guests-api-client.ts`, `meeting-lifecycle-client.ts` and
-  // `meeting-chat-anchor.ts` already are: both carry `import 'server-only'` (`member-
-  // join-path.ts` for the `/join/` prefetch-scan reason its own docblock states;
-  // `reschedule-api-client.ts` because it resolves the viewer's Bearer from the
-  // iron-session) and neither belongs in a browser bundle, so neither is scanned here.
-  // Neither file names `lens` in any case.
+  // ⚠ `reschedule-api-client.ts` IS DELIBERATELY ABSENT, on exactly the grounds
+  // `guests-api-client.ts`, `meeting-lifecycle-client.ts` and `meeting-chat-anchor.ts`
+  // already are: it carries `import 'server-only'` (it resolves the viewer's Bearer from the
+  // iron-session), so it does not belong in a browser bundle and is not scanned here. It
+  // names `lens` nowhere in any case.
+  //
+  // ⚠ `member-join-path.ts` USED TO BE NAMED HERE AS A SECOND CARVE-OUT. BAL-567 DELETED THE
+  // FILE — every member-facing producer now calls `member-call-path.ts`, which is PURE and
+  // carries no `server-only` marker at all (see its docblock), so there is nothing left to
+  // carve out. It names `lens` nowhere either.
   //
   // ── BAL-410, cancel a booked consultation ───────────────────────────────────────────
   //
@@ -181,11 +184,11 @@ const CALL_LIB_FILES: ReadonlySet<string> = new Set([
   // ⚠ `resolve-meeting-guest.ts` IS DELIBERATELY ABSENT, on exactly the grounds every other
   // carve-out above is: it carries `import 'server-only'`, it value-imports `@balo/db`, and
   // it imports `@/lib/logging` — the same shape `guests-api-client.ts`,
-  // `meeting-lifecycle-client.ts`, `meeting-chat-anchor.ts`, `member-join-path.ts` and
-  // `reschedule-api-client.ts` already hold. It must never reach a browser bundle. If you are
+  // `meeting-lifecycle-client.ts`, `meeting-chat-anchor.ts` and `reschedule-api-client.ts`
+  // already hold. It must never reach a browser bundle. If you are
   // unsure whether a name belongs on this list, the rot guard below decides it: a name here
   // must resolve to a real, scannable file — `resolve-meeting-guest.ts` is real but is
-  // deliberately not on this list, per the shipped convention those five carve-outs set.
+  // deliberately not on this list, per the shipped convention those four carve-outs set.
   'panel-capabilities.ts',
   // ── BAL-439 — the guest RECAP gate ──────────────────────────────────────────────────
   //

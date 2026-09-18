@@ -23,7 +23,8 @@ describe('NAV_ITEM_KEYS', () => {
     expect(NAV_ITEM_KEYS).toEqual([
       'dashboard',
       'find_experts',
-      'consultations',
+      // ⚠ BAL-567 — renamed in place from `consultations`; position and count are unchanged.
+      'cases',
       'projects',
       'calendar',
       'messages',
@@ -46,6 +47,19 @@ describe('NAV_ITEM_KEYS', () => {
   it('has 19 entries with no duplicates', () => {
     expect(NAV_ITEM_KEYS.length).toBe(19);
     expect(new Set(NAV_ITEM_KEYS).size).toBe(19);
+  });
+
+  /**
+   * BAL-567 — the OLD key is gone, not aliased.
+   *
+   * ⚠ WITHOUT THIS, "renamed in place" and "added beside" look identical to the tuple assertion
+   * above the moment someone re-adds `consultations` "for continuity". Two keys for one nav item
+   * is the drift this tuple exists to prevent, and it would also make the count 20 — which the
+   * assertion above would catch, but only after someone had already written the alias.
+   */
+  it('BAL-567 — no longer declares the retired `consultations` key', () => {
+    expect(NAV_ITEM_KEYS).not.toContain('consultations');
+    expect(NAV_ITEM_KEYS).toContain('cases');
   });
 });
 

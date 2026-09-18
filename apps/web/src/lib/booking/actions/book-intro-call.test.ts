@@ -110,7 +110,7 @@ const EXPECTED_PAYLOAD = {
   expertPartyLabel: 'CloudPeak',
   scheduledStartIso: START,
   durationMinutes: 30,
-  joinPath: `/join/m/${MEETING_ID}`,
+  joinPath: `/meetings/${MEETING_ID}/call`,
   provisioned: true,
   guestCount: 0,
 };
@@ -154,7 +154,7 @@ describe('bookIntroCallAction', () => {
    * fields the `conversation.intro_call_booked` Zod arm requires (`requestTitle`,
    * `scheduledStartIso`, `durationMinutes`, `joinPath`). Payload drift against that arm would
    * therefore have shipped GREEN and 400'd at runtime, swallowed by `publishNotificationEvent`.
-   * `windowMinutes()` and `memberJoinPath()` were likewise never asserted anywhere.
+   * `windowMinutes()` and the member call path were likewise never asserted anywhere.
    */
   it('publishes conversation.intro_call_booked with the COMPLETE payload, exactly', async () => {
     await bookIntroCallAction(input());
@@ -163,6 +163,30 @@ describe('bookIntroCallAction', () => {
       'conversation.intro_call_booked',
       EXPECTED_PAYLOAD
     );
+  });
+
+  /**
+   * BAL-567 — one `joinPath` local fans out to BOTH the published payload and the action's
+   * return value (`book-intro-call.ts:312`), and both are now the MEMBER CALL route.
+   *
+   * ⚠ THE NEGATIVE COMPANION IS WHAT PROVES THE MIGRATION. `EXPECTED_PAYLOAD` above already
+   * pins the exact literal, but it would pin a WRONG literal just as happily if the fixture and
+   * the producer were changed together in the wrong direction. Asserting the lobby prefix is
+   * gone states the property the API's publish-time regex actually enforces.
+   */
+  it('BAL-567 — the joinPath is the member CALL route on both the payload and the result', async () => {
+    const result = await bookIntroCallAction(input());
+
+    const [firstPublish] = mockPublishNotificationEvent.mock.calls;
+    expect(firstPublish).toBeDefined();
+    const publishedJoinPath = (firstPublish?.[1] as { joinPath: string } | undefined)?.joinPath;
+    expect(publishedJoinPath).toBe(`/meetings/${MEETING_ID}/call`);
+    expect(publishedJoinPath).not.toContain('/join/m/');
+
+    expect(result.ok).toBe(true);
+    const returnedJoinPath = result.ok ? result.joinPath : '';
+    expect(returnedJoinPath).toBe(`/meetings/${MEETING_ID}/call`);
+    expect(returnedJoinPath).not.toContain('/join/m/');
   });
 
   it('durationMinutes + scheduledStartIso come from the SERVER window, not the client slot', async () => {

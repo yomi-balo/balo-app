@@ -16,6 +16,8 @@ import { parseMemberJoinEnvelope } from './member-join-envelope';
  */
 
 const CONTEXT_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
+/** ⚠ BAL-567 — deliberately DIFFERENT from {@link CONTEXT_ID}: the whole point is the two ids. */
+const REQUEST_ID = '5c8e2b41-7a6d-4f3e-9b2a-1d0c8e7f6a5b';
 
 const FULL = {
   roomUrl: 'https://balo.daily.co/x',
@@ -32,11 +34,48 @@ const FULL = {
 describe('parseMemberJoinEnvelope — the happy path', () => {
   it('reads all four fields', () => {
     expect(parseMemberJoinEnvelope(FULL)).toEqual({
-      context: { type: 'case', id: CONTEXT_ID, title: 'Salesforce flow review' },
+      // ⚠ BAL-567 — `projectRequestId` is `null` on a `case`: the field is a request-grain link
+      // target, and a case has no request. `null` is the answer, not an absence.
+      context: {
+        type: 'case',
+        id: CONTEXT_ID,
+        title: 'Salesforce flow review',
+        projectRequestId: null,
+      },
       viewerRole: 'client',
       counterpartyFirstName: 'Dana',
       scheduledStart: '2026-09-02T10:00:00.000Z',
     });
+  });
+
+  /**
+   * BAL-567 — the request-grain link target rides the envelope.
+   *
+   * ⚠ IT DEGRADES TO `null`, NOT TO `id`. A body from an API build that predates the field must
+   * lose only the back link, never gain a WRONG one: on `request_interaction` the `id` is a
+   * `request_expert_relationships.id`, so substituting it would reinstate the exact bug this
+   * field exists to remove.
+   */
+  it('BAL-567 — carries a resolved projectRequestId, and degrades it to null rather than to id', () => {
+    const withTarget = parseMemberJoinEnvelope({
+      ...FULL,
+      context: {
+        type: 'request_interaction',
+        id: CONTEXT_ID,
+        title: 'Migrate to Flow',
+        projectRequestId: REQUEST_ID,
+      },
+    });
+    expect(withTarget.context?.projectRequestId).toBe(REQUEST_ID);
+    expect(withTarget.context?.id).toBe(CONTEXT_ID);
+
+    const withoutTarget = parseMemberJoinEnvelope({
+      ...FULL,
+      context: { type: 'request_interaction', id: CONTEXT_ID, title: 'Migrate to Flow' },
+    });
+    expect(withoutTarget.context?.projectRequestId).toBeNull();
+    // The rest of the context still parses — losing the target must not cost the heading.
+    expect(withoutTarget.context?.title).toBe('Migrate to Flow');
   });
 
   it('accepts every holder-bearing context type', () => {

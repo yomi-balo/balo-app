@@ -1300,7 +1300,8 @@ export interface BookingConfirmedPayload {
   priorConsultationCount: number;
   scheduledStartIso: string;
   durationMinutes: number;
-  /** `/join/m/{meetingId}` — the member route. NEVER `meetings.join_url` (raw Daily). */
+  /** `/meetings/{meetingId}/call` — the member route (BAL-567; it was `/join/m/{meetingId}`, the
+   *  ANONYMOUS lobby, until then). NEVER `meetings.join_url` (raw Daily).  */
   joinPath: string;
   /** False ⇒ the Daily room is not up yet; templates must not promise a live link. */
   provisioned: boolean;
@@ -1555,7 +1556,7 @@ export interface ConversationIntroCallBookedPayload {
   expertPartyLabel: string;
   scheduledStartIso: string;
   durationMinutes: number;
-  /** `/join/m/{meetingId}` — NEVER `meetings.join_url` (raw Daily). */
+  /** `/meetings/{meetingId}/call` — the member route (BAL-567). NEVER `meetings.join_url` (raw Daily).  */
   joinPath: string;
   provisioned: boolean;
   guestCount: number;

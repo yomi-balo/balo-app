@@ -169,7 +169,7 @@ describe('bookConsultationAction', () => {
       ok: true,
       engagementId: ENGAGEMENT_ID,
       meetingId: MEETING_ID,
-      joinPath: `/join/m/${MEETING_ID}`,
+      joinPath: `/meetings/${MEETING_ID}/call`,
       provisioned: true,
       isNewCase: true,
       caseTitle: 'Need help with a flow',
@@ -206,7 +206,7 @@ describe('bookConsultationAction', () => {
       ok: true,
       engagementId: ENGAGEMENT_ID,
       meetingId: MEETING_ID,
-      joinPath: `/join/m/${MEETING_ID}`,
+      joinPath: `/meetings/${MEETING_ID}/call`,
       provisioned: true,
       isNewCase: false,
       caseTitle: 'Existing case',
@@ -226,6 +226,32 @@ describe('bookConsultationAction', () => {
       'booking.confirmed',
       expect.objectContaining({ isNewCase: false })
     );
+  });
+
+  /**
+   * BAL-567 — the `joinPath` this action RETURNS and the one it PUBLISHES are both the MEMBER
+   * CALL route; neither is the anonymous lobby any more.
+   *
+   * ⚠ THE NEGATIVE COMPANION IS NOT DECORATION, and neither is checking both halves. The
+   * positive assertion alone stays green against a producer that fixed only the return value
+   * and left the PUBLISHED payload on `/join/m/` — which is exactly the failure that matters,
+   * because `memberCallPathSchema` in `apps/api` would then 400 the publish in production with
+   * nothing red in CI. `book-consultation.ts` builds the path at TWO separate call sites, so
+   * one of them regressing is a real shape, not a hypothetical.
+   */
+  it('BAL-567 — returns AND publishes the member CALL route, never the anonymous lobby', async () => {
+    const result = await bookConsultationAction(NEW_CASE_INPUT);
+
+    expect(result.ok).toBe(true);
+    const returnedJoinPath = result.ok ? result.joinPath : '';
+    expect(returnedJoinPath).toBe(`/meetings/${MEETING_ID}/call`);
+    expect(returnedJoinPath).not.toContain('/join/m/');
+
+    const [firstPublish] = mockPublishNotificationEvent.mock.calls;
+    expect(firstPublish).toBeDefined();
+    const publishedJoinPath = (firstPublish?.[1] as { joinPath: string } | undefined)?.joinPath;
+    expect(publishedJoinPath).toBe(`/meetings/${MEETING_ID}/call`);
+    expect(publishedJoinPath).not.toContain('/join/m/');
   });
 
   it("reports priorConsultationCount EXCLUDING this booking's own meeting", async () => {

@@ -223,7 +223,7 @@ export function toUpNextRowView(
     status: row.status,
     href: hrefForMeeting(row),
     // BAL-566 fix round 1 (F1, user ruling J1) — the AUTHENTICATED MEMBER call route, never the
-    // anonymous guest lobby (`memberJoinPath`). See `member-call-path.ts` for why.
+    // anonymous guest lobby (`meetingJoinLinkUrl`). See `member-call-path.ts` for why.
     joinPath: memberCallPath(row.meetingId),
     rescheduleProposalExpiresAt: rescheduleExpiryIso(row, lookups),
   };

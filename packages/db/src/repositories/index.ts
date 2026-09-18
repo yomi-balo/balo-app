@@ -641,6 +641,33 @@ export {
   type UpcomingMeetingTitles,
   type ExpertPartyNames,
 } from './upcoming-meetings';
+// ── Cases index read model (BAL-567) — the read behind `/cases` ──
+// ⚠ EVERY EXPORT HERE READS, AND NONE OF THEM AUTHORIZES. The caller resolves the viewer's
+// company-level `PARTICIPATE` (`resolveCompanyParticipation`, `@balo/shared/authz`) FIRST and
+// passes the SESSION's own party id as the scope. The four batched helpers add NO scope
+// predicate at all: pass only engagement ids that came out of `listOpenCases` /
+// `listResolvedCases`.
+export {
+  casesIndexRepository,
+  assertCasesIndexMeetingCap,
+  CasesIndexMeetingCapExceededError,
+  CasesIndexPageSizeError,
+  CASES_INDEX_OPEN_PAGE_SIZE,
+  CASES_INDEX_RESOLVED_PAGE_SIZE,
+  MAX_CASES_INDEX_PAGE_SIZE,
+  MAX_CASES_INDEX_MEETING_ROWS,
+  type CasesIndexScope,
+  type CasesIndexCursor,
+  type ResolvedCasesCursor,
+  type CasesIndexPage,
+  type CasesIndexCounterparty,
+  type CasesIndexCaseRow,
+  type CasesIndexResolvedRow,
+  type CasesIndexTrailMeeting,
+  type CasesIndexProductTag,
+  type CasesIndexActionItemCounts,
+  type CasesIndexCounts,
+} from './cases-index';
 // ── Consultation projection (BAL-428) — `consultations` as a read model of `meetings` ──
 // The WRITERS are deliberately NOT exported: they are transaction-scoped internals of
 // `meetingsRepository` / `meetingContextsRepository`. Only the typed errors (so callers can

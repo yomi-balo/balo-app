@@ -5,7 +5,7 @@ import {
   CALENDAR_CONTEXT_REGISTRY,
   type CalendarProjectedContextType,
 } from '../consultation-events/calendar-context-registry.js';
-import { memberJoinUrl } from '../consultation-events/member-join-url.js';
+import { memberCallUrl } from '../consultation-events/member-call-url.js';
 import { resolveExpertCalendarFacts } from '../consultation-events/resolve-calendar-facts.js';
 import {
   deliveringExpertProfileIdForMeeting,
@@ -120,7 +120,7 @@ export async function resolveCalendarInviteFacts(
       return undefined;
     }
 
-    const joinUrl = memberJoinUrl(meetingId);
+    const joinUrl = memberCallUrl(meetingId);
 
     let summary: string;
     if (party === 'expert') {
