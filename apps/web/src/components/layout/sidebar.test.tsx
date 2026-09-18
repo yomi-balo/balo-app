@@ -171,14 +171,14 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(clientLinks.map((l) => l.textContent?.trim())).toEqual([
       'Dashboard',
       'Find experts',
-      'Consultations',
+      'Cases',
       'Projects',
       'Messages',
     ]);
     expect(clientLinks.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
       '/experts',
-      '/consultations',
+      '/cases',
       '/projects',
       '/messages',
     ]);
@@ -188,14 +188,14 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     const expertLinks = within(primaryNav()).getAllByRole('link');
     expect(expertLinks.map((l) => l.textContent?.trim())).toEqual([
       'Dashboard',
-      'Consultations',
+      'Cases',
       'Projects',
       'Calendar',
       'Messages',
     ]);
     expect(expertLinks.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
-      '/consultations',
+      '/cases',
       '/projects',
       '/expert/calendar',
       '/messages',
@@ -214,9 +214,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       .filter(
         (href) =>
           href &&
-          !['/dashboard', '/experts', '/consultations', '/projects', '/messages', '/'].includes(
-            href
-          )
+          !['/dashboard', '/experts', '/cases', '/projects', '/messages', '/'].includes(href)
       );
     expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
@@ -230,9 +228,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       .filter(
         (href) =>
           href &&
-          !['/dashboard', '/experts', '/consultations', '/projects', '/messages', '/'].includes(
-            href
-          )
+          !['/dashboard', '/experts', '/cases', '/projects', '/messages', '/'].includes(href)
       );
     expect(bottomHrefs).toEqual(['/settings', '/settings/account']);
   });
@@ -245,14 +241,9 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       .filter(
         (href) =>
           href &&
-          ![
-            '/dashboard',
-            '/consultations',
-            '/projects',
-            '/expert/calendar',
-            '/messages',
-            '/',
-          ].includes(href)
+          !['/dashboard', '/cases', '/projects', '/expert/calendar', '/messages', '/'].includes(
+            href
+          )
       );
     expect(bottomHrefs).toEqual(['/expert/settings', '/settings/account']);
   });
@@ -265,14 +256,9 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
       .filter(
         (href) =>
           href &&
-          ![
-            '/dashboard',
-            '/consultations',
-            '/projects',
-            '/expert/calendar',
-            '/messages',
-            '/',
-          ].includes(href)
+          !['/dashboard', '/cases', '/projects', '/expert/calendar', '/messages', '/'].includes(
+            href
+          )
       );
     expect(bottomHrefs).toEqual(['/expert/settings', '/settings/team', '/settings/account']);
   });
@@ -320,7 +306,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(dashboardLabel).toHaveAttribute('aria-hidden', 'true');
     expect(dashboardLabel.className).toContain('max-w-0');
     expect(dashboardLabel.className).toContain('opacity-0');
-    expect(screen.getByText('Consultations')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('Cases')).toHaveAttribute('aria-hidden', 'true');
 
     // …and the collapsed link therefore names itself, exactly ONCE, via aria-label.
     expect(screen.getByRole('link', { name: 'Dashboard' })).toBe(dashboardLabel.closest('a'));

@@ -44,7 +44,7 @@ const BOOKED_DATA = {
   durationMinutes: 30,
   guestCount: 0,
   provisioned: true,
-  joinPath: '/join/m/meeting-456',
+  joinPath: '/meetings/meeting-456/call',
 };
 
 describe('getEmailTemplate — availability-shared-client', () => {
@@ -120,7 +120,7 @@ describe('getEmailTemplate — intro-call-booked-client', () => {
     const provisioned = clean(
       await render(getEmailTemplate('intro-call-booked-client', BOOKED_DATA).component)
     );
-    expect(provisioned).toContain('/join/m/meeting-456');
+    expect(provisioned).toContain('/meetings/meeting-456/call');
 
     const unprovisioned = textOf(
       await render(
@@ -128,7 +128,7 @@ describe('getEmailTemplate — intro-call-booked-client', () => {
           .component
       )
     );
-    expect(unprovisioned).not.toContain('/join/m/meeting-456');
+    expect(unprovisioned).not.toContain('/meetings/meeting-456/call');
     expect(unprovisioned).toContain('our team has been alerted');
     expect(unprovisioned).not.toMatch(/will be ready|on its way|by email/i);
   });
@@ -193,7 +193,7 @@ describe('getEmailTemplate — intro-call-booked-expert', () => {
           .component
       )
     );
-    expect(html).not.toContain('/join/m/meeting-456');
+    expect(html).not.toContain('/meetings/meeting-456/call');
   });
 
   it('carries no email address but support@getbalo.com, and no rate/total figure', async () => {

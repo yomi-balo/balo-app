@@ -134,7 +134,7 @@ function successResult(overrides: Partial<Extract<BookConsultationResult, { ok: 
     ok: true as const,
     engagementId: 'engagement-1',
     meetingId: 'meeting-1',
-    joinPath: '/join/m/meeting-1',
+    joinPath: '/meetings/meeting-1/call',
     provisioned: true,
     isNewCase: true,
     caseTitle: 'Discuss migration plan',

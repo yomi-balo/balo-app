@@ -42,7 +42,7 @@ const BASE_DATA = {
   guestCount: 0,
   provisioned: true,
   engagementId: 'engagement-123',
-  joinPath: '/join/m/meeting-456',
+  joinPath: '/meetings/meeting-456/call',
 };
 
 describe('getEmailTemplate — booking-confirmed-client', () => {
@@ -70,13 +70,13 @@ describe('getEmailTemplate — booking-confirmed-client', () => {
   it('includes the join link when provisioned', async () => {
     const out = getEmailTemplate('booking-confirmed-client', { ...BASE_DATA, provisioned: true });
     const html = clean(await render(out.component));
-    expect(html).toContain('/join/m/meeting-456');
+    expect(html).toContain('/meetings/meeting-456/call');
   });
 
   it('suppresses the join link when provisioned is false, and promises nothing (M6)', async () => {
     const out = getEmailTemplate('booking-confirmed-client', { ...BASE_DATA, provisioned: false });
     const text = textOf(await render(out.component));
-    expect(text).not.toContain('/join/m/meeting-456');
+    expect(text).not.toContain('/meetings/meeting-456/call');
     // M6 — no repair sweep, no retry job and no provision-on-join exists, so this branch may
     // state only what is TRUE: the time is held and the failure was recorded.
     expect(text).toContain('our team has been alerted');
@@ -141,7 +141,7 @@ describe('getEmailTemplate — booking-confirmed-expert', () => {
         getEmailTemplate('booking-confirmed-expert', { ...BASE_DATA, provisioned: false }).component
       )
     );
-    expect(html).not.toContain('/join/m/meeting-456');
+    expect(html).not.toContain('/meetings/meeting-456/call');
   });
 
   it('carries no email address but support@getbalo.com, and no rate/total figure', async () => {

@@ -16,6 +16,7 @@ import {
   type ActionItem,
   type CaseEngagementRow,
   type CaseExpertEarningsAggregate,
+  type LiveRescheduleProposalSummary,
   type Meeting,
 } from '@balo/db';
 import { CAPABILITIES, ENGAGEMENT_CAPABILITIES } from '@balo/shared/authz';
@@ -31,7 +32,6 @@ import {
   deriveCaseConsultationState,
   selectCaseNudge,
   type CaseNudge,
-  type CaseNudgeRescheduleProposal,
 } from '@balo/shared/engagements';
 import { formatLongUtc } from '@/lib/format/utc-date';
 import { errorMessage, log } from '@/lib/logging';
@@ -40,6 +40,8 @@ import { sanitizeProjectHtml } from '@/lib/sanitize/project-html';
 import { hasCapability } from '@/lib/authz';
 import { hasEngagementCapability } from '@/lib/authz/engagement';
 import { resolveCaseAccess, type CaseAccess } from '@/lib/cases/resolve-case-access';
+import { resolveActorLabel } from '@/lib/cases/actor-attribution';
+import { memberCallPath } from '@/lib/meetings/member-call-path';
 import { deriveConsultationOrdinal } from '@/lib/meetings/derive-consultation-ordinal';
 import {
   mapConversationFileRowToView,
@@ -175,10 +177,15 @@ interface RescheduleProposalDetailForNudge {
  */
 async function resolveRescheduleProposalForNudge(
   nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null,
-  liveProposals: readonly CaseNudgeRescheduleProposal[],
+  liveProposals: readonly LiveRescheduleProposalSummary[],
   now: Date
 ): Promise<{
-  proposal: CaseNudgeRescheduleProposal | null;
+  // ⚠ BAL-567 WIDENED THIS FROM `CaseNudgeRescheduleProposal` TO THE REPOSITORY'S OWN SUMMARY.
+  // The shared core's shape deliberately carries only what `selectCaseNudge` reads, and
+  // `proposedByUserId` is not that — it is ATTRIBUTION, never a capability input. Narrowing here
+  // would have thrown the proposer away and forced a second lookup back into `liveProposals` at
+  // the call site to get it again.
+  proposal: LiveRescheduleProposalSummary | null;
   detail: RescheduleProposalDetailForNudge | null;
 }> {
   if (nextScheduled === null) {
@@ -223,7 +230,12 @@ async function resolveRescheduleProposalForNudge(
 function toNudgeView(
   nudge: CaseNudge,
   nextScheduled: { meetingId: string; scheduledStart: Date; scheduledEnd: Date } | null,
-  proposalDetail: RescheduleProposalDetailForNudge | null
+  proposalDetail: RescheduleProposalDetailForNudge | null,
+  /**
+   * BAL-567 — WHO acted, already resolved by `resolveActorLabel`. Required rather than
+   * optional: the four attributed arms cannot be constructed without it (see `CaseNudgeView`).
+   */
+  actorLabel: string
 ): CaseNudgeView {
   if (nudge === null) return null;
   if (nudge.kind === 'upcoming') {
@@ -239,6 +251,9 @@ function toNudgeView(
       scheduledStartIso: nudge.scheduledStart.toISOString(),
       live: nudge.live,
       durationMinutes,
+      // BAL-567 — the member call route, built SERVER-SIDE from an id this arm already carries.
+      // `memberCallPath` is the ONE builder (`memberJoinPath`, the anonymous lobby, is deleted).
+      joinPath: memberCallPath(nudge.meetingId),
     };
   }
   if (nudge.kind === 'reschedule_proposal') {
@@ -257,6 +272,7 @@ function toNudgeView(
         optionId: option.id,
         scheduledStartIso: option.scheduledStart.toISOString(),
       })),
+      actorLabel,
     };
   }
   if (nudge.kind === 'reschedule_proposal_pending') {
@@ -274,9 +290,77 @@ function toNudgeView(
         optionId: option.id,
         scheduledStartIso: option.scheduledStart.toISOString(),
       })),
+      actorLabel,
     };
   }
-  return { kind: nudge.kind };
+  // ⚠ `nothing_booked` CARRIES NO ATTRIBUTION — nobody acted. Spelled as its own arm rather than
+  // spreading `actorLabel` onto every remaining kind, so the field cannot leak onto a nudge that
+  // has no actor to name.
+  if (nudge.kind === 'nothing_booked') {
+    return { kind: 'nothing_booked' };
+  }
+  return { kind: nudge.kind, actorLabel };
+}
+
+/**
+ * BAL-567 — WHOSE act this nudge is reporting, as a user id or `null`.
+ *
+ * ⚠ DRIVEN BY THE NUDGE KIND, NEVER BY WHICH COLUMNS HAPPEN TO BE POPULATED. A case can carry a
+ * live reschedule proposal AND an outstanding resolution request at the same time;
+ * `selectCaseNudge` has already decided which one the header reports, and reading "whichever
+ * column is non-null" here would attribute the wrong act to the wrong person.
+ *
+ * ⚠ `proposedByUserId` IS ATTRIBUTION, NEVER AUTHORIZATION. Nothing gates on it — the act axis
+ * is `hasEngagementCapability` (ADR-1046), resolved from the engagement's delivery identity.
+ */
+function nudgeActorUserId(
+  nudge: CaseNudge,
+  caseRow: CaseEngagementRow,
+  proposal: LiveRescheduleProposalSummary | null
+): string | null {
+  if (nudge === null) return null;
+  if (nudge.kind === 'reschedule_proposal' || nudge.kind === 'reschedule_proposal_pending') {
+    return proposal?.proposedByUserId ?? null;
+  }
+  if (nudge.kind === 'resolution_ask' || nudge.kind === 'resolution_ask_pending') {
+    return caseRow.resolutionRequestedByUserId;
+  }
+  return null;
+}
+
+/**
+ * BAL-567 — the actor's rendered label, through the ONE shared rule (`resolveActorLabel`).
+ *
+ * ⚠ NO ACTOR ⇒ NO QUERY. The overwhelming majority of cases carry neither a live proposal nor
+ * an outstanding ask, and this returns the party label without touching the database.
+ *
+ * ⚠ NAME COLUMNS ONLY (ADR-1044). `findNamesByIds` projects `id`/`firstName`/`lastName` and
+ * nothing else — never `email`, never `workosId`. Do not "upgrade" this to `findById`.
+ */
+async function resolveNudgeActorLabel(input: {
+  actorUserId: string | null;
+  lens: 'client' | 'expert';
+  viewerUserId: string;
+  deliveringExpertUserId: string | null;
+  agencyName: string | null;
+  partyFallbackLabel: string;
+}): Promise<string> {
+  const { actorUserId } = input;
+  if (actorUserId === null) return input.partyFallbackLabel;
+
+  const [actor] = await usersRepository.findNamesByIds([actorUserId]);
+  return resolveActorLabel({
+    side: input.lens,
+    actorUserId,
+    actorFirstName: actor?.firstName ?? null,
+    viewerUserId: input.viewerUserId,
+    // ⚠ `''` RATHER THAN THE ACTOR'S OWN ID when the expert profile's user row could not be
+    // read: an empty string matches no uuid, so the client arm falls to "{name} @ {agency}"
+    // instead of silently claiming the actor IS the delivering expert.
+    deliveringExpertUserId: input.deliveringExpertUserId ?? '',
+    agencyName: input.agencyName,
+    partyFallbackLabel: input.partyFallbackLabel,
+  });
 }
 
 /** Group action items into the three lens-relative buckets. */
@@ -338,6 +422,16 @@ interface CounterpartyLabels {
   counterpartyPartyLabel: string;
   /** The org line under the case title: the agency (client lens) or the company (expert). */
   counterpartyOrgLabel: string;
+  /**
+   * BAL-567 — the delivering expert's AGENCY name, or `null` for an INDEPENDENT expert.
+   *
+   * ⚠ THE RAW AGENCY, NOT `counterpartyOrgLabel`. That one coalesces to `expertPartyShort` on
+   * the client lens and to the client company on the expert lens, so it cannot answer "is there
+   * a separate org to name after this person?" — which is exactly what `resolveActorLabel`'s
+   * "{First name} @ {Agency}" arm asks. Both lenses carry it, because the attributed actor is
+   * always EXPERT-SIDE on both.
+   */
+  agencyLabel: string | null;
 }
 
 /**
@@ -409,6 +503,7 @@ async function resolveCounterparty(
       // independent. Already resolved by `expertPartyDisplayName` above; reused, never re-derived.
       counterpartyPartyLabel: expertPartyShort,
       counterpartyOrgLabel: agencyLabel ?? expertPartyShort,
+      agencyLabel,
       party: {
         name: expertPerson,
         headline: profile?.headline ?? null,
@@ -431,6 +526,8 @@ async function resolveCounterparty(
     // (see this function's docblock on the deliberate departure from the design fixture).
     counterpartyPartyLabel: clientCompanyName,
     counterpartyOrgLabel: clientCompanyName,
+    // The delivering expert's agency, on the EXPERT lens too — see the field's docblock.
+    agencyLabel,
     party: {
       name: clientCompanyName,
       headline: null,
@@ -658,6 +755,17 @@ export const loadCase = cache(
       now,
     });
 
+    // BAL-567 — WHO acted, for the four attributed nudge arms. One batched name read, name
+    // columns only; `null` (and no read at all) for the arms nobody acted on.
+    const actorLabel = await resolveNudgeActorLabel({
+      actorUserId: nudgeActorUserId(nudge, caseRow, rescheduleProposalForNudge),
+      lens,
+      viewerUserId: userId,
+      deliveringExpertUserId: profile?.userId ?? null,
+      agencyName: labels.agencyLabel,
+      partyFallbackLabel: labels.expertPartyShort,
+    });
+
     const header: CaseHeaderView = {
       title: caseRow.title,
       // ⚠ SANITISED HERE, AT READ, AND THAT IS LOAD-BEARING — NOT belt-and-braces.
@@ -718,7 +826,7 @@ export const loadCase = cache(
       expertProfileId,
       viewerUserId: userId,
       header,
-      nudge: toNudgeView(nudge, nextScheduled, proposalDetailForNudge),
+      nudge: toNudgeView(nudge, nextScheduled, proposalDetailForNudge, actorLabel),
       consultations,
       conversation: await buildConversation(access, labels, messagePage, conversationFileRows),
       actionItems: buildActionItems(

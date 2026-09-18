@@ -23,8 +23,10 @@ import { useMeetingRoute } from '@/lib/meetings/meeting-route-context';
 export function BackToContextLink(): React.JSX.Element | null {
   const { backTo } = useMeetingRoute();
   if (backTo === null) return null;
-  // ⚠ NEVER A DEAD LINK. Every href here comes from `back-to-context.ts`'s single table, which
-  // points `case` at `/consultations` until BAL-421 ships `/cases/[caseId]`.
+  // ⚠ NEVER A DEAD LINK. Every href here comes from `resolveBackTo`, which as of BAL-567 (R6)
+  // delegates to `hrefForMeeting` — the ONE context→href table — and falls back to
+  // `DASHBOARD_BACK_TO` whenever that answers `null`. A context with no reachable page therefore
+  // arrives here as the dashboard, never as a route that 404s.
   const { label, href } = backTo;
 
   return (

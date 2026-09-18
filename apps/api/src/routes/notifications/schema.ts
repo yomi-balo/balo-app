@@ -12,10 +12,23 @@ import {
 // string. `booking.confirmed`'s email template renders it as `${BASE_URL}${joinPath}`, so an
 // unconstrained value lets an internal-secret-holding caller (or a future bug upstream of this
 // boundary) turn `joinPath` into an absolute `https://evil.com/...` phishing link inside a real
-// Balo email. The only producer is `memberJoinPath()` (`apps/web/src/lib/meetings/
-// member-join-path.ts`), which emits exactly `/join/m/{meetingId}` — anchored front and back so
-// nothing else is accepted.
-const memberJoinPathSchema = z.string().regex(/^\/join\/m\/[0-9a-f-]{36}$/);
+// Balo email. The only producer is `memberCallPath()` (`apps/web/src/lib/meetings/
+// member-call-path.ts`), which emits exactly `/meetings/{meetingId}/call` — anchored front and
+// back so nothing else is accepted.
+//
+// ⚠⚠ BAL-567 REPOINTED THIS FROM `/join/m/{meetingId}` TO `/meetings/{meetingId}/call`, AND THE
+// REGEX HAD TO MOVE IN THE SAME COMMIT. This constraint is enforced at PUBLISH TIME, not at
+// compile time (L1 below: `z.infer` erases refinements), so migrating the producers without
+// moving the regex would not have failed `tsc` or any web test — it would have started 400ing
+// every `booking.confirmed` and `conversation.intro_call_booked` publish in production. Kept
+// TIGHT rather than relaxed to a bare `z.string()`: the anchored shape is the only thing that
+// catches a malformed link before it reaches a customer's inbox, which is the whole point of N3.
+//
+// ⚠ THE LOBBY PATH IS NO LONGER ACCEPTED, deliberately. `/join/m/{id}` still exists as a route,
+// but it is the ANONYMOUS GUEST lobby (`meetingJoinLinkUrl`, BAL-436) and both payloads below
+// are member-facing. A member routed through the lobby never opens a metered credit session —
+// see `member-call-path.ts` for the full reasoning.
+const memberCallPathSchema = z.string().regex(/^\/meetings\/[0-9a-f-]{36}\/call$/);
 
 const userWelcomePayload = z.object({
   correlationId: z.uuid(),
@@ -560,7 +573,7 @@ const bookingConfirmedPayload = z.object({
   priorConsultationCount: z.number().int().nonnegative(),
   scheduledStartIso: z.string().datetime(),
   durationMinutes: z.number().int().positive(),
-  joinPath: memberJoinPathSchema,
+  joinPath: memberCallPathSchema,
   provisioned: z.boolean(),
   guestCount: z.number().int().nonnegative(),
 });
@@ -733,7 +746,7 @@ const conversationIntroCallBookedPayload = z.object({
   expertPartyLabel: z.string().min(1).max(200),
   scheduledStartIso: z.string().datetime(),
   durationMinutes: z.number().int().positive(),
-  joinPath: memberJoinPathSchema,
+  joinPath: memberCallPathSchema,
   provisioned: z.boolean(),
   guestCount: z.number().int().nonnegative(),
 });
@@ -1016,7 +1029,7 @@ export type AssertPublishCoverageComplete = [
  *   L1. CONSTRAINT drift. `z.infer` erases refinements: `z.string().min(1).max(4000)` infers a
  *       plain `string`. `ProjectChangesRequestedPayload.note` is `string` in TS and `.min(1)`
  *       here, so publishing an empty note still 400s silently and this guard stays green. Same
- *       for `.uuid()`, `.max(n)`, `.email()`, and `memberJoinPathSchema`'s regex. DO NOT try to
+ *       for `.uuid()`, `.max(n)`, `.email()`, and `memberCallPathSchema`'s regex. DO NOT try to
  *       encode length bounds or formats into the TS types — that trades a small invisible gap
  *       for a large unreadable one. Bounds are validated here and only here, on purpose.
  *   L2. DEFAULTS and transforms. `.default(...)` makes `z.input` and `z.output` differ; this

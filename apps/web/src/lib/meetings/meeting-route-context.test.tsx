@@ -71,7 +71,7 @@ describe('MeetingRouteContextProvider — the MEMBER mount', () => {
         meetingId="m-1"
         viewerName="Dana Okoro"
         title="Salesforce flow review"
-        backTo={{ label: 'Back to the case', href: '/consultations' }}
+        backTo={{ label: 'Back to the case', href: '/cases/eng-1' }}
         contextNoun="case"
         waiting={{
           absentParty: 'client',
@@ -87,7 +87,7 @@ describe('MeetingRouteContextProvider — the MEMBER mount', () => {
     expect(probe).toHaveAttribute('data-meeting-id', 'm-1');
     expect(probe).toHaveAttribute('data-viewer-name', 'Dana Okoro');
     expect(probe).toHaveAttribute('data-title', 'Salesforce flow review');
-    expect(probe).toHaveAttribute('data-back', '/consultations');
+    expect(probe).toHaveAttribute('data-back', '/cases/eng-1');
     expect(probe).toHaveAttribute('data-noun', 'case');
     expect(probe).toHaveAttribute('data-absent', 'client');
   });

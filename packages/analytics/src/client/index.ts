@@ -109,6 +109,12 @@ export {
   DASHBOARD_UP_NEXT_MEETING_TYPES,
   DASHBOARD_UP_NEXT_TARGETS,
   DASHBOARD_UP_NEXT_ROW_STATES,
+  // BAL-567 — the `/cases` index's two vocabulary tuples. Its EVENTS ride the already-exported
+  // `RECAP_EVENTS` (see the registration note on `CASE_ACTION_CLICKED`), so only the tuples are
+  // new here. ⚠ THE RE-EXPORT ALLOWLIST. Omitting a name here fails in a DIFFERENT package
+  // (`apps/web` cannot import it), not in this one.
+  CASES_INDEX_TARGETS,
+  CASES_INDEX_CARD_STATES,
 } from '../events';
 
 export type {
@@ -182,6 +188,11 @@ export type {
   // this package nor `apps/web`'s barrel has a check that would have flagged the omission —
   // it surfaces only as an unresolved import in whichever app tries to use it.
   CaseSurfaceAction,
+  // BAL-567 — the `/cases` index's client vocabularies. The index shell and its card islands
+  // annotate their props with these.
+  CasesIndexTarget,
+  CasesIndexCardState,
+  CasesIndexWorkspaceType,
   // Availability CLIENT family — BAL-416's conflict warnings AND BAL-236's slot picker.
   AvailabilityEventMap,
   AvailabilityConflictResolution,

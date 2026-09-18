@@ -18,7 +18,7 @@ beforeEach(() => {
 
 describe('Breadcrumbs', () => {
   it('a list route resolves to exactly one crumb, rendered as the current-page h1, with no link', () => {
-    pathname = '/consultations';
+    pathname = '/cases';
     render(
       <BreadcrumbProvider>
         <Breadcrumbs />
@@ -27,7 +27,7 @@ describe('Breadcrumbs', () => {
 
     const nav = screen.getByLabelText('Breadcrumb');
     const heading = within(nav).getByRole('heading', { level: 1 });
-    expect(heading).toHaveTextContent('Consultations');
+    expect(heading).toHaveTextContent('Cases');
     expect(heading).toHaveAttribute('aria-current', 'page');
     expect(within(nav).queryAllByRole('link')).toHaveLength(0);
   });
@@ -42,8 +42,8 @@ describe('Breadcrumbs', () => {
     );
 
     const nav = screen.getByLabelText('Breadcrumb');
-    const parentLink = within(nav).getByRole('link', { name: 'Consultations' });
-    expect(parentLink).toHaveAttribute('href', '/consultations');
+    const parentLink = within(nav).getByRole('link', { name: 'Cases' });
+    expect(parentLink).toHaveAttribute('href', '/cases');
     expect(within(nav).getByRole('heading', { level: 1 })).toHaveTextContent('Case #1042');
   });
 
@@ -61,11 +61,11 @@ describe('Breadcrumbs', () => {
     const { rerender } = render(<Harness showPublisher />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Case #1042');
 
-    pathname = '/consultations';
+    pathname = '/cases';
     rerender(<Harness showPublisher={false} />);
 
     expect(screen.queryByText('Case #1042')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Consultations');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Cases');
   });
 
   it('anti-staleness B — THE GUARANTEE (D12): a stale label never leaks onto a new pathname, even with its publisher left mounted', () => {
@@ -90,7 +90,7 @@ describe('Breadcrumbs', () => {
     rerender(<Harness />);
 
     expect(screen.queryByText('Case #1042')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Consultations');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Cases');
   });
 
   it('BAL-499 F2: an unmounting stale publisher does NOT clear a DIFFERENT entity that has since published (the `clear` guard is ordering-proof)', () => {
@@ -162,10 +162,10 @@ describe('Breadcrumbs', () => {
       const nav = screen.getByLabelText('Breadcrumb');
       // No empty <h1> + dangling chevron — exactly one crumb, the parent, as a link.
       const heading = within(nav).getByRole('heading', { level: 1 });
-      expect(heading).toHaveTextContent('Consultations');
-      expect(within(heading).getByRole('link', { name: 'Consultations' })).toHaveAttribute(
+      expect(heading).toHaveTextContent('Cases');
+      expect(within(heading).getByRole('link', { name: 'Cases' })).toHaveAttribute(
         'href',
-        '/consultations'
+        '/cases'
       );
       expect(within(nav).queryAllByRole('link')).toHaveLength(1);
     }
@@ -194,11 +194,8 @@ describe('Breadcrumbs', () => {
     );
 
     const heading = screen.getByRole('heading', { level: 1 });
-    expect(heading).toHaveTextContent('Consultations');
-    expect(within(heading).getByRole('link', { name: 'Consultations' })).toHaveAttribute(
-      'href',
-      '/consultations'
-    );
+    expect(heading).toHaveTextContent('Cases');
+    expect(within(heading).getByRole('link', { name: 'Cases' })).toHaveAttribute('href', '/cases');
   });
 
   it('an unrecognised route renders nothing', () => {
@@ -232,7 +229,7 @@ describe('Breadcrumbs', () => {
   // ── BAL-501 §2.2 — the internal responsive branch, one <h1> in both layouts ────────────────
   describe('BAL-501 — mobile responsive branch', () => {
     it('exactly one level-1 heading on a list route', () => {
-      pathname = '/consultations';
+      pathname = '/cases';
       render(
         <BreadcrumbProvider>
           <Breadcrumbs />
@@ -270,13 +267,13 @@ describe('Breadcrumbs', () => {
           <Breadcrumbs />
         </BreadcrumbProvider>
       );
-      const back = screen.getByRole('link', { name: 'Back to Consultations' });
-      expect(back).toHaveAttribute('href', '/consultations');
+      const back = screen.getByRole('link', { name: 'Back to Cases' });
+      expect(back).toHaveAttribute('href', '/cases');
       expect(back.className).toContain('lg:hidden');
     });
 
     it('a list route (single crumb) renders no back link', () => {
-      pathname = '/consultations';
+      pathname = '/cases';
       render(
         <BreadcrumbProvider>
           <Breadcrumbs />
@@ -293,7 +290,7 @@ describe('Breadcrumbs', () => {
           <Breadcrumbs />
         </BreadcrumbProvider>
       );
-      const earlierLink = screen.getByRole('link', { name: 'Consultations' });
+      const earlierLink = screen.getByRole('link', { name: 'Cases' });
       const earlierLi = earlierLink.closest('li');
       expect(earlierLi?.className).toContain('hidden');
       expect(earlierLi?.className).toContain('lg:flex');
@@ -361,6 +358,79 @@ describe('Breadcrumbs', () => {
         .queryAllByRole('link')
         .filter((link) => link.getAttribute('href') === '/engagements');
       expect(linksToTheAdminList).toHaveLength(0);
+    });
+  });
+
+  // ── BAL-567 — /cases/[id] parents to Cases; the retired /consultations stub is unreachable ──
+  describe('BAL-567 — /cases/[id] parents to Cases', () => {
+    /**
+     * ⚠ THE ZERO-`/consultations`-LINKS ASSERTION IS THE LOAD-BEARING ONE, exactly as BAL-533's
+     * zero-`/engagements`-links assertion is. Every positive assertion here would stay green
+     * against a registry that kept the OLD `ENTITY_PARENTS` row beside the new one — two parent
+     * crumbs, one of them a link to a 308. Counting the offending hrefs is what rules that out.
+     */
+    it('an entity route parents to Cases, links nowhere near /consultations, and is axe clean', async () => {
+      pathname = '/cases/e-1';
+      const { container } = render(
+        <BreadcrumbProvider>
+          <EntityCrumb label="Salesforce flow review" />
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+
+      const nav = screen.getByLabelText('Breadcrumb');
+      const heading = within(nav).getByRole('heading', { level: 1 });
+      expect(heading).toHaveTextContent('Salesforce flow review');
+      expect(heading).toHaveAttribute('aria-current', 'page');
+      expect(within(nav).getByRole('link', { name: 'Cases' })).toHaveAttribute('href', '/cases');
+      expect(within(nav).getByRole('link', { name: 'Back to Cases' })).toHaveAttribute(
+        'href',
+        '/cases'
+      );
+
+      const linksToTheRetiredStub = within(nav)
+        .queryAllByRole('link')
+        .filter((link) => link.getAttribute('href')?.startsWith('/consultations') === true);
+      expect(linksToTheRetiredStub).toHaveLength(0);
+      // Non-vacuity: the nav really did render links, so the filter above ran over something.
+      expect(within(nav).queryAllByRole('link').length).toBeGreaterThan(0);
+
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    it('the Cases list route itself renders one h1 reading "Cases", and no link at all', () => {
+      pathname = '/cases';
+      render(
+        <BreadcrumbProvider>
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+
+      const nav = screen.getByLabelText('Breadcrumb');
+      expect(within(nav).getByRole('heading', { level: 1 })).toHaveTextContent('Cases');
+      expect(within(nav).queryAllByRole('link')).toHaveLength(0);
+    });
+
+    /**
+     * BAL-567 (D5) — `/meetings/[id]` NOW RENDERS **NO PARENT CRUMB**, because a meeting can
+     * belong to a case OR a project and no static parent is honest for both. Pinned here, at the
+     * component, so the disclosed cost is visible where a reader would look for it rather than
+     * only in the registry's unit test.
+     */
+    it('BAL-567 (D5) — a meeting route has no parent crumb; its own published label is the whole trail', () => {
+      pathname = '/meetings/m-1';
+      render(
+        <BreadcrumbProvider>
+          <EntityCrumb label="Consultation" />
+          <Breadcrumbs />
+        </BreadcrumbProvider>
+      );
+
+      const nav = screen.getByLabelText('Breadcrumb');
+      expect(within(nav).getByRole('heading', { level: 1 })).toHaveTextContent('Consultation');
+      // No parent ⇒ no link, and no mobile back arrow. That IS the cost D5 accepted.
+      expect(within(nav).queryAllByRole('link')).toHaveLength(0);
+      expect(within(nav).queryByRole('link', { name: /^Back to/ })).not.toBeInTheDocument();
     });
   });
 });

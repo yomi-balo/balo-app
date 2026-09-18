@@ -49,6 +49,16 @@ const contextSchema = z.object({
   id: z.string().uuid(),
   /** ⚠ `null` IS A FIRST-CLASS ANSWER — three of the six shapes have no title column at all. */
   title: z.string().nullable().optional(),
+  /**
+   * BAL-567 — the RESOLVED `project_requests.id`, non-null only on the two request-grain labels.
+   *
+   * ⚠ `.optional()` LIKE `title`, AND FOR THE SAME REASON: a body from an API build that
+   * predates this field must degrade to `null` rather than fail the whole context and cost the
+   * member their heading AND their back link at once. `null` means "no link target", which is
+   * exactly what `hrefForMeeting` wants; it never means "fall back to `id`" — reaching for `id`
+   * on a `request_interaction` is the wrong-id bug this field exists to remove.
+   */
+  projectRequestId: z.string().uuid().nullable().optional(),
 });
 
 const VIEWER_ROLES = ['client', 'expert'] as const satisfies readonly MeetingViewerRole[];
@@ -64,6 +74,8 @@ export interface MemberJoinContextValue {
   readonly type: MeetingContextTypeWithHolder;
   readonly id: string;
   readonly title: string | null;
+  /** BAL-567 — the resolved request id for the two request-grain labels; `null` elsewhere. */
+  readonly projectRequestId: string | null;
 }
 
 export interface MemberJoinEnvelope {
@@ -94,7 +106,12 @@ function readField(raw: unknown, key: string): unknown {
 function parseContext(raw: unknown): MemberJoinContextValue | null {
   const parsed = contextSchema.safeParse(raw);
   if (!parsed.success) return null;
-  return { type: parsed.data.type, id: parsed.data.id, title: parsed.data.title ?? null };
+  return {
+    type: parsed.data.type,
+    id: parsed.data.id,
+    title: parsed.data.title ?? null,
+    projectRequestId: parsed.data.projectRequestId ?? null,
+  };
 }
 
 /**

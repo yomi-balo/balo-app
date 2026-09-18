@@ -18,8 +18,6 @@ import { db } from '../client';
 import {
   agencies,
   caseEngagements,
-  conversationContexts,
-  conversations,
   engagements,
   expertProfiles,
   meetingContexts,
@@ -35,6 +33,9 @@ import {
   type FoldedCalendarMeeting,
   type RawMeetingContextRow,
 } from './meetings';
+// ⚠ EXTRACTED BY BAL-567, NOT COPIED. "This case has a live thread" now has ONE definition,
+// shared with `cases-index.ts` — see that module's docblock.
+import { caseHasLiveThread } from './_shared/case-thread';
 
 /**
  * BAL-566 — THE COMPANY-WIDE READ BEHIND THE DASHBOARD "UP NEXT" CARD.
@@ -278,33 +279,6 @@ function meetingInWindow(range: UpcomingRange): SQL[] {
     lt(meetings.scheduledStart, range.rangeEnd),
     gt(meetings.scheduledEnd, range.rangeStart),
   ];
-}
-
-/**
- * The case's LIVE thread on the `engagement` label — `authorizeEngagementConversation`'s
- * `no_thread` denial, which `resolveCaseAccess` inherits. A case with no live thread 404s its
- * page, so it must not be listed. Built per call: `db` is swapped per test transaction.
- */
-function caseHasLiveThread(): SQL {
-  return exists(
-    db
-      .select({ one: sql`1` })
-      .from(conversationContexts)
-      .innerJoin(
-        conversations,
-        and(
-          eq(conversations.id, conversationContexts.conversationId),
-          isNull(conversations.deletedAt)
-        )
-      )
-      .where(
-        and(
-          eq(conversationContexts.contextType, 'engagement'),
-          eq(conversationContexts.contextId, engagements.id),
-          isNull(conversationContexts.deletedAt)
-        )
-      )
-  );
 }
 
 /** A live `case_engagements` child — `load-case.ts`'s `findByEngagementId` coherence check. */

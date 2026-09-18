@@ -47,6 +47,18 @@ export interface LiveRescheduleProposalSummary {
   optionCount: number;
   originalScheduledStart: Date;
   expiresAt: Date;
+  /**
+   * BAL-567 — WHO proposed, for attribution ("{Actor} suggested {n} new times"). ATTRIBUTION
+   * ONLY: it is not a capability input and nothing may gate on it. The act axis is
+   * `hasEngagementCapability` (ADR-1046), resolved from the engagement's own delivery identity,
+   * never from who happened to press propose.
+   *
+   * ⚠ AN ID, NEVER A NAME OR AN ADDRESS. The caller batches this id through
+   * `usersRepository.findNamesByIds` — NAME COLUMNS ONLY, no `email` and no `workos_id`.
+   * Hydrating the user here would put a whole `users` row on a client-bound projection (memory
+   * `reference_drizzle_with_hydration_leaks_secrets`).
+   */
+  proposedByUserId: string;
 }
 
 export interface AnswerRescheduleProposalInput {
@@ -300,6 +312,10 @@ export const rescheduleProposalsRepository = {
           meetingId: rescheduleProposals.meetingId,
           originalScheduledStart: rescheduleProposals.originalScheduledStart,
           expiresAt: rescheduleProposals.expiresAt,
+          // BAL-567 — attribution only; see `LiveRescheduleProposalSummary.proposedByUserId`.
+          // Un-aggregated beside `count(...)` because the GROUP BY is on the PRIMARY KEY
+          // (Postgres functional dependency), exactly as the other three columns are.
+          proposedByUserId: rescheduleProposals.proposedByUserId,
           // `count()` over the LEFT-joined live options. bigint on the wire ⇒ `mapWith(Number)`.
           optionCount: sql<number>`count(${rescheduleProposalOptions.id})`.mapWith(Number),
         })

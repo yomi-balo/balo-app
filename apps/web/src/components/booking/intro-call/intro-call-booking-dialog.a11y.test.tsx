@@ -101,7 +101,7 @@ describe('IntroCallBookingDialog — accessibility', () => {
     mockBookIntroCallAction.mockResolvedValue({
       ok: true,
       meetingId: 'meeting-1',
-      joinPath: '/join/m/meeting-1',
+      joinPath: '/meetings/meeting-1/call',
       provisioned: true,
       scheduledStartIso: '2026-06-05T09:00:00.000Z',
       scheduledEndIso: '2026-06-05T09:30:00.000Z',

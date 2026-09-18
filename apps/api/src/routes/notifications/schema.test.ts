@@ -1354,12 +1354,17 @@ describe('publishBodySchema', () => {
       priorConsultationCount: 0,
       scheduledStartIso: '2026-09-01T10:00:00.000Z',
       durationMinutes: 30,
-      joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000',
+      joinPath: '/meetings/550e8400-e29b-41d4-a716-446655440000/call',
       provisioned: true,
       guestCount: 0,
     };
 
     it('accepts a valid payload', () => {
+      // ⚠ BAL-567 — the accepted shape is the MEMBER CALL route, pinned as an exact literal.
+      // This regex is enforced at PUBLISH time, so it is the last thing standing between a
+      // malformed link and a customer's inbox; a `.success` assertion alone would stay green
+      // against a regex loosened to `z.string()`.
+      expect(valid.joinPath).toBe('/meetings/550e8400-e29b-41d4-a716-446655440000/call');
       expect(
         publishBodySchema.safeParse({ event: 'booking.confirmed', payload: valid }).success
       ).toBe(true);
@@ -1374,11 +1379,27 @@ describe('publishBodySchema', () => {
       ).toBe(false);
     });
 
-    it('rejects a joinPath outside the /join/m/{uuid} shape', () => {
+    it('rejects a joinPath outside the /meetings/{uuid}/call shape', () => {
       expect(
         publishBodySchema.safeParse({
           event: 'booking.confirmed',
-          payload: { ...valid, joinPath: '/join/m/not-a-uuid' },
+          payload: { ...valid, joinPath: '/meetings/not-a-uuid/call' },
+        }).success
+      ).toBe(false);
+    });
+
+    /**
+     * ⚠ BAL-567 — THE OLD LOBBY PATH MUST NOW BE REJECTED, AND THIS CASE IS WHAT PROVES THE
+     * MIGRATION RATHER THAN ASSUMING IT. `/join/m/{uuid}` is a perfectly well-formed route;
+     * what makes it wrong on THIS payload is that it is the ANONYMOUS GUEST lobby and this
+     * event is member-facing. Without this case, a regex quietly widened to admit both shapes
+     * would pass every other assertion in the block.
+     */
+    it('rejects the retired ANONYMOUS lobby path on a member-facing payload', () => {
+      expect(
+        publishBodySchema.safeParse({
+          event: 'booking.confirmed',
+          payload: { ...valid, joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000' },
         }).success
       ).toBe(false);
     });
@@ -1398,7 +1419,7 @@ describe('publishBodySchema', () => {
       previousScheduledStartIso: '2026-09-01T09:00:00.000Z',
       scheduledStartIso: '2026-09-01T10:00:00.000Z',
       durationMinutes: 30,
-      joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000',
+      joinPath: '/meetings/550e8400-e29b-41d4-a716-446655440000/call',
       initiatedBy: 'client',
     };
 
@@ -1461,14 +1482,14 @@ describe('publishBodySchema', () => {
      * What the assertion below pins is the property that actually matters: the field cannot
      * reach a template, because it is absent from the parsed output.
      *
-     * The `/join/m/{uuid}` shape itself is still pinned — on `booking.confirmed`, the arm that
-     * actually renders `${BASE_URL}${joinPath}` (see the "booking.confirmed — joinPath (N3)"
+     * The `/meetings/{uuid}/call` shape itself is still pinned — on `booking.confirmed`, the arm
+     * that actually renders `${BASE_URL}${joinPath}` (see the "booking.confirmed — joinPath (N3)"
      * block above). Duplicating those cases here would test a field that does not exist.
      */
     it('carries no joinPath — a supplied one is STRIPPED, never forwarded', () => {
       const result = publishBodySchema.safeParse({
         event: 'booking.rescheduled',
-        payload: { ...valid, joinPath: '/join/m/550e8400-e29b-41d4-a716-446655440000' },
+        payload: { ...valid, joinPath: '/meetings/550e8400-e29b-41d4-a716-446655440000/call' },
       });
 
       // ⚠ Zod STRIPS unknown keys by default — these payload schemas are not `.strict()`, so

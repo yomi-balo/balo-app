@@ -59,6 +59,10 @@ const CLIENT_NUDGE = {
     { optionId: 'opt-1', scheduledStartIso: '2026-09-02T10:00:00.000Z' },
     { optionId: 'opt-2', scheduledStartIso: '2026-09-03T10:00:00.000Z' },
   ],
+  // BAL-567 — required on every attributed nudge arm. This card renders the OPTIONS, never the
+  // headline (item 14), so it does not display the label; it is present only because the union
+  // it is typed against can no longer be constructed without it.
+  actorLabel: 'Amara',
 };
 
 const EXPERT_NUDGE = {

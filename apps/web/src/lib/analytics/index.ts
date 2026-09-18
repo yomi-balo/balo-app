@@ -130,6 +130,15 @@ export type {
   MeetingPanelReactionEmoji,
   /** BAL-421 — annotates the case surface's client action handlers. */
   CaseSurfaceAction,
+  /**
+   * BAL-567 — annotate the `/cases` index's client islands. Types only, following BAL-566's F12
+   * ruling: the two runtime tuples (`CASES_INDEX_TARGETS`, `CASES_INDEX_CARD_STATES`) are NOT
+   * re-exported here — a call site that needs the values imports them straight from
+   * `@balo/analytics/events`.
+   */
+  CasesIndexTarget,
+  CasesIndexCardState,
+  CasesIndexWorkspaceType,
   /** BAL-416 — the time-off conflict warning's client outcome vocabulary. */
   AvailabilityConflictResolution,
   /** BAL-400 — the case-booking flow's client vocabulary. */

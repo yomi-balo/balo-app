@@ -470,17 +470,40 @@ describe('invariant: no dashboard-adjacent surface renders a join URL/path as an
     'src/components/balo/meetings',
     'apps/web/src/components/balo/meetings',
   ]);
+  const BOOKING_DIR = resolveRouteDir([
+    'src/components/booking',
+    'apps/web/src/components/booking',
+  ]);
+  const CASES_DIR = resolveRouteDir([
+    'src/app/(dashboard)/cases',
+    'apps/web/src/app/(dashboard)/cases',
+  ]);
 
   /**
-   * BAL-566 — THREE trees now, not one: the calendar route (BAL-498's original scope), the
-   * dashboard route (the Up next card's row, BAL-566), and `components/balo/meetings` (where
+   * BAL-566 — THREE trees, not one: the calendar route (BAL-498's original scope), the dashboard
+   * route (the Up next card's row, BAL-566), and `components/balo/meetings` (where
    * `JoinMeetingButton` now lives, having moved out of the calendar route entirely). Each gets
    * its own prefix so a failure names which tree the offending file is in.
+   *
+   * ⚠ BAL-567 ADDS A FOURTH: `components/booking`. Both booking surfaces (`StepBooked` and
+   * `StepBookedIntroCall`) render their action's `joinPath` as `sr-only` TEXT and never as an
+   * `href`, so nothing was broken before — but before BAL-567 that prop held the ANONYMOUS lobby
+   * path, which this scan is not really about. It now holds `memberCallPath`'s output, exactly
+   * like the other three trees, which is what brings it into scope. Adding it now means a future
+   * "let's make it a link" edit on either step fails here rather than shipping.
+   *
+   * ⚠ AND A FIFTH: the whole `(dashboard)/cases` tree. BAL-567 put a real Join on TWO surfaces
+   * there — the `/cases` index's featured ticket card and the case page's in-window nudge — both
+   * carrying `memberCallPath`'s output in a `joinPath` field. They are the newest place a
+   * `<Button asChild><a href={…joinPath}>` could plausibly be written, which is precisely why
+   * the tree is scanned rather than trusted.
    */
   const scanned = [
     ...scanRouteSources(CALENDAR_DIR, 'calendar', []),
     ...scanRouteSources(DASHBOARD_DIR, 'dashboard', []),
     ...scanRouteSources(COMPONENTS_DIR, 'components', []),
+    ...scanRouteSources(BOOKING_DIR, 'booking', []),
+    ...scanRouteSources(CASES_DIR, 'cases', []),
   ];
 
   /**
@@ -488,9 +511,10 @@ describe('invariant: no dashboard-adjacent surface renders a join URL/path as an
    * the same convention `_source-scan.ts` keeps for exactly this reason (SonarCloud S5852).
    *
    * ⚠ BOTH NAMES, DELIBERATELY. `joinUrl` is the calendar's prop name and `joinPath` is the
-   * dashboard Up next row's prop name — as of BAL-566 fix round 1 (F1 / user ruling J1) BOTH now
-   * hold `memberCallPath`'s output, the AUTHENTICATED member call route, never
-   * `meetingJoinLinkUrl` or `memberJoinPath`'s anonymous lobby URL. The call route is not on the
+   * dashboard Up next row's (and both booking steps') prop name — as of BAL-566 fix round 1
+   * (F1 / user ruling J1), and BAL-567 for the booking tree, ALL of them hold `memberCallPath`'s
+   * output, the AUTHENTICATED member call route, never `meetingJoinLinkUrl`'s anonymous lobby URL
+   * (BAL-567 deleted `memberJoinPath` outright). The call route is not on the
    * `SENSITIVE_PATH_PREFIXES` redaction list (it is already linked, unredacted, from in-app
    * notifications and absence emails), so the hazard here is narrower than the lobby URL's used
    * to be: it is not a NEW redaction gap, only an avoidable DOM exposure. Both prop names are
@@ -518,14 +542,20 @@ describe('invariant: no dashboard-adjacent surface renders a join URL/path as an
     return false;
   }
 
-  it('collects all three trees, including the moved button and the dashboard row (guards against a vacuous pass)', () => {
+  it('collects all FIVE trees, including the two BAL-567 Join surfaces (guards against a vacuous pass)', () => {
     expect(CALENDAR_DIR).not.toBe('');
     expect(DASHBOARD_DIR).not.toBe('');
     expect(COMPONENTS_DIR).not.toBe('');
+    expect(BOOKING_DIR).not.toBe('');
+    expect(CASES_DIR).not.toBe('');
     expect(scanned.length).toBeGreaterThan(0);
     const rels = scanned.map((file) => file.rel);
     expect(rels).toContain('components/join-meeting-button.tsx');
     expect(rels).toContain('dashboard/_components/up-next-row.tsx');
+    // BAL-567's two new Join surfaces, pinned BY NAME so a rename fails loudly here rather than
+    // quietly dropping out of the scan.
+    expect(rels).toContain('cases/_components/featured-case-card.tsx');
+    expect(rels).toContain('cases/[engagementId]/_components/case-nudge.tsx');
   });
 
   it('⚠ guards the guard: a synthetic href={row.joinPath} is detected by the matcher', () => {

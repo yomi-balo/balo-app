@@ -37,8 +37,8 @@ export interface UpNextRowView {
   readonly href: string | null;
   /**
    * `memberCallPath(meetingId)` — the AUTHENTICATED MEMBER call route (`/meetings/{id}/call`,
-   * BAL-435), built server-side (BAL-566 fix round 1, F1 / user ruling J1). NOT `memberJoinPath`
-   * (the anonymous guest lobby) — see `member-call-path.ts` for why. Navigated to via
+   * BAL-435), built server-side (BAL-566 fix round 1, F1 / user ruling J1). NOT the anonymous
+   * guest lobby (`meetingJoinLinkUrl`) — see `member-call-path.ts` for why. Navigated to via
    * `location.assign`, NEVER bound to an href (D9).
    */
   readonly joinPath: string;

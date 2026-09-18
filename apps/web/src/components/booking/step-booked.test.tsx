@@ -16,7 +16,7 @@ function renderStep(over: Partial<StepBookedProps> = {}) {
     viewerTimezone: 'UTC',
     durationMinutes: 30,
     provisioned: true,
-    joinPath: '/join/m/meeting-1',
+    joinPath: '/meetings/meeting-1/call',
     guestsInvited: 0,
     guestInviteFailed: false,
     onDone,
@@ -72,7 +72,7 @@ describe('StepBooked', () => {
         viewerTimezone="UTC"
         durationMinutes={30}
         provisioned
-        joinPath="/join/m/meeting-1"
+        joinPath="/meetings/meeting-1/call"
         guestsInvited={2}
         guestInviteFailed={false}
         onDone={vi.fn()}

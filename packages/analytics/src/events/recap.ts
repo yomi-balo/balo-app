@@ -105,6 +105,12 @@ export type RecapEntrySource = 'direct' | 'notification' | 'case_surface' | 'end
  * nothing readable would be a lie about what the invite does, which is the same reasoning that
  * forbids anchoring an invite to a past meeting. The ticket that builds the invite declares
  * this value.
+ *
+ * ⚠ `join` WAS ADDED BY BAL-567, WHICH IS THE TICKET THAT BUILDS ITS PRODUCER. Until BAL-567
+ * the case surface had NO Join affordance at all — `case-nudge.tsx` carried a docblock saying
+ * so — because the only member join route was the anonymous lobby. BAL-567 puts a real
+ * `JoinMeetingButton` on the in-window upcoming nudge, so the value arrives WITH the button
+ * that emits it, exactly as the no-producer rule prescribes.
  */
 export type CaseSurfaceAction =
   | 'book_another'
@@ -112,7 +118,64 @@ export type CaseSurfaceAction =
   | 'request_resolution'
   | 'dismiss_resolution_request'
   | 'view_recap'
-  | 'download_file';
+  | 'download_file'
+  | 'join';
+
+/**
+ * BAL-567 — which affordance was clicked on the `/cases` INDEX.
+ *
+ * ⚠ A SEPARATE UNION FROM {@link CaseSurfaceAction}, for the same reason that one is separate
+ * from {@link RecapCta}: the index and the case surface offer genuinely different actions, and
+ * a single union spanning both would let an index-only value be reported from the case surface
+ * with nothing to catch it. `case` is the whole-card click; every other value is a specific
+ * button, and each of them ALSO opens the case — the index carries no capability-gated act
+ * affordance, so the value records WHICH WORDING the viewer answered, not a distinct
+ * destination.
+ *
+ * ⚠ DECLARED AS A RUNTIME TUPLE, not a bare union, so the guard test can pin the exact ordered
+ * membership. The type is derived from the tuple rather than restated beside it.
+ */
+export const CASES_INDEX_TARGETS = [
+  'case',
+  'join',
+  'choose_time',
+  'review',
+  'book_another',
+  'book_time',
+  'book_again',
+  'book',
+] as const;
+export type CasesIndexTarget = (typeof CASES_INDEX_TARGETS)[number];
+
+/**
+ * BAL-567 — which of the eight card states the clicked card rendered in.
+ *
+ * The states are a DATA TABLE in the index's presentation module, not eight branches, and this
+ * tuple is the same list. `live` is reserved for the featured card (the only card that renders
+ * Join), so at most one card per page can carry it.
+ */
+export const CASES_INDEX_CARD_STATES = [
+  'live',
+  'booked',
+  'proposal',
+  'proposal_pending',
+  'resolution_ask',
+  'resolution_ask_pending',
+  'nothing_booked',
+  'no_calls',
+] as const;
+export type CasesIndexCardState = (typeof CASES_INDEX_CARD_STATES)[number];
+
+/**
+ * BAL-567 — WHICH list the viewer was looking at.
+ *
+ * ⚠ NOT A LENS AND NOT `activeMode`. It names the WORKSPACE the index rendered for, which is a
+ * view selector, never an authorization input (ADR-1029). It is deliberately not
+ * {@link RecapLens}: that union is a RESOLVED side on one already-authorized engagement, and
+ * reusing it here would blur "which side of this case am I on" with "which of my workspaces am
+ * I in".
+ */
+export type CasesIndexWorkspaceType = 'company' | 'expert';
 
 /**
  * Which lifecycle state the case surface rendered in.
@@ -213,6 +276,21 @@ export const RECAP_EVENTS = {
    * ⚠ ONCE PER MODAL OPEN — scrubbing, pausing and resuming do not re-fire.
    */
   RECORDING_PLAYED: 'recap_recording_played',
+  /**
+   * BAL-567 — the `/cases` INDEX rendered for an authorised viewer.
+   *
+   * ⚠ A CLIENT EVENT, UNLIKE `CASE_SURFACE_VIEWED`, AND THE ASYMMETRY IS DELIBERATE. The index
+   * shell is already a client island (it owns the Resolved disclosure and the Show-more
+   * pagination), so it can fire once per mount with a `viewedRef` guard and — crucially — NOT
+   * re-fire when the Server Action appends a page. A server event on the RSC would fire again
+   * on every `revalidate` of the same view, which would make `cases_index_viewed` a render
+   * count rather than a view count.
+   */
+  CASES_INDEX_VIEWED: 'cases_index_viewed',
+  /** BAL-567 — an affordance on the `/cases` index was clicked. See {@link CasesIndexTarget}. */
+  CASES_INDEX_CLICKED: 'cases_index_clicked',
+  /** BAL-567 — the Resolved disclosure was expanded or collapsed. */
+  CASES_INDEX_RESOLVED_TOGGLED: 'cases_index_resolved_toggled',
 } as const;
 
 export interface RecapEventMap {
@@ -241,6 +319,32 @@ export interface RecapEventMap {
     segment_count: number;
     /** The PLAYABLE artefact's length, or null on a row Mux never reported one for. */
     duration_seconds: number | null;
+  };
+  [RECAP_EVENTS.CASES_INDEX_VIEWED]: {
+    /** WHICH list rendered. A view selector, never an authorization input. */
+    workspace_type: CasesIndexWorkspaceType;
+    /** The TOTAL open count for the scope, not the page size — it is a `count(*)`, not `rows.length`. */
+    open_count: number;
+    /** The TOTAL resolved count for the scope, even though the section starts collapsed. */
+    resolved_count: number;
+    /** Whether the page promoted a featured case (the soonest booking) to the ticket card. */
+    has_featured: boolean;
+  };
+  [RECAP_EVENTS.CASES_INDEX_CLICKED]: {
+    target: CasesIndexTarget;
+    /**
+     * The clicked card's state, or `null` for a target that belongs to no card — the header's
+     * "Book a consultation" (`book`) and a Resolved row's "Book again" (`book_again`).
+     *
+     * ⚠ NULL RATHER THAN A SENTINEL STATE. Inventing a `'header'` member of
+     * {@link CASES_INDEX_CARD_STATES} would put a non-state into the state distribution and
+     * make every per-state figure wrong by however many header clicks there were.
+     */
+    card_state: CasesIndexCardState | null;
+  };
+  [RECAP_EVENTS.CASES_INDEX_RESOLVED_TOGGLED]: {
+    /** `true` on expand, `false` on collapse — one event, both directions. */
+    expanded: boolean;
   };
 }
 

@@ -95,19 +95,28 @@ describe('projectBookingCalendarEvent — the happy path', () => {
   });
 
   /**
-   * ⚠⚠ BALO'S MEMBER JOIN ROUTE, NEVER `meetings.join_url`. The raw Daily URL admits nobody
-   * without a minted token and would read as a dead link months later; `/join/m/{id}` resolves
-   * for every context and is the ONE action a calendar entry exists to enable (BAL-433 D4 —
-   * no context backlink, because `/packages/…` does not exist and `/engagements/[id]` 404s a
-   * case id).
+   * ⚠⚠ BALO'S MEMBER CALL ROUTE, NEVER `meetings.join_url`. The raw Daily URL admits nobody
+   * without a minted token and would read as a dead link months later; `/meetings/{id}/call`
+   * resolves for every context and is the ONE action a calendar entry exists to enable
+   * (BAL-433 D4 — no context backlink, because `/packages/…` does not exist and
+   * `/engagements/[id]` 404s a case id).
+   *
+   * ⚠ BAL-567 REPOINTED IT FROM `/join/m/{id}`. That was the ANONYMOUS GUEST lobby, and this
+   * projection writes to a MEMBER's own calendar — so the expert clicking their own entry
+   * landed in the lobby and, on a case, never opened a metered credit session. The
+   * `not.toContain('/join/m/')` companion below is what keeps the fix PROVED rather than
+   * assumed: the positive assertion alone would still pass against a builder that emitted both.
    */
-  it('⚠ builds the join URL from the MEMBER route and never from meetings.join_url', async () => {
+  it('⚠ builds the join URL from the MEMBER CALL route and never from meetings.join_url', async () => {
     await projectBookingCalendarEvent(createdMeeting(), 'case', CONTEXT_ID, fakeLog());
 
     const [[input]] = mockProjectToExpertCalendar.mock.calls;
     const { joinUrl } = input as { joinUrl: string };
-    expect(joinUrl).toBe(`${process.env.APP_URL ?? 'https://balo.expert'}/join/m/${MEETING_ID}`);
-    expect(joinUrl).toContain(`/join/m/${MEETING_ID}`);
+    expect(joinUrl).toBe(
+      `${process.env.APP_URL ?? 'https://balo.expert'}/meetings/${MEETING_ID}/call`
+    );
+    expect(joinUrl).toContain(`/meetings/${MEETING_ID}/call`);
+    expect(joinUrl).not.toContain('/join/m/');
     expect(joinUrl).not.toContain('daily.co');
   });
 

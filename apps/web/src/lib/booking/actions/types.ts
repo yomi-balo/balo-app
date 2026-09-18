@@ -47,7 +47,7 @@ export type BookConsultationResult =
       ok: true;
       engagementId: string;
       meetingId: string;
-      /** `/join/m/{meetingId}` — NEVER the raw Daily url (`meetings.join_url` never crosses). */
+      /** `/meetings/{meetingId}/call` — the member route (BAL-567). NEVER the raw Daily url (`meetings.join_url` never crosses).  */
       joinPath: string;
       /** `false` ⇒ the Daily room did not come up yet; the booked state must not show a live link. */
       provisioned: boolean;

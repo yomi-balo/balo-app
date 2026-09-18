@@ -55,7 +55,11 @@ describe('resolveCalendarInviteFacts', () => {
     );
 
     expect(facts?.summary).toBe('Consultation with Northwind Industrial');
-    expect(facts?.location).toContain('/join/m/meeting-1');
+    // ⚠ BAL-567 — the MEMBER arm carries the member CALL route, not the anonymous lobby. The
+    // negative companion is the half that proves the migration: the positive assertion alone
+    // stays green against a builder that emits both shapes.
+    expect(facts?.location).toContain('/meetings/meeting-1/call');
+    expect(facts?.location).not.toContain('/join/m/');
     expect(facts?.memberJoinUrl).toBe(facts?.location);
     expect(facts?.description).toContain('Join:');
   });

@@ -21,7 +21,7 @@ function row(overrides: Partial<UpNextRowView> = {}): UpNextRowView {
     scheduledEnd: new Date(NOW.getTime() + 60 * MIN).toISOString(),
     status: 'scheduled',
     href: '/cases/1',
-    joinPath: '/join/m/m-1',
+    joinPath: '/meetings/m-1/call',
     rescheduleProposalExpiresAt: null,
     ...overrides,
   };

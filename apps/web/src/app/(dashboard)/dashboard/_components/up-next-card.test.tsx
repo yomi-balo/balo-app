@@ -43,7 +43,7 @@ function row(overrides: Partial<UpNextRowView> = {}): UpNextRowView {
 }
 
 const FOOTER_LINKS: readonly UpNextFooterLink[] = [
-  { target: 'cases', label: 'Cases', href: '/consultations' },
+  { target: 'cases', label: 'Cases', href: '/cases' },
   { target: 'projects', label: 'Projects', href: '/projects' },
 ];
 
@@ -82,10 +82,14 @@ describe('UpNextCard — rendering rows', () => {
     render(
       <UpNextCard data={data} workspaceType="company" subtitle="sub" footerLinks={FOOTER_LINKS} />
     );
+    // ⚠ `/cases/` WITH THE TRAILING SLASH, as of BAL-567. The footer link is `/cases` now, so a
+    // bare `startsWith('/cases')` also matches it and counts 2. The subject here is the ROW
+    // anchor, and a case row's href is always `/cases/{engagementId}`.
     const links = screen
       .getAllByRole('link')
-      .filter((l) => l.getAttribute('href')?.startsWith('/cases'));
+      .filter((l) => l.getAttribute('href')?.startsWith('/cases/') === true);
     expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', '/cases/eng-1');
   });
 
   it('fires dashboard_up_next_viewed once, with row_count and meeting_types in tuple order', () => {

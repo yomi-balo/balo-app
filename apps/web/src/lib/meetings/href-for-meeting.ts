@@ -8,9 +8,16 @@ import type { MeetingContextTypeWithHolder } from '@balo/shared/meetings';
  * PURE, no `server-only` — both a client-safe view model builder (dashboard `build-up-next-rows.ts`)
  * and a server-only loader (`load-expert-calendar.ts`) call this.
  *
- * ⚠ `back-to-context.ts` is a SECOND, DIFFERENT context→href table (with a wrong
- * `request_interaction` id) and is NOT consolidated here — see the BAL-566 plan's follow-up list.
- * Do not copy from it; this module is the one to extend.
+ * ⚠⚠ BAL-567 (R6) — THIS IS NOW THE **ONLY** CONTEXT→HREF TABLE. `back-to-context.ts` used to
+ * carry a second one (with a wrong `request_interaction` id, and a `case` arm still pointing at
+ * `/consultations`); it now calls this function and keeps only the LABELS and the prose nouns.
+ * Extend this module, not that one — and if a third surface needs a meeting's destination, it
+ * calls `hrefForMeeting` too rather than starting a fourth table.
+ *
+ * ⚠ IT IS PARTIAL, AND EVERY CALLER MUST HANDLE `null`. Three shapes answer `null`: an unverified
+ * owning row, a request-grain arm with no resolved `projectRequestId`, and the two
+ * declared-but-unbuilt engagement kinds that have no detail route. `resolveBackTo` maps all three
+ * onto its documented `DASHBOARD_BACK_TO` fallback; the Up next card renders an un-linked row.
  */
 export interface MeetingHrefSubject {
   readonly owningRowFound: boolean;

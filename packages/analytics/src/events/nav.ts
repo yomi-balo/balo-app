@@ -9,7 +9,14 @@ import type { Workspace } from '@balo/shared/workspaces';
 export const NAV_ITEM_KEYS = [
   'dashboard',
   'find_experts',
-  'consultations',
+  // ⚠ BAL-567 RENAMED THIS KEY FROM `consultations`, IN PLACE (position 3, authored order
+  // preserved). The surface is now "Cases" at `/cases`, and a key still reading `consultations`
+  // would be the last place on the platform calling it by the old noun.
+  // ⚠⚠ IT BREAKS POSTHOG CONTINUITY FOR nav-click, DELIBERATELY AND WITH THE TICKET'S MANDATE:
+  // `nav_item_clicked` rows before and after this commit carry different `item` values and do
+  // not aggregate. An alias would have kept one graph whole at the cost of two names for one nav
+  // item forever, which is precisely the drift `NAV_ITEM_KEYS` exists to prevent.
+  'cases',
   'projects',
   'calendar',
   'messages',

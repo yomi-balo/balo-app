@@ -53,7 +53,7 @@ const BASE_INPUT = {
   caseTitle: 'Salesforce CPQ rollout',
   startAt: new Date('2026-09-01T04:00:00.000Z'),
   endAt: new Date('2026-09-01T04:30:00.000Z'),
-  joinUrl: 'https://balo.expert/join/m/meeting-1',
+  joinUrl: 'https://balo.expert/meetings/meeting-1/call',
 };
 
 function connection(overrides: Partial<Record<string, unknown>> = {}) {

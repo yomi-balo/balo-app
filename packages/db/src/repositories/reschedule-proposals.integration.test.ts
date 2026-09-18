@@ -422,6 +422,37 @@ describe('rescheduleProposalsRepository.findLivePendingByMeetingIds', () => {
     expect(found?.expiresAt.getTime()).toBe(proposal.expiresAt.getTime());
   });
 
+  /**
+   * BAL-567 — the projection gained `proposedByUserId` so the Cases index and the case nudge can
+   * say WHO suggested the new times. The key-set assertion is what keeps it a PROJECTION: a
+   * future `with:` hydration, or one more "harmless" column, fails here rather than in review.
+   */
+  it('carries proposedByUserId — and EXACTLY the six projected keys, never a hydrated row', async () => {
+    const start = new Date(Date.now() + 24 * HOUR_MS);
+    const { proposal, meetingId, proposedByUserId } = await rescheduleProposalFactory({
+      options: [{ scheduledStart: start, scheduledEnd: new Date(start.getTime() + HOUR_MS) }],
+    });
+
+    const rows = await rescheduleProposalsRepository.findLivePendingByMeetingIds([meetingId]);
+    expect(rows).toHaveLength(1);
+    const [found] = rows;
+    if (found === undefined) throw new Error('expected the pending proposal');
+
+    expect(found.proposalId).toBe(proposal.id);
+    expect(found.proposedByUserId).toBe(proposedByUserId);
+    expect(Object.keys(found).sort()).toEqual(
+      [
+        'proposalId',
+        'meetingId',
+        'optionCount',
+        'originalScheduledStart',
+        'expiresAt',
+        'proposedByUserId',
+      ].sort()
+    );
+    expect(Object.keys(found)).toHaveLength(6);
+  });
+
   it('skips SOFT-DELETED and NON-PENDING proposals, and returns [] for an empty id list', async () => {
     const deleted = await rescheduleProposalFactory({ values: { deletedAt: new Date() } });
     const declined = await rescheduleProposalFactory({ values: { status: 'declined' } });
