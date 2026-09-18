@@ -50,7 +50,8 @@ export type CaseCloseReason = NonNullable<CaseEngagement['closeReason']>;
  * them to the SCHEMA widened no consumer's view of a case. `CaseEngagementRow` is unchanged.
  *
  * `createdAt` is the PARENT's — the same clock `listOpenCreatedBefore` filters on, so
- * BAL-420 can feed it straight into `isCaseInactive` from `@balo/shared/engagements`.
+ * the inactivity sweep can feed it straight into `isCaseInactive` from
+ * `@balo/shared/engagements`.
  */
 export type CaseEngagementRow = Omit<Engagement, 'baloFeeBps'> &
   Omit<
@@ -584,7 +585,7 @@ export const caseEngagementsRepository = {
    *     a LIVE member of `engagements.company_id` — the DATA-INTEGRITY invariant on
    *     `closed_by_user_id`. A non-member (including the delivering expert) fails
    *     closed → `CaseCloserNotMemberError`.
-   *   - `{ reason: 'auto_inactive' }` — the BAL-420 sweep. Type-CANNOT supply a user;
+   *   - `{ reason: 'auto_inactive' }` — the inactivity sweep. Type-CANNOT supply a user;
    *     `closed_by_user_id` stays NULL (ADR-1030 system-actor exemption).
    *
    * ⚠ THIS IS NOT AN AUTHORIZATION GATE. No capability is resolved here and no role
@@ -609,7 +610,7 @@ export const caseEngagementsRepository = {
    *   2. publish `engagement.case_closed` carrying the RAW `reviewToken`, when that
    *      reviewer has not already rated the delivering expert.
    * BAL-388's `resolveCaseAction` (apps/web, the recap's `resolved` close) is the FIRST
-   * caller and does both; copy its post-commit half. BAL-420's `auto_inactive` sweep is
+   * caller and does both; copy its post-commit half. The `auto_inactive` inactivity sweep is
    * the second, and mints NO token by design.
    *
    * The NUDGE half needs no caller wiring: `listClosedBetween` below starts matching the
@@ -831,7 +832,8 @@ export const caseEngagementsRepository = {
    *
    * ⚠ DO NOT resolve the anchors through `credit_sessions.engagement_id`. That column
    * exists, but money/reporting read it while this rule reads the seam, and nothing
-   * enforces coherence between the two — see `schema/credit-sessions.ts:304-309`.
+   * enforces coherence between the two — see the `engagementId` column's docblock in
+   * `schema/credit-sessions.ts`.
    *
    * ⚠ THE BAL-425 PROHIBITION, RESTATED RATHER THAN DELETED. The old wording ("MUST NOT
    * run a sweep over this before BAL-418 lands") is discharged: BAL-418 landed in

@@ -145,7 +145,7 @@ async function assertPrimaryContextUnchangedTx(
  * passing `contextId` in. That check belongs in the service / server-action layer, not
  * here — authorization is capability-based and resolved at the call site (ADR-1029), so a
  * gate inside a repository would be the deviation. The full statement of this obligation,
- * with the named downstream owners (BAL-129, BAL-421, BAL-425/BAL-420, and BAL-424 by
+ * with the named downstream owners (BAL-129, BAL-421, the inactivity sweep, and BAL-424 by
  * inheritance), lives on the table in `schema/meeting-contexts.ts`.
  */
 export const meetingContextsRepository = {
@@ -498,13 +498,18 @@ export const meetingContextsRepository = {
    *    in_progress | ended | cancelled`, of which TWO are terminal — `ended` and
    *    `cancelled` (`endMeeting`'s CAS is written as the exclusion `NOT IN ('ended',
    *    'cancelled')`; see `schema/enums.ts`). ⚠ THE FOUR-LABEL ENUMERATION THAT STOOD HERE
-   *    UNTIL BAL-425 WAS STALE: `cancelled` was added by BAL-428 (`8daefce1`) in the SAME
-   *    commit that shipped this seam, and the enumeration was not refreshed.
+   *    UNTIL BAL-425 WAS STALE, AND THE WAY IT WENT STALE IS THE POINT: it was TRUE when
+   *    written — this seam and that sentence both shipped in BAL-418 (`5b843429`), when
+   *    `meeting_status` genuinely had four labels. BAL-428 (`8daefce1`) added `cancelled`
+   *    two days later WITHOUT touching this file, so nothing in that commit's diff pointed
+   *    a reviewer here. A comment does not have to be edited to become false; it only has
+   *    to describe something another commit is free to change.
    *
    *    So "non-terminal" would readmit BOTH `in_progress` AND `cancelled`, and the second
-   *    is the dangerous one. `cancelMeetingTx` flips `status` ONLY — it soft-deletes
-   *    neither the meeting nor its `meeting_contexts` rows — so a cancelled meeting keeps
-   *    its future `scheduled_start` FOREVER. Widening this filter would let one cancelled
+   *    is the dangerous one. `cancelMeetingTx` SOFT-DELETES NEITHER the meeting NOR its
+   *    `meeting_contexts` rows (it flips `status`, writes the `consultations` projection
+   *    and an audit row) — so a cancelled meeting keeps its future `scheduled_start`
+   *    FOREVER. Widening this filter would let one cancelled
    *    call hold a dead case open permanently, with no row anywhere that looks wrong. The
    *    `in_progress` exclusion is a judgement about the word "upcoming"; the `cancelled`
    *    exclusion is the difference between a rule that terminates and one that does not.

@@ -47,7 +47,7 @@
  * `packages/db/src/schema/meeting-contexts.ts`): a cross-tenant uuid SUCCEEDS SILENTLY.
  * Resolving the context's owning party and checking membership `hasCapability` against it
  * is the CALLER'S obligation, per that block's CARRIED BY list (BAL-129, BAL-409/410/411,
- * BAL-421, BAL-425/BAL-420) — BAL-413 is deliberately not on it.
+ * BAL-421, the inactivity sweep) — BAL-413 is deliberately not on it.
  * A `true` here is NEVER sufficient authorization on its own.
  *
  * ⚠ THE OBLIGATION LIST IS NOT EXHAUSTED BY TENANCY. ENGAGEMENT LIFECYCLE IS ALSO YOURS.

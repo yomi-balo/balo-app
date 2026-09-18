@@ -485,7 +485,7 @@ export type NotificationEvent =
   | 'engagement.review_reminder'
   // BAL-390 — a case was closed (fused close + rating ask). LIVE as of BAL-388: the recap's
   // `resolveCaseAction` publishes it from apps/web. The `auto_inactive` close is still
-  // unpublished (BAL-420's sweep).
+  // unpublished (the inactivity sweep).
   | 'engagement.case_closed'
   // BAL-390 — the star-rating nudge (+24h / +7d). SERVER-ONLY. NOT the same thing as
   // `engagement.review_reminder` above, which is BAL-338's pre-auto-accept nudge.

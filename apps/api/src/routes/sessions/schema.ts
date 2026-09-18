@@ -27,7 +27,7 @@ import { MAX_SESSION_MINUTES } from '@balo/shared/pricing';
  * that it names both the capability-gated company and the requested expert. Accepting an
  * `engagementId` from the wire would re-create the divergent `(meetingId, engagementId)` pair
  * that `OpenSessionInput`'s docblock warns about — a session that bills one engagement while
- * BAL-425's sweep ages out another. One resolution, one source.
+ * the inactivity sweep ages out another. One resolution, one source.
  *
  * ⚠ BAL-466 opens the Case consultation's session from the API SERVICE
  * (`joinMeetingAsMember` → `openSession`), not over this wire — `meetingId` and

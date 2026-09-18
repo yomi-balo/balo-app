@@ -85,7 +85,7 @@ export async function recordDeliveryAudit(
  * has none. `null` is the ADR-1030 SYSTEM-ACTOR ATTRIBUTION EXEMPTION, the same
  * convention `actionItemsRepository.createFromExtraction` uses for the BAL-387 transcript
  * pipeline and `caseEngagementsRepository.close({ reason: 'auto_inactive' })` uses for the
- * BAL-420 sweep: an unattributed row, never a fabricated actor.
+ * inactivity sweep: an unattributed row, never a fabricated actor.
  *
  * `entityId` IS the engagement id (it is the entity being created), and `engagementId` is
  * folded into `metadata` by `recordDeliveryAudit` as usual — both are the same value here.
