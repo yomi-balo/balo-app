@@ -95,7 +95,8 @@ export async function resolveOnboardingCompanyAction(): Promise<ResolveOnboardin
   // inside the `try` would be swallowed by the catch below and silently do nothing. A refused
   // account lands on the same safe default an anonymous one does: no company is disclosed, and
   // this path writes nothing.
-  if ((await accountRefusalFor(userId)) !== null) return { status: 'new', suggestion: '' };
+  if ((await accountRefusalFor(userId, { path: 'action', emit: true })) !== null)
+    return { status: 'new', suggestion: '' };
 
   try {
     const domain = extractEmailDomain(email);

@@ -35,7 +35,7 @@ export async function completeOnboardingAction(
   if (!session?.user?.id) {
     return { success: false, error: 'Unauthorized' };
   }
-  if ((await accountRefusalFor(session.user.id)) !== null) {
+  if ((await accountRefusalFor(session.user.id, { path: 'action', emit: true })) !== null) {
     return { success: false, error: 'Unauthorized' };
   }
 

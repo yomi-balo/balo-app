@@ -13,7 +13,8 @@ import { codeLinesOf, hasUseServerDirective, type ScannedFile } from './_source-
  * Measured in this worktree with the shipped `AUTH_HELPERS` list and NO following: **40** of 182
  * `'use server'` modules name no auth primitive at all. An allowlist of 40 is the one move that
  * must not happen. This module resolves the indirection instead, which is what makes a repo-wide
- * assertion — and a 12-entry allowlist — honest.
+ * assertion — and an 11-entry allowlist (re-measured 2026-09-19; `account-liveness-gate.test.ts`
+ * B7/B8 assert both counts) — honest.
  *
  * ⚠ IT BUILDS ON `_source-scan.ts` RATHER THAN ON A NEW PARSER. Same `indexOf`-only convention:
  * NO REGEX ANYWHERE (SonarCloud S5852 / `regexp/no-super-linear-move`).
@@ -56,6 +57,22 @@ export const LIVE_CHECKED_SEAMS: readonly string[] = [
   // A `meeting_guests` row, NOT a `users` row — see the note above.
   'resolveMeetingGuestSubject',
   // A Bearer hop: `apps/api`'s `requireAuth` live-checks on the other side of HTTP (BAL-568 §4).
+  //
+  // ⚠⚠ R9's "THE GATE SITS ABOVE THE PARSE" DOES **NOT** HOLD ON THIS SEAM, AND THAT IS A KNOWN,
+  // ACCEPTED EXCEPTION (fix round 2, G4). An action reaching the API this way (e.g.
+  // `openSessionAction`) validates its input LOCALLY first and only then makes the hop, so the
+  // account check happens on the far side of HTTP — AFTER the parse. A refused caller can
+  // therefore still learn whether their own input was well-formed.
+  //
+  // Why that is acceptable here, rather than a gap to close:
+  //   · nothing is written on the web side before the hop — the parse is pure;
+  //   · the leaked bit is about the CALLER'S OWN INPUT, not about the existence of any other
+  //     record, which is the disclosure R9 exists to prevent;
+  //   · closing it would mean a local liveness read in front of every api-client action purely to
+  //     reorder an error message, i.e. a second read on the hot path for no security gain.
+  //
+  // It is written down because an undocumented exception to a stated ruling is how the next reader
+  // concludes the ruling was never real.
   'callSessionApi',
 ];
 

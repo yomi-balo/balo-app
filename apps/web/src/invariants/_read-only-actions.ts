@@ -276,10 +276,13 @@ export const GUEST_READ_ALLOWLIST: readonly string[] = [
  * two lists must be disjoint. A new ungated action fails CI; deleting an entry without gating the
  * file fails CI too; an entry whose `proof` has drifted out of the file fails CI as well.
  *
- * ⚠⚠ TWELVE ENTRIES IN TOTAL (ten here + the two public ones), NOT FORTY. The forbidden move —
+ * ⚠⚠ ELEVEN ENTRIES IN TOTAL (nine here + the two public ones), NOT FORTY. The forbidden move —
  * deleting the filter and growing the allowlist to absorb every wrapper-gated action — is what
- * import-following exists to make unnecessary. Measured in this worktree: 139 modules resolve at
- * depth 0, 26 at one import hop, 5 at two, 12 unresolved.
+ * import-following exists to make unnecessary. Re-measured 2026-09-19: of 182 `'use server'`
+ * modules, **140 resolve at depth 0, 26 at one import hop, 5 at two, and 11 are unresolved**.
+ * (It read twelve/ten until `app/review/_actions/submit-token-review.ts` was GATED rather than
+ * allowlisted — see the removal note below.) `account-liveness-gate.test.ts` B7 and B8 assert both
+ * counts, so this prose and the assertions cannot drift apart silently again.
  *
  * ⚠ WHAT AN ENTRY IS ASSERTING: not "this action needs no authorization", but that **there is no
  * account to check yet, or checking one would break the only path back**. Every entry is

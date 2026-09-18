@@ -48,26 +48,55 @@ export class AccountNotLiveError extends Error {
 }
 
 /**
- * THE ONE PLACE an account refusal is logged and emitted, for every path. Keeping it here (rather
- * than at each of the call sites) is what makes the `path` dimension trustworthy.
+ * ── ⚠⚠ ONE EMITTER PER PATH. READ THIS BEFORE ADDING A `trackServerAndFlush` ANYWHERE NEAR A
+ *    LIVENESS REFUSAL (fix round 2, G3) ────────────────────────────────────────────────────────
  *
- * ⚠⚠ IT IS `React.cache()`'d ON `(userId, path)`, AND THAT IS A DEFECT FIX, NOT AN OPTIMISATION
- * (fix round 1, F3). `readLiveUserRow` is cached so the READ dedupes, but the emission was not, and
- * the seams call it more than once per request: a suspended visitor on the MARKETING surface — where
- * nothing converges, because there is no `checkSessionDrift` redirect to eject them — emitted two
- * events and two log lines on EVERY page view, indefinitely, each one a *flushing* PostHog call.
- * Keying on `path` as well as `userId` keeps a genuine page-then-action sequence distinguishable
- * while collapsing the repeats within one path.
+ * `auth_session_invalidated` must fire **exactly once per refusal**. Its docblock said so from the
+ * start; the code did not honour it, because two layers both emitted for the same refusal:
+ *
+ *   · an API refusal emitted in `apps/api`'s `requireAuth` AND again in `consumeApiAccountRefusal`;
+ *   · a page ejection emitted in `getCurrentUser()` (root layout) AND again in the sync route.
+ *
+ * The rule now, and the only place it is written down:
+ *
+ * | path     | THE ONE EMITTER                                                     |
+ * | -------- | ------------------------------------------------------------------- |
+ * | `api`    | `apps/api`'s `requireAuth` — the refusal originates there            |
+ * | `page`   | `app/api/auth/session-sync/route.ts` — the route that ejects         |
+ * | `action` | `assertAccountLive`, or a hand-gated action's own `{ emit: true }`       |
+ *
+ * Everything else is **LOG-ONLY**: it keeps its `log.*` line (which is what you debug with) and
+ * emits nothing. That includes `getCurrentUser`, the `switch-workspace` route and every web→api
+ * client — each of which hands off to a layer that does emit.
+ *
+ * ⚠ THIS ALSO CLOSES A REAL EVENT FLOOD. `NotificationBell` polls `/api/notifications` every 30s
+ * and KEEPS POLLING after a 401; that route resolves its actor through `getCurrentUser()`. While
+ * that seam emitted, a suspended user with one open tab produced a *flushing* PostHog call every
+ * 30 seconds for the life of the cookie. Exposure is zero today (only a direct DB edit can suspend
+ * anyone) and becomes real the moment an admin suspend screen ships.
+ *
+ * `emitter-per-path.test.ts` pins the rule structurally so a new emitter cannot be added quietly.
+ */
+
+/**
+ * Log a refusal, and emit `auth_session_invalidated` — for the callers that OWN a path per the
+ * table above. A caller that does not own its path calls {@link logAccountRefusal} instead.
  *
  * ⚠ `trackServerAndFlush`, NOT `trackServer`: Vercel route handlers and Server Actions are
  * serverless and an unflushed PostHog batch is lost when the function freezes.
+ *
+ * ⚠ IT IS `React.cache()`'d, WHICH HELPS ONLY ON THE RENDER PATH (corrected 2026-09-19). An
+ * earlier version claimed this made the emission fire "at most once per request" outright; it does
+ * not — `React.cache()` memoizes only inside a server-component render pass, so on a Server Action
+ * or a Route Handler it is inert (see `./live-user.ts`). The wrapper is kept because it is free and
+ * genuinely collapses repeat renders; **the one-emitter-per-path rule above is what actually
+ * guarantees one event per refusal**, and it does so without depending on a render scope.
  *
  * ⚠ UNDER IMPERSONATION `userId` IS THE **TARGET'S**, NOT THE STAFF MEMBER'S (BAL-553, fix round 1
  * F13). `session.user.id` carries the impersonated customer's id for the whole session, so a
  * refusal raised while a staff member is impersonating is attributed to the CUSTOMER in both the
  * log line and `distinct_id`. The gating behaviour is right — it is the target's account that is
- * being refused — but the attribution surprises anyone reading the event stream, and it is the same
- * trap this repo already records for actor-persisting actions generally.
+ * being refused — but the attribution surprises anyone reading the event stream.
  */
 export const noteAccountRefusal = cache(
   (code: AccountRefusalCode, path: AccountRefusalPath, userId: string): void => {
@@ -82,23 +111,49 @@ export const noteAccountRefusal = cache(
 );
 
 /**
+ * Log a refusal and emit NOTHING — for a seam that catches a refusal it does not own the path for.
+ * The `log.*` line is identical to {@link noteAccountRefusal}'s so debugging is unaffected; only
+ * the analytics event is withheld, because a layer downstream will emit it.
+ */
+export function logAccountRefusal(
+  code: AccountRefusalCode,
+  path: AccountRefusalPath,
+  userId: string
+): void {
+  log.info('Session invalidated: account not live', {
+    userId,
+    path,
+    reason: reasonOfRefusal(code),
+  });
+}
+
+/** How a caller of {@link accountRefusalFor} wants the refusal recorded. */
+export interface AccountRefusalOptions {
+  /**
+   * The path to record the refusal under. Required — there is no sensible default, and the plan
+   * (§5.2) hard-coding `'action'` here is exactly how every render-path refusal came to be
+   * mislabelled as an action refusal (fix round 1, F3). Do not reintroduce a default.
+   */
+  readonly path: AccountRefusalPath;
+  /**
+   * `true` ⇒ this caller OWNS the path and emits `auth_session_invalidated`.
+   * `false` (the default) ⇒ **log-only**; a downstream layer owns the emission.
+   * See the one-emitter-per-path table above before setting this.
+   */
+  readonly emit?: boolean;
+}
+
+/**
  * `null` ⇒ the account is live and may act. Otherwise the refusal.
  *
- * ⚠⚠ THE CALLER SUPPLIES THE `path`, AND IT DEFAULTS TO `'action'` ONLY BECAUSE THAT IS THE
- * DOMINANT SEAM. **The plan (§5.2) hard-coded `'action'` here; that was a PLAN DEFECT, not a
- * builder choice — do not "restore" it.** `getCurrentUser()` runs from `app/layout.tsx`,
- * `(marketing)/layout.tsx` and `(dashboard)/layout.tsx`, so with the constant every render-path
- * refusal was reported as an action refusal and R3's `page` arm was emitted by the sync route
- * alone — which defeats the entire point of the dimension (knowing how often a suspended account is
- * stopped OUTSIDE a page load).
- *
  * ⚠ FAIL CLOSED ON A DB FAULT: an unreachable database must not be a way to keep acting while
- * suspended. It returns {@link ACCOUNT_UNREADABLE} rather than a refusal CODE, and emits NO
- * analytics — a database blip is not a session invalidation and must not be counted as one.
+ * suspended. It returns {@link ACCOUNT_UNREADABLE} rather than a refusal CODE, and records NOTHING
+ * — a database blip is not a session invalidation and must not be logged or counted as one. The
+ * read failure has already been logged at `error` by then.
  */
 export async function accountRefusalFor(
   userId: string,
-  path: AccountRefusalPath = 'action'
+  options: AccountRefusalOptions
 ): Promise<AccountRefusalCode | typeof ACCOUNT_UNREADABLE | null> {
   let row: Awaited<ReturnType<typeof readLiveUserRow>>;
   try {
@@ -113,7 +168,10 @@ export async function accountRefusalFor(
   }
 
   const refusal = classifyAccountRefusal(row);
-  if (refusal !== null) noteAccountRefusal(refusal, path, userId);
+  if (refusal !== null) {
+    const record = options.emit === true ? noteAccountRefusal : logAccountRefusal;
+    record(refusal, options.path, userId);
+  }
   return refusal;
 }
 
@@ -134,6 +192,7 @@ export async function accountRefusalFor(
  * deliver is worse than the bug, because the next reader stops checking.
  */
 export async function assertAccountLive(userId: string): Promise<void> {
-  const refusal = await accountRefusalFor(userId);
+  // ⚠ THE ONE EMITTER FOR THE `action` PATH (fix round 2, G3) — see the table above.
+  const refusal = await accountRefusalFor(userId, { path: 'action', emit: true });
   if (refusal !== null) throw new AccountNotLiveError(refusal);
 }

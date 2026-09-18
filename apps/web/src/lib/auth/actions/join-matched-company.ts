@@ -46,7 +46,7 @@ export async function joinMatchedCompanyAction(): Promise<AuthResult<JoinMatched
   // (see `complete-onboarding.ts` for the full reasoning); `accountRefusalFor`, not
   // `assertAccountLive`, because this action returns a typed result and the `try` below would
   // swallow a throw into its generic retry copy.
-  if ((await accountRefusalFor(session.user.id)) !== null) {
+  if ((await accountRefusalFor(session.user.id, { path: 'action', emit: true })) !== null) {
     return { success: false, error: 'Unauthorized' };
   }
   if (session.user.onboardingCompleted) {

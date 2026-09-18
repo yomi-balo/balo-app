@@ -37,7 +37,8 @@ export async function resolveExpertAgencyAction(): Promise<ResolveExpertAgencyRe
   // inside the `try` would be swallowed by the catch below and silently do nothing — the exact
   // "a gate nobody noticed had stopped working" shape. A refused account lands on the same safe
   // default an anonymous one does: it learns nothing, and this path writes nothing.
-  if ((await accountRefusalFor(userId)) !== null) return { kind: 'solo' };
+  if ((await accountRefusalFor(userId, { path: 'action', emit: true })) !== null)
+    return { kind: 'solo' };
 
   try {
     // DB is authoritative for email + verification state (never trust the session copy).

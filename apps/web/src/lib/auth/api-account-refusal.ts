@@ -8,7 +8,8 @@ import {
 } from '@balo/shared/authz';
 import { log } from '@/lib/logging';
 import { getSession } from './session';
-import { noteAccountRefusal } from './account-liveness';
+// ⚠ NO `noteAccountRefusal` IMPORT, DELIBERATELY (fix round 2, G3). This module is log-only: the
+// `api` path's one emitter is `apps/api`'s `requireAuth`, on the other side of the HTTP hop.
 
 /**
  * BAL-568 — the `apps/web` half of the api refusal marker.
@@ -30,7 +31,14 @@ export function accountRefusalFromResponse(response: Response): AccountRefusalCo
 }
 
 /**
- * Record an api-path account refusal: one `warn` line plus `session_invalidated { path: 'api' }`.
+ * Record an api-path account refusal: one `warn` line, and **no analytics event**.
+ *
+ * ⚠⚠ LOG-ONLY, BY THE ONE-EMITTER-PER-PATH RULE (fix round 2, G3 — see `./account-liveness.ts`).
+ * The refusal ORIGINATES in `apps/api`'s `requireAuth`, which already emitted
+ * `auth_session_invalidated { path: 'api' }` for it before the 401 ever reached this tier. This
+ * function used to emit a second copy of the same event, so every refused API call counted twice.
+ * The `warn` line stays — it is what correlates the web-side failure with the api-side refusal —
+ * but the event does not.
  *
  * ⚠⚠ IT DOES NOT `redirect()` AND IT DOES NOT DESTROY THE COOKIE, AND BOTH OMISSIONS ARE
  * DELIBERATE:
@@ -53,12 +61,10 @@ export async function noteApiAccountRefusal(code: AccountRefusalCode): Promise<v
   const userId = session.user?.id;
   if (userId === undefined) {
     // No session to attribute it to — the api refused a Bearer this tier could not have sent.
-    // Log it (it is still an account refusal) but emit no event: `distinct_id` would be a lie.
     log.warn('API refused a non-live account', { reason: reasonOfRefusal(code) });
     return;
   }
   log.warn('API refused a non-live account', { userId, reason: reasonOfRefusal(code) });
-  noteAccountRefusal(code, 'api', userId);
 }
 
 /**

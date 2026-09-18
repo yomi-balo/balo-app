@@ -34,25 +34,28 @@ describe('accountRefusalFor (BAL-568)', () => {
     vi.clearAllMocks();
   });
 
+  const EMITTING = { path: 'action', emit: true } as const;
+  const LOG_ONLY = { path: 'page' } as const;
+
   it('returns null for a live row, and emits nothing', async () => {
     mockReadLiveUserRow.mockResolvedValue(LIVE);
-    await expect(accountRefusalFor('user-1')).resolves.toBeNull();
+    await expect(accountRefusalFor('user-1', EMITTING)).resolves.toBeNull();
     expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
   });
 
   it('returns account_suspended for a suspended row', async () => {
     mockReadLiveUserRow.mockResolvedValue(SUSPENDED);
-    await expect(accountRefusalFor('user-1')).resolves.toBe('account_suspended');
+    await expect(accountRefusalFor('user-1', EMITTING)).resolves.toBe('account_suspended');
   });
 
   it('returns account_deleted for a soft-deleted row', async () => {
     mockReadLiveUserRow.mockResolvedValue(DELETED);
-    await expect(accountRefusalFor('user-1')).resolves.toBe('account_deleted');
+    await expect(accountRefusalFor('user-1', EMITTING)).resolves.toBe('account_deleted');
   });
 
   it('returns account_deleted when the row is missing entirely', async () => {
     mockReadLiveUserRow.mockResolvedValue(null);
-    await expect(accountRefusalFor('ghost')).resolves.toBe('account_deleted');
+    await expect(accountRefusalFor('ghost', EMITTING)).resolves.toBe('account_deleted');
   });
 
   /**
@@ -64,7 +67,7 @@ describe('accountRefusalFor (BAL-568)', () => {
   it('⚠ a DB fault refuses as account_unreadable, logs, and emits NO analytics', async () => {
     mockReadLiveUserRow.mockRejectedValue(new Error('connection terminated'));
 
-    await expect(accountRefusalFor('user-1')).resolves.toBe(ACCOUNT_UNREADABLE);
+    await expect(accountRefusalFor('user-1', EMITTING)).resolves.toBe(ACCOUNT_UNREADABLE);
 
     expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledWith(
@@ -78,10 +81,10 @@ describe('accountRefusalFor (BAL-568)', () => {
    * passes against a payload carrying an extra field — including one carrying the token, the
    * email or the WorkOS `sub`, which is exactly what must never be attached here.
    */
-  it('⚠ emits session_invalidated with the EXACT payload for a real refusal', async () => {
+  it('⚠ emits session_invalidated with the EXACT payload when the caller OWNS the path', async () => {
     mockReadLiveUserRow.mockResolvedValue(SUSPENDED);
 
-    await accountRefusalFor('user-1');
+    await accountRefusalFor('user-1', EMITTING);
 
     expect(mockTrackServerAndFlush).toHaveBeenCalledTimes(1);
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_session_invalidated', {
@@ -92,16 +95,14 @@ describe('accountRefusalFor (BAL-568)', () => {
   });
 
   /**
-   * ⚠⚠ THE `path` IS THE CALLER'S TO SUPPLY (fix round 1, F3). It was HARD-CODED to `'action'` —
-   * specified that way by the plan (§5.2), so a plan defect rather than a builder slip — which
-   * meant every RENDER-path refusal (`getCurrentUser` runs from three layouts) was reported as an
-   * action refusal, and R3's `page` arm came only from the sync route. That defeats the whole
-   * point of the dimension: knowing how often a suspended account is stopped OUTSIDE a page load.
+   * ⚠⚠ THE `path` IS THE CALLER'S TO SUPPLY, AND IS REQUIRED (fix round 1, F3). The plan (§5.2)
+   * hard-coded `'action'` here, which meant every RENDER-path refusal (`getCurrentUser` runs from
+   * three layouts) was reported as an action refusal. There is now no default to fall back into.
    */
-  it('⚠ reports the path the CALLER supplies, not a constant', async () => {
+  it('⚠ reports the path the CALLER supplies, in both the log line and the event', async () => {
     mockReadLiveUserRow.mockResolvedValue(SUSPENDED);
 
-    await accountRefusalFor('user-1', 'page');
+    await accountRefusalFor('user-1', { path: 'page', emit: true });
 
     expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_session_invalidated', {
       distinct_id: 'user-1',
@@ -115,15 +116,35 @@ describe('accountRefusalFor (BAL-568)', () => {
     });
   });
 
-  it('defaults to action when the caller supplies no path — the dominant seam', async () => {
+  /**
+   * ⚠⚠ THE ONE-EMITTER-PER-PATH RULE (fix round 2, G3). `auth_session_invalidated` must fire once
+   * per refusal, and it did not: an API refusal emitted in `requireAuth` AND again in
+   * `consumeApiAccountRefusal`; a page ejection emitted in `getCurrentUser()` AND again in the
+   * sync route. A seam that does not own its path is now LOG-ONLY — it keeps the log line, which
+   * is what debugging needs, and withholds the event.
+   */
+  it('⚠ LOG-ONLY by default: it logs the refusal but emits NOTHING', async () => {
     mockReadLiveUserRow.mockResolvedValue(SUSPENDED);
 
-    await accountRefusalFor('user-1');
+    const refusal = await accountRefusalFor('user-1', LOG_ONLY);
 
-    expect(mockTrackServerAndFlush).toHaveBeenCalledWith(
-      'auth_session_invalidated',
-      expect.objectContaining({ path: 'action' })
-    );
+    // The refusal is unchanged — the caller still refuses; only the analytics differ.
+    expect(refusal).toBe('account_suspended');
+    expect(log.info).toHaveBeenCalledWith('Session invalidated: account not live', {
+      userId: 'user-1',
+      path: 'page',
+      reason: 'suspended',
+    });
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  it('⚠ an explicit `emit: false` is log-only too — the opt-in is the emission, not the log', async () => {
+    mockReadLiveUserRow.mockResolvedValue(SUSPENDED);
+
+    await accountRefusalFor('user-1', { path: 'action', emit: false });
+
+    expect(log.info).toHaveBeenCalledTimes(1);
+    expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
   });
 });
 

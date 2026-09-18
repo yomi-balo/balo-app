@@ -2,15 +2,26 @@ import { describe, expect, it } from 'vitest';
 import { occurrences, resolveRouteDir, scanRouteSources, type ScannedFile } from './_source-scan';
 
 /**
- * BAL-568 — structural invariant: **THE PER-REQUEST LIVE-ROW READ HAPPENS THROUGH EXACTLY ONE
- * FUNCTION, AND THAT FUNCTION IS `React.cache()`'d.**
+ * BAL-568 — structural invariant: **THE LIVE-ROW READ GOES THROUGH EXACTLY ONE FUNCTION.**
+ * One READER. Not one read.
  *
- * ⚠⚠ WHY A SOURCE INVARIANT AND NOT A RUNTIME ONE. The ruling asks for a MECHANISM, not a
- * convention: the 22 platform-gated staff actions must not pay two round trips for the same row.
- * `React.cache()` supplies the dedupe — but it is a NO-OP outside a React request scope, vitest
- * included, so the dedupe itself is not unit-testable. What IS testable, and what actually keeps
- * the mechanism intact, is that every per-request consumer goes through the one cached reader.
- * A convention with nothing enforcing it is not a mechanism; this file is the enforcement.
+ * ⚠⚠ THE DISTINCTION IS THE WHOLE POINT, AND AN EARLIER VERSION OF THIS HEADER GOT IT BACKWARDS
+ * (corrected 2026-09-19, human review of PR #325). It claimed this file enforced a "read once"
+ * MECHANISM via `React.cache()`. It does not, and `React.cache()` does not either:
+ *
+ *   · `React.cache()` memoizes **only inside a server-component render pass** — confirmed
+ *     empirically, and pinned by `lib/auth/live-user.test.ts`'s `toHaveBeenCalledTimes(2)`.
+ *   · A Server Action runs BEFORE that render begins; a Route Handler never runs inside one. On
+ *     both, every seam call is its own query.
+ *   · So the 22 platform-gated staff actions **do** pay two primary-key reads (the liveness gate,
+ *     then `actorHoldsPlatformCapability`). That is an ACCEPTED cost (user ruling, 2026-09-19),
+ *     not a defect — do not restructure the read or add a request-scoped cache to "fix" it.
+ *
+ * ⚠ WHAT THIS FILE **DOES** ENFORCE, AND WHY IT IS STILL WORTH HAVING: every per-request consumer
+ * reaches the row through `readLiveUserRow`, and nothing outside a small argued set calls
+ * `usersRepository.findForSessionSync(` directly. That is a real property — it is what makes the
+ * read swappable, cacheable or instrumentable in ONE place, and it is what would make a future
+ * genuine dedupe a one-file change. It is a single point of access, not a count of round trips.
  *
  * ⚠ THE WALK IS UNFILTERED AND THE PINS ARE COMPARED, NEVER USED TO FILTER (the BAL-404 lesson).
  * Every non-test `.ts`/`.tsx` under `apps/web/src` is collected, and the set of modules calling
@@ -21,17 +32,18 @@ const SRC_DIR = resolveRouteDir(['apps/web/src', 'src']);
 
 const REL_COMPARATOR = (a: string, b: string): number => a.localeCompare(b);
 
-/** The ONE cached reader. */
+/** The ONE reader every per-request consumer goes through. */
 const CACHED_READER = 'readLiveUserRow(';
 /** The raw repository read it wraps. */
 const RAW_READ = 'usersRepository.findForSessionSync(';
 
-/** The module that defines the cached reader — the one place allowed to call the raw read. */
+/** The module that defines the reader — the one place allowed to call the raw read. */
 const READER_MODULE = 'lib/auth/live-user.ts';
 
 /**
- * Per-request consumers of the live row. Each MUST call the cached reader and MUST NOT call the
- * raw repository read, so all three share one round trip.
+ * Per-request consumers of the live row. Each MUST go through the shared reader and MUST NOT call
+ * the raw repository read — so the access point stays single, and (on a RENDER pass, where
+ * `React.cache()` is live) they share one round trip.
  */
 const CACHED_CONSUMERS: readonly string[] = [
   // Every dashboard render.
@@ -52,7 +64,7 @@ const CACHED_CONSUMERS: readonly string[] = [
 const RAW_READ_ALLOWED: readonly { rel: string; reason: string }[] = [
   {
     rel: READER_MODULE,
-    reason: 'It IS the cached reader — the one wrapper every other consumer goes through.',
+    reason: 'It IS the shared reader — the one wrapper every other consumer goes through.',
   },
   {
     rel: 'app/api/auth/session-sync/route.ts',
@@ -72,7 +84,7 @@ const RAW_READ_ALLOWED: readonly { rel: string; reason: string }[] = [
 ];
 const RAW_READ_ALLOWED_RELS: readonly string[] = RAW_READ_ALLOWED.map((entry) => entry.rel);
 
-describe('invariant: one cached live-row reader for the request (BAL-568)', () => {
+describe('invariant: ONE reader function for the live row (BAL-568)', () => {
   const scanned = scanRouteSources(SRC_DIR, '', []);
   const fileOf = (rel: string): ScannedFile | undefined =>
     scanned.find((candidate) => candidate.rel === rel);
@@ -103,7 +115,7 @@ describe('invariant: one cached live-row reader for the request (BAL-568)', () =
     expect(reader.code).not.toContain("from '@/lib/auth/session'");
   });
 
-  it('C4: every per-request consumer reads through the cached reader, and never raw', () => {
+  it('C4: every per-request consumer reads through the shared reader, and never raw', () => {
     expect(CACHED_CONSUMERS).toHaveLength(4);
     for (const rel of CACHED_CONSUMERS) {
       const file = fileOf(rel);
@@ -112,8 +124,10 @@ describe('invariant: one cached live-row reader for the request (BAL-568)', () =
       expect(file.code.includes(CACHED_READER), `${rel} must call ${CACHED_READER}`).toBe(true);
       expect(
         occurrences(file.code, RAW_READ),
-        `${rel} must not call ${RAW_READ} directly — it would be a SECOND round trip for the ` +
-          'same row, which is exactly what the cached reader exists to prevent.'
+        `${rel} must not call ${RAW_READ} directly — the live row has ONE access point, which is ` +
+          'what keeps it swappable and instrumentable in one file. (On a render pass it is also ' +
+          'what lets these consumers share a round trip; outside one they do not — see the ' +
+          'header.)'
       ).toBe(0);
     }
   });

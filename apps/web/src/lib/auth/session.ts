@@ -198,25 +198,36 @@ export async function getSession() {
  * been resolved; no session means no DB read at all, so a marketing page for a logged-out visitor
  * issues zero extra queries. Pinned by `session.test.ts`.
  *
- * ⚠ Inside `(dashboard)` the read is free — it shares `checkSessionDrift`'s `React.cache()` entry
- * via `readLiveUserRow`. Outside it (the root and marketing layouts) it is one indexed read per
- * authenticated render: an accepted cost, because showing "signed in" chrome to an account whose
- * every action is refused is worse than the read.
+ * ⚠ ON A PAGE RENDER inside `(dashboard)` the read is free — it shares `checkSessionDrift`'s
+ * `React.cache()` entry via `readLiveUserRow`. Outside it (the root and marketing layouts) it is
+ * one indexed read per authenticated render: an accepted cost, because showing "signed in" chrome
+ * to an account whose every action is refused is worse than the read.
  *
- * ⚠⚠ IT REPORTS `path: 'page'`, AND THAT IS AN APPROXIMATION WITH A NAMED RESIDUAL (fix round 1,
- * F3). This seam has two kinds of caller and cannot tell them apart from the inside: the THREE
- * layouts (`app/layout.tsx`, `(marketing)/layout.tsx`, `(dashboard)/layout.tsx`) that run on every
- * authenticated render, and a handful of Server Actions that resolve their actor here rather than
- * through `requireUser`. `'page'` is right for the dominant caller and the one the dimension exists
- * to measure; the residual is that those few actions report as page refusals. The EXACT arms are
- * unaffected — `assertAccountLive` (behind `requireUser` / `withAuth`) reports `'action'`, the
- * api clients report `'api'`, and the sync route reports `'page'`.
+ * ⚠⚠ THAT SHARING IS A RENDER-PASS PROPERTY ONLY, AND AN EARLIER VERSION OF THIS DOCBLOCK IMPLIED
+ * MORE (corrected 2026-09-19). `React.cache()` memoizes only inside a server-component render
+ * pass; a Server Action runs BEFORE that render starts, and a Route Handler never runs inside one,
+ * so on those paths every seam call is its own query. The two reads a platform-gated staff action
+ * therefore pays are an ACCEPTED cost (user ruling, 2026-09-19), not a defect to restructure — see
+ * `./live-user.ts` for the full correction and `live-user.test.ts` for the assertion pinning it.
+ *
+ * ⚠⚠ IT IS LOG-ONLY: IT DOES NOT EMIT `auth_session_invalidated` (fix round 2, G3). The `page`
+ * path has exactly ONE emitter — the session-sync route, which is where a refused render actually
+ * ejects. Emitting here as well double-counted every page ejection, and worse: `NotificationBell`
+ * polls `/api/notifications` every 30s and KEEPS POLLING after a 401, so a suspended user with one
+ * open tab produced a *flushing* PostHog call every 30 seconds for the life of the cookie. The
+ * `log.info` line is unchanged, so debugging is unaffected.
+ *
+ * ⚠ `path: 'page'` on that log line remains an approximation with a named residual: this seam has
+ * two kinds of caller and cannot tell them apart from the inside — the THREE layouts that run on
+ * every authenticated render, and a handful of Server Actions that resolve their actor here rather
+ * than through `requireUser`. It is now only a LOG dimension, so the residual costs no accuracy in
+ * the event stream.
  */
 export async function getCurrentUser(): Promise<SessionUser | null> {
   const session = await getSession();
   const user = session.user ?? null;
   if (user === null) return null;
-  if ((await accountRefusalFor(user.id, 'page')) !== null) return null;
+  if ((await accountRefusalFor(user.id, { path: 'page' })) !== null) return null;
   return user;
 }
 

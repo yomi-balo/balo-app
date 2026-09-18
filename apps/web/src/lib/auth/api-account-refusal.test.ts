@@ -62,22 +62,34 @@ describe('noteApiAccountRefusal', () => {
     mockSessionObj = { user: { id: 'user-1' } };
   });
 
-  it('logs and records the refusal on the api path', async () => {
+  /**
+   * ⚠⚠ LOG-ONLY, BY THE ONE-EMITTER-PER-PATH RULE (fix round 2, G3). The refusal ORIGINATES in
+   * `apps/api`'s `requireAuth`, which already emitted `auth_session_invalidated { path: 'api' }`
+   * for it before the 401 reached this tier. This function used to emit a SECOND copy, so every
+   * refused API call was counted twice. The `warn` line stays — it is what correlates the web-side
+   * failure with the api-side refusal — and the event does not.
+   */
+  it('⚠ logs the refusal and emits NOTHING — apps/api owns the api path', async () => {
     await noteApiAccountRefusal('account_suspended');
 
     expect(log.warn).toHaveBeenCalledWith('API refused a non-live account', {
       userId: 'user-1',
       reason: 'suspended',
     });
-    expect(mockNoteAccountRefusal).toHaveBeenCalledWith('account_suspended', 'api', 'user-1');
+    expect(mockNoteAccountRefusal).not.toHaveBeenCalled();
   });
 
-  it('maps account_deleted to the deleted reason', async () => {
+  it('maps account_deleted to the deleted reason, still without emitting', async () => {
     await noteApiAccountRefusal('account_deleted');
-    expect(mockNoteAccountRefusal).toHaveBeenCalledWith('account_deleted', 'api', 'user-1');
+
+    expect(log.warn).toHaveBeenCalledWith('API refused a non-live account', {
+      userId: 'user-1',
+      reason: 'deleted',
+    });
+    expect(mockNoteAccountRefusal).not.toHaveBeenCalled();
   });
 
-  it('⚠ logs but emits NO event when there is no session to attribute it to', async () => {
+  it('⚠ logs WITHOUT a userId when there is no session to attribute it to', async () => {
     mockSessionObj = {};
 
     await noteApiAccountRefusal('account_suspended');
@@ -95,13 +107,14 @@ describe('consumeApiAccountRefusal — the ONE shape every web→api client uses
     mockSessionObj = { user: { id: 'user-1' } };
   });
 
-  it('records and returns the code when the marker is present', async () => {
+  it('logs and returns the code when the marker is present, emitting nothing', async () => {
     const code = await consumeApiAccountRefusal(
       responseWith({ [ACCOUNT_REFUSAL_HEADER]: 'account_suspended' })
     );
 
     expect(code).toBe('account_suspended');
-    expect(mockNoteAccountRefusal).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(mockNoteAccountRefusal).not.toHaveBeenCalled();
   });
 
   it('returns null and records NOTHING for an ordinary 401', async () => {

@@ -128,7 +128,7 @@ export async function submitTokenReviewAction(
   // there is no other actor to check. It still runs before `applyReview`, i.e. before any write.
   // ⚠ IT REFUSES WITH THE SAME NON-ENUMERATING LITERAL as every other failure on this surface — an
   // anonymous prober must not learn from the response whether a link's owner is suspended.
-  if ((await accountRefusalFor(row.reviewerUserId)) !== null) {
+  if ((await accountRefusalFor(row.reviewerUserId, { path: 'action', emit: true })) !== null) {
     log.warn('Review submit refused: reviewer account is not live', {
       engagementId: row.engagementId,
       userId: row.reviewerUserId,

@@ -43,6 +43,7 @@ vi.mock('@/lib/analytics/server', () => ({
 }));
 
 import { trackServerAndFlush } from '@/lib/analytics/server';
+import { log } from '@/lib/logging';
 import {
   requireUser,
   requireOnboardedUser,
@@ -339,17 +340,38 @@ describe('BAL-568 — the seams re-read the LIVE row, and the cookie stops grant
    * §5.2), which left R3's `page` arm coming only from the sync route and hid exactly the thing
    * the dimension exists to measure: how often a suspended account is stopped OUTSIDE a page load.
    */
-  it('⚠ getCurrentUser reports path=page, not the action default', async () => {
+  it('⚠ getCurrentUser LOGS the page refusal but emits NO event', async () => {
     mockSession = { user: userWith(true) };
     mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
 
     await getCurrentUser();
 
-    expect(trackServerAndFlush).toHaveBeenCalledWith('auth_session_invalidated', {
-      distinct_id: 'user-1',
+    expect(log.info).toHaveBeenCalledWith('Session invalidated: account not live', {
+      userId: 'user-1',
       path: 'page',
       reason: 'suspended',
     });
+    // ⚠⚠ LOG-ONLY (fix round 2, G3). The session-sync route is the ONE emitter for the page path —
+    // it is where a refused render actually ejects. Emitting here as well double-counted every
+    // ejection.
+    expect(trackServerAndFlush).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ THE POLLING CASE, AND WHY G3 IS MORE THAN A COUNTING FIX. `/api/notifications` resolves its
+   * actor through `getCurrentUser`, and `NotificationBell` polls it every 30s and KEEPS POLLING
+   * after a 401 — so an emission on this seam is a *flushing* PostHog call every 30 seconds for
+   * the entire life of a suspended user's cookie.
+   */
+  it('⚠ repeated getCurrentUser calls emit nothing at all — the NotificationBell poll', async () => {
+    mockSession = { user: userWith(true) };
+    mockFindForSessionSync.mockResolvedValue({ status: 'suspended', deletedAt: null });
+
+    await getCurrentUser();
+    await getCurrentUser();
+    await getCurrentUser();
+
+    expect(trackServerAndFlush).not.toHaveBeenCalled();
   });
 
   it('getCurrentUser returns NULL for a soft-deleted row', async () => {

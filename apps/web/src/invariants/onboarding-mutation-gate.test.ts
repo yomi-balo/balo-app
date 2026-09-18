@@ -224,13 +224,13 @@ describe('onboarding mutation gate (BAL-365)', () => {
    * IMPORTS. BAL-568 did exactly that. `_action-auth-scan.ts` resolves relative and `@/`-aliased
    * specifiers on disk and classifies each `'use server'` module at depth 0 (own source), 1 (one
    * import hop) or 2 (one further RE-EXPORT hop); `account-liveness-gate.test.ts` asserts the
-   * resulting property REPO-WIDE, against a 12-entry allowlist rather than the ~35 this note
+   * resulting property REPO-WIDE, against an 11-entry allowlist rather than the ~35 this note
    * warned about — so the forbidden move was avoided, not taken.
    *
-   * Measured in that work, superseding this note's estimate: **182** `'use server'` modules — 139
+   * Re-measured 2026-09-19, superseding this note's estimate: **182** `'use server'` modules — 140
    * resolve at depth 0, **26 at one import hop**, **5 at two** (the `accept-project.ts` →
    * `engagement-lifecycle-shared.ts` → `milestone-action-shared.ts` chain, which is what makes
-   * one level provably insufficient), 12 unresolved and allowlisted. That property is STRICTLY
+   * one level provably insufficient), 11 unresolved and allowlisted. That property is STRICTLY
    * STRONGER than this file's: it asserts each module reaches a seam that re-reads the LIVE ROW,
    * which a fortiori reads the caller at all.
    *

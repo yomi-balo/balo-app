@@ -145,7 +145,15 @@ describe('BAL-568 — account liveness (F1)', () => {
     expect(mockSwitchWorkspace).not.toHaveBeenCalled();
   });
 
-  it('fails CLOSED when the live-row read throws — an unreachable DB does not permit the switch', async () => {
+  /**
+   * ⚠⚠ "COULD NOT TELL" IS NOT "NOT LIVE" (fix round 2, G5). An unreadable row still REFUSES — the
+   * switch does not happen either way — but it must not be reported as a sign-out. Sending a DB
+   * fault down the session-sync path was dishonest AND useless: that route reads the same
+   * unreachable database and returns a 500. A 503 says what actually happened, leaves the session
+   * intact so a retry works once the database is back, and is the correct status for a transient
+   * dependency failure.
+   */
+  it('⚠ returns 503 — not a sign-out — when the live-row read throws', async () => {
     onboardedSession();
     validToken('/dashboard');
     switchSucceeds();
@@ -153,8 +161,12 @@ describe('BAL-568 — account liveness (F1)', () => {
 
     const response = await GET(makeRequest(signedQuery('/dashboard')));
 
-    expect(getRedirectLocation(response)).toBe('/api/auth/session-sync?returnTo=/login');
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: 'service_unavailable' });
+    // ⚠ STILL FAILS CLOSED: no write, and no re-sealed cookie.
     expect(mockSwitchWorkspace).not.toHaveBeenCalled();
+    // ⚠ AND IT DOES NOT MASQUERADE AS A REFUSAL — no redirect into the sign-out path.
+    expect(response.headers.get('Location')).toBeNull();
   });
 
   it('⚠ an anonymous caller pays ZERO live-row reads', async () => {

@@ -5,7 +5,7 @@ import {
   WORKSPACE_SWITCH_TOKEN_PARAM,
 } from '@/lib/workspaces/switch-token';
 import { getSession } from '@/lib/auth/session';
-import { accountRefusalFor } from '@/lib/auth/account-liveness';
+import { accountRefusalFor, ACCOUNT_UNREADABLE } from '@/lib/auth/account-liveness';
 import { getSafeRedirectPath } from '@/lib/auth/safe-redirect';
 import { log } from '@/lib/logging';
 
@@ -52,11 +52,28 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // `'use server'` modules and a Route Handler is not one. (`route-handler-liveness-gate.test.ts`
   // now closes that corpus gap.)
   //
-  // ⚠ IT REDIRECTS TO THE SYNC ROUTE, NOT TO `/login` DIRECTLY. The sync Route Handler re-reads the
-  // live row, destroys the cookie and lands on `/login?error=account_suspended|account_deleted`
-  // with BAL-197's shipped copy; a bare `/login` would lose the message entirely. Same move as
-  // `signOutOnAccountRefusal` in `components/balo/phone-verification-flow.tsx`.
-  if ((await accountRefusalFor(session.user.id, 'page')) !== null) {
+  // ⚠ A CONFIRMED REFUSAL REDIRECTS TO THE SYNC ROUTE, NOT TO `/login` DIRECTLY. The sync Route
+  // Handler re-reads the live row, destroys the cookie and lands on
+  // `/login?error=account_suspended|account_deleted` with BAL-197's shipped copy; a bare `/login`
+  // would lose the message entirely. Same move as `signOutOnAccountRefusal` in
+  // `components/balo/phone-verification-flow.tsx`.
+  //
+  // ⚠⚠ "COULD NOT TELL" IS NOT "NOT LIVE" (fix round 2, G5). An unreadable row still REFUSES — the
+  // switch does not happen either way — but sending a DB fault down the sign-out path was both
+  // dishonest and useless: the sync route would read the same unreachable database and 500. A 503
+  // says what actually happened, keeps the person's session intact so a retry works once the
+  // database is back, and is the correct status for a transient dependency failure.
+  //
+  // ⚠ IT IS LOG-ONLY (fix round 2, G3): `{ path: 'page' }` with no `emit`. The sync route this
+  // redirects to owns the `page` emission, and emitting here too would double-count one ejection.
+  const refusal = await accountRefusalFor(session.user.id, { path: 'page' });
+  if (refusal === ACCOUNT_UNREADABLE) {
+    log.error('Workspace switch (deep link) refused: liveness read failed', {
+      userId: session.user.id,
+    });
+    return NextResponse.json({ error: 'service_unavailable' }, { status: 503 });
+  }
+  if (refusal !== null) {
     return NextResponse.redirect(new URL('/api/auth/session-sync?returnTo=/login', request.url));
   }
 
