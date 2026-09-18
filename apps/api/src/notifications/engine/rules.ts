@@ -853,7 +853,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   //
   // ⚠ LIVE AS OF BAL-388: `resolveCaseAction` (the recap's client-side close) is the FIRST
   // and today ONLY publisher, so this rule delivers a real email to a real client. The
-  // `auto_inactive` arm is still unpublished — BAL-420's sweep owns it — and it reuses this
+  // `auto_inactive` arm is still unpublished — the inactivity sweep owns it — and it reuses this
   // same rule and template with a different `closeReason`.
   'engagement.case_closed': emailAndInApp(
     'client',

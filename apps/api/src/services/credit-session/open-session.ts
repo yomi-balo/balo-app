@@ -56,7 +56,7 @@ async function resolveEligibleCompanies(userId: string): Promise<EligibleCompany
  * engagement whose company they hold no capability on. A separate "does this user own this
  * meeting?" check would be a SECOND place the pair could diverge, which is exactly the
  * failure `OpenSessionInput`'s docblock warns about: a divergent pair bills one engagement
- * while BAL-425's sweep, which resolves through the seam, ages out another.
+ * while the inactivity sweep, which resolves through the seam, ages out another.
  *
  * ⚠ MEETING STATUS IS NOT CHECKED. `findWithContexts` filters soft-deleted rows; that is the
  * only liveness requirement. A session may legitimately be opened for a meeting in

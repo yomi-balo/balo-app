@@ -861,7 +861,7 @@ export interface ReviewReminderPayload {
  * ⚠ LIVE AS OF BAL-388. The recap's `resolveCaseAction` is the FIRST and (today) only
  * publisher: a `@balo/db` repository structurally cannot publish, so `close()` gets its
  * publish line at the caller's layer. The `auto_inactive` arm is still unpublished
- * (BAL-420's sweep owns it). Do not describe this event as inert.
+ * (the inactivity sweep owns it). Do not describe this event as inert.
  *
  * ⚠ THIS EVENT IS **PUBLISHABLE**, NOT SERVER-ONLY. BAL-421's caller is a web Server
  * Action, which publishes over HTTP → `apps/api/src/routes/notifications/schema.ts`.

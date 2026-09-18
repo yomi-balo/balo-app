@@ -1,5 +1,8 @@
 /**
- * Case inactivity rule (BAL-417; the SWEEP that applies it is BAL-420's).
+ * Case inactivity rule (BAL-417; the SWEEP that applies it belongs to WHICHEVER TICKET
+ * FIRST GIVES `consultationTimestampsForEngagements` A PRODUCTION CALLER — not BAL-420,
+ * which shipped only the delayed-dispatch primitive and is Done. See BAL-425's ruling in
+ * `repositories/meeting-contexts.ts`).
  *
  * A case is inactive when BOTH hold:
  *   1. it has NO upcoming scheduled consultation (a booked future consultation
@@ -27,7 +30,8 @@
  * entry for EVERY requested id, so "absent" never has to be distinguished from
  * "none".)
  *
- * ⚠ BAL-420's SWEEP MUST CALL THAT READ. `caseEngagementsRepository.listOpenCreatedBefore`
+ * ⚠ THE SWEEP MUST CALL THAT READ, whichever ticket ships it (see the note above — it is
+ * not BAL-420). `caseEngagementsRepository.listOpenCreatedBefore`
  * returns only the SQL-expressible SUPERSET (creation-anchored, consultation-blind);
  * this function refines it, and it can only refine what it is given. Passing
  * `null, null` is now a BUG, not a gap — it collapses the rule to "created ≥ 30 days
