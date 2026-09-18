@@ -86,7 +86,19 @@ export interface RotateMeetingGuestTokenInput {
    * onto any guest row in the database given only its uuid, from any caller that reached this
    * method. It is contained TODAY only because `resendGuestJoinLink` happens to re-read the
    * row through the meeting-scoped `findLiveById` first — i.e. by a caller's discipline rather
-   * than by this method's own shape. BAL-442's guest-facing arm inherits this primitive.
+   * than by this method's own shape.
+   *
+   * ⚠ CORRECTED BY BAL-442. This clause used to read "BAL-442's guest-facing arm inherits this
+   * primitive." It does not, and that instruction was UNIMPLEMENTABLE: `rotateToken` hard-codes
+   * `admission = 'admitted'`, which excludes EVERY row the self-service arm can match (a lobby
+   * knock is `pending` by definition, and stays `pending` until a host admits it). BAL-442 ships
+   * its own separately-named primitive — {@link RotatePendingLobbyTokenInput} /
+   * `rotatePendingLobbyToken` — and `rotateToken`'s predicate is LEFT UNTOUCHED, because widening
+   * it would silently grant the HOST resend arm (`resendGuestJoinLink`) the ability to re-send to
+   * un-admitted knocks, which that method's own docblock deliberately forbids.
+   * What the guest-facing arm DOES inherit is the TENANCY RULE stated above — the scope belongs
+   * in the statement, not in a caller's discipline — which is why the new input carries a
+   * non-optional `meetingId` too.
    */
   meetingId: string;
   guestId: string;
@@ -96,6 +108,32 @@ export interface RotateMeetingGuestTokenInput {
   expiresAt: Date;
   /** ATTRIBUTION — the host who re-sent the link. */
   rotatedByUserId: string;
+}
+
+/**
+ * BAL-442 — rotate ONE self-claimed, still-PENDING lobby credential. Every field is decided by
+ * the CALLER; this repository derives nothing from request input.
+ *
+ * ⚠⚠ THERE IS NO `rotatedByUserId` HERE, AND THAT ABSENCE IS THE POINT — the same shape
+ * {@link ClaimLobbyPlaceInput} has for `invitedById`. A self-service recovery has NO ACTOR: the
+ * person asking is anonymous by construction (a bare meeting URL plus a typed address), so the
+ * audit row is written with a NULL `actor_user_id`, exactly as `meeting_guest.self_claimed` is.
+ *
+ * ⚠ IT MUST NOT REUSE {@link RotateMeetingGuestTokenInput}, whose `rotatedByUserId: string` is
+ * NON-nullable — that type names a HOST, and there is no honest host to name on this path.
+ */
+export interface RotatePendingLobbyTokenInput {
+  /**
+   * ⚠⚠ THE TENANCY SCOPE, AND IT IS NOT OPTIONAL — the rule
+   * {@link RotateMeetingGuestTokenInput.meetingId} states, inherited verbatim. There is no RLS
+   * behind this method either; the `WHERE` clause is the whole boundary.
+   */
+  meetingId: string;
+  guestId: string;
+  /** SHA-256 hex of the NEW raw token. ⚠ The RAW token never arrives here — see the repository docblock. */
+  tokenHash: string;
+  /** `meetings.scheduled_end + GUEST_TOKEN_TTL_AFTER_END_MS`, recomputed by the caller. */
+  expiresAt: Date;
 }
 
 /**
@@ -175,6 +213,26 @@ export interface ConvertedGuestLink {
     startedAt: Date | null;
     scheduledStart: Date;
   };
+}
+
+/**
+ * BAL-442 — the NARROW projection behind the self-service lobby re-entry lookup.
+ *
+ * ⚠ DELIBERATELY EXCLUDES `token_hash`, `expires_at`, `access_count`, `last_accessed_at` and
+ * every attribution column — the {@link MeetingGuestPublic} rule, applied harder because this
+ * one is read on an UNAUTHENTICATED path. The caller needs exactly three things: the id (to
+ * rotate, to audit, and as the analytics `distinct_id`), the STORED email and the name.
+ */
+export interface PendingLobbyGuestMatch {
+  id: string;
+  meetingId: string;
+  /**
+   * ⚠⚠ THE STORED BYTES, NOT WHAT THE CALLER TYPED. The recovery link goes to THIS address and
+   * nowhere else — that is the single property that makes the self-service arm safe, so the
+   * caller must send to this value and never echo its own input back into the mailer.
+   */
+  email: string;
+  name: string | null;
 }
 
 /** A resolved live token: the guest AND the meeting it lets them into, in one round trip. */
@@ -756,6 +814,12 @@ export const meetingGuestsRepository = {
    *      by the route's per-visitor and per-meeting windows — but it is not closed. Closing it
    *      needs a decoy-token design whose failure surfaces one poll later, which is a worse
    *      answer for the legitimate visitor and only moves the oracle.
+   *
+   *      ⚠⚠ **BAL-442 DOES NOT CLOSE THIS, AND MUST NOT BE READ AS HAVING CLOSED IT.** The
+   *      recovery arm added below answers IDENTICALLY — same body, same status, same latency —
+   *      whether or not an address matched, so it adds no NEW oracle; but this one was already
+   *      open on the KNOCK and it stays exactly as open, and as accepted, as it was. Residual
+   *      #2 moved; residual #1 did not.
    *   2. **A VISITOR WHO LOSES THEIR TOKEN CANNOT RE-ENTER THE QUEUE WITH THAT ADDRESS WHILE
    *      THE ROW REMAINS LIVE.** `sessionStorage` survives a reload, so this needs the TAB to
    *      be closed. They then see the uniform "this link isn't active" card until something
@@ -774,8 +838,17 @@ export const meetingGuestsRepository = {
    *      design — they are in the room.
    *
    *      That is a real product cost, accepted here because the alternative is the hijack
-   *      above; a proper fix (an emailed re-entry link) is its own ticket, its own rate limit
-   *      and its own non-enumerating response.
+   *      above.
+   *
+   *      ⚠ **THAT TICKET IS BAL-442 AND IT HAS SHIPPED** — `requestLobbyReentryLink`
+   *      (`apps/api`), over {@link PendingLobbyGuestMatch} and `rotatePendingLobbyToken` below.
+   *      It emails a FRESH link to the address ALREADY ON THE ROW, with its own rate-limit
+   *      windows and a neutral, fixed-latency response, and never returns a credential to the
+   *      browser that asked — which is exactly why it does not reopen the hijack this
+   *      `DO NOTHING` closes. ⚠ NOTE WHAT IT DOES **NOT** DO: the row still holds its slot in
+   *      `meeting_guest_meeting_email_live_idx` until a host denies or removes it, and the
+   *      re-knock is still refused. Only the CREDENTIAL is recoverable, never the queue entry,
+   *      the name on it, or the place in line.
    *
    * ⚠ NEVER SOFT-DELETE-AND-REINSERT to work around either residual. `token_hash` carries a
    * NON-PARTIAL unique (`meeting_guest_token_hash_idx`), and vacating the live slot to insert
@@ -849,6 +922,92 @@ export const meetingGuestsRepository = {
 
       return row;
     });
+  },
+
+  /**
+   * BAL-442 — THE SELF-SERVICE LOBBY RE-ENTRY LOOKUP: the ONE live, still-`pending` lobby row an
+   * address holds on one meeting, or `undefined`. The read half of the recovery arm; the write
+   * half is {@link meetingGuestsRepository.rotatePendingLobbyToken}.
+   *
+   * ── ⚠⚠ EIGHT PREDICATES, AND THE `WHERE` IS THE WHOLE BOUNDARY ────────────────────────────
+   * There is no RLS on this platform and this read sits on an UNAUTHENTICATED path, so every
+   * narrowing fact is in the statement:
+   *
+   *   1. `meeting_id`      — TENANCY, and the leading column of
+   *                          `meeting_guest_meeting_email_live_idx`.
+   *   2. `party = 'client'`— ⚠ **REQUIRED FOR THE INDEX, NOT COSMETIC.** That index is
+   *                          `(meeting_id, party, email)`, so without `party` the email is not a
+   *                          usable key and the probe degrades to a scan. It is also CORRECT:
+   *                          `claimLobbyPlace` hard-codes `client` as the placeholder party, so
+   *                          no other value can name a lobby row (and an expert-side row with the
+   *                          same address is a different grant, recoverable by nothing here).
+   *   3. `email`           — the match key, canonicalised HERE. See the note below.
+   *   4. `deleted_at IS NULL`
+   *   5. `revoked_at IS NULL` — ⚠ 4 and 5 are the index's partial predicate, and 5 is ALSO what
+   *                          excludes a **DENIED** row: `decideAdmission` stamps `revoked_at` on
+   *                          the deny branch, so a denial can never be undone by self-service.
+   *   6. `invite_channel = 'link'` — SCOPE. An `email` invitee has an inviter and BAL-436's
+   *                          host-side resend path; this arm must never reach them.
+   *   7. `admission = 'pending'` — ⚠ **THE INDEX CARRIES NO `admission` PREDICATE**, so it is
+   *                          supplied here. An `admitted` / `pre_admitted` row is deliberately
+   *                          NOT self-recoverable: an admitted person's credential grants ROOM
+   *                          ENTRY with no further human check, and self-service rotation of that
+   *                          is a materially bigger primitive than restoring a queue place. That
+   *                          case is BAL-436's HOST arm. Across the two arms the coverage is
+   *                          complete; the split is documented, not closed here.
+   *   8. `expires_at > now()` — ⚠ **THE INDEX CARRIES NO `expires_at` PREDICATE EITHER** (see
+   *                          the index's own comment: expiry does not vacate a unique index).
+   *                          An expired row's recomputed expiry is also in the past, so rotating
+   *                          it would email a link that is dead on arrival.
+   *
+   * ⚠ NARROW PROJECTION VIA AN EXPLICIT `select({...})`, NEVER a bare `select()`, which would
+   * hydrate `token_hash` (memory `reference_drizzle_with_hydration_leaks_secrets`).
+   *
+   * ── WHY THIS MATCHER CANONICALISES INSIDE THE REPOSITORY ──────────────────────────────────
+   * `linkConvertedUser` §7 is the precedent and the argument is the same: the "`@balo/db` never
+   * normalises input" convention protects STORED BYTES under a unique index
+   * ({@link CreateMeetingGuestInput.email}). **This method stores nothing — it only MATCHES** —
+   * and a caller that forgot to canonicalise would silently find nothing: an invisible false
+   * negative that produces the SAME neutral response as a genuine miss, so no log, metric or
+   * test downstream could ever surface it. The route canonicalises too, deliberately:
+   * `canonicalGuestEmail` is idempotent, and the route needs the canonical form anyway to key
+   * its recipient rate-limit window on the same string this lookup uses.
+   *
+   * ⚠ NON-ASCII INPUT IS **NOT** SPECIALLY GUARDED HERE, unlike `linkConvertedUser` — stated
+   * rather than left to imply coverage. The addresses this matches against were themselves
+   * written through a `z.string().email()` boundary, and the worst case of a Unicode-fold
+   * collision on this path is the rotation of a live pending credential whose REPLACEMENT is
+   * emailed to the true owner — i.e. exactly the bounded cost the recovery arm already documents
+   * and its recipient-keyed window already bounds. No access is gained by it.
+   */
+  findLivePendingLobbyByEmail: async (
+    meetingId: string,
+    email: string
+  ): Promise<PendingLobbyGuestMatch | undefined> => {
+    const [row] = await db
+      .select({
+        id: meetingGuests.id,
+        meetingId: meetingGuests.meetingId,
+        email: meetingGuests.email,
+        name: meetingGuests.name,
+      })
+      .from(meetingGuests)
+      .where(
+        and(
+          eq(meetingGuests.meetingId, meetingId),
+          // ⚠ THE INDEX'S SECOND COLUMN. Without it `email` is not a usable key — see docblock.
+          eq(meetingGuests.party, 'client'),
+          eq(meetingGuests.email, canonicalGuestEmail(email)),
+          isNull(meetingGuests.deletedAt),
+          // ⚠ ALSO EXCLUDES A DENIED ROW — `decideAdmission` stamps this on the deny branch.
+          isNull(meetingGuests.revokedAt),
+          eq(meetingGuests.inviteChannel, 'link'),
+          // ⚠ NEITHER OF THE LAST TWO IS IN THE INDEX PREDICATE. Both are supplied here.
+          eq(meetingGuests.admission, 'pending'),
+          gt(meetingGuests.expiresAt, sql`now()`)
+        )
+      );
+    return row;
   },
 
   /**
@@ -936,8 +1095,13 @@ export const meetingGuestsRepository = {
    * ⚠ **ATOMIC, NOT RE-READ.** The service checks the same shape in front of this call for the
    * sake of a precise error literal (`guest_link_not_resendable` vs `guest_not_found`), but
    * that check is a COURTESY, not the gate: between the read and the write a concurrent revoke
-   * or admit-reversal could land, and a caller that forgets the read entirely (BAL-442's guest
-   * self-service arm is the one being written against this) still cannot widen the shape.
+   * or admit-reversal could land, and a caller that forgets the read entirely still cannot widen
+   * the shape.
+   * ⚠ CORRECTED BY BAL-442: that parenthetical used to name "BAL-442's guest self-service arm"
+   * as the caller being written against this method. It is not — that arm is written against
+   * `rotatePendingLobbyToken`, because `admission = 'admitted'` below excludes every row it can
+   * match. The ATOMICITY argument is what generalises, and it is restated verbatim on the new
+   * method; the FUNCTION is not shared, and must not be made shared.
    * ⚠ DO NOT "SIMPLIFY" THIS BACK TO `eq(id)` ON THE ARGUMENT THAT THE SERVICE ALREADY
    * CHECKED — that is precisely the argument that leaves an unguarded primitive behind.
    *
@@ -978,6 +1142,135 @@ export const meetingGuestsRepository = {
         {
           actorUserId: input.rotatedByUserId,
           action: 'meeting_guest.link_resent',
+          entityType: ENTITY_TYPE,
+          entityId: row.id,
+          metadata: {
+            meetingId: row.meetingId,
+            party: row.party,
+            inviteChannel: row.inviteChannel,
+          },
+        },
+        tx
+      );
+
+      return row;
+    });
+  },
+
+  /**
+   * BAL-442 — ROTATE ONE SELF-CLAIMED, STILL-`pending` LOBBY CREDENTIAL: replace `token_hash`,
+   * refresh `expires_at`, and append a `meeting_guest.link_self_recovered` audit row, all in ONE
+   * transaction, so the rotation and its trail commit or roll back together.
+   *
+   * ── ⚠⚠ WHY THIS IS A SECOND, SEPARATELY-NAMED METHOD AND NOT A WIDER `rotateToken` ────────
+   * `rotateToken` hard-codes `admission = 'admitted'`, which excludes EVERY row this arm can
+   * match. **ITS PREDICATE IS LEFT UNTOUCHED, DELIBERATELY** — widening it would silently grant
+   * the HOST resend arm (`resendGuestJoinLink`) the ability to re-send to un-admitted knocks,
+   * which is precisely the control the admission queue exists to be, and which that method's own
+   * docblock forbids in as many words. Two arms, two primitives, two audit meanings. ⚠ DO NOT
+   * MERGE THEM, and do not "simplify" either one into the other.
+   *
+   * ── ⚠⚠ WHY A SELF-SERVICE ROTATION IS SAFE HERE WHERE THE HOST ARM'S WOULD NOT BE ─────────
+   * **THE CREDENTIAL IS EMAILED TO THE ADDRESS ALREADY ON THE ROW AND IS NEVER RETURNED TO THE
+   * REQUESTING BROWSER.** That is the whole argument. Nothing on this path lets a stranger
+   * OBTAIN a credential, INHERIT a queue position, or CHANGE the name or address a host sees —
+   * so `claimLobbyPlace`'s `ON CONFLICT DO NOTHING` hijack control is not reopened. The `SET`
+   * touches `token_hash` / `expires_at` / `updated_at` and NOTHING ELSE: not `admission`, not
+   * `admission_decided_at`, not `name`, `email` or `party`. A recovery is a credential
+   * replacement, not an admission and not an identity edit.
+   *
+   * ⚠ THE ONE REAL COST, STATED RATHER THAN HIDDEN: a stranger who GUESSES a colleague's address
+   * can force a rotation of that colleague's live pending credential, so the colleague's open tab
+   * stops working. The replacement goes only to the colleague's own inbox, so nobody gains
+   * access; the cost is a one-off interruption plus an email, bounded by the caller's route-level
+   * recipient-keyed window. It is the same trade `rotateToken` documents for the host arm.
+   *
+   * ⚠ THE RAW TOKEN NEVER REACHES THIS LAYER — only the SHA-256 hex, for the reason the
+   * repository docblock states: the Drizzle query-logging hook in `client.ts` sees every bind
+   * parameter. `apps/api`'s `mintGuestInviteToken` / `hashGuestToken` own the mint.
+   *
+   * ⚠ `expiresAt` IS DERIVED BY THE CALLER FROM THE **MEETING** (`scheduled_end + TTL`), never
+   * from the mint instant — the `createMany` / `rotateToken` rule, and the reason
+   * `meeting_guests.expires_at` has no SQL default.
+   *
+   * ── ⚠⚠ THE `WHERE` CLAUSE IS THE WHOLE BOUNDARY, AND IT CARRIES ALL **SEVEN** PREDICATES ──
+   * There is no RLS, so a credential-minting UPDATE is contained by its own `WHERE` and by
+   * nothing else. ⚠ **ATOMIC, NOT RE-READ** — `rotateToken`'s rule, restated here because the
+   * function is not shared: the service's `findLivePendingLobbyByEmail` in front of this call is
+   * a COURTESY (it decides whether to mint at all), never the gate. Between the read and the
+   * write a host can admit, deny or remove; the statement refuses, not the read.
+   *
+   *   1. `id`
+   *   2. `meeting_id`            — TENANCY, IN THE STATEMENT. Without it any guest row in the
+   *                                database is rotatable given only its uuid.
+   *   3. `deleted_at IS NULL`
+   *   4. `revoked_at IS NULL`    — LIVE rows only; also excludes a DENIED row, since
+   *                                `decideAdmission` stamps `revoked_at` on the deny branch.
+   *   5. `invite_channel = 'link'`
+   *   6. `admission = 'pending'` — the lobby queue, and ONLY the lobby queue.
+   *   7. `expires_at > now()`    — ⚠ **A DELIBERATE DIVERGENCE FROM `rotateToken`, WHICH HAS NO
+   *                                `expires_at` PREDICATE.** It is here for the same reason the
+   *                                other six are: the `WHERE` is the entire boundary and the
+   *                                pre-read is a courtesy, so the write must be independently
+   *                                safe when called by a future caller that forgets the read.
+   *                                Without it, an expired handle could be re-minted with a fresh
+   *                                window — reviving a credential nobody admitted and that the
+   *                                deliberately-narrowed `extendGuestExpiryForMeetingTx` already
+   *                                refuses to revive. (Do not "align" this away.)
+   *
+   * ⚠ `undefined` therefore means "no row matched ALL SEVEN", and the caller cannot tell which
+   * one failed. That is CORRECT here rather than merely acceptable: the caller's response is
+   * neutral either way, by design, so a distinguishable failure would be a match oracle.
+   *
+   * ── THE AUDIT ROW ──────────────────────────────────────────────────────────────────────────
+   * `meeting_guest.link_self_recovered`, with a NULL `actorUserId`. ⚠ **NOT
+   * `meeting_guest.link_resent`** — that action's meaning is "a HOST re-sent it", which is false
+   * here, and reusing it would make the two arms indistinguishable in the durable trail.
+   *
+   * ⚠ THE METADATA NEVER CARRIES `token_hash` OR THE EMAIL — the `createMany` / `rotateToken`
+   * rule. Ids and labels only.
+   *
+   * ⚠ UNLIKE `meeting_guest.self_claimed` (exactly one per row, where a second is a BUG),
+   * **SEVERAL `link_self_recovered` ROWS ON ONE `entity_id` ARE EXPECTED AND NORMAL** — a guest
+   * may lose a tab more than once, and each recovery kills the previous link. The two rules are
+   * easy to conflate because they sit on the same entity; they are not the same rule.
+   */
+  rotatePendingLobbyToken: async (
+    input: RotatePendingLobbyTokenInput
+  ): Promise<MeetingGuest | undefined> => {
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(meetingGuests)
+        .set({
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(meetingGuests.id, input.guestId),
+            // ⚠ TENANCY, IN THE STATEMENT. See the docblock — there is no RLS behind this.
+            eq(meetingGuests.meetingId, input.meetingId),
+            isNull(meetingGuests.deletedAt),
+            isNull(meetingGuests.revokedAt),
+            // ⚠ THE NARROW SHAPE, ATOMIC RATHER THAN RE-READ.
+            eq(meetingGuests.inviteChannel, 'link'),
+            eq(meetingGuests.admission, 'pending'),
+            // ⚠ THE SEVENTH — deliberately absent from `rotateToken`. See the docblock.
+            gt(meetingGuests.expiresAt, sql`now()`)
+          )
+        )
+        .returning();
+
+      if (row === undefined) {
+        return undefined;
+      }
+
+      await auditEventsRepository.record(
+        {
+          // ⚠ NULL — self-service has no actor. The column permits it (`self_claimed`'s rule).
+          actorUserId: null,
+          action: 'meeting_guest.link_self_recovered',
           entityType: ENTITY_TYPE,
           entityId: row.id,
           metadata: {

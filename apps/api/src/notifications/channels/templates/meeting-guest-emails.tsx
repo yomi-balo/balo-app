@@ -465,3 +465,96 @@ export function MeetingGuestLinkResentEmail({
     </EmailShell>
   );
 }
+
+// ── meeting.guest_reentry_link_sent ──────────────────────────────────────────────────
+
+interface MeetingGuestReentryLinkEmailProps {
+  readonly guestName?: string;
+  readonly meetingTitle: string;
+  readonly scheduledStartIso: string;
+  readonly scheduledEndIso: string;
+  readonly expiresOn: string;
+  /** The CTA, and the ONLY credential-bearing string in the message. */
+  readonly joinUrl: string;
+  /** The SITE ORIGIN, for the shell's legal footer. ⚠ Never `joinUrl` — see the file docblock. */
+  readonly baseUrl: string;
+}
+
+/**
+ * BAL-442 — sent when a lobby guest asks us to email their own link back after losing the
+ * tab that held it. The previous link has been ROTATED and no longer works.
+ *
+ * ⚠⚠ **NO INVITER IS NAMED, AND THAT IS NOT AN OMISSION.** This row was self-claimed — the
+ * reader knocked at the meeting link themselves — so there is no inviter relationship to
+ * attribute, the same reasoning as {@link MeetingGuestLinkResentEmail}.
+ *
+ * ⚠⚠ **IT SAYS PLAINLY THEY ARE STILL WAITING TO BE LET IN.** This restores their PLACE IN
+ * THE QUEUE, it does **not** admit them — over-promising here would be a worse surprise than
+ * the lockout this email fixes.
+ *
+ * ⚠ IT SAYS PLAINLY THAT THE OLD LINK IS DEAD. Rotation is invisible to the reader otherwise,
+ * and somebody who keeps clicking a link that silently stopped working has a worse time than
+ * somebody who was told.
+ *
+ * ⚠ WARM, NOT ADVERSARIAL, AND NO COUNTDOWN. The expiry is stated as a helpful fact ("good
+ * until {date}, no rush"), never as a deadline.
+ *
+ * ⚠ NO BILLING LINE — see the file docblock. ⚠ Gender-neutral throughout.
+ */
+export function MeetingGuestReentryLinkEmail({
+  guestName,
+  meetingTitle,
+  scheduledStartIso,
+  scheduledEndIso,
+  expiresOn,
+  joinUrl,
+  baseUrl,
+}: Readonly<MeetingGuestReentryLinkEmailProps>): React.JSX.Element {
+  const previewText = `Here's your link back into "${meetingTitle}".`;
+  const window = formatMeetingWindowUtc(scheduledStartIso, scheduledEndIso);
+
+  // ⚠ THE SAME GUARDED-CLAUSE SHAPE AS THE OTHER TWO. `expiresOn` defaults to `''` at the
+  // template factory, and interpolating it unconditionally renders "…good until . " — a
+  // sentence with a hole in it. Present it or omit it; never render a stub.
+  const expiryClause =
+    expiresOn.trim().length > 0 ? ` It's good until ${expiresOn} — no rush.` : '';
+  const linkText = `This link is just for you, and it replaces the one you had. You'll still wait to be let in — this gets you back to the same place in line.${expiryClause}`;
+
+  return (
+    <EmailShell previewText={previewText} baseUrl={baseUrl}>
+      <Section style={shared.smallHero}>
+        <LogoRow size="small" />
+        <StatusPill label="🔗 Your link back in" style={guestPillStyle} />
+        <Heading style={shared.smallHeroHeading}>Here&apos;s your way back in</Heading>
+      </Section>
+
+      <Section style={shared.card}>
+        <Text style={shared.greeting}>{greetingFor(guestName)}</Text>
+        <Text style={shared.bodyText}>
+          You asked to join the call below and we&apos;ve sent a fresh link. The one you had has
+          stopped working, so use this one instead — you&apos;ll still wait for the host to let you
+          in.
+        </Text>
+
+        <MeetingWhenBlock meetingTitle={meetingTitle} window={window} />
+
+        <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
+          <Button style={shared.smallCtaButton} href={joinUrl}>
+            Go back to the call →
+          </Button>
+        </Section>
+
+        <Callout
+          emoji="🔗"
+          heading="About this link"
+          text={linkText}
+          bg={colors.bg}
+          borderColor={colors.border}
+          headingColor={colors.textSecondary}
+        />
+
+        <SupportFooter prefix="Trouble getting in?" />
+      </Section>
+    </EmailShell>
+  );
+}

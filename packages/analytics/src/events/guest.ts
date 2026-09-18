@@ -102,6 +102,12 @@ export const GUEST_SERVER_EVENTS = {
    * `app/join/[token]/recap/[meetingId]/page.tsx`, its only producer.
    */
   GUEST_RECAP_VIEWED: 'guest_recap_viewed',
+  /**
+   * BAL-442 — an anonymous lobby visitor asked for their own link back. Fires ONCE per accepted
+   * request, from `apps/api`'s `requestLobbyReentryLink`, which is its only producer (the
+   * constant arrives WITH it, per this module's discipline).
+   */
+  GUEST_REENTRY_REQUESTED: 'guest_reentry_requested',
   /** A guest's access was revoked. */
   GUEST_REMOVED: 'guest_removed',
 } as const;
@@ -279,6 +285,38 @@ export interface GuestServerEventMap {
     distinct_id: string;
   };
   /**
+   * BAL-442 — one lobby re-entry request, on BOTH arms.
+   *
+   * ⚠⚠ NO `meeting_id`, AND THE REASON IS THE **SINK**, NOT CONSISTENCY.
+   * `SENSITIVE_PATH_PREFIXES`' `/join/m/` docblock states the posture: the whole feature is built
+   * on treating "a meeting exists at this uuid" as non-disclosable to an anonymous visitor, and
+   * PostHog is a THIRD-PARTY PROCESSOR. It costs nothing in debuggability, because `meetingId` is
+   * still logged deliberately as a STRUCTURED FIELD by the service and by every `apps/api` join
+   * log line — different sink, different audience, unchanged.
+   *
+   * ⚠ NO `party` EITHER. A lobby row's `party` is the hard-coded placeholder `client` 100% of the
+   * time (`join-meeting.ts:1036-1040`), so emitting it makes a dashboard filtered on
+   * `party = client` WRONG rather than merely coarse — `guest_joined` set that precedent by
+   * omitting the key entirely.
+   */
+  [GUEST_SERVER_EVENTS.GUEST_REENTRY_REQUESTED]: {
+    /**
+     * ⚠⚠ ANALYTICS-ONLY. It must NEVER branch copy, status or timing — the service returns
+     * `void` precisely so it structurally cannot.
+     * `true` ⇔ a fresh link was actually emailed. A request that found a row but lost a race
+     * with a concurrent revoke is `false`, because nothing was sent.
+     */
+    matched: boolean;
+    /**
+     * `meeting_guests.id` on a match — the same pseudonymous handle `guest_invite_opened` and
+     * `guest_joined` use. On a MISS it is the constant
+     * `GUEST_REENTRY_ANONYMOUS_DISTINCT_ID` (`'system:guest-reentry'`, defined beside its
+     * producer in `apps/api/src/services/meetings/request-lobby-reentry-link.ts`) — ⚠ NEVER an
+     * IP-derived handle, which would mint a PostHog person profile per IP.
+     */
+    distinct_id: string;
+  };
+  /**
    * BAL-489 — the acquisition loop closing: a guest became a member.
    *
    * ⚠⚠ A PERSON-LEVEL EVENT, NOT A ROW-LEVEL ONE (R8). One person may hold several guest rows;
@@ -304,3 +342,22 @@ export interface GuestServerEventMap {
     distinct_id: string;
   };
 }
+
+/**
+ * BAL-442 fix round (F7) — compile-time witness that `guest_reentry_requested` carries EXACTLY
+ * `matched` + `distinct_id`, made REAL the same way `ASSERT_UP_NEXT_KEYS_COMPLETE` is
+ * (`apps/web/.../up-next-view-types.ts`): a key ADDED to the interface — required OR optional,
+ * `keyof` sees both — that is missing from the allow-list below makes `_MissingReentryKey`
+ * non-`never`, and the literal `true` then fails to `satisfy` the resulting `never` type, a
+ * genuine `tsc` error. This is what closes the gap `guest.test.ts`'s own `Object.keys(literal)`
+ * assertion cannot: that runtime check only ever sees the keys THIS test happened to write, so an
+ * OPTIONAL field added to the map would never make it fail. Exported and referenced by
+ * `guest.test.ts` so it can't rot back into "declared but unused".
+ */
+type _MissingReentryKey = Exclude<
+  keyof GuestServerEventMap['guest_reentry_requested'],
+  'matched' | 'distinct_id'
+>;
+export const ASSERT_GUEST_REENTRY_KEYS_COMPLETE = true satisfies _MissingReentryKey extends never
+  ? true
+  : never;

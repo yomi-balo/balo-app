@@ -204,3 +204,15 @@ export interface LobbyClaimState {
    */
   readonly lobbyToken: string;
 }
+
+/**
+ * BAL-442 — the anonymous lobby RE-ENTRY request's success body.
+ *
+ * ⚠⚠ IT CARRIES NOTHING, AND THE EMPTINESS IS THE CONTRACT. A `matched` boolean, a row id, an
+ * expiry or a count would each be the exact oracle the fixed-floor timing and the identical
+ * status exist to close. The only field is a constant discriminant so it reads like its two
+ * sibling bodies.
+ */
+export interface LobbyReentryState {
+  readonly state: 'requested';
+}

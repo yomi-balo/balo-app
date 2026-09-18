@@ -207,6 +207,67 @@ describe('redactSensitivePath', () => {
   });
 
   /**
+   * ── ⚠⚠ BAL-442 BLOCKER B — THE RESUME ROUTE'S RAW GUEST TOKEN ────────────────────────────
+   *
+   * `/join/m/` redacts only the SINGLE segment following it — the meeting id. Before this
+   * fix, `/join/m/{meetingId}/resume/{token}` came out as
+   * `/join/m/[redacted]/resume/{token}` — the id was protected but the RAW LOBBY CREDENTIAL
+   * sailed through into Axiom, Sentry event URLs and PostHog `$current_url` / `$referrer`.
+   * Guest tokens are deliberately not single-use, so one logged copy stays replayable for the
+   * whole 7-day window. The exact mirror of the BAL-439 recap-meeting-id chain.
+   */
+  describe('BAL-442 (BLOCKER B) — the lobby resume token', () => {
+    const RAW_TOKEN = 'aB3dE6fG9hJ1kL4mN7pQ0rS2tU5vW8xY1zA4bC7dE0fG3hJ6kL9mN2';
+    const MEETING_ID = 'a0000000-0000-4000-8000-000000000002';
+
+    it('non-vacuity: the raw fixture URL contains the 43-char token before redaction', () => {
+      expect(`/join/m/${MEETING_ID}/resume/${RAW_TOKEN}`).toContain(RAW_TOKEN);
+    });
+
+    it('⚠⚠ redacts BOTH the meeting id AND the resume token', () => {
+      const out = redactSensitivePath(`/join/m/${MEETING_ID}/resume/${RAW_TOKEN}`);
+      expect(out).not.toContain(RAW_TOKEN);
+      expect(out).toBe('/join/m/[redacted]/resume/[redacted]');
+    });
+
+    it('leaves a bare /join/m/{id} (no /resume/) unchanged', () => {
+      expect(redactSensitivePath(`/join/m/${MEETING_ID}`)).toBe('/join/m/[redacted]');
+    });
+
+    it('leaves a /join/m/{id}/other sub-route untouched beyond the meeting id', () => {
+      expect(redactSensitivePath(`/join/m/${MEETING_ID}/other`)).toBe('/join/m/[redacted]/other');
+    });
+
+    it('preserves a trailing query string and fragment after the token', () => {
+      expect(redactSensitivePath(`/join/m/${MEETING_ID}/resume/${RAW_TOKEN}?x=1#y`)).toBe(
+        '/join/m/[redacted]/resume/[redacted]?x=1#y'
+      );
+    });
+
+    it('redacts the percent-encoded form too (the ?from=%2Fjoin%2Fm%2F…%2Fresume%2F… trap)', () => {
+      const out = redactSensitivePath(
+        `/onboarding?from=%2Fjoin%2Fm%2F${MEETING_ID}%2Fresume%2F${RAW_TOKEN}`
+      );
+      expect(out).not.toContain(RAW_TOKEN);
+      expect(out).toBe('/onboarding?from=%2Fjoin%2Fm%2F[redacted]%2Fresume%2F[redacted]');
+    });
+
+    it('is idempotent', () => {
+      const once = redactSensitivePath(`/join/m/${MEETING_ID}/resume/${RAW_TOKEN}`);
+      expect(redactSensitivePath(once)).toBe(once);
+    });
+
+    it('SENSITIVE_PATH_PREFIXES is unchanged in contents and order — no new entry was added', () => {
+      expect([...SENSITIVE_PATH_PREFIXES]).toEqual([
+        '/shared/proposals/',
+        '/review/',
+        '/join/m/',
+        '/join/',
+      ]);
+    });
+  });
+
+  /**
    * ⚠ THE ENCODE-THEN-MISS TRAP. A sensitive path does not only travel as a path: the
    * fail-closed onboarding gate in `apps/web/src/middleware.ts` stashes the origin
    * pathname as a QUERY VALUE, and `URLSearchParams` percent-encodes the slashes. A

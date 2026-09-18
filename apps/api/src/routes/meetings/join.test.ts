@@ -1,13 +1,19 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockJoinAsMember, mockJoinAsGuest, mockClaimLobbyPlace, mockCheckRateLimit } = vi.hoisted(
-  () => ({
-    mockJoinAsMember: vi.fn(),
-    mockJoinAsGuest: vi.fn(),
-    mockClaimLobbyPlace: vi.fn(),
-    mockCheckRateLimit: vi.fn(),
-  })
-);
+const {
+  mockJoinAsMember,
+  mockJoinAsGuest,
+  mockClaimLobbyPlace,
+  mockCheckRateLimit,
+  mockRequestLobbyReentryLink,
+} = vi.hoisted(() => ({
+  mockJoinAsMember: vi.fn(),
+  mockJoinAsGuest: vi.fn(),
+  mockClaimLobbyPlace: vi.fn(),
+  mockCheckRateLimit: vi.fn(),
+  mockRequestLobbyReentryLink: vi.fn(),
+}));
 
 vi.mock('@balo/shared/logging', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -24,6 +30,9 @@ vi.mock('../../services/meetings/join-meeting.js', () => ({
   joinMeetingAsGuest: mockJoinAsGuest,
   claimLobbyPlace: mockClaimLobbyPlace,
 }));
+vi.mock('../../services/meetings/request-lobby-reentry-link.js', () => ({
+  requestLobbyReentryLink: mockRequestLobbyReentryLink,
+}));
 // ⚠ SPREADS THE REAL MODULE. A `() => ({ checkRateLimit })` factory silently drops
 // `RATE_LIMIT_DEADLINE_MS`, and `setTimeout(fn, undefined)` fires on the next tick — timing
 // out every request in this file for a reason that looks nothing like the cause.
@@ -36,6 +45,10 @@ vi.mock('../../lib/redis.js', () => ({ getRedis: () => ({}) }));
 // DELIBERATELY NOT MOCKED. The real Zod boundary is what the `400` rows assert (and its
 // ABSENCE of a `party` / `isOwner` key is a security property), and the real deadline is what
 // makes the Redis-outage row meaningful.
+// ⚠ BAL-442 — `../../lib/response-floor.js` and `../../lib/recipient-rate-limit-key.js` are
+// ALSO NOT MOCKED. The real floor is what the TIMING assertions are about (under fake timers),
+// and the real hash is what lets a test compute the fourth window's key independently and
+// compare it against what the route actually passed to `checkRateLimit`.
 
 import Fastify, {
   type FastifyInstance,
@@ -43,6 +56,7 @@ import Fastify, {
   type LightMyRequestResponse,
 } from 'fastify';
 import { meetingJoinRoutes } from './join.js';
+import { LOBBY_REENTRY_RESPONSE_FLOOR_MS } from '../../lib/response-floor.js';
 
 const USER_ID = '55555555-5555-4555-8555-555555555555';
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
@@ -53,6 +67,7 @@ const AUTH_HEADERS = { authorization: 'Bearer test-token' };
 const JOIN_URL = `/meetings/${MEETING_ID}/join`;
 const LOBBY_URL = `/meetings/${MEETING_ID}/lobby`;
 const GUEST_JOIN_URL = `/meetings/${MEETING_ID}/guest-join`;
+const REENTRY_URL = `/meetings/${MEETING_ID}/lobby/reentry`;
 
 const RAW_TOKEN = 'z'.repeat(43);
 
@@ -104,6 +119,11 @@ describe('meeting join routes (BAL-132)', () => {
     mockJoinAsMember.mockResolvedValue({ ok: true, grant: grant() });
     mockJoinAsGuest.mockResolvedValue({ ok: true, state: 'admitted', grant: grant() });
     mockClaimLobbyPlace.mockResolvedValue({ ok: true, lobbyToken: RAW_TOKEN });
+    mockRequestLobbyReentryLink.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   /** One typed entry point to `inject` — keeps the promise overload selected. */
@@ -143,6 +163,22 @@ describe('meeting join routes (BAL-132)', () => {
 
       expect(res.statusCode).not.toBe(401);
       expect(res.statusCode).toBe(200);
+    });
+
+    it('⚠ POST /lobby/reentry is PUBLIC — it must NOT 401 without a Bearer', async () => {
+      // The caller has no account BY DEFINITION — same reasoning as the knock above.
+      // ⚠ fix-round (F13) — fake timers so the fixed 400ms floor does not cost a real sleep.
+      vi.useFakeTimers();
+      const pending = call({
+        method: 'POST',
+        url: REENTRY_URL,
+        payload: { email: 'sam@cloudpeak.example' },
+      });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      const res = await pending;
+
+      expect(res.statusCode).not.toBe(401);
+      expect(res.statusCode).toBe(202);
     });
   });
 
@@ -454,6 +490,325 @@ describe('meeting join routes (BAL-132)', () => {
 
       expect(res.statusCode).toBe(status);
       expect(res.json()).toEqual({ error: code });
+    });
+  });
+
+  // ── THE LOBBY RE-ENTRY ARM (BAL-442) ────────────────────────────────────────────────
+
+  describe('POST /meetings/:meetingId/lobby/reentry', () => {
+    const validBody = { email: 'sam@cloudpeak.example' };
+
+    it('answers 202 with { state: "requested" }', async () => {
+      // ⚠ fix-round (F13) — fake timers so the fixed 400ms floor does not cost a real sleep.
+      vi.useFakeTimers();
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      const res = await pending;
+
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toEqual({ state: 'requested' });
+    });
+
+    /**
+     * ⚠⚠ TEST #45 — NEUTRALITY. A match response and a miss response must be BYTE-IDENTICAL.
+     * `requestLobbyReentryLink` returns `void` regardless of outcome, so this proves the route
+     * cannot even construct a distinguishing response.
+     *
+     * ⚠ fix-round (F3 / SEC-2 / REV-2) — REPAIRED. The original arrangement gave BOTH arms
+     * `mockResolvedValue(undefined)` — the identical mock behaviour compared against itself —
+     * so `shapes.size === 1` held trivially and this test would still pass with the feature
+     * reverted to any constant-response route. The two arms now have MATERIALLY DIFFERENT
+     * service behaviour (a match doing 50ms of real work vs a miss resolving immediately, under
+     * fake timers), so this proves body+status parity actually survives that difference, not
+     * merely that two identical mocks produce identical output.
+     */
+    it('⚠⚠ NEUTRALITY: match and miss are byte-identical — same status, same body', async () => {
+      vi.useFakeTimers();
+
+      // Match-shaped: the service does 50ms of real work (mint + UPDATE + BullMQ enqueue).
+      mockRequestLobbyReentryLink.mockImplementationOnce(
+        () => new Promise<void>((resolve) => setTimeout(resolve, 50))
+      );
+      const matchPending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      const matchRes = await matchPending;
+
+      // Miss-shaped: the service resolves immediately (one SELECT, no match).
+      mockRequestLobbyReentryLink.mockResolvedValueOnce(undefined);
+      const missPending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      const missRes = await missPending;
+
+      const shapes = new Set([
+        JSON.stringify([matchRes.statusCode, matchRes.json()]),
+        JSON.stringify([missRes.statusCode, missRes.json()]),
+      ]);
+      expect(shapes.size).toBe(1);
+      expect(matchRes.statusCode).toBe(202);
+    });
+
+    /**
+     * ⚠⚠ fix-round (F2 / SEC-1 / REV-3) — a throw from the service (the only residual throw
+     * source is `rotatePendingLobbyToken`, reached ONLY on the match arm) must still answer the
+     * SAME neutral `202`, still padded to the SAME floor — never a `500`, and never faster than
+     * a miss. This is the mutation-proof target for the try/catch inside the floor closure.
+     */
+    it('⚠⚠ a service REJECTION still answers 202, still padded to the floor — never a 500', async () => {
+      vi.useFakeTimers();
+      mockRequestLobbyReentryLink.mockRejectedValueOnce(new Error('serialization failure'));
+
+      let settled = false;
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody }).then((res) => {
+        settled = true;
+        return res;
+      });
+
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS - 1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      const res = await pending;
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toEqual({ state: 'requested' });
+    });
+
+    /**
+     * ⚠⚠ TEST #46 — TIMING. Under fake timers, a slow (match-shaped) and a fast (miss-shaped)
+     * service call must settle at the SAME instant: `LOBBY_REENTRY_RESPONSE_FLOOR_MS`.
+     */
+    describe('⚠⚠ TIMING — the fixed floor equalises a slow match and a fast miss', () => {
+      it('neither arm settles before the floor, and BOTH settle exactly at it', async () => {
+        vi.useFakeTimers();
+
+        // The "match" shape: the service takes 50ms of real work.
+        mockRequestLobbyReentryLink.mockImplementationOnce(
+          () => new Promise<void>((resolve) => setTimeout(resolve, 50))
+        );
+        let matchSettled = false;
+        const matchPending = call({ method: 'POST', url: REENTRY_URL, payload: validBody }).then(
+          (res) => {
+            matchSettled = true;
+            return res;
+          }
+        );
+
+        await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS - 1);
+        expect(matchSettled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(matchSettled).toBe(true);
+        expect((await matchPending).statusCode).toBe(202);
+      });
+
+      it('the miss shape (0ms of work) is padded to the SAME floor, not answered immediately', async () => {
+        vi.useFakeTimers();
+
+        mockRequestLobbyReentryLink.mockResolvedValueOnce(undefined);
+        let missSettled = false;
+        const missPending = call({ method: 'POST', url: REENTRY_URL, payload: validBody }).then(
+          (res) => {
+            missSettled = true;
+            return res;
+          }
+        );
+
+        await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS - 1);
+        expect(missSettled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(missSettled).toBe(true);
+        expect((await missPending).statusCode).toBe(202);
+      });
+
+      it('the floor constant is pinned to exactly 400ms', () => {
+        expect(LOBBY_REENTRY_RESPONSE_FLOOR_MS).toBe(400);
+      });
+    });
+
+    it.each([
+      ['a malformed :meetingId', { url: `/meetings/not-a-uuid/lobby/reentry`, payload: validBody }],
+      ['a missing email', { url: REENTRY_URL, payload: {} }],
+      ['a malformed email', { url: REENTRY_URL, payload: { email: 'not-an-email' } }],
+    ])('answers 400 for %s, and never consumes a rate-limit window', async (_label, opts) => {
+      const res = await call({ method: 'POST', ...opts });
+
+      expect(res.statusCode).toBe(400);
+      expect(mockCheckRateLimit).not.toHaveBeenCalled();
+      expect(mockRequestLobbyReentryLink).not.toHaveBeenCalled();
+    });
+
+    it('⚠ STRIPS unknown body keys — the service reaches exactly { meetingId, email }', async () => {
+      vi.useFakeTimers();
+      const pending = call({
+        method: 'POST',
+        url: REENTRY_URL,
+        payload: { email: 'sam@cloudpeak.example', name: 'x', party: 'expert' },
+      });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      await pending;
+
+      expect(mockRequestLobbyReentryLink).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        email: 'sam@cloudpeak.example',
+      });
+    });
+
+    it('⚠ the email reaching the service is CANONICAL (trimmed, lower-cased)', async () => {
+      vi.useFakeTimers();
+      const pending = call({
+        method: 'POST',
+        url: REENTRY_URL,
+        payload: { email: '  SAM@Cloudpeak.EXAMPLE ' },
+      });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      await pending;
+
+      expect(mockRequestLobbyReentryLink).toHaveBeenCalledWith({
+        meetingId: MEETING_ID,
+        email: 'sam@cloudpeak.example',
+      });
+    });
+
+    it('consumes a per-visitor, a per-meeting-visitor AND a per-peer window, in that order', async () => {
+      vi.useFakeTimers();
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      await pending;
+
+      const prefixes = mockCheckRateLimit.mock.calls.map(
+        (args) => (args[1] as { keyPrefix: string }).keyPrefix
+      );
+      expect(prefixes).toEqual([
+        'ratelimit:meeting-lobby-reentry:visitor',
+        'ratelimit:meeting-lobby-reentry:meeting-visitor',
+        'ratelimit:meeting-lobby-reentry:peer',
+        'ratelimit:meeting-lobby-reentry:recipient',
+      ]);
+    });
+
+    it('⚠ every re-entry window prefix DIFFERS from every knock window prefix', async () => {
+      vi.useFakeTimers();
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      await pending;
+
+      const prefixes = mockCheckRateLimit.mock.calls.map(
+        (args) => (args[1] as { keyPrefix: string }).keyPrefix
+      );
+      // ⚠ fix-round (F6) — NON-VACUITY GUARD. Without this, an empty `prefixes` array would
+      // make the `for` loop below run zero times and the test would pass for the wrong reason.
+      expect(prefixes).toHaveLength(4);
+      const knockPrefixes = [
+        'ratelimit:meeting-lobby:visitor',
+        'ratelimit:meeting-lobby:meeting-visitor',
+        'ratelimit:meeting-lobby:peer',
+      ];
+      for (const prefix of prefixes) {
+        expect(knockPrefixes).not.toContain(prefix);
+      }
+    });
+
+    it('⚠⚠ the FOURTH identifier is keyed on `meetingId|sha256(canonicalEmail).slice(0,32)`, and the first three are the visitor triple', async () => {
+      vi.useFakeTimers();
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      await pending;
+
+      const identifiers = mockCheckRateLimit.mock.calls.map((args) => args[2] as string);
+      expect(identifiers).toHaveLength(4);
+      const [visitorKey, meetingVisitorKey, peerKey, recipientKey] = identifiers;
+      const expectedHash = createHash('sha256')
+        .update('sam@cloudpeak.example')
+        .digest('hex')
+        .slice(0, 32);
+
+      expect(recipientKey).toBe(`${MEETING_ID}|${expectedHash}`);
+      // ⚠ THE PAIR: positive (equals the computed hash) AND negative (never the raw address).
+      expect(recipientKey).not.toContain('@');
+
+      // ⚠ fix-round (F6) — plan #50's first three identifiers, previously never asserted
+      // (only the fourth was). `visitorIdentity` builds `visitorKey = ${peer}|${client}`; with
+      // no `x-balo-client-ip` header, `client === peer`, so `visitorKey` is `peer` doubled.
+      expect(peerKey).toBeTruthy();
+      expect(visitorKey).toBe(`${peerKey}|${peerKey}`);
+      expect(meetingVisitorKey).toBe(`${MEETING_ID}|${visitorKey}`);
+    });
+
+    it('⚠⚠ recipient-window EXHAUSTION returns the SAME neutral 202 — never a 429', async () => {
+      vi.useFakeTimers();
+      // The first three (caller-keyed) windows allow; the fourth (recipient-keyed) denies.
+      mockCheckRateLimit
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: false, current: 4, ttlSeconds: 900 });
+
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      const res = await pending;
+
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toEqual({ state: 'requested' });
+      expect(mockRequestLobbyReentryLink).not.toHaveBeenCalled();
+    });
+
+    it('recipient-window exhaustion is ALSO padded to the floor', async () => {
+      vi.useFakeTimers();
+      mockCheckRateLimit
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: false, current: 4, ttlSeconds: 900 });
+
+      let settled = false;
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody }).then((res) => {
+        settled = true;
+        return res;
+      });
+
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS - 1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect((await pending).statusCode).toBe(202);
+    });
+
+    it('the three CALLER-keyed windows still answer 429 with Retry-After and cooldownSeconds', async () => {
+      mockCheckRateLimit.mockResolvedValue({ allowed: false, current: 6, ttlSeconds: 1200 });
+
+      const res = await call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['retry-after']).toBe('1200');
+      expect(res.json()).toEqual({ error: 'rate_limited', cooldownSeconds: 1200 });
+      expect(mockRequestLobbyReentryLink).not.toHaveBeenCalled();
+    });
+
+    it('⚠ Redis outage on the RECIPIENT window → 503, never neutral, never a silent send', async () => {
+      mockCheckRateLimit
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockResolvedValueOnce({ allowed: true, current: 1, ttlSeconds: 3600 })
+        .mockRejectedValueOnce(new Error('redis unreachable'));
+
+      const res = await call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'rate_limit_unavailable' });
+      expect(mockRequestLobbyReentryLink).not.toHaveBeenCalled();
+    });
+
+    it('there is no 404 and no 409 on this route — an unknown meeting still answers 202', async () => {
+      vi.useFakeTimers();
+      const pending = call({ method: 'POST', url: REENTRY_URL, payload: validBody });
+      await vi.advanceTimersByTimeAsync(LOBBY_REENTRY_RESPONSE_FLOOR_MS);
+      const res = await pending;
+
+      expect(res.statusCode).not.toBe(404);
+      expect(res.statusCode).not.toBe(409);
+      expect(res.statusCode).toBe(202);
     });
   });
 

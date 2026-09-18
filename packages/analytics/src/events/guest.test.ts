@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { GUEST_SERVER_EVENTS, type GuestServerEventMap } from './guest';
+import {
+  ASSERT_GUEST_REENTRY_KEYS_COMPLETE,
+  GUEST_SERVER_EVENTS,
+  type GuestServerEventMap,
+} from './guest';
 
 describe('GUEST_SERVER_EVENTS', () => {
   it('exposes exactly the BAL-408 guest server events', () => {
@@ -34,6 +38,10 @@ describe('GUEST_SERVER_EVENTS', () => {
       // (shared `GUEST_RE` prefix, then `C` < `M`) — so its position is not
       // collation-sensitive either.
       'GUEST_RECAP_VIEWED',
+      // ⚠ BAL-442. After the shared `GUEST_RE` prefix: `GUEST_RECAP_VIEWED` (`C`),
+      // `GUEST_REENTRY_REQUESTED` (`E`), `GUEST_REMOVED` (`M`) — `C` < `E` < `M` under BOTH
+      // ICU localeCompare and code-unit order, so this position is not collation-sensitive.
+      'GUEST_REENTRY_REQUESTED',
       'GUEST_REMOVED',
     ]);
   });
@@ -47,6 +55,7 @@ describe('GUEST_SERVER_EVENTS', () => {
     expect(GUEST_SERVER_EVENTS.GUEST_JOINED).toBe('guest_joined');
     expect(GUEST_SERVER_EVENTS.GUEST_LINK_RESENT).toBe('guest_link_resent');
     expect(GUEST_SERVER_EVENTS.GUEST_RECAP_VIEWED).toBe('guest_recap_viewed');
+    expect(GUEST_SERVER_EVENTS.GUEST_REENTRY_REQUESTED).toBe('guest_reentry_requested');
     expect(GUEST_SERVER_EVENTS.GUEST_REMOVED).toBe('guest_removed');
   });
 
@@ -173,5 +182,46 @@ describe('GUEST_SERVER_EVENTS', () => {
     };
 
     expect(openedTheSameDay.days_since_meeting).toBe(0);
+  });
+
+  /**
+   * BAL-442 — `guest_reentry_requested` fires on BOTH the match and the miss arm.
+   *
+   * ⚠⚠ NO `meeting_id`, NO `party` — see the map entry's own docblock for why (the SINK, not
+   * consistency: PostHog is a third-party processor and `meetingId` is already logged
+   * deliberately as a structured field elsewhere).
+   *
+   * ⚠ fix-round (F7) — WEAKENED CLAIM, on purpose. `Object.keys(match)` below only ever
+   * inspects the keys THIS test itself typed into the literal — it is runtime-tautological and
+   * would still pass if `GuestServerEventMap['guest_reentry_requested']` grew an OPTIONAL
+   * `meeting_id?`/`party?` field elsewhere in the map (the literal below simply wouldn't set
+   * it). The real "no extra key was added to the TYPE" guarantee is
+   * `ASSERT_GUEST_REENTRY_KEYS_COMPLETE` in `guest.ts` — a compile-time witness that fails
+   * `tsc`, not this runtime check — referenced below so it cannot rot back into
+   * "declared but unused". The `Object.keys` assertions here now document only what they
+   * actually prove: that a `matched`/`distinct_id` literal is what a match and a miss build.
+   */
+  it('⚠ `guest_reentry_requested` — the compile-time key-set witness holds', () => {
+    expect(ASSERT_GUEST_REENTRY_KEYS_COMPLETE).toBe(true);
+  });
+
+  it('documents the match/miss literals as `{ matched, distinct_id }`', () => {
+    const match: GuestServerEventMap['guest_reentry_requested'] = {
+      matched: true,
+      distinct_id: 'guest-6',
+    };
+    const miss: GuestServerEventMap['guest_reentry_requested'] = {
+      matched: false,
+      distinct_id: 'system:guest-reentry',
+    };
+
+    expect(Object.keys(match).sort((a, b) => a.localeCompare(b))).toEqual([
+      'distinct_id',
+      'matched',
+    ]);
+    expect(Object.keys(miss).sort((a, b) => a.localeCompare(b))).toEqual([
+      'distinct_id',
+      'matched',
+    ]);
   });
 });

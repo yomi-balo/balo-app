@@ -343,8 +343,14 @@ interface AnnounceInvitesParams {
  * and the ROTATED HASH PREFIX on `meeting.guest_link_resent` (see that payload's docblock for
  * why the two must differ). Either is enough to correlate a failure with a row; neither is a
  * secret.
+ *
+ * ⚠ BAL-442 — EXPORTED, not copied, for a second consumer:
+ * `apps/api/src/services/meetings/request-lobby-reentry-link.ts`'s self-service lobby
+ * re-entry arm. A copy would trip the SonarCloud duplication gate (<3% on new code) and
+ * create a second definition of the swallow rule. Its `correlationId` is also a rotated-hash
+ * prefix (`tokenHash.slice(0, 16)`), for the identical dedup reason as `meeting.guest_link_resent`.
  */
-async function publishBestEffort(
+export async function publishBestEffort(
   publish: () => Promise<unknown>,
   context: { event: string; correlationId: string },
   failureMessage: string
@@ -1152,8 +1158,19 @@ export async function decideGuestAdmission(input: {
  *
  * The host is re-sending precisely BECAUSE the previous credential is believed lost. Leaving
  * two live credentials on one row is a second hijack surface opened by the act of rescuing
- * somebody. **THIS RULING IS BAL-442'S INHERITANCE:** its guest self-service arm must call
- * THIS SAME FUNCTION behind a different actor gate, never a second rotation primitive.
+ * somebody.
+ *
+ * ⚠ CORRECTED BY BAL-442 — this docblock used to say its guest self-service arm "must call
+ * THIS SAME FUNCTION behind a different actor gate, never a second rotation primitive." That
+ * was unimplementable: this function's gate is `admission = 'admitted'`
+ * (`meetingGuestsRepository.rotateToken`'s own `WHERE`), which excludes EVERY row BAL-442's
+ * arm can match — a `pending` knock has not been let in at all. What IS inherited is the
+ * RULING above (rotation invalidates the previous credential), not the function: BAL-442's
+ * self-service arm is written against its own primitive,
+ * `meetingGuestsRepository.rotatePendingLobbyToken` (`packages/db`), because the two arms
+ * differ in actor (a host vs nobody), in audit meaning (`meeting_guest.link_resent`, "a host
+ * re-sent it", vs `meeting_guest.link_self_recovered`), and in admission predicate
+ * (`admitted` vs `pending`). See `apps/api/src/services/meetings/request-lobby-reentry-link.ts`.
  *
  * ── THE GATES, IN ORDER, BOTH FAIL-CLOSED ───────────────────────────────────────────────
  *

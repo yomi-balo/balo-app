@@ -786,6 +786,9 @@ export {
   type MeetingGuestPublic,
   type LinkConvertedUserInput,
   type ConvertedGuestLink,
+  // BAL-442 — the self-service lobby re-entry arm's read projection and write input.
+  type PendingLobbyGuestMatch,
+  type RotatePendingLobbyTokenInput,
 } from './meeting-guests';
 export type {
   MeetingGuest,

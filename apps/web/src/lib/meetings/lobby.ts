@@ -111,8 +111,13 @@ export const LOBBY_WAIT_STARTED_STORAGE_KEY = 'balo.lobby-waiting-since';
  * would have been for is itself a small disclosure, and it is free to avoid.
  *
  * ⚠ IT STILL POINTS AT A REAL NEXT STEP, and that step is a HUMAN one. There is deliberately no
- * "sign in" (a guest has no account) and no "email me a new link" (an unauthenticated email-send
- * primitive is an email-bomb amplifier and an existence oracle — its own ticket).
+ * "sign in" (a guest has no account). ⚠ CORRECTED BY BAL-442 — this docblock used to say "no
+ * 'email me a new link' … an unauthenticated email-send primitive is an email-bomb amplifier
+ * and an existence oracle — its own ticket." That ticket is BAL-442 and it has SHIPPED — on the
+ * LOBBY's knock form (`app/join/m/[meetingId]/lobby-reentry.tsx`), never here. This shared card
+ * still offers no CTA of its own: it is shared with `/join/[token]`, which has no `meetingId` in
+ * scope and is structurally incapable of hosting the affordance, and it renders for a token that
+ * never resolved, so there is nothing here to recover.
  */
 export const JOIN_UNAVAILABLE_TITLE = "This link isn't active";
 
@@ -197,3 +202,49 @@ export const MEMBER_JOIN_UNAVAILABLE_ERROR = "This meeting isn't available to jo
  */
 export const GUEST_READ_UNAVAILABLE_ERROR =
   "This isn't available to you. Whoever shared the link with you can help.";
+
+/**
+ * BAL-442 — the lobby's self-service RE-ENTRY affordance. ⚠ HERE, NOT IN THE `'use server'`
+ * ACTION MODULE, for the same reason every other literal in this file is.
+ */
+export const LOBBY_REENTRY_TRIGGER_LABEL = 'Already asked to join? Email me my link';
+
+export const LOBBY_REENTRY_HELPER =
+  "We'll send a fresh link to the address you used — and only to that address.";
+
+export const LOBBY_REENTRY_EMAIL_LABEL = 'The email you used';
+
+export const LOBBY_REENTRY_SUBMIT_LABEL = 'Email me my link';
+
+export const LOBBY_REENTRY_SUBMITTING_LABEL = 'Sending…';
+
+/**
+ * ⚠⚠ THE NEUTRAL CONFIRMATION, AND IT IS THE WHOLE PRIVACY PROPERTY IN ONE SENTENCE. It renders
+ * IDENTICALLY whether a row matched or not — there is deliberately no "we couldn't find an
+ * invitation for that address", because that sentence IS the oracle. It is conditional in
+ * grammar ("if there's…") so it is never a lie in either direction.
+ */
+export const LOBBY_REENTRY_NEUTRAL_MESSAGE =
+  "If there's an active invitation for that address, we've sent a new link. It can take a minute to arrive.";
+
+export const LOBBY_REENTRY_INVALID_INPUT_ERROR = 'Please enter the email address you used.';
+
+/**
+ * BAL-442 fix round (F1) — the TRANSPORT-FAILURE copy, and it is deliberately a DIFFERENT
+ * literal from {@link LOBBY_REENTRY_NEUTRAL_MESSAGE}.
+ *
+ * ⚠⚠ ORCHESTRATOR RULING — two review gates proposed different fixes for the `.catch()` arm
+ * rendering the NEUTRAL (success) sentence on a dropped connection. UX proposed a dedicated new
+ * constant; technical review proposed reusing `JOIN_UNAVAILABLE_TITLE`. This constant is the
+ * ruling: `JOIN_UNAVAILABLE_TITLE` is the DELIBERATELY-COLLAPSED literal for outcomes where the
+ * ANONYMITY OF A MEETING is at stake — see its own docblock. A transport failure (the request
+ * may never have reached the server) discloses NOTHING about any meeting, so there is no
+ * anonymity reason to collapse it, and telling the visitor plainly that nothing was sent — so
+ * they know to retry rather than wait for an email that is never coming — is strictly better for
+ * the exact persona this ticket exists to serve.
+ *
+ * ⚠ Never {@link LOBBY_REENTRY_NEUTRAL_MESSAGE} in the catch arm. That sentence is an
+ * AFFIRMATIVE claim ("we've sent a new link") that is false here — the request may not have
+ * reached the server at all.
+ */
+export const LOBBY_REENTRY_TRANSPORT_ERROR = "We couldn't reach Balo just now. Please try again.";

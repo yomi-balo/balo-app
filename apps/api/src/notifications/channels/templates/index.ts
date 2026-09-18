@@ -80,6 +80,7 @@ import { ProposalSharedEmail } from './proposal-shared.js';
 import {
   MeetingGuestInvitedEmail,
   MeetingGuestLinkResentEmail,
+  MeetingGuestReentryLinkEmail,
   MeetingGuestRemovedEmail,
   MeetingGuestRescheduledEmail,
 } from './meeting-guest-emails.js';
@@ -1733,6 +1734,34 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         baseUrl: BASE_URL,
       }),
       subject: 'Your new link for the video call',
+    };
+  },
+
+  // BAL-442 — a lobby guest recovered their own link. Email to THAT ADDRESS only (the external
+  // `email_address` path — no user row to hydrate). The CTA is the ONLY credential-bearing
+  // string and the raw token is never rendered as copyable text (the `proposal-shared` rule).
+  // ⚠ THE SUBJECT NAMES NOBODY — this row was self-claimed, so there is no inviter, and nothing
+  // caller-supplied reaches the subject.
+  // ⚠ NO BILLING LINE — see the file docblock on `meeting-guest-emails.tsx`.
+  'meeting-guest-reentry-link': (data) => {
+    const joinToken = (data.joinToken as string) ?? '';
+    const meetingId = (data.meetingId as string) ?? '';
+    return {
+      component: React.createElement(MeetingGuestReentryLinkEmail, {
+        guestName: data.guestName as string | undefined,
+        meetingTitle: (data.meetingTitle as string) ?? 'a call',
+        scheduledStartIso: (data.scheduledStartIso as string) ?? '',
+        scheduledEndIso: (data.scheduledEndIso as string) ?? '',
+        expiresOn: (data.expiresOn as string) ?? '',
+        // ⚠⚠ THE **RESUME** ROUTE, NOT `/join/{token}` (RULING 3). `app/join/[token]/page.tsx`
+        // asserts a self-claimed lobby row never reaches that route, and it drags in the
+        // roster/inviter path. The resume page writes the token into sessionStorage and
+        // replaces into the clean lobby URL.
+        joinUrl: `${BASE_URL}/join/m/${meetingId}/resume/${joinToken}`,
+        // ⚠ THE SHELL'S FOOTER BASE, DELIBERATELY SEPARATE FROM `joinUrl`.
+        baseUrl: BASE_URL,
+      }),
+      subject: 'Your link back into the video call',
     };
   },
 

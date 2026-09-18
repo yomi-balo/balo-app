@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // the production origin. The package throws outside an RSC graph, so the unit test stubs it.
 vi.mock('server-only', () => ({}));
 
-import { guestInvitationPath, guestRecapPath, meetingJoinLinkUrl } from './join-link';
+import { guestInvitationPath, guestRecapPath, lobbyPath, meetingJoinLinkUrl } from './join-link';
 
 /**
  * BAL-436 — the "Copy join link" URL.
@@ -86,5 +86,18 @@ describe('guestRecapPath (BAL-439)', () => {
 describe('guestInvitationPath (BAL-439)', () => {
   it('builds the back-to-invitation path from the token alone', () => {
     expect(guestInvitationPath(TOKEN)).toBe(`/join/${TOKEN}`);
+  });
+});
+
+describe('lobbyPath (BAL-442 BLOCKER C)', () => {
+  it('builds the bare, tokenless lobby path from the meeting id alone', () => {
+    expect(lobbyPath(MEETING_ID)).toBe(`/join/m/${MEETING_ID}`);
+  });
+
+  it('is a PATH, not an absolute URL — no origin, no trailing-slash handling needed', () => {
+    const path = lobbyPath(MEETING_ID);
+    expect(path.startsWith('/join/m/')).toBe(true);
+    expect(path).not.toContain('https://');
+    expect(path).not.toContain('http://');
   });
 });

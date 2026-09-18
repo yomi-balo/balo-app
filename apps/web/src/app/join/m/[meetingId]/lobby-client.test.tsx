@@ -29,11 +29,17 @@ vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 
 const mockClaim = vi.fn();
 const mockPoll = vi.fn();
+const mockReentry = vi.fn();
 vi.mock('@/app/join/_actions/claim-lobby-place', () => ({
   claimLobbyPlaceAction: (...args: unknown[]) => mockClaim(...args),
 }));
 vi.mock('@/app/join/_actions/poll-guest-admission', () => ({
   pollGuestAdmissionAction: (...args: unknown[]) => mockPoll(...args),
+}));
+// BAL-442 — the lobby re-entry affordance's own Server Action, mocked so no test here
+// accidentally reaches a real fetch if the panel is ever expanded.
+vi.mock('@/app/join/_actions/request-lobby-reentry-link', () => ({
+  requestLobbyReentryLinkAction: (...args: unknown[]) => mockReentry(...args),
 }));
 
 import { toast } from 'sonner';
@@ -120,6 +126,19 @@ afterEach(() => {
 });
 
 describe('LobbyClient — the identify state', () => {
+  /**
+   * ⚠⚠ BAL-442 — THE RE-ENTRY AFFORDANCE IS ALWAYS RENDERED, BEFORE ANY SERVER CALL. If it
+   * were conditional on a claim result (or on anything else server-resolved), the affordance
+   * itself would become the existence oracle it exists to avoid.
+   */
+  it('⚠⚠ renders the re-entry trigger unconditionally, before any action call', () => {
+    renderLobby();
+
+    expect(screen.getByRole('button', { name: /already asked to join/i })).toBeInTheDocument();
+    expect(mockClaim).not.toHaveBeenCalled();
+    expect(mockReentry).not.toHaveBeenCalled();
+  });
+
   it('renders a labelled name and email form', () => {
     renderLobby();
 
@@ -730,6 +749,27 @@ describe('⚠⚠ LobbyClient — ONE card for EVERY collapsed failure (the no-or
       expect(screen.getByText(JOIN_UNAVAILABLE_TITLE)).toBeInTheDocument();
     });
     expect(toast.error).toHaveBeenCalledWith(JOIN_UNAVAILABLE_TITLE);
+  });
+
+  /**
+   * ⚠⚠ BAL-442 ROUND-2 ADJUDICATION D — the re-entry trigger ALSO renders as a sibling below
+   * the terminal unavailable card, unconditionally, so a visitor who knocks first and
+   * collapses to this card can still recover without reloading.
+   */
+  it('⚠⚠ the re-entry trigger ALSO renders below the terminal unavailable card', async () => {
+    mockClaim.mockResolvedValue({
+      success: false,
+      kind: 'unavailable',
+      error: JOIN_UNAVAILABLE_TITLE,
+    });
+
+    renderLobby();
+    await identify();
+
+    await waitFor(() => {
+      expect(screen.getByText(JOIN_UNAVAILABLE_TITLE)).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /already asked to join/i })).toBeInTheDocument();
   });
 
   it('a TERMINAL poll failure lands on the unavailable card WITHOUT a toast', async () => {
