@@ -78,6 +78,14 @@ const ACTOR_CALLERS: readonly string[] = [
   'apps/web/src/lib/authz/platform.ts', // the WEB seam (session-sourced, D6)
   'apps/api/src/authz/platform.ts', // the API seam (live-row-sourced, D6)
   'apps/web/src/middleware.ts', // the EDGE gate — the ONE argued app-level direct caller
+  // ⚠ BAL-561 — the staff-access RULE MODULE, and NOT A GATE. It holds the in-transaction actor
+  // re-check (M2/D6) and the D2 staff-management floor: ONE definition, consumed by `@balo/db`'s
+  // `saveStaffAccess` transaction (on LOCKED rows) and by the Staff access page's floor preview.
+  // It resolves over an ACCOUNT's (role, customList) pair — never a session, never a live-row
+  // actor object — so it cannot route through either app seam: the web seam reads a sealed
+  // cookie, and the api seam is not reachable from `@balo/db`. It lives in `@balo/shared` beside
+  // the definition, like the barrel. Its threading proof is the `THREADING_SEAMS` entry below.
+  'packages/shared/src/authz/staff-access.ts',
 ];
 
 /**
@@ -91,11 +99,22 @@ const ACTOR_CALLERS: readonly string[] = [
  * `applyPlatformCapabilitiesToSessionUser`) carry a capital `P` for the same reason, which is why
  * the six seal points and gate #7 are absent from this set too: none of them NAMES the field,
  * they hand a ROW to the one encoder. That is the property this pin is measuring.
+ *
+ * ⚠ STILL EIGHT AFTER BAL-561, WHICH IS THE FIRST WRITER — AND THAT IS NOT A RENAME TO DODGE THE
+ * PIN. `usersRepository.saveStaffAccess` writes the column, and the Staff access reads project it,
+ * all inside `repositories/users.ts`, which was already listed. Those projections hand every
+ * consumer a NORMALISED `customList` (via `storedCustomListOf`) under a different name precisely
+ * because the consumer never holds the RAW override: `@balo/shared/authz/staff-access.ts` and the
+ * Staff access surface work only on the normalised list, and never name the column or the session
+ * field. A new file naming `platformCapabilities` would still mean something reads the raw value
+ * outside this set.
  */
 const OVERRIDE_FIELD = 'platformCapabilities';
 const OVERRIDE_TOUCHERS: readonly string[] = [
   'packages/db/src/schema/users.ts', // the column
-  'packages/db/src/repositories/users.ts', // the findForSessionSync projection
+  // the findForSessionSync projection + THE ONE WRITER (`saveStaffAccess`, BAL-561) + the
+  // staff-access projections (`listStaffAccessRoster`, `findStaffCandidateByEmail`)
+  'packages/db/src/repositories/users.ts',
   'apps/web/src/lib/auth/session.ts', // the session field
   'apps/web/src/lib/auth/session-platform-capabilities.ts', // the ONE session writer/keyer
   'apps/web/src/lib/authz/platform.ts', // the web seam's read
@@ -119,32 +138,62 @@ const OVERRIDE_TOUCHERS: readonly string[] = [
  * evades that pin entirely. The ticket's AC is worded about `users.platform_capabilities`, which
  * is this spelling, so it gets its own pin: exactly ONE non-test file may name the column, and it
  * is the schema that declares it.
+ *
+ * ⚠ TWO AFTER BAL-561, AND THE SECOND NAMES AN AUDIT ACTION, NOT THE COLUMN. The substring match
+ * cannot tell `platform_capabilities` from `user.platform_capabilities_set`, the wire string of the
+ * audit action a Staff access save writes. That string is defined ONCE, in
+ * `STAFF_ACCESS_AUDIT_ACTIONS` (`@balo/shared/authz/staff-access.ts`), which runs no SQL and reads
+ * no row. `repositories/users.ts` writes it through the constant and never spells the substring,
+ * and any reader of the action (the Lookup Timeline) must do the same. A third namer is still a
+ * raw-SQL reader of the column until argued otherwise.
  */
 const OVERRIDE_COLUMN = 'platform_capabilities';
-const OVERRIDE_COLUMN_NAMERS: readonly string[] = ['packages/db/src/schema/users.ts'];
+const OVERRIDE_COLUMN_NAMERS: readonly string[] = [
+  'packages/db/src/schema/users.ts', // the column
+  'packages/shared/src/authz/staff-access.ts', // the AUDIT ACTION string — see above
+];
 
 /**
  * E — the NEW TOKEN's exact naming set (fix round 1, review finding 1).
  *
- * The token's own docblock claims it "is INERT in this ticket … pinned as a fact rather than
- * trusted" and points at THIS file. Before this pin that sentence was false: the invariant
- * contained zero references to the token. It is true now — exactly one non-test file names
- * `MANAGE_STAFF_CAPABILITIES`, and that file is its own definition plus the `super_admin` entry
- * of the role map, plus its `PLATFORM_CAPABILITY_SEAL_ORDER` slot — a wire position, not a
- * resolution, so it does not add a second namer. A second namer means something RESOLVES it,
- * which is BAL-561's work and needs the docblock's inertness claim re-argued rather than
- * quietly widened.
+ * BAL-560 shipped the token INERT and pinned that as a fact here: exactly one non-test file named
+ * `MANAGE_STAFF_CAPABILITIES` — its own definition, plus the `super_admin` entry of the role map,
+ * plus its `PLATFORM_CAPABILITY_SEAL_ORDER` slot (a wire position, not a resolution, so not a
+ * second namer). A second namer was declared to mean something RESOLVES it, which is BAL-561's
+ * work, and to need re-arguing rather than quiet widening. This is that re-argument.
+ *
+ * ⚠⚠ **LIVE SINCE BAL-561, AND EVERY NAMER BELOW IS A PLACE THAT DECIDES STAFF-MANAGEMENT
+ * RIGHTS.** Each one is listed with why it must name the token:
+ *   · `platform.ts` — the definition (with the role map, the seal slot and, once BAL-561's label
+ *     map lands in the same file, the display label — none of which adds a namer);
+ *   · `staff-access.ts` — the shared RULE module: the actor re-check (`accountMayManageStaff`), the
+ *     D2 floor (`accountKeepsStaffManagementFloor`), and the storage rule "only a super_admin's list
+ *     may hold it" (`customListCanHold`). It is the ONE definition `@balo/db`'s save transaction
+ *     and the page's floor preview both consume, so neither of those names the token itself.
+ *   · `load-staff-access.ts` — the page's server loader: gates the ROSTER read on the SESSION
+ *     (D5 — a staff member who can open `/admin` but not this page sees the no-access state, not
+ *     a 404).
+ *   · `require-staff-access-manager.ts` — the Server Action gate: the SAME session check, plus the
+ *     LIVE re-read (BAL-560 fix round 1, security F2) that makes the token's own revocation take
+ *     effect on a mutating POST without waiting for a page render.
+ * Any further namer means a new place decides who may manage staff — review it before adding it.
  */
 const NEW_TOKEN = 'MANAGE_STAFF_CAPABILITIES';
 const NEW_TOKEN_VALUE = 'manage_staff_capabilities';
-const NEW_TOKEN_NAMERS: readonly string[] = ['packages/shared/src/authz/platform.ts'];
+const NEW_TOKEN_NAMERS: readonly string[] = [
+  'packages/shared/src/authz/platform.ts', // the definition
+  'packages/shared/src/authz/staff-access.ts', // BAL-561 — the shared staff-access rule module
+  // BAL-561 Phase B — the two web-side resolution points.
+  'apps/web/src/app/(dashboard)/admin/staff-access/_lib/load-staff-access.ts',
+  'apps/web/src/app/(dashboard)/admin/staff-access/_actions/_shared/require-staff-access-manager.ts',
+];
 
 /**
  * ⚠⚠ **THE WIRE-VALUE SET IS TWO, AND THE SECOND ENTRY IS A STORAGE RULE, NOT A RESOLUTION**
  * (fix round 3, R2).
  *
- * The CONSTANT spelling stays at ONE — that is the inertness claim, and it is what a resolver
- * would reach for. The wire VALUE now has a second namer because the
+ * The CONSTANT spelling is what a resolver reaches for (its namers are argued on
+ * `NEW_TOKEN_NAMERS` above). The wire VALUE has a second namer because the
  * `users_platform_capabilities_staff_array` CHECK writes the literal into SQL:
  *
  *   NOT platform_capabilities @> '["manage_staff_capabilities"]'::jsonb
@@ -156,9 +205,10 @@ const NEW_TOKEN_NAMERS: readonly string[] = ['packages/shared/src/authz/platform
  * place the rule CAN live: an override is deliberately unclamped on the read path, so refusing
  * the escalation in the resolver would reintroduce clamping.
  *
- * ⚠ A THIRD wire-value namer, or a SECOND constant namer, still means something resolves it —
- * BAL-561's work — and needs the docblock's inertness claim re-argued rather than quietly
- * widened. Do not add an entry here for a `.ts` gate.
+ * ⚠ STILL TWO AFTER BAL-561. The token went live, but every resolution names the CONSTANT —
+ * `staff-access.ts` included — so the Staff access surface never spells the wire value. A THIRD
+ * wire-value namer is a raw-string resolution (`=== 'manage_staff_capabilities'`) that bypasses the
+ * constant's single definition. Do not add an entry here for a `.ts` gate.
  */
 const NEW_TOKEN_VALUE_NAMERS: readonly string[] = [
   'packages/shared/src/authz/platform.ts', // the definition
@@ -399,6 +449,16 @@ const THREADING_SEAMS: readonly {
     file: 'apps/web/src/lib/authz/live-platform-capability.ts',
     mustContain: [SEALER],
   },
+  // ⚠ BAL-561 — the staff-access RULE module (PIN B's newest entry). Its actor re-check and floor
+  // resolve over an ACCOUNT built from a locked row, so the conversion is only real if the account's
+  // own `customList` is what reaches the predicate. Passing `null` there would silently judge every
+  // staff member by their role bundle alone — a custom list that removes staff management would
+  // still count as a floor holder. (Its `customListCanHold` passes `null` DELIBERATELY: that rule
+  // asks what the ROLE may hold, which is the CHECK's question, not what the account holds.)
+  {
+    file: 'packages/shared/src/authz/staff-access.ts',
+    mustContain: ['platformActorHasCapability(account.role, account.customList, capability)'],
+  },
 ];
 
 describe('invariant: the platform capability axis has ONE resolution point (BAL-560)', () => {
@@ -441,7 +501,8 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
   it('PIN B: the OVERRIDE-AWARE predicate has exactly the reviewed caller set (both directions + length)', () => {
     const found = filesNaming(ACTOR_PREDICATE).sort();
     expect(found).toEqual([...ACTOR_CALLERS].sort());
-    expect(found).toHaveLength(5);
+    // 5 → 6 (BAL-561): the staff-access rule module — argued on `ACTOR_CALLERS`.
+    expect(found).toHaveLength(6);
   });
 
   it('PIN C: the column / session field is touched by exactly the one writer and the readers (both directions + length)', () => {
@@ -450,23 +511,26 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
     expect(found).toHaveLength(8);
   });
 
-  it('PIN C2: the snake_case COLUMN name is written by exactly the schema that declares it', () => {
+  it('PIN C2: the snake_case COLUMN name is written by exactly the schema that declares it (+ the argued audit-action namer)', () => {
     const found = filesNaming(OVERRIDE_COLUMN).sort();
     expect(found).toEqual([...OVERRIDE_COLUMN_NAMERS].sort());
-    expect(found).toHaveLength(1);
+    // 1 → 2 (BAL-561): `STAFF_ACCESS_AUDIT_ACTIONS.CUSTOM_LIST_SET` — argued on `OVERRIDE_COLUMN_NAMERS`.
+    expect(found).toHaveLength(2);
   });
 
-  it('PIN E: MANAGE_STAFF_CAPABILITIES is named by exactly its own definition — it is INERT', () => {
+  it('PIN E: MANAGE_STAFF_CAPABILITIES is LIVE since BAL-561 and named by exactly the reviewed resolution points', () => {
     // Both spellings: the CONSTANT and its wire VALUE. A raw-string resolution
     // (`=== 'manage_staff_capabilities'`) would evade a constant-only pin, and the wire value is
     // what a jsonb override and a sealed cookie actually carry.
     const byConstant = filesNaming(NEW_TOKEN).sort();
     expect(byConstant).toEqual([...NEW_TOKEN_NAMERS].sort());
-    expect(byConstant).toHaveLength(1);
+    // 1 → 2 (BAL-561 Phase A: the shared staff-access rule module) → 4 (BAL-561 Phase B: the
+    // page's server loader and its Server Action gate) — argued on `NEW_TOKEN_NAMERS`.
+    expect(byConstant).toHaveLength(4);
 
     // ⚠ TWO for the wire value, and the second is the CHECK's SQL literal — a STORAGE rule, not
-    // a resolution. See `NEW_TOKEN_VALUE_NAMERS` for why that does not weaken the inertness
-    // claim, and why a THIRD entry would.
+    // a resolution. See `NEW_TOKEN_VALUE_NAMERS` for why that is not a raw-string resolution, and
+    // why a THIRD entry would be.
     const byValue = filesNaming(NEW_TOKEN_VALUE).sort();
     expect(byValue).toEqual([...NEW_TOKEN_VALUE_NAMERS].sort());
     expect(byValue).toHaveLength(2);
@@ -498,7 +562,8 @@ describe('invariant: the platform capability axis has ONE resolution point (BAL-
 
   it('every converted seam THREADS the override — the conversion is not cosmetic', () => {
     // Non-vacuity: the table is the size claimed, so an emptied table cannot pass this loop.
-    expect(THREADING_SEAMS).toHaveLength(8);
+    // 8 → 9 (BAL-561): the staff-access rule module's threading proof.
+    expect(THREADING_SEAMS).toHaveLength(9);
     for (const seam of THREADING_SEAMS) {
       const file = scanned.find((candidate) => candidate.rel === seam.file);
       expect(file, `${seam.file} must be in the scan set`).toBeDefined();

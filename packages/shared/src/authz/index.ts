@@ -117,12 +117,67 @@ export {
   // NOT re-exported here (PIN H): only the codec functions below read it.
   encodeSealedPlatformCapabilities,
   decodeSealedPlatformCapabilities,
+  // BAL-561 / D7 — the axis's DISPLAY metadata: the Staff access page's capability list is
+  // authored from this map and this group order, never from a page-local copy.
+  PLATFORM_CAPABILITY_GROUPS,
+  PLATFORM_CAPABILITY_LABELS,
+  platformCapabilityGroupMembers,
+  platformCapabilityDisplayOrder,
 } from './platform';
 export type {
   PlatformCapability,
   PlatformStaffRole,
   SealedPlatformCapabilityIndexes,
+  PlatformCapabilityGroup,
+  PlatformCapabilityLabel,
 } from './platform';
+
+// BAL-561 — the STAFF-ACCESS RULE MODULE: the actor re-check, the D2 staff-management floor, the
+// draft validation that pre-empts the CHECK, F1's grant-eligibility gain check, C4's grant
+// ceiling, and the audit action names. NOT a fourth axis: no token, no role→capability map —
+// every MEMBERSHIP question inside it goes through `platformActorHasCapability` above, and every
+// GAIN question (F1's eligibility check, C4's ceiling — C7's single `staffAccessDraftGains`) goes
+// through that predicate's whole-set sibling `resolvePlatformCapabilities`, also above — never a
+// role bundle or override read directly. ONE definition, consumed by `@balo/db`'s save transaction
+// and by the Staff access page's floor and eligibility preview. See `./staff-access.ts`.
+export {
+  PLATFORM_ROLE_LABELS,
+  STAFF_ACCESS_AUDIT_ACTIONS,
+  userRowIsLive,
+  canonicalCustomList,
+  storedCustomListOf,
+  sameCustomList,
+  staffCustomListAllowed,
+  customListCanHold,
+  validateStaffAccessDraft,
+  accountMayManageStaff,
+  accountMayGainAccess,
+  accountKeepsStaffManagementFloor,
+  staffManagementFloorHolds,
+  applyStaffAccessDraft,
+  precheckStaffAccessSave,
+  evaluateLockedStaffAccessSave,
+  staffAccessDraftGains,
+  staffAccessDraftGainsAnything,
+} from './staff-access';
+export type {
+  StaffAccessAccount,
+  StaffAccessPerson,
+  StaffAccessState,
+  StaffAccessSaveRequest,
+  StaffAccessDraft,
+  StaffAccessSnapshot,
+  StaffAccessDraftRefusal,
+  StaffAccessPrecheckRefusal,
+  StaffAccessLockedRefusal,
+  StaffAccessSaveRefusal,
+  StaffAccessDraftValidation,
+  StaffAccessPrecheckPassed,
+  StaffAccessSavePrecheck,
+  StaffAccessLockedRows,
+  StaffAccessSaveVerdict,
+  StaffAccessDraftGains,
+} from './staff-access';
 
 // The DISTINCT engagement-capability axis (BAL-413 / ADR-1046) — gates by DELIVERY
 // IDENTITY on ONE already-resolved meeting context, not by membership role and not by

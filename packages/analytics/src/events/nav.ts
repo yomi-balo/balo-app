@@ -32,6 +32,9 @@ export const NAV_ITEM_KEYS = [
   // BAL-550 — the capture-health detail lens, after `admin_catalogue` per the design's
   // `ADMIN_NAV` order.
   'admin_health',
+  // BAL-561 — the Staff access page, authored last in the "Balo admin" block after
+  // `admin_lookup` (the registry's own authored order).
+  'admin_staff_access',
 ] as const;
 export type NavItemKey = (typeof NAV_ITEM_KEYS)[number];
 

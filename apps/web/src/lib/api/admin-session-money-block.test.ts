@@ -24,13 +24,15 @@ describe('fetchAdminSessionMoneyBlock', () => {
     expect(mockCallSessionApi).toHaveBeenCalledWith('/admin/sessions/session_1/money-block', 'GET');
   });
 
-  it('403 → forbidden, and logs a warning (never an error)', async () => {
+  it('403 → forbidden, and logs info (P8 — a staff viewer without fee access is expected, not an anomaly)', async () => {
     mockCallSessionApi.mockResolvedValue({ ok: false, status: 403, error: 'forbidden' });
     const result = await fetchAdminSessionMoneyBlock('session_1');
     expect(result).toEqual({ ok: false, reason: 'forbidden' });
-    expect(log.warn).toHaveBeenCalledWith('Admin money block denied to a staff viewer', {
-      sessionId: 'session_1',
-    });
+    expect(log.info).toHaveBeenCalledWith(
+      'Admin money block withheld from a staff viewer without fee access',
+      { sessionId: 'session_1' }
+    );
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('404 → not_found', async () => {

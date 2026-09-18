@@ -153,6 +153,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
         'admin_catalogue',
         'admin_health',
         'admin_lookup',
+        'admin_staff_access',
       ]);
     }
     for (const context of [COMPANY_NO_MANAGE, COMPANY_MANAGE, EXPERT_NO_MANAGE, EXPERT_MANAGE]) {
@@ -163,7 +164,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('the two capability axes gate independently: staff-without-manage sees admin and NOT Team; owner-without-staff sees Team and NOT admin', () => {
     // A super_admin who is a plain member of a personal company (expert workspace, where `team`
     // lives after BAL-503).
-    expect(resolveNavItems(EXPERT_STAFF, 'admin')).toHaveLength(7);
+    expect(resolveNavItems(EXPERT_STAFF, 'admin')).toHaveLength(8);
     expect(resolveNavItems(EXPERT_STAFF, 'secondary').map((e) => e.key)).not.toContain('team');
     // A company/agency owner who is not Balo staff.
     expect(resolveNavItems(EXPERT_MANAGE, 'secondary').map((e) => e.key)).toContain('team');
@@ -174,12 +175,12 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
       capabilities: [CAPABILITIES.MANAGE_MEMBERS, PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
     };
     expect(resolveNavItems(both, 'secondary').map((e) => e.key)).toContain('team');
-    expect(resolveNavItems(both, 'admin')).toHaveLength(7);
+    expect(resolveNavItems(both, 'admin')).toHaveLength(8);
   });
 
   it('every admin entry is mobilePriority "more", scoped to both workspace types, and carries no badge or jumpOut', () => {
     const admin = NAV_ENTRIES.filter((e) => e.section === 'admin');
-    expect(admin).toHaveLength(7);
+    expect(admin).toHaveLength(8);
     for (const entry of admin) {
       expect(entry.mobilePriority).toBe('more');
       expect([...entry.workspaceTypes].sort()).toEqual(['company', 'expert']);
@@ -209,6 +210,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(byKey.get('admin_catalogue')?.href).toBe('/admin/catalogue');
     expect(byKey.get('admin_health')?.href).toBe('/admin/health/capture');
     expect(byKey.get('admin_lookup')?.href).toBe('/admin/lookup');
+    expect(byKey.get('admin_staff_access')?.href).toBe('/admin/staff-access');
   });
 
   it('key vocabulary is closed both ways against NAV_ITEM_KEYS', () => {
@@ -239,9 +241,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NO_CAPABILITY_REQUIRED({ workspaceType: 'company', capabilities: [] })).toBe(true);
   });
 
-  it('non-vacuity: 18 declared entries, 17 enabled', () => {
-    expect(NAV_ENTRIES).toHaveLength(18);
-    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(17);
+  it('non-vacuity: 19 declared entries, 18 enabled', () => {
+    expect(NAV_ENTRIES).toHaveLength(19);
+    expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(18);
   });
 
   it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
@@ -378,6 +380,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'admin_catalogue',
       'admin_health',
       'admin_lookup',
+      'admin_staff_access',
     ]);
     expect(resolveMoreItems(EXPERT_STAFF).map((e) => e.key)).toEqual([
       'projects',
@@ -390,6 +393,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
       'admin_catalogue',
       'admin_health',
       'admin_lookup',
+      'admin_staff_access',
     ]);
     // …and none of them reaches the tab bar (all `'more'`; the bar is already at the cap).
     expect(resolveMobileTabs(COMPANY_STAFF).map((e) => e.key)).toEqual([
@@ -445,6 +449,8 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/promo-codes', [{ label: 'Promo codes', href: null }]],
     ['/admin/catalogue', [{ label: 'Config & catalogue', href: null }]],
     ['/admin/lookup', [{ label: 'Lookup', href: null }]],
+    // BAL-561 — the Staff access page's own registry entry.
+    ['/admin/staff-access', [{ label: 'Staff access', href: null }]],
     // BAL-548 — the admin Home page's own registry entry.
     ['/admin', [{ label: 'Home', href: null }]],
     // ── Supplemental (non-nav) list routes ───────────────────────────────────────────────
@@ -520,6 +526,7 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
       '/promo-codes',
       '/admin/catalogue',
       '/admin/lookup',
+      '/admin/staff-access',
       '/admin',
       '/billing/top-up',
       '/redeem',

@@ -33,7 +33,7 @@ import {
  * solved here — consistent with every sibling invariant in this directory.
  *
  * ⚠⚠ BLIND SPOT: AN ACTION GATING THROUGH A SHARED HELPER NAMES NEITHER CALL, SO THIS SCAN
- * CANNOT SEE IT. Four helpers in this tree wrap the two-call sequence and are themselves
+ * CANNOT SEE IT. Five helpers in this tree wrap the two-call sequence and are themselves
  * `inScope` (proven by A2 below), but their CALLERS — the actions that invoke them — name
  * neither `hasPlatformCapability(` nor `actorHoldsPlatformCapability(` and are therefore
  * invisible to this walk:
@@ -47,6 +47,9 @@ import {
  *     `require-application-reviewer.test.ts`.
  *   · `projects/[requestId]/_actions/_shared/require-request-staff-capability.ts` — covered by
  *     `request-staff-capability-gated.test.ts`.
+ *   · `admin/staff-access/_actions/_shared/require-staff-access-manager.ts` — covered by
+ *     `require-staff-access-manager.test.ts`, `save-staff-access.test.ts` and
+ *     `find-staff-candidate.test.ts`.
  * Passing THIS invariant is NOT evidence those actions are live-gated — their own coverage is.
  *
  * ⚠ RENDER-TIME LOADERS OUTSIDE `_actions`/`'use server'` (pages, `_lib`) are OUT OF SCOPE by
@@ -152,6 +155,7 @@ describe('invariant: every session-gated platform capability check is ALSO live-
       'app/(dashboard)/engagements/[id]/_actions/action-item-action-shared.ts',
       'app/(dashboard)/admin/applications/_actions/_shared/require-application-reviewer.ts',
       'app/(dashboard)/projects/[requestId]/_actions/_shared/require-request-staff-capability.ts',
+      'app/(dashboard)/admin/staff-access/_actions/_shared/require-staff-access-manager.ts',
     ];
     for (const rel of sharedHelperRels) {
       const file = scanned.find((candidate) => candidate.rel === rel);

@@ -43,12 +43,11 @@ export async function fetchAdminSessionMoneyBlock(
   }
 
   if (result.status === 403) {
-    // A staff viewer with VIEW_PLATFORM_ADMIN but not MANAGE_PLATFORM_FEES cannot exist until a
-    // per-user override is WRITTEN (BAL-561). BAL-560 made a fee-blind staff viewer EXPRESSIBLE —
-    // `users.platform_capabilities` and the resolution path both ship — but nothing writes the
-    // column yet, so firing today still means the bundle split shipped or something drifted.
-    // log.warn per CLAUDE.md's "recoverable issues / validation anomalies" guidance.
-    log.warn('Admin money block denied to a staff viewer', { sessionId });
+    // A staff viewer with VIEW_PLATFORM_ADMIN but not MANAGE_PLATFORM_FEES is now a normal,
+    // intended configuration (BAL-561 ships the Staff access writer for the per-user override
+    // BAL-560 made expressible): an admin on a Custom list with the fee token unticked reaches
+    // here legitimately. Not an anomaly, so `log.info` rather than `log.warn` (P8).
+    log.info('Admin money block withheld from a staff viewer without fee access', { sessionId });
     return { ok: false, reason: 'forbidden' };
   }
 

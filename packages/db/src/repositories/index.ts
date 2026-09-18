@@ -1,4 +1,6 @@
 export { usersRepository } from './users';
+// BAL-561 — the Staff access save's input and discriminated outcome.
+export type { SaveStaffAccessInput, SaveStaffAccessResult } from './users';
 export { companiesRepository } from './companies';
 export type {
   CompanySummary,

@@ -49,7 +49,9 @@ export const users = pgTable(
      * from a script or a hand edit, and narrowing the axis later must take effect immediately
      * rather than waiting for a backfill. Readers must treat the value as `unknown`.
      *
-     * ⚠ NOTHING WRITES THIS COLUMN IN BAL-560. The writer is BAL-561.
+     * ⚠ THE ONE WRITER is `usersRepository.saveStaffAccess` (BAL-561), which writes it together
+     * with `platform_role`, in one statement, with its audit rows, and only ever stores a
+     * NORMALISED list (known tokens, de-duplicated, canonical order).
      */
     platformCapabilities: jsonb('platform_capabilities').$type<PlatformCapability[]>(),
     phone: text('phone'),
@@ -99,6 +101,21 @@ export const users = pgTable(
       .where(sql`${t.deletedAt} IS NULL`),
     uniqueIndex('users_email_unique')
       .on(t.email)
+      .where(sql`${t.deletedAt} IS NULL`),
+    // BAL-561 / D1 — "at most one LIVE account per email, CASE-INSENSITIVELY", by construction.
+    // The Staff access email lookup (`usersRepository.findStaffCandidateByEmail`) matches
+    // `lower(email) = lower($1)` with `LIMIT 1` and names THIS index as its guarantee: without it
+    // two live case-variants could both match and a security write could land on the wrong person
+    // (pre-flight O2). The lookup's `lower()` on both sides is exactly this index expression, so
+    // the two agree on what "the same email" means — no JS/Postgres case-folding mismatch.
+    // PARTIAL on `deleted_at IS NULL`, the shape above (BAL-360), so a soft-deleted account frees
+    // its slot. `users_email_unique` above is KEPT (D1): it is case-sensitive and strictly weaker,
+    // but nothing is gained by dropping it and an arbiter might one day name it.
+    // ⚠ A NEW 23505 SURFACE on every `users` INSERT path: a case-variant of a live email now fails
+    // closed through each path's existing generic catch (plan §3) instead of silently creating a
+    // second live account.
+    uniqueIndex('users_email_lower_unique')
+      .on(sql`lower(${t.email})`)
       .where(sql`${t.deletedAt} IS NULL`),
     // BAL-494: FK columns get an index (drizzle-schema skill). Also serves the
     // reverse lookup "which users have this company as their active workspace",
@@ -171,9 +188,11 @@ export const users = pgTable(
      * ⚠ THAT SAFETY PROPERTY IS ALSO AN OBLIGATION ON EVERY ROLE-SETTER (security F4). A
      * demotion of a staff member who holds an override MUST clear the column in the SAME
      * statement — `UPDATE users SET platform_role='user', platform_capabilities=NULL` — or it
-     * fails 23514 and the demotion does not happen at all. Nothing in production writes
-     * `platform_role` today, so no shipped path can hit this; BAL-561, which introduces the
-     * first writer for both columns, must do the pair atomically.
+     * fails 23514 and the demotion does not happen at all. The production writer of both columns
+     * is `usersRepository.saveStaffAccess` (BAL-561), and it honours this: every save writes
+     * `platform_role` AND `platform_capabilities` in the SAME `UPDATE`, and it validates the pair
+     * against this CHECK in application code first (`validateStaffAccessDraft`,
+     * `@balo/shared/authz`), so an operator gets a named refusal rather than a raw 23514.
      *
      * ⚠ `<> 'user'` rather than `IN ('admin','super_admin')` is D1's exact spelling. Consequence
      * to know: a FUTURE non-staff `platform_role` value would be allowed to carry an override by
@@ -206,11 +225,11 @@ export const users = pgTable(
      * ⚠ THE RULE IS "ONLY ON A `super_admin` ROW", **NOT** "never in an override". The narrower
      * form is the only one compatible with BAL-561's design: switching a super_admin to a Custom
      * override pre-fills from the current role bundle, which for a `super_admin` INCLUDES this
-     * token, and BAL-561's floor rule 3 requires a sole super_admin to keep
-     * `manage_staff_capabilities` while remaining a super admin. A blanket refusal would make a
-     * sole super_admin unable to switch to Custom at all, and would silently strip staff
-     * management from every other super_admin who did. The real hazard is narrow: the token on a
-     * NON-super_admin row.
+     * token, and BAL-561's staff-management floor (ADR-1035 §A1.9, D2) requires at least one live
+     * account to keep this token AND `view_platform_admin` — so a super_admin on a Custom list
+     * must be able to keep it. A blanket refusal would make the floor's last holder unable to
+     * switch to Custom at all, and would silently strip staff management from every other
+     * super_admin who did. The real hazard is narrow: the token on a NON-super_admin row.
      *
      * ⚠ IT LIVES INSIDE THE EXISTING `CASE` ARM, deliberately, so `@>` can never evaluate against
      * a non-array — the same evaluation-order reasoning as the length bound above. A demotion

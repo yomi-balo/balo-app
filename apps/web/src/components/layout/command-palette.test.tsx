@@ -267,7 +267,7 @@ describe('CommandPalette', () => {
     expect(companyLabels).not.toContain('Expert Settings');
   });
 
-  it('BAL-534/BAL-548/BAL-551/BAL-549/BAL-550: a staff context lists every Balo admin destination under their own heading', async () => {
+  it('BAL-534/BAL-548/BAL-551/BAL-549/BAL-550/BAL-561: a staff context lists every Balo admin destination under their own heading', async () => {
     renderPalette({
       workspaceType: 'company',
       capabilities: [PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN],
@@ -279,12 +279,12 @@ describe('CommandPalette', () => {
     // ⚠ DERIVED FROM THE REGISTRY, NEVER HARD-CODED (same reasoning as T8 below) — this used
     // to assert only `Config & catalogue` was present, which passed whether there were three
     // admin destinations or five; BAL-551 added `Lookup`, BAL-548 added `Home`, BAL-549 added
-    // `Applications` and BAL-550 added `Capture health` — nothing here caught any of them not
-    // being wired up.
+    // `Applications`, BAL-550 added `Capture health` and BAL-561 added `Staff access` — nothing
+    // here caught any of them not being wired up.
     const adminLabels = NAV_ENTRIES.filter((entry) => entry.section === 'admin').map(
       (entry) => entry.label
     );
-    expect(adminLabels.length).toBe(7);
+    expect(adminLabels.length).toBe(8);
     for (const label of adminLabels) {
       expect(screen.getByRole('option', { name: new RegExp(label) })).toBeInTheDocument();
     }

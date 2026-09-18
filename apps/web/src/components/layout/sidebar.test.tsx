@@ -421,7 +421,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('BAL-534/BAL-548/BAL-549/BAL-550: a staff context renders the labelled "Balo admin" group with its seven rows, in both modes', () => {
+  it('BAL-534/BAL-548/BAL-549/BAL-550/BAL-561: a staff context renders the labelled "Balo admin" group with its eight rows, in both modes', () => {
     for (const mode of ['client', 'expert'] as const) {
       const view = renderSidebar({ mode, canManageCompany: false, isStaff: true });
       const group = screen.getByTestId('sidebar-admin-group');
@@ -438,6 +438,7 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
         '/admin/catalogue',
         '/admin/health/capture',
         '/admin/lookup',
+        '/admin/staff-access',
       ]);
       expect(within(group).getByTestId('sidebar-nav-pill-admin')).toBeInTheDocument();
       view.unmount();
@@ -454,6 +455,9 @@ describe('Sidebar (BAL-495 pinning test — pre/post refactor identical)', () =>
     );
     expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain(
       '/admin/lookup'
+    );
+    expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).not.toContain(
+      '/admin/staff-access'
     );
   });
 });

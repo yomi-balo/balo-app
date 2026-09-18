@@ -17,6 +17,7 @@ import {
   Inbox,
   UserPlus,
   Activity,
+  ShieldCheck,
 } from 'lucide-react';
 import type { Workspace } from '@balo/shared/workspaces';
 import { CAPABILITIES, PLATFORM_CAPABILITIES } from '@balo/shared/authz';
@@ -415,6 +416,22 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
     label: 'Lookup',
     icon: ScanSearch,
     href: '/admin/lookup',
+    section: 'admin',
+    workspaceTypes: ['company', 'expert'],
+    requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
+    mobilePriority: 'more',
+    enabled: true,
+  },
+  // BAL-561 — 'admin_staff_access' is authored last in this block, after 'admin_lookup'. Gated
+  // on `VIEW_PLATFORM_ADMIN`, NOT `MANAGE_STAFF_CAPABILITIES` — the same reachability-vs-per-
+  // surface-token distinction the `admin_applications` comment above states: every staff member
+  // who can open `/admin` sees this entry; the page itself resolves `MANAGE_STAFF_CAPABILITIES`
+  // and renders the no-access state for a staff member who does not hold it (D5).
+  {
+    key: 'admin_staff_access',
+    label: 'Staff access',
+    icon: ShieldCheck,
+    href: '/admin/staff-access',
     section: 'admin',
     workspaceTypes: ['company', 'expert'],
     requires: requiresCapability(PLATFORM_CAPABILITIES.VIEW_PLATFORM_ADMIN),
