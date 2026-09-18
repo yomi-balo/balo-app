@@ -50,7 +50,8 @@ export type CaseCloseReason = NonNullable<CaseEngagement['closeReason']>;
  * them to the SCHEMA widened no consumer's view of a case. `CaseEngagementRow` is unchanged.
  *
  * `createdAt` is the PARENT's — the same clock `listOpenCreatedBefore` filters on, so
- * BAL-420 can feed it straight into `isCaseInactive` from `@balo/shared/engagements`.
+ * the inactivity sweep can feed it straight into `isCaseInactive` from
+ * `@balo/shared/engagements`.
  */
 export type CaseEngagementRow = Omit<Engagement, 'baloFeeBps'> &
   Omit<
@@ -584,7 +585,7 @@ export const caseEngagementsRepository = {
    *     a LIVE member of `engagements.company_id` — the DATA-INTEGRITY invariant on
    *     `closed_by_user_id`. A non-member (including the delivering expert) fails
    *     closed → `CaseCloserNotMemberError`.
-   *   - `{ reason: 'auto_inactive' }` — the BAL-420 sweep. Type-CANNOT supply a user;
+   *   - `{ reason: 'auto_inactive' }` — the inactivity sweep. Type-CANNOT supply a user;
    *     `closed_by_user_id` stays NULL (ADR-1030 system-actor exemption).
    *
    * ⚠ THIS IS NOT AN AUTHORIZATION GATE. No capability is resolved here and no role
@@ -609,7 +610,7 @@ export const caseEngagementsRepository = {
    *   2. publish `engagement.case_closed` carrying the RAW `reviewToken`, when that
    *      reviewer has not already rated the delivering expert.
    * BAL-388's `resolveCaseAction` (apps/web, the recap's `resolved` close) is the FIRST
-   * caller and does both; copy its post-commit half. BAL-420's `auto_inactive` sweep is
+   * caller and does both; copy its post-commit half. The `auto_inactive` inactivity sweep is
    * the second, and mints NO token by design.
    *
    * The NUDGE half needs no caller wiring: `listClosedBetween` below starts matching the
@@ -817,16 +818,33 @@ export const caseEngagementsRepository = {
    * Rides `engagement_type_status_created_idx` + `case_engagement_open_idx`.
    *
    * ⚠ The cutoff is compared against the PARENT's `created_at` — the same value
-   * `CaseEngagementRow.createdAt` exposes, so the set this selects and the set BAL-420
+   * `CaseEngagementRow.createdAt` exposes, so the set this selects and the set the sweep
    * re-evaluates with `isCaseInactive` cannot diverge on two clocks.
    *
-   * ⚠ This is a SUPERSET, not the rule: it is consultation-blind, because no FK links
-   * a case to its consultations yet (`credit_sessions` has no `engagement_id`;
-   * `consultations` is an availability stub — BAL-418's `meeting_contexts` is the
-   * link). BAL-420 refines each row with `isCaseInactive()` from
-   * `@balo/shared/engagements`, and MUST NOT run a sweep over this before BAL-418
-   * lands. The caller computes `cutoff = now - CASE_INACTIVITY_DAYS` — the repo stays
-   * policy-free (mirrors `listPendingAutoAccept(cutoff)`).
+   * ⚠ This is a SUPERSET, not the rule: it is consultation-blind. The refinement is
+   * `isCaseInactive()` from `@balo/shared/engagements`, fed by
+   * `meetingContextsRepository.consultationTimestampsForEngagements(ids, now)` — the
+   * `meeting_contexts` seam shipped by BAL-418. THE SUPERSET-PLUS-REFINE SHAPE
+   * IS RATIFIED, NOT A GAP — see the composition suite's header: folding the skip into
+   * this query would need a correlated subquery
+   * over `meeting_contexts` + `meetings`, i.e. a SECOND definition of "upcoming" that can
+   * drift from the seam's, and it would defeat `engagement_type_status_created_idx`.
+   *
+   * ⚠ DO NOT resolve the anchors through `credit_sessions.engagement_id`. That column
+   * exists, but money/reporting read it while this rule reads the seam, and nothing
+   * enforces coherence between the two — see the "BAL-418 / ADR-1045 §3" block in
+   * `schema/credit-sessions.ts` (the caveat sits above the columns, not on `engagement_id`,
+   * whose own comment is the denormalisation note).
+   *
+   * ⚠ THE BAL-425 PROHIBITION, RESTATED RATHER THAN DELETED. The old wording ("MUST NOT
+   * run a sweep over this before BAL-418 lands") is discharged: BAL-418 landed in
+   * `5b843429` and the rule is now SATISFIABLE end-to-end. That is NOT a licence to run a
+   * sweep. No case-inactivity sweep exists, and whichever ticket builds one still owes,
+   * BEFORE it runs in production: (a) excluding engagements with a live `in_progress`
+   * meeting from the candidate list (the mid-call hazard on
+   * `consultationTimestampsForEngagements`), and (b) calling the seam for every candidate
+   * — passing `null, null` is a BUG, not a gap. The caller computes
+   * `cutoff = now - CASE_INACTIVITY_DAYS`; the repo stays policy-free.
    */
   async listOpenCreatedBefore(cutoff: Date): Promise<CaseEngagementRow[]> {
     const rows = await db

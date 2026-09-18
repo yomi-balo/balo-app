@@ -77,7 +77,7 @@ import { timestamps, softDelete } from './helpers';
  * than a `context_id`, so their check is "who owns THIS MEETING", resolved through this
  * seam; see `apps/api/src/services/meetings/meeting-availability.ts`),
  * **BAL-421** (the case surface — the first caller of `listMeetingsForContext`), and
- * **BAL-425/BAL-420** (the inactivity sweep — the first caller of
+ * **the inactivity sweep** (the first caller of
  * `consultationTimestampsForEngagements`, which must pass only engagement ids it already
  * scoped).
  *

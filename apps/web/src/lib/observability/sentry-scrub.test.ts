@@ -15,6 +15,7 @@ import {
  * special-cases `/join/` from silently reopening the other two.
  */
 const TOKEN = 'gt_5f4dcc3b5aa765d61d8327deb882cf99';
+const MEETING_UUID = 'a0000000-0000-4000-8000-000000000003';
 
 const SENSITIVE_PATHS = [
   { label: 'BAL-408 /join/', path: `/join/${TOKEN}`, redacted: '/join/[redacted]' },
@@ -277,6 +278,19 @@ describe('isSensitiveUrl', () => {
       expect(isSensitiveUrl(value)).toBe(false);
     });
   }
+
+  /**
+   * ⚠ BAL-442 — the resume route's raw guest token is ALREADY covered by `/join/m/`'s
+   * derivation, once BLOCKER B's chain is in place: `redactSensitivePath` changes this URL
+   * (the meeting id AND the token are both redacted), so `isSensitiveUrl` is `true` — Session
+   * Replay is refused at `Sentry.init()` time for this landing, exactly as for `/join/m/{id}`
+   * alone. No change to `instrumentation-client.ts` is required.
+   */
+  it('BAL-442 — is true for the lobby resume route (raw token in the path)', () => {
+    const path = `/join/m/${MEETING_UUID}/resume/${TOKEN}`;
+    expect(isSensitiveUrl(path)).toBe(true);
+    expect(isSensitiveUrl(`${ORIGIN}${path}`)).toBe(true);
+  });
 
   it('is false for a bare prefix carrying no token', () => {
     // Nothing to withhold, so Replay stays on — the exclusion is targeted, not a blanket

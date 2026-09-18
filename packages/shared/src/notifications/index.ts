@@ -861,7 +861,7 @@ export interface ReviewReminderPayload {
  * ⚠ LIVE AS OF BAL-388. The recap's `resolveCaseAction` is the FIRST and (today) only
  * publisher: a `@balo/db` repository structurally cannot publish, so `close()` gets its
  * publish line at the caller's layer. The `auto_inactive` arm is still unpublished
- * (BAL-420's sweep owns it). Do not describe this event as inert.
+ * (the inactivity sweep owns it). Do not describe this event as inert.
  *
  * ⚠ THIS EVENT IS **PUBLISHABLE**, NOT SERVER-ONLY. BAL-421's caller is a web Server
  * Action, which publishes over HTTP → `apps/api/src/routes/notifications/schema.ts`.
@@ -1027,6 +1027,48 @@ export interface MeetingGuestLinkResentPayload {
   scheduledStartIso: string;
   scheduledEndIso: string;
   expiresOn: string; // pre-formatted UTC date — helpful-fact framing, never a countdown
+}
+
+/**
+ * BAL-442 — a lobby guest asked for their own link back, and a live PENDING row matched the
+ * address they gave. Email to THAT ADDRESS ONLY, and it carries a freshly ROTATED credential.
+ *
+ * ⚠⚠ THE RECIPIENT IS THE ADDRESS ON THE ROW, NEVER THE ADDRESS THE CALLER TYPED. They are
+ * equal by construction of the match, and the service reads it back off the stored row anyway
+ * so that the property is structural rather than incidental.
+ *
+ * ⚠⚠ NO `inviterName` / `inviterOrgLabel` / `accessScope` — the same reasoning as
+ * {@link MeetingGuestLinkResentPayload}: this row was created by the RECIPIENT themselves, so
+ * there is no inviter to attribute, and `accessScope` on a `link` row is `meeting` by
+ * construction. ⚠ NO BILLING LINE, EVER — the reader is an outsider who is not the payer.
+ *
+ * ⚠ AND IT CARRIES NO `matched` FLAG AND NO QUEUE POSITION. This payload exists ONLY on the
+ * match branch; a miss publishes nothing at all.
+ */
+export interface MeetingGuestReentryLinkSentPayload {
+  /**
+   * ⚠⚠ **NOT `meeting_guests.id`.** The original lobby row has no invite email, but a REPEAT
+   * recovery on the SAME row would collide with the previous recovery's retained BullMQ job and
+   * be silently dedup-swallowed — the exact failure this affordance exists to fix, and the
+   * failure {@link MeetingGuestLinkResentPayload.correlationId} documents for the host arm.
+   * It is the first 16 hex characters of the NEWLY MINTED token's SHA-256 hash: unique per
+   * rotation, deterministic for a retry of the same rotation, and never the raw token.
+   */
+  correlationId: string;
+  recipientEmail: string;
+  joinToken: string; // RAW. ⚠ Never logged, never persisted.
+  /**
+   * ⚠ REQUIRED, AND THE ONE STRUCTURAL DIFFERENCE FROM THE HOST ARM'S PAYLOAD. The CTA is the
+   * RESUME route `/join/m/{meetingId}/resume/{joinToken}` (RULING 3), not `/join/{token}` —
+   * `app/join/[token]/page.tsx:498-500` asserts a self-claimed lobby row never reaches that
+   * route, and it drags in the roster/inviter path.
+   */
+  meetingId: string;
+  guestName?: string; // absent ⇒ the template greets generically, never with the local part
+  meetingTitle: string;
+  scheduledStartIso: string;
+  scheduledEndIso: string;
+  expiresOn: string; // pre-formatted UTC date — helpful fact, never a countdown
 }
 
 // ── BAL-424 conversation events ────────────────────────────────────────────────────────
@@ -1258,7 +1300,8 @@ export interface BookingConfirmedPayload {
   priorConsultationCount: number;
   scheduledStartIso: string;
   durationMinutes: number;
-  /** `/join/m/{meetingId}` — the member route. NEVER `meetings.join_url` (raw Daily). */
+  /** `/meetings/{meetingId}/call` — the member route (BAL-567; it was `/join/m/{meetingId}`, the
+   *  ANONYMOUS lobby, until then). NEVER `meetings.join_url` (raw Daily).  */
   joinPath: string;
   /** False ⇒ the Daily room is not up yet; templates must not promise a live link. */
   provisioned: boolean;
@@ -1513,7 +1556,7 @@ export interface ConversationIntroCallBookedPayload {
   expertPartyLabel: string;
   scheduledStartIso: string;
   durationMinutes: number;
-  /** `/join/m/{meetingId}` — NEVER `meetings.join_url` (raw Daily). */
+  /** `/meetings/{meetingId}/call` — the member route (BAL-567). NEVER `meetings.join_url` (raw Daily).  */
   joinPath: string;
   provisioned: boolean;
   guestCount: number;

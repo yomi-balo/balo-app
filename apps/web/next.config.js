@@ -19,6 +19,25 @@ const nextConfig = {
     '/sessions/[sessionId]/receipt/pdf': ['./src/lib/project-request/proposal/pdf/fonts/*.ttf'],
     '/sessions/[sessionId]/payout/pdf': ['./src/lib/project-request/proposal/pdf/fonts/*.ttf'],
   },
+  /**
+   * BAL-567 — THE FIRST `redirects()` BLOCK IN THIS FILE.
+   *
+   * `/consultations` was the "Coming soon" stub the Cases nav entry pointed at; `/cases` replaces
+   * it. The old path survives as a PERMANENT (308) redirect because it is reachable from places
+   * we do not control: bookmarks, a crumb still in someone's browser history, and any cached page
+   * that still names it.
+   *
+   * ⚠ CONFIG-LEVEL, NOT A PAGE-LEVEL `permanentRedirect()`. Next runs `redirects()` BEFORE
+   * middleware, so an unauthenticated hit is answered with a 308 without paying for the
+   * auth/onboarding round trip, and without the chain a page-level version would produce
+   * (`/consultations` → `/login?returnTo=/consultations` → `/consultations` → `/cases`).
+   *
+   * ⚠ `permanent: true` IS DELIBERATE. `/consultations` is not coming back — this ticket retires
+   * the noun platform-wide — so telling caches and crawlers as much is the honest answer.
+   */
+  async redirects() {
+    return [{ source: '/consultations', destination: '/cases', permanent: true }];
+  },
   env: {
     NEXT_PUBLIC_APP_VERSION: process.env.npm_package_version || '0.0.0',
     NEXT_PUBLIC_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev',

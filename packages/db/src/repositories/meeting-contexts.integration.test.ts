@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { CASE_INACTIVITY_DAYS, isCaseInactive } from '@balo/shared/engagements';
 import { db } from '../client';
-import { creditSessions, engagements, meetingContexts } from '../schema';
+import { creditSessions, engagements, meetingContexts, meetings } from '../schema';
 import {
   caseEngagementFactory,
   creditWalletFactory,
@@ -621,6 +621,56 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
     expect(result.get(engagement.id)?.nextScheduledConsultationAt).toBeNull();
   });
 
+  it('a CANCELLED future meeting is NOT upcoming — the earliest LIVE scheduled one wins', async () => {
+    const { engagement } = await caseEngagementFactory();
+    const now = new Date();
+    const cancelledStart = new Date(now.getTime() + DAY_MS);
+    const liveStart = new Date(now.getTime() + 5 * DAY_MS);
+
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: {
+        status: 'cancelled',
+        scheduledStart: cancelledStart,
+        scheduledEnd: new Date(cancelledStart.getTime() + HOUR_MS),
+      },
+    });
+    // A second, LIVE meeting as a positive control: a lone `toBeNull()` here would also
+    // pass if the join or the context filter broke, not just if the status filter did its
+    // job. This forces the query to have actually matched rows.
+    await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: {
+        scheduledStart: liveStart,
+        scheduledEnd: new Date(liveStart.getTime() + HOUR_MS),
+      },
+    });
+
+    const result = await meetingContextsRepository.consultationTimestampsForEngagements(
+      [engagement.id],
+      now
+    );
+    expect(result.get(engagement.id)?.nextScheduledConsultationAt?.getTime()).toBe(
+      liveStart.getTime()
+    );
+    expect(result.get(engagement.id)?.lastCompletedConsultationAt).toBeNull();
+  });
+
+  it('a cancelled meeting can NEVER be a completed consultation — the DB refuses the state', async () => {
+    const now = new Date();
+    await expectConstraintViolation(
+      '23514',
+      (tx) =>
+        tx.insert(meetings).values({
+          status: 'cancelled',
+          outcome: 'completed',
+          scheduledStart: now,
+          scheduledEnd: new Date(now.getTime() + HOUR_MS),
+        }),
+      'meeting_outcome_requires_ended'
+    );
+  });
+
   it('resolves BOTH timestamps for the same engagement', async () => {
     const { engagement } = await caseEngagementFactory();
     const now = new Date();
@@ -740,9 +790,13 @@ describe('meetingContextsRepository.consultationTimestampsForEngagements (THE BA
  * ⚠ THIS IS A COMPOSITION TEST, NOT A SWEEP. BAL-417's auto-close is a WINDOW-MATH sweep
  * and is NOT a consumer of BAL-420's `schedule()` primitive — there is no per-instance
  * promise to cancel, because a candidate simply stops matching the query when the case
- * gets activity. BAL-425 stays OPEN: no sweep file, no cron registration, no feature flag,
- * and its mid-call `in_progress` hazard decision is untouched. What this proves is only
- * that the two SHIPPED pieces the sweep will stand on compose to the right answer:
+ * gets activity. BAL-425 SHIPPED DOCUMENTATION AND TESTS ONLY: still no sweep file, no cron
+ * registration and no feature flag. Its mid-call `in_progress` hazard is now RE-ASSIGNED BY
+ * CONDITION — to whichever ticket first gives `consultationTimestampsForEngagements` a
+ * production caller, rather than to a ticket id that can close without discharging it (the
+ * previous "BAL-425/BAL-420" pairing did exactly that). See the seam's docblock. What this
+ * proves is only that the two SHIPPED pieces the sweep will stand on compose to the right
+ * answer:
  *
  *     meetingContextsRepository.consultationTimestampsForEngagements(ids, now)   [BAL-418]
  *       ──feeds──▶  isCaseInactive({ caseCreatedAt, ...anchors, now })           [BAL-417]
@@ -868,6 +922,52 @@ describe('case inactivity composition (BAL-417 × BAL-418)', () => {
     });
 
     expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+  });
+
+  it('7 — the ONLY consultation was CANCELLED ⇒ INACTIVE, anchored on case creation (AC 4)', async () => {
+    const { engagement } = await caseEngagementFactory({ values: { createdAt: daysAgo(31) } });
+    const upcoming = daysAhead(1);
+    const { meeting } = await meetingFactory({
+      contexts: [{ contextType: 'case', contextId: engagement.id }],
+      values: { scheduledStart: upcoming, scheduledEnd: new Date(upcoming.getTime() + HOUR_MS) },
+    });
+
+    // Pre-assert: while the call is booked, the case is held open. This proves the
+    // engagement, the context row and the seam are all wired correctly, so the post-assert's
+    // flip to `true` can only come from the cancellation below, not from a wiring accident.
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(false);
+
+    // Cancel through the REAL production path, not by seeding a cancelled row — this is
+    // what turns "a cancelled row is excluded" into "production cancellation leaves a row
+    // the seam then excludes", the actual AC 4 claim.
+    await meetingsRepository.cancel(meeting.id, { actorUserId: null, actorRole: 'system' });
+
+    expect(await inactive(engagement.id, engagement.createdAt, NOW)).toBe(true);
+
+    const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
+      [engagement.id],
+      NOW
+    );
+    const timestamps = anchors.get(engagement.id);
+    expect(timestamps?.lastCompletedConsultationAt).toBeNull();
+    expect(timestamps?.nextScheduledConsultationAt).toBeNull();
+
+    // The exclusion must be attributable to the STATUS FILTER ALONE. If cancel ever starts
+    // soft-deleting the meeting or its context rows, the booleans above keep passing for a
+    // DIFFERENT reason, and the corrected docblock's "excluded ONLY by the status filter"
+    // becomes false. Fail here instead, so that change is made deliberately.
+    const [cancelledMeeting] = await db
+      .select({ status: meetings.status, deletedAt: meetings.deletedAt })
+      .from(meetings)
+      .where(eq(meetings.id, meeting.id));
+    expect(cancelledMeeting?.status).toBe('cancelled');
+    expect(cancelledMeeting?.deletedAt).toBeNull();
+
+    const [contextRow] = await db
+      .select({ deletedAt: meetingContexts.deletedAt })
+      .from(meetingContexts)
+      .where(eq(meetingContexts.meetingId, meeting.id));
+    expect(contextRow?.deletedAt).toBeNull();
   });
 
   it('THE CLOCK IS SHARED — `caseCreatedAt` is the PARENT engagements.created_at', async () => {

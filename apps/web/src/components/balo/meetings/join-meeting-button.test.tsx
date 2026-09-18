@@ -34,7 +34,7 @@ describe('JoinMeetingButton — the DOM', () => {
     const onJoin = vi.fn();
     render(
       <JoinMeetingButton
-        joinUrl="https://balo.expert/join/m/m-1"
+        joinUrl="https://balo.expert/meetings/m-1/call"
         ariaLabel="Join now"
         onJoin={onJoin}
       >
@@ -46,13 +46,13 @@ describe('JoinMeetingButton — the DOM', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     fireEvent.click(button);
     expect(onJoin).toHaveBeenCalledTimes(1);
-    expect(mockAssign).toHaveBeenCalledWith('https://balo.expert/join/m/m-1');
+    expect(mockAssign).toHaveBeenCalledWith('https://balo.expert/meetings/m-1/call');
   });
 
   it('carries the live ping-ring cue and its reduced-motion fallback, never the old animate-pulse', () => {
     render(
       <JoinMeetingButton
-        joinUrl="https://balo.expert/join/m/m-1"
+        joinUrl="https://balo.expert/meetings/m-1/call"
         ariaLabel="Join now"
         onJoin={vi.fn()}
       >
@@ -83,7 +83,7 @@ describe('JoinMeetingButton — the DOM', () => {
   it('D6 — a call-site className="absolute …" still wins over the baked-in relative', () => {
     render(
       <JoinMeetingButton
-        joinUrl="https://balo.expert/join/m/m-1"
+        joinUrl="https://balo.expert/meetings/m-1/call"
         ariaLabel="Join now"
         onJoin={vi.fn()}
         className="absolute top-0.5"

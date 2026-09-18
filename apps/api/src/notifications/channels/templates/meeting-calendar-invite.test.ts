@@ -31,7 +31,7 @@ function memberProps(
     endIso: END,
     transition: 'booked',
     audience: 'member',
-    memberJoinUrl: `${SITE}/join/m/meeting-1`,
+    memberJoinUrl: `${SITE}/meetings/meeting-1/call`,
     baseUrl: SITE,
     ...over,
   };
@@ -97,7 +97,7 @@ describe('getEmailTemplate("meeting-calendar-invite") — subjects', () => {
 describe('MeetingCalendarInviteEmail', () => {
   it('member audience: the "Open in Balo" CTA href is the memberJoinUrl', async () => {
     const html = await render(MeetingCalendarInviteEmail(memberProps()));
-    expect(hrefsIn(html)).toContain(`${SITE}/join/m/meeting-1`);
+    expect(hrefsIn(html)).toContain(`${SITE}/meetings/meeting-1/call`);
   });
 
   it('guest audience: no /join/ href anywhere in the render', async () => {

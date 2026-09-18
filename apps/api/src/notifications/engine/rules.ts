@@ -853,7 +853,7 @@ export const notificationRules: Record<string, NotificationRule[]> = {
   //
   // ⚠ LIVE AS OF BAL-388: `resolveCaseAction` (the recap's client-side close) is the FIRST
   // and today ONLY publisher, so this rule delivers a real email to a real client. The
-  // `auto_inactive` arm is still unpublished — BAL-420's sweep owns it — and it reuses this
+  // `auto_inactive` arm is still unpublished — the inactivity sweep owns it — and it reuses this
   // same rule and template with a different `closeReason`.
   'engagement.case_closed': emailAndInApp(
     'client',
@@ -1175,6 +1175,27 @@ export const notificationRules: Record<string, NotificationRule[]> = {
       channel: 'email',
       recipient: 'email_address',
       template: 'meeting-guest-link-resent',
+      timing: 'immediate',
+      priority: 'normal',
+    },
+  ],
+
+  // BAL-442 — a lobby guest recovered their OWN link. That person, and only that person; the
+  // same external `email_address` path as the invite, because there is no in-app surface for a
+  // non-user.
+  // ⚠⚠ EMAIL ONLY AND ONE PUBLISH PER REQUEST — the payload carries a freshly ROTATED RAW join
+  // token, and the dispatcher shares ONE payload across a fan-out. A second rule here, or a
+  // fan-out recipient kind, would email a live credential for a stranger's row to everybody on
+  // the meeting. Never widen the recipient.
+  // ⚠ NO SMS, and NO notification to the host or the counterparty — telling either that an
+  // address is in the lobby is precisely the disclosure this whole surface avoids.
+  // ⚠ `immediate`: somebody is locked out of a call that may be happening now.
+  // ⚠ NO CONDITION — a conditional rule is one a future edit can make not fire at all.
+  'meeting.guest_reentry_link_sent': [
+    {
+      channel: 'email',
+      recipient: 'email_address',
+      template: 'meeting-guest-reentry-link',
       timing: 'immediate',
       priority: 'normal',
     },

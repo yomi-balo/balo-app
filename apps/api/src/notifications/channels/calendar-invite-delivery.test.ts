@@ -142,8 +142,8 @@ const FACTS = {
   contextType: 'case',
   summary: 'Consultation with Northwind Industrial',
   description: 'CPQ rollout',
-  location: 'https://balo.expert/join/m/meeting-1',
-  memberJoinUrl: 'https://balo.expert/join/m/meeting-1',
+  location: 'https://balo.expert/meetings/meeting-1/call',
+  memberJoinUrl: 'https://balo.expert/meetings/meeting-1/call',
 };
 
 beforeEach(() => {

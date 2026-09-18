@@ -74,7 +74,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
 
   it('preserves NAV_ENTRIES order for the primary section despite interleaved disabled entries', () => {
     const keys = resolveNavItems(COMPANY_MANAGE, 'primary').map((entry) => entry.key);
-    expect(keys).toEqual(['dashboard', 'find_experts', 'consultations', 'projects', 'messages']);
+    expect(keys).toEqual(['dashboard', 'find_experts', 'cases', 'projects', 'messages']);
   });
 
   it('NAV_ENTRIES is authored primary block → secondary block → admin block (resolveMobileNav depends on it)', () => {
@@ -87,7 +87,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
 
   it('preserves NAV_ENTRIES order for the primary section in an expert context (calendar is expert-only)', () => {
     const keys = resolveNavItems(EXPERT_MANAGE, 'primary').map((entry) => entry.key);
-    expect(keys).toEqual(['dashboard', 'consultations', 'projects', 'calendar', 'messages']);
+    expect(keys).toEqual(['dashboard', 'cases', 'projects', 'calendar', 'messages']);
   });
 
   it('scopes expert_settings to the expert workspace only', () => {
@@ -120,7 +120,7 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     const more = primary.filter((e) => e.mobilePriority === 'more').map((e) => e.key);
     const tab = primary.filter((e) => e.mobilePriority === 'tab').map((e) => e.key);
     expect(more).toEqual(['projects']);
-    expect(tab).toEqual(['dashboard', 'consultations', 'calendar', 'messages']);
+    expect(tab).toEqual(['dashboard', 'cases', 'calendar', 'messages']);
   });
 
   it('every secondary entry is mobilePriority "more"', () => {
@@ -193,7 +193,9 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
   it('href pins: every enabled entry matches today’s literal; help is null', () => {
     const byKey = new Map(NAV_ENTRIES.map((e) => [e.key, e]));
     expect(byKey.get('dashboard')?.href).toBe('/dashboard');
-    expect(byKey.get('consultations')?.href).toBe('/consultations');
+    // ⚠ BAL-567 — key, label and href all renamed in place. `/consultations` 308s to this now.
+    expect(byKey.get('cases')?.href).toBe('/cases');
+    expect(byKey.get('cases')?.label).toBe('Cases');
     expect(byKey.get('projects')?.href).toBe('/projects');
     expect(byKey.get('messages')?.href).toBe('/messages');
     expect(byKey.get('expert_settings')?.href).toBe('/expert/settings');
@@ -246,13 +248,20 @@ describe('NAV_ENTRIES / resolveNavItems (BAL-495)', () => {
     expect(NAV_ENTRIES.filter((e) => e.enabled)).toHaveLength(18);
   });
 
-  it('shortLabel pin: exactly dashboard/find_experts/consultations carry one', () => {
+  /**
+   * ⚠ BAL-567 — `cases` NO LONGER CARRIES ONE, AND THAT IS THE POINT OF THE ASSERTION.
+   * `shortLabel` exists so a long label can fit a tab cell; it held `'Consults'` because
+   * "Consultations" could not. "Cases" fits, so keeping an abbreviation of a word that is no
+   * longer the label would ship a tab reading "Consults" under a page called "Cases".
+   */
+  it('shortLabel pin: exactly dashboard/find_experts carry one', () => {
     const byKey = new Map(NAV_ENTRIES.map((e) => [e.key, e]));
     expect(byKey.get('dashboard')?.shortLabel).toBe('Home');
     expect(byKey.get('find_experts')?.shortLabel).toBe('Experts');
-    expect(byKey.get('consultations')?.shortLabel).toBe('Consults');
+    expect(byKey.get('cases')?.shortLabel).toBeUndefined();
     const withShortLabel = NAV_ENTRIES.filter((e) => e.shortLabel !== undefined).map((e) => e.key);
-    expect(withShortLabel.sort()).toEqual(['consultations', 'dashboard', 'find_experts'].sort());
+    expect(withShortLabel.sort()).toEqual(['dashboard', 'find_experts'].sort());
+    expect(withShortLabel).toHaveLength(2);
   });
 });
 
@@ -331,13 +340,13 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
     expect(resolveMobileTabs(COMPANY_NO_MANAGE).map((e) => e.key)).toEqual([
       'dashboard',
       'find_experts',
-      'consultations',
+      'cases',
       'messages',
     ]);
     expect(resolveMobileTabs(COMPANY_NO_MANAGE)).toHaveLength(MOBILE_TAB_LIMIT);
     expect(resolveMobileTabs(EXPERT_MANAGE).map((e) => e.key)).toEqual([
       'dashboard',
-      'consultations',
+      'cases',
       'calendar',
       'messages',
     ]);
@@ -399,7 +408,7 @@ describe('splitMobileNav / resolveMobileTabs / resolveMoreItems (BAL-501)', () =
     expect(resolveMobileTabs(COMPANY_STAFF).map((e) => e.key)).toEqual([
       'dashboard',
       'find_experts',
-      'consultations',
+      'cases',
       'messages',
     ]);
   });
@@ -435,7 +444,9 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it.each([
     // ── Exact registry hrefs ──────────────────────────────────────────────────────────────
     ['/dashboard', [{ label: 'Dashboard', href: null }]],
-    ['/consultations', [{ label: 'Consultations', href: null }]],
+    // ⚠ BAL-567 — `/consultations` is no longer a route at all (308 → `/cases`), so it resolves
+    // to NO crumb. `/cases` is the registry href now.
+    ['/cases', [{ label: 'Cases', href: null }]],
     ['/projects', [{ label: 'Projects', href: null }]],
     ['/messages', [{ label: 'Messages', href: null }]],
     ['/expert/settings', [{ label: 'Expert Settings', href: null }]],
@@ -461,18 +472,48 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
     ['/settings/billing', [{ label: 'Credits & billing', href: null }]],
     ['/settings/notifications', [{ label: 'Notifications', href: null }]],
     // ── Entity routes — parent crumb only; the entity's own label is published separately ──
-    ['/cases/case-1', [{ label: 'Consultations', href: '/consultations' }]],
-    ['/meetings/meeting-1', [{ label: 'Consultations', href: '/consultations' }]],
-    ['/meetings/meeting-1/end', [{ label: 'Consultations', href: '/consultations' }]],
+    ['/cases/case-1', [{ label: 'Cases', href: '/cases' }]],
     // BAL-533 — Projects, not Engagements: the list is admin-only and this route is project-only.
     ['/engagements/eng-1', [{ label: 'Projects', href: '/projects' }]],
     ['/projects/req-1', [{ label: 'Projects', href: '/projects' }]],
     ['/projects/req-1/proposal/rel-1', [{ label: 'Projects', href: '/projects' }]],
-    // BAL-441 — the session receipt/payout pages.
-    ['/sessions/session-1/receipt', [{ label: 'Consultations', href: '/consultations' }]],
-    ['/sessions/session-1/payout', [{ label: 'Consultations', href: '/consultations' }]],
   ] as const)('%s resolves to %j', (pathname, expected) => {
     expect(resolveBreadcrumbTrail(pathname)).toEqual(expected);
+  });
+
+  /**
+   * BAL-567 (D5) — `/meetings/*` AND `/sessions/*` NOW RESOLVE TO **NO** PARENT CRUMB.
+   *
+   * ⚠ THIS IS A DELIBERATE DROP, NOT A REGRESSION, and BAL-533 is the precedent. Both segments
+   * used to parent to the `/consultations` stub. A meeting or a session can belong to a CASE or
+   * to a PROJECT, so no single static parent is honest, and deriving the right one needs a
+   * database read that the client-side `Breadcrumbs` cannot make. No heading is lost: every route
+   * under both segments publishes its own `EntityCrumb`, and `/meetings/:id/end` renders its own
+   * `<h1>` — so dropping its parent actually removes a duplicate-`h1` defect there.
+   *
+   * ⚠ THE COST, NAMED: the mobile back arrow disappears on these routes. The in-call
+   * "Back to {context}" link is the real affordance and is untouched.
+   */
+  it.each([
+    '/meetings/meeting-1',
+    '/meetings/meeting-1/end',
+    '/sessions/session-1/receipt',
+    '/sessions/session-1/payout',
+  ])(
+    'BAL-567 — %s has no static parent crumb (a meeting may belong to a case OR a project)',
+    (pathname) => {
+      expect(resolveBreadcrumbTrail(pathname)).toEqual([]);
+    }
+  );
+
+  /**
+   * ⚠ AND `/consultations` ITSELF RESOLVES TO NOTHING. The route is gone (a 308 in
+   * `next.config.js` answers it before any React runs), so a crumb for it would be a link to a
+   * redirect. Pinned because "renamed the entry" and "added a second entry" look identical
+   * until something asserts the old one is absent.
+   */
+  it('BAL-567 — the retired /consultations path resolves to no crumb', () => {
+    expect(resolveBreadcrumbTrail('/consultations')).toEqual([]);
   });
 
   it('unrecognised routes render no crumb — no crumb beats a wrong crumb (D11)', () => {
@@ -495,16 +536,15 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
   });
 
   it('every entity route crumb carries a non-null href (the way back is never lost)', () => {
+    // ⚠ BAL-567 removed `/meetings/*` and `/sessions/*` from this list, because they no longer
+    // HAVE a parent — see the D5 block above. The routes that keep one must still keep an href.
     const entityRoutes = [
       '/cases/case-1',
-      '/meetings/meeting-1',
-      '/meetings/meeting-1/end',
       '/engagements/eng-1',
       '/projects/req-1',
       '/projects/req-1/proposal/rel-1',
-      '/sessions/session-1/receipt',
-      '/sessions/session-1/payout',
     ];
+    expect(entityRoutes).toHaveLength(4);
     for (const pathname of entityRoutes) {
       const [crumb] = resolveBreadcrumbTrail(pathname);
       // BAL-533 — `const [crumb] = []` is `undefined`, and `undefined.not.toBeNull()` passes;
@@ -517,7 +557,7 @@ describe('resolveBreadcrumbTrail (BAL-499)', () => {
   it('every list-route crumb (exact registry or supplemental) has href: null', () => {
     const listRoutes = [
       '/dashboard',
-      '/consultations',
+      '/cases',
       '/projects',
       '/messages',
       '/expert/settings',
@@ -594,7 +634,7 @@ describe('resolveEntityListNavEntry (BAL-566)', () => {
     // (`!Object.hasOwn(ENTITY_PARENTS, entitySegment)`) as the "an unknown segment resolves to
     // undefined" test above, NOT the second failure mode (an ENTITY_PARENTS hit whose target nav
     // entry is disabled or missing for the given workspace). That second branch is UNREACHABLE
-    // today: every `ENTITY_PARENTS` value's `href` ('/consultations', '/projects') resolves to an
+    // today: every `ENTITY_PARENTS` value's `href` ('/cases', '/projects') resolves to an
     // enabled entry present in BOTH workspaces' primary section (pinned by
     // `resolveNavItems(...).map(...)` assertions elsewhere in this file), so there is no
     // ENTITY_PARENTS mapping whose target is ever disabled or workspace-scoped-out — constructing

@@ -1,7 +1,7 @@
 import { meetingCalendarEventsRepository, type CreatedMeeting } from '@balo/db';
 import type { FastifyBaseLogger } from 'fastify';
 import type { CalendarProjectedContextType } from './calendar-context-registry.js';
-import { memberJoinUrl } from './member-join-url.js';
+import { memberCallUrl } from './member-call-url.js';
 import {
   projectBookingToExpertCalendar,
   type ExpertCalendarDelivery,
@@ -87,7 +87,7 @@ async function runExpertCalendarProjection(
       // ONLY link a calendar artefact carries (BAL-433 D4): `/packages/…` does not exist and
       // `/engagements/[id]` 404s a case id, and a calendar entry outlives the meeting — a
       // dead link inside one is worse than no link.
-      joinUrl: memberJoinUrl(created.meeting.id),
+      joinUrl: memberCallUrl(created.meeting.id),
     },
     log
   );

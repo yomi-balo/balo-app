@@ -44,6 +44,7 @@ import type {
   MeetingGuestAddedPayload,
   MeetingGuestRemovedPayload,
   MeetingGuestLinkResentPayload,
+  MeetingGuestReentryLinkSentPayload,
   ConversationMessagePostedPayload,
   ConversationFileSharedPayload,
   ConversationUnreadDigestDuePayload,
@@ -485,7 +486,7 @@ export type NotificationEvent =
   | 'engagement.review_reminder'
   // BAL-390 — a case was closed (fused close + rating ask). LIVE as of BAL-388: the recap's
   // `resolveCaseAction` publishes it from apps/web. The `auto_inactive` close is still
-  // unpublished (BAL-420's sweep).
+  // unpublished (the inactivity sweep).
   | 'engagement.case_closed'
   // BAL-390 — the star-rating nudge (+24h / +7d). SERVER-ONLY. NOT the same thing as
   // `engagement.review_reminder` above, which is BAL-338's pre-auto-accept nudge.
@@ -532,6 +533,11 @@ export type NotificationEvent =
   // the guest's ONLY join credential, and minting in `apps/api` keeps that secret inside one
   // process from creation to enqueue.
   | 'meeting.guest_link_resent'
+  // BAL-442 — a lobby guest recovered their OWN link back into the queue. SERVER-ONLY for the
+  // same second reason as `meeting.guest_invited` / `meeting.guest_link_resent`: it carries
+  // the guest's ONLY join credential, and minting in `apps/api` keeps that secret inside one
+  // process from creation to enqueue.
+  | 'meeting.guest_reentry_link_sent'
   // BAL-134 / ADR-1049 — the two ABSENCE promises. Both SERVER-ONLY (see below): both are
   // published EXCLUSIVELY by BAL-420's dispatch tick, and `scheduleNotification` is an
   // in-process `apps/api` function that ADR-1047 Decision 11 keeps off HTTP entirely.
@@ -684,6 +690,11 @@ export type ServerOnlyNotificationEvent =
   // class of secret as `meeting.guest_invited` — a RAW join token. No `publishBodySchema`
   // arm; adding one would be a `StraySchemaArm` and fail `tsc`.
   | 'meeting.guest_link_resent'
+  // BAL-442: published by `request-lobby-reentry-link.ts`'s `requestLobbyReentryLink`, and
+  // carrying the same class of secret as `meeting.guest_invited` / `meeting.guest_link_resent`
+  // — a RAW join token. No `publishBodySchema` arm; adding one would be a `StraySchemaArm`
+  // and fail `tsc`.
+  | 'meeting.guest_reentry_link_sent'
   // BAL-134: both absence promises are published EXCLUSIVELY by the BAL-420 dispatch tick, so
   // neither has a `publishBodySchema` arm; adding one would be a `StraySchemaArm` and fail
   // `tsc`. ⚠ `meeting.expert_absent` MUST stay server-only for a SECOND, INDEPENDENT reason:
@@ -868,6 +879,7 @@ export interface EventPayloadMap {
   'meeting.guest_added': MeetingGuestAddedPayload;
   'meeting.guest_removed': MeetingGuestRemovedPayload;
   'meeting.guest_link_resent': MeetingGuestLinkResentPayload;
+  'meeting.guest_reentry_link_sent': MeetingGuestReentryLinkSentPayload;
   'meeting.expert_absent': MeetingExpertAbsentPayload;
   'meeting.client_absent': MeetingClientAbsentPayload;
   'conversation.message_posted': ConversationMessagePostedPayload;

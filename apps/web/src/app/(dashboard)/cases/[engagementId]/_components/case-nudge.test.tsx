@@ -1,8 +1,30 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@/test/utils';
+import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseNudgeView } from '@/lib/cases/case-view-types';
 import { CaseNudge } from './case-nudge';
+
+/**
+ * BAL-567 — `JoinMeetingButton` navigates with `globalThis.location.assign`, and jsdom's
+ * `Location.assign` is a NON-CONFIGURABLE own property, so the whole `location` object is
+ * swapped and restored (the `join-meeting-button.test.tsx` idiom, verbatim).
+ */
+const realLocation = globalThis.location;
+let mockAssign: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  mockAssign = vi.fn();
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { href: realLocation.href, origin: realLocation.origin, assign: mockAssign },
+  });
+});
+
+afterEach(() => {
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: realLocation });
+  vi.clearAllMocks();
+});
 
 /**
  * BAL-421 — the nudge renders EXACTLY ONE thing, chosen server-side by `selectCaseNudge`.
@@ -32,12 +54,15 @@ const BASE = {
   busy: false,
 };
 
+const JOIN_PATH = '/meetings/m1/call';
+
 const UPCOMING: CaseNudgeView = {
   kind: 'upcoming',
   meetingId: 'm1',
   scheduledStartIso: '2026-09-01T10:00:00Z',
   live: false,
   durationMinutes: 60,
+  joinPath: JOIN_PATH,
 };
 
 /**
@@ -48,9 +73,13 @@ const HEADINGS: readonly RegExp[] = [
   /Next consultation/i,
   /consultation is about to start|consultation starts in|consultation is starting now/i,
   /suggested some new times/i,
-  /Waiting on a reply to your suggested times/i,
+  // BAL-567 — was `/Waiting on a reply to your suggested times/i`. The pending-proposal title now
+  // names the ACTOR ("You suggested new times" / "Priya suggested new times"), so the pattern
+  // matches the sentence rather than the one viewer it used to assume.
+  /suggested new times/i,
   /thinks this one's sorted/i,
-  /You've asked if this is sorted/i,
+  // Likewise: "You've asked …" for the person who asked, "{Colleague} asked …" for everyone else.
+  /asked if this is sorted/i,
   /Nothing booked/i,
 ];
 
@@ -72,15 +101,23 @@ describe('CaseNudge — exactly ONE nudge renders, for every kind × every lens'
   });
 
   it.each(LENSES)('renders exactly one RESOLUTION_ASK nudge, %s lens', (lens) => {
-    render(<CaseNudge {...BASE} nudge={{ kind: 'resolution_ask' }} lens={lens} />);
+    render(
+      <CaseNudge {...BASE} nudge={{ kind: 'resolution_ask', actorLabel: 'Dana' }} lens={lens} />
+    );
     expect(renderedHeadingCount()).toBe(1);
-    expect(screen.getByText(/Amara thinks this one's sorted/i)).toBeInTheDocument();
+    expect(screen.getByText(/Dana thinks this one's sorted/i)).toBeInTheDocument();
   });
 
   it.each(LENSES)('renders exactly one RESOLUTION_ASK_PENDING nudge, %s lens', (lens) => {
-    render(<CaseNudge {...BASE} nudge={{ kind: 'resolution_ask_pending' }} lens={lens} />);
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ kind: 'resolution_ask_pending', actorLabel: 'You' }}
+        lens={lens}
+      />
+    );
     expect(renderedHeadingCount()).toBe(1);
-    expect(screen.getByText(/You've asked if this is sorted/i)).toBeInTheDocument();
+    expect(screen.getByText("You've asked if this is sorted")).toBeInTheDocument();
   });
 
   it.each(LENSES)('renders exactly one NOTHING_BOOKED nudge, %s lens', (lens) => {
@@ -103,6 +140,7 @@ describe('CaseNudge — exactly ONE nudge renders, for every kind × every lens'
     expiresAtIso: '2026-09-01T09:00:00Z',
     proposedAtIso: '2026-08-30T09:00:00Z',
     options: PROPOSAL_OPTIONS,
+    actorLabel: 'Dana',
   };
 
   const RESCHEDULE_PROPOSAL_PENDING_NUDGE = {
@@ -113,18 +151,132 @@ describe('CaseNudge — exactly ONE nudge renders, for every kind × every lens'
     expiresAtIso: '2026-09-01T09:00:00Z',
     proposedAtIso: '2026-08-30T09:00:00Z',
     options: PROPOSAL_OPTIONS,
+    actorLabel: 'You',
   };
 
   it('renders exactly one RESCHEDULE_PROPOSAL nudge — CLIENT lens only', () => {
     render(<CaseNudge {...BASE} nudge={RESCHEDULE_PROPOSAL_NUDGE} lens="client" />);
     expect(renderedHeadingCount()).toBe(1);
-    expect(screen.getByText(/Amara suggested some new times/i)).toBeInTheDocument();
+    expect(screen.getByText(/Dana suggested some new times/i)).toBeInTheDocument();
   });
 
   it('renders exactly one RESCHEDULE_PROPOSAL_PENDING nudge — EXPERT lens only', () => {
     render(<CaseNudge {...BASE} nudge={RESCHEDULE_PROPOSAL_PENDING_NUDGE} lens="expert" />);
     expect(renderedHeadingCount()).toBe(1);
-    expect(screen.getByText(/Waiting on a reply to your suggested times/i)).toBeInTheDocument();
+    expect(screen.getByText('You suggested new times')).toBeInTheDocument();
+  });
+});
+
+/**
+ * ⚠⚠ BAL-567 — THE ATTRIBUTION FIX, AND THE DEFECT IT CLOSES. Before this ticket the four
+ * attributed arms rendered `counterpartyLabel`, so the case page told EVERY expert-side viewer
+ * "You've asked if this is sorted" — including an agency colleague who did nothing
+ * (`resolveCaseAccess` admits any live agency member, ADR-1046 §7) — and named the delivering
+ * expert on the client side even when a colleague made the ask.
+ *
+ * Every case below asserts the actor's label IS rendered AND that `counterpartyLabel` is NOT,
+ * because a title that rendered both would pass a bare `getByText(actorLabel)`.
+ */
+describe('CaseNudge — the four attributed arms name the ACTOR, never the counterparty', () => {
+  const COUNTERPARTY = 'Amara';
+
+  interface AttributedCase {
+    readonly name: string;
+    readonly nudge: CaseNudgeView;
+    readonly lens: 'client' | 'expert';
+    readonly expectedTitle: string;
+    /**
+     * ⚠ THE EXACT SENTENCE THE PRE-BAL-567 COMPONENT WOULD HAVE RENDERED for this case, pinned
+     * as ABSENT. A "the counterparty name appears nowhere" assertion cannot be used here: the
+     * PROSPECTIVE bodies legitimately name the counterparty ("Amara will pick one…"), so such an
+     * assertion would fail on correct code. Naming the stale title is what makes this test fail
+     * if the titles are reverted to `counterpartyLabel`.
+     */
+    readonly staleTitle: string;
+  }
+
+  const ATTRIBUTED: readonly AttributedCase[] = [
+    {
+      name: 'resolution_ask · an agency colleague asked',
+      nudge: { kind: 'resolution_ask', actorLabel: 'Priya @ CloudPeak' },
+      lens: 'client',
+      expectedTitle: "Priya @ CloudPeak thinks this one's sorted",
+      staleTitle: "Amara thinks this one's sorted",
+    },
+    {
+      name: 'resolution_ask_pending · the viewer asked',
+      nudge: { kind: 'resolution_ask_pending', actorLabel: 'You' },
+      lens: 'expert',
+      expectedTitle: "You've asked if this is sorted",
+      staleTitle: 'Amara asked if this is sorted',
+    },
+    {
+      name: 'resolution_ask_pending · a COLLEAGUE asked, so it is not "you"',
+      nudge: { kind: 'resolution_ask_pending', actorLabel: 'Priya' },
+      lens: 'expert',
+      expectedTitle: 'Priya asked if this is sorted',
+      staleTitle: "You've asked if this is sorted",
+    },
+    {
+      name: 'reschedule_proposal · a colleague proposed',
+      nudge: {
+        kind: 'reschedule_proposal',
+        proposalId: 'p1',
+        meetingId: 'm1',
+        optionCount: 2,
+        originalScheduledStartIso: '2026-09-01T10:00:00Z',
+        expiresAtIso: '2026-09-01T09:00:00Z',
+        proposedAtIso: '2026-08-30T09:00:00Z',
+        options: [],
+        actorLabel: 'Priya @ CloudPeak',
+      },
+      lens: 'client',
+      expectedTitle: 'Priya @ CloudPeak suggested some new times',
+      staleTitle: 'Amara suggested some new times',
+    },
+    {
+      name: 'reschedule_proposal_pending · a COLLEAGUE proposed, so it is not "your" ask',
+      nudge: {
+        kind: 'reschedule_proposal_pending',
+        proposalId: 'p1',
+        meetingId: 'm1',
+        optionCount: 2,
+        expiresAtIso: '2026-09-01T09:00:00Z',
+        proposedAtIso: '2026-08-30T09:00:00Z',
+        options: [],
+        actorLabel: 'Priya',
+      },
+      lens: 'expert',
+      expectedTitle: 'Priya suggested new times',
+      staleTitle: 'Waiting on a reply to your suggested times',
+    },
+  ];
+
+  it('covers every attributed arm (guards a shrunken table)', () => {
+    expect(ATTRIBUTED).toHaveLength(5);
+  });
+
+  it.each(ATTRIBUTED)('$name', ({ nudge, lens, expectedTitle, staleTitle }) => {
+    render(<CaseNudge {...BASE} counterpartyLabel={COUNTERPARTY} nudge={nudge} lens={lens} />);
+    expect(screen.getByText(expectedTitle)).toBeInTheDocument();
+    expect(renderedHeadingCount()).toBe(1);
+    // The pre-BAL-567 sentence, pinned as ABSENT — see `staleTitle`'s note.
+    expect(screen.queryByText(staleTitle)).not.toBeInTheDocument();
+  });
+
+  it('keeps counterpartyLabel in the PROSPECTIVE bodies — it is a different register', () => {
+    render(
+      <CaseNudge
+        {...BASE}
+        counterpartyLabel={COUNTERPARTY}
+        nudge={{ kind: 'resolution_ask_pending', actorLabel: 'Priya' }}
+        lens="expert"
+      />
+    );
+    // "who must answer" names the PARTY (CLAUDE.md attribution-by-tense), and still does.
+    expect(
+      screen.getByText(new RegExp(`${COUNTERPARTY} will see the question`, 'i'))
+    ).toBeInTheDocument();
   });
 });
 
@@ -165,16 +317,55 @@ describe('CaseNudge — the lens changes the COPY, not the count', () => {
   });
 
   /**
-   * ⚠ THERE IS NO "JOIN NOW" BUTTON ANYWHERE, AND ITS ABSENCE IS DELIBERATE — no participant
-   * join route exists on `main` (BAL-132 / BAL-435 own it), so rendering one would be a link
-   * to nowhere and a disabled one is worse than an absent one.
+   * ⚠⚠ BAL-567 — **INVERTED**, NOT DELETED. This case used to assert that NO join button existed
+   * anywhere, because no participant join route existed on `main`. BAL-435 shipped
+   * `/meetings/{id}/call` and BAL-566 gave it one builder, so the assertion had become a guard
+   * against the feature. Deleting it would have left the new behaviour unpinned; it now asserts
+   * the opposite, on BOTH sides.
    */
-  it.each(LENSES)('offers NO join button even on a LIVE consultation, %s lens', (lens) => {
+  it.each(LENSES)('renders JOIN inside the window, as a <button>, %s lens', (lens) => {
     render(<CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens={lens} />);
-    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
+    const join = screen.getByRole('button', { name: /^Join .*meeting/i });
+    expect(join).toBeInTheDocument();
+    // ⚠ A `<button>`, NEVER AN `href` — `join-link-never-writes.test.ts` is the source-side half
+    // of this rule and `JoinMeetingButton`'s docblock is the reason.
+    expect(join.tagName).toBe('BUTTON');
     expect(screen.queryByRole('link', { name: /join/i })).not.toBeInTheDocument();
-    // …but the honest instruction IS carried.
-    expect(screen.getByText(/join link is in your calendar/i)).toBeInTheDocument();
+    // The stale instruction is gone: BAL-475 ships client invites, and the button is the nearer
+    // door either way (decisions D5).
+    expect(screen.queryByText(/join link is in your calendar/i)).not.toBeInTheDocument();
+  });
+
+  it.each(LENSES)('renders NO join button OUTSIDE the window, %s lens', (lens) => {
+    render(<CaseNudge {...BASE} nudge={UPCOMING} lens={lens} />);
+    expect(screen.queryByRole('button', { name: /join/i })).not.toBeInTheDocument();
+  });
+
+  it('navigates to the member call path and tracks the click, never rendering the path', async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens="client" />
+    );
+
+    expect(container.innerHTML).not.toContain(JOIN_PATH);
+
+    await user.click(screen.getByRole('button', { name: /^Join .*meeting/i }));
+
+    expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASE_ACTION_CLICKED, {
+      action: 'join',
+      lens: 'client',
+    });
+    expect(mockAssign).toHaveBeenCalledWith(JOIN_PATH);
+  });
+
+  it('tracks the EXPERT side under its own lens value', async () => {
+    const user = userEvent.setup();
+    render(<CaseNudge {...BASE} nudge={{ ...UPCOMING, live: true }} lens="expert" />);
+    await user.click(screen.getByRole('button', { name: /^Join .*meeting/i }));
+    expect(track).toHaveBeenCalledWith(RECAP_EVENTS.CASE_ACTION_CLICKED, {
+      action: 'join',
+      lens: 'expert',
+    });
   });
 
   /**
@@ -328,7 +519,7 @@ describe('CaseNudge — the resolution ask is the only interactive nudge', () =>
     const { rerender } = render(
       <CaseNudge
         {...BASE}
-        nudge={{ kind: 'resolution_ask' }}
+        nudge={{ kind: 'resolution_ask', actorLabel: 'Dana' }}
         lens="client"
         onMarkResolved={onMarkResolved}
         onDismissAsk={onDismissAsk}
@@ -344,7 +535,7 @@ describe('CaseNudge — the resolution ask is the only interactive nudge', () =>
     rerender(
       <CaseNudge
         {...BASE}
-        nudge={{ kind: 'resolution_ask' }}
+        nudge={{ kind: 'resolution_ask', actorLabel: 'Dana' }}
         lens="client"
         onMarkResolved={onMarkResolved}
         onDismissAsk={onDismissAsk}
@@ -360,7 +551,7 @@ describe('CaseNudge — the resolution ask is the only interactive nudge', () =>
     render(
       <CaseNudge
         {...BASE}
-        nudge={{ kind: 'resolution_ask' }}
+        nudge={{ kind: 'resolution_ask', actorLabel: 'Dana' }}
         lens="client"
         onDismissAsk={onDismissAsk}
       />
@@ -371,7 +562,7 @@ describe('CaseNudge — the resolution ask is the only interactive nudge', () =>
 
   it.each([
     ['upcoming', UPCOMING],
-    ['resolution_ask_pending', { kind: 'resolution_ask_pending' } as const],
+    ['resolution_ask_pending', { kind: 'resolution_ask_pending', actorLabel: 'You' } as const],
     ['nothing_booked', { kind: 'nothing_booked' } as const],
   ])('gives %s NO dismiss affordance', (_label, nudge) => {
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
@@ -379,7 +570,13 @@ describe('CaseNudge — the resolution ask is the only interactive nudge', () =>
   });
 
   it('offers the expert NO buttons on the pending state — nothing to do until they answer', () => {
-    render(<CaseNudge {...BASE} nudge={{ kind: 'resolution_ask_pending' }} lens="expert" />);
+    render(
+      <CaseNudge
+        {...BASE}
+        nudge={{ kind: 'resolution_ask_pending', actorLabel: 'You' }}
+        lens="expert"
+      />
+    );
     expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 });

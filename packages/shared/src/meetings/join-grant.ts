@@ -124,6 +124,22 @@ export interface MemberJoinContext {
    * for; a wrong title on a live call is worse than no title.
    */
   readonly title: string | null;
+  /**
+   * BAL-567 — `project_requests.id`, RESOLVED. Non-null only for the two request-grain labels
+   * (`project_discovery`, `request_interaction`); `null` for the other four.
+   *
+   * ⚠⚠ IT EXISTS BECAUSE {@link id} IS NOT ALWAYS A LINK TARGET, AND THAT ASYMMETRY IS THE WHOLE
+   * POINT. `meeting_contexts.context_id` is polymorphic: on `project_discovery` it IS the
+   * request id, but on `request_interaction` it is a `request_expert_relationships.id`. Building
+   * `/projects/{id}` from it — which `back-to-context.ts` did until BAL-567 — sends the member
+   * to a request that is not theirs, or to nothing at all. So the id hop is done ONCE here, on
+   * the server that already holds the rows, and the resolved value rides the envelope.
+   *
+   * ⚠ NULL IS NOT "MISSING", it is "this context has no request". `hrefForMeeting` reads it as
+   * such: a request-grain arm with a `null` here yields NO href rather than a guessed one, which
+   * is the same fail-closed discipline `owningRowFound` enforces on the other arms.
+   */
+  readonly projectRequestId: string | null;
 }
 
 /**
@@ -203,4 +219,16 @@ export interface LobbyClaimState {
    * so it can build a link for somebody else — see `claimLobbyPlace`'s docblock in `apps/api`.
    */
   readonly lobbyToken: string;
+}
+
+/**
+ * BAL-442 — the anonymous lobby RE-ENTRY request's success body.
+ *
+ * ⚠⚠ IT CARRIES NOTHING, AND THE EMPTINESS IS THE CONTRACT. A `matched` boolean, a row id, an
+ * expiry or a count would each be the exact oracle the fixed-floor timing and the identical
+ * status exist to close. The only field is a constant discriminant so it reads like its two
+ * sibling bodies.
+ */
+export interface LobbyReentryState {
+  readonly state: 'requested';
 }

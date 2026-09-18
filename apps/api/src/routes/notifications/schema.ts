@@ -12,10 +12,48 @@ import {
 // string. `booking.confirmed`'s email template renders it as `${BASE_URL}${joinPath}`, so an
 // unconstrained value lets an internal-secret-holding caller (or a future bug upstream of this
 // boundary) turn `joinPath` into an absolute `https://evil.com/...` phishing link inside a real
-// Balo email. The only producer is `memberJoinPath()` (`apps/web/src/lib/meetings/
-// member-join-path.ts`), which emits exactly `/join/m/{meetingId}` — anchored front and back so
-// nothing else is accepted.
-const memberJoinPathSchema = z.string().regex(/^\/join\/m\/[0-9a-f-]{36}$/);
+// Balo email. The only producer is `memberCallPath()` (`apps/web/src/lib/meetings/
+// member-call-path.ts`), which emits exactly `/meetings/{meetingId}/call` — anchored front and
+// back so nothing else is accepted.
+//
+// ⚠⚠ BAL-567 REPOINTED THIS FROM `/join/m/{meetingId}` TO `/meetings/{meetingId}/call`, AND THE
+// REGEX HAD TO MOVE IN THE SAME COMMIT. This constraint is enforced at PUBLISH TIME, not at
+// compile time (L1 below: `z.infer` erases refinements), so migrating the producers without
+// moving the regex would not have failed `tsc` or any web test — it would have started 400ing
+// every `booking.confirmed` and `conversation.intro_call_booked` publish in production. Kept
+// TIGHT rather than relaxed to a bare `z.string()`: the anchored shape is the only thing that
+// catches a malformed link before it reaches a customer's inbox, which is the whole point of N3.
+//
+// ⚠⚠ TRANSITIONAL UNION — THIS ACCEPTS **BOTH** SHAPES FOR EXACTLY ONE RELEASE, AND MUST BE
+// TIGHTENED TO THE MEMBER ROUTE ALONE ONCE BOTH APPS ARE DEPLOYED (BAL-567 review, item 3).
+//
+// WHY IT IS NOT SIMPLY THE NEW SHAPE: `apps/web` (Vercel) and `apps/api` (Railway) deploy
+// INDEPENDENTLY, and publishing is fire-and-forget — nothing surfaces a rejected publish to the
+// booking flow. So during the deploy gap in EITHER order, and after a web-only rollback, a
+// validation failure here is SILENT: the booking succeeds, the confirmation email and the in-app
+// notification are simply never sent, and the customer is told nothing.
+//   · api first  → web still emits `/join/m/{id}`, a new-shape-only schema rejects it.
+//   · web first  → api still expects `/join/m/{id}`, an old-shape-only schema rejects it.
+// Accepting both removes the window in both directions.
+//
+// ⚠ BOTH ARMS STAY TIGHTLY ANCHORED, front and back. This is a UNION OF TWO EXACT SHAPES, never
+// a relaxation to `z.string()`: N3's whole point is that an unconstrained `joinPath` lets a
+// caller turn `${BASE_URL}${joinPath}` into an absolute `https://evil.com/...` phishing link
+// inside a real Balo email, and a widened union does nothing to weaken that as long as every arm
+// is a same-origin route shape.
+//
+// ⚠ ACCEPTING THE LOBBY PATH IS NOT ENDORSING IT. `/join/m/{id}` is the ANONYMOUS GUEST lobby
+// (`meetingJoinLinkUrl`, BAL-436); a member routed through it never opens a metered credit
+// session. Nothing in `apps/web` emits it for these two payloads any more — the tests below pin
+// that the EMITTED value is the member route — and this arm exists solely so an in-flight
+// deployment cannot drop a notification.
+//
+// ⚠⚠ REMOVAL IS A ONE-LINE CHANGE, AND IT IS OWED: drop `legacyLobbyPathSchema` and its union
+// once web and api are both on this release. Leaving it is not neutral — it re-admits the lobby
+// path to a member-facing field permanently.
+const memberCallPathSchema = z.string().regex(/^\/meetings\/[0-9a-f-]{36}\/call$/);
+const legacyLobbyPathSchema = z.string().regex(/^\/join\/m\/[0-9a-f-]{36}$/);
+const transitionalJoinPathSchema = z.union([memberCallPathSchema, legacyLobbyPathSchema]);
 
 const userWelcomePayload = z.object({
   correlationId: z.uuid(),
@@ -560,7 +598,7 @@ const bookingConfirmedPayload = z.object({
   priorConsultationCount: z.number().int().nonnegative(),
   scheduledStartIso: z.string().datetime(),
   durationMinutes: z.number().int().positive(),
-  joinPath: memberJoinPathSchema,
+  joinPath: transitionalJoinPathSchema,
   provisioned: z.boolean(),
   guestCount: z.number().int().nonnegative(),
 });
@@ -733,7 +771,7 @@ const conversationIntroCallBookedPayload = z.object({
   expertPartyLabel: z.string().min(1).max(200),
   scheduledStartIso: z.string().datetime(),
   durationMinutes: z.number().int().positive(),
-  joinPath: memberJoinPathSchema,
+  joinPath: transitionalJoinPathSchema,
   provisioned: z.boolean(),
   guestCount: z.number().int().nonnegative(),
 });
@@ -1016,7 +1054,7 @@ export type AssertPublishCoverageComplete = [
  *   L1. CONSTRAINT drift. `z.infer` erases refinements: `z.string().min(1).max(4000)` infers a
  *       plain `string`. `ProjectChangesRequestedPayload.note` is `string` in TS and `.min(1)`
  *       here, so publishing an empty note still 400s silently and this guard stays green. Same
- *       for `.uuid()`, `.max(n)`, `.email()`, and `memberJoinPathSchema`'s regex. DO NOT try to
+ *       for `.uuid()`, `.max(n)`, `.email()`, and `transitionalJoinPathSchema`'s regexes. DO NOT try to
  *       encode length bounds or formats into the TS types — that trades a small invisible gap
  *       for a large unreadable one. Bounds are validated here and only here, on purpose.
  *   L2. DEFAULTS and transforms. `.default(...)` makes `z.input` and `z.output` differ; this

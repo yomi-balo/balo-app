@@ -118,6 +118,7 @@ import {
   decideGuestAdmission,
   inviteGuests,
   listGuests,
+  publishBestEffort,
   removeGuest,
   resendGuestJoinLink,
   type InviteGuestInput,
@@ -1901,4 +1902,30 @@ describe('resendGuestJoinLink (BAL-436)', () => {
       await expect(resend()).resolves.toMatchObject({ ok: true });
     }
   );
+});
+
+/**
+ * BAL-442 fix round (R-5) — `publishBestEffort` IS AN EXPORTED, SHARED PRIMITIVE, so its
+ * contract is pinned HERE rather than only through one of its consumers.
+ *
+ * ⚠⚠ THE SWALLOW IS UNCHANGED — it still never throws, which is why the three call sites in
+ * this file keep their behaviour exactly. What is NEW is that it SAYS WHICH HAPPENED, so the
+ * lobby re-entry arm can stop reporting `matched: true` for a link that was never queued.
+ */
+describe('publishBestEffort — the swallow now answers WHICH happened (R-5)', () => {
+  it('⚠ returns TRUE when the publish resolved', async () => {
+    await expect(
+      publishBestEffort(async () => 'queued', { event: 'e', correlationId: 'c' }, 'failed')
+    ).resolves.toBe(true);
+  });
+
+  it('⚠⚠ returns FALSE when the publish threw — and STILL does not throw', async () => {
+    await expect(
+      publishBestEffort(
+        () => Promise.reject(new Error('Redis unavailable')),
+        { event: 'e', correlationId: 'c' },
+        'failed'
+      )
+    ).resolves.toBe(false);
+  });
 });

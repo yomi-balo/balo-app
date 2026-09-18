@@ -7,7 +7,8 @@ import { stripComments } from '@balo/shared/testing';
  * BAL-390 §8.7.4 — D4's contract, encoded as a TEST rather than a comment.
  *
  * `case-engagements.ts`'s `close()` docblock tells every caller (BAL-388's recap action
- * today, BAL-420's sweep next) that it MUST, post-commit, mint a review token and publish
+ * today, the inactivity sweep next) that it MUST, post-commit, mint a review token (on the
+ * `resolved` arm — the `auto_inactive` sweep mints NONE, by design) and publish
  * `engagement.case_closed` — because **this repository cannot do either itself.** The
  * docblock says a reviewer "can check the ruling still holds by grepping it". This file
  * does the grep, every run, so the ruling cannot quietly stop holding.

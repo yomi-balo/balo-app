@@ -235,6 +235,18 @@ export const PUBLIC_ACTION_ALLOWLIST: readonly string[] = [
   // a guest has no WorkOS session to send a Bearer from. Authorization: `apps/api`'s
   // `joinMeetingAsGuest`, which resolves the token hash and refuses everything else identically.
   'app/join/_actions/poll-guest-admission.ts',
+  // BAL-442 — a locked-out lobby visitor asks us to email a fresh link to the address ALREADY ON
+  // THEIR ROW. They have no account BY DEFINITION, exactly as the knock above.
+  // ⚠ IT IS THE ONLY ACTION ON THIS LIST THAT CAUSES AN EMAIL TO BE SENT, which is why it has a
+  // FOURTH, RECIPIENT-KEYED rate-limit window that the knock does not — one bounding an INBOX
+  // rather than a caller.
+  // Authorization: `apps/api`'s `requestLobbyReentryLink` (meeting resolution, primary context,
+  // `status != 'cancelled'`, and a live `pending` + `link` + `party='client'` row for that exact
+  // canonical address), behind the re-entry route's per-visitor, per-meeting-visitor, per-peer
+  // AND per-recipient windows. ⚠ The api's response is IDENTICAL — body, status and latency —
+  // whether or not a row matched, and the service returns `void` so no verdict can reach this
+  // layer to be leaked.
+  'app/join/_actions/request-lobby-reentry-link.ts',
 ];
 
 /**

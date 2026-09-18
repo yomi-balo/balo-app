@@ -2018,7 +2018,7 @@ describe('creditSessionsRepository.open — meetingId / engagementId (BAL-418)',
     await creditSessionsRepository.connect(res.session.id, { now: BASE });
     await creditSessionsRepository.end(res.session.id, { now: sessionEndedAt });
 
-    // THE CONSEQUENCE, on a LIVE reader. BAL-425's sweep resolves through the seam, so this
+    // THE CONSEQUENCE, on a LIVE reader. The inactivity sweep resolves through the seam, so this
     // money row's `ended_at` lands on the MEETING's engagement — while money and reporting,
     // which read `engagement_id`, attribute the very same session to the other one.
     const anchors = await meetingContextsRepository.consultationTimestampsForEngagements(
@@ -2310,7 +2310,7 @@ describe('creditSessionsRepository.sumExpertEarningsForEngagement (BAL-421)', ()
   //
   // ⚠⚠ THESE TWO TESTS EXIST TO FAIL if anyone ever "helpfully" rewrites this read to
   // resolve `meeting_id` → `meeting_contexts.context_id` → engagement. Money and reporting
-  // consume `engagement_id` AS GIVEN (schema/credit-sessions.ts); only BAL-425's sweep goes
+  // consume `engagement_id` AS GIVEN (schema/credit-sessions.ts); only the inactivity sweep goes
   // through the seam. Re-deriving here would make a divergent pair silently AGREE — hiding
   // the divergence instead of catching it, with no row anywhere that looks wrong. They are
   // the engagement-grain companions to the `open()` divergence test above.

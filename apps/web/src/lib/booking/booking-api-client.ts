@@ -34,7 +34,9 @@ import type { MeetingBookingContextType } from '@balo/shared/meetings';
  * the browser (BAL-421 precedent; `meetings.join_url` never crosses this boundary). Dropping
  * the fields here, at the transport layer, means nothing DOWNSTREAM of this module ever holds
  * them, rather than relying on every caller to remember not to forward them. The client-facing
- * link is always `/join/m/{meetingId}`, built by the caller from `meetingId` alone.
+ * link is always `/meetings/{meetingId}/call` (BAL-567 — it was `/join/m/{meetingId}`, the
+ * ANONYMOUS lobby, until then), built by the caller from `meetingId` alone via
+ * `memberCallPath()`.
  *
  * ⚠⚠ AND `scheduledStart`/`scheduledEnd` ARE DELIBERATELY **KEPT** — the narrowing above is
  * about the raw Daily URL and nothing else (S2). They had been dropped too, which forced every

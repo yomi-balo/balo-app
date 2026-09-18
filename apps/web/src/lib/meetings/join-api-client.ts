@@ -1,7 +1,12 @@
 import 'server-only';
 
 import { headers } from 'next/headers';
-import type { GuestJoinState, LobbyClaimState, MemberJoinResponse } from '@balo/shared/meetings';
+import type {
+  GuestJoinState,
+  LobbyClaimState,
+  LobbyReentryState,
+  MemberJoinResponse,
+} from '@balo/shared/meetings';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -55,7 +60,7 @@ function getApiUrl(): string {
  * `@balo/db` value can reach a `'use client'` graph through it — but keeping this
  * `export type` makes that structurally impossible rather than merely true today.
  */
-export type { GuestJoinState, LobbyClaimState, MemberJoinResponse };
+export type { GuestJoinState, LobbyClaimState, LobbyReentryState, MemberJoinResponse };
 
 /**
  * ⚠ `export type … from`, NOT an import-then-re-export. The other three names above are USED in
@@ -349,5 +354,20 @@ export async function postGuestJoin(
     `/meetings/${meetingId}/guest-join`,
     { guestToken },
     { forwardVisitorIp: true }
+  );
+}
+
+/**
+ * BAL-442 — THE LOBBY RE-ENTRY HOP. ⚠ NO Authorization header — the caller is anonymous by
+ * design, and the response is neutral by contract (see `LobbyReentryState`).
+ */
+export async function postLobbyReentryRequest(
+  meetingId: string,
+  email: string
+): Promise<JoinApiResult<LobbyReentryState>> {
+  return callJoinApi<LobbyReentryState>(
+    `/meetings/${meetingId}/lobby/reentry`,
+    { email },
+    { forwardVisitorIp: true } // ⚠ REQUIRED — the per-visitor windows key on the GUEST
   );
 }

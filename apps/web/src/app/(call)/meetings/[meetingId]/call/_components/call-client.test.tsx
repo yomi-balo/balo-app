@@ -289,20 +289,74 @@ describe('CallClient — ⚠ the context envelope becomes the chrome', () => {
     const node = await surface();
     expect(node).toHaveAttribute('data-title', 'Salesforce flow review');
     expect(node).toHaveAttribute('data-back-label', 'Back to the case');
-    // ⚠ `/cases/[caseId]` is BAL-421 and does not exist yet — the label stays correct and the
-    // href falls back to the nearest live ancestor, as a table entry.
-    expect(node).toHaveAttribute('data-back-href', '/consultations');
+    // ⚠ BAL-567 — `/cases/{engagementId}` EXISTS now (BAL-421 built it), and `/consultations`
+    // permanently redirects to the index. Landing a member on the index rather than on their own
+    // case was the cost of the old table entry.
+    expect(node).toHaveAttribute('data-back-href', `/cases/${CONTEXT_ID}`);
     expect(node).toHaveAttribute('data-context-noun', 'case');
   });
 
   it('routes a project request to its own page', async () => {
     mockJoinAsMemberAction.mockResolvedValue({
       success: true,
-      grant: grantWith({ context: { type: 'project_discovery', id: CONTEXT_ID, title: null } }),
+      grant: grantWith({
+        // ⚠ BAL-567 — on `project_discovery` the two ids genuinely coincide, so the server sends
+        // both. The link target read is `projectRequestId`, never `id`.
+        context: {
+          type: 'project_discovery',
+          id: CONTEXT_ID,
+          title: null,
+          projectRequestId: CONTEXT_ID,
+        },
+      }),
     });
     renderClient();
 
     expect(await surface()).toHaveAttribute('data-back-href', `/projects/${CONTEXT_ID}`);
+  });
+
+  /**
+   * BAL-567 / D1 — THE WRONG-ID BUG, PINNED AT THE CALL SURFACE.
+   *
+   * `request_interaction`'s `context.id` is a `request_expert_relationships.id`. The old table
+   * built `/projects/{id}` from it and sent the member to a request that was not theirs. The
+   * fixture uses two DIFFERENT ids precisely so the negative assertion can tell the two
+   * implementations apart.
+   */
+  it('BAL-567 — a request_interaction links via the RESOLVED request id, not the relationship id', async () => {
+    const requestId = '5c8e2b41-7a6d-4f3e-9b2a-1d0c8e7f6a5b';
+    mockJoinAsMemberAction.mockResolvedValue({
+      success: true,
+      grant: grantWith({
+        context: {
+          type: 'request_interaction',
+          id: CONTEXT_ID,
+          title: 'Migrate to Flow',
+          projectRequestId: requestId,
+        },
+      }),
+    });
+    renderClient();
+
+    const node = await surface();
+    expect(node).toHaveAttribute('data-back-href', `/projects/${requestId}`);
+    expect(node.getAttribute('data-back-href')).not.toContain(CONTEXT_ID);
+  });
+
+  it('BAL-567 — a request-grain context with no resolved request falls back to the dashboard', async () => {
+    mockJoinAsMemberAction.mockResolvedValue({
+      success: true,
+      grant: grantWith({
+        context: { type: 'request_interaction', id: CONTEXT_ID, title: 'Migrate to Flow' },
+      }),
+    });
+    renderClient();
+
+    const node = await surface();
+    // Fail-closed: no honest target, so the dashboard — never `/projects/{relationshipId}`.
+    expect(node).toHaveAttribute('data-back-href', '/dashboard');
+    // ⚠ AND THE HEADING SURVIVES. Losing the link must not cost the member their context.
+    expect(node).toHaveAttribute('data-title', 'Migrate to Flow');
   });
 
   it('⚠⚠ an UNKNOWN context type degrades to the dashboard rather than crashing the join', async () => {

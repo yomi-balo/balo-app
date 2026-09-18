@@ -89,7 +89,7 @@ export interface IntroCallBookedEmailProps {
   readonly guestCount: number;
   /** False ⇒ the Daily room is not up yet; the join link is withheld, never promised. */
   readonly provisioned: boolean;
-  /** Absolute `${baseUrl}/join/m/{meetingId}` — the member route. Only rendered when provisioned. */
+  /** Absolute `{baseUrl}/meetings/{meetingId}/call` — the member route (BAL-567). Only rendered when provisioned. */
   readonly joinUrl: string;
   readonly requestUrl: string;
   readonly baseUrl: string;

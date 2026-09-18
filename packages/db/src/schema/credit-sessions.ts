@@ -303,7 +303,7 @@ export const creditSessions = pgTable(
     // ⚠ INDEPENDENT NULLABILITY IS NOT INDEPENDENT VALUES. When BOTH are set, NOTHING
     // checks that `engagement_id` is the engagement reachable via `meeting_id` →
     // `meeting_contexts.context_id` — and the two are read by DIFFERENT consumers. Money
-    // and reporting read `engagement_id` directly; BAL-425's inactivity sweep
+    // and reporting read `engagement_id` directly; the inactivity sweep
     // (`meetingContextsRepository.consultationTimestampsForEngagements`) resolves through
     // the seam instead. A divergent pair therefore bills one engagement and ages out
     // another, silently, with no row anywhere that looks wrong.

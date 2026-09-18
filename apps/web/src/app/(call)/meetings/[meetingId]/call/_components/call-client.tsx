@@ -322,8 +322,31 @@ export function CallClient({
     };
   }, [response, hasBalance, balanceAppeared, meetingId, context, envelope.viewerRole]);
 
+  /**
+   * BAL-567 — the subject is now a full {@link MeetingHrefSubject}, because `resolveBackTo`
+   * delegates to the one shared `hrefForMeeting` table.
+   *
+   * ⚠ `owningRowFound: true` IS AN ASSERTION THIS CALL SITE IS ENTITLED TO MAKE, not a default.
+   * `apps/api` emits a `context` envelope ONLY after `authorizeMeetingParticipation` has granted
+   * this member the call AND `resolveMeetingContextLabel` has resolved the owning row — so by
+   * the time `context !== null` here, the row is verified. The flag exists for the REPOSITORY
+   * paths (`upcoming-meetings.ts`), which can hold an unverified `meeting_contexts.context_id`;
+   * this path cannot.
+   *
+   * ⚠ `projectRequestId` COMES FROM THE SERVER AND IS NEVER SUBSTITUTED WITH `context.id`.
+   * Filling it from `id` is exactly the wrong-id bug BAL-567 removed: on `request_interaction`
+   * that id is a `request_expert_relationships.id`, not a request.
+   */
   const subject = useMemo(
-    () => (context === null ? null : { contextType: context.type, contextId: context.id }),
+    () =>
+      context === null
+        ? null
+        : {
+            owningRowFound: true,
+            contextType: context.type,
+            contextId: context.id,
+            projectRequestId: context.projectRequestId,
+          },
     [context]
   );
   // ⚠ STABLE IDENTITIES, so `MeetingRouteContextProvider`'s memo is not defeated on every render.

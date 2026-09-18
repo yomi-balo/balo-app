@@ -70,6 +70,13 @@ import { toAsciiLowerCase } from './ascii-fold';
 const JOIN_TOKEN_PREFIX = '/join/';
 
 /**
+ * ⚠⚠ BAL-442 — NAMED for the same reason {@link JOIN_TOKEN_PREFIX} is: so the chain below can
+ * identify "the lobby prefix matched" without a second hand-written `'/join/m/'` literal to
+ * drift out of sync with the array entry.
+ */
+const LOBBY_MEETING_PREFIX = '/join/m/';
+
+/**
  * Path prefixes whose FOLLOWING segment is a secret and must never be logged.
  *
  * ⚠ PAIRED with `PUBLIC_PREFIXES` in `apps/web/src/lib/auth/route-config.ts`: a
@@ -108,7 +115,7 @@ export const SENSITIVE_PATH_PREFIXES: readonly string[] = [
   //
   // ⚠ NO FALSE MATCH ON `/join/{token}`: guest tokens are base64url and contain no `/`, so
   // the literal eight characters `/join/m/` cannot occur inside one.
-  '/join/m/',
+  LOBBY_MEETING_PREFIX,
   // BAL-408 / ADR-1044 — the guest join landing, `/join/{token}`. The token is the
   // ONLY credential a guest has for a meeting they were invited to, and it is
   // deliberately NOT single-use (desktop → phone → rejoin after a network drop), so
@@ -431,6 +438,59 @@ function redactGuestRecapMeetingId(value: string): string {
 }
 
 /**
+ * ⚠⚠ BAL-442 (BLOCKER B) — `/join/m/{meetingId}/resume/{token}` chains a RAW GUEST TOKEN after
+ * the meeting id. `redactAfterPrefix` replaces only the ONE segment following a prefix, so the
+ * `/join/m/` entry alone yields `/join/m/[redacted]/resume/{token}` — the id is protected and
+ * the CREDENTIAL sails through, into Axiom, Sentry event URLs and PostHog `$current_url` /
+ * `$referrer`. RULING 3 rejected a `?rt=` query form for exactly this hazard; the path form has
+ * the same defect until this chain closes it.
+ *
+ * Chained onto the RESULT of the `/join/m/` redaction (never standalone, never reachable via
+ * any other prefix) — so a bare `/join/m/{id}` and a `/join/m/{id}/other` sub-route are
+ * untouched, matching the pinned behaviour for the recap chain.
+ *
+ * ⚠ O(1), and only on the branch where `/join/m/` already matched. This is a PRE-AUTH EDGE HOT
+ * PATH (memory `reference_redaction_is_preauth_edge_hot_path`) — do NOT add per-occurrence
+ * scanning here.
+ */
+const LOBBY_RESUME_TOKEN_PREFIX = `${REDACTED}/resume/`;
+
+function redactLobbyResumeToken(value: string): string {
+  const redacted = redactAfterPrefix(value, value, LOBBY_RESUME_TOKEN_PREFIX, RAW_TOKEN_DELIMITERS);
+  return redacted?.value ?? value;
+}
+
+/**
+ * ⚠ BAL-442 — the ENCODED counterpart of {@link LOBBY_RESUME_TOKEN_PREFIX} /
+ * {@link ENCODED_LOBBY_PREFIXES}, derived from {@link ENCODED_SLASH_FORMS} rather than
+ * hand-listed, for the same reason {@link ENCODED_SENSITIVE_PATH_PREFIXES} is. Closes the same
+ * "encode-then-miss" trap for the resume token that {@link ENCODED_LOBBY_PREFIXES} closes for
+ * the meeting id: `ENCODED_TOKEN_DELIMITERS` includes `%`, so an encoded `/join/m/` match alone
+ * would redact only the meeting id and let the raw token survive.
+ */
+const ENCODED_LOBBY_PREFIXES: readonly string[] = ENCODED_SLASH_FORMS.map((slash) =>
+  toAsciiLowerCase(LOBBY_MEETING_PREFIX).replaceAll('/', slash)
+);
+const ENCODED_LOBBY_RESUME_TOKEN_PREFIXES: readonly string[] = ENCODED_SLASH_FORMS.map(
+  (slash) => `${REDACTED}${slash}resume${slash}`
+);
+
+/**
+ * Try each of the (at most two) encoded `/resume/` needles against a haystack that has already
+ * been re-folded after the meeting-id redaction. ⚠ ≤2 scans, one extra fold, only on the branch
+ * where the encoded lobby prefix already matched — see {@link LOBBY_RESUME_TOKEN_PREFIX}'s note
+ * on why this stays O(1) rather than per-occurrence.
+ */
+function redactEncodedLobbyResumeToken(value: string): string {
+  const folded = toAsciiLowerCase(value);
+  for (const resumePrefix of ENCODED_LOBBY_RESUME_TOKEN_PREFIXES) {
+    const redacted = redactAfterPrefix(value, folded, resumePrefix, ENCODED_TOKEN_DELIMITERS);
+    if (redacted !== null) return redacted.value;
+  }
+  return value;
+}
+
+/**
  * A parameter can be first in the query string (`?t=`) or not (`&t=`); its position is not
  * ours to fix, since a redirect chain or an instrumentation rewrite can reorder it.
  */
@@ -567,11 +627,10 @@ export function redactSensitivePath(value: string): string {
 function redactSensitivePathPrefixes(value: string): string {
   for (const prefix of SENSITIVE_PATH_PREFIXES) {
     const redacted = redactAfterPrefix(value, value, prefix, RAW_TOKEN_DELIMITERS);
-    if (redacted !== null) {
-      return prefix === JOIN_TOKEN_PREFIX
-        ? redactGuestRecapMeetingId(redacted.value)
-        : redacted.value;
-    }
+    if (redacted === null) continue;
+    if (prefix === JOIN_TOKEN_PREFIX) return redactGuestRecapMeetingId(redacted.value);
+    if (prefix === LOBBY_MEETING_PREFIX) return redactLobbyResumeToken(redacted.value);
+    return redacted.value;
   }
   // Every encoded form begins `%`; skipping the fold when there is none keeps the common
   // case (an ordinary pathname) at a single scan with no allocation.
@@ -580,7 +639,14 @@ function redactSensitivePathPrefixes(value: string): string {
   const folded = toAsciiLowerCase(value);
   for (const prefix of ENCODED_SENSITIVE_PATH_PREFIXES) {
     const redacted = redactAfterPrefix(value, folded, prefix, ENCODED_TOKEN_DELIMITERS);
-    if (redacted !== null) return redacted.value;
+    if (redacted === null) continue;
+    // BAL-442 — the encoded lobby-prefix branch chains the encoded `/resume/` redaction, the
+    // same shape as the literal loop above. Re-fold once (the meeting-id redaction may have
+    // changed the string's length) and try the (at most two) encoded resume needles.
+    if (ENCODED_LOBBY_PREFIXES.includes(prefix)) {
+      return redactEncodedLobbyResumeToken(redacted.value);
+    }
+    return redacted.value;
   }
   return value;
 }

@@ -82,7 +82,7 @@ export interface ProjectBookingToCalendarInput {
   readonly eventLabel?: string;
   readonly startAt: Date;
   readonly endAt: Date;
-  /** `${WEB_BASE_URL}/join/m/${meetingId}` — NEVER `meetings.join_url`. */
+  /** `{WEB_BASE_URL}/meetings/{meetingId}/call` (BAL-567) — NEVER `meetings.join_url`. */
   readonly joinUrl: string;
 }
 

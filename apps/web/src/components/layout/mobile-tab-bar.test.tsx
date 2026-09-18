@@ -82,7 +82,7 @@ describe('MobileTabBar (BAL-501)', () => {
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
       '/experts',
-      '/consultations',
+      '/cases',
       '/messages',
     ]);
     expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
@@ -91,12 +91,12 @@ describe('MobileTabBar (BAL-501)', () => {
   it('renders one Link per resolved tab plus a More button for an expert workspace', () => {
     renderTabBar({ workspaceType: 'expert' });
     const links = screen.getAllByRole('link');
-    // BAL-498: Calendar is expert-only and sits between Consultations and Messages in registry
+    // BAL-498: Calendar is expert-only and sits between Cases and Messages in registry
     // order, filling the bar to MOBILE_TAB_LIMIT. The company case above is also at four now
     // (BAL-497 flipped `find_experts` on), not three.
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
       '/dashboard',
-      '/consultations',
+      '/cases',
       '/expert/calendar',
       '/messages',
     ]);
@@ -108,7 +108,11 @@ describe('MobileTabBar (BAL-501)', () => {
   it('tab labels use shortLabel where present, and label otherwise', () => {
     renderTabBar({ workspaceType: 'company' });
     expect(screen.getByText('Home')).toBeInTheDocument();
-    expect(screen.getByText('Consults')).toBeInTheDocument();
+    // ⚠ BAL-567 — "Cases" fits the tab cell, so the entry carries NO `shortLabel` any more and
+    // the full `label` reaches the tab. The `Consults` abbreviation retired with the old noun;
+    // without the negative assertion, "renamed" and "added a second tab" look the same here.
+    expect(screen.getByText('Cases')).toBeInTheDocument();
+    expect(screen.queryByText('Consults')).not.toBeInTheDocument();
     expect(screen.getByText('Messages')).toBeInTheDocument();
     expect(screen.queryByText('Dashboard')).not.toBeInTheDocument();
     // BAL-497 — the only place `find_experts`'s `shortLabel` fallback is exercised for the tab
@@ -139,13 +143,18 @@ describe('MobileTabBar (BAL-501)', () => {
   /*
    * ⚠ THE REGRESSION PIN for the negated-fallback bug. `moreActive` must be a POSITIVE rule over
    * `moreItems`, never `!tabs.some(...)`. These routes reach a list only via `ENTITY_PARENTS` /
-   * `SUPPLEMENTAL_ROUTE_LABELS`, so NO tab prefix-matches them and no More item does either — the
-   * honest answer is "nothing lit", matching desktop. Under the old negated rule every one of them
-   * lit More while the top bar simultaneously rendered "Back to Consultations".
+   * `SUPPLEMENTAL_ROUTE_LABELS` (or nothing at all), so NO tab prefix-matches them and no More
+   * item does either — the honest answer is "nothing lit", matching desktop. Under the old
+   * negated rule every one of them lit More while the top bar simultaneously rendered a parent
+   * crumb pointing the other way.
+   *
+   * ⚠ BAL-567 MOVED `/cases/abc` OFF THIS LIST — see the positive assertion below. The tab href
+   * is `/cases` now, so the prefix rule genuinely matches and "nothing lit" would be the WRONG
+   * answer there. `/meetings/abc` stays: BAL-567 dropped its `ENTITY_PARENTS` row outright
+   * (a meeting can belong to a case OR a project), so it reaches no list at all.
    */
   it.each([
-    ['/cases/abc', 'a case (Consultations via ENTITY_PARENTS)'],
-    ['/meetings/abc', 'a meeting (Consultations via ENTITY_PARENTS)'],
+    ['/meetings/abc', 'a meeting (no parent at all as of BAL-567 D5)'],
     ['/engagements', 'a non-registry route'],
     ['/billing/top-up', 'a supplemental route'],
     ['/promo-codes', 'a supplemental route'],
@@ -153,7 +162,10 @@ describe('MobileTabBar (BAL-501)', () => {
   ])('pathname "%s" — %s lights NO tab and NOT More (fails neutral, like desktop)', (path) => {
     pathname = path;
     renderTabBar({ workspaceType: 'company' });
-    for (const link of screen.getAllByRole('link')) {
+    const links = screen.getAllByRole('link');
+    // Non-vacuity: a bar with no links would pass the loop below without asserting anything.
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
       expect(link).not.toHaveAttribute('aria-current', 'page');
     }
     expect(screen.getByText('More').className).not.toContain('text-primary');
@@ -165,10 +177,20 @@ describe('MobileTabBar (BAL-501)', () => {
     expect(screen.getByText('More').className).toContain('text-primary');
   });
 
-  it('pathname "/consultations/abc" — Consultations is active via the prefix rule', () => {
-    pathname = '/consultations/abc';
+  /**
+   * BAL-567 — THE RENAME CLOSED THE `/cases/:id` GAP, AND IN THE RIGHT DIRECTION.
+   *
+   * The tab href used to be `/consultations` while the case page lived at `/cases/:id`, so the
+   * prefix rule matched nothing and the bar failed neutral on every case page — while the top bar
+   * simultaneously rendered a "Back to Consultations" crumb. Both now say `/cases`, so the tab
+   * lights and the two agree. This is a positive assertion of NEW behaviour, not a re-pin.
+   */
+  it('BAL-567 — pathname "/cases/abc" lights the Cases tab (the prefix rule now matches)', () => {
+    pathname = '/cases/abc';
     renderTabBar({ workspaceType: 'company' });
-    expect(screen.getByRole('link', { name: /Consults/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /Cases/ })).toHaveAttribute('aria-current', 'page');
+    // And More stays dark: the case page is not a More item, and the positive rule is unchanged.
+    expect(screen.getByText('More').className).not.toContain('text-primary');
   });
 
   it('clicking a tab tracks nav_item_clicked with surface "bottom_tabs"', async () => {

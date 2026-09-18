@@ -819,6 +819,8 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
       optionCount: 2,
       originalScheduledStart: SCHEDULED_START,
       expiresAt: new Date('2026-08-20T09:00:00Z'), // ahead of NOW (2026-08-12)
+      // BAL-567 — WHO proposed. Attribution only; nothing gates on it.
+      proposedByUserId: EXPERT_USER_ID,
       ...over,
     };
   }
@@ -856,6 +858,10 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
         { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
         { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
       ],
+      // BAL-567 — `findNamesByIds` is seeded EMPTY in the default fixture, so the rule falls
+      // back to the expert PARTY label rather than inventing a person. The dedicated
+      // attribution describe below drives the readable-name arms.
+      actorLabel: 'Amara Okafor',
     });
     expect(view.consultations[0]).toMatchObject({ state: 'pending_reschedule' });
   });
@@ -879,6 +885,7 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
         { optionId: 'opt-1', scheduledStartIso: '2026-08-21T10:00:00.000Z' },
         { optionId: 'opt-2', scheduledStartIso: '2026-08-22T10:00:00.000Z' },
       ],
+      actorLabel: 'Amara Okafor',
     });
   });
 
@@ -1482,8 +1489,8 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
     /**
      * ⚠ THE NUDGE ITSELF IS UNTOUCHED — this narrows the CANCEL hint only. A live call must keep
-     * rendering its `upcoming` nudge (with Join, once that lands); collapsing the whole nudge
-     * would show "Nothing booked yet" to two people who are mid-consultation.
+     * rendering its `upcoming` nudge (with Join, which BAL-567 landed); collapsing the whole
+     * nudge would show "Nothing booked yet" to two people who are mid-consultation.
      */
     it('still renders the upcoming nudge for the live meeting it refuses to cancel', async () => {
       seed({ access: { lens: 'client' } });
@@ -1496,5 +1503,162 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
       expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
       expect(view.canCancelConsultation).toBe(false);
     });
+  });
+});
+
+// ── BAL-567 — actor attribution on the four attributed nudge arms ─────────────────────────
+
+/**
+ * ⚠⚠ THE DEFECT THIS CLOSES. The nudge used to render `counterpartyLabel` on all four
+ * attributed arms, so the case page told EVERY expert-side viewer "You've asked if this is
+ * sorted" — including an agency colleague who did nothing — and named the DELIVERING expert on
+ * the client side even when an agency colleague made the ask.
+ *
+ * The rule itself is unit-tested in `lib/cases/actor-attribution.test.ts`; these cases pin the
+ * LOADER's wiring into it: the right actor id per nudge KIND, the right side, and ONE batched
+ * NAME-COLUMNS-ONLY read (never `findById`, which carries `email` and `workosId`).
+ */
+describe('loadCase — actor attribution (BAL-567)', () => {
+  const COLLEAGUE_USER_ID = 'k0000000-0000-4000-8000-0000000000c1';
+  const ASKED_AT = new Date('2026-08-10T09:00:00Z');
+  const PROPOSAL_DETAIL_FOR_ATTRIBUTION = {
+    proposal: { id: 'proposal-1', createdAt: new Date('2026-08-13T09:00:00Z') },
+    options: [{ id: 'opt-1', scheduledStart: new Date('2026-08-21T10:00:00Z') }],
+  };
+
+  /** The soonest consultation, still ahead of NOW — so a proposal on it reaches the nudge. */
+  function upcomingMeeting(): Record<string, unknown> {
+    return meeting('m1', {
+      status: 'scheduled',
+      outcome: null,
+      endedAt: null,
+      startedAt: null,
+      scheduledStart: new Date('2026-08-21T10:00:00Z'),
+      scheduledEnd: new Date('2026-08-21T11:00:00Z'),
+    });
+  }
+
+  function seedProposal(proposedByUserId: string): void {
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+    m.findLiveProposals.mockResolvedValue([
+      {
+        proposalId: 'proposal-1',
+        meetingId: 'm1',
+        optionCount: 1,
+        originalScheduledStart: new Date('2026-08-21T10:00:00Z'),
+        expiresAt: new Date('2026-08-20T09:00:00Z'),
+        proposedByUserId,
+      },
+    ]);
+    m.findProposalForAnswer.mockResolvedValue(PROPOSAL_DETAIL_FOR_ATTRIBUTION);
+  }
+
+  /** An AGENCY-delivered case, so "{First name} @ {Agency}" has an agency to name. */
+  function seedAgencyDelivery(): void {
+    m.findAgency.mockResolvedValue({ id: 'agency-1', name: 'CloudPeak' });
+    m.findProfile.mockResolvedValue({ ...FAT_PROFILE, agencyId: 'agency-1', type: 'agency' });
+  }
+
+  it('CLIENT lens — the DELIVERING expert is named by first name alone', async () => {
+    seed({ access: { lens: 'client' } });
+    seedAgencyDelivery();
+    m.findNames.mockResolvedValue([{ id: EXPERT_USER_ID, firstName: 'Amara', lastName: 'Okafor' }]);
+    seedProposal(EXPERT_USER_ID);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'reschedule_proposal', actorLabel: 'Amara' });
+    // ⚠ NAME COLUMNS ONLY, ONE BATCHED CALL, for the ONE id the nudge attributes.
+    expect(m.findNames).toHaveBeenCalledWith([EXPERT_USER_ID]);
+    expect(m.findNames).toHaveBeenCalledTimes(1);
+  });
+
+  it('CLIENT lens — an agency COLLEAGUE is named "{First name} @ {Agency}"', async () => {
+    seed({ access: { lens: 'client' } });
+    seedAgencyDelivery();
+    m.findNames.mockResolvedValue([
+      { id: COLLEAGUE_USER_ID, firstName: 'Priya', lastName: 'Nair' },
+    ]);
+    seedProposal(COLLEAGUE_USER_ID);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ actorLabel: 'Priya @ CloudPeak' });
+  });
+
+  it('EXPERT lens — the viewer’s own ask reads "You"', async () => {
+    seed({
+      access: { lens: 'expert' },
+      caseRow: { resolutionRequestedAt: ASKED_AT, resolutionRequestedByUserId: USER_ID },
+    });
+    m.listMeetings.mockResolvedValue([]);
+    m.findNames.mockResolvedValue([{ id: USER_ID, firstName: 'Dana', lastName: 'Whitfield' }]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toEqual({ kind: 'resolution_ask_pending', actorLabel: 'You' });
+    expect(m.findNames).toHaveBeenCalledWith([USER_ID]);
+  });
+
+  it('EXPERT lens — a COLLEAGUE’s ask is named, never collapsed into "You"', async () => {
+    seed({
+      access: { lens: 'expert' },
+      caseRow: { resolutionRequestedAt: ASKED_AT, resolutionRequestedByUserId: COLLEAGUE_USER_ID },
+    });
+    m.listMeetings.mockResolvedValue([]);
+    m.findNames.mockResolvedValue([
+      { id: COLLEAGUE_USER_ID, firstName: 'Priya', lastName: 'Nair' },
+    ]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toEqual({ kind: 'resolution_ask_pending', actorLabel: 'Priya' });
+  });
+
+  it('CLIENT lens — the resolution arm attributes the asker too, not just proposals', async () => {
+    seed({
+      access: { lens: 'client' },
+      caseRow: { resolutionRequestedAt: ASKED_AT, resolutionRequestedByUserId: EXPERT_USER_ID },
+    });
+    m.listMeetings.mockResolvedValue([]);
+    m.findNames.mockResolvedValue([{ id: EXPERT_USER_ID, firstName: 'Amara', lastName: 'Okafor' }]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toEqual({ kind: 'resolution_ask', actorLabel: 'Amara' });
+  });
+
+  it('reads NO names at all when the nudge has no actor to attribute', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'upcoming' });
+    // ⚠ `upcoming` / `nothing_booked` carry no actor, so the batched name read never fires.
+    expect(m.findNames).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the expert PARTY label when the actor’s name cannot be read', async () => {
+    seed({
+      access: { lens: 'client' },
+      caseRow: { resolutionRequestedAt: ASKED_AT, resolutionRequestedByUserId: COLLEAGUE_USER_ID },
+    });
+    m.listMeetings.mockResolvedValue([]);
+    m.findNames.mockResolvedValue([]); // a soft-deleted or missing `users` row
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toEqual({ kind: 'resolution_ask', actorLabel: 'Amara Okafor' });
+  });
+
+  it('carries the MEMBER CALL PATH on the upcoming arm — never the anonymous lobby', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+
+    const view = await loadOrThrow();
+
+    expect(view.nudge).toMatchObject({ kind: 'upcoming', joinPath: '/meetings/m1/call' });
+    expect(JSON.stringify(view.nudge)).not.toContain('/join/m/');
   });
 });

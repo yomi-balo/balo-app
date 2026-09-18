@@ -204,8 +204,17 @@ describe('Sidebar motion + jump-out (BAL-497)', () => {
     expect(pill.className).toContain('opacity-100');
   });
 
+  /**
+   * ⚠ BAL-567 SWAPPED THE FIXTURE ROUTE from `/cases/abc` to `/meetings/abc`.
+   *
+   * `/cases/abc` stopped being a "neither section" route when the Cases entry's href became
+   * `/cases`: the primary pill lights there now, which is the improvement rather than the bug.
+   * A meeting page is the honest remaining instance — BAL-567 (D5) dropped its `ENTITY_PARENTS`
+   * row too, because a meeting can belong to a case OR a project, so it prefix-matches nothing
+   * in either section.
+   */
   it('a route in neither section fades both pills to opacity-0', () => {
-    pathname = '/cases/abc';
+    pathname = '/meetings/abc';
     renderSidebar({ mode: 'client' });
     const primaryPill = within(primaryNav()).getByTestId('sidebar-nav-pill-primary');
     expect(primaryPill.className).toContain('opacity-0');

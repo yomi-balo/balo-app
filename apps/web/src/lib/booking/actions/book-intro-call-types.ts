@@ -43,7 +43,7 @@ export type BookIntroCallResult =
   | {
       ok: true;
       meetingId: string;
-      /** `/join/m/{meetingId}` — NEVER the raw Daily url. */
+      /** `/meetings/{meetingId}/call` — the member route (BAL-567). NEVER the raw Daily url.  */
       joinPath: string;
       /** `false` ⇒ the Daily room did not come up yet; the booked state must not show a live link. */
       provisioned: boolean;

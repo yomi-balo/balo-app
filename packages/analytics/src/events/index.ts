@@ -189,6 +189,13 @@ export {
   // BAL-440 — the recording posture dimension on `recap_viewed`, and `deriveRecordingState`'s
   // (apps/web) return type.
   type RecapRecordingState,
+  // BAL-567 — the `/cases` index dimensions. The two TUPLES are runtime values (the guard test
+  // pins their exact ordered membership); the three types are derived from them.
+  CASES_INDEX_TARGETS,
+  type CasesIndexTarget,
+  CASES_INDEX_CARD_STATES,
+  type CasesIndexCardState,
+  type CasesIndexWorkspaceType,
 } from './recap';
 export {
   END_OF_CALL_EVENTS,

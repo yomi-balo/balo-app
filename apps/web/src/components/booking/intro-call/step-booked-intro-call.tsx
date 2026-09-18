@@ -85,10 +85,10 @@ export function StepBookedIntroCall({
           the conversation page, so it is just `onDone` (design §Step 3). */}
       <Button onClick={onDone}>Back to conversation</Button>
       {/* `joinPath` IS rendered — as `sr-only` TEXT, never as an anchor (mirrors `StepBooked`).
-          Safe by construction: it is the viewer's OWN member route (`/join/m/{meetingId}`),
-          never a raw Daily url and never a token, so it discloses nothing the viewer cannot
-          already reach. An earlier comment here claimed it was "not rendered", which would have
-          misled the next auditor into skipping the line below. */}
+          Safe by construction: it is the viewer's OWN member route (`/meetings/{id}/call` as of
+          BAL-567), never a raw Daily url and never a token, so it discloses nothing the viewer
+          cannot already reach. An earlier comment here claimed it was "not rendered", which
+          would have misled the next auditor into skipping the line below. */}
       <span className="sr-only">{joinPath}</span>
     </div>
   );

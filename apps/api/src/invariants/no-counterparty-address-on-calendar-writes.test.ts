@@ -230,7 +230,7 @@ describe('Layer 2 — the vendor event payload has an exactly-pinned key set', (
       startAt: new Date('2026-09-01T04:00:00.000Z'),
       endAt: new Date('2026-09-01T04:30:00.000Z'),
       baloBookingId: 'meeting-1',
-      joinUrl: 'https://balo.expert/join/m/meeting-1',
+      joinUrl: 'https://balo.expert/meetings/meeting-1/call',
     });
 
     expect(
@@ -253,7 +253,7 @@ describe('Layer 2 — the vendor event payload has an exactly-pinned key set', (
       startAt: new Date('2026-09-01T04:00:00.000Z'),
       endAt: new Date('2026-09-01T04:30:00.000Z'),
       baloBookingId: 'meeting-2',
-      joinUrl: 'https://balo.expert/join/m/meeting-2',
+      joinUrl: 'https://balo.expert/meetings/meeting-2/call',
     });
 
     expect(
@@ -276,7 +276,7 @@ describe('Layer 2 — the vendor event payload has an exactly-pinned key set', (
       startAt: new Date('2026-09-01T04:00:00.000Z'),
       endAt: new Date('2026-09-01T04:30:00.000Z'),
       baloBookingId: 'meeting-3',
-      joinUrl: 'https://balo.expert/join/m/meeting-3',
+      joinUrl: 'https://balo.expert/meetings/meeting-3/call',
     });
 
     expect(event.privateExtendedProperties).toEqual({ baloBookingId: 'meeting-3' });
@@ -416,8 +416,8 @@ describe('Layer 2b — a built calendar invite names exactly Balo and its one re
     uid: '5b7c1d2e-8f90-4a1b-9c3d-4e5f6a7b8c9d',
     sequence: 0,
     summary: 'Consultation with Northwind Industrial',
-    description: 'CPQ rollout\n\nJoin: https://balo.expert/join/m/meeting-1',
-    location: 'https://balo.expert/join/m/meeting-1',
+    description: 'CPQ rollout\n\nJoin: https://balo.expert/meetings/meeting-1/call',
+    location: 'https://balo.expert/meetings/meeting-1/call',
     startAt: new Date('2026-09-01T04:00:00.000Z'),
     endAt: new Date('2026-09-01T04:30:00.000Z'),
     stampAt: new Date('2026-08-20T00:00:00.000Z'),
