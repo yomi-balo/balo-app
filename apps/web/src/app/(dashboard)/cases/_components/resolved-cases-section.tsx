@@ -53,18 +53,17 @@ interface ResolvedCasesSectionProps {
 
 /** One loaded page-set of resolved rows. `loaded` is what tells the effect below to stop. */
 interface ResolvedPage {
+  /** The payload this page-set belongs to — see {@link OpenPagination.token} in the shell. */
+  readonly token: object;
   readonly rows: readonly CasesIndexResolvedRowView[];
   readonly cursor: ResolvedCasesCursorDTO | null;
   readonly hasMore: boolean;
   readonly loaded: boolean;
 }
 
-const EMPTY_RESOLVED_PAGE: ResolvedPage = {
-  rows: [],
-  cursor: null,
-  hasMore: true,
-  loaded: false,
-};
+function emptyResolvedPage(token: object): ResolvedPage {
+  return { token, rows: [], cursor: null, hasMore: true, loaded: false };
+}
 
 export function ResolvedCasesSection({
   resolvedCount,
@@ -72,10 +71,16 @@ export function ResolvedCasesSection({
   onTrack,
 }: Readonly<ResolvedCasesSectionProps>): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false);
-  const [page, setPage] = useState<ResolvedPage>(EMPTY_RESOLVED_PAGE);
+  const [page, setPage] = useState<ResolvedPage>(() => emptyResolvedPage(dataToken));
   const [pending, startTransition] = useTransition();
-  /** Guards the fetch effect below against re-entering while a transition is still in flight. */
-  const inFlight = useRef(false);
+  /**
+   * ⚠⚠ THE TOKEN A REQUEST IS CURRENTLY IN FLIGHT FOR — **NOT** A BOOLEAN. A plain `true`/`false`
+   * guard made this worse than the shell's version of the same bug: after a refresh reset the
+   * flag was still `true` from the pre-refresh request, so the effect's page-one reload was
+   * BLOCKED, and the in-flight request then appended rows 21-40 with no page one under them.
+   * Keyed on the token, a new payload is never blocked by the old payload's request.
+   */
+  const inFlightFor = useRef<object | null>(null);
 
   /**
    * ⚠⚠ ALREADY-LOADED ROWS ARE DISCARDED WHEN A FRESH READ LANDS. `useRefreshOnFocus` (in the
@@ -94,32 +99,44 @@ export function ResolvedCasesSection({
   const [servedToken, setServedToken] = useState(dataToken);
   if (servedToken !== dataToken) {
     setServedToken(dataToken);
-    setPage(EMPTY_RESOLVED_PAGE);
+    setPage(emptyResolvedPage(dataToken));
   }
 
-  const fetchPage = useCallback((after: ResolvedCasesCursorDTO | null) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    startTransition(async () => {
-      try {
-        const result = await loadMoreResolvedCases({ cursor: after });
-        if (!result.success) {
-          // ⚠ A TOAST, NOT A SILENT NO-OP. The disclosure has already opened, so an empty body
-          // with no explanation would read as "there are none" — the opposite of what happened.
-          toast.error(CASES_INDEX_SHOW_MORE_FAILED);
-          return;
+  const fetchPage = useCallback(
+    (after: ResolvedCasesCursorDTO | null) => {
+      // Already fetching for THIS payload. A request for an older one never blocks a new one.
+      if (inFlightFor.current === dataToken) return;
+      const issuedFor = dataToken;
+      inFlightFor.current = issuedFor;
+      startTransition(async () => {
+        try {
+          const result = await loadMoreResolvedCases({ cursor: after });
+          if (!result.success) {
+            // ⚠ A TOAST, NOT A SILENT NO-OP. The disclosure has already opened, so an empty body
+            // with no explanation would read as "there are none" — the opposite of what happened.
+            toast.error(CASES_INDEX_SHOW_MORE_FAILED);
+            return;
+          }
+          setPage((current) => {
+            // A refresh landed while this was in flight — drop the page rather than stacking it
+            // on (or in place of) the fresh one. See `inFlightFor`.
+            if (current.token !== issuedFor) return current;
+            return {
+              token: current.token,
+              rows: [...current.rows, ...result.rows],
+              cursor: result.nextCursor,
+              hasMore: result.hasMore,
+              loaded: true,
+            };
+          });
+        } finally {
+          // Only clear the slot if it is still OURS — a newer request must not be un-marked.
+          if (inFlightFor.current === issuedFor) inFlightFor.current = null;
         }
-        setPage((current) => ({
-          rows: [...current.rows, ...result.rows],
-          cursor: result.nextCursor,
-          hasMore: result.hasMore,
-          loaded: true,
-        }));
-      } finally {
-        inFlight.current = false;
-      }
-    });
-  }, []);
+      });
+    },
+    [dataToken]
+  );
 
   // Page one, for BOTH the first expansion and a post-refresh reload of an open section.
   useEffect(() => {

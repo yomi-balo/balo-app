@@ -362,11 +362,32 @@ describe('resolveNextSlot', () => {
     });
   });
 
-  it('offers "Book another" to the CLIENT side only', () => {
+  /**
+   * ⚠⚠ BOTH BOOKING ACTIONS GO TO **THE CASE**, NOT TO `/experts/{username}`. Pointing them at
+   * the profile (which shipped, briefly) forgets the case: the client re-picks one, and creating
+   * a DUPLICATE is a click away. The href is asserted EXACTLY — "has some href" would have
+   * passed for the bug.
+   */
+  it('offers "Book another" to the CLIENT side only, pointed at the CASE', () => {
     const forClient = resolveNextSlot(card({ cardState: 'nothing_booked' }), 'company', NOW, 'UTC');
     const forExpert = resolveNextSlot(card({ cardState: 'nothing_booked' }), 'expert', NOW, 'UTC');
-    expect(forClient).toMatchObject({ action: { target: 'book_another', label: 'Book another' } });
+    expect(forClient).toMatchObject({
+      action: { target: 'book_another', label: 'Book another', href: '/cases/eng-1' },
+    });
     expect(forExpert).toMatchObject({ action: null });
+  });
+
+  it('never sends either booking action to the expert profile', () => {
+    for (const cardState of ['nothing_booked', 'no_calls'] as const) {
+      const slot = resolveNextSlot(
+        card({ cardState, trail: [], lastCallAtIso: null }),
+        'company',
+        NOW,
+        'UTC'
+      );
+      expect(slot.action?.href).toBe('/cases/eng-1');
+      expect(slot.action?.href).not.toContain('/experts/');
+    }
   });
 
   it('offers "Book a time" on a case that has never held one', () => {
@@ -380,11 +401,19 @@ describe('resolveNextSlot', () => {
       kind: 'quiet',
       title: 'No consultation booked',
       sub: 'Pick a time to get started',
-      action: { target: 'book_time', label: 'Book a time' },
+      // ⚠ THE CASE, not the profile — on a case with no calls yet, a profile-booked consultation
+      // would open a SECOND case and orphan this empty one.
+      action: { target: 'book_time', label: 'Book a time', href: '/cases/eng-1' },
     });
   });
 
-  it('renders NO booking action when the expert has no username — never /experts/null', () => {
+  /**
+   * ⚠ `bookAgainHref === null` IS NOW A BOOKABILITY TEST, NOT AN HREF SOURCE. It is null exactly
+   * when the expert has no username, and the CASE PAGE's own booking affordances gate on the
+   * same fact — so "Book another" would land somewhere that can offer no booking. An absent
+   * action beats a promise the destination cannot keep.
+   */
+  it('renders NO booking action when the expert is not bookable', () => {
     const slot = resolveNextSlot(
       card({ cardState: 'nothing_booked', bookAgainHref: null }),
       'company',

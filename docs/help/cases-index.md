@@ -46,8 +46,8 @@ The row of dots is the case's consultation history, oldest first:
 - **Filled** — held.
 - **Outlined** — booked, still to come.
 - **Dashed** — cancelled.
-- **Solid grey** — missed: either nobody from your side arrived, or the expert didn't join.
-- **Pale grey** — held, but the outcome wasn't recorded.
+- **Solid grey** — missed: the call was due, but one side didn't arrive.
+- **Pale grey** — the call ended, but what happened wasn't recorded.
 
 If you use a screen reader, the row reads as a summary — "Consultations: 2 held, 1 booked".
 

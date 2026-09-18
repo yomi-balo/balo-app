@@ -127,10 +127,25 @@ export type CaseSurfaceAction =
  * ⚠ A SEPARATE UNION FROM {@link CaseSurfaceAction}, for the same reason that one is separate
  * from {@link RecapCta}: the index and the case surface offer genuinely different actions, and
  * a single union spanning both would let an index-only value be reported from the case surface
- * with nothing to catch it. `case` is the whole-card click; every other value is a specific
- * button, and each of them ALSO opens the case — the index carries no capability-gated act
- * affordance, so the value records WHICH WORDING the viewer answered, not a distinct
- * destination.
+ * with nothing to catch it.
+ *
+ * ⚠⚠ THE VALUES DO **NOT** ALL SHARE A DESTINATION, and an earlier version of this docblock
+ * wrongly said they did ("each of them ALSO opens the case"). Three destinations, and which one
+ * a value carries is the thing an analysis of this dimension most needs to know:
+ *
+ *   · `case` (the whole-card click), `choose_time`, `review`, `book_another`, `book_time`
+ *        → `/cases/{engagementId}`. For these five the value records WHICH WORDING the viewer
+ *          answered, not a distinct destination — the index carries no capability-gated act
+ *          affordance, so every one of them simply opens the case and lets its own gates run.
+ *   · `book_again` (a RESOLVED row) → `/experts/{username}`. A resolved case cannot be booked
+ *          into; booking again deliberately starts a NEW one.
+ *   · `book` (the header CTA) → `/experts`. No case in play at all, which is why its
+ *          `card_state` is `null`.
+ *   · `join` → the member call route, and the one value that leaves the dashboard entirely.
+ *
+ * ⚠ `book_another` / `book_time` WERE BRIEFLY POINTED AT `/experts/{username}` (BAL-567 review
+ * round 2). That was a bug, not a second meaning: from the profile the case is forgotten, the
+ * client must re-pick one, and creating a DUPLICATE case is one click away.
  *
  * ⚠ DECLARED AS A RUNTIME TUPLE, not a bare union, so the guard test can pin the exact ordered
  * membership. The type is derived from the tuple rather than restated beside it.

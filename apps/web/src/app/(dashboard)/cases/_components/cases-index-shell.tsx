@@ -166,6 +166,15 @@ function CasesIndexFrame({
 
 /** Everything a "show more" has appended to page one, plus where the next page starts. */
 interface OpenPagination {
+  /**
+   * ⚠⚠ THE SERVER PAYLOAD THIS PAGE-SET BELONGS TO, compared by reference. It is what lets an
+   * IN-FLIGHT "Show more" be discarded when its answer lands after a refresh: resetting the
+   * state is not enough on its own, because a request issued a moment earlier will still call
+   * its `setPagination` and append a page belonging to an ordering that no longer holds —
+   * re-creating the duplicate-row bug the reset exists to remove. Clicking "Show more" in an
+   * UNFOCUSED window fires exactly that pair (the focus refresh and the click together).
+   */
+  readonly token: object;
   readonly extraCards: readonly CasesIndexCardView[];
   readonly cursor: CasesIndexCursorDTO | null;
   readonly hasMore: boolean;
@@ -173,7 +182,7 @@ interface OpenPagination {
 
 /** The pagination state a freshly-served page one implies. */
 function paginationFor(data: Extract<CasesIndexData, { kind: 'ready' }>): OpenPagination {
-  return { extraCards: [], cursor: data.openCursor, hasMore: data.openHasMore };
+  return { token: data, extraCards: [], cursor: data.openCursor, hasMore: data.openHasMore };
 }
 
 function CasesIndexReady({
@@ -265,19 +274,29 @@ function CasesIndexReady({
 
   const handleShowMore = useCallback(() => {
     if (cursor === null) return;
+    // The payload this request is issued AGAINST. Captured here, checked on arrival.
+    const issuedFor = data;
     startTransition(async () => {
       const result = await loadMoreOpenCases({ cursor });
       if (!result.success) {
         toast.error(CASES_INDEX_SHOW_MORE_FAILED);
         return;
       }
-      setPagination((current) => ({
-        extraCards: [...current.extraCards, ...result.rows],
-        cursor: result.nextCursor,
-        hasMore: result.hasMore,
-      }));
+      setPagination((current) => {
+        // ⚠ THE FUNCTIONAL UPDATER SEES THE LATEST STATE, which is what makes this check real: a
+        // refresh that landed while this request was in flight has already replaced `token`, so
+        // the page is dropped rather than appended to an ordering it was not paged against. No
+        // ref, no effect — the comparison happens where the write does.
+        if (current.token !== issuedFor) return current;
+        return {
+          token: current.token,
+          extraCards: [...current.extraCards, ...result.rows],
+          cursor: result.nextCursor,
+          hasMore: result.hasMore,
+        };
+      });
     });
-  }, [cursor]);
+  }, [cursor, data]);
 
   const copy = CASES_INDEX_COPY[data.side];
   const showsBook = SHOWS_BOOK_CTA[data.side];

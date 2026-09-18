@@ -222,8 +222,15 @@ describe('CaseCard — all eight states, both sides', () => {
       );
       for (const name of ACTION_NAMES) {
         const matcher = screen.queryByRole('link', { name });
-        if (name === clientAction) expect(matcher).toBeInTheDocument();
-        else expect(matcher).not.toBeInTheDocument();
+        if (name === clientAction) {
+          expect(matcher).toBeInTheDocument();
+          // ⚠ EVERY SLOT ACTION OPENS THE CASE — including the two BOOKING ones, which briefly
+          // pointed at `/experts/{username}` and so forgot which case they belonged to. The href
+          // is asserted EXACTLY; "has some href" would have passed for that bug.
+          expect(matcher).toHaveAttribute('href', '/cases/eng-1');
+        } else {
+          expect(matcher).not.toBeInTheDocument();
+        }
       }
       unmount();
 
@@ -238,8 +245,12 @@ describe('CaseCard — all eight states, both sides', () => {
       );
       for (const name of ACTION_NAMES) {
         const matcher = screen.queryByRole('link', { name });
-        if (name === expertAction) expect(matcher).toBeInTheDocument();
-        else expect(matcher).not.toBeInTheDocument();
+        if (name === expertAction) {
+          expect(matcher).toBeInTheDocument();
+          expect(matcher).toHaveAttribute('href', '/cases/eng-1');
+        } else {
+          expect(matcher).not.toBeInTheDocument();
+        }
       }
     }
   );

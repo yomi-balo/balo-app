@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { render, screen } from '@/test/utils';
+import { act, render, screen } from '@/test/utils';
 
 const mockRefresh = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
@@ -589,6 +589,57 @@ describe('CasesIndexShell — "show more"', () => {
     expect(viewed).toHaveLength(1);
   });
 
+  /**
+   * ⚠⚠ THE IN-FLIGHT RACE, which the reset alone does NOT close. The likely trigger is clicking
+   * "Show more" in an UNFOCUSED window: the focus refresh and the click fire together, so a
+   * request issued against the OLD payload resolves after the new one has landed. Without the
+   * token check its rows are appended to a page one they were never paged against — exactly the
+   * duplicate-row state the reset exists to prevent.
+   */
+  it('DISCARDS a "Show more" whose answer lands AFTER a fresh read', async () => {
+    const user = userEvent.setup();
+    let release: (value: unknown) => void = () => {};
+    mockLoadMoreOpenCases.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const { rerender } = render(
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: CURSOR })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Show more' }));
+
+    // The refresh lands FIRST — same component instance, new payload.
+    rerender(
+      <CasesIndexShell
+        data={ready({ openHasMore: true, openCursor: { bucket: 0, sortRank: 99, id: 'eng-9' } })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+
+    // …and only THEN does the in-flight request answer, with a page from the old ordering.
+    await act(async () => {
+      release({
+        success: true,
+        rows: [
+          card({ engagementId: 'eng-3', href: '/cases/eng-3', title: 'Report builder timeouts' }),
+        ],
+        hasMore: false,
+        nextCursor: null,
+      });
+    });
+
+    expect(screen.queryByText('Report builder timeouts')).not.toBeInTheDocument();
+    // …and its cursor did not overwrite the fresh one either.
+    expect(screen.getByRole('button', { name: 'Show more' })).toBeInTheDocument();
+  });
+
   it('toasts on failure rather than silently appending nothing', async () => {
     const user = userEvent.setup();
     mockLoadMoreOpenCases.mockResolvedValue({ success: false, error: 'nope' });
@@ -701,6 +752,64 @@ describe('CasesIndexShell — the Resolved section', () => {
     expect(await screen.findByText('Guided selling flow')).toBeInTheDocument();
     expect(screen.queryByText('Einstein bot handoff')).not.toBeInTheDocument();
     expect(mockLoadMoreResolvedCases).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * ⚠⚠ THE RESOLVED SECTION'S VERSION OF THE SAME RACE, WHICH WAS WORSE. Its in-flight guard was
+   * a boolean, so after a refresh reset it was still `true` from the pre-refresh request and the
+   * effect's page-one reload was BLOCKED — while the in-flight request went on to append rows
+   * 21-40 with no page one beneath them. Keyed on the token, the reload is never blocked by the
+   * old payload's request, and the old payload's answer is dropped.
+   */
+  it('reloads page one after a refresh even with a request still in flight', async () => {
+    const user = userEvent.setup();
+    let release: (value: unknown) => void = () => {};
+    mockLoadMoreResolvedCases.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const { rerender } = render(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 40 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: /Resolved/ }));
+    expect(mockLoadMoreResolvedCases).toHaveBeenCalledTimes(1);
+
+    // The refresh lands while page one is still in flight.
+    mockLoadMoreResolvedCases.mockResolvedValue({
+      success: true,
+      rows: [{ ...resolvedRow(), engagementId: 'eng-8', title: 'Guided selling flow' }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    rerender(
+      <CasesIndexShell
+        data={ready({ resolvedCount: 41 })}
+        title="Cases"
+        expertSetupHref={EXPERT_SETTINGS_HREF}
+      />
+    );
+
+    // ⚠ NOT BLOCKED — the reload fires for the new payload.
+    expect(await screen.findByText('Guided selling flow')).toBeInTheDocument();
+    expect(mockLoadMoreResolvedCases).toHaveBeenCalledTimes(2);
+
+    // …and the stale answer, arriving last, is discarded rather than stacked on top.
+    await act(async () => {
+      release({
+        success: true,
+        rows: [{ ...resolvedRow(), engagementId: 'eng-stale', title: 'Stale page' }],
+        hasMore: false,
+        nextCursor: null,
+      });
+    });
+    expect(screen.queryByText('Stale page')).not.toBeInTheDocument();
+    expect(screen.getByText('Guided selling flow')).toBeInTheDocument();
   });
 
   it('does NOT re-fetch when it is collapsed and opened again', async () => {

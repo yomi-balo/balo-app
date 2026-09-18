@@ -348,15 +348,36 @@ const SHOWS_STATE_BAND: Readonly<Record<CasesIndexSide, boolean>> = {
   expert: false,
 };
 
-/** "Book another" / "Book a time" — client side only, and only with a live destination. */
+/**
+ * "Book another" / "Book a time" — client side only.
+ *
+ * ⚠⚠ IT GOES TO **THE CASE**, NOT TO `/experts/{username}`, AND THE DIFFERENCE IS NOT COSMETIC.
+ * This shipped pointing at `bookAgainHref` — the RESOLVED row's destination — which drops the
+ * client on the expert's profile with the case forgotten: they must re-pick which case to book
+ * into, and the profile's own flow will happily open a NEW one. On a `no_calls` card that is
+ * worst of all, because the new case orphans the empty one the button was sitting on. The case
+ * page keeps the case fixed (`CaseSlotQuickPick` jumps straight to confirm with the case-choice
+ * step absent from the tree entirely).
+ *
+ * ⚠ THE CASE PAGE HAS NO DEEP LINK INTO ITS PICKER. `cases/[engagementId]/page.tsx` accepts
+ * `params` only — no `searchParams`, and nothing on that route reads a query string — so this
+ * links to the case page itself rather than inventing a `?book=1` that no route would honour.
+ * (`?book=1&src=…` exists, but on the EXPERT PROFILE route, which is the destination being
+ * moved away from here.) A picker deep link is a case-page change, not an index one.
+ *
+ * ⚠ `bookAgainHref` IS STILL READ — AS A BOOKABILITY TEST, NOT AS THE HREF. It is `null` exactly
+ * when `expert_profiles.username` is, and the case page's own two booking affordances both gate
+ * on the same fact. Offering "Book another" into a case that can offer no booking would be a
+ * promise the destination cannot keep, so the button is absent rather than dead-ending.
+ */
 function bookAction(
   context: NextSlotContext,
   target: CasesIndexTarget,
   label: string
 ): SlotAction | null {
-  const { bookAgainHref } = context.card;
+  const { bookAgainHref, href } = context.card;
   if (!SHOWS_BOOK_ACTION[context.side] || bookAgainHref === null) return null;
-  return { target, label, href: bookAgainHref, tone: 'neutral' };
+  return { target, label, href, tone: 'neutral' };
 }
 
 /** "Last call 12 Sep", or `null` when the case has never held one. */
