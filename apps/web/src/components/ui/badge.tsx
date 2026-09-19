@@ -15,6 +15,14 @@ const badgeVariants = cva(
           'bg-destructive text-white focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40 [a&]:hover:bg-destructive/90',
         outline:
           'border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground',
+        /*
+         * ⚠ Soft tints, not solid fills: these carry STATUS, which a list renders many of at
+         * once, and a column of saturated pills is louder than the content it annotates. Shape
+         * matches the tinted panels in `resolve-prompt.tsx` / `end-of-call-layout.tsx`.
+         */
+        success: 'border-success/25 bg-success/10 text-success',
+        warning: 'border-warning/30 bg-warning/15 text-warning',
+        info: 'border-info/25 bg-info/10 text-info',
         ghost: '[a&]:hover:bg-accent [a&]:hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 [a&]:hover:underline',
       },

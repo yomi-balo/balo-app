@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { relativeDay } from './relative-day';
+
 /**
  * An ABSOLUTE date/time, in the VIEWER's timezone (BAL-388 §R2). A recap — and a case — is a
  * RECORD, so it never says "2 hours ago".
@@ -37,26 +39,30 @@ export function LocalDateTime({
   iso,
   variant = 'full',
   timeZone,
+  relativeDays = false,
 }: Readonly<{
   iso: string;
   variant?: LocalDateTimeVariant;
   timeZone?: string;
+  /**
+   * Render "Today at 6:00 pm" / "Tomorrow at 6:00 pm" when the instant falls on one of those
+   * calendar days, falling back to `variant` otherwise. For APPOINTMENTS only — see
+   * `relative-day.ts` for why this does not contradict the no-elapsed-time rule above.
+   *
+   * ⚠ Resolves only after mount, even with an explicit `timeZone`: it depends on `now`, which
+   * server and client never agree on. First paint is always the absolute form.
+   */
+  relativeDays?: boolean;
 }>): React.JSX.Element {
   const [label, setLabel] = useState(() => formatIn(iso, timeZone ?? 'UTC', variant));
   const [zone, setZone] = useState(timeZone ?? 'UTC');
 
   useEffect(() => {
-    if (timeZone !== undefined) {
-      setZone(timeZone);
-      setLabel(formatIn(iso, timeZone, variant));
-      return;
-    }
-    const viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (viewerZone) {
-      setZone(viewerZone);
-      setLabel(formatIn(iso, viewerZone, variant));
-    }
-  }, [iso, variant, timeZone]);
+    const resolved = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!resolved) return;
+    setZone(resolved);
+    setLabel(labelFor(iso, resolved, variant, relativeDays));
+  }, [iso, variant, timeZone, relativeDays]);
 
   return (
     <time dateTime={iso} title={label + ' (' + zone + ')'}>
@@ -91,6 +97,33 @@ const VARIANT_OPTIONS: Readonly<Record<LocalDateTimeVariant, Intl.DateTimeFormat
     minute: '2-digit',
   },
 };
+
+/**
+ * A relative day plus a clock time when `relativeDays` is on and the instant lands today or
+ * tomorrow, otherwise the plain `variant` format.
+ *
+ * ⚠ Only the DATE half is ever replaced — "Today" alone would drop the one thing an
+ * appointment row exists to tell you.
+ */
+function labelFor(
+  iso: string,
+  timeZone: string,
+  variant: LocalDateTimeVariant,
+  relativeDays: boolean
+): string {
+  if (relativeDays) {
+    const day = relativeDay(iso, timeZone, new Date());
+    if (day !== null) {
+      const time = new Intl.DateTimeFormat('en-AU', {
+        timeZone,
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(new Date(iso));
+      return `${day === 'today' ? 'Today' : 'Tomorrow'} at ${time}`;
+    }
+  }
+  return formatIn(iso, timeZone, variant);
+}
 
 function formatIn(iso: string, timeZone: string, variant: LocalDateTimeVariant): string {
   return new Intl.DateTimeFormat('en-AU', {
