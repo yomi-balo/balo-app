@@ -31,6 +31,8 @@ describe('getAccessTokenExpiry', () => {
   });
 
   it.each([
+    ['a non-numeric exp', jwt({ exp: '1800000000' })],
+    ['a NaN exp', jwt({ exp: Number.NaN })],
     ['not a jwt at all', 'abc'],
     ['too few segments', 'a.b'],
     ['an empty payload segment', 'a..c'],

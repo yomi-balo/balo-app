@@ -70,11 +70,16 @@ describe('FileViewerDialog', () => {
     expect(onDownload).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the loading state and disables Download while the URL is still being minted', () => {
-    renderViewer({ url: null });
+  /** The URL is in hand before this mounts, so Download is never dead. */
+  it('keeps Download live throughout, including before the image has loaded', async () => {
+    const user = userEvent.setup();
+    const { onDownload } = renderViewer();
     expect(screen.getByText('Loading preview…')).toBeInTheDocument();
-    expect(screen.queryByAltText('BALO LinkedIn.png')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Download/i })).toBeDisabled();
+
+    const download = screen.getByRole('button', { name: /Download/i });
+    expect(download).toBeEnabled();
+    await user.click(download);
+    expect(onDownload).toHaveBeenCalledTimes(1);
   });
 
   /**

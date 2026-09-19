@@ -51,15 +51,27 @@ describe('relativeDay', () => {
   });
 
   /**
-   * Melbourne springs forward at 2 am on 4 Oct 2026, making it a 23-hour day: adding 86_400_000 ms
-   * to `now` would stay inside the 4th and answer `null` for the 5th.
+   * ⚠⚠ THESE TWO PIN `nextDayKey`'S CALENDAR ARITHMETIC, and the discriminating instant is the
+   * EVENING BEFORE the irregular day, never a time on it. `now + 86_400_000` lands on the right
+   * date from almost anywhere — including from 10 am on the 23-hour day itself. Only within an
+   * hour of the boundary can the gained or lost hour push the naive answer onto the wrong date.
    */
-  it('gets tomorrow right across a spring-forward day', () => {
-    // 2026-10-03 23:00 UTC == 4 Oct, 10:00 am Melbourne (AEDT, after the change).
-    const dstNow = new Date('2026-10-03T23:00:00.000Z');
-    expect(relativeDay('2026-10-03T23:30:00.000Z', MELBOURNE, dstNow)).toBe('today');
-    // 2026-10-04 23:00 UTC == 5 Oct, 10:00 am Melbourne.
-    expect(relativeDay('2026-10-04T23:00:00.000Z', MELBOURNE, dstNow)).toBe('tomorrow');
+  it('gets tomorrow right from the evening before a 23-hour day', () => {
+    // Melbourne springs forward at 2 am on 4 Oct 2026. Sat 3 Oct, 11:30 pm AEST.
+    // `now + 24h` is 00:30 am on the 5th, which SKIPS the 4th entirely and answers null.
+    const springEve = new Date('2026-10-03T13:30:00.000Z');
+    expect(relativeDay('2026-10-03T13:45:00.000Z', MELBOURNE, springEve)).toBe('today');
+    // 2026-10-04 01:00 UTC == 4 Oct, 12:00 pm Melbourne (AEDT).
+    expect(relativeDay('2026-10-04T01:00:00.000Z', MELBOURNE, springEve)).toBe('tomorrow');
+  });
+
+  it('gets tomorrow right from just after midnight on a 25-hour day', () => {
+    // Melbourne falls back at 3 am on 5 Apr 2026. Sun 5 Apr, 12:30 am AEDT — `now + 24h` is
+    // 11:30 pm on the SAME 5th, so the naive answer calls today tomorrow and the 6th null.
+    const autumnMidnight = new Date('2026-04-04T13:30:00.000Z');
+    expect(relativeDay('2026-04-04T23:00:00.000Z', MELBOURNE, autumnMidnight)).toBe('today');
+    // 2026-04-05 23:00 UTC == 6 Apr, 9:00 am Melbourne (AEST).
+    expect(relativeDay('2026-04-05T23:00:00.000Z', MELBOURNE, autumnMidnight)).toBe('tomorrow');
   });
 
   it('rolls across a month boundary', () => {

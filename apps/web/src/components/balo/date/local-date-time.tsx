@@ -40,6 +40,7 @@ export function LocalDateTime({
   variant = 'full',
   timeZone,
   relativeDays = false,
+  now,
 }: Readonly<{
   iso: string;
   variant?: LocalDateTimeVariant;
@@ -53,6 +54,13 @@ export function LocalDateTime({
    * server and client never agree on. First paint is always the absolute form.
    */
   relativeDays?: boolean;
+  /**
+   * The caller's "now", for `relativeDays`. ⚠ SUPPLY A TICKING ONE (`useViewerClock`) OR THE
+   * LABEL DECAYS: a surface left open overnight keeps saying "Tomorrow at 9:00 am" about a call
+   * that is now today. The clock is LIFTED to the list rather than run here so one timer serves
+   * every row instead of one per rendered date. Omitted, the label is computed once at mount.
+   */
+  now?: Date;
 }>): React.JSX.Element {
   const [label, setLabel] = useState(() => formatIn(iso, timeZone ?? 'UTC', variant));
   const [zone, setZone] = useState(timeZone ?? 'UTC');
@@ -61,11 +69,16 @@ export function LocalDateTime({
     const resolved = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!resolved) return;
     setZone(resolved);
-    setLabel(labelFor(iso, resolved, variant, relativeDays));
-  }, [iso, variant, timeZone, relativeDays]);
+    setLabel(labelFor(iso, resolved, variant, relativeDays, now ?? new Date()));
+  }, [iso, variant, timeZone, relativeDays, now]);
+
+  /* ⚠ THE TOOLTIP STAYS ABSOLUTE even when the visible label reads "Today at 6:00 pm". The
+     relative form is the convenience; the exact date is the thing a record must always be able
+     to answer, and the `sr-only` zone below is announced against it for the same reason. */
+  const absolute = formatIn(iso, zone, variant);
 
   return (
-    <time dateTime={iso} title={label + ' (' + zone + ')'}>
+    <time dateTime={iso} title={absolute + ' (' + zone + ')'}>
       {label}
       <span className="sr-only"> ({zone})</span>
     </time>
@@ -109,10 +122,11 @@ function labelFor(
   iso: string,
   timeZone: string,
   variant: LocalDateTimeVariant,
-  relativeDays: boolean
+  relativeDays: boolean,
+  now: Date
 ): string {
   if (relativeDays) {
-    const day = relativeDay(iso, timeZone, new Date());
+    const day = relativeDay(iso, timeZone, now);
     if (day !== null) {
       const time = new Intl.DateTimeFormat('en-AU', {
         timeZone,

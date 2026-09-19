@@ -19,10 +19,13 @@ const badgeVariants = cva(
          * ⚠ Soft tints, not solid fills: these carry STATUS, which a list renders many of at
          * once, and a column of saturated pills is louder than the content it annotates. Shape
          * matches the tinted panels in `resolve-prompt.tsx` / `end-of-call-layout.tsx`.
+         *
+         * ⚠ THE TEXT IS `-strong`, NOT THE PLAIN TOKEN. `text-warning` on `bg-warning/15`
+         * measures 1.91:1 in light mode at 11px. See the `--*-strong` block in globals.css.
          */
-        success: 'border-success/25 bg-success/10 text-success',
-        warning: 'border-warning/30 bg-warning/15 text-warning',
-        info: 'border-info/25 bg-info/10 text-info',
+        success: 'border-success/25 bg-success/10 text-success-strong',
+        warning: 'border-warning/30 bg-warning/15 text-warning-strong',
+        info: 'border-info/25 bg-info/10 text-info-strong',
         ghost: '[a&]:hover:bg-accent [a&]:hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 [a&]:hover:underline',
       },

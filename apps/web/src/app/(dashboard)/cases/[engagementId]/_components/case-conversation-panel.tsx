@@ -62,7 +62,7 @@ export function CaseConversationPanel({
   const [uploading, setUploading] = useState<{ fileName: string; progress: number } | null>(null);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
   /** `url: null` is the minting window: the dialog opens at once and shows its loading state. */
-  const [viewing, setViewing] = useState<{ fileName: string; url: string | null } | null>(null);
+  const [viewing, setViewing] = useState<{ fileName: string; url: string } | null>(null);
 
   // ── realtime ────────────────────────────────────────────────────────────────────────────
   const handleRealtimeMessage = useCallback((incoming: ConversationMessageView) => {
@@ -236,9 +236,6 @@ export function CaseConversationPanel({
   const handleFileClick = useCallback(
     async (file: ConversationFileView) => {
       setDownloadingFileId(file.id);
-      if (isConversationViewableImage(file.contentType)) {
-        setViewing({ fileName: file.fileName, url: null });
-      }
       try {
         const result = await getCaseFileDownloadAction({
           engagementId,
@@ -257,7 +254,6 @@ export function CaseConversationPanel({
         globalThis.location.assign(result.url);
       } catch {
         toast.error('Could not download this file. Please try again.');
-        setViewing(null);
       } finally {
         setDownloadingFileId(null);
       }
@@ -267,7 +263,7 @@ export function CaseConversationPanel({
 
   /** Reuses the URL already minted for the preview rather than minting a second one. */
   const handleViewerDownload = useCallback(() => {
-    if (viewing?.url == null) return;
+    if (viewing === null) return;
     globalThis.location.assign(viewing.url);
   }, [viewing]);
 
@@ -307,13 +303,18 @@ export function CaseConversationPanel({
         />
       </div>
 
-      <FileViewerDialog
-        open={viewing !== null}
-        onOpenChange={(next) => !next && setViewing(null)}
-        fileName={viewing?.fileName ?? ''}
-        url={viewing?.url ?? null}
-        onDownload={handleViewerDownload}
-      />
+      {/* ⚠ Mounted only once a URL exists. The row's own `downloadingFileId` spinner covers the
+          mint, so there is no window in which this can be open with nothing to show — see
+          `FileViewerDialog`'s contract note. */}
+      {viewing !== null && (
+        <FileViewerDialog
+          open
+          onOpenChange={(next) => !next && setViewing(null)}
+          fileName={viewing.fileName}
+          url={viewing.url}
+          onDownload={handleViewerDownload}
+        />
+      )}
 
       {conversation.writable ? (
         <div className="mt-2">

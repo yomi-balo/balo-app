@@ -59,15 +59,12 @@ export function CaseFilesCard({
    * predicate must read `contentType` (which both origins carry) rather than special-casing an
    * origin — otherwise two identical PNGs behave differently in the same list.
    */
-  const [viewing, setViewing] = useState<{ fileName: string; url: string | null } | null>(null);
+  const [viewing, setViewing] = useState<{ fileName: string; url: string } | null>(null);
 
   const handleDownload = useCallback(
     async (file: CaseFileRowView) => {
       const key = `${file.origin}:${file.id}`;
       setDownloadingKey(key);
-      if (isConversationViewableImage(file.contentType)) {
-        setViewing({ fileName: file.fileName, url: null });
-      }
       try {
         const result = await getCaseFileDownloadAction(
           file.origin === 'meeting' && file.meetingId !== null
@@ -84,6 +81,10 @@ export function CaseFilesCard({
           return;
         }
         if (isConversationViewableImage(file.contentType)) {
+          // ⚠ `view_file`, not `download_file`. An image OPENS rather than downloading, and
+          // counting it as a download would overstate that metric while leaving the surface's
+          // most common file interaction with no event of its own.
+          track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'view_file', lens });
           setViewing({ fileName: file.fileName, url: result.url });
           return;
         }
@@ -91,7 +92,6 @@ export function CaseFilesCard({
         globalThis.location.assign(result.url);
       } catch {
         toast.error('Could not download this file. Please try again.');
-        setViewing(null);
       } finally {
         setDownloadingKey(null);
       }
@@ -101,7 +101,7 @@ export function CaseFilesCard({
 
   /** Reuses the URL already minted for the preview, never a second mint. */
   const handleViewerDownload = useCallback(() => {
-    if (viewing?.url == null) return;
+    if (viewing === null) return;
     track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'download_file', lens });
     globalThis.location.assign(viewing.url);
   }, [viewing, lens]);
@@ -139,13 +139,16 @@ export function CaseFilesCard({
         </>
       )}
 
-      <FileViewerDialog
-        open={viewing !== null}
-        onOpenChange={(next) => !next && setViewing(null)}
-        fileName={viewing?.fileName ?? ''}
-        url={viewing?.url ?? null}
-        onDownload={handleViewerDownload}
-      />
+      {/* ⚠ Mounted only once a URL exists — the row's own busy spinner covers the mint. */}
+      {viewing !== null && (
+        <FileViewerDialog
+          open
+          onOpenChange={(next) => !next && setViewing(null)}
+          fileName={viewing.fileName}
+          url={viewing.url}
+          onDownload={handleViewerDownload}
+        />
+      )}
     </section>
   );
 }

@@ -14,6 +14,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { SectionHead } from '@/components/balo/section/section-states';
 import { LocalDateTime } from '@/components/balo/date/local-date-time';
+import { useViewerClock } from '@/hooks/use-viewer-clock';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -45,6 +46,11 @@ export function ConsultationList({
   lens: 'client' | 'expert';
   counterpartyLabel: string;
 }>): React.JSX.Element {
+  /* ⚠ ONE CLOCK FOR THE WHOLE LIST, not a timer inside each date. Without a tick the relative
+     labels decay: a case left open overnight keeps calling a call that is now today
+     "Tomorrow at 9:00 am". `null` until mount, which is the absolute first paint. */
+  const clock = useViewerClock();
+
   return (
     <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead
@@ -59,6 +65,7 @@ export function ConsultationList({
               row={row}
               lens={lens}
               counterpartyLabel={counterpartyLabel}
+              now={clock?.now}
               last={index === consultations.length - 1}
             />
           </li>
@@ -68,20 +75,6 @@ export function ConsultationList({
   );
 }
 
-/**
- * Per-state presentation, as a LOOKUP rather than a chain of ternaries (SonarCloud).
- *
- * ⚠⚠ `no_show_client` AND `missed_call` ARE SEPARATE ENTRIES WITH DIFFERENT COPY. They are
- * genuinely different events — `no_show_client` means the expert waited and nobody
- * client-side arrived; `missed_call` means THE EXPERT NEVER JOINED (`meetingOutcomeEnum`,
- * `enums.ts:611-613` — NOT "the call never connected", which reads as nobody's fault).
- * Folding them into one "not held" label would tell the wronged party that the call failed
- * without saying who failed to show, which is the single most load-bearing fact in the row.
- *
- * ⚠ `outcome_pending` IS REPRESENTABLE, NOT IMPOSSIBLE. `meeting_outcome_requires_ended` is
- * one-directional, so `ended` with a NULL outcome is legal. It renders neutrally rather than
- * being silently folded into `held`, which would misreport an unrecorded call as delivered.
- */
 /**
  * The pill's colour, mapped to `Badge` variants below so the palette lives in one table.
  *
@@ -107,6 +100,20 @@ const TONE_VARIANT: Readonly<
   warning: 'warning',
 };
 
+/**
+ * Per-state presentation, as a LOOKUP rather than a chain of ternaries (SonarCloud).
+ *
+ * ⚠⚠ `no_show_client` AND `missed_call` ARE SEPARATE ENTRIES WITH DIFFERENT COPY. They are
+ * genuinely different events — `no_show_client` means the expert waited and nobody
+ * client-side arrived; `missed_call` means THE EXPERT NEVER JOINED (`meetingOutcomeEnum`,
+ * `enums.ts:611-613` — NOT "the call never connected", which reads as nobody's fault).
+ * Folding them into one "not held" label would tell the wronged party that the call failed
+ * without saying who failed to show, which is the single most load-bearing fact in the row.
+ *
+ * ⚠ `outcome_pending` IS REPRESENTABLE, NOT IMPOSSIBLE. `meeting_outcome_requires_ended` is
+ * one-directional, so `ended` with a NULL outcome is legal. It renders neutrally rather than
+ * being silently folded into `held`, which would misreport an unrecorded call as delivered.
+ */
 const STATE_PRESENTATION: Readonly<
   Record<CaseConsultationStateLabel, { icon: LucideIcon; muted: boolean; tone: StateTone }>
 > = {
@@ -123,17 +130,6 @@ const STATE_PRESENTATION: Readonly<
 };
 
 /**
- * The pill's text, lens-aware for the two states where who-did-not-join is the load-bearing fact.
- *
- * ⚠ The two "did not join" states stay distinct, for the same reason `stateNote` keeps them
- * distinct: one means the CLIENT never arrived and the other the EXPERT, and one shared "Not
- * held" would tell the wronged party the call failed without saying who.
- *
- * ⚠ Never second person, and never name the reader as the one who failed — `stateNote`'s
- * `missed_call` arm is impersonal for exactly this reason. The party who missed it reads a
- * statement of the event; the other party reads who was absent.
- */
-/**
  * The states whose row is an APPOINTMENT rather than a record: these show a clock time and may
  * say "Today"/"Tomorrow".
  *
@@ -146,6 +142,17 @@ const FORWARD_LOOKING: ReadonlySet<CaseConsultationStateLabel> = new Set([
   'in_progress',
 ]);
 
+/**
+ * The pill's text, lens-aware for the two states where who-did-not-join is the load-bearing fact.
+ *
+ * ⚠ The two "did not join" states stay distinct, for the same reason `stateNote` keeps them
+ * distinct: one means the CLIENT never arrived and the other the EXPERT, and one shared "Not
+ * held" would tell the wronged party the call failed without saying who.
+ *
+ * ⚠ Never second person, and never name the reader as the one who failed — `stateNote`'s
+ * `missed_call` arm is impersonal for exactly this reason. The party who missed it reads a
+ * statement of the event; the other party reads who was absent.
+ */
 function stateLabel(state: CaseConsultationStateLabel, lens: 'client' | 'expert'): string {
   switch (state) {
     case 'scheduled':
@@ -166,8 +173,6 @@ function stateLabel(state: CaseConsultationStateLabel, lens: 'client' | 'expert'
       return 'Cancelled';
     case 'outcome_pending':
       return 'Not recorded';
-    default:
-      return 'Unknown';
   }
 }
 
@@ -221,11 +226,14 @@ function ConsultationRow({
   row,
   lens,
   counterpartyLabel,
+  now,
   last,
 }: Readonly<{
   row: CaseConsultationRowView;
   lens: 'client' | 'expert';
   counterpartyLabel: string;
+  /** The list's ticking "now", or `undefined` before it resolves. */
+  now: Date | undefined;
   last: boolean;
 }>): React.JSX.Element {
   const onViewRecap = useCallback(() => {
@@ -263,6 +271,7 @@ function ConsultationRow({
               iso={row.scheduledStartIso}
               variant={FORWARD_LOOKING.has(row.state) ? 'day-month-time' : 'day-month'}
               relativeDays={FORWARD_LOOKING.has(row.state)}
+              now={now}
             />
           </span>
           {row.durationMinutes !== null && (

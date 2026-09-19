@@ -3,8 +3,8 @@
 import { AlertCircle, AlertTriangle, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-export interface HardFailurePanelProps {
-  onRetry: () => void;
+/** The overridable half of {@link HardFailurePanelProps} — what a caller can restate. */
+export interface HardFailurePanelCopy {
   /** Defaults to the BAL-400 case-booking headline. */
   title?: string;
   /**
@@ -19,6 +19,10 @@ export interface HardFailurePanelProps {
    * fix (`not_permitted`). Offering "Try again" there is a dead end that fails identically.
    */
   hideRetry?: boolean;
+}
+
+export interface HardFailurePanelProps extends HardFailurePanelCopy {
+  onRetry: () => void;
 }
 
 /** Hard failure — nothing created yet. Standard destructive treatment. */
@@ -77,9 +81,14 @@ export function SessionExpiredPanel({
             : `Your session timed out before we could lock in the time. “${caseTitle}” is saved — sign in and pick up right where you left off.`}
         </p>
       </div>
+      {/* `min-h-11` — the booking surface's own touch target, which `size="sm"` does not meet.
+          These two are the only way out of a dead session, so they are the last controls that
+          should be hard to hit on a phone. */}
       <div className="flex flex-col items-center gap-2">
-        <Button onClick={onSignIn}>Sign in</Button>
-        <Button variant="ghost" size="sm" onClick={onClose}>
+        <Button className="min-h-11" onClick={onSignIn}>
+          Sign in
+        </Button>
+        <Button variant="ghost" size="sm" className="min-h-11" onClick={onClose}>
           I&apos;ll finish this later
         </Button>
       </div>

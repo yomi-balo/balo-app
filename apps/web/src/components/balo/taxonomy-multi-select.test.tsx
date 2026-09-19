@@ -136,6 +136,31 @@ describe('TaxonomyMultiSelect', () => {
     expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
   });
 
+  /**
+   * ⚠ THE ONLY KEYBOARD ROUND TRIP INTO THE PORTALLED LIST AND BACK OUT. Tab cannot reach the
+   * options (they are portalled outside the field, and inside a Dialog, outside its trap), so
+   * ArrowDown is the way in and Escape is the way out. Radix's focus scope LOOPS, so a user who
+   * has landed on a chip cannot Tab past the last option either — which is what makes Escape's
+   * focus restore load-bearing rather than a nicety, and why both halves are asserted here.
+   */
+  it('ArrowDown enters the portalled list and Escape returns focus to the input', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    const input = screen.getByPlaceholderText('Filter project types…');
+    expect(input).toHaveFocus();
+
+    await user.keyboard('{ArrowDown}');
+    const firstOption = screen.getByRole('button', { name: 'New Salesforce Implementation' });
+    expect(firstOption).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
+  });
+
   it('closes the overlay on outside mousedown', async () => {
     const user = userEvent.setup();
     render(

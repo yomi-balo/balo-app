@@ -17,8 +17,10 @@ export function getAccessTokenExpiry(token: string): number | null {
     if (!encodedPayload) return null;
     // JWT uses base64url encoding; atob() expects standard base64
     const base64 = encodedPayload.replaceAll('-', '+').replaceAll('_', '/');
-    const payload = JSON.parse(atob(base64)) as { exp?: number };
-    return payload.exp ?? null;
+    const payload = JSON.parse(atob(base64)) as { exp?: unknown };
+    // A non-numeric `exp` is an unreadable token, not a token that never expires — `?? null`
+    // alone would hand a string or an object straight into the arithmetic below.
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? payload.exp : null;
   } catch {
     return null;
   }

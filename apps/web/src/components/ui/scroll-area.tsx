@@ -21,6 +21,12 @@ function ScrollArea({
        * capped Root, where (the Root being positioned) it paints over and intercepts clicks on
        * whatever follows. `overflow-hidden` alone stops the interception but leaves the tail of
        * the list unreachable.
+       *
+       * ⚠⚠ CONSEQUENCE FOR CALL SITES: CAP THIS WITH `max-h-*` AND NOTHING ELSE. `inherit` takes
+       * the Root's max-height verbatim, while `box-sizing: border-box` shrinks the Root's own
+       * CONTENT box by any padding or border — so `<ScrollArea className="max-h-[400px] p-4">`
+       * gives the Viewport a 400px cap inside a 368px content box, and `overflow-hidden` clips
+       * the last 32px of the list where nothing can scroll to it. Put the padding on the child.
        */
       className={cn('relative overflow-hidden', className)}
       {...props}

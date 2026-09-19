@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Download, ImageOff, Loader2 } from 'lucide-react';
+import { Download, ImageOff } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,11 @@ import { Button } from '@/components/ui/button';
  *
  * ⚠ Mobile full-screen takeover follows `RecordingPlayerDialog`: a bottom Sheet would crop the
  * one piece of content this surface exists to show.
+ *
+ * ⚠⚠ `url` IS NON-NULLABLE, AND THAT IS THE CONTRACT: callers mint the presigned URL first and
+ * mount this second, with the row's own busy spinner covering the mint. It makes two states
+ * unrepresentable — a refused mint that leaves a modal spinner up for ever, and a dismissal
+ * during the mint that a late success re-opens.
  */
 export function FileViewerDialog({
   open,
@@ -32,8 +37,7 @@ export function FileViewerDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   fileName: string;
-  /** `null` while the presigned URL is still being minted — the viewer shows its loading state. */
-  url: string | null;
+  url: string;
   onDownload: () => void;
 }>): React.JSX.Element {
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
@@ -49,7 +53,7 @@ export function FileViewerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-dvh w-screen max-w-none gap-3 rounded-none p-4 sm:h-auto sm:max-w-3xl sm:rounded-2xl sm:p-6">
+      <DialogContent className="h-dvh w-screen max-w-none gap-3 rounded-none p-4 sm:h-auto sm:max-w-3xl sm:rounded-xl sm:p-6">
         <DialogHeader>
           {/* `break-all`: file names are user-supplied and arrive without spaces often enough
               that a long one would otherwise push the close button off a 375px viewport. */}
@@ -70,35 +74,37 @@ export function FileViewerDialog({
           ) : (
             <>
               {status === 'loading' && (
-                <output className="text-muted-foreground absolute inset-0 flex items-center justify-center">
-                  <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" />
+                /* A skeleton in the image's own footprint, not a spinner — the house rule, and
+                   the honest shape here: the bytes are on their way and will land in this box. */
+                <output
+                  className="bg-muted absolute inset-0 animate-pulse motion-reduce:animate-none"
+                  aria-live="polite"
+                >
                   <span className="sr-only">Loading preview…</span>
                 </output>
               )}
-              {url !== null && (
-                /*
-                 * ⚠ Plain `<img>`, never `next/image`: the source is a short-lived presigned URL
-                 * on a third-party host, and the optimizer would cache private bytes under a
-                 * key whose signature expires.
-                 */
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  key={url}
-                  src={url}
-                  alt={fileName}
-                  onLoad={() => setStatus('ready')}
-                  onError={() => setStatus('failed')}
-                  className={`max-h-[60vh] w-auto max-w-full object-contain transition-opacity duration-200 ${
-                    status === 'ready' ? 'opacity-100' : 'opacity-0'
-                  }`}
-                />
-              )}
+              {/*
+               * ⚠ Plain `<img>`, never `next/image`: the source is a short-lived presigned URL
+               * on a third-party host, and the optimizer would cache private bytes under a
+               * key whose signature expires.
+               */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                key={url}
+                src={url}
+                alt={fileName}
+                onLoad={() => setStatus('ready')}
+                onError={() => setStatus('failed')}
+                className={`max-h-[60vh] w-auto max-w-full object-contain transition-opacity duration-200 ${
+                  status === 'ready' ? 'opacity-100' : 'opacity-0'
+                }`}
+              />
             </>
           )}
         </div>
 
         <div className="flex justify-end">
-          <Button variant="outline" onClick={onDownload} disabled={url === null}>
+          <Button variant="outline" className="min-h-11" onClick={onDownload}>
             <Download className="h-4 w-4" aria-hidden="true" /> Download
           </Button>
         </div>

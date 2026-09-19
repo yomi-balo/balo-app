@@ -13,6 +13,7 @@ import {
 import { SLOT_DURATION_LADDER } from '@balo/shared/availability';
 import { CAPABILITIES } from '@/lib/authz';
 import { requireOnboardedUser } from '@/lib/auth/session';
+import { isImpersonatedSession } from '@/lib/auth/impersonation';
 import { log } from '@/lib/logging';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
 import { memberCallPath } from '@/lib/meetings/member-call-path';
@@ -685,6 +686,22 @@ export async function bookConsultationAction(
     return { ok: false, stage: 'validation', code: 'invalid_request' };
   }
   const input = parsed.data;
+
+  /**
+   * ⚠ BEFORE the credential pre-flight below, which an impersonated session ALWAYS fails — it
+   * holds no `accessToken` by design. Ordering it second would report every impersonated
+   * booking as an expired session and invite the staff member to sign in, ending the
+   * impersonation. Booking commits the customer to a consultation their wallet settles, so the
+   * answer is refusal either way; only the message differs.
+   */
+  if (isImpersonatedSession(user)) {
+    log.warn('Booking refused — impersonated session', {
+      userId: user.id,
+      impersonatorUserId: user.impersonatorUserId,
+      expertProfileId: input.expertProfileId,
+    });
+    return { ok: false, stage: 'validation', code: 'impersonation_refused' };
+  }
 
   /**
    * ⚠ Gate BEFORE the first write. `requireOnboardedUser()` is satisfied by the 7-day cookie,

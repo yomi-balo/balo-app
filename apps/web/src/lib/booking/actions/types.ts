@@ -48,6 +48,17 @@ export type BookingFailureCode =
    * arrives as a 401 and is deliberately not folded in (see `isExpiredCredentialFailure`).
    */
   | 'session_expired'
+  /**
+   * A staff member is impersonating this account and tried to book on its behalf.
+   *
+   * ⚠ ITS OWN CODE, AND IT MUST NOT REACH THE SESSION-EXPIRED PANEL. An impersonated session
+   * carries no `accessToken` at all (`startImpersonationAction` deletes both tokens so the
+   * middleware can never re-seal it past its 30-minute deadline), so the credential pre-flight
+   * reads it as dead and would otherwise offer "Sign in" — which signs the STAFF MEMBER in as
+   * themselves and silently ends the impersonation. Nothing about that is a session that
+   * expired, and no retry can change it.
+   */
+  | 'impersonation_refused'
   | 'booking_failed';
 
 export type BookConsultationResult =

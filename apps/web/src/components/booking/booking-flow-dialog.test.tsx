@@ -4,6 +4,7 @@ import { render, screen } from '@/test/utils';
 import { toast } from 'sonner';
 import { track } from '@/lib/analytics';
 import type { BookConsultationResult } from '@/lib/booking/actions/types';
+import { SESSION_EXPIRED_MESSAGE } from '@/lib/auth/auth-error-copy';
 import type { BookingFlowExpert, BookingContext } from './types';
 
 vi.mock('motion/react', async () => {
@@ -15,6 +16,11 @@ vi.mock('sonner', () => ({
 }));
 const { mockRouterPush } = vi.hoisted(() => ({ mockRouterPush: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mockRouterPush }) }));
+
+const { mockAuthModalOpen } = vi.hoisted(() => ({ mockAuthModalOpen: vi.fn() }));
+vi.mock('@/hooks/use-auth-modal', () => ({
+  useAuthModal: () => ({ open: mockAuthModalOpen, close: vi.fn(), isOpen: false }),
+}));
 
 const { mockIsMobile } = vi.hoisted(() => ({ mockIsMobile: vi.fn(() => false) }));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => mockIsMobile() }));
@@ -498,11 +504,46 @@ describe('BookingFlowDialog — failure panels + idempotent retry', () => {
       expect(screen.queryByText(/nothing was saved/i)).not.toBeInTheDocument();
     });
 
-    it('"Sign in" routes to the login screen that already owns the expired-session copy', async () => {
+    /**
+     * ⚠ The dialog must still be mounted afterwards. Re-authenticating is what lets the draft,
+     * the slot and the nonce survive — a navigation would discard all three, and the panel's
+     * own copy promises it does not.
+     */
+    it('"Sign in" re-authenticates in place and returns to confirm on success', async () => {
       const user = userEvent.setup();
       await submitWith(user, { ok: false, stage: 'validation', code: 'session_expired' });
       await user.click(await screen.findByRole('button', { name: 'Sign in' }));
-      expect(mockRouterPush).toHaveBeenCalledWith('/login?error=session_expired');
+
+      expect(mockRouterPush).not.toHaveBeenCalled();
+      expect(mockAuthModalOpen).toHaveBeenCalledTimes(1);
+      const options = mockAuthModalOpen.mock.calls[0]?.[0] as {
+        initialError?: string;
+        onSuccess?: () => void;
+      };
+      expect(options.initialError).toBe(SESSION_EXPIRED_MESSAGE);
+
+      options.onSuccess?.();
+      expect(await screen.findByRole('button', { name: /Confirm & book/i })).toBeInTheDocument();
+      expect(screen.queryByText('Sign in to finish booking')).not.toBeInTheDocument();
+    });
+
+    /**
+     * An impersonated session holds no access token at all, so it fails the credential
+     * pre-flight for a reason that has nothing to do with expiry. Offering it "Sign in" would
+     * sign the staff member in as themselves and end the impersonation.
+     */
+    it('an impersonation refusal names its own reason, with no sign-in and no retry', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, {
+        ok: false,
+        stage: 'validation',
+        code: 'impersonation_refused',
+      });
+
+      expect(await screen.findByText(/can't be made while impersonating/i)).toBeInTheDocument();
+      expect(screen.queryByText('Sign in to finish booking')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Try again/i })).not.toBeInTheDocument();
     });
   });
 

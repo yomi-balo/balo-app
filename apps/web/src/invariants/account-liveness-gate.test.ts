@@ -161,6 +161,12 @@ describe('invariant: every Server Action reaches a live-checked seam, or is allo
     //     GATED rather than allowlisted, so it LEFT the unresolved set.
     //   · 11 → 12 (2026-09-19): `app/join/_actions/request-lobby-reentry-link.ts` ARRIVED on main
     //     with BAL-442 — a new, deliberately unauthenticated guest action.
+    //   · 12 → 13 (2026-09-20): `app/join/_actions/resolve-guest-exit-reason.ts` ARRIVED on main
+    //     with BAL-476 (#326) — another deliberately unauthenticated guest action, already
+    //     carrying its written reason. ⚠ IT WENT RED ON MAIN, NOT ON A PR: #326 and #325 (the
+    //     BAL-568 commit that wrote the 12) merged 23 SECONDS APART, so neither one's CI saw the
+    //     other's half. A count pinned in one PR against a set another PR grows is a semantic
+    //     conflict two green checks cannot catch between them.
     //
     // ⚠ WHAT ACTUALLY HAPPENED ON THAT SECOND MOVE, because an earlier version of this comment
     // (and of `onboarding-mutation-gate.test.ts`'s note) got it wrong (fix round 3, H5): BAL-442
@@ -173,8 +179,8 @@ describe('invariant: every Server Action reaches a live-checked seam, or is allo
     //
     // ⚠ IF THIS GOES RED, THE ANSWER IS ALMOST NEVER TO CHANGE THE NUMBER. B5 names the new file;
     // gate it, or give it an allowlist entry with a reason that survives being read out loud.
-    expect(unresolved).toHaveLength(12);
-    expect(UNION).toHaveLength(12);
+    expect(unresolved).toHaveLength(13);
+    expect(UNION).toHaveLength(13);
   });
 
   it('B8: each allowlist reason is backed by source', () => {

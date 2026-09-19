@@ -271,6 +271,12 @@ export function TaxonomyMultiSelect({
           onOpenAutoFocus={(e) => e.preventDefault()}
           /* …and is not yanked back on close, which would fight a Tab to the next field. */
           onCloseAutoFocus={(e) => e.preventDefault()}
+          /* ⚠ ESCAPE IS THE ONLY KEYBOARD WAY OUT OF THE LIST, so it is the one close path that
+             must place focus. Radix's focus scope loops, so once ArrowDown has landed on a chip
+             Tab only cycles the options; the blanket `onCloseAutoFocus` prevent above — right
+             for a Tab-away — would then leave focus on `<body>`. Restoring to the input returns
+             the user exactly where ArrowDown took them from. */
+          onEscapeKeyDown={() => inputRef.current?.focus()}
           /* An ANCHOR is not exempted from outside-dismiss the way a Trigger is, so without
              this a click on the input or chevron fights this component's own toggle. */
           onInteractOutside={(event) => {
