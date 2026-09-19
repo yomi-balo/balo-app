@@ -78,7 +78,7 @@ export function EndOfCallLayout({
 }>): React.JSX.Element {
   return (
     <EndOfCallShell>
-      <div className="bg-card border-border w-full rounded-3xl border p-8 text-center shadow-sm">
+      <div className="bg-card border-border w-full rounded-xl border p-8 text-center shadow-sm">
         <Reveal>
           {sessionHeld ? (
             <span
@@ -117,7 +117,7 @@ export function EndOfCallLayout({
         {/* The one thing that earns its place on a throwaway screen: permission to leave. */}
         <Reveal
           delay={0.1}
-          className="border-primary/15 bg-primary/5 dark:bg-primary/10 mt-5 flex w-full items-start gap-2.5 rounded-2xl border px-4 py-3 text-left"
+          className="border-primary/15 bg-primary/5 dark:bg-primary/10 mt-5 flex w-full items-start gap-2.5 rounded-lg border px-4 py-3 text-left"
         >
           <ShieldCheck className="text-primary mt-0.5 h-4 w-4 flex-none" aria-hidden="true" />
           <p className="text-muted-foreground text-sm leading-relaxed">{reassurance}</p>

@@ -1,10 +1,10 @@
 'use client';
 
-import { AlertCircle, AlertTriangle } from 'lucide-react';
+import { AlertCircle, AlertTriangle, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-export interface HardFailurePanelProps {
-  onRetry: () => void;
+/** The overridable half of {@link HardFailurePanelProps} — what a caller can restate. */
+export interface HardFailurePanelCopy {
   /** Defaults to the BAL-400 case-booking headline. */
   title?: string;
   /**
@@ -19,6 +19,10 @@ export interface HardFailurePanelProps {
    * fix (`not_permitted`). Offering "Try again" there is a dead end that fails identically.
    */
   hideRetry?: boolean;
+}
+
+export interface HardFailurePanelProps extends HardFailurePanelCopy {
+  onRetry: () => void;
 }
 
 /** Hard failure — nothing created yet. Standard destructive treatment. */
@@ -42,6 +46,52 @@ export function HardFailurePanel({
           Try again
         </Button>
       )}
+    </div>
+  );
+}
+
+/**
+ * Session expired — the viewer's credential died, not a refusal of the booking.
+ *
+ * ⚠ No "Try again": retrying re-sends the same dead token, so signing in is the only move that
+ * changes the outcome.
+ *
+ * `caseTitle` is set only when the credential died mid-submit, after the case row was written —
+ * on the pre-flight path nothing was written, and the copy must not claim otherwise.
+ */
+export function SessionExpiredPanel({
+  caseTitle,
+  onSignIn,
+  onClose,
+}: Readonly<{
+  caseTitle: string | null;
+  onSignIn: () => void;
+  onClose: () => void;
+}>): React.JSX.Element {
+  return (
+    <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
+      <span className="bg-muted flex h-14 w-14 items-center justify-center rounded-xl p-4">
+        <LogIn className="text-muted-foreground h-6 w-6" aria-hidden="true" />
+      </span>
+      <div className="max-w-[360px] space-y-1.5">
+        <h2 className="text-foreground text-lg font-semibold">Sign in to finish booking</h2>
+        <p className="text-muted-foreground text-sm leading-relaxed">
+          {caseTitle === null
+            ? 'Your session timed out, so nothing was booked — and nothing was saved. Sign in and your time is still there to pick.'
+            : `Your session timed out before we could lock in the time. “${caseTitle}” is saved — sign in and pick up right where you left off.`}
+        </p>
+      </div>
+      {/* `min-h-11` — the booking surface's own touch target, which `size="sm"` does not meet.
+          These two are the only way out of a dead session, so they are the last controls that
+          should be hard to hit on a phone. */}
+      <div className="flex flex-col items-center gap-2">
+        <Button className="min-h-11" onClick={onSignIn}>
+          Sign in
+        </Button>
+        <Button variant="ghost" size="sm" className="min-h-11" onClick={onClose}>
+          I&apos;ll finish this later
+        </Button>
+      </div>
     </div>
   );
 }

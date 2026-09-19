@@ -28,7 +28,7 @@ export default function EndOfCallError({
 }: Readonly<{ error: Error & { digest?: string }; reset: () => void }>): React.JSX.Element {
   return (
     <EndOfCallShell>
-      <div className="bg-card border-border rounded-3xl border p-6 shadow-sm">
+      <div className="bg-card border-border rounded-xl border p-6 shadow-sm">
         <SectionError
           label="this page"
           onRetry={reset}

@@ -18,6 +18,7 @@ describe('BOOKING_EVENTS', () => {
       'RESCHEDULE_PROPOSAL_SLOT_LOST',
       'RESCHEDULE_PROPOSED',
       'RESCHEDULED',
+      'SESSION_EXPIRED',
     ]);
   });
 
@@ -33,6 +34,7 @@ describe('BOOKING_EVENTS', () => {
     expect(BOOKING_EVENTS.RESCHEDULED).toBe('booking_rescheduled');
     expect(BOOKING_EVENTS.CANCELLED).toBe('booking_cancelled');
     expect(BOOKING_EVENTS.CANCEL_ABANDONED).toBe('booking_cancel_abandoned');
+    expect(BOOKING_EVENTS.SESSION_EXPIRED).toBe('booking_session_expired');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSED).toBe('reschedule_proposed');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_ANSWERED).toBe('reschedule_proposal_answered');
     expect(BOOKING_EVENTS.RESCHEDULE_PROPOSAL_SLOT_LOST).toBe('reschedule_proposal_slot_lost');

@@ -11,6 +11,9 @@ vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('@/hooks/use-auth-modal', () => ({
+  useAuthModal: () => ({ open: vi.fn(), close: vi.fn(), isOpen: false }),
+}));
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }));
 vi.mock('@/components/availability', () => ({
   ExpertAvailabilityCalendar: () => <div>Calendar</div>,

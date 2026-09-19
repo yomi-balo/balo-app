@@ -12,7 +12,7 @@ export default function ExpertCalendarError({
 }: Readonly<{ error: Error & { digest?: string }; reset: () => void }>): React.JSX.Element {
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-      <div className="bg-card border-border rounded-3xl border p-6">
+      <div className="bg-card border-border rounded-xl border p-6">
         <SectionError
           label="your calendar"
           onRetry={reset}

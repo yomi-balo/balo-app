@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen } from '@/test/utils';
+import { render, screen, waitFor } from '@/test/utils';
+import { cleanup } from '@testing-library/react';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type {
   CaseConsultationRowView,
@@ -131,6 +132,10 @@ interface StateCase {
   readonly muted: boolean;
   /** `stateNote(state, lens, counterpartyLabel)`. `null` ⇒ the indicators speak for the row. */
   readonly notes: Readonly<Record<'client' | 'expert', string | null>>;
+  /** `stateLabel(state, lens)` — the status pill's text, lens-aware for the two no-shows. */
+  readonly pill: Readonly<Record<'client' | 'expert', string>>;
+  /** The `Badge` variant `TONE_VARIANT[STATE_PRESENTATION[state].tone]` resolves to. */
+  readonly variant: string;
 }
 
 /** Both lenses share this note — spelled once so the table stays readable. */
@@ -138,15 +143,34 @@ function bothLenses(note: string | null): Readonly<Record<'client' | 'expert', s
   return { client: note, expert: note };
 }
 
+/** Both lenses share this pill label — true for every state except the two no-shows. */
+function bothPills(label: string): Readonly<Record<'client' | 'expert', string>> {
+  return { client: label, expert: label };
+}
+
 const STATE_CASES: readonly StateCase[] = [
   {
     state: 'scheduled',
     muted: false,
     notes: bothLenses('Upcoming · join link in your calendar'),
+    pill: bothPills('Upcoming'),
+    variant: 'outline',
   },
-  { state: 'in_progress', muted: false, notes: bothLenses('Happening now') },
+  {
+    state: 'in_progress',
+    muted: false,
+    notes: bothLenses('Happening now'),
+    pill: bothPills('Live now'),
+    variant: 'default',
+  },
   // `held` is the ONE state with no note: its indicators carry the row instead.
-  { state: 'held', muted: false, notes: bothLenses(null) },
+  {
+    state: 'held',
+    muted: false,
+    notes: bothLenses(null),
+    pill: bothPills('Held'),
+    variant: 'success',
+  },
   {
     state: 'no_show_client',
     muted: true,
@@ -154,6 +178,9 @@ const STATE_CASES: readonly StateCase[] = [
       client: `${COUNTERPARTY} waited — billed at the minimum`,
       expert: "Client didn't join — settled at the minimum",
     },
+    // The CLIENT never arrived: impersonal for the client, explicit for the expert.
+    pill: { client: 'Not joined', expert: "Client didn't join" },
+    variant: 'warning',
   },
   {
     state: 'missed_call',
@@ -162,9 +189,26 @@ const STATE_CASES: readonly StateCase[] = [
       client: `${COUNTERPARTY} wasn't able to join`,
       expert: "The call didn't start",
     },
+    // The EXPERT never joined: impersonal for the expert, explicit for the client.
+    pill: { client: "Expert didn't join", expert: "Didn't start" },
+    variant: 'warning',
   },
-  { state: 'cancelled', muted: true, notes: bothLenses('Cancelled — nothing charged') },
-  { state: 'outcome_pending', muted: true, notes: bothLenses('Outcome not recorded') },
+  {
+    state: 'cancelled',
+    muted: true,
+    notes: bothLenses('Cancelled — nothing charged'),
+    // ⚠ NEUTRAL, NOT WARNING. Cancelling is a supported action used correctly; tinting it like
+    // a failure would punish someone for using the feature as designed.
+    pill: bothPills('Cancelled'),
+    variant: 'secondary',
+  },
+  {
+    state: 'outcome_pending',
+    muted: true,
+    notes: bothLenses('Outcome not recorded'),
+    pill: bothPills('Not recorded'),
+    variant: 'secondary',
+  },
   // Item 13 (BAL-411) — same icon/weight as `scheduled`; `stateNote` carries the one
   // distinguishing fact, and it is LENS-AWARE (the proposal card above the list is where
   // either side actually acts — this note only says WHY the badge differs from `scheduled`).
@@ -175,12 +219,128 @@ const STATE_CASES: readonly StateCase[] = [
       client: `${COUNTERPARTY} suggested some new times — see above`,
       expert: 'Waiting on a reply to your suggested times',
     },
+    pill: bothPills('New times proposed'),
+    variant: 'info',
   },
 ];
 
 const SWEEP = STATE_CASES.flatMap((stateCase) =>
-  LENSES.map((lens) => ({ ...stateCase, lens, expected: stateCase.notes[lens] }))
+  LENSES.map((lens) => ({
+    ...stateCase,
+    lens,
+    expected: stateCase.notes[lens],
+    expectedPill: stateCase.pill[lens],
+  }))
 );
+
+describe('ConsultationList — relative days, on appointments only', () => {
+  // Viewer zone is UTC under the suite's TZ, so the day keys below are unambiguous.
+  const NOW = new Date('2026-06-11T12:00:00.000Z');
+
+  beforeEach(() => {
+    // `shouldAdvanceTime` keeps `waitFor` working — `LocalDateTime` upgrades in an effect.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('says "Tomorrow at …" for an upcoming call on the next day', async () => {
+    renderList([makeRow({ state: 'scheduled', scheduledStartIso: '2026-06-12T09:00:00.000Z' })]);
+    expect(await screen.findByText(/Tomorrow at/)).toBeInTheDocument();
+  });
+
+  it('says "Today at …" for an upcoming call later the same day', async () => {
+    renderList([makeRow({ state: 'scheduled', scheduledStartIso: '2026-06-11T22:00:00.000Z' })]);
+    expect(await screen.findByText(/Today at/)).toBeInTheDocument();
+  });
+
+  it('falls back to an absolute date beyond tomorrow', async () => {
+    renderList([makeRow({ state: 'scheduled', scheduledStartIso: '2026-06-14T09:00:00.000Z' })]);
+    await waitFor(() => expect(firstTimeElement().textContent).toContain('14 Jun'));
+    expect(firstTimeElement().textContent).not.toMatch(/Today|Tomorrow/);
+  });
+
+  /**
+   * ⚠ THE RECORD KEEPS ITS DATE. `local-date-time.tsx` rules that a case never speaks in
+   * relative time; the relative form is confined to rows a reader still has to act on. A past
+   * call landing on today would otherwise read "Today at 10:00 am" where it should read the
+   * date it will still read next week.
+   */
+  it.each(['held', 'missed_call', 'no_show_client', 'cancelled', 'outcome_pending'] as const)(
+    'never says Today/Tomorrow for the terminal %s row',
+    async (state) => {
+      renderList([makeRow({ state, scheduledStartIso: '2026-06-11T09:00:00.000Z' })]);
+      await waitFor(() => expect(firstTimeElement().textContent).toContain('11 Jun'));
+      expect(firstTimeElement().textContent).not.toMatch(/Today|Tomorrow/);
+    }
+  );
+
+  /** A terminal row shows no clock time either — the duration already carries the detail. */
+  it('shows no clock time on a terminal row', async () => {
+    renderList([makeRow({ state: 'held', scheduledStartIso: '2026-06-09T09:00:00.000Z' })]);
+    await waitFor(() => expect(firstTimeElement().textContent).toContain('9 Jun'));
+    expect(firstTimeElement().textContent).not.toMatch(/\d:\d{2}/);
+  });
+});
+
+describe("ConsultationList — the status pill's three standing rules", () => {
+  /**
+   * ⚠ RULE 1 — THE TWO "DID NOT JOIN" STATES NEVER SHARE A LABEL ON THE SAME LENS.
+   * `no_show_client` is THE CLIENT never arriving; `missed_call` is THE EXPERT never joining.
+   * `stateNote`'s docblock calls who-was-absent "the single most load-bearing fact in the row",
+   * so a pill that collapsed both to one "Not held" would tell the wronged party the call failed
+   * without saying who — on the surface they opened to find out exactly that.
+   */
+  it.each(LENSES)('distinguishes no_show_client from missed_call on the %s lens', (lens) => {
+    renderList([makeRow({ state: 'no_show_client' })], lens);
+    const noShow = document.querySelector('[data-slot="badge"]')?.textContent?.trim();
+    cleanup();
+
+    renderList([makeRow({ state: 'missed_call' })], lens);
+    const missed = document.querySelector('[data-slot="badge"]')?.textContent?.trim();
+
+    expect(noShow).toBeTruthy();
+    expect(missed).toBeTruthy();
+    expect(noShow).not.toBe(missed);
+  });
+
+  /**
+   * ⚠ RULE 2 — NO PILL ADDRESSES THE READER, AND NONE NAMES THEM AS THE ONE WHO FAILED.
+   * `stateNote`'s `missed_call` arm is impersonal for the expert precisely so an expert reading
+   * their OWN missed call is never told they failed. A "You didn't join" pill would put that
+   * back. Swept across every state and both lenses so a future label cannot smuggle it in.
+   */
+  it.each(SWEEP)('uses no second person for $state on the $lens lens', ({ state, lens }) => {
+    renderList([makeRow({ state })], lens);
+    const label = document.querySelector('[data-slot="badge"]')?.textContent?.trim() ?? '';
+    expect(label).not.toMatch(/\byou\b|\byour\b/i);
+  });
+
+  /**
+   * ⚠ RULE 3 — `destructive` IS NEVER THE TONE. A consultation that did not happen is a fact
+   * with a settlement story, not an error, and red on a surface both parties read about
+   * themselves reads as blame. `warning` is the honest tone; `cancelled` is not even that,
+   * because cancelling is a supported action used correctly.
+   */
+  it.each(SWEEP)('never renders $state as destructive on the $lens lens', ({ state, lens }) => {
+    renderList([makeRow({ state })], lens);
+    expect(document.querySelector('[data-slot="badge"]')).not.toHaveAttribute(
+      'data-variant',
+      'destructive'
+    );
+  });
+
+  it('gives cancelled a neutral tone, never warning', () => {
+    renderList([makeRow({ state: 'cancelled' })], 'client');
+    expect(document.querySelector('[data-slot="badge"]')).toHaveAttribute(
+      'data-variant',
+      'secondary'
+    );
+  });
+});
 
 describe('ConsultationList — every state renders, on every lens', () => {
   it('sweeps all eight states across both lenses', () => {
@@ -193,7 +353,7 @@ describe('ConsultationList — every state renders, on every lens', () => {
 
   it.each(SWEEP)(
     'renders the $state state on the $lens lens',
-    ({ state, muted, lens, expected }) => {
+    ({ state, muted, lens, expected, expectedPill, variant }) => {
       renderList([makeRow({ state })], lens);
 
       // The row itself rendered — one `li`, carrying the date as a real, machine-readable
@@ -201,6 +361,12 @@ describe('ConsultationList — every state renders, on every lens', () => {
       expect(rowElements()).toHaveLength(1);
       expect(firstTimeElement()).toHaveAttribute('datetime', '2026-06-12T09:00:00.000Z');
       expect(firstTimeElement().textContent).toContain('12 Jun');
+
+      // The status pill: its TEXT (lens-aware for the two no-shows) and its TONE.
+      const pill = document.querySelector('[data-slot="badge"]');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent?.trim()).toBe(expectedPill);
+      expect(pill).toHaveAttribute('data-variant', variant);
 
       // The presentation half of `STATE_PRESENTATION` — muted states get the muted treatment
       // and NOT the primary one, so an all-primary or all-muted regression fails here.

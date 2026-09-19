@@ -57,6 +57,44 @@ describe('ExpertAvailabilityCalendar', () => {
     expect(screen.getByText('10:00 AM')).toBeInTheDocument();
   });
 
+  /**
+   * ⚠ `staggerChildren` propagates only when the PARENT transitions between variants, and the
+   * slot list's `motion.ul` keeps its place in the tree across a day change — only its children
+   * are replaced. Without a remount the new rows sit at `initial="hidden"` forever.
+   *
+   * ⚠ jsdom runs no animation, so opacity is not assertable; the remount is. Asserting the row
+   * TEXT would not catch it — the rows are in the DOM either way.
+   */
+  it('remounts the slot list on a day change, so the reveal animation re-runs', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        200,
+        okBody({
+          slots: [
+            { start: '2026-06-05T09:00:00.000Z', end: '2026-06-05T10:00:00.000Z', maxDuration: 60 },
+            { start: '2026-06-06T09:00:00.000Z', end: '2026-06-06T10:00:00.000Z', maxDuration: 60 },
+          ],
+        })
+      )
+    );
+    const user = userEvent.setup();
+    const { container } = render(
+      <ExpertAvailabilityCalendar expertProfileId={EXPERT_ID} viewerTimezone="UTC" daysAhead={14} />
+    );
+
+    await user.click(await screen.findByRole('button', { name: /June 5th, 2026/ }));
+    await screen.findByText('9:00 AM');
+    const firstList = container.querySelector('ul');
+    expect(firstList).not.toBeNull();
+
+    await user.click(await screen.findByRole('button', { name: /June 6th, 2026/ }));
+    await screen.findByText('9:00 AM');
+    const secondList = container.querySelector('ul');
+
+    expect(secondList).not.toBeNull();
+    expect(secondList).not.toBe(firstList);
+  });
+
   describe('BAL-409 — fixedDurationMinutes', () => {
     it('locks the filter and hides the manual pills when supplied', async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, okBody()));

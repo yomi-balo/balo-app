@@ -13,6 +13,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import type { SessionData } from './session';
 import { sessionConfig, impersonatedSessionConfig } from './session-config';
+import { isAccessTokenExpired } from './access-token';
 
 /** Buffer before actual JWT expiry to trigger proactive refresh (seconds) */
 const REFRESH_BUFFER_SECONDS = 60;
@@ -27,35 +28,6 @@ function getWorkOS(): WorkOS {
     _workos = new WorkOS(apiKey);
   }
   return _workos;
-}
-
-// ── Token expiry check ────────────────────────────────────────
-
-/**
- * Decode a JWT payload WITHOUT signature verification.
- * Only used to read the `exp` claim for refresh timing.
- * Uses base64url → base64 conversion for Edge compatibility.
- */
-function getTokenExpiry(token: string): number | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const encodedPayload = parts[1];
-    if (!encodedPayload) return null;
-    // JWT uses base64url encoding; atob() expects standard base64
-    const base64 = encodedPayload.replaceAll('-', '+').replaceAll('_', '/');
-    const payload = JSON.parse(atob(base64)) as { exp?: number };
-    return payload.exp ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function isTokenExpired(accessToken: string): boolean {
-  const exp = getTokenExpiry(accessToken);
-  if (exp === null) return true; // Unreadable → treat as expired
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  return exp - nowSeconds < REFRESH_BUFFER_SECONDS;
 }
 
 // ── Public API ────────────────────────────────────────────────
@@ -103,7 +75,7 @@ export async function refreshSessionIfNeeded(
     return null;
   }
 
-  if (!isTokenExpired(session.accessToken)) {
+  if (!isAccessTokenExpired(session.accessToken, REFRESH_BUFFER_SECONDS)) {
     return null;
   }
 

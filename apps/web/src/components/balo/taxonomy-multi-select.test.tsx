@@ -61,13 +61,53 @@ describe('TaxonomyMultiSelect', () => {
     expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
   });
 
-  it('renders the browse popup as an absolutely positioned overlay', async () => {
+  /**
+   * ⚠ Asserts CONTAINMENT, not a class name. jsdom has no layout engine, so clipping is not
+   * measurable here — but being portalled out of the field's subtree is the property that makes
+   * any `overflow: hidden` ancestor irrelevant, and it is assertable.
+   */
+  it('portals the browse popup out of a clipping ancestor', async () => {
+    const user = userEvent.setup();
+    render(
+      <div data-testid="clipping-ancestor" style={{ overflow: 'hidden' }}>
+        <TaxonomyMultiSelect
+          {...BASE}
+          selectedIds={new Set()}
+          onToggle={vi.fn()}
+          onClear={vi.fn()}
+        />
+      </div>
+    );
+    await openBrowse(user);
+    const popup = screen.getByTestId('taxonomy-browse-tags');
+    expect(popup).toBeInTheDocument();
+    expect(screen.getByTestId('clipping-ancestor')).not.toContainElement(popup);
+  });
+
+  it('keeps focus in the search input when the popup opens, so typing is uninterrupted', async () => {
     const user = userEvent.setup();
     render(
       <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
     );
     await openBrowse(user);
-    expect(screen.getByTestId('taxonomy-browse-tags').className).toContain('absolute');
+    expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter project types\u2026')).toHaveFocus();
+  });
+
+  it('selects an option from the portalled popup (the portal must not eat the click)', async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+      <TaxonomyMultiSelect
+        {...BASE}
+        selectedIds={new Set()}
+        onToggle={onToggle}
+        onClear={vi.fn()}
+      />
+    );
+    await openBrowse(user);
+    await user.click(screen.getByRole('button', { name: 'Data Migration' }));
+    expect(onToggle).toHaveBeenCalledWith('b');
   });
 
   it('places the search control before the selected band in DOM order', () => {
@@ -94,6 +134,31 @@ describe('TaxonomyMultiSelect', () => {
     expect(screen.getByTestId('taxonomy-browse-tags')).toBeInTheDocument();
     await user.keyboard('{Escape}');
     expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+  });
+
+  /**
+   * ⚠ THE ONLY KEYBOARD ROUND TRIP INTO THE PORTALLED LIST AND BACK OUT. Tab cannot reach the
+   * options (they are portalled outside the field, and inside a Dialog, outside its trap), so
+   * ArrowDown is the way in and Escape is the way out. Radix's focus scope LOOPS, so a user who
+   * has landed on a chip cannot Tab past the last option either — which is what makes Escape's
+   * focus restore load-bearing rather than a nicety, and why both halves are asserted here.
+   */
+  it('ArrowDown enters the portalled list and Escape returns focus to the input', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaxonomyMultiSelect {...BASE} selectedIds={new Set()} onToggle={vi.fn()} onClear={vi.fn()} />
+    );
+    await openBrowse(user);
+    const input = screen.getByPlaceholderText('Filter project types…');
+    expect(input).toHaveFocus();
+
+    await user.keyboard('{ArrowDown}');
+    const firstOption = screen.getByRole('button', { name: 'New Salesforce Implementation' });
+    expect(firstOption).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('taxonomy-browse-tags')).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
   });
 
   it('closes the overlay on outside mousedown', async () => {

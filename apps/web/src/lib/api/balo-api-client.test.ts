@@ -32,11 +32,13 @@ vi.mock('@/lib/auth/api-account-refusal', () => ({
 import { log } from '@/lib/logging';
 import {
   getApiUrl,
+  isExpiredCredentialFailure,
   postBaloApiJson,
   readInstant,
   readRetryAfter,
   readString,
   safeParse,
+  viewerApiCredentialIsLive,
 } from './balo-api-client';
 
 const ACCESS_TOKEN = 'workos.access.token';
@@ -165,5 +167,68 @@ describe('postBaloApiJson', () => {
     const result = await postBaloApiJson('/x', {}, (p) => p, 'Widget');
 
     expect(result).toEqual({ ok: false, status: 401, code: 'unauthenticated' });
+  });
+});
+
+/** A JWT whose `exp` is `secondsFromNow` away. Signature is never read. */
+function tokenExpiringIn(secondsFromNow: number): string {
+  const b64url = (v: string): string =>
+    btoa(v).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  const exp = Math.floor(Date.now() / 1000) + secondsFromNow;
+  return `${b64url(JSON.stringify({ alg: 'RS256' }))}.${b64url(JSON.stringify({ exp }))}.sig`;
+}
+
+describe('viewerApiCredentialIsLive', () => {
+  it.each([
+    ['no session user', { user: undefined, accessToken: tokenExpiringIn(600) }],
+    ['no access token', { user: { id: 'u1' }, accessToken: undefined }],
+    ['an empty access token', { user: { id: 'u1' }, accessToken: '' }],
+  ])('is false with %s', async (_label, session) => {
+    mockGetSession.mockResolvedValue(session);
+    await expect(viewerApiCredentialIsLive()).resolves.toBe(false);
+  });
+
+  it('is true for a session whose token has real time left', async () => {
+    mockGetSession.mockResolvedValue({ user: { id: 'u1' }, accessToken: tokenExpiringIn(600) });
+    await expect(viewerApiCredentialIsLive()).resolves.toBe(true);
+  });
+
+  /**
+   * \u26a0 The state a presence check cannot see: the cookie lives 7 days, the token minutes, and a
+   * failed refresh only logs \u2014 so the token is present and dead.
+   */
+  it('is false for a PRESENT but expired token', async () => {
+    mockGetSession.mockResolvedValue({ user: { id: 'u1' }, accessToken: tokenExpiringIn(-30) });
+    await expect(viewerApiCredentialIsLive()).resolves.toBe(false);
+  });
+
+  it('is false inside the 5s pre-flight buffer', async () => {
+    mockGetSession.mockResolvedValue({ user: { id: 'u1' }, accessToken: tokenExpiringIn(2) });
+    await expect(viewerApiCredentialIsLive()).resolves.toBe(false);
+  });
+
+  it('does NOT refuse a token that merely falls inside the middleware refresh window', async () => {
+    mockGetSession.mockResolvedValue({ user: { id: 'u1' }, accessToken: tokenExpiringIn(30) });
+    await expect(viewerApiCredentialIsLive()).resolves.toBe(true);
+  });
+});
+
+describe('isExpiredCredentialFailure', () => {
+  it('is true for a plain 401', () => {
+    expect(isExpiredCredentialFailure(401, 'Unauthorized')).toBe(true);
+    expect(isExpiredCredentialFailure(401, 'unauthenticated')).toBe(true);
+  });
+
+  it.each([403, 409, 500, 0])('is false for status %i', (status) => {
+    expect(isExpiredCredentialFailure(status, 'Unauthorized')).toBe(false);
+  });
+
+  /**
+   * \u26a0 BAL-568's refusals arrive as 401s too. Calling them "session expired" would send a
+   * suspended user round a loop that cannot end: signing in succeeds, the next call refuses
+   * again.
+   */
+  it.each(['account_suspended', 'account_deleted'])('is false for a 401 carrying %s', (code) => {
+    expect(isExpiredCredentialFailure(401, code)).toBe(false);
   });
 });

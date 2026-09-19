@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { relativeDay } from './relative-day';
+
 /**
  * An ABSOLUTE date/time, in the VIEWER's timezone (BAL-388 §R2). A recap — and a case — is a
  * RECORD, so it never says "2 hours ago".
@@ -37,29 +39,46 @@ export function LocalDateTime({
   iso,
   variant = 'full',
   timeZone,
+  relativeDays = false,
+  now,
 }: Readonly<{
   iso: string;
   variant?: LocalDateTimeVariant;
   timeZone?: string;
+  /**
+   * Render "Today at 6:00 pm" / "Tomorrow at 6:00 pm" when the instant falls on one of those
+   * calendar days, falling back to `variant` otherwise. For APPOINTMENTS only — see
+   * `relative-day.ts` for why this does not contradict the no-elapsed-time rule above.
+   *
+   * ⚠ Resolves only after mount, even with an explicit `timeZone`: it depends on `now`, which
+   * server and client never agree on. First paint is always the absolute form.
+   */
+  relativeDays?: boolean;
+  /**
+   * The caller's "now", for `relativeDays`. ⚠ SUPPLY A TICKING ONE (`useViewerClock`) OR THE
+   * LABEL DECAYS: a surface left open overnight keeps saying "Tomorrow at 9:00 am" about a call
+   * that is now today. The clock is LIFTED to the list rather than run here so one timer serves
+   * every row instead of one per rendered date. Omitted, the label is computed once at mount.
+   */
+  now?: Date;
 }>): React.JSX.Element {
   const [label, setLabel] = useState(() => formatIn(iso, timeZone ?? 'UTC', variant));
   const [zone, setZone] = useState(timeZone ?? 'UTC');
 
   useEffect(() => {
-    if (timeZone !== undefined) {
-      setZone(timeZone);
-      setLabel(formatIn(iso, timeZone, variant));
-      return;
-    }
-    const viewerZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (viewerZone) {
-      setZone(viewerZone);
-      setLabel(formatIn(iso, viewerZone, variant));
-    }
-  }, [iso, variant, timeZone]);
+    const resolved = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!resolved) return;
+    setZone(resolved);
+    setLabel(labelFor(iso, resolved, variant, relativeDays, now ?? new Date()));
+  }, [iso, variant, timeZone, relativeDays, now]);
+
+  /* ⚠ THE TOOLTIP STAYS ABSOLUTE even when the visible label reads "Today at 6:00 pm". The
+     relative form is the convenience; the exact date is the thing a record must always be able
+     to answer, and the `sr-only` zone below is announced against it for the same reason. */
+  const absolute = formatIn(iso, zone, variant);
 
   return (
-    <time dateTime={iso} title={label + ' (' + zone + ')'}>
+    <time dateTime={iso} title={absolute + ' (' + zone + ')'}>
       {label}
       <span className="sr-only"> ({zone})</span>
     </time>
@@ -91,6 +110,34 @@ const VARIANT_OPTIONS: Readonly<Record<LocalDateTimeVariant, Intl.DateTimeFormat
     minute: '2-digit',
   },
 };
+
+/**
+ * A relative day plus a clock time when `relativeDays` is on and the instant lands today or
+ * tomorrow, otherwise the plain `variant` format.
+ *
+ * ⚠ Only the DATE half is ever replaced — "Today" alone would drop the one thing an
+ * appointment row exists to tell you.
+ */
+function labelFor(
+  iso: string,
+  timeZone: string,
+  variant: LocalDateTimeVariant,
+  relativeDays: boolean,
+  now: Date
+): string {
+  if (relativeDays) {
+    const day = relativeDay(iso, timeZone, now);
+    if (day !== null) {
+      const time = new Intl.DateTimeFormat('en-AU', {
+        timeZone,
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(new Date(iso));
+      return `${day === 'today' ? 'Today' : 'Tomorrow'} at ${time}`;
+    }
+  }
+  return formatIn(iso, timeZone, variant);
+}
 
 function formatIn(iso: string, timeZone: string, variant: LocalDateTimeVariant): string {
   return new Intl.DateTimeFormat('en-AU', {

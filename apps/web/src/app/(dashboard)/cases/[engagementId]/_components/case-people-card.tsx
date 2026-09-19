@@ -29,7 +29,7 @@ export function CasePeopleCard({
   people,
 }: Readonly<{ people: readonly CasePersonView[] }>): React.JSX.Element {
   return (
-    <section className="bg-card border-border rounded-3xl border px-5 py-4">
+    <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead icon={Users} title="People" />
       <p className="text-muted-foreground text-xs leading-relaxed">
         {people.map((person, index) => (

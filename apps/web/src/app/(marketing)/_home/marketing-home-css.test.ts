@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { resolveRouteDir } from '@/invariants/_source-scan';
+import { resolveRouteDir, stripBlockComments } from '@/invariants/_source-scan';
 
 /**
  * BAL-493 (D4/§2.5) — the source-scan guard over `marketing-home.css` + `globals.css`.
@@ -29,29 +29,11 @@ const marketingHomeCssRaw =
   HOME_DIR === '' ? '' : readFileSync(`${HOME_DIR}/marketing-home.css`, 'utf8');
 const globalsCssRaw = APP_DIR === '' ? '' : readFileSync(`${APP_DIR}/globals.css`, 'utf8');
 
-/** Strip CSS block comments (`/* … *\/`) — CSS has no line-comment syntax, so this is the
- * whole grammar. Every existence/absence check below runs on the STRIPPED text so this
- * file's own docblock — which necessarily NAMES the stripped selectors (`.mk-ctl`,
- * `.mk-page.deep`, `@import url(`, `.mk-nav`) while explaining they are gone — can never
- * trip its own guard. Unmatched (never-closed) comments stop the scan rather than loop. */
-function stripCssComments(source: string): string {
-  let result = '';
-  let i = 0;
-  while (i < source.length) {
-    if (source[i] === '/' && source[i + 1] === '*') {
-      const close = source.indexOf('*/', i + 2);
-      if (close === -1) break;
-      i = close + 2;
-      continue;
-    }
-    result += source[i];
-    i += 1;
-  }
-  return result;
-}
-
-const marketingHomeCss = stripCssComments(marketingHomeCssRaw);
-const globalsCss = stripCssComments(globalsCssRaw);
+/** Every existence/absence check below runs on the STRIPPED text so this file's own docblock —
+ * which necessarily NAMES the stripped selectors (`.mk-ctl`, `.mk-page.deep`, `@import url(`,
+ * `.mk-nav`) while explaining they are gone — can never trip its own guard. */
+const marketingHomeCss = stripBlockComments(marketingHomeCssRaw);
+const globalsCss = stripBlockComments(globalsCssRaw);
 
 /** The body of the FIRST rule whose selector text is exactly `${selector} {`, up to the
  * next `}`. Every rule this file looks up is flat (no nested braces in its body), so a

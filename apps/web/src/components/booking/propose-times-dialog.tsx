@@ -263,7 +263,7 @@ export function ProposeTimesDialog({
   if (isMobile) {
     return (
       <Sheet open={open} onOpenChange={(next) => !next && resetAndClose()}>
-        <SheetContent side="bottom" className="max-h-[94dvh] overflow-hidden rounded-t-2xl p-0">
+        <SheetContent side="bottom" className="max-h-[94dvh] overflow-y-auto rounded-t-2xl p-0">
           <SheetTitle className="sr-only">Propose new times</SheetTitle>
           <SheetDescription className="sr-only">
             Pick up to three alternative times and send them to your client.
@@ -276,7 +276,7 @@ export function ProposeTimesDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && resetAndClose()}>
-      <DialogContent className="max-h-[85vh] overflow-hidden rounded-xl p-0 sm:max-w-[560px]">
+      <DialogContent className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[560px]">
         <DialogTitle className="sr-only">Propose new times</DialogTitle>
         <DialogDescription className="sr-only">
           Pick up to three alternative times and send them to your client.

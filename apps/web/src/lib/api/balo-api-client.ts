@@ -4,6 +4,8 @@ import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
 import { consumeApiAccountRefusal } from '@/lib/auth/api-account-refusal';
+import { isAccessTokenExpired } from '@/lib/auth/access-token';
+import { isAccountRefusalCode } from '@balo/shared/authz';
 
 /**
  * Fix round 1 item 9 — THE ONE FETCH+AUTH+ERROR-MAPPING SHAPE, extracted from
@@ -40,6 +42,44 @@ export type BaloApiResult<T> =
       /** Seconds, from a `429`'s `Retry-After`. Absent unless the server sent a usable one. */
       readonly retryAfterSeconds?: number;
     };
+
+/**
+ * How close to expiry counts as dead for a PRE-FLIGHT gate. Deliberately much narrower than the
+ * middleware's 60s refresh buffer: this answers "will the api reject this right now", and
+ * refusing a session with 50 seconds of life left would turn a working booking into a spurious
+ * "please sign in again".
+ */
+const PREFLIGHT_EXPIRY_BUFFER_SECONDS = 5;
+
+/**
+ * Whether the viewer's API credential is usable right now — for callers that write across more
+ * than one hop, to be asked BEFORE the first write.
+ *
+ * ⚠ A presence check is not enough. The iron-session cookie lives 7 days while the access token
+ * lives minutes, and a failed refresh only logs — it does not destroy the session. So an idle
+ * viewer keeps a valid session carrying a present but expired token: the web-side hop succeeds
+ * on the cookie and the `apps/api` hop 401s on the Bearer, leaving a half-written record.
+ *
+ * Advisory only: `apps/api` re-verifies.
+ */
+export async function viewerApiCredentialIsLive(): Promise<boolean> {
+  const session = await getSession();
+  const accessToken = session.accessToken;
+  if (session.user?.id === undefined || accessToken === undefined || accessToken.length === 0) {
+    return false;
+  }
+  return !isAccessTokenExpired(accessToken, PREFLIGHT_EXPIRY_BUFFER_SECONDS);
+}
+
+/**
+ * Is this failure a dead credential rather than a refusal of the request itself?
+ *
+ * ⚠ Account-liveness refusals (BAL-568) also arrive as 401s and are excluded: telling a
+ * suspended user to sign in again sends them round a loop that cannot end.
+ */
+export function isExpiredCredentialFailure(status: number, code: string): boolean {
+  return status === 401 && !isAccountRefusalCode(code);
+}
 
 /** Parse a body as JSON, tolerating an empty one. Never throws. */
 export function safeParse(text: string): Record<string, unknown> {

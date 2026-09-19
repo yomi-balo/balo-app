@@ -89,7 +89,7 @@ export function CasePartyCard({
   };
 
   return (
-    <section className="bg-card border-border rounded-3xl border px-5 py-4">
+    <section className="bg-card border-border rounded-xl border px-5 py-4">
       <div className="flex items-start gap-3">
         <Avatar size="lg" className="flex-none">
           {avatarSrc !== null && <AvatarImage src={avatarSrc} alt="" />}

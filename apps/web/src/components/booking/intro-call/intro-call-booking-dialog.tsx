@@ -296,8 +296,9 @@ export function IntroCallBookingDialog({
   const step: IntroCallStep = STEP_FOR_PHASE[phase];
   const hardFailure = HARD_FAILURE_COPY[failureCode];
 
+  /** ⚠ `min-h-0 flex-1`, never `h-full` — see the note in `booking-flow-dialog.tsx`. */
   const body = (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <IntroCallHeader expertName={expertName} expertInitials={expertInitials} step={step} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <AnimatePresence mode="wait">
@@ -380,7 +381,7 @@ export function IntroCallBookingDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
-      <DialogContent className="max-h-[85vh] overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
         <DialogTitle className="sr-only">Book an intro call with {expertName}</DialogTitle>
         <DialogDescription className="sr-only">
           Pick a time — this is a free intro call, no commitment.

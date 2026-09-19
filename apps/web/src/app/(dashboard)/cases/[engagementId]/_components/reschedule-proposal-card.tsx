@@ -264,7 +264,7 @@ export function RescheduleProposalCard({
     return (
       <section
         aria-label="Your reschedule proposal"
-        className="bg-card border-border mt-3 rounded-3xl border px-5 py-4"
+        className="bg-card border-border mt-3 rounded-xl border px-5 py-4"
       >
         <div className="flex items-center gap-2">
           <CalendarSync size={16} className="text-primary" aria-hidden="true" />
@@ -302,7 +302,7 @@ export function RescheduleProposalCard({
   return (
     <section
       aria-label="Reschedule proposal"
-      className="bg-card border-border mt-3 rounded-3xl border px-5 py-4"
+      className="bg-card border-border mt-3 rounded-xl border px-5 py-4"
     >
       {/* Item 14 — the NUDGE above already carries the headline ("{counterparty} suggested
           some new times") and the deadline ("Reply by …"); this card carries only the options

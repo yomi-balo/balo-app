@@ -23,12 +23,12 @@ export default function EndOfCallLoading(): React.JSX.Element {
     <EndOfCallShell>
       <output
         aria-label="Loading"
-        className="bg-card border-border block w-full rounded-3xl border p-8 text-center"
+        className="bg-card border-border block w-full rounded-xl border p-8 text-center"
       >
         <span className="bg-muted mx-auto mb-4 block h-14 w-14 animate-pulse rounded-full motion-reduce:animate-none" />
         <span className="bg-muted mx-auto mb-2.5 block h-5 w-48 animate-pulse rounded motion-reduce:animate-none" />
         <span className="bg-muted/60 mx-auto mb-5 block h-3 w-56 animate-pulse rounded motion-reduce:animate-none" />
-        <span className="bg-muted/40 mb-6 block h-16 w-full animate-pulse rounded-2xl motion-reduce:animate-none" />
+        <span className="bg-muted/40 mb-6 block h-16 w-full animate-pulse rounded-lg motion-reduce:animate-none" />
         {/* ⚠ Keys come from a FIXED literal array — never an array index (SonarCloud S6479). */}
         {LINE_KEYS.map((key) => (
           <span

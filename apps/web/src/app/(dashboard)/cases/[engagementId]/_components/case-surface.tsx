@@ -150,7 +150,9 @@ export function CaseSurface({
       <div className="mx-auto w-full max-w-[1060px] px-4 py-8 sm:px-6 lg:px-8">
         <Reveal>
           <CaseHeader header={view.header} />
-          <div className="px-6">
+          {/* ⚠ No horizontal padding: these are peer cards and belong on the same vertical
+              edges as every other card on the surface. */}
+          <div>
             <CaseNudge
               nudge={view.nudge}
               lens={view.lens}
