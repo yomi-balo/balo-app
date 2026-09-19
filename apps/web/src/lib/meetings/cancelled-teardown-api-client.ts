@@ -32,8 +32,19 @@ import { getApiUrl } from '@/lib/api/balo-api-client';
 /** Must not exceed the route schema's `.max()` (`apps/api/.../cancelled-teardown.schema.ts`). */
 export const TEARDOWN_BATCH_SIZE = 25;
 
+/**
+ * BAL-476 — one cancelled meeting's post-commit work. `cancelAuditId` is the per-WRITE handle the
+ * calendar withdrawal correlates on; it is OPTIONAL on the wire on purpose (see the api route's
+ * schema docblock: `apps/web` and `apps/api` deploy independently from one merge).
+ */
+export interface CancelledTeardownEntry {
+  readonly meetingId: string;
+  readonly expertProfileId: string | null;
+  readonly cancelAuditId: string;
+}
+
 export async function postCancelledTeardown(
-  meetings: ReadonlyArray<{ meetingId: string; expertProfileId: string | null }>
+  meetings: readonly CancelledTeardownEntry[]
 ): Promise<void> {
   if (meetings.length === 0) return;
 
@@ -56,7 +67,7 @@ export async function postCancelledTeardown(
 /** One ≤{@link TEARDOWN_BATCH_SIZE} batch. Logs and swallows; never throws. */
 async function postOneBatch(
   secret: string,
-  batch: ReadonlyArray<{ meetingId: string; expertProfileId: string | null }>
+  batch: readonly CancelledTeardownEntry[]
 ): Promise<void> {
   try {
     const response = await loggedFetch(`${getApiUrl()}/meetings/cancelled-teardown`, {

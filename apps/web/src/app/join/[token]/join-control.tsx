@@ -20,12 +20,14 @@ import { useAdmissionPoll } from '@/lib/meetings/use-admission-poll';
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
 import type { MeetingGuestPanelRegistration } from '@/lib/meetings/meeting-panels';
+import type { GuestExitCause } from '@/lib/meetings/guest-exit-cause';
 // ⚠ C5 — RELATIVE IMPORTS. `join-link-never-writes.test.ts` fails on any occurrence of the
 // literal `/join/` in non-comment code under `app/join/`; `'../_actions/…'` does not contain it.
 import { pollGuestAdmissionAction } from '../_actions/poll-guest-admission';
 import { listGuestMeetingFilesAction } from '../_actions/list-guest-meeting-files';
 import { getGuestMeetingFileDownloadAction } from '../_actions/get-guest-meeting-file-download';
 import { fetchGuestMeetingThreadAction } from '../_actions/fetch-guest-meeting-thread';
+import { resolveGuestExitReasonAction } from '../_actions/resolve-guest-exit-reason';
 import type { JoinGrant } from '@/lib/meetings/join-api-client';
 
 /**
@@ -182,6 +184,16 @@ export function JoinControl({
     }),
     [meetingId, token, hasChat]
   );
+
+  /**
+   * BAL-476 (R5 amended) — ⚠ A CALLBACK THAT CLOSES OVER THE TOKEN, NEVER THE TOKEN ITSELF. The
+   * raw guest credential must not reach the call frame's props or React tree. Memoised on the
+   * same two stable values `panels` is, so the provider's own `useMemo` is not defeated.
+   */
+  const resolveExitReason = useMemo(
+    () => () => resolveGuestExitReasonAction({ meetingId, guestToken: token }),
+    [meetingId, token]
+  );
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [isLongWait, setIsLongWait] = useState(false);
   /** ⚠ STARTS AS THE SERVER'S UTC STRING, so the first client render matches the server's. */
@@ -322,6 +334,7 @@ export function JoinControl({
       phase={phase}
       grant={grant}
       panels={panels}
+      resolveExitReason={resolveExitReason}
       headingRef={headingRef}
       isLongWait={isLongWait}
       windowLabel={windowLabel}
@@ -356,6 +369,8 @@ interface JoinPhaseContentProps {
   readonly phase: ControlPhase;
   readonly grant: JoinGrant | null;
   readonly panels: MeetingGuestPanelRegistration;
+  /** BAL-476 — ⚠ A ZERO-ARGUMENT RESOLVER. The token stays in `JoinControl`'s closure. */
+  readonly resolveExitReason: () => Promise<GuestExitCause>;
   readonly headingRef: React.Ref<HTMLHeadingElement>;
   readonly isLongWait: boolean;
   readonly windowLabel: string;
@@ -383,6 +398,7 @@ function JoinPhaseContent({
   phase,
   grant,
   panels,
+  resolveExitReason,
   headingRef,
   isLongWait,
   windowLabel,
@@ -410,6 +426,7 @@ function JoinPhaseContent({
         contextNoun="call"
         waiting={null}
         panels={panels}
+        resolveExitReason={resolveExitReason}
       >
         <MeetingCallSurface
           roomUrl={grant.roomUrl}

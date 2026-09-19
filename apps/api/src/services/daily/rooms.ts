@@ -332,8 +332,9 @@ export type RoomTeardownOutcome = 'deleted' | 'already_gone';
  * the shipped client-side `updateParticipants({'*': {eject: true}})` revokes nothing, and a
  * participant who kept their token could walk straight back into a settled room. Balo-side
  * rejoin refusal already exists (`MEETING_CLOSED_TO_JOIN` contains `ended`); deleting the room
- * is what closes the VENDOR side. Per-participant `ban: true` and the roster remove-from-call
- * path stay with BAL-444 — this adds `DELETE /rooms/:name` and nothing else.
+ * is what closes the VENDOR side. ⚠ CORRECTED OWNER (BAL-476): per-participant `ban: true` and
+ * the roster remove-from-call path are NO LONGER BAL-444's — BAL-476 ships them, as
+ * {@link ejectParticipants} below. BAL-134 itself added `DELETE /rooms/:name` and nothing else.
  *
  * ⚠ A `404` IS `'already_gone'`, NOT AN ERROR. Daily auto-deletes an expiring room once the
  * last participant leaves, so racing that is the NORMAL outcome, not a failure — and the
@@ -460,3 +461,67 @@ export interface PresenceReader {
 /** The live implementations. Tests substitute their own object literals. */
 export const dailyRoomTeardown: RoomTeardown = { deleteRoom };
 export const dailyPresenceReader: PresenceReader = { getAllPresence };
+
+// ── BAL-476 (R4) — PER-PARTICIPANT EJECT ──────────────────────────────────────────────────
+
+/** Daily's cap on each id list in one eject call (`.claude/skills/daily-co/SKILL.md`). */
+export const DAILY_EJECT_MAX_IDS = 100;
+
+/** What {@link ejectParticipants} answers. Both values are SUCCESS; neither is an error. */
+export type ParticipantEjectOutcome = 'ejected' | 'already_gone';
+
+/**
+ * BAL-476 (R4) — remove named participants from a LIVE room, and ban them from rejoining.
+ *
+ * ⚠⚠ `ban: true` IS LOAD-BEARING, NOT DEFENSIVE. The daily-co skill's own trap list: "Eject alone
+ * doesn't revoke the token — a removed participant can rejoin with the same token unless you
+ * `ban:true` or don't re-mint." Balo mints with `eject_at_token_exp: false` and
+ * `exp = scheduled_end + 24h`, so an un-banned eject buys seconds. Balo-side revocation already
+ * stops a RE-MINT; it does nothing about the token already in the browser.
+ *
+ * ⚠ EJECT BY `user_ids` — the Balo participantId claim (`dailyParticipantIdFor`), never Daily's
+ * per-session `ids`. The session id is not knowable server-side without a presence round trip,
+ * and the participantId is the value the token itself carried.
+ *
+ * ⚠ A `404` IS `'already_gone'`, AN EXPLICIT SUCCESS — the room may have been reaped, or the
+ * person may have left on their own. Identical to {@link deleteRoom}'s 404 handling, for the
+ * identical reason. Every other non-2xx throws; the caller is best-effort.
+ *
+ * Rate limit: 20/s (100 per 5s) — the same tier as room delete and presence.
+ */
+export async function ejectParticipants(
+  roomName: string,
+  participantIds: readonly string[]
+): Promise<ParticipantEjectOutcome> {
+  if (participantIds.length === 0) return 'already_gone';
+  if (participantIds.length > DAILY_EJECT_MAX_IDS) {
+    throw new DailyApiError(
+      'POST',
+      `/rooms/${roomName}/eject`,
+      RESPONSE_CONTRACT_VIOLATION_STATUS,
+      `Refusing to eject ${participantIds.length} ids — Daily's cap is ${DAILY_EJECT_MAX_IDS}`
+    );
+  }
+  try {
+    await dailyRequest<unknown>('POST', `/rooms/${encodeURIComponent(roomName)}/eject`, {
+      user_ids: [...participantIds],
+      ban: true,
+    });
+    return 'ejected';
+  } catch (error) {
+    if (error instanceof DailyApiError && error.status === 404) {
+      return 'already_gone';
+    }
+    throw error;
+  }
+}
+
+/** The eject seam, mirroring {@link RoomTeardown} — so the service's tests run with no network. */
+export interface ParticipantEjector {
+  ejectParticipants(
+    roomName: string,
+    participantIds: readonly string[]
+  ): Promise<ParticipantEjectOutcome>;
+}
+
+export const dailyParticipantEjector: ParticipantEjector = { ejectParticipants };

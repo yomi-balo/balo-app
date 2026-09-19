@@ -105,7 +105,7 @@ describe('runCloseRequestFanout', () => {
     expect(mockPublishNow).not.toHaveBeenCalled();
   });
 
-  it('tears down every cancelled meeting, mapped to {meetingId, expertProfileId}', async () => {
+  it('⚠ tears down every cancelled meeting, carrying its per-WRITE cancelAuditId (BAL-476)', async () => {
     const result = closeResult({
       cancelledMeetings: [
         { meetingId: 'meeting-1', expertProfileId: 'expert-1', cancelAuditId: 'cancel-1' },
@@ -115,9 +115,12 @@ describe('runCloseRequestFanout', () => {
     runCloseRequestFanout(result, BASE_CONTEXT);
     await getScheduled()?.();
 
+    // ⚠ `cancelAuditId` ALREADY EXISTED ON THIS RESULT (`cancelMeetingTx` mints it) and this
+    // mapper was dropping it on the floor. BAL-476 threads it through as the calendar
+    // withdrawal's per-WRITE correlation handle.
     expect(mockPostCancelledTeardown).toHaveBeenCalledWith([
-      { meetingId: 'meeting-1', expertProfileId: 'expert-1' },
-      { meetingId: 'meeting-2', expertProfileId: null },
+      { meetingId: 'meeting-1', expertProfileId: 'expert-1', cancelAuditId: 'cancel-1' },
+      { meetingId: 'meeting-2', expertProfileId: null, cancelAuditId: 'cancel-2' },
     ]);
   });
 

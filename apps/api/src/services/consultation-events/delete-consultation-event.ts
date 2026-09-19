@@ -16,8 +16,15 @@ export interface DeleteConsultationEventInput {
 
 /**
  * BAL-396 §5/§10.6 — reads the stored row for `(endUserAccountId, calendarId, vendorEventId)`,
- * soft-deletes Balo's record, then one `events.delete`. Ships INERT: no live caller until
- * BAL-400 wires cancellation.
+ * soft-deletes Balo's record, then one `events.delete`.
+ *
+ * ⚠ LIVE SINCE BAL-476, WITH EXACTLY ONE PRODUCTION CALLER:
+ * `services/meetings/withdraw-meeting-calendar.ts`'s `withdrawMeetingCalendarProjection`, which
+ * runs post-commit off both cancellation producers — inline, best-effort and NEVER inside a
+ * retrying job (see the mark-first note below: on a second attempt the row is already
+ * soft-deleted, so a retry silently performs no vendor delete). An earlier version of this line
+ * said "Ships INERT: no live caller until BAL-400 wires cancellation"; BAL-400 never did, and it
+ * is no longer inert.
  *
  * ⚠ USES THE STORED `calendarId`, NEVER THE CURRENT `target_calendar_id` — the expert may have
  * changed their target calendar since the event was written; the delete must address the

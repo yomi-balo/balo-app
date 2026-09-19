@@ -104,3 +104,53 @@ describe('deleteConsultationEvent (BAL-396 §5/§10.6)', () => {
     expect(callOrder).toEqual(['mark', 'vendor-delete']);
   });
 });
+
+// ── BAL-476 — vendor id discipline (apiroc SKILL.md §M1), and idempotency ─────────────────
+
+describe('deleteConsultationEvent — BAL-476 (its first production consumer)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * ⚠⚠ THE DELETE TAKES THE **STORED, VENDOR-RETURNED** IDS — never a derived id, never the
+   * RFC 5545 UID, never the meeting id. The fixture below makes every one of those a DIFFERENT
+   * value, so a regression that reached for any of them fails on the exact argument triple
+   * rather than on "delete was called".
+   */
+  it('⚠ passes the STORED (endUserAccountId, calendarId, vendorEventId) triple, exactly', async () => {
+    mockFindLiveExpertProviderEvent.mockResolvedValue({
+      id: 'row-1',
+      meetingId: 'meeting-1',
+      // ⚠ EVERY ID BELOW DIFFERS FROM THE MEETING ID **AND** FROM THE UID.
+      uid: 'uid-that-must-never-reach-the-vendor',
+      calendarId: 'cal-stored-at-write-time',
+      vendorEventId: 'vendor-event-1',
+      connectionId: 'conn-1',
+    });
+
+    await deleteConsultationEvent({ meetingId: 'meeting-1', endUserAccountId: 'eua-1' });
+
+    expect(mockEventsDelete).toHaveBeenCalledTimes(1);
+    expect(mockEventsDelete.mock.calls[0]).toEqual([
+      'eua-1',
+      'cal-stored-at-write-time',
+      'vendor-event-1',
+    ]);
+  });
+
+  /**
+   * ⚠ "A RETRIED WITHDRAWAL IS A NO-OP, NOT AN ERROR" — and it falls straight out of the
+   * mark-first order rather than out of a guard. The second call finds no LIVE provider row,
+   * returns, and touches the vendor ZERO times.
+   */
+  it('⚠ a SECOND withdrawal for the same meeting touches the vendor zero times', async () => {
+    mockFindLiveExpertProviderEvent
+      .mockResolvedValueOnce({ calendarId: 'cal-1', vendorEventId: 'vendor-1' })
+      .mockResolvedValueOnce(undefined);
+
+    await deleteConsultationEvent({ meetingId: 'meeting-1', endUserAccountId: 'eua-1' });
+    await deleteConsultationEvent({ meetingId: 'meeting-1', endUserAccountId: 'eua-1' });
+
+    expect(mockEventsDelete).toHaveBeenCalledTimes(1);
+    expect(mockSoftDeleteByMeetingAndParty).toHaveBeenCalledTimes(1);
+  });
+});

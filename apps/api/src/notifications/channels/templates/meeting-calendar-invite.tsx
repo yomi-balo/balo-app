@@ -10,13 +10,22 @@ import {
 } from './shared.js';
 import { formatMeetingWindowUtc } from './meeting-guest-emails.js';
 import { CALENDAR_INVITE_GUEST_JOIN_NOTE } from '../../calendar-invite-copy.js';
-import type { CalendarInviteTransition } from '../../calendar-invite-spec.js';
+import {
+  isCalendarInviteWithdrawal,
+  type CalendarInviteTransition,
+} from '../../calendar-invite-spec.js';
 import type { CalendarInviteAudience } from '../../../services/calendar-invites/resolve-calendar-invite-facts.js';
 
 /**
- * BAL-475 — the Balo-organised CALENDAR INVITE email. Rendered ONCE PER RECIPIENT by
+ * BAL-475 / BAL-476 — the Balo-organised CALENDAR email. Rendered ONCE PER RECIPIENT by
  * `channels/calendar-invite-delivery.ts`, alongside the ICS attachment. This body is the
- * fallback for a client that ignores `text/calendar` entirely; the invite itself is the ICS.
+ * fallback for a client that ignores `text/calendar` entirely; the message itself is the ICS.
+ *
+ * ⚠ IT IS NOT ONLY AN "INVITE". BAL-476 put the two WITHDRAWALS (`cancelled`, `guest_removed`)
+ * on this same template, so every transition-dependent string — heading, pill, note, subject
+ * prefix — comes off ONE table, {@link TRANSITION_CHROME}, and the member CTA and the guest join
+ * note are SUPPRESSED on a withdrawal. Offering a way into a call that is cancelled, or that the
+ * reader is no longer on, is the one thing this copy must never do.
  *
  * ⚠ NO BILLING LINE, NO ADDRESS, EVER — this template renders no counterparty contact
  * information of any kind (ADR-1044 §4 concealment applies to email bodies too).
@@ -54,6 +63,14 @@ export type MeetingCalendarInviteEmailProps = MeetingCalendarInviteEmailBaseProp
     | { readonly audience: 'guest' }
   );
 
+const ISSUE_ICS_NOTE =
+  'This short email carries the calendar file (.ics) attached below, so this call lands ' +
+  "correctly in your own calendar app — it isn't a duplicate of anything else Balo has sent you.";
+
+const WITHDRAWAL_ICS_NOTE =
+  'This short email carries the calendar file (.ics) attached below, so this call comes off ' +
+  "your own calendar app — it isn't a duplicate of anything else Balo has sent you.";
+
 const invitePillStyle = {
   ...shared.statusPillBase,
   background: 'rgba(37, 99, 235, 0.16)',
@@ -61,45 +78,77 @@ const invitePillStyle = {
   color: '#93C5FD',
 };
 
-function headingFor(transition: CalendarInviteEmailTransition): string {
-  return transition === 'rescheduled'
-    ? 'Your calendar invite has been updated'
-    : 'Your calendar invite';
-}
-
 /**
+ * ONE DATA TABLE for every transition's chrome — heading, pill, the one explanatory line, and the
+ * subject/preview prefix.
+ *
+ * ⚠ A `Record` KEYED ON THE TRANSITION UNION, so a sixth transition is a compile error here
+ * rather than a silently invite-shaped email for a withdrawal.
+ *
  * F28 (fix round 1, UX3) — the pill changes with the transition, matching the sibling guest
  * emails' pattern (`meeting-guest-emails.tsx`'s "🕐 Time changed" vs "📅 You're invited"): a
  * reader scanning just the pill/subject-adjacent chrome can tell what happened without reading
  * the heading text.
+ *
+ * BAL-476 copy rules: gender-neutral, factual, never adversarial, never countdown-led. It says
+ * what happened and what is now TRUE — and it never says WHY, because Balo does not know.
  */
-function pillLabelFor(transition: CalendarInviteEmailTransition): string {
-  return transition === 'rescheduled' ? '🕐 Time changed' : '📅 Calendar invite';
-}
-
-function movedLineFor(transition: CalendarInviteEmailTransition): string | null {
-  return transition === 'rescheduled'
-    ? 'This call has moved — your calendar entry updates to the new time.'
-    : null;
-}
+export const TRANSITION_CHROME: Record<
+  CalendarInviteEmailTransition,
+  {
+    readonly heading: string;
+    readonly pill: string;
+    readonly note: string | null;
+    readonly previewPrefix: string;
+  }
+> = {
+  booked: {
+    heading: 'Your calendar invite',
+    pill: '📅 Calendar invite',
+    note: null,
+    previewPrefix: 'Calendar invite',
+  },
+  guest_added: {
+    heading: 'Your calendar invite',
+    pill: '📅 Calendar invite',
+    note: null,
+    previewPrefix: 'Calendar invite',
+  },
+  rescheduled: {
+    heading: 'Your calendar invite has been updated',
+    pill: '🕐 Time changed',
+    note: 'This call has moved — your calendar entry updates to the new time.',
+    previewPrefix: 'Updated calendar invite',
+  },
+  cancelled: {
+    heading: 'This call has been cancelled',
+    pill: '🗓️ Cancelled',
+    note: 'This call is no longer happening — your calendar entry is being removed.',
+    previewPrefix: 'Cancelled',
+  },
+  guest_removed: {
+    heading: 'Your invitation has been withdrawn',
+    pill: '🗓️ Invitation withdrawn',
+    note: 'You are no longer on this call — your calendar entry is being removed, and the invite link no longer works.',
+    previewPrefix: 'Invitation withdrawn',
+  },
+};
 
 export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInviteEmailProps>) {
   const { recipientName, summary, startIso, endIso, transition, baseUrl, audience } = props;
   const window = formatMeetingWindowUtc(startIso, endIso);
-  const heading = headingFor(transition);
-  const pillLabel = pillLabelFor(transition);
-  const movedLine = movedLineFor(transition);
-  const previewText =
-    transition === 'rescheduled'
-      ? `Updated calendar invite: ${summary}`
-      : `Calendar invite: ${summary}`;
+  const chrome = TRANSITION_CHROME[transition];
+  // ⚠ ONE definition of "is this a withdrawal" — never a second
+  // `=== 'cancelled' || === 'guest_removed'`.
+  const isWithdrawal = isCalendarInviteWithdrawal(transition);
+  const previewText = `${chrome.previewPrefix}: ${summary}`;
 
   return (
     <EmailShell previewText={previewText} baseUrl={baseUrl}>
       <Section style={shared.smallHero}>
         <LogoRow size="small" />
-        <StatusPill label={pillLabel} style={invitePillStyle} />
-        <Heading style={shared.smallHeroHeading}>{heading}</Heading>
+        <StatusPill label={chrome.pill} style={invitePillStyle} />
+        <Heading style={shared.smallHeroHeading}>{chrome.heading}</Heading>
       </Section>
 
       <Section style={shared.card}>
@@ -111,26 +160,28 @@ export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInvite
          * intro call has no reschedule email; a guest's other email is their invitation, not a
          * "booking confirmation"). Included in the plain-text render for free — react-email
          * derives plain text from this same JSX tree.
+         *
+         * BAL-476 — on a WITHDRAWAL the same file takes the entry OFF the reader's calendar, so
+         * the sentence says so rather than claiming the call "lands correctly".
          */}
         <Text style={{ ...shared.bodyText, color: colors.textSecondary, fontSize: '13px' }}>
-          This short email carries the calendar file (.ics) attached below, so this call lands
-          correctly in your own calendar app — it isn&apos;t a duplicate of anything else Balo has
-          sent you.
+          {isWithdrawal ? WITHDRAWAL_ICS_NOTE : ISSUE_ICS_NOTE}
         </Text>
 
+        {/* ⚠ The reader still needs to know WHICH call — kept on every transition. */}
         <MeetingWhenBlock meetingTitle={summary} window={window} />
-        {movedLine === null ? null : <Text style={shared.bodyText}>{movedLine}</Text>}
+        {chrome.note === null ? null : <Text style={shared.bodyText}>{chrome.note}</Text>}
 
-        {audience === 'member' ? (
-          <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
-            <Button style={shared.smallCtaButton} href={props.memberJoinUrl}>
-              Open in Balo →
-            </Button>
-          </Section>
-        ) : (
-          <Text style={{ ...shared.bodyText, color: colors.textTertiary }}>
-            {CALENDAR_INVITE_GUEST_JOIN_NOTE}
-          </Text>
+        {/*
+         * ⚠⚠ BAL-476 — THE JOIN AFFORDANCE IS SUPPRESSED ON A WITHDRAWAL, for members AND for
+         * guests. Offering a way into a call that is cancelled (or that this person is no longer
+         * on) is the one thing this copy must not do.
+         */}
+        {isWithdrawal ? null : (
+          <JoinAffordance
+            audience={audience}
+            memberJoinUrl={audience === 'member' ? props.memberJoinUrl : undefined}
+          />
         )}
 
         <Text style={{ ...shared.bodyText, fontSize: '13px', color: colors.textTertiary }}>
@@ -141,5 +192,25 @@ export function MeetingCalendarInviteEmail(props: Readonly<MeetingCalendarInvite
         <SupportFooter prefix="Questions about this call?" />
       </Section>
     </EmailShell>
+  );
+}
+
+/** The member CTA / guest note pair — extracted so the withdrawal suppression is ONE branch. */
+function JoinAffordance(
+  props: Readonly<{ audience: CalendarInviteEmailAudience; memberJoinUrl: string | undefined }>
+) {
+  if (props.audience === 'member') {
+    return (
+      <Section style={{ ...shared.ctaWrapper, margin: '24px 0 20px' }}>
+        <Button style={shared.smallCtaButton} href={props.memberJoinUrl}>
+          Open in Balo →
+        </Button>
+      </Section>
+    );
+  }
+  return (
+    <Text style={{ ...shared.bodyText, color: colors.textTertiary }}>
+      {CALENDAR_INVITE_GUEST_JOIN_NOTE}
+    </Text>
   );
 }

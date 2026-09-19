@@ -4,6 +4,7 @@ const {
   mockAuthorizeMeetingCancel,
   mockCancelMeeting,
   mockPublishBookingCancelled,
+  mockWithdrawMeetingCalendarProjection,
   mockCheckRateLimit,
   MeetingNotCancellableErrorStub,
 } = vi.hoisted(() => {
@@ -19,6 +20,7 @@ const {
     mockAuthorizeMeetingCancel: vi.fn(),
     mockCancelMeeting: vi.fn(),
     mockPublishBookingCancelled: vi.fn(),
+    mockWithdrawMeetingCalendarProjection: vi.fn(),
     mockCheckRateLimit: vi.fn(),
     MeetingNotCancellableErrorStub: MeetingNotCancellableErrorImpl,
   };
@@ -52,6 +54,12 @@ vi.mock('../../services/meetings/meeting-availability.js', () => ({
 }));
 vi.mock('../../services/meetings/publish-booking-cancelled.js', () => ({
   publishBookingCancelled: mockPublishBookingCancelled,
+}));
+// BAL-476 — mocked at the ORCHESTRATOR boundary; it has its own unit tests
+// (`withdraw-meeting-calendar.test.ts`). This file proves only that the route runs it AFTER
+// the reply, with the right per-WRITE key, and that a failure never changes the status code.
+vi.mock('../../services/meetings/withdraw-meeting-calendar.js', () => ({
+  withdrawMeetingCalendarProjection: mockWithdrawMeetingCalendarProjection,
 }));
 // ⚠ `./join.schema.js`, `./cancel.schema.js` AND `@balo/shared/meetings` are DELIBERATELY NOT
 // MOCKED — the real Zod boundary is what the `400` rows assert, and the real
@@ -406,5 +414,110 @@ describe('POST /meetings/:meetingId/cancel (BAL-410)', () => {
     await post();
 
     expect(mockPublishBookingCancelled).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-476 — the calendar withdrawal, producer 1 ─────────────────────────────────────────
+
+describe('POST /meetings/:meetingId/cancel — the calendar withdrawal (BAL-476)', () => {
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    app = Fastify({ logger: false });
+    app.setErrorHandler((_error, _request, reply) => {
+      reply.status(500).send({ error: 'Internal Server Error' });
+    });
+    await app.register(meetingCancelRoutes);
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCheckRateLimit.mockResolvedValue({ allowed: true, remaining: 4, retryAfterSeconds: 0 });
+    mockAuthorizeMeetingCancel.mockResolvedValue(authOk());
+    mockCancelMeeting.mockResolvedValue(cancelOk());
+    mockPublishBookingCancelled.mockResolvedValue(undefined);
+    mockWithdrawMeetingCalendarProjection.mockResolvedValue(undefined);
+  });
+
+  function cancel(options: InjectOptions = {}): Promise<LightMyRequestResponse> {
+    return app.inject({ method: 'POST', url: URL, headers: AUTH, payload: {}, ...options });
+  }
+
+  /**
+   * ⚠ THE PER-WRITE KEY IS `result.cancelAuditId`, not the meeting id. A bare meeting id is
+   * unique per MEETING, not per WRITE, and would be swallowed by BullMQ's retained-completed set.
+   */
+  it('⚠ withdraws with the cancel AUDIT id and the authorized expertProfileId', async () => {
+    const response = await cancel();
+
+    expect(response.statusCode).toBe(200);
+    expect(mockWithdrawMeetingCalendarProjection).toHaveBeenCalledTimes(1);
+    expect(mockWithdrawMeetingCalendarProjection).toHaveBeenCalledWith(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: AUDIT_ID,
+        expertProfileId: EXPERT_PROFILE_ID,
+      },
+      expect.anything()
+    );
+  });
+
+  /**
+   * ⚠ THE TELLING GOES FIRST, THE JANITORIAL VENDOR CALLS SECOND — the house rule from
+   * `_actions/_shared/close-request-fanout.ts`.
+   */
+  it('⚠ publishes booking.cancelled BEFORE the calendar withdrawal', async () => {
+    await cancel();
+
+    const publishOrder = mockPublishBookingCancelled.mock.invocationCallOrder[0] ?? 0;
+    const withdrawOrder = mockWithdrawMeetingCalendarProjection.mock.invocationCallOrder[0] ?? 0;
+    expect(publishOrder).toBeGreaterThan(0);
+    expect(withdrawOrder).toBeGreaterThan(publishOrder);
+  });
+
+  it('⚠ a THROWING withdrawal still answers 200 — the cancellation already committed', async () => {
+    mockWithdrawMeetingCalendarProjection.mockRejectedValue(new Error('contract violation'));
+
+    const response = await cancel();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: 'cancelled', cancelAuditId: AUDIT_ID });
+  });
+
+  it('⚠ a THROWING booking.cancelled publish does NOT skip the withdrawal', async () => {
+    mockPublishBookingCancelled.mockRejectedValue(new Error('redis down'));
+
+    const response = await cancel();
+
+    expect(response.statusCode).toBe(200);
+    expect(mockWithdrawMeetingCalendarProjection).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⚠⚠ THE WITHDRAWAL IS **NOT** NESTED INSIDE `publishBookingCancelled`, which is hard-gated to
+   * `contextType: 'case'` while the calendar projection exists for all five bookable contexts.
+   */
+  it('⚠ withdraws for a NON-case context too', async () => {
+    mockAuthorizeMeetingCancel.mockResolvedValue(
+      authOk({ subject: { contextType: 'project_kickoff', contextId: ENGAGEMENT_ID } })
+    );
+
+    await cancel();
+
+    expect(mockWithdrawMeetingCalendarProjection).toHaveBeenCalledTimes(1);
+  });
+
+  it('never withdraws when the cancellation itself failed', async () => {
+    mockCancelMeeting.mockRejectedValue(new MeetingNotCancellableErrorStub(MEETING_ID));
+
+    const response = await cancel();
+
+    expect(response.statusCode).toBe(409);
+    expect(mockWithdrawMeetingCalendarProjection).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@ import { resolvePanelCapabilities } from '@/lib/meetings/panel-capabilities';
 import type { WaitingFacts, WaitingPhase, WaitingSubject } from '@/lib/meetings/waiting-copy';
 import { useDrawdownPoll, type DrawdownPollState } from '@/lib/meetings/use-drawdown-poll';
 import { resolveAutoOpen } from '@/lib/meetings/drawdown-auto-open';
+import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { InCallBalancePanel } from '@/components/balo/credit/in-call-balance-panel';
 import type { MeetingFrameProps } from './meeting-frame-types';
 import { JoinRetryNotice } from './join-notice-card';
@@ -34,8 +35,11 @@ import { BackToContextLink } from './back-to-context-link';
 import { DeviceSettingsSheet } from './device-settings-sheet';
 import { MeetingFrameElementProvider } from './meeting-frame-element';
 import {
+  ENDED_TITLE,
+  EXIT_RESOLVING_TITLE,
   MeetingAnnouncer,
   MeetingEndedNotice,
+  MeetingExitResolvingNotice,
   MeetingPill,
   PresentingBar,
   RECONNECTING_LONG_AFTER_MS,
@@ -101,7 +105,8 @@ import type { MeetingReactionEmoji } from '@/lib/meetings/meeting-reactions';
  * now" button wired to `join()` with the SAME still-valid token; and because `hasJoined` is a
  * dependency of the skip-prejoin effect, anyone carrying the "Skip this next time" preference was
  * silently rejoined **within one render tick, with no interaction**, camera and microphone on.
- * That undid "End for everyone" (a client-side eject revokes no token — `ban:true` is BAL-444's)
+ * That undid "End for everyone" (a client-side eject revokes no token — `ban:true` shipped in
+ * BAL-476, server-side, on the guest-removal path only)
  * while the host had already navigated away. `didAutoJoinRef` makes the skip a ONE-SHOT for the
  * life of the frame, which is the second, independent half of the same fix.
  */
@@ -471,6 +476,8 @@ interface FrameChromeInput {
   /** ⚠ NULLABLE — `useMeetingState()` returns `null` before the call object reports one. */
   readonly meetingState: string | null;
   readonly exitReason: MeetingExitReason | null;
+  /** BAL-476 — the exit-reason probe is in flight; chrome is suppressed exactly as for terminal. */
+  readonly isResolvingExit: boolean;
   readonly kind: ReturnType<typeof resolveStageKind>;
   readonly headingRef: React.Ref<HTMLHeadingElement> | undefined;
 }
@@ -491,17 +498,56 @@ interface FrameChrome {
  * separately, so extracting handlers would not have helped), and these four booleans were the
  * bulk of them — 18 against the allowed 15. The logic is unchanged, line for line.
  */
+/**
+ * BAL-476 (U-1) — the frame's own focus key: `'live'` until the exit begins, then `'resolving'`,
+ * then the settled reason. A pure helper so the two transitions are one expression rather than a
+ * conditional inside the component body (SonarCloud scores that body's conditionals).
+ */
+function resolveExitFocusKey(input: {
+  readonly isResolvingExit: boolean;
+  readonly exitReason: MeetingExitReason | null;
+}): string {
+  if (input.isResolvingExit) return 'resolving';
+  return input.exitReason ?? 'live';
+}
+
+/**
+ * BAL-476 (U-1) — attach BOTH the mount's heading ref and the frame's own to one `<h1>`.
+ *
+ * ⚠ THE OUTER ONE MAY BE A CALLBACK **OR** AN OBJECT REF (or absent — the member route passes
+ * none), so both forms are handled rather than assumed.
+ */
+function useComposedHeadingRef(
+  outer: React.Ref<HTMLHeadingElement> | undefined,
+  inner: React.RefCallback<HTMLHeadingElement>
+): React.RefCallback<HTMLHeadingElement> {
+  return useCallback(
+    (node: HTMLHeadingElement | null): void => {
+      if (typeof outer === 'function') {
+        outer(node);
+      } else if (outer !== null && outer !== undefined) {
+        (outer as React.MutableRefObject<HTMLHeadingElement | null>).current = node;
+      }
+      inner(node);
+    },
+    [outer, inner]
+  );
+}
+
 function resolveFrameChrome({
   hasFailed,
   meetingState,
   exitReason,
+  isResolvingExit,
   kind,
   headingRef,
 }: Readonly<FrameChromeInput>): FrameChrome {
   const isFatal = hasFailed || meetingState === 'error';
   // ⚠ THE TERMINAL LATCH, read here only to suppress chrome. The component itself branches on
   // `exitReason` directly, so this stays local rather than joining the returned shape.
-  const isTerminal = exitReason !== null;
+  // ⚠ BAL-476 — the resolving window counts as terminal here too: the person is already out of
+  // the call, so the toolbar and top bar must not linger while the card is being chosen.
+  const isTerminal = exitReason !== null || isResolvingExit;
   const showChrome = !isFatal && !isTerminal && kind !== 'prejoin';
   const topBarHeadingRef = showChrome && kind !== 'waiting' ? headingRef : undefined;
   return { isFatal, showChrome, topBarHeadingRef };
@@ -950,6 +996,14 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
    * See the module docblock — it is a security control, not a courtesy.
    */
   const [exitReason, setExitReason] = useState<MeetingExitReason | null>(null);
+  /**
+   * BAL-476 (R5 amended) — ⚠ THE **LOADING** STATE of the exit-reason round-trip: latched
+   * terminal, but the card is not chosen yet. ⚠ IT IS NOT A LEAVE REASON and must never join
+   * `MeetingExitReason` — a non-terminal value on `meeting_call_left.reason` would create a bogus
+   * PostHog breakdown bucket. It is a frame state, and it counts as TERMINAL everywhere the latch
+   * does, so PreJoin can never be reached while it is set.
+   */
+  const [isResolvingExit, setIsResolvingExit] = useState(false);
   const [override, setOverride] = useState<LayoutOverride>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   /**
@@ -1053,11 +1107,18 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
    */
   useEffect(() => {
     if (daily === null || hasJoined || isJoining || hasFailed) return;
-    if (exitReason !== null || didAutoJoinRef.current) return;
+    // ⚠⚠ BAL-476 — `isResolvingExit` IS A THIRD GUARD, AND IT IS THE ONLY ONE THAT CLOSES ITS
+    // WINDOW. Between the latch and the probe's answer `exitReason` is still `null`, so the
+    // first guard is inert for the whole length of the probe; and `didAutoJoinRef` only covers
+    // somebody who arrived with the preference ALREADY set. The reachable hazard is the guest
+    // who ticks "Skip this next time" inside PreJoin (which writes the key immediately) and
+    // then joins MANUALLY: `didAutoJoinRef` stays false, so without this guard an ejection would
+    // rejoin them mid-probe, camera and microphone on, into a call they were just removed from.
+    if (exitReason !== null || isResolvingExit || didAutoJoinRef.current) return;
     if (!readSkipPrejoin()) return;
     didAutoJoinRef.current = true;
     join();
-  }, [daily, hasJoined, hasFailed, isJoining, exitReason, join]);
+  }, [daily, hasJoined, hasFailed, isJoining, exitReason, isResolvingExit, join]);
 
   useEffect(() => {
     if (pill === null) return;
@@ -1066,28 +1127,68 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
   }, [pill]);
 
   /**
-   * ⚠⚠ THE LATCH ITSELF. Everything that ends this frame goes through here exactly once: the
-   * analytics event, the terminal state, and the route's own navigation (which both GUEST mounts
-   * structurally do not have — which is precisely why the terminal card exists).
+   * BAL-476 (R5 amended) — ⚠⚠ THE **SETTLE**, WHICH IS WHERE `MEETING_CALL_EVENTS.LEFT` NOW
+   * FIRES, WITH THE **RESOLVED** REASON.
+   *
+   * It used to fire at the top of `finishExit` with the UNRESOLVED one, which would put
+   * `reason: 'host_ended'` on every removal and make the new breakdown useless. `hasExitedRef`
+   * still latches at the top of `finishExit`, so "exactly once" is unchanged.
+   *
+   * ⚠ `duration_ms` IS COMPUTED FROM `callStartedAtRef` **HERE**, but the ref is captured at
+   * JOIN time and never moves, so the probe's own latency cannot inflate it.
+   *
+   * ⚠ `route.onExit?.(resolved)` MOVED TOO, so the member route's navigation is unaffected: a
+   * member mount has no resolver and reaches this function synchronously, exactly as before.
+   */
+  const settleExit = useCallback(
+    (resolved: MeetingExitReason): void => {
+      const startedAt = callStartedAtRef.current;
+      track(MEETING_CALL_EVENTS.LEFT, {
+        ...meetingProps,
+        reason: resolved,
+        duration_ms: startedAt === null ? 0 : Date.now() - startedAt,
+      });
+      setExitReason(resolved);
+      // ⚠ THE DESTINATION IS ROUTE-SCOPED. A guest has none, so the frame renders the terminal
+      // notice instead — never PreJoin, and never a rejoin affordance. BAL-389 takes this seam
+      // over unchanged.
+      route.onExit?.(resolved);
+    },
+    [meetingProps, route]
+  );
+
+  /**
+   * ⚠⚠ THE LATCH ITSELF. Everything that ends this frame goes through here exactly once.
+   *
+   * BAL-476 (R5 amended) — ⚠ ON `host_ended` **WITH A RESOLVER PRESENT** (i.e. a guest mount),
+   * the reason is not final yet: daily-js reports a host-ended eject and a targeted removal
+   * IDENTICALLY, so the frame asks the SERVER which happened before choosing a card. Every other
+   * path — `'self'`, `'error'`, and the whole member mount (no resolver, structurally) — settles
+   * SYNCHRONOUSLY, byte-identically to how it shipped.
+   *
+   * ⚠ THE `.catch` ARM RESOLVES TO `'access_ended'`, THE VAGUER CARD, NEVER `host_ended` AND
+   * NEVER `removed`. If we cannot determine why somebody is out of a call, we say less, not
+   * something false.
    */
   const finishExit = useCallback(
     (reason: MeetingExitReason): void => {
       if (hasExitedRef.current) return;
       hasExitedRef.current = true;
-      const startedAt = callStartedAtRef.current;
-      track(MEETING_CALL_EVENTS.LEFT, {
-        ...meetingProps,
-        reason,
-        duration_ms: startedAt === null ? 0 : Date.now() - startedAt,
-      });
       setHasJoined(false);
-      setExitReason(reason);
-      // ⚠ THE DESTINATION IS ROUTE-SCOPED. A guest has none, so the frame renders the terminal
-      // notice instead — never PreJoin, and never a rejoin affordance. BAL-389 takes this seam
-      // over unchanged.
-      route.onExit?.(reason);
+
+      const resolver = route.resolveExitReason;
+      if (reason !== 'host_ended' || resolver === undefined) {
+        settleExit(reason);
+        return;
+      }
+
+      setIsResolvingExit(true);
+      resolver()
+        .then(settleExit)
+        .catch(() => settleExit('access_ended'))
+        .finally(() => setIsResolvingExit(false));
     },
-    [meetingProps, route]
+    [route, settleExit]
   );
 
   const exit = useCallback(
@@ -1306,6 +1407,24 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     micOn,
   });
 
+  /**
+   * ⚠⚠ BAL-476 (U-1) — THE **FLOOR** UNDER THE FOCUS MOVE, and it is deliberately redundant with
+   * it. Focus landing on the card's `<h1>` is the primary signal; this region is what still says
+   * something if the heading never mounts, if focus is refused, or if the card is replaced twice
+   * in quick succession. For the person this transition is designed for, hearing the sentence
+   * twice is strictly better than hearing nothing.
+   *
+   * ⚠ IT READS THE SAME STRINGS THE CARDS RENDER (`ENDED_TITLE` / `EXIT_RESOLVING_TITLE`), so a
+   * copy edit cannot leave the spoken version behind.
+   */
+  useEffect(() => {
+    if (isResolvingExit) {
+      announce(EXIT_RESOLVING_TITLE);
+      return;
+    }
+    if (exitReason !== null) announce(ENDED_TITLE[exitReason]);
+  }, [isResolvingExit, exitReason, announce]);
+
   const joinedTrackedRef = useRef(false);
   useEffect(() => {
     if (!hasJoined || joinedTrackedRef.current) return;
@@ -1349,12 +1468,39 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
 
   useSeatCountOnJoin({ panels: route.panels, hasJoined, onSeats: onSeatsChange });
 
+  /**
+   * ⚠⚠ BAL-476 (U-1) — THE FRAME ARMS ITS **OWN** FOCUS INTENT FOR THE EXIT TRANSITION, because
+   * the mounts' one cannot.
+   *
+   * Both guest mounts call `useFocusOnTransition(phase)`, and `phase` latches at `'admitted'`
+   * and never changes again — a guest mount passes no `onExit`, structurally, so nothing outside
+   * this component ever learns the frame went terminal. Meanwhile `resolveFrameChrome` unmounts
+   * the top bar and the toolbar in the SAME RENDER the resolving notice mounts, so whatever held
+   * focus disappears and focus falls to `<body>`. An ejected guest on a screen reader or keyboard
+   * then gets no signal at all — the one person R5 exists to protect, and the one with no other
+   * way to find out what happened.
+   *
+   * ⚠ THE KEY IS THE EXIT STATE, NOT THE PHASE: `live` → `resolving` → the settled reason. The
+   * hook skips its FIRST render, so mounting at `live` steals nothing.
+   */
+  const exitFocusKey = resolveExitFocusKey({ isResolvingExit, exitReason });
+  const exitHeadingRef = useFocusOnTransition(exitFocusKey);
+
+  /**
+   * ⚠ THE MOUNT'S REF **AND** THE FRAME'S, COMPOSED — never one replacing the other. The mount's
+   * intent still fires for its own transitions (idle → admitted); the frame's fires for the exit
+   * ones the mount cannot see. ⚠ MEMOISED: an unstable ref callback is detached and re-attached
+   * on every render, and a re-attach would consume a pending intent and steal focus at random.
+   */
+  const stageHeadingRef = useComposedHeadingRef(headingRef, exitHeadingRef);
+
   const { isFatal, showChrome, topBarHeadingRef } = resolveFrameChrome({
     hasFailed,
     meetingState,
     exitReason,
+    isResolvingExit,
     kind,
-    headingRef,
+    headingRef: stageHeadingRef,
   });
   // ⚠ FROM THE ROUTE CONTEXT — the SAME table `backTo` comes from, so the confirm dialog and the
   // back link cannot disagree. `'call'` on both guest mounts, structurally.
@@ -1382,7 +1528,7 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
     balanceButtonRef,
   } = useMeetingPanel({
     isRegistered: panels !== null,
-    isTerminal: exitReason !== null || isFatal,
+    isTerminal: exitReason !== null || isFatal || isResolvingExit,
   });
 
   /**
@@ -1395,7 +1541,7 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
   const { realtime, reactionControl, onOpenReactions } = useCallRealtimeSlot({
     panels,
     panel,
-    isTerminal: exitReason !== null || isFatal,
+    isTerminal: exitReason !== null || isFatal || isResolvingExit,
     meetingProps,
     announce,
     moreButtonRef,
@@ -1417,7 +1563,7 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
   } = useDrawdownBalanceSlot({
     panels,
     panel,
-    isTerminal: exitReason !== null || isFatal,
+    isTerminal: exitReason !== null || isFatal || isResolvingExit,
     openPanel,
     closePanel,
     togglePanel: rawTogglePanel,
@@ -1549,11 +1695,12 @@ function MeetingFrameInner({ grant, headingRef }: Readonly<MeetingFrameProps>): 
                 kind={kind}
                 isFatal={isFatal}
                 exitReason={exitReason}
+                isResolvingExit={isResolvingExit}
                 contextNoun={contextNoun}
                 tiles={tiles}
                 activeSpeakerId={activeSpeakerId}
                 screenSessionId={presenter?.session_id ?? null}
-                headingRef={headingRef}
+                headingRef={stageHeadingRef}
                 displayName={route.viewerName}
                 waiting={route.waiting}
                 // ⚠ BAL-134 — the server's phase label. `'pre-start'` on both guest mounts.
@@ -1691,6 +1838,12 @@ interface FrameStageProps {
   readonly isFatal: boolean;
   /** ⚠ Non-null ⇒ TERMINAL. See the module docblock; it outranks every other state but fatal. */
   readonly exitReason: MeetingExitReason | null;
+  /**
+   * BAL-476 — ⚠ TERMINAL-BUT-UNDECIDED: the exit-reason probe is in flight. It outranks
+   * `prejoin` for the same reason `exitReason` does — a person who is already out of the call
+   * must never be shown a live "Join now" button.
+   */
+  readonly isResolvingExit: boolean;
   readonly contextNoun: string;
   readonly tiles: ReturnType<typeof orderTiles>;
   readonly activeSpeakerId: string | null;
@@ -1740,6 +1893,7 @@ function FrameStage({
   kind,
   isFatal,
   exitReason,
+  isResolvingExit,
   contextNoun,
   tiles,
   activeSpeakerId,
@@ -1772,6 +1926,13 @@ function FrameStage({
     return (
       <MeetingEndedNotice reason={exitReason} contextNoun={contextNoun} headingRef={headingRef} />
     );
+  }
+  // ⚠ BAL-476 — AFTER the settled card and BEFORE prejoin. The order is contract: a frame that
+  // has latched terminal must never fall through to PreJoin's "Join now", and during the probe
+  // `exitReason` is still `null`, so this branch is the only thing standing between an ejected
+  // person and that button.
+  if (isResolvingExit) {
+    return <MeetingExitResolvingNotice headingRef={headingRef} />;
   }
   if (kind === 'prejoin') {
     return (
@@ -1841,7 +2002,13 @@ function FrameStage({
  * ⚠⚠ A TERMINAL FRAME CLOSES THE PANEL. A frame that has ended must not keep a live roster on
  * screen — and closing it unmounts the poll, so nothing keeps asking the api about a call that
  * is over. It deliberately does NOT restore focus there: on a terminal frame the toolbar is
- * unmounted too, and the terminal card owns the heading and takes focus itself.
+ * unmounted too, so there is no button left to restore focus TO.
+ *
+ * ⚠ CORRECTED (BAL-476, U-1): an earlier version of this note went on to say "the terminal card
+ * owns the heading and takes focus itself". IT DID NOT — the card renders the `<h1>`, but the only
+ * thing that MOVED focus to it was the MOUNT's `useFocusOnTransition(phase)`, and `phase` never
+ * changes on either guest mount. Focus is now delivered by the frame's own intent
+ * (`resolveExitFocusKey` + `useComposedHeadingRef`), with the live-region announce as a floor.
  *
  * ⚠ AN UNREGISTERED SLOT FORCES `null`. (N5, fix-round-2 — corrected: both GUEST mounts no
  * longer land there structurally — each registers a real `MeetingGuestPanelRegistration` — so

@@ -2,12 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
+import type { MeetingExitReason } from '@/lib/meetings/meeting-route-context';
 import {
+  CALL_ACCESS_ENDED_BODY,
+  CALL_ACCESS_ENDED_TITLE,
   CALL_ENDED_TITLE,
   CALL_LEFT_BODY,
   CALL_LEFT_TITLE,
+  CALL_REMOVED_BODY,
+  CALL_REMOVED_TITLE,
+  EXIT_RESOLVING_TITLE,
   MeetingAnnouncer,
   MeetingEndedNotice,
+  MeetingExitResolvingNotice,
   MeetingPill,
   PresentingBar,
   RECONNECTING_BODY,
@@ -246,6 +253,161 @@ describe('MeetingEndedNotice — ⚠⚠ the terminal state', () => {
 
   it('has no accessibility violations', async () => {
     const { container } = render(<MeetingEndedNotice reason="host_ended" contextNoun="case" />);
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+// ── BAL-476 (R5 amended) — the removed / access-ended cards, and the loading state ────────
+
+/**
+ * ⚠⚠ THE FULL, VERBATIM LITERALS, PINNED AGAINST THE EXPORTED CONSTANTS — never
+ * `stringContaining`. A partial match would survive a reword that changed the meaning of the
+ * sentence while keeping the fragment.
+ */
+const EVERY_REASON: readonly MeetingExitReason[] = [
+  'self',
+  'host_ended',
+  'error',
+  'removed',
+  'access_ended',
+];
+
+describe('MeetingEndedNotice — BAL-476 the widened reason set', () => {
+  it('⚠ renders a real, non-empty card for EVERY reason (a length assertion guards a vacuous pass)', () => {
+    expect(EVERY_REASON).toHaveLength(5);
+    const rendered = EVERY_REASON.map((reason) => {
+      const { container, unmount } = render(
+        <MeetingEndedNotice reason={reason} contextNoun="case" />
+      );
+      const text = container.textContent ?? '';
+      unmount();
+      return text;
+    });
+
+    expect(rendered).toHaveLength(EVERY_REASON.length);
+    for (const text of rendered) {
+      expect(text.length).toBeGreaterThan(0);
+    }
+    // Every reason produces a DISTINCT body — no arm silently falls through to another's copy.
+    expect(new Set(rendered).size).toBeGreaterThanOrEqual(4);
+  });
+
+  it('⚠ `removed` renders the honest card, VERBATIM', () => {
+    render(<MeetingEndedNotice reason="removed" contextNoun="case" />);
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(CALL_REMOVED_TITLE);
+    expect(screen.getByText(CALL_REMOVED_BODY)).toBeInTheDocument();
+    expect(CALL_REMOVED_TITLE).toBe('You’ve been removed from this call');
+    expect(CALL_REMOVED_BODY).toBe(
+      'You’re no longer in this call, and this invite link has stopped working. The calendar ' +
+        'entry has been withdrawn, so it will come off your own calendar too. If this looks ' +
+        'like a mistake, the person who invited you can invite you again.'
+    );
+  });
+
+  /**
+   * ⚠⚠ IT DELIBERATELY DOES **NOT** PROMISE CONTINUITY. `findLiveByTokenHash` now refuses this
+   * person's token, so their file and thread reads are dead too — telling them "the recap, notes
+   * and files all stay with the {contextNoun}" would be misleading by implication to the one
+   * person who has just lost access to all of it.
+   */
+  it('⚠ `removed` never promises the recap/notes/files, and never says WHY', () => {
+    const { container } = render(<MeetingEndedNotice reason="removed" contextNoun="case" />);
+    const text = container.textContent ?? '';
+
+    expect(text).not.toMatch(/recap, notes and files/i);
+    expect(text).not.toMatch(/for everyone/i);
+    for (const adversarial of ['kicked', 'banned', 'denied', 'because']) {
+      expect(text.toLowerCase()).not.toContain(adversarial);
+    }
+  });
+
+  it('⚠ `access_ended` renders the VAGUER card, VERBATIM, and claims nothing about who did what', () => {
+    render(<MeetingEndedNotice reason="access_ended" contextNoun="case" />);
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(CALL_ACCESS_ENDED_TITLE);
+    expect(screen.getByText(CALL_ACCESS_ENDED_BODY)).toBeInTheDocument();
+    expect(CALL_ACCESS_ENDED_TITLE).toBe('This call is no longer available to you');
+    expect(CALL_ACCESS_ENDED_BODY).toBe(
+      'You’re no longer in this call. We couldn’t check why just now — if you were expecting ' +
+        'to stay, try opening your invite link again.'
+    );
+  });
+
+  /**
+   * ⚠⚠ THE `host_ended` ARM MUST NOT HAVE BEEN REWORDED. R5 AMENDED explicitly WITHDREW the
+   * earlier plan's reword: the arm is now reached only on a CONFIRMED 409, so the claim is true.
+   */
+  it('⚠ `host_ended` is BYTE-IDENTICAL to the shipped strings', () => {
+    render(<MeetingEndedNotice reason="host_ended" contextNoun="engagement" />);
+
+    expect(CALL_ENDED_TITLE).toBe('The call has ended');
+    expect(
+      screen.getByText(
+        'The host ended the call for everyone. Nothing is lost — the recap, notes and files all stay with the engagement.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it.each(['removed', 'access_ended'] as const)(
+    '⚠ %s offers NO rejoin affordance of any kind',
+    (reason) => {
+      const { container } = render(<MeetingEndedNotice reason={reason} contextNoun="case" />);
+
+      expect(container.querySelectorAll('button')).toHaveLength(0);
+      expect(container.textContent ?? '').not.toMatch(/rejoin/i);
+    }
+  );
+
+  it.each(['removed', 'access_ended'] as const)(
+    '%s has no accessibility violations',
+    async (reason) => {
+      const { container } = render(<MeetingEndedNotice reason={reason} contextNoun="case" />);
+
+      expect(await axe(container)).toHaveNoViolations();
+    }
+  );
+});
+
+describe('MeetingExitResolvingNotice — the LOADING state (BAL-476)', () => {
+  /**
+   * ⚠⚠ THE COPY CARRIES THE MEANING ON ITS OWN. The spinner is `aria-hidden` and does not move
+   * under reduced motion, so it may never be the thing that says "in progress".
+   */
+  it('⚠ renders the copy as a real <h1>, not only a spinner', () => {
+    const { container } = render(<MeetingExitResolvingNotice />);
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(EXIT_RESOLVING_TITLE);
+    expect(EXIT_RESOLVING_TITLE).toBe('Working out what happened…');
+    expect(container.querySelectorAll('h1')).toHaveLength(1);
+  });
+
+  it('⚠ the spinner is aria-hidden AND motion-reduce:animate-none', () => {
+    const { container } = render(<MeetingExitResolvingNotice />);
+    const spinner = container.querySelector('svg');
+
+    expect(spinner).not.toBeNull();
+    expect(spinner).toHaveAttribute('aria-hidden', 'true');
+    expect(spinner?.getAttribute('class') ?? '').toContain('motion-reduce:animate-none');
+  });
+
+  it('⚠ the headingRef reaches the <h1>, which is focusable', () => {
+    const ref = { current: null as HTMLHeadingElement | null };
+    render(<MeetingExitResolvingNotice headingRef={ref} />);
+
+    expect(ref.current).toBe(screen.getByRole('heading', { level: 1 }));
+    expect(ref.current).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('⚠ offers NO control — the probe is hard-bounded instead', () => {
+    const { container } = render(<MeetingExitResolvingNotice />);
+
+    expect(container.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('has no accessibility violations', async () => {
+    const { container } = render(<MeetingExitResolvingNotice />);
 
     expect(await axe(container)).toHaveNoViolations();
   });

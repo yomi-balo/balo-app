@@ -16,7 +16,12 @@ vi.mock('next/headers', () => ({
 }));
 
 import { log } from '@/lib/logging';
-import { postGuestJoin, postLobbyClaim, postMemberJoin } from './join-api-client';
+import {
+  postGuestJoin,
+  postGuestJoinProbe,
+  postLobbyClaim,
+  postMemberJoin,
+} from './join-api-client';
 
 const MEETING_ID = '0f7b1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d';
 const ACCESS_TOKEN = 'workos.access.token';
@@ -424,5 +429,86 @@ describe('Retry-After (only on a 429)', () => {
     const result = await postGuestJoin(MEETING_ID, GUEST_TOKEN);
 
     expect(result).not.toHaveProperty('retryAfterSeconds');
+  });
+});
+
+// ── BAL-476 (S-1) — the PROBE's body literal is LOAD-BEARING and is pinned here ──────────
+
+/**
+ * ⚠⚠ THE WHOLE SAFETY ARGUMENT FOR PUTTING `resolve-guest-exit-reason.ts` ON
+ * `PUBLIC_ACTION_ALLOWLIST` IS THAT IT "PERFORMS NO WRITE" — and that rests entirely on the
+ * literal `probe: true` reaching the api. Drop it and the SAME allowlisted, UNAUTHENTICATED
+ * action mints a live Daily meeting token for nobody and fires a false `guest_joined` on every
+ * terminal exit, with nothing failing anywhere: the action's own suite mocks
+ * `postGuestJoinProbe` wholesale, and the api-side short-circuit test only proves the service
+ * honours a flag it is handed.
+ *
+ * This file is the one place the literal is on the wire, so this is where it gets pinned.
+ */
+describe('postGuestJoinProbe — ⚠⚠ the `probe: true` literal (the no-write guarantee)', () => {
+  it('⚠⚠ sends a body that deep-equals EXACTLY { guestToken, probe: true }', async () => {
+    await postGuestJoinProbe(MEETING_ID, GUEST_TOKEN);
+
+    expect(JSON.parse(lastInit().body)).toEqual({ guestToken: GUEST_TOKEN, probe: true });
+  });
+
+  it('⚠ hits the same guest-join path, and the token is never in the URL', async () => {
+    await postGuestJoinProbe(MEETING_ID, GUEST_TOKEN);
+
+    const [url] = mockLoggedFetch.mock.calls.at(-1) as [string];
+    expect(url).toBe(`http://api.test/meetings/${MEETING_ID}/guest-join`);
+    expect(url).not.toContain(GUEST_TOKEN);
+  });
+
+  /** ⚠ A PUBLIC HOP — a guest has no session, so there is no Bearer to send. */
+  it('sends no Authorization header and reads no session', async () => {
+    await postGuestJoinProbe(MEETING_ID, GUEST_TOKEN);
+
+    expect('Authorization' in lastInit().headers).toBe(false);
+    expect(mockGetSession).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ HARD-BOUNDED. The card it selects offers no retry affordance, so an unbounded probe is a
+   * spinner the person can never leave — the signal has to reach `fetch`.
+   */
+  it('⚠ forwards the caller AbortSignal through to fetch', async () => {
+    const controller = new AbortController();
+
+    await postGuestJoinProbe(MEETING_ID, GUEST_TOKEN, controller.signal);
+
+    const init = mockLoggedFetch.mock.calls.at(-1)?.[1] as { signal?: AbortSignal };
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it('omits the signal key entirely when the caller passes none', async () => {
+    await postGuestJoinProbe(MEETING_ID, GUEST_TOKEN);
+
+    const init = mockLoggedFetch.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+    expect('signal' in init).toBe(false);
+  });
+
+  it('⚠ never throws — a transport failure is the `status: 0` sentinel', async () => {
+    mockLoggedFetch.mockRejectedValue(new Error('aborted'));
+
+    await expect(postGuestJoinProbe(MEETING_ID, GUEST_TOKEN)).resolves.toEqual({
+      ok: false,
+      status: 0,
+      code: 'request_failed',
+    });
+  });
+
+  it('⚠ surfaces the two DISCRIMINATING statuses unchanged', async () => {
+    mockLoggedFetch.mockResolvedValue(response(404, { error: 'meeting_not_found' }));
+    await expect(postGuestJoinProbe(MEETING_ID, GUEST_TOKEN)).resolves.toMatchObject({
+      ok: false,
+      status: 404,
+    });
+
+    mockLoggedFetch.mockResolvedValue(response(409, { error: 'meeting_not_open_for_join' }));
+    await expect(postGuestJoinProbe(MEETING_ID, GUEST_TOKEN)).resolves.toMatchObject({
+      ok: false,
+      status: 409,
+    });
   });
 });

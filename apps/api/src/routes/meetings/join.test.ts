@@ -858,6 +858,82 @@ describe('meeting join routes (BAL-132)', () => {
       ]);
     });
 
+    // ── BAL-476 (R5 amended) — the exit-reason PROBE ────────────────────────────────
+
+    it('⚠ forwards `probe: true` to the service', async () => {
+      mockJoinAsGuest.mockResolvedValue({ ok: true, state: 'live' });
+
+      const res = await call({
+        method: 'POST',
+        url: GUEST_JOIN_URL,
+        payload: { ...validBody, probe: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ state: 'live' });
+      expect(mockJoinAsGuest).toHaveBeenCalledWith(
+        expect.objectContaining({ probe: true, rawGuestToken: RAW_TOKEN })
+      );
+    });
+
+    it('⚠ a bare call forwards `probe: false`, so the ordinary join is unchanged', async () => {
+      await call({ method: 'POST', url: GUEST_JOIN_URL, payload: validBody });
+
+      expect(mockJoinAsGuest).toHaveBeenCalledWith(expect.objectContaining({ probe: false }));
+    });
+
+    /**
+     * ⚠ `z.literal(true)`, NOT `z.boolean()` — `probe: false` is not a thing a caller should be
+     * able to say, and a falsy value meaning "join for real" would be one typo from a mint.
+     */
+    it('⚠ answers 400 for `probe: false` and for a non-boolean probe', async () => {
+      for (const probe of [false, 'true', 1]) {
+        mockJoinAsGuest.mockClear();
+        const res = await call({
+          method: 'POST',
+          url: GUEST_JOIN_URL,
+          payload: { ...validBody, probe },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(mockJoinAsGuest).not.toHaveBeenCalled();
+      }
+    });
+
+    /**
+     * ⚠⚠ THE PROBE CONSUMES BOTH RATE-LIMIT WINDOWS, exactly like a poll. It sits AFTER them, so
+     * it can only ever make this route do LESS work, never bypass a control.
+     */
+    it('⚠ a probe still consumes BOTH rate-limit windows', async () => {
+      mockJoinAsGuest.mockResolvedValue({ ok: true, state: 'live' });
+
+      await call({
+        method: 'POST',
+        url: GUEST_JOIN_URL,
+        payload: { ...validBody, probe: true },
+      });
+
+      expect(mockCheckRateLimit).toHaveBeenCalledTimes(2);
+      const prefixes = mockCheckRateLimit.mock.calls.map(
+        (args) => (args[1] as { keyPrefix: string }).keyPrefix
+      );
+      expect(prefixes).toEqual([
+        'ratelimit:meeting-guest-join:visitor',
+        'ratelimit:meeting-guest-join:peer',
+      ]);
+    });
+
+    it('⚠ a probe answers the SAME statuses a bare call does', async () => {
+      for (const { code, status } of ERROR_STATUS) {
+        mockJoinAsGuest.mockResolvedValue({ ok: false, code });
+        const res = await call({
+          method: 'POST',
+          url: GUEST_JOIN_URL,
+          payload: { ...validBody, probe: true },
+        });
+        expect(res.statusCode).toBe(status);
+      }
+    });
+
     it('⚠⚠ the poll window is PER VISITOR — keyed on the peer alone, 3 waiting guests broke it', async () => {
       // At the documented cadence (~264 requests/hour each) three concurrent waiting guests
       // exceeded the 600/hour window between them. That is a functional break at trivial load,

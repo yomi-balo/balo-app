@@ -976,15 +976,14 @@ export interface MeetingGuestAddedPayload {
 /**
  * BAL-408 — a guest's access was revoked. Email to THAT PERSON ONLY.
  *
- * ⚠ THE CALENDAR HALF OF THE AC IS DEFERRED, AND THIS EVENT IS THE WHOLE OF THE SHIPPED
- * REMOVAL NOTICE. The AC line "Removing a guest … sends `METHOD:CANCEL` to that person only"
- * is still not satisfied — but the ORIGINAL REASON stated here ("no meeting has a calendar
- * event to cancel") is now FALSE and must not be trusted: BAL-475 ships Balo-organised
- * `METHOD:REQUEST` ICS invites (`ical-generator`, `nodemailer`, the Brevo SMTP relay), so a
- * removed guest who was ADMITTED/PRE_ADMITTED and already received one now holds a STALE
- * calendar entry until BAL-476 sends the matching `METHOD:CANCEL`. BAL-476 owns that relax
- * (widening `meeting_calendar_deliveries.method`'s CHECK to add `'CANCEL'`) and the re-send.
- * Revocation itself IS immediate and total: every read path re-checks `revoked_at IS NULL`.
+ * ⚠ THE CALENDAR HALF IS NO LONGER DEFERRED, AND IT IS NOT ON THIS PAYLOAD. Since BAL-476 the
+ * withdrawal rides the SEPARATE `meeting.calendar_invite` event with
+ * `transition: 'guest_removed'` (method `CANCEL`), published by `removeGuest` right beside this
+ * one. So: this payload stays EMAIL-ONLY and carries no calendar field, and the AC line
+ * "Removing a guest … sends `METHOD:CANCEL` to that person only" is satisfied there, not here.
+ * Nothing is sent to the remaining party and no sequence is bumped (R2).
+ *
+ * Revocation itself is immediate and total: every read path re-checks `revoked_at IS NULL`.
  */
 export interface MeetingGuestRemovedPayload {
   correlationId: string; // = meeting_guests.id (stable: one removal per guest row)

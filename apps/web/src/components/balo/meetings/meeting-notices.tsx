@@ -183,7 +183,49 @@ export const CALL_LEFT_TITLE = 'You’ve left the call';
 export const CALL_LEFT_BODY = 'You can close this tab whenever you’re ready.';
 export const CALL_ENDED_TITLE = 'The call has ended';
 
-/** ⚠ ONE BUILDER PER REASON — a lookup, never a nested ternary (SonarCloud S3358). */
+/**
+ * BAL-476 (R5 amended) — the REMOVED person's card.
+ *
+ * ⚠ IT STATES ONLY WHAT IS NOW TRUE, and exactly three facts: they are out of the call, the
+ * invite link is dead, the calendar entry has been withdrawn. ⚠ IT NEVER SAYS WHY — Balo does not
+ * know, and `removeGuest` records no reason. ⚠ GENDER-NEUTRAL: no pronoun for the remover, and
+ * "the person who invited you" names a ROLE, not a party this guest may never have heard of.
+ * ⚠ NOT ADVERSARIAL: no "kicked", no "banned", no "denied", even though `ban: true` is the literal
+ * Daily parameter underneath.
+ *
+ * ⚠⚠ IT DELIBERATELY DOES **NOT** SAY "the recap, notes and files all stay with the {contextNoun}",
+ * unlike the `host_ended` arm. For a removed guest that sentence would be misleading by
+ * implication: their token no longer resolves, so their file and thread reads are dead too and
+ * they cannot reach any of it. Promising continuity to the one person who has just lost it is the
+ * exact failure mode this ruling exists to prevent.
+ */
+export const CALL_REMOVED_TITLE = 'You’ve been removed from this call';
+export const CALL_REMOVED_BODY =
+  'You’re no longer in this call, and this invite link has stopped working. The calendar entry ' +
+  'has been withdrawn, so it will come off your own calendar too. If this looks like a mistake, ' +
+  'the person who invited you can invite you again.';
+
+/**
+ * BAL-476 (R5 amended) — THE VAGUER CARD, and the whole point of the error arm.
+ *
+ * ⚠ IT IS TRUE UNDER **EVERY** CAUSE and claims nothing about who did what. It is what an
+ * inconclusive probe resolves to — a transport failure, a timeout, a 429, a 5xx, a 2xx.
+ * "We couldn’t check why just now" is an honest statement about OUR failure, not a hedge about
+ * theirs, and it is the only place any card mentions the probe. The invite-link sentence is a
+ * FACT, not a retry control: there is no button.
+ */
+export const CALL_ACCESS_ENDED_TITLE = 'This call is no longer available to you';
+export const CALL_ACCESS_ENDED_BODY =
+  'You’re no longer in this call. We couldn’t check why just now — if you were expecting to ' +
+  'stay, try opening your invite link again.';
+
+/**
+ * ⚠ ONE BUILDER PER REASON — a lookup, never a nested ternary (SonarCloud S3358).
+ *
+ * ⚠⚠ BAL-476 — `host_ended` IS **UNCHANGED**, AND THAT IS NOW CORRECT RATHER THAN MERELY
+ * SHIPPED. It is reached only on a CONFIRMED `409` from the exit probe, so "the host ended the
+ * call for everyone" is a true claim. Do not reword these two strings.
+ */
 const ENDED_BODY: Record<MeetingExitReason, (contextNoun: string) => string> = {
   self: () => CALL_LEFT_BODY,
   host_ended: (contextNoun) =>
@@ -191,12 +233,21 @@ const ENDED_BODY: Record<MeetingExitReason, (contextNoun: string) => string> = {
   // ⚠ The frame's fatal card owns a genuine error; this arm exists so the record is TOTAL and a
   // future reason cannot fall through to a blank card.
   error: () => 'The call has stopped. Nothing is lost — your meeting is still there.',
+  removed: () => CALL_REMOVED_BODY,
+  access_ended: () => CALL_ACCESS_ENDED_BODY,
 };
 
-const ENDED_TITLE: Record<MeetingExitReason, string> = {
+/**
+ * ⚠ EXPORTED SO THE FRAME'S LIVE-REGION ANNOUNCE READS THE SAME STRING THE CARD RENDERS
+ * (BAL-476, U-1). One definition; the announce is the floor under the focus move, and two
+ * spellings of one title is how the two drift.
+ */
+export const ENDED_TITLE: Readonly<Record<MeetingExitReason, string>> = {
   self: CALL_LEFT_TITLE,
   host_ended: CALL_ENDED_TITLE,
   error: CALL_ENDED_TITLE,
+  removed: CALL_REMOVED_TITLE,
+  access_ended: CALL_ACCESS_ENDED_TITLE,
 };
 
 export interface MeetingEndedNoticeProps {
@@ -206,11 +257,53 @@ export interface MeetingEndedNoticeProps {
 }
 
 /**
+ * BAL-476 (R5 amended) — ⚠ THE **LOADING** STATE of the exit-reason round-trip.
+ *
+ * The frame has latched terminal but does not yet know WHICH card to show, because it is asking
+ * the server. It renders the same centred layout `MeetingEndedNotice` does, so the swap is a copy
+ * change rather than a layout jump.
+ *
+ * ⚠⚠ THE COPY CARRIES THE MEANING ON ITS OWN. The spinner is `aria-hidden` and does not move
+ * under `prefers-reduced-motion` (the `ReconnectingOverlay` rule), so it may never be the thing
+ * that says "in progress".
+ *
+ * ⚠ THE HEADING TAKES THE SAME `headingRef` / `tabIndex={-1}` FOCUS TREATMENT, so focus lands
+ * somewhere real during the wait rather than on `document.body`.
+ *
+ * ⚠ IT OFFERS NO CONTROL — same reasoning as the terminal card's "no rejoin affordance of any
+ * kind". The probe is hard-bounded instead (`GUEST_EXIT_PROBE_TIMEOUT_MS`), so this can never be
+ * a dead end.
+ */
+export const EXIT_RESOLVING_TITLE = 'Working out what happened…';
+
+export function MeetingExitResolvingNotice({
+  headingRef,
+}: Readonly<{ headingRef?: React.Ref<HTMLHeadingElement> }>): React.JSX.Element {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-6 text-center">
+      <span className="bg-muted/60 flex h-14 w-14 items-center justify-center rounded-full">
+        <Loader2
+          className="text-muted-foreground h-6 w-6 animate-spin motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+      </span>
+      <h1
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-foreground text-lg font-semibold outline-none"
+      >
+        {EXIT_RESOLVING_TITLE}
+      </h1>
+    </div>
+  );
+}
+
+/**
  * ⚠⚠ **THE TERMINAL STATE, AND IT IS A SECURITY CONTROL, NOT A COURTESY.**
  *
  * `left-meeting` and the Leave button both used to set `hasJoined = false` and nothing else,
  * which returned the frame to **PreJoin** — a live "Join now" button wired to `join()` with the
- * SAME still-valid token. Eject alone does not revoke a token (that is BAL-436's `ban: true`), so
+ * SAME still-valid token. Eject alone does not revoke a token (`ban: true` shipped in BAL-476), so
  * "End for everyone" was undone by one click; and for anyone carrying the "Skip this next time"
  * preference the skip effect re-fired on that very state change and rejoined them **with no user
  * interaction at all**, camera and microphone on, while the host had already navigated away

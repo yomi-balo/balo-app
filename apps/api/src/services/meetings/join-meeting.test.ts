@@ -1560,3 +1560,150 @@ describe('⚠⚠ claimLobbyPlace — EVERY failure is `meeting_not_found` (the a
     expect([...rendered]).toEqual([JSON.stringify({ ok: false, code: 'meeting_not_found' })]);
   });
 });
+
+// ── BAL-476 (R5 amended) — the PROBE, and the 404/409 discriminator it reads ──────────────
+
+describe('joinMeetingAsGuest — `probe: true` (BAL-476)', () => {
+  /**
+   * ⚠⚠ THE SHORT-CIRCUIT SITS **BEFORE THE ADMISSION SWITCH AND BEFORE THE MINT**, and the
+   * position is the whole security argument.
+   *
+   * MUTATION PROOF FOR THIS ASSERTION: move the `if (input.probe === true)` block below the
+   * admission switch and this goes red — an admitted token would then mint a LIVE DAILY
+   * CREDENTIAL FOR NOBODY and fire a FALSE `guest_joined` on a funnel event.
+   */
+  it('⚠ answers `live` for an ADMITTED token, minting NOTHING and tracking NOTHING', async () => {
+    mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow({ admission: 'admitted' }));
+    const minter = createJwtMinter();
+
+    const result = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter,
+      probe: true,
+    });
+
+    expect(result).toEqual({ ok: true, state: 'live' });
+    expect(minter.requests).toHaveLength(0);
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('⚠ answers `live` for a PRE_ADMITTED token too — same absence of side effects', async () => {
+    mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow({ admission: 'pre_admitted' }));
+    const minter = createJwtMinter();
+
+    const result = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter,
+      probe: true,
+    });
+
+    expect(result).toEqual({ ok: true, state: 'live' });
+    expect(minter.requests).toHaveLength(0);
+    expect(mockTrackServer).not.toHaveBeenCalled();
+  });
+
+  it('⚠ answers `live` for a PENDING token — the probe never reaches the admission switch', async () => {
+    mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow({ admission: 'pending' }));
+    const minter = createJwtMinter();
+
+    const result = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter,
+      probe: true,
+    });
+
+    expect(result).toEqual({ ok: true, state: 'live' });
+    expect(minter.requests).toHaveLength(0);
+  });
+
+  it('a bare call (no probe) still mints, so the flag only ever removes behaviour', async () => {
+    mockGuestFindLiveByTokenHash.mockResolvedValue(await tokenRow({ admission: 'admitted' }));
+    const minter = createJwtMinter();
+
+    const result = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter,
+    });
+
+    expect(result.ok && result.state).toBe('admitted');
+    expect(minter.requests).toHaveLength(1);
+  });
+});
+
+describe('joinMeetingAsGuest — ⚠⚠ THE EXIT-REASON DISCRIMINATOR, PINNED (BAL-476)', () => {
+  /**
+   * ⚠⚠ THIS INEQUALITY IS THE WHOLE CARD SELECTOR. `guestExitCauseForStatus` maps 404 ⇒
+   * `removed` and 409 ⇒ `host_ended`; those two statuses come from these two literals via
+   * `JOIN_ERROR_STATUS`. If they ever collapsed to one code, an ejected person would be shown a
+   * card that says something false about why they are out of a call.
+   *
+   * The supporting argument — that a 404 on this transition means REVOKED and not one of
+   * `findLiveByTokenHash`'s four OTHER refusal reasons — is written out in full in
+   * `apps/web/src/lib/meetings/guest-exit-cause.ts`, including the TOKEN-ROTATION source an
+   * earlier version of that list missed. It is a DERIVED guarantee, not a structural one, which
+   * is why the two codes are pinned here rather than assumed.
+   */
+  it('⚠ a REVOKED (unresolvable) token answers `meeting_not_found` → 404 → "removed"', async () => {
+    // `findLiveByTokenHash` filters `deleted_at IS NULL AND revoked_at IS NULL`, and `revoke`
+    // stamps BOTH in one statement — so a removed guest's token simply stops resolving.
+    mockGuestFindLiveByTokenHash.mockResolvedValue(undefined);
+
+    const result = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter: createJwtMinter(),
+      probe: true,
+    });
+
+    expect(result).toEqual({ ok: false, code: 'meeting_not_found' });
+  });
+
+  it('⚠ a LIVE token on an ENDED meeting answers `meeting_not_open_for_join` → 409 → "host_ended"', async () => {
+    // The guest token deliberately keeps resolving for GUEST_TOKEN_TTL_AFTER_END_MS after a
+    // meeting ends; `assertMeetingJoinable` is what refuses it.
+    const row = await tokenRow({ admission: 'admitted' });
+    mockGuestFindLiveByTokenHash.mockResolvedValue({
+      ...row,
+      meeting: meetingRow({ status: 'ended' }),
+    });
+
+    const result = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter: createJwtMinter(),
+      probe: true,
+    });
+
+    expect(result).toEqual({ ok: false, code: 'meeting_not_open_for_join' });
+  });
+
+  it('⚠⚠ THE TWO ARE DIFFERENT CODES — that inequality IS the card selector', async () => {
+    mockGuestFindLiveByTokenHash.mockResolvedValue(undefined);
+    const revoked = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter: createJwtMinter(),
+      probe: true,
+    });
+
+    const row = await tokenRow({ admission: 'admitted' });
+    mockGuestFindLiveByTokenHash.mockResolvedValue({
+      ...row,
+      meeting: meetingRow({ status: 'ended' }),
+    });
+    const hostEnded = await joinMeetingAsGuest({
+      meetingId: MEETING_ID,
+      rawGuestToken: RAW_TOKEN,
+      minter: createJwtMinter(),
+      probe: true,
+    });
+
+    expect(revoked.ok).toBe(false);
+    expect(hostEnded.ok).toBe(false);
+    expect(revoked.ok === false && revoked.code).not.toBe(hostEnded.ok === false && hostEnded.code);
+  });
+});

@@ -20,6 +20,7 @@ import {
 import { useFocusOnTransition } from '@/lib/meetings/use-focus-on-transition';
 import { useAdmissionPoll } from '@/lib/meetings/use-admission-poll';
 import { MeetingRouteContextProvider } from '@/lib/meetings/meeting-route-context';
+import { resolveGuestExitReasonAction } from '../../_actions/resolve-guest-exit-reason';
 import type { MeetingGuestPanelRegistration } from '@/lib/meetings/meeting-panels';
 // ⚠ C5 — RELATIVE IMPORTS, one level deeper than `join-control.tsx`'s (`_actions` sits at
 // `app/join/_actions`, this route is `app/join/m/[meetingId]`).
@@ -359,6 +360,22 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
     [meetingId, lobbyToken]
   );
 
+  /**
+   * BAL-476 (R5 amended) — ⚠ A CALLBACK THAT CLOSES OVER THE TOKEN, NEVER THE TOKEN ITSELF.
+   *
+   * ⚠⚠ `undefined` WHEN `lobbyToken` IS `null` (storage unavailable). An absent resolver means
+   * "keep the shipped `host_ended` behaviour", which is the honest degradation: a resolver that
+   * structurally cannot answer would produce the vaguer card for every exit on this mount, which
+   * is worse than the shipped one for the far commoner host-ended case.
+   */
+  const resolveExitReason = useMemo(
+    () =>
+      lobbyToken === null
+        ? undefined
+        : () => resolveGuestExitReasonAction({ meetingId, guestToken: lobbyToken }),
+    [meetingId, lobbyToken]
+  );
+
   let content: React.JSX.Element;
   if (state === 'admitted' && grant !== null) {
     content = (
@@ -370,6 +387,7 @@ export function LobbyClient({ meetingId }: Readonly<LobbyClientProps>): React.JS
         contextNoun="call"
         waiting={null}
         panels={panels}
+        resolveExitReason={resolveExitReason}
       >
         <MeetingCallSurface
           roomUrl={grant.roomUrl}

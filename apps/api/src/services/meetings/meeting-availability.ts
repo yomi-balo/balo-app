@@ -24,6 +24,7 @@ import { notificationEvents } from '../../notifications/index.js';
 import { publishRescheduleCalendarInvites } from '../calendar-invites/publish-calendar-invites.js';
 import { dailyRoomTeardown } from '../daily/rooms.js';
 import { formatExpiryDate, resolveMeetingTitle } from './guest-participation.js';
+import { withdrawMeetingCalendarProjection } from './withdraw-meeting-calendar.js';
 import { raiseAdminAlert } from '../admin-alerts/raise.js';
 import { sanitizedErrorMessage } from '../../lib/sanitize-error.js';
 
@@ -614,6 +615,51 @@ export async function softDeleteMeeting(
 }
 
 /**
+ * BAL-476 — one entry's calendar withdrawal, with the warn-and-skip arm and the contract-violation
+ * backstop.
+ *
+ * ⚠⚠ THE BACKSTOP IS LOAD-BEARING HERE, NOT BELT-AND-BRACES. `withdrawMeetingCalendarProjection`
+ * throws for exactly one thing — a W1 contract violation (see its docblock) — and its caller is a
+ * BATCH of up to 25 meetings. Letting that reject would 500 the route, `postCancelledTeardown`
+ * logs-and-swallows a non-2xx, and the Daily room teardown plus the availability rebuild would
+ * then be dropped for EVERY meeting in the batch, including entries the loop never reached. That
+ * is precisely the "degrade only the new half" failure the `.optional()` `cancelAuditId` ruling
+ * exists to prevent, so the new half must not be able to take the shipped half down with it.
+ * Mirrors the catch in `routes/meetings/cancel.ts`.
+ *
+ * ⚠ EXTRACTED RATHER THAN INLINED: inline, `tearDownCancelledMeetings` scored 23 against
+ * SonarCloud's allowed 15. The repo's precedent is to EXTRACT, never to disable the rule.
+ */
+async function withdrawCalendarBestEffort(
+  entry: { meetingId: string; expertProfileId: string | null; cancelAuditId?: string },
+  log: FastifyBaseLogger
+): Promise<void> {
+  const { meetingId, expertProfileId, cancelAuditId } = entry;
+  if (cancelAuditId === undefined) {
+    log.warn(
+      { meetingId },
+      'cancelled-teardown entry carries no cancelAuditId — skipping the calendar withdrawal (deploy skew between apps/web and apps/api)'
+    );
+    return;
+  }
+
+  try {
+    await withdrawMeetingCalendarProjection({ meetingId, cancelAuditId, expertProfileId }, log);
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        cancelAuditId,
+        errorName: error instanceof Error ? error.name : 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Calendar withdrawal threw despite its contract — the cancellation already committed; the room teardown and availability rebuild still run'
+    );
+  }
+}
+
+/**
  * BAL-540 — discharge the POST-COMMIT half of a cancellation the CLOSE CASCADE already committed in
  * `@balo/db`. Two effects, both best-effort and non-fatal (`cancelMeeting`'s shape above):
  * the availability-cache rebuild and the Daily room teardown. NO money: request-grain meetings never
@@ -627,7 +673,13 @@ export async function softDeleteMeeting(
  * stamped room name disagrees with `dailyRoomNameForMeeting(meeting.id)`.
  */
 export async function tearDownCancelledMeetings(
-  entries: ReadonlyArray<{ meetingId: string; expertProfileId: string | null }>,
+  entries: ReadonlyArray<{
+    meetingId: string;
+    expertProfileId: string | null;
+    /** BAL-476 — optional on the wire; see `cancelled-teardown.schema.ts` for the deploy-skew
+     *  reasoning, and the warn-and-skip arm below for what an absent one costs. */
+    cancelAuditId?: string;
+  }>,
   log: FastifyBaseLogger
 ): Promise<{ processed: number; skipped: number }> {
   let processed = 0;
@@ -639,6 +691,10 @@ export async function tearDownCancelledMeetings(
       skipped += 1;
       continue;
     }
+
+    // BAL-476 — THE CALENDAR WITHDRAWAL, BEFORE the room teardown: the telling and the calendar
+    // projection both matter more than a Daily room the lifecycle sweep would reap anyway.
+    await withdrawCalendarBestEffort(entry, log);
 
     await tearDownRoomBestEffort(meeting, log);
     if (entry.expertProfileId !== null) {

@@ -23,6 +23,9 @@ const {
   mockProjectRequestFindById,
   mockRelationshipFindById,
   mockPublishGuestAddedCalendarInvites,
+  mockPublishGuestRemovedCalendarWithdrawal,
+  mockEjectParticipants,
+  mockCalendarListLiveByMeeting,
 } = vi.hoisted(() => ({
   mockAuthorizeMeetingParticipation: vi.fn(),
   mockHasEngagementCapability: vi.fn(),
@@ -46,6 +49,10 @@ const {
   mockProjectRequestFindById: vi.fn(),
   mockRelationshipFindById: vi.fn(),
   mockPublishGuestAddedCalendarInvites: vi.fn(),
+  mockPublishGuestRemovedCalendarWithdrawal: vi.fn(),
+  mockEjectParticipants: vi.fn(),
+  /** ⚠ THE CALENDAR-EVENTS repository, NOT the guests one — two different `listLiveByMeeting`s. */
+  mockCalendarListLiveByMeeting: vi.fn(),
 }));
 
 vi.mock('@balo/shared/logging', () => ({
@@ -65,6 +72,7 @@ vi.mock('@balo/db', () => ({
     decideAdmission: mockDecideAdmission,
     rotateToken: mockRotateToken,
   },
+  meetingCalendarEventsRepository: { listLiveByMeeting: mockCalendarListLiveByMeeting },
   partyDomainsRepository: { listByParty: mockListDomainsByParty },
   partyMembershipsRepository: { listAdminUserIds: mockListAdminUserIds },
   projectRequestsRepository: { findById: mockProjectRequestFindById },
@@ -104,6 +112,12 @@ vi.mock('./authorize-engagement-host.js', () => ({
 // sequence.
 vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
   publishGuestAddedCalendarInvites: mockPublishGuestAddedCalendarInvites,
+  publishGuestRemovedCalendarWithdrawal: mockPublishGuestRemovedCalendarWithdrawal,
+}));
+// BAL-476 (R4) — mocked at the PORT, exactly as `RoomTeardown` is elsewhere, so these tests
+// run with no network and no Daily account. `ejectParticipants` has its own unit tests.
+vi.mock('../daily/rooms.js', () => ({
+  dailyParticipantEjector: { ejectParticipants: mockEjectParticipants },
 }));
 /**
  * ⚠ `@balo/shared/meetings`, `@balo/shared/domains` AND `@balo/shared/authz` ARE DELIBERATELY
@@ -114,6 +128,7 @@ vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
  * of the three would leave the assertion asserting the stub.
  */
 
+import { dailyParticipantIdFor, dailyRoomNameForMeeting } from '@balo/shared/meetings';
 import {
   decideGuestAdmission,
   inviteGuests,
@@ -1927,5 +1942,427 @@ describe('publishBestEffort — the swallow now answers WHICH happened (R-5)', (
         'failed'
       )
     ).resolves.toBe(false);
+  });
+});
+
+// ── BAL-476 (R3/R4) — the eject and the calendar withdrawal on removal ────────────────────
+
+describe('removeGuest — BAL-476', () => {
+  const LIVE_CLIENT_GUEST = {
+    id: GUEST_ID,
+    meetingId: MEETING_ID,
+    email: 'dana@northwind.example',
+    name: 'Dana',
+    party: 'client',
+    accessScope: 'engagement',
+    accessCount: 0,
+  };
+
+  /** The room name the meeting would legitimately carry — a pure function of the meeting id. */
+  const DERIVED_ROOM = dailyRoomNameForMeeting(MEETING_ID);
+
+  function provisionedGate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return gateOk({ meeting: meetingRow({ dailyRoomName: DERIVED_ROOM }), ...overrides });
+  }
+
+  function remove(): Promise<unknown> {
+    return removeGuest({ meetingId: MEETING_ID, guestId: GUEST_ID, actorUserId: USER_ID });
+  }
+
+  beforeEach(() => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(provisionedGate());
+    mockFindLiveById.mockResolvedValue(LIVE_CLIENT_GUEST);
+    mockRevoke.mockResolvedValue(LIVE_CLIENT_GUEST);
+    mockEjectParticipants.mockResolvedValue('ejected');
+    mockPublishGuestRemovedCalendarWithdrawal.mockResolvedValue(undefined);
+    mockCalendarListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 4 },
+      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 4 },
+    ]);
+  });
+
+  /**
+   * ⚠⚠ THE participantId IS DERIVED, NOT LOOKED UP — byte-for-byte the `user_id` claim the
+   * guest's own meeting token carried. A lookup would have a "cannot resolve" case; this does
+   * not.
+   */
+  it('⚠ ejects by the DERIVED participantId, from the stamped room', async () => {
+    await expect(remove()).resolves.toEqual({ ok: true });
+
+    expect(mockEjectParticipants).toHaveBeenCalledTimes(1);
+    expect(mockEjectParticipants).toHaveBeenCalledWith(DERIVED_ROOM, [
+      dailyParticipantIdFor('guest', GUEST_ID),
+    ]);
+  });
+
+  it('⚠ ejects AFTER the revoke has committed — the credential is the authoritative act', async () => {
+    await remove();
+
+    const revokeOrder = mockRevoke.mock.invocationCallOrder[0] ?? 0;
+    const ejectOrder = mockEjectParticipants.mock.invocationCallOrder[0] ?? 0;
+    expect(revokeOrder).toBeGreaterThan(0);
+    expect(ejectOrder).toBeGreaterThan(revokeOrder);
+  });
+
+  it('never ejects when the revoke lost its race', async () => {
+    mockRevoke.mockResolvedValue(undefined);
+
+    await expect(remove()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockEjectParticipants).not.toHaveBeenCalled();
+    expect(mockPublishGuestRemovedCalendarWithdrawal).not.toHaveBeenCalled();
+  });
+
+  it('never ejects from an UNPROVISIONED meeting (dailyRoomName null)', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      gateOk({ meeting: meetingRow({ dailyRoomName: null }) })
+    );
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockEjectParticipants).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ A `ban: true` AGAINST A ROOM THIS MEETING MAY NOT OWN IS A WRITE INTO SOMEBODY ELSE'S
+   * CALL. The same guard the two destructive room-delete paths apply.
+   */
+  it('⚠ REFUSES to eject when the stamped room name disagrees with the derived one', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      gateOk({ meeting: meetingRow({ dailyRoomName: 'balo-somebody-elses-room' }) })
+    );
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockEjectParticipants).not.toHaveBeenCalled();
+  });
+
+  it('⚠ a THROWING ejector still returns ok, still emails, still tracks, still withdraws', async () => {
+    mockEjectParticipants.mockRejectedValue(new Error('daily 500'));
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(publishedPayloads('meeting.guest_removed')).toHaveLength(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_removed', expect.anything());
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⚠⚠ COMPOSED FROM THE REVOKED ROW, AND **NEVER** WITH THE ADDRESS. U1 forbids an address on
+   * the wire; the email channel resolves it at delivery time from the guest id.
+   */
+  it('⚠ publishes the withdrawal from the REVOKED row, with ids only and NO email', async () => {
+    await remove();
+
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledTimes(1);
+    const [input] = mockPublishGuestRemovedCalendarWithdrawal.mock.calls[0] as [
+      Record<string, unknown>,
+    ];
+    expect(input).toEqual({
+      meetingId: MEETING_ID,
+      party: 'client',
+      guestId: GUEST_ID,
+      contextType: 'case',
+      calendarEvent: { id: 'row-client', sequence: 4 },
+    });
+    expect(Object.values(input).some((value) => String(value).includes('@'))).toBe(false);
+    expect('email' in input).toBe(false);
+    expect('recipientEmail' in input).toBe(false);
+  });
+
+  it('takes the withdrawal party from the REVOKED row, not from the pre-revoke read', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(
+      provisionedGate({
+        side: 'expert',
+        subject: { contextType: 'project_kickoff', contextId: ENGAGEMENT_ID },
+      })
+    );
+    mockFindLiveById.mockResolvedValue({ ...LIVE_CLIENT_GUEST, party: 'expert' });
+    mockRevoke.mockResolvedValue({ ...LIVE_CLIENT_GUEST, party: 'expert' });
+
+    await remove();
+
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledWith(
+      expect.objectContaining({ party: 'expert', contextType: 'project_kickoff' }),
+      expect.anything()
+    );
+  });
+
+  it('a throwing withdrawal publish does NOT undo a committed revocation', async () => {
+    mockPublishGuestRemovedCalendarWithdrawal.mockRejectedValue(new Error('contract violation'));
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_removed', expect.anything());
+  });
+});
+
+// ── BAL-476 (second review round) — the LINK-ROW entitlement rule ────────────────────────
+
+/**
+ * ⚠⚠ A `link` ROW'S `party` IS A PLACEHOLDER, NOT A SIDE. `claimLobbyPlace` writes `client`
+ * because the column is NOT NULL and a bare meeting URL carries no sharer identity;
+ * `@balo/shared/meetings` forbids deriving same-party entitlement from it. Until this ticket gave
+ * `removeGuest` a caller, nothing could reach the mistake. All three consequences below are
+ * asserted as SERVER behaviour — the panel's own gate is a courtesy, and `resendGuestJoinLink`
+ * in the same module states the rule: A UI GATE IS NEVER THE GATE.
+ */
+describe('removeGuest — the LINK-row rule (BAL-476)', () => {
+  const LINK_ROW = {
+    id: GUEST_ID,
+    meetingId: MEETING_ID,
+    email: 'taylor@somewhere.example',
+    name: 'Taylor Wu',
+    // ⚠ THE PLACEHOLDER. Never a resolved side.
+    party: 'client',
+    inviteChannel: 'link',
+    accessScope: 'meeting',
+    admission: 'admitted',
+    accessCount: 1,
+  };
+
+  const EMAIL_ROW = {
+    ...LINK_ROW,
+    email: 'dana@northwind.example',
+    name: 'Dana',
+    inviteChannel: 'email',
+    accessScope: 'engagement',
+  };
+
+  /** A provisioned meeting, so the best-effort eject actually reaches the port. */
+  const PROVISIONED = meetingRow({ dailyRoomName: dailyRoomNameForMeeting(MEETING_ID) });
+
+  function provisionedGate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return gateOk({ meeting: PROVISIONED, ...overrides });
+  }
+
+  function remove(): Promise<unknown> {
+    return removeGuest({ meetingId: MEETING_ID, guestId: GUEST_ID, actorUserId: USER_ID });
+  }
+
+  beforeEach(() => {
+    mockEjectParticipants.mockResolvedValue('ejected');
+    mockPublishGuestRemovedCalendarWithdrawal.mockResolvedValue(undefined);
+    mockCalendarListLiveByMeeting.mockResolvedValue([
+      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 4 },
+    ]);
+  });
+
+  /**
+   * ⚠ CONSEQUENCE 1 — THE HOST COULD NOT UNDO THEIR OWN ADMIT. An expert host admitted the lobby
+   * visitor; the row says `client`; the same-party rule answered `guest_not_found`.
+   */
+  it('⚠⚠ an EXPERT host CAN remove a link row whose placeholder party says `client`', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(provisionedGate({ side: 'expert' }));
+    mockFindLiveById.mockResolvedValue(LINK_ROW);
+    mockRevoke.mockResolvedValue(LINK_ROW);
+    mockHasEngagementCapability.mockResolvedValue(true);
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockRevoke).toHaveBeenCalledWith({ guestId: GUEST_ID, revokedByUserId: USER_ID });
+    // ⚠ THE LITERAL, RESTATED — the same token `decideGuestAdmission` gates on. `host_meetings`
+    // is the live/in-meeting right; `manage_engagement` is the administrative one and would be
+    // the wrong question here.
+    expect(mockHasEngagementCapability).toHaveBeenCalledWith(
+      { id: USER_ID },
+      'host_meetings',
+      CLIENT_SUBJECT
+    );
+  });
+
+  /**
+   * ⚠ CONSEQUENCE 2 — ANY CLIENT-SIDE MEMBER COULD REVOKE, EJECT AND **BAN** the expert's own
+   * forwarded colleague, purely because the placeholder happens to read `client`. That is the
+   * exact cross-party act `removeGuest`'s docblock says must be impossible.
+   */
+  it('⚠⚠ a CLIENT-side NON-HOST cannot remove a link row, even though the placeholder matches their side', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'client' }));
+    mockFindLiveById.mockResolvedValue(LINK_ROW);
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    await expect(remove()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockRevoke).not.toHaveBeenCalled();
+    expect(mockEjectParticipants).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ CONSEQUENCE 3 — A DENY WITHOUT `host_meetings`. Revoking a `pending` knock IS a Deny, and
+   * `decideGuestAdmission` reserves that for hosts. The panel hides Remove on the lobby queue,
+   * but the route is what has to refuse it.
+   */
+  it('⚠⚠ a CLIENT-side NON-HOST cannot revoke a PENDING knock through the API — that is a Deny', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'client' }));
+    mockFindLiveById.mockResolvedValue({ ...LINK_ROW, admission: 'pending', accessCount: 0 });
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    await expect(remove()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockRevoke).not.toHaveBeenCalled();
+  });
+
+  it('a HOST can revoke a pending knock (the un-admit that mirrors Deny)', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'client' }));
+    const pending = { ...LINK_ROW, admission: 'pending', accessCount: 0 };
+    mockFindLiveById.mockResolvedValue(pending);
+    mockRevoke.mockResolvedValue(pending);
+    mockHasEngagementCapability.mockResolvedValue(true);
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+  });
+
+  /**
+   * ⚠ AN `email` ROW IS UNCHANGED: its `party` WAS resolved server-side from the inviter's own
+   * authorized side, so same-party still governs it — and `host_meetings` is not consulted at all
+   * (R6 stands for that channel).
+   */
+  it('⚠ an EMAIL row still uses SAME-PARTY, and never consults host_meetings', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'client' }));
+    mockFindLiveById.mockResolvedValue(EMAIL_ROW);
+    mockRevoke.mockResolvedValue(EMAIL_ROW);
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockHasEngagementCapability).not.toHaveBeenCalled();
+  });
+
+  it('⚠ an EMAIL row on the OTHER side is still refused, host or not', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'expert' }));
+    mockFindLiveById.mockResolvedValue(EMAIL_ROW);
+    mockHasEngagementCapability.mockResolvedValue(true);
+
+    await expect(remove()).resolves.toEqual({ ok: false, code: 'guest_not_found' });
+    expect(mockRevoke).not.toHaveBeenCalled();
+  });
+
+  // ── the two removal messages ────────────────────────────────────────────────────────
+
+  /**
+   * ⚠⚠ NEITHER MESSAGE GOES TO A SELF-DECLARED ADDRESS. A `link` row's address was typed by an
+   * anonymous visitor holding a forwarded URL; Balo never invited it, never verified it and never
+   * shows it. Both messages also describe an INVITATION being withdrawn, which does not describe
+   * a lobby visitor at all.
+   */
+  it('⚠⚠ a LINK row is removed with NO removal email and NO calendar withdrawal', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(provisionedGate({ side: 'client' }));
+    mockFindLiveById.mockResolvedValue(LINK_ROW);
+    mockRevoke.mockResolvedValue(LINK_ROW);
+    mockHasEngagementCapability.mockResolvedValue(true);
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+
+    expect(publishedPayloads('meeting.guest_removed')).toHaveLength(0);
+    expect(mockPublishGuestRemovedCalendarWithdrawal).not.toHaveBeenCalled();
+    // ⚠ The REVOCATION and the EJECT still happen — the message suppression is not a skip of
+    // the act.
+    expect(mockRevoke).toHaveBeenCalledTimes(1);
+    expect(mockEjectParticipants).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_removed', expect.anything());
+  });
+
+  it('⚠ an EMAIL row still gets BOTH messages', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'client' }));
+    mockFindLiveById.mockResolvedValue(EMAIL_ROW);
+    mockRevoke.mockResolvedValue(EMAIL_ROW);
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+
+    expect(publishedPayloads('meeting.guest_removed')).toHaveLength(1);
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ no address of either provenance reaches a denial log line', async () => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk({ side: 'client' }));
+    mockFindLiveById.mockResolvedValue(LINK_ROW);
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    await remove();
+
+    // The module's logger is a bare stub, so assert on what the service was GIVEN to log: ids
+    // and a fixed reason literal, never the row.
+    expect(mockRevoke).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-476 (second review round) — the concurrent cancel/removal race ───────────────────
+
+/**
+ * ⚠⚠ THE WINDOW THAT EXISTED. `removeGuest` revokes, ejects and publishes `meeting.guest_removed`
+ * before the calendar withdrawal, and the withdrawal used to read the party's calendar row ITSELF,
+ * at the end — a LIVE read. A cancellation landing inside that window retires the row, so the
+ * read found nothing and the withdrawal sent nothing; and the cancellation's own fan-out had
+ * already resolved ITS recipients from the live guest index, which no longer held the
+ * just-revoked person. The guest ended up with a CANCEL from NEITHER path.
+ *
+ * The fix is ordering, not a retired-tolerant read: snapshot BEFORE the revoke. That also keeps
+ * `findByIdIncludingRetired`'s containment argument intact — it still has exactly one caller.
+ */
+describe('removeGuest — the cancel/removal race (BAL-476)', () => {
+  const ROW = { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 4 };
+  const GUEST_ROW = {
+    id: GUEST_ID,
+    meetingId: MEETING_ID,
+    email: 'dana@northwind.example',
+    name: 'Dana',
+    party: 'client',
+    inviteChannel: 'email',
+    accessScope: 'engagement',
+    admission: 'admitted',
+    accessCount: 0,
+  };
+
+  function remove(): Promise<unknown> {
+    return removeGuest({ meetingId: MEETING_ID, guestId: GUEST_ID, actorUserId: USER_ID });
+  }
+
+  beforeEach(() => {
+    mockAuthorizeMeetingParticipation.mockResolvedValue(gateOk());
+    mockFindLiveById.mockResolvedValue(GUEST_ROW);
+    mockRevoke.mockResolvedValue(GUEST_ROW);
+    mockCalendarListLiveByMeeting.mockResolvedValue([ROW]);
+    mockPublishGuestRemovedCalendarWithdrawal.mockResolvedValue(undefined);
+  });
+
+  it('⚠⚠ reads the calendar row BEFORE the revoke, so a concurrent cancel cannot hide it', async () => {
+    await expect(remove()).resolves.toEqual({ ok: true });
+
+    const readOrder = mockCalendarListLiveByMeeting.mock.invocationCallOrder[0] ?? 0;
+    const revokeOrder = mockRevoke.mock.invocationCallOrder[0] ?? 0;
+    expect(readOrder).toBeGreaterThan(0);
+    expect(revokeOrder).toBeGreaterThan(readOrder);
+  });
+
+  /**
+   * ⚠ THE RACE ITSELF: the row is retired the instant the revoke commits. With the snapshot the
+   * withdrawal still goes out, addressed to the row it was issued from; the delivery path's
+   * calendar read is retired-tolerant for a CANCEL, so a retired row is no obstacle.
+   */
+  it('⚠⚠ a cancellation retiring the row DURING the removal still produces a withdrawal', async () => {
+    mockRevoke.mockImplementation(() => {
+      // The concurrent cancellation lands here: every later LIVE read sees nothing.
+      mockCalendarListLiveByMeeting.mockResolvedValue([]);
+      return Promise.resolve(GUEST_ROW);
+    });
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledTimes(1);
+    expect(mockPublishGuestRemovedCalendarWithdrawal).toHaveBeenCalledWith(
+      expect.objectContaining({ calendarEvent: { id: 'row-client', sequence: 4 } }),
+      expect.anything()
+    );
+  });
+
+  it('no calendar row on that side ⇒ no withdrawal, and the removal still succeeds', async () => {
+    mockCalendarListLiveByMeeting.mockResolvedValue([
+      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+    ]);
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockPublishGuestRemovedCalendarWithdrawal).not.toHaveBeenCalled();
+    expect(mockRevoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('⚠ a FAILING calendar read never fails the removal — it only skips the withdrawal', async () => {
+    mockCalendarListLiveByMeeting.mockRejectedValue(new Error('db down'));
+
+    await expect(remove()).resolves.toEqual({ ok: true });
+    expect(mockPublishGuestRemovedCalendarWithdrawal).not.toHaveBeenCalled();
+    expect(mockRevoke).toHaveBeenCalledTimes(1);
+    expect(mockTrackServer).toHaveBeenCalledWith('guest_removed', expect.anything());
   });
 });

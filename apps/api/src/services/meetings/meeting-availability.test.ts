@@ -23,6 +23,7 @@ const {
   mockDeleteRoom,
   mockRaiseAdminAlert,
   mockPublishRescheduleCalendarInvites,
+  mockWithdrawMeetingCalendarProjection,
   MockInvalidSessionTransitionError,
 } = vi.hoisted(() => ({
   mockCreate: vi.fn(),
@@ -48,6 +49,8 @@ const {
   /** BAL-548 — the `calendar.amend_failed` raise, additive to log.error on the enqueue catch. */
   mockRaiseAdminAlert: vi.fn().mockResolvedValue(undefined),
   mockPublishRescheduleCalendarInvites: vi.fn().mockResolvedValue(undefined),
+  /** BAL-476 — the calendar withdrawal, mocked at its own boundary. */
+  mockWithdrawMeetingCalendarProjection: vi.fn().mockResolvedValue(undefined),
   /**
    * BAL-410 — the real `InvalidSessionTransitionError` cannot be imported here (`@balo/db` is
    * factory-mocked below), so the mock exports a stand-in the service's `instanceof` check
@@ -106,6 +109,11 @@ vi.mock('../admin-alerts/raise.js', () => ({ raiseAdminAlert: mockRaiseAdminAler
 
 vi.mock('../calendar-invites/publish-calendar-invites.js', () => ({
   publishRescheduleCalendarInvites: mockPublishRescheduleCalendarInvites,
+}));
+// BAL-476 — mocked at the ORCHESTRATOR boundary; it has its own unit tests
+// (`withdraw-meeting-calendar.test.ts`).
+vi.mock('./withdraw-meeting-calendar.js', () => ({
+  withdrawMeetingCalendarProjection: mockWithdrawMeetingCalendarProjection,
 }));
 
 import { dailyRoomNameForMeeting } from '@balo/shared/meetings';
@@ -908,5 +916,136 @@ describe('tearDownCancelledMeetings — safe by state', () => {
     );
 
     expect(result).toEqual({ processed: 1, skipped: 1 });
+  });
+});
+
+// ── BAL-476 — the calendar withdrawal, producer 2 (the close cascade) ─────────────────────
+
+describe('tearDownCancelledMeetings — the calendar withdrawal (BAL-476)', () => {
+  const CANCEL_AUDIT_ID = '55555555-5555-4555-8555-555555555555';
+
+  beforeEach(() => {
+    mockFindById.mockResolvedValue({
+      id: MEETING_ID,
+      status: 'cancelled',
+      dailyRoomName: CORRECT_ROOM_NAME,
+    });
+  });
+
+  it('⚠ withdraws with the entry cancelAuditId, BEFORE the room teardown', async () => {
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID, cancelAuditId: CANCEL_AUDIT_ID }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 1, skipped: 0 });
+    expect(mockWithdrawMeetingCalendarProjection).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID, cancelAuditId: CANCEL_AUDIT_ID, expertProfileId: EXPERT_ID },
+      log
+    );
+    const withdrawOrder = mockWithdrawMeetingCalendarProjection.mock.invocationCallOrder[0] ?? 0;
+    const teardownOrder = mockDeleteRoom.mock.invocationCallOrder[0] ?? 0;
+    expect(withdrawOrder).toBeGreaterThan(0);
+    expect(teardownOrder).toBeGreaterThan(withdrawOrder);
+  });
+
+  /**
+   * ⚠⚠ THE DEPLOY-SKEW ARM. `apps/web` and `apps/api` deploy independently from one merge, so an
+   * entry minted by an older web bundle carries no `cancelAuditId`. Only the NEW half degrades:
+   * the room teardown and the availability rebuild still run.
+   */
+  it('⚠ an entry WITHOUT a cancelAuditId warns, skips the withdrawal, and still tears down', async () => {
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 1, skipped: 0 });
+    expect(mockWithdrawMeetingCalendarProjection).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      { meetingId: MEETING_ID },
+      'cancelled-teardown entry carries no cancelAuditId — skipping the calendar withdrawal (deploy skew between apps/web and apps/api)'
+    );
+    expect(mockDeleteRoom).toHaveBeenCalledTimes(1);
+    expect(mockEnqueue).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⚠⚠ R-1 — THE BACKSTOP, AND THE BATCH IS WHY IT MATTERS. `withdrawMeetingCalendarProjection`
+   * lets exactly one thing propagate: a W1 contract violation. Unwrapped, that would reject
+   * `tearDownCancelledMeetings`, 500 the route, and `postCancelledTeardown` logs-and-swallows a
+   * non-2xx — so the SHIPPED half (Daily room teardown + availability rebuild) would be dropped
+   * for EVERY meeting in a ≤25-entry batch, including entries the loop never reached.
+   *
+   * MUTATION PROOF FOR THIS ASSERTION: remove the try/catch around the withdrawal in
+   * `tearDownCancelledMeetings` and this goes red — the call rejects instead of resolving, and
+   * neither `deleteRoom` nor the rebuild ever runs.
+   */
+  it('⚠⚠ a THROWING withdrawal still tears down the room, rebuilds availability, and counts the entry', async () => {
+    mockWithdrawMeetingCalendarProjection.mockRejectedValueOnce(new Error('contract violation'));
+
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID, cancelAuditId: CANCEL_AUDIT_ID }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 1, skipped: 0 });
+    expect(mockDeleteRoom).toHaveBeenCalledTimes(1);
+    expect(mockEnqueue).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, cancelAuditId: CANCEL_AUDIT_ID }),
+      'Calendar withdrawal threw despite its contract — the cancellation already committed; the room teardown and availability rebuild still run'
+    );
+  });
+
+  /**
+   * ⚠ THE BATCH ARM: a violation on entry 1 must not take entries 2..N down with it. This is the
+   * assertion that names the ≤25-meeting blast radius the backstop exists to bound.
+   */
+  it('⚠⚠ a throwing withdrawal on ONE entry does not drop the teardown for the REST of the batch', async () => {
+    const SECOND_MEETING_ID = '66666666-6666-4666-8666-666666666666';
+    mockFindById.mockImplementation((id: string) =>
+      Promise.resolve({
+        id,
+        status: 'cancelled',
+        dailyRoomName: dailyRoomNameForMeeting(id),
+      })
+    );
+    mockWithdrawMeetingCalendarProjection
+      .mockRejectedValueOnce(new Error('contract violation'))
+      .mockResolvedValue(undefined);
+
+    const result = await tearDownCancelledMeetings(
+      [
+        { meetingId: MEETING_ID, expertProfileId: EXPERT_ID, cancelAuditId: CANCEL_AUDIT_ID },
+        {
+          meetingId: SECOND_MEETING_ID,
+          expertProfileId: EXPERT_ID,
+          cancelAuditId: CANCEL_AUDIT_ID,
+        },
+      ],
+      log
+    );
+
+    expect(result).toEqual({ processed: 2, skipped: 0 });
+    expect(mockWithdrawMeetingCalendarProjection).toHaveBeenCalledTimes(2);
+    expect(mockDeleteRoom).toHaveBeenCalledTimes(2);
+    expect(mockEnqueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('never withdraws for an entry the state guard skips', async () => {
+    mockFindById.mockResolvedValue({
+      id: MEETING_ID,
+      status: 'scheduled',
+      dailyRoomName: CORRECT_ROOM_NAME,
+    });
+
+    const result = await tearDownCancelledMeetings(
+      [{ meetingId: MEETING_ID, expertProfileId: EXPERT_ID, cancelAuditId: CANCEL_AUDIT_ID }],
+      log
+    );
+
+    expect(result).toEqual({ processed: 0, skipped: 1 });
+    expect(mockWithdrawMeetingCalendarProjection).not.toHaveBeenCalled();
   });
 });

@@ -118,3 +118,73 @@ describe('POST /meetings/cancelled-teardown', () => {
     expect(res.json()).toEqual({ processed: 2, skipped: 1 });
   });
 });
+
+// ── BAL-476 — `cancelAuditId` on the wire ────────────────────────────────────────────────
+
+describe('POST /meetings/cancelled-teardown — cancelAuditId (BAL-476)', () => {
+  const CANCEL_AUDIT_ID = '550e8400-e29b-41d4-a716-446655440044';
+  let app: FastifyInstance;
+
+  beforeAll(async () => {
+    process.env.INTERNAL_API_SECRET = TEST_SECRET;
+    app = Fastify({ logger: false });
+    await app.register(meetingCancelledTeardownRoutes);
+    await app.ready();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    delete process.env.INTERNAL_API_SECRET;
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTearDownCancelledMeetings.mockResolvedValue({ processed: 1, skipped: 0 });
+  });
+
+  function post(body: Record<string, unknown>) {
+    return app.inject({
+      method: 'POST',
+      url: '/meetings/cancelled-teardown',
+      headers: { 'content-type': 'application/json', 'x-internal-api-key': TEST_SECRET },
+      payload: body,
+    });
+  }
+
+  it('accepts and forwards a cancelAuditId', async () => {
+    const entry = {
+      meetingId: MEETING_ID,
+      expertProfileId: EXPERT_PROFILE_ID,
+      cancelAuditId: CANCEL_AUDIT_ID,
+    };
+
+    const res = await post({ meetings: [entry] });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockTearDownCancelledMeetings).toHaveBeenCalledWith([entry], expect.anything());
+  });
+
+  /**
+   * ⚠⚠ OPTIONAL ON PURPOSE. A REQUIRED field would `400` the WHOLE batch during the
+   * independent-deploy skew window, and the web client logs-and-swallows a non-2xx — so the
+   * EXISTING room teardown and availability rebuild would be dropped too, for every meeting in
+   * the batch. Optional + warn-and-skip degrades only the new half.
+   */
+  it('⚠ still accepts an entry WITHOUT one — a 400 here would drop the whole batch on deploy skew', async () => {
+    const res = await post({
+      meetings: [{ meetingId: MEETING_ID, expertProfileId: EXPERT_PROFILE_ID }],
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockTearDownCancelledMeetings).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a non-uuid cancelAuditId', async () => {
+    const res = await post({
+      meetings: [{ meetingId: MEETING_ID, expertProfileId: null, cancelAuditId: 'not-a-uuid' }],
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(mockTearDownCancelledMeetings).not.toHaveBeenCalled();
+  });
+});

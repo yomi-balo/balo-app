@@ -86,6 +86,7 @@ import {
 } from './meeting-guest-emails.js';
 import {
   MeetingCalendarInviteEmail,
+  TRANSITION_CHROME,
   type CalendarInviteEmailAudience,
   type CalendarInviteEmailTransition,
   type MeetingCalendarInviteEmailProps,
@@ -2146,9 +2147,17 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
     subject: 'This call has moved',
   }),
 
-  // BAL-475 — the Balo-organised calendar invite, rendered per recipient by
-  // `channels/calendar-invite-delivery.ts` alongside the ICS attachment. Subject differs only
-  // for a reschedule; `summary` is pre-resolved by `resolveCalendarInviteFacts`.
+  // BAL-475 / BAL-476 — the Balo-organised calendar message, rendered per recipient by
+  // `channels/calendar-invite-delivery.ts` alongside the ICS attachment. `summary` is
+  // pre-resolved by `resolveCalendarInviteFacts`.
+  //
+  // ⚠ THE SUBJECT IS A LOOKUP OVER ALL FIVE TRANSITIONS, NOT A RESCHEDULE SPECIAL CASE. An
+  // earlier version of this note said "subject differs only for a reschedule", which stopped
+  // being true when BAL-476 put the two WITHDRAWALS on this same template: `cancelled` and
+  // `guest_removed` carry their own prefixes ("Cancelled", "Invitation withdrawn"), and an
+  // invite-shaped subject on either would be the one thing the copy must not do. The prefix
+  // comes off `TRANSITION_CHROME`, the SAME table the body's heading and pill do, so a subject
+  // cannot drift from the email it announces.
   'meeting-calendar-invite': (data) => {
     const summary = (data.summary as string) ?? 'your call';
     const transition = (data.transition as CalendarInviteEmailTransition) ?? 'booked';
@@ -2171,10 +2180,10 @@ const templates: Record<string, (data: Record<string, unknown>) => TemplateOutpu
         : { ...base, audience: 'member', memberJoinUrl: (data.memberJoinUrl as string) ?? '' };
     return {
       component: React.createElement(MeetingCalendarInviteEmail, props),
-      subject:
-        transition === 'rescheduled'
-          ? `Updated calendar invite: ${sanitizeSubjectTitle(summary)}`
-          : `Calendar invite: ${sanitizeSubjectTitle(summary)}`,
+      // BAL-476 — the subject prefix comes off the SAME table the body's chrome does, so a
+      // withdrawal can never ship under an invite subject. The `?? 'booked'` defaulting above
+      // is what keeps the untyped `data` seam total.
+      subject: `${TRANSITION_CHROME[transition].previewPrefix}: ${sanitizeSubjectTitle(summary)}`,
     };
   },
 

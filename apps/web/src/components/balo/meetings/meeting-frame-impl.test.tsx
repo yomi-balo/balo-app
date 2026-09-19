@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { toast } from 'sonner';
 import { deriveDrawdownState, type DrawdownState } from '@balo/shared/credit';
@@ -26,7 +26,14 @@ import {
   installMediaStubs,
   resetDailyMock,
 } from '@/test/mocks/daily';
-import { CALL_ENDED_TITLE, CALL_LEFT_TITLE } from './meeting-notices';
+import {
+  CALL_ACCESS_ENDED_TITLE,
+  CALL_ENDED_TITLE,
+  CALL_LEFT_TITLE,
+  CALL_REMOVED_TITLE,
+  EXIT_RESOLVING_TITLE,
+} from './meeting-notices';
+import type { GuestExitCause } from '@/lib/meetings/guest-exit-cause';
 import { SKIP_PREJOIN_STORAGE_KEY } from './prejoin';
 import { MeetingFrame } from './meeting-frame-impl';
 
@@ -1208,5 +1215,365 @@ describe('MeetingFrame — the Balance slot, ⚠⚠ fix round 2 (R5 — the badg
     // ⚠ AN ESCAPE, NEVER THE LITERAL CHARACTER — see `announce`'s own docblock in
     // `meeting-frame-impl.tsx`: an invisible code point pasted into source is unreviewable.
     expect(region?.textContent).toBe(`Your balance needs attention.${'\u200B'}`);
+  });
+});
+
+// ── BAL-476 (R5 amended) — the exit-reason round-trip ────────────────────────────────────
+
+/**
+ * A guest mount WITH a `resolveExitReason` resolver — the shape both real guest mounts pass.
+ *
+ * ⚠ THE FRAME NEVER SEES A TOKEN. Both mounts close over their own raw guest token and hand the
+ * provider a zero-argument callback, exactly as they already do for `panels`.
+ */
+function renderGuestWithResolver(resolveExitReason: () => Promise<GuestExitCause>): HTMLElement {
+  return render(
+    <MeetingRouteContextProvider
+      meetingId={null}
+      viewerName={null}
+      title={null}
+      backTo={null}
+      contextNoun="call"
+      waiting={null}
+      panels={guestPanelsFake()}
+      resolveExitReason={resolveExitReason}
+    >
+      <MeetingFrame grant={grantFor()} />
+    </MeetingRouteContextProvider>
+  ).container;
+}
+
+function leftReasons(): unknown[] {
+  return vi
+    .mocked(track)
+    .mock.calls.filter(([event]) => event === MEETING_CALL_EVENTS.LEFT)
+    .map(([, properties]) => (properties as { reason?: unknown }).reason);
+}
+
+describe('MeetingFrame — the exit-reason round-trip (BAL-476)', () => {
+  it('⚠ renders the LOADING notice while the resolver is in flight, then the card it selects', async () => {
+    let settle: (cause: GuestExitCause) => void = () => {};
+    const resolver = vi.fn(
+      () =>
+        new Promise<GuestExitCause>((resolve) => {
+          settle = resolve;
+        })
+    );
+    renderGuestWithResolver(resolver);
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    expect(await screen.findByRole('heading', { name: EXIT_RESOLVING_TITLE })).toBeInTheDocument();
+    // ⚠ NOT PREJOIN — a frame that has latched terminal must never offer "Join now".
+    expect(screen.queryByRole('button', { name: 'Join now' })).toBeNull();
+
+    act(() => settle('removed'));
+
+    expect(await screen.findByRole('heading', { name: CALL_REMOVED_TITLE })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: EXIT_RESOLVING_TITLE })).toBeNull();
+  });
+
+  it.each([
+    ['removed', CALL_REMOVED_TITLE],
+    ['host_ended', CALL_ENDED_TITLE],
+    ['access_ended', CALL_ACCESS_ENDED_TITLE],
+  ] as const)('⚠ the resolver answer %s selects its own card', async (cause, title) => {
+    renderGuestWithResolver(vi.fn().mockResolvedValue(cause));
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠⚠ THE ERROR ARM FAILS TO THE **VAGUER** CARD. Never `host_ended` (a claim about somebody
+   * else's act) and never `removed` (a claim about this person's). If we cannot determine why
+   * they are out, we say less.
+   */
+  it('⚠ a REJECTING resolver renders access_ended — never host_ended, never removed', async () => {
+    renderGuestWithResolver(vi.fn().mockRejectedValue(new Error('probe failed')));
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    expect(
+      await screen.findByRole('heading', { name: CALL_ACCESS_ENDED_TITLE })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: CALL_ENDED_TITLE })).toBeNull();
+    expect(screen.queryByRole('heading', { name: CALL_REMOVED_TITLE })).toBeNull();
+  });
+
+  /**
+   * ⚠ WITH NO RESOLVER — the MEMBER mount, structurally — the behaviour is BYTE-IDENTICAL to
+   * before: synchronous settle, `host_ended`, `onExit` fired.
+   */
+  it('⚠ with NO resolver the member mount is unchanged: synchronous host_ended, onExit fired', async () => {
+    const onExit = vi.fn();
+    renderMember({ onExit });
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    expect(screen.queryByRole('heading', { name: EXIT_RESOLVING_TITLE })).toBeNull();
+    await waitFor(() => expect(onExit).toHaveBeenCalledWith('host_ended'));
+    expect(leftReasons()).toEqual(['host_ended']);
+  });
+
+  it('⚠ OUR OWN leave never consults the resolver — it is not a host-ended transition', async () => {
+    const resolver = vi.fn().mockResolvedValue('removed');
+    renderGuestWithResolver(resolver);
+    await join();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Leave' }));
+
+    expect(await screen.findByRole('heading', { name: CALL_LEFT_TITLE })).toBeInTheDocument();
+    expect(resolver).not.toHaveBeenCalled();
+    expect(leftReasons()).toEqual(['self']);
+  });
+
+  /**
+   * ⚠⚠ T-34 — `MEETING_CALL_EVENTS.LEFT` FIRES **EXACTLY ONCE**, WITH THE **RESOLVED** REASON.
+   *
+   * MUTATION PROOF FOR THIS ASSERTION: put `track` back at the top of `finishExit` and this goes
+   * red, because the reason on the wire would be the UNRESOLVED `'host_ended'` — which is what
+   * made the breakdown useless in the first place.
+   */
+  it('⚠⚠ fires meeting_call_left EXACTLY ONCE, with the RESOLVED reason', async () => {
+    renderGuestWithResolver(vi.fn().mockResolvedValue('removed'));
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    await screen.findByRole('heading', { name: CALL_REMOVED_TITLE });
+    expect(leftReasons()).toEqual(['removed']);
+  });
+
+  it('⚠ the resolver is called exactly once, however many times the event arrives', async () => {
+    const resolver = vi.fn().mockResolvedValue('removed');
+    renderGuestWithResolver(resolver);
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    await screen.findByRole('heading', { name: CALL_REMOVED_TITLE });
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ⚠⚠ THE SKIP-PREJOIN HAZARD, DURING THE PROBE — AND THE PATH IT ACTUALLY ARRIVES ON.
+   *
+   * ⚠ AN EARLIER VERSION OF THIS TEST WAS VACUOUS AND A REVIEWER PROVED IT. It seeded
+   * `SKIP_PREJOIN_STORAGE_KEY` BEFORE render, so the frame AUTO-joined on mount and latched
+   * `didAutoJoinRef.current = true` — which is checked on the very same line as the guard under
+   * test, so removing `isResolvingExit ||` changed nothing and all 56 tests stayed green.
+   *
+   * The reachable path is the OTHER one: a guest who arrives WITHOUT the preference, ticks
+   * "Skip this next time" inside PreJoin (which writes the key immediately) and then joins
+   * MANUALLY. `didAutoJoinRef` is never set on that route, so at ejection time the only thing
+   * standing between them and a silent rejoin — camera and microphone on, into a call they were
+   * just removed from — is `isResolvingExit`, because `exitReason` is still `null` for the whole
+   * length of the probe.
+   *
+   * MUTATION PROOF FOR THIS ASSERTION: remove `isResolvingExit ||` from the skip effect's guard
+   * and this goes red on the `join` count.
+   */
+  it('⚠⚠ ticking "Skip this next time" in PreJoin then joining MANUALLY does NOT rejoin mid-probe', async () => {
+    const user = userEvent.setup();
+    let settle: (cause: GuestExitCause) => void = () => {};
+    renderGuestWithResolver(
+      () =>
+        new Promise<GuestExitCause>((resolve) => {
+          settle = resolve;
+        })
+    );
+
+    // ⚠ NOT seeded before render — the preference is set the way a real person sets it, which is
+    // what leaves `didAutoJoinRef` false.
+    await user.click(await screen.findByLabelText('Skip this next time'));
+    expect(globalThis.localStorage.getItem(SKIP_PREJOIN_STORAGE_KEY)).not.toBeNull();
+
+    await user.click(await screen.findByRole('button', { name: 'Join now' }));
+    await screen.findByRole('button', { name: 'Leave' });
+    expect(dailySpies.join).toHaveBeenCalledTimes(1);
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    // ⚠ THE WINDOW: terminal has latched, `exitReason` is still `null`, the preference is set and
+    // `didAutoJoinRef` is false. Only `isResolvingExit` returns here.
+    await screen.findByRole('heading', { name: EXIT_RESOLVING_TITLE });
+    await waitFor(() => expect(dailySpies.join).toHaveBeenCalledTimes(1));
+
+    act(() => settle('removed'));
+    await screen.findByRole('heading', { name: CALL_REMOVED_TITLE });
+    expect(dailySpies.join).toHaveBeenCalledTimes(1);
+  });
+
+  /** The auto-join route stays covered too — `didAutoJoinRef` is what closes it. */
+  it('the AUTO-join route also never rejoins mid-probe (didAutoJoinRef, the one-shot)', async () => {
+    globalThis.localStorage.setItem(SKIP_PREJOIN_STORAGE_KEY, '1');
+    let settle: (cause: GuestExitCause) => void = () => {};
+    renderGuestWithResolver(
+      () =>
+        new Promise<GuestExitCause>((resolve) => {
+          settle = resolve;
+        })
+    );
+    await screen.findByRole('button', { name: 'Leave' });
+    expect(dailySpies.join).toHaveBeenCalledTimes(1);
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+    await screen.findByRole('heading', { name: EXIT_RESOLVING_TITLE });
+
+    act(() => settle('removed'));
+    await screen.findByRole('heading', { name: CALL_REMOVED_TITLE });
+    expect(dailySpies.join).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── BAL-476 (U-1) — focus and the live region on the exit transition ─────────────────────
+
+/**
+ * ⚠⚠ THE PERSON THIS EXISTS FOR IS AN EJECTED GUEST ON A SCREEN READER OR KEYBOARD, and they are
+ * the one with no other way to find out what happened.
+ *
+ * The hazard is structural, not cosmetic: both guest mounts drive focus with
+ * `useFocusOnTransition(phase)`, and `phase` latches at `'admitted'` and never changes again (a
+ * guest mount passes no `onExit` — `meeting-route-context.tsx` documents that as structural), so
+ * the mount's intent can never re-arm for a transition that happens INSIDE the frame. Meanwhile
+ * `resolveFrameChrome` unmounts the top bar and toolbar in the SAME render the card mounts, so
+ * whatever held focus disappears and focus falls to `<body>`.
+ *
+ * The frame therefore arms its OWN intent, keyed on the exit state, and announces as a floor.
+ */
+describe('MeetingFrame — ⚠⚠ U-1: the exit transition delivers focus AND a live-region announce', () => {
+  function liveRegionText(container: HTMLElement): string {
+    return container.querySelector('output[aria-live="polite"]')?.textContent ?? '';
+  }
+
+  it('⚠⚠ focus lands on the RESOLVING heading, not on <body>', async () => {
+    let settle: (cause: GuestExitCause) => void = () => {};
+    renderGuestWithResolver(
+      () =>
+        new Promise<GuestExitCause>((resolve) => {
+          settle = resolve;
+        })
+    );
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    const resolving = await screen.findByRole('heading', { name: EXIT_RESOLVING_TITLE });
+    await waitFor(() => expect(document.activeElement).toBe(resolving));
+    expect(document.activeElement).not.toBe(document.body);
+
+    act(() => settle('removed'));
+    await screen.findByRole('heading', { name: CALL_REMOVED_TITLE });
+  });
+
+  it('⚠⚠ focus MOVES AGAIN onto the settled card when the resolver answers', async () => {
+    let settle: (cause: GuestExitCause) => void = () => {};
+    renderGuestWithResolver(
+      () =>
+        new Promise<GuestExitCause>((resolve) => {
+          settle = resolve;
+        })
+    );
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+    await screen.findByRole('heading', { name: EXIT_RESOLVING_TITLE });
+
+    act(() => settle('removed'));
+
+    const removed = await screen.findByRole('heading', { name: CALL_REMOVED_TITLE });
+    await waitFor(() => expect(document.activeElement).toBe(removed));
+  });
+
+  it('⚠ the SYNCHRONOUS exit (no resolver) also delivers focus to the terminal card', async () => {
+    renderGuest();
+    await join();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Leave' }));
+
+    const left = await screen.findByRole('heading', { name: CALL_LEFT_TITLE });
+    await waitFor(() => expect(document.activeElement).toBe(left));
+  });
+
+  it('⚠ THE FLOOR: the ONE polite live region carries the resolving title, then the settled one', async () => {
+    let settle: (cause: GuestExitCause) => void = () => {};
+    const container = renderGuestWithResolver(
+      () =>
+        new Promise<GuestExitCause>((resolve) => {
+          settle = resolve;
+        })
+    );
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    await waitFor(() => expect(liveRegionText(container)).toContain(EXIT_RESOLVING_TITLE));
+
+    act(() => settle('removed'));
+
+    await waitFor(() => expect(liveRegionText(container)).toContain(CALL_REMOVED_TITLE));
+    // ⚠ ONE region, not two — §16. A second `aria-live` node would race this one.
+    expect(container.querySelectorAll('output[aria-live="polite"]')).toHaveLength(1);
+  });
+
+  it('⚠ the announce reads the SAME string the card renders, for every settled reason', async () => {
+    for (const [cause, title] of [
+      ['removed', CALL_REMOVED_TITLE],
+      ['host_ended', CALL_ENDED_TITLE],
+      ['access_ended', CALL_ACCESS_ENDED_TITLE],
+    ] as const) {
+      const container = renderGuestWithResolver(vi.fn().mockResolvedValue(cause));
+      await join();
+
+      act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+      await screen.findByRole('heading', { name: title });
+      await waitFor(() => expect(liveRegionText(container)).toContain(title));
+      cleanup();
+      resetDailyMock();
+    }
+  });
+
+  /**
+   * ⚠ THE FRAME'S INTENT IS **COMPOSED** WITH THE MOUNT'S, NEVER A REPLACEMENT. A mount that
+   * supplies its own `headingRef` must still receive the node — that ref is how `/join/[token]`
+   * and `/join/m/[meetingId]` drive focus for their OWN transitions.
+   */
+  it('⚠ a mount-supplied headingRef still receives the terminal heading', async () => {
+    const seen: (HTMLHeadingElement | null)[] = [];
+    render(
+      <MeetingRouteContextProvider
+        meetingId={null}
+        viewerName={null}
+        title={null}
+        backTo={null}
+        contextNoun="call"
+        waiting={null}
+        panels={guestPanelsFake()}
+        resolveExitReason={vi.fn().mockResolvedValue('removed')}
+      >
+        <MeetingFrame
+          grant={grantFor()}
+          headingRef={(node) => {
+            seen.push(node);
+          }}
+        />
+      </MeetingRouteContextProvider>
+    );
+    await join();
+
+    act(() => emitDailyEvent('left-meeting', { action: 'left-meeting' }));
+
+    const removed = await screen.findByRole('heading', { name: CALL_REMOVED_TITLE });
+    expect(seen).toContain(removed);
+    await waitFor(() => expect(document.activeElement).toBe(removed));
   });
 });

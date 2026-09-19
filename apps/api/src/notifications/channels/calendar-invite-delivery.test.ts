@@ -4,7 +4,9 @@ import type { Job } from 'bullmq';
 const {
   mockFindByIdUser,
   mockFindLiveByIdGuest,
+  mockFindByIdIncludingRevokedGuest,
   mockFindLiveByIdCalendarEvent,
+  mockFindByIdIncludingRetiredCalendarEvent,
   mockFindByIdMeeting,
   mockClaimSend,
   mockMarkSent,
@@ -23,7 +25,9 @@ const {
 } = vi.hoisted(() => ({
   mockFindByIdUser: vi.fn(),
   mockFindLiveByIdGuest: vi.fn(),
+  mockFindByIdIncludingRevokedGuest: vi.fn(),
   mockFindLiveByIdCalendarEvent: vi.fn(),
+  mockFindByIdIncludingRetiredCalendarEvent: vi.fn(),
   mockFindByIdMeeting: vi.fn(),
   mockClaimSend: vi.fn(),
   mockMarkSent: vi.fn(),
@@ -43,8 +47,14 @@ const {
 
 vi.mock('@balo/db', () => ({
   usersRepository: { findById: mockFindByIdUser },
-  meetingGuestsRepository: { findLiveById: mockFindLiveByIdGuest },
-  meetingCalendarEventsRepository: { findLiveById: mockFindLiveByIdCalendarEvent },
+  meetingGuestsRepository: {
+    findLiveById: mockFindLiveByIdGuest,
+    findByIdIncludingRevoked: mockFindByIdIncludingRevokedGuest,
+  },
+  meetingCalendarEventsRepository: {
+    findLiveById: mockFindLiveByIdCalendarEvent,
+    findByIdIncludingRetired: mockFindByIdIncludingRetiredCalendarEvent,
+  },
   meetingsRepository: { findById: mockFindByIdMeeting },
   meetingCalendarDeliveriesRepository: {
     claimSend: mockClaimSend,
@@ -105,6 +115,20 @@ const GUEST_SPEC = {
   contextType: 'case' as const,
 };
 
+// ── BAL-476 — the two WITHDRAWAL specs ────────────────────────────────────────────────────
+
+const CANCEL_USER_SPEC = {
+  ...USER_SPEC,
+  method: 'CANCEL' as const,
+  transition: 'cancelled' as const,
+};
+
+const GUEST_REMOVED_SPEC = {
+  ...GUEST_SPEC,
+  method: 'CANCEL' as const,
+  transition: 'guest_removed' as const,
+};
+
 function makeJob(
   payload: Record<string, unknown>,
   opts: { id?: string; attemptsMade?: number; attempts?: number } = {}
@@ -163,6 +187,17 @@ beforeEach(() => {
     name: 'Guest Person',
   });
   mockFindLiveByIdCalendarEvent.mockResolvedValue(LIVE_ROW);
+  // BAL-476 — the retired-tolerant reads default to the SAME row / guest, so a CANCEL test only
+  // has to override the arm it is actually exercising.
+  mockFindByIdIncludingRetiredCalendarEvent.mockResolvedValue(LIVE_ROW);
+  mockFindByIdIncludingRevokedGuest.mockResolvedValue({
+    id: 'guest-1',
+    meetingId: MEETING_ID,
+    party: 'client',
+    admission: 'admitted',
+    email: 'guest@example.test',
+    name: 'Guest Person',
+  });
   mockFindByIdMeeting.mockResolvedValue(LIVE_MEETING);
   mockClaimSend.mockResolvedValue({ status: 'claimed', delivery: { id: 'delivery-1' } });
   mockMarkSent.mockResolvedValue({ id: 'delivery-1' });
@@ -808,5 +843,299 @@ describe('describeSmtpFailure', () => {
       responseCode: null,
       command: null,
     });
+  });
+});
+
+// ── BAL-476 — a REQUEST may only address LIVE state; a CANCEL may address RETIRED state ───
+
+function withdrawalJob(spec: unknown, correlationId: string) {
+  return makeJob({
+    recipientId: 'user-1',
+    template: 'meeting-calendar-invite',
+    event: 'meeting.calendar_invite',
+    data: {},
+    payload: { correlationId },
+    calendarInvite: spec,
+  });
+}
+
+describe('deliverCalendarInvite — BAL-476 gate A (the calendar row)', () => {
+  /**
+   * ⚠⚠ MUTATION PROOF FOR THIS ASSERTION: make the Step-3 read unconditionally retired-tolerant
+   * (drop the `isWithdrawal ?` branch) and this test goes red — a REQUEST would then find the
+   * retired row and SEND, re-issuing an invite for a series Balo has already withdrawn.
+   */
+  it('⚠ a REQUEST whose calendar row is retired skips calendar_event_not_live and sends NOTHING', async () => {
+    mockFindLiveByIdCalendarEvent.mockResolvedValue(undefined);
+
+    await deliverCalendarInvite(withdrawalJob(USER_SPEC, 'corr-1'), FAKE_TRANSPORT);
+
+    expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
+    expect(mockClaimSend).not.toHaveBeenCalled();
+    expect(mockFindByIdIncludingRetiredCalendarEvent).not.toHaveBeenCalled();
+    expect(mockLogNotification).toHaveBeenCalledWith(
+      expect.anything(),
+      'email',
+      'skipped',
+      'calendar_event_not_live'
+    );
+  });
+
+  it('⚠ a CANCEL whose calendar row is retired SENDS, off the retired-tolerant read', async () => {
+    mockFindLiveByIdCalendarEvent.mockResolvedValue(undefined);
+    mockFindByIdIncludingRetiredCalendarEvent.mockResolvedValue({
+      ...LIVE_ROW,
+      deletedAt: new Date(),
+    });
+
+    await deliverCalendarInvite(
+      withdrawalJob(CANCEL_USER_SPEC, 'cancelled:a:client:user:user-1'),
+      FAKE_TRANSPORT
+    );
+
+    expect(mockFindLiveByIdCalendarEvent).not.toHaveBeenCalled();
+    expect(mockFindByIdIncludingRetiredCalendarEvent).toHaveBeenCalledWith({
+      id: ROW_ID,
+      meetingId: MEETING_ID,
+      party: 'client',
+    });
+    expect(FAKE_TRANSPORT.send).toHaveBeenCalledTimes(1);
+    expect(mockBuildIcs).toHaveBeenCalledWith(expect.objectContaining({ method: 'CANCEL' }));
+    expect(mockBuildMailOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'CANCEL' })
+    );
+  });
+
+  /**
+   * ⚠ TWO DISTINCT LABELS. "The row was retired" and "the row never existed" are different
+   * operational facts, and a dashboard that cannot tell them apart is the one thing this log
+   * line has to be right about.
+   */
+  it('⚠ a CANCEL whose row does not exist AT ALL skips calendar_event_not_FOUND', async () => {
+    mockFindByIdIncludingRetiredCalendarEvent.mockResolvedValue(undefined);
+
+    await deliverCalendarInvite(withdrawalJob(CANCEL_USER_SPEC, 'corr-x'), FAKE_TRANSPORT);
+
+    expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
+    expect(mockLogNotification).toHaveBeenCalledWith(
+      expect.anything(),
+      'email',
+      'skipped',
+      'calendar_event_not_found'
+    );
+  });
+});
+
+describe('deliverCalendarInvite — BAL-476 gate B (meeting liveness)', () => {
+  it.each(['cancelled', 'ended'] as const)(
+    '⚠ a CANCEL for a %s meeting SENDS — that is the whole point of the withdrawal',
+    async (status) => {
+      mockFindByIdMeeting.mockResolvedValue({ ...LIVE_MEETING, status });
+
+      await deliverCalendarInvite(withdrawalJob(CANCEL_USER_SPEC, 'corr-y'), FAKE_TRANSPORT);
+
+      expect(FAKE_TRANSPORT.send).toHaveBeenCalledTimes(1);
+      expect(mockClaimSend).toHaveBeenCalledWith(expect.objectContaining({ method: 'CANCEL' }));
+    }
+  );
+
+  it.each(['cancelled', 'ended'] as const)(
+    '⚠ a REQUEST for a %s meeting still skips meeting_not_live',
+    async (status) => {
+      mockFindByIdMeeting.mockResolvedValue({ ...LIVE_MEETING, status });
+
+      await deliverCalendarInvite(withdrawalJob(USER_SPEC, 'corr-z'), FAKE_TRANSPORT);
+
+      expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
+      expect(mockLogNotification).toHaveBeenCalledWith(
+        expect.anything(),
+        'email',
+        'skipped',
+        'meeting_not_live'
+      );
+    }
+  );
+
+  it('⚠ a CANCEL for a meeting that does NOT EXIST skips meeting_not_FOUND', async () => {
+    mockFindByIdMeeting.mockResolvedValue(undefined);
+
+    await deliverCalendarInvite(withdrawalJob(CANCEL_USER_SPEC, 'corr-w'), FAKE_TRANSPORT);
+
+    expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
+    expect(mockLogNotification).toHaveBeenCalledWith(
+      expect.anything(),
+      'email',
+      'skipped',
+      'meeting_not_found'
+    );
+  });
+});
+
+describe('deliverCalendarInvite — BAL-476 gate C (the revoked guest)', () => {
+  it('⚠ a CANCEL to a REVOKED guest sends, off the revoked-tolerant read', async () => {
+    mockFindLiveByIdGuest.mockResolvedValue(undefined);
+    mockFindByIdIncludingRevokedGuest.mockResolvedValue({
+      id: 'guest-1',
+      meetingId: MEETING_ID,
+      party: 'client',
+      admission: 'admitted',
+      revokedAt: new Date(),
+      deletedAt: new Date(),
+      email: 'guest@example.test',
+      name: 'Guest Person',
+    });
+
+    await deliverCalendarInvite(
+      withdrawalJob(GUEST_REMOVED_SPEC, 'guest_removed:guest-1'),
+      FAKE_TRANSPORT
+    );
+
+    expect(mockFindLiveByIdGuest).not.toHaveBeenCalled();
+    expect(mockFindByIdIncludingRevokedGuest).toHaveBeenCalledWith(MEETING_ID, 'guest-1');
+    expect(FAKE_TRANSPORT.send).toHaveBeenCalledTimes(1);
+    expect(mockBuildIcs).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'CANCEL', recipientAddress: 'guest@example.test' })
+    );
+  });
+
+  /**
+   * ⚠⚠ THE HAZARD THE `guestIsAdmittedForRead` RE-CHECK EXISTS FOR, KEPT ON THE CANCEL ARM: a
+   * `pending` anonymous lobby knock's self-declared address was never invited by Balo, so it must
+   * never receive an unsolicited ICS — not even a withdrawal.
+   */
+  it('⚠ a CANCEL to a revoked PENDING knock still skips guest_not_admitted', async () => {
+    mockFindByIdIncludingRevokedGuest.mockResolvedValue({
+      id: 'guest-1',
+      meetingId: MEETING_ID,
+      party: 'client',
+      admission: 'pending',
+      revokedAt: new Date(),
+      email: 'stranger@example.test',
+      name: 'Stranger',
+    });
+
+    await deliverCalendarInvite(withdrawalJob(GUEST_REMOVED_SPEC, 'corr-p'), FAKE_TRANSPORT);
+
+    expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
+    expect(mockLogNotification).toHaveBeenCalledWith(
+      expect.anything(),
+      'email',
+      'skipped',
+      'guest_not_admitted'
+    );
+  });
+
+  it('⚠ a CANCEL to a CROSS-PARTY guest still skips guest_not_admitted', async () => {
+    mockFindByIdIncludingRevokedGuest.mockResolvedValue({
+      id: 'guest-1',
+      meetingId: MEETING_ID,
+      party: 'expert',
+      admission: 'admitted',
+      email: 'other-side@example.test',
+      name: 'Other Side',
+    });
+
+    await deliverCalendarInvite(withdrawalJob(GUEST_REMOVED_SPEC, 'corr-q'), FAKE_TRANSPORT);
+
+    expect(FAKE_TRANSPORT.send).not.toHaveBeenCalled();
+    expect(mockLogNotification).toHaveBeenCalledWith(
+      expect.anything(),
+      'email',
+      'skipped',
+      'guest_not_admitted'
+    );
+  });
+
+  it('a REQUEST still reads the LIVE guest index and never the revoked-tolerant one', async () => {
+    await deliverCalendarInvite(withdrawalJob(GUEST_SPEC, 'guest_added:guest-1'), FAKE_TRANSPORT);
+
+    expect(mockFindLiveByIdGuest).toHaveBeenCalledTimes(1);
+    expect(mockFindByIdIncludingRevokedGuest).not.toHaveBeenCalled();
+  });
+});
+
+describe('deliverCalendarInvite — BAL-476 the CANCEL carries the method everywhere', () => {
+  it('claimSend and the notification_log metadata both carry CANCEL, never REQUEST', async () => {
+    await deliverCalendarInvite(withdrawalJob(CANCEL_USER_SPEC, 'corr-m'), FAKE_TRANSPORT);
+
+    expect(mockClaimSend).toHaveBeenCalledWith({
+      calendarEventId: ROW_ID,
+      recipient: CANCEL_USER_SPEC.recipient,
+      sequence: LIVE_ROW.sequence,
+      method: 'CANCEL',
+      channel: 'email',
+      claimToken: 'job-1',
+    });
+    expect(mockLogNotification).toHaveBeenCalledWith(
+      expect.anything(),
+      'email',
+      'sent',
+      undefined,
+      expect.objectContaining({ method: 'CANCEL', transition: 'cancelled' })
+    );
+  });
+
+  /**
+   * T-13 — ⚠ NO COUNTERPARTY ADDRESS IN ANY CANCEL FIELD OR PAYLOAD, asserted end to end through
+   * the REAL builder and the REAL mail-options constructor (the F8(a) precedent).
+   */
+  it('⚠ the CANCEL ICS names ONLY Balo and the one resolved recipient, and the payload carries no second address', async () => {
+    const { buildCalendarInviteIcs } = await vi.importActual<
+      typeof import('../../services/calendar-invites/build-calendar-invite-ics.js')
+    >('../../services/calendar-invites/build-calendar-invite-ics.js');
+    const { buildCalendarInviteMailOptions } = await vi.importActual<
+      typeof import('./calendar-invite-message.js')
+    >('./calendar-invite-message.js');
+    const { unfoldIcs, icsAddressPropertyNames } =
+      await import('../../test/fixtures/ics-assertions.js');
+    mockBuildIcs.mockImplementation(buildCalendarInviteIcs);
+    mockBuildMailOptions.mockImplementation(buildCalendarInviteMailOptions);
+    mockFindLiveByIdGuest.mockResolvedValue(undefined);
+    mockFindByIdIncludingRevokedGuest.mockResolvedValue({
+      id: 'guest-1',
+      meetingId: MEETING_ID,
+      party: 'client',
+      admission: 'admitted',
+      revokedAt: new Date(),
+      email: 'guest@example.test',
+      name: 'Guest Person',
+    });
+
+    await deliverCalendarInvite(
+      withdrawalJob(GUEST_REMOVED_SPEC, 'guest_removed:guest-1'),
+      FAKE_TRANSPORT
+    );
+
+    expect(FAKE_TRANSPORT.send).toHaveBeenCalledTimes(1);
+    const [sentOptions] = FAKE_TRANSPORT.send.mock.calls[0] as [
+      {
+        to: { address: string };
+        from: { address: string };
+        icalEvent: { method: string; content: string };
+      },
+    ];
+    expect(sentOptions.icalEvent.method).toBe('CANCEL');
+
+    const lines = unfoldIcs(sentOptions.icalEvent.content);
+    expect(lines).toContain('METHOD:CANCEL');
+    expect(lines).toContain('STATUS:CANCELLED');
+    const addressProperties = icsAddressPropertyNames(lines);
+    expect(addressProperties.length).toBeGreaterThan(0);
+    expect([...new Set(addressProperties)].sort((a, b) => a.localeCompare(b))).toEqual([
+      'ATTENDEE',
+      'ORGANIZER',
+    ]);
+    const attendeeLines = lines.filter((line) => line.startsWith('ATTENDEE'));
+    expect(attendeeLines).toHaveLength(1);
+    expect(attendeeLines[0]).toContain('guest@example.test');
+
+    // ⚠ THE DELIVERY PAYLOAD HANDED TO `logNotification` CARRIES NO SECOND ADDRESS.
+    const sentLogCall = mockLogNotification.mock.calls.find((call) => call[2] === 'sent');
+    expect(sentLogCall).toBeDefined();
+    const payload = sentLogCall?.[0] as Record<string, unknown>;
+    const addressValues = Object.values(payload).filter(
+      (value) => typeof value === 'string' && value.includes('@')
+    );
+    expect(addressValues).toEqual(['guest@example.test']);
   });
 });

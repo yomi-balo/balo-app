@@ -1377,6 +1377,91 @@ describe('meetingGuestsRepository — the live reads', () => {
   });
 });
 
+/**
+ * ⚠⚠ BAL-476 (T-14) — THE WITHDRAWAL READ, and the ONE read in this repository that sees a
+ * revoked row. Everything else keeps refusing it: revocation stays IMMEDIATE AND TOTAL.
+ *
+ * It exists because a `METHOD:CANCEL` is BY DEFINITION addressed to somebody whose access was
+ * just revoked — `revoke` stamps `revoked_at` AND `deleted_at` in one statement, so by the time
+ * the calendar-withdrawal job runs there is no live row left to compose the ICS from.
+ */
+describe('meetingGuestsRepository.findByIdIncludingRevoked (BAL-476)', () => {
+  it('resolves a REVOKED + soft-deleted row that findLiveById refuses, address and admission intact', async () => {
+    const remover = await userFactory();
+    const seeded = await meetingGuestFactory();
+    await meetingGuestsRepository.revoke({
+      guestId: seeded.guest.id,
+      revokedByUserId: remover.id,
+    });
+
+    const withdrawn = await meetingGuestsRepository.findByIdIncludingRevoked(
+      seeded.meetingId,
+      seeded.guest.id
+    );
+
+    expect(withdrawn).toMatchObject({
+      id: seeded.guest.id,
+      meetingId: seeded.meetingId,
+      // The address the CANCEL is composed FROM — never re-read from a live index, which by
+      // now holds nothing for this person.
+      email: seeded.guest.email,
+      party: seeded.guest.party,
+      // ⚠ `revoke` does NOT touch `admission`, so the admitted-ness AT REMOVAL TIME survives
+      // verbatim — which is what lets the delivery path keep its `guestIsAdmittedForRead`
+      // check on a CANCEL and still refuse an anonymous `pending` lobby knock.
+      admission: seeded.guest.admission,
+    });
+    expect(withdrawn?.revokedAt).toBeInstanceOf(Date);
+    expect(withdrawn?.revokedByUserId).toBe(remover.id);
+    expect(withdrawn?.deletedAt).toBeInstanceOf(Date);
+
+    // Every other read still refuses this person — the relax is contained to this method.
+    await expect(
+      meetingGuestsRepository.findLiveById(seeded.meetingId, seeded.guest.id)
+    ).resolves.toBeUndefined();
+    await expect(
+      meetingGuestsRepository.findLiveByTokenHash(seeded.guest.tokenHash)
+    ).resolves.toBeUndefined();
+    expect(await meetingGuestsRepository.listLiveByMeeting(seeded.meetingId)).toHaveLength(0);
+  });
+
+  it('resolves a LIVE row too — the relax is on revoked_at / deleted_at and NOTHING else', async () => {
+    const seeded = await meetingGuestFactory();
+
+    await expect(
+      meetingGuestsRepository.findByIdIncludingRevoked(seeded.meetingId, seeded.guest.id)
+    ).resolves.toMatchObject({ id: seeded.guest.id, revokedAt: null, deletedAt: null });
+  });
+
+  it('is SCOPED BY MEETING — a revoked guest id from another meeting resolves to undefined', async () => {
+    const remover = await userFactory();
+    const mine = await meetingFactory();
+    const seeded = await meetingGuestFactory();
+    await meetingGuestsRepository.revoke({
+      guestId: seeded.guest.id,
+      revokedByUserId: remover.id,
+    });
+
+    await expect(
+      meetingGuestsRepository.findByIdIncludingRevoked(mine.meeting.id, seeded.guest.id)
+    ).resolves.toBeUndefined();
+    await expect(
+      meetingGuestsRepository.findByIdIncludingRevoked(seeded.meetingId, seeded.guest.id)
+    ).resolves.toMatchObject({ id: seeded.guest.id });
+  });
+
+  it('answers undefined for a guest id that does not exist', async () => {
+    const { meeting } = await meetingFactory();
+
+    await expect(
+      meetingGuestsRepository.findByIdIncludingRevoked(
+        meeting.id,
+        '00000000-0000-4000-8000-000000000000'
+      )
+    ).resolves.toBeUndefined();
+  });
+});
+
 // ── revoke / recordAccess / extendExpiryForMeeting ───────────────────────────
 
 describe('meetingGuestsRepository.revoke', () => {

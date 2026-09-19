@@ -161,6 +161,11 @@ export type JoinMeetingResult =
 export type GuestJoinResult =
   | { readonly ok: true; readonly state: 'admitted'; readonly grant: JoinGrant }
   | { readonly ok: true; readonly state: 'waiting' }
+  /**
+   * BAL-476 (R5 amended) — the PROBE's only success answer: "this meeting and this token are
+   * both still live." Carries NO grant, because the probe mints nothing.
+   */
+  | { readonly ok: true; readonly state: 'live' }
   | { readonly ok: false; readonly code: JoinErrorCode };
 
 export type ClaimLobbyPlaceResult =
@@ -178,6 +183,27 @@ export interface JoinMeetingAsGuestInput {
   readonly meetingId: string;
   readonly rawGuestToken: string;
   readonly minter?: MeetingTokenMinter;
+  /**
+   * BAL-476 (R5 amended) — ⚠⚠ ASK THE ROUTE TO DO **LESS**, NEVER MORE.
+   *
+   * A guest who has just been ejected cannot tell "the host ended the call" from "I was removed"
+   * — daily-js reports both identically. The SERVER can: a removed guest's token stops resolving
+   * (`404 meeting_not_found`) while a host-ended meeting's token still resolves and
+   * `assertMeetingJoinable` refuses it (`409 meeting_not_open_for_join`). The exit card reads
+   * that refusal.
+   *
+   * ⚠ Called BARE, the inconclusive arm (a genuine network blip while both the meeting and the
+   * token are live) would answer `200 { state: 'admitted' }` and, on the way there, MINT A LIVE
+   * DAILY CREDENTIAL FOR NOBODY and fire a FALSE `guest_joined` funnel event. So the probe
+   * short-circuits immediately after `assertMeetingJoinable` and BEFORE the admission switch:
+   * no mint, no analytics, no write, no side effect of any kind — the identical contract the
+   * `waiting` arm already has.
+   *
+   * ⚠ IT UNLOCKS NOTHING. `404` / `409` / `200` are exactly the statuses this same caller
+   * already observes without it, it sits AFTER both rate-limit windows and after every
+   * authorization step, and scanning this route without a ≥256-bit token still learns nothing.
+   */
+  readonly probe?: boolean;
 }
 
 export interface ClaimLobbyPlaceInput {
@@ -878,6 +904,15 @@ export async function joinMeetingAsGuest(input: JoinMeetingAsGuestInput): Promis
   const liveness = await assertMeetingJoinable(meeting, primary.context);
   if (!liveness.ok) {
     return deny('meeting_not_open_for_join', liveness.reason, { meetingId, guestId: guest.id });
+  }
+
+  // 3b. BAL-476 (R5 amended) — ⚠⚠ THE PROBE SHORT-CIRCUITS **HERE**, AND THE POSITION IS THE
+  //     WHOLE SECURITY ARGUMENT: after every gate above (token resolution, the token's-meeting
+  //     check, the primary context, `assertMeetingJoinable`) and BEFORE the admission switch, so
+  //     it can never reach the mint below. Moving it lower would create a live Daily credential
+  //     for nobody and fire a false `guest_joined`. See `JoinMeetingAsGuestInput.probe`.
+  if (input.probe === true) {
+    return { ok: true, state: 'live' };
   }
 
   // 4. ⚠⚠ THE ADMISSION SWITCH — DECISION 2. A `pending` guest gets `waiting` and NOTHING

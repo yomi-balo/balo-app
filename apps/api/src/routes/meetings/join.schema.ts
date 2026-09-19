@@ -80,6 +80,15 @@ export type LobbyClaimBody = z.infer<typeof lobbyClaimBodySchema>;
  */
 export const guestJoinBodySchema = z.object({
   guestToken: z.string().min(20).max(200),
+  /**
+   * BAL-476 (R5 amended) — "am I still allowed in this call?", asked with NO side effects. See
+   * `JoinMeetingAsGuestInput.probe`.
+   *
+   * ⚠ `z.literal(true)`, NOT `z.boolean()`. `probe: false` is not a thing a caller should be
+   * able to say: the absence of the flag IS the ordinary join, and a falsy value that meant
+   * "join for real" would be one typo away from an unintended mint.
+   */
+  probe: z.literal(true).optional(),
 });
 
 export type GuestJoinBody = z.infer<typeof guestJoinBodySchema>;

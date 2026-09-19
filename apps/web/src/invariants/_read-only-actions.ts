@@ -239,6 +239,14 @@ export const PUBLIC_ACTION_ALLOWLIST: readonly string[] = [
   // whether or not a row matched, and the service returns `void` so no verdict can reach this
   // layer to be leaked.
   'app/join/_actions/request-lobby-reentry-link.ts',
+  // BAL-476 (R5 amended) — a just-EJECTED token-bearing guest asks "why am I out of this call?".
+  // Same premise as the two above: a guest has no WorkOS session, the ≥256-bit token IS the
+  // credential, and the route it forwards to is public BY DESIGN. It reads the REFUSAL that
+  // credential now produces (404 ⇒ removed, 409 ⇒ the host ended it) so the terminal card stops
+  // telling a removed person "the host ended the call for everyone", which is false.
+  // ⚠ It performs NO WRITE: `probe: true` short-circuits the api service before the admission
+  // switch — no Daily token minted, no analytics fired, no row touched.
+  'app/join/_actions/resolve-guest-exit-reason.ts',
 ];
 
 /**

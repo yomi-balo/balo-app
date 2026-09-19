@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { render } from '@react-email/render';
 import {
   MeetingCalendarInviteEmail,
+  TRANSITION_CHROME,
   type CalendarInviteEmailTransition,
 } from './meeting-calendar-invite.js';
+import { CALENDAR_INVITE_TRANSITIONS } from '../../calendar-invite-spec.js';
 import { getEmailTemplate } from './index.js';
 
 const START = '2026-09-01T10:00:00.000Z';
@@ -190,4 +192,108 @@ describe('MeetingCalendarInviteEmail', () => {
     const html = await render(MeetingCalendarInviteEmail(guestProps()));
     expect(html).not.toContain('Open in Balo');
   });
+});
+
+// ── BAL-476 — the two WITHDRAWAL transitions ──────────────────────────────────────────────
+
+describe('TRANSITION_CHROME — the one data table', () => {
+  it('⚠ is TOTAL over CALENDAR_INVITE_TRANSITIONS (a length assertion guards a vacuous pass)', () => {
+    const keys = Object.keys(TRANSITION_CHROME);
+    expect(keys).toHaveLength(CALENDAR_INVITE_TRANSITIONS.length);
+    expect(CALENDAR_INVITE_TRANSITIONS).toHaveLength(5);
+    expect([...keys].sort((a, b) => a.localeCompare(b))).toEqual(
+      [...CALENDAR_INVITE_TRANSITIONS].sort((a, b) => a.localeCompare(b))
+    );
+  });
+});
+
+describe('getEmailTemplate("meeting-calendar-invite") — withdrawal subjects (BAL-476)', () => {
+  it('cancelled: "Cancelled: {summary}" — never an invite-shaped subject', () => {
+    const { subject } = getEmailTemplate('meeting-calendar-invite', {
+      summary: 'Consultation with Northwind Industrial',
+      transition: 'cancelled',
+    });
+    expect(subject).toBe('Cancelled: Consultation with Northwind Industrial');
+    expect(subject).not.toContain('Calendar invite');
+  });
+
+  it('guest_removed: "Invitation withdrawn: {summary}"', () => {
+    const { subject } = getEmailTemplate('meeting-calendar-invite', {
+      summary: 'Consultation with Northwind Industrial',
+      transition: 'guest_removed',
+    });
+    expect(subject).toBe('Invitation withdrawn: Consultation with Northwind Industrial');
+  });
+});
+
+describe('MeetingCalendarInviteEmail — the withdrawal body (BAL-476)', () => {
+  const WITHDRAWALS = ['cancelled', 'guest_removed'] as const;
+
+  it('cancelled: the heading and the note say the call is off', async () => {
+    const html = await render(MeetingCalendarInviteEmail(memberProps({ transition: 'cancelled' })));
+    expect(html).toContain('This call has been cancelled');
+    expect(html).toContain('This call is no longer happening');
+    expect(html).toContain('Cancelled');
+  });
+
+  it('guest_removed: the heading and the note say the invitation is withdrawn', async () => {
+    const html = await render(
+      MeetingCalendarInviteEmail(guestProps({ transition: 'guest_removed' }))
+    );
+    expect(html).toContain('Your invitation has been withdrawn');
+    expect(html).toContain('You are no longer on this call');
+    expect(html).toContain('the invite link no longer works');
+  });
+
+  /**
+   * ⚠⚠ THE ONE THING THE WITHDRAWAL COPY MUST NOT DO: offer a way INTO a call that is cancelled,
+   * or that this person is no longer on.
+   */
+  it.each(WITHDRAWALS)(
+    '⚠ %s, member audience: NO "Open in Balo" CTA and no /join/ href',
+    async (transition) => {
+      const html = await render(MeetingCalendarInviteEmail(memberProps({ transition })));
+      expect(html).not.toContain('Open in Balo');
+      expect(hrefsIn(html).some((href) => href.includes('/join/'))).toBe(false);
+    }
+  );
+
+  it.each(WITHDRAWALS)('⚠ %s, guest audience: NO guest join note', async (transition) => {
+    const html = await render(MeetingCalendarInviteEmail(guestProps({ transition })));
+    expect(html).not.toContain('invitation email Balo sent you');
+    expect(hrefsIn(html).some((href) => href.includes('/join/'))).toBe(false);
+  });
+
+  it.each(WITHDRAWALS)(
+    '%s: the .ics sentence says the entry comes OFF the calendar, in BOTH html and plain text',
+    async (transition) => {
+      const props = memberProps({ transition });
+      const html = await render(MeetingCalendarInviteEmail(props));
+      const text = await render(MeetingCalendarInviteEmail(props), { plainText: true });
+      expect(html).toContain('comes off your own calendar app');
+      expect(text).toContain('comes off your own calendar app');
+      expect(html).not.toContain('lands correctly in your own calendar app');
+    }
+  );
+
+  it.each(WITHDRAWALS)('%s: still names WHICH call — the when-block stays', async (transition) => {
+    const html = await render(MeetingCalendarInviteEmail(memberProps({ transition })));
+    expect(html).toContain('Consultation with Northwind Industrial');
+  });
+
+  /** ⚠ It says what happened and what is now true. It NEVER says why — Balo does not know. */
+  it.each(WITHDRAWALS)('⚠ %s: never editorialises about WHY', async (transition) => {
+    const html = await render(MeetingCalendarInviteEmail(memberProps({ transition })));
+    for (const forbidden of ['because', 'removed you', 'kicked', 'banned', 'denied']) {
+      expect(html).not.toContain(forbidden);
+    }
+  });
+
+  it.each(WITHDRAWALS)(
+    '%s: keeps the "rescheduling and cancelling happen in Balo" footer',
+    async (transition) => {
+      const html = await render(MeetingCalendarInviteEmail(memberProps({ transition })));
+      expect(html).toContain('Rescheduling and cancelling happen in Balo');
+    }
+  );
 });

@@ -11,6 +11,9 @@ const { mockLoggedFetch, mockLog } = vi.hoisted(() => ({
   },
 }));
 
+/** BAL-476 — the per-WRITE correlation handle threaded through the teardown wire. */
+const CANCEL_AUDIT_ID = '550e8400-e29b-41d4-a716-446655440044';
+
 vi.mock('server-only', () => ({}));
 
 vi.mock('@/lib/logging/fetch-wrapper', () => ({
@@ -47,8 +50,8 @@ describe('postCancelledTeardown', () => {
     mockLoggedFetch.mockResolvedValue({ ok: true });
 
     await postCancelledTeardown([
-      { meetingId: 'meeting-1', expertProfileId: 'expert-1' },
-      { meetingId: 'meeting-2', expertProfileId: null },
+      { meetingId: 'meeting-1', expertProfileId: 'expert-1', cancelAuditId: CANCEL_AUDIT_ID },
+      { meetingId: 'meeting-2', expertProfileId: null, cancelAuditId: CANCEL_AUDIT_ID },
     ]);
 
     expect(mockLoggedFetch).toHaveBeenCalledWith(
@@ -62,8 +65,8 @@ describe('postCancelledTeardown', () => {
         },
         body: JSON.stringify({
           meetings: [
-            { meetingId: 'meeting-1', expertProfileId: 'expert-1' },
-            { meetingId: 'meeting-2', expertProfileId: null },
+            { meetingId: 'meeting-1', expertProfileId: 'expert-1', cancelAuditId: CANCEL_AUDIT_ID },
+            { meetingId: 'meeting-2', expertProfileId: null, cancelAuditId: CANCEL_AUDIT_ID },
           ],
         }),
       })
@@ -73,7 +76,9 @@ describe('postCancelledTeardown', () => {
   it('logs error and never fetches when INTERNAL_API_SECRET is not set', async () => {
     delete process.env.INTERNAL_API_SECRET;
 
-    await postCancelledTeardown([{ meetingId: 'meeting-1', expertProfileId: null }]);
+    await postCancelledTeardown([
+      { meetingId: 'meeting-1', expertProfileId: null, cancelAuditId: CANCEL_AUDIT_ID },
+    ]);
 
     expect(mockLog.error).toHaveBeenCalledWith(
       'INTERNAL_API_SECRET not configured — cannot post cancelled-meeting teardown',
@@ -90,7 +95,9 @@ describe('postCancelledTeardown', () => {
     });
 
     await expect(
-      postCancelledTeardown([{ meetingId: 'meeting-1', expertProfileId: null }])
+      postCancelledTeardown([
+        { meetingId: 'meeting-1', expertProfileId: null, cancelAuditId: CANCEL_AUDIT_ID },
+      ])
     ).resolves.toBeUndefined();
 
     expect(mockLog.error).toHaveBeenCalledWith(
@@ -104,6 +111,7 @@ describe('postCancelledTeardown', () => {
     const oversized = Array.from({ length: TEARDOWN_BATCH_SIZE + 1 }, (_, i) => ({
       meetingId: `meeting-${i}`,
       expertProfileId: null,
+      cancelAuditId: CANCEL_AUDIT_ID,
     }));
 
     await postCancelledTeardown(oversized);
@@ -128,6 +136,7 @@ describe('postCancelledTeardown', () => {
     const oversized = Array.from({ length: TEARDOWN_BATCH_SIZE + 2 }, (_, i) => ({
       meetingId: `meeting-${i}`,
       expertProfileId: null,
+      cancelAuditId: CANCEL_AUDIT_ID,
     }));
 
     await expect(postCancelledTeardown(oversized)).resolves.toBeUndefined();
@@ -140,7 +149,9 @@ describe('postCancelledTeardown', () => {
     mockLoggedFetch.mockRejectedValue(new Error('Network error'));
 
     await expect(
-      postCancelledTeardown([{ meetingId: 'meeting-1', expertProfileId: null }])
+      postCancelledTeardown([
+        { meetingId: 'meeting-1', expertProfileId: null, cancelAuditId: CANCEL_AUDIT_ID },
+      ])
     ).resolves.toBeUndefined();
 
     expect(mockLog.error).toHaveBeenCalledWith(

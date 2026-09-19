@@ -23,10 +23,15 @@ import { timestamps, softDelete } from './helpers';
 export type MeetingCalendarDeliveryChannel = 'email';
 
 /**
- * The RFC 5546 iTIP method on the wire. `REQUEST` only in BAL-475; BAL-476 relaxes the CHECK
- * to add `CANCEL` (again a CHECK relax, not an enum migration).
+ * The RFC 5546 iTIP method on the wire. `REQUEST` issues (or re-issues) the series;
+ * `CANCEL` withdraws it — BAL-476, added by migration `0098` as a CHECK relax rather than an
+ * `ALTER TYPE … ADD VALUE`, which is exactly why the column is `text` + CHECK.
+ *
+ * ⚠ `method` IS PART OF BOTH PARTIAL UNIQUES below, so a `CANCEL` at the SAME `sequence` as an
+ * earlier `REQUEST` is a DISTINCT ledger row, and "no duplicate withdrawal at the same
+ * sequence" falls out of `claimSend`'s shipped protocol with no extra column, index or guard.
  */
-export type MeetingCalendarDeliveryMethod = 'REQUEST';
+export type MeetingCalendarDeliveryMethod = 'REQUEST' | 'CANCEL';
 
 /**
  * meeting_calendar_deliveries (BAL-475, decision O4) — ONE ROW PER CALENDAR-INVITE SEND:
@@ -174,7 +179,7 @@ export const meetingCalendarDeliveries = pgTable(
     ),
     methodKnown: check(
       'meeting_calendar_delivery_method_known',
-      sql`${table.method} IN ('REQUEST')`
+      sql`${table.method} IN ('REQUEST','CANCEL')`
     ),
     sequenceNonNegative: check(
       'meeting_calendar_delivery_sequence_non_negative',

@@ -124,6 +124,7 @@ export type {
   MeetingPanelDecisionOutcome,
   MeetingPanelInviteOutcome,
   MeetingPanelOutcome,
+  MeetingPanelRemovalState,
   MeetingPanelFileOutcome,
   MeetingPanelSizeBucket,
   MeetingPanelMessageOutcome,

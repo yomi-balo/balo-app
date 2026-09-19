@@ -52,6 +52,7 @@ import {
   type CancelMeetingOutcome,
 } from '../../services/meetings/meeting-availability.js';
 import { publishBookingCancelled } from '../../services/meetings/publish-booking-cancelled.js';
+import { withdrawMeetingCalendarProjection } from '../../services/meetings/withdraw-meeting-calendar.js';
 import type { PrimaryMeetingContext } from '@balo/shared/meetings';
 import { CANCEL_USER_RATE_LIMIT, enforceBookingRateLimit } from './guards.js';
 import { meetingIdParamsSchema } from './join.schema.js';
@@ -138,14 +139,23 @@ function toErrorLogFields(error: unknown): {
 }
 
 /**
- * FAIL-SOFT PUBLISH — see the module docblock. The cancellation has already committed by the
- * time this runs; a publish failure must never turn it into a 500 and must never change the
- * status code the caller already earned, so it is logged and swallowed, never re-thrown.
+ * FAIL-SOFT POST-CANCEL FAN-OUT — see the module docblock. The cancellation has already committed
+ * by the time this runs; a failure here must never turn it into a 500 and must never change the
+ * status code the caller already earned, so every step is logged and swallowed, never re-thrown.
+ *
+ * ⚠ THE TELLING GOES FIRST, THE JANITORIAL VENDOR CALLS SECOND — the house rule stated at
+ * `_actions/_shared/close-request-fanout.ts`. So: `booking.cancelled`, then BAL-476's calendar
+ * withdrawal.
+ *
+ * ⚠⚠ THE WITHDRAWAL IS **NOT** NESTED INSIDE `publishBookingCancelled`. That function is
+ * hard-gated to `contextType: 'case'`, while the calendar projection exists for all five
+ * `BOOKABLE_CONTEXT_TYPES` — nesting it would silently drop the withdrawal for `project_kickoff`,
+ * `package_session`, `project_discovery` and `request_interaction`.
  *
  * ⚠ EXTRACTED alongside `toErrorLogFields`, for the same reason as `resolveCancelInput` — keeps
  * the route handler a flat read and stays under SonarCloud's cognitive-complexity ceiling of 15.
  */
-async function publishCancellationFailSoft(
+async function runPostCancelFanout(
   input: ResolvedCancelInput,
   result: CancelMeetingOutcome,
   requestLog: FastifyBaseLogger
@@ -174,6 +184,32 @@ async function publishCancellationFailSoft(
         ...toErrorLogFields(error),
       },
       'Failed to publish booking.cancelled — the cancellation itself already committed'
+    );
+  }
+
+  // ⚠ THE CONTRACT-VIOLATION BACKSTOP. `withdrawMeetingCalendarProjection` catches every read,
+  // vendor call and retire of its own; the ONE thing it lets propagate is a W1 contract
+  // violation (see its docblock — stopping before the retire is the deliberate failure
+  // direction). Both producers wrap it, for the same reason the `publishBookingCancelled` catch
+  // above exists: the cancellation has already committed and nothing here may change the status
+  // code the caller already earned.
+  try {
+    await withdrawMeetingCalendarProjection(
+      {
+        meetingId: input.meetingId,
+        cancelAuditId: result.cancelAuditId,
+        expertProfileId: input.expertProfileId,
+      },
+      requestLog
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: input.meetingId,
+        userId: input.userId,
+        ...toErrorLogFields(error),
+      },
+      'Calendar withdrawal threw despite its never-throws contract — the cancellation itself already committed'
     );
   }
 }
@@ -234,8 +270,8 @@ export async function meetingCancelRoutes(fastify: FastifyInstance): Promise<voi
           ...(input.actorRole === 'client' ? { holdReleased: result.holdReleased } : {}),
         });
 
-        // ⚠ AFTER THE REPLY IS BUILT, AND FAIL-SOFT — see `publishCancellationFailSoft`.
-        await publishCancellationFailSoft(input, result, request.log);
+        // ⚠ AFTER THE REPLY IS BUILT, AND FAIL-SOFT — see `runPostCancelFanout`.
+        await runPostCancelFanout(input, result, request.log);
         return;
       } catch (error) {
         if (error instanceof MeetingNotCancellableError) {

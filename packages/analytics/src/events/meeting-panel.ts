@@ -27,6 +27,8 @@ export const MEETING_PANEL_EVENTS = {
   GUESTS_INVITED: 'meeting_panel_guests_invited',
   JOIN_LINK_COPIED: 'meeting_panel_join_link_copied',
   LINK_RESENT: 'meeting_panel_link_resent',
+  // ── BAL-476 (R3) — the in-call Remove control ───────────────────────────────────────
+  GUEST_REMOVED: 'meeting_panel_guest_removed',
   FILE_SHARED: 'meeting_panel_file_shared',
   FILE_DOWNLOADED: 'meeting_panel_file_downloaded',
   // ── BAL-437 — the chat slot and the reaction control ────────────────────────────────
@@ -73,8 +75,25 @@ export type MeetingPanelInviteOutcome =
   | 'rate_limited'
   | 'failed';
 
-/** How a re-send or a download resolved. Binary — neither has a race or a refusal shape. */
+/**
+ * How a re-send, a download or a REMOVAL resolved. Binary — none has a race or a refusal shape.
+ *
+ * ⚠ BAL-476 reuses this for `GUEST_REMOVED` rather than minting a third outcome type: the
+ * removal route answers the plain `guest_not_found` literal for a LOST RACE on purpose ("a
+ * distinct code would only describe our own timing"), so the client has nothing to split on and
+ * an `already_removed` bucket would always be empty.
+ */
 export type MeetingPanelOutcome = 'ok' | 'failed';
+
+/**
+ * BAL-476 — which roster state the removed person was in when the actor confirmed.
+ *
+ * ⚠ THIS IS THE PRODUCT QUESTION THE EVENT EXISTS FOR: "are people removing someone who is ON
+ * the call, or withdrawing an invite that was never used?" Those are different problems with
+ * different remedies. ⚠ `waiting` is absent BY CONSTRUCTION — the lobby row offers Deny, never
+ * Remove.
+ */
+export type MeetingPanelRemovalState = 'in_call' | 'invited' | 'not_arrived';
 
 /**
  * How a file share resolved.
@@ -150,6 +169,16 @@ export interface MeetingPanelEventMap {
   };
   [MEETING_PANEL_EVENTS.LINK_RESENT]: {
     meeting_id?: string;
+    outcome: MeetingPanelOutcome;
+  };
+  /**
+   * ⚠ A STATE AND AN OUTCOME AND NOTHING ELSE — never the person's name, address, email domain,
+   * `meeting_guests.id` or Daily participant id (see this file's header).
+   */
+  [MEETING_PANEL_EVENTS.GUEST_REMOVED]: {
+    meeting_id?: string;
+    context_type?: string;
+    state: MeetingPanelRemovalState;
     outcome: MeetingPanelOutcome;
   };
   [MEETING_PANEL_EVENTS.FILE_SHARED]: {

@@ -84,6 +84,9 @@ export function runCloseRequestFanout(
       result.cancelledMeetings.map((meeting) => ({
         meetingId: meeting.meetingId,
         expertProfileId: meeting.expertProfileId,
+        // BAL-476 — the per-WRITE correlation handle for the calendar withdrawal. It already
+        // existed on this result (`cancelMeetingTx` mints it); this mapper was dropping it.
+        cancelAuditId: meeting.cancelAuditId,
       }))
     );
   });

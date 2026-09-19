@@ -17,7 +17,13 @@ const MEMBER: MeetingMemberPanelRegistration = {
   joinLinkUrl: 'https://balo.test/join/m/x',
   loadGuests: async () => ({
     success: true,
-    data: { guests: [], canHost: false, participantCount: 1, participantCap: 10 },
+    data: {
+      guests: [],
+      canHost: false,
+      viewerSide: 'client' as const,
+      participantCount: 1,
+      participantCap: 10,
+    },
   }),
   inviteGuests: async () => ({
     success: true,
@@ -27,6 +33,7 @@ const MEMBER: MeetingMemberPanelRegistration = {
   }),
   decideAdmission: async () => ({ success: true }),
   resendLink: async () => ({ success: true }),
+  removeGuest: async () => ({ success: true }),
   files: {
     list: async () => ({ success: true, files: [] }),
     requestUpload: async () => ({ success: true, presignedUrl: 'x', key: 'y' }),

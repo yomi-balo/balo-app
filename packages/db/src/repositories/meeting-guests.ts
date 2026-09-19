@@ -596,6 +596,35 @@ export const meetingGuestsRepository = {
   },
 
   /**
+   * BAL-476 — one guest by `(meetingId, id)` INCLUDING a REVOKED and/or SOFT-DELETED row.
+   *
+   * ⚠⚠ THE WITHDRAWAL READ, AND NOTHING ELSE MAY CALL IT. {@link findLiveById} is the read
+   * every authorization, roster and admission path uses, and it STAYS that way: revocation is
+   * IMMEDIATE AND TOTAL. This exists because a `METHOD:CANCEL` is BY DEFINITION addressed to
+   * somebody whose access has just been revoked — by the time the delivery job runs there is
+   * no live row left to compose the withdrawal from.
+   *
+   * ⚠ IT GRANTS NOTHING. The one caller (`calendar-invite-delivery.ts`, on a `CANCEL` spec
+   * only) uses it to resolve an address for a withdrawal it was already told to send, and
+   * STILL re-checks `party` and `guestIsAdmittedForRead` afterwards — so a `pending` lobby
+   * knock, whose self-declared address Balo never invited, receives nothing. The read writes
+   * nothing and un-revokes nothing.
+   *
+   * ⚠ `meetingId` IS IN THE WHERE — the tenancy scope, for the same reason
+   * {@link findLiveById} takes it. A guest id from another meeting resolves to `undefined`.
+   */
+  findByIdIncludingRevoked: async (
+    meetingId: string,
+    guestId: string
+  ): Promise<MeetingGuest | undefined> => {
+    const [row] = await db
+      .select()
+      .from(meetingGuests)
+      .where(and(eq(meetingGuests.id, guestId), eq(meetingGuests.meetingId, meetingId)));
+    return row;
+  },
+
+  /**
    * Remove a guest: stamp `revoked_at` + `revoked_by_user_id` + `deleted_at` in ONE
    * transaction and append a `meeting_guest.removed` audit row.
    *

@@ -71,6 +71,17 @@ export const LOBBY_LONG_WAIT_AFTER_MS = 180_000;
  * keep a live queue place — and, after an admit, a live room credential — on a shared or
  * public machine long after the person walked away.
  */
+/**
+ * BAL-476 (R5 amended) — the HARD BOUND on the exit-reason probe.
+ *
+ * ⚠⚠ ONE ATTEMPT, NO POLL, NO BACK-OFF, NO RE-ARM. This is a TERMINAL transition, not a wait:
+ * the card it selects offers no retry affordance of any kind (the same reasoning that gives
+ * `MeetingEndedNotice` no rejoin control), which would make an unbounded spinner a dead end the
+ * person can never leave. On abort the probe resolves to the VAGUER `access_ended` card, exactly
+ * like every other inconclusive answer.
+ */
+export const GUEST_EXIT_PROBE_TIMEOUT_MS = 4_000;
+
 export const LOBBY_TOKEN_STORAGE_KEY = 'balo.lobby-token';
 
 /**

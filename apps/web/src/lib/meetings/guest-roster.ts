@@ -1,4 +1,4 @@
-import type { GuestForViewer } from '@balo/shared/meetings';
+import type { GuestForViewer, MeetingGuestSide } from '@balo/shared/meetings';
 import { ADMITTED_NOT_ARRIVED_GRACE_MS } from './guests-poll';
 
 /**
@@ -59,6 +59,27 @@ export interface GuestRosterRow {
    * ago rotates a credential that was working fine.
    */
   readonly canResendLink: boolean;
+  /**
+   * BAL-476 — may the viewer remove this guest?
+   *
+   * ⚠⚠ THE RULE IS CHANNEL-FIRST, AND IT MIRRORS THE ROUTE'S rather than restating a simpler
+   * one. An `email` row's `party` WAS resolved server-side from the inviter's own authorized
+   * side, so same-party is the right question for it. A `link` row's `party` is a NOT-NULL
+   * PLACEHOLDER `claimLobbyPlace` writes because the column demands a value — a bare meeting URL
+   * carries no sharer identity — and `@balo/shared/meetings` forbids deriving same-party
+   * entitlement from it. For those rows the question is `canHost`, exactly as it is for
+   * admit/deny: whoever may admit a lobby visitor may un-admit them.
+   *
+   * ⚠ BOTH INPUTS ARE SERVER-COMPUTED AND TRANSMITTED (`guest.party`, `guest.inviteChannel`,
+   * `viewerSide`, `canHost`), so this is a plain expression over transmitted facts, not a
+   * re-implementation of an authorization predicate. THE ENFORCEMENT IS THE ROUTE: both arms
+   * answer `guest_not_found`, identical on the wire to a nonexistent id. This only saves
+   * somebody a guaranteed 404.
+   *
+   * ⚠ SET ON EVERY SECTION, INCLUDING `waiting` — that section still never renders a Remove
+   * control, because Deny already produces the same practical outcome and reads correctly there.
+   */
+  readonly canRemove: boolean;
 }
 
 export interface GuestRoster {
@@ -80,6 +101,8 @@ export interface BuildGuestRosterInput {
   readonly presentGuestIds: ReadonlySet<string>;
   /** ⚠ THE SERVER'S VERDICT, off the GET response. Never re-derived in the browser. */
   readonly canHost: boolean;
+  /** BAL-476 — the viewer's own side, off the same GET response. See {@link GuestRosterRow.canRemove}. */
+  readonly viewerSide: MeetingGuestSide;
   /** `Date.now()` at render, passed in so this stays pure and testable. */
   readonly nowMs: number;
 }
@@ -116,17 +139,20 @@ export function buildGuestRoster(input: BuildGuestRosterInput): GuestRoster {
     if (guest.admission === 'denied') continue;
 
     const isUnverified = guest.inviteChannel === 'link';
+    // ⚠ CHANNEL FIRST — see `GuestRosterRow.canRemove`. A `link` row's `party` is a placeholder.
+    const canRemove =
+      guest.inviteChannel === 'link' ? input.canHost : guest.party === input.viewerSide;
 
     if (guest.admission === 'pending') {
       // ⚠ THE SERVER'S VERDICT GATES THE WHOLE SECTION. A non-host is not shown the queue.
       if (input.canHost) {
-        waiting.push({ guest, state: 'waiting', isUnverified, canResendLink: false });
+        waiting.push({ guest, state: 'waiting', isUnverified, canResendLink: false, canRemove });
       }
       continue;
     }
 
     if (input.presentGuestIds.has(guest.id)) {
-      inCall.push({ guest, state: 'in_call', isUnverified, canResendLink: false });
+      inCall.push({ guest, state: 'in_call', isUnverified, canResendLink: false, canRemove });
       continue;
     }
 
@@ -136,11 +162,12 @@ export function buildGuestRoster(input: BuildGuestRosterInput): GuestRoster {
         state: 'not_arrived',
         isUnverified,
         canResendLink: canResend(guest, input.nowMs),
+        canRemove,
       });
       continue;
     }
 
-    invited.push({ guest, state: 'invited', isUnverified, canResendLink: false });
+    invited.push({ guest, state: 'invited', isUnverified, canResendLink: false, canRemove });
   }
 
   return { inCall, invited, notArrived, waiting };

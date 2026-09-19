@@ -1,4 +1,4 @@
-import type { GuestForViewer } from '@balo/shared/meetings';
+import type { GuestForViewer, MeetingGuestSide } from '@balo/shared/meetings';
 import type { DrawdownState } from '@balo/shared/credit';
 import type {
   MeetingPanelInviteOutcome,
@@ -91,6 +91,16 @@ export interface MeetingGuestsPayload {
    */
   readonly canHost: boolean;
   /**
+   * BAL-476 — the viewer's OWN resolved side, computed SERVER-side from
+   * `authorizeMeetingParticipation`'s verdict and transmitted, exactly like `canHost`.
+   *
+   * ⚠ NEVER RE-DERIVED IN THIS TIER. It exists so the roster can offer a Remove control only on
+   * rows the viewer's own party invited. ⚠ IT GATES NOTHING: a cross-party removal still
+   * answers `guest_not_found`, identical on the wire to a nonexistent id. The visible gate is a
+   * courtesy that saves somebody a guaranteed 404; it is not the enforcement.
+   */
+  readonly viewerSide: MeetingGuestSide;
+  /**
    * ⚠⚠ A **SEAT** COUNT — the reserved pair plus pre-admitted and admitted guests, from the
    * very counter the server refuses invites on. It is NOT the tile count and the two
    * routinely differ. Render "{n} of {cap}" from this pair, never from a local count.
@@ -138,6 +148,19 @@ export type DecideAdmissionActionResult =
       readonly error: string;
       readonly outcome: Exclude<MeetingPanelDecisionOutcome, 'ok'>;
     };
+
+/**
+ * BAL-476 (R3/R7) — the removal's answer.
+ *
+ * ⚠⚠ **NO `outcome` FIELD, AND THAT IS DELIBERATE** — it copies `ResendLinkActionResult`'s
+ * shape, not `DecideAdmissionActionResult`'s. `removeGuest` reuses the plain `guest_not_found`
+ * literal for a LOST RACE on purpose (its own comment: "a distinct code would only describe our
+ * own timing"), so the client has nothing to split on and an `outcome` dimension here would be
+ * `'failed'` in every single case — a PostHog breakdown with one bucket.
+ */
+export type RemoveGuestActionResult =
+  | { readonly success: true }
+  | { readonly success: false; readonly error: string };
 
 export type ResendLinkActionResult =
   | { readonly success: true }
@@ -326,6 +349,8 @@ export interface MeetingMemberPanelRegistration {
     decision: 'admit' | 'deny'
   ) => Promise<DecideAdmissionActionResult>;
   readonly resendLink: (guestId: string) => Promise<ResendLinkActionResult>;
+  /** BAL-476 (R3) — revoke a same-party guest's access, and eject them if they are in the room. */
+  readonly removeGuest: (guestId: string) => Promise<RemoveGuestActionResult>;
   readonly files: MeetingFilePanelActions;
   /**
    * BAL-437 — ⚠⚠ `null` ⇒ **NO CHAT SLOT AT ALL.** Resolved SERVER-SIDE in the RSC, not in the

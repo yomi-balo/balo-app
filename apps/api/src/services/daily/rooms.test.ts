@@ -4,11 +4,14 @@ import { DAILY_API_BASE } from './client.js';
 import { DailyApiError } from './errors.js';
 import {
   createRoom,
+  dailyParticipantEjector,
   dailyPresenceReader,
   dailyRoomProvisioner,
   dailyRoomTeardown,
   deleteRoom,
+  ejectParticipants,
   getAllPresence,
+  DAILY_EJECT_MAX_IDS,
 } from './rooms.js';
 
 const ROOM = 'balo-0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d';
@@ -465,5 +468,96 @@ describe('the BAL-134 ports', () => {
 
   it('dailyPresenceReader satisfies PresenceReader with the live getAllPresence', () => {
     expect(dailyPresenceReader.getAllPresence).toBe(getAllPresence);
+  });
+});
+
+// ── BAL-476 (R4) — the per-participant eject ──────────────────────────────────────────────
+
+const PARTICIPANT = 'g0f7b1c2d3e4f4a5b8c9d0e1f2a3b4c5d';
+
+describe('ejectParticipants (BAL-476)', () => {
+  /**
+   * ⚠ A DEEP-EQUAL BODY PIN, for the reason `createRoom`'s is one: **a wrong key is SILENTLY
+   * IGNORED by Daily** (the recording-body trap). An `ids:` where `user_ids:` belongs, or a
+   * dropped `ban`, would produce a perfectly healthy 200 and eject nobody / ban nobody.
+   */
+  it('⚠ POSTs a body that deep-equals EXACTLY { user_ids, ban: true } and nothing else', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(ejectParticipants(ROOM, [PARTICIPANT])).resolves.toBe('ejected');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${DAILY_API_BASE}/rooms/${ROOM}/eject`);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual({ user_ids: [PARTICIPANT], ban: true });
+  });
+
+  /**
+   * ⚠⚠ `ban: true` IS LOAD-BEARING. A Daily meeting token SURVIVES an eject
+   * (`eject_at_token_exp: false`, `exp = scheduled_end + 24h`), so an un-banned eject buys
+   * seconds. This is the assertion that fails if somebody "simplifies" it away.
+   */
+  it('⚠ always sends ban: true — an eject alone does not revoke the token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ejectParticipants(ROOM, [PARTICIPANT]);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).ban).toBe(true);
+  });
+
+  it('⚠ maps 404 to `already_gone` — the room may have been reaped, or they may have left', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(404, { error: 'not-found' })));
+
+    await expect(ejectParticipants(ROOM, [PARTICIPANT])).resolves.toBe('already_gone');
+  });
+
+  it('⚠ rethrows a 429 — there is deliberately NO retry loop; the caller is best-effort', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(429, { error: 'rate-limited' })));
+
+    const error = await ejectParticipants(ROOM, [PARTICIPANT]).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DailyApiError);
+    expect(error).toMatchObject({ status: 429, method: 'POST' });
+  });
+
+  it('rethrows any other non-2xx', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(500, { error: 'boom' })));
+
+    await expect(ejectParticipants(ROOM, [PARTICIPANT])).rejects.toBeInstanceOf(DailyApiError);
+  });
+
+  it('⚠ refuses more than Daily cap WITHOUT a network call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const tooMany = Array.from({ length: DAILY_EJECT_MAX_IDS + 1 }, (_value, index) => `g${index}`);
+
+    await expect(ejectParticipants(ROOM, tooMany)).rejects.toBeInstanceOf(DailyApiError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(DAILY_EJECT_MAX_IDS).toBe(100);
+  });
+
+  it('an empty id list is `already_gone` and makes no network call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(ejectParticipants(ROOM, [])).resolves.toBe('already_gone');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('percent-encodes the room name', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await ejectParticipants('balo room/1', [PARTICIPANT]);
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe(`${DAILY_API_BASE}/rooms/balo%20room%2F1/eject`);
+  });
+
+  it('dailyParticipantEjector satisfies ParticipantEjector with the live ejectParticipants', () => {
+    expect(dailyParticipantEjector.ejectParticipants).toBe(ejectParticipants);
   });
 });

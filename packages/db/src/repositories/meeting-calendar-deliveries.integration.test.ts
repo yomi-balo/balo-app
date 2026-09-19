@@ -285,6 +285,87 @@ describe('meetingCalendarDeliveriesRepository.claimSend', () => {
     expect(rows).toHaveLength(4);
   });
 
+  /**
+   * ⚠⚠ BAL-476 (T-6) — THE FREEBIE, PROVED. `method` is the fourth column of BOTH partial
+   * uniques, so a `CANCEL` at the SAME `(calendar_event, recipient, sequence)` as an already-
+   * SENT `REQUEST` conflicts with nothing and claims a DISTINCT ledger row. That is the whole
+   * of "a withdrawal is never swallowed by the invite that preceded it", with no new column,
+   * no new index and no guard — and it is only checkable against a real planner, because the
+   * arbiter is chosen at plan time from the index definition.
+   *
+   * ⚠ NO SEQUENCE BUMP (R2): the CANCEL carries the REQUEST's OWN sequence. `sequence` keeps
+   * its single writer (`_shared/calendar-sequence.ts`), which is what makes "no double
+   * increment on a BullMQ retry" structural rather than guarded.
+   */
+  it('a CANCEL at the SAME (event, recipient, sequence) is a DISTINCT row from a SENT REQUEST', async () => {
+    const seeded = await seed();
+    const request = await claimOrFail(userClaim(seeded));
+    await meetingCalendarDeliveriesRepository.markSent({
+      id: request.id,
+      claimToken: 'job-a',
+      providerMessageId: '<invite@balo>',
+    });
+
+    const cancel = await claimOrFail(
+      userClaim(seeded, { method: 'CANCEL', claimToken: 'job-cancel' })
+    );
+
+    expect(cancel.id).not.toBe(request.id);
+    expect(cancel.method).toBe('CANCEL');
+    expect(cancel.sequence).toBe(request.sequence);
+    expect(cancel.attemptCount).toBe(1);
+    const rows = await db
+      .select()
+      .from(meetingCalendarDeliveries)
+      .where(eq(meetingCalendarDeliveries.calendarEventId, seeded.calendarEventId));
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.method).sort((a, b) => a.localeCompare(b))).toEqual([
+      'CANCEL',
+      'REQUEST',
+    ]);
+    // The invite's own row is untouched — a withdrawal never rewrites the send it withdraws.
+    expect(await storedRow(request.id)).toMatchObject({
+      method: 'REQUEST',
+      outcome: 'sent',
+      attemptCount: 1,
+    });
+  });
+
+  /**
+   * ⚠⚠ BAL-476 (T-6) — "NO DUPLICATE `METHOD:CANCEL` AT THE SAME SEQUENCE", the AC, satisfied
+   * by the SHIPPED protocol rather than by anything new. The same BullMQ job id re-claims its
+   * own pending row (a retry must be able to finish); a DIFFERENT job against the `sent` row is
+   * refused `already_sent`. One recipient, one sequence, one CANCEL on the wire.
+   */
+  it('no duplicate CANCEL at one sequence: the same job re-claims, a different job is already_sent', async () => {
+    const seeded = await seed();
+    const cancelClaim = guestClaim(seeded, { method: 'CANCEL', claimToken: 'job-cancel' });
+    const first = await claimOrFail(cancelClaim);
+
+    const retry = await claimOrFail(cancelClaim);
+    expect(retry.id).toBe(first.id);
+    expect(retry.attemptCount).toBe(2);
+
+    await meetingCalendarDeliveriesRepository.markSent({
+      id: first.id,
+      claimToken: 'job-cancel',
+      providerMessageId: null,
+    });
+    await ageLease(first.id, 60);
+    const duplicate = await meetingCalendarDeliveriesRepository.claimSend(
+      guestClaim(seeded, { method: 'CANCEL', claimToken: 'job-cancel-again' })
+    );
+
+    expect(duplicate.status).toBe('already_sent');
+    expect(duplicate.delivery.id).toBe(first.id);
+    const rows = await db
+      .select()
+      .from(meetingCalendarDeliveries)
+      .where(eq(meetingCalendarDeliveries.recipientGuestId, seeded.guestId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ method: 'CANCEL', outcome: 'sent', attemptCount: 2 });
+  });
+
   /** The arbiters are partial on `deleted_at IS NULL`: a retired ledger row is invisible. */
   it('a SOFT-DELETED sent row does not block a new claim — a fresh row beside it', async () => {
     const seeded = await seed();
@@ -422,7 +503,12 @@ describe('meeting_calendar_deliveries — constraints', () => {
     );
   });
 
-  /** Typed out of reach in TS (`$type<'REQUEST'>` / `$type<'email'>`), so probed as raw SQL. */
+  /**
+   * Typed out of reach in TS (`$type<'REQUEST' | 'CANCEL'>` / `$type<'email'>`), so probed as
+   * raw SQL. ⚠ The rejected method used to be `'CANCEL'`; BAL-476's migration `0098` relaxed
+   * the CHECK to admit it, so the probe moved to `'PUBLISH'` — a method Balo does not issue and
+   * the vocabulary must still refuse. The ACCEPTANCE half is the test below.
+   */
   it('rejects an unknown method or channel (23514)', async () => {
     const seeded = await seed();
 
@@ -432,7 +518,7 @@ describe('meeting_calendar_deliveries — constraints', () => {
         tx.execute(sql`
           INSERT INTO meeting_calendar_deliveries
             (calendar_event_id, recipient_user_id, channel, method, sequence, outcome, claim_token, attempt_count, last_attempted_at)
-          VALUES (${seeded.calendarEventId}, ${seeded.userId}, 'email', 'CANCEL', 0, 'pending', 'job-raw', 1, now())
+          VALUES (${seeded.calendarEventId}, ${seeded.userId}, 'email', 'PUBLISH', 0, 'pending', 'job-raw', 1, now())
         `),
       'meeting_calendar_delivery_method_known'
     );
@@ -446,6 +532,22 @@ describe('meeting_calendar_deliveries — constraints', () => {
         `),
       'meeting_calendar_delivery_channel_known'
     );
+  });
+
+  /**
+   * BAL-476 (T-7) — the other half of the relax. `'CANCEL'` is now a stored value, not just a
+   * TypeScript label, and only a real planner can say so: the CHECK lives in Postgres, and a
+   * mocked client would accept any string at all.
+   */
+  it('ACCEPTS the CANCEL method, and stores it verbatim (BAL-476, migration 0098)', async () => {
+    const seeded = await seed();
+
+    const [row] = await db
+      .insert(meetingCalendarDeliveries)
+      .values(validRow(seeded, { method: 'CANCEL', claimToken: 'job-cancel-raw' }))
+      .returning();
+
+    expect(row?.method).toBe('CANCEL');
   });
 
   it('rejects a negative sequence and a zero attempt count (23514)', async () => {
