@@ -376,7 +376,7 @@ export function AvailabilitySlotsPanel({
             when the duration is PINNED, "Show all →" would be a visible control whose only job
             is to discard the pin (see the prop's own docblock). */}
         {!hideDurationFilter && filterAutoReset && (
-          <output className="text-warning mt-2 flex items-center gap-1.5 text-xs">
+          <output className="text-warning-strong mt-2 flex items-center gap-1.5 text-xs">
             <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
             {/* `durationFilter` is never `'any'` here: `filterAutoReset` is only set when
                 `shouldResetFilter` returned true, which requires a non-`'any'` filter. The old

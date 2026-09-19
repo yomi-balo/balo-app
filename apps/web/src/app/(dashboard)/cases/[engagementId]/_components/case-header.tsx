@@ -165,7 +165,7 @@ function StatusChip({
 }: Readonly<{ isOpen: boolean; closeReason: CaseHeaderView['closeReason'] }>): React.JSX.Element {
   if (isOpen) {
     return (
-      <span className="bg-success/10 text-success shrink-0 rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap">
+      <span className="bg-success/10 text-success-strong shrink-0 rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap">
         Open
       </span>
     );
