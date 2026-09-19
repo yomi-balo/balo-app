@@ -19,6 +19,8 @@ import { markCaseThreadReadAction } from '../_actions/mark-case-thread-read';
 import { requestCaseFileUploadAction } from '../_actions/request-case-file-upload';
 import { confirmCaseFileUploadAction } from '../_actions/confirm-case-file-upload';
 import { getCaseFileDownloadAction } from '../_actions/get-case-file-download';
+import { FileViewerDialog } from '@/components/balo/conversation/file-viewer-dialog';
+import { isConversationViewableImage } from '@/lib/storage/conversation-file-constraints';
 
 /**
  * BAL-421 — the case's conversation region. It LEADS the main column, because between calls
@@ -59,6 +61,8 @@ export function CaseConversationPanel({
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState<{ fileName: string; progress: number } | null>(null);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
+  /** `url: null` is the minting window: the dialog opens at once and shows its loading state. */
+  const [viewing, setViewing] = useState<{ fileName: string; url: string | null } | null>(null);
 
   // ── realtime ────────────────────────────────────────────────────────────────────────────
   const handleRealtimeMessage = useCallback((incoming: ConversationMessageView) => {
@@ -232,6 +236,9 @@ export function CaseConversationPanel({
   const handleFileClick = useCallback(
     async (file: ConversationFileView) => {
       setDownloadingFileId(file.id);
+      if (isConversationViewableImage(file.contentType)) {
+        setViewing({ fileName: file.fileName, url: null });
+      }
       try {
         const result = await getCaseFileDownloadAction({
           engagementId,
@@ -242,9 +249,15 @@ export function CaseConversationPanel({
           toast.error(result.error);
           return;
         }
+        // Decided on the validated `contentType`, never the file extension.
+        if (isConversationViewableImage(file.contentType)) {
+          setViewing({ fileName: file.fileName, url: result.url });
+          return;
+        }
         globalThis.location.assign(result.url);
       } catch {
         toast.error('Could not download this file. Please try again.');
+        setViewing(null);
       } finally {
         setDownloadingFileId(null);
       }
@@ -252,8 +265,14 @@ export function CaseConversationPanel({
     [engagementId]
   );
 
+  /** Reuses the URL already minted for the preview rather than minting a second one. */
+  const handleViewerDownload = useCallback(() => {
+    if (viewing?.url == null) return;
+    globalThis.location.assign(viewing.url);
+  }, [viewing]);
+
   return (
-    <section className="bg-card border-border rounded-3xl border px-5 py-4">
+    <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead icon={MessageSquare} title="Conversation" meta="Free — between calls" />
 
       {/*
@@ -287,6 +306,14 @@ export function CaseConversationPanel({
           onFileClick={handleFileClick}
         />
       </div>
+
+      <FileViewerDialog
+        open={viewing !== null}
+        onOpenChange={(next) => !next && setViewing(null)}
+        fileName={viewing?.fileName ?? ''}
+        url={viewing?.url ?? null}
+        onDownload={handleViewerDownload}
+      />
 
       {conversation.writable ? (
         <div className="mt-2">

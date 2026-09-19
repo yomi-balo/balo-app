@@ -24,3 +24,26 @@ export const MAX_CONVERSATION_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 /** Accept attribute for the composer's hidden file input. */
 export const CONVERSATION_FILE_ACCEPT =
   '.pdf,image/png,image/jpeg,image/webp,.docx,.xlsx,.pptx,.csv,.txt';
+
+/**
+ * The types the in-app viewer renders in an `<img>`.
+ *
+ * ⚠ No `application/pdf`. An `<img>` ignores `Content-Disposition`, so these render from the
+ * existing `attachment` presign with no new exposure — the presigned PUT does not sign
+ * `content-type`, so the stored type is uploader-chosen, and HTML bytes in an `<img>` simply
+ * fail to decode. A PDF would need the header flipped to `inline`, which makes that same
+ * uploader-chosen type a rendering decision.
+ *
+ * ⚠ Never add `image/svg+xml`: it is a scriptable document, and it is absent from
+ * {@link CONVERSATION_ALLOWED_CONTENT_TYPES} for the same reason.
+ */
+export const CONVERSATION_VIEWABLE_IMAGE_CONTENT_TYPES = new Set<string>([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+]);
+
+/** Can the in-app viewer display this file, or must the click fall through to a download? */
+export function isConversationViewableImage(contentType: string): boolean {
+  return CONVERSATION_VIEWABLE_IMAGE_CONTENT_TYPES.has(contentType);
+}

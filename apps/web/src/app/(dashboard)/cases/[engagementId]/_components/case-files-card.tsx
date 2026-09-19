@@ -7,6 +7,8 @@ import { SectionHead } from '@/components/balo/section/section-states';
 import { track, RECAP_EVENTS } from '@/lib/analytics';
 import type { CaseFileRowView } from '@/lib/cases/case-view-types';
 import { getCaseFileDownloadAction } from '../_actions/get-case-file-download';
+import { FileViewerDialog } from '@/components/balo/conversation/file-viewer-dialog';
+import { isConversationViewableImage } from '@/lib/storage/conversation-file-constraints';
 
 /**
  * BAL-421 §D4 — the MERGED files card: `meeting_files` ∪ `conversation_files`, on read.
@@ -52,11 +54,20 @@ export function CaseFilesCard({
   // Keyed by `origin:id` — an id is unique only WITHIN its origin, so the bare id could
   // collide across the two tables and spin the wrong row.
   const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
+  /**
+   * ⚠ This card merges `conversation_files` and `meeting_files` into one sorted list, so the
+   * predicate must read `contentType` (which both origins carry) rather than special-casing an
+   * origin — otherwise two identical PNGs behave differently in the same list.
+   */
+  const [viewing, setViewing] = useState<{ fileName: string; url: string | null } | null>(null);
 
   const handleDownload = useCallback(
     async (file: CaseFileRowView) => {
       const key = `${file.origin}:${file.id}`;
       setDownloadingKey(key);
+      if (isConversationViewableImage(file.contentType)) {
+        setViewing({ fileName: file.fileName, url: null });
+      }
       try {
         const result = await getCaseFileDownloadAction(
           file.origin === 'meeting' && file.meetingId !== null
@@ -72,10 +83,15 @@ export function CaseFilesCard({
           toast.error(result.error);
           return;
         }
+        if (isConversationViewableImage(file.contentType)) {
+          setViewing({ fileName: file.fileName, url: result.url });
+          return;
+        }
         track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'download_file', lens });
         globalThis.location.assign(result.url);
       } catch {
         toast.error('Could not download this file. Please try again.');
+        setViewing(null);
       } finally {
         setDownloadingKey(null);
       }
@@ -83,8 +99,15 @@ export function CaseFilesCard({
     [engagementId, lens]
   );
 
+  /** Reuses the URL already minted for the preview, never a second mint. */
+  const handleViewerDownload = useCallback(() => {
+    if (viewing?.url == null) return;
+    track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'download_file', lens });
+    globalThis.location.assign(viewing.url);
+  }, [viewing, lens]);
+
   return (
-    <section className="bg-card border-border rounded-3xl border px-5 py-4">
+    <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead
         icon={Folder}
         title="Files"
@@ -115,6 +138,14 @@ export function CaseFilesCard({
           )}
         </>
       )}
+
+      <FileViewerDialog
+        open={viewing !== null}
+        onOpenChange={(next) => !next && setViewing(null)}
+        fileName={viewing?.fileName ?? ''}
+        url={viewing?.url ?? null}
+        onDownload={handleViewerDownload}
+      />
     </section>
   );
 }

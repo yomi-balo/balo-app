@@ -760,6 +760,42 @@ describe('CaseConversationPanel — downloading a file', () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  /**
+   * ⚠ Must not navigate: the presign still carries `Content-Disposition: attachment`, so any
+   * navigation downloads. The `<img>` ignores that header.
+   */
+  it('opens the in-app viewer for an image and does NOT navigate', async () => {
+    const user = userEvent.setup();
+    mockGetDownload.mockResolvedValue({ success: true, url: 'https://signed.example/pic.png' });
+    renderPanel({
+      initialFiles: [fileView('shot', { fileName: 'shot.png', contentType: 'image/png' })],
+    });
+
+    await user.click(screen.getByRole('button', { name: /shot\.png/ }));
+
+    const preview = await screen.findByAltText('shot.png');
+    expect(preview).toHaveAttribute('src', 'https://signed.example/pic.png');
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  /** Anything the viewer cannot render keeps the download behaviour unchanged. */
+  it.each([
+    ['application/pdf', 'brief.pdf'],
+    ['text/csv', 'rows.csv'],
+    ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'notes.docx'],
+  ])('still downloads %s, opening no viewer', async (contentType, fileName) => {
+    const user = userEvent.setup();
+    mockGetDownload.mockResolvedValue({ success: true, url: 'https://signed.example/get' });
+    renderPanel({ initialFiles: [fileView('f1', { fileName, contentType })] });
+
+    await user.click(
+      screen.getByRole('button', { name: new RegExp(fileName.replace('.', '\\.')) })
+    );
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://signed.example/get'));
+    expect(screen.queryByAltText(fileName)).not.toBeInTheDocument();
+  });
+
   it('re-enables the row after the download settles', async () => {
     const user = userEvent.setup();
     mockGetDownload.mockResolvedValue({ success: true, url: 'https://signed.example/get' });
