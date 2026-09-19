@@ -13,9 +13,13 @@ export type LiveUserRow = Awaited<ReturnType<typeof usersRepository.findForSessi
  * human review of PR #325 — AN EARLIER VERSION OF THIS DOCBLOCK OVERCLAIMED, so read this before
  * trusting any "shares a single round trip" phrasing elsewhere):
  *
- *   · `React.cache()` memoizes **only during a server-component render pass.** Confirmed
- *     empirically, not inferred: a `cache()`-wrapped function called twice outside a render
- *     invoked its inner function **twice**.
+ *   · `React.cache()` memoizes **only during a server-component render pass.** MEASURED under the
+ *     `react-server` build, driving a real Flight render (`live-user.react-server.test.ts`, fix
+ *     round 3 H2): two calls outside a render are two reads, two calls inside ONE render are one
+ *     read, and two separate renders do not share. ⚠ The round-2 "empirical confirmation" of this
+ *     was circular — it measured vitest's CLIENT build of React, where `cache` is a pass-through,
+ *     so it would have reported the same thing in either world. The conclusion survived; the
+ *     evidence had to be replaced.
  *   · So on a **page render** the gate, `checkSessionDrift` and `deriveWorkspacesForUser` really
  *     do share ONE round trip — that part was always true.
  *   · On a **Server Action** (which runs BEFORE Next starts the render) and in a **Route Handler**
@@ -26,8 +30,9 @@ export type LiveUserRow = Awaited<ReturnType<typeof usersRepository.findForSessi
  * **TWO** primary-key reads — one for the liveness gate inside `requireOnboardedUser`, one inside
  * `actorHoldsPlatformCapability`. That is a deliberate, accepted cost on a rare path, NOT a defect
  * to fix. Do not restructure this read, do not thread a request-scoped cache through the seams,
- * do not add a caching layer. `live-user.test.ts` pins the two-read behaviour with an explicit
- * `toHaveBeenCalledTimes(2)` so this docblock cannot quietly drift back into overclaiming.
+ * do not add a caching layer. `live-user.react-server.test.ts` pins BOTH halves — the two reads
+ * outside a render and the one inside — so this docblock cannot quietly drift back into
+ * overclaiming; `live-user.test.ts` separately pins that this module adds no memo of its own.
  *
  * ⚠ WHY `findForSessionSync` RATHER THAN A NARROW `{status, deletedAt}` READER — the choice is
  * deliberate and survives the correction above:

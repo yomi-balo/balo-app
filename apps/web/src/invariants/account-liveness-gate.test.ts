@@ -160,10 +160,16 @@ describe('invariant: every Server Action reaches a live-checked seam, or is allo
     //   · 12 → 11 (fix round 1, F6, 2026-09-18): `app/review/_actions/submit-token-review.ts` was
     //     GATED rather than allowlisted, so it LEFT the unresolved set.
     //   · 11 → 12 (2026-09-19): `app/join/_actions/request-lobby-reentry-link.ts` ARRIVED on main
-    //     with BAL-442 — a new, deliberately unauthenticated guest action. **This assertion caught
-    //     it**, in CI, on the PR merge commit, which is exactly the BAL-132 property this file
-    //     extends: an anonymous Server Action cannot land without a written reason. The reason is
-    //     its entry in `PUBLIC_ACTION_ALLOWLIST`; the count follows the entry, never the reverse.
+    //     with BAL-442 — a new, deliberately unauthenticated guest action.
+    //
+    // ⚠ WHAT ACTUALLY HAPPENED ON THAT SECOND MOVE, because an earlier version of this comment
+    // (and of `onboarding-mutation-gate.test.ts`'s note) got it wrong (fix round 3, H5): BAL-442
+    // had ALREADY written the entry and its reason onto `PUBLIC_ACTION_ALLOWLIST` on main — it had
+    // to, because BAL-132's join-surface set equality in `onboarding-mutation-gate.test.ts`
+    // already demanded one. So the set equality on the line above held on the merge commit, and
+    // the ONLY thing that went red in CI was THIS FILE'S PINNED COUNT OF 11, which then had to be
+    // re-measured to 12. The count follows the set, never the reverse — but it was the count, not
+    // the written reason, that this file enforced that day.
     //
     // ⚠ IF THIS GOES RED, THE ANSWER IS ALMOST NEVER TO CHANGE THE NUMBER. B5 names the new file;
     // gate it, or give it an allowlist entry with a reason that survives being read out loud.
@@ -239,13 +245,23 @@ describe('invariant: every Server Action reaches a live-checked seam, or is allo
     //    modules honest.
     expect(depthOf("import { getSession } from '@/lib/auth/session';")).toBeNull();
 
+    // 4b. ⚠⚠ THE BARREL — the same hole one level up, and it was OPEN until fix round 3 (H1).
+    //     `lib/auth/index.ts` re-exports `getSession` ALONGSIDE `requireUser`, `withAuth` and
+    //     friends, so following into it found seam names and classified this shape as
+    //     live-checked: a FALSE PASS. Without this decoy the `lib/auth/index.ts` entry in
+    //     SEAM_DEFINITION_MODULES could be deleted and nothing would notice.
+    expect(depthOf("import { getSession } from '@/lib/auth';")).toBeNull();
+
     // 5. A file that is NOT 'use server' is out of the corpus walk entirely.
     expect(hasUseServerDirective('export function x() {}')).toBe(false);
     expect(hasUseServerDirective("'use server';\nexport async function x() {}")).toBe(true);
   });
 
   it('B11: SEAM_DEFINITION_MODULES is not stale — each file exists and names what it defines', () => {
-    expect(SEAM_DEFINITION_MODULES).toHaveLength(6);
+    // ⚠ 7, UP FROM 6 (fix round 3, H1): `lib/auth/index.ts` — the BARREL — joined the list. It is
+    // not a tune: the barrel re-exports `getSession` beside the seams, so following into it was a
+    // false PASS. B10's decoy 4b is what holds the entry in place.
+    expect(SEAM_DEFINITION_MODULES).toHaveLength(7);
     for (const rel of SEAM_DEFINITION_MODULES) {
       const abs = path.join(SRC_DIR, rel);
       expect(existsSync(abs), `${rel} must exist — a stale entry silently widens the walk`).toBe(

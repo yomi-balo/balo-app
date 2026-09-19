@@ -10,7 +10,25 @@ import { trackServerAndFlush, AUTH_SERVER_EVENTS } from '@/lib/analytics/server'
 import { log } from '@/lib/logging';
 import { readLiveUserRow } from './live-user';
 
-/** Which enforcement path caught the refusal — the `session_invalidated` dimension. */
+/**
+ * Which enforcement path caught the refusal — the `session_invalidated` dimension.
+ *
+ * ⚠ TWO NAMED RESIDUALS. The label is what the SEAM is, not what the CALLER was, and neither seam
+ * can tell its callers apart from the inside. Both are log/analytics dimensions only — nothing
+ * branches on the value — so each costs accuracy in the event stream and nothing else:
+ *
+ * | seam                                | labels as | but also serves                      |
+ * | ----------------------------------- | --------- | ------------------------------------ |
+ * | `getCurrentUser`                    | `page`    | the few Server Actions resolving there |
+ * | `requireUser` → `assertAccountLive` | `action`  | server-component RENDERS that call it |
+ *
+ * The second row's live instance: `getChecklistStatus()` resolves through `requireOnboardedUser`
+ * and is awaited by the `(dashboard)` layout on every authenticated render, so a refusal raised
+ * during that RENDER is recorded as an `action` refusal.
+ *
+ * (The `getCurrentUser` row is written up at its own call site in `./session.ts`; the
+ * `requireUser` row was added in fix round 3, H4 — known and accepted, now written down.)
+ */
 export type AccountRefusalPath = 'page' | 'api' | 'action';
 
 /**

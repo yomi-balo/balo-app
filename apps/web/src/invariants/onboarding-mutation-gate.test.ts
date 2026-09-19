@@ -234,10 +234,16 @@ describe('onboarding mutation gate (BAL-365)', () => {
    * property is STRICTLY STRONGER than this file's: it asserts each module reaches a seam that
    * re-reads the LIVE ROW, which a fortiori reads the caller at all.
    *
-   * ⚠ IT HAS ALREADY EARNED ITS KEEP ON EXACTLY THIS SURFACE. BAL-442 landed
-   * `app/join/_actions/request-lobby-reentry-link.ts` — a third deliberately unauthenticated join
-   * action — and the repo-wide assertion failed in CI until it was given a written reason on
-   * `PUBLIC_ACTION_ALLOWLIST`. That is the BAL-132 property, now enforced beyond `app/join/`.
+   * ⚠ WHAT THE REPO-WIDE ASSERTION ACTUALLY DID WHEN BAL-442 LANDED — corrected 2026-09-19 (fix
+   * round 3, H5), because the previous wording here credited it with something THIS file did.
+   * BAL-442 added `app/join/_actions/request-lobby-reentry-link.ts`, a third deliberately
+   * unauthenticated join action, and wrote its entry and reason onto `PUBLIC_ACTION_ALLOWLIST` in
+   * the same PR — it had to, because the exact set equality BELOW already demanded one for any new
+   * `app/join/` action. So the written reason was never in question: what went red in CI on the
+   * merge commit was `account-liveness-gate.test.ts` B7's PINNED COUNT of 11, which had to be
+   * re-measured to 12. The reason-enforcing property is this file's, over `app/join/`; the
+   * repo-wide file extends the same shape past that surface, and its count is what noticed the
+   * arrival.
    *
    * ── ⚠ WHY THIS ASSERTION STAYS, AND STAYS SCOPED TO `app/join/` ─────────────────────────
    *

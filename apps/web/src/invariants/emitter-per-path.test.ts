@@ -42,6 +42,39 @@ const EVENT_CONSTANT = 'AUTH_SERVER_EVENTS.SESSION_INVALIDATED';
 const EMIT_OPT_IN = 'emit: true';
 
 /**
+ * The ONLY shape an opt-in may take. The `action` path is the only one a call site owns: `page`
+ * belongs to the session-sync route and `api` to `apps/api`'s `requireAuth`, so an opt-in on
+ * either of those is a SECOND emitter for a refusal another layer already reports.
+ */
+const ACTION_EMIT_CALL = "{ path: 'action', emit: true }";
+
+/**
+ * The hand-gated actions that own their own refusal: each resolves its actor with a bare
+ * `getSession()` and has no chokepoint to fold into, so each is the ONLY layer that sees its
+ * refusal — which makes it the one emitter for that refusal, not a duplicate.
+ */
+const HAND_GATED: readonly string[] = [
+  'lib/auth/actions/complete-onboarding.ts',
+  'lib/auth/actions/update-timezone.ts',
+  'lib/auth/actions/join-matched-company.ts',
+  'lib/auth/actions/request-join-company.ts',
+  'lib/auth/actions/name-workspace-and-complete.ts',
+  'lib/auth/actions/resolve-expert-agency.ts',
+  'lib/auth/actions/resolve-onboarding-company.ts',
+  'app/review/_actions/submit-token-review.ts',
+];
+
+/**
+ * ⚠⚠ EVERY MODULE PERMITTED TO PASS `emit: true` — `assertAccountLive`'s home plus the eight
+ * hand-gated actions. Asserted by EXACT SET EQUALITY in both directions (E7), because the
+ * one-emitter-per-path property is otherwise only half-enforced: E2 counts modules naming the
+ * event CONSTANT, and `accountRefusalFor` names it nowhere at its call sites — so before fix
+ * round 3 (H3) any module could have added `{ path: 'page', emit: true }` and double-counted a
+ * refusal with every test in this file green.
+ */
+const EMIT_OPT_IN_SITES: readonly string[] = ['lib/auth/account-liveness.ts', ...HAND_GATED];
+
+/**
  * The ONLY `apps/web` modules permitted to emit `auth_session_invalidated`, each with the path it
  * owns and why it — and not a neighbouring layer — is the right place.
  */
@@ -163,28 +196,45 @@ describe('invariant: one emitter per path for auth_session_invalidated (BAL-568 
     expect(liveness.code).toContain(EVENT_CONSTANT);
   });
 
-  it('E7: ⚠ the hand-gated actions that own their own refusal still emit', () => {
-    // These have no chokepoint to fold into, so each is the ONLY layer that sees its refusal —
-    // which makes each of them the one emitter for that refusal, not a duplicate.
-    const HAND_GATED = [
-      'lib/auth/actions/complete-onboarding.ts',
-      'lib/auth/actions/update-timezone.ts',
-      'lib/auth/actions/join-matched-company.ts',
-      'lib/auth/actions/request-join-company.ts',
-      'lib/auth/actions/name-workspace-and-complete.ts',
-      'lib/auth/actions/resolve-expert-agency.ts',
-      'lib/auth/actions/resolve-onboarding-company.ts',
-      'app/review/_actions/submit-token-review.ts',
-    ];
+  /**
+   * ⚠⚠ THE OPT-IN SET, BOTH DIRECTIONS (fix round 3, H3). The old version of this test only
+   * asserted the eight hand-gated actions DO opt in — one direction — so a NEW module could add
+   * `{ path: 'page', emit: true }` and double-count a page ejection with every test here green.
+   * Exact set equality closes that: the opt-in surface can only change by a deliberate edit to
+   * {@link EMIT_OPT_IN_SITES}, which is where the reason lives.
+   */
+  it('E7: ⚠⚠ the set of `emit: true` call sites is EXACTLY the allowed set, both directions', () => {
+    const optIn = scanned.filter((f) => f.code.includes(EMIT_OPT_IN)).map((f) => f.rel);
+    expect([...optIn].sort(REL_COMPARATOR)).toEqual([...EMIT_OPT_IN_SITES].sort(REL_COMPARATOR));
+    expect(optIn).toHaveLength(9);
+    expect(EMIT_OPT_IN_SITES).toHaveLength(9);
     expect(HAND_GATED).toHaveLength(8);
-    for (const rel of HAND_GATED) {
+  });
+
+  /**
+   * ⚠ THE OTHER HALF OF H3: an allowed site could still opt in on the WRONG path. `page` is the
+   * sync route's and `api` is `apps/api`'s, so `{ path: 'page', emit: true }` inside one of these
+   * nine files would be a second emitter for a refusal another layer already reports — and E7,
+   * which only looks at WHICH files opt in, would stay green. Exact count equality per file is
+   * what makes every opt-in prove its path.
+   */
+  it("E8: ⚠ every `emit: true` is paired with `path: 'action'`", () => {
+    expect(EMIT_OPT_IN_SITES).toHaveLength(9);
+    let total = 0;
+    for (const rel of EMIT_OPT_IN_SITES) {
       const file = fileOf(rel);
       expect(file, `${rel} must be in the scan set`).toBeDefined();
       if (file === undefined) continue;
+      const optIns = occurrences(file.code, EMIT_OPT_IN);
+      expect(optIns, `${rel} must opt in at least once`).toBeGreaterThan(0);
       expect(
-        file.code.includes(EMIT_OPT_IN),
-        `${rel} is the only layer that sees its own refusal, so it must emit it`
-      ).toBe(true);
+        occurrences(file.code, ACTION_EMIT_CALL),
+        `${rel}: every emit opt-in must read ${ACTION_EMIT_CALL}. The action path is the only ` +
+          'one a call site owns — page belongs to the session-sync route, api to requireAuth.'
+      ).toBe(optIns);
+      total += optIns;
     }
+    // Non-vacuity: nine files, at least one opt-in each.
+    expect(total).toBeGreaterThanOrEqual(9);
   });
 });

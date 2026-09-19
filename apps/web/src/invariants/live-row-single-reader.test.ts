@@ -9,8 +9,12 @@ import { occurrences, resolveRouteDir, scanRouteSources, type ScannedFile } from
  * (corrected 2026-09-19, human review of PR #325). It claimed this file enforced a "read once"
  * MECHANISM via `React.cache()`. It does not, and `React.cache()` does not either:
  *
- *   · `React.cache()` memoizes **only inside a server-component render pass** — confirmed
- *     empirically, and pinned by `lib/auth/live-user.test.ts`'s `toHaveBeenCalledTimes(2)`.
+ *   · `React.cache()` memoizes **only inside a server-component render pass** — MEASURED under the
+ *     `react-server` build by `lib/auth/live-user.react-server.test.ts`, which renders through the
+ *     Flight server and pins both halves (two reads outside a render, ONE inside one). ⚠ The
+ *     sibling `lib/auth/live-user.test.ts` cannot pin that half: under the default vitest project
+ *     React's `cache` is a client-build pass-through, so its two-read assertion pins only that
+ *     `readLiveUserRow` adds no memo of its own.
  *   · A Server Action runs BEFORE that render begins; a Route Handler never runs inside one. On
  *     both, every seam call is its own query.
  *   · So the 22 platform-gated staff actions **do** pay two primary-key reads (the liveness gate,

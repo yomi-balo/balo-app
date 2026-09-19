@@ -3,9 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 // ⚠⚠ THIS FILE DELIBERATELY DOES **NOT** MOCK `react`'s `cache`. Every sibling suite stubs it to a
-// pass-through so the module under test is reachable; here the REAL wrapper is the subject, because
-// the thing being pinned is what `React.cache()` does — and does not do — outside a render pass.
-// Stubbing it would simulate the very behaviour these assertions exist to check.
+// pass-through so the module under test is reachable; here the real import is kept, so the module
+// is exercised exactly as shipped. ⚠ Under THIS project that import is React's CLIENT build, where
+// `cache` is itself a pass-through — so nothing here can observe what `React.cache()` does. The
+// suite that can is `./live-user.react-server.test.ts`, under the `react-server` project.
 
 const mockFindForSessionSync = vi.fn();
 vi.mock('@balo/db', () => ({
@@ -41,24 +42,25 @@ describe('readLiveUserRow (BAL-568)', () => {
   });
 
   /**
-   * ⚠⚠ THE DOCUMENTED-BEHAVIOUR PIN, AND THE REASON IT IS A TEST RATHER THAN A COMMENT.
+   * ⚠⚠ WHAT THIS PINS — AND, EQUALLY IMPORTANT, WHAT IT DOES NOT (corrected 2026-09-19, fix
+   * round 3 H2, after an earlier version of this docblock claimed the larger thing).
    *
-   * `React.cache()` memoizes **only during a server-component render pass**. A Server Action runs
-   * BEFORE Next starts that render; a Route Handler never runs inside one. So on those two paths
-   * the wrapper does nothing and every seam call is its own query — which is why the 22
-   * platform-gated staff actions pay TWO primary-key reads (the liveness gate, then
-   * `actorHoldsPlatformCapability`).
+   * **It pins that `readLiveUserRow` adds no memo of its OWN.** This suite runs under the default
+   * vitest project, which resolves `react` with no `react-server` condition — so `cache` here is
+   * the CLIENT build's pass-through, and two calls reaching the repository twice says something
+   * about this module and nothing about React.
    *
-   * That cost was RULED ACCEPTABLE (user, 2026-09-19). What was not acceptable was the docblock
-   * claiming a dedupe that does not happen there — the second time in this ticket a comment
-   * vouched for an invariant that did not hold. Hence an assertion rather than more prose.
+   * **It does NOT pin React's behaviour**, and cannot: the assertion below would hold whether or
+   * not production deduped. That claim lives in `./live-user.react-server.test.ts`, which runs
+   * under the `react-server` build and drives a real Flight render, so it can measure both halves
+   * — two reads OUTSIDE a render, ONE inside one. Keep the two files' claims distinct; the whole
+   * reason this ticket needed a third fix round is that a test was credited with more than it
+   * could see.
    *
-   * ⚠ IF THIS EVER GOES RED, DO NOT "FIX" IT BY LOOSENING THE COUNT. A future React/Next that
-   * deduped outside a render would be good news — update `live-user.ts`'s docblock (and
-   * `live-row-single-reader.test.ts`'s header) to match the new reality, and change this number
-   * deliberately.
+   * ⚠ IF THIS EVER GOES RED, DO NOT "FIX" IT BY LOOSENING THE COUNT: it would mean this module
+   * grew a memo of its own, which is a behaviour change to make deliberately.
    */
-  it('⚠ does NOT dedupe outside a render pass — two calls are TWO reads', async () => {
+  it('⚠ adds no memo of its own — two calls are TWO reads (client build)', async () => {
     mockFindForSessionSync.mockResolvedValue({ status: 'active', deletedAt: null });
 
     await readLiveUserRow('user-1');
@@ -73,9 +75,11 @@ describe('readLiveUserRow (BAL-568)', () => {
     await readLiveUserRow('user-1');
     await readLiveUserRow('user-1');
 
-    // Both calls carried the identical key, so a memo keyed on the argument WOULD have collapsed
-    // them. It did not, which isolates the cause to the missing render scope rather than to a
-    // cache-key mismatch.
+    // Both calls carried the identical key, so any memo keyed on the argument — this module's own,
+    // had it grown one — WOULD have collapsed them. (What it does NOT show is why React's wrapper
+    // did not: under this project's client build `cache` memoizes nothing at all. The missing
+    // render scope is isolated as the cause in `./live-user.react-server.test.ts` instead, where
+    // the identical pair of calls DOES collapse once it is made inside a render.)
     expect(mockFindForSessionSync.mock.calls).toEqual([['user-1'], ['user-1']]);
   });
 });

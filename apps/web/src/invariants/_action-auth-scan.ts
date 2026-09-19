@@ -92,9 +92,21 @@ export const LIVE_CHECKED_SEAMS: readonly string[] = [
  * Without that, `PUBLIC_ACTION_ALLOWLIST`'s exact-set-equality assertion in
  * `onboarding-mutation-gate.test.ts` would break — i.e. BAL-132's property would be destroyed by
  * "fixing" BAL-568.
+ *
+ * ⚠⚠ THE BARREL IS THE SAME HOLE ONE LEVEL UP, AND IT WAS OPEN UNTIL FIX ROUND 3 (H1).
+ * `lib/auth/index.ts` re-exports `getSession` ALONGSIDE `requireUser`, `requireOnboardedUser`,
+ * `getCurrentUser` and `withAuth`, so a module importing ONLY `getSession` from `@/lib/auth` was
+ * followed into the barrel, found the seam names sitting there, and classified as LIVE-CHECKED —
+ * a FALSE PASS, the one direction a security scan must never be wrong in. Excluding the barrel
+ * costs nothing for the same reason the `session.ts` entry does: a module that genuinely CALLS a
+ * seam names it in its own source and is caught at depth 0. `account-liveness-gate.test.ts` B10
+ * carries a barrel decoy so the entry cannot be deleted unnoticed.
  */
 export const SEAM_DEFINITION_MODULES: readonly string[] = [
   'lib/auth/session.ts', // requireUser / requireOnboardedUser / getCurrentUser
+  // The BARREL over `session.ts` + `with-auth.ts` — importing from it proves nothing, exactly as
+  // for the two modules it re-exports (it also re-exports the raw `getSession`).
+  'lib/auth/index.ts',
   'lib/auth/with-auth.ts', // withAuth
   'lib/auth/account-liveness.ts', // assertAccountLive / accountRefusalFor
   'lib/credit/api-client.ts', // callSessionApi

@@ -208,7 +208,8 @@ export async function getSession() {
  * pass; a Server Action runs BEFORE that render starts, and a Route Handler never runs inside one,
  * so on those paths every seam call is its own query. The two reads a platform-gated staff action
  * therefore pays are an ACCEPTED cost (user ruling, 2026-09-19), not a defect to restructure — see
- * `./live-user.ts` for the full correction and `live-user.test.ts` for the assertion pinning it.
+ * `./live-user.ts` for the full correction and `live-user.react-server.test.ts` for the assertions
+ * that measure it under React's server build (the only place a `cache()` scope exists).
  *
  * ⚠⚠ IT IS LOG-ONLY: IT DOES NOT EMIT `auth_session_invalidated` (fix round 2, G3). The `page`
  * path has exactly ONE emitter — the session-sync route, which is where a refused render actually
