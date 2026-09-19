@@ -97,6 +97,7 @@ const CASE_SURFACE_ACTIONS: Record<CaseSurfaceAction, true> = {
   dismiss_resolution_request: true,
   view_recap: true,
   download_file: true,
+  view_file: true,
   join: true,
 };
 const CASES_INDEX_WORKSPACE_TYPES: Record<CasesIndexWorkspaceType, true> = {
@@ -146,6 +147,9 @@ describe('BAL-388 enum values', () => {
     // case surface had no Join affordance at all (`case-nudge.tsx` carried a docblock saying so),
     // because the only member join route was the anonymous lobby. The value arrived with the
     // button, which is the rule.
+    // ⚠ `view_file` IS DISTINCT FROM `download_file`, not a rename: an image OPENS in the
+    // in-app viewer while every other type downloads, and one value spanning both would make
+    // the download figure an "interacted with a file" figure.
     expect(Object.keys(CASE_SURFACE_ACTIONS).sort((a, b) => a.localeCompare(b))).toEqual([
       'book_another',
       'dismiss_resolution_request',
@@ -153,6 +157,7 @@ describe('BAL-388 enum values', () => {
       'join',
       'mark_resolved',
       'request_resolution',
+      'view_file',
       'view_recap',
     ]);
     expect(CASE_SURFACE_ACTIONS).not.toHaveProperty('slot_quick_pick');
