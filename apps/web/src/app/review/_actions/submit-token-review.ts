@@ -8,6 +8,7 @@ import { reviewInviteTokensRepository } from '@balo/db';
 import { REVIEW_BODY_MAX, RATING_MAX, RATING_MIN, isRating } from '@balo/shared/reviews';
 import { checkMemoryLimit } from '@/lib/rate-limit/memory-window';
 import { clientIp, hashesMatch, sha256Hex } from '@/lib/magic-link';
+import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { log } from '@/lib/logging';
 import { REVIEW_SUBMIT_FAILED } from '@/lib/reviews/messages';
 import { applyReview } from './review-write-shared';
@@ -111,6 +112,27 @@ export async function submitTokenReviewAction(
   if (row === undefined || !hashesMatch(tokenHash, row.tokenHash)) {
     // A hash PREFIX only — enough to correlate an incident, never enough to replay.
     log.info('Review link not active on submit', { tokenHashPrefix: tokenHash.slice(0, 8) });
+    return { success: false, error: REVIEW_SUBMIT_FAILED };
+  }
+
+  // ⚠⚠ BAL-568 (fix round 1, F6) — ACCOUNT LIVENESS ON THE TOKEN'S SUBJECT. This action was
+  // ALLOWLISTED in the first cut on the stated grounds that "the reviewer may have no `users` row
+  // at all". **That was false**: `review_invite_tokens.reviewer_user_id` is a `notNull` FK to
+  // `users.id`, so the row always exists and the check is always possible. The real residual that
+  // reason was hiding is the one now closed — a suspended or soft-deleted user holding a live
+  // 30-day magic link could still submit a review, because the only gate (`applyReview` →
+  // `review-write-shared`) reads `company_members.role` and never touches `users.status` /
+  // `users.deleted_at`.
+  //
+  // ⚠ IT MUST RUN AFTER THE TOKEN LOOKUP, not before: the token is what NAMES the subject, and
+  // there is no other actor to check. It still runs before `applyReview`, i.e. before any write.
+  // ⚠ IT REFUSES WITH THE SAME NON-ENUMERATING LITERAL as every other failure on this surface — an
+  // anonymous prober must not learn from the response whether a link's owner is suspended.
+  if ((await accountRefusalFor(row.reviewerUserId, { path: 'action', emit: true })) !== null) {
+    log.warn('Review submit refused: reviewer account is not live', {
+      engagementId: row.engagementId,
+      userId: row.reviewerUserId,
+    });
     return { success: false, error: REVIEW_SUBMIT_FAILED };
   }
 

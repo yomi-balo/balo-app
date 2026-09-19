@@ -18,6 +18,13 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
+// BAL-568 — the account-refusal marker reader. Doubled here; its header parsing, logging and
+// emission are covered in `lib/auth/api-account-refusal.test.ts`.
+const mockConsumeApiAccountRefusal = vi.fn();
+vi.mock('@/lib/auth/api-account-refusal', () => ({
+  consumeApiAccountRefusal: (...args: unknown[]) => mockConsumeApiAccountRefusal(...args),
+}));
+
 import {
   createPurchaseIntent,
   createMandateSetupIntent,
@@ -45,10 +52,36 @@ describe('credit api-client', () => {
     vi.clearAllMocks();
     process.env.INTERNAL_API_SECRET = 'secret-123';
     process.env.API_URL = 'http://api.test';
+    mockConsumeApiAccountRefusal.mockResolvedValue(null);
   });
   afterEach(() => {
     process.env.INTERNAL_API_SECRET = originalSecret;
     process.env.API_URL = originalApiUrl;
+  });
+
+  describe('BAL-568 — the api account-refusal marker', () => {
+    it('⚠ surfaces the refusal code on a marked 401, recording it exactly once', async () => {
+      const refused = jsonResponse({ error: 'Unauthorized' }, false, 401);
+      mockLoggedFetch.mockResolvedValue(refused);
+      mockConsumeApiAccountRefusal.mockResolvedValue('account_suspended');
+
+      const result = await callSessionApi('/sessions/x', 'POST', {});
+
+      expect(result.ok).toBe(false);
+      expect(result).toMatchObject({ status: 401, code: 'account_suspended' });
+      expect(mockConsumeApiAccountRefusal).toHaveBeenCalledTimes(1);
+      expect(mockConsumeApiAccountRefusal).toHaveBeenCalledWith(refused);
+    });
+
+    it('an UNMARKED failure keeps the body-supplied code, byte-identical to before', async () => {
+      mockLoggedFetch.mockResolvedValue(
+        jsonResponse({ code: 'insufficient_credit', error: 'Not enough credit.' }, false, 402)
+      );
+
+      const result = await callSessionApi('/sessions/x', 'POST', {});
+
+      expect(result).toMatchObject({ status: 402, code: 'insufficient_credit' });
+    });
   });
 
   const purchaseInput = {

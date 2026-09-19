@@ -369,8 +369,17 @@ const SESSION_USER_PASS_THROUGH_PROOFS: readonly {
 }[] = [
   // Returns `{ ...user, isImpersonating, … }` — a SPREAD, so the override rides along untouched.
   { file: 'apps/web/src/lib/auth/impersonation.ts', proof: '...user,', count: 1 },
-  // `requireUser()` AND `requireOnboardedUser()` — two of them, which is why the count matters.
-  { file: 'apps/web/src/lib/auth/session.ts', proof: 'return user;', count: 2 },
+  // `requireUser()`, `requireOnboardedUser()` AND `getCurrentUser()` — three of them, which is
+  // why the count matters.
+  //
+  // ⚠ BAL-568 TOOK THIS FROM 2 TO 3, AND THE FILE IS STILL A PASS-THROUGH. `getCurrentUser()`
+  // gained an account-liveness gate, which needed the session user in a local
+  // (`const user = session.user ?? null;` … `return user;`) instead of the old one-line
+  // `return session.user ?? null;`. It still hands back the EXISTING session user: it reads the
+  // live row only to decide whether to return `null`, and never builds a `SessionUser` from that
+  // row. Had it started constructing one it would owe a seal decision and belong in the
+  // row-backed list instead — which is exactly the distinction this count exists to force.
+  { file: 'apps/web/src/lib/auth/session.ts', proof: 'return user;', count: 3 },
 ];
 
 const SESSION_USER_PASS_THROUGHS: readonly string[] = SESSION_USER_PASS_THROUGH_PROOFS.map(

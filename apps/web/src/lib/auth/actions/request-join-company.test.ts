@@ -6,16 +6,32 @@ import { log } from '@/lib/logging';
 // mocked so the action's guards / fail-closed logic are exercised in isolation.
 // `@/lib/logging` is globally mocked in test/setup.ts.
 
-const { mockFindOrCreatePending, mockUsersUpdate, mockResolveActionable } = vi.hoisted(() => ({
-  mockFindOrCreatePending: vi.fn(),
-  mockUsersUpdate: vi.fn(),
-  mockResolveActionable: vi.fn(),
-}));
+const { mockFindOrCreatePending, mockUsersUpdate, mockResolveActionable, mockFindForSessionSync } =
+  vi.hoisted(() => ({
+    mockFindOrCreatePending: vi.fn(),
+    mockUsersUpdate: vi.fn(),
+    mockResolveActionable: vi.fn(),
+    // BAL-568 — the account-liveness gate reads the LIVE row through `readLiveUserRow`.
+    mockFindForSessionSync: vi.fn(),
+  }));
 
 vi.mock('@balo/db', () => ({
   partyJoinRequestsRepository: { findOrCreatePending: mockFindOrCreatePending },
-  usersRepository: { update: mockUsersUpdate },
+  usersRepository: { update: mockUsersUpdate, findForSessionSync: mockFindForSessionSync },
 }));
+
+// `readLiveUserRow` is `React.cache()`'d; a unit test has no request scope, so pass it through.
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>();
+  return { ...actual, cache: <T>(fn: T): T => fn };
+});
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: vi.fn(),
+  AUTH_SERVER_EVENTS: { SESSION_INVALIDATED: 'auth_session_invalidated' },
+}));
+
+const LIVE_ROW = { status: 'active', deletedAt: null };
+const SUSPENDED_ROW = { status: 'suspended', deletedAt: null };
 
 vi.mock('@/lib/domain-join/resolve-actionable-company', () => ({
   resolveActionableCompanyForSession: mockResolveActionable,
@@ -51,6 +67,7 @@ describe('requestJoinCompanyAction', () => {
     mockUsersUpdate.mockResolvedValue({});
     mockSave.mockResolvedValue(undefined);
     mockResolveActionable.mockResolvedValue({ partyId: 'company-1', mode: 'request' });
+    mockFindForSessionSync.mockResolvedValue(LIVE_ROW);
     mockSessionObj = {
       user: {
         id: 'user-1',
@@ -60,6 +77,36 @@ describe('requestJoinCompanyAction', () => {
       },
       save: mockSave,
     };
+  });
+
+  /** BAL-568 — one of the bounded `getSession()`-only set; the gate runs before the write. */
+  describe('BAL-568 — account liveness', () => {
+    it('⚠ refuses a SUSPENDED actor before resolving or writing anything', async () => {
+      mockFindForSessionSync.mockResolvedValue(SUSPENDED_ROW);
+
+      const result = await requestJoinCompanyAction();
+
+      expect(result).toEqual({ success: false, error: 'Unauthorized' });
+      expect(mockResolveActionable).not.toHaveBeenCalled();
+      expect(mockFindOrCreatePending).not.toHaveBeenCalled();
+    });
+
+    it('fails CLOSED when the live-row read throws', async () => {
+      mockFindForSessionSync.mockRejectedValue(new Error('connection terminated'));
+
+      const result = await requestJoinCompanyAction();
+
+      expect(result).toEqual({ success: false, error: 'Unauthorized' });
+      expect(mockFindOrCreatePending).not.toHaveBeenCalled();
+    });
+
+    it('⚠ an unauthenticated caller pays ZERO live-row reads', async () => {
+      mockSessionObj = { save: mockSave };
+
+      await requestJoinCompanyAction();
+
+      expect(mockFindForSessionSync).not.toHaveBeenCalled();
+    });
   });
 
   describe('authentication guards', () => {

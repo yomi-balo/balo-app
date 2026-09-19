@@ -121,6 +121,25 @@ export const usersRepository = {
   },
 
   /**
+   * ⚠⚠ BAL-568 ADDED A `findSoftDeletedByWorkosId` HERE AND FIX ROUND 1 REMOVED IT. DO NOT
+   * RE-ADD IT — not without an index and a deliberate decision.
+   *
+   * It filtered `deleted_at IS NOT NULL`, which CANNOT use `users_workos_id_unique` (that index is
+   * PARTIAL, `WHERE deleted_at IS NULL`), so every call SEQ-SCANNED `users`. It sat on the
+   * authentication hot path, and `apps/api`'s `requireAuth` runs BEFORE the rate limiter on every
+   * route that has one — so a replayed soft-deleted token drove unthrottled full-table scans, at
+   * whatever rate the caller chose. The original design rejected a supporting index on DBA effort;
+   * it never weighed attacker-controlled scan rate, which is what actually decided this.
+   *
+   * ⚠ THE CONSEQUENCE IS DELIBERATE AND IS DOCUMENTED AT `apps/api/src/lib/require-auth.ts`: a
+   * soft-deleted account and an unknown `sub` are now indistinguishable to the API, so the API path
+   * emits only `account_suspended` and never `account_deleted`. Both are still REFUSED — the
+   * difference is only whether the 401 carries the teardown marker. The page and action paths keep
+   * emitting BOTH codes, because `findForSessionSync` below deliberately does not filter
+   * `deletedAt` and so still returns soft-deleted rows.
+   */
+
+  /**
    * Find user by email (excludes soft-deleted)
    */
   findByEmail: async (email: string): Promise<User | undefined> => {

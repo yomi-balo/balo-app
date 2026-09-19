@@ -5,6 +5,7 @@ import 'server-only';
 import { companiesRepository, usersRepository } from '@balo/db';
 import { classifyEmailDomain, extractEmailDomain } from '@balo/shared/domains';
 import { getSession } from '@/lib/auth/session';
+import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { companyNameSchema } from '@/lib/auth/company-name-schema';
 import { type AuthResult } from '@/lib/auth/errors';
 import { publishNotificationEvent } from '@/lib/notifications/publish';
@@ -105,6 +106,17 @@ async function resolveWorkspaceName(
 export async function nameWorkspaceAndCompleteAction(
   companyName: string
 ): Promise<AuthResult<NameWorkspaceResult>> {
+  // BAL-568 — ACCOUNT LIVENESS against the LIVE row, ABOVE THE PARSE (R9; fix round 1, F4). One of
+  // the bounded `getSession()`-only set — see `complete-onboarding.ts` for the full reasoning,
+  // including why this is `accountRefusalFor` rather than `assertAccountLive`.
+  const session = await getSession();
+  if (!session?.user?.id) {
+    return { success: false, error: 'Unauthorized' };
+  }
+  if ((await accountRefusalFor(session.user.id, { path: 'action', emit: true })) !== null) {
+    return { success: false, error: 'Unauthorized' };
+  }
+
   const parsed = companyNameSchema.safeParse({ companyName });
   if (!parsed.success) {
     return {
@@ -113,10 +125,6 @@ export async function nameWorkspaceAndCompleteAction(
     };
   }
 
-  const session = await getSession();
-  if (!session?.user?.id) {
-    return { success: false, error: 'Unauthorized' };
-  }
   if (session.user.onboardingCompleted) {
     return { success: false, error: 'Onboarding already completed' };
   }

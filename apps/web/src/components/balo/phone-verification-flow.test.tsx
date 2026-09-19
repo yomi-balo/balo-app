@@ -37,6 +37,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 // Import after mocks
+import { ACCOUNT_REFUSAL_HEADER } from '@balo/shared/authz';
 import { PhoneVerificationFlow } from './phone-verification-flow';
 import { track, PHONE_EVENTS } from '@/lib/analytics';
 
@@ -48,16 +49,22 @@ const DEFAULT_PROPS = {
   onVerified: vi.fn(),
 };
 
+/**
+ * A mocked `fetch` response. ⚠ BAL-568 — `headers` IS PRESENT ON EVERY ONE OF THEM: the component
+ * reads the account-refusal marker off `res.headers` before mapping a non-ok body, so a stand-in
+ * without headers throws a TypeError instead of exercising the error mapping.
+ */
+interface MockResponse {
+  ok: boolean;
+  headers: Headers;
+  json: () => Promise<Record<string, unknown>>;
+}
+
 /** Mock ipapi.co geolocation fetch to return AU by default, plus any additional fetch calls. */
-function setupFetchMock(
-  additionalResponses: Array<{
-    ok: boolean;
-    json: () => Promise<Record<string, unknown>>;
-  }> = []
-): void {
-  const responses = [
+function setupFetchMock(additionalResponses: MockResponse[] = []): void {
+  const responses: MockResponse[] = [
     // First call: ipapi.co geolocation
-    { ok: true, json: () => Promise.resolve({ country_code: 'AU' }) },
+    { ok: true, headers: new Headers(), json: () => Promise.resolve({ country_code: 'AU' }) },
     ...additionalResponses,
   ];
   let callIndex = 0;
@@ -87,29 +94,36 @@ function setupLandlinePhone(): void {
 }
 
 /** Create a successful send-otp response. */
-function sendOtpSuccess(): { ok: boolean; json: () => Promise<Record<string, unknown>> } {
-  return { ok: true, json: () => Promise.resolve({ success: true }) };
+function sendOtpSuccess(): MockResponse {
+  return { ok: true, headers: new Headers(), json: () => Promise.resolve({ success: true }) };
 }
 
 /** Create a failed send-otp response with a specific error. */
-function sendOtpError(
-  error: string,
-  extra: Record<string, unknown> = {}
-): { ok: boolean; json: () => Promise<Record<string, unknown>> } {
-  return { ok: false, json: () => Promise.resolve({ error, ...extra }) };
+function sendOtpError(error: string, extra: Record<string, unknown> = {}): MockResponse {
+  return { ok: false, headers: new Headers(), json: () => Promise.resolve({ error, ...extra }) };
 }
 
 /** Create a successful verify-otp response. */
-function verifyOtpSuccess(): { ok: boolean; json: () => Promise<Record<string, unknown>> } {
-  return { ok: true, json: () => Promise.resolve({ success: true }) };
+function verifyOtpSuccess(): MockResponse {
+  return { ok: true, headers: new Headers(), json: () => Promise.resolve({ success: true }) };
 }
 
 /** Create a failed verify-otp response. */
-function verifyOtpError(
-  error: string,
-  extra: Record<string, unknown> = {}
-): { ok: boolean; json: () => Promise<Record<string, unknown>> } {
-  return { ok: false, json: () => Promise.resolve({ error, ...extra }) };
+function verifyOtpError(error: string, extra: Record<string, unknown> = {}): MockResponse {
+  return { ok: false, headers: new Headers(), json: () => Promise.resolve({ error, ...extra }) };
+}
+
+/**
+ * BAL-568 — a 401 carrying the account-refusal marker `apps/api`'s `requireAuth` sets on a
+ * suspended or soft-deleted account. The BODY is byte-identical to every other 401; the marker
+ * lives on the header.
+ */
+function accountRefused(code: 'account_suspended' | 'account_deleted'): MockResponse {
+  return {
+    ok: false,
+    headers: new Headers({ [ACCOUNT_REFUSAL_HEADER]: code }),
+    json: () => Promise.resolve({ error: 'Unauthorized' }),
+  };
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -1008,6 +1022,107 @@ describe('PhoneVerificationFlow', () => {
       await waitFor(() => {
         expect(screen.getByText(/Verifying/)).toBeInTheDocument();
       });
+    });
+  });
+
+  /**
+   * ── BAL-568 — THE ONE BROWSER-SIDE BEARER CALLER, AND THE ONE REAL SIGN-OUT ─────────────
+   *
+   * Every other web→api client in this app is `server-only`, so this component is the single
+   * place the browser can drive a sign-out itself. On a 401 carrying the account-refusal marker
+   * it navigates to the session-sync Route Handler, which re-reads the LIVE row, destroys the
+   * cookie and lands on `/login?error=account_suspended|account_deleted` with BAL-197's copy.
+   *
+   * ⚠ IT MUST NOT PICK THE CODE ITSELF — the route owns the precedence — and it must NOT run the
+   * normal error mapping, which would show retry copy for an account that can never retry.
+   */
+  describe('BAL-568 — a marked 401 signs the person out', () => {
+    let assignSpy: ReturnType<typeof vi.fn>;
+    let originalLocation: Location;
+
+    beforeEach(() => {
+      assignSpy = vi.fn();
+      originalLocation = globalThis.location;
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        writable: true,
+        value: { ...originalLocation, assign: assignSpy },
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        writable: true,
+        value: originalLocation,
+      });
+    });
+
+    it('⚠ navigates to the sync route on a marked SEND failure, once, with no error copy', async () => {
+      setupFetchMock([accountRefused('account_suspended')]);
+      const user = userEvent.setup();
+      render(<PhoneVerificationFlow {...DEFAULT_PROPS} />);
+
+      await user.type(screen.getByPlaceholderText('412 345 678'), '412345678');
+      await user.click(screen.getByRole('button', { name: /send verification code/i }));
+
+      await waitFor(() => {
+        expect(assignSpy).toHaveBeenCalledTimes(1);
+      });
+      expect(assignSpy).toHaveBeenCalledWith('/api/auth/session-sync?returnTo=/login');
+      // The normal mapping never ran: no generic failure copy, and no OTP stage.
+      expect(screen.queryByText(/Something went wrong sending the code/)).not.toBeInTheDocument();
+      expect(screen.queryByText('Enter 6-digit code')).not.toBeInTheDocument();
+    });
+
+    it('navigates to the same route for account_deleted — the component never picks the code', async () => {
+      setupFetchMock([accountRefused('account_deleted')]);
+      const user = userEvent.setup();
+      render(<PhoneVerificationFlow {...DEFAULT_PROPS} />);
+
+      await user.type(screen.getByPlaceholderText('412 345 678'), '412345678');
+      await user.click(screen.getByRole('button', { name: /send verification code/i }));
+
+      await waitFor(() => {
+        expect(assignSpy).toHaveBeenCalledWith('/api/auth/session-sync?returnTo=/login');
+      });
+    });
+
+    it('⚠ navigates on a marked VERIFY failure too, without the wrong-code mapping', async () => {
+      setupFetchMock([sendOtpSuccess(), accountRefused('account_suspended')]);
+      const user = userEvent.setup();
+      render(<PhoneVerificationFlow {...DEFAULT_PROPS} />);
+
+      await user.type(screen.getByPlaceholderText('412 345 678'), '412345678');
+      await user.click(screen.getByRole('button', { name: /send verification code/i }));
+      await waitFor(() => {
+        expect(screen.getByText('Enter 6-digit code')).toBeInTheDocument();
+      });
+
+      const digits = screen.getAllByLabelText(/Digit \d/);
+      for (let i = 0; i < 6; i++) {
+        await user.click(digits[i]!);
+        await user.keyboard(String(i + 1));
+      }
+
+      await waitFor(() => {
+        expect(assignSpy).toHaveBeenCalledWith('/api/auth/session-sync?returnTo=/login');
+      });
+      expect(screen.queryByText(/incorrect/i)).not.toBeInTheDocument();
+    });
+
+    it('an UNMARKED 401 is unchanged — it still maps to the normal error copy', async () => {
+      setupFetchMock([sendOtpError('brevo_rejected')]);
+      const user = userEvent.setup();
+      render(<PhoneVerificationFlow {...DEFAULT_PROPS} />);
+
+      await user.type(screen.getByPlaceholderText('412 345 678'), '412345678');
+      await user.click(screen.getByRole('button', { name: /send verification code/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/couldn't send/i)).toBeInTheDocument();
+      });
+      expect(assignSpy).not.toHaveBeenCalled();
     });
   });
 });

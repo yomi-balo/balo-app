@@ -1,8 +1,8 @@
 import 'server-only';
 
-import { usersRepository } from '@balo/db';
-import type { PlatformCapability } from '@balo/shared/authz';
+import { userRowIsLive, type PlatformCapability } from '@balo/shared/authz';
 import { sealedPlatformCapabilities } from '@/lib/auth/session-platform-capabilities';
+import { readLiveUserRow } from '@/lib/auth/live-user';
 import { log } from '@/lib/logging';
 import { hasPlatformCapability } from './platform';
 
@@ -60,9 +60,9 @@ export async function actorHoldsPlatformCapability(
   userId: string,
   capability: PlatformCapability
 ): Promise<boolean> {
-  let row: Awaited<ReturnType<typeof usersRepository.findForSessionSync>>;
+  let row: Awaited<ReturnType<typeof readLiveUserRow>>;
   try {
-    row = await usersRepository.findForSessionSync(userId);
+    row = await readLiveUserRow(userId);
   } catch (error) {
     log.error('Live platform-capability check failed — denying', {
       actorUserId: userId,
@@ -72,7 +72,11 @@ export async function actorHoldsPlatformCapability(
     });
     return false;
   }
-  if (row === null || row.deletedAt !== null || row.status !== 'active') return false;
+  // BAL-568 (R5) — ONE definition of "live". This used to inline the same three conditions
+  // (`row.deletedAt !== null || row.status !== 'active'`); `userRowIsLive` is the shared
+  // predicate `@balo/shared/authz` already exported, and a second copy of a security predicate is
+  // exactly what this repo's standing one-definition rule exists to prevent.
+  if (row === null || !userRowIsLive(row)) return false;
   // `sealedPlatformCapabilities` is the ONE encoder — absent when the column is NULL — so this
   // actor is shaped exactly like a sealed `SessionUser` and resolves through the same seam.
   return hasPlatformCapability(

@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { PLATFORM_CAPABILITIES, resolvePlatformCapabilities } from '@balo/shared/authz';
+import {
+  PLATFORM_CAPABILITIES,
+  classifyAccountRefusal,
+  resolvePlatformCapabilities,
+} from '@balo/shared/authz';
 import { db } from '../client';
 import { partyDomains, auditEvents, users, companies } from '../schema';
 import {
@@ -1242,5 +1246,69 @@ describe(`users.platform_capabilities — the CHECK (${STAFF_ARRAY_CHECK}) (BAL-
     const row = await usersRepository.findForSessionSync(user.id);
     expect(row?.platformRole).toBe('admin');
     expect(row?.platformCapabilities).toEqual(['redrive_job']);
+  });
+});
+
+/**
+ * BAL-568 — **LIVENESS IS READ LIVE, NOT CACHED.**
+ *
+ * ⚠⚠ THE ACCEPTANCE CASE IS ONLY EXPRESSIBLE AS A DIRECT ROW UPDATE, AND THAT IS THE RIGHT TEST,
+ * NOT A WORKAROUND. No application code path anywhere writes `status = 'suspended' | 'inactive'`
+ * — there is no admin surface to suspend an account today, only a direct database edit. So
+ * "suspended between render and submit" cannot be driven through a Server Action or an API route;
+ * it is driven here, against a real Postgres, exactly as an operator would cause it.
+ */
+describe('BAL-568 — liveness is read live, not cached', () => {
+  it('⚠ a row read as LIVE one moment refuses the next, after a direct status flip', async () => {
+    const user = await userFactory();
+
+    // ── the "render": the account is live and every seam lets it act.
+    const before = await usersRepository.findForSessionSync(user.id);
+    expect(before).not.toBeNull();
+    expect(classifyAccountRefusal(before)).toBeNull();
+
+    // ── the suspension, between render and submit.
+    await db.update(users).set({ status: 'suspended' }).where(eq(users.id, user.id));
+
+    // ── the "submit": the SAME read now refuses. Nothing was cached across the flip.
+    const after = await usersRepository.findForSessionSync(user.id);
+    expect(classifyAccountRefusal(after)).toBe('account_suspended');
+  });
+
+  it('the soft-delete arm refuses as account_deleted', async () => {
+    const user = await userFactory();
+    expect(classifyAccountRefusal(await usersRepository.findForSessionSync(user.id))).toBeNull();
+
+    await usersRepository.softDelete(user.id);
+
+    expect(classifyAccountRefusal(await usersRepository.findForSessionSync(user.id))).toBe(
+      'account_deleted'
+    );
+  });
+
+  it("'inactive' — the enum's third member — refuses identically to 'suspended'", async () => {
+    const user = await userFactory();
+    await db.update(users).set({ status: 'inactive' }).where(eq(users.id, user.id));
+
+    expect(classifyAccountRefusal(await usersRepository.findForSessionSync(user.id))).toBe(
+      'account_suspended'
+    );
+  });
+
+  /**
+   * ⚠ PRECEDENCE, AGAINST A REAL ROW. The one case where the two conditions disagree:
+   * `account_deleted` wins, because that is the order the shipped session-sync route branches in
+   * and BAL-197's copy was written against it.
+   */
+  it('⚠ suspended AND soft-deleted reads account_deleted, not account_suspended', async () => {
+    const user = await userFactory();
+    await db
+      .update(users)
+      .set({ status: 'suspended', deletedAt: new Date() })
+      .where(eq(users.id, user.id));
+
+    expect(classifyAccountRefusal(await usersRepository.findForSessionSync(user.id))).toBe(
+      'account_deleted'
+    );
   });
 });

@@ -1,8 +1,8 @@
 import 'server-only';
 
-import { cache } from 'react';
-import { usersRepository } from '@balo/db';
+import { classifyAccountRefusal } from '@balo/shared/authz';
 import { getSession } from './session';
+import { readLiveUserRow } from './live-user';
 import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { activeWorkspaceKeyOf } from '@/lib/workspaces/session-workspace';
 import {
@@ -12,16 +12,16 @@ import {
 
 type CheckResult = { action: 'ok' } | { action: 'sync-needed' };
 
-// React.cache wraps the DB query so multiple Server Components
-// in the same request tree share a single DB roundtrip.
-const getCachedUserForSync = cache(async (userId: string) => {
-  return usersRepository.findForSessionSync(userId);
-});
-
 /**
  * Read-only session drift check for Server Components.
  * Does NOT mutate cookies — if drift or invalidation is detected,
  * returns 'sync-needed' so the caller can redirect to the route handler.
+ *
+ * BAL-568 — the live row now comes from `readLiveUserRow` (the ONE `React.cache()`'d reader),
+ * so this render, the liveness gate and `actorHoldsPlatformCapability` share a single round trip
+ * rather than each holding their own `cache()` entry over the same query. The liveness branch
+ * below goes through `classifyAccountRefusal` for the same reason the api arm does: one
+ * definition of "live", built on `userRowIsLive`.
  */
 export async function checkSessionDrift(): Promise<CheckResult> {
   const session = await getSession();
@@ -30,10 +30,12 @@ export async function checkSessionDrift(): Promise<CheckResult> {
     return { action: 'sync-needed' };
   }
 
-  const dbUser = await getCachedUserForSync(session.user.id);
+  const dbUser = await readLiveUserRow(session.user.id);
 
-  // User not found, soft-deleted, or non-active → needs sync (route handler will destroy session)
-  if (dbUser?.deletedAt !== null || dbUser?.status !== 'active') {
+  // User not found, soft-deleted, or non-active → needs sync (route handler will destroy session).
+  // ⚠ The explicit `null` arm is REDUNDANT behaviourally — `classifyAccountRefusal(null)` already
+  // refuses — and is kept solely so TypeScript narrows `dbUser` for the drift comparisons below.
+  if (dbUser === null || classifyAccountRefusal(dbUser) !== null) {
     return { action: 'sync-needed' };
   }
 

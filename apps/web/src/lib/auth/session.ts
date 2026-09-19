@@ -7,6 +7,7 @@ import type { SealedPlatformCapabilityIndexes } from '@balo/shared/authz';
 import { sessionConfig } from './config';
 import { impersonatedSessionConfig } from './session-config';
 import { isImpersonatedSession } from './impersonation';
+import { accountRefusalFor, assertAccountLive } from './account-liveness';
 import type { AuthMethodSignal } from './auth-method';
 
 export interface SessionUser {
@@ -186,16 +187,65 @@ export async function getSession() {
   return session;
 }
 
+/**
+ * BAL-568 (ruling 2026-09-18) — the session's user, **re-validated against the LIVE row**.
+ *
+ * ⚠ A SUSPENDED OR SOFT-DELETED ACCOUNT READS AS `null` HERE, exactly as an unauthenticated one
+ * does. Every shipped caller already handles `null`, so the whole read-only surface gains the
+ * check with zero edits.
+ *
+ * ⚠⚠ AN ANONYMOUS VISITOR PAYS **NOTHING**. The live read happens only AFTER a session user has
+ * been resolved; no session means no DB read at all, so a marketing page for a logged-out visitor
+ * issues zero extra queries. Pinned by `session.test.ts`.
+ *
+ * ⚠ ON A PAGE RENDER inside `(dashboard)` the read is free — it shares `checkSessionDrift`'s
+ * `React.cache()` entry via `readLiveUserRow`. Outside it (the root and marketing layouts) it is
+ * one indexed read per authenticated render: an accepted cost, because showing "signed in" chrome
+ * to an account whose every action is refused is worse than the read.
+ *
+ * ⚠⚠ THAT SHARING IS A RENDER-PASS PROPERTY ONLY, AND AN EARLIER VERSION OF THIS DOCBLOCK IMPLIED
+ * MORE (corrected 2026-09-19). `React.cache()` memoizes only inside a server-component render
+ * pass; a Server Action runs BEFORE that render starts, and a Route Handler never runs inside one,
+ * so on those paths every seam call is its own query. The two reads a platform-gated staff action
+ * therefore pays are an ACCEPTED cost (user ruling, 2026-09-19), not a defect to restructure — see
+ * `./live-user.ts` for the full correction and `live-user.react-server.test.ts` for the assertions
+ * that measure it under React's server build (the only place a `cache()` scope exists).
+ *
+ * ⚠⚠ IT IS LOG-ONLY: IT DOES NOT EMIT `auth_session_invalidated` (fix round 2, G3). The `page`
+ * path has exactly ONE emitter — the session-sync route, which is where a refused render actually
+ * ejects. Emitting here as well double-counted every page ejection, and worse: `NotificationBell`
+ * polls `/api/notifications` every 30s and KEEPS POLLING after a 401, so a suspended user with one
+ * open tab produced a *flushing* PostHog call every 30 seconds for the life of the cookie. The
+ * `log.info` line is unchanged, so debugging is unaffected.
+ *
+ * ⚠ `path: 'page'` on that log line remains an approximation with a named residual: this seam has
+ * two kinds of caller and cannot tell them apart from the inside — the THREE layouts that run on
+ * every authenticated render, and a handful of Server Actions that resolve their actor here rather
+ * than through `requireUser`. It is now only a LOG dimension, so the residual costs no accuracy in
+ * the event stream.
+ */
 export async function getCurrentUser(): Promise<SessionUser | null> {
   const session = await getSession();
-  return session.user ?? null;
+  const user = session.user ?? null;
+  if (user === null) return null;
+  if ((await accountRefusalFor(user.id, { path: 'page' })) !== null) return null;
+  return user;
 }
 
+/**
+ * BAL-568 — ⚠ THIS SEAM READS `getSession()` DIRECTLY RATHER THAN GOING VIA `getCurrentUser()`,
+ * and that is deliberate: the two failures must stay distinguishable. No session at all is still
+ * the generic `'Unauthorized'` every caller already maps; a non-live account throws
+ * `AccountNotLiveError`, which carries the refusal code. Routing through `getCurrentUser()` would
+ * collapse both onto `'Unauthorized'` and lose the code.
+ */
 export async function requireUser(): Promise<SessionUser> {
-  const user = await getCurrentUser();
+  const session = await getSession();
+  const user = session.user;
   if (!user) {
     throw new Error('Unauthorized');
   }
+  await assertAccountLive(user.id);
   return user;
 }
 

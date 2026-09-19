@@ -9,6 +9,7 @@ import {
 } from '@balo/shared/domains';
 import { partyDomainsRepository, partyMembershipsRepository, companiesRepository } from '@balo/db';
 import { getSession } from '@/lib/auth/session';
+import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { isActionableDomainMatch } from '@/lib/domain-join/match-stand-down';
 import { log } from '@/lib/logging';
 
@@ -33,6 +34,39 @@ export type ResolveOnboardingCompanyResult =
     };
 
 /**
+ * The JOIN arm: read the owning company and shape the `matched` result, or stand down to `new`.
+ *
+ * ⚠ EXTRACTED ONLY TO SHED COGNITIVE COMPLEXITY (SonarCloud caps the action at 15; BAL-568's
+ * liveness gate took the inlined version to 16). The body moved VERBATIM, including the BAL-372
+ * blank-name reasoning below.
+ */
+async function resolveMatchedCompany(
+  email: string,
+  partyId: string,
+  domainJoinMode: string
+): Promise<ResolveOnboardingCompanyResult> {
+  const company = await companiesRepository.findWithMembers(partyId);
+  const name = company?.name?.trim();
+  // BAL-372 defense-in-depth: under S2 the name + domain claim commit in ONE tx, so a
+  // domain-owning org structurally always has a non-empty name. If that invariant is
+  // ever violated, a blank name would render "Join ?" with a blank avatar — so treat a
+  // missing/empty/whitespace name as non-actionable and fall through to CREATE.
+  if (name === undefined || name === '') {
+    return { status: 'new', suggestion: suggestCompanyNameFromEmail(email) };
+  }
+  return {
+    status: 'matched',
+    company: {
+      name, // trimmed
+      // Primitive count only — no member rows cross to the client (no PII).
+      memberCount: company?.members?.length ?? 0,
+      joinMode: domainJoinMode === 'request' ? 'request' : 'auto',
+    },
+    suggestion: suggestCompanyNameFromEmail(email),
+  };
+}
+
+/**
  * READ-ONLY, authenticated Server Action that resolves the signed-in user's
  * workspace identity from their email domain. Unlike PR #134's pre-auth endpoint
  * this reads the email from the SESSION (never a client arg), which removes the
@@ -45,11 +79,24 @@ export type ResolveOnboardingCompanyResult =
  *
  * FAIL-OPEN: any thrown error → `{ status: 'new', suggestion }` so onboarding is
  * never blocked on a resolve failure (logged at `warn`, since it is recoverable).
+ *
+ * ⚠ THIS DOCBLOCK BELONGS TO THE ACTION, AND IT BRIEFLY DID NOT (fix round 1, F10): extracting
+ * `resolveMatchedCompany` above left it attached to the helper. Keep the helper BELOW this
+ * function, or move this block with it.
  */
 export async function resolveOnboardingCompanyAction(): Promise<ResolveOnboardingCompanyResult> {
   const session = await getSession();
   const email = session?.user?.email;
-  if (!email) return { status: 'new', suggestion: '' }; // no auth/email → fail open, empty prefill
+  const userId = session?.user?.id;
+  if (!email || !userId) return { status: 'new', suggestion: '' }; // no auth/email → fail open
+
+  // BAL-568 — ACCOUNT LIVENESS against the LIVE row; one of the bounded `getSession()`-only set.
+  // ⚠⚠ IT SITS **ABOVE** THE `try`, DELIBERATELY. This action fails OPEN on any throw, so a gate
+  // inside the `try` would be swallowed by the catch below and silently do nothing. A refused
+  // account lands on the same safe default an anonymous one does: no company is disclosed, and
+  // this path writes nothing.
+  if ((await accountRefusalFor(userId, { path: 'action', emit: true })) !== null)
+    return { status: 'new', suggestion: '' };
 
   try {
     const domain = extractEmailDomain(email);
@@ -78,25 +125,7 @@ export async function resolveOnboardingCompanyAction(): Promise<ResolveOnboardin
     // second signup resolves 'matched' here — the same predicate the detect
     // engine reads.
     if (isActionableDomainMatch(owner.partyType, settings)) {
-      const company = await companiesRepository.findWithMembers(owner.partyId);
-      const name = company?.name?.trim();
-      // BAL-372 defense-in-depth: under S2 the name + domain claim commit in ONE tx, so a
-      // domain-owning org structurally always has a non-empty name. If that invariant is
-      // ever violated, a blank name would render "Join ?" with a blank avatar — so treat a
-      // missing/empty/whitespace name as non-actionable and fall through to CREATE.
-      if (name === undefined || name === '') {
-        return { status: 'new', suggestion: suggestCompanyNameFromEmail(email) };
-      }
-      return {
-        status: 'matched',
-        company: {
-          name, // trimmed
-          // Primitive count only — no member rows cross to the client (no PII).
-          memberCount: company?.members?.length ?? 0,
-          joinMode: settings.domainJoinMode === 'request' ? 'request' : 'auto',
-        },
-        suggestion: suggestCompanyNameFromEmail(email),
-      };
+      return await resolveMatchedCompany(email, owner.partyId, settings.domainJoinMode);
     }
     return { status: 'new', suggestion: suggestCompanyNameFromEmail(email) };
   } catch (error) {

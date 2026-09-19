@@ -179,6 +179,22 @@ export type {
   StaffAccessDraftGains,
 } from './staff-access';
 
+// BAL-568 — the ACCOUNT-LIVENESS classifier: the ONE place the two refusal codes
+// (`account_suspended` / `account_deleted`) are chosen, on all three enforcement paths (page
+// render, `apps/api` Bearer call, `apps/web` Server Action). Built ON `userRowIsLive` above —
+// never a second definition of "live". See `./account-liveness.ts`.
+export {
+  ACCOUNT_REFUSAL_HEADER,
+  classifyAccountRefusal,
+  reasonOfRefusal,
+  isAccountRefusalCode,
+} from './account-liveness';
+export type {
+  AccountRefusalCode,
+  AccountRefusalReason,
+  AccountLivenessRow,
+} from './account-liveness';
+
 // The DISTINCT engagement-capability axis (BAL-413 / ADR-1046) — gates by DELIVERY
 // IDENTITY on ONE already-resolved meeting context, not by membership role and not by
 // platform role. Re-exported here so all THREE axes are reachable via the single

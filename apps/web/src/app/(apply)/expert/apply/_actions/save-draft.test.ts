@@ -13,6 +13,9 @@ const SUPPORT_TYPE_ID_2 = 'a0000000-0000-4000-8000-000000000011';
 
 // ── Mocks ────────────────────────────────────────────────────────
 
+// BAL-568 — the seams re-read the LIVE `users` row; this suite is not about that gate.
+vi.mock('@/lib/auth/live-user', async () => (await import('@/test/live-user-double')).mock);
+
 vi.mock('server-only', () => ({}));
 
 const mockFindApplicationWithRelations = vi.fn();

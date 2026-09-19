@@ -11,6 +11,13 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: (...args: unknown[]) => mockGetSession(...args),
 }));
 
+// BAL-568 — the account-refusal marker reader. Doubled here; its header parsing, logging and
+// emission are covered in `lib/auth/api-account-refusal.test.ts`.
+const mockConsumeApiAccountRefusal = vi.fn();
+vi.mock('@/lib/auth/api-account-refusal', () => ({
+  consumeApiAccountRefusal: (...args: unknown[]) => mockConsumeApiAccountRefusal(...args),
+}));
+
 import { log } from '@/lib/logging';
 import { endMeeting, getMeetingState } from './meeting-lifecycle-client';
 
@@ -60,6 +67,29 @@ function lastUrl(): string {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetSession.mockResolvedValue({ user: { id: 'user_1' }, accessToken: ACCESS_TOKEN });
+  mockConsumeApiAccountRefusal.mockResolvedValue(null);
+});
+
+describe('BAL-568 — the api account-refusal marker', () => {
+  it('⚠ surfaces the refusal code on a marked 401, recording it exactly once', async () => {
+    const refused = response(401, { error: 'Unauthorized' });
+    mockLoggedFetch.mockResolvedValue(refused);
+    mockConsumeApiAccountRefusal.mockResolvedValue('account_deleted');
+
+    const result = await endMeeting(MEETING_ID);
+
+    expect(result).toEqual({ ok: false, status: 401, code: 'account_deleted' });
+    expect(mockConsumeApiAccountRefusal).toHaveBeenCalledTimes(1);
+    expect(mockConsumeApiAccountRefusal).toHaveBeenCalledWith(refused);
+  });
+
+  it('an UNMARKED 401 is byte-identical to its pre-BAL-568 behaviour', async () => {
+    mockLoggedFetch.mockResolvedValue(response(401, { error: 'forbidden' }));
+
+    const result = await endMeeting(MEETING_ID);
+
+    expect(result).toEqual({ ok: false, status: 401, code: 'forbidden' });
+  });
 });
 
 describe('⚠⚠ endMeeting sends a BODY on the POST (the production regression guard)', () => {

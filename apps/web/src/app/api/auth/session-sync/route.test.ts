@@ -34,6 +34,15 @@ vi.mock('@/lib/logging', () => ({
   },
 }));
 
+// BAL-568 — this route emits the `page` arm of `auth_session_invalidated`. ⚠ THE MOCK IS
+// REQUIRED, not merely convenient: `trackServerAndFlush` calls next/server's `after()`, which
+// THROWS outside a request scope ("`after` was called outside a request scope").
+const { mockTrackServerAndFlush } = vi.hoisted(() => ({ mockTrackServerAndFlush: vi.fn() }));
+vi.mock('@/lib/analytics/server', () => ({
+  trackServerAndFlush: mockTrackServerAndFlush,
+  AUTH_SERVER_EVENTS: { SESSION_INVALIDATED: 'auth_session_invalidated' },
+}));
+
 const PERSONAL_ID = 'company-1';
 // BAL-507 (R-A) — the ROUTE writes the narrow pointer via `applyWorkspaceDerivationToSession
 // User`, never a full `Workspace` (`via` / `isPersonal` / `role`). Assertions that read
@@ -229,6 +238,126 @@ describe('GET /api/auth/session-sync', () => {
       expect(session.destroy).toHaveBeenCalled();
       expect(response.status).toBe(307);
       expect(getRedirectLocation(response)).toBe('/login?error=account_suspended');
+    });
+  });
+
+  /**
+   * ── BAL-568 — this route is now the `page` ARM of one shared classifier ────────────────
+   *
+   * The two hand-written branches were replaced by `classifyAccountRefusal`, so what has to be
+   * pinned is that NOTHING OBSERVABLE CHANGED (both redirect targets and both `log.info` strings
+   * are BAL-197's, byte-for-byte) and that the analytics arm this route never had now fires.
+   */
+  describe('BAL-568 — the page arm', () => {
+    it('⚠ keeps the shipped log.info string byte-identical for a DELETED account', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ deletedAt: new Date('2025-06-01') }));
+
+      await GET(makeRequest());
+
+      expect(mockLogInfo).toHaveBeenCalledWith('Session invalidated: user deleted', {
+        userId: 'user-1',
+        reason: 'deleted',
+      });
+    });
+
+    it('⚠ keeps the shipped log.info string AND the `status` field for a SUSPENDED account', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ status: 'suspended' }));
+
+      await GET(makeRequest());
+
+      expect(mockLogInfo).toHaveBeenCalledWith('Session invalidated: user suspended', {
+        userId: 'user-1',
+        reason: 'suspended',
+        status: 'suspended',
+      });
+    });
+
+    it('⚠ emits session_invalidated { path: page } ONCE, with the FULL literal payload', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ status: 'suspended' }));
+
+      await GET(makeRequest());
+
+      expect(mockTrackServerAndFlush).toHaveBeenCalledTimes(1);
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_session_invalidated', {
+        distinct_id: 'user-1',
+        path: 'page',
+        reason: 'suspended',
+      });
+    });
+
+    it('emits the deleted reason for a soft-deleted account', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser({ deletedAt: new Date('2025-06-01') }));
+
+      await GET(makeRequest());
+
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_session_invalidated', {
+        distinct_id: 'user-1',
+        path: 'page',
+        reason: 'deleted',
+      });
+    });
+
+    /**
+     * ⚠ THE MISSING-ROW ARM IS A DISTINCT BRANCH AND MUST STAY ONE. It `warn`s its own string
+     * where the other two `info`; folding it into the shared classifier would silently change the
+     * level and the message.
+     */
+    it('⚠ the MISSING-row arm keeps its own warn string and is not folded in', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(null);
+
+      const response = await GET(makeRequest());
+
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        'Session sync: user not found in DB, destroying session',
+        { userId: 'user-1' }
+      );
+      expect(mockLogInfo).not.toHaveBeenCalledWith(
+        'Session invalidated: user deleted',
+        expect.anything()
+      );
+      expect(getRedirectLocation(response)).toBe('/login?error=account_deleted');
+    });
+
+    it('a LIVE account emits no session_invalidated at all', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(createDbUser());
+
+      await GET(makeRequest());
+
+      expect(mockTrackServerAndFlush).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ⚠ PRECEDENCE, AGAINST THE ROUTE ITSELF. A row that is BOTH suspended and soft-deleted must
+     * land on `account_deleted` — BAL-197's shipped order. This is the one case where the two
+     * conditions disagree, and it is the only reason the classifier's branch order is pinned.
+     */
+    it('⚠ a suspended AND soft-deleted account still redirects to account_deleted', async () => {
+      const session = createMockSession();
+      mockGetSession.mockResolvedValue(session);
+      mockFindForSessionSync.mockResolvedValue(
+        createDbUser({ status: 'suspended', deletedAt: new Date('2025-06-01') })
+      );
+
+      const response = await GET(makeRequest());
+
+      expect(getRedirectLocation(response)).toBe('/login?error=account_deleted');
+      expect(mockTrackServerAndFlush).toHaveBeenCalledWith('auth_session_invalidated', {
+        distinct_id: 'user-1',
+        path: 'page',
+        reason: 'deleted',
+      });
     });
   });
 

@@ -214,28 +214,44 @@ describe('onboarding mutation gate (BAL-365)', () => {
    * the invariant — but passing it was not evidence of anything, and nothing stopped a THIRD,
    * accidentally unauthenticated action landing beside them and passing just as quietly.
    *
-   * ── ⚠ WHY IT IS SCOPED TO `app/join/` RATHER THAN REPO-WIDE, STATED PLAINLY ─────────────
+   * ── ⚠⚠ BAL-568 — THE PREREQUISITE THIS NOTE DEFERRED IS **DONE**, AND THE REPO-WIDE
+   *    PROPERTY NOW SHIPS IN ITS OWN FILE ────────────────────────────────────────────────────
    *
-   * A repo-wide version is DELIBERATELY DEFERRED, not impossible — and the distinction matters,
-   * because an earlier version of this note said "NOT currently implementable", which is too
-   * strong and would discourage the very work that should happen next. ~35 shipped actions —
-   * the whole `engagements/[id]/_actions/*` and `projects/[requestId]/_actions/*` families —
-   * authenticate through PER-FEATURE WRAPPERS (`engagement-lifecycle-shared`,
-   * `action-item-action-shared`, and friends) that a fixed helper-name list cannot see through,
-   * so a repo-wide scan today would flag all ~35 as unauthenticated. At least two approaches
-   * WOULD work: follow imports one level, or add the wrapper names to `AUTH_HELPERS`.
+   * This note used to say a repo-wide version was DEFERRED because shipped actions authenticate
+   * through PER-FEATURE WRAPPERS (`engagement-lifecycle-shared`, `milestone-action-shared`,
+   * `_shared/require-request-staff-capability`, and friends) that a fixed helper-name list cannot
+   * see through — and it named the prerequisite: resolve the wrapper indirection by FOLLOWING
+   * IMPORTS. BAL-568 did exactly that. `_action-auth-scan.ts` resolves relative and `@/`-aliased
+   * specifiers on disk and classifies each `'use server'` module at depth 0 (own source), 1 (one
+   * import hop) or 2 (one further RE-EXPORT hop); `account-liveness-gate.test.ts` asserts the
+   * resulting property REPO-WIDE, against a 12-entry allowlist rather than the ~35 this note
+   * warned about — so the forbidden move was avoided, not taken.
    *
-   * ⚠ THE OBJECTION TO A WRAPPER LIST UNDERCUTS ITSELF, SO IT IS NOT THE REASON. `AUTH_HELPERS`
-   * is ALREADY a fixed name list that rots silently; adding wrapper names makes it longer, not
-   * different in kind. The real reason is cost and sequencing: allowlisting 35 files would be a
-   * "justification" nobody reads (the failure mode `_read-only-actions.ts` records from
-   * BAL-424), and the payoff is concentrated where the anonymous arm actually is.
+   * Re-measured 2026-09-19 after merging `origin/main`, superseding this note's estimate: **184**
+   * `'use server'` modules — 141 resolve at depth 0, **26 at one import hop**, **5 at two** (the
+   * `accept-project.ts` → `engagement-lifecycle-shared.ts` → `milestone-action-shared.ts` chain,
+   * which is what makes one level provably insufficient), 12 unresolved and allowlisted. That
+   * property is STRICTLY STRONGER than this file's: it asserts each module reaches a seam that
+   * re-reads the LIVE ROW, which a fortiori reads the caller at all.
    *
-   * ⚠ SO THE SCOPE IS THE SURFACE THAT ACTUALLY HAS AN ANONYMOUS ARM. `app/join/` is where the
-   * unauthenticated actions live, where the next one would land, and where the property is
-   * exactly checkable. **The PREREQUISITE for widening is resolving the wrapper indirection
-   * (import-following, or wrapper names in `AUTH_HELPERS`) — deleting the filter and growing
-   * the allowlist to 35 entries is the one move that must not happen.**
+   * ⚠ WHAT THE REPO-WIDE ASSERTION ACTUALLY DID WHEN BAL-442 LANDED — corrected 2026-09-19 (fix
+   * round 3, H5), because the previous wording here credited it with something THIS file did.
+   * BAL-442 added `app/join/_actions/request-lobby-reentry-link.ts`, a third deliberately
+   * unauthenticated join action, and wrote its entry and reason onto `PUBLIC_ACTION_ALLOWLIST` in
+   * the same PR — it had to, because the exact set equality BELOW already demanded one for any new
+   * `app/join/` action. So the written reason was never in question: what went red in CI on the
+   * merge commit was `account-liveness-gate.test.ts` B7's PINNED COUNT of 11, which had to be
+   * re-measured to 12. The reason-enforcing property is this file's, over `app/join/`; the
+   * repo-wide file extends the same shape past that surface, and its count is what noticed the
+   * arrival.
+   *
+   * ── ⚠ WHY THIS ASSERTION STAYS, AND STAYS SCOPED TO `app/join/` ─────────────────────────
+   *
+   * It answers the NARROWER BAL-132 question over the one surface that actually has an anonymous
+   * arm, and it is what keeps `PUBLIC_ACTION_ALLOWLIST` honest — that list is REUSED (never
+   * duplicated) by the repo-wide invariant, which asserts the two allowlists are disjoint and
+   * that their union equals the unresolved set exactly. **Deleting the scope filter here and
+   * growing this list is still the one move that must not happen.**
    *
    * It asserts EXACT SET EQUALITY in both directions, so the anonymous surface can only grow by
    * a deliberate edit to `PUBLIC_ACTION_ALLOWLIST`, which carries the written justification.

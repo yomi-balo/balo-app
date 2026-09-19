@@ -20,6 +20,15 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: (...args: unknown[]) => mockGetSession(...args),
 }));
 
+// BAL-568 — the account-refusal marker reader. Doubled here (its header parsing, logging and
+// emission are covered exhaustively in `lib/auth/api-account-refusal.test.ts`); what THIS file
+// pins is the client's WIRING: that the real `Response` is handed over, and that the code it
+// returns lands in the typed failure's `code`.
+const mockConsumeApiAccountRefusal = vi.fn();
+vi.mock('@/lib/auth/api-account-refusal', () => ({
+  consumeApiAccountRefusal: (...args: unknown[]) => mockConsumeApiAccountRefusal(...args),
+}));
+
 import { log } from '@/lib/logging';
 import {
   getApiUrl,
@@ -46,6 +55,7 @@ beforeEach(() => {
   delete process.env.API_URL;
   delete process.env.NEXT_PUBLIC_API_URL;
   mockGetSession.mockResolvedValue({ user: { id: 'user-1' }, accessToken: ACCESS_TOKEN });
+  mockConsumeApiAccountRefusal.mockResolvedValue(null);
 });
 
 describe('getApiUrl', () => {
@@ -131,5 +141,29 @@ describe('postBaloApiJson', () => {
     mockLoggedFetch.mockResolvedValue(response(200, { ok: true }));
     const result = await postBaloApiJson('/x', {}, (p) => p, 'Widget');
     expect(result).toEqual({ ok: true, data: { ok: true } });
+  });
+
+  // ── BAL-568 — the api's account-refusal marker ─────────────────────────────────────────
+
+  it('⚠ surfaces the refusal code on a marked 401, and records it exactly once', async () => {
+    const refused = response(401, { error: 'Unauthorized' });
+    mockLoggedFetch.mockResolvedValue(refused);
+    mockConsumeApiAccountRefusal.mockResolvedValue('account_suspended');
+
+    const result = await postBaloApiJson('/x', {}, (p) => p, 'Widget');
+
+    expect(result).toEqual({ ok: false, status: 401, code: 'account_suspended' });
+    expect(mockConsumeApiAccountRefusal).toHaveBeenCalledTimes(1);
+    // ⚠ THE REAL RESPONSE, not a copy — the marker lives on its headers.
+    expect(mockConsumeApiAccountRefusal).toHaveBeenCalledWith(refused);
+  });
+
+  it('an UNMARKED 401 is byte-identical to its pre-BAL-568 behaviour', async () => {
+    mockLoggedFetch.mockResolvedValue(response(401, { error: 'unauthenticated' }));
+    mockConsumeApiAccountRefusal.mockResolvedValue(null);
+
+    const result = await postBaloApiJson('/x', {}, (p) => p, 'Widget');
+
+    expect(result).toEqual({ ok: false, status: 401, code: 'unauthenticated' });
   });
 });

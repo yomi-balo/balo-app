@@ -3,6 +3,7 @@
 import 'server-only';
 
 import { getSession } from '@/lib/auth/session';
+import { accountRefusalFor } from '@/lib/auth/account-liveness';
 import { usersRepository } from '@balo/db';
 import { type AuthResult } from '@/lib/auth/errors';
 import { deriveCountryFromTimezone } from '@balo/shared/timezone';
@@ -17,14 +18,20 @@ const timezoneSchema = z
   .refine((tz) => VALID_TIMEZONES.has(tz), 'Invalid timezone');
 
 export async function updateTimezoneAction(timezone: string): Promise<AuthResult> {
-  const parsed = timezoneSchema.safeParse(timezone);
-  if (!parsed.success) {
-    return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid timezone' };
-  }
-
+  // BAL-568 — ACCOUNT LIVENESS against the LIVE row, ABOVE THE PARSE (R9; fix round 1, F4). One of
+  // the bounded `getSession()`-only set — see `complete-onboarding.ts` for the full reasoning,
+  // including why this is `accountRefusalFor` rather than `assertAccountLive`.
   const session = await getSession();
   if (!session?.user?.id) {
     return { success: false, error: 'Unauthorized' };
+  }
+  if ((await accountRefusalFor(session.user.id, { path: 'action', emit: true })) !== null) {
+    return { success: false, error: 'Unauthorized' };
+  }
+
+  const parsed = timezoneSchema.safeParse(timezone);
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? 'Invalid timezone' };
   }
 
   try {

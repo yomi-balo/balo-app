@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { usersRepository } from '@balo/db';
+import { userRowIsLive } from '@balo/shared/authz';
 import { deriveWorkspacesForUser } from '@/lib/workspaces/derive-workspaces';
 import { applyWorkspaceDerivationToSessionUser } from '@/lib/workspaces/session-workspace';
 import type { SessionUser } from './session';
@@ -31,7 +32,11 @@ export async function buildImpersonatedSessionUser(
   targetUserId: string,
   targetRow: ImpersonationTargetRow
 ): Promise<SessionUser | null> {
-  if (targetRow.deletedAt !== null || targetRow.status !== 'active') {
+  // BAL-568 (R5; fix round 1, F7) — ONE definition of "live". This inlined the same two conditions
+  // (`deletedAt !== null || status !== 'active'`) and was the FOURTH copy in the tree: R5 asked the
+  // codebase to end with one definition, and the first cut folded only three. `userRowIsLive` is
+  // the shared predicate `@balo/shared/authz` already exports.
+  if (!userRowIsLive(targetRow)) {
     return null;
   }
 

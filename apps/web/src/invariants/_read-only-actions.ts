@@ -172,11 +172,19 @@ export const READ_ONLY_ALLOWLIST: readonly string[] = [
  * EXACTLY this list. A new one fails CI; deleting one from here without deleting the file fails
  * CI too.
  *
- * ⚠ THE ASSERTION IS SCOPED TO `app/join/`, AND THAT LIMIT IS DELIBERATE AND DOCUMENTED. A
- * repo-wide version is not implementable as a name scan today: ~35 correctly-authenticated
- * actions gate through per-feature wrappers a fixed helper-name list cannot see through. See
- * the test's own docblock for the full reasoning — and do NOT "fix" it by deleting the scope
- * filter and growing this list.
+ * ⚠ THE ASSERTION IS SCOPED TO `app/join/`, AND THAT LIMIT IS DELIBERATE. It answers the NARROWER
+ * BAL-132 question ("does this module look at its caller at all?") over the one tree where an
+ * anonymous mutating action is a live risk, and it is what keeps this list honest.
+ *
+ * ⚠⚠ BAL-568 — THE REPO-WIDE, STRICTLY STRONGER PROPERTY NOW EXISTS, and this list is REUSED by
+ * it rather than duplicated. `account-liveness-gate.test.ts` asserts that every `'use server'`
+ * module in `apps/web/src` reaches a LIVE-CHECKED seam — in its own source, one import hop away,
+ * or one further re-export hop — or is named in an allowlist with a written reason. Its allowlist
+ * is the UNION of {@link LIVE_CHECK_EXEMPT_ALLOWLIST} and this list, and it asserts the two are
+ * disjoint. The "~35 wrapper-gated actions a name scan cannot see through" obstacle recorded here
+ * is RESOLVED, not deferred: `_action-auth-scan.ts` follows imports (measured: 26 modules resolve
+ * at one hop, 5 at two). Do NOT "fix" either invariant by deleting a scope filter and growing a
+ * list.
  *
  * ── ⚠ WHAT AN ENTRY HERE IS ASSERTING ───────────────────────────────────────────────────
  *
@@ -277,6 +285,157 @@ export const GUEST_READ_ALLOWLIST: readonly string[] = [
   // Lists an in-call thread's messages for a guest — `conversationsRepository.listMessagesPage`,
   // a SELECT (keyset-paginated).
   'app/join/_actions/fetch-guest-meeting-thread.ts',
+];
+
+/**
+ * BAL-568 — the `'use server'` modules that reach NO live-checked actor seam, and are ALLOWED to,
+ * each with a written reason and a `proof` substring that reason genuinely rests on.
+ *
+ * Enforced by `account-liveness-gate.test.ts`: the UNION of this list and
+ * {@link PUBLIC_ACTION_ALLOWLIST} must equal the unresolved set EXACTLY, both directions, and the
+ * two lists must be disjoint. A new ungated action fails CI; deleting an entry without gating the
+ * file fails CI too; an entry whose `proof` has drifted out of the file fails CI as well.
+ *
+ * ⚠⚠ TWELVE ENTRIES IN TOTAL (nine here + the three on {@link PUBLIC_ACTION_ALLOWLIST}), NOT
+ * FORTY. The forbidden move — deleting the filter and growing the allowlist to absorb every
+ * wrapper-gated action — is what import-following exists to make unnecessary. Re-measured
+ * 2026-09-19 after merging `origin/main`: of **184** `'use server'` modules, **141 resolve at
+ * depth 0, 26 at one import hop, 5 at two, and 12 are unresolved**.
+ *
+ * ⚠ THE COUNT HAS MOVED TWICE, AND EACH MOVE FOLLOWED A REAL CHANGE TO THE SET — never the other
+ * way round. It read ten-here/twelve-total until `app/review/_actions/submit-token-review.ts` was
+ * GATED rather than allowlisted (fix round 1, F6 — see the removal note below), and went back to
+ * twelve when BAL-442 landed `app/join/_actions/request-lobby-reentry-link.ts` on main: a new,
+ * deliberately unauthenticated guest action. ⚠ BAL-442 wrote that entry and its reason ITSELF, in
+ * its own PR — `onboarding-mutation-gate.test.ts`'s join-surface set equality already required one
+ * (corrected 2026-09-19, fix round 3 H5: an earlier wording here said the repo-wide scan extracted
+ * the reason). What `account-liveness-gate.test.ts` B7 caught on the merge commit was its PINNED
+ * COUNT of 11. B7 and B8 assert both counts, so this prose and the assertions cannot drift apart
+ * silently.
+ *
+ * ⚠ WHAT AN ENTRY IS ASSERTING: not "this action needs no authorization", but that **there is no
+ * account to check yet, or checking one would break the only path back**. Every entry is
+ * pre-identity, token-bearing, or the sign-out itself. An entry that is merely "convenient to
+ * exempt" does not belong here — the default for any authenticated Server Action is that the gate
+ * comes for free through `requireUser` / `requireOnboardedUser` / `withAuth`.
+ */
+export const LIVE_CHECK_EXEMPT_ALLOWLIST: readonly {
+  rel: string;
+  reason: string;
+  proof: string;
+}[] = [
+  {
+    rel: 'lib/auth/actions/sign-in.ts',
+    reason:
+      'Establishes the session — there is no resolved actor to check yet, and the users row may be created here (the orphaned-WorkOS-identity arm). A suspended account that signs in is ejected one redirect later by checkSessionDrift with the correct BAL-197 copy, and the resulting session GRANTS NOTHING because every seam now re-reads the live row. Gating the highest-risk auth path in the app, which also touches row creation, buys marginally nicer error timing for real risk.',
+    proof: 'authenticateWithPassword(',
+  },
+  {
+    rel: 'lib/auth/actions/sign-up.ts',
+    reason:
+      'Creates the users row. There is no row to read, so there is nothing to check liveness against.',
+    proof: 'signUpAction(',
+  },
+  {
+    rel: 'lib/auth/actions/verify-email.ts',
+    reason:
+      'Completes sign-up by verifying the emailed code, before any session-bound actor exists to resolve.',
+    proof: 'verifyEmailAction(',
+  },
+  {
+    rel: 'lib/auth/actions/oauth.ts',
+    reason:
+      'Returns a WorkOS authorization URL and redirects to it. Pre-identity by definition — the caller has not been identified yet.',
+    proof: 'initiateGoogleOAuth(',
+  },
+  {
+    rel: 'lib/auth/actions/forgot-password.ts',
+    reason:
+      'Anonymous by design and must not enumerate accounts, so it must not branch on account state at all — a different response for a suspended address would be exactly the disclosure this action is written to avoid.',
+    proof: 'forgotPasswordAction(',
+  },
+  {
+    rel: 'lib/auth/actions/reset-password.ts',
+    reason:
+      'Token-bearing recovery: the emailed token IS the credential, and there is no session. Gating it would lock a recovering user out of the only path back.',
+    proof: 'resetPasswordAction(',
+  },
+  {
+    rel: 'lib/auth/actions/logout.ts',
+    reason:
+      '⚠ MUST STAY UNGATED. A suspended or soft-deleted user must be able to sign out; a liveness gate here traps exactly the people who most need to leave, and it is the action that tears the cookie down.',
+    proof: 'session.destroy()',
+  },
+  {
+    rel: 'app/dev/_actions/seed.ts',
+    reason:
+      'Dev-only seeding proxy: a real NODE_ENV refusal precedes every network call and every write (callSeedEndpoint returns before fetching in production), and the Fastify /dev/seed routes are not registered in production either — two independent gates. Verified against the file, not assumed.',
+    proof: "process.env.NODE_ENV === 'production'",
+  },
+  // ⚠⚠ `app/review/_actions/submit-token-review.ts` WAS AN ENTRY HERE AND IS NOT ANY MORE (fix
+  // round 1, F6) — it is GATED now, not allowlisted. Its reason claimed "the reviewer may have no
+  // users row at all", which was simply FALSE: `review_invite_tokens.reviewer_user_id` is a
+  // `notNull` FK to `users.id`, so the row always exists. The false premise concealed a real
+  // residual — a suspended or soft-deleted user holding a live 30-day magic link could still
+  // submit a review — which is precisely the "justification nobody re-checks" failure this file's
+  // own header records from BAL-424. Do not re-add it; gate the subject instead.
+  {
+    rel: 'lib/project-request/actions/refetch-project-taxonomies.ts',
+    reason:
+      'Public reference data shown on the UNAUTHENTICATED expert profile — its own docblock says gating it would break anonymous browse. It reads a taxonomy that degrades to empty on error, writes nothing, and exposes nothing account-specific.',
+    proof: 'loadProjectRequestTaxonomies()',
+  },
+];
+
+/**
+ * BAL-568 (fix round 1, F1) — the **ROUTE HANDLERS** that reach no live-checked actor seam, and are
+ * allowed to.
+ *
+ * ⚠⚠ THIS LIST EXISTS BECAUSE A ROUTE HANDLER SHIPPED UNGATED AND NO INVARIANT COULD SEE IT.
+ * `account-liveness-gate.test.ts` walks `'use server'` modules, and a Route Handler is not one — so
+ * all thirteen of them sat outside the corpus. `app/api/auth/switch-workspace/route.ts` resolved its
+ * actor with a bare `getSession()`, then WROTE to `users` and re-sealed a fresh seven-day cookie: a
+ * suspended account both acted and had its session renewed. `route-handler-liveness-gate.test.ts`
+ * closes the corpus gap; this list is what keeps it honest.
+ *
+ * Same shape and same rules as {@link LIVE_CHECK_EXEMPT_ALLOWLIST}: compared for exact set
+ * equality in both directions, never used to filter, every `proof` re-checked against the file.
+ */
+export const ROUTE_HANDLER_EXEMPT_ALLOWLIST: readonly {
+  rel: string;
+  reason: string;
+  proof: string;
+}[] = [
+  {
+    rel: 'app/api/auth/callback/route.ts',
+    reason:
+      'The WorkOS callback that MINTS the session. There is no resolved actor yet and the users row may be created right here, so there is nothing to read liveness from — the same ruling as sign-in (A4). A suspended account that completes a callback is ejected one render later by checkSessionDrift with the correct BAL-197 copy, and the session it holds meanwhile grants nothing because every seam re-reads the live row.',
+    proof: 'authenticateWithCode(',
+  },
+  {
+    rel: 'app/api/auth/session-sync/route.ts',
+    reason:
+      '⚠ MUST STAY UNGATED AT THE SEAM — it IS the teardown route. It reads the live row itself through classifyAccountRefusal, destroys the cookie and lands on /login?error=..., and every other refusal path in the app redirects HERE. A gate in front of it would throw before it could clear the cookie, leaving a suspended user in an unbreakable loop with no recovery path — the same reasoning that keeps getSession() ungated.',
+    proof: 'classifyAccountRefusal(dbUser)',
+  },
+  {
+    rel: 'app/api/auth/test-login/route.ts',
+    reason:
+      'The seeded E2E harness. It 404s unless E2E_TEST_SECRET is set (production never sets it) and then demands a constant-time header match, so it is unreachable in production and resolves no real actor — it MINTS a session for a seeded fixture, which puts it in the same class as the callback above.',
+    proof: 'E2E_TEST_SECRET',
+  },
+  {
+    rel: 'app/api/health/route.ts',
+    reason:
+      'An unauthenticated liveness probe. It reads no session, resolves no actor and touches no database — there is no account for a gate to check.',
+    proof: "status: 'ok'",
+  },
+  {
+    rel: 'app/api/sentry-example-api/route.ts',
+    reason:
+      'A deliberately throwing fixture that exercises Sentry error reporting. It reads no session and resolves no actor.',
+    proof: 'SentryExampleAPIError',
+  },
 ];
 
 /** The module whose two variants differ by whether they WRITE. */

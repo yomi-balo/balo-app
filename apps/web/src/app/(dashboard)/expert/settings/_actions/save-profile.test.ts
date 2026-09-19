@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mocks ────────────────────────────────────────────────────────
 
+// BAL-568 — the seams re-read the LIVE `users` row; this suite is not about that gate.
+vi.mock('@/lib/auth/live-user', async () => (await import('@/test/live-user-double')).mock);
+
 vi.mock('server-only', () => ({}));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
