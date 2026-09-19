@@ -60,17 +60,24 @@ export interface GuestRosterRow {
    */
   readonly canResendLink: boolean;
   /**
-   * BAL-476 — is this guest on the VIEWER's OWN side?
+   * BAL-476 — may the viewer remove this guest?
    *
-   * ⚠ A PLAIN EQUALITY between two values the SERVER computed and transmitted (`guest.party`
-   * and `BuildGuestRosterInput.viewerSide`) — not a re-implementation of an authorization
-   * predicate, and therefore not a breach of the "never re-derive `canHost`" rule. The actual
-   * enforcement stays on the route: a cross-party removal answers `guest_not_found`, identical
-   * on the wire to a nonexistent id. This only saves somebody a guaranteed 404.
+   * ⚠⚠ THE RULE IS CHANNEL-FIRST, AND IT MIRRORS THE ROUTE'S rather than restating a simpler
+   * one. An `email` row's `party` WAS resolved server-side from the inviter's own authorized
+   * side, so same-party is the right question for it. A `link` row's `party` is a NOT-NULL
+   * PLACEHOLDER `claimLobbyPlace` writes because the column demands a value — a bare meeting URL
+   * carries no sharer identity — and `@balo/shared/meetings` forbids deriving same-party
+   * entitlement from it. For those rows the question is `canHost`, exactly as it is for
+   * admit/deny: whoever may admit a lobby visitor may un-admit them.
    *
-   * ⚠ SET ON EVERY SECTION, INCLUDING `waiting` — that section simply never renders a Remove
-   * control (Deny already produces the same practical outcome and IS host-gated, whereas Remove
-   * is not; offering both would let a non-host achieve via Remove what Deny reserves for hosts).
+   * ⚠ BOTH INPUTS ARE SERVER-COMPUTED AND TRANSMITTED (`guest.party`, `guest.inviteChannel`,
+   * `viewerSide`, `canHost`), so this is a plain expression over transmitted facts, not a
+   * re-implementation of an authorization predicate. THE ENFORCEMENT IS THE ROUTE: both arms
+   * answer `guest_not_found`, identical on the wire to a nonexistent id. This only saves
+   * somebody a guaranteed 404.
+   *
+   * ⚠ SET ON EVERY SECTION, INCLUDING `waiting` — that section still never renders a Remove
+   * control, because Deny already produces the same practical outcome and reads correctly there.
    */
   readonly canRemove: boolean;
 }
@@ -132,7 +139,9 @@ export function buildGuestRoster(input: BuildGuestRosterInput): GuestRoster {
     if (guest.admission === 'denied') continue;
 
     const isUnverified = guest.inviteChannel === 'link';
-    const canRemove = guest.party === input.viewerSide;
+    // ⚠ CHANNEL FIRST — see `GuestRosterRow.canRemove`. A `link` row's `party` is a placeholder.
+    const canRemove =
+      guest.inviteChannel === 'link' ? input.canHost : guest.party === input.viewerSide;
 
     if (guest.admission === 'pending') {
       // ⚠ THE SERVER'S VERDICT GATES THE WHOLE SECTION. A non-host is not shown the queue.

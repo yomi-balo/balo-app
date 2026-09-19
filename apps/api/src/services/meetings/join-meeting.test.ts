@@ -1641,10 +1641,11 @@ describe('joinMeetingAsGuest — ⚠⚠ THE EXIT-REASON DISCRIMINATOR, PINNED (B
    * `JOIN_ERROR_STATUS`. If they ever collapsed to one code, an ejected person would be shown a
    * card that says something false about why they are out of a call.
    *
-   * §10.2's supporting argument — that a 404 on this transition means REVOKED rather than
-   * CANCELLED — rests on both cancel writers compare-and-setting on `status = 'scheduled'`, so a
-   * meeting cannot flip to `cancelled` once anybody has joined. That is a DERIVED guarantee, not
-   * a structural one, which is why it is pinned here rather than assumed.
+   * The supporting argument — that a 404 on this transition means REVOKED and not one of
+   * `findLiveByTokenHash`'s four OTHER refusal reasons — is written out in full in
+   * `apps/web/src/lib/meetings/guest-exit-cause.ts`, including the TOKEN-ROTATION source an
+   * earlier version of that list missed. It is a DERIVED guarantee, not a structural one, which
+   * is why the two codes are pinned here rather than assumed.
    */
   it('⚠ a REVOKED (unresolvable) token answers `meeting_not_found` → 404 → "removed"', async () => {
     // `findLiveByTokenHash` filters `deleted_at IS NULL AND revoked_at IS NULL`, and `revoke`

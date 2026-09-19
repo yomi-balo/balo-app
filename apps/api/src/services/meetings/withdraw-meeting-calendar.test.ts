@@ -69,9 +69,16 @@ function asLogger(log: ReturnType<typeof fakeLog>): FastifyBaseLogger {
   return log as unknown as FastifyBaseLogger;
 }
 
+/** A clean fan-out: every row the orchestrator handed W1 came back discharged. */
+function dischargeAll(input: { calendarEvents: ReadonlyArray<{ id: string }> }) {
+  return Promise.resolve(new Set(input.calendarEvents.map((row) => row.id)));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mockPublishCancellation.mockResolvedValue(undefined);
+  // ⚠ W1 REPORTS which rows it discharged, and W3 retires only those. The default is a clean
+  // fan-out; the hold-back suite below is what exercises a partial one.
+  mockPublishCancellation.mockImplementation(dischargeAll);
   mockSoftDeleteByMeetingAndParty.mockResolvedValue(undefined);
   mockDeleteConsultationEvent.mockResolvedValue(undefined);
   mockListConnections.mockResolvedValue([{ id: 'conn-1', endUserAccountId: 'eua-1' }]);
@@ -349,5 +356,101 @@ describe('withdrawMeetingCalendarProjection — the ONE propagating failure (W1)
     // not deleted either — a projection whose withdrawal was never enqueued must not be retired.
     expect(mockDeleteConsultationEvent).not.toHaveBeenCalled();
     expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
+  });
+});
+
+// ── BAL-476 (second review round) — W1 REPORTS, W3 RETIRES ONLY WHAT IT DISCHARGED ───────
+
+/**
+ * ⚠⚠ THE PATH THE PUBLISH-BEFORE-RETIRE ORDERING NEVER COVERED.
+ *
+ * Ordering protects against PROCESS DEATH. It does nothing about the caught-and-swallowed path,
+ * which is entirely reachable: `publishOne` catches an enqueue failure and
+ * `resolveRowRecipients` catches a read failure, so on a Redis or DB blip W1 returns NORMALLY
+ * having enqueued nothing. With a `void` return the orchestrator could not tell that from a
+ * clean fan-out and retired every row anyway — no CANCEL enqueued, the rows gone from the live
+ * set, and therefore nothing for reconciliation to find either. The permanent failure, reached
+ * without a crash.
+ */
+describe('withdrawMeetingCalendarProjection — the discharge hold-back', () => {
+  it('⚠⚠ a row W1 did NOT discharge is left LIVE, while the others are retired', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      CLIENT_ICS_ROW,
+      { ...EXPERT_PROVIDER_ROW, deliveryMode: 'ics', connectionId: null },
+    ]);
+    // The client row's fan-out failed; the expert row's landed.
+    mockPublishCancellation.mockResolvedValue(new Set(['row-expert']));
+    const log = fakeLog();
+
+    await withdrawMeetingCalendarProjection(
+      { meetingId: MEETING_ID, cancelAuditId: CANCEL_AUDIT_ID, expertProfileId: 'ep-1' },
+      asLogger(log)
+    );
+
+    // ⚠ EXACTLY ONE retire, and it is the DISCHARGED row's party.
+    expect(mockSoftDeleteByMeetingAndParty).toHaveBeenCalledTimes(1);
+    expect(mockSoftDeleteByMeetingAndParty).toHaveBeenCalledWith(MEETING_ID, 'expert');
+    expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalledWith(MEETING_ID, 'client');
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ meetingId: MEETING_ID, calendarEventId: 'row-client' }),
+      'Leaving the calendar row LIVE — its withdrawal was not fully enqueued, so retiring it would hide a stale projection from reconciliation'
+    );
+  });
+
+  it('⚠ W1 discharging NOTHING retires NOTHING — the whole projection stays live', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      CLIENT_ICS_ROW,
+      { ...EXPERT_PROVIDER_ROW, deliveryMode: 'ics', connectionId: null },
+    ]);
+    mockPublishCancellation.mockResolvedValue(new Set<string>());
+
+    await withdrawMeetingCalendarProjection(
+      { meetingId: MEETING_ID, cancelAuditId: CANCEL_AUDIT_ID, expertProfileId: 'ep-1' },
+      asLogger(fakeLog())
+    );
+
+    expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠⚠ THE DOCUMENTED RESIDUAL, PINNED SO IT CANNOT DRIFT INTO AN UNNOTICED CLAIM.
+   *
+   * `deleteConsultationEvent` marks Balo's row deleted BEFORE it calls the vendor (its own
+   * deliberate mark-first ordering, which this file does not reorder), so an expert-party
+   * `provider_event` row is retired inside W2 whatever W1 reported. Gating W2 on that row's
+   * CANCELs was considered and REJECTED: its recipients are the expert side's admitted GUESTS
+   * only (Ruling 1 excludes the expert member), so gating would leave the EXPERT'S OWN calendar
+   * entry on a cancelled meeting — worse for the primary user than an expert-side guest keeping
+   * a stale entry, which is the same class of residual as the client-side one.
+   */
+  it('⚠ RESIDUAL: an UNDISCHARGED expert `provider_event` row is still retired, by W2 mark-first', async () => {
+    mockListLiveByMeeting.mockResolvedValue([EXPERT_PROVIDER_ROW]);
+    mockPublishCancellation.mockResolvedValue(new Set<string>());
+
+    await withdrawMeetingCalendarProjection(
+      { meetingId: MEETING_ID, cancelAuditId: CANCEL_AUDIT_ID, expertProfileId: 'ep-1' },
+      asLogger(fakeLog())
+    );
+
+    // W3 holds it back...
+    expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
+    // ...but W2 has already marked it, which is the residual the docblock names.
+    expect(mockDeleteConsultationEvent).toHaveBeenCalledTimes(1);
+  });
+
+  /** ⚠ An expert-party **ICS** row has no W2 arm, so the hold-back protects it normally. */
+  it('⚠ an UNDISCHARGED expert `ics` row is neither retired nor sent to the vendor', async () => {
+    mockListLiveByMeeting.mockResolvedValue([
+      { ...EXPERT_PROVIDER_ROW, deliveryMode: 'ics', connectionId: null },
+    ]);
+    mockPublishCancellation.mockResolvedValue(new Set<string>());
+
+    await withdrawMeetingCalendarProjection(
+      { meetingId: MEETING_ID, cancelAuditId: CANCEL_AUDIT_ID, expertProfileId: 'ep-1' },
+      asLogger(fakeLog())
+    );
+
+    expect(mockSoftDeleteByMeetingAndParty).not.toHaveBeenCalled();
+    expect(mockDeleteConsultationEvent).not.toHaveBeenCalled();
   });
 });

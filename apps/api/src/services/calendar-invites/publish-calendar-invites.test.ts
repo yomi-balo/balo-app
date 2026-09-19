@@ -44,6 +44,13 @@ function fakeLog() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
+/** The fields on the publisher own "Calendar invite enqueued" line, for the last publish. */
+function lastEnqueuedFields(log: ReturnType<typeof fakeLog>): Record<string, unknown> {
+  const call = log.info.mock.calls.at(-1) as [Record<string, unknown>, string] | undefined;
+  expect(call?.[1]).toBe('Calendar invite enqueued');
+  return call?.[0] ?? {};
+}
+
 const MEETING_ID = 'meeting-1';
 
 beforeEach(() => {
@@ -484,10 +491,116 @@ describe('publishCancellationCalendarWithdrawals', () => {
         } as never,
         log
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toBeInstanceOf(Set);
 
     expect(mockPublish).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+
+  // ── THE DISCHARGE REPORT — what the orchestrator retires from ──────────────────────────
+
+  /**
+   * ⚠⚠ THE WHOLE POINT OF THE RETURN VALUE. Every publish here is individually try/caught, so a
+   * Redis blip produces a NORMAL return having enqueued nothing. Returning `void` made that
+   * indistinguishable from a clean fan-out, and the caller retired the rows either way — leaving
+   * no CANCEL enqueued, the rows gone from the live set, and nothing for reconciliation to see.
+   */
+  it('⚠⚠ reports a row as discharged ONLY when every one of its publishes was accepted', async () => {
+    mockResolveRecipients.mockImplementation(({ party }: { party: string }) =>
+      Promise.resolve(
+        party === 'client'
+          ? [
+              { kind: 'user', userId: 'booker-1' },
+              { kind: 'guest', guestId: 'guest-1' },
+            ]
+          : [{ kind: 'user', userId: 'expert-1' }]
+      )
+    );
+    // The SECOND client-side publish is refused; the expert row's is accepted.
+    mockPublish
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('redis down'))
+      .mockResolvedValue(undefined);
+
+    const discharged = await publishCancellationCalendarWithdrawals(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: 'audit-cancel-1',
+        expertProfileId: 'ep-1',
+        calendarEvents: [
+          { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 0 },
+          { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+        ],
+      } as never,
+      fakeLog()
+    );
+
+    expect(mockPublish).toHaveBeenCalledTimes(3);
+    expect([...discharged]).toEqual(['row-expert']);
+    expect(discharged.has('row-client')).toBe(false);
+  });
+
+  it('⚠ a row whose recipient READ failed is never discharged', async () => {
+    mockResolveRecipients.mockRejectedValue(new Error('db down'));
+
+    const discharged = await publishCancellationCalendarWithdrawals(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: 'audit-cancel-1',
+        expertProfileId: 'ep-1',
+        calendarEvents: [{ id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 0 }],
+      } as never,
+      fakeLog()
+    );
+
+    expect(discharged.size).toBe(0);
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ "NOBODY TO TELL" IS NOT "WE COULD NOT FIND OUT". A row with an empty recipient list is
+   * fully discharged — there is no CANCEL owed — so holding it live would be a permanent stale
+   * projection for no benefit.
+   */
+  it('⚠ a row with NOBODY to tell IS discharged', async () => {
+    mockResolveRecipients.mockResolvedValue([]);
+
+    const discharged = await publishCancellationCalendarWithdrawals(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: 'audit-cancel-1',
+        expertProfileId: 'ep-1',
+        calendarEvents: [
+          { id: 'row-expert', party: 'expert', deliveryMode: 'provider_event', sequence: 0 },
+        ],
+      } as never,
+      fakeLog()
+    );
+
+    expect([...discharged]).toEqual(['row-expert']);
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('every row discharged on a clean fan-out', async () => {
+    mockResolveRecipients.mockResolvedValue([{ kind: 'user', userId: 'booker-1' }]);
+
+    const discharged = await publishCancellationCalendarWithdrawals(
+      {
+        meetingId: MEETING_ID,
+        cancelAuditId: 'audit-cancel-1',
+        expertProfileId: 'ep-1',
+        calendarEvents: [
+          { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 0 },
+          { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
+        ],
+      } as never,
+      fakeLog()
+    );
+
+    expect([...discharged].sort((a, b) => a.localeCompare(b))).toEqual([
+      'row-client',
+      'row-expert',
+    ]);
   });
 });
 
@@ -498,14 +611,16 @@ describe('publishGuestRemovedCalendarWithdrawal', () => {
    * sequence. Nothing to the remaining party, nothing to the other side, no bump.
    */
   it('⚠ sends to the removed person and to NOBODY ELSE', async () => {
-    mockListLiveByMeeting.mockResolvedValue([
-      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 5 },
-      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 5 },
-    ]);
     const log = fakeLog();
 
     await publishGuestRemovedCalendarWithdrawal(
-      { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        guestId: 'guest-1',
+        contextType: 'case',
+        calendarEvent: { id: 'row-client', sequence: 5 },
+      },
       log
     );
 
@@ -528,11 +643,14 @@ describe('publishGuestRemovedCalendarWithdrawal', () => {
   });
 
   it('⚠ NEVER WRITES `sequence` — the mocked repository exposes no write method at all', async () => {
-    mockListLiveByMeeting.mockResolvedValue([
-      { id: 'row-client', party: 'client', deliveryMode: 'ics', sequence: 5 },
-    ]);
     await publishGuestRemovedCalendarWithdrawal(
-      { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        guestId: 'guest-1',
+        contextType: 'case',
+        calendarEvent: { id: 'row-client', sequence: 5 },
+      },
       fakeLog()
     );
     const { meetingCalendarEventsRepository } = await import('@balo/db');
@@ -540,32 +658,47 @@ describe('publishGuestRemovedCalendarWithdrawal', () => {
     expect(mockPublish).toHaveBeenCalledTimes(1);
   });
 
-  it('skips when the removed guest side has no live row', async () => {
-    mockListLiveByMeeting.mockResolvedValue([
-      { id: 'row-expert', party: 'expert', deliveryMode: 'ics', sequence: 0 },
-    ]);
+  /**
+   * ⚠⚠ IT PERFORMS **NO READ OF ITS OWN**, AND THAT ABSENCE IS THE RACE FIX. It used to
+   * `listLiveByMeeting` here — i.e. AFTER `removeGuest` had revoked, ejected and published — so a
+   * cancellation landing in that window retired the party row, the read found nothing, and the
+   * guest got a withdrawal from NEITHER path (the cancellation's own fan-out had already resolved
+   * its recipients from the LIVE guest index, which no longer held them). The caller now
+   * snapshots the row BEFORE the revoke and hands it in.
+   */
+  it('⚠⚠ reads NOTHING — the row is the caller pre-revoke snapshot', async () => {
+    await publishGuestRemovedCalendarWithdrawal(
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        guestId: 'guest-1',
+        contextType: 'case',
+        calendarEvent: { id: 'row-snapshot', sequence: 9 },
+      },
+      fakeLog()
+    );
+
+    expect(mockListLiveByMeeting).not.toHaveBeenCalled();
+    expect(mockPublish).toHaveBeenCalledWith('meeting.calendar_invite', {
+      correlationId: 'guest_removed:guest-1',
+      calendarInvite: expect.objectContaining({ calendarEventId: 'row-snapshot' }),
+    });
+  });
+
+  it('⚠ uses the SNAPSHOT sequence, not a re-read one — R2 bumps nothing', async () => {
     const log = fakeLog();
 
     await publishGuestRemovedCalendarWithdrawal(
-      { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
+      {
+        meetingId: MEETING_ID,
+        party: 'client',
+        guestId: 'guest-1',
+        contextType: 'case',
+        calendarEvent: { id: 'row-client', sequence: 9 },
+      },
       log
     );
 
-    expect(mockPublish).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: 'no_calendar_row' }),
-      'Calendar invite not enqueued'
-    );
-  });
-
-  it('never throws when the row read fails', async () => {
-    mockListLiveByMeeting.mockRejectedValue(new Error('db down'));
-    await expect(
-      publishGuestRemovedCalendarWithdrawal(
-        { meetingId: MEETING_ID, party: 'client', guestId: 'guest-1', contextType: 'case' },
-        fakeLog()
-      )
-    ).resolves.toBeUndefined();
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(lastEnqueuedFields(log).sequence).toBe(9);
   });
 });

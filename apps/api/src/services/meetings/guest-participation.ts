@@ -24,6 +24,7 @@ import {
   caseEngagementsRepository,
   companiesRepository,
   expertsRepository,
+  meetingCalendarEventsRepository,
   meetingGuestsRepository,
   partyDomainsRepository,
   partyMembershipsRepository,
@@ -31,6 +32,7 @@ import {
   requestExpertRelationshipsRepository,
   usersRepository,
   type Meeting,
+  type MeetingCalendarEvent,
   type MeetingGuest,
   type MeetingGuestPublic,
   type MeetingStatus,
@@ -51,6 +53,7 @@ import {
   dailyRoomNameForMeeting,
   projectGuestForViewer,
   type GuestAccessScopeLabel,
+  type MeetingGuestInviteChannelLabel,
   type GuestForViewer,
   type PrimaryMeetingContext,
   type MeetingGuestSide,
@@ -973,6 +976,176 @@ async function ejectGuestBestEffort(meeting: Meeting, guestId: string): Promise<
 }
 
 /**
+ * BAL-476 — TELL THE REMOVED PERSON, AND NOBODY ELSE (R2): the removal email and the
+ * `METHOD:CANCEL` that takes the event off their calendar.
+ *
+ * ⚠⚠ NEITHER MESSAGE IS SENT TO A `link` ROW, AND ONE FACT DRIVES BOTH. A `link` row's address is
+ * SELF-DECLARED by an anonymous visitor holding a forwarded meeting URL: Balo never invited it,
+ * never verified it, and never shows it to anybody (the projector omits `email` on every `link`
+ * row). Mailing it on removal would make this the platform's FIRST outbound message to an address
+ * of that provenance — and the copy would be wrong on its own terms, since both messages describe
+ * an INVITATION being withdrawn ("this invite link has stopped working", "the event will come off
+ * your calendar") and a lobby visitor was never sent an invitation.
+ *
+ * ⚠ RESIDUAL, STATED RATHER THAN HIDDEN: an admitted `link` guest can acquire a calendar entry by
+ * ONE indirect route — `publishRescheduleCalendarInvites` fans out over
+ * `listCalendarInviteGuestIds`, which admits them — and would then keep it after removal. Narrow
+ * (it needs an admitted lobby guest AND a reschedule AND a removal) and accepted: the alternative
+ * is a CANCEL whose own copy does not describe them, sent to an address nobody verified.
+ *
+ * ⚠ BOTH ARE BEST-EFFORT OVER A COMMITTED REVOCATION — a queue hiccup is an undelivered message,
+ * never a failed removal.
+ *
+ * ⚠ EXTRACTED ONLY TO SHED COGNITIVE COMPLEXITY (`removeGuest` scored 19 against the allowed 15).
+ */
+async function announceGuestRemoval(params: {
+  readonly authorized: Extract<AuthorizeMeetingParticipationResult, { ok: true }>;
+  readonly revoked: MeetingGuest;
+  readonly calendarEvent: { id: string; sequence: number } | undefined;
+}): Promise<void> {
+  const { authorized, revoked, calendarEvent } = params;
+  if (revoked.inviteChannel === 'link') return;
+
+  try {
+    await notificationEvents.publish('meeting.guest_removed', {
+      correlationId: revoked.id,
+      recipientEmail: revoked.email,
+      ...(revoked.name === null ? {} : { guestName: revoked.name }),
+      meetingTitle: await resolveMeetingTitle(authorized.subject),
+      scheduledStartIso: authorized.meeting.scheduledStart.toISOString(),
+    });
+  } catch (error) {
+    log.error(
+      {
+        event: 'meeting.guest_removed',
+        correlationId: revoked.id,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Failed to publish guest-removed notification — the revocation itself is committed'
+    );
+  }
+
+  if (calendarEvent === undefined) return;
+
+  // ⚠ COMPOSED FROM THE REVOKED ROW (`revoked.party`, `revoked.id`), never by re-reading a live
+  // index — the row is already revoked and soft-deleted by now, so no live read would find it.
+  // ⚠⚠ `revoked.email` IS DELIBERATELY NOT THREADED IN. U1 forbids an address on the wire and
+  // `MeetingCalendarInvitePayload` has no field for one: the email channel resolves the address
+  // at DELIVERY time from the guest id.
+  // ⚠ Wrapped even though `publishGuestRemovedCalendarWithdrawal`'s own contract is "never
+  // throws" — matching this module's best-effort-over-committed-rows rule.
+  try {
+    await publishGuestRemovedCalendarWithdrawal(
+      {
+        meetingId: revoked.meetingId,
+        party: revoked.party as MeetingGuestSide,
+        guestId: revoked.id,
+        contextType: authorized.subject.contextType,
+        calendarEvent,
+      },
+      log
+    );
+  } catch (error) {
+    log.error(
+      {
+        meetingId: revoked.meetingId,
+        guestId: revoked.id,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Calendar withdrawal publish threw despite its never-throws contract — the revocation already committed'
+    );
+  }
+}
+
+/**
+ * BAL-476 — the removed guest's own side's calendar row, READ BEFORE THE REVOKE.
+ *
+ * ⚠ `undefined` ⇒ NO WITHDRAWAL, AND THAT IS NOT AN ERROR. Two ways to get it: the meeting has no
+ * calendar projection for that side at all (nothing was ever issued, so nothing is owed), or the
+ * read failed (best-effort — a removal must never fail because a calendar read did).
+ *
+ * ⚠ ONLY `id` AND `sequence` ARE CARRIED FORWARD: the withdrawal addresses the series it is
+ * retiring, at the side's CURRENT sequence, and bumps nothing (R2).
+ */
+async function snapshotPartyCalendarRow(
+  meetingId: string,
+  party: string
+): Promise<{ id: string; sequence: number } | undefined> {
+  try {
+    const rows = await meetingCalendarEventsRepository.listLiveByMeeting(meetingId);
+    const row = rows.find((candidate: MeetingCalendarEvent) => candidate.party === party);
+    if (row === undefined) {
+      log.info({ meetingId, party }, 'Guest removal — no calendar row on this side to withdraw');
+      return undefined;
+    }
+    return { id: row.id, sequence: row.sequence };
+  } catch (error) {
+    log.error(
+      {
+        meetingId,
+        party,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      'Guest removal could not read the calendar row — skipping the withdrawal; the revocation still proceeds'
+    );
+    return undefined;
+  }
+}
+
+/** Why a removal was refused — a LOG field, never a wire value (every arm answers the same code). */
+type RemovalDenialReason = 'no_guest' | 'cross_party' | 'not_host';
+
+/**
+ * BAL-476 — MAY THIS ACTOR REMOVE THIS GUEST? `null` ⇒ yes.
+ *
+ * ⚠⚠ THE RULE DEPENDS ON THE INVITE CHANNEL, AND IT HAS TO. `@balo/shared/meetings`'
+ * `presencePartyForGuest` states it outright: on a `link` row, `party` is a PLACEHOLDER
+ * `claimLobbyPlace` writes because the column demands a value, not a side anybody resolved — a
+ * bare meeting URL carries no sharer identity. Deriving an entitlement from it is exactly what
+ * that module forbids, and until this ticket gave `removeGuest` a caller nothing could reach the
+ * mistake. Three concrete consequences of doing so, all wrong:
+ *
+ *   1. AN EXPERT HOST COULD NOT UNDO THEIR OWN ADMIT. They admitted the lobby guest; the row says
+ *      `client`; removal answered `guest_not_found`.
+ *   2. ANY CLIENT-SIDE MEMBER COULD REVOKE, EJECT AND **BAN** the expert's own forwarded
+ *      colleague — the precise cross-party act `removeGuest`'s docblock says must be impossible.
+ *   3. A CLIENT-SIDE NON-HOST COULD DENY A PENDING KNOCK THROUGH THE API — revoking a `pending`
+ *      row is a Deny, and Deny is `host_meetings`-gated. The panel hides Remove on the lobby
+ *      queue, but `resendGuestJoinLink` in this same file states the rule: A UI GATE IS NEVER
+ *      THE GATE.
+ *
+ * So: an `email` row keeps the SAME-PARTY rule (its `party` WAS resolved, server-side, from the
+ * inviter's own authorized side), and a `link` row is gated on `host_meetings` instead —
+ * mirroring `decideGuestAdmission`, on the principle that whoever may ADMIT a lobby visitor may
+ * un-admit them. ⚠ INSTEAD OF, not in addition to: AND-ing the party check would re-break
+ * consequence 1, since the placeholder can never equal an expert host's side.
+ *
+ * ⚠ `host_meetings`, NOT `manage_engagement` — the live/in-meeting right, the same token
+ * `decideGuestAdmission` uses, so the two cannot drift.
+ * ⚠ THE TENANCY GATE HAS ALREADY RUN in the caller; this decides only entitlement.
+ */
+async function removalDenialReason(input: {
+  readonly guest: Readonly<{ party: string; inviteChannel: MeetingGuestInviteChannelLabel }>;
+  readonly authorized: Extract<AuthorizeMeetingParticipationResult, { ok: true }>;
+  readonly actorUserId: string;
+}): Promise<RemovalDenialReason | null> {
+  const { guest, authorized, actorUserId } = input;
+
+  if (guest.inviteChannel === 'link') {
+    const canHost = await hasEngagementCapability(
+      { id: actorUserId },
+      ENGAGEMENT_CAPABILITIES.HOST_MEETINGS,
+      authorized.subject
+    );
+    return canHost ? null : 'not_host';
+  }
+
+  return guest.party === authorized.side ? null : 'cross_party';
+}
+
+/**
  * Remove a guest: revoke + soft-delete + audit, then email that person and only that person.
  *
  * ⚠ THE SAME-PARTY RULE. An actor may remove only a guest whose `party` equals their own
@@ -1012,18 +1185,32 @@ export async function removeGuest(input: {
   // `meetingId` is the tenancy scope already authorized, so a guest id belonging to another
   // meeting resolves to `undefined` rather than to somebody else's row.
   const guest = await meetingGuestsRepository.findLiveById(input.meetingId, input.guestId);
-  if (guest === undefined || guest.party !== authorized.side) {
+  const denial =
+    guest === undefined
+      ? 'no_guest'
+      : await removalDenialReason({ guest, authorized, actorUserId: input.actorUserId });
+  if (guest === undefined || denial !== null) {
     log.warn(
       {
         meetingId: input.meetingId,
         guestId: input.guestId,
         actorUserId: input.actorUserId,
-        reason: guest === undefined ? 'no_guest' : 'cross_party',
+        reason: denial,
       },
       'Guest removal denied'
     );
     return { ok: false, code: 'guest_not_found' };
   }
+
+  // ⚠⚠ SNAPSHOT THE CALENDAR ROW **BEFORE** THE REVOKE. Everything below — the revoke, the Daily
+  // eject, the `meeting.guest_removed` publish — takes time, and a CANCELLATION landing in that
+  // window retires the party row. Read afterwards, the withdrawal found nothing and sent nothing,
+  // while the cancellation's own fan-out had already resolved recipients from the LIVE guest
+  // index that no longer held this person: a withdrawal from NEITHER path. Reading first costs
+  // one query and removes the window.
+  //
+  // ⚠ BEST-EFFORT: a failed read means no withdrawal, never a failed removal.
+  const calendarEvent = await snapshotPartyCalendarRow(input.meetingId, guest.party);
 
   const revoked = await meetingGuestsRepository.revoke({
     guestId: input.guestId,
@@ -1039,55 +1226,7 @@ export async function removeGuest(input: {
   // on the next click". Best-effort; see `ejectGuestBestEffort`.
   await ejectGuestBestEffort(authorized.meeting, revoked.id);
 
-  try {
-    await notificationEvents.publish('meeting.guest_removed', {
-      correlationId: revoked.id,
-      recipientEmail: revoked.email,
-      ...(revoked.name === null ? {} : { guestName: revoked.name }),
-      meetingTitle: await resolveMeetingTitle(authorized.subject),
-      scheduledStartIso: authorized.meeting.scheduledStart.toISOString(),
-    });
-  } catch (error) {
-    log.error(
-      {
-        event: 'meeting.guest_removed',
-        correlationId: revoked.id,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      'Failed to publish guest-removed notification — the revocation itself is committed'
-    );
-  }
-
-  // BAL-476 — the METHOD:CANCEL to the removed person, and to NOBODY ELSE (R2).
-  //
-  // ⚠ COMPOSED FROM THE REVOKED ROW (`revoked.party`, `revoked.id`), never by re-reading a live
-  // index — the row is already revoked and soft-deleted by now, so no live read would find it.
-  // ⚠⚠ `revoked.email` IS DELIBERATELY NOT THREADED IN. U1 forbids an address on the wire and
-  // `MeetingCalendarInvitePayload` has no field for one: the email channel resolves the address
-  // at DELIVERY time from the guest id.
-  // ⚠ Wrapped even though `publishGuestRemovedCalendarWithdrawal`'s own contract is "never
-  // throws" — matching this module's best-effort-over-committed-rows rule.
-  try {
-    await publishGuestRemovedCalendarWithdrawal(
-      {
-        meetingId: input.meetingId,
-        party: revoked.party as MeetingGuestSide,
-        guestId: revoked.id,
-        contextType: authorized.subject.contextType,
-      },
-      log
-    );
-  } catch (error) {
-    log.error(
-      {
-        meetingId: input.meetingId,
-        guestId: revoked.id,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      },
-      'Calendar withdrawal publish threw despite its never-throws contract — the revocation already committed'
-    );
-  }
+  await announceGuestRemoval({ authorized, revoked, calendarEvent });
 
   trackServer(GUEST_SERVER_EVENTS.GUEST_REMOVED, {
     party: revoked.party as MeetingGuestSide,

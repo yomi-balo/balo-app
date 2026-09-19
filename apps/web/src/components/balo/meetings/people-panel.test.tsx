@@ -1032,7 +1032,10 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
     const container = renderPanel(
       fakes({
         guests: [{ ...inCallGuest, inviteChannel: 'link', email: BAIT_EMAIL }],
-        viewerSide: 'client',
+        // ⚠ `canHost`, NOT `viewerSide` — a `link` row follows the host rule (BAL-476): its
+        // `party` is the lobby writer's placeholder, never a resolved side.
+        canHost: true,
+        viewerSide: 'expert',
       })
     );
 

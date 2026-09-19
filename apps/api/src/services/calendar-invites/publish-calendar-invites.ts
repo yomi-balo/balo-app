@@ -67,7 +67,13 @@ async function publishOne(input: {
   readonly contextType: (typeof BOOKABLE_CONTEXT_TYPES)[number] | null;
   readonly sequence: number | null;
   readonly log: CalendarInviteLogger;
-}): Promise<void> {
+  /**
+   * BAL-476 — ⚠ `true` WHEN THE EVENT WAS ACTUALLY ENQUEUED, `false` when the publish was caught
+   * and swallowed. It still NEVER THROWS; the boolean is what lets the cancellation orchestrator
+   * tell a failure from a success, which it previously could not (a `void` return made a Redis
+   * blip indistinguishable from a clean fan-out, and the rows were retired regardless).
+   */
+}): Promise<boolean> {
   const spec = {
     meetingId: input.meetingId,
     party: input.party,
@@ -89,6 +95,7 @@ async function publishOne(input: {
       calendarInvite: spec,
     });
     input.log.info({ ...fields, correlationId: input.correlationId }, 'Calendar invite enqueued');
+    return true;
   } catch (error) {
     input.log.error(
       {
@@ -100,6 +107,7 @@ async function publishOne(input: {
       'Calendar invite enqueue failed'
     );
     Sentry.captureException(error, { extra: { ...fields, correlationId: input.correlationId } });
+    return false;
   }
 }
 
@@ -137,17 +145,32 @@ function logSkip(input: {
 /**
  * One row's recipient list, with the read's own try/catch and the empty-list skip.
  *
- * ⚠ `null` MEANS "SKIP THIS ROW" — the caller `continue`s. Extracted (BAL-476) because the
- * booking, reschedule and cancellation fan-outs need byte-identical behaviour here and three
- * copies of it is how they drift apart (and how the duplication gate fails).
+ * ⚠ THREE OUTCOMES, AND THE THIRD IS NOT THE SECOND. `'none'` means we asked and there is
+ * genuinely NOBODY to tell; `'read_failed'` means we could not find out. The booking and
+ * reschedule fan-outs treat both as "skip this row" and are unchanged, but the CANCELLATION
+ * fan-out must not: a row with nobody to tell has been fully discharged and may be retired,
+ * while a row whose recipients are UNKNOWN must stay live. Collapsing the two is exactly what
+ * let a Redis/DB blip retire a projection whose withdrawal was never enqueued.
+ *
+ * Extracted (BAL-476) because the booking, reschedule and cancellation fan-outs need
+ * byte-identical behaviour here and three copies of it is how they drift apart (and how the
+ * duplication gate fails).
  */
+/** See {@link resolveRowRecipients}. */
+type RowRecipientOutcome =
+  | { readonly outcome: 'recipients'; readonly recipients: CalendarInviteRecipient[] }
+  /** Asked, and there is nobody to tell. The row is DISCHARGED. */
+  | { readonly outcome: 'none' }
+  /** The read failed. What we owe this row is UNKNOWN, so it is not discharged. */
+  | { readonly outcome: 'read_failed' };
+
 async function resolveRowRecipients(input: {
   readonly meetingId: string;
   readonly party: CalendarInviteParty;
   readonly deliveryMode: MeetingCalendarDeliveryMode;
   readonly expertProfileId: string | null;
   readonly log: CalendarInviteLogger;
-}): Promise<CalendarInviteRecipient[] | null> {
+}): Promise<RowRecipientOutcome> {
   const { meetingId, party, deliveryMode, expertProfileId, log } = input;
   let recipients: CalendarInviteRecipient[];
   try {
@@ -159,7 +182,7 @@ async function resolveRowRecipients(input: {
     });
   } catch (error) {
     logReadFailure({ log, meetingId, party, step: 'resolveCalendarInviteRecipients', error });
-    return null;
+    return { outcome: 'read_failed' };
   }
   if (recipients.length === 0) {
     logSkip({
@@ -168,9 +191,9 @@ async function resolveRowRecipients(input: {
       party,
       reason: deliveryMode === 'provider_event' ? 'provider_event_party' : 'no_member_recipient',
     });
-    return null;
+    return { outcome: 'none' };
   }
-  return recipients;
+  return { outcome: 'recipients', recipients };
 }
 
 /**
@@ -246,16 +269,16 @@ export async function publishBookingCalendarInvites(
     }
     const party = row.party;
 
-    const recipients = await resolveRowRecipients({
+    const resolved = await resolveRowRecipients({
       meetingId: input.meetingId,
       party,
       deliveryMode: row.deliveryMode,
       expertProfileId: input.expertProfileId,
       log,
     });
-    if (recipients === null) continue;
+    if (resolved.outcome !== 'recipients') continue;
 
-    for (const recipient of recipients) {
+    for (const recipient of resolved.recipients) {
       await publishOne({
         meetingId: input.meetingId,
         party,
@@ -301,16 +324,16 @@ export async function publishRescheduleCalendarInvites(
   const contextType = await resolveContextTypeForLogs(input.meetingId, log);
 
   for (const row of input.calendarEvents) {
-    const recipients = await resolveRowRecipients({
+    const resolved = await resolveRowRecipients({
       meetingId: input.meetingId,
       party: row.party,
       deliveryMode: row.deliveryMode,
       expertProfileId: input.expertProfileId,
       log,
     });
-    if (recipients === null) continue;
+    if (resolved.outcome !== 'recipients') continue;
 
-    for (const recipient of recipients) {
+    for (const recipient of resolved.recipients) {
       await publishOne({
         meetingId: input.meetingId,
         party: row.party,
@@ -390,6 +413,15 @@ export async function publishGuestAddedCalendarInvites(
  * NEVER THROWS. The rows are the caller's read (see `withdrawMeetingCalendarProjection`) so the
  * publish and the retire act on ONE SNAPSHOT — and so the publish can run BEFORE the retire.
  *
+ * ⚠⚠ IT RETURNS THE ROW IDS THAT WERE **FULLY DISCHARGED**, AND THAT RETURN IS LOAD-BEARING.
+ * "Post-commit, best-effort, never throws" used to mean this function returned `void`, so its
+ * caller could not tell a clean fan-out from one where every publish was caught and swallowed —
+ * and it retired the rows either way. On a Redis or DB blip that left NO `METHOD:CANCEL`
+ * enqueued, the rows gone from the live set, and therefore nothing for reconciliation to find.
+ * A row is in the returned set only when EVERY recipient's publish was accepted, or when there
+ * was demonstrably nobody to tell (`resolveRowRecipients`' `'none'`). A row whose recipient read
+ * FAILED is never in it: what we owe it is unknown, so it must stay live.
+ *
  * ⚠ AN EXPERT-PARTY `provider_event` ROW STILL FANS OUT, to that side's admitted GUESTS:
  * `resolveCalendarInviteRecipients` includes the expert MEMBER only for an `ics` row but includes
  * that side's guests whatever the mode. That is precisely why the delivery path's calendar-row
@@ -404,55 +436,104 @@ export async function publishCancellationCalendarWithdrawals(
     readonly calendarEvents: readonly MeetingCalendarEvent[];
   },
   log: CalendarInviteLogger = defaultLog
-): Promise<void> {
+): Promise<ReadonlySet<string>> {
+  /** `meeting_calendar_events.id`s whose withdrawal is fully enqueued — see the docblock. */
+  const discharged = new Set<string>();
+
   if (input.calendarEvents.length === 0) {
     logSkip({ log, meetingId: input.meetingId, party: null, reason: 'no_calendar_row' });
-    return;
+    return discharged;
   }
 
   const contextType = await resolveContextTypeForLogs(input.meetingId, log);
 
   for (const row of input.calendarEvents) {
-    if (!isCalendarInviteParty(row.party)) {
-      // Unreachable under `meeting_calendar_event_party_two_sided` — a database that disagrees
-      // with its own CHECK must not be published from.
-      log.error(
-        { meetingId: input.meetingId, calendarEventId: row.id, party: row.party },
-        'meeting_calendar_events row holds a party the two-sided CHECK forbids — skipping'
-      );
-      continue;
-    }
-    const party = row.party;
-
-    const recipients = await resolveRowRecipients({
+    const isDischarged = await withdrawOneRow({
+      row,
       meetingId: input.meetingId,
-      party,
-      deliveryMode: row.deliveryMode,
+      cancelAuditId: input.cancelAuditId,
       expertProfileId: input.expertProfileId,
+      contextType,
       log,
     });
-    if (recipients === null) continue;
-
-    for (const recipient of recipients) {
-      await publishOne({
-        meetingId: input.meetingId,
-        party,
-        calendarEventId: row.id,
-        transition: 'cancelled',
-        method: CALENDAR_INVITE_TRANSITION_METHOD.cancelled,
-        recipient,
-        correlationId: calendarInviteCorrelationId({
-          transition: 'cancelled',
-          cancelAuditId: input.cancelAuditId,
-          party,
-          recipient,
-        }),
-        contextType,
-        sequence: row.sequence,
-        log,
-      });
-    }
+    if (isDischarged) discharged.add(row.id);
   }
+
+  return discharged;
+}
+
+/**
+ * One calendar row's whole withdrawal. `true` ⇒ DISCHARGED: every recipient's CANCEL was accepted,
+ * or there was demonstrably nobody to tell. `false` ⇒ the caller must leave the row LIVE.
+ *
+ * ⚠ EXTRACTED ONLY TO SHED COGNITIVE COMPLEXITY — inline, `publishCancellationCalendarWithdrawals`
+ * scored 16 against SonarCloud's allowed 15. The repo precedent is EXTRACT, never disable.
+ */
+async function withdrawOneRow(input: {
+  readonly row: MeetingCalendarEvent;
+  readonly meetingId: string;
+  readonly cancelAuditId: string;
+  readonly expertProfileId: string | null;
+  readonly contextType: (typeof BOOKABLE_CONTEXT_TYPES)[number] | null;
+  readonly log: CalendarInviteLogger;
+}): Promise<boolean> {
+  const { row, meetingId, cancelAuditId, expertProfileId, contextType, log } = input;
+
+  if (!isCalendarInviteParty(row.party)) {
+    // Unreachable under `meeting_calendar_event_party_two_sided` — a database that disagrees with
+    // its own CHECK must not be published from. ⚠ NOT discharged: a row this function refused to
+    // read must not then be retired by the caller.
+    log.error(
+      { meetingId, calendarEventId: row.id, party: row.party },
+      'meeting_calendar_events row holds a party the two-sided CHECK forbids — skipping'
+    );
+    return false;
+  }
+  const party = row.party;
+
+  const resolved = await resolveRowRecipients({
+    meetingId,
+    party,
+    deliveryMode: row.deliveryMode,
+    expertProfileId,
+    log,
+  });
+  // ⚠ THE READ FAILED ⇒ NOT DISCHARGED. We do not know who we owe a CANCEL, so the row stays live
+  // and reconciliation can still see it.
+  if (resolved.outcome === 'read_failed') return false;
+  // ⚠ NOBODY TO TELL ⇒ DISCHARGED. There is no CANCEL owed, so holding the row live would be a
+  // permanent stale projection for no benefit.
+  if (resolved.outcome === 'none') return true;
+
+  let allEnqueued = true;
+  for (const recipient of resolved.recipients) {
+    const enqueued = await publishOne({
+      meetingId,
+      party,
+      calendarEventId: row.id,
+      transition: 'cancelled',
+      method: CALENDAR_INVITE_TRANSITION_METHOD.cancelled,
+      recipient,
+      correlationId: calendarInviteCorrelationId({
+        transition: 'cancelled',
+        cancelAuditId,
+        party,
+        recipient,
+      }),
+      contextType,
+      sequence: row.sequence,
+      log,
+    });
+    if (!enqueued) allEnqueued = false;
+  }
+
+  if (!allEnqueued) {
+    log.warn(
+      { meetingId, party, calendarEventId: row.id },
+      'Calendar withdrawal not fully enqueued for this row — leaving it LIVE so reconciliation can still see it'
+    );
+  }
+  return allEnqueued;
 }
 
 /**
@@ -471,32 +552,27 @@ export async function publishGuestRemovedCalendarWithdrawal(
     readonly party: CalendarInviteParty;
     readonly guestId: string;
     readonly contextType: string;
+    /**
+     * ⚠⚠ THE CALLER'S OWN SNAPSHOT, TAKEN **BEFORE** THE REVOKE — this function performs NO READ
+     * of its own, and that absence is the fix for a real race.
+     *
+     * It used to `listLiveByMeeting` here, i.e. AFTER `removeGuest` had already revoked the
+     * guest, ejected them and published `meeting.guest_removed`. A cancellation landing inside
+     * that window retires the party row, so the read found nothing and the removal sent NO
+     * `METHOD:CANCEL` — while the cancellation's own fan-out had already resolved its recipients
+     * from the LIVE guest index, which no longer contained the just-revoked person. The guest
+     * ended up with a withdrawal from NEITHER path. Snapshotting before the revoke closes it by
+     * construction, and matches `publishCancellationCalendarWithdrawals`, which takes its rows
+     * from its caller for the same one-snapshot reason.
+     */
+    readonly calendarEvent: Pick<MeetingCalendarEvent, 'id' | 'sequence'>;
   },
   log: CalendarInviteLogger = defaultLog
 ): Promise<void> {
-  let rows: Awaited<ReturnType<typeof meetingCalendarEventsRepository.listLiveByMeeting>>;
-  try {
-    rows = await meetingCalendarEventsRepository.listLiveByMeeting(input.meetingId);
-  } catch (error) {
-    logReadFailure({
-      log,
-      meetingId: input.meetingId,
-      party: input.party,
-      step: 'listLiveByMeeting',
-      error,
-    });
-    return;
-  }
-  const row = rows.find((candidate) => candidate.party === input.party);
-  if (row === undefined) {
-    logSkip({ log, meetingId: input.meetingId, party: input.party, reason: 'no_calendar_row' });
-    return;
-  }
-
   await publishOne({
     meetingId: input.meetingId,
     party: input.party,
-    calendarEventId: row.id,
+    calendarEventId: input.calendarEvent.id,
     transition: 'guest_removed',
     method: CALENDAR_INVITE_TRANSITION_METHOD.guest_removed,
     recipient: { kind: 'guest', guestId: input.guestId },
@@ -505,7 +581,7 @@ export async function publishGuestRemovedCalendarWithdrawal(
       guestId: input.guestId,
     }),
     contextType: toBookableContextType(input.contextType),
-    sequence: row.sequence,
+    sequence: input.calendarEvent.sequence,
     log,
   });
 }

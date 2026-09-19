@@ -45,6 +45,28 @@ import { publishCancellationCalendarWithdrawals } from '../calendar-invites/publ
  *   ever enqueued, and nothing re-drives it. Every recipient keeps a stale calendar entry
  *   FOREVER. That is the exact defect this ticket exists to close.
  *
+ * ⚠⚠ ORDERING ALONE ONLY COVERS **PROCESS DEATH**, AND AN EARLIER VERSION OF THIS BLOCK STOPPED
+ * THERE — WHICH WAS AN OVERCLAIM. Every publish in W1 is individually try/caught (`publishOne`
+ * swallows an enqueue failure; `resolveRowRecipients` swallows a read failure), so on a Redis or
+ * DB blip the process does NOT die: W1 returns normally having enqueued nothing, and W3 then
+ * retired every row anyway — reaching the permanent failure the ordering exists to prevent, by a
+ * path the ordering never touched. **W1 therefore REPORTS which rows it fully discharged, and W3
+ * retires only those.** A row whose recipients could not be read, or any of whose publishes was
+ * refused, STAYS LIVE — the cosmetic, reconciliation-visible residual, which is the correct
+ * direction.
+ *
+ * ⚠⚠ THE ONE ROW THAT CANNOT BE HELD BACK IS THE EXPERT-PARTY `provider_event` ROW, AND IT IS A
+ * DOCUMENTED RESIDUAL RATHER THAN AN OVERSIGHT. W2's `deleteConsultationEvent` marks Balo's row
+ * deleted BEFORE it calls the vendor (its own deliberate mark-first ordering, which this file
+ * does not reorder), so that row is retired inside W2 whatever W1 reported. The alternative —
+ * gating W2 on that row's CANCELs having enqueued — was considered and REJECTED: the recipients
+ * of an expert-party `provider_event` row are that side's admitted GUESTS only (Ruling 1 excludes
+ * the expert member), so gating would mean a Redis blip leaves the EXPERT'S OWN calendar entry
+ * sitting on a cancelled meeting. That is worse for the primary user than the residual it would
+ * buy, which is an expert-side GUEST keeping a stale entry — the same class of residual as the
+ * client-side one, and equally visible to reconciliation. ⚠ An expert-party `ics` row is NOT
+ * affected: W2 never touches it, so the hold-back applies to it normally.
+ *
  * A mid-loop crash inside W1 leaves some recipients enqueued and others not; nothing re-drives
  * it. Accepted — identical to every other publisher in `publish-calendar-invites.ts`, whose
  * contract is already "never throws, post-commit, best-effort". Once a CANCEL job IS enqueued,
@@ -174,8 +196,10 @@ export async function withdrawMeetingCalendarProjection(
   }
   log.info({ meetingId, cancelAuditId, rowCount: rows.length }, 'Calendar withdrawal started');
 
-  // W1 — THE TELLING FIRST. Never throws (every recipient publish is individually try/caught).
-  await publishCancellationCalendarWithdrawals(
+  // W1 — THE TELLING FIRST. Never throws (every recipient publish is individually try/caught) —
+  // which is exactly why it has to REPORT: a swallowed failure is invisible otherwise. The
+  // returned set is the row ids whose withdrawal is fully enqueued (or that had nobody to tell).
+  const discharged = await publishCancellationCalendarWithdrawals(
     { meetingId, cancelAuditId, expertProfileId, calendarEvents: rows },
     log
   );
@@ -197,7 +221,19 @@ export async function withdrawMeetingCalendarProjection(
   //
   // ⚠ The expert provider row was already retired inside W2 (`deleteConsultationEvent` marks
   // first), so its call here matches zero rows — idempotent by the `deleted_at IS NULL` predicate.
+  // That is also why the hold-back below cannot protect THAT row; see the module docblock's
+  // residual note.
+  //
+  // ⚠⚠ ONLY THE ROWS W1 SAID IT DISCHARGED. A row whose CANCELs were not all enqueued stays LIVE
+  // on purpose: retiring it would remove the only evidence that anybody is owed a withdrawal.
   for (const row of rows) {
+    if (!discharged.has(row.id)) {
+      log.warn(
+        { meetingId, cancelAuditId, calendarEventId: row.id, party: row.party },
+        'Leaving the calendar row LIVE — its withdrawal was not fully enqueued, so retiring it would hide a stale projection from reconciliation'
+      );
+      continue;
+    }
     if (!isCalendarInviteParty(row.party)) {
       // Unreachable under `meeting_calendar_event_party_two_sided`; a database that disagrees
       // with its own CHECK must not be soft-deleted from on a party the column cannot hold.

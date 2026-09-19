@@ -340,3 +340,48 @@ describe('buildGuestRoster — canRemove (BAL-476)', () => {
     expect(roster.invited[0]?.canRemove).toBe(true);
   });
 });
+
+// ── BAL-476 (second review round) — canRemove is CHANNEL-FIRST ───────────────────────────
+
+/**
+ * ⚠⚠ THE PANEL MIRRORS THE ROUTE'S RULE, NOT A SIMPLER ONE. A `link` row's `party` is the
+ * NOT-NULL PLACEHOLDER `claimLobbyPlace` writes; `@balo/shared/meetings` forbids deriving
+ * same-party entitlement from it, so the question for those rows is `canHost` — exactly as it is
+ * for admit/deny. These are COURTESY gates: the enforcement is server-side and is asserted in
+ * `apps/api/src/services/meetings/guest-participation.test.ts`.
+ */
+describe('buildGuestRoster — canRemove is channel-first (BAL-476)', () => {
+  const LINK_GUEST = guest({ id: 'link-1', inviteChannel: 'link', party: 'client' });
+  const EMAIL_GUEST = guest({ id: 'email-1', inviteChannel: 'email', party: 'client' });
+
+  it('⚠⚠ a LINK row follows canHost, NOT the placeholder party', () => {
+    const asHost = build([LINK_GUEST], { canHost: true, viewerSide: 'expert' });
+    expect(asHost.invited).toHaveLength(1);
+    // ⚠ The placeholder says `client` and the viewer is `expert` — same-party would say NO.
+    expect(asHost.invited[0]?.canRemove).toBe(true);
+
+    const asNonHost = build([LINK_GUEST], { canHost: false, viewerSide: 'client' });
+    expect(asNonHost.invited).toHaveLength(1);
+    // ⚠ The placeholder MATCHES the viewer here — same-party would say YES.
+    expect(asNonHost.invited[0]?.canRemove).toBe(false);
+  });
+
+  it('⚠ an EMAIL row follows SAME-PARTY, and canHost does not move it', () => {
+    const matching = build([EMAIL_GUEST], { canHost: false, viewerSide: 'client' });
+    expect(matching.invited).toHaveLength(1);
+    expect(matching.invited[0]?.canRemove).toBe(true);
+
+    const crossParty = build([EMAIL_GUEST], { canHost: true, viewerSide: 'expert' });
+    expect(crossParty.invited).toHaveLength(1);
+    expect(crossParty.invited[0]?.canRemove).toBe(false);
+  });
+
+  it('⚠ the two rules DISAGREE on the same payload — which is the whole point', () => {
+    const roster = build([LINK_GUEST, EMAIL_GUEST], { canHost: true, viewerSide: 'expert' });
+
+    expect(roster.invited).toHaveLength(2);
+    const byId = new Map(roster.invited.map((row) => [row.guest.id, row.canRemove]));
+    expect(byId.get('link-1')).toBe(true);
+    expect(byId.get('email-1')).toBe(false);
+  });
+});
