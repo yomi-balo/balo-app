@@ -445,6 +445,67 @@ describe('BookingFlowDialog — failure panels + idempotent retry', () => {
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
   });
 
+  describe('session_expired — sign-in, never a message about the slot', () => {
+    async function submitWith(
+      user: ReturnType<typeof userEvent.setup>,
+      result: Extract<BookConsultationResult, { ok: false }>
+    ): Promise<void> {
+      mockBookConsultationAction.mockResolvedValue(result);
+      render(
+        <BookingFlowDialog
+          open
+          onClose={vi.fn()}
+          expert={EXPERT}
+          source="profile"
+          entry={{ mode: 'chooser', context: SINGLE_COMPANY_NO_CASES }}
+          viewerEmailDomain={null}
+          onMessage={vi.fn()}
+        />
+      );
+      await user.click(screen.getByText('Pick 9:00am slot'));
+      await user.type(screen.getByLabelText(/^Title/), 'Migration planning');
+      await user.type(
+        screen.getByLabelText("What you'd like to discuss"),
+        'A real problem statement.'
+      );
+      await user.click(screen.getByRole('button', { name: /Confirm & book/i }));
+    }
+
+    it('pre-flight refusal offers sign-in and says nothing was saved', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, { ok: false, stage: 'validation', code: 'session_expired' });
+
+      expect(await screen.findByText('Sign in to finish booking')).toBeInTheDocument();
+      expect(screen.getByText(/nothing was saved/i)).toBeInTheDocument();
+      // ⚠ Never the partial panel: its headline is about the SLOT, and its only action
+      // re-sends the same dead token.
+      expect(screen.queryByText(/couldn't lock in the time/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Try again/i })).not.toBeInTheDocument();
+    });
+
+    it('mid-submit refusal names the case that WAS written', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, {
+        ok: false,
+        stage: 'meeting',
+        code: 'session_expired',
+        engagementId: 'engagement-9',
+        caseTitle: 'Migration planning',
+      });
+
+      expect(await screen.findByText('Sign in to finish booking')).toBeInTheDocument();
+      expect(screen.getByText(/“Migration planning” is saved/)).toBeInTheDocument();
+      expect(screen.queryByText(/nothing was saved/i)).not.toBeInTheDocument();
+    });
+
+    it('"Sign in" routes to the login screen that already owns the expired-session copy', async () => {
+      const user = userEvent.setup();
+      await submitWith(user, { ok: false, stage: 'validation', code: 'session_expired' });
+      await user.click(await screen.findByRole('button', { name: 'Sign in' }));
+      expect(mockRouterPush).toHaveBeenCalledWith('/login?error=session_expired');
+    });
+  });
+
   it('shows the inline stale-slot banner (not a full panel) and preserves the typed title', async () => {
     const user = userEvent.setup();
     mockBookConsultationAction.mockResolvedValue({

@@ -40,6 +40,14 @@ export type BookingFailureCode =
   | 'slot_unavailable'
   | 'rate_limited'
   | 'idempotency_key_conflict'
+  /**
+   * The viewer's WorkOS credential is dead — not a refusal of the booking itself.
+   *
+   * ⚠ Its own code so it can never be reported as a slot problem: nothing is wrong with the
+   * slot, and a "Try again" would re-send the same dead token. Account suspension/deletion also
+   * arrives as a 401 and is deliberately not folded in (see `isExpiredCredentialFailure`).
+   */
+  | 'session_expired'
   | 'booking_failed';
 
 export type BookConsultationResult =

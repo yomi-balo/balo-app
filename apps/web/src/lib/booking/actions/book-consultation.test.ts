@@ -15,6 +15,7 @@ const mockSanitizeCaseDescription = vi.fn();
 const mockAuthorizeCaseAttach = vi.fn();
 const mockResolveBookingExpertDisplay = vi.fn();
 const mockPostBookMeeting = vi.fn();
+const mockViewerApiCredentialIsLive = vi.fn();
 const mockPostInviteGuests = vi.fn();
 const mockPublishNotificationEvent = vi.fn();
 const mockLogInfo = vi.fn();
@@ -75,6 +76,16 @@ vi.mock('../load-booking-context', () => ({
 vi.mock('../booking-api-client', () => ({
   postBookMeeting: (...args: unknown[]) => mockPostBookMeeting(...args),
   postInviteGuests: (...args: unknown[]) => mockPostInviteGuests(...args),
+}));
+/**
+ * ⚠ PARTIAL BY `importActual`, NOT A HAND-WRITTEN STUB. Only the session-reading
+ * `viewerApiCredentialIsLive` is replaced; `isExpiredCredentialFailure` stays REAL so the 401
+ * mapping is exercised against the shipped classifier — including its account-refusal
+ * exclusion — rather than a second copy of the rule that could drift from it.
+ */
+vi.mock('@/lib/api/balo-api-client', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/api/balo-api-client')>()),
+  viewerApiCredentialIsLive: (...args: unknown[]) => mockViewerApiCredentialIsLive(...args),
 }));
 
 import { bookConsultationAction } from './book-consultation';
@@ -139,6 +150,7 @@ beforeEach(() => {
   mockCountByActorAndActionSince.mockResolvedValue(0);
   mockGetSalesforceVertical.mockResolvedValue({ id: 'vertical-1' });
   mockGetProductsByVertical.mockResolvedValue([{ products: [{ id: PRODUCT_ID }] }]);
+  mockViewerApiCredentialIsLive.mockResolvedValue(true);
   mockPostBookMeeting.mockResolvedValue({
     ok: true,
     data: {
@@ -623,6 +635,39 @@ describe('bookConsultationAction', () => {
       expect.objectContaining({ engagementId: ENGAGEMENT_ID })
     );
     expect(mockPublishNotificationEvent).not.toHaveBeenCalled();
+  });
+
+  describe('session_expired (dead WorkOS credential, not a booking refusal)', () => {
+    it('PRE-FLIGHT: refuses before the case hop and writes NOTHING', async () => {
+      mockViewerApiCredentialIsLive.mockResolvedValue(false);
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+      expect(result).toEqual({ ok: false, stage: 'validation', code: 'session_expired' });
+      // ⚠ THE POINT OF THE GATE. Before it existed the case row was written first and the
+      // meeting hop then 401'd, stranding an orphaned case behind a panel about the SLOT.
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockPostBookMeeting).not.toHaveBeenCalled();
+    });
+
+    it('MID-SUBMIT: a hop-2 401 maps to session_expired, still naming the case that was written', async () => {
+      mockPostBookMeeting.mockResolvedValue({ ok: false, status: 401, code: 'Unauthorized' });
+      const result = await bookConsultationAction(NEW_CASE_INPUT);
+      expect(result).toEqual({
+        ok: false,
+        stage: 'meeting',
+        code: 'session_expired',
+        engagementId: ENGAGEMENT_ID,
+        caseTitle: 'Need help with a flow',
+      });
+    });
+
+    it.each(['account_suspended', 'account_deleted'])(
+      'does NOT claim session_expired for a 401 carrying %s — signing in again cannot fix it',
+      async (code) => {
+        mockPostBookMeeting.mockResolvedValue({ ok: false, status: 401, code });
+        const result = await bookConsultationAction(NEW_CASE_INPUT);
+        expect(result).toMatchObject({ stage: 'meeting', code: 'booking_failed' });
+      }
+    );
   });
 
   it('maps a 409 window_not_available to slot_unavailable, preserving the case', async () => {

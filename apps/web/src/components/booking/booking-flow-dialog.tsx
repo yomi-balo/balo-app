@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import * as Sentry from '@sentry/nextjs';
@@ -21,11 +22,18 @@ import { StepPickTime } from './step-pick-time';
 import { StepConfirm, type CaseSelection, type ConfirmSlot } from './step-confirm';
 import { StepBooked } from './step-booked';
 import { OnboardingRoutingState } from './onboarding-routing-state';
-import { HardFailurePanel, PartialFailurePanel } from './booking-error-panels';
+import { HardFailurePanel, PartialFailurePanel, SessionExpiredPanel } from './booking-error-panels';
 import type { GuestDraft } from './guest-invite-composer';
 import type { BookingFlowDialogProps, FixedCaseSummary, OpenCaseForExpert } from './types';
 
-type Phase = 'onboarding' | 'pick_time' | 'confirm' | 'booked' | 'error_hard' | 'error_partial';
+type Phase =
+  | 'onboarding'
+  | 'pick_time'
+  | 'confirm'
+  | 'booked'
+  | 'error_hard'
+  | 'error_partial'
+  | 'error_session';
 
 interface BookedSnapshot {
   engagementId: string;
@@ -204,6 +212,7 @@ function fireBookingSuccessAnalytics(params: {
 
 type SubmitFailureOutcome =
   | { kind: 'stale_slot' }
+  | { kind: 'session_expired'; caseTitle: string | null }
   | { kind: 'partial'; engagementId: string; caseTitle: string }
   | { kind: 'company_fail_closed'; code: BookingFailureCode }
   | { kind: 'hard' };
@@ -221,6 +230,13 @@ function resolveSubmitFailureOutcome(
 ): SubmitFailureOutcome {
   if (result.code === 'slot_unavailable') {
     return { kind: 'stale_slot' };
+  }
+  // ⚠ BEFORE the partial arm. A meeting-hop `session_expired` also carries
+  // `engagementId`/`caseTitle`, so the partial arm below would otherwise swallow it and offer a
+  // Try again that re-sends the same dead token forever. `caseTitle` is threaded through rather
+  // than dropped: on that path the case row IS real, and the panel says so.
+  if (result.code === 'session_expired') {
+    return { kind: 'session_expired', caseTitle: result.caseTitle ?? null };
   }
   if (
     result.stage === 'meeting' &&
@@ -255,6 +271,7 @@ export function BookingFlowDialog(
     productsTaxonomy = EMPTY_TAXONOMY,
   } = props;
   const isMobile = useIsMobile(768);
+  const router = useRouter();
 
   const [phase, setPhase] = useState<Phase>('pick_time');
   const [viewerTimezone, setViewerTimezone] = useState('UTC');
@@ -281,6 +298,11 @@ export function BookingFlowDialog(
   const [bookedResult, setBookedResult] = useState<BookedSnapshot | null>(null);
   /** Set once a partial failure creates a real case — every subsequent submit attaches to it. */
   const [recovered, setRecovered] = useState<FixedCaseSummary | null>(null);
+  /**
+   * The case title to name on the session-expired panel, or `null` when the credential was
+   * refused BEFORE any write (the pre-flight gate) and there is therefore no case to name.
+   */
+  const [sessionExpiredCaseTitle, setSessionExpiredCaseTitle] = useState<string | null>(null);
 
   const openFiredRef = useRef(false);
   /** Frozen true the moment ANY submit creates a real case row (D4b) — see `handleSubmit`. */
@@ -310,6 +332,7 @@ export function BookingFlowDialog(
     setRecovered(null);
     setSubmitting(false);
     setCaseChoiceLoading(false);
+    setSessionExpiredCaseTitle(null);
 
     if (entry.mode === 'fixed_case') {
       setPhase('confirm');
@@ -554,6 +577,11 @@ export function BookingFlowDialog(
           setStaleSlot(true);
           return;
         }
+        if (outcome.kind === 'session_expired') {
+          setSessionExpiredCaseTitle(outcome.caseTitle);
+          setPhase('error_session');
+          return;
+        }
         if (outcome.kind === 'partial') {
           setRecovered({
             engagementId: outcome.engagementId,
@@ -713,8 +741,15 @@ export function BookingFlowDialog(
 
   const bookingStep = toBookingStep(phase);
 
+  /**
+   * ⚠ `min-h-0 flex-1`, never `h-full`, and the container must be `flex flex-col`.
+   * `DialogContent` is `display: grid` and capped with `max-h-[85vh]` and no definite height, so
+   * a child's `height: 100%` cannot resolve and falls back to `auto` — the column grows to
+   * content height, the `overflow-y-auto` below inherits it and has nothing to scroll, and the
+   * surplus is clipped. `flex-1` + `min-h-0` resolves against the clamped height.
+   */
   const body = (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <BookingHeader expert={expert} step={bookingStep} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <AnimatePresence mode="wait">
@@ -815,6 +850,17 @@ export function BookingFlowDialog(
               />
             </motion.div>
           )}
+          {phase === 'error_session' && (
+            <motion.div key="error_session" {...pageTransition}>
+              <SessionExpiredPanel
+                caseTitle={sessionExpiredCaseTitle}
+                /* `?error=session_expired` is copy `/login` already owns — never a second
+                   spelling of "your session has expired" living in this dialog. */
+                onSignIn={() => router.push('/login?error=session_expired')}
+                onClose={onClose}
+              />
+            </motion.div>
+          )}
           {phase === 'error_partial' && recovered !== null && (
             <motion.div key="error_partial" {...pageTransition}>
               <PartialFailurePanel
@@ -846,7 +892,7 @@ export function BookingFlowDialog(
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleAbandon()}>
-      <DialogContent className="max-h-[85vh] overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden rounded-xl p-0 sm:max-w-[640px]">
         <DialogTitle className="sr-only">Book a consultation with {expert.name}</DialogTitle>
         <DialogDescription className="sr-only">
           Pick a time, review the details, and confirm your consultation.
