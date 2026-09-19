@@ -439,7 +439,7 @@ function NudgeShell({
   }, [onDismiss]);
 
   return (
-    <div className="bg-primary/5 border-border mt-4 flex items-start gap-3 rounded-2xl border px-4 py-3.5">
+    <div className="bg-primary/5 border-border mt-4 flex items-start gap-3 rounded-xl border px-4 py-3.5">
       <Icon size={17} className="text-primary mt-0.5 shrink-0" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">

@@ -16,7 +16,7 @@ export default function CaseLoading(): React.JSX.Element {
         className="mx-auto block w-full max-w-[1060px] px-4 py-8 sm:px-6 lg:px-8"
       >
         {/* header */}
-        <span className="bg-card border-border mb-3 block rounded-3xl border px-6 py-5">
+        <span className="bg-card border-border mb-3 block rounded-xl border px-6 py-5">
           <span className="bg-muted mb-3 block h-6 w-2/3 animate-pulse rounded" />
           <span className="bg-muted/60 mb-4 block h-3 w-1/2 animate-pulse rounded" />
           <span className="bg-muted/60 block h-3 w-full animate-pulse rounded" />
@@ -47,7 +47,7 @@ const LINE_KEYS = ['a', 'b', 'c', 'd'] as const;
 
 function SkeletonCard({ lines }: Readonly<{ lines: number }>): React.JSX.Element {
   return (
-    <span className="bg-card border-border block rounded-3xl border px-5 py-4">
+    <span className="bg-card border-border block rounded-xl border px-5 py-4">
       <span className="bg-muted mb-4 block h-3 w-28 animate-pulse rounded" />
       {LINE_KEYS.slice(0, lines).map((key) => (
         <span key={key} className="bg-muted/60 mb-2.5 block h-3 w-full animate-pulse rounded" />

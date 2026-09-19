@@ -31,7 +31,7 @@ export function CaseActionItems({
   const { yours, theirs, unassigned, counterpartyLabel, doneCount, totalCount } = actionItems;
 
   return (
-    <section className="bg-card border-border rounded-3xl border px-5 py-4">
+    <section className="bg-card border-border rounded-xl border px-5 py-4">
       <SectionHead
         icon={CircleCheck}
         title="Action items"
