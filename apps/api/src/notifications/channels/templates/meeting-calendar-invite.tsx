@@ -17,9 +17,15 @@ import {
 import type { CalendarInviteAudience } from '../../../services/calendar-invites/resolve-calendar-invite-facts.js';
 
 /**
- * BAL-475 — the Balo-organised CALENDAR INVITE email. Rendered ONCE PER RECIPIENT by
+ * BAL-475 / BAL-476 — the Balo-organised CALENDAR email. Rendered ONCE PER RECIPIENT by
  * `channels/calendar-invite-delivery.ts`, alongside the ICS attachment. This body is the
- * fallback for a client that ignores `text/calendar` entirely; the invite itself is the ICS.
+ * fallback for a client that ignores `text/calendar` entirely; the message itself is the ICS.
+ *
+ * ⚠ IT IS NOT ONLY AN "INVITE". BAL-476 put the two WITHDRAWALS (`cancelled`, `guest_removed`)
+ * on this same template, so every transition-dependent string — heading, pill, note, subject
+ * prefix — comes off ONE table, {@link TRANSITION_CHROME}, and the member CTA and the guest join
+ * note are SUPPRESSED on a withdrawal. Offering a way into a call that is cancelled, or that the
+ * reader is no longer on, is the one thing this copy must never do.
  *
  * ⚠ NO BILLING LINE, NO ADDRESS, EVER — this template renders no counterparty contact
  * information of any kind (ADR-1044 §4 concealment applies to email bodies too).

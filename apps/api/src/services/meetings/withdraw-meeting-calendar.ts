@@ -62,10 +62,25 @@ import { publishCancellationCalendarWithdrawals } from '../calendar-invites/publ
  * gating W2 on that row's CANCELs having enqueued — was considered and REJECTED: the recipients
  * of an expert-party `provider_event` row are that side's admitted GUESTS only (Ruling 1 excludes
  * the expert member), so gating would mean a Redis blip leaves the EXPERT'S OWN calendar entry
- * sitting on a cancelled meeting. That is worse for the primary user than the residual it would
- * buy, which is an expert-side GUEST keeping a stale entry — the same class of residual as the
- * client-side one, and equally visible to reconciliation. ⚠ An expert-party `ics` row is NOT
- * affected: W2 never touches it, so the hold-back applies to it normally.
+ * sitting on a cancelled meeting. That is worse for the primary user than the residual it buys,
+ * which is an expert-side GUEST keeping a stale entry.
+ *
+ * ⚠ BUT THE TWO RESIDUALS ARE **NOT EQUALLY RECOVERABLE**, and an earlier version of this note
+ * flattened them together by calling both "equally visible to reconciliation". They are not:
+ *
+ *   · A HELD-BACK ROW (client party, or an expert `ics` row) stays LIVE. It is visible to any
+ *     reconciliation that walks `meeting_calendar_events` against cancelled meetings — which is
+ *     the whole reason the hold-back exists.
+ *   · THE EXPERT `provider_event` ROW IS ALREADY RETIRED by the time anything could notice, so
+ *     that walk will never surface it. The only remaining evidence that a guest is owed a CANCEL
+ *     is the `meeting_calendar_deliveries` ledger — no `sent` row at that `(calendarEventId,
+ *     recipient, sequence, method)` — which is a different query nothing runs today.
+ *
+ * The trade-off still stands; the recoverability does not, and a future sweep has to be written
+ * against the ledger rather than the projection to catch this arm.
+ *
+ * ⚠ An expert-party `ics` row is NOT affected: W2 never touches it, so the hold-back applies to
+ * it normally and it lands in the recoverable case above.
  *
  * A mid-loop crash inside W1 leaves some recipients enqueued and others not; nothing re-drives
  * it. Accepted — identical to every other publisher in `publish-calendar-invites.ts`, whose

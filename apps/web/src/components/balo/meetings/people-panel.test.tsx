@@ -923,12 +923,13 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
   it('⚠ the confirm copy says NOTHING about the remaining party', async () => {
     const user = userEvent.setup();
     putInCall();
-    const container = renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'client' }));
+    renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'client' }));
 
     await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
     await screen.findByRole('button', { name: 'Remove from call' });
 
-    const text = container.textContent ?? '';
+    const text = dialogText();
+    expect(text.length).toBeGreaterThan(0);
     expect(text).not.toMatch(/everyone will be notified/i);
     for (const adversarial of ['kick', 'boot', 'ban']) {
       expect(text.toLowerCase()).not.toContain(adversarial);
@@ -1027,9 +1028,18 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
     expect(fake.removeGuest).not.toHaveBeenCalled();
   });
 
+  /**
+   * ⚠ THE DIALOG PORTALS OUT OF THE PANEL, so every assertion about its copy has to read the
+   * dialog itself. Reading `container.textContent` would pass vacuously — the text simply is not
+   * in there.
+   */
+  function dialogText(): string {
+    return screen.getByRole('alertdialog').textContent ?? '';
+  }
+
   it('⚠ no address reaches the dialog, even from a bait-carrying row', async () => {
     const user = userEvent.setup();
-    const container = renderPanel(
+    renderPanel(
       fakes({
         guests: [{ ...inCallGuest, inviteChannel: 'link', email: BAIT_EMAIL }],
         // ⚠ `canHost`, NOT `viewerSide` — a `link` row follows the host rule (BAL-476): its
@@ -1040,9 +1050,82 @@ describe('PeoplePanel — Remove (BAL-476)', () => {
     );
 
     await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
-    await screen.findByRole('button', { name: 'Withdraw invite' });
+    // ⚠ `Remove`, NOT `Withdraw invite` — a `link` row never had an invite. See the link variants.
+    await screen.findByRole('button', { name: 'Remove' });
 
-    expect(containsEmailAddress(container.textContent ?? '')).toBe(false);
+    const text = dialogText();
+    expect(text.length).toBeGreaterThan(0);
+    expect(containsEmailAddress(text)).toBe(false);
+  });
+
+  // ── the LINK variants: three claims the server does not honour for a lobby guest ──────
+
+  /**
+   * ⚠⚠ THE DIALOG HALF OF THE LINK-ROW RULE. `removeGuest` sends a `link` row NEITHER the removal
+   * email NOR the `METHOD:CANCEL`, so promising either would tell the host something the server
+   * deliberately does not do — on the very path the host gate opened up. And "invite" names a
+   * thing a lobby visitor never had: they knocked with a forwarded meeting URL.
+   */
+  const LINK_GUEST = {
+    ...inCallGuest,
+    inviteChannel: 'link' as const,
+    displayName: 'Taylor Wu',
+    name: 'Taylor Wu',
+  };
+
+  it.each([
+    ['in the call', true],
+    ['admitted but not arrived', false],
+  ])(
+    '⚠⚠ a LINK row (%s) promises NO email, NO calendar removal, and says no "invite"',
+    async (_label, present) => {
+      const user = userEvent.setup();
+      if (present) putInCall();
+      renderPanel(
+        fakes({
+          guests: [present ? { ...LINK_GUEST, id: GUEST_ID } : LINK_GUEST],
+          canHost: true,
+          viewerSide: 'expert',
+        })
+      );
+
+      await user.click(await screen.findByRole('button', { name: 'Remove Taylor Wu' }));
+      await screen.findByRole('button', { name: present ? 'Remove from call' : 'Remove' });
+
+      const text = dialogText();
+      expect(text.length).toBeGreaterThan(0);
+      expect(text).not.toMatch(/let them know by email/i);
+      expect(text).not.toMatch(/come off their calendar/i);
+      expect(text).not.toMatch(/invite/i);
+      // ⚠ AND IT SAYS THE PART THE HOST HAS TO ACT ON.
+      expect(text).toMatch(/We won't email them/i);
+      expect(text).toMatch(/can't be undone/i);
+    }
+  );
+
+  it('⚠ an EMAIL row STILL promises both — the server still honours them', async () => {
+    const user = userEvent.setup();
+    putInCall();
+    renderPanel(fakes({ guests: [inCallGuest], viewerSide: 'client' }));
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Dana Okoro' }));
+    await screen.findByRole('button', { name: 'Remove from call' });
+
+    const text = dialogText();
+    expect(text).toMatch(/We'll let them know by email/i);
+    expect(text).toMatch(/the event will come off their calendar/i);
+    expect(text).toMatch(/rejoin with this invite/i);
+  });
+
+  it('⚠ the LINK success toast names no invite either', async () => {
+    const user = userEvent.setup();
+    const fake = fakes({ guests: [LINK_GUEST], canHost: true, viewerSide: 'expert' });
+    renderPanel(fake);
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Taylor Wu' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Taylor Wu has been removed.'));
   });
 
   /**

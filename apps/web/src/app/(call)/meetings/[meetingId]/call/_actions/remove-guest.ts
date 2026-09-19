@@ -12,18 +12,27 @@ import type { RemoveGuestActionResult } from '@/lib/meetings/meeting-panels';
 const inputSchema = z.object({ meetingId: z.uuid(), guestId: z.uuid() });
 
 /**
- * BAL-476 (R3) — a party member removes a guest their own side invited.
+ * BAL-476 (R3) — remove a guest from a meeting the actor is on.
  *
  * ⚠⚠ **REMOVE MEANS GONE NOW.** `apps/api`'s `removeGuest` revokes the credential (immediate and
- * total — every read path re-checks `revoked_at IS NULL`), EJECTS the person from the live Daily
- * room with `ban: true` (R4), emails them, and publishes the `METHOD:CANCEL` that takes the event
- * off their calendar. This action forwards one authenticated request and learns only that it
- * happened.
+ * total — every read path re-checks `revoked_at IS NULL`) and EJECTS the person from the live
+ * Daily room with `ban: true` (R4). This action forwards one authenticated request and learns
+ * only that it happened.
  *
- * ⚠ THE GATE IS SAME-PARTY MEMBERSHIP, NOT `canHost` — deliberately, and it is the SHIPPED route
- * rule (R6): a cross-party attempt answers `guest_not_found`, identical on the wire to a
- * nonexistent id. The panel's row-level visibility mirrors that rule as a courtesy; it is never
- * the enforcement.
+ * ⚠⚠ THE GATE AND THE MESSAGES ARE BOTH **CHANNEL-DEPENDENT**, so neither can be stated flatly
+ * here — `apps/api`'s `removalDenialReason` and `announceGuestRemoval` are where each rule lives:
+ *
+ *   · AN `email` ROW — SAME-PARTY membership, not `canHost` (R6 stands for that channel); and the
+ *     person gets a removal email plus the `METHOD:CANCEL` that takes the event off their
+ *     calendar.
+ *   · A `link` ROW — `host_meetings` INSTEAD of same-party, because a lobby row's `party` is the
+ *     writer's placeholder; and the person is told NOTHING, because the address on the row is
+ *     self-declared and Balo never verified it. The confirm dialog has its own copy variant that
+ *     promises neither (`use-guest-removal.tsx`).
+ *
+ * ⚠ EVERY REFUSAL, ON EITHER ARM, ANSWERS `guest_not_found` — identical on the wire to a
+ * nonexistent id, so the route is an oracle for nothing. The panel's row-level visibility mirrors
+ * the rule as a courtesy; it is never the enforcement.
  *
  * ⚠ NO `outcome` FIELD ON THE RESULT — see {@link RemoveGuestActionResult}. A lost race to a
  * concurrent removal answers the same plain `guest_not_found`, on purpose.

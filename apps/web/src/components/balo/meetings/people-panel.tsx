@@ -233,7 +233,14 @@ export function PeoplePanel({
         <RemoveGuestButton
           displayName={row.guest.displayName}
           onClick={() =>
-            requestRemoval({ guestId: row.guest.id, displayName: row.guest.displayName, state })
+            requestRemoval({
+              guestId: row.guest.id,
+              displayName: row.guest.displayName,
+              state,
+              // ⚠ THE CHANNEL PICKS THE DIALOG COPY — a `link` row is told neither an email nor a
+              // calendar withdrawal is coming, because the server sends neither.
+              isUnverified: row.isUnverified,
+            })
           }
         />
       );

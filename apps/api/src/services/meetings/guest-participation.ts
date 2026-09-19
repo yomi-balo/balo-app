@@ -147,10 +147,17 @@ export type ListGuestsResult =
       canHost: boolean;
       /**
        * BAL-476 — the viewer's own resolved side, straight off the tenancy gate
-       * (`authorized.side`). ⚠ SERVER-COMPUTED, NEVER RE-DERIVED CLIENT-SIDE. Same shape and
-       * same provenance as `canHost`; it is what lets the roster show a Remove control only on
-       * the viewer's OWN side. It gates nothing — a cross-party removal still answers
-       * `guest_not_found`, identical to a nonexistent id.
+       * (`authorized.side`). ⚠ SERVER-COMPUTED, NEVER RE-DERIVED CLIENT-SIDE. Same shape and same
+       * provenance as `canHost`.
+       *
+       * ⚠ IT IS **HALF** OF THE ROSTER'S REMOVE RULE, NOT ALL OF IT. `buildGuestRoster` picks by
+       * CHANNEL first: an `email` row's control shows on `party === viewerSide`, while a `link`
+       * row's shows on `canHost`, because a `link` row's `party` is the lobby writer's
+       * placeholder and entitlement may not be derived from it. Both fields are on this payload
+       * for that reason.
+       *
+       * ⚠ IT GATES NOTHING EITHER WAY — every refusal answers `guest_not_found`, identical to a
+       * nonexistent id. The visible control is a courtesy that saves a guaranteed 404.
        */
       viewerSide: MeetingGuestSide;
     } & GuestRosterCounts)
@@ -982,10 +989,16 @@ async function ejectGuestBestEffort(meeting: Meeting, guestId: string): Promise<
  * ⚠⚠ NEITHER MESSAGE IS SENT TO A `link` ROW, AND ONE FACT DRIVES BOTH. A `link` row's address is
  * SELF-DECLARED by an anonymous visitor holding a forwarded meeting URL: Balo never invited it,
  * never verified it, and never shows it to anybody (the projector omits `email` on every `link`
- * row). Mailing it on removal would make this the platform's FIRST outbound message to an address
- * of that provenance — and the copy would be wrong on its own terms, since both messages describe
- * an INVITATION being withdrawn ("this invite link has stopped working", "the event will come off
- * your calendar") and a lobby visitor was never sent an invitation.
+ * row). The copy would also be wrong on its own terms, since both messages describe an INVITATION
+ * being withdrawn ("this invite link has stopped working", "the event will come off your
+ * calendar") and a lobby visitor was never sent an invitation.
+ *
+ * ⚠ CORRECTED CLAIM: an earlier version of this note called such a message "the platform's FIRST
+ * outbound message" to an address of that provenance. IT IS NOT, and the residual below says so
+ * in the same breath — BAL-475's reschedule invite already reaches an ADMITTED lobby guest
+ * (`listCalendarInviteGuestIds` admits them), and so does this ticket's cancellation `CANCEL`.
+ * The reason to withhold these two is not that they would be a first; it is that Balo has no
+ * grounds to assert anything to that address about an invitation it never issued.
  *
  * ⚠ RESIDUAL, STATED RATHER THAN HIDDEN: an admitted `link` guest can acquire a calendar entry by
  * ONE indirect route — `publishRescheduleCalendarInvites` fans out over
@@ -1146,13 +1159,25 @@ async function removalDenialReason(input: {
 }
 
 /**
- * Remove a guest: revoke + soft-delete + audit, then email that person and only that person.
+ * Remove a guest: revoke + soft-delete + audit, eject them from the live room, and — FOR AN
+ * EMAIL-INVITED GUEST — tell that person, and only that person.
  *
- * ⚠ THE SAME-PARTY RULE. An actor may remove only a guest whose `party` equals their own
- * resolved side — a client member must not be able to eject the expert's colleague, nor the
- * reverse. A cross-party attempt answers `guest_not_found`, IDENTICAL on the wire to a guest
- * id that does not exist, so the route is not an oracle for "does the other side have a guest
- * with this id".
+ * ⚠⚠ BOTH HALVES OF THAT SENTENCE ARE CHANNEL-DEPENDENT SINCE BAL-476, so read them together
+ * rather than as the old unconditional rule:
+ *
+ *   · WHO MAY REMOVE. An `email` row keeps the SAME-PARTY rule — an actor may remove only a guest
+ *     whose `party` equals their own resolved side, because that `party` WAS resolved server-side
+ *     from the inviter's own authorized side. A `link` row is gated on `host_meetings` INSTEAD:
+ *     its `party` is the lobby writer's NOT-NULL placeholder and entitlement may not be derived
+ *     from it. {@link removalDenialReason} is the one place that rule lives, and carries the
+ *     three concrete consequences of getting it wrong.
+ *   · WHO IS TOLD. An `email` row gets the removal email and the `METHOD:CANCEL` that takes the
+ *     event off their calendar. A `link` row gets NEITHER — its address is self-declared and
+ *     never verified. {@link announceGuestRemoval} owns that rule and its residual.
+ *
+ * ⚠ EVERY REFUSAL ANSWERS THE SAME `guest_not_found`, whichever arm produced it — IDENTICAL on the
+ * wire to a guest id that does not exist, so the route is not an oracle for "does the other side
+ * have a guest with this id", nor for "am I a host here". The reason is a LOG field only.
  *
  * ⚠⚠ NO MEETING-STATE CHECK — THIS DELIBERATELY DOES NOT CALL `authorizeMutation`, AND THE
  * ASYMMETRY IS THE WHOLE POINT. `findLiveByTokenHash` keeps resolving for an `ended` meeting
