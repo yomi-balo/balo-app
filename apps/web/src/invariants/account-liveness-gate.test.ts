@@ -155,11 +155,20 @@ describe('invariant: every Server Action reaches a live-checked seam, or is allo
 
   it('B7: exact set equality, both directions, with a size', () => {
     expect([...unresolved].sort(REL_COMPARATOR)).toEqual([...UNION].sort(REL_COMPARATOR));
-    // ⚠ 11, DOWN FROM 12 (fix round 1, F6): `app/review/_actions/submit-token-review.ts` is GATED
-    // now rather than allowlisted, so it left the unresolved set. Re-MEASURED after the gate
-    // landed, not tuned until this went green.
-    expect(unresolved).toHaveLength(11);
-    expect(UNION).toHaveLength(11);
+    // ⚠⚠ 12. THE NUMBER HAS MOVED TWICE, AND NEITHER MOVE WAS A TUNE — each one was a real change
+    // to the set, re-measured after the change landed:
+    //   · 12 → 11 (fix round 1, F6, 2026-09-18): `app/review/_actions/submit-token-review.ts` was
+    //     GATED rather than allowlisted, so it LEFT the unresolved set.
+    //   · 11 → 12 (2026-09-19): `app/join/_actions/request-lobby-reentry-link.ts` ARRIVED on main
+    //     with BAL-442 — a new, deliberately unauthenticated guest action. **This assertion caught
+    //     it**, in CI, on the PR merge commit, which is exactly the BAL-132 property this file
+    //     extends: an anonymous Server Action cannot land without a written reason. The reason is
+    //     its entry in `PUBLIC_ACTION_ALLOWLIST`; the count follows the entry, never the reverse.
+    //
+    // ⚠ IF THIS GOES RED, THE ANSWER IS ALMOST NEVER TO CHANGE THE NUMBER. B5 names the new file;
+    // gate it, or give it an allowlist entry with a reason that survives being read out loud.
+    expect(unresolved).toHaveLength(12);
+    expect(UNION).toHaveLength(12);
   });
 
   it('B8: each allowlist reason is backed by source', () => {

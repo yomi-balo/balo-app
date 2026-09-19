@@ -288,13 +288,19 @@ export const GUEST_READ_ALLOWLIST: readonly string[] = [
  * two lists must be disjoint. A new ungated action fails CI; deleting an entry without gating the
  * file fails CI too; an entry whose `proof` has drifted out of the file fails CI as well.
  *
- * ⚠⚠ ELEVEN ENTRIES IN TOTAL (nine here + the two public ones), NOT FORTY. The forbidden move —
- * deleting the filter and growing the allowlist to absorb every wrapper-gated action — is what
- * import-following exists to make unnecessary. Re-measured 2026-09-19: of 182 `'use server'`
- * modules, **140 resolve at depth 0, 26 at one import hop, 5 at two, and 11 are unresolved**.
- * (It read twelve/ten until `app/review/_actions/submit-token-review.ts` was GATED rather than
- * allowlisted — see the removal note below.) `account-liveness-gate.test.ts` B7 and B8 assert both
- * counts, so this prose and the assertions cannot drift apart silently again.
+ * ⚠⚠ TWELVE ENTRIES IN TOTAL (nine here + the three on {@link PUBLIC_ACTION_ALLOWLIST}), NOT
+ * FORTY. The forbidden move — deleting the filter and growing the allowlist to absorb every
+ * wrapper-gated action — is what import-following exists to make unnecessary. Re-measured
+ * 2026-09-19 after merging `origin/main`: of **184** `'use server'` modules, **141 resolve at
+ * depth 0, 26 at one import hop, 5 at two, and 12 are unresolved**.
+ *
+ * ⚠ THE COUNT HAS MOVED TWICE, AND EACH MOVE FOLLOWED A REAL CHANGE TO THE SET — never the other
+ * way round. It read ten-here/twelve-total until `app/review/_actions/submit-token-review.ts` was
+ * GATED rather than allowlisted (fix round 1, F6 — see the removal note below), and went back to
+ * twelve when BAL-442 landed `app/join/_actions/request-lobby-reentry-link.ts` on main: a new,
+ * deliberately unauthenticated guest action, which `account-liveness-gate.test.ts` B7 caught in
+ * CI and which is now listed with its own written reason. B7 and B8 assert both counts, so this
+ * prose and the assertions cannot drift apart silently.
  *
  * ⚠ WHAT AN ENTRY IS ASSERTING: not "this action needs no authorization", but that **there is no
  * account to check yet, or checking one would break the only path back**. Every entry is

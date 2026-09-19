@@ -13,8 +13,8 @@ import { codeLinesOf, hasUseServerDirective, type ScannedFile } from './_source-
  * Measured in this worktree with the shipped `AUTH_HELPERS` list and NO following: **40** of 182
  * `'use server'` modules name no auth primitive at all. An allowlist of 40 is the one move that
  * must not happen. This module resolves the indirection instead, which is what makes a repo-wide
- * assertion — and an 11-entry allowlist (re-measured 2026-09-19; `account-liveness-gate.test.ts`
- * B7/B8 assert both counts) — honest.
+ * assertion — and a 12-entry allowlist (re-measured 2026-09-19 after merging `origin/main`;
+ * `account-liveness-gate.test.ts` B7/B8 assert both counts) — honest.
  *
  * ⚠ IT BUILDS ON `_source-scan.ts` RATHER THAN ON A NEW PARSER. Same `indexOf`-only convention:
  * NO REGEX ANYWHERE (SonarCloud S5852 / `regexp/no-super-linear-move`).
