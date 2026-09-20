@@ -759,7 +759,11 @@ describe('loadCase — the nudge', () => {
       }),
     ]);
     const view = await loadOrThrow();
-    expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm-soon' });
+    expect(view.nudge).toMatchObject({
+      kind: 'upcoming',
+      meetingId: 'm-soon',
+      serverNowIso: NOW.toISOString(),
+    });
   });
 
   /** ⚠ `in_progress` COUNTS: a call happening RIGHT NOW is the most urgent thing the header
@@ -791,6 +795,7 @@ describe('loadCase — the nudge', () => {
       throw new Error('expected an upcoming nudge');
     }
     expect(view.nudge.scheduledStartIso).toBe('2026-08-20T10:00:00.000Z');
+    expect(view.nudge.serverNowIso).toBe(NOW.toISOString());
   });
 
   it('nudges nothing-booked when every consultation is already behind us', async () => {

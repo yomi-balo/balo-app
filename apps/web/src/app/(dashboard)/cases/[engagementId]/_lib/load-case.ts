@@ -235,7 +235,11 @@ function toNudgeView(
    * BAL-567 — WHO acted, already resolved by `resolveActorLabel`. Required rather than
    * optional: the four attributed arms cannot be constructed without it (see `CaseNudgeView`).
    */
-  actorLabel: string
+  actorLabel: string,
+  /** BAL-574 — the SAME `now` `selectCaseNudge` used to decide `nudge.live`, projected onto
+   *  the `'upcoming'` arm as `serverNowIso`. One `now`, read once, feeding both fields off the
+   *  same object literal — see `CaseNudgeView`'s docblock. */
+  now: Date
 ): CaseNudgeView {
   if (nudge === null) return null;
   if (nudge.kind === 'upcoming') {
@@ -250,6 +254,7 @@ function toNudgeView(
       meetingId: nudge.meetingId,
       scheduledStartIso: nudge.scheduledStart.toISOString(),
       live: nudge.live,
+      serverNowIso: now.toISOString(),
       durationMinutes,
       // BAL-567 — the member call route, built SERVER-SIDE from an id this arm already carries.
       // `memberCallPath` is the ONE builder (`memberJoinPath`, the anonymous lobby, is deleted).
@@ -834,7 +839,7 @@ export const loadCase = cache(
       expertProfileId,
       viewerUserId: userId,
       header,
-      nudge: toNudgeView(nudge, nextScheduled, actorLabel),
+      nudge: toNudgeView(nudge, nextScheduled, actorLabel, now),
       consultations,
       rescheduleProposals,
       conversation: await buildConversation(access, labels, messagePage, conversationFileRows),

@@ -146,11 +146,24 @@ function calendarDaysBetween(from: Date, to: Date): number {
  * the render was still showing the inactive countdown. The pre-window minutes below use
  * `Math.ceil`, not `signedMinutesUntilCalendarStart` — that primitive's rounding is pinned to the
  * analytics contract and must not change; this label alone needed a different one.
+ *
+ * ⚠⚠ `calendarDaysAvailable` GATES THE ONE TZ-DEPENDENT BRANCH, AND THAT IS THE WHOLE PARAMETER.
+ * `calendarDaysBetween` reads the VIEWER's local calendar day (`getFullYear`/`getMonth`/
+ * `getDate`), so a render that can still run on the SERVER disagrees between the server's host
+ * timezone and the client's browser timezone — a hydration mismatch for every non-UTC viewer.
+ * Pass `false` on any render that must match byte-for-byte between server and client. `'Join
+ * now'` and the under-an-hour branch never reach this parameter, so they behave identically
+ * either way — one ladder, never a second implementation kept in agreement by hand.
  */
-export function joinCountdownLabel(now: Date, scheduledStart: Date): string {
+export function joinCountdownLabel(
+  now: Date,
+  scheduledStart: Date,
+  { calendarDaysAvailable = true }: { calendarDaysAvailable?: boolean } = {}
+): string {
   if (insideCaseJoinWindow(now, scheduledStart.toISOString())) return 'Join now';
   const minutes = Math.ceil((scheduledStart.getTime() - now.getTime()) / MS_PER_MINUTE);
   if (minutes < 60) return `Join in ${minutes} minutes`;
+  if (!calendarDaysAvailable) return 'Join';
   const days = calendarDaysBetween(now, scheduledStart);
   if (days <= 0) {
     const hours = Math.round(minutes / 60);

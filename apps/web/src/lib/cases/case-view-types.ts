@@ -259,6 +259,15 @@ export type CaseNudgeView =
       scheduledStartIso: string;
       live: boolean;
       /**
+       * BAL-574 — the server's render instant, ISO, from the SAME `now` that produced `live`
+       * above (one object literal, one `now` — see `toNudgeView`). The client anchors its own
+       * clock to this rather than trusting its device clock, so join-window liveness and the
+       * countdown are never a function of the viewer's clock skew. Required, not optional: a
+       * fixture that omits it produces `Invalid Date` and a join affordance that can never open
+       * — see `use-server-anchored-clock.ts`.
+       */
+      serverNowIso: string;
+      /**
        * BAL-409 — the meeting's current length, minutes. An ADDITIVE field on this WEB WIRE
        * PROJECTION only — `@balo/shared/engagements`'s `CaseNudge` discriminated union is
        * UNCHANGED (a client-initiated reschedule auto-approves; it produces no new state for
