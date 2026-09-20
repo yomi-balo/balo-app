@@ -15,6 +15,7 @@ function renderComposer(
     clientCompanyName?: string | null;
     accessScope?: GuestAccessScope;
     showPricingNote?: boolean;
+    caseAccessDomains?: readonly string[];
     onChange?: (g: readonly GuestDraft[]) => void;
   } = {}
 ) {
@@ -28,6 +29,7 @@ function renderComposer(
       clientCompanyName={over.clientCompanyName ?? 'Acme'}
       accessScope={over.accessScope}
       showPricingNote={over.showPricingNote}
+      caseAccessDomains={over.caseAccessDomains}
     />
   );
   return { ...utils, onChange };
@@ -154,6 +156,50 @@ describe('GuestInviteComposer', () => {
     });
 
     it('defaults to the CASE copy when the prop is omitted — BAL-400 is unchanged', async () => {
+      const user = userEvent.setup();
+      renderComposer();
+      await user.type(screen.getByLabelText('Guest email address'), 'dana@acme.com');
+      expect(
+        screen.getByText(/Same company as you — they’ll see this whole case/)
+      ).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * BAL-573 (D3) — `caseAccessDomains`, the EXACT registered-domain answer that REPLACES the
+   * viewer-domain estimate when supplied.
+   */
+  describe('caseAccessDomains — the exact registered-domain answer (BAL-573)', () => {
+    it('an address on the SECOND domain gets case-level disclosure although viewerEmailDomain is the first', async () => {
+      const user = userEvent.setup();
+      renderComposer({
+        viewerEmailDomain: 'northwind.com',
+        caseAccessDomains: ['northwind.com', 'nw-industrial.com'],
+      });
+      await user.type(screen.getByLabelText('Guest email address'), 'dana@nw-industrial.com');
+      expect(
+        screen.getByText(/Same company as you — they’ll see this whole case/)
+      ).toBeInTheDocument();
+    });
+
+    it('a freemail address that somehow appears in caseAccessDomains still resolves NARROW (server step 3)', async () => {
+      const user = userEvent.setup();
+      renderComposer({ caseAccessDomains: ['gmail.com'] });
+      await user.type(screen.getByLabelText('Guest email address'), 'dana@gmail.com');
+      expect(screen.getByText(/Outside Acme, or a personal email address/)).toBeInTheDocument();
+    });
+
+    it('an address on NEITHER caseAccessDomains entry resolves narrow, even matching viewerEmailDomain would have widened it', async () => {
+      const user = userEvent.setup();
+      renderComposer({
+        viewerEmailDomain: 'acme.com',
+        caseAccessDomains: ['northwind.com'],
+      });
+      await user.type(screen.getByLabelText('Guest email address'), 'dana@acme.com');
+      expect(screen.getByText(/Outside Acme, or a personal email address/)).toBeInTheDocument();
+    });
+
+    it('REGRESSION PROOF — with caseAccessDomains omitted, the viewer-domain estimate behaves byte-for-byte as before', async () => {
       const user = userEvent.setup();
       renderComposer();
       await user.type(screen.getByLabelText('Guest email address'), 'dana@acme.com');

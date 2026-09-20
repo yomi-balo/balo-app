@@ -99,6 +99,7 @@ const CASE_SURFACE_ACTIONS: Record<CaseSurfaceAction, true> = {
   download_file: true,
   view_file: true,
   join: true,
+  invite: true,
 };
 const CASES_INDEX_WORKSPACE_TYPES: Record<CasesIndexWorkspaceType, true> = {
   company: true,
@@ -150,10 +151,14 @@ describe('BAL-388 enum values', () => {
     // ⚠ `view_file` IS DISTINCT FROM `download_file`, not a rename: an image OPENS in the
     // in-app viewer while every other type downloads, and one value spanning both would make
     // the download figure an "interacted with a file" figure.
+    // ⚠ `invite` IS declared as of BAL-573 — the ticket that BUILDS its producer. See the
+    // module docblock's `invite` note for why the two reasons BAL-421 withheld it no longer
+    // hold.
     expect(Object.keys(CASE_SURFACE_ACTIONS).sort((a, b) => a.localeCompare(b))).toEqual([
       'book_another',
       'dismiss_resolution_request',
       'download_file',
+      'invite',
       'join',
       'mark_resolved',
       'request_resolution',
@@ -161,10 +166,6 @@ describe('BAL-388 enum values', () => {
       'view_recap',
     ]);
     expect(CASE_SURFACE_ACTIONS).not.toHaveProperty('slot_quick_pick');
-    // ⚠ NO `invite`: BAL-421 ships no invite affordance. `apps/web` has no seam that CREATES
-    // a guest invite (only the `/join/[token]` landing that consumes one), and guest reads are
-    // inert on `main` — so the button would promise access the grant cannot give.
-    expect(CASE_SURFACE_ACTIONS).not.toHaveProperty('invite');
   });
 
   it('keeps the two CLOSED case states distinct', () => {

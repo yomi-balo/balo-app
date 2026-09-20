@@ -10,6 +10,7 @@ import type { CaseConsultationRowView, CaseSurfaceView } from '@/lib/cases/case-
 import { RescheduleDialog } from '@/components/booking/reschedule-dialog';
 import { ProposeTimesDialog } from '@/components/booking/propose-times-dialog';
 import { CancelConsultationDialog } from '@/components/booking/cancel-consultation-dialog';
+import { InviteColleagueDialog } from '@/components/booking/invite-colleague-dialog';
 import { resolveCaseAction } from '../_actions/resolve-case';
 import { dismissResolutionRequestAction } from '../_actions/dismiss-resolution-request';
 import { CaseHeader } from './case-header';
@@ -17,7 +18,10 @@ import { CaseNudge } from './case-nudge';
 import { RescheduleProposalCard } from './reschedule-proposal-card';
 import { CaseConversationPanel } from './case-conversation-panel';
 import { ConsultationList } from './consultation-list';
-import type { ConsultationRowActionVerb } from './consultation-row-menu';
+import type {
+  ConsultationRowActionVerb,
+  ConsultationRowTriggerSlot,
+} from './consultation-row-menu';
 import { CasePartyCard } from './case-party-card';
 import { CaseActionItems } from './case-action-items';
 import { CaseFilesCard } from './case-files-card';
@@ -50,7 +54,7 @@ import { MarkResolvedButton, RequestResolutionButton } from './case-actions';
  */
 
 /**
- * Exactly one of the three verbs, carrying everything the matching dialog needs — never
+ * Exactly one of the four verbs, carrying everything the matching dialog needs — never
  * re-read from `view`, so a dialog opened from row #3 can't end up showing row #1's data.
  */
 export type ConsultationActionSelection =
@@ -81,7 +85,36 @@ export type ConsultationActionSelection =
       scheduledStartIso: string;
       scheduledMinutes: number;
       ordinal: number | null;
+    }
+  | {
+      verb: 'invite';
+      source: 'row';
+      /** WHICH control opened it, so focus returns to that one and not the other. */
+      triggerSlot: ConsultationRowTriggerSlot;
+      meetingId: string;
+      scheduledStartIso: string;
+      scheduledMinutes: number;
+      ordinal: number | null;
+      /** The row's live seat count, for the composer's "{n} of 10". ⚠ Never re-read from `view`. */
+      guestCount: number;
     };
+
+/** A fresh `[]` in JSX would re-render the composer every paint. */
+const EMPTY_SCOPE_DOMAINS: readonly string[] = [];
+
+/**
+ * BAL-573 — routes focus back to whichever row control opened the dialog for `selection`.
+ * `source: 'row'` is required (a `'nudge'`-opened dialog has no row trigger to return to); the
+ * slot is the row's kebab for every verb except `invite`, which remembers which of its two
+ * triggers — the kebab or the guest-count control — opened it.
+ */
+function focusRowTrigger(
+  selection: ConsultationActionSelection | null,
+  focusTrigger: (meetingId: string, slot?: ConsultationRowTriggerSlot) => void
+): void {
+  if (selection === null || selection.source !== 'row') return;
+  focusTrigger(selection.meetingId, selection.verb === 'invite' ? selection.triggerSlot : 'menu');
+}
 
 export function CaseSurface({
   view,
@@ -95,24 +128,32 @@ export function CaseSurface({
   const [selection, setSelection] = useState<ConsultationActionSelection | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  // Keyed by `meetingId` so a closed dialog can restore focus to the row that opened it — the
-  // row's own `DropdownMenu` has already unmounted by then, so Radix's own focus-return has
-  // nothing to fire into.
+  // Keyed by `meetingId#slot` so a closed dialog can restore focus to the control that opened
+  // it — the row's own `DropdownMenu` has already unmounted by then, so Radix's own
+  // focus-return has nothing to fire into, and a row can now have TWO triggers (the kebab and
+  // the guest-count control).
   const triggerRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
-  const registerTrigger = useCallback((meetingId: string, node: HTMLButtonElement | null) => {
-    if (node) {
-      triggerRefs.current.set(meetingId, node);
-    } else {
-      triggerRefs.current.delete(meetingId);
-    }
-  }, []);
-  const focusTrigger = useCallback((meetingId: string) => {
-    // Deferred a frame: the node may be re-registering (a re-render landed new props on the
-    // same row) at the instant the dialog's own callback fires.
-    requestAnimationFrame(() => {
-      triggerRefs.current.get(meetingId)?.focus();
-    });
-  }, []);
+  const registerTrigger = useCallback(
+    (meetingId: string, slot: ConsultationRowTriggerSlot, node: HTMLButtonElement | null) => {
+      const key = `${meetingId}#${slot}`;
+      if (node) {
+        triggerRefs.current.set(key, node);
+      } else {
+        triggerRefs.current.delete(key);
+      }
+    },
+    []
+  );
+  const focusTrigger = useCallback(
+    (meetingId: string, slot: ConsultationRowTriggerSlot = 'menu') => {
+      // Deferred a frame: the node may be re-registering (a re-render landed new props on the
+      // same row) at the instant the dialog's own callback fires.
+      requestAnimationFrame(() => {
+        triggerRefs.current.get(`${meetingId}#${slot}`)?.focus();
+      });
+    },
+    []
+  );
 
   // `SectionHead` only becomes a focus target when this ref is supplied.
   const consultationsHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -194,7 +235,6 @@ export function CaseSurface({
 
   const handleRowAction = useCallback(
     (verb: ConsultationRowActionVerb, row: CaseConsultationRowView) => {
-      if (verb === 'invite') return; // `canInvite` is hard-false, so this branch is unreachable.
       const shared = {
         source: 'row' as const,
         meetingId: row.meetingId,
@@ -202,6 +242,20 @@ export function CaseSurface({
         scheduledMinutes: row.scheduledMinutes,
         ordinal: row.ordinal,
       };
+      if (verb === 'invite') {
+        track(RECAP_EVENTS.CASE_ACTION_CLICKED, { action: 'invite', lens: view.lens });
+        setSelection({
+          verb: 'invite',
+          ...shared,
+          // ⚠ `triggerSlot` IS DERIVED FROM THE ROW, not from which handler fired, because both
+          // triggers call this same `onRowAction('invite', row)`. The count control is the only
+          // other trigger; a row with no guests has only the kebab.
+          triggerSlot: row.guestCount > 0 ? 'guests' : 'menu',
+          guestCount: row.guestCount,
+        });
+        setDialogOpen(true);
+        return;
+      }
       if (verb === 'cancel') {
         setSelection({
           verb: 'cancel',
@@ -217,7 +271,7 @@ export function CaseSurface({
       }
       setDialogOpen(true);
     },
-    []
+    [view.lens]
   );
 
   /** The cancel dialog's "Reschedule instead" / "Propose a new time". Re-keys the CURRENT
@@ -239,7 +293,7 @@ export function CaseSurface({
    *  (and possibly scroll) to a control the user never interacted with. */
   const handleDialogClose = useCallback(() => {
     setDialogOpen(false);
-    if (selection !== null && selection.source === 'row') focusTrigger(selection.meetingId);
+    focusRowTrigger(selection, focusTrigger);
   }, [selection, focusTrigger]);
 
   /**
@@ -257,7 +311,7 @@ export function CaseSurface({
    *  nudge-opened dialog has no row trigger the user came from. */
   const handleRescheduled = useCallback(() => {
     setDialogOpen(false);
-    if (selection !== null && selection.source === 'row') focusTrigger(selection.meetingId);
+    focusRowTrigger(selection, focusTrigger);
     router.refresh();
   }, [selection, focusTrigger, router]);
 
@@ -266,7 +320,17 @@ export function CaseSurface({
    *  `source: 'row'` open; a nudge-opened dialog has no row trigger to return to. */
   const handleProposed = useCallback(() => {
     setDialogOpen(false);
-    if (selection !== null && selection.source === 'row') focusTrigger(selection.meetingId);
+    focusRowTrigger(selection, focusTrigger);
+    router.refresh();
+  }, [selection, focusTrigger, router]);
+
+  /** BAL-573 — invite success. Mirrors `handleRescheduled`: close, focus the trigger that
+   *  opened the dialog, and `router.refresh()` — which is what updates the row's guest count. */
+  const handleInvited = useCallback(() => {
+    setDialogOpen(false);
+    // `verb: 'invite'` only ever carries `source: 'row'` (see the type above), so
+    // `focusRowTrigger` resolves to `selection.triggerSlot`, the same slot this handler acts on.
+    focusRowTrigger(selection, focusTrigger);
     router.refresh();
   }, [selection, focusTrigger, router]);
 
@@ -397,6 +461,26 @@ export function CaseSurface({
           />
         )}
 
+        {selection !== null && selection.verb === 'invite' && (
+          <InviteColleagueDialog
+            key={selection.meetingId}
+            open={dialogOpen}
+            onClose={handleDialogClose}
+            onInvited={handleInvited}
+            meetingId={selection.meetingId}
+            caseTitle={view.header.title}
+            scheduledStartIso={selection.scheduledStartIso}
+            ordinal={selection.ordinal}
+            existingGuestCount={selection.guestCount}
+            clientCompanyName={view.clientCompanyName}
+            // ⚠ COPY, NOT AUTHORIZATION (CLAUDE.md allows `lens` to gate the VIEW, never the
+            // mutation). `resolveGuestAccessScope` step (2) widens a grant only for a
+            // CLIENT-side inviter, so on the expert lens nothing the viewer types can widen
+            // anything and the composer must not say it can.
+            caseScopeDomains={view.lens === 'client' ? view.caseScopeDomains : EMPTY_SCOPE_DOMAINS}
+          />
+        )}
+
         <div className="mt-3 flex flex-wrap items-start gap-3">
           {/* Main column — the conversation LEADS it. Between calls, the conversation is
               the case; the consultation list is the record of what has already happened. */}
@@ -452,7 +536,11 @@ export function CaseSurface({
               />
             </Reveal>
             <Reveal delay={0.3}>
-              <CasePeopleCard people={view.people} />
+              <CasePeopleCard
+                people={view.people}
+                lens={view.lens}
+                clientCompanyName={view.clientCompanyName}
+              />
               {/* ⚠ THE TWO LIFECYCLE ACTIONS RENDER ONLY WHEN THE VIEW SAYS THEY CAN. Both
                   flags are FALSE on a closed case, so a resolved case offers neither — and
                   neither is ever rendered disabled. */}

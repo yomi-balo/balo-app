@@ -65,6 +65,8 @@ const m = {
   listMeetingFiles: vi.fn(),
   findLiveProposals: vi.fn(),
   findProposalForAnswer: vi.fn(),
+  countsLiveByMeetingIds: vi.fn(),
+  listPartyDomains: vi.fn(),
 };
 
 vi.mock('@balo/db', () => ({
@@ -84,6 +86,10 @@ vi.mock('@balo/db', () => ({
   expertsRepository: { findDisplayProfileById: (...a: unknown[]) => m.findProfile(...a) },
   meetingContextsRepository: { listMeetingsForContext: (...a: unknown[]) => m.listMeetings(...a) },
   meetingFilesRepository: { listByMeeting: (...a: unknown[]) => m.listMeetingFiles(...a) },
+  meetingGuestsRepository: {
+    countsLiveByMeetingIds: (...a: unknown[]) => m.countsLiveByMeetingIds(...a),
+  },
+  partyDomainsRepository: { listByParty: (...a: unknown[]) => m.listPartyDomains(...a) },
   rescheduleProposalsRepository: {
     findLivePendingByMeetingIds: (...a: unknown[]) => m.findLiveProposals(...a),
     findPendingForAnswer: (...a: unknown[]) => m.findProposalForAnswer(...a),
@@ -227,6 +233,8 @@ function seed(over: { access?: Partial<Access>; caseRow?: Record<string, unknown
   m.listMeetingFiles.mockResolvedValue([]);
   m.findLiveProposals.mockResolvedValue([]);
   m.findProposalForAnswer.mockResolvedValue(undefined);
+  m.countsLiveByMeetingIds.mockResolvedValue([]);
+  m.listPartyDomains.mockResolvedValue([]);
 }
 
 /** Load and assert non-null, so each test can read the view without re-narrowing. */
@@ -1455,15 +1463,18 @@ describe('loadCase — canCancel axis resolution (BAL-410)', () => {
    * an enabled Cancel for the party who has NOT joined. `CANCELLABLE_MEETING_STATUSES` is the
    * only source of truth for this, shared with the route guard and the repository CAS.
    *
-   * ⚠ AND NO CANCEL CAPABILITY IS RESOLVED, on the same short-circuit invariant as a closed
-   * case: the status term sits ahead of the `await` in both arms. On the client arm that means
-   * ZERO membership reads (cancel is its only one); on the expert arm it means TWO engagement
-   * reads instead of three — the other two flags (`canRequestResolution`, `canManageReschedule`)
-   * are unaffected by cancellability and still run.
+   * ⚠ THE CANCEL CAPABILITY ITSELF IS STILL NOT RE-RESOLVED, on the same short-circuit
+   * invariant as a closed case — but BAL-573 gives the client arm a SECOND flag
+   * (`mayInviteAsClient`) built off the SAME membership read, gated on the WEAKER invitable
+   * term rather than the cancellable one. `waiting_for_participants`/`in_progress` are both
+   * still `caseConsultationIsUpcoming`, so that read now fires ONCE on this arm — cancel is no
+   * longer its only reason to. On the expert arm it means TWO engagement reads instead of
+   * three — the other two flags (`canRequestResolution`, `canManageReschedule`) are unaffected
+   * by cancellability and still run.
    */
   describe('once the meeting has STARTED — the affordance collapses on BOTH arms', () => {
     it.each(['waiting_for_participants', 'in_progress'] as const)(
-      'is FALSE for the CLIENT on a %s meeting, resolving no capability',
+      'canCancel is FALSE for the CLIENT on a %s meeting, but the membership read now fires ONCE (BAL-573)',
       async (status) => {
         seed({ access: { lens: 'client' } });
         m.listMeetings.mockResolvedValue([meeting('m1', { status, outcome: null, endedAt: null })]);
@@ -1471,8 +1482,8 @@ describe('loadCase — canCancel axis resolution (BAL-410)', () => {
 
         const view = await loadOrThrow();
 
-        expect(view.consultations[0]).toMatchObject({ canCancel: false });
-        expect(mockHasCapability).not.toHaveBeenCalled();
+        expect(view.consultations[0]).toMatchObject({ canCancel: false, canInvite: true });
+        expect(mockHasCapability).toHaveBeenCalledTimes(1);
       }
     );
 
@@ -1508,6 +1519,175 @@ describe('loadCase — canCancel axis resolution (BAL-410)', () => {
       expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
       expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
+  });
+});
+
+// ── BAL-573 — canInvite / guestCount / clientCompanyName / caseScopeDomains ────────────────
+
+describe('loadCase — canInvite axis resolution (BAL-573)', () => {
+  function upcomingMeeting(id = 'm1', over: Record<string, unknown> = {}): Record<string, unknown> {
+    return meeting(id, { status: 'scheduled', outcome: null, endedAt: null, ...over });
+  }
+
+  it('client — canInvite: true on a scheduled row for a participate holder', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]).toMatchObject({ canInvite: true });
+  });
+
+  it('client — canInvite: true while canCancel: false on an in_progress row', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([
+      meeting('m1', { status: 'in_progress', outcome: null, endedAt: null }),
+    ]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]).toMatchObject({ canInvite: true, canCancel: false });
+  });
+
+  /**
+   * ⚠⚠ AC 2 — `canInvite` IS RESOLVED ONCE PER CASE, NOT FOUR READS × N ROWS. The count
+   * assertion alone would pass vacuously if every flag were `false` (memory
+   * `feedback_mutation_proof_is_per_assertion_not_per_suite`), so it is paired with the
+   * non-vacuity assertion that all three rows actually carry `canInvite: true`.
+   */
+  it('client, AC 2 — three upcoming meetings resolve hasCapability EXACTLY ONCE', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([
+      upcomingMeeting('m1', { scheduledStart: new Date('2026-08-01T10:00:00Z') }),
+      upcomingMeeting('m2', { scheduledStart: new Date('2026-08-02T10:00:00Z') }),
+      upcomingMeeting('m3', { scheduledStart: new Date('2026-08-03T10:00:00Z') }),
+    ]);
+
+    const view = await loadOrThrow();
+
+    expect(mockHasCapability).toHaveBeenCalledTimes(1);
+    expect(view.consultations.filter((row) => row.canInvite)).toHaveLength(3);
+  });
+
+  it('client — a case with only ended meetings: canInvite false on every row, zero hasCapability calls', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([meeting('m1'), meeting('m2')]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations.every((row) => !row.canInvite)).toBe(true);
+    expect(view.consultations).toHaveLength(2);
+    expect(mockHasCapability).not.toHaveBeenCalled();
+  });
+
+  it('client — a CLOSED case with a scheduled meeting: canInvite false, zero calls', async () => {
+    seed({
+      access: { lens: 'client' },
+      caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+    });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]).toMatchObject({ canInvite: false });
+    expect(mockHasCapability).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ NOT GATED ON `isOpen` — closing a case never requires its meetings to be cancelled or
+   * completed first (`resolve-case.ts` runs no such check), so a CLOSED case with a still-
+   * upcoming meeting is a reachable state. The row's guest count is informational (`canInvite`
+   * is already `false` from the membership gate above, so the row renders static text with no
+   * action), and the count would otherwise go silently missing on real invited guests.
+   */
+  it('client — a CLOSED case with an upcoming meeting still reads and renders the guest count', async () => {
+    seed({
+      access: { lens: 'client' },
+      caseRow: { closedAt: new Date('2026-08-01T00:00:00Z'), closeReason: 'resolved' },
+    });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+    m.countsLiveByMeetingIds.mockResolvedValue([{ meetingId: 'm1', count: 2 }]);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]).toMatchObject({ canInvite: false, guestCount: 2 });
+  });
+
+  /** ⚠ PROVES THE INVITE FLAG ADDED NO READ — the engagement-axis count is unchanged by
+   *  BAL-573: 3 on an open cancellable case, 2 once the meeting has started. */
+  it('expert — canInvite: true for a manage_engagement holder, read count unchanged (3 open / 2 started)', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+
+    const openView = await loadOrThrow();
+    expect(openView.consultations[0]).toMatchObject({ canInvite: true });
+    expect(mockHasEngagementCapability).toHaveBeenCalledTimes(3);
+
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([
+      meeting('m1', { status: 'in_progress', outcome: null, endedAt: null }),
+    ]);
+
+    const startedView = await loadOrThrow();
+    expect(startedView.consultations[0]).toMatchObject({ canInvite: true });
+    expect(mockHasEngagementCapability).toHaveBeenCalledTimes(2);
+  });
+
+  it('expert, AC 8 — no manage_engagement: the case loads, canInvite/canCancel/canProposeReschedule all false', async () => {
+    seed({ access: { lens: 'expert' } });
+    m.listMeetings.mockResolvedValue([upcomingMeeting()]);
+    mockHasEngagementCapability.mockResolvedValue(false);
+
+    const view = await loadOrThrow();
+
+    expect(view.consultations[0]).toMatchObject({
+      canInvite: false,
+      canCancel: false,
+      canProposeReschedule: false,
+    });
+  });
+
+  it('guestCount is threaded from the batched read onto upcoming rows and 0 on terminal rows; countsLiveByMeetingIds is called ONCE with ONLY the upcoming ids', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([
+      upcomingMeeting('m1', { scheduledStart: new Date('2026-08-01T10:00:00Z') }),
+      meeting('m2', { scheduledStart: new Date('2026-07-01T10:00:00Z') }), // ended/terminal
+    ]);
+    m.countsLiveByMeetingIds.mockResolvedValue([{ meetingId: 'm1', count: 3 }]);
+
+    const view = await loadOrThrow();
+
+    const byId = new Map(view.consultations.map((row) => [row.meetingId, row.guestCount]));
+    expect(byId.get('m1')).toBe(3);
+    expect(byId.get('m2')).toBe(0);
+    expect(m.countsLiveByMeetingIds).toHaveBeenCalledTimes(1);
+    expect(m.countsLiveByMeetingIds).toHaveBeenCalledWith(['m1']);
+  });
+
+  it('countsLiveByMeetingIds is NOT called at all when nothing is upcoming', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listMeetings.mockResolvedValue([meeting('m1'), meeting('m2')]);
+
+    await loadOrThrow();
+
+    expect(m.countsLiveByMeetingIds).not.toHaveBeenCalled();
+  });
+
+  it('clientCompanyName is on BOTH arms; caseScopeDomains is on the client arm ONLY, and listByParty is not called on the expert lens', async () => {
+    seed({ access: { lens: 'client' } });
+    m.listPartyDomains.mockResolvedValue([
+      { id: 'd1', domain: 'northwind.test', source: 'auto_captured', createdAt: new Date() },
+    ]);
+    const clientView = await loadOrThrow();
+    expect(clientView.clientCompanyName).toBe('Northwind Industrial');
+    if (clientView.lens !== 'client') throw new Error('expected the client arm');
+    expect(clientView.caseScopeDomains).toEqual(['northwind.test']);
+    expect(m.listPartyDomains).toHaveBeenCalledWith('company', COMPANY_ID);
+
+    seed({ access: { lens: 'expert' } });
+    const expertView = await loadOrThrow();
+    expect(expertView.clientCompanyName).toBe('Northwind Industrial');
+    expect(m.listPartyDomains).not.toHaveBeenCalled();
   });
 });
 

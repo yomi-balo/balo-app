@@ -185,13 +185,29 @@ describe('inviteMeetingGuestsAction', () => {
   it('forwards the addresses and returns the post-write seat counts', async () => {
     const result = await inviteMeetingGuestsAction({ meetingId: MEETING_ID, emails: [EMAIL] });
 
-    expect(mockInviteMeetingGuests).toHaveBeenCalledWith(MEETING_ID, [EMAIL]);
+    expect(mockInviteMeetingGuests).toHaveBeenCalledWith(MEETING_ID, [EMAIL], 'in_call');
     expect(result).toEqual({
       success: true,
       invitedCount: 1,
       participantCount: 4,
       participantCap: 10,
     });
+  });
+
+  /**
+   * Twin of the same check in `invite-consultation-guests.test.ts` — a Server Action's
+   * arguments are client-deserialized, so a rogue `entryPoint` CAN arrive inside the input
+   * object. `{ ...input, entryPoint: 'in_call' }` wins only because the literal follows the
+   * spread. Cast through `unknown` — the typed signature has no `entryPoint` key.
+   */
+  it('⚠ a rogue `entryPoint` inside the input is NOT what gets forwarded — `in_call` wins', async () => {
+    await inviteMeetingGuestsAction({
+      meetingId: MEETING_ID,
+      emails: [EMAIL],
+      entryPoint: 'case_surface',
+    } as unknown as { meetingId: string; emails: readonly string[] });
+
+    expect(mockInviteMeetingGuests).toHaveBeenCalledWith(MEETING_ID, [EMAIL], 'in_call');
   });
 
   it('⚠⚠ NO LOG LINE CARRIES THE ADDRESS — on the success arm or on any failure arm', async () => {

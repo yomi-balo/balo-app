@@ -44,6 +44,22 @@ export interface GuestInviteComposerProps {
    * non-sequitur — there is nothing to pay, so reassuring the user about it invents a concern.
    */
   showPricingNote?: boolean;
+  /**
+   * BAL-573 — the domains whose exact match ACTUALLY widens a guest's grant, i.e. the owning
+   * company's LIVE `party_domains` rows, which is input (4) of `resolveGuestAccessScope`.
+   *
+   * ⚠ WHEN SUPPLIED IT REPLACES `viewerEmailDomain`, IT DOES NOT SUPPLEMENT IT. The
+   * viewer-domain comparison is an ESTIMATE (this file's own word) that both under- and
+   * over-warns when a company has more than one registered domain. On the CASE surface the
+   * grant is RETROSPECTIVE over calls already held, so an under-warning there hands a guest
+   * every past recap with no disclosure at all — exactly the harm the disclosure exists to
+   * prevent.
+   * ⚠ STILL AN ESTIMATE, JUST AN EXACT ONE: the authoritative scope is computed and stored by
+   * `inviteGuests` at invite time (ADR-1038), and a `party_domains` edit between render and
+   * send can still change the answer. It never gates anything.
+   * ⚠ ABSENT ⇒ BAL-400's behaviour, byte for byte. Both booking call sites are unchanged.
+   */
+  caseAccessDomains?: readonly string[];
 }
 
 const MAX_TOTAL_PARTICIPANTS = 10;
@@ -52,11 +68,22 @@ const MAX_TOTAL_PARTICIPANTS = 10;
  * True when adding this address grants access BEYOND this one call — i.e. same verified
  * company domain. On an `accessScope: 'call'` surface the WIDER grant does not exist, but the
  * "same company as you" fact is still what decides which disclosure line to show.
+ *
+ * BAL-573 — `caseAccessDomains`, WHEN SUPPLIED, REPLACES the viewer-domain estimate rather than
+ * supplementing it — see the prop's own docblock. Server step (3), corporate only, is kept
+ * ahead of BOTH arms: a freemail domain can never widen a grant even if it somehow appeared in
+ * `party_domains`.
  */
-function isCaseLevelAccess(email: string, viewerEmailDomain: string | null): boolean {
+function isCaseLevelAccess(
+  email: string,
+  viewerEmailDomain: string | null,
+  caseAccessDomains: readonly string[] | undefined
+): boolean {
   const domain = extractEmailDomain(email);
   if (domain === null) return false;
-  return viewerEmailDomain !== null && domain === viewerEmailDomain && !isBlockedDomain(domain);
+  if (isBlockedDomain(domain)) return false;
+  if (caseAccessDomains !== undefined) return caseAccessDomains.includes(domain);
+  return viewerEmailDomain !== null && domain === viewerEmailDomain;
 }
 
 /** Live, per-keystroke disclosure of what THIS address (if added) would grant — an ESTIMATE. */
@@ -64,11 +91,12 @@ function liveDisclosure(
   email: string,
   viewerEmailDomain: string | null,
   companyName: string | null,
-  accessScope: GuestAccessScope
+  accessScope: GuestAccessScope,
+  caseAccessDomains: readonly string[] | undefined
 ): string | null {
   const domain = extractEmailDomain(email);
   if (domain === null) return null;
-  if (isCaseLevelAccess(email, viewerEmailDomain)) {
+  if (isCaseLevelAccess(email, viewerEmailDomain, caseAccessDomains)) {
     return accessScope === 'case'
       ? 'Same company as you — they’ll see this whole case, including consultations held before today.'
       : 'Same company as you — they’ll only see this intro call and its recap.';
@@ -117,6 +145,7 @@ export function GuestInviteComposer({
   clientCompanyName,
   accessScope = 'case',
   showPricingNote = true,
+  caseAccessDomains,
 }: Readonly<GuestInviteComposerProps>): React.JSX.Element {
   const [draftEmail, setDraftEmail] = useState('');
   const total = otherParticipantCount + guests.length;
@@ -124,7 +153,13 @@ export function GuestInviteComposer({
 
   const disclosure =
     draftEmail.trim().length > 0
-      ? liveDisclosure(draftEmail, viewerEmailDomain, clientCompanyName, accessScope)
+      ? liveDisclosure(
+          draftEmail,
+          viewerEmailDomain,
+          clientCompanyName,
+          accessScope,
+          caseAccessDomains
+        )
       : null;
 
   // ⚠ NOT A REGEX — a hand-rolled `local@domain.tld` pattern here trips SonarCloud's S5852
@@ -149,7 +184,9 @@ export function GuestInviteComposer({
     onChange(guests.filter((g) => g.email !== email));
   }
 
-  const caseLevelGuests = guests.filter((g) => isCaseLevelAccess(g.email, viewerEmailDomain));
+  const caseLevelGuests = guests.filter((g) =>
+    isCaseLevelAccess(g.email, viewerEmailDomain, caseAccessDomains)
+  );
   const summary = summaryDisclosure(caseLevelGuests, accessScope);
   // ⚠ Positive condition first (SonarCloud S7735 — no negated condition with an else).
   const countLabel = showPricingNote

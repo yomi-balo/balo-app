@@ -95,16 +95,16 @@ export type RecapEntrySource = 'direct' | 'notification' | 'case_surface' | 'end
  * "Book another consultation" affordance (`book_another`) and nothing can emit a quick pick.
  * BAL-400 declares that value when it builds the thing that produces it.
  *
- * ⚠⚠ NO `invite` EITHER, AND THIS ONE IS WORTH READING TWICE BECAUSE THE DESIGN REFERENCE
- * DRAWS THE BUTTON. BAL-421 does NOT ship the "Invite a colleague" affordance, for two
- * independent reasons: (1) `apps/web` has NO seam that creates a guest invite — it only has
- * the `/join/[token]` LANDING that consumes one, so there is nothing to call; and (2) guest
- * scoping is INERT on `main` — `resolveGuestConversationScope` has zero production callers and
- * `/join/[token]` resolves an identity CLAIM with no guest read session behind it. Shipping a
- * button whose copy promises "anyone invited sees this whole case" while the grant grants
- * nothing readable would be a lie about what the invite does, which is the same reasoning that
- * forbids anchoring an invite to a past meeting. The ticket that builds the invite declares
- * this value.
+ * ⚠⚠ `invite` IS DECLARED AS OF BAL-573 — THE TICKET THAT BUILDS ITS PRODUCER. BAL-421 shipped
+ * no "Invite a colleague" affordance, for two independent reasons that no longer hold: (1)
+ * `apps/web` had NO seam that creates a guest invite (only the `/join/[token]` LANDING that
+ * consumes one) — BAL-573 wires the case surface's row-level composer to the already-shipped
+ * `POST /meetings/:meetingId/guests` route; and (2) guest scoping was INERT on `main` — it is
+ * live now, computed and stored server-side at invite time (ADR-1038). The button now renders
+ * only when `canInvite` is true and the guest actually receives the grant `inviteGuests`
+ * computes, so the value arrives WITH its producer, exactly as the no-producer rule prescribes.
+ * Its producer is `case-surface.tsx`'s `handleRowAction`, firing on either the kebab's "Invite a
+ * colleague" item or the row's own guest-count control.
  *
  * ⚠ `join` WAS ADDED BY BAL-567, WHICH IS THE TICKET THAT BUILDS ITS PRODUCER. Until BAL-567
  * the case surface had NO Join affordance at all — `case-nudge.tsx` carried a docblock saying
@@ -125,7 +125,10 @@ export type CaseSurfaceAction =
    * the download count would inflate it with people who only ever looked.
    */
   | 'view_file'
-  | 'join';
+  | 'join'
+  /** BAL-573 — the invite dialog was opened, from either the kebab or the row's guest-count
+   *  control. See the module docblock's `invite` note for the no-producer-rule history. */
+  | 'invite';
 
 /**
  * BAL-567 — which affordance was clicked on the `/cases` INDEX.

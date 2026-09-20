@@ -86,9 +86,28 @@ export interface CaseConsultationRowView {
   /** Unlike the two move flags, NOT blocked by a live proposal ("one negotiation at a time"
    *  governs moving, not cancelling). */
   canCancel: boolean;
-  /** PHASE 2 — hard-`false` in phase 1. The menu item never renders until this is real. */
+  /**
+   * BAL-573 — may the viewer invite a guest to THIS consultation? Resolved SERVER-SIDE, ONCE
+   * per case (the membership `participate` token on the client lens, the engagement
+   * `manage_engagement` token on the expert lens) and ANDed with this row's own upcoming state.
+   *
+   * ⚠ IT IS NOT `canCancel`'s CAPABILITY WITH A DIFFERENT NAME. Same token, different condition:
+   * the api accepts an invite on any meeting that is not `ended`/`cancelled`, including one that
+   * has already started, which it refuses to cancel.
+   * ⚠ A RENDER HINT. The Server Action re-checks nothing and the API re-derives the gate
+   * independently (`authorizeMeetingParticipation`); a stale `true` costs a refusal, never
+   * access.
+   */
   canInvite: boolean;
-  /** PHASE 2 — hard-`0` in phase 1. */
+  /**
+   * BAL-573 — how many guests hold a seat on THIS consultation. `0` on every non-upcoming row.
+   *
+   * ⚠⚠ A COUNT, AND NEVER ANYTHING MORE. No email address, no name, no domain — ADR-1044, and
+   * the module docblock above. If a future ticket wants "Priya and 2 others" it needs a
+   * party-scoped name projection and a fresh look at that ADR; it is not a widening of this
+   * field.
+   * ⚠ NOT `participantCount` from the invite response, which is guests **+ 2**.
+   */
   guestCount: number;
   /** `scheduled_end − scheduled_start`, minutes. NOT `durationMinutes` above, which is
    *  wall-clock and therefore `null` on every upcoming row — this is the duration that's always
@@ -381,6 +400,12 @@ interface CaseSurfaceViewBase {
    * two surfaces cannot drift.
    */
   counterpartyPartyLabel: string;
+  /**
+   * BAL-573 — the CLIENT company's name, for the invite composer's scope disclosure. `null`
+   * when unresolvable. Present on both lenses: the expert already reads it as the counterparty
+   * org.
+   */
+  clientCompanyName: string | null;
 }
 
 /**
@@ -400,7 +425,19 @@ interface CaseSurfaceViewBase {
  * extra key past a structurally-typed assignment.
  */
 export type CaseSurfaceView =
-  | (CaseSurfaceViewBase & { lens: 'client'; canClose: boolean })
+  | (CaseSurfaceViewBase & {
+      lens: 'client';
+      canClose: boolean;
+      /**
+       * BAL-573 / D3 — the domains whose exact match widens a guest's grant to the whole case,
+       * i.e. the client company's LIVE `party_domains` rows, the same input
+       * `resolveGuestAccessScope` uses.
+       * ⚠ STRUCTURALLY ABSENT FROM THE EXPERT ARM (the `earnings` precedent) — an expert-side
+       * invite can never widen a grant, so there is no optional field for a bug to populate.
+       * ⚠ NEVER AN AUTHORIZATION INPUT. ADR-1038: the scope is computed and stored server-side.
+       */
+      caseScopeDomains: readonly string[];
+    })
   | (CaseSurfaceViewBase & {
       lens: 'expert';
       earnings: CaseEarningsView;

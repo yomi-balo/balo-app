@@ -139,9 +139,15 @@ const BASE = {
   // invariant being pinned.
   people: [{ name: 'Dana Reyes', isViewer: true }],
   counterpartyPartyLabel: 'CloudPeak Consulting',
+  clientCompanyName: 'Northwind Industrial',
 };
 
-const CLIENT_VIEW: CaseSurfaceView = { ...BASE, lens: 'client', canClose: true };
+const CLIENT_VIEW: CaseSurfaceView = {
+  ...BASE,
+  lens: 'client',
+  canClose: true,
+  caseScopeDomains: [],
+};
 
 const EXPERT_VIEW: CaseSurfaceView = {
   ...BASE,

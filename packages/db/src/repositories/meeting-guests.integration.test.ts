@@ -1377,6 +1377,106 @@ describe('meetingGuestsRepository — the live reads', () => {
   });
 });
 
+// ── BAL-573 — countsLiveByMeetingIds, the case surface's batched guest count ─────────────────
+
+/**
+ * ⚠⚠ SHARES `liveSeatPredicate` WITH `countLiveByMeeting` — these tests exist to prove the two
+ * can never disagree about what a seat is, not to re-litigate `countLiveByMeeting`'s own
+ * per-predicate coverage (already pinned above).
+ */
+describe('meetingGuestsRepository.countsLiveByMeetingIds', () => {
+  it('groups live seat counts across SEVERAL meetings in one call', async () => {
+    const inviter = await userFactory();
+    const one = await meetingFactory();
+    const two = await meetingFactory();
+    await meetingGuestFactory({ meetingId: one.meeting.id, invitedById: inviter.id });
+    await meetingGuestFactory({ meetingId: one.meeting.id, invitedById: inviter.id });
+    await meetingGuestFactory({ meetingId: two.meeting.id, invitedById: inviter.id });
+
+    const rows = await meetingGuestsRepository.countsLiveByMeetingIds([
+      one.meeting.id,
+      two.meeting.id,
+    ]);
+
+    const byId = new Map(rows.map((row) => [row.meetingId, row.count]));
+    expect(byId.get(one.meeting.id)).toBe(2);
+    expect(byId.get(two.meeting.id)).toBe(1);
+  });
+
+  it('a meeting with NO live guest is ABSENT from the result, not zero', async () => {
+    const { meeting } = await meetingFactory();
+    const withGuest = await meetingFactory();
+    await meetingGuestFactory({ meetingId: withGuest.meeting.id });
+
+    const rows = await meetingGuestsRepository.countsLiveByMeetingIds([
+      meeting.id,
+      withGuest.meeting.id,
+    ]);
+
+    expect(rows.find((row) => row.meetingId === meeting.id)).toBeUndefined();
+    expect(rows.find((row) => row.meetingId === withGuest.meeting.id)?.count).toBe(1);
+  });
+
+  it.each([
+    ['soft-deleted', { deletedAt: new Date() }],
+    ['revoked', { revokedAt: new Date() }],
+    ['a `denied` admission', { admission: 'denied' as const, admissionDecidedAt: new Date() }],
+    ['a `pending` admission', { admission: 'pending' as const }],
+    ['expired', { expiresAt: new Date(Date.now() - DAY_MS) }],
+  ])('excludes a %s guest from the count', async (_label, values) => {
+    const { meeting } = await meetingFactory();
+    await meetingGuestFactory({ meetingId: meeting.id, values });
+
+    const rows = await meetingGuestsRepository.countsLiveByMeetingIds([meeting.id]);
+
+    expect(rows.find((row) => row.meetingId === meeting.id)).toBeUndefined();
+  });
+
+  /**
+   * ⚠⚠ D7 — THE AGREEMENT PROOF. The row count and the invite cap read the SAME predicate, so
+   * they can never disagree about what a seat is. Mutation proof: drop one predicate from
+   * `liveSeatPredicate` and this test goes red.
+   */
+  it('agrees with countLiveByMeeting, meeting by meeting, over a mixed fixture', async () => {
+    const inviter = await userFactory();
+    const meetings = await Promise.all([meetingFactory(), meetingFactory(), meetingFactory()]);
+    const [a, b, c] = meetings;
+    if (a === undefined || b === undefined || c === undefined) {
+      throw new Error('expected three meetings');
+    }
+
+    await meetingGuestFactory({ meetingId: a.meeting.id, invitedById: inviter.id });
+    await meetingGuestFactory({ meetingId: a.meeting.id, invitedById: inviter.id });
+    await meetingGuestFactory({
+      meetingId: a.meeting.id,
+      invitedById: inviter.id,
+      values: { revokedAt: new Date() },
+    });
+    await meetingGuestFactory({ meetingId: b.meeting.id, invitedById: inviter.id });
+    // `c` gets no guests at all.
+
+    const meetingIds = [a.meeting.id, b.meeting.id, c.meeting.id];
+    const batched = await meetingGuestsRepository.countsLiveByMeetingIds(meetingIds);
+    const batchedById = new Map(batched.map((row) => [row.meetingId, row.count]));
+
+    expect(meetingIds).toHaveLength(3);
+    for (const meetingId of meetingIds) {
+      const expected = await meetingGuestsRepository.countLiveByMeeting(meetingId);
+      expect(batchedById.get(meetingId) ?? 0).toBe(expected);
+    }
+    expect(batchedById.get(a.meeting.id)).toBe(2);
+    expect(batchedById.get(b.meeting.id)).toBe(1);
+    expect(batchedById.has(c.meeting.id)).toBe(false);
+  });
+
+  it('an empty id list returns an empty result and issues no query', async () => {
+    const selectSpy = vi.spyOn(db, 'select');
+    await expect(meetingGuestsRepository.countsLiveByMeetingIds([])).resolves.toEqual([]);
+    expect(selectSpy).not.toHaveBeenCalled();
+    selectSpy.mockRestore();
+  });
+});
+
 /**
  * ⚠⚠ BAL-476 (T-14) — THE WITHDRAWAL READ, and the ONE read in this repository that sees a
  * revoked row. Everything else keeps refusing it: revocation stays IMMEDIATE AND TOTAL.

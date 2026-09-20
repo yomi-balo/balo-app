@@ -115,6 +115,11 @@ const BARE_REQUIRE_USER_CALL = /\brequireUser\s*\(/;
  * calls `requireOnboardedUser()` as its first statement and re-runs the full tenancy gate — so
  * without this entry all three registered as UNAUTHENTICATED and passed in silence, and
  * deleting their gate call would have shipped green.
+ *
+ * ⚠⚠ `performGuestInvite` (BAL-573) — the ONE gate for both guest-invite entry points. It calls
+ * `requireOnboardedUser()` as its first statement; without this entry both `'use server'`
+ * wrappers (`invite-meeting-guests.ts`, `invite-consultation-guests.ts`) register as
+ * UNAUTHENTICATED and pass in silence, and deleting the gate call would ship green.
  */
 /**
  * ⚠⚠ `resolveMeetingGuestSubject` (BAL-445) — the second entry added for a reason OTHER than
@@ -135,6 +140,7 @@ const AUTH_HELPERS = [
   'getCurrentUser',
   'authorizeCaseMutation',
   'resolveMeetingGuestSubject',
+  'performGuestInvite',
 ] as const;
 
 interface ServerActionScan {

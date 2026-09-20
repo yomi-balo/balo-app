@@ -10,6 +10,8 @@ import {
   creditSessionsRepository,
   expertsRepository,
   meetingContextsRepository,
+  meetingGuestsRepository,
+  partyDomainsRepository,
   rescheduleProposalsRepository,
   transcriptsRepository,
   usersRepository,
@@ -562,6 +564,25 @@ async function buildConversation(
 }
 
 /**
+ * Tallies `items` by the meeting id `meetingIdOf` derives from each one, skipping any item with
+ * no meeting id. Shared by the action-item and file counters below — both were the same loop
+ * over a different array and field, inlining both kept `loadCase` over SonarCloud's
+ * cognitive-complexity ceiling.
+ */
+function countByMeetingId<T>(
+  items: readonly T[],
+  meetingIdOf: (item: T) => string | null
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const meetingId = meetingIdOf(item);
+    if (meetingId === null) continue;
+    counts.set(meetingId, (counts.get(meetingId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
  * Load the whole case surface, or `null`.
  *
  * ⚠ ONE `null` FOR EVERY DENIAL — missing, soft-deleted, cross-tenant, no-capability,
@@ -640,15 +661,32 @@ export const loadCase = cache(
       occurredAt: meeting.startedAt ?? meeting.scheduledStart,
     }));
 
-    const [labels, fileResult, transcriptMeetingIds, liveProposals] = await Promise.all([
-      resolveCounterparty(lens, profile, clientCompanyName),
-      loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
-      readTranscriptMeetingIds(meetings),
-      // BAL-411 — needs `meetings`' ids, so it rides the SECOND wave, not the first.
-      rescheduleProposalsRepository.findLivePendingByMeetingIds(
-        meetings.map((meeting) => meeting.id)
-      ),
-    ]);
+    const [labels, fileResult, transcriptMeetingIds, liveProposals, caseScopeDomains] =
+      await Promise.all([
+        resolveCounterparty(lens, profile, clientCompanyName),
+        loadCaseFiles({ meetings: meetingRefs, conversationId, viewerUserId: userId }),
+        readTranscriptMeetingIds(meetings),
+        // BAL-411 — needs `meetings`' ids, so it rides the SECOND wave, not the first.
+        rescheduleProposalsRepository.findLivePendingByMeetingIds(
+          meetings.map((meeting) => meeting.id)
+        ),
+        /**
+         * BAL-573 / D3 — the owning company's LIVE registered domains, projected to bare
+         * strings at the boundary. ⚠ CLIENT LENS ONLY, and that is the server's own rule, not a
+         * convenience: `resolveGuestAccessScope` step (2) requires `party === 'client'`, so on
+         * the expert lens there is nothing a domain match could widen and the composer must not
+         * estimate otherwise. It is the VIEWER'S OWN company's domains, never the
+         * counterparty's.
+         * ⚠ A RENDER HINT, NEVER AN AUTHORIZATION INPUT — the authoritative `access_scope` is
+         * computed and STORED by `inviteGuests` at invite time (ADR-1038); this only decides
+         * which sentence renders.
+         */
+        lens === 'client'
+          ? partyDomainsRepository
+              .listByParty('company', companyId)
+              .then((rows) => rows.map((row) => row.domain))
+          : Promise.resolve<string[]>([]),
+      ]);
 
     // ⚠ LIVENESS (expiry) IS DECIDED HERE, ONCE, via `rescheduleProposalIsLive` — the read
     // itself filters `status = 'pending'` only (never soft-deleted), never expiry. Both the
@@ -660,24 +698,32 @@ export const loadCase = cache(
         .map((proposal) => proposal.meetingId)
     );
 
-    const actionItemCountByMeetingId = new Map<string, number>();
-    for (const item of actionItems) {
-      const { meetingId } = item;
-      if (meetingId === null) continue;
-      actionItemCountByMeetingId.set(
-        meetingId,
-        (actionItemCountByMeetingId.get(meetingId) ?? 0) + 1
-      );
-    }
+    /**
+     * BAL-573 — each meeting's derived state, computed ONCE and reused by both case-level terms
+     * below. `deriveCaseConsultationState` is pure; the old `.some()` here re-derived it per
+     * predicate, and a second predicate would have made that three passes.
+     */
+    const derivedStates = meetings.map((meeting) => ({
+      meetingId: meeting.id,
+      status: meeting.status,
+      state: deriveCaseConsultationState({
+        status: meeting.status,
+        outcome: meeting.outcome,
+        hasLiveRescheduleProposal: meetingIdsWithLiveProposal.has(meeting.id),
+      }),
+    }));
 
-    const fileCountByMeetingId = new Map<string, number>();
-    for (const file of fileResult.files) {
-      if (file.origin !== 'meeting' || file.meetingId === null) continue;
-      fileCountByMeetingId.set(file.meetingId, (fileCountByMeetingId.get(file.meetingId) ?? 0) + 1);
-    }
-
-    const isOpen = caseRow.closedAt === null;
-    const nextScheduled = selectNextScheduled(meetings, meetingIdsWithLiveProposal);
+    /**
+     * ⚠ THE INVITE CONDITION, AND IT IS NOT THE CANCEL CONDITION. The api accepts an invite on
+     * any meeting whose status is not `ended`/`cancelled` (`MEETING_CLOSED_TO_GUESTS`,
+     * `guest-participation.ts:91`), and over the states a case row can hold
+     * `caseConsultationIsUpcoming` is exactly that set's complement. Reusing
+     * `someUpcomingMeetingIsCancellable` here would withhold Invite on a live call, which the
+     * server permits.
+     */
+    const someUpcomingMeetingIsInvitable = derivedStates.some((row) =>
+      caseConsultationIsUpcoming(row.state)
+    );
     /**
      * `resolveCancelRefusal` / `CANCELLABLE_MEETING_STATUSES` from `@balo/shared/meetings` —
      * the one definition, shared with the route guard and the repository CAS, so a new status
@@ -687,14 +733,32 @@ export const loadCase = cache(
      * differs), so this one boolean short-circuits both the cancel and move capability calls
      * below.
      */
-    const someUpcomingMeetingIsCancellable = meetings.some((meeting) => {
-      const state = deriveCaseConsultationState({
-        status: meeting.status,
-        outcome: meeting.outcome,
-        hasLiveRescheduleProposal: meetingIdsWithLiveProposal.has(meeting.id),
-      });
-      return caseConsultationIsUpcoming(state) && resolveCancelRefusal(meeting.status) === null;
-    });
+    const someUpcomingMeetingIsCancellable = derivedStates.some(
+      (row) => caseConsultationIsUpcoming(row.state) && resolveCancelRefusal(row.status) === null
+    );
+
+    /**
+     * BAL-573 — ONE read for the whole case, upcoming rows only. ⚠ A COUNT, NEVER A ROSTER: no
+     * email, no name and no token is read (ADR-1044). Skipped entirely on a case with nothing
+     * upcoming, which is most closed cases.
+     */
+    const invitableMeetingIds = derivedStates
+      .filter((row) => caseConsultationIsUpcoming(row.state))
+      .map((row) => row.meetingId);
+    const guestCountRows =
+      invitableMeetingIds.length === 0
+        ? []
+        : await meetingGuestsRepository.countsLiveByMeetingIds(invitableMeetingIds);
+    const guestCountByMeetingId = new Map(guestCountRows.map((row) => [row.meetingId, row.count]));
+
+    const actionItemCountByMeetingId = countByMeetingId(actionItems, (item) => item.meetingId);
+
+    const fileCountByMeetingId = countByMeetingId(fileResult.files, (file) =>
+      file.origin === 'meeting' ? file.meetingId : null
+    );
+
+    const isOpen = caseRow.closedAt === null;
+    const nextScheduled = selectNextScheduled(meetings, meetingIdsWithLiveProposal);
     // BAL-411 — the nudge cares about the proposal on THE NEXT meeting only: a live proposal's
     // meeting is always `caseConsultationIsUpcoming`, so if `nextScheduled` exists and carries a
     // proposal, this finds it; a proposal on some OTHER, later meeting is represented on that
@@ -726,14 +790,29 @@ export const loadCase = cache(
       now,
     });
 
-    // Lives on `CaseSurfaceViewBase` (both lenses have it) and `mapCaseConsultations` below
-    // needs it for every row's flags; the expert arm uses `expertCapabilities` instead, keeping
-    // the two authorization axes separate.
-    const mayCancelAsClient =
+    /**
+     * The MEMBERSHIP answer for this case, resolved AT MOST ONCE and read by both client-side
+     * row flags below.
+     *
+     * ⚠ `isOpen` sits ahead of the `await`: a CLOSED case resolves NO capability call at all
+     * (the invariant `resolveExpertLensCapabilities`'s docblock states). The
+     * `someUpcomingMeetingIsInvitable` term covers the other half: a case whose consultations
+     * are all in the past resolves nothing either.
+     *
+     * ⚠ NOT GATED ON CANCELLABILITY. Invite and Cancel share the same TOKEN on different
+     * CONDITIONS — the api accepts an invite on a live call it refuses to cancel — so the
+     * capability is resolved once against the weaker (invite) term and the cancel term is ANDed
+     * in afterwards. Cancellable implies invitable, so `mayCancelAsClient` is unchanged.
+     */
+    const clientParticipatesOnAnUpcomingMeeting =
       lens === 'client' &&
       isOpen &&
-      someUpcomingMeetingIsCancellable &&
+      someUpcomingMeetingIsInvitable &&
       (await hasCapability({ id: userId }, CAPABILITIES.PARTICIPATE, { companyId }));
+
+    const mayCancelAsClient =
+      clientParticipatesOnAnUpcomingMeeting && someUpcomingMeetingIsCancellable;
+    const mayInviteAsClient = clientParticipatesOnAnUpcomingMeeting;
 
     // Reused by both `mapCaseConsultations` and the expert return arm below; extracted to its
     // own function to keep `loadCase` under SonarCloud's cognitive-complexity ceiling.
@@ -743,6 +822,7 @@ export const loadCase = cache(
       isOpen,
       resolutionRequestedAt: caseRow.resolutionRequestedAt,
       nextScheduledIsCancellable: someUpcomingMeetingIsCancellable,
+      someUpcomingMeetingIsInvitable,
     });
 
     const consultations = mapCaseConsultations(
@@ -752,9 +832,17 @@ export const loadCase = cache(
         fileCountByMeetingId,
         meetingIdsWithTranscript: transcriptMeetingIds,
         meetingIdsWithLiveProposal,
+        guestCountByMeetingId,
       },
       now,
-      { lens, mayAct: resolveRowActionCapability(lens, mayCancelAsClient, expertCapabilities) }
+      {
+        lens,
+        ...resolveRowActionCapabilities(
+          lens,
+          { mayCancel: mayCancelAsClient, mayInvite: mayInviteAsClient },
+          expertCapabilities
+        ),
+      }
     );
 
     // BAL-567 — WHO acted, for the four attributed nudge arms. One batched name read, name
@@ -830,6 +918,13 @@ export const loadCase = cache(
 
     const base = {
       counterpartyPartyLabel: labels.counterpartyPartyLabel,
+      /**
+       * BAL-573 — the CLIENT company's name, for the invite composer's scope disclosure.
+       * `null` when unresolvable. Present on both lenses: the expert already reads it as the
+       * counterparty org. ⚠ `null`, NEVER the 'the client' placeholder — that is a phrase, and
+       * the composer needs a NAME or null.
+       */
+      clientCompanyName: company?.name ?? null,
       engagementId,
       expertProfileId,
       viewerUserId: userId,
@@ -868,7 +963,7 @@ export const loadCase = cache(
         canManageReschedule: capabilities.canManageReschedule,
       };
     }
-    return { ...base, lens: 'client', canClose: isOpen };
+    return { ...base, lens: 'client', canClose: isOpen, caseScopeDomains };
   }
 );
 
@@ -879,12 +974,18 @@ interface ExpertLensCapabilitiesInput {
   resolutionRequestedAt: Date | null;
   /** True when at least one upcoming meeting is cancellable — not only the next one. */
   nextScheduledIsCancellable: boolean;
+  /** BAL-573 — true when at least one upcoming meeting is invitable (the api's own gate is a
+   *  status DENY-set, not cancellability — see `mayInviteAsExpert`'s own comment below). */
+  someUpcomingMeetingIsInvitable: boolean;
 }
 
 interface ExpertLensCapabilities {
   mayRequestResolution: boolean;
   canManageReschedule: boolean;
   mayCancelAsExpert: boolean;
+  /** BAL-573 — the SAME `manage_engagement` token as `canManageReschedule`, ANDed with the
+   *  invite condition instead of the cancel one. See `managesEngagementWhileOpen`'s comment. */
+  mayInviteAsExpert: boolean;
 }
 
 /**
@@ -912,7 +1013,14 @@ interface ExpertLensCapabilities {
 async function resolveExpertLensCapabilities(
   input: ExpertLensCapabilitiesInput
 ): Promise<ExpertLensCapabilities> {
-  const { userId, engagementId, isOpen, resolutionRequestedAt, nextScheduledIsCancellable } = input;
+  const {
+    userId,
+    engagementId,
+    isOpen,
+    resolutionRequestedAt,
+    nextScheduledIsCancellable,
+    someUpcomingMeetingIsInvitable,
+  } = input;
   const contextSubject = { contextType: 'case' as const, contextId: engagementId };
 
   const mayRequestResolution =
@@ -931,13 +1039,28 @@ async function resolveExpertLensCapabilities(
   // alone (which also admits an agency member with role `expert` — a legitimate viewer of the
   // case surface who is deliberately and permanently NOT a `manage_engagement` holder,
   // ADR-1046 §7).
-  const canManageReschedule =
+  /**
+   * `manage_engagement` on an OPEN case — the answer BOTH the reschedule-management flag and
+   * the per-row invite flag are built from, resolved with ONE `await` because their predicates
+   * are identical up to the invite flag's extra term.
+   *
+   * ⚠ `isOpen &&` sits ahead of this `await`, and the other two flags below keep their own
+   * independent short-circuits, so a CLOSED case resolves no capability call here either — the
+   * engagement-axis read COUNT is 3 on an open cancellable case, 2 once the meeting has
+   * started.
+   * ⚠ IF THE TWO PREDICATES EVER DIVERGE, SPLIT THE `await` — do not add a term to one name.
+   */
+  const managesEngagementWhileOpen =
     isOpen &&
     (await hasEngagementCapability(
       { id: userId },
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
       contextSubject
     ));
+  // Item 18's holder set, unchanged.
+  const canManageReschedule = managesEngagementWhileOpen;
+  // BAL-573 — the SAME token, the SAME `isOpen` gate, a DIFFERENT row condition (see D2).
+  const mayInviteAsExpert = managesEngagementWhileOpen && someUpcomingMeetingIsInvitable;
   // BAL-410 — the THIRD independent short-circuiting call, on the SAME pattern and for the
   // same reason the docblock above gives: at most one of the three ever actually awaits for
   // any given case state, and hoisting them would break the pinned invariant that a CLOSED
@@ -952,7 +1075,7 @@ async function resolveExpertLensCapabilities(
       contextSubject
     ));
 
-  return { mayRequestResolution, canManageReschedule, mayCancelAsExpert };
+  return { mayRequestResolution, canManageReschedule, mayCancelAsExpert, mayInviteAsExpert };
 }
 
 async function resolveExpertCapabilitiesIfNeeded(
@@ -963,16 +1086,17 @@ async function resolveExpertCapabilitiesIfNeeded(
   return resolveExpertLensCapabilities(input);
 }
 
-/** The one case-level capability `mapCaseConsultations` ANDs into every row's flags:
- *  `mayCancelAsClient` (membership `participate`) or `mayCancelAsExpert` (engagement
- *  `manage_engagement`). */
-function resolveRowActionCapability(
+/** The case-level capabilities `mapCaseConsultations` ANDs into every row's flags. */
+function resolveRowActionCapabilities(
   lens: 'client' | 'expert',
-  mayCancelAsClient: boolean,
+  client: { mayCancel: boolean; mayInvite: boolean },
   expertCapabilities: ExpertLensCapabilities | null
-): boolean {
-  if (lens === 'client') return mayCancelAsClient;
-  return expertCapabilities?.mayCancelAsExpert ?? false;
+): { mayAct: boolean; mayInvite: boolean } {
+  if (lens === 'client') return { mayAct: client.mayCancel, mayInvite: client.mayInvite };
+  return {
+    mayAct: expertCapabilities?.mayCancelAsExpert ?? false,
+    mayInvite: expertCapabilities?.mayInviteAsExpert ?? false,
+  };
 }
 
 /**
@@ -993,6 +1117,7 @@ const EMPTY_EXPERT_CAPABILITIES: ExpertLensCapabilities = {
   mayRequestResolution: false,
   canManageReschedule: false,
   mayCancelAsExpert: false,
+  mayInviteAsExpert: false,
 };
 
 /**

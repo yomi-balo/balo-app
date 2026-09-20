@@ -155,7 +155,7 @@ describe('failure handling — ⚠⚠ NOTHING THROWS', () => {
     const address = 'dana@northwind.example';
     mockLoggedFetch.mockRejectedValue(new Error('ECONNRESET'));
 
-    await inviteMeetingGuests(MEETING_ID, [address]);
+    await inviteMeetingGuests(MEETING_ID, [address], 'in_call');
 
     const [, context] = vi.mocked(log.error).mock.calls.at(-1) ?? [];
     const serialised = JSON.stringify(context);
@@ -176,7 +176,7 @@ describe('failure handling — ⚠⚠ NOTHING THROWS', () => {
       response(409, { error: 'participant_cap_reached', detail: 'do not surface this prose' })
     );
 
-    const result = await inviteMeetingGuests(MEETING_ID, ['dana@northwind.example']);
+    const result = await inviteMeetingGuests(MEETING_ID, ['dana@northwind.example'], 'in_call');
 
     expect(result).toEqual({ ok: false, status: 409, code: 'participant_cap_reached' });
     expect(JSON.stringify(result)).not.toContain('do not surface this prose');
@@ -248,28 +248,31 @@ describe('Retry-After', () => {
 });
 
 describe('inviteMeetingGuests', () => {
-  it('⚠⚠ NEVER sends `party` or `accessScope`, and always sends `entryPoint: in_call`', async () => {
-    mockLoggedFetch.mockResolvedValue(
-      response(201, { guests: [{ id: GUEST_ID }], participantCount: 3, participantCap: 10 })
-    );
+  it.each(['in_call', 'case_surface', 'booking_confirm'] as const)(
+    '⚠⚠ NEVER sends `party` or `accessScope`, and forwards entryPoint=%s VERBATIM — never defaulted',
+    async (entryPoint) => {
+      mockLoggedFetch.mockResolvedValue(
+        response(201, { guests: [{ id: GUEST_ID }], participantCount: 3, participantCap: 10 })
+      );
 
-    await inviteMeetingGuests(MEETING_ID, ['dana@northwind.example']);
+      await inviteMeetingGuests(MEETING_ID, ['dana@northwind.example'], entryPoint);
 
-    const body = JSON.parse(lastInit().body ?? '{}') as Record<string, unknown>;
-    expect(body).toEqual({
-      entryPoint: 'in_call',
-      guests: [{ email: 'dana@northwind.example' }],
-    });
-    expect(JSON.stringify(body)).not.toContain('party');
-    expect(JSON.stringify(body)).not.toContain('accessScope');
-  });
+      const body = JSON.parse(lastInit().body ?? '{}') as Record<string, unknown>;
+      expect(body).toEqual({
+        entryPoint,
+        guests: [{ email: 'dana@northwind.example' }],
+      });
+      expect(JSON.stringify(body)).not.toContain('party');
+      expect(JSON.stringify(body)).not.toContain('accessScope');
+    }
+  );
 
   it('sends every address in one batch', async () => {
     mockLoggedFetch.mockResolvedValue(
       response(201, { guests: [], participantCount: 3, participantCap: 10 })
     );
 
-    await inviteMeetingGuests(MEETING_ID, ['a@x.example', 'b@x.example']);
+    await inviteMeetingGuests(MEETING_ID, ['a@x.example', 'b@x.example'], 'in_call');
 
     const body = JSON.parse(lastInit().body ?? '{}') as { guests: unknown[] };
     expect(body.guests).toHaveLength(2);

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { GuestForViewer, MeetingGuestSide } from '@balo/shared/meetings';
+import type { GuestInviteEntryPoint } from '@balo/analytics/events';
 import { loggedFetch } from '@/lib/logging/fetch-wrapper';
 import { log } from '@/lib/logging';
 import { getSession } from '@/lib/auth/session';
@@ -177,15 +178,18 @@ export async function getMeetingGuests(
  * be a cross-party write. The api's Zod schema has no key for them, so a field would be
  * silently stripped — but not sending it is the control, not relying on the strip.
  *
- * ⚠ `entryPoint: 'in_call'` — the enum value already exists, and it is the funnel dimension
- * the whole guest event set exists to measure.
+ * ⚠ `entryPoint` IS A REQUIRED PARAMETER WITH NO DEFAULT. The route's schema states the rule:
+ * it is the ONLY part of the invite contract that differs between the three consuming
+ * surfaces, it is the funnel dimension the whole guest event set exists to measure, and "a
+ * default would silently mis-attribute every invite to one surface".
  */
 export async function inviteMeetingGuests(
   meetingId: string,
-  emails: readonly string[]
+  emails: readonly string[],
+  entryPoint: GuestInviteEntryPoint
 ): Promise<GuestsApiResult<GuestsInviteResponse>> {
   return callGuestsApi<GuestsInviteResponse>(`/meetings/${meetingId}/guests`, 'POST', {
-    entryPoint: 'in_call',
+    entryPoint,
     guests: emails.map((email) => ({ email })),
   });
 }
