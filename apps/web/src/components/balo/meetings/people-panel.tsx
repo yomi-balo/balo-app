@@ -72,6 +72,31 @@ const QUEUE_DISCLOSURE =
 
 const COPY_LINK_HELPER = 'Anyone using this link asks to be let in.';
 
+/**
+ * ⚠⚠ THE CLIPBOARD-UNAVAILABLE FALLBACK **NEVER** POINTS AT THE ADDRESS BAR.
+ *
+ * It used to read "You can select it from the address bar instead." — wrong on the ONLY mount
+ * this panel has. The People panel renders on the MEMBER call route
+ * (`/meetings/{meetingId}/call`), NOT the join link (`/join/m/{meetingId}`). A guest handed the
+ * address-bar URL is 307'd to `/login`; a signed-in non-participant is refused by
+ * `authorizeMeetingParticipation`. So at the one moment the copy failed, the fallback told the
+ * host to send the one URL that cannot work.
+ *
+ * ⚠ THE NEXT STEP IS THE EMAIL INVITE, BECAUSE IT IS ONE A HOST CAN ACTUALLY CARRY OUT. "Add
+ * people" sits directly above this button, is never disabled, and needs no clipboard.
+ *
+ * ⚠⚠ IT DELIBERATELY DOES **NOT** REVEAL THE URL FOR MANUAL SELECTION. `joinLinkUrl` is
+ * tokenless but sensitive by policy and today never reaches the DOM at all — see
+ * `lib/meetings/join-link.ts` and `join-link-never-writes.test.ts`'s BAL-498 S1 block on why an
+ * `href` or rendered string would leak the meeting id to PostHog autocapture and Sentry Replay.
+ * Surfacing it needs its own decision about those sinks; this fix does not get to make it.
+ */
+const COPY_LINK_UNAVAILABLE =
+  "We couldn't copy the link in this browser. Use Add people to invite them by email instead.";
+
+/** ⚠ A rejected write is transient, unlike the unavailable case above — a retry can succeed. */
+const COPY_LINK_FAILED = "We couldn't copy the link. Try again in a moment.";
+
 export interface PeoplePanelProps {
   readonly panels: MeetingMemberPanelRegistration;
   readonly onClose: () => void;
@@ -661,7 +686,9 @@ function PeoplePanelFooter({
     // never comes back from the api and this UI never builds a link.
     const write = globalThis.navigator?.clipboard?.writeText(panels.joinLinkUrl);
     if (write === undefined) {
-      report('error', "We couldn't copy the link. You can select it from the address bar instead.");
+      // ⚠⚠ NO CLIPBOARD API AT ALL, so a retry cannot succeed. NEVER "use the address bar" —
+      // on this mount that is the member call route, not the join link. See the constant.
+      report('error', COPY_LINK_UNAVAILABLE);
       return;
     }
     write
@@ -672,7 +699,7 @@ function PeoplePanelFooter({
         report('success', 'Join link copied.');
       })
       .catch(() => {
-        report('error', "We couldn't copy the link. Try again in a moment.");
+        report('error', COPY_LINK_FAILED);
       });
   }, [panels.joinLinkUrl, meetingProps, report]);
 
