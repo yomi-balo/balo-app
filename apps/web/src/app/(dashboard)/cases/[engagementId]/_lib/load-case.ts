@@ -742,9 +742,7 @@ export const loadCase = cache(
       engagementId,
       isOpen,
       resolutionRequestedAt: caseRow.resolutionRequestedAt,
-      nextScheduled,
       nextScheduledIsCancellable: someUpcomingMeetingIsCancellable,
-      rescheduleProposalForNudge,
     });
 
     const consultations = mapCaseConsultations(
@@ -867,7 +865,6 @@ export const loadCase = cache(
         lens: 'expert',
         earnings: toEarningsView(earningsAggregate ?? EMPTY_EARNINGS),
         canRequestResolution: capabilities.mayRequestResolution,
-        canProposeReschedule: capabilities.mayProposeReschedule,
         canManageReschedule: capabilities.canManageReschedule,
       };
     }
@@ -875,31 +872,23 @@ export const loadCase = cache(
   }
 );
 
-/** `selectNextScheduled`'s return shape — named so `resolveExpertLensCapabilities` need not repeat it. */
-type NextScheduledMeeting = ReturnType<typeof selectNextScheduled>;
-
 interface ExpertLensCapabilitiesInput {
   userId: string;
   engagementId: string;
   isOpen: boolean;
   resolutionRequestedAt: Date | null;
-  nextScheduled: NextScheduledMeeting;
   /** True when at least one upcoming meeting is cancellable — not only the next one. */
   nextScheduledIsCancellable: boolean;
-  rescheduleProposalForNudge: Awaited<
-    ReturnType<typeof resolveRescheduleProposalForNudge>
-  >['proposal'];
 }
 
 interface ExpertLensCapabilities {
   mayRequestResolution: boolean;
-  mayProposeReschedule: boolean;
   canManageReschedule: boolean;
   mayCancelAsExpert: boolean;
 }
 
 /**
- * The four independent, short-circuiting `manage_engagement` capability checks gated on the
+ * The three independent, short-circuiting `manage_engagement` capability checks gated on the
  * expert lens — extracted from `loadCase` to keep it under SonarCloud's cognitive-complexity
  * ceiling of 15. Behaviour is UNCHANGED by the extraction; every reasoning comment below is
  * copied verbatim from the call site it used to sit at.
@@ -915,23 +904,15 @@ interface ExpertLensCapabilities {
  * ⚠ EACH FLAG SHORT-CIRCUITS ITS OWN `await hasEngagementCapability(...)` INDEPENDENTLY — NOT a
  * shared/hoisted call. A shared call was tried and reverted: it made the capability check
  * unconditional on `isOpen` alone, which broke the pre-existing invariant (pinned by its own
- * test) that a CLOSED case resolves no capability call at all. Four calls with identical
- * short-circuit shape cost nothing extra in the common case — at most one of the four ever
- * actually awaits, because at most one of `canRequestResolution`/`canProposeReschedule`/
- * `canManageReschedule`/`mayCancelAsExpert` is relevant to any one case state.
+ * test) that a CLOSED case resolves no capability call at all. Three calls with identical
+ * short-circuit shape cost nothing extra in the common case — at most one of the three ever
+ * actually awaits, because at most one of `canRequestResolution`/`canManageReschedule`/
+ * `mayCancelAsExpert` is relevant to any one case state.
  */
 async function resolveExpertLensCapabilities(
   input: ExpertLensCapabilitiesInput
 ): Promise<ExpertLensCapabilities> {
-  const {
-    userId,
-    engagementId,
-    isOpen,
-    resolutionRequestedAt,
-    nextScheduled,
-    nextScheduledIsCancellable,
-    rescheduleProposalForNudge,
-  } = input;
+  const { userId, engagementId, isOpen, resolutionRequestedAt, nextScheduledIsCancellable } = input;
   const contextSubject = { contextType: 'case' as const, contextId: engagementId };
 
   const mayRequestResolution =
@@ -942,28 +923,14 @@ async function resolveExpertLensCapabilities(
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
       contextSubject
     ));
-  // BAL-411 — the SAME resolve-server-side/re-check-in-the-action pattern as
-  // `mayRequestResolution` immediately above. `rescheduleProposalForNudge === null` is the
-  // "no LIVE proposal already outstanding on the next meeting" half — mirroring the DB's
-  // own partial unique index (at most one pending proposal per meeting), so the button
-  // never invites a 409 `proposal_already_pending` the picker itself could have prevented.
-  const mayProposeReschedule =
-    isOpen &&
-    nextScheduled !== null &&
-    rescheduleProposalForNudge === null &&
-    (await hasEngagementCapability(
-      { id: userId },
-      ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
-      contextSubject
-    ));
-  // Item 18 (security LOW) — the WITHDRAW holder set. `canProposeReschedule` is
-  // STRUCTURALLY FALSE exactly when Withdraw would be relevant (a live proposal already
-  // exists — that is `rescheduleProposalForNudge !== null`), so it cannot be reused as-is
-  // to gate the Withdraw button the way its own docblock suggested; this is the SAME
-  // capability check, without the "no live proposal" condition, so the card can gate
-  // Withdraw on the actual holder set instead of `lens === 'expert'` alone (which also
-  // admits an agency member with role `expert` — a legitimate viewer of the case surface
-  // who is deliberately and permanently NOT a `manage_engagement` holder, ADR-1046 §7).
+  // Item 18 (security LOW) — the WITHDRAW holder set: the SAME `manage_engagement` check as
+  // the per-row `canProposeReschedule`, without its "no live proposal already outstanding"
+  // condition — that per-row flag is structurally FALSE exactly when Withdraw would be
+  // relevant (a live proposal already exists), so it cannot be reused as-is to gate the
+  // Withdraw button; this gives the card the actual holder set instead of `lens === 'expert'`
+  // alone (which also admits an agency member with role `expert` — a legitimate viewer of the
+  // case surface who is deliberately and permanently NOT a `manage_engagement` holder,
+  // ADR-1046 §7).
   const canManageReschedule =
     isOpen &&
     (await hasEngagementCapability(
@@ -971,8 +938,8 @@ async function resolveExpertLensCapabilities(
       ENGAGEMENT_CAPABILITIES.MANAGE_ENGAGEMENT,
       contextSubject
     ));
-  // BAL-410 — the FOURTH independent short-circuiting call, on the SAME pattern and for the
-  // same reason the docblock above gives: at most one of the four ever actually awaits for
+  // BAL-410 — the THIRD independent short-circuiting call, on the SAME pattern and for the
+  // same reason the docblock above gives: at most one of the three ever actually awaits for
   // any given case state, and hoisting them would break the pinned invariant that a CLOSED
   // case resolves no capability call at all. Also gates `mapCaseConsultations`'s per-row flags
   // on the expert lens (the caller reuses this result).
@@ -985,7 +952,7 @@ async function resolveExpertLensCapabilities(
       contextSubject
     ));
 
-  return { mayRequestResolution, mayProposeReschedule, canManageReschedule, mayCancelAsExpert };
+  return { mayRequestResolution, canManageReschedule, mayCancelAsExpert };
 }
 
 async function resolveExpertCapabilitiesIfNeeded(
@@ -1024,7 +991,6 @@ const EMPTY_EARNINGS: CaseExpertEarningsAggregate = {
  *  outside the `lens === 'expert'` guard — visibly the empty state, never a fabricated grant. */
 const EMPTY_EXPERT_CAPABILITIES: ExpertLensCapabilities = {
   mayRequestResolution: false,
-  mayProposeReschedule: false,
   canManageReschedule: false,
   mayCancelAsExpert: false,
 };

@@ -760,8 +760,12 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
     };
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
 
-    expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
+    const join = screen.getByRole('button', { name: /^Join .*meeting/i });
+    expect(join).toBeInTheDocument();
     expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
+    // The visible label must agree with liveness too — not just the accessible name — or a
+    // device clock running behind the server's shows an active button reading a countdown.
+    expect(join).toHaveTextContent('Join now');
   });
 });
 

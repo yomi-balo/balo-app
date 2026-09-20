@@ -277,9 +277,6 @@ export function CaseSurface({
     router.refresh();
   }, [router]);
 
-  // Per-row, mirroring `canReschedule` above — `view.canProposeReschedule` is the case-level
-  // flag `load-case.ts` resolves against the single `nextScheduled` meeting, the same class of
-  // staleness the row-menu Cancel fix addressed for `canCancelConsultation`.
   const canProposeReschedule = nudgeRow?.canProposeReschedule ?? false;
   // Item 18 — same posture, for the Withdraw button's holder set (see `RescheduleProposalCard`).
   const canManageReschedule = view.lens === 'expert' && view.canManageReschedule;

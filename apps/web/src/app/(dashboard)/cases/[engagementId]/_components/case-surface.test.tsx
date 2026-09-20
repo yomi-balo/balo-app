@@ -262,7 +262,6 @@ function expertView(over: Record<string, unknown> = {}): CaseSurfaceView {
     lens: 'expert',
     earnings: { state: 'not_yet', earningsAudMinor: null, finalizedCount: 0, pendingCount: 0 },
     canRequestResolution: true,
-    canProposeReschedule: true,
     canManageReschedule: true,
     ...over,
   } as CaseSurfaceView;
@@ -654,9 +653,8 @@ describe('CaseSurface — the conditional regions', () => {
       live: false,
       durationMinutes: 45,
     };
-    // Item 6 — the nudge's `canProposeReschedule` now reads the ROW for the nudge's own
-    // meeting (`nudgeRow?.canProposeReschedule`), mirroring `canReschedule` on the client side —
-    // no longer the case-level `view.canProposeReschedule` alone.
+    // The nudge's `canProposeReschedule` reads the ROW for the nudge's own meeting
+    // (`nudgeRow?.canProposeReschedule`), mirroring `canReschedule` on the client side.
     const PROPOSABLE_ROW = upcomingRow({ canProposeReschedule: true });
 
     it('mounts the dialog only when the EXPERT has an upcoming meeting and canProposeReschedule', async () => {
@@ -665,7 +663,6 @@ describe('CaseSurface — the conditional regions', () => {
         <CaseSurface
           view={expertView({
             nudge: UPCOMING_NUDGE,
-            canProposeReschedule: true,
             consultations: [PROPOSABLE_ROW],
           })}
         />
@@ -689,7 +686,6 @@ describe('CaseSurface — the conditional regions', () => {
         <CaseSurface
           view={expertView({
             nudge: UPCOMING_NUDGE,
-            canProposeReschedule: true,
             consultations: [upcomingRow({ canProposeReschedule: false })],
           })}
         />
@@ -703,7 +699,6 @@ describe('CaseSurface — the conditional regions', () => {
         <CaseSurface
           view={expertView({
             nudge: UPCOMING_NUDGE,
-            canProposeReschedule: true,
             consultations: [PROPOSABLE_ROW],
           })}
         />
@@ -720,7 +715,6 @@ describe('CaseSurface — the conditional regions', () => {
         <CaseSurface
           view={expertView({
             nudge: UPCOMING_NUDGE,
-            canProposeReschedule: true,
             consultations: [PROPOSABLE_ROW],
           })}
         />

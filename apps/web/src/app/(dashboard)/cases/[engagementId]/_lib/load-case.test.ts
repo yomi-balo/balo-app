@@ -410,8 +410,7 @@ describe('loadCase — canRequestResolution carries the CAPABILITY term, not jus
     // case above. Fix round 1 item 18 added a SEPARATE `canManageReschedule` flag with a
     // DIFFERENT (broader) short-circuit condition (`isOpen` alone — Withdraw eligibility does
     // not care whether a resolution was already asked for), so on an OPEN case it legitimately
-    // calls the capability once on its own; the case is open with no meeting seeded, so
-    // `mayProposeReschedule`'s own call stays skipped (`nextScheduled !== null` is false).
+    // calls the capability once on its own.
     expect(mockHasEngagementCapability).toHaveBeenCalledTimes(1);
   });
 });
@@ -922,7 +921,7 @@ describe('loadCase — the reschedule-proposal read (BAL-411)', () => {
   });
 });
 
-describe('loadCase — canProposeReschedule (BAL-411)', () => {
+describe('loadCase — canProposeReschedule axis resolution (BAL-411)', () => {
   const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
 
   function scheduledMeeting(id = 'm1'): Record<string, unknown> {
@@ -939,7 +938,7 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     m.listMeetings.mockResolvedValue([scheduledMeeting()]);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: true });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: true });
   });
 
   it('is FALSE when a live proposal is already outstanding on the next meeting', async () => {
@@ -956,13 +955,15 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     ]);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
   });
 
-  it('is FALSE when nothing is booked — there is no meeting to propose a move on', async () => {
+  it('is FALSE when nothing is booked — there is no UPCOMING meeting to propose a move on', async () => {
+    // `seed()`'s default meeting is `status: 'ended'` — a row still exists (past consultation
+    // history), it is simply not movable.
     seed({ access: { lens: 'expert' } });
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
     expect(view.nudge).toEqual({ kind: 'nothing_booked' });
   });
 
@@ -974,7 +975,7 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     m.listMeetings.mockResolvedValue([scheduledMeeting()]);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
   });
 
   it('is FALSE when the engagement axis says no', async () => {
@@ -983,13 +984,13 @@ describe('loadCase — canProposeReschedule (BAL-411)', () => {
     mockHasEngagementCapability.mockResolvedValue(false);
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
   });
 });
 
 // Item 18 (security LOW) — `canManageReschedule` is the WITHDRAW holder set, deliberately
-// separate from `canProposeReschedule`: it must stay TRUE precisely when a live proposal
-// exists (the one case `canProposeReschedule` is always FALSE), so it needs its OWN coverage
+// separate from the per-row `canProposeReschedule`: it must stay TRUE precisely when a live
+// proposal exists (the one case that row flag is always FALSE), so it needs its OWN coverage
 // rather than inheriting the sibling's.
 describe('loadCase — canManageReschedule (fix round 1 item 18)', () => {
   const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
@@ -1021,7 +1022,8 @@ describe('loadCase — canManageReschedule (fix round 1 item 18)', () => {
     });
 
     const view = await loadOrThrow();
-    expect(view).toMatchObject({ canProposeReschedule: false, canManageReschedule: true });
+    expect(view.consultations[0]).toMatchObject({ canProposeReschedule: false });
+    expect(view).toMatchObject({ canManageReschedule: true });
   });
 
   it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
@@ -1455,9 +1457,9 @@ describe('loadCase — canCancel axis resolution (BAL-410)', () => {
    *
    * ⚠ AND NO CANCEL CAPABILITY IS RESOLVED, on the same short-circuit invariant as a closed
    * case: the status term sits ahead of the `await` in both arms. On the client arm that means
-   * ZERO membership reads (cancel is its only one); on the expert arm it means THREE engagement
-   * reads instead of four — the other three flags (`canRequestResolution`,
-   * `canProposeReschedule`, `canManageReschedule`) are unaffected by cancellability and still run.
+   * ZERO membership reads (cancel is its only one); on the expert arm it means TWO engagement
+   * reads instead of three — the other two flags (`canRequestResolution`, `canManageReschedule`)
+   * are unaffected by cancellability and still run.
    */
   describe('once the meeting has STARTED — the affordance collapses on BOTH arms', () => {
     it.each(['waiting_for_participants', 'in_progress'] as const)(
@@ -1475,7 +1477,7 @@ describe('loadCase — canCancel axis resolution (BAL-410)', () => {
     );
 
     it.each(['waiting_for_participants', 'in_progress'] as const)(
-      'is FALSE for the EXPERT on a %s meeting, without the fourth engagement read',
+      'is FALSE for the EXPERT on a %s meeting, without the third engagement read',
       async (status) => {
         seed({ access: { lens: 'expert' } });
         m.listMeetings.mockResolvedValue([meeting('m1', { status, outcome: null, endedAt: null })]);
@@ -1484,9 +1486,9 @@ describe('loadCase — canCancel axis resolution (BAL-410)', () => {
         const view = await loadOrThrow();
 
         expect(view.consultations[0]).toMatchObject({ canCancel: false });
-        // 3, not 4 — the cancel term short-circuits ahead of its `await`; the other three
+        // 2, not 3 — the cancel term short-circuits ahead of its `await`; the other two
         // engagement flags are unaffected by cancellability and still resolve.
-        expect(mockHasEngagementCapability).toHaveBeenCalledTimes(3);
+        expect(mockHasEngagementCapability).toHaveBeenCalledTimes(2);
       }
     );
 

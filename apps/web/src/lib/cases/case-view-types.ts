@@ -406,21 +406,14 @@ export type CaseSurfaceView =
       earnings: CaseEarningsView;
       canRequestResolution: boolean;
       /**
-       * BAL-411 — `isOpen && nextScheduled !== null && rescheduleProposal === null &&
-       * hasEngagementCapability(...)`, resolved server-side the same
-       * resolve-server-side/re-check-in-the-action pattern as `canRequestResolution`. The
-       * action re-checks independently; this is a render hint only.
-       */
-      canProposeReschedule: boolean;
-      /**
-       * Fix round 1 item 18 (security LOW) — the SAME `manage_engagement` holder set as
-       * `canProposeReschedule`, without its "no live proposal already outstanding" condition.
-       * `canProposeReschedule` is structurally `false` exactly when Withdraw is relevant (a
-       * live proposal exists), so `RescheduleProposalCard` needs this SEPARATE flag to gate
-       * Withdraw on the actual holder set rather than `lens === 'expert'` alone — which also
-       * admits an agency member with role `expert`, deliberately and permanently NOT a
-       * `manage_engagement` holder (ADR-1046 §7). A render hint only; the withdraw action
-       * re-checks independently.
+       * Fix round 1 item 18 (security LOW) — the SAME `manage_engagement` holder set as the
+       * per-row `canProposeReschedule` (`CaseConsultationRowView`), without its "no live
+       * proposal already outstanding" condition. That per-row flag is structurally `false`
+       * exactly when Withdraw is relevant (a live proposal exists), so `RescheduleProposalCard`
+       * needs this SEPARATE flag to gate Withdraw on the actual holder set rather than
+       * `lens === 'expert'` alone — which also admits an agency member with role `expert`,
+       * deliberately and permanently NOT a `manage_engagement` holder (ADR-1046 §7). A render
+       * hint only; the withdraw action re-checks independently.
        */
       canManageReschedule: boolean;
     });

@@ -337,7 +337,7 @@ function useUpcomingJoinClock(iso: string, initialLive: boolean): UpcomingJoinCl
         live,
         minutes: live ? signedMinutesUntilCalendarStart(now, scheduledStart) : null,
         timingLabel: live ? joinAffordanceTimingLabel(now, scheduledStart) : null,
-        joinLabel: joinCountdownLabel(now, scheduledStart),
+        joinLabel: live ? 'Join now' : joinCountdownLabel(now, scheduledStart),
       });
       if (live && !wasLiveRef.current) {
         setAnnouncement('You can join now.');
