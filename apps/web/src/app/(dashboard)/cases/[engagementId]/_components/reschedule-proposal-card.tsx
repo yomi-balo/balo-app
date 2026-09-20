@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useId, useState } from 'react';
 import { toast } from 'sonner';
 import * as Sentry from '@sentry/nextjs';
 import { CalendarSync } from 'lucide-react';
@@ -103,6 +103,10 @@ export function RescheduleProposalCard({
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [deadOptionIds, setDeadOptionIds] = useState<ReadonlySet<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  // `case-surface.tsx` renders one card per live proposal; a shared literal `name` here would
+  // put every mounted card's radios in the same native group (document-scoped), so selecting in
+  // one silently unchecks another's DOM state.
+  const radioGroupId = useId();
 
   const liveOptions = proposal.options.filter((option) => !deadOptionIds.has(option.optionId));
   // This toast/panel is client-only (never SSR'd), so the local-timezone short date has no
@@ -352,7 +356,7 @@ export function RescheduleProposalCard({
                       design system instead of the browser default. */}
                   <input
                     type="radio"
-                    name="reschedule-proposal-option"
+                    name={radioGroupId}
                     value={option.optionId}
                     disabled={isDead || submitting}
                     checked={selectedOptionId === option.optionId}

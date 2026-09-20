@@ -163,8 +163,6 @@ const BASE = {
     { name: 'Dana Reyes', isViewer: true },
     { name: 'Amara Okafor', isViewer: false },
   ],
-  // BAL-410 — on the BASE, so both lenses carry it.
-  canCancelConsultation: false,
   counterpartyPartyLabel: 'CloudPeak Consulting',
 };
 

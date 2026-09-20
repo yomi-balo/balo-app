@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen } from '@/test/utils';
+import { render, screen, within } from '@/test/utils';
 import { RescheduleProposalCard } from './reschedule-proposal-card';
 
 /**
@@ -632,5 +632,67 @@ describe('RescheduleProposalCard — EXPERT lens', () => {
     await user.click(screen.getByRole('button', { name: 'Withdraw' }));
     expect(mockToastError).toHaveBeenCalledWith('Too many changes just now — try again shortly.');
     expect(onChanged).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `case-surface.tsx` mounts one card per entry in `view.rescheduleProposals` — several live
+ * proposals at once, never unmounting one before the next mounts. A shared literal `name` on
+ * the radio inputs would put every card's options in ONE native radio group (document-scoped,
+ * with no `<form>` between them), so choosing an option in one card unchecks another's option in
+ * the DOM while that other card's own React state still holds its selection.
+ */
+describe('RescheduleProposalCard — two live cards do not share a native radio group', () => {
+  it('selecting an option in one card leaves the other card untouched', async () => {
+    const user = userEvent.setup();
+    const proposalA = { ...PROPOSAL, proposalId: 'proposal-a', meetingId: 'm-a', ordinal: 1 };
+    const proposalB = {
+      ...PROPOSAL,
+      proposalId: 'proposal-b',
+      meetingId: 'm-b',
+      ordinal: 3,
+      options: [
+        { optionId: 'opt-b1', scheduledStartIso: '2026-09-05T10:00:00.000Z' },
+        { optionId: 'opt-b2', scheduledStartIso: '2026-09-06T10:00:00.000Z' },
+      ],
+    };
+
+    render(
+      <>
+        <RescheduleProposalCard
+          engagementId={ENGAGEMENT_ID}
+          lens="client"
+          proposal={proposalA}
+          counterpartyLabel="Amara"
+          onChanged={vi.fn()}
+          canManageReschedule={true}
+        />
+        <RescheduleProposalCard
+          engagementId={ENGAGEMENT_ID}
+          lens="client"
+          proposal={proposalB}
+          counterpartyLabel="Amara"
+          onChanged={vi.fn()}
+          canManageReschedule={true}
+        />
+      </>
+    );
+
+    const cardA = screen.getByRole('region', { name: /consultation 1/ });
+    const cardB = screen.getByRole('region', { name: /consultation 3/ });
+    const [radioA] = within(cardA).getAllByRole('radio');
+    const [radioB] = within(cardB).getAllByRole('radio');
+    if (radioA === undefined || radioB === undefined) throw new Error('expected two radios');
+
+    await user.click(radioA);
+    expect(radioA).toBeChecked();
+    expect(within(cardA).getByRole('button', { name: 'Accept' })).toBeEnabled();
+
+    await user.click(radioB);
+
+    expect(radioA).toBeChecked();
+    expect(within(cardA).getByRole('button', { name: 'Accept' })).toBeEnabled();
+    expect(radioB).toBeChecked();
+    expect(within(cardB).getByRole('button', { name: 'Accept' })).toBeEnabled();
   });
 });

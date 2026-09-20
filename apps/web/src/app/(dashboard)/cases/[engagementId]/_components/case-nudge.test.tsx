@@ -706,7 +706,12 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
     };
     render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
 
-    expect(screen.getByTestId('join-countdown')).toBeInTheDocument();
+    // 20s outside the window rounds to the SAME minute as the boundary itself, so a
+    // rounded-minute comparison reads this instant as "Join now" while the control is still
+    // rendering aria-disabled — the label must say WHEN it opens instead.
+    expect(screen.getByTestId('join-countdown')).toHaveTextContent(
+      `Join in ${CASE_JOIN_WINDOW_MINUTES + 1} minutes`
+    );
     expect(screen.getByRole('status')).toHaveTextContent('');
     expect(mockRouterRefresh).not.toHaveBeenCalled();
 
@@ -743,6 +748,21 @@ describe('CaseNudge — the clock owns the join window crossing', () => {
     expect(mockRouterRefresh).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent('');
   });
+
+  /** A device clock running behind the server's must never HIDE Join once the server already
+   *  considers the meeting joinable — the server's word only ever ADDS liveness. */
+  it('renders Join, not the countdown, when the server says live but the device clock disagrees', () => {
+    const nudge = {
+      ...UPCOMING,
+      // 20 minutes out by this (behind) device clock — outside the window on the clock alone.
+      scheduledStartIso: isoFromNow(20 * 60_000),
+      live: true,
+    };
+    render(<CaseNudge {...BASE} nudge={nudge} lens="client" />);
+
+    expect(screen.getByRole('button', { name: /^Join .*meeting/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('join-countdown')).not.toBeInTheDocument();
+  });
 });
 
 /**
@@ -765,6 +785,10 @@ describe('CaseNudge — the countdown label renders in the inactive slot', () =>
 
   it.each([
     ['Join now', CASE_JOIN_WINDOW_MINUTES * 60_000],
+    // Just outside the window — the boundary the inactive-vs-live disagreement lived on. Must
+    // NOT read "Join now": `insideCaseJoinWindow` (the render's own liveness predicate) is
+    // already false here, one second past the inclusive boundary.
+    [`Join in ${CASE_JOIN_WINDOW_MINUTES + 1} minutes`, CASE_JOIN_WINDOW_MINUTES * 60_000 + 1_000],
     ['Join in 40 minutes', 40 * 60_000],
     ['Join in 3 hours', 3 * 60 * 60_000 + 30_000],
     ['Join tomorrow', 25 * 60 * 60_000],

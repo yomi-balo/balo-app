@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { Meeting, MeetingOutcome, MeetingStatus } from '@balo/db';
 import {
+  caseConsultationIsUpcoming,
   deriveCaseConsultationState,
   type MeetingOutcomeLabel,
   type MeetingStatusLabel,
@@ -128,7 +129,14 @@ export function mapCaseConsultations(
     // Every flag below reads the raw `meeting.status`, never the derived `state` above: `state`
     // folds `waiting_for_participants` into `'scheduled'`, but neither
     // `CANCELLABLE_MEETING_STATUSES` nor `RESCHEDULABLE_MEETING_STATUSES` admits it.
-    const live = insideCaseJoinWindow(now, meeting.scheduledStart.toISOString());
+    //
+    // `insideCaseJoinWindow` has no closing bound (true forever once `scheduledStart` is past),
+    // so it alone would read `live: true` on every past row regardless of state — gated on
+    // `caseConsultationIsUpcoming` to match this field's own contract (false on every non-
+    // upcoming row).
+    const live =
+      caseConsultationIsUpcoming(state) &&
+      insideCaseJoinWindow(now, meeting.scheduledStart.toISOString());
     const hasLiveProposal = counts.meetingIdsWithLiveProposal.has(meeting.id);
     const canCancel = action.mayAct && resolveCancelRefusal(meeting.status) === null;
     // `canCancel` is deliberately not blocked by a live proposal or the join window, unlike the

@@ -249,7 +249,6 @@ const BASE = {
     { name: 'Dana Reyes', isViewer: true },
     { name: 'Amara Okafor', isViewer: false },
   ],
-  canCancelConsultation: false,
   counterpartyPartyLabel: 'CloudPeak Consulting',
 } satisfies Omit<CaseSurfaceView, 'lens' | 'canClose'>;
 
@@ -655,11 +654,21 @@ describe('CaseSurface — the conditional regions', () => {
       live: false,
       durationMinutes: 45,
     };
+    // Item 6 — the nudge's `canProposeReschedule` now reads the ROW for the nudge's own
+    // meeting (`nudgeRow?.canProposeReschedule`), mirroring `canReschedule` on the client side —
+    // no longer the case-level `view.canProposeReschedule` alone.
+    const PROPOSABLE_ROW = upcomingRow({ canProposeReschedule: true });
 
     it('mounts the dialog only when the EXPERT has an upcoming meeting and canProposeReschedule', async () => {
       const user = userEvent.setup();
       render(
-        <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, canProposeReschedule: true })} />
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            canProposeReschedule: true,
+            consultations: [PROPOSABLE_ROW],
+          })}
+        />
       );
       expect(screen.queryByTestId('propose-times-dialog-stub')).not.toBeInTheDocument();
 
@@ -675,10 +684,29 @@ describe('CaseSurface — the conditional regions', () => {
       expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
     });
 
+    it('offers no propose CTA when the nudge row itself does not carry canProposeReschedule', () => {
+      render(
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            canProposeReschedule: true,
+            consultations: [upcomingRow({ canProposeReschedule: false })],
+          })}
+        />
+      );
+      expect(screen.queryByRole('button', { name: 'Propose a new time' })).not.toBeInTheDocument();
+    });
+
     it('onProposed closes the dialog AND refreshes the page', async () => {
       const user = userEvent.setup();
       render(
-        <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, canProposeReschedule: true })} />
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            canProposeReschedule: true,
+            consultations: [PROPOSABLE_ROW],
+          })}
+        />
       );
       await user.click(screen.getByRole('button', { name: 'Propose a new time' }));
       await user.click(screen.getByRole('button', { name: 'Stub proposed' }));
@@ -689,7 +717,13 @@ describe('CaseSurface — the conditional regions', () => {
     it('onTerminalFailure closes the dialog AND refreshes the page — parity with cancel/reschedule (F12)', async () => {
       const user = userEvent.setup();
       render(
-        <CaseSurface view={expertView({ nudge: UPCOMING_NUDGE, canProposeReschedule: true })} />
+        <CaseSurface
+          view={expertView({
+            nudge: UPCOMING_NUDGE,
+            canProposeReschedule: true,
+            consultations: [PROPOSABLE_ROW],
+          })}
+        />
       );
       await user.click(screen.getByRole('button', { name: 'Propose a new time' }));
       await user.click(screen.getByRole('button', { name: 'Stub propose-terminal' }));

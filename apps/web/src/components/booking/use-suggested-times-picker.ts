@@ -16,6 +16,10 @@ export interface SuggestedTimesPicker {
   suggestions: AvailabilitySlotDto[];
   pickerView: SuggestedTimesPickerView;
   setPickerView: (view: SuggestedTimesPickerView) => void;
+  /** Re-fetches availability. Callers use this on `slot_unavailable` — the calendar's own
+   *  `pickerKey` remount re-fetches on the SAME retry, but the suggestion list is fed by this
+   *  hook's own `availabilityView` and would otherwise keep re-offering the just-taken slot. */
+  reload: () => void;
 }
 
 /**
@@ -35,7 +39,7 @@ export function useSuggestedTimesPicker(params: {
   extraFilter?: (slot: AvailabilitySlotDto) => boolean;
 }): SuggestedTimesPicker {
   const { expertProfileId, fixedDurationMinutes, originalStartIso, extraFilter } = params;
-  const { view: availabilityView } = useExpertAvailability(
+  const { view: availabilityView, reload } = useExpertAvailability(
     expertProfileId,
     DEFAULT_AVAILABILITY_WINDOW_DAYS
   );
@@ -55,5 +59,5 @@ export function useSuggestedTimesPicker(params: {
     setPickerView(suggestions.length > 0 ? 'suggested' : 'calendar');
   }, [pickerView, availabilityView.kind, suggestions.length]);
 
-  return { availabilityView, suggestions, pickerView, setPickerView };
+  return { availabilityView, suggestions, pickerView, setPickerView, reload };
 }

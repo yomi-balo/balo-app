@@ -74,9 +74,10 @@ export interface CaseConsultationRowView {
    */
   hasRecording: boolean;
 
-  // ── Row actions — UPCOMING rows only, all FALSE / 0 / `false` on every other state. A
-  // component never re-derives availability from `state` (see the HARD BLOCKER on
-  // `mapCaseConsultations`).
+  // ── Row actions — UPCOMING rows only, all FALSE / 0 on every other state. A component never
+  // re-derives availability from `state` (see the HARD BLOCKER on `mapCaseConsultations`).
+  // `scheduledMinutes` and `live` below are a SEPARATE group and do not follow this rule the
+  // same way — see their own docs.
 
   /** CLIENT axis — structurally `false` on the expert lens. */
   canReschedule: boolean;
@@ -93,9 +94,11 @@ export interface CaseConsultationRowView {
    *  wall-clock and therefore `null` on every upcoming row — this is the duration that's always
    *  present here. */
   scheduledMinutes: number;
-  /** Inside `CASE_JOIN_WINDOW_MINUTES` of this row's own start — mirrors the nudge's `live` for
-   *  the same meeting, per-row. Drives the "Starting soon" pill and the move-item visibility
-   *  rule. */
+  /** Inside `CASE_JOIN_WINDOW_MINUTES` of this row's own start AND the row is upcoming — mirrors
+   *  the nudge's `live` for the same meeting, per-row. Drives the "Starting soon" pill and the
+   *  move-item visibility rule. `false`, never a stray `true`, on a past/terminal row: the join
+   *  window itself has no closing bound, so the upcoming-state gate is what keeps this field
+   *  honest once a row's `scheduledStart` is behind `now`. */
   live: boolean;
 }
 
@@ -362,18 +365,6 @@ interface CaseSurfaceViewBase {
   filesTruncated: boolean;
   party: CasePartyView;
   people: CasePersonView[];
-  /**
-   * BAL-410 — may THIS viewer cancel the upcoming consultation? ⚠ ON THE **BASE**, so BOTH
-   * lenses carry it: the AC gives cancel to the client AND the delivering expert, on two
-   * different axes (membership `participate` / engagement `manage_engagement`), resolved
-   * server-side in `load-case.ts`.
-   *
-   * A RENDER HINT ONLY. `cancelConsultationAction` re-checks the axis independently, and
-   * `apps/api`'s `authorizeMeetingCancel` re-derives all three axes from the MEETING's own
-   * context row and is the actual authority. This exists so the surface never shows a
-   * dead-end CTA — the case surface's own rule is "an absent action beats a dead one".
-   */
-  canCancelConsultation: boolean;
   /**
    * BAL-410 — the counterparty's PARTY label, lens-relative: the expert's agency (or their own
    * name when independent) on the client lens, the client company on the expert lens.

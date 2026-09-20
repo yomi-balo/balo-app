@@ -1308,11 +1308,15 @@ describe('loadCase — the surface identity', () => {
 });
 
 /**
- * BAL-410 — `canCancelConsultation` lives on `CaseSurfaceViewBase`, so BOTH lenses carry it —
- * but each resolves it on its OWN AXIS. That split is the whole point of this block: a shared
- * flag would be the "lens alone is authorization" mistake CLAUDE.md forbids.
+ * BAL-410 — the cancel capability resolution BOTH lenses share, each on its OWN AXIS. It used
+ * to also serialize as the case-level `canCancelConsultation`; this PR's per-row generalization
+ * (BAL-410's own row `canCancel`, superseding the single-`nextScheduled` case-level flag — see
+ * `case-surface.tsx`'s ALSO-FIX item 8) made that field dead, so these cases now read the row
+ * the SAME axis resolution feeds (`view.consultations[0].canCancel`) rather than a field that no
+ * longer exists on the wire. That split is still the whole point of this block: a shared flag
+ * would be the "lens alone is authorization" mistake CLAUDE.md forbids.
  */
-describe('loadCase — canCancelConsultation (BAL-410)', () => {
+describe('loadCase — canCancel axis resolution (BAL-410)', () => {
   const SCHEDULED_START = new Date('2026-08-20T10:00:00Z');
 
   function scheduledMeeting(id = 'm1'): Record<string, unknown> {
@@ -1331,7 +1335,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: true });
+      expect(view.consultations[0]).toMatchObject({ canCancel: true });
     });
 
     it('asks the MEMBERSHIP axis, and NOT the engagement axis', async () => {
@@ -1352,15 +1356,17 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
-    it('is FALSE when nothing is booked — there is no meeting to cancel', async () => {
+    it('is FALSE when nothing is booked — there is no UPCOMING meeting to cancel', async () => {
+      // `seed()`'s default meeting is `status: 'ended'` — a row still exists (past consultation
+      // history), it is simply not cancellable.
       seed({ access: { lens: 'client' } });
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
     /** ⚠ The short-circuit invariant: a closed case resolves NO capability call at all. */
@@ -1374,7 +1380,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
       expect(mockHasCapability).not.toHaveBeenCalled();
     });
   });
@@ -1386,7 +1392,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: true });
+      expect(view.consultations[0]).toMatchObject({ canCancel: true });
     });
 
     it('asks the ENGAGEMENT axis, and NOT the membership axis', async () => {
@@ -1412,15 +1418,15 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
-    it('is FALSE when nothing is booked', async () => {
+    it('is FALSE when nothing is booked — there is no UPCOMING meeting', async () => {
       seed({ access: { lens: 'expert' } });
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
 
     it('is FALSE on a CLOSED case, without resolving any capability for it', async () => {
@@ -1433,7 +1439,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
       const view = await loadOrThrow();
 
-      expect(view).toMatchObject({ canCancelConsultation: false });
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
       expect(mockHasEngagementCapability).not.toHaveBeenCalled();
     });
   });
@@ -1463,7 +1469,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
         const view = await loadOrThrow();
 
-        expect(view).toMatchObject({ canCancelConsultation: false });
+        expect(view.consultations[0]).toMatchObject({ canCancel: false });
         expect(mockHasCapability).not.toHaveBeenCalled();
       }
     );
@@ -1477,7 +1483,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
 
         const view = await loadOrThrow();
 
-        expect(view).toMatchObject({ canCancelConsultation: false });
+        expect(view.consultations[0]).toMatchObject({ canCancel: false });
         // 3, not 4 — the cancel term short-circuits ahead of its `await`; the other three
         // engagement flags are unaffected by cancellability and still resolve.
         expect(mockHasEngagementCapability).toHaveBeenCalledTimes(3);
@@ -1498,7 +1504,7 @@ describe('loadCase — canCancelConsultation (BAL-410)', () => {
       const view = await loadOrThrow();
 
       expect(view.nudge).toMatchObject({ kind: 'upcoming', meetingId: 'm1' });
-      expect(view.canCancelConsultation).toBe(false);
+      expect(view.consultations[0]).toMatchObject({ canCancel: false });
     });
   });
 });

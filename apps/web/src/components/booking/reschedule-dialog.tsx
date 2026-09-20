@@ -176,11 +176,12 @@ export function RescheduleDialog({
     ? (durationMinutes as SlotDurationMinutes)
     : undefined;
 
-  const { availabilityView, suggestions, pickerView, setPickerView } = useSuggestedTimesPicker({
-    expertProfileId,
-    fixedDurationMinutes,
-    originalStartIso: currentScheduledStartIso,
-  });
+  const { availabilityView, suggestions, pickerView, setPickerView, reload } =
+    useSuggestedTimesPicker({
+      expertProfileId,
+      fixedDurationMinutes,
+      originalStartIso: currentScheduledStartIso,
+    });
 
   useEffect(() => {
     if (!hasTransitionedRef.current) {
@@ -264,6 +265,9 @@ export function RescheduleDialog({
           setStep('pick_time');
           setPicked(null);
           setPickerKey((key) => key + 1);
+          // The taken slot came from this hook's own `availabilityView` — remounting the
+          // calendar alone leaves the suggestion list re-offering it.
+          reload();
         }
         return;
       }
@@ -302,6 +306,7 @@ export function RescheduleDialog({
     source,
     onRescheduled,
     resetAndClose,
+    reload,
   ]);
 
   let pickerPanel: React.JSX.Element;

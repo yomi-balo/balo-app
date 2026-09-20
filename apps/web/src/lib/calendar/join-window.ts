@@ -13,6 +13,7 @@
  */
 import { CASE_JOIN_WINDOW_MINUTES, MEETING_OVERRUN_GRACE_MINUTES } from '@balo/shared/engagements';
 import { meetingIsClosedToJoin, type MeetingLifecycleStatus } from '@balo/shared/meetings';
+import { insideCaseJoinWindow } from '@/lib/cases/case-join-window';
 
 const MS_PER_MINUTE = 60_000;
 
@@ -138,10 +139,17 @@ function calendarDaysBetween(from: Date, to: Date): number {
  *
  * ⚠ The hour/day boundary is decided by CALENDAR day, not elapsed minutes — a 23-hour gap that
  * crosses local midnight reads "Join tomorrow", never "Join in 23 hours".
+ *
+ * ⚠ The "Join now" branch reuses `insideCaseJoinWindow` — the same millisecond-exact predicate
+ * `case-nudge.tsx` renders from — rather than rounding `signedMinutesUntilCalendarStart` against
+ * `CASE_JOIN_WINDOW_MINUTES`: that rounding let this label read "Join now" for up to ~30s while
+ * the render was still showing the inactive countdown. The pre-window minutes below use
+ * `Math.ceil`, not `signedMinutesUntilCalendarStart` — that primitive's rounding is pinned to the
+ * analytics contract and must not change; this label alone needed a different one.
  */
 export function joinCountdownLabel(now: Date, scheduledStart: Date): string {
-  const minutes = signedMinutesUntilCalendarStart(now, scheduledStart);
-  if (minutes <= CASE_JOIN_WINDOW_MINUTES) return 'Join now';
+  if (insideCaseJoinWindow(now, scheduledStart.toISOString())) return 'Join now';
+  const minutes = Math.ceil((scheduledStart.getTime() - now.getTime()) / MS_PER_MINUTE);
   if (minutes < 60) return `Join in ${minutes} minutes`;
   const days = calendarDaysBetween(now, scheduledStart);
   if (days <= 0) {

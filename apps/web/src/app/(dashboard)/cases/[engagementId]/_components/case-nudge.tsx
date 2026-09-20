@@ -294,15 +294,17 @@ interface UpcomingJoinClock {
  * The ONE client clock the `'upcoming'` arm needs, ticking on a 30s interval regardless of
  * liveness — the countdown must keep counting down to zero, not just while already live.
  *
- * ⚠⚠ THIS HOOK OWNS THE WINDOW, NOT THE SERVER. `initialLive` (`nudge.live`) seeds the very
- * first render ONLY, so server and client agree on which element mounts before hydration; every
- * tick after that re-derives `live` from `insideCaseJoinWindow` against the browser's own clock
- * — the same case-domain predicate the loader used, so the two can't drift in DEFINITION, only
- * in TIMING (a page left open across the boundary). On the tick that flips `live` false → true,
- * it fires `router.refresh()` exactly once — never again for this meeting, and never on a tick
- * that doesn't cross — so the row list's own `live`/`canReschedule` (server-resolved) catch up.
- * The server stays the sole authority on the join CLICK (`assertMeetingJoinable`); this hook is
- * presentation only.
+ * ⚠⚠ THIS HOOK OWNS THE WINDOW, NOT THE SERVER — but `initialLive` (`nudge.live`) stays in the
+ * OR on every tick, not just the seed render: `live = initialLive || insideCaseJoinWindow(...)`,
+ * so the server's word can only ever ADD liveness, never take it away. A browser clock running
+ * behind the server's would otherwise HIDE Join past the moment the server already considers the
+ * meeting joinable — the one direction this hook must never drift in. Every tick still
+ * re-derives from `insideCaseJoinWindow` against the browser's own clock — the same case-domain
+ * predicate the loader used — for the OTHER direction: flipping live BEFORE the next server
+ * refresh lands. On the tick that flips `live` false → true, it fires `router.refresh()` exactly
+ * once — never again for this meeting, and never on a tick that doesn't cross — so the row
+ * list's own `live`/`canReschedule` (server-resolved) catch up. The server stays the sole
+ * authority on the join CLICK (`assertMeetingJoinable`); this hook is presentation only.
  */
 function useUpcomingJoinClock(iso: string, initialLive: boolean): UpcomingJoinClock {
   const router = useRouter();
@@ -330,7 +332,7 @@ function useUpcomingJoinClock(iso: string, initialLive: boolean): UpcomingJoinCl
     const scheduledStart = new Date(iso);
     const tick = (): void => {
       const now = new Date();
-      const live = insideCaseJoinWindow(now, iso);
+      const live = initialLive || insideCaseJoinWindow(now, iso);
       setClock({
         live,
         minutes: live ? signedMinutesUntilCalendarStart(now, scheduledStart) : null,

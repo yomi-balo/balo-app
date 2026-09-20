@@ -138,9 +138,6 @@ const BASE = {
   // genuinely assignable — freezing it would make them fail for a reason unrelated to the
   // invariant being pinned.
   people: [{ name: 'Dana Reyes', isViewer: true }],
-  // BAL-410 — on `CaseSurfaceViewBase`, so BOTH lens arms must carry it. That placement is the
-  // point: the AC gives cancel to the client AND the expert, on two different axes.
-  canCancelConsultation: false,
   counterpartyPartyLabel: 'CloudPeak Consulting',
 };
 

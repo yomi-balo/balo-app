@@ -831,7 +831,6 @@ export const loadCase = cache(
     ];
 
     const base = {
-      canCancelConsultation: mayCancelAsClient,
       counterpartyPartyLabel: labels.counterpartyPartyLabel,
       engagementId,
       expertProfileId,
@@ -865,7 +864,6 @@ export const loadCase = cache(
       const capabilities = expertCapabilities ?? EMPTY_EXPERT_CAPABILITIES;
       return {
         ...base,
-        canCancelConsultation: capabilities.mayCancelAsExpert,
         lens: 'expert',
         earnings: toEarningsView(earningsAggregate ?? EMPTY_EARNINGS),
         canRequestResolution: capabilities.mayRequestResolution,

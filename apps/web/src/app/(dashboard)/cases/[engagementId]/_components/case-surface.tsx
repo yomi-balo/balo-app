@@ -234,10 +234,12 @@ export function CaseSurface({
   );
 
   /** Dismissal without success. `selection` is guaranteed non-null: this only ever fires from
-   *  a mounted dialog, and a dialog only mounts when `selection` names it. */
+   *  a mounted dialog, and a dialog only mounts when `selection` names it. A `source: 'nudge'`
+   *  open has no row trigger to return to — sending focus to the row's kebab would move it
+   *  (and possibly scroll) to a control the user never interacted with. */
   const handleDialogClose = useCallback(() => {
     setDialogOpen(false);
-    if (selection !== null) focusTrigger(selection.meetingId);
+    if (selection !== null && selection.source === 'row') focusTrigger(selection.meetingId);
   }, [selection, focusTrigger]);
 
   /**
@@ -251,18 +253,20 @@ export function CaseSurface({
   }, [router]);
 
   /** Reschedule success. The row stays mounted (same `meetingId`, only the schedule changed),
-   *  so focus returns to the trigger rather than the heading. */
+   *  so focus returns to the trigger rather than the heading — but only for `source: 'row'`; a
+   *  nudge-opened dialog has no row trigger the user came from. */
   const handleRescheduled = useCallback(() => {
     setDialogOpen(false);
-    if (selection !== null) focusTrigger(selection.meetingId);
+    if (selection !== null && selection.source === 'row') focusTrigger(selection.meetingId);
     router.refresh();
   }, [selection, focusTrigger, router]);
 
   /** Propose success (and its terminal failures — `propose-times-dialog.tsx` shares one
-   *  callback for both). The row survives either way, so the trigger is the right target. */
+   *  callback for both). The row survives either way, so the trigger is the right target for a
+   *  `source: 'row'` open; a nudge-opened dialog has no row trigger to return to. */
   const handleProposed = useCallback(() => {
     setDialogOpen(false);
-    if (selection !== null) focusTrigger(selection.meetingId);
+    if (selection !== null && selection.source === 'row') focusTrigger(selection.meetingId);
     router.refresh();
   }, [selection, focusTrigger, router]);
 
@@ -273,9 +277,10 @@ export function CaseSurface({
     router.refresh();
   }, [router]);
 
-  // BAL-411 — read ONLY from the expert arm; the client arm has no `canProposeReschedule` field
-  // to hold (the same discriminant-not-flag posture the whole view already follows).
-  const canProposeReschedule = view.lens === 'expert' && view.canProposeReschedule;
+  // Per-row, mirroring `canReschedule` above — `view.canProposeReschedule` is the case-level
+  // flag `load-case.ts` resolves against the single `nextScheduled` meeting, the same class of
+  // staleness the row-menu Cancel fix addressed for `canCancelConsultation`.
+  const canProposeReschedule = nudgeRow?.canProposeReschedule ?? false;
   // Item 18 — same posture, for the Withdraw button's holder set (see `RescheduleProposalCard`).
   const canManageReschedule = view.lens === 'expert' && view.canManageReschedule;
 
@@ -316,6 +321,11 @@ export function CaseSurface({
 
         {selection !== null && selection.verb === 'reschedule' && (
           <RescheduleDialog
+            // Forces a full remount per meeting — the dialog otherwise stays mounted across a
+            // row-to-row swap, and its own `pickerView`/availability state (owned inside
+            // `useSuggestedTimesPicker`) is reset only on a DISMISSED close, never on a
+            // successful one. See `use-suggested-times-picker.ts`.
+            key={selection.meetingId}
             open={dialogOpen}
             onClose={handleDialogClose}
             onRescheduled={handleRescheduled}
@@ -336,6 +346,7 @@ export function CaseSurface({
 
         {selection !== null && selection.verb === 'cancel' && (
           <CancelConsultationDialog
+            key={selection.meetingId}
             open={dialogOpen}
             onClose={handleDialogClose}
             onCancelled={closeAndFocusHeading}
@@ -370,6 +381,7 @@ export function CaseSurface({
 
         {selection !== null && selection.verb === 'propose' && (
           <ProposeTimesDialog
+            key={selection.meetingId}
             open={dialogOpen}
             onClose={handleDialogClose}
             onProposed={handleProposed}
@@ -383,6 +395,8 @@ export function CaseSurface({
             durationMinutes={selection.scheduledMinutes}
             caseTitle={view.header.title}
             ordinal={selection.ordinal}
+            // The deterministic `onCloseAutoFocus` target for this dialog's terminal closes.
+            headingRef={consultationsHeadingRef}
           />
         )}
 

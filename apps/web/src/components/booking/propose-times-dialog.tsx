@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { X } from 'lucide-react';
 import { toast } from 'sonner';
 import * as Sentry from '@sentry/nextjs';
@@ -69,6 +70,9 @@ export interface ProposeTimesDialogProps {
   /** 1-based, or `null`. With a menu on every upcoming row, Propose isn't only ever about "the"
    *  meeting the nudge names — this identifies which one. */
   ordinal: number | null;
+  /** Where a terminal close sends focus (optional; omitting it keeps Radix's default restore) —
+   *  the `reschedule-dialog.tsx` / `cancel-consultation-dialog.tsx` `onCloseAutoFocus` pattern. */
+  headingRef?: RefObject<HTMLElement | null>;
 }
 
 function hoursBetween(fromIso: string, toIso: string): number {
@@ -87,6 +91,7 @@ export function ProposeTimesDialog({
   durationMinutes,
   caseTitle,
   ordinal,
+  headingRef,
 }: Readonly<ProposeTimesDialogProps>): React.JSX.Element {
   const isMobile = useIsMobile(768);
   const [picked, setPicked] = useState<AvailabilitySlotSelection[]>([]);
@@ -105,12 +110,13 @@ export function ProposeTimesDialog({
   // different days, not 6:00 and 6:15 on the same evening (which also structurally excludes
   // re-suggesting an already-picked slot — same day, so same exclusion).
   const pickedDays = new Set(picked.map((option) => localDayKey(option.start)));
-  const { availabilityView, suggestions, pickerView, setPickerView } = useSuggestedTimesPicker({
-    expertProfileId,
-    fixedDurationMinutes,
-    originalStartIso: currentScheduledStartIso,
-    extraFilter: (slot) => !pickedDays.has(localDayKey(slot.start)),
-  });
+  const { availabilityView, suggestions, pickerView, setPickerView, reload } =
+    useSuggestedTimesPicker({
+      expertProfileId,
+      fixedDurationMinutes,
+      originalStartIso: currentScheduledStartIso,
+      extraFilter: (slot) => !pickedDays.has(localDayKey(slot.start)),
+    });
   // Reactive, unlike `pickerView`'s own initial decision: the LAST suggested day being picked
   // must fall through to the calendar immediately, not only on the next "See more times" click.
   const showingCalendar = pickerView === 'calendar' || suggestions.length === 0;
@@ -128,8 +134,11 @@ export function ProposeTimesDialog({
    * times" and "Suggested times" each unmount the button that was just clicked.
    */
   const capNoteRef = useRef<HTMLParagraphElement>(null);
-  const headingRef = useRef<HTMLHeadingElement>(null);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const hasTransitionedRef = useRef(false);
+  /** Set before the one close that must land on the `headingRef` PROP; cleared by
+   *  `handleCloseAutoFocus`. Same race as `RescheduleDialog` / `CancelConsultationDialog`. */
+  const terminalCloseRef = useRef(false);
 
   const resetAndClose = useCallback(
     (options: { terminal?: boolean } = {}) => {
@@ -141,6 +150,7 @@ export function ProposeTimesDialog({
       // view into a fresh open.
       setPickerView(null);
       if (options.terminal === true && onTerminalFailure !== undefined) {
+        terminalCloseRef.current = true;
         onTerminalFailure();
         return;
       }
@@ -177,9 +187,11 @@ export function ProposeTimesDialog({
         setSubmitting(false);
         if (result.code === 'slot_unavailable') {
           // One of the picked slots was taken between pick and send — reset the picker so the
-          // stale list (which included the now-taken slot) is not re-shown.
+          // stale list (which included the now-taken slot) is not re-shown, and refetch so the
+          // suggestion list (fed by this hook's own `availabilityView`, not `pickerKey`) drops it.
           setPicked([]);
           setPickerKey((key) => key + 1);
+          reload();
         } else if (isTerminalProposalFailure(result.code)) {
           // BAL-409's `copyForFailure`/`closeOnAcknowledge` precedent, carried over: the state
           // this dialog was rendered from is gone — close (via `onTerminalFailure`) instead
@@ -214,6 +226,7 @@ export function ProposeTimesDialog({
     currentScheduledStartIso,
     onProposed,
     resetAndClose,
+    reload,
   ]);
 
   const atMax = picked.length >= RESCHEDULE_PROPOSAL_MAX_OPTIONS;
@@ -226,9 +239,20 @@ export function ProposeTimesDialog({
     if (atMax) {
       capNoteRef.current?.focus();
     } else {
-      headingRef.current?.focus();
+      stepHeadingRef.current?.focus();
     }
   }, [atMax, pickerView]);
+
+  const handleCloseAutoFocus = useCallback(
+    (event: Event) => {
+      if (terminalCloseRef.current) {
+        event.preventDefault();
+        headingRef?.current?.focus();
+      }
+      terminalCloseRef.current = false;
+    },
+    [headingRef]
+  );
 
   const sendButtonLabel = picked.length > 0 ? `Send proposal (${picked.length})` : 'Send proposal';
 
@@ -277,7 +301,7 @@ export function ProposeTimesDialog({
   const body = (
     <div className="flex min-h-[420px] flex-col p-6">
       <h2
-        ref={headingRef}
+        ref={stepHeadingRef}
         tabIndex={-1}
         className="text-foreground mb-1 text-base font-semibold focus-visible:outline-none"
       >
@@ -361,7 +385,11 @@ export function ProposeTimesDialog({
   if (isMobile) {
     return (
       <Sheet open={open} onOpenChange={(next) => !next && resetAndClose()}>
-        <SheetContent side="bottom" className="max-h-[94dvh] overflow-y-auto rounded-t-2xl p-0">
+        <SheetContent
+          side="bottom"
+          className="max-h-[94dvh] overflow-y-auto rounded-t-2xl p-0"
+          onCloseAutoFocus={handleCloseAutoFocus}
+        >
           <SheetTitle className="sr-only">{programmaticTitle}</SheetTitle>
           <SheetDescription className="sr-only">
             Pick up to three alternative times and send them to your client.
@@ -376,7 +404,10 @@ export function ProposeTimesDialog({
     <Dialog open={open} onOpenChange={(next) => !next && resetAndClose()}>
       {/* Same width as `reschedule-dialog.tsx` DialogContent, same reason — this dialog embeds
           the identical two-pane `ExpertAvailabilityCalendar`, unmodified. */}
-      <DialogContent className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[min(92vw,840px)]">
+      <DialogContent
+        className="max-h-[85vh] overflow-y-auto rounded-xl p-0 sm:max-w-[min(92vw,840px)]"
+        onCloseAutoFocus={handleCloseAutoFocus}
+      >
         <DialogTitle className="sr-only">{programmaticTitle}</DialogTitle>
         <DialogDescription className="sr-only">
           Pick up to three alternative times and send them to your client.

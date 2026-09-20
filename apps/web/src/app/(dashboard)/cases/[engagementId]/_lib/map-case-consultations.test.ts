@@ -488,6 +488,26 @@ describe('mapCaseConsultations — row action flags (canCancel / canReschedule /
     expect(row?.canReschedule).toBe(false);
   });
 
+  /** MUTATION PROOF: `insideCaseJoinWindow` has no closing bound, so an UNGATED read would say
+   *  `live: true` for this row forever once its `scheduledStart` is behind `now` — even though
+   *  the meeting is long over. */
+  it('live is false on a past HELD row, even with scheduledStart inside what would be the join window', () => {
+    const justEnded = new Date(NOW.getTime() - 5 * 60_000);
+    const [row] = mapCaseConsultations(
+      [
+        held('m1', {
+          scheduledStart: justEnded,
+          scheduledEnd: new Date(justEnded.getTime() + 30 * 60_000),
+        }),
+      ],
+      EMPTY_COUNTS,
+      NOW,
+      CLIENT_MAY_ACT
+    );
+    expect(row?.state).toBe('held');
+    expect(row?.live).toBe(false);
+  });
+
   it('computes scheduledMinutes from scheduled_end − scheduled_start, independent of durationMinutes', () => {
     const [row] = mapCaseConsultations([upcoming()], EMPTY_COUNTS, NOW, CLIENT_MAY_ACT);
     expect(row?.scheduledMinutes).toBe(60);
