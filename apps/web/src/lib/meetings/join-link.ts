@@ -123,6 +123,24 @@ export function guestRecapPath(token: string, meetingId: string): string {
 }
 
 /**
+ * BAL-492 — the guest recap INDEX's in-app path (no `meetingId`). Same shape as
+ * {@link guestRecapPath}: a PATH, not an absolute URL, for same-origin navigation.
+ *
+ * ⚠⚠ TOKEN-BEARING. It is on `TOKEN_BEARING_BUILDERS` in `join-link-never-writes.test.ts`, so
+ * every caller must live under `app/join/`. The `meetingJoinLinkUrl` / `lobbyPath` exclusion
+ * does NOT apply — those are tokenless; this one carries a replayable credential.
+ *
+ * ⚠⚠ EVERY `<Link>` BUILT FROM THIS CARRIES `prefetch={false}`, AND THE REASON IS THE SHIPPED
+ * ONE, NOT MERELY A WASTED GATE RUN: a prefetched token URL leaks the token in a `Referer` and
+ * into the rrweb META frame, which no scrubbing hook reaches
+ * (`join-link-never-writes.test.ts:356-373`, `instrumentation-client.ts`). Do not "optimise"
+ * the flag away.
+ */
+export function guestRecapIndexPath(token: string): string {
+  return `/join/${token}/recap`;
+}
+
+/**
  * Back to the invitation card. ⚠ Its GET stamps `meetingGuestsRepository.recordAccess` —
  * NEVER prefetch a `<Link>` built from this (see `[token]/page.tsx`'s own docblock on why a
  * prefetch would stamp an access nobody made).

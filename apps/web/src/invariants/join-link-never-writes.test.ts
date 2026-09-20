@@ -103,6 +103,14 @@ const PINNED_GET_PATH_FILES: readonly string[] = [
   '[token]/recap/_components/guest-recap-card.tsx',
   '[token]/recap/_components/guest-recap-summary.tsx',
   '[token]/recap/_components/guest-recap-files.tsx',
+  // ── BAL-492 — the guest recap INDEX ─────────────────────────────────────────────────
+  '[token]/recap/page.tsx',
+  '[token]/recap/loading.tsx',
+  '[token]/recap/error.tsx',
+  '[token]/recap/_lib/load-guest-recap-index.ts',
+  '[token]/recap/_lib/guest-recap-index-view-types.ts',
+  '[token]/recap/_lib/envelope-context-types.ts',
+  '[token]/recap/_components/guest-recap-index-card.tsx',
 ];
 
 /**
@@ -208,7 +216,7 @@ describe('invariant: the /join/{token} GET path never changes who may attend (BA
     }
     const disallowed = [...used]
       .filter((member) => !ALLOWED_GUEST_REPOSITORY_MEMBERS.includes(member))
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
     expect(
       disallowed,
       `The /join/{token} GET path may only use ${ALLOWED_GUEST_REPOSITORY_MEMBERS.join(', ')} ` +
@@ -424,7 +432,12 @@ describe('invariant: guestRecapPath / guestInvitationPath are only called from a
   // as easily be written under `src/lib` or `src/components`, and only a scan that is not
   // scoped to the app router would catch it there.
   const SRC_DIR = resolveRouteDir(['src', 'apps/web/src']);
-  const TOKEN_BEARING_BUILDERS: readonly string[] = ['guestRecapPath(', 'guestInvitationPath('];
+  const TOKEN_BEARING_BUILDERS: readonly string[] = [
+    'guestRecapPath(',
+    'guestInvitationPath(',
+    // BAL-492 — the guest recap INDEX's path builder. Carries the same replayable token.
+    'guestRecapIndexPath(',
+  ];
   const DEFINITION_FILE = 'lib/meetings/join-link.ts';
 
   const scanned = scanRouteSources(SRC_DIR, '', []);

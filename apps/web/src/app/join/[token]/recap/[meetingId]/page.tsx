@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { hashedClientIp } from '@/lib/magic-link';
 import { trackServerAndFlush, GUEST_SERVER_EVENTS } from '@/lib/analytics/server';
 import { daysSinceMeeting } from '@/lib/analytics/days-since-meeting';
+import { guestRecapIndexPath } from '@/lib/meetings/join-link';
 import { LinkNotActive } from '../../link-not-active';
 import { loadGuestRecap } from '../_lib/load-guest-recap';
 import { GuestRecapCard } from '../_components/guest-recap-card';
@@ -105,5 +106,10 @@ export default async function GuestRecapPage({
     distinct_id: result.guestId,
   });
 
-  return <GuestRecapCard view={result.view} token={token} />;
+  // BAL-492 — built OUTSIDE this tree; see `join-link.ts`'s docblock for why. Gated on
+  // `accessScope === 'engagement'` ALONE — see `guest-recap-card.tsx`'s docblock for the
+  // rejected, more-precise alternative and why it is not worth widening `GuestRecapLoadResult`.
+  const indexHref = result.accessScope === 'engagement' ? guestRecapIndexPath(token) : null;
+
+  return <GuestRecapCard view={result.view} token={token} indexHref={indexHref} />;
 }

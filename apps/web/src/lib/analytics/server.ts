@@ -19,8 +19,9 @@ export {
   // Action, and there is deliberately NO landing-view event (Gmail's link proxy and
   // Safe Links detonation fetch `/review/{token}` unsolicited).
   REVIEW_SERVER_EVENTS,
-  // BAL-408 — server-only. `apps/web` emits THREE: `GUEST_INVITE_OPENED` (the
-  // `/join/{token}` RSC), `GUEST_RECAP_VIEWED` (the guest recap RSC, BAL-439), and
+  // BAL-408 — server-only. `apps/web` emits FOUR: `GUEST_INVITE_OPENED` (the
+  // `/join/{token}` RSC), `GUEST_RECAP_VIEWED` (the guest recap RSC, BAL-439),
+  // `GUEST_RECAP_INDEX_VIEWED` (the guest recap INDEX RSC, BAL-492), and
   // `GUEST_CONVERTED_TO_MEMBER` (the verified new-user signup seams via
   // `lib/guest-conversion`, BAL-489); the invite / remove / admit / deny / joined /
   // link-resent events all fire in `apps/api`. ⚠ NOT in the client `@/lib/analytics`

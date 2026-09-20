@@ -98,6 +98,15 @@ export const GUEST_SERVER_EVENTS = {
    */
   GUEST_LINK_RESENT: 'guest_link_resent',
   /**
+   * BAL-492 — the guest recap INDEX rendered SUCCESSFULLY. Fires from
+   * `app/join/[token]/recap/page.tsx`, its only producer.
+   *
+   * ⚠ ONLY AN `engagement`-SCOPE READER EVER EMITS IT. A `meeting`-scope guest is redirected
+   * to their own anchor recap (D2) and never reaches a successful index render — which is
+   * why there is deliberately no `access_scope` property (see the map entry).
+   */
+  GUEST_RECAP_INDEX_VIEWED: 'guest_recap_index_viewed',
+  /**
    * BAL-439 (R12) — the guest recap page rendered SUCCESSFULLY. Fires from
    * `app/join/[token]/recap/[meetingId]/page.tsx`, its only producer.
    */
@@ -258,6 +267,25 @@ export interface GuestServerEventMap {
     distinct_id: string;
   };
   /**
+   * BAL-492 — the guest recap INDEX rendered successfully.
+   *
+   * ⚠⚠ NO PII, NO COUNTERPARTY IDENTITY, NO `meeting_id`. `meeting_count` is a count the
+   * reader can already see in full on the page they just rendered, so it discloses nothing
+   * beyond the index itself.
+   *
+   * ⚠ `access_scope` IS DELIBERATELY OMITTED. Under D2 a `meeting`-scope guest never reaches a
+   * successful index render, so the property would be the constant `'engagement'` on 100% of
+   * rows — which makes a dashboard filtered on it WRONG rather than merely coarse. The same
+   * ruling `guest_joined` records for `invite_channel` and `guest_reentry_requested` records
+   * for `party`.
+   */
+  [GUEST_SERVER_EVENTS.GUEST_RECAP_INDEX_VIEWED]: {
+    /** How many rows rendered. ⚠ Never a total the page did not show. */
+    meeting_count: number;
+    /** ⚠ `meeting_guests.id` — a guest has NO user id. See the module docblock. */
+    distinct_id: string;
+  };
+  /**
    * BAL-439 (R12) — the guest recap rendered successfully.
    *
    * ⚠⚠ NO PII, NO COUNTERPARTY IDENTITY. No email, no company name, no counterparty name, no
@@ -361,3 +389,17 @@ type _MissingReentryKey = Exclude<
 export const ASSERT_GUEST_REENTRY_KEYS_COMPLETE = true satisfies _MissingReentryKey extends never
   ? true
   : never;
+
+/**
+ * BAL-492 — the same compile-time witness for `guest_recap_index_viewed`, following the
+ * `ASSERT_GUEST_REENTRY_KEYS_COMPLETE` precedent above verbatim: a key added to the map entry
+ * that is missing from the allow-list here fails `tsc`, catching what `guest.test.ts`'s runtime
+ * `Object.keys(literal)` check structurally cannot (an OPTIONAL field the test's own literal
+ * never happens to set).
+ */
+type _MissingRecapIndexKey = Exclude<
+  keyof GuestServerEventMap['guest_recap_index_viewed'],
+  'meeting_count' | 'distinct_id'
+>;
+export const ASSERT_GUEST_RECAP_INDEX_KEYS_COMPLETE =
+  true satisfies _MissingRecapIndexKey extends never ? true : never;

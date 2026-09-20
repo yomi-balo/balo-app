@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // the production origin. The package throws outside an RSC graph, so the unit test stubs it.
 vi.mock('server-only', () => ({}));
 
-import { guestInvitationPath, guestRecapPath, lobbyPath, meetingJoinLinkUrl } from './join-link';
+import {
+  guestInvitationPath,
+  guestRecapIndexPath,
+  guestRecapPath,
+  lobbyPath,
+  meetingJoinLinkUrl,
+} from './join-link';
 
 /**
  * BAL-436 — the "Copy join link" URL.
@@ -80,6 +86,24 @@ describe('guestRecapPath (BAL-439)', () => {
     expect(path.startsWith('/join/')).toBe(true);
     expect(path).not.toContain('https://');
     expect(path).not.toContain('http://');
+  });
+});
+
+describe('guestRecapIndexPath (BAL-492)', () => {
+  it('builds /join/{token}/recap from the token alone', () => {
+    expect(guestRecapIndexPath(TOKEN)).toBe(`/join/${TOKEN}/recap`);
+  });
+
+  it('is a PATH, not an absolute URL — no origin, no env var involved', () => {
+    process.env.APP_URL = 'https://sentinel.example';
+    const path = guestRecapIndexPath(TOKEN);
+    expect(path.startsWith('/join/')).toBe(true);
+    expect(path).not.toContain('https://sentinel.example');
+    expect(path).not.toContain('http://');
+  });
+
+  it('is NOT guestRecapPath with an empty second argument — the two differ for the same token', () => {
+    expect(guestRecapIndexPath(TOKEN)).not.toBe(guestRecapPath(TOKEN, ''));
   });
 });
 
